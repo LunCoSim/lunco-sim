@@ -631,7 +631,16 @@ pub fn detect_top_level_literal_parameters(source: &str) -> Vec<DetectedParam> {
         }
         let (default_literal, supportable, reason) = match (eq_pos, end_pos) {
             (Some(eq), Some(end)) if end > eq + 1 => {
-                let rhs = tail[eq + 1..end].trim();
+                // Modelica allows a trailing description string after
+                // the binding: `parameter Real g = 9.81 "Gravity";`.
+                // Strip it before classifying — otherwise the whole
+                // `9.81 "Gravity"` blob fails `looks_like_literal` and
+                // the override editor disables the row.
+                let raw_rhs = tail[eq + 1..end].trim();
+                let rhs = match raw_rhs.find('"') {
+                    Some(q) => raw_rhs[..q].trim_end(),
+                    None => raw_rhs,
+                };
                 if rhs.is_empty() {
                     (None, false, Some("no default value".to_string()))
                 } else if looks_like_literal(rhs) {
@@ -658,6 +667,17 @@ pub fn detect_top_level_literal_parameters(source: &str) -> Vec<DetectedParam> {
             reason,
         });
     }
+    // Dedupe by parameter name. The scan is regex-based over the
+    // whole file and picks up `parameter Real g` in every class
+    // (RocketStage AND Airframe both declare `g`, for example). The
+    // override path rewrites only the first occurrence in source —
+    // surfacing duplicates here just produces conflicting widget ids
+    // in the UI and confuses users about which row their edit
+    // targets. Keep the first occurrence (matches the source order
+    // the rewriter touches).
+    let mut seen: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    out.retain(|p| seen.insert(p.name.clone()));
     out
 }
 

@@ -273,6 +273,7 @@ impl Panel for ExperimentsPanel {
                             None => "auto".into(),
                         }
                     ),
+                    overrides: format_overrides_summary(&e.overrides),
                     status: status_label(&e.status),
                     duration_ms: match &e.status {
                         RunStatus::Done { wall_time_ms } => Some(*wall_time_ms),
@@ -555,7 +556,17 @@ impl Panel for ExperimentsPanel {
                                 }
                             });
                         }
-                        ui.label(&row.bounds);
+                        ui.horizontal(|ui| {
+                            ui.label(&row.bounds);
+                            if !row.overrides.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(format!("· {}", row.overrides))
+                                        .color(col_warning)
+                                        .small(),
+                                )
+                                .on_hover_text("Parameter overrides applied to this run");
+                            }
+                        });
                         // Color-code status: failed → red, cancelled →
                         // muted, running → amber, done → default.
                         let status_color = match (&row.error, row.is_terminal, row.duration_ms) {
@@ -1104,24 +1115,22 @@ impl ExperimentsPanel {
         let document = host.document();
         let source = document.source().to_string();
 
-        // Resolve the model class — first non-package top-level class.
-        let model_name = document
-            .strict_ast()
-            .and_then(|ast| {
-                ast.classes
-                    .iter()
-                    .find(|(_, c)| {
-                        !matches!(
-                            c.class_type,
-                            rumoca_session::parsing::ast::ClassType::Package
-                        )
-                    })
-                    .map(|(n, _)| n.clone())
-            })
-            .unwrap_or_default();
-        if model_name.is_empty() {
+        // Resolve the model class via the same path the Setup section
+        // uses (drilled class → first non-package fallback) so this
+        // section stays visible even when `strict_ast()` returns None
+        // because of a recoverable parse warning.
+        let drilled = world
+            .get_resource::<crate::ui::panels::model_view::ModelTabs>()
+            .and_then(|t| t.drilled_class_for_doc(doc));
+        let first_non_pkg = document
+            .index()
+            .classes
+            .values()
+            .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
+            .map(|c| c.name.clone());
+        let Some(model_name) = drilled.or(first_non_pkg) else {
             return;
-        }
+        };
         let model_ref = lunco_experiments::ModelRef(model_name.clone());
 
         let detected =
@@ -1130,7 +1139,11 @@ impl ExperimentsPanel {
             return;
         }
 
-        egui::CollapsingHeader::new("⚙ Parameter overrides")
+        egui::CollapsingHeader::new(format!(
+            "⚙ Parameter overrides ({})",
+            detected.iter().filter(|p| p.supportable).count()
+        ))
+            .id_salt("experiments_parameter_overrides")
             .default_open(false)
             .show(ui, |ui| {
                 use lunco_experiments::{ParamPath, ParamValue};
@@ -1179,7 +1192,18 @@ impl ExperimentsPanel {
                                 // didn't realize they could click and
                                 // type to override.
                                 let existing = current_overrides.get(&path).cloned();
-                                let mut text = match &existing {
+                                // Prefill with the current effective
+                                // value — the override if set, else
+                                // the model's default — so the user
+                                // can modify in place (OMEdit-style)
+                                // instead of clearing and retyping.
+                                // The "×" button clears the override
+                                // (revert to default).
+                                let default_text = p
+                                    .default_literal
+                                    .clone()
+                                    .unwrap_or_default();
+                                let committed = match &existing {
                                     Some(ParamValue::Real(x)) => format!("{x}"),
                                     Some(ParamValue::Int(x)) => format!("{x}"),
                                     Some(ParamValue::Bool(b)) => {
@@ -1188,23 +1212,72 @@ impl ExperimentsPanel {
                                     Some(ParamValue::String(s)) => s.clone(),
                                     Some(ParamValue::Enum(s)) => s.clone(),
                                     Some(ParamValue::RealArray(_)) => "(array)".into(),
-                                    None => String::new(),
+                                    None => default_text.clone(),
                                 };
-                                let hint =
-                                    p.default_literal.clone().unwrap_or_default();
+                                // Per-row id so egui can route keystrokes
+                                // and preserve the in-progress edit buffer
+                                // across frames. Without this the auto-id
+                                // collides between rows that start with the
+                                // same empty buffer and the cell silently
+                                // rejects input.
+                                let cell_id = egui::Id::new(("override_cell", p.name.as_str()));
+                                // Latched draft: keeps typed characters
+                                // alive across frames. Without this the
+                                // local `text` re-initializes from the
+                                // committed value every frame and wipes
+                                // each keystroke.
+                                let latched: Option<String> =
+                                    ui.data_mut(|d| d.get_temp::<String>(cell_id));
+                                let mut text = latched
+                                    .clone()
+                                    .unwrap_or_else(|| committed.clone());
                                 let resp = ui.add(
                                     egui::TextEdit::singleline(&mut text)
-                                        .desired_width(80.0)
-                                        .hint_text(hint),
+                                        .id(cell_id)
+                                        .desired_width(80.0),
                                 );
-                                if resp.lost_focus()
-                                    || resp.ctx.input(|i| i.key_pressed(egui::Key::Enter))
-                                        && resp.has_focus()
-                                {
-                                    if let Some(v) = parse_override(&p.type_name, &text) {
+                                if resp.has_focus() || resp.changed() {
+                                    ui.data_mut(|d| d.insert_temp(cell_id, text.clone()));
+                                }
+                                // Compare against the *committed* value
+                                // (last value pushed into the draft),
+                                // not the latched in-progress text — the
+                                // latch updates on every keystroke, so
+                                // using it as the baseline makes
+                                // `text != baseline` always false at
+                                // focus-loss time and no commit fires
+                                // unless the user explicitly pressed
+                                // Enter.
+                                let commit = resp.lost_focus()
+                                    && (ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                        || text != committed);
+                                if commit {
+                                    // Typing back the unchanged default
+                                    // text shouldn't materialise an
+                                    // override — keep the row at "no
+                                    // override set".
+                                    let matches_default =
+                                        existing.is_none() && text == default_text;
+                                    if matches_default {
+                                        ui.data_mut(|d| d.remove::<String>(cell_id));
+                                    } else if let Some(v) =
+                                        parse_override(&p.type_name, &text)
+                                    {
                                         updates.push((path.clone(), Some(v)));
+                                        // Latch the new value so the cell
+                                        // keeps showing it until the draft
+                                        // reflects the commit on the next
+                                        // frame.
+                                        ui.data_mut(|d| d.insert_temp(cell_id, text.clone()));
                                     } else if text.trim().is_empty() {
                                         updates.push((path.clone(), None));
+                                        ui.data_mut(|d| d.remove::<String>(cell_id));
+                                    }
+                                } else if !resp.has_focus() {
+                                    // Drop the latch once the committed
+                                    // value catches up.
+                                    if latched.as_deref() == Some(committed.as_str()) {
+                                        ui.data_mut(|d| d.remove::<String>(cell_id));
                                     }
                                 }
                                 if existing.is_some() {
@@ -2114,6 +2187,10 @@ struct Row {
     id: ExperimentId,
     name: String,
     bounds: String,
+    /// Comma-separated `name=value` for every override on this run.
+    /// Empty when the run used the model's defaults. Shown in the
+    /// Bounds column so users can scan which experiments deviated.
+    overrides: String,
     status: String,
     duration_ms: Option<u64>,
     error: Option<String>,
@@ -2126,6 +2203,33 @@ struct Row {
     /// the Status column so users get "how far along" without doing
     /// arithmetic against the bounds string.
     progress: Option<f32>,
+}
+
+fn format_overrides_summary(
+    overrides: &std::collections::BTreeMap<
+        lunco_experiments::ParamPath,
+        lunco_experiments::ParamValue,
+    >,
+) -> String {
+    use lunco_experiments::ParamValue;
+    if overrides.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<String> = overrides
+        .iter()
+        .map(|(path, v)| {
+            let val = match v {
+                ParamValue::Real(x) => format!("{x}"),
+                ParamValue::Int(x) => format!("{x}"),
+                ParamValue::Bool(b) => if *b { "true".into() } else { "false".into() },
+                ParamValue::String(s) => format!("\"{s}\""),
+                ParamValue::Enum(s) => s.clone(),
+                ParamValue::RealArray(_) => "[…]".into(),
+            };
+            format!("{}={}", path.0, val)
+        })
+        .collect();
+    parts.join(", ")
 }
 
 fn status_label(s: &RunStatus) -> String {
