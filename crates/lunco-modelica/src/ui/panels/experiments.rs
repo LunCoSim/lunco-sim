@@ -211,7 +211,7 @@ impl Panel for ExperimentsPanel {
     }
 
     fn title(&self) -> String {
-        "🧪 Experiments".into()
+        "⚗ Experiments".into()
     }
 
     fn default_slot(&self) -> PanelSlot {
@@ -243,15 +243,18 @@ impl Panel for ExperimentsPanel {
             (t.tokens.success, t.tokens.warning, t.tokens.error, t.tokens.text_subdued)
         };
 
-        // Persistent Setup section — bounds + inputs editable inline,
-        // ⏩ Run dispatches without re-opening the modal. Replaces the
-        // "open dialog every time" friction.
-        self.render_setup_section(ui, world);
-        ui.separator();
-
-        // Full override editor (non-input parameters). Stays
-        // collapsed; only opened when needed.
-        self.render_override_editor(ui, world);
+        // Setup + Parameter overrides scroll together when the panel is
+        // short — otherwise the bounds row at the bottom of Setup gets
+        // clipped behind the experiments table below.
+        egui::ScrollArea::vertical()
+            .id_salt("experiments_setup_scroll")
+            .auto_shrink([false, true])
+            .max_height(ui.available_height() * 0.45)
+            .show(ui, |ui| {
+                self.render_setup_section(ui, world);
+                ui.separator();
+                self.render_override_editor(ui, world);
+            });
         ui.separator();
 
         // Snapshot for rendering — avoids holding the registry borrow
@@ -1135,63 +1138,10 @@ impl ExperimentsPanel {
             return;
         }
 
-        egui::CollapsingHeader::new(format!("⚙ Parameters — {}", model_name))
-            .default_open(true)
+        egui::CollapsingHeader::new("⚙ Parameter overrides")
+            .default_open(false)
             .show(ui, |ui| {
                 use lunco_experiments::{ParamPath, ParamValue};
-
-                // Bounds editor
-                let mut bounds = world
-                    .get_resource::<crate::experiments_runner::ExperimentDrafts>()
-                    .and_then(|d| {
-                        d.get(doc, &model_ref)
-                            .and_then(|dr| dr.bounds_override.clone())
-                    })
-                    .unwrap_or(lunco_experiments::RunBounds {
-                        t_start: 0.0,
-                        t_end: 10.0,
-                        dt: None,
-                        tolerance: None,
-                        solver: None,
-                    });
-                let mut bounds_changed = false;
-                ui.horizontal(|ui| {
-                    ui.label("t_start");
-                    if ui.add(egui::DragValue::new(&mut bounds.t_start).speed(0.1)).changed() {
-                        bounds_changed = true;
-                    }
-                    ui.label("t_end");
-                    if ui.add(egui::DragValue::new(&mut bounds.t_end).speed(0.1)).changed() {
-                        bounds_changed = true;
-                    }
-                    let mut dt_v = bounds.dt.unwrap_or(0.0);
-                    let mut adaptive = bounds.dt.is_none();
-                    if ui.checkbox(&mut adaptive, "adaptive dt").changed() {
-                        bounds.dt = if adaptive { None } else { Some(0.01) };
-                        bounds_changed = true;
-                    }
-                    if !adaptive
-                        && ui
-                            .add(
-                                egui::DragValue::new(&mut dt_v)
-                                    .speed(0.001)
-                                    .range(1e-6..=10.0),
-                            )
-                            .changed()
-                    {
-                        bounds.dt = Some(dt_v);
-                        bounds_changed = true;
-                    }
-                });
-                if bounds_changed {
-                    if let Some(mut drafts) = world
-                        .get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
-                    {
-                        drafts.entry(doc, model_ref.clone()).bounds_override = Some(bounds);
-                    }
-                }
-
-                ui.separator();
 
                 // Parameter overrides
                 let current_overrides: BTreeMap<ParamPath, ParamValue> = world
