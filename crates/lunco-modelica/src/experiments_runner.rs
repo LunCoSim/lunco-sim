@@ -873,11 +873,25 @@ pub struct ExperimentSources(
     pub std::collections::HashMap<ExperimentId, lunco_doc::DocumentId>,
 );
 
+/// Per-document playback entity: holds the latest completed run's
+/// time-series in `SignalRegistry` so canvas plot tiles can resolve
+/// `(entity, path)` lookups without a live cosim entity.
+///
+/// One playback entity per doc; refilled in place each time a run
+/// finishes (drop old signals, push new ones). When live cosim is
+/// active for the same doc, the live entity wins in
+/// `doc_to_entity` — playback is the no-live-cosim fallback.
+#[derive(Resource, Default)]
+pub struct PlaybackEntities(
+    pub std::collections::HashMap<lunco_doc::DocumentId, bevy::prelude::Entity>,
+);
+
 /// Bevy system: drain RunUpdate messages from each pending handle,
 /// update the registry status, and emit lifecycle Bevy messages
 /// (`RunProgress` / `RunCompleted` / `RunFailed` / `RunCancelled`).
 /// Removes handles whose runs have terminated.
 pub fn drain_pending_handles(
+    mut commands: bevy::prelude::Commands,
     mut pending: ResMut<PendingHandles>,
     mut registry: ResMut<ExperimentRegistry>,
     mut ev_progress: MessageWriter<RunProgress>,
@@ -889,6 +903,8 @@ pub fn drain_pending_handles(
     mut console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
     mut plot_states: Option<ResMut<crate::ui::panels::experiments::PlotPanelStates>>,
     active_plot: Option<Res<crate::ui::panels::experiments::ActivePlot>>,
+    mut playback: ResMut<PlaybackEntities>,
+    mut signals: Option<ResMut<lunco_viz::SignalRegistry>>,
 ) {
     let mut keep: Vec<RunHandle> = Vec::with_capacity(pending.0.len());
     for handle in pending.0.drain(..) {
@@ -963,6 +979,32 @@ pub fn drain_pending_handles(
                         c.info(format!(
                             "✓ {run_name} done: {n_samples} samples × {n_vars} vars in {wall} ms"
                         ));
+                    }
+                    // Publish the run's series into `SignalRegistry`
+                    // under a per-doc playback entity, so canvas plot
+                    // tiles bound by `PlotBinding::Doc` resolve to
+                    // real (entity, path) samples without needing a
+                    // live cosim entity. One entity per doc, reused
+                    // across runs — drop prior signals then push the
+                    // new run's data.
+                    if let (Some(doc_id), Some(signals_mut)) = (
+                        sources.0.get(&handle.run_id).copied(),
+                        signals.as_deref_mut(),
+                    ) {
+                        let entity = *playback
+                            .0
+                            .entry(doc_id)
+                            .or_insert_with(|| commands.spawn_empty().id());
+                        signals_mut.drop_entity(entity);
+                        for (path, samples) in &result.series {
+                            let sig = lunco_viz::SignalRef {
+                                entity,
+                                path: path.clone(),
+                            };
+                            for (t, v) in result.times.iter().zip(samples.iter()) {
+                                signals_mut.push_scalar(sig.clone(), *t, *v);
+                            }
+                        }
                     }
                     registry.set_result(handle.run_id, result);
                     registry.set_status(

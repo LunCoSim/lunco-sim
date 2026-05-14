@@ -851,6 +851,7 @@ fn build_modelica_core(app: &mut App) {
     app.init_resource::<experiments_runner::PendingHandles>();
     app.init_resource::<experiments_runner::ExperimentDrafts>();
     app.init_resource::<experiments_runner::ExperimentSources>();
+    app.init_resource::<experiments_runner::PlaybackEntities>();
     app.add_systems(Update, experiments_runner::drain_pending_handles);
 
     app.configure_sets(

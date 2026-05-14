@@ -13,6 +13,19 @@ pub(crate) fn stash_snapshots(ui: &egui::Context, world: &mut World, doc_id: Opt
             let pts: Vec<[f64; 2]> = hist.samples.iter().map(|s| [s.time, s.value]).collect();
             snapshot.samples.insert((sig_ref.entity, sig_ref.path.clone()), pts);
         }
+        // Seed doc → playback entity first, then overwrite with the
+        // live cosim entity (if any) so live wins for docs that have
+        // both. The playback entity holds the latest Fast Run's
+        // series in `SignalRegistry` (published by
+        // `drain_pending_handles`), keeping the lookup uniform
+        // — `(entity, path) → samples` — across live and historical.
+        if let Some(playback) = world
+            .get_resource::<crate::experiments_runner::PlaybackEntities>()
+        {
+            for (d, e) in &playback.0 {
+                snapshot.doc_to_entity.insert(d.raw(), *e);
+            }
+        }
         // Source-backed plot tiles store a `doc_id` instead of a
         // pinned sim entity (the runtime entity isn't known at
         // parse / projection time). Populate the per-frame

@@ -205,7 +205,7 @@ fn render_workspace_doc_row(
     let mut start_rename: Option<String> = None;
     let mut commit_rename: Option<String> = None;
     let mut cancel_rename = false;
-    let mut update_draft: Option<String> = None;
+    let update_draft: Option<String> = None;
 
     if let Some((_, draft)) = editing {
         // Inline edit mode — replaces the CollapsingHeader header
