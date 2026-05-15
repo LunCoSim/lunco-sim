@@ -1925,7 +1925,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             anchor_rects.push(("menu.settings", r_settings.response.rect));
             let r_help = ui.menu_button("Help", |ui| {
                 ui.label(format!(
-                    "LunCoSim workbench v{} ({})",
+                    "Lunica v{} ({})",
                     env!("CARGO_PKG_VERSION"),
                     env!("LUNCO_GIT_HASH"),
                 ));

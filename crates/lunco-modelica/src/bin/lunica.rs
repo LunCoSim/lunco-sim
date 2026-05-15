@@ -63,8 +63,8 @@ fn main() {
         port
     };
     let window_title = match api_port {
-        Some(p) => format!("LunCo Modelica Workbench — Listening on {p}"),
-        None => "LunCo Modelica Workbench".to_string(),
+        Some(p) => format!("Lunica — Listening on {p}"),
+        None => "Lunica".to_string(),
     };
 
     let mut app = App::new();

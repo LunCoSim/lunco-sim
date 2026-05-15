@@ -287,7 +287,7 @@ impl Panel for WelcomePanel {
             // ── Hero ───────────────────────────────────────
             ui.vertical_centered(|ui| {
                 ui.heading(
-                    egui::RichText::new("LunCoSim Modelica Workbench")
+                    egui::RichText::new("Lunica (LunCoSim Modelica Workbench)")
                         .size(24.0),
                 );
                 ui.label(

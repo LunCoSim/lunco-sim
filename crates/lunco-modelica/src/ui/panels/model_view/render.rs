@@ -243,18 +243,33 @@ fn render_unified_toolbar(
 
         if let Some((can_undo, can_redo, undo_n, redo_n)) = undo_redo {
             ui.separator();
-            undo_clicked = ui.add_enabled(can_undo, egui::Button::new("↶")).on_hover_text(format!("Undo ({undo_n})")).clicked();
-            redo_clicked = ui.add_enabled(can_redo, egui::Button::new("↷")).on_hover_text(format!("Redo ({redo_n})")).clicked();
+            undo_clicked = ui
+                .add_enabled(can_undo, egui::Button::new("↶"))
+                .on_hover_text(format!("Undo ({undo_n})"))
+                .on_disabled_hover_text("Undo — nothing to undo")
+                .clicked();
+            redo_clicked = ui
+                .add_enabled(can_redo, egui::Button::new("↷"))
+                .on_hover_text(format!("Redo ({redo_n})"))
+                .on_disabled_hover_text("Redo — nothing to redo")
+                .clicked();
         }
 
         ui.separator();
+        let compile_busy_hint = if matches!(compile_state, CompileState::Compiling) {
+            "Compiling — wait for the current build to finish"
+        } else {
+            "A simulation is already running — stop it before compiling again"
+        };
         let r_compile = ui
             .add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("🚀"))
-            .on_hover_text("Interactive compile — build & run the model live; step, pause and tweak inputs as it simulates");
+            .on_hover_text("Interactive compile — build & run the model live; step, pause and tweak inputs as it simulates")
+            .on_disabled_hover_text(compile_busy_hint);
         compile_clicked = r_compile.clicked();
         let r_fast = ui
             .add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("⏩"))
-            .on_hover_text("Fast Run — compile and simulate to completion in one go, then show results");
+            .on_hover_text("Fast Run — compile and simulate to completion in one go, then show results")
+            .on_disabled_hover_text(compile_busy_hint);
         fast_run_clicked = r_fast.clicked();
         // Publish a combined anchor over the two compilation-mode
         // buttons (🚀 Interactive compile, ⏩ Fast Run) so the help

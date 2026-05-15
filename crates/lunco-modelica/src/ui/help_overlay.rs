@@ -75,7 +75,7 @@ struct HelpScreen {
 const SCREENS: &[HelpScreen] = &[
     HelpScreen {
         title: "Welcome to Lunica",
-        body: "LunCoSim Modelica Workbench — a quick interactive tour. \
+        body: "Lunica (LunCoSim Modelica Workbench) — a quick interactive tour. \
                Use ◀ ▶ or the arrow keys. Esc to skip.",
         anchor: None,
         focus_panel: None,
