@@ -1644,71 +1644,86 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     world.trigger(file_ops::ShowOpenFilePicker {});
                     ui.close();
                 }
-                // Open Folder auto-classifies on the resolved path —
-                // `twin.toml` present routes to Twin mode, absence
-                // gives a plain folder workspace. The strict-mode
-                // `OpenTwin` typed command remains available to
-                // recents/HTTP/scripts that want explicit Twin
-                // semantics, but isn't worth a separate menu entry.
-                if ui.button("Open Folder…").clicked() {
-                    world.trigger(file_ops::ShowOpenFolderPicker {});
-                    ui.close();
-                }
+                // Open Folder + Recents are native-only for now.
+                //
+                // TODO(wasm): the browser has no folder picker that
+                // hands back a usable path (`webkitdirectory` only
+                // exposes loose files, not a writable Twin root), and
+                // recents are persisted to `~/.lunco/recents.json` —
+                // there is no home dir on wasm and recorded paths
+                // can't be re-read (no filesystem, picked content is
+                // consumed once). Wasm equivalents need a directory
+                // picker via the File-System-Access API and recents
+                // backed by localStorage / IndexedDB.
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    // Open Folder auto-classifies on the resolved path
+                    // — `twin.toml` present routes to Twin mode,
+                    // absence gives a plain folder workspace. The
+                    // strict-mode `OpenTwin` typed command remains
+                    // available to recents/HTTP/scripts that want
+                    // explicit Twin semantics, but isn't worth a
+                    // separate menu entry.
+                    if ui.button("Open Folder…").clicked() {
+                        world.trigger(file_ops::ShowOpenFolderPicker {});
+                        ui.close();
+                    }
 
-                // -- Recents -----------------------------------------
-                // Twin folders and loose files have separate lists per
-                // VS Code precedent — recently-edited files within a
-                // Twin shouldn't crowd out the much-shorter list of
-                // recently-opened projects. Persisted to
-                // `~/.lunco/recents.json` (cross-platform) by
-                // `WorkspacePlugin`.
-                let (recent_twins, recent_files) = {
-                    let ws = world.resource::<WorkspaceResource>();
-                    (
-                        ws.recents.twin_paths.clone(),
-                        ws.recents.loose_paths.clone(),
-                    )
-                };
-                ui.add_enabled_ui(!recent_twins.is_empty(), |ui| {
-                    ui.menu_button("Open Recent Twin", |ui| {
-                        for path in &recent_twins {
-                            let label = path
-                                .file_name()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or_else(|| path.to_str().unwrap_or("(invalid)"));
-                            if ui
-                                .button(label)
-                                .on_hover_text(path.display().to_string())
-                                .clicked()
-                            {
-                                world.trigger(file_ops::OpenTwin {
-                                    path: path.display().to_string(),
-                                });
-                                ui.close();
+                    // -- Recents ------------------------------------
+                    // Twin folders and loose files have separate
+                    // lists per VS Code precedent — recently-edited
+                    // files within a Twin shouldn't crowd out the
+                    // much-shorter list of recently-opened projects.
+                    // Persisted to `~/.lunco/recents.json`
+                    // (cross-platform) by `WorkspacePlugin`.
+                    let (recent_twins, recent_files) = {
+                        let ws = world.resource::<WorkspaceResource>();
+                        (
+                            ws.recents.twin_paths.clone(),
+                            ws.recents.loose_paths.clone(),
+                        )
+                    };
+                    ui.add_enabled_ui(!recent_twins.is_empty(), |ui| {
+                        ui.menu_button("Open Recent Twin", |ui| {
+                            for path in &recent_twins {
+                                let label = path
+                                    .file_name()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or_else(|| path.to_str().unwrap_or("(invalid)"));
+                                if ui
+                                    .button(label)
+                                    .on_hover_text(path.display().to_string())
+                                    .clicked()
+                                {
+                                    world.trigger(file_ops::OpenTwin {
+                                        path: path.display().to_string(),
+                                    });
+                                    ui.close();
+                                }
                             }
-                        }
+                        });
                     });
-                });
-                ui.add_enabled_ui(!recent_files.is_empty(), |ui| {
-                    ui.menu_button("Open Recent File", |ui| {
-                        for path in &recent_files {
-                            let label = path
-                                .file_name()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or_else(|| path.to_str().unwrap_or("(invalid)"));
-                            if ui
-                                .button(label)
-                                .on_hover_text(path.display().to_string())
-                                .clicked()
-                            {
-                                world.trigger(file_ops::OpenFile {
-                                    path: path.display().to_string(),
-                                });
-                                ui.close();
+                    ui.add_enabled_ui(!recent_files.is_empty(), |ui| {
+                        ui.menu_button("Open Recent File", |ui| {
+                            for path in &recent_files {
+                                let label = path
+                                    .file_name()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or_else(|| path.to_str().unwrap_or("(invalid)"));
+                                if ui
+                                    .button(label)
+                                    .on_hover_text(path.display().to_string())
+                                    .clicked()
+                                {
+                                    world.trigger(file_ops::OpenFile {
+                                        path: path.display().to_string(),
+                                    });
+                                    ui.close();
+                                }
                             }
-                        }
+                        });
                     });
-                });
+                }
                 ui.separator();
 
                 // -- Save ---------------------------------------------

@@ -166,6 +166,18 @@ pub fn on_save_document(
 ) {
     let doc = trigger.event().doc;
 
+    // No writable filesystem in the browser — every save is a
+    // download. Delegate to Save-As, which picks a sensible file name
+    // and triggers the browser download.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (&registry, &console);
+        commands.trigger(SaveAsDocument { doc, path: String::new() });
+        return;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
     let to_save = {
         let Some(host) = registry.host(doc) else {
             return;
@@ -210,6 +222,7 @@ pub fn on_save_document(
 
     registry.mark_document_saved(doc);
     commands.trigger(DocumentSaved::local(doc));
+    }
 }
 
 pub fn on_save_as_document(
@@ -222,6 +235,34 @@ pub fn on_save_as_document(
     let doc = trigger.event().doc;
     let target_path = trigger.event().path.clone();
 
+    // wasm: no filesystem, and the browser's save flow can't hand back
+    // a writable path — so Save-As is a download triggered right here,
+    // never a two-phase picker round-trip.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = &workspace;
+        let (name, source) = {
+            let Some(host) = registry.host(doc) else { return };
+            let document = host.document();
+            let name = if !target_path.is_empty() {
+                target_path.clone()
+            } else {
+                let raw = document.origin().display_name();
+                if raw.ends_with(".mo") { raw } else { format!("{raw}.mo") }
+            };
+            (name, document.source().to_string())
+        };
+        lunco_workbench::picker::download_file(&name, &source);
+        registry.mark_document_saved(doc);
+        let msg = format!("Downloaded {} ({} bytes)", name, source.len());
+        info!("[SaveAs] {msg}");
+        console.info(msg);
+        commands.trigger(DocumentSaved::local(doc));
+        return;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
     if target_path.is_empty() {
         let Some(host) = registry.host(doc) else { return };
         let document = host.document();
@@ -279,6 +320,7 @@ pub fn on_save_as_document(
     console.info(msg);
 
     commands.trigger(DocumentSaved::local(doc));
+    }
 }
 
 #[on_command(FormatDocument)]

@@ -42,6 +42,29 @@ rfd = { workspace = true }
 # replacement on every target.
 web-time = { workspace = true }
 
+# Web file picker. On wasm32 the picker backend (`src/picker.rs`)
+# raises the browser's open dialog through a hidden `<input
+# type="file">` and reads the chosen file's text browser-side — there
+# is no `rfd` and no filesystem.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "HtmlInputElement",
+    "HtmlAnchorElement",
+    "CssStyleDeclaration",
+    "Node",
+    "File",
+    "FileList",
+    "Blob",
+    "Url",
+] }
+
 [dev-dependencies]
 # For the hello_workbench example. The full DefaultPlugins pull in a winit
 # window + renderer so the example produces an actual window.

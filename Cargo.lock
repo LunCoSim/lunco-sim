@@ -6422,6 +6422,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "egui_dock",
+ "js-sys",
  "lunco-assets",
  "lunco-core",
  "lunco-doc",
@@ -6434,6 +6435,9 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "web-time",
 ]
 

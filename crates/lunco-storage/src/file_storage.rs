@@ -18,7 +18,6 @@
 #![allow(unreachable_patterns)]
 
 use std::collections::HashMap;
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
 
 use crate::{OpenFilter, SaveHint, Storage, StorageError, StorageHandle, StorageResult};

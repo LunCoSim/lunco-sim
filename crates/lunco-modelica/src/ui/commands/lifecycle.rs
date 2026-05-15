@@ -731,31 +731,57 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
             return;
         }
 
-        // Read the file off the main thread. A 150 KB MSL package
-        // file synchronously read on the input path is ~30 ms of
-        // stutter; spawn on AsyncCompute and re-enter the World via
-        // a one-shot channel drained on the Update tick.
         let path_buf = std::path::PathBuf::from(&path);
-        let path_for_task = path_buf.clone();
-        let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-            std::fs::read_to_string(&path_for_task)
-        });
-        bevy::tasks::AsyncComputeTaskPool::get()
-            .spawn(async move {
-                let read_result = task.await;
-                let _ = OPEN_FILE_RESULT_TX
-                    .get_or_init(|| {
-                        let (tx, rx) = std::sync::mpsc::channel::<OpenFileResult>();
-                        let _ = OPEN_FILE_RESULT_RX.set(std::sync::Mutex::new(rx));
-                        tx
-                    })
-                    .send(OpenFileResult {
+
+        // wasm has no filesystem: the web file picker already read the
+        // chosen file's text browser-side and stashed it under its
+        // name. Pull it back and feed the same result channel.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let read_result = match lunco_workbench::picker::take_picked_content(&path) {
+                Some(content) => Ok(content),
+                None => Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no picked content for this path (wasm has no filesystem)",
+                )),
+            };
+            let _ = open_file_result_tx().send(OpenFileResult {
+                path: path_buf,
+                read_result,
+            });
+        }
+
+        // Native: read the file off the main thread. A 150 KB MSL
+        // package file synchronously read on the input path is ~30 ms
+        // of stutter; spawn on AsyncCompute and re-enter the World via
+        // a one-shot channel drained on the Update tick.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let path_for_task = path_buf.clone();
+            let task = bevy::tasks::AsyncComputeTaskPool::get()
+                .spawn(async move { std::fs::read_to_string(&path_for_task) });
+            bevy::tasks::AsyncComputeTaskPool::get()
+                .spawn(async move {
+                    let read_result = task.await;
+                    let _ = open_file_result_tx().send(OpenFileResult {
                         path: path_buf,
                         read_result,
                     });
-            })
-            .detach();
+                })
+                .detach();
+        }
     });
+}
+
+/// Lazily-initialised sender for the `OpenFile` read-result channel.
+/// Both the native async path and the wasm picker path funnel results
+/// here; [`drain_open_file_results`] consumes them on the Update tick.
+fn open_file_result_tx() -> &'static std::sync::mpsc::Sender<OpenFileResult> {
+    OPEN_FILE_RESULT_TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<OpenFileResult>();
+        let _ = OPEN_FILE_RESULT_RX.set(std::sync::Mutex::new(rx));
+        tx
+    })
 }
 
 struct OpenFileResult {

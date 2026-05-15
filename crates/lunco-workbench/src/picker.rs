@@ -222,12 +222,251 @@ mod native {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Web backend — browser dialog via a hidden `<input type="file">`
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// `cfg(wasm32)` sibling of `native`: same `PickHandle` in, same
+// `PickResolved` / `PickCancelled` out. A hidden `<input type="file">`
+// is the most portable open path — it works on every browser, unlike
+// the Chromium-only File-System-Access API. The chosen file's text is
+// read browser-side and stashed in a per-name cache; domain `OpenFile`
+// observers pull it back via [`take_picked_content`] instead of
+// `std::fs`, which has no real filesystem to read on wasm. Save and
+// folder pickers are not wired yet and resolve as a cancellation.
+
+#[cfg(target_arch = "wasm32")]
+mod web {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use bevy::prelude::*;
+    use wasm_bindgen::prelude::*;
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::{spawn_local, JsFuture};
+
+    use super::{
+        OpenFilter, PickCancelled, PickFollowUp, PickHandle, PickMode, PickResolved,
+        StorageHandle,
+    };
+
+    thread_local! {
+        /// Picks resolved on the JS event loop, awaiting conversion
+        /// into Bevy events by [`drain_web_picks`] on the next tick.
+        static PENDING: RefCell<Vec<Outcome>> = const { RefCell::new(Vec::new()) };
+        /// Text of files chosen through the picker, keyed by file
+        /// name. Drained by [`take_picked_content`].
+        static PICKED_CONTENT: RefCell<HashMap<String, String>> =
+            RefCell::new(HashMap::new());
+    }
+
+    enum Outcome {
+        Resolved {
+            follow_up: PickFollowUp,
+            handle: StorageHandle,
+        },
+        Cancelled {
+            follow_up: PickFollowUp,
+        },
+    }
+
+    fn push(outcome: Outcome) {
+        PENDING.with(|p| p.borrow_mut().push(outcome));
+    }
+
+    /// Pull a previously-picked file's text out of the stash, by file
+    /// name. Returns `None` when the name was never picked (or was
+    /// already taken — each entry is consumed once).
+    pub(super) fn take_picked_content(name: &str) -> Option<String> {
+        PICKED_CONTENT.with(|m| m.borrow_mut().remove(name))
+    }
+
+    /// Trigger a browser download of `content` under `file_name`.
+    ///
+    /// The browser owns where the bytes land (the Downloads folder, or
+    /// a Save-As prompt depending on the user's settings) — there is no
+    /// writable filesystem path to hand back, so this is a fire-and-
+    /// forget alternative to `Storage::write` on wasm. Builds a `Blob`,
+    /// wires it to a hidden `<a download>` anchor, and clicks it.
+    pub(super) fn download_file(file_name: &str, content: &str) -> Result<(), JsValue> {
+        let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
+        let document = window
+            .document()
+            .ok_or_else(|| JsValue::from_str("no document"))?;
+        let body = document
+            .body()
+            .ok_or_else(|| JsValue::from_str("no document body"))?;
+
+        let parts = js_sys::Array::new();
+        parts.push(&JsValue::from_str(content));
+        let blob = web_sys::Blob::new_with_str_sequence(&parts)?;
+        let url = web_sys::Url::create_object_url_with_blob(&blob)?;
+
+        let anchor: web_sys::HtmlAnchorElement =
+            document.create_element("a")?.dyn_into()?;
+        anchor.set_href(&url);
+        anchor.set_download(file_name);
+        anchor.style().set_property("display", "none")?;
+        body.append_child(&anchor)?;
+        anchor.click();
+        if let Some(parent) = anchor.parent_node() {
+            let _ = parent.remove_child(&anchor);
+        }
+        // The object URL is intentionally not revoked: revoking it
+        // immediately can race the browser's download kick-off. A few
+        // bytes per save leak until the page unloads — negligible.
+        Ok(())
+    }
+
+    /// Observer: react to [`PickHandle`] by raising a browser dialog.
+    pub(super) fn spawn_picker(trigger: On<PickHandle>) {
+        let event = trigger.event().clone();
+        match event.mode {
+            PickMode::OpenFile(filter) => {
+                if let Err(e) = open_file_dialog(&filter, event.on_resolved.clone()) {
+                    warn!("[picker] could not open web file dialog: {e:?}");
+                    push(Outcome::Cancelled {
+                        follow_up: event.on_resolved,
+                    });
+                }
+            }
+            PickMode::SaveFile(_) | PickMode::OpenFolder => {
+                warn!(
+                    "[picker] save / folder dialogs are not yet supported on \
+                     wasm — request resolves as cancelled"
+                );
+                push(Outcome::Cancelled {
+                    follow_up: event.on_resolved,
+                });
+            }
+        }
+    }
+
+    /// Per-frame system: turn JS-resolved picks into Bevy events.
+    pub(super) fn drain_web_picks(mut commands: Commands) {
+        let drained: Vec<Outcome> = PENDING.with(|p| p.borrow_mut().drain(..).collect());
+        for outcome in drained {
+            match outcome {
+                Outcome::Resolved { follow_up, handle } => {
+                    commands.trigger(PickResolved { follow_up, handle });
+                }
+                Outcome::Cancelled { follow_up } => {
+                    commands.trigger(PickCancelled { follow_up });
+                }
+            }
+        }
+    }
+
+    /// Build a hidden `<input type="file">`, wire its `change` event,
+    /// and click it to raise the browser's native open dialog.
+    fn open_file_dialog(
+        filter: &OpenFilter,
+        follow_up: PickFollowUp,
+    ) -> Result<(), JsValue> {
+        let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
+        let document = window
+            .document()
+            .ok_or_else(|| JsValue::from_str("no document"))?;
+        let body = document
+            .body()
+            .ok_or_else(|| JsValue::from_str("no document body"))?;
+
+        let input: web_sys::HtmlInputElement =
+            document.create_element("input")?.dyn_into()?;
+        input.set_type("file");
+        if !filter.extensions.is_empty() {
+            let accept = filter
+                .extensions
+                .iter()
+                .map(|e| format!(".{e}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            input.set_accept(&accept);
+        }
+        input.style().set_property("display", "none")?;
+        body.append_child(&input)?;
+
+        let input_for_change = input.clone();
+        let change = Closure::<dyn FnMut()>::new(move || {
+            on_input_change(&input_for_change, follow_up.clone());
+        });
+        input.set_onchange(Some(change.as_ref().unchecked_ref()));
+        // The browser invokes the closure long after this frame — it
+        // must outlive the stack. One small leak per dialog opened;
+        // negligible for a user-driven action.
+        change.forget();
+
+        input.click();
+        Ok(())
+    }
+
+    /// `change` handler: read the chosen file's text and resolve the
+    /// pending pick. An empty `FileList` means the user cancelled.
+    fn on_input_change(input: &web_sys::HtmlInputElement, follow_up: PickFollowUp) {
+        let detach = |el: &web_sys::HtmlInputElement| {
+            if let Some(parent) = el.parent_node() {
+                let _ = parent.remove_child(el);
+            }
+        };
+        let Some(file) = input.files().and_then(|list| list.get(0)) else {
+            detach(input);
+            push(Outcome::Cancelled { follow_up });
+            return;
+        };
+        let name = file.name();
+        detach(input);
+
+        // `File::text()` (inherited from `Blob`) yields a promise of
+        // the decoded UTF-8 contents — correct for `.mo` source.
+        let text_promise = file.text();
+        spawn_local(async move {
+            match JsFuture::from(text_promise).await {
+                Ok(value) => {
+                    let content = value.as_string().unwrap_or_default();
+                    PICKED_CONTENT
+                        .with(|m| m.borrow_mut().insert(name.clone(), content));
+                    push(Outcome::Resolved {
+                        follow_up,
+                        handle: StorageHandle::File(name.into()),
+                    });
+                }
+                Err(e) => {
+                    warn!("[picker] reading picked file failed: {e:?}");
+                    push(Outcome::Cancelled { follow_up });
+                }
+            }
+        });
+    }
+}
+
+/// Retrieve the text of a file chosen through the wasm file picker,
+/// keyed by file name. Domain `OpenFile` observers call this on wasm
+/// in place of `std::fs` — the browser has no filesystem to read, but
+/// the picker already pulled the bytes in. Each entry is consumed
+/// once; a second call for the same name returns `None`.
+#[cfg(target_arch = "wasm32")]
+pub fn take_picked_content(name: &str) -> Option<String> {
+    web::take_picked_content(name)
+}
+
+/// Save `content` by triggering a browser download named `file_name`.
+///
+/// The wasm counterpart to writing a file: there is no real filesystem
+/// in the browser, so domain "Save" / "Save As" handlers call this on
+/// wasm instead of `Storage::write`. The browser decides where the
+/// bytes land. Logs and swallows DOM errors — a failed save shouldn't
+/// panic the app.
+#[cfg(target_arch = "wasm32")]
+pub fn download_file(file_name: &str, content: &str) {
+    if let Err(e) = web::download_file(file_name, content) {
+        bevy::log::warn!("[picker] browser download of `{file_name}` failed: {e:?}");
+    }
+}
+
 /// Plugin that wires up the picker backend appropriate for the target.
 ///
 /// On native: registers the `rfd`-driven observer + poll system. On
-/// wasm: today it's a no-op stub; the File-System-Access backend will
-/// drop into the same plugin behind a `cfg`-gated branch when the wasm
-/// build comes online.
+/// wasm: registers the `<input type="file">` observer + drain system.
 ///
 /// `WorkbenchPlugin` adds this automatically; standalone tests that
 /// want picker behaviour without the full workbench shell can install
@@ -243,11 +482,8 @@ impl Plugin for PickerPlugin {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            // Web backend lands in a follow-up: `showOpenFilePicker` /
-            // `showSaveFilePicker` / `showDirectoryPicker` via wasm-bindgen,
-            // same `PickHandle` in, same `PickResolved` / `PickCancelled`
-            // out. Until then, picker requests on wasm silently no-op.
-            let _ = app;
+            app.add_observer(web::spawn_picker)
+                .add_systems(Update, web::drain_web_picks);
         }
     }
 }
