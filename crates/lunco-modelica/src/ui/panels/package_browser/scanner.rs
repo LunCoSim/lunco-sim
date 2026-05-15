@@ -78,13 +78,109 @@ pub fn scan_msl_dir(dir: &Path, package_path: String) -> Vec<PackageNode> {
     #[cfg(target_arch = "wasm32")]
     {
         let _ = dir;
-        let _ = package_path;
-        Vec::new() // FIXME: scan_msl_inmem missing
+        scan_msl_inmem(&package_path)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
         scan_msl_dir_native(dir, package_path)
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn scan_msl_inmem(package_path: &str) -> Vec<PackageNode> {
+    if crate::msl_remote::global_parsed_msl().is_none() {
+        return Vec::new();
+    }
+    let tree = msl_inmem_index();
+    let Some(children) = tree.get(package_path) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PackageNode> = Vec::with_capacity(children.len());
+    for (short, kind) in children {
+        let qname = if package_path.is_empty() {
+            short.clone()
+        } else {
+            format!("{package_path}.{short}")
+        };
+        let has_children = tree.get(&qname).map(|v| !v.is_empty()).unwrap_or(false);
+        let id = format!("msl_{}", qname.replace('.', "_"));
+        if has_children {
+            out.push(PackageNode::Category {
+                id,
+                name: short.clone(),
+                package_path: qname,
+                fs_path: std::path::PathBuf::new(),
+                children: None,
+                is_loading: false,
+            });
+        } else {
+            out.push(PackageNode::Model {
+                id,
+                name: short.clone(),
+                library: ModelLibrary::MSL,
+                class_kind: Some(*kind),
+            });
+        }
+    }
+    out.sort_by_key(omedit_sort_key);
+    out
+}
+
+#[cfg(target_arch = "wasm32")]
+fn msl_inmem_index(
+) -> &'static std::collections::HashMap<String, Vec<(String, crate::index::ClassKind)>> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<
+        std::collections::HashMap<String, Vec<(String, crate::index::ClassKind)>>,
+    > = OnceLock::new();
+    CACHE.get_or_init(build_msl_inmem_index)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_msl_inmem_index(
+) -> std::collections::HashMap<String, Vec<(String, crate::index::ClassKind)>> {
+    use std::collections::HashMap;
+    let mut tree: HashMap<String, Vec<(String, crate::index::ClassKind)>> = HashMap::new();
+    let Some(parsed) = crate::msl_remote::global_parsed_msl() else {
+        return tree;
+    };
+
+    fn walk(
+        parent_qname: &str,
+        short_name: &str,
+        def: &rumoca_session::parsing::ast::ClassDef,
+        tree: &mut std::collections::HashMap<String, Vec<(String, crate::index::ClassKind)>>,
+    ) {
+        let qname = if parent_qname.is_empty() {
+            short_name.to_string()
+        } else {
+            format!("{parent_qname}.{short_name}")
+        };
+        let kind = crate::index::map_class_type(&def.class_type);
+        tree.entry(parent_qname.to_string())
+            .or_default()
+            .push((short_name.to_string(), kind));
+        for (child_short, child_def) in &def.classes {
+            walk(&qname, child_short, child_def, tree);
+        }
+    }
+
+    for (_uri, def) in parsed.iter() {
+        let parent = def
+            .within
+            .as_ref()
+            .map(|w| w.to_string())
+            .unwrap_or_default();
+        for (short, cdef) in &def.classes {
+            walk(&parent, short, cdef, &mut tree);
+        }
+    }
+
+    for entries in tree.values_mut() {
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        entries.dedup_by(|a, b| a.0 == b.0);
+    }
+    tree
 }
 
 #[cfg(not(target_arch = "wasm32"))]
