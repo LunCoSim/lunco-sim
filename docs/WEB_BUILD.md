@@ -1,8 +1,8 @@
-# Building LunCo Modelica Workbench for Web
+# Building Lunica for Web
 
 ## Overview
 
-The LunCo Modelica Workbench compiles to WebAssembly (wasm32-unknown-unknown) and runs in the browser with WebGPU rendering via Bevy/wgpu. The full Modelica simulation pipeline works in the browser — compilation, DAE generation, and runtime simulation.
+The Lunica compiles to WebAssembly (wasm32-unknown-unknown) and runs in the browser with WebGPU rendering via Bevy/wgpu. The full Modelica simulation pipeline works in the browser — compilation, DAE generation, and runtime simulation.
 
 ## Architecture
 
