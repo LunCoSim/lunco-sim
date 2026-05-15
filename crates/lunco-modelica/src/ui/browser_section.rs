@@ -205,6 +205,7 @@ fn render_workspace_doc_row(
     let mut start_rename: Option<String> = None;
     let mut commit_rename: Option<String> = None;
     let mut cancel_rename = false;
+    let mut close_doc = false;
     let update_draft: Option<String> = None;
 
     if let Some((_, draft)) = editing {
@@ -303,9 +304,20 @@ fn render_workspace_doc_row(
                     start_rename = Some(doc_name.to_string());
                     ui.close();
                 }
+                if ui.button("✕ Close").clicked() {
+                    close_doc = true;
+                    ui.close();
+                }
             });
         });
         header.body(|ui| render_workspace_doc(ui, ctx, doc_id));
+    }
+
+    // Close the document — drops its tabs and (for an autosaved
+    // wasm draft) its localStorage entry. Dispatched after the egui
+    // closures release their borrow on `ctx`.
+    if close_doc {
+        ctx.actions.push(BrowserAction::CloseDoc { doc: doc_id });
     }
 
     // State transitions, priority: commit > cancel > start > update.

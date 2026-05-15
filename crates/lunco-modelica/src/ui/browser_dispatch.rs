@@ -32,7 +32,9 @@ pub fn drain_browser_actions(world: &mut World) {
                 .and_then(|e| e.to_str())
                 .map(|ext| ext.eq_ignore_ascii_case("mo"))
                 .unwrap_or(false),
-            BrowserAction::OpenModelicaClass { .. } | BrowserAction::OpenLoadedClass { .. } => true,
+            BrowserAction::OpenModelicaClass { .. }
+            | BrowserAction::OpenLoadedClass { .. }
+            | BrowserAction::CloseDoc { .. } => true,
             _ => false,
         })
     };
@@ -162,6 +164,33 @@ pub fn drain_browser_actions(world: &mut World) {
                 world
                     .resource_mut::<lunco_workbench::WorkspaceResource>()
                     .active_document = Some(doc);
+            }
+            BrowserAction::CloseDoc { doc } => {
+                use crate::ui::panels::model_view::{ModelTabs, MODEL_VIEW_KIND};
+                // Close every tab bound to the doc — dock layout via
+                // CloseTab triggers, ModelTabs state via
+                // `close_all_for_doc`, canvas via `drop_tab` — then
+                // the document itself. `CloseDocument`'s observers
+                // handle registry removal and package-tree cleanup;
+                // on wasm the resulting `DocumentClosed` also clears
+                // the localStorage autosave entry, so a restored
+                // draft stops resurrecting on reload.
+                let tab_ids =
+                    world.resource_mut::<ModelTabs>().close_all_for_doc(doc);
+                for tab in tab_ids {
+                    world.commands().trigger(lunco_workbench::CloseTab {
+                        kind: MODEL_VIEW_KIND,
+                        instance: tab,
+                    });
+                    if let Some(mut state) = world.get_resource_mut::<
+                        crate::ui::panels::canvas_diagram::CanvasDiagramState,
+                    >() {
+                        state.drop_tab(tab);
+                    }
+                }
+                world
+                    .commands()
+                    .trigger(lunco_doc_bevy::CloseDocument { doc });
             }
             // `BrowserAction` is `#[non_exhaustive]` upstream; future
             // variants land as warnings here, not silent drops.

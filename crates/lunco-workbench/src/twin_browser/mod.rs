@@ -232,6 +232,16 @@ pub enum BrowserAction {
         /// Fully-qualified Modelica path to the class.
         qualified_path: String,
     },
+    /// User clicked the close (✕) control on a workspace-document row
+    /// in the Files section → close the document, all its tabs, and
+    /// any backing state (on wasm this also clears the localStorage
+    /// autosave entry, so an unwanted draft stops resurrecting on
+    /// reload). Discards unsaved changes without a prompt — the row's
+    /// dirty dot is the warning.
+    CloseDoc {
+        /// The document to close.
+        doc: lunco_doc::DocumentId,
+    },
 }
 
 /// Frame-scoped outbox of actions emitted by sections during render.

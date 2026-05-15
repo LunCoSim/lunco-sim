@@ -58,7 +58,8 @@ impl Plugin for WasmAutosavePlugin {
             );
         #[cfg(target_arch = "wasm32")]
         {
-            app.add_systems(bevy::prelude::Startup, restore_from_localstorage)
+            app.init_resource::<AutosaveKeys>()
+                .add_systems(bevy::prelude::Startup, restore_from_localstorage)
                 .add_observer(autosave_on_changed)
                 .add_observer(forget_on_closed);
         }
@@ -98,6 +99,23 @@ fn drive_modal_gesture_flag(
     if gesture.modal != active {
         gesture.modal = active;
     }
+}
+
+/// Side map of `DocumentId → display name` for every document we've
+/// autosaved this session (plus those restored at startup).
+///
+/// `forget_on_closed` needs the display name to rebuild a document's
+/// `localStorage` key, but `CloseDocument`'s `on_close_document`
+/// observer removes the doc from the registry *before* the
+/// `DocumentClosed` event fires — so the origin is unreachable by
+/// then. This map captures the name while the document still exists,
+/// so the autosave key survives long enough to be cleared. Without it
+/// the `localStorage` entry leaks and `restore_from_localstorage`
+/// resurrects the doc on the next reload.
+#[cfg(target_arch = "wasm32")]
+#[derive(bevy::prelude::Resource, Default)]
+struct AutosaveKeys {
+    by_doc: std::collections::HashMap<lunco_doc::DocumentId, String>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -155,6 +173,12 @@ fn restore_from_localstorage(world: &mut World) {
             source,
             lunco_doc::DocumentOrigin::untitled(display_name.clone()),
         );
+        // Remember the key so a later close can clear localStorage
+        // even after the registry host is gone.
+        world
+            .resource_mut::<AutosaveKeys>()
+            .by_doc
+            .insert(doc_id, display_name.clone());
         // Register an in-memory entry so the Package Browser shows
         // the doc under "Workspace / (Untitled)". The browser's
         // existing render path picks it up; no extra UI plumbing.
@@ -228,6 +252,7 @@ fn autosave_on_changed(
     trigger: bevy::prelude::On<lunco_doc_bevy::DocumentChanged>,
     registry: bevy::prelude::Res<crate::ui::state::ModelicaDocumentRegistry>,
     gesture: bevy::prelude::Res<IsGestureActive>,
+    mut keys: bevy::prelude::ResMut<AutosaveKeys>,
 ) {
     let Some(storage) = local_storage() else { return };
     let doc = trigger.event().doc;
@@ -237,8 +262,12 @@ fn autosave_on_changed(
     if !should_autosave(gesture.any(), origin.is_untitled()) {
         return;
     }
-    let key = storage_key(&origin.display_name());
+    let display_name = origin.display_name();
+    let key = storage_key(&display_name);
     let _ = storage.set_item(&key, document.source());
+    // Capture the key while the doc still exists — `forget_on_closed`
+    // can't reach the origin once the registry host is removed.
+    keys.by_doc.insert(doc, display_name.to_string());
 }
 
 /// Drop the autosaved entry when the user closes the tab — the
@@ -247,18 +276,16 @@ fn autosave_on_changed(
 #[cfg(target_arch = "wasm32")]
 fn forget_on_closed(
     trigger: bevy::prelude::On<lunco_doc_bevy::DocumentClosed>,
-    registry: bevy::prelude::Res<crate::ui::state::ModelicaDocumentRegistry>,
+    mut keys: bevy::prelude::ResMut<AutosaveKeys>,
 ) {
     let Some(storage) = local_storage() else { return };
     let doc = trigger.event().doc;
-    // The doc may already be gone from the registry by the time
-    // `Closed` fires; `find_by_path` doesn't help here. Best-effort:
-    // try to look it up; if absent, skip.
-    let Some(host) = registry.host(doc) else { return };
-    let origin = host.document().origin();
-    if !origin.is_untitled() {
-        return;
-    }
-    let key = storage_key(&origin.display_name());
+    // `CloseDocument`'s `on_close_document` observer removes the doc
+    // from the registry *before* `DocumentClosed` fires, so the
+    // origin is unreachable here. Use the display name captured in
+    // `AutosaveKeys` while the doc still existed. Absent ⇒ the doc was
+    // never autosaved (File-backed / bundled) ⇒ nothing to clear.
+    let Some(display_name) = keys.by_doc.remove(&doc) else { return };
+    let key = storage_key(&display_name);
     let _ = storage.remove_item(&key);
 }

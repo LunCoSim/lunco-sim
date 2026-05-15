@@ -194,6 +194,7 @@ impl BrowserSection for FilesSection {
         let mut doc_begin_rename: Option<DocRenameInProgress> = None;
         let mut doc_submit: Option<(lunco_doc::DocumentId, String)> = None;
         let mut doc_cancel = false;
+        let mut doc_close: Option<lunco_doc::DocumentId> = None;
 
         for entry in &docs {
             let in_rename = self
@@ -263,8 +264,66 @@ impl BrowserSection for FilesSection {
                             needs_focus: true,
                         });
                     }
+                    // Close (✕) control — closes the document, its
+                    // tabs, and (on wasm) its localStorage autosave
+                    // entry. Without this a restored draft has no
+                    // delete path from the UI and resurrects on every
+                    // reload. Right-aligned so it doesn't crowd names.
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            let close = ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("✕").size(10.0),
+                                    )
+                                    .frame(false)
+                                    .small(),
+                                )
+                                .on_hover_text(
+                                    "Close document (discards unsaved \
+                                     changes)",
+                                );
+                            if close.clicked() {
+                                doc_close = Some(entry.id);
+                            }
+                        },
+                    );
                 }
             });
+        }
+
+        // Drain the workspace-doc intents (rename + close) here —
+        // BEFORE the `twins.is_empty()` early return below. These
+        // intents are about open documents, not the Twin file tree,
+        // so they must fire even when no Twin/folder is open (e.g. a
+        // lone in-memory draft restored from autosave). Draining them
+        // after the early return silently dropped every rename and
+        // close click in that state.
+        if let Some(intent) = doc_begin_rename {
+            self.rename_doc = Some(intent);
+        }
+        if let Some((doc, new_name)) = doc_submit {
+            self.rename_doc = None;
+            let new_name = new_name.trim().to_string();
+            if !new_name.is_empty() {
+                ctx.world
+                    .commands()
+                    .trigger(super::super::file_ops::RenameOpenDocument {
+                        doc,
+                        new_name,
+                    });
+            }
+        }
+        if doc_cancel {
+            self.rename_doc = None;
+        }
+        if let Some(doc) = doc_close {
+            // Cancel any in-flight rename on the doc we're closing.
+            if self.rename_doc.as_ref().map(|r| r.doc) == Some(doc) {
+                self.rename_doc = None;
+            }
+            ctx.actions.push(BrowserAction::CloseDoc { doc });
         }
 
         // Collect twins out of ctx so we can re-borrow ctx.actions
@@ -399,27 +458,6 @@ impl BrowserSection for FilesSection {
         }
         if cancel_rename {
             self.rename = None;
-        }
-
-        // Workspace-doc rename: drain after the egui pass for the
-        // same borrow-checker reason as the Twin-tree path.
-        if let Some(intent) = doc_begin_rename {
-            self.rename_doc = Some(intent);
-        }
-        if let Some((doc, new_name)) = doc_submit {
-            self.rename_doc = None;
-            let new_name = new_name.trim().to_string();
-            if !new_name.is_empty() {
-                ctx.world
-                    .commands()
-                    .trigger(super::super::file_ops::RenameOpenDocument {
-                        doc,
-                        new_name,
-                    });
-            }
-        }
-        if doc_cancel {
-            self.rename_doc = None;
         }
     }
 }
