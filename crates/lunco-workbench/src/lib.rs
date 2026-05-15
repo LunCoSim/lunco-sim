@@ -1641,9 +1641,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
 
                 // -- Open ---------------------------------------------
                 if ui.button("Open File…\tCtrl+O").clicked() {
-                    world.trigger(file_ops::OpenFile {
-                        path: String::new(),
-                    });
+                    world.trigger(file_ops::ShowOpenFilePicker {});
                     ui.close();
                 }
                 // Open Folder auto-classifies on the resolved path —
@@ -1653,9 +1651,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 // recents/HTTP/scripts that want explicit Twin
                 // semantics, but isn't worth a separate menu entry.
                 if ui.button("Open Folder…").clicked() {
-                    world.trigger(file_ops::OpenFolder {
-                        path: String::new(),
-                    });
+                    world.trigger(file_ops::ShowOpenFolderPicker {});
                     ui.close();
                 }
 

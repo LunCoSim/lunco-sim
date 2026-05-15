@@ -1978,7 +1978,7 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
         start_dir: None,
         filters: vec![lunco_storage::OpenFilter::new("CSV", &["csv"])],
     };
-    let handle = match storage.pick_save(&hint) {
+    let handle = match futures_lite::future::block_on(storage.pick_save(&hint)) {
         Ok(Some(h)) => h,
         Ok(None) => return,
         Err(e) => {
@@ -1990,7 +1990,7 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
             return;
         }
     };
-    if let Err(e) = storage.write(&handle, csv_text.as_bytes()) {
+    if let Err(e) = futures_lite::future::block_on(storage.write(&handle, csv_text.as_bytes())) {
         if let Some(mut console) =
             world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
         {

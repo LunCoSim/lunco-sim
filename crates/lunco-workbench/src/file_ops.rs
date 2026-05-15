@@ -44,6 +44,22 @@ use lunco_twin::{DocumentKindId, DocumentKindRegistry, TwinError, TwinMode};
 use crate::picker::{PickFollowUp, PickResolved};
 use crate::session::{FileRenamed, TwinAdded, TwinClosed, WorkspaceResource};
 
+/// Request a system "Open File" dialog.
+///
+/// Dispatches [`ShowOpenFilePicker`] which triggers the picker via
+/// [`crate::picker::PickHandle`]. On success, the picker resolves to
+/// [`OpenFile`] with the chosen path.
+#[Command(default)]
+pub struct ShowOpenFilePicker {}
+
+/// Request a system "Open Folder" dialog.
+///
+/// Dispatches [`ShowOpenFolderPicker`] which triggers the picker via
+/// [`crate::picker::PickHandle`]. On success, the picker resolves to
+/// [`OpenFolder`] with the chosen path.
+#[Command(default)]
+pub struct ShowOpenFolderPicker {}
+
 /// Create a new untitled document of the given kind.
 ///
 /// `kind` is the registered [`DocumentKindId`] string (`"modelica"`,
@@ -246,6 +262,64 @@ fn on_new_document(
     });
 }
 
+#[on_command(ShowOpenFilePicker)]
+fn on_show_open_file_picker(
+    _trigger: On<ShowOpenFilePicker>,
+    registry: Res<DocumentKindRegistry>,
+    mut commands: Commands,
+) {
+    use crate::picker::{PickHandle, PickMode};
+    // Collect all unique extensions from every registered kind to
+    // build a unified "Supported files" filter.
+    let mut extensions: Vec<String> = Vec::new();
+    for (_, meta) in registry.iter() {
+        for ext in &meta.extensions {
+            let ext_str = ext.to_string();
+            if !extensions.contains(&ext_str) {
+                extensions.push(ext_str);
+            }
+        }
+    }
+
+    if extensions.is_empty() {
+        // Fallback for Modelica if no kinds are registered yet.
+        extensions.push("mo".to_string());
+    }
+
+    let ext_refs: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
+    commands.trigger(PickHandle {
+        mode: PickMode::OpenFile(lunco_storage::OpenFilter::new(
+            "Supported files",
+            &ext_refs,
+        )),
+        on_resolved: PickFollowUp::OpenFile,
+    });
+}
+
+#[on_command(ShowOpenFolderPicker)]
+fn on_show_open_folder_picker(
+    _trigger: On<ShowOpenFolderPicker>,
+    mut commands: Commands,
+) {
+    use crate::picker::{PickHandle, PickMode};
+    commands.trigger(PickHandle {
+        mode: PickMode::OpenFolder,
+        on_resolved: PickFollowUp::OpenFolder,
+    });
+}
+
+#[on_command(OpenFile)]
+fn on_open_file(
+    trigger: On<OpenFile>,
+    _registry: Res<DocumentKindRegistry>,
+    _commands: Commands,
+) {
+    let path = trigger.event().path.clone();
+    if path.is_empty() {
+        warn!("[OpenFile] fired with empty path — ignoring (use ShowOpenFilePicker for dialog)");
+    }
+}
+
 #[on_command(OpenFolder)]
 fn on_open_folder(
     trigger: On<OpenFolder>,
@@ -253,13 +327,9 @@ fn on_open_folder(
     mut pending: ResMut<PendingTwinOpens>,
     mut commands: Commands,
 ) {
-    use crate::picker::{PickHandle, PickMode};
     let path = trigger.event().path.clone();
     if path.is_empty() {
-        commands.trigger(PickHandle {
-            mode: PickMode::OpenFolder,
-            on_resolved: PickFollowUp::OpenFolder,
-        });
+        warn!("[OpenFolder] fired with empty path — ignoring (use ShowOpenFolderPicker for dialog)");
         return;
     }
     let folder = std::path::Path::new(&path);
@@ -751,6 +821,9 @@ impl Plugin for FileOpsPlugin {
         // crate registers an observer. Idempotent — re-registration
         // by a domain's `register_commands!()` is a no-op.
         app.register_type::<OpenFile>();
+        app.add_observer(on_show_open_file_picker);
+        app.add_observer(on_show_open_folder_picker);
+        app.add_observer(on_open_file);
         app.add_observer(on_pick_resolved);
         // Off-thread folder-scan pipeline: each `Open*` / `Add*` parks
         // a `Task<Result<TwinMode, _>>` in `PendingTwinOpens`; this

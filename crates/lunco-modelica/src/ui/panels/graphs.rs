@@ -219,9 +219,9 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
         start_dir: None,
         filters: vec![lunco_storage::OpenFilter::new("CSV", &["csv"])],
     };
-    let handle = match <lunco_storage::FileStorage as lunco_storage::Storage>::pick_save(
+    let handle = match futures_lite::future::block_on(<lunco_storage::FileStorage as lunco_storage::Storage>::pick_save(
         &storage, &hint,
-    ) {
+    )) {
         Ok(Some(h)) => h,
         Ok(None) => return,
         Err(e) => {
@@ -234,11 +234,11 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
         }
     };
 
-    if let Err(e) = <lunco_storage::FileStorage as lunco_storage::Storage>::write(
+    if let Err(e) = futures_lite::future::block_on(<lunco_storage::FileStorage as lunco_storage::Storage>::write(
         &storage,
         &handle,
         csv.as_bytes(),
-    ) {
+    )) {
         if let Some(mut console) =
             world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
         {

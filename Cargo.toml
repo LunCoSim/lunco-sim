@@ -162,6 +162,7 @@ egui_plot = "0.34.1"
 rfd = "0.15"
 tempfile = "3.10"
 thiserror = "2.0"
+async-trait = "0.1"
 
 # ── Lints (inherited via `[lints] workspace = true` per crate) ───────
 # Encodes policy decisions:

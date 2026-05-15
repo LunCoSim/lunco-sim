@@ -194,11 +194,11 @@ pub fn on_save_document(
     let (path, source) = to_save;
     let storage = lunco_storage::FileStorage::new();
     let handle = lunco_storage::StorageHandle::File(path.clone());
-    if let Err(e) = <lunco_storage::FileStorage as lunco_storage::Storage>::write(
+    if let Err(e) = futures_lite::future::block_on(<lunco_storage::FileStorage as lunco_storage::Storage>::write(
         &storage,
         &handle,
         source.as_bytes(),
-    ) {
+    )) {
         let msg = format!("Save failed: {}: {e}", path.display());
         error!("[Save] {msg}");
         console.error(msg);
@@ -256,11 +256,11 @@ pub fn on_save_as_document(
 
     let storage = lunco_storage::FileStorage::new();
     let handle = lunco_storage::StorageHandle::File(path.clone());
-    if let Err(e) = <lunco_storage::FileStorage as lunco_storage::Storage>::write(
+    if let Err(e) = futures_lite::future::block_on(<lunco_storage::FileStorage as lunco_storage::Storage>::write(
         &storage,
         &handle,
         source.as_bytes(),
-    ) {
+    )) {
         let msg = format!("Save-As failed: {}: {e}", path.display());
         error!("[SaveAs] {msg}");
         console.error(msg);

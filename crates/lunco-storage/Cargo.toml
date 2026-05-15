@@ -12,6 +12,8 @@ description = "I/O abstraction for LunCoSim — Storage trait + backends (FileSt
 rfd = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+async-trait = { workspace = true }
+futures-lite = { workspace = true }
 
 [features]
 # Empty stubs that unlock the corresponding `StorageHandle` variants.

@@ -241,38 +241,37 @@ pub struct SaveHint {
 /// signature and wraps the call in [`bevy::tasks::AsyncComputeTaskPool`]
 /// when the workload warrants.
 ///
-/// Pickers are **synchronous** today (native rfd dialogs block the
-/// calling thread, which is expected — the user is looking at a modal
-/// system dialog). The wasm backend will switch to async when we get
-/// there; we'll revisit the trait at that point rather than paying
-/// `async_trait` costs every call now.
+/// Pickers are **asynchronous** today (native rfd dialogs block the
+/// task thread, but the workbench observers poll them without blocking
+/// the UI; on wasm they are truly async browser-side).
+#[async_trait::async_trait]
 pub trait Storage: Send + Sync {
     /// Read the full contents of a handle.
-    fn read(&self, handle: &StorageHandle) -> StorageResult<Vec<u8>>;
+    async fn read(&self, handle: &StorageHandle) -> StorageResult<Vec<u8>>;
 
     /// Write bytes to a handle, replacing existing content atomically
     /// where the backend supports it.
-    fn write(&self, handle: &StorageHandle, bytes: &[u8]) -> StorageResult<()>;
+    async fn write(&self, handle: &StorageHandle, bytes: &[u8]) -> StorageResult<()>;
 
     /// Cheap "does this exist?" probe. Backends that can't implement
     /// it cheaply (e.g. always-fetch HTTP) should answer `false` on
     /// error rather than making a round-trip.
-    fn exists(&self, handle: &StorageHandle) -> bool;
+    async fn exists(&self, handle: &StorageHandle) -> bool;
 
     /// Whether this handle would reject a write (MSL library file,
     /// read-only FS mount, remote snapshot). Pure advisory — a final
     /// `write` is the ground truth.
-    fn is_writable(&self, handle: &StorageHandle) -> bool;
+    async fn is_writable(&self, handle: &StorageHandle) -> bool;
 
     /// Show an "open" picker and return the chosen handle.
     /// Returns `Ok(None)` if the user cancelled.
-    fn pick_open(&self, filter: &OpenFilter) -> StorageResult<Option<StorageHandle>>;
+    async fn pick_open(&self, filter: &OpenFilter) -> StorageResult<Option<StorageHandle>>;
 
     /// Show a "save as" picker and return the chosen handle.
     /// Returns `Ok(None)` if the user cancelled.
-    fn pick_save(&self, hint: &SaveHint) -> StorageResult<Option<StorageHandle>>;
+    async fn pick_save(&self, hint: &SaveHint) -> StorageResult<Option<StorageHandle>>;
 
     /// Show an "open folder" picker. Used for "Open Twin folder" and
     /// "Open Workspace folder" flows.
-    fn pick_folder(&self) -> StorageResult<Option<StorageHandle>>;
+    async fn pick_folder(&self) -> StorageResult<Option<StorageHandle>>;
 }

@@ -19,7 +19,6 @@
 
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
-use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::{OpenFilter, SaveHint, Storage, StorageError, StorageHandle, StorageResult};
@@ -41,8 +40,9 @@ impl FileStorage {
     }
 }
 
+#[async_trait::async_trait]
 impl Storage for FileStorage {
-    fn read(&self, handle: &StorageHandle) -> StorageResult<Vec<u8>> {
+    async fn read(&self, handle: &StorageHandle) -> StorageResult<Vec<u8>> {
         match handle {
             #[cfg(not(target_arch = "wasm32"))]
             StorageHandle::File(path) => match std::fs::read(path) {
@@ -64,7 +64,7 @@ impl Storage for FileStorage {
         }
     }
 
-    fn write(&self, handle: &StorageHandle, bytes: &[u8]) -> StorageResult<()> {
+    async fn write(&self, handle: &StorageHandle, bytes: &[u8]) -> StorageResult<()> {
         match handle {
             #[cfg(not(target_arch = "wasm32"))]
             StorageHandle::File(path) => {
@@ -89,7 +89,7 @@ impl Storage for FileStorage {
         }
     }
 
-    fn exists(&self, handle: &StorageHandle) -> bool {
+    async fn exists(&self, handle: &StorageHandle) -> bool {
         match handle {
             #[cfg(not(target_arch = "wasm32"))]
             StorageHandle::File(path) => path.exists(),
@@ -102,7 +102,7 @@ impl Storage for FileStorage {
         }
     }
 
-    fn is_writable(&self, handle: &StorageHandle) -> bool {
+    async fn is_writable(&self, handle: &StorageHandle) -> bool {
         match handle {
             #[cfg(not(target_arch = "wasm32"))]
             StorageHandle::File(path) => {
@@ -124,7 +124,7 @@ impl Storage for FileStorage {
         }
     }
 
-    fn pick_open(
+    async fn pick_open(
         &self,
         #[allow(unused_variables)]
         filter: &OpenFilter,
@@ -145,7 +145,7 @@ impl Storage for FileStorage {
         }
     }
 
-    fn pick_save(
+    async fn pick_save(
         &self,
         #[allow(unused_variables)]
         hint: &SaveHint,
@@ -157,10 +157,10 @@ impl Storage for FileStorage {
                 dialog = dialog.set_file_name(name);
             }
             if let Some(StorageHandle::File(dir)) = &hint.start_dir {
-                let start: PathBuf = if dir.is_dir() {
+                let start: std::path::PathBuf = if dir.is_dir() {
                     dir.clone()
                 } else {
-                    dir.parent().map(PathBuf::from).unwrap_or_default()
+                    dir.parent().map(std::path::PathBuf::from).unwrap_or_default()
                 };
                 if !start.as_os_str().is_empty() {
                     dialog = dialog.set_directory(&start);
@@ -180,7 +180,7 @@ impl Storage for FileStorage {
         }
     }
 
-    fn pick_folder(&self) -> StorageResult<Option<StorageHandle>> {
+    async fn pick_folder(&self) -> StorageResult<Option<StorageHandle>> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             Ok(rfd::FileDialog::new().pick_folder().map(StorageHandle::File))
@@ -195,47 +195,56 @@ impl Storage for FileStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_lite::future::block_on;
 
     #[test]
     fn memory_roundtrip() {
-        let s = FileStorage::new();
-        let h = StorageHandle::Memory("k".into());
-        assert!(!s.exists(&h));
-        s.write(&h, b"hello").unwrap();
-        assert!(s.exists(&h));
-        assert_eq!(s.read(&h).unwrap(), b"hello");
-        s.write(&h, b"world").unwrap();
-        assert_eq!(s.read(&h).unwrap(), b"world");
+        block_on(async {
+            let s = FileStorage::new();
+            let h = StorageHandle::Memory("k".into());
+            assert!(!s.exists(&h).await);
+            s.write(&h, b"hello").await.unwrap();
+            assert!(s.exists(&h).await);
+            assert_eq!(s.read(&h).await.unwrap(), b"hello");
+            s.write(&h, b"world").await.unwrap();
+            assert_eq!(s.read(&h).await.unwrap(), b"world");
+        });
     }
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn missing_file_returns_not_found() {
-        let s = FileStorage::new();
-        let h = StorageHandle::File("/tmp/lunco-storage-does-not-exist.xxx".into());
-        assert!(matches!(s.read(&h), Err(StorageError::NotFound)));
+        block_on(async {
+            let s = FileStorage::new();
+            let h = StorageHandle::File("/tmp/lunco-storage-does-not-exist.xxx".into());
+            assert!(matches!(s.read(&h).await, Err(StorageError::NotFound)));
+        });
     }
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn file_roundtrip_through_tempdir() {
-        let dir = std::env::temp_dir().join("lunco-storage-test-rt");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("file.txt");
-        let s = FileStorage::new();
-        let h = StorageHandle::File(path.clone());
-        s.write(&h, b"persisted").unwrap();
-        assert!(s.exists(&h));
-        assert_eq!(s.read(&h).unwrap(), b"persisted");
-        let _ = std::fs::remove_file(&path);
+        block_on(async {
+            let dir = std::env::temp_dir().join("lunco-storage-test-rt");
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("file.txt");
+            let s = FileStorage::new();
+            let h = StorageHandle::File(path.clone());
+            s.write(&h, b"persisted").await.unwrap();
+            assert!(s.exists(&h).await);
+            assert_eq!(s.read(&h).await.unwrap(), b"persisted");
+            let _ = std::fs::remove_file(&path);
+        });
     }
 
     #[test]
     fn memory_unsupported_for_file_only_ops_is_silent() {
-        // Memory handle should work fine; unsupported variants will be
-        // behind feature flags so the test compiles on the default set.
-        let s = FileStorage::new();
-        let h = StorageHandle::Memory("x".into());
-        assert!(s.is_writable(&h));
+        block_on(async {
+            // Memory handle should work fine; unsupported variants will be
+            // behind feature flags so the test compiles on the default set.
+            let s = FileStorage::new();
+            let h = StorageHandle::Memory("x".into());
+            assert!(s.is_writable(&h).await);
+        });
     }
 }
