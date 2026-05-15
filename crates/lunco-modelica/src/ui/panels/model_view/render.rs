@@ -186,6 +186,7 @@ fn render_unified_toolbar(
     let mut auto_arrange_clicked = false;
     let mut run_pause_clicked = false;
     let mut reset_clicked = false;
+    let mut restart_clicked = false;
     let mut new_view_mode = view_mode;
 
     ui.horizontal(|ui| {
@@ -197,13 +198,21 @@ fn render_unified_toolbar(
         // Capture the rect spanning the four view-mode toggles so
         // the help-tour overlay can spotlight the exact strip instead
         // of the whole panel.
-        let r_text = ui.selectable_label(view_mode == ModelViewMode::Text, "📝");
+        let r_text = ui
+            .selectable_label(view_mode == ModelViewMode::Text, "📝")
+            .on_hover_text("Text — edit the Modelica source code");
         if r_text.clicked() { new_view_mode = ModelViewMode::Text; }
-        let r_canvas = ui.selectable_label(view_mode == ModelViewMode::Canvas, "🔗");
+        let r_canvas = ui
+            .selectable_label(view_mode == ModelViewMode::Canvas, "🔗")
+            .on_hover_text("Diagram — wire components on the connection canvas");
         if r_canvas.clicked() { new_view_mode = ModelViewMode::Canvas; }
-        let r_icon = ui.selectable_label(view_mode == ModelViewMode::Icon, "🎨");
+        let r_icon = ui
+            .selectable_label(view_mode == ModelViewMode::Icon, "🎨")
+            .on_hover_text("Icon — draw the model's icon-layer graphics");
         if r_icon.clicked() { new_view_mode = ModelViewMode::Icon; }
-        let r_docs = ui.selectable_label(view_mode == ModelViewMode::Docs, "📖");
+        let r_docs = ui
+            .selectable_label(view_mode == ModelViewMode::Docs, "📖")
+            .on_hover_text("Docs — view the model's documentation");
         if r_docs.clicked() { new_view_mode = ModelViewMode::Docs; }
         let toggles_rect = r_text.rect.union(r_docs.rect).union(r_canvas.rect).union(r_icon.rect);
         if let Some(mut a) = world.get_resource_mut::<lunco_workbench::HelpAnchors>() {
@@ -225,10 +234,10 @@ fn render_unified_toolbar(
             ui.colored_label(tokens.warning, "⏩ Running…").on_hover_text("Realtime simulation stepping");
         } else {
             match compile_state {
-                CompileState::Compiling => { ui.colored_label(tokens.warning, "⏳"); }
-                CompileState::Ready => { ui.colored_label(tokens.success, "✓"); }
-                CompileState::Error => { ui.colored_label(tokens.error, "⚠"); }
-                CompileState::Idle => { ui.colored_label(tokens.text_subdued, "◌"); }
+                CompileState::Compiling => { ui.colored_label(tokens.warning, "⏳").on_hover_text("Compiling — building the model"); }
+                CompileState::Ready => { ui.colored_label(tokens.success, "✓").on_hover_text("Ready — model compiled successfully"); }
+                CompileState::Error => { ui.colored_label(tokens.error, "⚠").on_hover_text("Error — compilation failed"); }
+                CompileState::Idle => { ui.colored_label(tokens.text_subdued, "◌").on_hover_text("Idle — model not compiled yet"); }
             }
         }
 
@@ -239,9 +248,13 @@ fn render_unified_toolbar(
         }
 
         ui.separator();
-        let r_compile = ui.add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("🚀"));
+        let r_compile = ui
+            .add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("🚀"))
+            .on_hover_text("Interactive compile — build & run the model live; step, pause and tweak inputs as it simulates");
         compile_clicked = r_compile.clicked();
-        let r_fast = ui.add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("⏩"));
+        let r_fast = ui
+            .add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("⏩"))
+            .on_hover_text("Fast Run — compile and simulate to completion in one go, then show results");
         fast_run_clicked = r_fast.clicked();
         // Publish a combined anchor over the two compilation-mode
         // buttons (🚀 Interactive compile, ⏩ Fast Run) so the help
@@ -252,19 +265,23 @@ fn render_unified_toolbar(
 
         if let Some((paused, t_now)) = sim_state {
             ui.separator();
-            run_pause_clicked = ui.button(if paused { "▶" } else { "⏸" }).clicked();
-            reset_clicked = ui.button("⟲").clicked();
+            run_pause_clicked = ui
+                .button(if paused { "▶" } else { "⏸" })
+                .on_hover_text(if paused { "Resume simulation" } else { "Pause simulation" })
+                .clicked();
+            reset_clicked = ui.button("⟲").on_hover_text("Reset simulation to t=0").clicked();
+            restart_clicked = ui.button("⟳").on_hover_text("Restart — reset to t=0 and run again").clicked();
             ui.label(egui::RichText::new(format!("t={:.3}s", t_now)).monospace().weak());
         }
 
         if view_mode == ModelViewMode::Canvas && !is_read_only {
             ui.separator();
-            auto_arrange_clicked = ui.button("▦").clicked();
+            auto_arrange_clicked = ui.button("▦").on_hover_text("Auto-arrange diagram layout").clicked();
         }
 
         if is_read_only {
             ui.separator();
-            duplicate_clicked = ui.button("📄").clicked();
+            duplicate_clicked = ui.button("📄").on_hover_text("Duplicate as editable draft").clicked();
         }
     });
 
@@ -278,6 +295,10 @@ fn render_unified_toolbar(
         else { world.commands().trigger(crate::ui::commands::PauseActiveModel { doc }); }
     }
     if reset_clicked { world.commands().trigger(crate::ui::commands::ResetActiveModel { doc }); }
+    if restart_clicked {
+        world.commands().trigger(crate::ui::commands::ResetActiveModel { doc });
+        world.commands().trigger(crate::ui::commands::ResumeActiveModel { doc });
+    }
     if auto_arrange_clicked { world.commands().trigger(crate::ui::commands::AutoArrangeDiagram { doc }); }
     if fast_run_clicked {
         let model_ref = super::context::drilled_class_for_doc(world, doc).or_else(|| {

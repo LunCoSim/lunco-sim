@@ -342,7 +342,7 @@ fn register_help_entry(world: &mut World) {
         return;
     };
     layout.register_help_menu(|ui, world| {
-        if ui.button("🎓 Show Tour").clicked() {
+        if ui.button("🎓 Show Tour").on_hover_text("Replay the guided interactive tour of the workbench").clicked() {
             let mut state = world.resource_mut::<HelpOverlayState>();
             open_tour(&mut state);
             ui.close();

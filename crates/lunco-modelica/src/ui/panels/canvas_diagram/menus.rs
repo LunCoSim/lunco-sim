@@ -91,7 +91,7 @@ pub(super) fn render_node_menu(
         ui.label(egui::RichText::new(&type_name).weak().small());
     }
     ui.separator();
-    if ui.button("✂ Delete").clicked() {
+    if ui.button("✂ Delete").on_hover_text("Remove this component from the diagram").clicked() {
         if let Some(class) = editing_class {
             if let Some(op) = op_remove_component(world, id, class) {
                 out.push(op);
@@ -107,14 +107,14 @@ pub(super) fn render_node_menu(
         }
         ui.close();
     }
-    if ui.button("📋 Duplicate").clicked() {
+    if ui.button("📋 Duplicate").on_hover_text("Create a copy of this component").clicked() {
         ui.close();
     }
     ui.separator();
-    if ui.button("↧ Open class").clicked() {
+    if ui.button("↧ Open class").on_hover_text("Open this component's class definition").clicked() {
         ui.close();
     }
-    if ui.button("🔧 Parameters…").clicked() {
+    if ui.button("🔧 Parameters…").on_hover_text("Edit this component's parameters").clicked() {
         ui.close();
     }
 }
@@ -208,12 +208,14 @@ pub(super) fn render_plot_node_menu(
             });
     });
 
-    if !current.signal_path.is_empty() && ui.button("Unbind").clicked() {
+    if !current.signal_path.is_empty()
+        && ui.button("Unbind").on_hover_text("Clear this plot's signal binding").clicked()
+    {
         rebind_plot_node(world, id, 0, "");
         ui.close();
     }
     ui.separator();
-    if ui.button("✂ Delete").clicked() {
+    if ui.button("✂ Delete").on_hover_text("Remove this plot node from the diagram").clicked() {
         let active_doc = active_doc_from_world(world);
         let tab = render_tab_id(world);
         let mut state = world.resource_mut::<CanvasDiagramState>();
@@ -262,7 +264,7 @@ pub(super) fn render_edge_menu(
     if let Some(class) = editing_class {
         match hit {
             lunco_canvas::EdgeHitKind::Corner(idx) => {
-                if ui.button("✕ Delete bend").clicked() {
+                if ui.button("✕ Delete bend").on_hover_text("Remove this waypoint from the connection").clicked() {
                     if let Some(op) = op_modify_waypoints(
                         world,
                         id,
@@ -279,7 +281,7 @@ pub(super) fn render_edge_menu(
                 }
             }
             lunco_canvas::EdgeHitKind::Segment(seg_idx) => {
-                if ui.button("➕ Add bend here").clicked() {
+                if ui.button("➕ Add bend here").on_hover_text("Insert a waypoint at the clicked point").clicked() {
                     if let Some(op) = op_modify_waypoints(
                         world,
                         id,
@@ -306,7 +308,7 @@ pub(super) fn render_edge_menu(
         }
         ui.separator();
     }
-    if ui.button("✂ Delete").clicked() {
+    if ui.button("✂ Delete").on_hover_text("Remove this connection from the diagram").clicked() {
         if let Some(class) = editing_class {
             if let Some(op) = op_remove_edge(world, id, class) {
                 out.push(op);
@@ -319,7 +321,7 @@ pub(super) fn render_edge_menu(
         }
         ui.close();
     }
-    if ui.button("↺ Reverse direction").clicked() {
+    if ui.button("↺ Reverse direction").on_hover_text("Swap the connection's start and end ports").clicked() {
         if let Some(class) = editing_class {
             let active_doc = active_doc_from_world(world);
             let tab = render_tab_id(world);
@@ -490,7 +492,7 @@ pub(super) fn render_empty_menu(
         let max_h = (ui.ctx().content_rect().height() * 0.7).max(180.0);
         let wanted = ((sigs.len() + 3) as f32 * ROW_PX).min(max_h);
         ui.set_min_height(wanted);
-        if ui.button("Empty plot (bind later)").clicked() {
+        if ui.button("Empty plot (bind later)").on_hover_text("Add a blank plot node — bind a signal to it later").clicked() {
             insert_plot_node(world, click_world, 0, "");
             ui.close();
         }
@@ -522,7 +524,7 @@ pub(super) fn render_empty_menu(
             });
     });
     ui.separator();
-    if ui.button("⎚ Fit all (F)").clicked() {
+    if ui.button("⎚ Fit all (F)").on_hover_text("Zoom and pan to fit the whole diagram in view").clicked() {
         let active_doc = active_doc_from_world(world);
         let tab = render_tab_id(world);
         let mut state = world.resource_mut::<CanvasDiagramState>();
@@ -537,7 +539,7 @@ pub(super) fn render_empty_menu(
         }
         ui.close();
     }
-    if ui.button("⟲ Reset zoom").clicked() {
+    if ui.button("⟲ Reset zoom").on_hover_text("Return to 100% zoom").clicked() {
         let active_doc = active_doc_from_world(world);
         let tab = render_tab_id(world);
         let mut state = world.resource_mut::<CanvasDiagramState>();

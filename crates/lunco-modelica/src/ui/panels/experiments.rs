@@ -519,17 +519,17 @@ impl Panel for ExperimentsPanel {
                                 load_into_draft = Some(row.id);
                             }
                             name_resp.context_menu(|ui| {
-                                if ui.button("✏ Rename").clicked() {
+                                if ui.button("✏ Rename").on_hover_text("Give this run a new name").clicked() {
                                     start_rename = Some((row.id, row.name.clone()));
                                     ui.close();
                                 }
                                 ui.separator();
                                 if row.is_terminal {
-                                    if ui.button("▶ Re-run with same setup").clicked() {
+                                    if ui.button("▶ Re-run with same setup").on_hover_text("Run again with identical bounds and parameter overrides").clicked() {
                                         rerun = Some(row.id);
                                         ui.close();
                                     }
-                                    if ui.button("📋 Duplicate into Setup").clicked() {
+                                    if ui.button("📋 Duplicate into Setup").on_hover_text("Load this run's setup into the draft so you can tweak it").clicked() {
                                         load_into_draft = Some(row.id);
                                         ui.close();
                                     }
@@ -546,11 +546,11 @@ impl Panel for ExperimentsPanel {
                                         ui.close();
                                     }
                                     ui.separator();
-                                    if ui.button("✕ Delete").clicked() {
+                                    if ui.button("✕ Delete").on_hover_text("Remove this run from the list").clicked() {
                                         delete = Some(row.id);
                                         ui.close();
                                     }
-                                } else if ui.button("⊘ Cancel run").clicked() {
+                                } else if ui.button("⊘ Cancel run").on_hover_text("Stop this in-progress run").clicked() {
                                     cancel = Some(row.id);
                                     ui.close();
                                 }
