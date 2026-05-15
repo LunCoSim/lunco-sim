@@ -30,7 +30,7 @@ use bevy_egui::egui;
 use lunco_workbench::{InstancePanel, PanelId, PanelSlot};
 use lunco_viz::{
     export_signals_to_csv, kinds::line_plot::LinePlot, view::Panel2DCtx, viz::Visualization,
-    viz::VizId, SignalRegistry, VisualizationRegistry,
+    viz::VizId, SignalRegistry, VisualizationRegistry, VizFitRequests,
 };
 
 use crate::ui::viz::{ensure_default_modelica_graph, DEFAULT_MODELICA_GRAPH};
@@ -116,10 +116,14 @@ fn render_modelica_plot(ui: &mut egui::Ui, world: &mut World, viz_id: VizId) {
     let has_live = bound_count > 0;
     let has_exp = exp_summary.total_runs > 0;
 
-    // Top action row removed — the experiments plot's own header
-    // owns the doc badge, picker chips, and all action buttons
-    // (Fit, Dup, New, CSV) so the layout is a single line in every
-    // state.
+    // Single shared action header — New / Duplicate / Fit / CSV —
+    // rendered once here regardless of which plot body follows.
+    // Both bodies (the live LinePlot and the experiments plot) used
+    // to grow their own action clusters; the live path's toolbar
+    // never had one, so binding a live variable made the tab-copy
+    // buttons vanish. One header, one place, every state.
+    render_plot_header(ui, world, viz_id, has_live);
+
     if has_live && !has_exp {
         // Pure live mode keeps the dedicated LinePlot rendering so
         // the X/Y/+add binding picker stays accessible.
@@ -130,12 +134,78 @@ fn render_modelica_plot(ui: &mut egui::Ui, world: &mut World, viz_id: VizId) {
         } else {
             Vec::new()
         };
-        let summary = crate::ui::panels::experiments::render_experiments_plot_with_extras(
-            ui, world, viz_id, &extras, has_live,
+        crate::ui::panels::experiments::render_experiments_plot_with_extras(
+            ui, world, viz_id, &extras,
         );
-        if summary.csv_export_clicked {
-            export_graph_to_csv(world, viz_id);
+    }
+}
+
+/// The shared action cluster for every Modelica plot tab, drawn once
+/// above the plot body. `➕` opens a fresh plot panel, `📄` duplicates
+/// this one (same bindings + picked vars), `📐 Fit` queues a one-shot
+/// auto-fit via [`VizFitRequests`] (both the LinePlot and experiments
+/// bodies drain it), and `💾 CSV` exports live signal histories.
+fn render_plot_header(ui: &mut egui::Ui, world: &mut World, viz_id: VizId, has_live: bool) {
+    let mut new_plot = false;
+    let mut dup = false;
+    let mut fit = false;
+    let mut csv = false;
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .small_button("➕")
+                .on_hover_text("New plot panel — opens a fresh tab.")
+                .clicked()
+            {
+                new_plot = true;
+            }
+            if ui
+                .small_button("📄")
+                .on_hover_text(
+                    "Duplicate this plot — new tab with the same \
+                     signal bindings and picked variables.",
+                )
+                .clicked()
+            {
+                dup = true;
+            }
+            if ui
+                .small_button("📐 Fit")
+                .on_hover_text("Auto-fit axes to data")
+                .clicked()
+            {
+                fit = true;
+            }
+            if has_live
+                && ui
+                    .small_button("💾 CSV")
+                    .on_hover_text("Export live signal histories to CSV.")
+                    .clicked()
+            {
+                csv = true;
+            }
+        });
+    });
+    ui.separator();
+
+    if new_plot {
+        world
+            .commands()
+            .trigger(crate::ui::commands::NewPlotPanel::default());
+    }
+    if dup {
+        world.commands().trigger(crate::ui::commands::NewPlotPanel {
+            source: viz_id.0,
+            ..Default::default()
+        });
+    }
+    if fit {
+        if let Some(mut reqs) = world.get_resource_mut::<VizFitRequests>() {
+            reqs.request(viz_id);
         }
+    }
+    if csv {
+        export_graph_to_csv(world, viz_id);
     }
 }
 

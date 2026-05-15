@@ -1401,7 +1401,7 @@ pub fn render_experiments_plot(
     world: &mut World,
     viz_id: VizId,
 ) -> ExpPlotSummary {
-    render_experiments_plot_inner(ui, world, viz_id, &[], false)
+    render_experiments_plot_inner(ui, world, viz_id, &[])
 }
 
 pub fn render_experiments_plot_with_extras(
@@ -1409,9 +1409,8 @@ pub fn render_experiments_plot_with_extras(
     world: &mut World,
     viz_id: VizId,
     extras: &[PlotExtraLine],
-    has_live: bool,
 ) -> ExpPlotSummary {
-    render_experiments_plot_inner(ui, world, viz_id, extras, has_live)
+    render_experiments_plot_inner(ui, world, viz_id, extras)
 }
 
 fn render_experiments_plot_inner(
@@ -1419,7 +1418,6 @@ fn render_experiments_plot_inner(
     world: &mut World,
     viz_id: VizId,
     extras: &[PlotExtraLine],
-    has_live: bool,
 ) -> ExpPlotSummary {
     // Scope to the experiments-pinned (or active) doc — same
     // semantics as the Experiments table above. When no doc is
@@ -1428,41 +1426,16 @@ fn render_experiments_plot_inner(
     // Graphs tab never collapses to a blank panel.
     let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc(world)
     else {
-        // No doc resolved yet — still draw the header so Fit / Dup /
-        // New stay visible (otherwise the panel looks broken in the
-        // welcome state). Fit is a no-op here (no axes to fit yet),
-        // New/Dup dispatch the same commands as the populated header.
-        let mut new_plot = false;
-        let mut dup = false;
+        // No doc resolved yet — draw just the doc badge. Action
+        // buttons (New / Dup / Fit / CSV) live in the Graphs panel's
+        // shared header, rendered above this body in every state.
         let col_muted = world.resource::<lunco_theme::Theme>().tokens.text_subdued;
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("📈 (no model)  ·  0 vars")
-                    .color(col_muted)
-                    .small(),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("➕").on_hover_text("New plot panel").clicked() {
-                    new_plot = true;
-                }
-                if ui.small_button("📄").on_hover_text("Duplicate this plot").clicked() {
-                    dup = true;
-                }
-                let _ = ui.small_button("📐 Fit").on_hover_text("Auto-fit axes");
-            });
-        });
+        ui.label(
+            egui::RichText::new("📈 (no model)  ·  0 vars")
+                .color(col_muted)
+                .small(),
+        );
         render_empty_plot_frame(ui, extras);
-        if new_plot {
-            world
-                .commands()
-                .trigger(crate::ui::commands::NewPlotPanel::default());
-        }
-        if dup {
-            world.commands().trigger(crate::ui::commands::NewPlotPanel {
-                source: viz_id.0,
-                ..Default::default()
-            });
-        }
         return ExpPlotSummary::default();
     };
     let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
@@ -1604,14 +1577,10 @@ fn render_experiments_plot_inner(
     // plot.
     let mut toggle_var: Option<String> = None;
     let mut reset_clicked = false;
-    let mut fit_clicked = false;
-    let mut new_plot_clicked = false;
-    let mut dup_clicked = false;
-    let mut csv_clicked = false;
-    // Unified header — doc badge + var picker chips + plot actions
-    // on a single line. Renders in every state (no runs, runs only,
-    // runs + live) so the no-run and run views align visually and
-    // there's only one place for the user to find Fit/Dup/CSV.
+    // Header — doc badge + var picker chips. Plot action buttons
+    // (New / Dup / Fit / CSV) live in the Graphs panel's shared
+    // header rendered above this body, so they stay reachable in
+    // every state including the pure-live LinePlot mode.
     let var_count = picked_vars.len();
     let mut groups: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
@@ -1635,38 +1604,6 @@ fn render_experiments_plot_inner(
         // Right-aligned action cluster first so the picker scroll
         // area gets the remaining middle space.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .small_button("➕")
-                .on_hover_text("New plot panel — opens a fresh tab.")
-                .clicked()
-            {
-                new_plot_clicked = true;
-            }
-            if ui
-                .small_button("📄")
-                .on_hover_text(
-                    "Duplicate this plot — new tab with the same \
-                     signal bindings and picked variables.",
-                )
-                .clicked()
-            {
-                dup_clicked = true;
-            }
-            if ui
-                .small_button("📐 Fit")
-                .on_hover_text("Auto-fit axes to data")
-                .clicked()
-            {
-                fit_clicked = true;
-            }
-            if has_live
-                && ui
-                    .small_button("💾 CSV")
-                    .on_hover_text("Export live signal histories to CSV.")
-                    .clicked()
-            {
-                csv_clicked = true;
-            }
             if scrub_time.is_some() {
                 if ui
                     .small_button("↻")
@@ -1747,17 +1684,6 @@ fn render_experiments_plot_inner(
             states.toggle_var(viz_id, v);
         }
     }
-    if new_plot_clicked {
-        world
-            .commands()
-            .trigger(crate::ui::commands::NewPlotPanel::default());
-    }
-    if dup_clicked {
-        world.commands().trigger(crate::ui::commands::NewPlotPanel {
-            source: viz_id.0,
-            ..Default::default()
-        });
-    }
 
     // Empty-state auto-promote — when this plot tab has no visible
     // runs but the doc *has* completed runs, automatically mark the
@@ -1779,6 +1705,15 @@ fn render_experiments_plot_inner(
     };
     let show_latest_clicked = auto_show_pending;
 
+    // Drain any one-shot Fit request for this plot. The Graphs
+    // panel's shared header queues it via `VizFitRequests`; the
+    // LinePlot body drains the same resource, so Fit behaves
+    // identically in both plot modes.
+    let fit_requested = world
+        .get_resource_mut::<lunco_viz::VizFitRequests>()
+        .map(|mut r| r.take(viz_id))
+        .unwrap_or(false);
+
     // Plot frame always renders. x-axis label dropped: time is
     // implicit in this panel and the label was burning a row of
     // pixels for one symbol.
@@ -1789,7 +1724,7 @@ fn render_experiments_plot_inner(
             // the scrub cursor instead of pan/zoom. Box-zoom stays on
             // the modifier defaults; double-click still resets bounds.
             .allow_drag(false);
-        if fit_clicked {
+        if fit_requested {
             plot = plot.reset();
         }
         if let Some(u) = shared_unit.as_ref().filter(|u| !u.is_empty()) {
@@ -1898,7 +1833,6 @@ fn render_experiments_plot_inner(
         visible_runs,
         series_drawn: series.len(),
         picked_vars: picked_vars.len(),
-        csv_export_clicked: csv_clicked,
     }
 }
 
@@ -2115,11 +2049,6 @@ pub struct ExpPlotSummary {
     pub visible_runs: usize,
     pub series_drawn: usize,
     pub picked_vars: usize,
-    /// User clicked the `💾 CSV` button in the plot's header. Only
-    /// fires when `has_live` was passed to the renderer; callers
-    /// (Graphs panel) handle the export so the experiments module
-    /// doesn't depend on the SignalRegistry-CSV writer.
-    pub csv_export_clicked: bool,
 }
 
 /// Compute an [`ExpPlotSummary`] without rendering. Lets the Graphs
@@ -2157,7 +2086,6 @@ pub fn experiments_plot_summary(world: &World, viz_id: VizId) -> ExpPlotSummary 
         visible_runs,
         series_drawn,
         picked_vars: picked_vars.len(),
-        csv_export_clicked: false,
     }
 }
 
