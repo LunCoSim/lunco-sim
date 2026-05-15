@@ -646,16 +646,6 @@ fn render_help_overlay(
         .show(ctx, |ui| {
             ui.set_width(card_w);
 
-            // Drop-shadow: paint a faint dark rect under the card.
-            ui.painter().rect_filled(
-                egui::Rect::from_min_size(
-                    card_pos + egui::vec2(0.0, 6.0),
-                    egui::vec2(card_w, card_h_est),
-                ),
-                14.0,
-                egui::Color32::from_black_alpha(110),
-            );
-
             egui::Frame::new()
                 .fill(card_fill)
                 .corner_radius(14.0)
