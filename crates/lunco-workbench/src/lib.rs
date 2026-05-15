@@ -68,6 +68,61 @@ pub mod window_command;
 pub use window_command::{merged_titlebar_window, MaximizeWindow, MinimizeWindow, CloseWindow, WindowMaximized};
 
 pub use panel::{InstancePanel, Panel, PanelId, PanelSlot, TabId};
+
+/// SystemSet that runs the main workbench egui pass. Use
+/// `.after(WorkbenchRenderSet)` for systems that need to read
+/// the rects the workbench just published (e.g. help-tour overlays
+/// reading [`HelpAnchors`]).
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct WorkbenchRenderSet;
+
+/// Saved position of a tab in the dock — opaque to callers.
+/// Returned by [`WorkbenchLayout::move_tab_next_to`] and passed to
+/// [`WorkbenchLayout::restore_tab_to`] to move a tab back where it
+/// was before a demo / programmatic rearrangement.
+#[derive(Clone, Copy, Debug)]
+pub struct TabLocation {
+    surface: egui_dock::SurfaceIndex,
+    node: egui_dock::NodeIndex,
+    index: egui_dock::TabIndex,
+}
+
+/// Screen-space rects of named UI landmarks, refreshed each frame
+/// by whoever draws them. Read by feature-tour overlays (e.g. the
+/// Modelica help tour) to spotlight a real widget instead of a
+/// hand-drawn picture.
+///
+/// Convention: short stable keys like `"menu.file"`, `"menu.help"`,
+/// `"toolbar.run"`. A missing key just means the widget wasn't
+/// painted this frame (panel closed, perspective inactive); the
+/// overlay falls back to a centred callout.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct HelpAnchors {
+    /// Frame-counter or similar staleness gate is unnecessary —
+    /// readers always check the current frame's data after the
+    /// writers have run (overlay renders late in the same pass).
+    rects: std::collections::HashMap<String, bevy_egui::egui::Rect>,
+}
+
+impl HelpAnchors {
+    /// Publish a widget's screen rect under `key`. Called from any
+    /// UI render fn after laying the widget out (response.rect).
+    pub fn set(&mut self, key: impl Into<String>, rect: bevy_egui::egui::Rect) {
+        self.rects.insert(key.into(), rect);
+    }
+
+    /// Read the most recent rect under `key`, if any.
+    pub fn get(&self, key: &str) -> Option<bevy_egui::egui::Rect> {
+        self.rects.get(key).copied()
+    }
+
+    /// Drop every recorded rect — done once per frame at the start
+    /// of the egui pass so stale rects from a closed panel don't
+    /// linger as overlay targets.
+    pub fn clear(&mut self) {
+        self.rects.clear();
+    }
+}
 pub use files_panel::{FilesPanel, FILES_PANEL_ID};
 pub use uri::{UriClicked, UriHandler, UriRegistry, UriResolution};
 pub use twin_browser::{
@@ -259,6 +314,7 @@ impl Plugin for WorkbenchPlugin {
             app.add_plugins(file_ops::FileOpsPlugin);
         }
         app.init_resource::<WorkbenchLayout>()
+            .init_resource::<HelpAnchors>()
             .init_resource::<PendingTabCloses>()
             // Twin Browser plumbing — resources are always present so
             // the panel renders an empty state cleanly when no Twin is
@@ -276,7 +332,7 @@ impl Plugin for WorkbenchPlugin {
             .add_observer(on_close_tab);
         register_all_commands(app);
         app
-            .add_systems(EguiPrimaryContextPass, render_workbench);
+            .add_systems(EguiPrimaryContextPass, render_workbench.in_set(WorkbenchRenderSet));
 
         // Built-in Files section ships with the workbench so apps get
         // a usable browser even before any domain plugin registers.
@@ -335,6 +391,14 @@ pub struct WorkbenchLayout {
     /// code editor's Cut/Copy/Paste) without each plugin scattering its
     /// own toolbar.
     pub(crate) edit_menu:
+        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+
+    /// App-wide Help menu contributions. Same pattern as
+    /// [`settings_menu`](Self::settings_menu) — domain plugins push a
+    /// closure via [`WorkbenchLayout::register_help_menu`] at Startup
+    /// so the Help drop-down can host tour / docs / about entries
+    /// without each domain inventing its own help button.
+    pub(crate) help_menu:
         Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
 
     /// The live dock tree — what egui_dock actually renders. Stores
@@ -396,6 +460,7 @@ impl Default for WorkbenchLayout {
             status: None,
             settings_menu: Vec::new(),
             edit_menu: Vec::new(),
+            help_menu: Vec::new(),
             dock: DockState::new(Vec::new()),
         }
     }
@@ -558,6 +623,109 @@ impl WorkbenchLayout {
         }
     }
 
+    /// Opaque handle to a tab's position in the dock — surface,
+    /// node, index. Returned by [`Self::move_tab_next_to`] so callers
+    /// can restore the tab to its original spot later.
+    ///
+    /// Wrapper around egui_dock's internal indices; treat as
+    /// round-trip only (don't compare across frames where the dock
+    /// has been rebuilt).
+    /// Move `src` to a fresh split-leaf alongside `sibling_of` so the
+    /// two panels render **side-by-side**, not as tabs of the same
+    /// strip. Returns the source's original [`TabLocation`] so
+    /// callers can restore later, or `None` if either tab isn't in
+    /// the dock. No-op when they're already in the same node.
+    ///
+    /// Splits 50/50 to the right of `sibling_of`'s node. egui_dock
+    /// auto-collapses the source leaf if removing the tab leaves it
+    /// empty.
+    pub fn move_tab_next_to(
+        &mut self,
+        src: TabId,
+        sibling_of: TabId,
+    ) -> Option<TabLocation> {
+        let src_loc = self.dock.find_tab(&src)?;
+        let (t_surface, t_node, _) = self.dock.find_tab(&sibling_of)?;
+        if src_loc.0 == t_surface && src_loc.1 == t_node {
+            return Some(TabLocation {
+                surface: src_loc.0,
+                node: src_loc.1,
+                index: src_loc.2,
+            });
+        }
+        let saved = TabLocation {
+            surface: src_loc.0,
+            node: src_loc.1,
+            index: src_loc.2,
+        };
+        self.dock.move_tab(
+            src_loc,
+            egui_dock::TabDestination::Node(
+                t_surface,
+                t_node,
+                egui_dock::TabInsert::Split(egui_dock::Split::Right),
+            ),
+        );
+        Some(saved)
+    }
+
+    /// Move `src` back to a saved [`TabLocation`]. No-op if `src`
+    /// isn't in the dock or the destination node no longer exists
+    /// (e.g. it was collapsed when a sibling was closed).
+    pub fn restore_tab_to(&mut self, src: TabId, loc: TabLocation) {
+        let Some(src_loc) = self.dock.find_tab(&src) else {
+            return;
+        };
+        if (src_loc.0, src_loc.1) == (loc.surface, loc.node) {
+            return;
+        }
+        // Validate the destination still exists and is a leaf.
+        let dest_ok = self
+            .dock
+            .get_surface(loc.surface)
+            .and_then(|s| s.node_tree())
+            .map(|tree| {
+                loc.node.0 < tree.len()
+                    && tree[loc.node].is_leaf()
+            })
+            .unwrap_or(false);
+        if !dest_ok {
+            return;
+        }
+        let count = self
+            .dock
+            .get_surface(loc.surface)
+            .and_then(|s| s.node_tree())
+            .map(|tree| tree[loc.node].tabs_count())
+            .unwrap_or(0);
+        let idx = egui_dock::TabIndex(loc.index.0.min(count));
+        self.dock.move_tab(
+            src_loc,
+            egui_dock::TabDestination::Node(
+                loc.surface,
+                loc.node,
+                egui_dock::TabInsert::Insert(idx),
+            ),
+        );
+    }
+
+    /// Find the first tab matching the given instance-kind, returning
+    /// the typed [`TabId`]. Useful when callers know the kind but not
+    /// the instance id (e.g. demo-tour "move the plot tab").
+    pub fn find_any_instance(&self, kind: PanelId) -> Option<TabId> {
+        for (_, t) in self.dock.iter_all_tabs() {
+            if let TabId::Instance { kind: k, instance } = t {
+                if *k == kind {
+                    return Some(TabId::Instance {
+                        kind: *k,
+                        instance: *instance,
+                    });
+                }
+            }
+        }
+        None
+    }
+
     /// Close a multi-instance tab if present. Idempotent.
     pub fn close_instance(&mut self, kind: PanelId, instance: u64) {
         let tab = TabId::Instance { kind, instance };
@@ -599,6 +767,15 @@ impl WorkbenchLayout {
         F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
     {
         self.edit_menu.push(Box::new(callback));
+    }
+
+    /// Register a closure that contributes entries to the global Help
+    /// menu. Mirrors [`register_settings`](Self::register_settings).
+    pub fn register_help_menu<F>(&mut self, callback: F)
+    where
+        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+    {
+        self.help_menu.push(Box::new(callback));
     }
 
     /// Register a perspective (named workbench layout). The first one
@@ -909,6 +1086,12 @@ fn render_workbench(world: &mut World) {
         return;
     };
 
+    // Clear stale anchor rects at the start of each frame; menu /
+    // panel writers refresh them as they render.
+    if let Some(mut anchors) = world.get_resource_mut::<HelpAnchors>() {
+        anchors.clear();
+    }
+
     let theme = world.resource::<lunco_theme::Theme>().clone();
 
     // Apply theme to the egui ctx itself (not just per-ui) — the
@@ -987,6 +1170,22 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        // Publish this panel's rect so feature-tour overlays can
+        // spotlight it by id (`panel.<panel_id>`). Done before
+        // render so even early-returning panels still register an
+        // anchor for the current frame.
+        let panel_rect = ui.max_rect();
+        let panel_key = match *tab {
+            TabId::Singleton(id) => Some(format!("panel.{}", id.as_str())),
+            TabId::Instance { kind, .. } => Some(format!("panel.{}", kind.as_str())),
+        };
+        if let (Some(mut a), Some(k)) = (
+            self.world.get_resource_mut::<HelpAnchors>(),
+            panel_key,
+        ) {
+            a.set(k, panel_rect);
+        }
+
         match *tab {
             TabId::Singleton(id) => {
                 // Take-and-return pattern so the panel can itself borrow
@@ -1265,11 +1464,18 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         // edge. Explicit `Align::Center` keeps them vertically centred
         // in the bar.
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            // Collected screen-rects of the menu buttons + transport
+            // controls. Published to `HelpAnchors` after this layout
+            // closure finishes so we don't double-borrow `world`
+            // while the menu_button closures already hold it.
+            let mut anchor_rects: Vec<(&'static str, egui::Rect)> = Vec::new();
+            anchor_rects.push(("menu.bar", ui.max_rect()));
+
             // macOS: leave room for the native traffic lights that
             // float over our content because of `fullsize_content_view`.
             #[cfg(target_os = "macos")]
             ui.add_space(78.0);
-            ui.menu_button("File", |ui| {
+            let r_file = ui.menu_button("File", |ui| {
                 // Active doc gates Save / Save As / Close — there's
                 // nothing to save when no document is focused.
                 let active_doc =
@@ -1429,7 +1635,8 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     ui.close();
                 }
             });
-            ui.menu_button("Edit", |ui| {
+            anchor_rects.push(("menu.file", r_file.response.rect));
+            let r_edit = ui.menu_button("Edit", |ui| {
                 let has_active = world
                     .resource::<WorkspaceResource>()
                     .active_document
@@ -1465,7 +1672,8 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 }
                 layout.edit_menu = callbacks;
             });
-            ui.menu_button("View", |ui| {
+            anchor_rects.push(("menu.edit", r_edit.response.rect));
+            let r_view = ui.menu_button("View", |ui| {
                 if ui.button("Toggle Activity Bar").clicked() {
                     layout.toggle_activity_bar();
                     ui.close();
@@ -1545,7 +1753,8 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     }
                 }
             });
-            ui.menu_button("Settings", |ui| {
+            anchor_rects.push(("menu.view", r_view.response.rect));
+            let r_settings = ui.menu_button("Settings", |ui| {
                 ui.label(egui::RichText::new("Theme").weak().small());
                 let mut theme = world.resource_mut::<lunco_theme::Theme>();
                 let mode = theme.mode;
@@ -1580,13 +1789,23 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 }
                 layout.settings_menu = callbacks;
             });
-            ui.menu_button("Help", |ui| {
+            anchor_rects.push(("menu.settings", r_settings.response.rect));
+            let r_help = ui.menu_button("Help", |ui| {
                 ui.label(format!(
                     "LunCoSim workbench v{} ({})",
                     env!("CARGO_PKG_VERSION"),
                     env!("LUNCO_GIT_HASH"),
                 ));
+                let callbacks = std::mem::take(&mut layout.help_menu);
+                if !callbacks.is_empty() {
+                    ui.separator();
+                    for cb in &callbacks {
+                        cb(ui, world);
+                    }
+                }
+                layout.help_menu = callbacks;
             });
+            anchor_rects.push(("menu.help", r_help.response.rect));
 
             // Pause/Resume simulation. Toggles `Time<Virtual>` so both
             // physics (avian -> Time<Physics> derived from Virtual) and
@@ -1599,7 +1818,9 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 } else {
                     ("⏸", "Pause simulation")
                 };
-                if ui.button(glyph).on_hover_text(hover).clicked() {
+                let btn_resp = ui.button(glyph).on_hover_text(hover);
+                anchor_rects.push(("toolbar.run", btn_resp.rect));
+                if btn_resp.clicked() {
                     if paused { vtime.unpause(); } else { vtime.pause(); }
                 }
             }
@@ -1649,6 +1870,15 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     }
                 }
             });
+
+            // Flush collected button rects into `HelpAnchors` now
+            // that the menu_button closures have returned and no
+            // longer borrow `world`.
+            if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
+                for (k, r) in anchor_rects {
+                    a.set(k, r);
+                }
+            }
         });
     });
 
@@ -1768,6 +1998,12 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             && screen.height() > 1.0
         {
             DockArea::new(dock).style(style).show(ctx, &mut viewer);
+            // After the dock has laid itself out, publish the area
+            // rect under a generic "panel.center" anchor so the help
+            // tour can spotlight the dock content as a whole.
+            if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
+                a.set("panel.center", screen);
+            }
         }
     } else {
         // 3D-app mode — explicit side panels, transparent centre.
@@ -1780,7 +2016,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         let bottom_default = (screen.height() * 0.20).max(120.0);
 
         if let Some(id) = layout.side_browser.first().copied() {
-            egui::SidePanel::left("lunco_workbench_side_panel_left")
+            let r = egui::SidePanel::left("lunco_workbench_side_panel_left")
                 .resizable(true)
                 .default_width(side_default)
                 .min_width(120.0)
@@ -1789,9 +2025,12 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });
+            if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
+                a.set("panel.side_browser", r.response.rect);
+            }
         }
         if let Some(id) = layout.right_inspector.first().copied() {
-            egui::SidePanel::right("lunco_workbench_side_panel_right")
+            let r = egui::SidePanel::right("lunco_workbench_side_panel_right")
                 .resizable(true)
                 .default_width(side_default)
                 .min_width(140.0)
@@ -1800,9 +2039,12 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });
+            if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
+                a.set("panel.right_inspector", r.response.rect);
+            }
         }
         if let Some(id) = layout.bottom.first().copied() {
-            egui::TopBottomPanel::bottom("lunco_workbench_bottom_panel")
+            let r = egui::TopBottomPanel::bottom("lunco_workbench_bottom_panel")
                 .resizable(true)
                 .default_height(bottom_default)
                 .min_height(60.0)
@@ -1810,6 +2052,9 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });
+            if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
+                a.set("panel.bottom", r.response.rect);
+            }
         }
         // Central area: do NOT call CentralPanel — egui's bottom/side
         // panels reserve their space and the remaining region stays

@@ -194,10 +194,21 @@ fn render_unified_toolbar(
             ui.separator();
         }
 
-        if ui.selectable_label(view_mode == ModelViewMode::Text, "📝").clicked() { new_view_mode = ModelViewMode::Text; }
-        if ui.selectable_label(view_mode == ModelViewMode::Canvas, "🔗").clicked() { new_view_mode = ModelViewMode::Canvas; }
-        if ui.selectable_label(view_mode == ModelViewMode::Icon, "🎨").clicked() { new_view_mode = ModelViewMode::Icon; }
-        if ui.selectable_label(view_mode == ModelViewMode::Docs, "📖").clicked() { new_view_mode = ModelViewMode::Docs; }
+        // Capture the rect spanning the four view-mode toggles so
+        // the help-tour overlay can spotlight the exact strip instead
+        // of the whole panel.
+        let r_text = ui.selectable_label(view_mode == ModelViewMode::Text, "📝");
+        if r_text.clicked() { new_view_mode = ModelViewMode::Text; }
+        let r_canvas = ui.selectable_label(view_mode == ModelViewMode::Canvas, "🔗");
+        if r_canvas.clicked() { new_view_mode = ModelViewMode::Canvas; }
+        let r_icon = ui.selectable_label(view_mode == ModelViewMode::Icon, "🎨");
+        if r_icon.clicked() { new_view_mode = ModelViewMode::Icon; }
+        let r_docs = ui.selectable_label(view_mode == ModelViewMode::Docs, "📖");
+        if r_docs.clicked() { new_view_mode = ModelViewMode::Docs; }
+        let toggles_rect = r_text.rect.union(r_docs.rect).union(r_canvas.rect).union(r_icon.rect);
+        if let Some(mut a) = world.get_resource_mut::<lunco_workbench::HelpAnchors>() {
+            a.set("model_view.view_toggles", toggles_rect);
+        }
         ui.separator();
 
         // Status pill — single compact icon for every run/compile
@@ -228,8 +239,16 @@ fn render_unified_toolbar(
         }
 
         ui.separator();
-        compile_clicked = ui.add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("🚀")).clicked();
-        fast_run_clicked = ui.add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("⏩")).clicked();
+        let r_compile = ui.add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("🚀"));
+        compile_clicked = r_compile.clicked();
+        let r_fast = ui.add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("⏩"));
+        fast_run_clicked = r_fast.clicked();
+        // Publish a combined anchor over the two compilation-mode
+        // buttons (🚀 Interactive compile, ⏩ Fast Run) so the help
+        // tour can spotlight where compilation is launched.
+        if let Some(mut a) = world.get_resource_mut::<lunco_workbench::HelpAnchors>() {
+            a.set("model_view.compile_buttons", r_compile.rect.union(r_fast.rect));
+        }
 
         if let Some((paused, t_now)) = sim_state {
             ui.separator();

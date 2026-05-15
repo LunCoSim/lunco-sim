@@ -78,6 +78,7 @@ pub mod text_node;
 pub mod wasm_autosave;
 pub mod wasm_clipboard;
 pub mod welcome_progress;
+pub mod help_overlay;
 /// Debounced AST reparse driver — see module docs.
 pub mod input_activity;
 pub mod wire_router;
@@ -650,6 +651,11 @@ impl Plugin for ModelicaUiPlugin {
         // JSON at startup and bumps counts whenever `OpenClass`
         // fires — drives the progress dots on the learning paths.
         app.add_plugins(welcome_progress::WelcomeProgressPlugin);
+
+        // Multi-screen help/tour overlay. Pops on first launch (per
+        // `HelpOverlaySettings.seen` in settings.json), reachable
+        // thereafter from Help → Show Tour or F1.
+        app.add_plugins(help_overlay::HelpOverlayPlugin);
 
         // Reflect-registered query providers exposed over the
         // ApiQueryRegistry (cf. spec 032). Feature-gated because the
