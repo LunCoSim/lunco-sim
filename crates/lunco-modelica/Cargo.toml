@@ -125,21 +125,18 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 #   - `Session::load_source_root_in_memory(...)` so the wasm runtime can
 #     hand pre-fetched MSL bytes to the compile session without any fs.
 #
-# While that branch is in flight locally, point `path = ...` at the
-# sibling worktree so we can iterate without pushing. Flip back to
-# `git = ..., branch = "wasm-asset-loader"` after the branch is pushed.
-rumoca-sim = { path = "../../../rumoca/crates/rumoca-sim" }
+rumoca-sim = { workspace = true }
 lunco-experiments = { path = "../lunco-experiments" }
-rumoca-session = { path = "../../../rumoca/crates/rumoca-session" }
-rumoca-phase-parse = { path = "../../../rumoca/crates/rumoca-phase-parse" }
+rumoca-session = { workspace = true }
+rumoca-phase-parse = { workspace = true }
 # Modelica formatter — surfaced as a "Format" toolbar button +
 # Ctrl+Shift+F binding. Rewrites the active editor buffer with
 # the canonical layout rumoca-tool-fmt produces.
-rumoca-tool-fmt = { path = "../../../rumoca/crates/rumoca-tool-fmt" }
+rumoca-tool-fmt = { workspace = true }
 # Modelica linter — surfaced into the Diagnostics panel alongside
 # parse errors. Wraps `rumoca_tool_lint::lint(source, name, opts)`
 # which returns a `Vec<LintMessage>` we map to `LogEntry`s.
-rumoca-tool-lint = { path = "../../../rumoca/crates/rumoca-tool-lint" }
+rumoca-tool-lint = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

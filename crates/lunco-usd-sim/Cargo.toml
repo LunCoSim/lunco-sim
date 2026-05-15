@@ -15,7 +15,7 @@ lunco-avatar = { path = "../lunco-avatar" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-modelica = { path = "../lunco-modelica" }
-rumoca-phase-parse = { path = "../../../rumoca/crates/rumoca-phase-parse" }
+rumoca-phase-parse = { workspace = true }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-api = { path = "../lunco-api" }

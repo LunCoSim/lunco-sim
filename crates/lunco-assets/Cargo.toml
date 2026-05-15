@@ -41,11 +41,8 @@ zstd = "0.13"
 # `Vec<(String, StoredDefinition)>` next to the source bundle so the
 # wasm runtime can skip the per-file parse (which is ~600 ms/file in
 # release wasm — unworkable for 2670 files).
-# Local path while the rumoca branch is in flight; flip back to git+branch
-# once `wasm-asset-loader` is pushed. Mirrors the path shape used by
-# lunco-modelica/Cargo.toml.
-rumoca-phase-parse = { path = "../../../rumoca/crates/rumoca-phase-parse" }
-rumoca-ir-ast = { path = "../../../rumoca/crates/rumoca-ir-ast" }
+rumoca-phase-parse = { workspace = true }
+rumoca-ir-ast = { workspace = true }
 bincode = "1.3"
 resvg = { workspace = true }
 tiny-skia = { workspace = true }

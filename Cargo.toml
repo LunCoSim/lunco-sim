@@ -52,17 +52,17 @@ scnr2 = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 scnr2_generate = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 scnr2_macro = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 
-# Rumoca is consumed from the LunCoSim/rumoca fork's `main` branch
-# (see crates/lunco-modelica/Cargo.toml). To diagnose / fix rumoca
-# bugs locally, re-enable the patch block below pointing at a sibling
-# `../rumoca` checkout.
+# Rumoca is consumed from the LunCoSim/rumoca fork's `wasm-asset-loader`
+# branch (see workspace deps below). To develop against a local rumoca
+# checkout, uncomment the [patch] block and point it at `../rumoca`.
 #
-[patch."https://github.com/LunCoSim/rumoca"]
-rumoca-session   = { path = "../rumoca/crates/rumoca-session" }
-rumoca-sim       = { path = "../rumoca/crates/rumoca-sim" }
-rumoca-phase-parse = { path = "../rumoca/crates/rumoca-phase-parse" }
-rumoca-tool-fmt  = { path = "../rumoca/crates/rumoca-tool-fmt" }
-rumoca-tool-lint = { path = "../rumoca/crates/rumoca-tool-lint" }
+# [patch."https://github.com/LunCoSim/rumoca"]
+# rumoca-ir-ast      = { path = "../rumoca/crates/rumoca-ir-ast" }
+# rumoca-phase-parse = { path = "../rumoca/crates/rumoca-phase-parse" }
+# rumoca-session     = { path = "../rumoca/crates/rumoca-session" }
+# rumoca-sim         = { path = "../rumoca/crates/rumoca-sim" }
+# rumoca-tool-fmt    = { path = "../rumoca/crates/rumoca-tool-fmt" }
+# rumoca-tool-lint   = { path = "../rumoca/crates/rumoca-tool-lint" }
 
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"
@@ -143,6 +143,15 @@ lunco-terrain = { path = "crates/lunco-terrain" }
 lunco-cosim = { path = "crates/lunco-cosim" }
 lunco-environment = { path = "crates/lunco-environment" }
 lunco-theme = { path = "crates/lunco-theme" }
+
+# Rumoca crates — single source-of-truth for the git URL + branch.
+# Crates opt in via `rumoca-xxx = { workspace = true }`.
+rumoca-ir-ast      = { git = "https://github.com/LunCoSim/rumoca", branch = "wasm-asset-loader" }
+rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", branch = "wasm-asset-loader" }
+rumoca-session     = { git = "https://github.com/LunCoSim/rumoca", branch = "wasm-asset-loader" }
+rumoca-sim         = { git = "https://github.com/LunCoSim/rumoca", branch = "wasm-asset-loader" }
+rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", branch = "wasm-asset-loader" }
+rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", branch = "wasm-asset-loader" }
 
 egui_colors = "0.4.0"
 catppuccin-egui = "5.2.0"

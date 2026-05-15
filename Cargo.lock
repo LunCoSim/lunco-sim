@@ -8829,6 +8829,7 @@ dependencies = [
 [[package]]
 name = "rumoca-core"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "miette",
  "serde",
@@ -8837,6 +8838,7 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-ast"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "rumoca-core",
  "rumoca-ir-ast",
@@ -8847,6 +8849,7 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-dae"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -8863,6 +8866,7 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-flat"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -8874,6 +8878,7 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-ast"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -8885,6 +8890,7 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-core"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "serde",
 ]
@@ -8892,6 +8898,7 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-dae"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -8902,6 +8909,7 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-flat"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -8912,6 +8920,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-codegen"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "miette",
  "minijinja",
@@ -8926,6 +8935,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-dae"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "indexmap",
  "miette",
@@ -8941,6 +8951,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-flatten"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "indexmap",
  "miette",
@@ -8956,6 +8967,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-instantiate"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "indexmap",
  "miette",
@@ -8969,6 +8981,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-parse"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -8984,6 +8997,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-resolve"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -8997,6 +9011,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-solve"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -9009,6 +9024,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-typecheck"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "miette",
  "rumoca-core",
@@ -9022,6 +9038,7 @@ dependencies = [
 [[package]]
 name = "rumoca-session"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "anyhow",
  "bincode",
@@ -9052,6 +9069,7 @@ dependencies = [
 [[package]]
 name = "rumoca-sim"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "diffsol",
  "getrandom 0.3.4",
@@ -9072,6 +9090,7 @@ dependencies = [
 [[package]]
 name = "rumoca-tool-fmt"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "rumoca-session",
  "serde",
@@ -9082,6 +9101,7 @@ dependencies = [
 [[package]]
 name = "rumoca-tool-lint"
 version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
 dependencies = [
  "rumoca-session",
  "serde",
