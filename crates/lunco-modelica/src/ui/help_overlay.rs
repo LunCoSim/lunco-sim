@@ -173,7 +173,7 @@ impl Plugin for HelpOverlayPlugin {
 
 fn auto_show_on_first_start(
     mut state: ResMut<HelpOverlayState>,
-    settings: Res<HelpOverlaySettings>,
+    mut settings: ResMut<HelpOverlaySettings>,
 ) {
     if state.auto_shown {
         return;
@@ -181,6 +181,14 @@ fn auto_show_on_first_start(
     state.auto_shown = true;
     if !settings.seen {
         open_tour(&mut state);
+        // Mark seen as soon as the tour auto-shows — otherwise the
+        // flag only flips when the user explicitly unchecks "Show on
+        // next start", so closing the tour normally leaves `seen`
+        // false and the tour (plus its AnnotatedRocketStage demo)
+        // re-fires on every launch. Critical on wasm, where settings
+        // persist in localStorage and tabs do not. The checkbox can
+        // still set `seen = false` to re-arm the tour deliberately.
+        settings.seen = true;
     }
 }
 
