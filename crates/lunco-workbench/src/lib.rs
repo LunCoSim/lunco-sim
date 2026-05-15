@@ -1996,10 +1996,17 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     // them in registration order from left to right.
                     .rev()
                     .collect();
-                for (id, title, is_active) in tabs {
-                    let button = egui::Button::new(title.as_str()).selected(is_active);
-                    if ui.add(button).clicked() && !is_active {
-                        layout.activate_perspective(id);
+                // TODO: re-enable the perspective switcher once more
+                // than one perspective is registered. With a single
+                // perspective (Lunica ships only "📐 Design" today) the
+                // lone tab is just noise — hide it, but keep the render
+                // logic intact for when "Build" / "Simulate" / etc. land.
+                if tabs.len() > 1 {
+                    for (id, title, is_active) in tabs {
+                        let button = egui::Button::new(title.as_str()).selected(is_active);
+                        if ui.add(button).clicked() && !is_active {
+                            layout.activate_perspective(id);
+                        }
                     }
                 }
             });
