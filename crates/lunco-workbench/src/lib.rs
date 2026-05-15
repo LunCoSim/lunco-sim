@@ -76,6 +76,35 @@ pub use panel::{InstancePanel, Panel, PanelId, PanelSlot, TabId};
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct WorkbenchRenderSet;
 
+/// Desired pixel widths for the side / right dock panes. Read each
+/// frame by [`WorkbenchLayout::enforce_fixed_widths`] which rewrites
+/// the relevant split fractions so the panes stay at a constant
+/// absolute size as the window resizes — instead of scaling
+/// proportionally, which is egui_dock's default fraction-based
+/// behaviour.
+///
+/// Defaults are sized for "comfortable to read at default zoom" and
+/// match common IDE chrome (VS Code's sidebar at 280 px, inspector
+/// at 320 px).
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct DockSizes {
+    /// Target width in screen-space pixels for the left-hand side
+    /// browser pane.
+    pub side_browser_px: f32,
+    /// Target width in screen-space pixels for the right-hand
+    /// inspector pane.
+    pub right_inspector_px: f32,
+}
+
+impl Default for DockSizes {
+    fn default() -> Self {
+        Self {
+            side_browser_px: 280.0,
+            right_inspector_px: 320.0,
+        }
+    }
+}
+
 /// Saved position of a tab in the dock — opaque to callers.
 /// Returned by [`WorkbenchLayout::move_tab_next_to`] and passed to
 /// [`WorkbenchLayout::restore_tab_to`] to move a tab back where it
@@ -315,6 +344,7 @@ impl Plugin for WorkbenchPlugin {
         }
         app.init_resource::<WorkbenchLayout>()
             .init_resource::<HelpAnchors>()
+            .init_resource::<DockSizes>()
             .init_resource::<PendingTabCloses>()
             // Twin Browser plumbing — resources are always present so
             // the panel renders an empty state cleanly when no Twin is
@@ -332,7 +362,8 @@ impl Plugin for WorkbenchPlugin {
             .add_observer(on_close_tab);
         register_all_commands(app);
         app
-            .add_systems(EguiPrimaryContextPass, render_workbench.in_set(WorkbenchRenderSet));
+            .add_systems(EguiPrimaryContextPass, render_workbench.in_set(WorkbenchRenderSet))
+            .add_systems(bevy::prelude::Update, maintain_dock_widths);
 
         // Built-in Files section ships with the workbench so apps get
         // a usable browser even before any domain plugin registers.
@@ -726,6 +757,66 @@ impl WorkbenchLayout {
         None
     }
 
+    /// Rewrite the side-browser and right-inspector split fractions
+    /// so the panes occupy a fixed absolute pixel width regardless
+    /// of the current window size. Driven by [`maintain_dock_widths`]
+    /// on `WindowResized`.
+    ///
+    /// Relies on the dock topology that [`rebuild_dock`] produces:
+    /// - if `side_browser` non-empty, root is the side-left split.
+    /// - if `right_inspector` non-empty, the right-inspector split
+    ///   is the previous root, i.e. at `NodeIndex(2)` when wrapped
+    ///   by a side-left split, or at `NodeIndex(0)` otherwise.
+    pub fn enforce_widths(
+        &mut self,
+        window_w: f32,
+        side_px: f32,
+        right_px: f32,
+    ) {
+        let total_w = window_w.max(100.0);
+        let has_side = !self.side_browser.is_empty();
+        let has_right = !self.right_inspector.is_empty();
+        if !has_side && !has_right {
+            return;
+        }
+        // `main_surface_mut()` returns `&mut Surface<Tab>` which
+        // derefs to the underlying `Tree` for indexing.
+        let tree = self.dock.main_surface_mut();
+        if tree.len() == 0 {
+            return;
+        }
+
+        // Side-browser split — the outermost (root) when present.
+        if has_side {
+            let f = (side_px / total_w).clamp(0.05, 0.5);
+            if let egui_dock::Node::Horizontal(ref mut s) = tree[NodeIndex(0)] {
+                s.fraction = f;
+            }
+        }
+
+        // Right-inspector split — at NodeIndex(2) if it lives inside
+        // the side-left wrap, else at root.
+        if has_right {
+            let parent_w = if has_side {
+                (total_w - side_px).max(100.0)
+            } else {
+                total_w
+            };
+            let right_share = (right_px / parent_w).clamp(0.05, 0.5);
+            let f = 1.0 - right_share;
+            let idx = if has_side {
+                NodeIndex(2)
+            } else {
+                NodeIndex(0)
+            };
+            if idx.0 < tree.len() {
+                if let egui_dock::Node::Horizontal(ref mut s) = tree[idx] {
+                    s.fraction = f;
+                }
+            }
+        }
+    }
+
     /// Close a multi-instance tab if present. Idempotent.
     pub fn close_instance(&mut self, kind: PanelId, instance: u64) {
         let tab = TabId::Instance { kind, instance };
@@ -1006,9 +1097,11 @@ impl WorkbenchLayout {
         if !side_browser_tabs.is_empty() {
             let main = dock.main_surface_mut();
             // For split_left, fraction is the NEW (left) share — see
-            // the table in the doc above.
+            // the table in the doc above. Bumped from 0.15 → 0.22 so
+            // the Twin Browser shows full library names ("Modelica
+            // Standard Library") without truncation at default zoom.
             let [_old_root, _left] =
-                main.split_left(NodeIndex::root(), 0.15, side_browser_tabs);
+                main.split_left(NodeIndex::root(), 0.22, side_browser_tabs);
         }
 
         let _ = central;
@@ -1070,6 +1163,35 @@ impl WorkbenchAppExt for App {
 // ─────────────────────────────────────────────────────────────────────
 // Renderer
 // ─────────────────────────────────────────────────────────────────────
+
+/// React to window resize events (and the very first frame) by
+/// rewriting the side / right dock fractions so the panes stay at
+/// their configured absolute pixel widths. Avoids a per-frame
+/// pre-render adjustment — this only runs when the window
+/// actually resizes.
+fn maintain_dock_widths(
+    mut resize_events: bevy::prelude::MessageReader<bevy::window::WindowResized>,
+    mut layout: ResMut<WorkbenchLayout>,
+    sizes: Res<DockSizes>,
+    windows: Query<
+        &bevy::window::Window,
+        bevy::prelude::With<bevy::window::PrimaryWindow>,
+    >,
+    mut applied_once: bevy::prelude::Local<bool>,
+) {
+    // Latest event wins — multiple events in one frame collapse.
+    let resized_w = resize_events.read().last().map(|ev| ev.width);
+    let initial_w = if !*applied_once {
+        windows.single().ok().map(|w| w.width())
+    } else {
+        None
+    };
+    let Some(w) = resized_w.or(initial_w) else {
+        return;
+    };
+    layout.enforce_widths(w, sizes.side_browser_px, sizes.right_inspector_px);
+    *applied_once = true;
+}
 
 fn render_workbench(world: &mut World) {
     let ctx = {
