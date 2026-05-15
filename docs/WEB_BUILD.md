@@ -169,16 +169,26 @@ The release wasm is large (104 MB pre-opt) and the page boots through
 several stages. Three levers are wired into the build + page; install
 them once and the rest is automatic.
 
-### 1. `wasm-opt` (build step, ~30 % smaller wasm)
+### 1. `wasm-opt` (build step, ~40 % smaller wasm)
 
-`scripts/build_web.sh` runs `wasm-opt -O2 --strip-debug` after
-`wasm-bindgen` if the binary is on PATH. Typical impact:
+`scripts/build_web.sh` runs `wasm-opt -Oz --converge --strip-debug`
+after `wasm-bindgen` if the binary is on PATH. `-Oz` optimises for
+size (vs `-O2`'s speed-first), and `--converge` re-runs passes until
+no further shrinkage. Typical impact on the release wasm:
 
 ```
-wasm-opt: 103.9 MB → 69.7 MB
+wasm-opt: 103.9 MB → ~60 MB
 ```
 
 Smaller wasm = less to download, less for the browser to compile.
+Adds ~1–2 min to the build but only matters at deploy time (the
+`--dev` profile skips this pass).
+
+The Rust side also contributes — `[profile.web-release]` in
+`Cargo.toml` sets `opt-level = "z"`, `lto = "fat"`,
+`codegen-units = 1`, `strip = true`, and `panic = "abort"`. The
+`panic = "abort"` flag drops unwinding metadata that nothing on
+wasm reads.
 
 ### 2. Streaming compile (page-side, free)
 
@@ -189,13 +199,26 @@ to `wasm-bindgen`'s `init()`. The browser pipes that into
 download** instead of buffering the whole 70 MB first. Roughly halves
 the gap between "click" and "first frame".
 
-### 3. `binaryen` post-pass + brotli/gzip on the wire (optional)
+### 3. Brotli + gzip pre-compression at deploy (~3–4× on the wire)
 
-`python -m http.server` doesn't compress. If you serve from a server
-that supports `Content-Encoding: br` (e.g. `caddy file-server`,
-`miniserve --http=...`, or any production CDN) the network leg drops
-another ~3×. Pre-compressing once at build time also works — drop a
-`.wasm.br` next to the `.wasm` and serve with the right MIME headers.
+`scripts/deploy_web.sh` walks the bundle and emits sibling
+`.br` (brotli `-q 11 --large_window=24`) and `.gz` (gzip `-9`) files
+for every `wasm/js/html/json/css/svg/ts/xml/txt/map`. Files already
+in efficient final formats (zstd, png, woff2, …) are skipped.
+
+`python -m http.server` doesn't serve these; production hosts must
+be configured with `brotli_static on; gzip_static on;` (nginx) or
+equivalent. See **Deployment** below.
+
+Sizes for a typical release wasm:
+
+| stage                       | size        |
+|-----------------------------|-------------|
+| Rust release (`-O3`)        | ~104 MB     |
+| `-Oz` + `panic=abort` + LTO | ~70 MB     |
+| `wasm-opt -Oz --converge`   | ~60 MB      |
+| gzip -9 on the wire         | ~14–16 MB   |
+| brotli -q 11 on the wire    | ~11–13 MB   |
 
 ### What still costs time
 
@@ -259,6 +282,100 @@ To verify the fork is wired in:
 ```bash
 cargo metadata --format-version 1 | jq '.packages[] | select(.name == "rumoca-sim") | .source'
 ```
+
+## Deployment
+
+`scripts/deploy_web.sh` pre-compresses the bundle (brotli + gzip)
+and rsyncs it to a remote host.
+
+### One-time setup
+
+**Local machine** — install brotli alongside binaryen:
+
+```bash
+sudo apt install brotli binaryen        # Debian/Ubuntu
+# brew install brotli binaryen          # macOS
+```
+
+If `brotli` is missing the deploy script still runs (gzip-only with
+a warning), but you lose ~20 % on the wire.
+
+**Remote host** — nginx with the brotli module:
+
+```bash
+sudo apt install nginx libnginx-mod-http-brotli
+```
+
+Site config (`/etc/nginx/sites-available/lunco`):
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name lunco.example;
+    root /var/www/lunco;
+
+    # application/wasm is required for streaming compile —
+    # most nginx installs don't ship it.
+    types {
+        application/wasm        wasm;
+        application/javascript  js mjs;
+    }
+
+    # Serve pre-compressed siblings directly. Drop `brotli_static`
+    # if libnginx-mod-http-brotli isn't installed.
+    brotli_static on;
+    gzip_static   on;
+
+    # Immutable long cache for content-addressed assets. The wasm
+    # filename isn't hashed by default; if you want immutable caching
+    # for it too, add a content-hash injection step.
+    location ~* \.(?:wasm|js|css|tar\.zst|bin\.zst)$ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+
+    index index.html;
+}
+```
+
+Reload: `sudo nginx -t && sudo systemctl reload nginx`.
+
+### Deploy
+
+```bash
+./scripts/build_web.sh build lunica_web
+./scripts/deploy_web.sh deploy@host:/var/www/lunco
+```
+
+Useful env vars on `deploy_web.sh`:
+
+| var             | purpose                                  |
+|-----------------|------------------------------------------|
+| `BIN`           | binary name (default `lunica_web`)       |
+| `DEPLOY_TARGET` | rsync destination (overrides positional) |
+| `SSH_PORT`      | non-default SSH port                     |
+| `EXTRA_RSYNC`   | extra rsync args, e.g. `-n` for dry-run  |
+
+Example:
+
+```bash
+BIN=rover_sandbox_web SSH_PORT=2222 EXTRA_RSYNC=-n \
+    ./scripts/deploy_web.sh deploy@host:/var/www/rover
+```
+
+### Verify
+
+```bash
+curl -I -H "Accept-Encoding: br"   https://lunco.example/lunica_web_bg.wasm
+# expect: Content-Encoding: br
+curl -I -H "Accept-Encoding: gzip" https://lunco.example/lunica_web_bg.wasm
+# expect: Content-Encoding: gzip
+```
+
+If `br` is missing, `libnginx-mod-http-brotli` isn't loaded — either
+install it or remove the `brotli_static on;` line and rely on gzip.
 
 ## Troubleshooting
 

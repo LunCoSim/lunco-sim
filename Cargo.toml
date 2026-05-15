@@ -233,6 +233,11 @@ opt-level = "z"
 lto = "fat"
 codegen-units = 1
 strip = true
+# `panic = "abort"` drops the unwinding tables and panic-formatting
+# machinery from the wasm. Typical gain: ~5–10 % on a release build.
+# Safe on wasm — there's no host that catches panics; a panic
+# terminates the module either way, we just skip the unwind metadata.
+panic = "abort"
 
 # Wasm web build, fast-iteration variant. Used by `scripts/build_web.sh
 # build <bin> --dev` for inner-loop development — produces a larger

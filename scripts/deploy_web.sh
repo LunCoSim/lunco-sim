@@ -96,9 +96,20 @@ is_compressible_ext() {
     return 1
 }
 
-info "Pre-compressing files in $DIST_DIR with gzip -9…"
+# Brotli is preferred (typically ~20% smaller than gzip-9 on wasm);
+# gzip is the universal fallback for clients that don't send
+# `Accept-Encoding: br` (rare in modern browsers but cheap insurance).
+HAVE_BROTLI=0
+if command -v brotli &> /dev/null; then
+    HAVE_BROTLI=1
+else
+    warn "brotli not installed — skipping .br siblings (install: apt install brotli)"
+fi
+
+info "Pre-compressing files in $DIST_DIR (gzip -9$([ $HAVE_BROTLI -eq 1 ] && echo ' + brotli -q 11'))…"
 total_raw=0
 total_gz=0
+total_br=0
 file_count=0
 
 while IFS= read -r -d '' f; do
@@ -118,13 +129,29 @@ while IFS= read -r -d '' f; do
     gzip -kfn -9 "$f"
     gz_size=$(stat -c '%s' "$f.gz" 2>/dev/null || stat -f '%z' "$f.gz")
     total_gz=$((total_gz + gz_size))
+
+    # -q 11 = max quality (slow but one-shot at deploy time).
+    # --large_window=24 lets the encoder use a 16 MB window — meaningful
+    # for the 20+ MB wasm blob. Some old decoders cap at window=22, but
+    # every browser brotli decoder accepts up to 24.
+    if [ $HAVE_BROTLI -eq 1 ]; then
+        brotli -f -k -q 11 --large_window=24 -o "$f.br" "$f"
+        br_size=$(stat -c '%s' "$f.br" 2>/dev/null || stat -f '%z' "$f.br")
+        total_br=$((total_br + br_size))
+    fi
 done < <(find "$DIST_DIR" -type f -print0)
 
 if [ $file_count -gt 0 ]; then
     raw_mb=$(awk "BEGIN{printf \"%.1f\", $total_raw/1048576}")
     gz_mb=$(awk  "BEGIN{printf \"%.1f\", $total_gz/1048576}")
-    ratio=$(awk  "BEGIN{printf \"%.1f\", $total_raw/$total_gz}")
-    info "Compressed $file_count file(s): ${raw_mb} MB → ${gz_mb} MB (${ratio}× smaller)"
+    gz_ratio=$(awk  "BEGIN{printf \"%.1f\", $total_raw/$total_gz}")
+    if [ $HAVE_BROTLI -eq 1 ]; then
+        br_mb=$(awk    "BEGIN{printf \"%.1f\", $total_br/1048576}")
+        br_ratio=$(awk "BEGIN{printf \"%.1f\", $total_raw/$total_br}")
+        info "Compressed $file_count file(s): ${raw_mb} MB raw → ${gz_mb} MB gz (${gz_ratio}×), ${br_mb} MB br (${br_ratio}×)"
+    else
+        info "Compressed $file_count file(s): ${raw_mb} MB → ${gz_mb} MB (${gz_ratio}× smaller)"
+    fi
 else
     info "No compressible files found."
 fi
@@ -174,8 +201,12 @@ on every request, or not at all):
             application/javascript  js mjs;
         }
 
-        gzip_static on;          # serve `<file>.gz` directly when
-                                 # the client sends `Accept-Encoding: gzip`
+        # Serve pre-compressed siblings directly. brotli_static requires
+        # ngx_brotli (apt install libnginx-mod-http-brotli on Debian/Ubuntu,
+        # or nginx-extras). If brotli_static isn't available, drop the
+        # line — gzip_static alone still works.
+        brotli_static on;        # serve `<file>.br` for `Accept-Encoding: br`
+        gzip_static on;          # serve `<file>.gz` for `Accept-Encoding: gzip`
 
         # Long cache for hashed assets (msl/sources-<sha>.tar.zst etc).
         # The wasm filename isn't hashed by default — if you want
@@ -194,7 +225,9 @@ on every request, or not at all):
 
 After config change: `sudo nginx -t && sudo systemctl reload nginx`.
 
-Verify the .gz is actually served:
+Verify the pre-compressed sibling is actually served:
+    curl -I -H "Accept-Encoding: br" https://lunco.example/lunica_web_bg.wasm
+    # expect:  Content-Encoding: br
     curl -I -H "Accept-Encoding: gzip" https://lunco.example/lunica_web_bg.wasm
     # expect:  Content-Encoding: gzip
 EOF

@@ -267,13 +267,14 @@ generate_bindings() {
     if [ "${BUILD_PROFILE:-web-release}" = "web-dev" ]; then
         info "wasm-opt skipped (--dev profile)"
     elif [ -f "$wasm_in" ] && command -v wasm-opt &> /dev/null; then
-        info "Running wasm-opt -O2 (best-effort size + speed pass)…"
+        info "Running wasm-opt -Oz --converge (max-size pass)…"
         local before
         before=$(stat -c '%s' "$wasm_in" 2>/dev/null || stat -f '%z' "$wasm_in")
-        # -O2 keeps compile time reasonable while still doing useful
-        # work; -Oz/-Os go further but are noticeably slower per build.
+        # -Oz = shrink-first (typically 10–25 % smaller than -O2).
+        # --converge re-runs passes until no further size win — adds a
+        # minute or two to release builds but is one-shot at deploy.
         local tmp="$wasm_in.opt.tmp"
-        if wasm-opt -O2 --strip-debug -o "$tmp" "$wasm_in"; then
+        if wasm-opt -Oz --converge --strip-debug -o "$tmp" "$wasm_in"; then
             mv "$tmp" "$wasm_in"
             local after
             after=$(stat -c '%s' "$wasm_in" 2>/dev/null || stat -f '%z' "$wasm_in")
@@ -380,7 +381,7 @@ Run: cargo run -p lunco-assets -- download"
             info "Worker wasm-opt skipped (--dev profile)"
         elif [ -f "$worker_wasm_in" ] && command -v wasm-opt &> /dev/null; then
             local tmp="$worker_wasm_in.opt.tmp"
-            if wasm-opt -O2 --strip-debug -o "$tmp" "$worker_wasm_in"; then
+            if wasm-opt -Oz --converge --strip-debug -o "$tmp" "$worker_wasm_in"; then
                 mv "$tmp" "$worker_wasm_in"
             else
                 rm -f "$tmp"
