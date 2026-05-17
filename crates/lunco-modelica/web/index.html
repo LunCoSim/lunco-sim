@@ -213,8 +213,16 @@
             setIndeterminate();
             const resp = await fetch(url);
             if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+            // Use the build-time embedded uncompressed size as baseline.
+            // When nginx serves a pre-compressed .gz (gzip_static on),
+            // Content-Length is the compressed size but the browser
+            // auto-decompresses, so received bytes don't match — progress
+            // overshoots and sizes are misleading.  The embedded size is
+            // always accurate regardless of compression.
+            const embeddedTotal = __LC_WASM_SIZE__;
             const totalHdr = resp.headers.get('Content-Length');
-            const total = totalHdr ? parseInt(totalHdr, 10) : 0;
+            const total = embeddedTotal > 0 ? embeddedTotal
+                        : totalHdr ? parseInt(totalHdr, 10) : 0;
 
             const start = performance.now();
             let lastT = start;
@@ -274,6 +282,10 @@
             root.classList.add('hidden');
             resize();
         };
+
+        // Uncompressed WASM size in bytes, injected at build time.
+        // Placeholder 0 is replaced by build_web.sh with the real size.
+        const __LC_WASM_SIZE__ = 0;
 
         try {
             const wasmResp = await streamWasmResponse('./lunica_web_bg.wasm');
