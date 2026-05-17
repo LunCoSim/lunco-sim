@@ -1,4 +1,4 @@
-//! LunCo Modelica Workbench — Web entry point.
+//! Lunica — Web entry point.
 //!
 //! ## Why a separate binary?
 //!
@@ -117,7 +117,7 @@ pub fn run() {
     app
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "LunCo Modelica Workbench".into(),
+                title: "Lunica".into(),
                 resolution: bevy::window::WindowResolution::new(1280, 720),
                 // Render into the <canvas id="bevy"> element from index.html.
                 canvas: Some("#bevy".into()),

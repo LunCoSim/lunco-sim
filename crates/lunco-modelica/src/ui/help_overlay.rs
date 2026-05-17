@@ -1,8 +1,11 @@
 //! Multi-step product tour — spotlights real workbench widgets and
 //! pops a callout next to each one. Auto-opens any panel a step
 //! points at, via the existing `FocusPanel` command. Opens
-//! `AnnotatedRocketStage` for the duration of the tour so the model
+//! `CascadedRCFilter` for the duration of the tour so the model
 //! views have something real to show; closes it on hide.
+//! (`CascadedRCFilter` has no MSL dependency, so it loads fast —
+//! unlike `AnnotatedRocketStage`, which pulled in the Modelica
+//! Standard Library and stalled the tour on first launch.)
 //!
 //! Anchors are screen-rects published into the
 //! [`lunco_workbench::HelpAnchors`] resource each frame by whoever
@@ -51,7 +54,7 @@ pub struct HelpOverlayState {
     wants_capture_doc: bool,
     wants_close_doc: bool,
     /// Original location of the Graphs tab before we moved it next
-    /// to the RocketStage tab during the Graphs step. Restored when
+    /// to the demo model tab during the Graphs step. Restored when
     /// the tour closes so the user's layout returns to normal.
     saved_graphs_loc: Option<lunco_workbench::TabLocation>,
     /// Last screen for which we ran the Graphs demo move (so it
@@ -72,7 +75,7 @@ struct HelpScreen {
 const SCREENS: &[HelpScreen] = &[
     HelpScreen {
         title: "Welcome to Lunica",
-        body: "LunCoSim Modelica Workbench — a quick interactive tour. \
+        body: "Lunica (LunCoSim Modelica Workbench) — a quick interactive tour. \
                Use ◀ ▶ or the arrow keys. Esc to skip.",
         anchor: None,
         focus_panel: None,
@@ -184,7 +187,7 @@ fn auto_show_on_first_start(
         // Mark seen as soon as the tour auto-shows — otherwise the
         // flag only flips when the user explicitly unchecks "Show on
         // next start", so closing the tour normally leaves `seen`
-        // false and the tour (plus its AnnotatedRocketStage demo)
+        // false and the tour (plus its CascadedRCFilter demo)
         // re-fires on every launch. Critical on wasm, where settings
         // persist in localStorage and tabs do not. The checkbox can
         // still set `seen = false` to re-arm the tour deliberately.
@@ -193,7 +196,7 @@ fn auto_show_on_first_start(
 }
 
 /// Opening helper. Marks the tour visible and queues the
-/// AnnotatedRocketStage open so the model views have content.
+/// CascadedRCFilter open so the model views have content.
 fn open_tour(state: &mut HelpOverlayState) {
     state.visible = true;
     state.screen = 0;
@@ -226,7 +229,7 @@ fn auto_focus_target_panel(
     }
 }
 
-/// Exclusive system: opens AnnotatedRocketStage when the tour starts,
+/// Exclusive system: opens CascadedRCFilter when the tour starts,
 /// captures the resulting active doc id, and closes the doc when the
 /// tour ends. Runs as `&mut World` because `open_class` and the
 /// close intent both need it.
@@ -237,10 +240,7 @@ fn manage_tutorial_doc(world: &mut World) {
     if wants_open {
         crate::ui::panels::package_browser::open_class(
             world,
-            crate::class_ref::ClassRef::bundled([
-                "AnnotatedRocketStage",
-                "RocketStage",
-            ]),
+            crate::class_ref::ClassRef::bundled(["CascadedRCFilter"]),
             false,
         );
         let mut state = world.resource_mut::<HelpOverlayState>();
@@ -250,15 +250,20 @@ fn manage_tutorial_doc(world: &mut World) {
     }
 
     // Step 2 — capture. Reads whatever active_document the open
-    // observer landed on.
+    // observer landed on. The open may resolve a frame or more
+    // late (the bundled source still has to parse), so keep the
+    // capture flag armed until a doc actually shows up — otherwise
+    // a fast skip leaves `tutorial_doc` None and the demo leaks.
     let wants_capture = world.resource::<HelpOverlayState>().wants_capture_doc;
     if wants_capture {
         let active = world
             .resource::<lunco_workbench::WorkspaceResource>()
             .active_document;
         let mut state = world.resource_mut::<HelpOverlayState>();
-        state.tutorial_doc = active;
-        state.wants_capture_doc = false;
+        if active.is_some() {
+            state.tutorial_doc = active;
+            state.wants_capture_doc = false;
+        }
     }
 
     // Step 3 — close. Triggers `EditorIntent::Close` while the tour
@@ -284,7 +289,22 @@ fn manage_tutorial_doc(world: &mut World) {
             state.graphs_demo_ran_for = None;
         }
 
-        let doc = world.resource::<HelpOverlayState>().tutorial_doc;
+        // Prefer the captured id; if capture never landed (fast
+        // skip before the open resolved), fall back to whatever the
+        // tour left active so the demo is still torn down.
+        let (captured, pending) = {
+            let s = world.resource::<HelpOverlayState>();
+            (s.tutorial_doc, s.wants_capture_doc)
+        };
+        let doc = captured.or_else(|| {
+            if pending {
+                world
+                    .resource::<lunco_workbench::WorkspaceResource>()
+                    .active_document
+            } else {
+                None
+            }
+        });
         if let Some(doc) = doc {
             // Make the tour doc active so `EditorIntent::Close` (which
             // closes the active document) targets the right one.
@@ -296,10 +316,13 @@ fn manage_tutorial_doc(world: &mut World) {
         let mut state = world.resource_mut::<HelpOverlayState>();
         state.tutorial_doc = None;
         state.wants_close_doc = false;
+        // Disarm capture too — a late open resolving after teardown
+        // must not re-adopt a doc the tour no longer owns.
+        state.wants_capture_doc = false;
     }
 
     // Step 4 — Graphs-step demo: programmatically move the plot tab
-    // next to the RocketStage model-view tab so the user sees that
+    // next to the demo model-view tab so the user sees that
     // tabs can be drag-rearranged. Fires once when entering the
     // Graphs step; restoration happens in Step 3 above on tour close.
     let (visible, screen, already_ran) = {
@@ -329,7 +352,7 @@ fn manage_tutorial_doc(world: &mut World) {
 }
 
 /// Index of the "Rearrange tabs" step in [`SCREENS`] — the one where
-/// we programmatically move the Graphs tab next to RocketStage so
+/// we programmatically move the Graphs tab next to the demo model so
 /// the user sees that the dock is interactive. Update if screens
 /// reorder. (The plain "Graphs" step at index 4 shows the panel in
 /// its default bottom-dock location; the move only happens on entry
@@ -622,16 +645,6 @@ fn render_help_overlay(
         .interactable(true)
         .show(ctx, |ui| {
             ui.set_width(card_w);
-
-            // Drop-shadow: paint a faint dark rect under the card.
-            ui.painter().rect_filled(
-                egui::Rect::from_min_size(
-                    card_pos + egui::vec2(0.0, 6.0),
-                    egui::vec2(card_w, card_h_est),
-                ),
-                14.0,
-                egui::Color32::from_black_alpha(110),
-            );
 
             egui::Frame::new()
                 .fill(card_fill)

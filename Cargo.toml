@@ -82,7 +82,7 @@ bevy = { version = "0.18.1", default-features = false, features = [
     # ── 2D / UI-only core. Anything 3D-shaped (PBR, GLTF, scenes,
     # meshes, post-processing, mesh picking) is *not* in this list —
     # crates that need 3D opt in via their own Cargo.toml so the
-    # Modelica workbench web binary doesn't carry them. See
+    # Lunica (LunCoSim Modelica Workbench) web binary doesn't carry them. See
     # `crates/lunco-client/Cargo.toml` for the opt-in pattern.
     "bevy_log",                    # info!/warn!/error! macros workspace-wide
     "bevy_state",                  # state machine (some panels)

@@ -894,10 +894,20 @@ pub fn on_open(trigger: On<Open>, mut commands: Commands) {
 pub fn on_close_document(
     trigger: On<CloseDocument>,
     mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut commands: Commands,
 ) {
     let doc = trigger.event().doc;
     if registry.host(doc).is_none() {
         return;
+    }
+    // Despawn any `ModelicaModel` entity backing this doc *before*
+    // dropping the document. The despawn fires `RemovedComponents`,
+    // which `cleanup_removed_documents` picks up to purge the doc's
+    // signal histories + plot bindings from the SignalRegistry /
+    // VisualizationRegistry — otherwise stale variables (der(C2.v),
+    // …) linger in the Graphs X/Y picker after the doc is closed.
+    for entity in registry.entities_linked_to(doc) {
+        commands.entity(entity).despawn();
     }
     registry.remove_document(doc);
 }

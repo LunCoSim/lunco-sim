@@ -885,7 +885,7 @@ No conflict. No merge dialog. Deterministic convergence.
 ### Architecture
 
 ```
-┌── Modelica Workbench Client A ───────────────┐
+┌── Lunica (LunCoSim Modelica Workbench) Client A ───────────────┐
 │  Code Editor Panel                            │
 │  ┌─────────────────────────────────────────┐ │
 │  │ parameter Real mass = 100;  ← cursor A  │ │
@@ -898,7 +898,7 @@ No conflict. No merge dialog. Deterministic convergence.
                                                   │ renet2
                                                   │ CHANNEL_YJS_UPDATE
                                                   │
-┌── Modelica Workbench Client B ───────────────┐  │
+┌── Lunica (LunCoSim Modelica Workbench) Client B ───────────────┐  │
 │  Code Editor Panel                            │  │
 │  ┌─────────────────────────────────────────┐ │  │
 │  │ // Author: Bob               ← cursor B  │ │  │

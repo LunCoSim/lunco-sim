@@ -1,18 +1,39 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Modelica Workbench</title>
+    <title>Lunica (LunCoSim Modelica Workbench)</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { width: 100%; height: 100%; overflow: hidden; }
-        body { background: #1a1a1a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        body {
+            background: #1a1a1a;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
         /* Match the workbench backdrop so the gap between wasm init
            resolving and Bevy's first egui frame is invisible — no
            gray-flash. Bevy's clear colour paints over this once the
            render loop starts. */
-        #bevy { width: 100%; height: 100%; display: block; background: #1a1a1a; }
+        #bevy {
+            width: 100%;
+            height: 100%;
+            display: block;
+            background: #1a1a1a;
+        }
 
         /* Centred loader card. Covers ONLY the crucial pre-init steps:
            wasm download → wasm init. Hidden the moment `init()` resolves.
@@ -22,61 +43,105 @@
            because MSL is non-blocking — the UI is fully usable while
            it streams in. */
         #loading {
-            position: fixed; inset: 0;
-            display: flex; align-items: center; justify-content: center;
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             pointer-events: none;
             transition: opacity 0.3s ease;
             z-index: 1000;
         }
-        #loading.hidden { opacity: 0; visibility: hidden; }
+
+        #loading.hidden {
+            opacity: 0;
+            visibility: hidden;
+        }
+
         #loading .card {
-            min-width: 320px; max-width: 420px;
+            min-width: 320px;
+            max-width: 420px;
             padding: 18px 22px;
             background: rgba(20, 20, 20, 0.94);
-            border: 1px solid #3a3a3a; border-radius: 10px;
+            border: 1px solid #3a3a3a;
+            border-radius: 10px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
             pointer-events: auto;
         }
+
         #loading .title {
-            color: #4CAF50; font-weight: 600; font-size: 14px;
-            letter-spacing: 0.04em; text-transform: uppercase;
+            color: #4CAF50;
+            font-weight: 600;
+            font-size: 14px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
         }
+
         #loading .phase {
-            color: #e8e8e8; font-size: 16px; margin-top: 6px;
+            color: #e8e8e8;
+            font-size: 16px;
+            margin-top: 6px;
         }
+
         #loading .detail {
-            color: #888; font-size: 12px; margin-top: 4px;
+            color: #888;
+            font-size: 12px;
+            margin-top: 4px;
             font-variant-numeric: tabular-nums;
         }
+
         #loading .bar {
-            margin-top: 14px; height: 6px; width: 100%;
-            background: #2a2a2a; border-radius: 3px; overflow: hidden;
+            margin-top: 14px;
+            height: 6px;
+            width: 100%;
+            background: #2a2a2a;
+            border-radius: 3px;
+            overflow: hidden;
         }
-        #loading .bar > .fill {
-            height: 100%; background: #4CAF50; width: 0%;
+
+        #loading .bar>.fill {
+            height: 100%;
+            background: #4CAF50;
+            width: 0%;
             transition: width 0.15s ease;
         }
+
         /* Indeterminate state when we don't know totals yet — gentle
            shimmer so the user can see things are alive. */
-        #loading.indeterminate .bar > .fill {
+        #loading.indeterminate .bar>.fill {
             width: 35%;
             animation: shimmer 1.4s ease-in-out infinite;
         }
+
         @keyframes shimmer {
-            0%   { margin-left: -35%; }
-            100% { margin-left: 100%; }
+            0% {
+                margin-left: -35%;
+            }
+
+            100% {
+                margin-left: 100%;
+            }
         }
-        #loading.error .title { color: #f44336; }
-        #loading.error .bar > .fill { background: #f44336; }
+
+        #loading.error .title {
+            color: #f44336;
+        }
+
+        #loading.error .bar>.fill {
+            background: #f44336;
+        }
     </style>
 </head>
+
 <body>
     <div id="loading" class="indeterminate">
         <div class="card">
-            <div class="title">Modelica Workbench</div>
+            <div class="title">Lunica (LunCoSim Modelica Workbench)</div>
             <div class="phase">Starting…</div>
             <div class="detail">&nbsp;</div>
-            <div class="bar"><div class="fill"></div></div>
+            <div class="bar">
+                <div class="fill"></div>
+            </div>
         </div>
     </div>
     <canvas id="bevy"></canvas>
@@ -89,13 +154,13 @@
         window.__lc_test_worker_ping = __lc_test_worker_ping;
         window.__lc_test_dispatch_compile = __lc_test_dispatch_compile;
 
-        const root   = document.getElementById('loading');
+        const root = document.getElementById('loading');
         const phaseE = root.querySelector('.phase');
         const detailE = root.querySelector('.detail');
-        const fillE  = root.querySelector('.bar > .fill');
+        const fillE = root.querySelector('.bar > .fill');
 
-        function setPhase(text)   { phaseE.textContent = text; }
-        function setDetail(text)  { detailE.innerHTML = text || '&nbsp;'; }
+        function setPhase(text) { phaseE.textContent = text; }
+        function setDetail(text) { detailE.innerHTML = text || '&nbsp;'; }
         function setProgress(pct) {
             // Determinate fill — drop the shimmer.
             root.classList.remove('indeterminate');
@@ -127,11 +192,11 @@
         // WebAssembly.compileStreaming as they arrive — overlapping
         // download and compile, which routinely cuts pre-init time by
         // 30–50 % on the 104 MB binary versus buffering first.
-        function fmtBytes(n) { return (n/1048576).toFixed(1) + ' MB'; }
+        function fmtBytes(n) { return (n / 1048576).toFixed(1) + ' MB'; }
         function fmtRate(bps) {
             if (bps <= 0) return '';
-            if (bps > 1048576) return (bps/1048576).toFixed(1) + ' MB/s';
-            if (bps > 1024) return (bps/1024).toFixed(0) + ' KB/s';
+            if (bps > 1048576) return (bps / 1048576).toFixed(1) + ' MB/s';
+            if (bps > 1024) return (bps / 1024).toFixed(0) + ' KB/s';
             return bps.toFixed(0) + ' B/s';
         }
         function fmtEta(s) {
@@ -229,4 +294,5 @@
         }
     </script>
 </body>
+
 </html>
