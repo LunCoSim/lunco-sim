@@ -708,7 +708,7 @@ impl Panel for ExperimentsPanel {
             {
                 world
                     .commands()
-                    .trigger(crate::ui::commands::FastRunActiveModel { doc });
+                    .trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None });
             }
         }
 
@@ -1091,7 +1091,7 @@ impl ExperimentsPanel {
             // Skip the modal — Setup is already filled in.
             world
                 .commands()
-                .trigger(crate::ui::commands::FastRunActiveModel { doc });
+                .trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None });
         }
     }
 
