@@ -151,15 +151,36 @@ pub struct RunResult {
 
 impl RunResult {
     /// Append another result's samples to this one. Assumes the delta's
-    /// `times` continue from our last time point and that `series`
-    /// keys match.
+    /// `times` continue from our last time point.
+    ///
+    /// Robustly handles mid-run discovery: if `delta` contains a
+    /// variable we haven't seen yet, it's inserted and padded with
+    /// `NaN` for our existing `times` span.
     pub fn merge_delta(&mut self, mut delta: RunResult) {
-        self.times.append(&mut delta.times);
-        for (k, v) in &mut self.series {
-            if let Some(mut dv) = delta.series.remove(k) {
+        let base_len = self.times.len();
+
+        for (k, mut dv) in delta.series {
+            if let Some(v) = self.series.get_mut(&k) {
                 v.append(&mut dv);
+            } else {
+                // New variable discovered mid-run. Pad with NaN for
+                // the time we've already covered.
+                let mut new_v = vec![f64::NAN; base_len];
+                new_v.append(&mut dv);
+                self.series.insert(k, new_v);
             }
         }
+
+        // Handle variables we HAVE but the delta MISSED (solver
+        // stopped reporting them). Pad the delta's span with NaN.
+        let delta_len = delta.times.len();
+        for (_k, v) in &mut self.series {
+            if v.len() == base_len {
+                v.resize(base_len + delta_len, f64::NAN);
+            }
+        }
+
+        self.times.append(&mut delta.times);
         self.meta.sample_count = self.times.len();
         self.meta.wall_time_ms = delta.meta.wall_time_ms; // Update to latest wall time
     }

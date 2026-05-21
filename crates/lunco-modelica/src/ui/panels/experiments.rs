@@ -332,7 +332,11 @@ impl Panel for ExperimentsPanel {
                     name: "Interactive Live".into(),
                     bounds: "realtime".into(),
                     overrides: String::new(),
-                    status: format!("▶ {:.2}s", m.current_time),
+                    status: format!(
+                        "{} {:.2}s",
+                        if m.paused { "⏸" } else { "▶" },
+                        m.current_time
+                    ),
                     duration_ms: None,
                     error: None,
                     is_terminal: false,
