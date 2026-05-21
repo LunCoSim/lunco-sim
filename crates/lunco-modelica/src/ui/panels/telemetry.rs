@@ -417,17 +417,6 @@ impl Panel for TelemetryPanel {
                 (Vec::new(), Vec::new())
             };
 
-            // Read plotted-set from the viz registry. Clone once so
-            // we don't reborrow the resource inside the loop.
-            let plotted: std::collections::HashSet<String> = world
-                .get_resource::<lunco_viz::VisualizationRegistry>()
-                .and_then(|r| r.get(crate::ui::viz::DEFAULT_MODELICA_GRAPH))
-                .map(|cfg| cfg.inputs.iter()
-                    .filter(|b| b.source.entity == entity)
-                    .map(|b| b.source.path.clone())
-                    .collect())
-                .unwrap_or_default();
-
             // Picked-for-experiments set, snapshotted once. Routes
             // through the "Plot in" target — pinned plot if set,
             // else the active plot. Same VizId used for the toggle
@@ -438,6 +427,20 @@ impl Panel for TelemetryPanel {
                 .unwrap_or_default()
                 .or_default();
             let target_plot = pinned.unwrap_or(active_plot);
+
+            // Read plotted-set from the viz registry for the target plot.
+            // Clone once so we don't reborrow the resource inside the loop.
+            let plotted: std::collections::HashSet<String> = world
+                .get_resource::<lunco_viz::VisualizationRegistry>()
+                .and_then(|r| r.get(target_plot))
+                .map(|cfg| {
+                    cfg.inputs
+                        .iter()
+                        .filter(|b| b.source.entity == entity)
+                        .map(|b| b.source.path.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
             let picked_exp: std::collections::BTreeSet<String> = world
                 .get_resource::<crate::ui::panels::experiments::PlotPanelStates>()
                 .map(|s| s.picked(target_plot))
@@ -549,6 +552,7 @@ impl Panel for TelemetryPanel {
                 {
                     set_signal_plotted(
                         &mut reg,
+                        target_plot,
                         lunco_viz::SignalRef::new(entity, name.clone()),
                         on,
                     );
