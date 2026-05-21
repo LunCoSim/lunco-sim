@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_doc::DocumentId;
 use egui_plot::{Legend, Line, LineStyle, Plot, PlotPoints, VLine};
 use lunco_experiments::{
     ExperimentId, ExperimentRegistry, RunStatus,
@@ -2147,11 +2148,20 @@ pub fn experiments_plot_summary(world: &mut World, viz_id: VizId) -> ExpPlotSumm
 /// the active twin. Used by the Telemetry panel to surface
 /// experiment-only variables alongside live cosim signals.
 pub fn all_experiment_variables(world: &World) -> std::collections::BTreeSet<String> {
+    let doc_id = crate::ui::doc_pin::resolved_experiments_doc(world);
+    doc_id
+        .map(|id| all_experiment_variables_for_doc(world, id))
+        .unwrap_or_default()
+}
+
+/// Collect every variable name across all completed experiments for
+/// the specified document. Used by the Telemetry panel to surface
+/// experiment-only variables alongside live cosim signals.
+pub fn all_experiment_variables_for_doc(
+    world: &World,
+    doc_id: DocumentId,
+) -> std::collections::BTreeSet<String> {
     let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc(world)
-    else {
-        return out;
-    };
     let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
     if let Some(reg) = world.get_resource::<ExperimentRegistry>() {
         for exp in reg.list_for_twin(&twin) {
