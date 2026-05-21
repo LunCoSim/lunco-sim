@@ -409,91 +409,131 @@ fn run_inner(
     }
 
     // Build sim options from bounds.
-    let opts = rumoca_sim::SimOptions {
-        t_start: bounds.t_start,
-        t_end: bounds.t_end,
-        rtol: bounds.tolerance.unwrap_or(1e-6),
-        atol: bounds.tolerance.unwrap_or(1e-6),
-        dt: bounds.dt,
-        scalarize: true,
-        max_wall_seconds: None,
-        solver_mode: rumoca_sim::SimSolverMode::Auto,
+    let mut stepper_opts = rumoca_sim::StepperOptions::default();
+    stepper_opts.atol = bounds.tolerance.unwrap_or(1e-6);
+    stepper_opts.rtol = bounds.tolerance.unwrap_or(1e-6);
+
+    let mut stepper = match rumoca_sim::SimStepper::new(&dae_result.dae, stepper_opts) {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = tx.send(RunUpdate::Failed {
+                error: format!("stepper init failed: {e:?}"),
+                partial: None,
+            });
+            return;
+        }
     };
 
-    // Run batch simulation. Today this is a one-shot call; we have no
-    // intra-run progress hook from rumoca-sim. Post a final
-    // RunUpdate::Completed once it returns. Progress events from
-    // inside the solver come in Step 4 (worker) where the stepper
-    // path lets us check cancel and emit progress between steps.
-    //
-    // TODO(progress): swap to PreparedSimulation + a step loop here
-    // for native too, so cancel is responsive and progress fires.
-    // v1 ships with batch-only on native.
     bevy::log::info!(
         "[runner] simulate begin: t={}..{} dt={:?}",
-        opts.t_start, opts.t_end, opts.dt
+        bounds.t_start,
+        bounds.t_end,
+        bounds.dt
     );
-    let sim_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        rumoca_sim::simulate_dae(&dae_result.dae, &opts)
-    }));
 
-    if cancel.load(Ordering::SeqCst) {
-        let _ = tx.send(RunUpdate::Cancelled);
-        return;
-    }
+    let t_end = bounds.t_end;
+    let step_dt = bounds.dt.unwrap_or(0.01);
+    let mut last_progress_emit = std::time::Instant::now();
+    
+    // Get variable names from the initial state.
+    let names: Vec<String> = stepper.state().values.keys()
+        .filter(|n| *n != "time")
+        .cloned()
+        .collect();
 
-    match sim_outcome {
-        Ok(Ok(r)) => {
-            bevy::log::info!(
-                "[runner] simulate ok: {} samples, {} vars, {:.2}s wall",
-                r.times.len(),
-                r.names.len(),
-                t_wall.elapsed().as_secs_f64(),
-            );
-            let result = sim_result_to_run_result(r, t_wall.elapsed().as_millis() as u64);
-            let _ = tx.send(RunUpdate::Completed(result));
+    let mut all_times: Vec<f64> = Vec::new();
+    let mut all_series: Vec<Vec<f64>> = vec![Vec::new(); names.len()];
+    let mut last_emit_idx = 0;
+
+    // Simulation loop.
+    while stepper.time() < t_end {
+        if cancel.load(Ordering::SeqCst) {
+            let _ = tx.send(RunUpdate::Cancelled);
+            return;
         }
-        Ok(Err(e)) => {
+
+        if let Err(e) = stepper.step(step_dt) {
             bevy::log::warn!("[runner] simulate err: {e:?}");
+            // Pack whatever we have so far into partial result.
+            let mut series = BTreeMap::new();
+            for (i, name) in names.iter().enumerate() {
+                series.insert(name.clone(), all_series[i].clone());
+            }
+            let partial = RunResult {
+                times: all_times.clone(),
+                series,
+                meta: RunMeta {
+                    wall_time_ms: t_wall.elapsed().as_millis() as u64,
+                    sample_count: all_times.len(),
+                    notes: Some(format!("failed during step: {e:?}")),
+                },
+            };
             let _ = tx.send(RunUpdate::Failed {
                 error: format!("simulate failed: {e:?}"),
-                partial: None,
+                partial: Some(partial),
             });
+            return;
         }
-        Err(payload) => {
-            let msg = payload
-                .downcast_ref::<&'static str>()
-                .copied()
-                .or_else(|| payload.downcast_ref::<String>().map(|s| s.as_str()))
-                .unwrap_or("(unknown panic)");
-            bevy::log::warn!("[runner] simulate panic: {msg}");
-            let _ = tx.send(RunUpdate::Failed {
-                error: format!("simulate panic: {msg}"),
-                partial: None,
-            });
-        }
-    }
-}
 
-fn sim_result_to_run_result(r: rumoca_sim::SimResult, wall_time_ms: u64) -> RunResult {
-    let mut series: BTreeMap<String, Vec<f64>> = BTreeMap::new();
-    // SimResult.data is Vec<Vec<f64>> with one inner vec per variable.
-    // Pair up with names; defensively skip mismatched lengths.
-    for (i, name) in r.names.iter().enumerate() {
-        if let Some(col) = r.data.get(i) {
-            series.insert(name.clone(), col.clone());
+        let t = stepper.time();
+        all_times.push(t);
+        let current_values = stepper.state().values;
+        for (i, name) in names.iter().enumerate() {
+            let val = current_values.get(name).copied().unwrap_or(0.0);
+            all_series[i].push(val);
+        }
+
+        // Throttle progress updates to ~10 Hz to avoid flooding the
+        // main thread and incurring excessive serialization overhead.
+        if last_progress_emit.elapsed().as_millis() > 100 {
+            let delta_times = all_times[last_emit_idx..].to_vec();
+            let mut delta_series = BTreeMap::new();
+            for (i, name) in names.iter().enumerate() {
+                delta_series.insert(name.clone(), all_series[i][last_emit_idx..].to_vec());
+            }
+
+            let delta = RunResult {
+                times: delta_times,
+                series: delta_series,
+                meta: RunMeta {
+                    wall_time_ms: t_wall.elapsed().as_millis() as u64,
+                    sample_count: all_times.len() - last_emit_idx,
+                    notes: None,
+                },
+            };
+
+            let _ = tx.send(RunUpdate::Progress {
+                t_current: t,
+                delta: Some(delta),
+            });
+            last_progress_emit = std::time::Instant::now();
+            last_emit_idx = all_times.len();
         }
     }
-    let sample_count = r.times.len();
-    RunResult {
-        times: r.times,
-        series,
+
+    bevy::log::info!(
+        "[runner] simulate ok: {} samples, {} vars, {:.2}s wall",
+        all_times.len(),
+        names.len(),
+        t_wall.elapsed().as_secs_f64(),
+    );
+
+    let mut final_series = BTreeMap::new();
+    for (i, name) in names.iter().enumerate() {
+        final_series.insert(name.clone(), all_series[i].clone());
+    }
+
+    let n_samples = all_times.len();
+    let result = RunResult {
+        times: all_times,
+        series: final_series,
         meta: RunMeta {
-            wall_time_ms,
-            sample_count,
+            wall_time_ms: t_wall.elapsed().as_millis() as u64,
+            sample_count: n_samples,
             notes: None,
         },
-    }
+    };
+    let _ = tx.send(RunUpdate::Completed(result));
 }
 
 /// One detected top-level `parameter` declaration. Used by the
@@ -931,8 +971,11 @@ pub fn drain_pending_handles(
         let mut terminal = false;
         while let Ok(update) = handle.progress_rx.try_recv() {
             match update {
-                RunUpdate::Progress { t_current } => {
+                RunUpdate::Progress { t_current, delta } => {
                     registry.set_status(handle.run_id, RunStatus::Running { t_current });
+                    if let Some(d) = delta {
+                        registry.merge_result(handle.run_id, d);
+                    }
                     ev_progress.write(RunProgress {
                         experiment_id: handle.run_id,
                         t_current,

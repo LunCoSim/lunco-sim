@@ -185,7 +185,13 @@ impl PlotPanelStates {
         let mut restored = self
             .archived
             .remove(&(viz, twin.clone()))
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                let mut state = PlotPanelState::default();
+                // Live run visible by default — matches the dedicated
+                // LinePlot behavior (live signals show until hidden).
+                state.visible_experiments.insert(ExperimentId::live());
+                state
+            });
         restored.last_twin = Some(twin.clone());
         self.by_viz.insert(viz, restored);
     }
@@ -257,7 +263,7 @@ impl Panel for ExperimentsPanel {
 
         // Snapshot for rendering — avoids holding the registry borrow
         // across egui calls.
-        let rows: Vec<Row> = match world.get_resource::<ExperimentRegistry>() {
+        let mut rows: Vec<Row> = match world.get_resource::<ExperimentRegistry>() {
             Some(reg) => reg
                 .list_for_twin(&twin)
                 .iter()
@@ -310,6 +316,32 @@ impl Panel for ExperimentsPanel {
                 .collect(),
             None => Vec::new(),
         };
+
+        // Add the "Interactive Live" row if an interactive simulation
+        // is active for the current document.
+        let live_model = world
+            .query::<&crate::worker::ModelicaModel>()
+            .iter(world)
+            .find(|m| m.document == doc_id);
+        if let Some(m) = live_model {
+            rows.insert(
+                0,
+                Row {
+                    id: ExperimentId::live(),
+                    name: "Interactive Live".into(),
+                    bounds: "realtime".into(),
+                    overrides: String::new(),
+                    status: format!("▶ {:.2}s", m.current_time),
+                    duration_ms: None,
+                    error: None,
+                    is_terminal: false,
+                    color_hint: 255, // distinct color index for live
+                    sample_count: 0,
+                    var_count: 0,
+                    progress: None,
+                },
+            );
+        }
 
         if rows.is_empty() {
             // Detect *why* the experiments table is empty so the
@@ -508,53 +540,57 @@ impl Panel for ExperimentsPanel {
                                 .sense(egui::Sense::click());
                             let name_resp = ui
                                 .add(name_label)
-                                .on_hover_text(
+                                .on_hover_text(if row.id.is_live() {
+                                    "Interactive realtime simulation state."
+                                } else {
                                     "Click: load this run's setup into the draft. \
                                      Double-click or right-click → Rename. \
-                                     Right-click: Re-run / Duplicate / Delete.",
-                                );
-                            if name_resp.double_clicked() {
-                                start_rename = Some((row.id, row.name.clone()));
-                            } else if name_resp.clicked() && row.is_terminal {
-                                load_into_draft = Some(row.id);
-                            }
-                            name_resp.context_menu(|ui| {
-                                if ui.button("✏ Rename").on_hover_text("Give this run a new name").clicked() {
+                                     Right-click: Re-run / Duplicate / Delete."
+                                });
+                            if !row.id.is_live() {
+                                if name_resp.double_clicked() {
                                     start_rename = Some((row.id, row.name.clone()));
-                                    ui.close();
+                                } else if name_resp.clicked() && row.is_terminal {
+                                    load_into_draft = Some(row.id);
                                 }
-                                ui.separator();
-                                if row.is_terminal {
-                                    if ui.button("▶ Re-run with same setup").on_hover_text("Run again with identical bounds and parameter overrides").clicked() {
-                                        rerun = Some(row.id);
-                                        ui.close();
-                                    }
-                                    if ui.button("📋 Duplicate into Setup").on_hover_text("Load this run's setup into the draft so you can tweak it").clicked() {
-                                        load_into_draft = Some(row.id);
-                                        ui.close();
-                                    }
-                                    if ui
-                                        .button("💾 Export CSV…")
-                                        .on_hover_text(
-                                            "Save this run's full trajectory \
-                                             (time + every recorded variable) \
-                                             to a CSV file.",
-                                        )
-                                        .clicked()
-                                    {
-                                        export_csv = Some(row.id);
+                                name_resp.context_menu(|ui| {
+                                    if ui.button("✏ Rename").on_hover_text("Give this run a new name").clicked() {
+                                        start_rename = Some((row.id, row.name.clone()));
                                         ui.close();
                                     }
                                     ui.separator();
-                                    if ui.button("✕ Delete").on_hover_text("Remove this run from the list").clicked() {
-                                        delete = Some(row.id);
+                                    if row.is_terminal {
+                                        if ui.button("▶ Re-run with same setup").on_hover_text("Run again with identical bounds and parameter overrides").clicked() {
+                                            rerun = Some(row.id);
+                                            ui.close();
+                                        }
+                                        if ui.button("📋 Duplicate into Setup").on_hover_text("Load this run's setup into the draft so you can tweak it").clicked() {
+                                            load_into_draft = Some(row.id);
+                                            ui.close();
+                                        }
+                                        if ui
+                                            .button("💾 Export CSV…")
+                                            .on_hover_text(
+                                                "Save this run's full trajectory \
+                                                 (time + every recorded variable) \
+                                                 to a CSV file.",
+                                            )
+                                            .clicked()
+                                        {
+                                            export_csv = Some(row.id);
+                                            ui.close();
+                                        }
+                                        ui.separator();
+                                        if ui.button("✕ Delete").on_hover_text("Remove this run from the list").clicked() {
+                                            delete = Some(row.id);
+                                            ui.close();
+                                        }
+                                    } else if ui.button("⊘ Cancel run").on_hover_text("Stop this in-progress run").clicked() {
+                                        cancel = Some(row.id);
                                         ui.close();
                                     }
-                                } else if ui.button("⊘ Cancel run").on_hover_text("Stop this in-progress run").clicked() {
-                                    cancel = Some(row.id);
-                                    ui.close();
-                                }
-                            });
+                                });
+                            }
                         }
                         ui.horizontal(|ui| {
                             ui.label(&row.bounds);
@@ -609,7 +645,7 @@ impl Panel for ExperimentsPanel {
                             if ui.small_button("✕").on_hover_text("Delete").clicked() {
                                 delete = Some(row.id);
                             }
-                        } else {
+                        } else if !row.id.is_live() {
                             if ui
                                 .small_button("⊘")
                                 .on_hover_text("Cancel run")
@@ -1748,12 +1784,15 @@ fn render_experiments_plot_inner(
             // Live `SignalRegistry` curves overlaid on top of the
             // run curves so users get a single merged plot instead
             // of separate "experiment" and "live" widgets.
-            for ex in extras {
-                let (r, g, b) = ex.color;
-                let line =
-                    Line::new(ex.label.clone(), PlotPoints::from(ex.points.clone()))
+            // Visibility is controlled by the "Interactive Live" row
+            // in the experiments table.
+            if visible.contains(&ExperimentId::live()) {
+                for ex in extras {
+                    let (r, g, b) = ex.color;
+                    let line = Line::new(ex.label.clone(), PlotPoints::from(ex.points.clone()))
                         .color(egui::Color32::from_rgb(r, g, b));
-                plot_ui.line(line);
+                    plot_ui.line(line);
+                }
             }
             if let Some(t) = scrub_time {
                 plot_ui.vline(
@@ -2053,7 +2092,7 @@ pub struct ExpPlotSummary {
 
 /// Compute an [`ExpPlotSummary`] without rendering. Lets the Graphs
 /// panel show counts in its top header row before drawing the plot.
-pub fn experiments_plot_summary(world: &World, viz_id: VizId) -> ExpPlotSummary {
+pub fn experiments_plot_summary(world: &mut World, viz_id: VizId) -> ExpPlotSummary {
     let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc(world)
     else {
         return ExpPlotSummary::default();
@@ -2066,6 +2105,21 @@ pub fn experiments_plot_summary(world: &World, viz_id: VizId) -> ExpPlotSummary 
     let mut total_runs = 0usize;
     let mut visible_runs = 0usize;
     let mut series_drawn = 0usize;
+
+    // Add "Interactive Live" run to counters if it exists.
+    let live_exists = world
+        .query::<&crate::worker::ModelicaModel>()
+        .iter(world)
+        .any(|m| m.document == doc_id);
+    if live_exists {
+        total_runs += 1;
+        if visible.contains(&ExperimentId::live()) {
+            visible_runs += 1;
+            // Note: we don't count individual live series here as
+            // they are in `extras`, not the registry.
+        }
+    }
+
     if let Some(reg) = world.get_resource::<ExperimentRegistry>() {
         for exp in reg.list_for_twin(&twin) {
             total_runs += 1;
