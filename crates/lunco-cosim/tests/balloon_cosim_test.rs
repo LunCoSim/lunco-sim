@@ -36,7 +36,7 @@ const BALLOON_MO: &str = include_str!("../../../assets/models/Balloon.mo");
 
 // Miniature copies of the production `balloon_setup` systems. They're
 // duplicated here because `balloon_setup.rs` lives as a `#[path]`-included
-// module inside the `rover_sandbox_usd` binary crate and cannot be imported
+// module inside the `sandbox` binary crate and cannot be imported
 // from a library test. Keeping them in sync is a manual regression surface —
 // if this test passes and the production binary doesn't, the two are out of
 // sync and the production systems need a matching change.

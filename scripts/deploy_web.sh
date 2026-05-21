@@ -10,7 +10,7 @@
 #     # or:
 #     DEPLOY_TARGET="user@host:/var/www/lunco" ./scripts/deploy_web.sh
 #     # build a different binary first:
-#     BIN=rover_sandbox_web ./scripts/deploy_web.sh user@host:/path
+#     BIN=sandbox_web ./scripts/deploy_web.sh user@host:/path
 #
 # Environment variables:
 #     BIN              binary name (default: lunica_web)
@@ -60,7 +60,7 @@ usage: $0 <user@host:/remote/path>
 
 example:
    ./scripts/deploy_web.sh deploy@lunco.dev:/var/www/lunco
-   BIN=rover_sandbox_web $0 deploy@lunco.dev:/var/www/rover
+   BIN=sandbox_web $0 deploy@lunco.dev:/var/www/rover
 EOF
     exit 2
 fi

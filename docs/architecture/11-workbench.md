@@ -515,7 +515,7 @@ lives in domain crates.
 Each binary is ~50 lines of plugin registration:
 
 ```
-rover_sandbox_usd     = workbench + SpawnPalette + SceneTree + Inspector +
+sandbox     = workbench + SpawnPalette + SceneTree + Inspector +
                         ModelicaInspector + 3D viewport
                         (sandbox editor with compact Modelica view)
 
@@ -529,7 +529,7 @@ lunica    = workbench + CodeEditor + Diagram + PackageBrowser +
 ```
 
 Same workbench shell, different panel sets, different default workspaces.
-`lunica` opens in the Analyze workspace; `rover_sandbox_usd`
+`lunica` opens in the Analyze workspace; `sandbox`
 in Build; `lunco_client` in Observe with quick access to all others.
 
 ## 13. Migration strategy (from bevy_workbench)

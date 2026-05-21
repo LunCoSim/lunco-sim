@@ -137,7 +137,7 @@ fn main() {
     // ticks: residual real time is *dropped* instead of compounded.
     // (`Time<Fixed>` reads its delta from Virtual, so this
     // transitively caps the catchup loop.) Same fix as
-    // `rover_sandbox_usd.rs`.
+    // `sandbox.rs`.
     let mut virtual_time = Time::<Virtual>::default();
     virtual_time.set_max_delta(std::time::Duration::from_millis(33));
     app.insert_resource(virtual_time);

@@ -159,7 +159,7 @@ As a user, I want to land on the Moon and drive a rover on a simple flat terrain
 
 ### User Story 7 - Sandbox Mode (Priority: P1)
 
-As a developer, I want to run the flat-ground rover sandbox for quick physics iteration without loading the celestial system.
+As a developer, I want to run the flat-ground sandbox for quick physics iteration without loading the celestial system.
 
 **Acceptance Scenarios**:
 
@@ -202,7 +202,7 @@ As a developer, I want to run the flat-ground rover sandbox for quick physics it
 -   **FR-017**: **Server Authority Design**: All celestial state (body positions, clock state) is computed deterministically. All celestial computation is isolated in systems that can run headless. Designed so a future server can own the state and clients receive it.
 -   **FR-018**: **Feature-Flagged Scenario System** (AD-5):
     -   Default (`celestial`): Full celestial world with bodies, grids, observer camera.
-    -   `sandbox` feature: Flat-ground rover sandbox (current `setup_scenario`). No `big_space`.
+    -   `sandbox` feature: Flat-ground sandbox (current `setup_scenario`). No `big_space`.
 -   **FR-019**: **Coordinate Conversion Utility** (AD-6): Shared `celestial::coords` module converting ecliptic J2000 (AU) → Bevy coordinate space (meters, Y-up). Handles obliquity rotation and unit scaling.
 -   **FR-020**: **Body Rotation** (AD-7): Each body rotates based on epoch. Earth: sidereal rotation (~360°/23h56m) around its tilted polar axis. Moon: tidally locked — rotation synchronized to orbital position. Earth must appear realistically oriented when observed from the lunar surface.
 -   **FR-021**: **Time Scale Conversion** (AD-10): Use `celestial-time` crate for Julian Date (TDB) ↔ UTC conversion. Time scrubber UI displays UTC; internal clock stores Julian Date.
@@ -236,7 +236,7 @@ As a developer, I want to run the flat-ground rover sandbox for quick physics it
 -   **SC-003**: Body positions match reference data within acceptable tolerance (VSOP2013/ELP accuracy) for Sun/Earth/Moon at any epoch in 2020-2030.
 -   **SC-004**: Rover can drive on a terrain tile spawned at the lunar surface with functional collision and Moon gravity (1.625 m/s²).
 -   **SC-005**: Adding a new body to the registry (e.g., Mars) requires only data — no code changes to rendering or positioning.
--   **SC-006**: `cargo run --features sandbox` runs the flat-ground rover sandbox without celestial overhead.
+-   **SC-006**: `cargo run --features sandbox` runs the flat-ground sandbox without celestial overhead.
 -   **SC-007**: Earth viewed from the Moon's surface shows correct continent orientation for the given epoch.
 -   **SC-008**: No Z-fighting or clipping artifacts at any camera altitude from 1 AU to 1m above surface.
 

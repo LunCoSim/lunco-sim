@@ -2,7 +2,7 @@
 //!
 //! Loads the entire scene from USD **synchronously** during Startup,
 //! so all entities (rover chassis + wheels) exist before physics runs.
-//! This matches the original rover_sandbox behavior exactly.
+//! This matches the original sandbox behavior exactly.
 
 // glibc's allocator serialises cross-thread allocations through a
 // shared arena lock; with avian's contact graph allocating heavily on
@@ -98,8 +98,8 @@ fn main() {
         bevy::window::PresentMode::Fifo
     };
     let window_title = match api_port {
-        Some(p) => format!("rover_sandbox_usd — Listening on {p}"),
-        None => "rover_sandbox_usd".to_string(),
+        Some(p) => format!("sandbox — Listening on {p}"),
+        None => "sandbox".to_string(),
     };
 
     let mut app = App::new();
@@ -215,7 +215,7 @@ fn main() {
         // Activate the 3D-only View workspace by default — full-screen scene,
         // no panels. User can switch to Build via the workspace tabs.
         .add_systems(Startup, |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
-            layout.activate_perspective(lunco_workbench::PerspectiveId("rover_view"));
+            layout.activate_perspective(lunco_workbench::PerspectiveId("sandbox_view"));
         })
         .add_systems(Update, apply_sandbox_settings)
         // Cosim pipeline ordering inside FixedUpdate:
@@ -233,7 +233,7 @@ fn main() {
         .add_systems(Update, lunco_sandbox_edit::selection::handle_entity_selection.before(lunco_avatar::avatar_raycast_possession))
         // Manual transform/visibility propagation runs ONCE per frame
         // after physics writeback. The earlier triple-call (PreUpdate
-        // + two in PostUpdate) ate ~80% of frame time on rover_sandbox
+        // + two in PostUpdate) ate ~80% of frame time on sandbox
         // because each call rebuilds a HashMap of every spatial entity
         // four times. Big_space's own BigSpacePropagationPlugin handles
         // the CellCoord-rooted hierarchy; this fallback exists only to

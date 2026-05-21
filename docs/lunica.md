@@ -94,7 +94,7 @@ path.
 - [`docs/architecture/11-workbench.md`](architecture/11-workbench.md) —
   workbench frame, perspectives, panel registration.
 - [`docs/architecture/13-twin-and-workflow.md`](architecture/13-twin-and-workflow.md) —
-  how Lunica fits alongside `rover_sandbox_usd` and `lunco_client`.
+  how Lunica fits alongside `sandbox` and `lunco_client`.
 - [`docs/WEB_BUILD.md`](WEB_BUILD.md) — wasm pipeline reference.
 - [`docs/api.md`](api.md) — typed-command HTTP API exposed by
   `lunica --api`.

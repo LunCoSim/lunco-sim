@@ -2053,7 +2053,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     // Two-mode rendering:
     //   1. If the dock has tabs (centre-driven app like modelica
     //      workbench), render the full DockArea.
-    //   2. Otherwise (3D app like rover_sandbox_usd), render the side
+    //   2. Otherwise (3D app like sandbox), render the side
     //      panels with plain SidePanel / TopBottomPanel and leave the
     //      central area transparent for the 3D viewport.
     let has_dock_tabs = layout.dock.iter_all_tabs().next().is_some();
@@ -2085,7 +2085,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         // Tab body fill is set further below alongside the
         // per-state tab colours so the body matches the active tab.
         // Always opaque, in every app. Transparency on the bar made
-        // the Modelica workbench look broken, and the rover sandbox's
+        // the Modelica workbench look broken, and the sandbox's
         // centre is a transparent `ViewportPanel` anyway — a dark
         // strip above its invisible header just looks like the top
         // edge of the viewport tile, which is fine.

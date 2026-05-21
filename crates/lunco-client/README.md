@@ -15,7 +15,7 @@ This crate aggregates all domain-specific crates (`lunco-celestial`, `lunco-mobi
 
 | Name | Path | Purpose |
 |---|---|---|
-| **`rover_sandbox_usd`** | `src/bin/rover_sandbox_usd.rs` | Main sandbox for testing USD-based rover mobility |
+| **`sandbox`** | `src/bin/sandbox.rs` | Main sandbox for testing USD-based rover mobility |
 | **`lunco_client_web`** | `src/bin/lunco_client_web.rs` | Web-targeted build of the LunCoSim client |
 | **`model_viewer`** | `src/bin/model_viewer.rs` | Isolated viewer for USD assets and materials |
 
@@ -36,8 +36,8 @@ The web target uses `wasm-bindgen` and `web-sys` to bridge Bevy's systems with b
 ## Usage
 
 ```bash
-# Run the rover sandbox natively
-cargo run -p lunco-client --bin rover_sandbox_usd
+# Run the sandbox natively
+cargo run -p lunco-client --bin sandbox
 
 # Build for web (using scripts/build_web.sh)
 ./scripts/build_web.sh

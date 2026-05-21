@@ -226,4 +226,4 @@ The existing `soi_transition_system` detects sphere-of-inificance crossings and 
 |------|---------|
 | `crates/lunco-celestial/src/gravity.rs` | Core types + systems |
 | `crates/lunco-celestial/src/lib.rs` | `CelestialPlugin` + `GravityPlugin` |
-| `crates/lunco-client/src/bin/rover_sandbox.rs` | Flat gravity demo |
+| `crates/lunco-client/src/bin/sandbox.rs` | Flat gravity demo |

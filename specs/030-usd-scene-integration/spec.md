@@ -15,7 +15,7 @@ As a rover engineer, I want to define my rover model in a standalone `.usda` fil
 **Acceptance Criteria:**
 - A `rover.usda` file can be loaded into any scene via a USD `reference`.
 - Changes in the source model are reflected across all scenes referencing it.
-- **Independent Test**: Verify that a change in `rover.usda` propagates to `rover_sandbox.usda` at runtime.
+- **Independent Test**: Verify that a change in `rover.usda` propagates to `sandbox.usda` at runtime.
 
 ### User Story 2 - Isaac Sim Physics Compatibility (Priority: P2)
 As a simulation specialist, I want to use standard `PhysX` and `USDPhysics` schemas so my files are compatible across both Isaac Sim and LunCoSim.
@@ -57,7 +57,7 @@ As a developer, I want to add new simulation-specific mapping logic (e.g., for a
 
 ### Measurable Outcomes
 - **SC-001**: 100% decoupling of the core parser from the Bevy framework.
-- **SC-002**: Verification of a full 4-rover sandbox scene authored entirely in USDA.
+- **SC-002**: Verification of a full 4-sandbox scene authored entirely in USDA.
 - **SC-003**: 1:1 parity for `springStrength` and `dampingRate` between USD and Avian3D.
 
 ## Assumptions

@@ -108,7 +108,7 @@ _Note: The original plan used `avian_pickup` for gravity-gun style grab. This wa
   - **Requirement**: FR-014
 
 - [x] 5.4 Integrate editing tools into sandbox binary
-  - Add `lunco-sandbox-edit` plugin to `rover_sandbox_usd.rs`
+  - Add `lunco-sandbox-edit` plugin to `sandbox.rs`
   - Add spawn palette panel to existing EGUI sandbox UI
   - Wire keyboard shortcuts: Escape=cancel spawn, Delete=delete entity
   - **Depends on**: 2.2, 3.1, 5.1, 5.2, 5.3

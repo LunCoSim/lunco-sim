@@ -103,7 +103,7 @@ targets an entity in USD.
 
 ```
 Apps
-  (rover_sandbox_usd, lunco_client, lunica, future ones)
+  (sandbox, lunco_client, lunica, future ones)
    │
    ├── Panel crates (domain-specific UI)
    │     lunco-modelica/ui    lunco-sandbox-edit/ui    lunco-mission/ui

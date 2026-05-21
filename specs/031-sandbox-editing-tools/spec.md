@@ -7,7 +7,7 @@
 
 ## Problem Statement
 
-The USD-based rover sandbox currently loads a fixed scene with predefined rovers and terrain. Users cannot add new objects, modify terrain, or interact with objects beyond possession. This limits the sandbox's usefulness as a testing and prototyping environment. Users need a way to dynamically place objects, build terrain, and manipulate entities without editing USD files.
+The USD-based sandbox currently loads a fixed scene with predefined rovers and terrain. Users cannot add new objects, modify terrain, or interact with objects beyond possession. This limits the sandbox's usefulness as a testing and prototyping environment. Users need a way to dynamically place objects, build terrain, and manipulate entities without editing USD files.
 
 ## User Scenarios & Testing
 

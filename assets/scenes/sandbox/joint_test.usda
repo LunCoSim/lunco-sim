@@ -17,7 +17,7 @@
 # CubeA via the gizmo (or call the `MoveEntity` API) and CubeB
 # follows rigidly.
 #
-# Loaded by `rover_sandbox_usd --scene scenes/sandbox/joint_test.usda`.
+# Loaded by `sandbox --scene scenes/sandbox/joint_test.usda`.
 
 def Xform "SandboxScene"
 {
