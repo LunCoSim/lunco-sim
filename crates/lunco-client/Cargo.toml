@@ -63,6 +63,7 @@ lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 default = ["celestial"]
 celestial = []
 sandbox = []
+python = ["lunco-scripting/python"]
 # Tracy profiler. Enable with `--features tracy` and connect a Tracy
 # GUI to see per-system flame graphs. Match the GUI version to the
 # tracy-client version pulled in by Bevy 0.18 (check `cargo tree -p

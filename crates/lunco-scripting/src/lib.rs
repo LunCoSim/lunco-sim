@@ -7,6 +7,7 @@ pub mod doc;
 use std::collections::HashMap;
 use lunco_doc::{DocumentId, DocumentHost};
 use doc::{ScriptDocument, ScriptedModel};
+#[cfg(feature = "python")]
 use pyo3::types::{PyDictMethods, PyAnyMethods};
 
 #[derive(Resource, Default)]

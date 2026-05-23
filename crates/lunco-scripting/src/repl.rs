@@ -2,6 +2,7 @@ use std::io::{self, BufRead};
 use std::ffi::CString;
 use crossbeam_channel::{Receiver, unbounded};
 use bevy::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 
 #[derive(Resource)]

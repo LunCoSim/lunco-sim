@@ -89,6 +89,7 @@ fn sync_script_inputs(mut q: Query<(&SimComponent, &mut ScriptedModel)>) {
     }
 }
 
+#[cfg(feature = "python")]
 #[test]
 fn cosim_chain_modelica_python_avian_propagates_data() {
     // Enable info-level logs so the test surfaces Modelica worker
