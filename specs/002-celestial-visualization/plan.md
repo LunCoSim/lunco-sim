@@ -223,7 +223,7 @@ fn main() {
 ```
 
 - `cargo run` → celestial world (default)
-- `cargo run --features sandbox` → flat-ground rover sandbox
+- `cargo run --features sandbox` → flat-ground sandbox
 
 ### 9. Basic Surface Terrain (AD-12: Sphere Stays Visible)
 
@@ -547,4 +547,4 @@ graph TD
 - Enter Ground View on Moon; verify AvatarCamera activates and rover drives on terrain tile with Moon gravity.
 - Return to ObserverCamera from Ground View; verify smooth transition.
 - Verify Earth-Moon relative positions match real sky at a known date.
-- Run `cargo run --features sandbox`; verify flat-ground rover sandbox loads.
+- Run `cargo run --features sandbox`; verify flat-ground sandbox loads.

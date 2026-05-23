@@ -25,5 +25,8 @@ big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
 serde_json = { workspace = true }
 
+[features]
+python = ["lunco-scripting/python"]
+
 [lints]
 workspace = true

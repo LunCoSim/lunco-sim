@@ -32,6 +32,17 @@ impl ExperimentId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
+
+    /// Stable id for the "Interactive Live" run (realtime cosim).
+    /// Used by the UI to toggle live-signal visibility from the
+    /// experiments table.
+    pub fn live() -> Self {
+        Self(Uuid::from_u128(0x0123456789ABCDEF0123456789ABCDEF))
+    }
+
+    pub fn is_live(&self) -> bool {
+        *self == Self::live()
+    }
 }
 
 impl Default for ExperimentId {
@@ -136,6 +147,43 @@ pub struct RunResult {
     pub times: Vec<f64>,
     pub series: BTreeMap<String, Vec<f64>>,
     pub meta: RunMeta,
+}
+
+impl RunResult {
+    /// Append another result's samples to this one. Assumes the delta's
+    /// `times` continue from our last time point.
+    ///
+    /// Robustly handles mid-run discovery: if `delta` contains a
+    /// variable we haven't seen yet, it's inserted and padded with
+    /// `NaN` for our existing `times` span.
+    pub fn merge_delta(&mut self, mut delta: RunResult) {
+        let base_len = self.times.len();
+
+        for (k, mut dv) in delta.series {
+            if let Some(v) = self.series.get_mut(&k) {
+                v.append(&mut dv);
+            } else {
+                // New variable discovered mid-run. Pad with NaN for
+                // the time we've already covered.
+                let mut new_v = vec![f64::NAN; base_len];
+                new_v.append(&mut dv);
+                self.series.insert(k, new_v);
+            }
+        }
+
+        // Handle variables we HAVE but the delta MISSED (solver
+        // stopped reporting them). Pad the delta's span with NaN.
+        let delta_len = delta.times.len();
+        for (_k, v) in &mut self.series {
+            if v.len() == base_len {
+                v.resize(base_len + delta_len, f64::NAN);
+            }
+        }
+
+        self.times.append(&mut delta.times);
+        self.meta.sample_count = self.times.len();
+        self.meta.wall_time_ms = delta.meta.wall_time_ms; // Update to latest wall time
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -364,6 +412,21 @@ impl ExperimentRegistry {
             false
         }
     }
+
+    /// Merge a partial result into the experiment's existing result
+    /// store. Creates the result if it doesn't exist yet.
+    pub fn merge_result(&mut self, id: ExperimentId, delta: RunResult) -> bool {
+        if let Some(e) = self.get_mut(id) {
+            if let Some(res) = &mut e.result {
+                res.merge_delta(delta);
+            } else {
+                e.result = Some(delta);
+            }
+            true
+        } else {
+            false
+        }
+    }
 }
 
 // ---------- Runner trait ----------
@@ -371,9 +434,18 @@ impl ExperimentRegistry {
 /// Lifecycle update streamed from a runner back to the host.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RunUpdate {
-    Progress { t_current: f64 },
+    /// Incremental progress. `delta` may carry the newest trajectory
+    /// samples since the last update; the host should append them to
+    /// the registry's result store to enable live-updating plots.
+    Progress {
+        t_current: f64,
+        delta: Option<RunResult>,
+    },
     Completed(RunResult),
-    Failed { error: String, partial: Option<RunResult> },
+    Failed {
+        error: String,
+        partial: Option<RunResult>,
+    },
     Cancelled,
 }
 
@@ -524,5 +596,32 @@ mod tests {
         assert!(!reg.delete(id));
         reg.set_status(id, RunStatus::Done { wall_time_ms: 0 });
         assert!(reg.delete(id));
+    }
+
+    #[test]
+    fn merge_deltas() {
+        let mut base = RunResult {
+            times: vec![0.0, 0.1],
+            series: [("v".into(), vec![1.0, 1.1])].into(),
+            meta: RunMeta {
+                wall_time_ms: 10,
+                sample_count: 2,
+                ..Default::default()
+            },
+        };
+        let delta = RunResult {
+            times: vec![0.2, 0.3],
+            series: [("v".into(), vec![1.2, 1.3])].into(),
+            meta: RunMeta {
+                wall_time_ms: 20,
+                sample_count: 2,
+                ..Default::default()
+            },
+        };
+        base.merge_delta(delta);
+        assert_eq!(base.times, vec![0.0, 0.1, 0.2, 0.3]);
+        assert_eq!(base.series["v"], vec![1.0, 1.1, 1.2, 1.3]);
+        assert_eq!(base.meta.sample_count, 4);
+        assert_eq!(base.meta.wall_time_ms, 20);
     }
 }

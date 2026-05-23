@@ -1,7 +1,7 @@
 //! Shell-level file-workflow commands.
 //!
 //! Verbs that span every domain — Open, Save All, Save as Twin — live
-//! here so all three apps (`lunica`, `rover_sandbox_usd`,
+//! here so all three apps (`lunica`, `sandbox`,
 //! `lunco_client`) get the same File menu, keybinds, and HTTP API
 //! shape from one place. Domain-specific commands (`SaveDocument`,
 //! `SaveAsDocument`, `CloseDocument`) stay in `lunco-doc-bevy`; their

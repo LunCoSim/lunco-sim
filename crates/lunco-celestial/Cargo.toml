@@ -7,7 +7,7 @@ edition = "2021"
 default = []
 # Bake Earth/Moon textures + Artemis 2 mission JSON + ephemeris CSV into the
 # binary via `include_bytes!`. Only needed by binaries that actually render
-# celestial bodies on wasm32 (e.g. rover_sandbox_web). Off by default so the
+# celestial bodies on wasm32 (e.g. sandbox_web). Off by default so the
 # Modelica IDE doesn't drag in ~5 MB of textures it never uses.
 embed-assets = ["dep:image"]
 

@@ -7,7 +7,7 @@
 //! `Position.y` actually increases — which is what the user observes
 //! (or doesn't, hence the bug).
 //!
-//! Setup mirrors `rover_sandbox_usd`:
+//! Setup mirrors `sandbox`:
 //!   - `Gravity::ZERO` — Modelica's `netForce` already excludes weight.
 //!   - `Time::<Fixed>::from_hz(60.0)`.
 //!   - Avian `RigidBody::Dynamic` + `Mass(4.5)` + `Collider::sphere(1.0)`.

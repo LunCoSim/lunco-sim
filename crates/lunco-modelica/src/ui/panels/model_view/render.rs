@@ -346,7 +346,7 @@ fn render_unified_toolbar(
                 setup.0 = Some(crate::ui::commands::FastRunSetupEntry { doc, model_ref, bounds, overrides_count, inputs });
             }
         } else {
-            world.commands().trigger(crate::ui::commands::FastRunActiveModel { doc });
+            world.commands().trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None });
         }
     }
     if compile_clicked {

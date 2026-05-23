@@ -49,16 +49,10 @@ Clone the repository and run the simulation sandbox:
 ```bash
 git clone https://github.com/LunCoSim/lunco-sim.git
 cd lunco-sim
-cargo run --release -p lunco-client --bin rover_sandbox
+cargo run --release -p lunco-client --bin sandbox
 ```
 
-### USD Rover Sandbox (with Editing Tools)
-
-The USD-based rover sandbox loads the entire scene — rovers, terrain, and camera — from declarative `.usda` files. It includes an in-scene editing toolkit:
-
-```bash
-cargo run --release -p lunco-client --bin rover_sandbox_usd
-```
+The USD-based sandbox loads the entire scene — rovers, terrain, and camera — from declarative `.usda` files. It includes an in-scene editing toolkit.
 
 ### Lunica — the Modelica workbench
 

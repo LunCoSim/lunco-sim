@@ -106,9 +106,19 @@ fn models_palette_content(ui: &mut egui::Ui, world: &mut World, tokens: &lunco_t
 
     for item in [PendingAttachment::ModelicaBalloon, PendingAttachment::PythonBalloon] {
         let is_selected = pending == Some(item);
-        let label = format!("{}  ({})", item.title(), item.language_label());
+        let mut label = format!("{}  ({})", item.title(), item.language_label());
+
+        let mut enabled = true;
+        if item == PendingAttachment::PythonBalloon {
+            #[cfg(not(feature = "python"))]
+            {
+                label.push_str(" [Disabled - No Python]");
+                enabled = false;
+            }
+        }
+
         let button = egui::Button::new(label).selected(is_selected).min_size(egui::vec2(ui.available_width(), 24.0));
-        if ui.add(button).clicked() {
+        if ui.add_enabled(enabled, button).clicked() {
             if let Some(mut s) = world.get_resource_mut::<AttachState>() {
                 *s = if is_selected {
                     AttachState::Idle

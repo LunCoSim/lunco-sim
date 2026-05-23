@@ -29,9 +29,11 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{InstancePanel, PanelId, PanelSlot};
 use lunco_viz::{
-    export_signals_to_csv, kinds::line_plot::LinePlot, view::Panel2DCtx, viz::Visualization,
+    kinds::line_plot::LinePlot, view::Panel2DCtx, viz::Visualization,
     viz::VizId, SignalRegistry, VisualizationRegistry, VizFitRequests,
 };
+use lunco_experiments::{ExperimentId, ExperimentRegistry};
+use crate::ui::panels::experiments::PlotPanelStates;
 
 use crate::ui::viz::{ensure_default_modelica_graph, DEFAULT_MODELICA_GRAPH};
 
@@ -263,25 +265,123 @@ fn render_line_plot(ui: &mut egui::Ui, world: &mut World, viz_id: VizId) {
 /// Gather the plot's bound signals, pop a native save-file picker,
 /// and write a CSV with `time` + one column per signal.
 fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
-    let (signals, labels) = {
-        let Some(reg) = world.get_resource::<VisualizationRegistry>() else { return };
-        let Some(cfg) = reg.get(viz_id) else { return };
-        let sigs: Vec<_> = cfg.inputs.iter().map(|b| b.source.clone()).collect();
-        let labels: Vec<String> = cfg
-            .inputs
-            .iter()
-            .map(|b| b.label.clone().unwrap_or_else(|| b.source.path.clone()))
-            .collect();
-        (sigs, labels)
-    };
-    if signals.is_empty() {
+    struct Column {
+        label: String,
+        data: Vec<(f64, f64)>,
+    }
+    let mut columns: Vec<Column> = Vec::new();
+    let mut all_times: Vec<f64> = Vec::new();
+
+    // 1. Collect live signals from SignalRegistry
+    {
+        let reg = world.get_resource::<lunco_viz::SignalRegistry>();
+        let viz_reg = world.get_resource::<VisualizationRegistry>();
+        if let (Some(reg), Some(viz_reg)) = (reg, viz_reg) {
+            if let Some(cfg) = viz_reg.get(viz_id) {
+                // If "Interactive Live" is hidden in experiments, skip live
+                // signals if they are Modelica signals.
+                let show_live = world
+                    .get_resource::<PlotPanelStates>()
+                    .map(|s| s.is_visible(viz_id, ExperimentId::live()))
+                    .unwrap_or(true);
+
+                if show_live {
+                    for binding in &cfg.inputs {
+                        if let Some(hist) = reg.scalar_history(&binding.source) {
+                            let label = binding
+                                .label
+                                .clone()
+                                .unwrap_or_else(|| format!("Live · {}", binding.source.path));
+                            let mut data = Vec::new();
+                            for s in &hist.samples {
+                                all_times.push(s.time);
+                                data.push((s.time, s.value));
+                            }
+                            columns.push(Column { label, data });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Collect visible experiment curves
+    {
+        let reg = world.get_resource::<ExperimentRegistry>();
+        let states = world.get_resource::<PlotPanelStates>();
+        if let (Some(reg), Some(states)) = (reg, states) {
+            let visible = states.visible(viz_id);
+            let picked = states.picked(viz_id);
+            let doc_id = crate::ui::doc_pin::resolved_experiments_doc(world);
+            let twin = doc_id.map(crate::ui::doc_pin::twin_id_for_doc);
+
+            if let Some(twin) = twin {
+                for exp in reg.list_for_twin(&twin) {
+                    if !visible.contains(&exp.id) {
+                        continue;
+                    }
+                    if let Some(result) = &exp.result {
+                        for var in &picked {
+                            if let Some(series) = result.series.get(var) {
+                                let label = format!("{} · {}", exp.name, var);
+                                let mut data = Vec::new();
+                                for (i, &t) in result.times.iter().enumerate() {
+                                    if let Some(&v) = series.get(i) {
+                                        if v.is_finite() {
+                                            all_times.push(t);
+                                            data.push((t, v));
+                                        }
+                                    }
+                                }
+                                columns.push(Column { label, data });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if columns.is_empty() {
         return;
     }
 
-    let csv = {
-        let Some(reg) = world.get_resource::<SignalRegistry>() else { return };
-        export_signals_to_csv(reg, &signals, &labels)
-    };
+    // 3. Flatten into unified CSV rows with forward-filling
+    let mut csv = String::from("time");
+    for col in &columns {
+        csv.push(',');
+        // Escape label
+        if col.label.contains(',') || col.label.contains('"') || col.label.contains('\n') {
+            csv.push('"');
+            csv.push_str(&col.label.replace('"', "\"\""));
+            csv.push('"');
+        } else {
+            csv.push_str(&col.label);
+        }
+    }
+    csv.push('\n');
+
+    // Build the master time axis.
+    all_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    all_times.dedup_by(|a, b| (*a - *b).abs() < f64::EPSILON);
+
+    let mut cursors = vec![0usize; columns.len()];
+    let mut last_val = vec![Option::<f64>::None; columns.len()];
+
+    for t in all_times {
+        csv.push_str(&format!("{t}"));
+        for (i, col) in columns.iter().enumerate() {
+            while cursors[i] < col.data.len() && col.data[cursors[i]].0 <= t + f64::EPSILON {
+                last_val[i] = Some(col.data[cursors[i]].1);
+                cursors[i] += 1;
+            }
+            csv.push(',');
+            if let Some(v) = last_val[i] {
+                csv.push_str(&format!("{v}"));
+            }
+        }
+        csv.push('\n');
+    }
 
     let storage = lunco_storage::FileStorage::new();
     let hint = lunco_storage::SaveHint {
@@ -322,9 +422,9 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
             _ => "(handle)".to_string(),
         };
         console.info(format!(
-            "Exported {} bytes ({} signals) to {path}",
+            "Exported {} bytes ({} columns) to {path}",
             csv.len(),
-            signals.len()
+            columns.len()
         ));
     }
 }

@@ -3,7 +3,9 @@
 //! Layout, top → bottom:
 //!
 //! 1. **Hero** — product name + tagline.
-//! 2. **Get Started** — New Model · Open Folder buttons.
+//! 2. **Get Started** — New Model · Open Folder/File buttons. On desktop,
+//!    we offer "Open Folder" (native picker); on web (where folder
+//!    picking is limited) we show "Open File".
 //! 3. **Learning paths** — three hand-authored tutorial paths
 //!    (Circuits 101, Control basics, Moving parts), each a sequence
 //!    of 5 MSL classes with a one-line goal. Progress dots
@@ -245,6 +247,7 @@ impl Panel for WelcomePanel {
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         let mut create_new = false;
         let mut open_folder = false;
+        let mut open_file = false;
         let mut open_msl: Option<String> = None;
         let mut open_bundled: Option<&'static str> = None;
 
@@ -319,19 +322,26 @@ impl Panel for WelcomePanel {
                     {
                         create_new = true;
                     }
+                    let (label, hover) = if cfg!(target_arch = "wasm32") {
+                        ("📄  Open File", "Pick a .mo file to open")
+                    } else {
+                        ("📁  Open Folder", "Pick a folder of .mo files to browse")
+                    };
                     if ui
                         .add_sized(
                             [272.0, 44.0],
                             egui::Button::new(
-                                egui::RichText::new("📁  Open Folder")
-                                    .size(14.0)
-                                    .strong(),
+                                egui::RichText::new(label).size(14.0).strong(),
                             ),
                         )
-                        .on_hover_text("Pick a folder of .mo files to browse")
+                        .on_hover_text(hover)
                         .clicked()
                     {
-                        open_folder = true;
+                        if cfg!(target_arch = "wasm32") {
+                            open_file = true;
+                        } else {
+                            open_folder = true;
+                        }
                     }
                 });
             });
@@ -949,18 +959,18 @@ impl Panel for WelcomePanel {
                 .trigger(crate::ui::commands::CreateNewScratchModel {});
         }
         if open_folder {
-            // Empty-path `OpenFolder` triggers the workbench's native
-            // picker, classifies on resolve (twin.toml → Twin, else
-            // Folder), and fires `TwinAdded`. The Modelica package
-            // browser observes that event and kicks off its scan.
-            // Single source of truth for the open-folder flow —
-            // menus, recents, HTTP, and this welcome button all
-            // route through the same observers.
+            // Native OpenFolder picker. Classified at the observer
+            // level (twin.toml → OpenTwin, else Folder).
             world
                 .commands()
-                .trigger(lunco_workbench::file_ops::OpenFolder {
-                    path: String::new(),
-                });
+                .trigger(lunco_workbench::file_ops::ShowOpenFolderPicker {});
+        }
+        if open_file {
+            // Native OpenFile picker. Web doesn't support folder
+            // pickers yet, so we offer file picking instead.
+            world
+                .commands()
+                .trigger(lunco_workbench::file_ops::ShowOpenFilePicker {});
         }
         if let Some(filename) = open_bundled {
             let stem = filename.strip_suffix(".mo").unwrap_or(filename).to_string();

@@ -49,7 +49,7 @@ impl Plugin for SandboxEditUiPlugin {
 pub struct ViewPerspective;
 
 impl Perspective for ViewPerspective {
-    fn id(&self) -> PerspectiveId { PerspectiveId("rover_view") }
+    fn id(&self) -> PerspectiveId { PerspectiveId("sandbox_view") }
     fn title(&self) -> String { "🎬 View".into() }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);

@@ -4,8 +4,12 @@ version = "0.6.0-dev"
 edition = "2021"
 
 [[bin]]
-name = "rover_sandbox_usd"
-path = "src/bin/rover_sandbox_usd.rs"
+name = "sandbox"
+path = "src/bin/sandbox.rs"
+
+[[bin]]
+name = "sandbox_web"
+path = "src/bin/sandbox.rs"
 
 [[bin]]
 name = "lunco_client_web"
@@ -59,6 +63,7 @@ lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 default = ["celestial"]
 celestial = []
 sandbox = []
+python = ["lunco-scripting/python"]
 # Tracy profiler. Enable with `--features tracy` and connect a Tracy
 # GUI to see per-system flame graphs. Match the GUI version to the
 # tracy-client version pulled in by Bevy 0.18 (check `cargo tree -p

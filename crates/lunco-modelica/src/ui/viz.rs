@@ -38,14 +38,26 @@ pub fn ensure_default_modelica_graph(
     registry.get_mut(DEFAULT_MODELICA_GRAPH).unwrap()
 }
 
-/// Add (or remove) one signal in the default Modelica plot. Idempotent
-/// — safe to call from a checkbox handler each frame.
+/// Add (or remove) one signal in a specific plot. Idempotent — safe
+/// to call from a checkbox handler each frame.
 pub fn set_signal_plotted(
     registry: &mut VisualizationRegistry,
+    viz_id: VizId,
     signal: SignalRef,
     plotted: bool,
 ) {
-    let cfg = ensure_default_modelica_graph(registry);
+    if registry.get(viz_id).is_none() {
+        // Create if missing (matches ensure_default_modelica_graph behavior)
+        registry.insert(VisualizationConfig {
+            id: viz_id,
+            title: if viz_id == DEFAULT_MODELICA_GRAPH { "Modelica".into() } else { format!("Plot #{}", viz_id.0) },
+            kind: LINE_PLOT_KIND,
+            view: ViewTarget::Panel2D,
+            inputs: Vec::new(),
+            style: serde_json::Value::Null,
+        });
+    }
+    let cfg = registry.get_mut(viz_id).unwrap();
     if plotted {
         if !cfg.inputs.iter().any(|b| b.source == signal) {
             cfg.inputs.push(SignalBinding {
@@ -61,17 +73,25 @@ pub fn set_signal_plotted(
     }
 }
 
-/// Whether `signal` is currently a binding of the default plot.
-pub fn is_signal_plotted(registry: &VisualizationRegistry, signal: &SignalRef) -> bool {
+/// Whether `signal` is currently a binding of the specified plot.
+pub fn is_signal_plotted(
+    registry: &VisualizationRegistry,
+    viz_id: VizId,
+    signal: &SignalRef,
+) -> bool {
     registry
-        .get(DEFAULT_MODELICA_GRAPH)
+        .get(viz_id)
         .is_some_and(|cfg| cfg.inputs.iter().any(|b| b.source == *signal))
 }
 
-/// Drop every binding tied to `entity`. Called when a model entity
-/// despawns so the plot doesn't keep stale-source bindings forever.
-pub fn drop_entity_bindings(registry: &mut VisualizationRegistry, entity: Entity) {
-    if let Some(cfg) = registry.get_mut(DEFAULT_MODELICA_GRAPH) {
+/// Drop every binding tied to `entity` across ALL plots in the
+/// registry. Called when a model entity despawns so stale-source
+/// bindings are cleared globally.
+pub fn drop_entity_bindings(
+    registry: &mut VisualizationRegistry,
+    entity: Entity,
+) {
+    for cfg in registry.values_mut() {
         cfg.inputs.retain(|b| b.source.entity != entity);
     }
 }

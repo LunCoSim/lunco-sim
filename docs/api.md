@@ -8,10 +8,10 @@ Transport-agnostic API layer for LunCoSim. Exposes simulation state and typed co
 
 ```bash
 # Default port (3000)
-cargo run --bin rover_sandbox_usd -- --api
+cargo run --bin sandbox -- --api
 
 # Custom port
-cargo run --bin rover_sandbox_usd -- --api 8080
+cargo run --bin sandbox -- --api 8080
 ```
 
 The `--api` flag enables the HTTP server. Without it, the sim runs normally with no network exposure.
@@ -328,7 +328,7 @@ that want a runtime-toggleable opt-out.
 
 | Binary | Flag | Default Port |
 |---|---|---|
-| `rover_sandbox_usd` | `--api [PORT]` | 3000 |
+| `sandbox` | `--api [PORT]` | 3000 |
 | `lunica` | `--api [PORT]` | 3000 |
 | `model_viewer` | `--api [PORT]` | 3000 |
 

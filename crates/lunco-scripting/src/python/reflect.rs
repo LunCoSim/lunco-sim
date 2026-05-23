@@ -1,13 +1,17 @@
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::IntoPyObjectExt;
 use bevy::prelude::*;
 
+#[cfg(feature = "python")]
 #[pyclass]
 #[derive(Clone)]
 pub struct EntityProxy {
     pub entity: Entity,
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl EntityProxy {
     #[new]

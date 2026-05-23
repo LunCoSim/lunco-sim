@@ -269,83 +269,142 @@ fn run_fast_in_worker(
         return;
     }
 
-    let opts = rumoca_sim::SimOptions {
-        t_start: bounds.t_start,
-        t_end: bounds.t_end,
-        rtol: bounds.tolerance.unwrap_or(1e-6),
-        atol: bounds.tolerance.unwrap_or(1e-6),
-        dt: bounds.dt,
-        scalarize: true,
-        max_wall_seconds: None,
-        solver_mode: rumoca_sim::SimSolverMode::Auto,
+    let mut stepper_opts = rumoca_sim::StepperOptions::default();
+    stepper_opts.atol = bounds.tolerance.unwrap_or(1e-6);
+    stepper_opts.rtol = bounds.tolerance.unwrap_or(1e-6);
+
+    let mut stepper = match rumoca_sim::SimStepper::new(&dae.dae, stepper_opts) {
+        Ok(s) => s,
+        Err(e) => {
+            post_run_update(
+                scope,
+                run_id,
+                lunco_experiments::RunUpdate::Failed {
+                    error: format!("stepper init: {e:?}"),
+                    partial: None,
+                },
+            );
+            return;
+        }
     };
 
-    // Batch simulate. v1: no intra-step progress on wasm either —
-    // diffsol's batch path doesn't expose a hook. TODO(progress):
-    // switch to `build_simulation` + step loop with progress + cancel
-    // poll between steps.
-    let sim = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        rumoca_sim::simulate_dae(&dae.dae, &opts)
-    }));
-    if is_cancelled(run_id) {
-        clear_cancel();
-        post_run_update(scope, run_id, lunco_experiments::RunUpdate::Cancelled);
+    let t_end = bounds.t_end;
+    let step_dt = bounds.dt.unwrap_or(0.01);
+    let mut last_progress_emit = web_time::Instant::now();
+
+    // Get variable names from the initial state.
+    let names: Vec<String> = stepper.state().values.keys()
+        .filter(|n| *n != "time")
+        .cloned()
+        .collect();
+
+    let mut all_times: Vec<f64> = Vec::new();
+    let mut all_series: Vec<Vec<f64>> = vec![Vec::new(); names.len()];
+    let mut last_emit_idx = 0;
+
+    // Simulation loop. v1: blocks the worker thread entirely (no
+    // yielding), so `is_cancelled` won't update until we return.
+    // Progress messages ARE posted and reached the main thread.
+    let mut error = None;
+    while stepper.time() < t_end {
+        if is_cancelled(run_id) {
+            clear_cancel();
+            post_run_update(scope, run_id, lunco_experiments::RunUpdate::Cancelled);
+            return;
+        }
+
+        if let Err(e) = stepper.step(step_dt) {
+            error = Some(format!("simulate failed: {e:?}"));
+            break;
+        }
+
+        let t = stepper.time();
+        all_times.push(t);
+        let current_values = stepper.state().values;
+        for (i, name) in names.iter().enumerate() {
+            let val = current_values.get(name).copied().unwrap_or(0.0);
+            all_series[i].push(val);
+        }
+
+        if last_progress_emit.elapsed().as_millis() > 200 {
+            let delta_times = all_times[last_emit_idx..].to_vec();
+            let mut delta_series = std::collections::BTreeMap::new();
+            for (i, name) in names.iter().enumerate() {
+                delta_series.insert(name.clone(), all_series[i][last_emit_idx..].to_vec());
+            }
+
+            let delta = lunco_experiments::RunResult {
+                times: delta_times,
+                series: delta_series,
+                meta: lunco_experiments::RunMeta {
+                    wall_time_ms: started.elapsed().as_millis() as u64,
+                    sample_count: all_times.len() - last_emit_idx,
+                    notes: None,
+                },
+            };
+
+            post_run_update(
+                scope,
+                run_id,
+                lunco_experiments::RunUpdate::Progress {
+                    t_current: t,
+                    delta: Some(delta),
+                },
+            );
+            last_progress_emit = web_time::Instant::now();
+            last_emit_idx = all_times.len();
+        }
+    }
+
+    if let Some(e) = error {
+        let mut series = std::collections::BTreeMap::new();
+        for (i, name) in names.iter().enumerate() {
+            series.insert(name.clone(), all_series[i].clone());
+        }
+        let partial = lunco_experiments::RunResult {
+            times: all_times.clone(),
+            series,
+            meta: lunco_experiments::RunMeta {
+                wall_time_ms: started.elapsed().as_millis() as u64,
+                sample_count: all_times.len(),
+                notes: Some(e.clone()),
+            },
+        };
+        post_run_update(
+            scope,
+            run_id,
+            lunco_experiments::RunUpdate::Failed {
+                error: e,
+                partial: Some(partial),
+            },
+        );
         return;
     }
-    match sim {
-        Ok(Ok(r)) => {
-            let result = sim_to_run_result(r, started.elapsed().as_millis() as u64);
-            post_run_update(scope, run_id, lunco_experiments::RunUpdate::Completed(result));
-            post_log(
-                scope,
-                format!("run_fast: done in {:.2}s", started.elapsed().as_secs_f64()),
-            );
-        }
-        Ok(Err(e)) => {
-            post_run_update(
-                scope,
-                run_id,
-                lunco_experiments::RunUpdate::Failed {
-                    error: format!("simulate: {e:?}"),
-                    partial: None,
-                },
-            );
-        }
-        Err(payload) => {
-            let msg = payload
-                .downcast_ref::<&'static str>()
-                .copied()
-                .or_else(|| payload.downcast_ref::<String>().map(|s| s.as_str()))
-                .unwrap_or("(unknown panic)");
-            post_run_update(
-                scope,
-                run_id,
-                lunco_experiments::RunUpdate::Failed {
-                    error: format!("simulate panic: {msg}"),
-                    partial: None,
-                },
-            );
-        }
-    }
-}
 
-fn sim_to_run_result(r: rumoca_sim::SimResult, wall_time_ms: u64) -> lunco_experiments::RunResult {
-    let mut series: std::collections::BTreeMap<String, Vec<f64>> = std::collections::BTreeMap::new();
-    for (i, name) in r.names.iter().enumerate() {
-        if let Some(col) = r.data.get(i) {
-            series.insert(name.clone(), col.clone());
-        }
+    let mut final_series = std::collections::BTreeMap::new();
+    for (i, name) in names.iter().enumerate() {
+        final_series.insert(name.clone(), all_series[i].clone());
     }
-    let sample_count = r.times.len();
-    lunco_experiments::RunResult {
-        times: r.times,
-        series,
+
+    let n_samples = all_times.len();
+    let result = lunco_experiments::RunResult {
+        times: all_times,
+        series: final_series,
         meta: lunco_experiments::RunMeta {
-            wall_time_ms,
-            sample_count,
+            wall_time_ms: started.elapsed().as_millis() as u64,
+            sample_count: n_samples,
             notes: None,
         },
-    }
+    };
+    post_run_update(
+        scope,
+        run_id,
+        lunco_experiments::RunUpdate::Completed(result),
+    );
+    post_log(
+        scope,
+        format!("run_fast: done in {:.2}s", started.elapsed().as_secs_f64()),
+    );
 }
 
 #[wasm_bindgen(start)]

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rover Sandbox</title>
+    <title>Sandbox</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { width: 100%; height: 100%; overflow: hidden; }
@@ -17,10 +17,10 @@
     </style>
 </head>
 <body>
-    <div id="loading">Loading Rover Sandbox...</div>
+    <div id="loading">Loading Sandbox...</div>
     <canvas id="bevy"></canvas>
     <script type="module">
-        import init from './rover_sandbox_web.js';
+        import init from './sandbox_web.js';
         function resize() {
             const canvas = document.getElementById('bevy');
             if (canvas) { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }

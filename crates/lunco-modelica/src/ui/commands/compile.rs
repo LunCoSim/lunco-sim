@@ -327,7 +327,7 @@ pub(crate) fn render_fast_run_setup(
             }
         }
         draft.inputs = new_inputs;
-        commands.trigger(FastRunActiveModel { doc: entry.doc });
+        commands.trigger(FastRunActiveModel { doc: entry.doc, class: None, t_end: None, dt: None, tolerance: None });
     } else if cancelled {
         setup.0 = None;
     }
@@ -430,7 +430,7 @@ pub(crate) fn render_compile_class_picker(
             PickerPurpose::FastRun => {
                 // Re-dispatch — second-time-around the drilled-class
                 // pin is set so resolution skips the picker.
-                commands.trigger(FastRunActiveModel { doc });
+                commands.trigger(FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None });
             }
         }
     } else if cancelled {
@@ -890,12 +890,24 @@ pub fn on_resume_active_model(trigger: On<ResumeActiveModel>, mut commands: Comm
 #[Command(default)]
 pub struct FastRunActiveModel {
     pub doc: DocumentId,
+    /// Target class. When `None`, resolves via drilled-in class or picker.
+    pub class: Option<String>,
+    /// Override experiment StopTime (seconds). `None` = use annotation or fallback.
+    pub t_end: Option<f64>,
+    /// Override output interval (seconds). `None` = use annotation or fallback.
+    pub dt: Option<f64>,
+    /// Override solver tolerance. `None` = use annotation or fallback.
+    pub tolerance: Option<f64>,
 }
 
 #[on_command(FastRunActiveModel)]
 pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: Commands) {
     use lunco_experiments::ExperimentRunner;
     let raw = trigger.event().doc;
+    let explicit_class = trigger.event().class.clone();
+    let cmd_t_end = trigger.event().t_end;
+    let cmd_dt = trigger.event().dt;
+    let cmd_tolerance = trigger.event().tolerance;
     commands.queue(move |world: &mut World| {
         let Some(doc) = (if raw.is_unassigned() {
             resolve_active_doc(world)
@@ -911,7 +923,7 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
         // > sole non-package class. Without this, package-wrapped
         // models (AnnotatedRocketStage etc.) fail with "no compilable
         // top-level class".
-        let (source, filename, candidates) = {
+        let (source, filename, candidates, experiment_map) = {
             let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
             let host = match registry.host(doc) {
                 Some(h) => h,
@@ -924,45 +936,51 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
             let source = document.source().to_string();
             let filename = document.origin().display_name();
             let index = document.index();
-            let candidates: Vec<String> = index
-                .classes
-                .values()
-                .filter(|c| !matches!(c.kind, crate::index::ClassKind::Package))
-                .map(|c| c.name.clone())
-                .collect();
-            (source, filename, candidates)
+            let mut candidates: Vec<String> = Vec::new();
+            let mut experiment_map: HashMap<String, crate::annotations::Experiment> = HashMap::new();
+            for c in index.classes.values() {
+                if matches!(c.kind, crate::index::ClassKind::Package) { continue; }
+                if let Some(exp) = &c.experiment {
+                    experiment_map.insert(c.name.clone(), *exp);
+                }
+                candidates.push(c.name.clone());
+            }
+            (source, filename, candidates, experiment_map)
         };
         let drilled =
             crate::ui::panels::model_view::drilled_class_for_doc(world, doc);
-        let model_name = match drilled {
+        let model_name = match explicit_class {
             Some(c) => c,
-            None => match candidates.len() {
-                0 => {
-                    bevy::log::warn!(
-                        "[FastRunActiveModel] doc {} has no compilable top-level class",
-                        doc.raw()
-                    );
-                    return;
-                }
-                1 => candidates[0].clone(),
-                _ => {
-                    // Ambiguous — open the same modal Compile uses,
-                    // tagged with FastRun purpose so confirmation
-                    // re-dispatches FastRunActiveModel.
-                    if let Some(mut picker) =
-                        world.get_resource_mut::<CompileClassPickerState>()
-                    {
-                        if picker.0.as_ref().map(|p| p.doc) != Some(doc) {
-                            picker.0 = Some(CompileClassPickerEntry {
-                                doc,
-                                candidates,
-                                preselected: 0,
-                                purpose: PickerPurpose::FastRun,
-                            });
-                        }
+            None => match drilled {
+                Some(c) => c,
+                None => match candidates.len() {
+                    0 => {
+                        bevy::log::warn!(
+                            "[FastRunActiveModel] doc {} has no compilable top-level class",
+                            doc.raw()
+                        );
+                        return;
                     }
-                    return;
-                }
+                    1 => candidates[0].clone(),
+                    _ => {
+                        // Ambiguous — open the same modal Compile uses,
+                        // tagged with FastRun purpose so confirmation
+                        // re-dispatches FastRunActiveModel.
+                        if let Some(mut picker) =
+                            world.get_resource_mut::<CompileClassPickerState>()
+                        {
+                            if picker.0.as_ref().map(|p| p.doc) != Some(doc) {
+                                picker.0 = Some(CompileClassPickerEntry {
+                                    doc,
+                                    candidates,
+                                    preselected: 0,
+                                    purpose: PickerPurpose::FastRun,
+                                });
+                            }
+                        }
+                        return;
+                    }
+                },
             },
         };
 
@@ -987,21 +1005,39 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
             },
         );
 
-        // Bounds default from runner-side annotation cache (populated
-        // after a successful Compile via set_model_defaults). Fallback
-        // 0..1.
-        let bounds = runner_res
-            .0
-            .default_bounds(&model_ref)
-            .unwrap_or_else(|| lunco_experiments::RunBounds {
-                t_start: 0.0,
-                t_end: 10.0,
-                dt: None,
-                tolerance: None,
-                solver: None,
-            });
+        // Seed the runner's annotation cache from the AST so
+        // `default_bounds` works even without a prior interactive compile.
+        if let Some(exp) = experiment_map.get(&model_name) {
+            runner_res.0.set_model_defaults(
+                model_ref.clone(),
+                crate::experiments_runner::ModelDefaults {
+                    t_start: exp.start_time,
+                    t_end: exp.stop_time,
+                    tolerance: exp.tolerance,
+                    interval: exp.interval,
+                    solver: None,
+                },
+            );
+        }
 
-        // Pull the override + inputs + bounds draft for this model.
+        // Bounds priority: fallback → annotation → draft override →
+        // command override. Each layer overrides the previous.
+        let mut bounds = lunco_experiments::RunBounds {
+            t_start: 0.0,
+            t_end: 10.0,
+            dt: None,
+            tolerance: None,
+            solver: None,
+        };
+
+        // Layer 2: annotation (from AST, now seeded into runner cache).
+        if let Some(annotated) = runner_res.0.default_bounds(&model_ref) {
+            if annotated.t_start != 0.0 || annotated.t_end != 1.0 {
+                bounds = annotated;
+            }
+        }
+
+        // Layer 3: experiment draft override (from UI setup dialog).
         let (overrides, inputs, bounds) = {
             let drafts = world.resource::<crate::experiments_runner::ExperimentDrafts>();
             match drafts.get(doc, &model_ref) {
@@ -1013,6 +1049,12 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
                 None => (Default::default(), Default::default(), bounds),
             }
         };
+
+        // Layer 4: command override (explicit API params, highest priority).
+        let mut bounds = bounds;
+        if let Some(t) = cmd_t_end { bounds.t_end = t; }
+        if let Some(d) = cmd_dt { bounds.dt = Some(d); }
+        if let Some(t) = cmd_tolerance { bounds.tolerance = Some(t); }
 
         // Insert experiment + dispatch run. Scope to the originating
         // doc so multi-tab workflows keep run histories separate

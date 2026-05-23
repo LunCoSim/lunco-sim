@@ -276,7 +276,7 @@ Users can open any Document without creating a Twin:
 
 ```sh
 $ lunica balloon.mo
-$ rover_sandbox_usd scene.usda
+$ sandbox scene.usda
 ```
 
 The Document opens in a single-document workspace. Same editing, same
@@ -566,7 +566,7 @@ system) reads and writes through it.
 
 ## 6. Startup flow
 
-All three apps (`rover_sandbox_usd`, `lunco_client`, `lunica`)
+All three apps (`sandbox`, `lunco_client`, `lunica`)
 share the same logic:
 
 ```
@@ -624,7 +624,7 @@ The Examples list is **filtered per app** to what it knows how to open:
 | App | Examples shown |
 |-----|----------------|
 | `lunica` | Modelica-only models |
-| `rover_sandbox_usd` | 3D sandbox scenarios |
+| `sandbox` | 3D sandbox scenarios |
 | `lunco_client` | All examples |
 
 ## 7. Creating a new Document — unified across types
@@ -924,7 +924,7 @@ Three categories:
 
 ### Key insight: apps differentiate by plugins, not by hardcoded scenes
 
-The three binaries — `lunica`, `rover_sandbox_usd`,
+The three binaries — `lunica`, `sandbox`,
 `lunco_client` — share the **same Twin-loading machinery** from
 `lunco-workbench` and `lunco-twin`. They differ only in:
 
@@ -941,7 +941,7 @@ uniformly for all of them.
 | App | Default Workspace | Domain plugins registered | Welcome examples shown |
 |-----|-------------------|---------------------------|------------------------|
 | `lunica` | **Analyze** | `ModelicaPlugin` + `ModelicaInspectorPlugin` | Modelica examples only (circuit, spring-mass, thermal, …) |
-| `rover_sandbox_usd` | **Build** | `CoSimPlugin`, `ModelicaCorePlugin`, `SandboxEditPlugin`, `EnvironmentPlugin`, `UsdPlugins`, `Mobility`, `Controller`, `Avatar`, … | Sandbox examples (rover-on-moon, balloon-test, …) |
+| `sandbox` | **Build** | `CoSimPlugin`, `ModelicaCorePlugin`, `SandboxEditPlugin`, `EnvironmentPlugin`, `UsdPlugins`, `Mobility`, `Controller`, `Avatar`, … | Sandbox examples (rover-on-moon, balloon-test, …) |
 | `lunco_client` | **Build** (or last-used) | All of the above + `CelestialPlugin` + `LuncoUiPlugin` (MissionControl) | All examples, categorized |
 
 A `lunco-workbench` config type (passed to `WorkbenchPlugin`) declares
@@ -994,7 +994,7 @@ Each app exposes relevant `File → New →` items based on what it can edit:
 | App | New menu items |
 |-----|---------------|
 | `lunica` | New Modelica Model, New Modelica Package |
-| `rover_sandbox_usd` | New Scene (USD), New Twin, New Modelica Model |
+| `sandbox` | New Scene (USD), New Twin, New Modelica Model |
 | `lunco_client` | New Scene, New Modelica Model, New Mission, New SysML Block, New Twin |
 
 Across all three, the Command Palette can find any action — even if a

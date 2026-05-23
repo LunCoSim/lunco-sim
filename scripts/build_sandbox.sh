@@ -1,9 +1,9 @@
 #!/bin/bash
 # ============================================================================
-# LunCoSim - Rover Sandbox Build Script
+# LunCoSim - Sandbox Build Script
 # ============================================================================
-# Builds the rover_sandbox binary (desktop or web)
-# Usage: ./scripts/build_rover.sh [desktop|web|all]
+# Builds the sandbox binary (desktop or web)
+# Usage: ./scripts/build_sandbox.sh [desktop|web|all]
 # ============================================================================
 
 set -e
@@ -36,15 +36,15 @@ error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Build desktop rover_sandbox
+# Build desktop sandbox
 build_desktop() {
     local profile="${1:-release}"
-    info "Building rover_sandbox for desktop ($profile)..."
+    info "Building sandbox for desktop ($profile)..."
     
-    cargo build --$profile -p lunco-client --bin rover_sandbox
+    cargo build --$profile -p lunco-client --bin sandbox
     
     if [ $? -eq 0 ]; then
-        local bin_path="$PROJECT_DIR/target/$profile/rover_sandbox"
+        local bin_path="$PROJECT_DIR/target/$profile/sandbox"
         success "Desktop build complete: $bin_path"
         success "Run: $bin_path"
     else
@@ -53,9 +53,9 @@ build_desktop() {
     fi
 }
 
-# Build web rover_sandbox_web
+# Build web sandbox_web
 build_web() {
-    info "Building rover_sandbox_web for WebAssembly..."
+    info "Building sandbox_web for WebAssembly..."
     
     # Check prerequisites
     if ! rustup target list --installed | grep -q wasm32-unknown-unknown; then
@@ -70,7 +70,7 @@ build_web() {
     
     # Build WASM
     info "Compiling to WebAssembly..."
-    cargo build --profile web-release --target wasm32-unknown-unknown --bin rover_sandbox_web -p lunco-client
+    cargo build --profile web-release --target wasm32-unknown-unknown --bin sandbox_web -p lunco-client
     
     # Generate bindings
     info "Generating JavaScript bindings..."
@@ -78,7 +78,7 @@ build_web() {
     local pkg_dir="$web_dir/pkg"
     mkdir -p "$pkg_dir"
     
-    wasm-bindgen "$PROJECT_DIR/target/wasm32-unknown-unknown/web-release/rover_sandbox_web.wasm" \
+    wasm-bindgen "$PROJECT_DIR/target/wasm32-unknown-unknown/web-release/sandbox_web.wasm" \
         --out-dir "$pkg_dir" \
         --target web
     
@@ -89,8 +89,8 @@ build_web() {
     fi
     
     # Show sizes
-    WASM_SIZE=$(du -h "$pkg_dir/rover_sandbox_web_bg.wasm" | cut -f1)
-    JS_SIZE=$(du -h "$pkg_dir/rover_sandbox_web.js" | cut -f1)
+    WASM_SIZE=$(du -h "$pkg_dir/sandbox_web_bg.wasm" | cut -f1)
+    JS_SIZE=$(du -h "$pkg_dir/sandbox_web.js" | cut -f1)
     
     success "Web build complete!"
     success "Output sizes: WASM=${WASM_SIZE}, JS=${JS_SIZE}"
@@ -103,7 +103,7 @@ serve_web() {
     local port="${1:-8081}"
     local web_dir="$PROJECT_DIR/crates/lunco-client/web"
     
-    info "Starting web server for rover_sandbox_web..."
+    info "Starting web server for sandbox_web..."
     info "Serving from: $web_dir"
     info "URL: http://localhost:$port"
     
@@ -118,17 +118,17 @@ serve_web() {
 
 # Clean build artifacts
 clean() {
-    info "Cleaning rover sandbox build artifacts..."
-    rm -f "$PROJECT_DIR/target/release/rover_sandbox"
-    rm -f "$PROJECT_DIR/target/debug/rover_sandbox"
-    rm -f "$PROJECT_DIR/target/wasm32-unknown-unknown/web-release/rover_sandbox_web.wasm"
+    info "Cleaning sandbox build artifacts..."
+    rm -f "$PROJECT_DIR/target/release/sandbox"
+    rm -f "$PROJECT_DIR/target/debug/sandbox"
+    rm -f "$PROJECT_DIR/target/wasm32-unknown-unknown/web-release/sandbox_web.wasm"
     rm -rf "$PROJECT_DIR/crates/lunco-client/web/pkg"
     success "Cleaned"
 }
 
 # Show help
 show_help() {
-    echo "LunCoSim - Rover Sandbox Build Script"
+    echo "LunCoSim - Sandbox Build Script"
     echo ""
     echo "Usage: $0 [COMMAND] [OPTIONS]"
     echo ""
@@ -149,8 +149,8 @@ show_help() {
     echo "  $0 all               # Build both desktop and web"
     echo ""
     echo "Running the desktop build:"
-    echo "  cargo run --release -p lunco-client --bin rover_sandbox"
-    echo "  ./target/release/rover_sandbox"
+    echo "  cargo run --release -p lunco-client --bin sandbox"
+    echo "  ./target/release/sandbox"
 }
 
 # Main execution

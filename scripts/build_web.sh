@@ -14,7 +14,7 @@
 #
 # Available binaries:
 #   lunica_web  - Modelica Workbench IDE
-#   rover_sandbox_web       - Rover Physics Sandbox
+#   sandbox_web       - Simulation Sandbox
 # ============================================================================
 
 set -e
@@ -54,12 +54,12 @@ get_binary_config() {
         lunica_web)
             echo "lunco-modelica"
             ;;
-        rover_sandbox_web)
+        sandbox_web)
             echo "lunco-client"
             ;;
         *)
             error "Unknown binary: $binary"
-            error "Available binaries: lunica_web, rover_sandbox_web"
+            error "Available binaries: lunica_web, sandbox_web"
             exit 1
             ;;
     esac
@@ -418,7 +418,7 @@ Run: cargo run -p lunco-assets -- download"
 # Pack MSL into a versioned, compressed bundle and place it next to the
 # wasm under `dist/<bin>/msl/`. Same-origin so the runtime fetcher doesn't
 # need CORS configuration. Skipped for binaries that don't ship MSL
-# (rover_sandbox_web).
+# (sandbox_web).
 build_msl_bundle() {
     local binary="$1"
     if [ "$binary" != "lunica_web" ]; then
@@ -527,13 +527,13 @@ show_help() {
     echo ""
     echo "Available binaries:"
     echo "  lunica_web  - Modelica Workbench IDE (default port: 8080)"
-    echo "  rover_sandbox_web       - Rover Physics Sandbox (default port: 8081)"
+    echo "  sandbox_web       - Rover Physics Sandbox (default port: 8081)"
     echo ""
     echo "Examples:"
     echo "  $0 build lunica_web    # Build Modelica Workbench"
-    echo "  $0 serve rover_sandbox_web         # Serve Rover Sandbox"
+    echo "  $0 serve sandbox_web         # Serve Sandbox"
     echo "  $0 all lunica_web      # Build and serve Modelica Workbench"
-    echo "  $0 all rover_sandbox_web 8082      # Build and serve on custom port"
+    echo "  $0 all sandbox_web 8082      # Build and serve on custom port"
     echo "  $0 clean                           # Clean all artifacts"
     echo ""
     echo "Prerequisites:"
@@ -592,7 +592,7 @@ main() {
             check_prerequisites
             local crate=$(get_binary_config "$binary")
             local default_port=8080
-            if [ "$binary" = "rover_sandbox_web" ]; then
+            if [ "$binary" = "sandbox_web" ]; then
                 default_port=8081
             fi
             serve_web "$binary" "$crate" "${port:-$default_port}"
@@ -606,7 +606,7 @@ main() {
             check_prerequisites
             local crate=$(get_binary_config "$binary")
             local default_port=8080
-            if [ "$binary" = "rover_sandbox_web" ]; then
+            if [ "$binary" = "sandbox_web" ]; then
                 default_port=8081
             fi
             build_wasm "$binary" "$crate"

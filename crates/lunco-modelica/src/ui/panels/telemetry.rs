@@ -109,34 +109,26 @@ impl Panel for TelemetryPanel {
         render_selected_components_inspector(ui, world, muted);
         render_active_class_parameters(ui, world, muted);
 
+        // Resolve the document and entity to display. Telemetry follows
+        // its own pin or the active document.
+        let doc_id = crate::ui::doc_pin::resolved_telemetry_doc(world);
+        let Some(doc_id) = doc_id else {
+            render_runtime_hint(
+                ui,
+                muted,
+                world,
+                "No document active.",
+            );
+            return;
+        };
+
         // Resolve the entity to display: explicit pin (`selected_entity`)
-        // wins so the future "Pin to a specific model" UX stays
-        // possible, otherwise follow the active document — same
-        // lookup any doc-scoped panel uses. The previous form read
-        // `selected_entity` only and was clobbered on every Compile,
-        // stranding the user looking at whichever model was compiled
-        // last regardless of which tab they had focused.
+        // wins, otherwise follow the resolved document.
         let (entity, has_data) = {
-            // Resolution order, strongest signal first:
-            //   1. Explicit doc-pin (user clicked 📌 on this panel)
-            //   2. Follow the active document tab — switching tabs
-            //      moves the telemetry view with the user.
-            //   3. Entity-level pin (`WorkbenchState.selected_entity`,
-            //      set implicitly by compile / click flows) as a last
-            //      fallback when no active doc has a stepper yet.
-            // (2) sits above (3) because the user-visible rule is
-            // "Telemetry follows the focused tab"; Compile setting
-            // `selected_entity` shouldn't strand the panel on the
-            // last-compiled stepper after the user switches tabs.
-            let explicit_doc_pin = world
-                .get_resource::<crate::ui::doc_pin::DocPinState>()
-                .and_then(|p| p.telemetry);
             let pinned_entity = world
                 .get_resource::<WorkbenchState>()
                 .and_then(|s| s.selected_entity);
-            let resolved = explicit_doc_pin
-                .and_then(|doc| crate::ui::state::simulator_for(world, doc))
-                .or_else(|| crate::ui::state::active_simulator(world))
+            let resolved = crate::ui::state::simulator_for(world, doc_id)
                 .or(pinned_entity);
             let has = resolved
                 .map(|e| world.get::<ModelicaModel>(e).is_some())
@@ -144,156 +136,134 @@ impl Panel for TelemetryPanel {
             (resolved, has)
         };
 
-        let Some(entity) = entity else {
-            // Pre-compile state. The Parameters list above is sourced
-            // from the AST and is already populated; the runtime block
-            // below it is empty because no stepper exists yet. Spelling
-            // that out — and offering the Compile action inline —
-            // avoids the "Parameters (17) … No model selected" stall
-            // where the two lines look like they contradict each other.
-            render_runtime_hint(
-                ui,
-                muted,
-                world,
-                "Live telemetry appears here once the model is compiled.",
-            );
-            return;
-        };
-        if !has_data {
-            // Stepper entity exists but lost its `ModelicaModel`
-            // component (post-Reset / mid-rebuild). Offer Compile so the
-            // user can recover without hunting for the toolbar button.
-            render_runtime_hint(
-                ui,
-                muted,
-                world,
-                "Stepper went away — recompile to restore live telemetry.",
-            );
-            return;
-        }
+        if let (Some(entity), true) = (entity, has_data) {
+            // Read model snapshot for display. Parameter editing lives in
+            // `render_selected_components_inspector` (op-pipeline based);
+            // the panel only reads runtime values here.
+            let (is_paused, current_time, inputs) = {
+                if let Some(model) = world.get::<ModelicaModel>(entity) {
+                    (model.paused, model.current_time, model.inputs.clone())
+                } else {
+                    (true, 0.0, std::collections::HashMap::new())
+                }
+            };
 
-        // Read model snapshot for display. Parameter editing lives in
-        // `render_selected_components_inspector` (op-pipeline based);
-        // the panel only reads runtime values here.
-        let (is_paused, current_time, inputs, doc_id) = {
-            if let Some(model) = world.get::<ModelicaModel>(entity) {
-                (model.paused, model.current_time,
-                 model.inputs.clone(), model.document)
-            } else {
-                ui.label("Model not found.");
-                return;
-            }
-        };
+            // Snapshot per-input metadata from the document index so the
+            // inputs grid below can render tooltips and bound-clamped
+            // sliders without reborrowing the registry per row.
+            let input_rows: Vec<InputRow> = {
+                let mut sorted: Vec<(String, f64)> = inputs.into_iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                let registry = world.get_resource::<crate::ui::ModelicaDocumentRegistry>();
+                let index_ref = registry
+                    .and_then(|r| r.host(doc_id))
+                    .map(|h| h.document().index());
+                sorted
+                    .into_iter()
+                    .map(|(name, value)| {
+                        let entry =
+                            index_ref.and_then(|idx| idx.find_component_by_leaf(&name));
+                        InputRow {
+                            description: entry
+                                .map(|e| e.description.clone())
+                                .filter(|s| !s.is_empty()),
+                            min: entry
+                                .and_then(|e| e.modifications.get("min").and_then(|s| s.parse().ok())),
+                            max: entry
+                                .and_then(|e| e.modifications.get("max").and_then(|s| s.parse().ok())),
+                            name,
+                            value,
+                        }
+                    })
+                    .collect()
+            };
 
-        // Snapshot per-input metadata from the document index so the
-        // inputs grid below can render tooltips and bound-clamped
-        // sliders without reborrowing the registry per row.
-        let input_rows: Vec<InputRow> = {
-            let mut sorted: Vec<(String, f64)> = inputs.into_iter().collect();
-            sorted.sort_by(|a, b| a.0.cmp(&b.0));
-            let registry = world.get_resource::<crate::ui::ModelicaDocumentRegistry>();
-            let index_ref = registry
-                .and_then(|r| r.host(doc_id))
-                .map(|h| h.document().index());
-            sorted
-                .into_iter()
-                .map(|(name, value)| {
-                    let entry =
-                        index_ref.and_then(|idx| idx.find_component_by_leaf(&name));
-                    InputRow {
-                        description: entry
-                            .map(|e| e.description.clone())
-                            .filter(|s| !s.is_empty()),
-                        min: entry
-                            .and_then(|e| e.modifications.get("min").and_then(|s| s.parse().ok())),
-                        max: entry
-                            .and_then(|e| e.modifications.get("max").and_then(|s| s.parse().ok())),
-                        name,
-                        value,
+            // Play/Pause
+            ui.horizontal(|ui| {
+                if is_paused {
+                    if ui.button("▶ Play").clicked() {
+                        if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
+                            m.paused = false;
+                        }
                     }
-                })
-                .collect()
-        };
-
-        // Entity / model heading suppressed — the pin header at the
-        // top of the panel already shows the doc identity, and
-        // `model_name` here is almost always a duplicate of that.
-
-        // Play/Pause
-        ui.horizontal(|ui| {
-            if is_paused {
-                if ui.button("▶ Play").clicked() {
-                    if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
-                        m.paused = false;
+                } else {
+                    if ui.button("⏸ Pause").clicked() {
+                        if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
+                            m.paused = true;
+                        }
                     }
                 }
-            } else {
-                if ui.button("⏸ Pause").clicked() {
-                    if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
-                        m.paused = true;
+                ui.label(format!("Time: {current_time:.4} s"));
+
+                ui.add_space(ui.available_width() - 70.0);
+                if ui.button("🔄 Reset").clicked() {
+                    let sid = if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
+                        m.session_id += 1;
+                        m.is_stepping = true;
+                        m.current_time = 0.0;
+                        m.last_step_time = 0.0;
+                        Some(m.session_id)
+                    } else { None };
+                    if let (Some(sid), Some(channels)) = (sid, world.get_resource::<ModelicaChannels>()) {
+                        let _ = channels.tx.send(ModelicaCommand::Reset { entity, session_id: sid });
                     }
                 }
-            }
-            ui.label(format!("Time: {current_time:.4} s"));
+            });
+            ui.separator();
 
-            ui.add_space(ui.available_width() - 70.0);
-            if ui.button("🔄 Reset").clicked() {
-                let sid = if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
-                    m.session_id += 1;
-                    m.is_stepping = true;
-                    m.current_time = 0.0;
-                    m.last_step_time = 0.0;
-                    Some(m.session_id)
-                } else { None };
-                if let (Some(sid), Some(channels)) = (sid, world.get_resource::<ModelicaChannels>()) {
-                    let _ = channels.tx.send(ModelicaCommand::Reset { entity, session_id: sid });
-                }
-                // The worker's Reset handler pushes a fresh set of
-                // samples into `SignalRegistry`; clearing per-signal
-                // history is handled there.
-            }
-        });
-        ui.separator();
-
-        // Inputs
-        if !input_rows.is_empty() {
-            ui.label("Inputs (Real-time):");
-            resizable_v_section(ui, "inputs_height", 120.0, |ui| {
-                egui::ScrollArea::vertical().id_salt("inputs_scroll").auto_shrink([false, false]).show(ui, |ui| {
-                    egui::Grid::new("inputs_grid")
-                        .num_columns(2)
-                        .striped(true)
-                        .spacing([8.0, 4.0])
-                        .show(ui, |ui| {
-                            for row in &input_rows {
-                                let label = egui::Label::new(row.name.clone())
-                                    .sense(egui::Sense::hover());
-                                let resp = ui.add(label);
-                                if let Some(desc) = &row.description {
-                                    resp.on_hover_text(desc);
-                                }
-                                let mut v = row.value;
-                                let avail = ui.available_width().max(60.0);
-                                ui.add_sized(
-                                    [avail, 20.0],
-                                    egui::DragValue::new(&mut v)
-                                        .speed(0.1)
-                                        .fixed_decimals(2)
-                                        .range(
-                                            row.min.unwrap_or(f64::NEG_INFINITY)
-                                                ..=row.max.unwrap_or(f64::INFINITY),
-                                        ),
-                                );
-                                ui.end_row();
-                                if (v - row.value).abs() > 1e-10 {
-                                    if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
-                                        if let Some(inp) = m.inputs.get_mut(&row.name) { *inp = v; }
+            // Inputs
+            if !input_rows.is_empty() {
+                ui.label("Inputs (Real-time):");
+                resizable_v_section(ui, "inputs_height", 120.0, |ui| {
+                    egui::ScrollArea::vertical().id_salt("inputs_scroll").auto_shrink([false, false]).show(ui, |ui| {
+                        egui::Grid::new("inputs_grid")
+                            .num_columns(2)
+                            .striped(true)
+                            .spacing([8.0, 4.0])
+                            .show(ui, |ui| {
+                                for row in &input_rows {
+                                    let label = egui::Label::new(row.name.clone())
+                                        .sense(egui::Sense::hover());
+                                    let resp = ui.add(label);
+                                    if let Some(desc) = &row.description {
+                                        resp.on_hover_text(desc);
+                                    }
+                                    let mut v = row.value;
+                                    let avail = ui.available_width().max(60.0);
+                                    ui.add_sized(
+                                        [avail, 20.0],
+                                        egui::DragValue::new(&mut v)
+                                            .speed(0.1)
+                                            .fixed_decimals(2)
+                                            .range(
+                                                row.min.unwrap_or(f64::NEG_INFINITY)
+                                                    ..=row.max.unwrap_or(f64::INFINITY),
+                                            ),
+                                    );
+                                    ui.end_row();
+                                    if (v - row.value).abs() > 1e-10 {
+                                        if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
+                                            if let Some(inp) = m.inputs.get_mut(&row.name) { *inp = v; }
+                                        }
                                     }
                                 }
-                            }
-                        });
+                            });
+                    });
                 });
-            });
+            }
+        } else {
+            // Pre-compile state OR post-Reset. Show a hint and Compile
+            // button, but continue to show the Variables list below.
+            render_runtime_hint(
+                ui,
+                muted,
+                world,
+                if !has_data && entity.is_some() {
+                    "Stepper went away — recompile to restore live telemetry."
+                } else {
+                    "Live telemetry appears here once the model is compiled."
+                },
+            );
         }
 
         // Variables (Toggle to Plot).
@@ -410,23 +380,16 @@ impl Panel for TelemetryPanel {
         }
 
         egui::ScrollArea::vertical().id_salt("telemetry_scroll").show(ui, |ui| {
-            let (model_vars, model_inputs) = if let Some(m) = world.get::<ModelicaModel>(entity) {
-                (m.variables.keys().cloned().collect::<Vec<_>>(),
-                 m.inputs.keys().cloned().collect::<Vec<_>>())
+            let (model_vars, model_inputs) = if let Some(e) = entity {
+                if let Some(m) = world.get::<ModelicaModel>(e) {
+                    (m.variables.keys().cloned().collect::<Vec<_>>(),
+                     m.inputs.keys().cloned().collect::<Vec<_>>())
+                } else {
+                    (Vec::new(), Vec::new())
+                }
             } else {
                 (Vec::new(), Vec::new())
             };
-
-            // Read plotted-set from the viz registry. Clone once so
-            // we don't reborrow the resource inside the loop.
-            let plotted: std::collections::HashSet<String> = world
-                .get_resource::<lunco_viz::VisualizationRegistry>()
-                .and_then(|r| r.get(crate::ui::viz::DEFAULT_MODELICA_GRAPH))
-                .map(|cfg| cfg.inputs.iter()
-                    .filter(|b| b.source.entity == entity)
-                    .map(|b| b.source.path.clone())
-                    .collect())
-                .unwrap_or_default();
 
             // Picked-for-experiments set, snapshotted once. Routes
             // through the "Plot in" target — pinned plot if set,
@@ -438,6 +401,25 @@ impl Panel for TelemetryPanel {
                 .unwrap_or_default()
                 .or_default();
             let target_plot = pinned.unwrap_or(active_plot);
+
+            // Read plotted-set from the viz registry for the target plot.
+            // Clone once so we don't reborrow the resource inside the loop.
+            let plotted: std::collections::HashSet<String> = if let Some(e) = entity {
+                world
+                    .get_resource::<lunco_viz::VisualizationRegistry>()
+                    .and_then(|r| r.get(target_plot))
+                    .map(|cfg| {
+                        cfg.inputs
+                            .iter()
+                            .filter(|b| b.source.entity == e)
+                            .map(|b| b.source.path.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                std::collections::HashSet::new()
+            };
+
             let picked_exp: std::collections::BTreeSet<String> = world
                 .get_resource::<crate::ui::panels::experiments::PlotPanelStates>()
                 .map(|s| s.picked(target_plot))
@@ -446,11 +428,32 @@ impl Panel for TelemetryPanel {
             // Variables sourced from completed experiments — surface
             // them even when there's no live cosim entity yet.
             let exp_vars: std::collections::BTreeSet<String> =
-                crate::ui::panels::experiments::all_experiment_variables(world);
+                crate::ui::panels::experiments::all_experiment_variables_for_doc(world, doc_id);
 
             let mut all_names: Vec<_> = model_vars;
             all_names.extend(model_inputs);
             all_names.extend(exp_vars.iter().cloned());
+            
+            // Proactively pull names from the document index if we're
+            // looking at a model that hasn't run yet.
+            let registry = world.get_resource::<crate::ui::ModelicaDocumentRegistry>();
+            let index_ref = registry
+                .and_then(|r| r.host(doc_id))
+                .map(|h| h.document().index());
+            if let Some(index) = index_ref {
+                for comp in &index.components {
+                    // Very rough heuristic: if it's a Real and not
+                    // obviously a parameter, it's probably an
+                    // observable. This is just to seed the list
+                    // before the first compile.
+                    if comp.type_name == "Real"
+                        && comp.variability == crate::index::Variability::Continuous
+                    {
+                        all_names.push(comp.name.clone());
+                    }
+                }
+            }
+
             all_names.sort();
             all_names.dedup();
 
@@ -458,21 +461,21 @@ impl Panel for TelemetryPanel {
             // up front so the row loop doesn't reborrow the registry per
             // checkbox.
             let var_desc: std::collections::HashMap<String, String> = {
-                let registry = world.get_resource::<crate::ui::ModelicaDocumentRegistry>();
-                let index_ref = registry
-                    .and_then(|r| r.host(doc_id))
-                    .map(|h| h.document().index());
-                all_names
-                    .iter()
-                    .filter_map(|n| {
-                        let entry = index_ref.and_then(|idx| idx.find_component_by_leaf(n))?;
-                        if entry.description.is_empty() {
-                            None
-                        } else {
-                            Some((n.clone(), entry.description.clone()))
-                        }
-                    })
-                    .collect()
+                if let Some(index) = index_ref {
+                    all_names
+                        .iter()
+                        .filter_map(|n| {
+                            let entry = index.find_component_by_leaf(n)?;
+                            if entry.description.is_empty() {
+                                None
+                            } else {
+                                Some((n.clone(), entry.description.clone()))
+                            }
+                        })
+                        .collect()
+                } else {
+                    std::collections::HashMap::new()
+                }
             };
 
             // Group by leading dotted segment for compactness.
@@ -544,14 +547,17 @@ impl Panel for TelemetryPanel {
             // viz registry (live cosim) and ExperimentVisibility
             // (Fast Run) so the user picks once.
             for (name, on) in toggles {
-                if let Some(mut reg) =
-                    world.get_resource_mut::<lunco_viz::VisualizationRegistry>()
-                {
-                    set_signal_plotted(
-                        &mut reg,
-                        lunco_viz::SignalRef::new(entity, name.clone()),
-                        on,
-                    );
+                if let Some(e) = entity {
+                    if let Some(mut reg) =
+                        world.get_resource_mut::<lunco_viz::VisualizationRegistry>()
+                    {
+                        set_signal_plotted(
+                            &mut reg,
+                            target_plot,
+                            lunco_viz::SignalRef::new(e, name.clone()),
+                            on,
+                        );
+                    }
                 }
                 if let Some(mut states) = world
                     .get_resource_mut::<crate::ui::panels::experiments::PlotPanelStates>()
