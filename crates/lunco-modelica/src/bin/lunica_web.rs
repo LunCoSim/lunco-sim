@@ -131,7 +131,6 @@ pub fn run() {
         }))
         .add_plugins(EguiPlugin::default())
         .add_plugins(lunco_workbench::WorkbenchPlugin)
-        .add_plugins(lunco_viz::LuncoVizPlugin)
         .add_plugins(ModelicaPlugin)
         // Autosave Untitled / duplicated docs to the browser's
         // localStorage so a page reload doesn't silently lose

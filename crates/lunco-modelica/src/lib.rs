@@ -732,7 +732,14 @@ impl Plugin for ModelicaCorePlugin {
 
 impl Plugin for ModelicaPlugin {
     fn build(&self, app: &mut App) {
-        build_modelica_core(app);
+        // The Modelica UI experience requires both core logic and plotting.
+        // Enforce the dependency chain by adding them here.
+        if !app.is_plugin_added::<ModelicaCorePlugin>() {
+            app.add_plugins(ModelicaCorePlugin);
+        }
+        if !app.is_plugin_added::<lunco_viz::LuncoVizPlugin>() {
+            app.add_plugins(lunco_viz::LuncoVizPlugin);
+        }
 
         // PR-A: inventory every source root the workbench can load
         // into a rumoca compile session. No loads yet — the registry

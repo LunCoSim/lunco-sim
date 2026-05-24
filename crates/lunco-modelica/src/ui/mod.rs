@@ -962,12 +962,9 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
     // Current state line.
     let state = world.get_resource::<MslLoadState>().cloned();
 
-    // If we don't have the settings resource, we likely don't have the
-    // MSL remote plugin either (e.g. in sandbox or other standalone
-    // binaries). Hide the section to avoid panics.
-    let Some(mut settings) = world.get_resource_mut::<crate::msl_settings::MslSettings>() else {
-        return;
-    };
+    // If the Modelica UI is active, the MslSettings resource MUST exist
+    // by architectural design (ModelicaPlugin adds ModelicaCorePlugin adds MslRemotePlugin).
+    let mut settings = world.resource_mut::<crate::msl_settings::MslSettings>();
 
     ui.label(egui::RichText::new("Assets — MSL").weak().small());
 
