@@ -959,10 +959,18 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
     use bevy_egui::egui;
     use lunco_assets::msl::{MslLoadPhase, MslLoadState};
 
-    ui.label(egui::RichText::new("Assets — MSL").weak().small());
-
     // Current state line.
     let state = world.get_resource::<MslLoadState>().cloned();
+
+    // If we don't have the settings resource, we likely don't have the
+    // MSL remote plugin either (e.g. in sandbox or other standalone
+    // binaries). Hide the section to avoid panics.
+    let Some(mut settings) = world.get_resource_mut::<crate::msl_settings::MslSettings>() else {
+        return;
+    };
+
+    ui.label(egui::RichText::new("Assets — MSL").weak().small());
+
     match state.as_ref() {
         Some(MslLoadState::Ready {
             file_count,
@@ -1021,7 +1029,6 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
     // Local-root override — wins over auto-download. Restart needed
     // for changes to take effect (the resolution happens once at
     // plugin build).
-    let mut settings = world.resource_mut::<crate::msl_settings::MslSettings>();
     let mut local = settings
         .local_root_override
         .as_ref()

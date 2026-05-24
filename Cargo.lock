@@ -5977,6 +5977,7 @@ dependencies = [
  "lunco-theme",
  "lunco-ui",
  "lunco-usd",
+ "lunco-viz",
  "lunco-workbench",
  "mimalloc",
  "wasm-bindgen",

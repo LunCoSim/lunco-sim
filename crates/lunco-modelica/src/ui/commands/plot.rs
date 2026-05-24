@@ -79,7 +79,10 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
                 visible: true,
             });
         }
-        let mut registry = world.resource_mut::<VisualizationRegistry>();
+        let Some(mut registry) = world.get_resource_mut::<VisualizationRegistry>() else {
+            bevy::log::warn!("[NewPlotPanel] could not open plot: VisualizationRegistry resource missing (is LuncoVizPlugin added?)");
+            return;
+        };
         registry.insert(VisualizationConfig {
             id,
             title: title.clone(),
@@ -119,7 +122,10 @@ pub fn on_add_signal_to_plot(trigger: On<AddSignalToPlot>, mut commands: Command
             .next()
             .map(|(e, _)| e)
             .unwrap_or(bevy::prelude::Entity::PLACEHOLDER);
-        let mut registry = world.resource_mut::<VisualizationRegistry>();
+        let Some(mut registry) = world.get_resource_mut::<VisualizationRegistry>() else {
+            bevy::log::warn!("[AddSignalToPlot] could not add signal: VisualizationRegistry resource missing");
+            return;
+        };
         let Some(cfg) = registry.get_mut(id) else {
             bevy::log::warn!("[AddSignalToPlot] no plot with id={}", ev.plot);
             return;
