@@ -311,6 +311,16 @@ generate_bindings() {
     fi
     if [ -f "$index_html" ]; then
         cp "$index_html" "$dist_dir/index.html"
+        # Inject the actual uncompressed WASM size so the loading UI
+        # can show accurate progress even when nginx serves a
+        # pre-compressed .gz sibling (gzip_static on).
+        local wasm_dist="$dist_dir/${binary}_bg.wasm"
+        if [ -f "$wasm_dist" ]; then
+            local wasm_bytes
+            wasm_bytes=$(stat -c '%s' "$wasm_dist" 2>/dev/null || stat -f '%z' "$wasm_dist")
+            sed -i "s/const __LC_WASM_SIZE__ = 0/const __LC_WASM_SIZE__ = $wasm_bytes/" "$dist_dir/index.html"
+            info "Injected WASM size into index.html: $(awk "BEGIN{printf \"%.1f\", $wasm_bytes/1048576}") MB"
+        fi
     else
         warn "No index.html found at $index_html — bundle will lack an entry point"
     fi
