@@ -683,9 +683,12 @@ fn log_state_transition(s: &MslLoadState) {
 /// handle that drops in lockstep with state transitions.
 fn mirror_state_to_status_bus(
     state: Res<MslLoadState>,
-    mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
+    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
     mut last: bevy::prelude::Local<Option<MirrorMemo>>,
 ) {
+    let Some(mut bus) = bus else {
+        return;
+    };
     let now_summary = MirrorMemo::from(&*state);
     let prior_phase_label = last.as_ref().and_then(|m| m.phase_label);
 

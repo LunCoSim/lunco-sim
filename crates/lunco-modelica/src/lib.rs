@@ -733,6 +733,7 @@ impl Plugin for ModelicaCorePlugin {
 impl Plugin for ModelicaPlugin {
     fn build(&self, app: &mut App) {
         build_modelica_core(app);
+
         // PR-A: inventory every source root the workbench can load
         // into a rumoca compile session. No loads yet — the registry
         // just enumerates so PR-B's gate has something to look up.
@@ -772,6 +773,12 @@ impl Plugin for ModelicaPlugin {
 fn build_modelica_core(app: &mut App) {
     let (tx_cmd, rx_cmd) = unbounded();
     let (tx_res, rx_res) = unbounded();
+
+    // Ensure MSL remote management is present (fetching, settings, status).
+    // The domain is incomplete without MSL access.
+    if !app.is_plugin_added::<msl_remote::MslRemotePlugin>() {
+        app.add_plugins(msl_remote::MslRemotePlugin);
+    }
 
     let msl = msl_dir();
     if msl.exists() {

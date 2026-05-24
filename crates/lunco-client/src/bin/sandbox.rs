@@ -173,7 +173,6 @@ fn main() {
         .add_plugins(lunco_workbench::WorkbenchPlugin)
         .add_plugins(lunco_viz::LuncoVizPlugin)
         .add_plugins(ModelicaPlugin)
-        .add_plugins(lunco_modelica::msl_remote::MslRemotePlugin)
         .add_plugins(lunco_core::LunCoCorePlugin)
         .add_plugins(GravityPlugin)
         .add_plugins(EnvironmentPlugin)
