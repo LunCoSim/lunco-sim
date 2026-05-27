@@ -141,6 +141,11 @@ fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
             },
         );
         bevy::log::info!("[OpenUsd] opened `{}` as {}", path, doc_id);
+
+        // Also import into the running scene (additive — Blender's
+        // File → Append). Helper no-ops on same `(asset, root_prim)`,
+        // and warns + skips for files outside the asset root.
+        lunco_usd_sim::cosim::spawn_scene_root_world(world, &path, "");
     });
 }
 

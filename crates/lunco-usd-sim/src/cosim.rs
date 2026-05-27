@@ -454,12 +454,12 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
 
 /// Reload (or load) a USD scene at runtime via the API.
 ///
-/// `curl … {"command":"LoadScene","params":{"path":"scenes/sandbox/sandbox_scene.usda","root_prim":""}}`
+/// `curl … {"command":"LoadScene","params":{"path":"scenes/sandbox/sandbox_scene.usda"}}`
 ///
 /// - `path`: USD asset path relative to the asset root.
-/// - `root_prim`: SDF path of the prim to spawn (e.g. `/SandboxScene`).
-///   Empty string auto-derives `/PascalCaseFromFilename`
-///   (so `sandbox_scene.usda` → `/SandboxScene`).
+/// - `root_prim`: optional override for the SDF path of the prim to
+///   spawn. Empty (default) reads the stage's `defaultPrim` metadata;
+///   if absent, falls back to `/` (walk all top-level prims).
 ///
 /// Despawns every existing entity carrying `UsdPrimPath` plus every
 /// `SimConnection` (cosim wires are scene-derived in current code), then
@@ -475,11 +475,13 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
 /// drops `ScriptRegistry::documents` entries for every `ScriptedModel`.
 /// Without this, repeated reloads accumulate stale steppers and parsed
 /// scripts indefinitely.
-#[Command]
+#[Command(default)]
 pub struct LoadScene {
     /// USD asset path (relative to `assets/`).
     pub path: String,
-    /// SDF path of the prim to spawn. Empty = auto-derive from filename.
+    /// Optional override for the prim to spawn. Empty (default) reads
+    /// `defaultPrim` from the stage's metadata header, falling back to
+    /// `/` when none is declared.
     pub root_prim: String,
 }
 
@@ -488,20 +490,23 @@ fn on_load_scene(
     cmd: LoadScene,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
-    q_usd: Query<Entity, With<UsdPrimPath>>,
+    q_usd: Query<(Entity, &UsdPrimPath)>,
     q_wires: Query<Entity, With<SimConnection>>,
-    q_grid: Query<Entity, With<Grid>>,
     q_modelica: Query<Entity, With<ModelicaModel>>,
     q_scripted: Query<&ScriptedModel>,
     channels: Res<ModelicaChannels>,
     mut script_registry: ResMut<lunco_scripting::ScriptRegistry>,
 ) {
-    let path = &cmd.path;
-    let root_prim = if cmd.root_prim.is_empty() {
-        derive_root_prim_path(path)
-    } else {
-        cmd.root_prim.clone()
-    };
+    let path = cmd.path.clone();
+    let root_prim = resolve_root_prim(&path, &cmd.root_prim);
+
+    // Blender-style no-op: same path + root prim already loaded.
+    let new_id = asset_server.load::<UsdStageAsset>(&path).id();
+    if q_usd.iter().any(|(_, upp)| upp.stage_handle.id() == new_id && upp.path == root_prim) {
+        info!("[load-scene] `{}` @ `{}` already loaded — no-op", path, root_prim);
+        return;
+    }
+
     info!("[load-scene] reload path=`{}` root=`{}`", path, root_prim);
 
     // Worker-side cleanup before despawn. Send Despawn for every
@@ -523,7 +528,7 @@ fn on_load_scene(
     }
 
     let mut despawned = 0usize;
-    for e in q_usd.iter() { commands.entity(e).try_despawn(); despawned += 1; }
+    for (e, _) in q_usd.iter() { commands.entity(e).try_despawn(); despawned += 1; }
     for e in q_wires.iter() { commands.entity(e).try_despawn(); despawned += 1; }
     info!(
         "[load-scene] cleanup: {} entities despawned, {} Modelica steppers freed, {} Python docs freed",
@@ -531,16 +536,66 @@ fn on_load_scene(
     );
 
     // Force fresh read from disk in case the user edited the file.
-    asset_server.reload(path);
-    let handle = asset_server.load::<UsdStageAsset>(path);
+    asset_server.reload(&path);
 
-    let Some(grid) = q_grid.iter().next() else {
-        warn!("[load-scene] no `Grid` entity found — scene won't be parented");
-        return;
+    // Spawn via shared helper, deferred so despawns flush first.
+    commands.queue(move |world: &mut World| {
+        spawn_scene_root_world(world, &path, &root_prim);
+    });
+}
+
+/// Spawn a USD scene root under the first `Grid` entity.
+///
+/// Shared by `LoadScene` (after its clear step) and `OpenFile` (additive
+/// import). Blender-style no-op when the same `(asset, root_prim)` is
+/// already mounted. Returns the spawned entity, or `None` on no-op /
+/// missing `Grid`.
+pub fn spawn_scene_root_world(
+    world: &mut World,
+    path_in: &str,
+    root_prim_in: &str,
+) -> Option<Entity> {
+    // Normalize to asset-server-relative. The asset server prepends
+    // its configured `file_path` (the `assets/` root) to every load
+    // string, so absolute paths must have that prefix stripped.
+    let pb = std::path::PathBuf::from(path_in);
+    let asset_path: String = if pb.is_absolute() {
+        let assets = assets_dir();
+        match pb.strip_prefix(&assets) {
+            Ok(rel) => rel.to_string_lossy().into_owned(),
+            Err(_) => {
+                warn!("[scene] `{}` is outside assets dir — cannot load", path_in);
+                return None;
+            }
+        }
+    } else {
+        path_in.to_string()
+    };
+    let root_prim = resolve_root_prim(&asset_path, root_prim_in);
+    let handle = world
+        .resource::<AssetServer>()
+        .load::<UsdStageAsset>(asset_path.clone());
+    let new_id = handle.id();
+
+    {
+        let mut q = world.query::<&UsdPrimPath>();
+        if q.iter(world).any(|upp| upp.stage_handle.id() == new_id && upp.path == root_prim) {
+            info!("[scene] `{}` @ `{}` already loaded — no-op", asset_path, root_prim);
+            return None;
+        }
+    }
+
+    let grid = {
+        let mut q = world.query_filtered::<Entity, With<Grid>>();
+        q.iter(world).next()
+    };
+    let Some(grid) = grid else {
+        warn!("[scene] no `Grid` entity — `{}` won't be parented", asset_path);
+        return None;
     };
 
-    let root = commands.spawn((
-        Name::new(format!("Scene:{}", path)),
+    let root = world.spawn((
+        Name::new(format!("Scene:{}", asset_path)),
         UsdPrimPath { stage_handle: handle, path: root_prim.clone() },
         Visibility::Visible,
         InheritedVisibility::default(),
@@ -548,27 +603,66 @@ fn on_load_scene(
         Transform::default(),
         CellCoord::default(),
     )).id();
-    commands.entity(grid).add_child(root);
-    info!("[load-scene] spawned new root entity {} at `{}`", root, root_prim);
+    world.entity_mut(grid).add_child(root);
+    info!("[scene] spawned `{}` @ `{}` (entity {})", asset_path, root_prim, root);
+    Some(root)
 }
 
-/// Derives `/PascalCaseFromFilename` from an asset path.
-/// `scenes/sandbox/sandbox_scene.usda` → `/SandboxScene`.
-fn derive_root_prim_path(asset_path: &str) -> String {
-    let stem = asset_path
-        .rsplit('/').next().unwrap_or(asset_path)
-        .rsplit_once('.').map(|(s, _)| s).unwrap_or(asset_path);
-    let pascal: String = stem
-        .split('_')
-        .map(|p| {
-            let mut chars = p.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(c) => c.to_uppercase().chain(chars).collect(),
-            }
-        })
-        .collect();
-    format!("/{}", pascal)
+/// Resolve the SDF mount path for a scene load.
+///
+/// Priority:
+/// 1. explicit `override_in` (non-empty caller-supplied path)
+/// 2. stage's `defaultPrim` metadata
+/// 3. `/` — mount the whole stage (matches `usdview` / Omniverse
+///    behavior when a stage lacks `defaultPrim`).
+///
+/// Per USD spec, `defaultPrim` is only required for files that will be
+/// *referenced* by other USD files (composition arcs need a target
+/// prim). Opening a stage directly works fine without it. We warn at
+/// load time so authors notice missing metadata before another file
+/// tries to reference theirs.
+pub fn resolve_root_prim(asset_path: &str, override_in: &str) -> String {
+    if !override_in.is_empty() {
+        return override_in.to_string();
+    }
+    let abs = assets_dir().join(asset_path);
+    match read_default_prim(&abs) {
+        Some(name) => {
+            info!("[scene] `{}` defaultPrim = `{}`", asset_path, name);
+            format!("/{}", name)
+        }
+        None => {
+            warn!(
+                "[scene] `{}` has no `defaultPrim` — mounting at `/`. \
+                 Add `( defaultPrim = \"Name\" )` to the stage header if \
+                 this file will be referenced from other USD files.",
+                asset_path
+            );
+            "/".to_string()
+        }
+    }
+}
+
+/// Scan a `.usda` file's metadata header for `defaultPrim = "Name"`.
+/// Returns the prim name (without leading slash) or `None` if the file
+/// can't be read or no `defaultPrim` is declared.
+///
+/// The metadata block sits in the first few hundred bytes of every
+/// stage, right after `#usda 1.0`, so we only read the file head.
+fn read_default_prim(path: &std::path::Path) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let head = &raw[..raw.len().min(4096)];
+    for line in head.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("defaultPrim") else { continue };
+        // Accept `defaultPrim = "Name"` and `defaultPrim="Name"`.
+        let rest = rest.trim_start_matches(|c: char| c == '=' || c.is_whitespace());
+        let name = rest.trim_matches('"');
+        if !name.is_empty() {
+            return Some(name.to_string());
+        }
+    }
+    None
 }
 
 /// Plugin install hook — registers translator systems, per-tick sync
@@ -633,5 +727,91 @@ mod tests {
         assert_eq!(parse_wire(":b"), None);
         assert_eq!(parse_wire("a:"), None);
         assert_eq!(parse_wire(""), None);
+    }
+
+    // ── defaultPrim resolution ───────────────────────────────────────
+
+    use std::io::Write;
+
+    /// Write a `.usda` source into a unique tempfile and return its
+    /// absolute path. Each call uses a counter so parallel tests don't
+    /// collide on the same name.
+    fn tmp_usda(source: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let p = std::env::temp_dir().join(format!(
+            "lunco_usd_sim_default_prim_{}_{}.usda",
+            std::process::id(),
+            n
+        ));
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(source.as_bytes()).unwrap();
+        p
+    }
+
+    #[test]
+    fn read_default_prim_extracts_name() {
+        let p = tmp_usda(
+            "#usda 1.0\n(\n    defaultPrim = \"SandboxScene\"\n    upAxis = \"Y\"\n)\n\ndef Xform \"SandboxScene\" {}\n",
+        );
+        assert_eq!(read_default_prim(&p), Some("SandboxScene".to_string()));
+    }
+
+    #[test]
+    fn read_default_prim_accepts_unspaced_equals() {
+        let p = tmp_usda("#usda 1.0\n(\n    defaultPrim=\"Foo\"\n)\n");
+        assert_eq!(read_default_prim(&p), Some("Foo".to_string()));
+    }
+
+    #[test]
+    fn read_default_prim_returns_none_when_absent() {
+        // Top-level prims declared but no metadata block.
+        let p = tmp_usda("#usda 1.0\n\ndef Xform \"World\" {}\n");
+        assert_eq!(read_default_prim(&p), None);
+    }
+
+    #[test]
+    fn read_default_prim_returns_none_for_missing_file() {
+        let p = std::env::temp_dir().join("lunco_usd_sim_no_such_file.usda");
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(read_default_prim(&p), None);
+    }
+
+    // ── resolve_root_prim ────────────────────────────────────────────
+    //
+    // `resolve_root_prim` joins its `asset_path` arg with `assets_dir()`
+    // (= relative `"assets"`). To exercise it hermetically we hand it
+    // absolute temp paths — `PathBuf::join` of a base with an absolute
+    // path returns the absolute path, so the join is a no-op.
+
+    #[test]
+    fn resolve_root_prim_override_wins() {
+        let p = tmp_usda("#usda 1.0\n(\n    defaultPrim = \"Stage\"\n)\n");
+        let p_str = p.to_string_lossy().into_owned();
+        assert_eq!(resolve_root_prim(&p_str, "/Override"), "/Override");
+    }
+
+    #[test]
+    fn resolve_root_prim_uses_default_prim_when_override_empty() {
+        let p = tmp_usda("#usda 1.0\n(\n    defaultPrim = \"SandboxScene\"\n)\n");
+        let p_str = p.to_string_lossy().into_owned();
+        assert_eq!(resolve_root_prim(&p_str, ""), "/SandboxScene");
+    }
+
+    #[test]
+    fn resolve_root_prim_falls_back_to_root_when_no_default_prim() {
+        let p = tmp_usda("#usda 1.0\n\ndef Xform \"World\" {}\n");
+        let p_str = p.to_string_lossy().into_owned();
+        assert_eq!(resolve_root_prim(&p_str, ""), "/");
+    }
+
+    #[test]
+    fn resolve_root_prim_falls_back_to_root_when_file_missing() {
+        // Nonexistent path → no defaultPrim → "/" fallback.
+        let p = std::env::temp_dir().join("lunco_usd_sim_resolve_missing.usda");
+        let _ = std::fs::remove_file(&p);
+        let p_str = p.to_string_lossy().into_owned();
+        assert_eq!(resolve_root_prim(&p_str, ""), "/");
     }
 }

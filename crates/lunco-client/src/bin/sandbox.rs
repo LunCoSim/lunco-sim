@@ -24,7 +24,7 @@ use leafwing_input_manager::prelude::*;
 
 use lunco_mobility::LunCoMobilityPlugin;
 use lunco_hardware::LunCoHardwarePlugin;
-use lunco_usd::{ui::{UsdUiPlugin, UsdViewportPlugin}, UsdPlugins, UsdPrimPath};
+use lunco_usd::{ui::{UsdUiPlugin, UsdViewportPlugin}, LoadScene, UsdPlugins};
 use lunco_terrain::TerrainPlugin;
 use lunco_sandbox_edit::SandboxEditPlugin;
 use lunco_controller::LunCoControllerPlugin;
@@ -279,7 +279,6 @@ struct ScenePath(String);
 
 fn setup_sandbox(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     scene_path: Res<ScenePath>,
 ) {
     let scene_path: String = scene_path.0.clone();
@@ -307,29 +306,15 @@ fn setup_sandbox(
         Name::new("Sun"),
     )).set_parent_in_place(grid);
 
-    // --- Load scene from USD (ground + ramp + ALL rovers) ---
-    // The scene file references rover definitions from external .usda files
-    // with position overrides. The UsdComposer flattens everything into
-    // a single stage, then sync_usd_visuals spawns entities for all prims.
-    let scene_handle = asset_server.load(scene_path.as_str().to_string());
-    info!("Loading sandbox scene from USD");
-    commands.spawn((
-        Name::new("SandboxScene"),
-        UsdPrimPath {
-            stage_handle: scene_handle,
-            path: "/SandboxScene".to_string(),
-        },
-        Visibility::Visible,
-        InheritedVisibility::default(),
-        ViewVisibility::default(),
-        Transform::default(),
-        CellCoord::default(),
-    )).set_parent_in_place(grid);
-
-    // Balloons live in `sandbox_scene.usda` now (Red/GreenBalloon prims
-    // reference `vessels/balloons/{modelica,python}_balloon.usda`).
-    // The cosim translator reads `lunco:modelicaModel` / `lunco:scriptModel`
-    // and `lunco:simWires` to wire up Modelica/Python and SimConnections.
+    // --- Load scene from USD ---
+    // Routed through the typed-command bus so startup and runtime
+    // (API/MCP `LoadScene`, future File→Open) share one code path.
+    // Empty `root_prim` auto-derives `/PascalCaseFromFilename`.
+    info!("Loading sandbox scene `{}` via LoadScene", scene_path);
+    commands.trigger(LoadScene {
+        path: scene_path.clone(),
+        root_prim: String::new(),
+    });
 }
 
 /// Spawns a default avatar if no USD-defined Avatar was loaded.

@@ -30,6 +30,7 @@ pub use registry::UsdDocumentRegistry;
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 pub use lunco_usd_avian::UsdAvianPlugin;
 pub use lunco_usd_sim::UsdSimPlugin;
+pub use lunco_usd_sim::cosim::LoadScene;
 
 /// Master plugin that bundles all USD subsystems together.
 ///
