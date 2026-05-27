@@ -136,8 +136,19 @@ fn main() {
             })
             .set(WindowPlugin {
                 primary_window: Some(Window {
+                    #[cfg(not(target_arch = "wasm32"))]
                     resolution: bevy::window::WindowResolution::new(1600, 1000),
+                    #[cfg(not(target_arch = "wasm32"))]
                     position: WindowPosition::Centered(MonitorSelection::Primary),
+                    // On wasm, attach to the `#bevy` canvas in index.html and
+                    // mirror its parent's CSS size to the bevy window. Without
+                    // this winit never sees DOM resize events and the canvas
+                    // stays at its default 1x1 logical size — menu bars and
+                    // panels render outside the visible area.
+                    #[cfg(target_arch = "wasm32")]
+                    canvas: Some("#bevy".to_string()),
+                    #[cfg(target_arch = "wasm32")]
+                    fit_canvas_to_parent: true,
                     present_mode,
                     ..lunco_workbench::merged_titlebar_window(window_title)
                 }),
@@ -171,7 +182,6 @@ fn main() {
         .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
         .add_plugins(CoSimPlugin)
         .add_plugins(lunco_workbench::WorkbenchPlugin)
-        .add_plugins(ModelicaCorePlugin)
         .add_plugins(lunco_core::LunCoCorePlugin)
         .add_plugins(GravityPlugin)
         .add_plugins(EnvironmentPlugin)
@@ -242,6 +252,14 @@ fn main() {
             global_transform_propagation_system,
             spawn_fallback_avatar,
         ).chain().after(avian3d::prelude::PhysicsSystems::Writeback));
+
+    // ModelicaCorePlugin owns `ModelicaChannels` and `ModelicaSet` system
+    // sets that many sandbox systems hard-depend on. On wasm we suppress
+    // the MSL auto-fetch (no manifest shipped with sandbox_web — sandbox
+    // cosim doesn't compile against Modelica.Library classes).
+    #[cfg(target_arch = "wasm32")]
+    app.insert_resource(lunco_modelica::msl_remote::SkipMslAutoLoad);
+    app.add_plugins(ModelicaCorePlugin);
 
     #[cfg(feature = "lunco-api")]
     app.add_plugins(lunco_api::LunCoApiPlugin::default());

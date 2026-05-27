@@ -67,6 +67,15 @@ pub fn install_global_parsed_msl_pub(parsed: Vec<(String, rumoca_compile::parsin
 }
 
 
+/// Marker resource. Insert **before** adding [`MslRemotePlugin`] (or
+/// [`ModelicaCorePlugin`], which adds it transitively) to suppress the
+/// auto-fetch of the MSL bundle on app start. The sandbox uses this on
+/// wasm — sandbox cosim doesn't load any Modelica.Library classes, so
+/// fetching `msl/manifest.json` produces a noisy 404 and a wasted
+/// parse pipeline.
+#[derive(Resource, Default, Clone, Copy)]
+pub struct SkipMslAutoLoad;
+
 /// Plugin that owns MSL asset loading. Add once during app build.
 pub struct MslRemotePlugin;
 
@@ -151,27 +160,26 @@ impl Plugin for MslRemotePlugin {
 
         // Web: kick off the async fetcher and have a system promote the
         // shared `Mutex` slot into a Bevy resource once the task completes.
+        // Apps that don't ship an MSL bundle (sandbox_web) can pre-insert
+        // `SkipMslAutoLoad` to suppress the fetch entirely.
         #[cfg(target_arch = "wasm32")]
         {
-            let slot: SharedSlot = Arc::new(Mutex::new(SlotInner::default()));
-            app.insert_resource(MslLoadState::Loading {
-                phase: MslLoadPhase::FetchingManifest,
-                bytes_done: 0,
-                bytes_total: 0,
-            });
-            app.insert_resource(MslLoadSlot(slot.clone()));
-            // Order:
-            //  1. drain_msl_load_slot — bundle → parse handoff
-            //  2. drive_msl_parse — chunked parse if needed
-            //  3. mirror_state_to_status_bus (added cross-platform above)
-            // The cross-platform mirror runs after the drain so it picks
-            // up state changes within the same frame; egui's status bar
-            // (rendered later by the workbench) reads StatusBus directly.
-            app.add_systems(
-                Update,
-                (drain_msl_load_slot, drive_msl_parse).chain(),
-            );
-            wasm_bindgen_futures::spawn_local(web::run_fetcher(slot));
+            if app.world().contains_resource::<SkipMslAutoLoad>() {
+                app.insert_resource(MslLoadState::NotStarted);
+            } else {
+                let slot: SharedSlot = Arc::new(Mutex::new(SlotInner::default()));
+                app.insert_resource(MslLoadState::Loading {
+                    phase: MslLoadPhase::FetchingManifest,
+                    bytes_done: 0,
+                    bytes_total: 0,
+                });
+                app.insert_resource(MslLoadSlot(slot.clone()));
+                app.add_systems(
+                    Update,
+                    (drain_msl_load_slot, drive_msl_parse).chain(),
+                );
+                wasm_bindgen_futures::spawn_local(web::run_fetcher(slot));
+            }
         }
     }
 }

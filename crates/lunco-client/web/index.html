@@ -18,16 +18,15 @@
 </head>
 <body>
     <div id="loading">Loading Sandbox...</div>
+    <!-- Bevy owns the canvas size on wasm via `fit_canvas_to_parent` — it
+         observes the parent (`body`) and writes width/height in CSS px
+         every frame. Don't set width/height attrs manually; bevy's
+         attrs win on each resize and a JS resize handler just fights
+         the engine. -->
     <canvas id="bevy"></canvas>
     <script type="module">
         import init from './sandbox_web.js';
-        function resize() {
-            const canvas = document.getElementById('bevy');
-            if (canvas) { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
-        }
-        window.addEventListener('resize', resize);
-        resize();
-        init().then(() => { document.getElementById('loading').remove(); resize(); });
+        init().then(() => { document.getElementById('loading').remove(); });
     </script>
 </body>
 </html>
