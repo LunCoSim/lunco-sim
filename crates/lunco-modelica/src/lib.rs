@@ -33,7 +33,7 @@
 //! reported as "Solver Error" in the logs rather than crashing the application.
 
 use bevy::prelude::*;
-use rumoca_session::{Session, SessionConfig};
+use rumoca_compile::{Session, SessionConfig};
 use crossbeam_channel::unbounded;
 use std::thread;
 use lunco_assets::msl_dir;
@@ -123,7 +123,7 @@ pub mod visual_diagram;
 /// See `docs/architecture/REFACTOR_PLAN.md`.
 pub mod index;
 
-/// Per-Twin Modelica domain engine: long-lived `rumoca_session::Session`
+/// Per-Twin Modelica domain engine: long-lived `rumoca_compile::Session`
 /// + per-doc URI mapping. Provides cross-file inheritance-merged queries.
 pub mod engine;
 pub mod engine_resource;
@@ -146,10 +146,10 @@ pub mod text_diff;
 pub mod icon_warmer;
 pub mod source_roots;
 
-/// Simple wrapper around rumoca-session for compiling Modelica models.
+/// Simple wrapper around rumoca-compile for compiling Modelica models.
 ///
 /// MSL is preloaded into the session at construction time via
-/// [`rumoca_session::compile::Session::load_source_root_tolerant`].
+/// [`rumoca_compile::compile::Session::load_source_root_tolerant`].
 /// After preload, compiling any MSL-based user model is a plain
 /// strict-reachable-DAE call against a session that already has
 /// every MSL class visible to rumoca's §5 scope walker.
@@ -211,7 +211,7 @@ impl ModelicaCompiler {
                 // enable bincode persistence for parsed artifacts.
                 let report = session.load_source_root_tolerant(
                     "msl",
-                    rumoca_session::compile::SourceRootKind::DurableExternal,
+                    rumoca_compile::compile::SourceRootKind::DurableExternal,
                     &msl_root,
                     None,
                 );
@@ -262,7 +262,7 @@ impl ModelicaCompiler {
             let pair_count = docs.len();
             let inserted = session.replace_parsed_source_set(
                 "msl",
-                rumoca_session::compile::SourceRootKind::DurableExternal,
+                rumoca_compile::compile::SourceRootKind::DurableExternal,
                 docs,
                 None,
             );
@@ -301,14 +301,14 @@ impl ModelicaCompiler {
             let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
             if let Ok(bytes) = std::fs::read(&bundle_path) {
                 match bincode::deserialize::<
-                    Vec<(String, rumoca_session::parsing::StoredDefinition)>,
+                    Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
                 >(&bytes)
                 {
                     Ok(docs) => {
                         let pair_count = docs.len();
                         let inserted = session.replace_parsed_source_set(
                             "msl",
-                            rumoca_session::compile::SourceRootKind::DurableExternal,
+                            rumoca_compile::compile::SourceRootKind::DurableExternal,
                             docs,
                             None,
                         );
@@ -336,9 +336,9 @@ impl ModelicaCompiler {
             // fingerprint-keyed and easily invalidates — we treat this
             // as a one-time cost and write the bundle below so the
             // next launch hits the fast path above.
-            let parsed = match rumoca_session::source_roots::parse_source_root_with_cache_in(
+            let parsed = match rumoca_compile::source_roots::parse_source_root_with_cache_in(
                 root,
-                rumoca_session::source_roots::resolve_source_root_cache_dir().as_deref(),
+                rumoca_compile::source_roots::resolve_source_root_cache_dir().as_deref(),
             ) {
                 Ok(p) => p,
                 Err(e) => {
@@ -375,7 +375,7 @@ impl ModelicaCompiler {
             }
             let inserted = session.replace_parsed_source_set(
                 "msl",
-                rumoca_session::compile::SourceRootKind::DurableExternal,
+                rumoca_compile::compile::SourceRootKind::DurableExternal,
                 parsed.documents,
                 None,
             );
@@ -407,7 +407,7 @@ impl ModelicaCompiler {
         model_name: &str,
         source: &str,
         filename: &str,
-    ) -> Result<Box<rumoca_session::compile::DaeCompilationResult>, String> {
+    ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
         self.session.update_document(filename, source);
         self.compile_loaded(model_name)
     }
@@ -425,7 +425,7 @@ impl ModelicaCompiler {
         source: &str,
         filename: &str,
         extras: &[(String, String)],
-    ) -> Result<Box<rumoca_session::compile::DaeCompilationResult>, String> {
+    ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
         for (extra_filename, extra_source) in extras {
             if extra_filename == filename {
                 continue;
@@ -444,7 +444,7 @@ impl ModelicaCompiler {
     pub fn compile_msl_class(
         &mut self,
         qualified: &str,
-    ) -> Result<Box<rumoca_session::compile::DaeCompilationResult>, String> {
+    ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
         self.compile_loaded(qualified)
     }
 
@@ -455,7 +455,7 @@ impl ModelicaCompiler {
     fn compile_loaded(
         &mut self,
         model_name: &str,
-    ) -> Result<Box<rumoca_session::compile::DaeCompilationResult>, String> {
+    ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
         let t_total = web_time::Instant::now();
 
         // Heartbeat: rumoca's compile pipeline is opaque from outside
@@ -520,7 +520,7 @@ impl ModelicaCompiler {
         result
     }
 
-    /// Access the underlying `rumoca_session::Session` — used by a
+    /// Access the underlying `rumoca_compile::Session` — used by a
     /// test helper that needs to inspect loaded source roots.
     #[cfg(test)]
     pub fn session(&self) -> &Session {
@@ -541,7 +541,7 @@ impl ModelicaCompiler {
         &mut self,
         id: &str,
         root_dir: &std::path::Path,
-    ) -> rumoca_session::compile::SourceRootLoadReport {
+    ) -> rumoca_compile::compile::SourceRootLoadReport {
         // MSL fast path: a pre-parsed bundle (`parsed-msl.bin`,
         // ~316 MB) sits next to the MSL source tree, produced by
         // `msl_indexer`. Installing it via
@@ -557,13 +557,13 @@ impl ModelicaCompiler {
             let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
             if let Ok(bytes) = std::fs::read(&bundle_path) {
                 if let Ok(docs) = bincode::deserialize::<
-                    Vec<(String, rumoca_session::parsing::StoredDefinition)>,
+                    Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
                 >(&bytes)
                 {
                     let pair_count = docs.len();
                     let inserted = self.session.replace_parsed_source_set(
                         id,
-                        rumoca_session::compile::SourceRootKind::DurableExternal,
+                        rumoca_compile::compile::SourceRootKind::DurableExternal,
                         docs,
                         None,
                     );
@@ -572,7 +572,7 @@ impl ModelicaCompiler {
                          ({} of {} docs)",
                         inserted, pair_count,
                     );
-                    return rumoca_session::compile::SourceRootLoadReport {
+                    return rumoca_compile::compile::SourceRootLoadReport {
                         source_set_id: id.to_string(),
                         source_root_path: bundle_path.display().to_string(),
                         parsed_file_count: pair_count,
@@ -587,7 +587,7 @@ impl ModelicaCompiler {
         }
         self.session.load_source_root_tolerant(
             id,
-            rumoca_session::compile::SourceRootKind::DurableExternal,
+            rumoca_compile::compile::SourceRootKind::DurableExternal,
             root_dir,
             None,
         )
@@ -609,14 +609,24 @@ impl ModelicaCompiler {
         id: &str,
         label: &str,
         files: Vec<(String, String)>,
-    ) -> rumoca_session::compile::SourceRootLoadReport {
-        self.session.load_source_root_in_memory(
-            id,
-            rumoca_session::compile::SourceRootKind::Workspace,
-            label,
-            files,
-            None,
-        )
+    ) -> rumoca_compile::compile::SourceRootLoadReport {
+        let file_count = files.len();
+        let mut inserted = 0;
+        for (uri, text) in &files {
+            if self.session.add_document(uri, text).is_ok() {
+                inserted += 1;
+            }
+        }
+        rumoca_compile::compile::SourceRootLoadReport {
+            source_set_id: id.to_string(),
+            source_root_path: label.to_string(),
+            parsed_file_count: file_count,
+            inserted_file_count: inserted,
+            cache_status: None,
+            cache_key: None,
+            cache_file: None,
+            diagnostics: Vec::new(),
+        }
     }
 }
 

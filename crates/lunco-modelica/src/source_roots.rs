@@ -31,7 +31,7 @@
 //! workspace folder becomes a data change, not new plumbing.
 
 use bevy::prelude::*;
-use rumoca_session::parsing::ast::{ClassDef, StoredDefinition};
+use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use web_time::Instant;

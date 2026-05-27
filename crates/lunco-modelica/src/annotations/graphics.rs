@@ -1,6 +1,6 @@
 //! Graphics primitives for Modelica Icons and Diagrams.
 
-use rumoca_session::parsing::ast::Expression;
+use rumoca_compile::parsing::ast::Expression;
 use serde::{Deserialize, Serialize};
 use super::types::{Point, Extent, Color, LinePattern, FilledShape, Arrow, EllipseClosure};
 

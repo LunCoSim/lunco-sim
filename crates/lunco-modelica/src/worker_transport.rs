@@ -74,7 +74,7 @@ pub enum WireMessage {
     /// `GLOBAL_PARSED_MSL` slot. Sent once shortly after the main app's
     /// own MSL install lands. Worker uses this to seed
     /// `ModelicaCompiler::new`'s session before the first Compile.
-    InstallParsedMsl(Vec<(String, rumoca_session::parsing::StoredDefinition)>),
+    InstallParsedMsl(Vec<(String, rumoca_compile::parsing::StoredDefinition)>),
     /// Diagnostic round-trip — worker echoes back as a `WireResult::Log`.
     /// Used by the test bridge (`window.__lc_test_worker_ping`) to confirm
     /// the worker is alive and responding without sending an actual
@@ -150,7 +150,7 @@ pub enum WireResult {
     ParseDocumentDone {
         doc_id: lunco_doc::DocumentId,
         gen: u64,
-        ast: rumoca_session::parsing::StoredDefinition,
+        ast: rumoca_compile::parsing::StoredDefinition,
         errors: Vec<String>,
     },
     /// Lifecycle update for a Fast Run started via
@@ -201,7 +201,7 @@ static COMMAND_TX: OnceLock<crossbeam_channel::Sender<ModelicaCommand>> = OnceLo
 pub struct ParseDoneEnvelope {
     pub doc_id: lunco_doc::DocumentId,
     pub gen: u64,
-    pub ast: rumoca_session::parsing::StoredDefinition,
+    pub ast: rumoca_compile::parsing::StoredDefinition,
     pub errors: Vec<String>,
 }
 static PARSE_DONE_TX: OnceLock<crossbeam_channel::Sender<ParseDoneEnvelope>> = OnceLock::new();
@@ -720,7 +720,7 @@ pub fn __lc_test_dispatch_compile(model_name: &str, source: &str) {
 /// The transfer call detaches the source `ArrayBuffer` immediately;
 /// the worker receives it with no extra allocation.
 pub fn install_msl_in_worker(
-    parsed: &[(String, rumoca_session::parsing::StoredDefinition)],
+    parsed: &[(String, rumoca_compile::parsing::StoredDefinition)],
 ) {
     let Some(WorkerHandle(worker)) = WORKER.get() else { return };
     let envelope = WireMessage::InstallParsedMsl(parsed.to_vec());

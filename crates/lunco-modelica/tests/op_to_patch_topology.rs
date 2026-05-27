@@ -107,7 +107,7 @@ fn add_connection_through_apply() {
         .unwrap()
         .equations
         .iter()
-        .any(|eq| matches!(eq, rumoca_session::parsing::ast::Equation::Connect { .. }));
+        .any(|eq| matches!(eq, rumoca_compile::parsing::ast::Equation::Connect { .. }));
     assert!(
         any_connect,
         "no connect equation after AddConnection; src:\n{}",
@@ -132,6 +132,6 @@ fn remove_connection_through_apply() {
         .unwrap()
         .equations
         .iter()
-        .any(|eq| matches!(eq, rumoca_session::parsing::ast::Equation::Connect { .. }));
+        .any(|eq| matches!(eq, rumoca_compile::parsing::ast::Equation::Connect { .. }));
     assert!(!any_connect, "connect equation still present after RemoveConnection");
 }

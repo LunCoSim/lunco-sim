@@ -24,8 +24,8 @@
 use lunco_core::diagram::{
     ComponentGraph, ComponentPort, EdgeKind, NodeId, NodeKind,
 };
-use rumoca_session::parsing::ast::{ClassDef, Component, Equation, Expression, Name, StoredDefinition, Variability, Causality};
-use rumoca_session::parsing::ClassType;
+use rumoca_compile::parsing::ast::{ClassDef, Component, Equation, Expression, Name, StoredDefinition, Variability, Causality};
+use rumoca_compile::parsing::ClassType;
 use std::collections::HashMap;
 
 /// The type of diagram to generate from a Modelica model.
@@ -654,7 +654,7 @@ pub(crate) fn collect_inherited_components_with(
                 msl_mode,
             );
             if let Some(q) = resolved {
-                comp.type_name = rumoca_session::parsing::ast::Name::from_string(&q);
+                comp.type_name = rumoca_compile::parsing::ast::Name::from_string(&q);
             }
             out.push((name.clone(), comp));
         }
@@ -723,7 +723,7 @@ fn ports_for_component(
     // single connector instance — expose one port named after the
     // component's own name. Empty for the projection's empty-port
     // fallback to handle (resolved to index 0).
-    use rumoca_session::parsing::ClassType;
+    use rumoca_compile::parsing::ClassType;
     if matches!(type_class.class_type, ClassType::Connector) {
         return vec![ComponentPort::output(&comp.name).with_type(&type_ref)];
     }
@@ -752,7 +752,7 @@ fn ports_for_component(
         let sub_type = sub.type_name.to_string();
         // Causality wins when present (input/output declarations are
         // unambiguously ports). Otherwise consult the type's class.
-        use rumoca_session::parsing::ast::Causality;
+        use rumoca_compile::parsing::ast::Causality;
         let is_port = match sub.causality {
             Causality::Input(_) | Causality::Output(_) => true,
             Causality::Empty => is_connector_type(&sub_type, type_qpath, ast, msl_mode),
@@ -821,7 +821,7 @@ fn is_connector_type(
     ast: &StoredDefinition,
     msl_mode: crate::class_cache::MslLookupMode,
 ) -> bool {
-    use rumoca_session::parsing::ClassType;
+    use rumoca_compile::parsing::ClassType;
     if type_ref.is_empty() {
         return false;
     }
@@ -967,7 +967,7 @@ fn get_connector_port_names(comp: &Component) -> Vec<String> {
 ///
 /// Handles simple two-part references (component.port). For more complex
 /// paths like `a.b.c.p`, returns the last two parts.
-fn parse_connect_reference(comp_ref: &rumoca_session::parsing::ast::ComponentReference) -> (String, String) {
+fn parse_connect_reference(comp_ref: &rumoca_compile::parsing::ast::ComponentReference) -> (String, String) {
     let parts: Vec<String> = comp_ref
         .parts
         .iter()
@@ -1143,11 +1143,11 @@ end MyLib;
 
     #[test]
     fn test_parse_connect_reference() {
-        use rumoca_session::parsing::ast::{ComponentRefPart, Token as AstToken};
+        use rumoca_compile::parsing::ast::{ComponentRefPart, Token as AstToken};
         use std::sync::Arc;
 
-        fn make_ref(parts: &[(&str, &str)]) -> rumoca_session::parsing::ast::ComponentReference {
-            rumoca_session::parsing::ast::ComponentReference {
+        fn make_ref(parts: &[(&str, &str)]) -> rumoca_compile::parsing::ast::ComponentReference {
+            rumoca_compile::parsing::ast::ComponentReference {
                 local: false,
                 parts: parts
                     .iter()

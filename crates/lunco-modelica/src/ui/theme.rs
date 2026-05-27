@@ -16,7 +16,7 @@
 
 use bevy_egui::egui::Color32;
 use lunco_theme::Theme;
-use rumoca_session::parsing::ClassType;
+use rumoca_compile::parsing::ClassType;
 
 /// Modelica-domain typed accessors over [`lunco_theme::Theme`].
 ///

@@ -1,9 +1,9 @@
 //! Text and annotation extraction helpers for Modelica documentation.
 
 pub fn extract_documentation(
-    annotations: &[rumoca_session::parsing::ast::Expression],
+    annotations: &[rumoca_compile::parsing::ast::Expression],
 ) -> (Option<String>, Option<String>) {
-    use rumoca_session::parsing::ast::Expression;
+    use rumoca_compile::parsing::ast::Expression;
     let call = annotations.iter().find(|e| match e {
         Expression::FunctionCall { comp, .. } | Expression::ClassModification { target: comp, .. } => {
             comp.parts

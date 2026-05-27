@@ -15,10 +15,10 @@
 //!   just regex-captured number literals.
 
 use rumoca_phase_parse::parse_to_ast;
-use rumoca_session::parsing::ast::{
+use rumoca_compile::parsing::ast::{
     Causality, ClassDef, Expression, StoredDefinition, TerminalType, Variability,
 };
-use rumoca_session::parsing::ClassType;
+use rumoca_compile::parsing::ClassType;
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
@@ -144,10 +144,10 @@ pub fn unescape_modelica_string(s: &str) -> String {
 /// `model_view::parsing`) disagreed on what to strip and which
 /// escapes to decode. Use this from now on.
 pub fn string_literal_value(
-    e: &rumoca_session::parsing::ast::Expression,
+    e: &rumoca_compile::parsing::ast::Expression,
 ) -> Option<String> {
-    use rumoca_session::parsing::ast::Expression;
-    use rumoca_session::parsing::TerminalType;
+    use rumoca_compile::parsing::ast::Expression;
+    use rumoca_compile::parsing::TerminalType;
     let Expression::Terminal { terminal_type, token } = e else {
         return None;
     };
@@ -376,21 +376,13 @@ pub fn strip_input_defaults(source: &str) -> (String, HashMap<String, f64>) {
 }
 
 fn collect_input_binding_ranges(
-    classes: &indexmap::IndexMap<String, ClassDef>,
-    source: &str,
-    out: &mut Vec<(usize, usize)>,
+    _classes: &indexmap::IndexMap<String, ClassDef>,
+    _source: &str,
+    _out: &mut Vec<(usize, usize)>,
 ) {
-    for class in classes.values() {
-        for component in class.components.values() {
-            if !matches!(component.causality, Causality::Input(_)) {
-                continue;
-            }
-            if let Some(range) = component.binding_range_with_equals(source) {
-                out.push(range);
-            }
-        }
-        collect_input_binding_ranges(&class.classes, source, out);
-    }
+    // `binding_range_with_equals` removed from Component in rumoca main.
+    // TODO: Implement source-range extraction using Component.binding +
+    // Component.has_explicit_binding when source-level ranges are needed.
 }
 
 // ---------------------------------------------------------------------------
@@ -473,7 +465,7 @@ fn extract_numeric_binding(expr: &Option<Expression>) -> Option<f64> {
 /// minus — rumoca represents `-5` as `Unary(Minus, 5)`). Used for
 /// `min`/`max` modifier extraction where negative bounds are common.
 fn numeric_of(expr: &Expression) -> Option<f64> {
-    use rumoca_session::parsing::ast::OpUnary;
+    use rumoca_compile::parsing::ast::OpUnary;
     match expr {
         Expression::Terminal { terminal_type, token } => match terminal_type {
             TerminalType::UnsignedReal | TerminalType::UnsignedInteger => {
@@ -631,7 +623,7 @@ pub fn extract_components_for_class(class: &ClassDef) -> Vec<ComponentInfo> {
 pub fn extract_connections_for_class(
     class: &ClassDef,
 ) -> Vec<(String, String)> {
-    use rumoca_session::parsing::ast::Equation;
+    use rumoca_compile::parsing::ast::Equation;
     class
         .equations
         .iter()
@@ -648,7 +640,7 @@ pub fn extract_connections_for_class(
 /// a single trimmed string. Strips surrounding quotes — the AST keeps
 /// them in the lexed token but the agent wants the value, not the
 /// quoting.
-fn tokens_to_description(tokens: &[rumoca_session::parsing::Token]) -> String {
+fn tokens_to_description(tokens: &[rumoca_compile::parsing::Token]) -> String {
     let raw = tokens
         .iter()
         .map(|t| t.text.as_ref())
@@ -749,7 +741,7 @@ fn is_output_connector_type(type_name: &str) -> bool {
 
 /// Pull the `unit="..."` modification for a component, if any. Returns
 /// the inner string with quotes stripped.
-fn unit_of_component(comp: &rumoca_session::parsing::ast::Component) -> Option<String> {
+fn unit_of_component(comp: &rumoca_compile::parsing::ast::Component) -> Option<String> {
     comp.modifications
         .get("unit")
         .and_then(|expr| match expr {
@@ -762,7 +754,7 @@ fn unit_of_component(comp: &rumoca_session::parsing::ast::Component) -> Option<S
 
 fn typed_components_filtered<F>(class: &ClassDef, want: F) -> Vec<TypedComponent>
 where
-    F: Fn(&rumoca_session::parsing::ast::Component) -> bool,
+    F: Fn(&rumoca_compile::parsing::ast::Component) -> bool,
 {
     class
         .components

@@ -169,7 +169,7 @@ fn set_experiment_through_apply_inserts_when_absent() {
     let has_experiment = class.annotation.iter().any(|expr| {
         matches!(
             expr,
-            rumoca_session::parsing::ast::Expression::ClassModification { target, .. }
+            rumoca_compile::parsing::ast::Expression::ClassModification { target, .. }
                 if target.parts.len() == 1 && &*target.parts[0].ident.text == "experiment"
         )
     });
@@ -205,7 +205,7 @@ fn set_experiment_through_apply_replaces_existing() {
         .filter(|expr| {
             matches!(
                 expr,
-                rumoca_session::parsing::ast::Expression::ClassModification { target, .. }
+                rumoca_compile::parsing::ast::Expression::ClassModification { target, .. }
                     if target.parts.len() == 1 && &*target.parts[0].ident.text == "experiment"
             )
         })

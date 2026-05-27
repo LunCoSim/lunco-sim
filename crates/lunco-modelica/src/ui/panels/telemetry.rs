@@ -788,7 +788,7 @@ impl FlatParam {
 /// Recursively flatten a class's parameters using only the local
 /// [`ModelicaIndex`] — no engine session, no async lookup. Always
 /// synchronous with the latest parse, never lags behind an edit,
-/// never depends on the rumoca-session bookkeeping for the active
+/// never depends on the rumoca-compile bookkeeping for the active
 /// document.
 ///
 /// Walk order per class:
@@ -1070,14 +1070,14 @@ fn render_active_class_parameters(
                         // by the row's path. The naive `let mut buf =
                         // row.value.clone()` resets keystrokes every
                         // frame because `row.value` comes from
-                        // rumoca-session's cache, which only refreshes
+                        // rumoca-compile's cache, which only refreshes
                         // ~1.5s after the source patch. While the field
                         // has focus we keep the user's draft; on focus
                         // loss we drop the draft so the next frame
                         // syncs to whatever the AST now says.
                         let edit_id = egui::Id::new(("telem_flat_param", path.as_str()));
                         // Latched buffer: persists the committed value
-                        // until `display_value` (rumoca-session cache,
+                        // until `display_value` (rumoca-compile cache,
                         // ~1.5s lag) catches up. Without this, the field
                         // visually reverts to the stale pre-edit value
                         // on focus loss, and a subsequent click+blur

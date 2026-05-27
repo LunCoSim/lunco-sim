@@ -11,7 +11,7 @@ use lunco_modelica::pretty::{
     CausalitySpec, ClassKindSpec, VariabilitySpec, VariableDecl,
 };
 use rumoca_phase_parse::parse_to_ast;
-use rumoca_session::parsing::ast::{ClassDef, StoredDefinition};
+use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
 
 fn mutate_class<F>(source: &str, class_name: &str, op: F) -> ClassDef
 where
@@ -89,7 +89,7 @@ fn add_variable_with_parameter_variability_round_trips() {
     assert!(
         matches!(
             comp.variability,
-            rumoca_session::parsing::ast::Variability::Parameter(_)
+            rumoca_compile::parsing::ast::Variability::Parameter(_)
         ),
         "expected parameter variability, got {:?}",
         comp.variability

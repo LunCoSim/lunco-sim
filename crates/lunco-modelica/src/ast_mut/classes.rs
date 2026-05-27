@@ -1,6 +1,6 @@
 //! Class definition mutation helpers.
 
-use rumoca_session::parsing::ast::StoredDefinition;
+use rumoca_compile::parsing::ast::StoredDefinition;
 use super::errors::AstMutError;
 use super::util::lookup_class_mut;
 use super::parsing::parse_stub_cached;

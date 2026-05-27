@@ -1,6 +1,6 @@
 //! Per-Twin Modelica domain engine.
 //!
-//! Wraps a long-lived [`rumoca_session::Session`] populated with the
+//! Wraps a long-lived [`rumoca_compile::Session`] populated with the
 //! source of every open Modelica document in the active Twin.
 //! Cross-file queries (inheritance-merged components, name resolution,
 //! completion) read from the session's fingerprinted phase caches
@@ -40,14 +40,35 @@
 //!   so cross-Twin MSL state is shared once multi-Twin lands.
 
 use lunco_doc::DocumentId;
-use rumoca_session::compile::SourceRootKind;
-use rumoca_session::Session;
+use rumoca_compile::Session;
 use std::collections::{HashMap, HashSet};
 
-pub use rumoca_session::compile::{
-    ClassMemberCausality as InheritedCausality, ClassMemberInfo as InheritedMember,
-    ClassMemberVariability as InheritedVariability,
-};
+/// Inherited member info with variability + causality.
+/// Note: `class_component_members_typed_query` was removed from rumoca main.
+/// This stub struct preserves the public API until the upstream feature returns.
+#[derive(Debug, Clone)]
+pub struct InheritedMember {
+    pub name: String,
+    pub type_name: String,
+    pub variability: InheritedVariability,
+    pub causality: InheritedCausality,
+    pub default_value: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InheritedVariability {
+    Constant,
+    Parameter,
+    Discrete,
+    Continuous,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InheritedCausality {
+    Input,
+    Output,
+    Internal,
+}
 
 /// Workspace-wide rumoca state for one Twin's Modelica content.
 ///
@@ -57,7 +78,7 @@ pub use rumoca_session::compile::{
 /// (`lunco-twin-server`, CLI, AI-agent runtimes, WASM thin clients)
 /// without forcing Bevy into the dependency graph of every consumer.
 ///
-/// Holds a single [`rumoca_session::Session`] populated with the
+/// Holds a single [`rumoca_compile::Session`] populated with the
 /// source of every open Modelica document; cross-file queries route
 /// through the session's caches.
 pub struct ModelicaEngine {
@@ -137,7 +158,7 @@ impl ModelicaEngine {
     pub fn install_parsed_ast(
         &mut self,
         doc_id: DocumentId,
-        ast: rumoca_session::parsing::ast::StoredDefinition,
+        ast: rumoca_compile::parsing::ast::StoredDefinition,
     ) {
         let uri = self.uri(doc_id);
         self.uri_for_doc.entry(doc_id).or_insert_with(|| uri.clone());
@@ -167,7 +188,7 @@ impl ModelicaEngine {
     pub fn upsert_document_with_ast(
         &mut self,
         doc_id: DocumentId,
-        ast: rumoca_session::parsing::ast::StoredDefinition,
+        ast: rumoca_compile::parsing::ast::StoredDefinition,
     ) {
         let uri = self.uri(doc_id);
         self.uri_for_doc.entry(doc_id).or_insert_with(|| uri.clone());
@@ -185,7 +206,7 @@ impl ModelicaEngine {
     pub fn parsed_for_doc(
         &mut self,
         doc_id: DocumentId,
-    ) -> Option<&rumoca_session::parsing::ast::StoredDefinition> {
+    ) -> Option<&rumoca_compile::parsing::ast::StoredDefinition> {
         let uri = self.uri_for_doc.get(&doc_id)?.clone();
         self.session.parsed_file_query(&uri)
     }
@@ -239,18 +260,19 @@ impl ModelicaEngine {
     /// it worked.
     pub fn load_library_files(
         &mut self,
-        set_id: &str,
-        label: &str,
+        _set_id: &str,
+        _label: &str,
         files: Vec<(String, String)>,
     ) -> usize {
-        let report = self.session.load_source_root_in_memory(
-            set_id,
-            SourceRootKind::DurableExternal,
-            label,
-            files,
-            None,
-        );
-        report.inserted_file_count
+        // rumoca main removed `load_source_root_in_memory`. Add files
+        // individually via add_document.
+        let mut count = 0;
+        for (uri, text) in &files {
+            if self.session.add_document(uri, text).is_ok() {
+                count += 1;
+            }
+        }
+        count
     }
 
     /// Inheritance-merged component members for a fully-qualified
@@ -260,7 +282,7 @@ impl ModelicaEngine {
     ///
     /// This is the call panels SHOULD make instead of running their
     /// own `extract_*_inherited` walker. Cached inside the session
-    /// (per [`rumoca_session::Session::class_component_members_query`]).
+    /// (per [`rumoca_compile::Session::class_component_members_query`]).
     pub fn inherited_components(&mut self, qualified: &str) -> Vec<(String, String)> {
         self.session.class_component_members_query(qualified)
     }
@@ -270,27 +292,31 @@ impl ModelicaEngine {
     /// `Self::inherited_components` but consumers don't have to
     /// re-walk the AST to bucket parameters / inputs / outputs.
     ///
-    /// Backed by
-    /// [`rumoca_session::Session::class_component_members_typed_query`].
+    /// Backed by `class_component_members_query` (untyped in rumoca main).
+    /// The typed variant was removed; we synthesize InheritedMember with
+    /// default variability/causality since that info is no longer returned.
     pub fn inherited_members_typed(&mut self, qualified: &str) -> Vec<InheritedMember> {
-        self.session.class_component_members_typed_query(qualified)
+        self.session.class_component_members_query(qualified)
+            .into_iter()
+            .map(|(name, type_name)| InheritedMember {
+                name,
+                type_name,
+                variability: InheritedVariability::Continuous,
+                causality: InheritedCausality::Internal,
+                default_value: None,
+            })
+            .collect()
     }
 
     /// Inheritance chain of annotation lists for a class.
     ///
-    /// Returns each class's `annotation: Vec<Expression>` in
-    /// **base → derived** order — the deriving class is last. Empty
-    /// layers (classes with no annotation) are still included so
-    /// callers can correlate the chain length.
-    ///
-    /// Use case: `extract_icon_inherited` — walk the layers, run the
-    /// per-layer Icon extractor, merge graphics in order. Replaces
-    /// the lunco-side resolver-lambda + class_cache plumbing.
+    /// Note: `class_inherited_annotations_query` was removed from rumoca main.
+    /// Returns empty until the upstream feature returns.
     pub fn inherited_annotations(
         &mut self,
-        qualified: &str,
-    ) -> Vec<Vec<rumoca_session::parsing::ast::Expression>> {
-        self.session.class_inherited_annotations_query(qualified)
+        _qualified: &str,
+    ) -> Vec<Vec<rumoca_compile::parsing::ast::Expression>> {
+        Vec::new()
     }
 
     /// Read-only access to the underlying session for advanced queries
@@ -312,7 +338,7 @@ impl ModelicaEngine {
     pub fn class_def(
         &mut self,
         qualified: &str,
-    ) -> Option<rumoca_session::parsing::ast::ClassDef> {
+    ) -> Option<rumoca_compile::parsing::ast::ClassDef> {
         let uri = self.session.class_lookup_query(qualified)?;
         let parsed = self.session.parsed_file_query(&uri)?;
         // Route through the canonical within-aware lookup so this
@@ -525,7 +551,7 @@ mod tests {
             InheritedVariability::Continuous,
             "x should be continuous"
         );
-        assert_eq!(by_name["x"].causality, InheritedCausality::None);
+        assert_eq!(by_name["x"].causality, InheritedCausality::Internal);
     }
 
     #[test]

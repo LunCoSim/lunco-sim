@@ -61,7 +61,7 @@ impl MslLookupMode {
     pub fn lookup(
         self,
         qualified: &str,
-    ) -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
+    ) -> Option<Arc<rumoca_compile::parsing::ast::ClassDef>> {
         match self {
             Self::Cached => peek_msl_class_cached(qualified),
             Self::Loading => peek_or_load_msl_class_blocking(qualified),
@@ -91,7 +91,7 @@ fn read_msl_source_bytes(path: &std::path::Path) -> Option<String> {
 /// until MSL lands.
 pub fn peek_or_load_msl_class_blocking(
     qualified: &str,
-) -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
+) -> Option<Arc<rumoca_compile::parsing::ast::ClassDef>> {
     let handle = crate::engine_resource::global_engine_handle()?;
 
     // Phase 1: brief lock to check whether the class is already
@@ -118,7 +118,7 @@ pub fn peek_or_load_msl_class_blocking(
     let cached_ast = crate::msl_remote::global_parsed_msl()
         .and_then(|b| b.iter().find(|(k, _)| k == &uri).map(|(_, ast)| ast.clone()));
 
-    let parsed_ast: Option<rumoca_session::parsing::ast::StoredDefinition> = match cached_ast {
+    let parsed_ast: Option<rumoca_compile::parsing::ast::StoredDefinition> = match cached_ast {
         Some(ast) => Some(ast),
         None => {
             #[cfg(target_arch = "wasm32")]
@@ -175,7 +175,7 @@ pub fn peek_or_load_msl_class_blocking(
 /// a parent rumoca parse stalls for the projection deadline.
 pub fn peek_msl_class_cached(
     qualified: &str,
-) -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
+) -> Option<Arc<rumoca_compile::parsing::ast::ClassDef>> {
     let handle = crate::engine_resource::global_engine_handle()?;
     let mut engine = handle.lock();
     if !engine.has_class(qualified) {

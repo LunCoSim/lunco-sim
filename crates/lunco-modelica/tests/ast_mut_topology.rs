@@ -10,13 +10,13 @@
 use lunco_modelica::ast_mut::{self, AstMutError};
 use lunco_modelica::pretty::{ComponentDecl, ConnectEquation, PortRef};
 use rumoca_phase_parse::parse_to_ast;
-use rumoca_session::parsing::ast::{ClassDef, Component, Equation};
+use rumoca_compile::parsing::ast::{ClassDef, Component, Equation};
 
 fn mutate_and_reparse_class<F>(
     source: &str,
     class_name: &str,
     op: F,
-) -> rumoca_session::parsing::ast::ClassDef
+) -> rumoca_compile::parsing::ast::ClassDef
 where
     F: FnOnce(&mut ClassDef),
 {

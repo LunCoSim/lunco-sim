@@ -1,6 +1,6 @@
 //! Equation mutation helpers.
 
-use rumoca_session::parsing::ast::ClassDef;
+use rumoca_compile::parsing::ast::ClassDef;
 use super::errors::AstMutError;
 use super::parsing::{parse_stub_cached, FRAGMENT_CLASS_NAME};
 use crate::pretty;

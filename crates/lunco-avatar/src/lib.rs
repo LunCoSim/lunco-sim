@@ -20,6 +20,7 @@ use bevy::math::DVec3;
 use leafwing_input_manager::prelude::*;
 use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 
+use transform_gizmo_bevy::GizmoTarget;
 use lunco_controller::ControllerLink;
 use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands};
 use lunco_celestial::{CelestialClock, GravityBody, LocalGravityField, TeleportToSurface, LeaveSurface};
@@ -382,10 +383,12 @@ fn spring_arm_system(
         Option<&SurfaceRelativeMode>,
     ), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
-    _q_spatial_abs: Query<(&CellCoord, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     _q_parents: Query<&ChildOf>,
+    q_gizmo: Query<&GizmoTarget>,
+
     defaults: Res<CameraDefaults>,
+
     mut scroll_res: ResMut<CameraScroll>,
     _sens: Res<CameraScrollSensitivity>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -396,6 +399,11 @@ fn spring_arm_system(
     let dt = time.delta_secs();
 
     for (_avatar_ent, mut tf, mut cell, mut arm, child_of, surface_mode) in q_avatar.iter_mut() {
+        // Skip follow if target is being dragged by a gizmo
+        if let Ok(gt) = q_gizmo.get(arm.target) {
+            if gt.is_active() { continue; }
+        }
+
         let Ok((t_cell, t_tf)) = q_spatial.get(arm.target) else { continue; };
         let Ok(grid) = q_grids.get(child_of.0) else { continue; };
 
@@ -514,6 +522,7 @@ fn chase_camera_system(
     mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut ChaseCamera, &ChildOf), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
+    q_gizmo: Query<&GizmoTarget>,
     defaults: Res<CameraDefaults>,
     mut scroll_res: ResMut<CameraScroll>,
     sens: Res<CameraScrollSensitivity>,
@@ -524,6 +533,11 @@ fn chase_camera_system(
     let dt = time.delta_secs();
 
     for (_avatar_ent, mut tf, mut cell, mut chase, child_of) in q_avatar.iter_mut() {
+        // Skip follow if target is being dragged by a gizmo
+        if let Ok(gt) = q_gizmo.get(chase.target) {
+            if gt.is_active() { continue; }
+        }
+
         let Ok((t_cell, t_tf)) = q_spatial.get(chase.target) else { continue; };
         let Ok(grid) = q_grids.get(child_of.0) else { continue; };
 
@@ -568,11 +582,11 @@ fn orbit_system(
     time: Res<Time>,
     mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut OrbitCamera, &ChildOf), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
-    q_spatial_abs: Query<(&CellCoord, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_bodies: Query<&CelestialBody>,
     q_sc: Query<&Spacecraft>,
+    q_gizmo: Query<&GizmoTarget>,
     defaults: Res<CameraDefaults>,
     mut scroll_res: ResMut<CameraScroll>,
     sens: Res<CameraScrollSensitivity>,
@@ -585,6 +599,11 @@ fn orbit_system(
     let dt = time.delta_secs();
 
     for (avatar_ent, mut tf, mut cell, mut orbit, child_of) in q_avatar.iter_mut() {
+        // Skip follow if target is being dragged by a gizmo
+        if let Ok(gt) = q_gizmo.get(orbit.target) {
+            if gt.is_active() { continue; }
+        }
+
         let Ok((_t_cell, _t_tf)) = q_spatial.get(orbit.target) else { continue; };
 
         // Find the target's grid.
@@ -613,11 +632,11 @@ fn orbit_system(
         // — don't snap to the target body.
         if current_grid != target_grid {
             let cam_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-                avatar_ent, &cell, &tf, &q_parents, &q_grids, &q_spatial_abs,
+                avatar_ent, &cell, &tf, &q_parents, &q_grids, &q_spatial,
             );
             if let Ok(target_grid_ref) = q_grids.get(target_grid) {
                 let target_grid_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-                    target_grid, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
+                    target_grid, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial,
                 );
                 let local_pos = cam_abs - target_grid_abs;
                 let (new_cell, new_tf) = target_grid_ref.translation_to_grid(local_pos);

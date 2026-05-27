@@ -136,7 +136,7 @@ pub enum ModelicaCommand {
 
 /// Payload for [`ModelicaCommand::LoadSourceRoot`]. Distinguishes
 /// disk-rooted libraries from in-memory sources so the worker can
-/// dispatch to the right rumoca-session API without losing the
+/// dispatch to the right rumoca-compile API without losing the
 /// source bytes on the way.
 #[derive(Serialize, Deserialize)]
 pub enum LoadSourceRootPayload {

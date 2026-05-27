@@ -109,7 +109,7 @@ fn set_placement_through_apply_writes_annotation_to_ast() {
     let has_placement = comp.annotation.iter().any(|expr| {
         matches!(
             expr,
-            rumoca_session::parsing::ast::Expression::ClassModification { target, .. }
+            rumoca_compile::parsing::ast::Expression::ClassModification { target, .. }
                 if target.parts.len() == 1 && &*target.parts[0].ident.text == "Placement"
         )
     });
@@ -141,7 +141,7 @@ fn set_placement_replaces_existing_placement_through_apply() {
         .filter(|expr| {
             matches!(
                 expr,
-                rumoca_session::parsing::ast::Expression::ClassModification { target, .. }
+                rumoca_compile::parsing::ast::Expression::ClassModification { target, .. }
                     if target.parts.len() == 1 && &*target.parts[0].ident.text == "Placement"
             )
         })

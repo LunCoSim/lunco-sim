@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use lunco_doc::{Document, DocumentError, DocumentId, DocumentOrigin};
 use rumoca_phase_parse::parse_to_syntax;
-use rumoca_session::parsing::ast::StoredDefinition;
+use rumoca_compile::parsing::ast::StoredDefinition;
 
 use super::ops::{ModelicaChange, ModelicaOp, FreshAst, CHANGE_HISTORY_CAPACITY};
 use crate::index::ModelicaIndex;
@@ -178,7 +178,7 @@ impl ModelicaDocument {
         };
         #[cfg(not(target_arch = "wasm32"))]
         let ast: StoredDefinition = {
-            let mut parsed = rumoca_session::parsing::parse_files_parallel(&[path.to_path_buf()])
+            let mut parsed = rumoca_compile::parsing::parse_files_parallel(&[path.to_path_buf()])
                 .map_err(|e| format!("parse failed `{}`: {e}", path.display()))?;
             let (_uri, ast) = parsed
                 .drain(..)
@@ -189,9 +189,10 @@ impl ModelicaDocument {
 
         let class_def = crate::ast_extract::find_class_by_short_name(&ast, short_name)
             .ok_or_else(|| format!("class `{qualified}` not found in `{}`", path.display()))?;
-        let (full_start, full_end) = class_def
-            .full_span_with_leading_comments(&full_source)
-            .ok_or_else(|| format!("could not slice class `{qualified}` from `{}`", path.display()))?;
+        // `full_span_with_leading_comments` removed in rumoca main;
+        // fall back to the class location span.
+        let full_start = class_def.location.start as usize;
+        let full_end = class_def.location.end as usize;
         let class_slice = &full_source[full_start..full_end];
 
         let source = if parent_pkg.is_empty() {
@@ -239,7 +240,7 @@ impl ModelicaDocument {
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    match rumoca_session::parsing::parse_files_parallel(&[path.to_path_buf()]) {
+                    match rumoca_compile::parsing::parse_files_parallel(&[path.to_path_buf()]) {
                         Ok(mut pairs) if !pairs.is_empty() => {
                             let (_, stored) = pairs.remove(0);
                             Ok(Arc::new(stored))

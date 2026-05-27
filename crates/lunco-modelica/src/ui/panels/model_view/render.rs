@@ -488,7 +488,7 @@ fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
             Some(handle) => {
                 let mut engine = handle.lock();
                 let icon = crate::annotations::extract_icon_via_engine(&qpath, &mut engine);
-                let params = engine.inherited_members_typed(&qpath).into_iter()
+                let params: Vec<(String, String)> = engine.inherited_members_typed(&qpath).into_iter()
                     .filter(|m| matches!(m.variability, crate::engine::InheritedVariability::Parameter))
                     .map(|m| (m.name, m.default_value.unwrap_or_default())).collect();
                 (icon, params)

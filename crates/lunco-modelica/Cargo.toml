@@ -127,7 +127,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 #
 rumoca-sim = { workspace = true }
 lunco-experiments = { path = "../lunco-experiments" }
-rumoca-session = { workspace = true }
+rumoca-compile = { workspace = true }
 rumoca-phase-parse = { workspace = true }
 # Modelica formatter — surfaced as a "Format" toolbar button +
 # Ctrl+Shift+F binding. Rewrites the active editor buffer with

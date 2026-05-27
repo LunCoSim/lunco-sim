@@ -16,7 +16,7 @@ use lunco_modelica::pretty::{
     FillPattern, GraphicSpec, LinePattern, LunCoPlotNodeSpec,
 };
 use rumoca_phase_parse::parse_to_ast;
-use rumoca_session::parsing::ast::Expression;
+use rumoca_compile::parsing::ast::Expression;
 
 fn host(source: &str) -> DocumentHost<ModelicaDocument> {
     let syntax = Arc::new(SyntaxCache::from_source(source, 0));

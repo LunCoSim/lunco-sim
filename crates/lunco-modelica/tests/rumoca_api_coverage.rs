@@ -149,7 +149,7 @@ fn ast_class_rename_via_token_spans() {
 /// rewrites in `commands.rs` for class rename and route through rumoca.
 #[test]
 fn rumoca_rename_covers_header_and_end_token() {
-    use rumoca_session::Session;
+    use rumoca_compile::Session;
 
     let mut session = Session::default();
     let source = "model Foo\n  Real x;\nend Foo;\n";

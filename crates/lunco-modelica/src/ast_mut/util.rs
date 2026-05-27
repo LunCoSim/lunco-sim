@@ -1,7 +1,7 @@
 //! AST and text utility helpers.
 
 use std::sync::Arc;
-use rumoca_session::parsing::ast::{ClassDef, ComponentReference, Expression, StoredDefinition, Token};
+use rumoca_compile::parsing::ast::{ClassDef, ComponentReference, Expression, StoredDefinition, Token};
 use super::errors::AstMutError;
 use crate::pretty;
 
@@ -176,7 +176,7 @@ pub fn number_literal_value(e: &Expression) -> Option<f64> {
     match e {
         Expression::Terminal { token, .. } => token.text.parse::<f64>().ok(),
         Expression::Unary { op, rhs }
-            if matches!(op, rumoca_session::parsing::ast::OpUnary::Minus(_)) =>
+            if matches!(op, rumoca_compile::parsing::ast::OpUnary::Minus(_)) =>
         {
             number_literal_value(rhs).map(|v| -v)
         }

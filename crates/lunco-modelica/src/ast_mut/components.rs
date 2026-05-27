@@ -1,6 +1,6 @@
 //! Component and variable mutation helpers.
 
-use rumoca_session::parsing::ast::ClassDef;
+use rumoca_compile::parsing::ast::ClassDef;
 use super::errors::AstMutError;
 use super::parsing::{parse_value_fragment, parse_component_fragment, FRAGMENT_CLASS_NAME};
 use crate::pretty;

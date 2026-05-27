@@ -29,7 +29,7 @@ use bevy::prelude::*;
 use bevy::tasks::AsyncComputeTaskPool;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::DocumentOpened;
-use rumoca_session::parsing::ast::{ClassDef, StoredDefinition};
+use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
 use std::collections::HashSet;
 
 /// Bevy plugin: registers the `DocumentOpened` observer that fans out

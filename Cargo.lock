@@ -280,7 +280,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
  "x11rb",
 ]
 
@@ -3875,7 +3875,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4445,8 +4445,8 @@ dependencies = [
  "libc",
  "log",
  "rustversion",
- "windows-link 0.2.1",
- "windows-result 0.4.1",
+ "windows-link 0.1.3",
+ "windows-result 0.3.4",
 ]
 
 [[package]]
@@ -5397,7 +5397,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5882,6 +5882,7 @@ dependencies = [
  "lunco-mobility",
  "lunco-theme",
  "lunco-workbench",
+ "transform-gizmo-bevy",
 ]
 
 [[package]]
@@ -6151,8 +6152,8 @@ dependencies = [
  "rayon",
  "regex",
  "rfd",
+ "rumoca-compile",
  "rumoca-phase-parse",
- "rumoca-session",
  "rumoca-sim",
  "rumoca-tool-fmt",
  "rumoca-tool-lint",
@@ -7011,7 +7012,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8828,218 +8829,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "rumoca-core"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
+name = "rumoca-analysis-dae"
+version = "0.8.13"
 dependencies = [
- "miette",
- "serde",
-]
-
-[[package]]
-name = "rumoca-eval-ast"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "rumoca-core",
- "rumoca-ir-ast",
- "rumoca-ir-core",
- "rustc-hash 2.1.2",
-]
-
-[[package]]
-name = "rumoca-eval-dae"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "cranelift-codegen",
- "cranelift-frontend",
- "cranelift-jit",
- "cranelift-module",
- "indexmap",
- "js-sys",
  "rumoca-ir-core",
  "rumoca-ir-dae",
- "wasm-bindgen",
- "wasm-encoder 0.241.2",
 ]
 
 [[package]]
-name = "rumoca-eval-flat"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "indexmap",
- "rumoca-core",
- "rumoca-ir-core",
- "rumoca-ir-flat",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "rumoca-ir-ast"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "indexmap",
- "rumoca-core",
- "rumoca-ir-core",
- "rustc-hash 2.1.2",
- "serde",
-]
-
-[[package]]
-name = "rumoca-ir-core"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "rumoca-ir-dae"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "indexmap",
- "rumoca-core",
- "rumoca-ir-core",
- "serde",
-]
-
-[[package]]
-name = "rumoca-ir-flat"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "indexmap",
- "rumoca-core",
- "rumoca-ir-core",
- "serde",
-]
-
-[[package]]
-name = "rumoca-phase-codegen"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "miette",
- "minijinja",
- "rumoca-ir-ast",
- "rumoca-ir-core",
- "rumoca-ir-dae",
- "rumoca-ir-flat",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "rumoca-phase-dae"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "indexmap",
- "miette",
- "rumoca-core",
- "rumoca-eval-dae",
- "rumoca-ir-core",
- "rumoca-ir-dae",
- "rumoca-ir-flat",
- "rustc-hash 2.1.2",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "rumoca-phase-flatten"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "indexmap",
- "miette",
- "rumoca-core",
- "rumoca-eval-flat",
- "rumoca-ir-ast",
- "rumoca-ir-core",
- "rumoca-ir-flat",
- "rustc-hash 2.1.2",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "rumoca-phase-instantiate"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "indexmap",
- "miette",
- "rumoca-core",
- "rumoca-ir-ast",
- "rumoca-ir-core",
- "rustc-hash 2.1.2",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "rumoca-phase-parse"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "anyhow",
- "indexmap",
- "miette",
- "parol",
- "parol_runtime",
- "rumoca-core",
- "rumoca-ir-ast",
- "rumoca-ir-core",
- "scnr2",
-]
-
-[[package]]
-name = "rumoca-phase-resolve"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "anyhow",
- "indexmap",
- "miette",
- "rumoca-core",
- "rumoca-ir-ast",
- "rumoca-ir-core",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "rumoca-phase-solve"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "indexmap",
- "rumoca-core",
- "rumoca-eval-dae",
- "rumoca-ir-core",
- "rumoca-ir-dae",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "rumoca-phase-typecheck"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
-dependencies = [
- "miette",
- "rumoca-core",
- "rumoca-eval-ast",
- "rumoca-ir-ast",
- "rumoca-ir-core",
- "rustc-hash 2.1.2",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "rumoca-session"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
+name = "rumoca-compile"
+version = "0.8.13"
 dependencies = [
  "anyhow",
  "bincode",
@@ -9058,9 +8857,8 @@ dependencies = [
  "rumoca-phase-instantiate",
  "rumoca-phase-parse",
  "rumoca-phase-resolve",
- "rumoca-phase-solve",
+ "rumoca-phase-structural",
  "rumoca-phase-typecheck",
- "rumoca-sim",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -9068,32 +8866,254 @@ dependencies = [
 ]
 
 [[package]]
-name = "rumoca-sim"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
+name = "rumoca-core"
+version = "0.8.13"
 dependencies = [
- "diffsol",
+ "miette",
+ "serde",
+]
+
+[[package]]
+name = "rumoca-eval-ast"
+version = "0.8.13"
+dependencies = [
+ "rumoca-core",
+ "rumoca-ir-ast",
+ "rumoca-ir-core",
+ "rustc-hash 2.1.2",
+]
+
+[[package]]
+name = "rumoca-eval-flat"
+version = "0.8.13"
+dependencies = [
+ "indexmap",
+ "rumoca-core",
+ "rumoca-ir-core",
+ "rumoca-ir-flat",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rumoca-ir-ast"
+version = "0.8.13"
+dependencies = [
+ "indexmap",
+ "rumoca-core",
+ "rumoca-ir-core",
+ "rustc-hash 2.1.2",
+ "serde",
+]
+
+[[package]]
+name = "rumoca-ir-core"
+version = "0.8.13"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "rumoca-ir-dae"
+version = "0.8.13"
+dependencies = [
+ "indexmap",
+ "rumoca-core",
+ "rumoca-ir-core",
+ "serde",
+]
+
+[[package]]
+name = "rumoca-ir-flat"
+version = "0.8.13"
+dependencies = [
+ "indexmap",
+ "rumoca-core",
+ "rumoca-ir-core",
+ "serde",
+]
+
+[[package]]
+name = "rumoca-ir-solve"
+version = "0.8.13"
+dependencies = [
+ "indexmap",
+ "serde",
+]
+
+[[package]]
+name = "rumoca-phase-codegen"
+version = "0.8.13"
+dependencies = [
+ "miette",
+ "minijinja",
+ "rumoca-ir-ast",
+ "rumoca-ir-core",
+ "rumoca-ir-dae",
+ "rumoca-ir-flat",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rumoca-phase-dae"
+version = "0.8.13"
+dependencies = [
+ "indexmap",
+ "miette",
+ "rumoca-analysis-dae",
+ "rumoca-core",
+ "rumoca-ir-core",
+ "rumoca-ir-dae",
+ "rumoca-ir-flat",
+ "rustc-hash 2.1.2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rumoca-phase-flatten"
+version = "0.8.13"
+dependencies = [
+ "indexmap",
+ "miette",
+ "rumoca-core",
+ "rumoca-eval-flat",
+ "rumoca-ir-ast",
+ "rumoca-ir-core",
+ "rumoca-ir-flat",
+ "rustc-hash 2.1.2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rumoca-phase-instantiate"
+version = "0.8.13"
+dependencies = [
+ "indexmap",
+ "miette",
+ "rumoca-core",
+ "rumoca-ir-ast",
+ "rumoca-ir-core",
+ "rustc-hash 2.1.2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rumoca-phase-parse"
+version = "0.8.13"
+dependencies = [
+ "anyhow",
+ "indexmap",
+ "miette",
+ "parol",
+ "parol_runtime",
+ "rumoca-core",
+ "rumoca-ir-ast",
+ "rumoca-ir-core",
+ "scnr2",
+]
+
+[[package]]
+name = "rumoca-phase-resolve"
+version = "0.8.13"
+dependencies = [
+ "anyhow",
+ "indexmap",
+ "miette",
+ "rumoca-core",
+ "rumoca-ir-ast",
+ "rumoca-ir-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rumoca-phase-solve-lower"
+version = "0.8.13"
+dependencies = [
+ "cranelift-codegen",
+ "cranelift-frontend",
+ "cranelift-jit",
+ "cranelift-module",
+ "indexmap",
+ "js-sys",
+ "rumoca-ir-core",
+ "rumoca-ir-dae",
+ "rumoca-ir-solve",
+ "wasm-bindgen",
+ "wasm-encoder 0.241.2",
+]
+
+[[package]]
+name = "rumoca-phase-structural"
+version = "0.8.13"
+dependencies = [
+ "indexmap",
+ "rumoca-analysis-dae",
+ "rumoca-core",
+ "rumoca-ir-core",
+ "rumoca-ir-dae",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rumoca-phase-typecheck"
+version = "0.8.13"
+dependencies = [
+ "miette",
+ "rumoca-core",
+ "rumoca-eval-ast",
+ "rumoca-ir-ast",
+ "rumoca-ir-core",
+ "rustc-hash 2.1.2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rumoca-sim"
+version = "0.8.13"
+dependencies = [
+ "libc",
+ "rumoca-sim-core",
+ "rumoca-solver-diffsol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rumoca-sim-core"
+version = "0.8.13"
+dependencies = [
  "getrandom 0.3.4",
  "indexmap",
  "instant",
- "levenberg-marquardt",
- "nalgebra",
+ "rumoca-analysis-dae",
  "rumoca-core",
- "rumoca-eval-dae",
  "rumoca-ir-core",
  "rumoca-ir-dae",
- "rumoca-phase-solve",
+ "rumoca-ir-solve",
+ "rumoca-phase-solve-lower",
+ "rumoca-phase-structural",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
 ]
 
 [[package]]
-name = "rumoca-tool-fmt"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
+name = "rumoca-solver-diffsol"
+version = "0.8.13"
 dependencies = [
- "rumoca-session",
+ "diffsol",
+ "indexmap",
+ "levenberg-marquardt",
+ "nalgebra",
+ "rumoca-sim-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rumoca-tool-fmt"
+version = "0.8.13"
+dependencies = [
+ "rumoca-compile",
  "serde",
  "thiserror 2.0.18",
  "toml",
@@ -9101,10 +9121,9 @@ dependencies = [
 
 [[package]]
 name = "rumoca-tool-lint"
-version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=wasm-asset-loader#7bdcc700148de23b8f5d44dbad609fdada664704"
+version = "0.8.13"
 dependencies = [
- "rumoca-session",
+ "rumoca-compile",
  "serde",
  "thiserror 2.0.18",
  "toml",
@@ -9160,7 +9179,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9969,7 +9988,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9998,7 +10017,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10477,7 +10496,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c5f7c95348f20c1c913d72157b3c6dee6ea3e30b3d19502c5a7f6d3f160dacbf"
 dependencies = [
  "cc",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -11484,7 +11503,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

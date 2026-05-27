@@ -41,11 +41,11 @@ use lunco_assets::msl::{MslAssetSource, MslLoadPhase, MslLoadState};
 /// [`global_parsed_msl`]) and installs into rumoca via
 /// `Session::replace_parsed_source_set` — the entire parse cost is
 /// already paid by then, so compile init is fast.
-static GLOBAL_PARSED_MSL: OnceLock<Arc<Vec<(String, rumoca_session::parsing::StoredDefinition)>>> =
+static GLOBAL_PARSED_MSL: OnceLock<Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> =
     OnceLock::new();
 
 /// Read the pre-parsed MSL bundle if any has been installed.
-pub fn global_parsed_msl() -> Option<&'static Arc<Vec<(String, rumoca_session::parsing::StoredDefinition)>>> {
+pub fn global_parsed_msl() -> Option<&'static Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> {
     GLOBAL_PARSED_MSL.get()
 }
 
@@ -54,7 +54,7 @@ pub fn global_parsed_msl() -> Option<&'static Arc<Vec<(String, rumoca_session::p
 /// (the `OnceLock` guarantees a stable handle for the lifetime of
 /// the page session).
 #[cfg(target_arch = "wasm32")]
-fn install_global_parsed_msl(parsed: Vec<(String, rumoca_session::parsing::StoredDefinition)>) {
+fn install_global_parsed_msl(parsed: Vec<(String, rumoca_compile::parsing::StoredDefinition)>) {
     let _ = GLOBAL_PARSED_MSL.set(Arc::new(parsed));
 }
 
@@ -62,7 +62,7 @@ fn install_global_parsed_msl(parsed: Vec<(String, rumoca_session::parsing::Store
 /// worker bin (`bin/lunica_worker.rs`) can install the MSL bundle it
 /// receives over postMessage.
 #[cfg(target_arch = "wasm32")]
-pub fn install_global_parsed_msl_pub(parsed: Vec<(String, rumoca_session::parsing::StoredDefinition)>) {
+pub fn install_global_parsed_msl_pub(parsed: Vec<(String, rumoca_compile::parsing::StoredDefinition)>) {
     install_global_parsed_msl(parsed);
 }
 
@@ -185,7 +185,7 @@ impl Plugin for MslRemotePlugin {
 #[derive(Resource)]
 struct MslParseInProgress {
     pending: Vec<(String, String)>,
-    parsed: Vec<(String, rumoca_session::parsing::StoredDefinition)>,
+    parsed: Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
     total: usize,
     started: web_time::Instant,
     last_log: web_time::Instant,
@@ -479,7 +479,7 @@ struct SlotInner {
     /// Pre-parsed `Vec<(uri, StoredDefinition)>` if the manifest had a
     /// `parsed` entry. When `Some`, the drain skips the chunked-source
     /// parse path and installs directly into `GLOBAL_PARSED_MSL`.
-    pending_parsed: Option<Vec<(String, rumoca_session::parsing::StoredDefinition)>>,
+    pending_parsed: Option<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -942,10 +942,10 @@ mod web {
     /// shipped as the `parsed` blob.
     fn decode_parsed(
         compressed: &[u8],
-    ) -> Result<Vec<(String, rumoca_session::parsing::StoredDefinition)>, String> {
+    ) -> Result<Vec<(String, rumoca_compile::parsing::StoredDefinition)>, String> {
         let decoder = ruzstd::StreamingDecoder::new(compressed)
             .map_err(|e| format!("zstd decoder: {e}"))?;
-        let docs: Vec<(String, rumoca_session::parsing::StoredDefinition)> =
+        let docs: Vec<(String, rumoca_compile::parsing::StoredDefinition)> =
             bincode::deserialize_from(decoder)
                 .map_err(|e| format!("bincode deserialize: {e}"))?;
         Ok(docs)

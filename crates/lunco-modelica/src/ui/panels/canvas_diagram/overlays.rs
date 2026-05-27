@@ -282,8 +282,8 @@ pub(super) fn empty_overlay_class_info(
         return (None, None, None, vec![], vec![], vec![]);
     };
 
-    use rumoca_session::parsing::ast::Causality;
-    use rumoca_session::parsing::ClassType;
+    use rumoca_compile::parsing::ast::Causality;
+    use rumoca_compile::parsing::ClassType;
 
     // Engine-driven Icon merge: hand the qualified class path to
     // [`crate::annotations::extract_icon_via_engine`] which walks
@@ -334,7 +334,7 @@ pub(super) fn empty_overlay_class_info(
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
     for (name, comp) in class.components.iter() {
-        use rumoca_session::parsing::ast::Variability;
+        use rumoca_compile::parsing::ast::Variability;
         if matches!(comp.variability, Variability::Parameter(_)) {
             params.push(name.clone());
         }
@@ -361,13 +361,13 @@ pub(super) fn empty_overlay_class_info(
 /// `extract_model_name_from_ast`'s output and rely on the picker
 /// when that name isn't structurally findable.
 pub(super) fn locate_class<'a>(
-    ast: &'a rumoca_session::parsing::ast::StoredDefinition,
+    ast: &'a rumoca_compile::parsing::ast::StoredDefinition,
     name: &str,
-) -> Option<&'a rumoca_session::parsing::ast::ClassDef> {
+) -> Option<&'a rumoca_compile::parsing::ast::ClassDef> {
     if let Some(c) = crate::diagram::find_class_by_qualified_name(ast, name) {
         return Some(c);
     }
-    use rumoca_session::parsing::ClassType;
+    use rumoca_compile::parsing::ClassType;
     ast.classes
         .iter()
         .find(|(_, c)| !matches!(c.class_type, ClassType::Package))

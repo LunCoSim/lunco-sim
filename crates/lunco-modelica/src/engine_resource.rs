@@ -3,7 +3,7 @@
 //!
 //! ## Why a long-lived engine
 //!
-//! The engine wraps a `rumoca_session::Session` whose phase caches
+//! The engine wraps a `rumoca_compile::Session` whose phase caches
 //! (parse, resolve, instantiate, typecheck, flatten, DAE) amortise
 //! across every cross-file query the workbench makes — completion,
 //! inheritance walks, icon merging, compile, future hover-info.
@@ -124,7 +124,7 @@ impl ModelicaEngineHandle {
         &self,
         doc_id: DocumentId,
         gen: u64,
-        ast: rumoca_session::parsing::ast::StoredDefinition,
+        ast: rumoca_compile::parsing::ast::StoredDefinition,
     ) {
         let mut engine = self.lock();
         engine.install_parsed_ast(doc_id, ast);
@@ -293,7 +293,7 @@ pub fn drive_engine_sync(
                     let syntax = crate::document::SyntaxCache {
                         generation: parse_gen,
                         ast: std::sync::Arc::new(
-                            rumoca_session::parsing::ast::StoredDefinition::default(),
+                            rumoca_compile::parsing::ast::StoredDefinition::default(),
                         ),
                         errors: vec!["strict parse failed (lenient recovered)".into()],
                     };
@@ -330,7 +330,7 @@ pub fn drive_engine_sync(
     // decide between sync fast-path (fresh strict AST already on doc)
     // and async path (no AST or stale).
     enum SyncPlan {
-        Sync(std::sync::Arc<rumoca_session::parsing::ast::StoredDefinition>),
+        Sync(std::sync::Arc<rumoca_compile::parsing::ast::StoredDefinition>),
         Async(std::sync::Arc<str>),
     }
     let mut to_upsert: Vec<(DocumentId, u64, SyncPlan)> = Vec::new();
@@ -374,7 +374,7 @@ pub fn drive_engine_sync(
     }
 
     // ── 3. Apply sync upserts + spawn async parses ────────────────────
-    let mut sync_only: Vec<(DocumentId, u64, std::sync::Arc<rumoca_session::parsing::ast::StoredDefinition>)> = Vec::new();
+    let mut sync_only: Vec<(DocumentId, u64, std::sync::Arc<rumoca_compile::parsing::ast::StoredDefinition>)> = Vec::new();
     let mut async_only: Vec<(DocumentId, u64, std::sync::Arc<str>)> = Vec::new();
     for (doc_id, gen, plan) in to_upsert {
         match plan {
@@ -517,7 +517,7 @@ pub fn drive_engine_sync(
                 //
                 // Identification: the doc's `DocumentOrigin::File`
                 // path is the same key the MSL bundle uses.
-                let cached_ast: Option<rumoca_session::parsing::ast::StoredDefinition> = {
+                let cached_ast: Option<rumoca_compile::parsing::ast::StoredDefinition> = {
                     let host = registry.host(doc_id);
                     let origin_path = host
                         .map(|h| h.document().origin().clone())
@@ -698,7 +698,7 @@ enum MslBootstrapState {
 ///
 /// **Web fast path**: when `msl_remote::global_parsed_msl()` returns
 /// pre-parsed `Vec<(uri, StoredDefinition)>` from the asset bundle,
-/// we route through [`rumoca_session::Session::replace_parsed_source_set`]
+/// we route through [`rumoca_compile::Session::replace_parsed_source_set`]
 /// — zero re-parsing, just register the parsed defs as a source root.
 ///
 /// **Native path**: when the bundle is filesystem-resident
@@ -724,13 +724,13 @@ fn drive_msl_bootstrap(
     // `GLOBAL_PARSED_MSL`; we just hand the AST half over.
     let parsed = crate::msl_remote::global_parsed_msl();
     if let Some(docs) = parsed {
-        let defs: Vec<(String, rumoca_session::parsing::ast::StoredDefinition)> =
+        let defs: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)> =
             docs.iter().map(|(u, d)| (u.clone(), d.clone())).collect();
         let count = defs.len();
         let mut engine = handle.lock();
         engine.session_mut().replace_parsed_source_set(
             "msl",
-            rumoca_session::compile::SourceRootKind::DurableExternal,
+            rumoca_compile::compile::SourceRootKind::DurableExternal,
             defs,
             None,
         );

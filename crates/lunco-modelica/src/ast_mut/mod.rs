@@ -19,7 +19,7 @@ pub use util::{lookup_class_mut, synth_token};
 
 use std::ops::Range;
 use std::sync::Arc;
-use rumoca_session::parsing::ast::{ClassDef, StoredDefinition};
+use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
 use util::*;
 
 /// Run an AST mutation against a class and return a `(byte_range,

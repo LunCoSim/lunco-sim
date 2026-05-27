@@ -33,7 +33,7 @@ use super::si_unit_suffix;
 /// care about the line-continuation form, doesn't consult
 /// annotations. "Text says A.x ↔ B.y; show a line between A and B".
 pub(super) fn recover_edges_from_ast(
-    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    ast: &rumoca_compile::parsing::ast::StoredDefinition,
     diagram: &mut VisualDiagram,
 ) {
     // Walk every class's `Equation::Connect` and add any edges the
@@ -80,12 +80,12 @@ pub(super) fn recover_edges_from_ast(
         .collect();
 
     fn walk(
-        class: &rumoca_session::parsing::ast::ClassDef,
+        class: &rumoca_compile::parsing::ast::ClassDef,
         diagram: &mut VisualDiagram,
         index: &HashMap<String, DiagramNodeId>,
         existing: &std::collections::HashSet<((String, String), (String, String))>,
     ) {
-        use rumoca_session::parsing::ast::Equation;
+        use rumoca_compile::parsing::ast::Equation;
         for eq in &class.equations {
             let Equation::Connect { lhs, rhs, .. } = eq else { continue };
             // Only handle 2+ part references (`inst.port[.subport]`);

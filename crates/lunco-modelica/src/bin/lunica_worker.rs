@@ -601,7 +601,7 @@ pub fn run() -> Result<(), JsValue> {
                             format!("PANIC during ParseDocument doc={doc_id:?}: {msg}"),
                         );
                         (
-                            rumoca_session::parsing::ast::StoredDefinition::default(),
+                            rumoca_compile::parsing::ast::StoredDefinition::default(),
                             vec![format!("worker panic: {msg}")],
                         )
                     }

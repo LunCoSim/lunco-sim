@@ -1,7 +1,7 @@
 //! Annotation graphics mutation helpers.
 
 use std::sync::Arc;
-use rumoca_session::parsing::ast::{ClassDef, Expression};
+use rumoca_compile::parsing::ast::{ClassDef, Expression};
 use super::errors::AstMutError;
 use super::util::{is_annotation_entry_named, synth_token, is_graphic_entry_named, graphic_entry_arg, string_literal_value, point_pair, render_text_spec, read_text_spec, plot_node_signal_matches};
 use super::parsing::{parse_graphics_entry, parse_experiment_expression, parse_placement_expression, parse_plot_node_record};
@@ -33,9 +33,9 @@ fn graphics_array_mut<'a>(
         Some(i) => i,
         None => {
             class.annotation.push(Expression::ClassModification {
-                target: rumoca_session::parsing::ast::ComponentReference {
+                target: rumoca_compile::parsing::ast::ComponentReference {
                     local: false,
-                    parts: vec![rumoca_session::parsing::ast::ComponentRefPart {
+                    parts: vec![rumoca_compile::parsing::ast::ComponentRefPart {
                         ident: synth_token(section_name.to_string()),
                         subs: None,
                     }],
@@ -63,9 +63,9 @@ fn graphics_array_mut<'a>(
         Some(i) => i,
         None => {
             mods.push(Expression::Modification {
-                target: rumoca_session::parsing::ast::ComponentReference {
+                target: rumoca_compile::parsing::ast::ComponentReference {
                     local: false,
-                    parts: vec![rumoca_session::parsing::ast::ComponentRefPart {
+                    parts: vec![rumoca_compile::parsing::ast::ComponentRefPart {
                         ident: synth_token("graphics".to_string()),
                         subs: None,
                     }],
@@ -110,9 +110,9 @@ fn lunco_plot_nodes_array_mut(class: &mut ClassDef) -> &mut Vec<Expression> {
         Some(i) => i,
         None => {
             class.annotation.push(Expression::ClassModification {
-                target: rumoca_session::parsing::ast::ComponentReference {
+                target: rumoca_compile::parsing::ast::ComponentReference {
                     local: false,
-                    parts: vec![rumoca_session::parsing::ast::ComponentRefPart {
+                    parts: vec![rumoca_compile::parsing::ast::ComponentRefPart {
                         ident: synth_token("__LunCo".to_string()),
                         subs: None,
                     }],
@@ -138,9 +138,9 @@ fn lunco_plot_nodes_array_mut(class: &mut ClassDef) -> &mut Vec<Expression> {
         Some(i) => i,
         None => {
             mods.push(Expression::Modification {
-                target: rumoca_session::parsing::ast::ComponentReference {
+                target: rumoca_compile::parsing::ast::ComponentReference {
                     local: false,
-                    parts: vec![rumoca_session::parsing::ast::ComponentRefPart {
+                    parts: vec![rumoca_compile::parsing::ast::ComponentRefPart {
                         ident: synth_token("plotNodes".to_string()),
                         subs: None,
                     }],

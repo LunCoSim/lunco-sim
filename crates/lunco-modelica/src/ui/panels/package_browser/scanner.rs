@@ -148,7 +148,7 @@ fn build_msl_inmem_index(
     fn walk(
         parent_qname: &str,
         short_name: &str,
-        def: &rumoca_session::parsing::ast::ClassDef,
+        def: &rumoca_compile::parsing::ast::ClassDef,
         tree: &mut std::collections::HashMap<String, Vec<(String, crate::index::ClassKind)>>,
     ) {
         let qname = if parent_qname.is_empty() {
@@ -319,9 +319,9 @@ fn class_def_to_node(
     path: &Path,
     qualified: &str,
     short_name: &str,
-    def: &rumoca_session::parsing::ast::ClassDef,
+    def: &rumoca_compile::parsing::ast::ClassDef,
 ) -> PackageNode {
-    use rumoca_session::parsing::ClassType;
+    use rumoca_compile::parsing::ClassType;
     let is_package = matches!(def.class_type, ClassType::Package);
     if is_package && !def.classes.is_empty() {
         let mut children: Vec<PackageNode> = def

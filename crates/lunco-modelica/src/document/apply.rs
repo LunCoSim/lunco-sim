@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 use lunco_doc::DocumentError;
-use rumoca_session::parsing::ast::StoredDefinition;
+use rumoca_compile::parsing::ast::StoredDefinition;
 
 use super::ops::{ModelicaChange, ModelicaOp, FreshAst};
 use super::core::AstCache;

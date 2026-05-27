@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use rumoca_session::parsing::ast::{Expression, OpBinary, OpUnary, TerminalType, ClassDef, Import};
+use rumoca_compile::parsing::ast::{Expression, OpBinary, OpUnary, TerminalType, ClassDef, Import};
 use super::types::*;
 use super::graphics::*;
 use super::layers::*;
@@ -241,8 +241,8 @@ fn build_extends_candidates(
         None => (base_name, None),
     };
     for imp in imports {
-        use rumoca_session::parsing::ast::Import;
-        let import_path_name = |path: &rumoca_session::parsing::ast::Name| -> String {
+        use rumoca_compile::parsing::ast::Import;
+        let import_path_name = |path: &rumoca_compile::parsing::ast::Name| -> String {
             path.name
                 .iter()
                 .map(|t| t.text.as_ref())

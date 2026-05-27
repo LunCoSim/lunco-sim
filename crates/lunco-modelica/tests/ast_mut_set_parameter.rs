@@ -26,9 +26,9 @@ fn mutate_and_reparse<F>(
     class_name: &str,
     component_name: &str,
     op: F,
-) -> rumoca_session::parsing::ast::Component
+) -> rumoca_compile::parsing::ast::Component
 where
-    F: FnOnce(&mut rumoca_session::parsing::ast::ClassDef),
+    F: FnOnce(&mut rumoca_compile::parsing::ast::ClassDef),
 {
     let mut sd = parse_to_ast(source, "test.mo").expect("first parse");
     let class = ast_mut::lookup_class_mut(&mut sd, class_name).expect("class lookup");

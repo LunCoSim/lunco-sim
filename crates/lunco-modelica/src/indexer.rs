@@ -1,10 +1,10 @@
 // Indexer no longer calls `rumoca_phase_parse::parse_to_ast` directly.
-// Going through `rumoca_session::parsing::parse_files_parallel` routes
+// Going through `rumoca_compile::parsing::parse_files_parallel` routes
 // every parse through rumoca's content-hash keyed artifact cache
 // (`<workspace>/.cache/rumoca/parsed-files/`). Second indexer runs and
 // the workbench's runtime drill-ins share the same cache entries, so
 // a file parsed here is instant at runtime and vice versa.
-use rumoca_session::parsing::ast::{Causality, ClassDef, ClassType, StoredDefinition, Token, Variability};
+use rumoca_compile::parsing::ast::{Causality, ClassDef, ClassType, StoredDefinition, Token, Variability};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -80,8 +80,8 @@ impl Options {
 /// - `ComponentReference{Foo.Bar.Baz}`     → `"Baz"` (enum-style leaf)
 /// - `Unary{op:Minus, rhs:Terminal..}`     → `"-100"`
 /// - anything else                          → `""`
-fn format_default_expr(expr: &rumoca_session::parsing::ast::Expression) -> String {
-    use rumoca_session::parsing::ast::{Expression, OpUnary, TerminalType};
+fn format_default_expr(expr: &rumoca_compile::parsing::ast::Expression) -> String {
+    use rumoca_compile::parsing::ast::{Expression, OpUnary, TerminalType};
     match expr {
         Expression::Terminal { terminal_type, token } => {
             let raw = token.text.as_ref();
@@ -417,7 +417,7 @@ fn extract_documentation_infos(source: &str) -> HashMap<String, String> {
 /// one's `Documentation(info=…)` keyed by short name.
 fn collect_documentation(
     short_name: &str,
-    class_def: &rumoca_session::parsing::ast::ClassDef,
+    class_def: &rumoca_compile::parsing::ast::ClassDef,
     out: &mut HashMap<String, String>,
 ) {
     let (info, _revisions) =
@@ -659,7 +659,7 @@ impl MSLIndexer {
         // both the placement mapping below and `add_stored_definition`
         // treat the class name correctly.
         let is_package_file = file_name == "package.mo";
-        // Parse through rumoca-session's cache. A content-hash-matching
+        // Parse through rumoca-compile's cache. A content-hash-matching
         // entry at `.cache/rumoca/parsed-files/` deserialises from
         // bincode in ~ms; a miss pays the full rumoca parse once and
         // writes the bincode so the NEXT indexer run and the workbench's
@@ -667,7 +667,7 @@ impl MSLIndexer {
         // one path is the public entry point that exercises the cache;
         // rayon overhead is negligible for length-1.
         let ast_opt =
-            rumoca_session::parsing::parse_files_parallel(&[path.to_path_buf()])
+            rumoca_compile::parsing::parse_files_parallel(&[path.to_path_buf()])
                 .ok()
                 .and_then(|mut pairs| pairs.pop().map(|(_, ast)| ast));
         if let Some(ast) = ast_opt {
@@ -1075,7 +1075,7 @@ impl MSLIndexer {
                 // with the `expandable` keyword — folded into the
                 // typed enum so consumers don't need a separate flag.
                 let class_kind = match (&class.class_type, class.expandable) {
-                    (rumoca_session::parsing::ast::ClassType::Connector, true) => {
+                    (rumoca_compile::parsing::ast::ClassType::Connector, true) => {
                         crate::index::ClassKind::ExpandableConnector
                     }
                     (t, _) => crate::index::map_class_type(t),

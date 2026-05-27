@@ -64,7 +64,7 @@ pub(crate) fn extract_class_spans_via_path(
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut parsed =
-            rumoca_session::parsing::parse_files_parallel(&[path.to_path_buf()]).ok()?;
+            rumoca_compile::parsing::parse_files_parallel(&[path.to_path_buf()]).ok()?;
         let (_uri, ast) = parsed.drain(..).next()?;
         spans_from_ast(&ast, source, class_name)
     }
@@ -84,12 +84,15 @@ pub(crate) fn extract_class_spans_inline(
 }
 
 pub(crate) fn spans_from_ast(
-    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    ast: &rumoca_compile::parsing::ast::StoredDefinition,
     source: &str,
     class_name: &str,
 ) -> Option<DuplicateExtract> {
     let class = crate::ast_extract::find_class_by_short_name(ast, class_name)?;
-    let (full_start, full_end) = class.full_span_with_leading_comments(source)?;
+    // `full_span_with_leading_comments` removed in rumoca main;
+    // fall back to the class location span.
+    let full_start = class.location.start as usize;
+    let full_end = class.location.end as usize;
     let end_tok = class.end_name_token.as_ref()?;
     Some(DuplicateExtract {
         full_start,
@@ -158,7 +161,7 @@ pub(crate) fn collect_parent_imports(class_file: &std::path::Path) -> Vec<String
             let pairs = if std::env::var_os("LUNCO_NO_PARSE").is_some() {
                 None
             } else {
-                rumoca_session::parsing::parse_files_parallel(&[pkg.clone()]).ok()
+                rumoca_compile::parsing::parse_files_parallel(&[pkg.clone()]).ok()
             };
             if let Some(mut pairs) = pairs {
                 // Re-read source so we can slice each import's location
@@ -175,7 +178,7 @@ pub(crate) fn collect_parent_imports(class_file: &std::path::Path) -> Vec<String
                 let pkg_class = stored.as_ref().and_then(|s| s.classes.values().next());
                 let mut level: Vec<String> = Vec::new();
                 if let Some(class) = pkg_class {
-                    use rumoca_session::parsing::ast::Import;
+                    use rumoca_compile::parsing::ast::Import;
                     for imp in &class.imports {
                         let loc = match imp {
                             Import::Qualified { location, .. }

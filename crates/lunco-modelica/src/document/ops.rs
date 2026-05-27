@@ -364,7 +364,7 @@ pub enum OpKind {
 #[derive(Debug)]
 pub enum FreshAst {
     /// Structured op handed back this freshly-mutated AST.
-    Mutated(std::sync::Arc<rumoca_session::parsing::ast::StoredDefinition>),
+    Mutated(std::sync::Arc<rumoca_compile::parsing::ast::StoredDefinition>),
     /// Raw text edit — no fresh AST.
     TextEdit,
 }

@@ -41,7 +41,7 @@ pub fn on_inspect_active_doc(_trigger: On<InspectActiveDoc>, mut commands: Comma
             );
             fn dump(
                 name: &str,
-                class: &rumoca_session::parsing::ast::ClassDef,
+                class: &rumoca_compile::parsing::ast::ClassDef,
                 depth: usize,
             ) {
                 let indent = "  ".repeat(depth + 1);

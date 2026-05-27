@@ -15,7 +15,7 @@
 //!   matches wasm worker serialization.
 //!
 //! ## TODO(rumoca)
-//! Replace string injection with `rumoca-session::compile_with_modifications`
+//! Replace string injection with `rumoca-compile::compile_with_modifications`
 //! once upstream exposes `ClassModification` on the public API.
 //! See `rumoca-ir-ast::visitor`.
 //!

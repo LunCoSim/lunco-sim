@@ -34,7 +34,7 @@
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_workbench::{BrowserAction, BrowserCtx, BrowserSection};
-use rumoca_session::parsing::ClassType;
+use rumoca_compile::parsing::ClassType;
 
 // `DrilledInClassNames` reads migrated to
 // `crate::ui::panels::model_view::drilled_class_for_doc`.

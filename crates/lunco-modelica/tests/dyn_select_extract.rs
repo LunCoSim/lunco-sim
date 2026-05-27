@@ -1,12 +1,12 @@
 //! Verify DynamicSelect extraction on the actual Tank/Valve icons.
 
 use lunco_modelica::annotations::{DynExpr, DynValue, GraphicItem, extract_icon};
-use rumoca_session::parsing::ast::Expression;
+use rumoca_compile::parsing::ast::Expression;
 
 const SRC: &str = include_str!("../../../assets/models/AnnotatedRocketStage.mo");
 
 fn class_annotations<'a>(
-    classes: &'a indexmap::IndexMap<String, rumoca_session::parsing::ast::ClassDef>,
+    classes: &'a indexmap::IndexMap<String, rumoca_compile::parsing::ast::ClassDef>,
     name: &str,
 ) -> Option<Vec<Expression>> {
     for (cname, class) in classes {

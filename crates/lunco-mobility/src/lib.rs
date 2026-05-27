@@ -124,12 +124,17 @@ fn apply_wheel_suspension(
         &Transform,
         &ChildOf,
     )>,
-    mut q_chassis: Query<Forces, With<RoverVessel>>,
+    mut q_chassis: Query<(Forces, &RigidBody), With<RoverVessel>>,
     mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<RoverVessel>)>,
 ) {
     for (mut wheel, hits, wheel_tf, parent) in q_wheels.iter_mut() {
         let parent_entity = parent.parent();
-        if let Ok(mut forces) = q_chassis.get_mut(parent_entity) {
+        if let Ok((mut forces, body)) = q_chassis.get_mut(parent_entity) {
+            // Skip forces if body is kinematic (e.g. during gizmo drag)
+            if matches!(body, RigidBody::Kinematic) {
+                wheel.last_normal_force = 0.0;
+                continue;
+            }
             let world_pos = forces.position().0 + forces.rotation().0 * wheel_tf.translation.as_dvec3();
 
             if let Some(hit) = hits.iter_sorted().next() {
@@ -196,11 +201,14 @@ fn apply_wheel_drive(
         &ChildOf,
     )>,
     q_ports: Query<&lunco_core::architecture::PhysicalPort>,
-    mut q_chassis: Query<Forces, With<RoverVessel>>,
+    mut q_chassis: Query<(Forces, &RigidBody), With<RoverVessel>>,
 ) {
     for (wheel, wheel_tf, hits, parent) in q_wheels.iter() {
         let parent_entity = parent.parent();
-        if let Ok(mut forces) = q_chassis.get_mut(parent_entity) {
+        if let Ok((mut forces, body)) = q_chassis.get_mut(parent_entity) {
+            // Skip forces if body is kinematic
+            if matches!(body, RigidBody::Kinematic) { continue; }
+
             if let Ok(port) = q_ports.get(wheel.drive_port) {
                 // Traction only exists when the ray is hitting the ground
                 if hits.iter().next().is_some() {

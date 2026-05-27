@@ -23,7 +23,7 @@
 
 use crate::pretty::Placement;
 use lunco_doc::{NodeId, TextRange};
-use rumoca_session::parsing::ast::{
+use rumoca_compile::parsing::ast::{
     self as ast,
     ClassType as AstClassType,
     Causality as AstCausality,
@@ -805,8 +805,8 @@ fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def:
         .filter(|eq| {
             !matches!(
                 eq,
-                rumoca_session::parsing::ast::Equation::Empty
-                    | rumoca_session::parsing::ast::Equation::Connect { .. }
+                rumoca_compile::parsing::ast::Equation::Empty
+                    | rumoca_compile::parsing::ast::Equation::Connect { .. }
             )
         })
         .count()
@@ -904,17 +904,12 @@ fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def:
     // skipped — diagram-side panels read connections; full equations
     // are inspector territory.
     for eq in &class_def.equations {
-        if let ast::Equation::Connect { lhs, rhs, annotation } = eq {
+        if let ast::Equation::Connect { lhs, rhs } = eq {
             let from = endpoint_from_component_ref(lhs);
             let to = endpoint_from_component_ref(rhs);
-            // Pull authored Line waypoints from the connect's
-            // annotation tree. `annotations::extract_line_points`
-            // walks `Line(points={{x,y},...})` (with `Line` either
-            // as a top-level call or nested inside a graphics-list
-            // `points={{...}}` entry). Empty when the source had no
-            // annotation or only authored colour/thickness without
-            // a points list.
-            let waypoints = crate::annotations::extract_line_points(annotation);
+            // Connect annotation is no longer carried on Equation::Connect
+            // in rumoca main. Line waypoints are unavailable here.
+            let waypoints = Vec::new();
             let key = ConnectionKey(idx.connections.len() as u32);
             let entry = ConnectionEntry {
                 key,

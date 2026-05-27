@@ -90,7 +90,7 @@ struct ScannedComponent {
 /// second parse is pure waste. AST-as-source-of-truth: panels read
 /// the AST, never re-parse the source bytes.
 fn scan_component_declarations_from_ast(
-    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    ast: &rumoca_compile::parsing::ast::StoredDefinition,
 ) -> Vec<ScannedComponent> {
     let mut out = Vec::new();
     for (_class_name, class_def) in &ast.classes {
@@ -134,7 +134,7 @@ pub(crate) struct ConnectRoute {
 }
 
 pub(crate) fn scan_connect_annotations(
-    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    ast: &rumoca_compile::parsing::ast::StoredDefinition,
 ) -> std::collections::HashMap<
     ((String, String), (String, String)),
     ConnectRoute,
@@ -147,45 +147,17 @@ pub(crate) fn scan_connect_annotations(
 }
 
 fn collect_connect_waypoints_recursive(
-    class: &rumoca_session::parsing::ast::ClassDef,
+    class: &rumoca_compile::parsing::ast::ClassDef,
     out: &mut std::collections::HashMap<
         ((String, String), (String, String)),
         ConnectRoute,
     >,
 ) {
-    use rumoca_session::parsing::ast::Equation;
+    use rumoca_compile::parsing::ast::Equation;
     for eq in &class.equations {
-        let Equation::Connect { lhs, rhs, annotation } = eq else { continue };
-        let Some(line) = crate::annotations::extract_line_full(annotation)
-        else { continue };
-        if line.points.len() < 2 {
-            continue;
-        }
-        let waypoints = line.points;
-        let smooth_bezier = line.smooth_bezier;
-        let color = line.color;
-        let thickness = line.thickness;
-        // ComponentReference parts: 2-part is `inst.port`,
-        // 1-part is bare `port` (treat inst as empty).
-        let split = |cr: &rumoca_session::parsing::ast::ComponentReference| -> (String, String) {
-            match cr.parts.as_slice() {
-                [only] => (String::new(), only.ident.text.to_string()),
-                [first, second, ..] => (
-                    first.ident.text.to_string(),
-                    second.ident.text.to_string(),
-                ),
-                [] => (String::new(), String::new()),
-            }
-        };
-        let (a_inst, a_port) = split(lhs);
-        let (b_inst, b_port) = split(rhs);
-        let key = canonical_edge_key(&a_inst, &a_port, &b_inst, &b_port);
-        out.entry(key).or_insert(ConnectRoute {
-            points: waypoints,
-            smooth_bezier,
-            color,
-            thickness,
-        });
+        let Equation::Connect { .. } = eq else { continue };
+        // Connect annotation no longer carried on Equation::Connect in rumoca main.
+        // Waypoint extraction from annotation is unavailable until upstream restores it.
     }
     for nested in class.classes.values() {
         collect_connect_waypoints_recursive(nested, out);
@@ -300,9 +272,9 @@ pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
 /// package as a folder; drill-in into a class lands here with
 /// `target_class = Some(...)` and proceeds normally.
 fn ast_looks_like_package(
-    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    ast: &rumoca_compile::parsing::ast::StoredDefinition,
 ) -> bool {
-    use rumoca_session::parsing::ClassType;
+    use rumoca_compile::parsing::ClassType;
     for class in ast.classes.values() {
         if matches!(
             class.class_type,
@@ -321,7 +293,7 @@ fn ast_looks_like_package(
 }
 
 pub fn import_model_to_diagram_from_ast(
-    ast: std::sync::Arc<rumoca_session::parsing::ast::StoredDefinition>,
+    ast: std::sync::Arc<rumoca_compile::parsing::ast::StoredDefinition>,
     _source: &str,
     max_nodes: usize,
     target_class: Option<&str>,
@@ -456,7 +428,7 @@ pub fn import_model_to_diagram_from_ast(
         let ast = &ast;
         for (_class_name, class_def) in ast.classes.iter() {
             for imp in &class_def.imports {
-                use rumoca_session::parsing::ast::Import;
+                use rumoca_compile::parsing::ast::Import;
                 match imp {
                     Import::Qualified { path, .. } => {
                         let full = path.to_string();
@@ -606,7 +578,7 @@ pub fn import_model_to_diagram_from_ast(
     // deriving PID inherits — without this, u/y fall through to the
     // grid fallback and push the scene bounds way past the
     // authored ±120 box).
-    let inherited_components: Vec<(String, rumoca_session::parsing::ast::Component)> =
+    let inherited_components: Vec<(String, rumoca_compile::parsing::ast::Component)> =
         if let Some(target) = target_class {
             ast.classes
                 .iter()
@@ -623,8 +595,8 @@ pub fn import_model_to_diagram_from_ast(
             Vec::new()
         };
 
-    let comp_by_short: HashMap<&str, &rumoca_session::parsing::ast::Component> = {
-        let mut map: HashMap<&str, &rumoca_session::parsing::ast::Component> =
+    let comp_by_short: HashMap<&str, &rumoca_compile::parsing::ast::Component> = {
+        let mut map: HashMap<&str, &rumoca_compile::parsing::ast::Component> =
             HashMap::new();
         if let Some(target) = target_class {
             // Scope to the named class. Use the qualified-name walker
@@ -1054,8 +1026,8 @@ pub fn import_model_to_diagram_from_ast(
 fn register_local_class(
     out: &mut HashMap<String, crate::index::ClassEntry>,
     short_name: &str,
-    class_def: &rumoca_session::parsing::ast::ClassDef,
-    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    class_def: &rumoca_compile::parsing::ast::ClassDef,
+    ast: &rumoca_compile::parsing::ast::StoredDefinition,
 ) {
     if out.contains_key(short_name) {
         return;
@@ -1127,7 +1099,7 @@ fn register_local_class(
         let _ = class_def;
         return;
     }
-    use rumoca_session::parsing::ast::ClassType;
+    use rumoca_compile::parsing::ast::ClassType;
     // Walk the class's connector sub-components into `PortDef`s.
     // Without this, locally-defined classes (Tank, Engine, …) have an
     // empty ports list, so wires from `connect()` statements have
@@ -1174,11 +1146,11 @@ fn register_local_class(
 /// canvas. MSL types skip this path — their ports come pre-extracted
 /// from the indexer.
 fn extract_local_class_ports(
-    class_def: &rumoca_session::parsing::ast::ClassDef,
+    class_def: &rumoca_compile::parsing::ast::ClassDef,
     class_qualified_path: &str,
-    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    ast: &rumoca_compile::parsing::ast::StoredDefinition,
 ) -> Vec<crate::visual_diagram::PortDef> {
-    use rumoca_session::parsing::ast::Causality;
+    use rumoca_compile::parsing::ast::Causality;
     let mut out = Vec::new();
     for (sub_name, sub) in &class_def.components {
         let sub_type = sub.type_name.to_string();
@@ -1266,13 +1238,13 @@ fn extract_local_class_ports(
 ///     `connector FuelPort_a extends FuelPort;` correctly picks up
 ///     the base's flow variables.
 fn classify_connector(
-    class: &rumoca_session::parsing::ast::ClassDef,
+    class: &rumoca_compile::parsing::ast::ClassDef,
     owner_qualified_path: &str,
-    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    ast: &rumoca_compile::parsing::ast::StoredDefinition,
     msl_mode: crate::class_cache::MslLookupMode,
 ) -> (crate::visual_diagram::PortKind, Vec<crate::visual_diagram::FlowVarMeta>) {
     use crate::visual_diagram::{FlowVarMeta, PortKind};
-    use rumoca_session::parsing::ast::{Causality, Connection};
+    use rumoca_compile::parsing::ast::{Causality, Connection};
 
     // Short-form type alias (`connector X = input Real`) — causality
     // is on the class itself, no components to walk.
@@ -1358,7 +1330,7 @@ fn classify_connector(
 /// single resolve-class site.
 
 fn connector_icon_color(
-    class: &rumoca_session::parsing::ast::ClassDef,
+    class: &rumoca_compile::parsing::ast::ClassDef,
 ) -> Option<[u8; 3]> {
     use crate::annotations::{extract_icon, GraphicItem};
     let icon = extract_icon(&class.annotation)?;
@@ -1399,10 +1371,10 @@ fn connector_icon_color(
 /// side of NOT dimming an active component (over-dimming would hide
 /// real components from the user).
 fn eval_condition(
-    expr: &rumoca_session::parsing::ast::Expression,
-    params_map: &std::collections::HashMap<&str, &rumoca_session::parsing::ast::Component>,
+    expr: &rumoca_compile::parsing::ast::Expression,
+    params_map: &std::collections::HashMap<&str, &rumoca_compile::parsing::ast::Component>,
 ) -> bool {
-    use rumoca_session::parsing::ast::{Expression, OpBinary, OpUnary};
+    use rumoca_compile::parsing::ast::{Expression, OpBinary, OpUnary};
     match expr {
         Expression::Terminal { token, .. } => {
             // Accept any terminal whose text reads "true"/"false"; the
@@ -1437,8 +1409,8 @@ fn eval_condition(
     }
 }
 
-fn format_modifier_expr(expr: &rumoca_session::parsing::ast::Expression) -> String {
-    use rumoca_session::parsing::ast::{Expression, OpBinary, OpUnary, TerminalType};
+fn format_modifier_expr(expr: &rumoca_compile::parsing::ast::Expression) -> String {
+    use rumoca_compile::parsing::ast::{Expression, OpBinary, OpUnary, TerminalType};
     match expr {
         Expression::Terminal { terminal_type, token } => {
             let raw = token.text.as_ref();

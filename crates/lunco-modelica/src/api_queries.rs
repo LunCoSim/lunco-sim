@@ -717,7 +717,7 @@ fn class_member_causality_str(
 ) -> &'static str {
     use crate::engine::InheritedCausality;
     match c {
-        InheritedCausality::None => "none",
+        InheritedCausality::Internal => "none",
         InheritedCausality::Input => "input",
         InheritedCausality::Output => "output",
     }

@@ -52,14 +52,14 @@ scnr2 = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 scnr2_generate = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 scnr2_macro = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 
-# Rumoca is consumed from the LunCoSim/rumoca fork's `wasm-asset-loader`
-# branch (see workspace deps below). To develop against a local rumoca
-# checkout, uncomment the [patch] block and point it at `../rumoca`.
+# Rumoca consumed from local checkout (`../rumoca`, main branch).
+# To develop against a local rumoca checkout, uncomment the [patch] block
+# and point it at `../rumoca`.
 #
 # [patch."https://github.com/LunCoSim/rumoca"]
 # rumoca-ir-ast      = { path = "../rumoca/crates/rumoca-ir-ast" }
 # rumoca-phase-parse = { path = "../rumoca/crates/rumoca-phase-parse" }
-# rumoca-session     = { path = "../rumoca/crates/rumoca-session" }
+# rumoca-compile     = { path = "../rumoca/crates/rumoca-compile" }
 # rumoca-sim         = { path = "../rumoca/crates/rumoca-sim" }
 # rumoca-tool-fmt    = { path = "../rumoca/crates/rumoca-tool-fmt" }
 # rumoca-tool-lint   = { path = "../rumoca/crates/rumoca-tool-lint" }
@@ -146,12 +146,13 @@ lunco-theme = { path = "crates/lunco-theme" }
 
 # Rumoca crates — single source-of-truth for the git URL + branch.
 # Crates opt in via `rumoca-xxx = { workspace = true }`.
-rumoca-ir-ast      = { git = "https://github.com/LunCoSim/rumoca", branch = "wasm-asset-loader" }
-rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", branch = "wasm-asset-loader" }
-rumoca-session     = { git = "https://github.com/LunCoSim/rumoca", branch = "wasm-asset-loader" }
-rumoca-sim         = { git = "https://github.com/LunCoSim/rumoca", branch = "wasm-asset-loader" }
-rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", branch = "wasm-asset-loader" }
-rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", branch = "wasm-asset-loader" }
+# Consumed from the `main` branch of LunCoSim/rumoca.
+rumoca-ir-ast      = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
+rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
+rumoca-compile     = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
+rumoca-sim         = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
+rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
+rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 
 egui_colors = "0.4.0"
 catppuccin-egui = "5.2.0"

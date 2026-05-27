@@ -212,7 +212,7 @@ pub(super) fn emit_diagram_decorations(
 }
 
 pub(super) fn diagram_annotation_for_target(
-    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    ast: &rumoca_compile::parsing::ast::StoredDefinition,
     target: Option<&str>,
 ) -> Option<crate::annotations::Diagram> {
     // Route through the canonical AST class lookup
@@ -232,7 +232,7 @@ pub(super) fn diagram_annotation_for_target(
     let class = if let Some(qualified) = target {
         crate::diagram::find_class_by_qualified_name(ast, qualified)
     } else {
-        use rumoca_session::parsing::ClassType;
+        use rumoca_compile::parsing::ClassType;
         ast.classes
             .iter()
             .find(|(_, c)| !matches!(c.class_type, ClassType::Package))
