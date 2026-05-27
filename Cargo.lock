@@ -6206,6 +6206,7 @@ dependencies = [
 name = "lunco-scripting"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bevy",
  "crossbeam-channel",
  "libloading",

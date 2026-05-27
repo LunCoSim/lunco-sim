@@ -637,6 +637,7 @@ pub mod ui;
 /// Available on all targets, but primarily used for wasm builds.
 pub mod models;
 pub mod msl_remote;
+pub mod source_asset;
 pub mod msl_settings;
 pub mod indexer;
 pub mod sim_stream;
@@ -795,6 +796,13 @@ fn build_modelica_core(app: &mut App) {
     // The domain is incomplete without MSL access.
     if !app.is_plugin_added::<msl_remote::MslRemotePlugin>() {
         app.add_plugins(msl_remote::MslRemotePlugin);
+    }
+
+    // Register the `.mo` asset loader so domain code can fetch source
+    // through `AssetServer::load(...)` instead of `std::fs::read_to_string`.
+    // See `docs/architecture/40-asset-io.md`.
+    if !app.is_plugin_added::<source_asset::ModelicaSourceAssetPlugin>() {
+        app.add_plugins(source_asset::ModelicaSourceAssetPlugin);
     }
 
     let msl = msl_dir();

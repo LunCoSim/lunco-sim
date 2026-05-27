@@ -4,6 +4,7 @@ pub mod python;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod repl;
 pub mod doc;
+pub mod source_asset;
 
 use std::collections::HashMap;
 use lunco_doc::{DocumentId, DocumentHost};
@@ -22,7 +23,11 @@ impl Plugin for LunCoScriptingPlugin {
     fn build(&self, app: &mut App) {
         info!("Initializing LunCo Scripting Bridge...");
         python::initialize_python();
-        
+
+        if !app.is_plugin_added::<source_asset::PythonSourceAssetPlugin>() {
+            app.add_plugins(source_asset::PythonSourceAssetPlugin);
+        }
+
         app.init_resource::<ScriptRegistry>();
         
         #[cfg(not(target_arch = "wasm32"))]

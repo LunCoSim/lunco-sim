@@ -1,0 +1,58 @@
+# ─────────────────────────────────────────────────────────────────────
+# LunCoSim — clippy lint configuration
+# ─────────────────────────────────────────────────────────────────────
+#
+# Lives at the workspace root so every member crate inherits it under
+# `cargo clippy --workspace`. The lint *severity* is set in `Cargo.toml`
+# under `[workspace.lints.clippy]` (currently `disallowed_methods =
+# "deny"`); this file only enumerates the banned symbols.
+#
+# Why a workspace-wide ban list at all? Because every entry below is a
+# foot-gun whose failure mode is **wasm-only** — code compiles, tests
+# pass on native, then the browser binary either silently no-ops or
+# panics at runtime. Catching it at PR time via `cargo clippy --workspace`
+# is much cheaper than catching it from a user bug report ("the red
+# ball doesn't fly").
+#
+# Allow-list. Three classes of crate legitimately need raw fs/thread/
+# instant access and override the workspace lint locally with
+# `#![allow(clippy::disallowed_methods)]` at the top of `lib.rs` (or
+# `main.rs` for binaries):
+#
+#   * lunco-assets             — owns the on-disk asset cache layout
+#   * lunco-storage            — owns local-fs persistence (native only)
+#   * build scripts (*build.rs)— run at compile time on the host
+#   * `tests/` modules         — test fixtures live on disk
+#   * native-only binaries     — `lunica`, `sandbox`, etc. (the wasm
+#                                pair lives in `lunica_web` /
+#                                `sandbox_web` and uses AssetServer).
+#
+# Adding new entries to the allow-list requires PR review; the override
+# is local (a single `#![allow(...)]`), so reviewers can see and
+# challenge each escape.
+
+disallowed-methods = [
+    # ── Filesystem I/O ────────────────────────────────────────────────
+    # wasm32 returns `Err("operation not supported on this platform")`
+    # from every fs read. Domain code must route asset reads through
+    # `bevy::asset::AssetServer::load(...)` so the same call works on
+    # native (default `assets/` source) and wasm (HTTP fetch).
+    { path = "std::fs::read",            reason = "Use bevy::asset::AssetServer::load — std::fs is wasm-incompatible" },
+    { path = "std::fs::read_to_string",  reason = "Use bevy::asset::AssetServer::load — std::fs is wasm-incompatible" },
+    { path = "std::fs::File::open",      reason = "Use bevy::asset::AssetServer::load — std::fs is wasm-incompatible" },
+    { path = "std::fs::write",           reason = "Use lunco-storage for persistence — std::fs is wasm-incompatible" },
+
+    # ── Threading ────────────────────────────────────────────────────
+    # wasm32-unknown-unknown has no pthread support. `std::thread::spawn`
+    # panics. Off-thread work goes through a Web Worker bundle on wasm
+    # (see lunica_worker) or `AsyncComputeTaskPool` (which is main-thread
+    # on wasm, see `lunco-workbench` tracked-task helpers for the
+    # cross-platform wrapper).
+    { path = "std::thread::spawn",       reason = "Use AsyncComputeTaskPool / Web Worker — std::thread panics on wasm" },
+
+    # ── Time ─────────────────────────────────────────────────────────
+    # `std::time::Instant::now()` panics on wasm32-unknown-unknown.
+    # `web_time::Instant` is a drop-in that uses `performance.now()` on
+    # wasm and `std::time::Instant` on native.
+    { path = "std::time::Instant::now",  reason = "Use web_time::Instant — std::time::Instant panics on wasm" },
+]

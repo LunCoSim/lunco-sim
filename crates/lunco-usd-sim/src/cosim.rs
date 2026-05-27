@@ -27,14 +27,15 @@
 
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_assets::assets_dir;
 use lunco_core::{Command, on_command};
 use lunco_cosim::{SimComponent, SimConnection, SimStatus};
 use lunco_doc::DocumentId;
+use lunco_modelica::source_asset::ModelicaSource;
 use lunco_modelica::{
     extract_inputs_with_defaults_from_ast, extract_model_name_from_ast,
     extract_parameters_from_ast, ModelicaChannels, ModelicaCommand, ModelicaModel,
 };
+use lunco_scripting::source_asset::PythonSource;
 use lunco_scripting::{
     doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
     ScriptRegistry,
@@ -43,6 +44,7 @@ use lunco_doc::DocumentHost;
 use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 use openusd::sdf::{AbstractData, Path as SdfPath, Value};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use crate::UsdSimProcessed;
 
@@ -60,6 +62,25 @@ pub struct UsdSourcedCosim;
 #[derive(Component, Default)]
 pub struct UsdSourcedWire;
 
+/// Queued Modelica source load. Inserted by `process_usd_cosim_prims`;
+/// drained by `dispatch_loaded_modelica_sources` once the
+/// `Handle<ModelicaSource>` has resolved to bytes.
+#[derive(Component)]
+pub struct PendingModelicaSource {
+    pub handle: Handle<ModelicaSource>,
+    /// Asset-relative path, copied for use as the eventual
+    /// `ModelicaModel::model_path` (purely informational once the
+    /// source is in memory).
+    pub asset_path: String,
+}
+
+/// Same for Python.
+#[derive(Component)]
+pub struct PendingPythonSource {
+    pub handle: Handle<PythonSource>,
+    pub asset_path: String,
+}
+
 /// Reads cosim attributes from USD prims and dispatches model
 /// compilation + wires. Runs in `Update` after `sync_usd_visuals` so
 /// `Transform` / `Mesh3d` / `Material` are already present.
@@ -67,8 +88,7 @@ pub fn process_usd_cosim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath), Without<UsdSourcedCosim>>,
     stages: Res<Assets<UsdStageAsset>>,
-    channels: Res<ModelicaChannels>,
-    mut script_registry: ResMut<ScriptRegistry>,
+    asset_server: Res<AssetServer>,
 ) {
     for (entity, prim_path) in query.iter() {
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
@@ -102,11 +122,26 @@ pub fn process_usd_cosim_prims(
             lunco_core::SelectableRoot,
         ));
 
+        // Source files are loaded through Bevy's `AssetServer` rather
+        // than `std::fs::read_to_string`. On native this reads from the
+        // workspace `assets/` source; on wasm it issues an HTTP fetch
+        // against the same path. Either way the actual Compile dispatch
+        // happens later, in `dispatch_loaded_modelica_sources` /
+        // `dispatch_loaded_python_sources`, once the asset is ready.
+        // See `docs/architecture/40-asset-io.md`.
         if let Some(rel) = modelica_path.as_ref() {
-            dispatch_modelica(&mut commands, entity, rel, &channels);
+            let asset_path = strip_assets_prefix(rel);
+            commands.entity(entity).insert(PendingModelicaSource {
+                handle: asset_server.load(asset_path.clone()),
+                asset_path,
+            });
         }
         if let Some(rel) = python_path.as_ref() {
-            dispatch_python(&mut commands, entity, rel, &mut script_registry);
+            let asset_path = strip_assets_prefix(rel);
+            commands.entity(entity).insert(PendingPythonSource {
+                handle: asset_server.load(asset_path.clone()),
+                asset_path,
+            });
         }
 
         for raw in wires_csv.split(',') {
@@ -130,106 +165,130 @@ pub fn process_usd_cosim_prims(
     }
 }
 
-fn dispatch_modelica(
-    commands: &mut Commands,
-    entity: Entity,
-    rel_path: &str,
-    channels: &ModelicaChannels,
-) {
-    let model_path = assets_dir().join(rel_path);
-    let source = match std::fs::read_to_string(&model_path) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("[usd-cosim] failed to read Modelica source `{}`: {e}", model_path.display());
-            return;
-        }
-    };
-
-    // Single best-effort parse, three AST-driven extracts. The
-    // string-call variants of these helpers re-parse on every call;
-    // `_from_ast` lets us share one parse across all three. Lenient
-    // parsing means a model with a semantic error still produces
-    // usable name/parameter/input snapshots — same recovery
-    // semantics `Session::recovered_file_query` uses on the engine
-    // side.
-    // Lenient parse: even a model with a semantic error produces
-    // usable name/parameter/input snapshots. Inlined here (rather than
-    // wrapped in a helper) so the parse cost is visible at the call
-    // site — same principle as the AST-canonical engine surface
-    // (see lunco-doc/domain_engine.rs).
-    let ast = rumoca_phase_parse::parse_to_syntax(&source, "cosim-dispatch.mo")
-        .best_effort()
-        .clone();
-    let model_name = extract_model_name_from_ast(&ast).unwrap_or_else(|| "Model".into());
-    let parameters = extract_parameters_from_ast(&ast);
-    let inputs = extract_inputs_with_defaults_from_ast(&ast).into_iter().collect();
-
-    commands.entity(entity).insert(ModelicaModel {
-        model_path,
-        model_name: model_name.clone(),
-        parameters,
-        inputs,
-        ..default()
-    });
-
-    let _ = channels.tx.send(ModelicaCommand::Compile {
-        entity,
-        session_id: 0,
-        model_name,
-        source,
-        extra_sources: Vec::new(),
-        stream: None,
-    });
+/// USD attributes sometimes carry an `assets/` prefix
+/// (`lunco:modelicaModel = "assets/models/Balloon.mo"`) and sometimes
+/// don't (`"models/Balloon.mo"`). Bevy's `AssetServer` resolves paths
+/// against the default asset source's root (already `assets/`), so an
+/// `assets/` prefix would cause a double-prefix on native. Strip it.
+fn strip_assets_prefix(path: &str) -> String {
+    path.strip_prefix("assets/").unwrap_or(path).to_string()
 }
 
-fn dispatch_python(
-    commands: &mut Commands,
-    entity: Entity,
-    rel_path: &str,
-    registry: &mut ScriptRegistry,
+/// Drain `PendingModelicaSource` for entities whose `.mo` text has
+/// finished loading via `AssetServer`. Parses the source, populates a
+/// `ModelicaModel` stub, dispatches `ModelicaCommand::Compile`, and
+/// removes the pending marker. Stable retry behaviour: if the asset
+/// isn't ready this frame we just skip — the system runs again next
+/// frame.
+pub fn dispatch_loaded_modelica_sources(
+    mut commands: Commands,
+    q: Query<(Entity, &PendingModelicaSource)>,
+    sources: Res<Assets<ModelicaSource>>,
+    asset_server: Res<AssetServer>,
+    channels: Option<Res<ModelicaChannels>>,
 ) {
-    let script_path = assets_dir().join(rel_path);
-    let source = match std::fs::read_to_string(&script_path) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("[usd-cosim] failed to read Python source `{}`: {e}", script_path.display());
-            return;
+    let Some(channels) = channels else { return };
+    for (entity, pending) in q.iter() {
+        // Bail loud if the asset failed to load — without this the
+        // entity stays Pending forever and the user sees nothing.
+        if asset_server.load_state(&pending.handle).is_failed() {
+            warn!(
+                "[usd-cosim] failed to load Modelica source `{}` via AssetServer",
+                pending.asset_path
+            );
+            commands.entity(entity).remove::<PendingModelicaSource>();
+            continue;
         }
-    };
+        let Some(src) = sources.get(&pending.handle) else { continue };
 
-    // Offset doc id away from any Modelica-allocated ids on the same
-    // entity (legacy catalog Python balloon does the same).
-    let doc_id = DocumentId::new(entity.index().index() as u64 + 10_000);
-    registry.documents.insert(
-        doc_id,
-        DocumentHost::new(ScriptDocument {
-            id: doc_id.raw(),
-            generation: 0,
-            language: ScriptLanguage::Python,
-            source,
-            inputs: vec!["height".to_string(), "velocity".to_string()],
-            outputs: vec!["netForce".to_string()],
-        }),
-    );
-    commands.entity(entity).insert(ScriptedModel {
-        document_id: Some(doc_id.raw()),
-        language: Some(ScriptLanguage::Python),
-        paused: false,
-        inputs: Default::default(),
-        outputs: Default::default(),
-    });
+        // Single best-effort parse, three AST-driven extracts. Lenient
+        // parsing means a model with a semantic error still produces
+        // usable name/parameter/input snapshots — same recovery
+        // semantics `Session::recovered_file_query` uses on the engine
+        // side.
+        let ast = rumoca_phase_parse::parse_to_syntax(&src.text, "cosim-dispatch.mo")
+            .best_effort()
+            .clone();
+        let model_name = extract_model_name_from_ast(&ast).unwrap_or_else(|| "Model".into());
+        let parameters = extract_parameters_from_ast(&ast);
+        let inputs = extract_inputs_with_defaults_from_ast(&ast).into_iter().collect();
 
-    // Python execution doesn't compile on a separate worker; the
-    // SimComponent can be created right away (no need to wait for
-    // variables to populate the way Modelica does).
-    commands.entity(entity).insert(SimComponent {
-        model_name: format!("Python:{}", rel_path),
-        parameters: Default::default(),
-        inputs: Default::default(),
-        outputs: Default::default(),
-        status: SimStatus::Running,
-        is_stepping: false,
-    });
+        commands.entity(entity).insert(ModelicaModel {
+            model_path: PathBuf::from(&pending.asset_path),
+            model_name: model_name.clone(),
+            parameters,
+            inputs,
+            ..default()
+        });
+
+        let _ = channels.tx.send(ModelicaCommand::Compile {
+            entity,
+            session_id: 0,
+            model_name,
+            source: src.text.clone(),
+            extra_sources: Vec::new(),
+            stream: None,
+        });
+
+        commands.entity(entity).remove::<PendingModelicaSource>();
+    }
+}
+
+/// Drain `PendingPythonSource` analogously to the Modelica version.
+pub fn dispatch_loaded_python_sources(
+    mut commands: Commands,
+    q: Query<(Entity, &PendingPythonSource)>,
+    sources: Res<Assets<PythonSource>>,
+    asset_server: Res<AssetServer>,
+    mut registry: ResMut<ScriptRegistry>,
+) {
+    for (entity, pending) in q.iter() {
+        if asset_server.load_state(&pending.handle).is_failed() {
+            warn!(
+                "[usd-cosim] failed to load Python source `{}` via AssetServer",
+                pending.asset_path
+            );
+            commands.entity(entity).remove::<PendingPythonSource>();
+            continue;
+        }
+        let Some(src) = sources.get(&pending.handle) else { continue };
+
+        // Offset doc id away from any Modelica-allocated ids on the same
+        // entity (legacy catalog Python balloon does the same).
+        let doc_id = DocumentId::new(entity.index().index() as u64 + 10_000);
+        registry.documents.insert(
+            doc_id,
+            DocumentHost::new(ScriptDocument {
+                id: doc_id.raw(),
+                generation: 0,
+                language: ScriptLanguage::Python,
+                source: src.text.clone(),
+                inputs: vec!["height".to_string(), "velocity".to_string()],
+                outputs: vec!["netForce".to_string()],
+            }),
+        );
+        commands.entity(entity).insert(ScriptedModel {
+            document_id: Some(doc_id.raw()),
+            language: Some(ScriptLanguage::Python),
+            paused: false,
+            inputs: Default::default(),
+            outputs: Default::default(),
+        });
+
+        // Python execution doesn't compile on a separate worker; the
+        // SimComponent can be created right away (no need to wait for
+        // variables to populate the way Modelica does).
+        commands.entity(entity).insert(SimComponent {
+            model_name: format!("Python:{}", pending.asset_path),
+            parameters: Default::default(),
+            inputs: Default::default(),
+            outputs: Default::default(),
+            status: SimStatus::Running,
+            is_stepping: false,
+        });
+
+        commands.entity(entity).remove::<PendingPythonSource>();
+    }
 }
 
 /// On-Modelica-compile-complete: wraps the populated `ModelicaModel`
@@ -587,6 +646,13 @@ pub(crate) fn install(app: &mut App) {
         Update,
         (
             process_usd_cosim_prims,
+            // Source-load drain runs every Update; cheap when no
+            // `PendingModelicaSource` / `PendingPythonSource` entities
+            // exist. Splitting it from `process_usd_cosim_prims` is
+            // intentional — the source asset may take multiple frames
+            // to load (network on wasm, async I/O on native).
+            dispatch_loaded_modelica_sources,
+            dispatch_loaded_python_sources,
             // Cross-entity wires must run after participant prims are
             // processed (so their entities are addressable in the
             // path → entity index built each call).
