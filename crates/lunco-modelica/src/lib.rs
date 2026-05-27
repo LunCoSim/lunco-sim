@@ -878,6 +878,14 @@ fn build_modelica_core(app: &mut App) {
     app.init_resource::<experiments_runner::PlaybackEntities>();
     app.add_systems(Update, experiments_runner::drain_pending_handles);
 
+    // Keep the winit event loop pumping at full speed while any sim
+    // is active, even when the window loses focus. Otherwise the
+    // app's idle `unfocused_mode` (lunica defaults to
+    // `reactive_low_power(1s)`) throttles `FixedUpdate` and the
+    // Modelica/cosim stepper crawls. Restores the binary's
+    // configured idle mode the moment all sims pause/finish.
+    app.add_systems(Update, sim_focus_pace);
+
     app.configure_sets(
         FixedUpdate,
         (ModelicaSet::HandleResponses, ModelicaSet::SpawnRequests).chain(),
@@ -922,6 +930,44 @@ fn build_modelica_core(app: &mut App) {
         });
     }
 }
+
+/// Keep winit's `unfocused_mode` pegged at `Continuous` while any
+/// sim is active (interactive `ModelicaModel { paused: false }` or
+/// a non-empty `PendingHandles`), otherwise restore the binary's
+/// idle setting. The first invocation snapshots whatever the
+/// binary inserted into `WinitSettings` so we can faithfully restore
+/// it later — the modelica plugin does not pick the idle policy
+/// itself, just respects what the host app chose. No-op when the
+/// app is headless (no `WinitSettings` resource).
+#[cfg(not(target_arch = "wasm32"))]
+fn sim_focus_pace(
+    settings: Option<ResMut<bevy::winit::WinitSettings>>,
+    pending: Option<Res<experiments_runner::PendingHandles>>,
+    models: Query<&worker::ModelicaModel>,
+    mut idle: Local<Option<bevy::winit::UpdateMode>>,
+) {
+    let Some(mut settings) = settings else { return };
+    if idle.is_none() {
+        *idle = Some(settings.unfocused_mode);
+    }
+    let sim_active = pending.map(|p| !p.0.is_empty()).unwrap_or(false)
+        || models.iter().any(|m| !m.paused && m.is_compiled);
+    let desired = if sim_active {
+        bevy::winit::UpdateMode::Continuous
+    } else {
+        idle.expect("snapshot set above")
+    };
+    if settings.unfocused_mode != desired {
+        settings.unfocused_mode = desired;
+    }
+}
+
+// On wasm the winit settings model differs (the rAF loop drives
+// updates regardless of focus); the throttle this guards against
+// doesn't exist there. Empty no-op keeps the symbol present so
+// `add_systems` compiles for both targets.
+#[cfg(target_arch = "wasm32")]
+fn sim_focus_pace() {}
 
 /// Global frame-time probe — start of frame.
 fn frame_time_probe_start(mut probe: ResMut<FrameTimeProbe>) {

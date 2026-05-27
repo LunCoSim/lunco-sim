@@ -118,7 +118,9 @@ fn main() {
         // misses a vsync, and `present_frames` stalls for 16-32ms.
         // That's the 5Hz spike train tracy showed.
         // Unfocused: ReactiveLowPower(1s) keeps fans quiet when the
-        // window is in the background.
+        // window is in the background. The Modelica plugin overrides
+        // this to Continuous while a sim is running (see
+        // lunco_modelica::sim_focus).
         focused_mode: UpdateMode::Continuous,
         unfocused_mode: UpdateMode::reactive_low_power(std::time::Duration::from_secs(1)),
     });

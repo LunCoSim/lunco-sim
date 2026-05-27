@@ -26,7 +26,9 @@ use lunco_twin::{DocumentKind, FileEntry, FileKind};
 use lunco_workbench::WorkspaceResource;
 
 use crate::ast_extract;
+use crate::experiments_runner::ExperimentSources;
 use crate::models::bundled_models;
+use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
 // `DrilledInClassNames` reads migrated to
 // `crate::ui::panels::model_view::drilled_class_for_doc`.
 use crate::ui::state::{CompileState, CompileStates, ModelicaDocumentRegistry};
@@ -54,6 +56,8 @@ impl Plugin for ModelicaApiQueriesPlugin {
         registry.register(ListMslProvider);
         registry.register(ListCompileCandidatesProvider);
         registry.register(CompileStatusProvider);
+        registry.register(RunStatusProvider);
+        registry.register(ListRunsProvider);
         registry.register(GetDocumentSourceProvider);
         registry.register(DescribeModelProvider);
         registry.register(SnapshotVariablesProvider);
@@ -476,6 +480,12 @@ impl ApiQueryProvider for CompileStatusProvider {
             .get_resource::<crate::ui::CompileStates>()
             .and_then(|cs| cs.error_for(doc_id).map(str::to_string));
 
+        // Convenience pointer to the most recent run for this doc.
+        // Run errors live on `RunStatus::Failed`, not here — this is
+        // just a hint so a single CompileStatus call can tell the
+        // caller "there's something to look at on the run side".
+        let latest_run = latest_run_for_doc(world, doc_id);
+
         let state_label = match state {
             CompileState::Idle => "idle",
             CompileState::Compiling => "compiling",
@@ -490,8 +500,198 @@ impl ApiQueryProvider for CompileStatusProvider {
             "candidates": candidates,
             "ast_parsed": has_ast,
             "error_message": error_message,
+            "latest_run": latest_run,
         }))
     }
+}
+
+// ─── RunStatus / ListRuns ──────────────────────────────────────────────
+
+struct RunStatusProvider;
+
+impl ApiQueryProvider for RunStatusProvider {
+    fn name(&self) -> &'static str {
+        "RunStatus"
+    }
+
+    fn execute(
+        &self,
+        world: &mut World,
+        params: &serde_json::Value,
+    ) -> ApiResponse {
+        let Some(id) = parse_experiment_id(params, "experiment_id") else {
+            return err_missing_field("experiment_id");
+        };
+        let sources_doc = world
+            .get_resource::<ExperimentSources>()
+            .and_then(|s| s.0.get(&id).copied().map(|d| d.raw()));
+        let Some(registry) = world.get_resource::<ExperimentRegistry>() else {
+            return ApiResponse::error(
+                ApiErrorCode::EntityNotFound,
+                "experiment registry not installed".to_string(),
+            );
+        };
+        let Some(exp) = registry.get(id) else {
+            return ApiResponse::error(
+                ApiErrorCode::EntityNotFound,
+                format!("experiment {id:?} not in registry"),
+            );
+        };
+        ApiResponse::ok(run_summary(exp, sources_doc))
+    }
+}
+
+struct ListRunsProvider;
+
+impl ApiQueryProvider for ListRunsProvider {
+    fn name(&self) -> &'static str {
+        "ListRuns"
+    }
+
+    fn execute(
+        &self,
+        world: &mut World,
+        params: &serde_json::Value,
+    ) -> ApiResponse {
+        // Optional `doc` filter — when absent, list every run in the
+        // registry (across docs/twins).
+        let filter_doc = parse_doc_id(params, "doc");
+        // Snapshot the sources map into an id→doc table we can reuse
+        // per row without re-borrowing the resource.
+        let id_to_doc: std::collections::HashMap<ExperimentId, u64> = world
+            .get_resource::<ExperimentSources>()
+            .map(|s| s.0.iter().map(|(k, v)| (*k, v.raw())).collect())
+            .unwrap_or_default();
+        let Some(registry) = world.get_resource::<ExperimentRegistry>() else {
+            return ApiResponse::ok(serde_json::json!({"runs": [], "count": 0}));
+        };
+        let mut rows: Vec<serde_json::Value> = Vec::new();
+        for exp in registry.iter_all() {
+            let exp_doc = id_to_doc.get(&exp.id).copied();
+            if let Some(want) = filter_doc {
+                if exp_doc != Some(want.raw()) {
+                    continue;
+                }
+            }
+            rows.push(run_summary(exp, exp_doc));
+        }
+        // Newest first.
+        rows.sort_by(|a, b| {
+            let ka = a.get("created_at_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+            let kb = b.get("created_at_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+            kb.cmp(&ka)
+        });
+        ApiResponse::ok(serde_json::json!({
+            "runs": rows.clone(),
+            "count": rows.len(),
+        }))
+    }
+}
+
+/// Build the `latest_run` pointer attached to `CompileStatus`. Picks
+/// the most-recently-created experiment whose source doc matches.
+/// Returns `null` when no run has been dispatched for the doc.
+fn latest_run_for_doc(
+    world: &World,
+    doc_id: DocumentId,
+) -> serde_json::Value {
+    let Some(sources) = world.get_resource::<ExperimentSources>() else {
+        return serde_json::Value::Null;
+    };
+    let Some(registry) = world.get_resource::<ExperimentRegistry>() else {
+        return serde_json::Value::Null;
+    };
+    let mut best: Option<&lunco_experiments::Experiment> = None;
+    for (id, d) in &sources.0 {
+        if *d != doc_id {
+            continue;
+        }
+        if let Some(exp) = registry.get(*id) {
+            best = match best {
+                None => Some(exp),
+                Some(prev) if exp.created_at > prev.created_at => Some(exp),
+                Some(prev) => Some(prev),
+            };
+        }
+    }
+    match best {
+        Some(exp) => serde_json::json!({
+            "experiment_id": exp.id.0.to_string(),
+            "name": exp.name,
+            "state": run_state_label(&exp.status),
+        }),
+        None => serde_json::Value::Null,
+    }
+}
+
+fn run_state_label(s: &RunStatus) -> &'static str {
+    match s {
+        RunStatus::Pending => "pending",
+        RunStatus::Running { .. } => "running",
+        RunStatus::Done { .. } => "done",
+        RunStatus::Failed { .. } => "failed",
+        RunStatus::Cancelled => "cancelled",
+    }
+}
+
+/// Project an `Experiment` into the API's stable JSON shape. The
+/// flat `state` tag plus optional fields keeps clients simple — they
+/// pattern-match on `state` and read the field they care about.
+fn run_summary(
+    exp: &lunco_experiments::Experiment,
+    doc_id: Option<u64>,
+) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert(
+        "experiment_id".into(),
+        serde_json::Value::String(exp.id.0.to_string()),
+    );
+    obj.insert("name".into(), serde_json::Value::String(exp.name.clone()));
+    obj.insert(
+        "state".into(),
+        serde_json::Value::String(run_state_label(&exp.status).to_string()),
+    );
+    if let Some(d) = doc_id {
+        obj.insert("doc_id".into(), serde_json::Value::from(d));
+    }
+    obj.insert(
+        "has_result".into(),
+        serde_json::Value::Bool(exp.result.is_some()),
+    );
+    let created_ms = exp
+        .created_at
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    obj.insert(
+        "created_at_ms".into(),
+        serde_json::Value::from(created_ms),
+    );
+    match &exp.status {
+        RunStatus::Running { t_current } => {
+            obj.insert("t_current".into(), serde_json::json!(*t_current));
+        }
+        RunStatus::Done { wall_time_ms } => {
+            obj.insert("wall_time_ms".into(), serde_json::json!(*wall_time_ms));
+        }
+        RunStatus::Failed { error, partial } => {
+            obj.insert("error".into(), serde_json::Value::String(error.clone()));
+            obj.insert("partial".into(), serde_json::Value::Bool(*partial));
+        }
+        RunStatus::Pending | RunStatus::Cancelled => {}
+    }
+    serde_json::Value::Object(obj)
+}
+
+fn parse_experiment_id(
+    params: &serde_json::Value,
+    field: &str,
+) -> Option<ExperimentId> {
+    params
+        .get(field)
+        .and_then(|v| v.as_str())
+        .and_then(|s| uuid::Uuid::parse_str(s).ok())
+        .map(ExperimentId)
 }
 
 // ─── GetDocumentSource (spec 033 P0, US 1.6) ───────────────────────────

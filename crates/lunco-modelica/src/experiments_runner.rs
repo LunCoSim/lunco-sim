@@ -924,10 +924,12 @@ impl ExperimentDrafts {
 #[derive(Resource, Default)]
 pub struct PendingHandles(pub Vec<RunHandle>);
 
-/// Map experiment id → originating DocumentId. Lets the drain system
-/// route Fast Run errors back into the document's CompileStates +
-/// Console so failures surface in the Diagnostics panel like a
-/// regular compile error.
+/// Map experiment id → originating DocumentId. Lets queries that
+/// know a doc (e.g. the RunStatus API) discover which experiments
+/// belong to it. Run-failure surfacing lives on `RunStatus::Failed`
+/// in the registry — we no longer write run errors into
+/// `CompileStates`, which is reserved for compile/Step errors on
+/// the doc itself.
 #[derive(Resource, Default)]
 pub struct ExperimentSources(
     pub std::collections::HashMap<ExperimentId, lunco_doc::DocumentId>,
@@ -959,7 +961,6 @@ pub fn drain_pending_handles(
     mut ev_failed: MessageWriter<RunFailed>,
     mut ev_cancelled: MessageWriter<RunCancelled>,
     mut sources: ResMut<ExperimentSources>,
-    mut compile_states: Option<ResMut<crate::ui::CompileStates>>,
     mut console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
     mut plot_states: Option<ResMut<crate::ui::panels::experiments::PlotPanelStates>>,
     active_plot: Option<Res<crate::ui::panels::experiments::ActivePlot>>,
@@ -1090,11 +1091,6 @@ pub fn drain_pending_handles(
                         .unwrap_or_else(|| "Fast Run".into());
                     if let Some(c) = console.as_mut() {
                         c.error(format!("⚠ {run_name} FAILED: {error}"));
-                    }
-                    if let Some(doc) = sources.0.get(&handle.run_id).copied() {
-                        if let Some(cs) = compile_states.as_mut() {
-                            cs.set_error(doc, format!("Fast Run: {error}"));
-                        }
                     }
                     let had_partial = partial.is_some();
                     if let Some(p) = partial {

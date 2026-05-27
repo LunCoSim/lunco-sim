@@ -311,6 +311,14 @@ impl ExperimentRegistry {
         self.by_twin.values().flatten().find(|e| e.id == id)
     }
 
+    /// Iterate every experiment across every twin bucket. Order is
+    /// twin-bucket order, then insertion order within a bucket —
+    /// callers that need chronological order should sort by
+    /// `created_at`.
+    pub fn iter_all(&self) -> impl Iterator<Item = &Experiment> {
+        self.by_twin.values().flatten()
+    }
+
     pub fn get_mut(&mut self, id: ExperimentId) -> Option<&mut Experiment> {
         self.by_twin.values_mut().flatten().find(|e| e.id == id)
     }
