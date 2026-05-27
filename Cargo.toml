@@ -47,10 +47,8 @@ members = [
 resolver = "2"
 
 [patch.crates-io]
-# Force ALL scnr2 related crates to 0.3.3
-scnr2 = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
-scnr2_generate = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
-scnr2_macro = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
+# scnr2 patch removed — rumoca main uses scnr2 0.3.3 and
+# parol_runtime 4.2 which resolve correctly without overrides.
 
 # Rumoca consumed from local checkout (`../rumoca`, main branch).
 # To develop against a local rumoca checkout, uncomment the [patch] block
