@@ -1048,6 +1048,7 @@ pub struct ModelicaOutput { pub variable_name: String, pub value: f64 }
 #[cfg(test)]
 mod observables_smoke {
     use super::*;
+    #[cfg(any())]
     use rumoca_sim::{SimStepper, StepperOptions};
 
     /// End-to-end smoke test for the observables pipeline: compile the

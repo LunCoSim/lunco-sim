@@ -662,7 +662,6 @@ impl Default for WorkbenchState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_doc::Document;
 
     fn fake_entity(bits: u64) -> Entity {
         Entity::from_bits(bits)

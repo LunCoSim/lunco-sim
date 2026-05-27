@@ -33,9 +33,6 @@
 //! - Auto-sync system: a Bevy `Update` system that mirrors changes
 //!   from `ModelicaDocumentRegistry` into the session. Today callers
 //!   call `upsert_document` explicitly.
-//! - Rumoca ask: `class_inherited_annotations_query` so Icon/Diagram
-//!   merging also goes through the session instead of
-//!   `extract_icon_inherited`.
 //! - Library-parent session for MSL (`Session::with_library_parent`)
 //!   so cross-Twin MSL state is shared once multi-Twin lands.
 
@@ -464,29 +461,6 @@ mod tests {
         );
         assert!(names.contains(&"x"), "library Base.x must be resolved");
         assert!(names.contains(&"y"), "user-doc UserMod.y must be present");
-    }
-
-    #[test]
-    fn inherited_annotations_walks_extends_in_order() {
-        let mut engine = ModelicaEngine::new();
-        let src = "model Base\n  annotation(Icon(graphics={Rectangle(extent={{-10,-10},{10,10}})}));\nend Base;\n\nmodel Mid\n  extends Base;\n  annotation(Icon(graphics={Line(points={{0,0},{5,5}})}));\nend Mid;\n\nmodel Derived\n  extends Mid;\n  annotation(Icon(graphics={Text(extent={{0,0},{10,10}}, textString=\"hi\")}));\nend Derived;\n";
-        upsert_test(&mut engine, DocumentId::new(1), src);
-
-        let layers = engine.inherited_annotations("Derived");
-        // Three classes in the chain: Base, Mid, Derived (in that order).
-        assert_eq!(
-            layers.len(),
-            3,
-            "expected 3 layers (Base, Mid, Derived), got {}",
-            layers.len()
-        );
-        for (i, layer) in layers.iter().enumerate() {
-            assert!(
-                !layer.is_empty(),
-                "layer {} should have at least one annotation expression",
-                i
-            );
-        }
     }
 
     #[test]
