@@ -106,12 +106,55 @@ impl AssetLoader for UsdLoader {
         // parent onto `assets/` fixes it.
         let reader = if let Some(parent) = load_context.path().path().parent() {
             let asset_root = std::path::Path::new("assets");
+            // On native, base_dir lives under `assets/` so the composer's
+            // filesystem reads see real on-disk paths; on wasm (no fs)
+            // base_dir stays asset-source-relative and sublayers are
+            // pre-fetched through the AssetServer below.
             let base_dir = if asset_root.exists() {
                 asset_root.join(parent)
             } else {
                 parent.to_path_buf()
             };
-            UsdComposer::flatten(&reader, &base_dir).map_err(|e| anyhow::anyhow!("USD Composition Error: {}", e))?
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                // Pre-fetch every transitively-referenced .usda via the
+                // AssetServer (the only filesystem-like API available on
+                // wasm). The composer then runs synchronously off the
+                // in-memory map.
+                use lunco_usd_composer::{collect_sublayer_paths, normalize_path};
+                let mut fetched: std::collections::HashMap<std::path::PathBuf, openusd::usda::TextReader> = std::collections::HashMap::new();
+                let mut queue: Vec<(std::path::PathBuf, openusd::usda::TextReader)> = Vec::new();
+                queue.push((base_dir.clone(), reader.clone()));
+                while let Some((cur_dir, cur_reader)) = queue.pop() {
+                    for sub in collect_sublayer_paths(&cur_reader, &cur_dir) {
+                        let key = normalize_path(&sub);
+                        if fetched.contains_key(&key) { continue; }
+                        let bytes = load_context.read_asset_bytes(key.clone()).await
+                            .map_err(|e| anyhow::anyhow!("Failed to fetch sublayer {}: {}", key.display(), e))?;
+                        let text = String::from_utf8(bytes)
+                            .map_err(|e| anyhow::anyhow!("Sublayer {} is not UTF-8: {}", key.display(), e))?;
+                        let mut sub_parser = openusd::usda::parser::Parser::new(&text);
+                        let sub_data = sub_parser.parse().map_err(|e| anyhow::anyhow!("USD Parse Error in {}: {}", key.display(), e))?;
+                        let sub_reader = openusd::usda::TextReader::from_data(sub_data);
+                        let parent_dir = key.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
+                        fetched.insert(key.clone(), sub_reader.clone());
+                        queue.push((parent_dir, sub_reader));
+                    }
+                }
+                let mut fetcher = |p: &std::path::Path| -> anyhow::Result<openusd::usda::TextReader> {
+                    let key = normalize_path(p);
+                    fetched.get(&key)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("Sublayer not pre-fetched: {}", key.display()))
+                };
+                UsdComposer::flatten_with_fetcher(&reader, &base_dir, &mut fetcher)
+                    .map_err(|e| anyhow::anyhow!("USD Composition Error: {}", e))?
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                UsdComposer::flatten(&reader, &base_dir).map_err(|e| anyhow::anyhow!("USD Composition Error: {}", e))?
+            }
         } else {
             reader
         };

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 pub mod python;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod repl;
 pub mod doc;
 
@@ -24,15 +25,19 @@ impl Plugin for LunCoScriptingPlugin {
         
         app.init_resource::<ScriptRegistry>();
         
-        let repl = repl::spawn_repl_thread();
-        app.insert_resource(repl);
-        
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let repl = repl::spawn_repl_thread();
+            app.insert_resource(repl);
+        }
+
         app.register_type::<ScriptedModel>()
            .register_type::<doc::ScriptLanguage>();
 
         let python_status = python::get_python_status();
         app.insert_resource(python_status);
 
+        #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, repl::process_repl_commands);
         app.add_systems(FixedUpdate, run_scripted_models);
 

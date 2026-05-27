@@ -1,8 +1,24 @@
 use openusd::usda::TextReader;
 use openusd::sdf::{self, SpecType, Value};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use anyhow::{bail, Result};
+
+/// Resolve `..` / `.` segments in a path *without* touching the
+/// filesystem. Needed for wasm where canonicalisation has no fs to
+/// consult, and useful on native to keep `processed` cache keys
+/// deduplicated across reference chains.
+pub fn normalize_path(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::ParentDir => { out.pop(); }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
 
 /// File extensions the composer recognises as **non-USD binary assets**
 /// referenced through `payload`/`references`.
@@ -91,15 +107,79 @@ fn find_assets_root(start: &Path) -> PathBuf {
 /// (Prim Composition Propagation) logic.
 pub struct UsdComposer;
 
+/// Sublayer reader strategy. The default reads from the local
+/// filesystem via `TextReader::read`; the wasm asset loader injects a
+/// pre-fetched-bytes map so HTTP-fetched layers feed back in
+/// synchronously.
+pub type SublayerFetcher<'a> = &'a mut dyn FnMut(&Path) -> Result<TextReader>;
+
+/// Walk a parsed USDA layer's references/payloads and return every
+/// resolved sublayer path (USD-text only, binary assets skipped). Used
+/// by the wasm asset loader to discover the transitive sublayer set so
+/// it can async-fetch them all via the bevy `AssetServer` before
+/// invoking the (sync) composer.
+pub fn collect_sublayer_paths(
+    reader: &TextReader,
+    base_dir: &Path,
+) -> Vec<PathBuf> {
+    let asset_root = find_assets_root(base_dir);
+    let mut out = Vec::new();
+    for (_path, spec) in reader.iter() {
+        let mut asset_paths: Vec<String> = Vec::new();
+        if let Some(Value::ReferenceListOp(list_op)) = spec.fields.get(sdf::schema::FieldKey::References.as_str()) {
+            for r in list_op.explicit_items.iter()
+                .chain(list_op.added_items.iter())
+                .chain(list_op.prepended_items.iter())
+                .chain(list_op.appended_items.iter())
+            {
+                if !r.asset_path.is_empty() { asset_paths.push(r.asset_path.clone()); }
+            }
+        }
+        if let Some(Value::PayloadListOp(list_op)) = spec.fields.get(sdf::schema::FieldKey::Payload.as_str()) {
+            for p in list_op.explicit_items.iter()
+                .chain(list_op.added_items.iter())
+                .chain(list_op.prepended_items.iter())
+                .chain(list_op.appended_items.iter())
+            {
+                if !p.asset_path.is_empty() { asset_paths.push(p.asset_path.clone()); }
+            }
+        }
+        for asset_path in asset_paths {
+            if is_binary_asset(&asset_path) || asset_path.contains("://") { continue; }
+            let resolved = if let Some(rest) = asset_path.strip_prefix('/') {
+                asset_root.join(rest)
+            } else {
+                base_dir.join(&asset_path)
+            };
+            out.push(normalize_path(&resolved));
+        }
+    }
+    out
+}
+
 impl UsdComposer {
     /// Recursively resolves all references in the given reader and merges them
-    /// into a single flattened layer.
+    /// into a single flattened layer. Uses the local filesystem for sublayer reads.
     pub fn flatten(reader: &TextReader, base_dir: &Path) -> Result<TextReader> {
+        let mut fetcher = |p: &Path| TextReader::read(p);
+        Self::flatten_with_fetcher(reader, base_dir, &mut fetcher)
+    }
+
+    /// Like [`Self::flatten`], but reads referenced sublayers through a
+    /// caller-provided closure. Use this in environments without a
+    /// blocking filesystem (e.g. wasm), where the loader pre-fetches
+    /// every transitively-referenced `.usda` via the host's async asset
+    /// pipeline and the closure just hands them back from an
+    /// in-memory map.
+    pub fn flatten_with_fetcher(
+        reader: &TextReader,
+        base_dir: &Path,
+        fetcher: SublayerFetcher<'_>,
+    ) -> Result<TextReader> {
         let mut data_map: HashMap<sdf::Path, sdf::Spec> = reader.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let mut processed_references = HashSet::new();
-        // Find the actual assets root for resolving "/"-prefixed absolute USD paths
         let usd_root = find_assets_root(base_dir);
-        Self::flatten_recursive(&mut data_map, &usd_root, base_dir, &mut processed_references)?;
+        Self::flatten_recursive(&mut data_map, &usd_root, base_dir, &mut processed_references, fetcher)?;
         Ok(TextReader::from_data(data_map))
     }
 
@@ -107,7 +187,8 @@ impl UsdComposer {
         data_map: &mut HashMap<sdf::Path, sdf::Spec>,
         asset_root: &Path,
         current_dir: &Path,
-        processed: &mut HashSet<PathBuf>
+        processed: &mut HashSet<PathBuf>,
+        fetcher: SublayerFetcher<'_>
     ) -> Result<()> {
         // Collect all prim paths and prepare merges
         let prim_paths: Vec<sdf::Path> = data_map.keys().cloned().collect();
@@ -167,12 +248,12 @@ impl UsdComposer {
                     // "/"-prefixed paths are absolute from USD assets root
                     let ref_path = if asset_path.starts_with('/') {
                         let stripped = asset_path.strip_prefix('/').unwrap();
-                        asset_root.join(stripped)
+                        normalize_path(&asset_root.join(stripped))
                     } else {
-                        current_dir.join(&asset_path)
+                        normalize_path(&current_dir.join(&asset_path))
                     };
 
-                    let sub_reader = TextReader::read(&ref_path)?;
+                    let sub_reader = fetcher(&ref_path)?;
                     let ref_current_dir = ref_path.parent().unwrap_or_else(|| Path::new("."));
                     let mut sub_data: HashMap<sdf::Path, sdf::Spec> = sub_reader.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
@@ -180,7 +261,7 @@ impl UsdComposer {
                     // (prevents infinite loops from circular references)
                     if !processed.contains(&ref_path) {
                         processed.insert(ref_path.clone());
-                        Self::flatten_recursive(&mut sub_data, asset_root, ref_current_dir, processed)?;
+                        Self::flatten_recursive(&mut sub_data, asset_root, ref_current_dir, processed, fetcher)?;
                     }
 
                     let root = if ref_prim_path.is_empty() {

@@ -35,7 +35,7 @@ use lunco_core::Avatar;
 use lunco_cosim::CoSimPlugin;
 use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
-use lunco_modelica::{ModelicaPlugin, ModelicaSet};
+use lunco_modelica::{ModelicaCorePlugin, ModelicaSet};
 use big_space::prelude::Grid;
 use lunco_materials::{BlueprintMaterialPlugin, SolarPanelMaterialPlugin};
 
@@ -171,7 +171,7 @@ fn main() {
         .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
         .add_plugins(CoSimPlugin)
         .add_plugins(lunco_workbench::WorkbenchPlugin)
-        .add_plugins(ModelicaPlugin)
+        .add_plugins(ModelicaCorePlugin)
         .add_plugins(lunco_core::LunCoCorePlugin)
         .add_plugins(GravityPlugin)
         .add_plugins(EnvironmentPlugin)
@@ -241,8 +241,10 @@ fn main() {
         .add_systems(PostUpdate, (
             global_transform_propagation_system,
             spawn_fallback_avatar,
-        ).chain().after(avian3d::prelude::PhysicsSystems::Writeback))
-        .add_plugins(lunco_api::LunCoApiPlugin::default());
+        ).chain().after(avian3d::prelude::PhysicsSystems::Writeback));
+
+    #[cfg(feature = "lunco-api")]
+    app.add_plugins(lunco_api::LunCoApiPlugin::default());
 
     if log_diag {
         app.add_plugins(bevy::diagnostic::LogDiagnosticsPlugin::default());

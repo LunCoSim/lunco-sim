@@ -345,6 +345,15 @@ generate_bindings() {
 Run: cargo run -p lunco-assets -- download"
     fi
 
+    # sandbox_web loads scene files via the bevy AssetServer over HTTP
+    # (`assets/scenes/sandbox/sandbox_scene.usda` and friends). Copy the
+    # workspace `assets/` tree next to the wasm so they're same-origin.
+    # lunica_web doesn't need this — its models live in the MSL bundle.
+    if [ "$binary" = "sandbox_web" ] && [ -d "$PROJECT_DIR/assets" ]; then
+        info "Copying assets/ → $dist_dir/assets/"
+        rsync -a --delete "$PROJECT_DIR/assets/" "$dist_dir/assets/"
+    fi
+
     # Show output size
     WASM_SIZE=$(du -h "$dist_dir/${binary}_bg.wasm" | cut -f1)
     JS_SIZE=$(du -h "$dist_dir/${binary}.js" | cut -f1)
