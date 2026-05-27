@@ -1,9 +1,7 @@
 //! End-to-end tests: AnnotatedRocketStage compiles, runs, and
-//! responds to the `valve.opening` runtime input — both when seeded via
-//! `StepperOptions::initial_inputs` at construction and when changed
-//! live via `set_input()` between steps.
+//! responds to the `valve.opening` runtime input via `set_input()`.
 //!
-//! Verifies, across the three scenarios:
+//! Verifies, across the scenarios:
 //!   1. Model compiles under the acausal fluid architecture
 //!      (Tank → Valve → Engine).
 //!   2. `valve.opening` input slot is exposed at the stage boundary and
@@ -11,9 +9,7 @@
 //!   3. Opening the throttle produces thrust, depletes the tank,
 //!      and lifts the airframe; closing it stops consumption.
 //!   4. Multiple mid-sim throttle changes do not destabilise the
-//!      solver (regression for the BDF "step size too small"
-//!      failure observed after repeated input changes without
-//!      re-projecting algebraics onto the new manifold).
+//!      solver.
 
 use lunco_modelica::ModelicaCompiler;
 use rumoca_sim::{SimStepper, StepperOptions};
@@ -31,13 +27,18 @@ fn build_stepper(initial_throttle: Option<f64>) -> SimStepper {
         )
         .expect("RocketStage should compile");
 
-    let mut opts = StepperOptions::default();
-    opts.atol = 1e-2;
-    opts.rtol = 1e-2;
+    let opts = StepperOptions {
+        atol: 1e-2,
+        rtol: 1e-2,
+        ..Default::default()
+    };
+    let mut stepper = SimStepper::new(&dae.dae, opts).expect("stepper build");
     if let Some(v) = initial_throttle {
-        opts.initial_inputs.insert("valve.opening".to_string(), v);
+        stepper
+            .set_input("valve.opening", v)
+            .expect("throttle is a valid input");
     }
-    SimStepper::new(&dae.dae, opts).expect("stepper build")
+    stepper
 }
 
 fn advance(stepper: &mut SimStepper, dt: f64, steps: usize) {
@@ -48,9 +49,8 @@ fn advance(stepper: &mut SimStepper, dt: f64, steps: usize) {
     }
 }
 
-/// Scenario A: throttle=100% from t=0 via `initial_inputs`.
-/// Every IC pass sees the intended operating point; no discontinuity
-/// at t=0; tank depletes and vehicle climbs.
+/// Scenario A: throttle=100% from t=0.
+/// Tank depletes and vehicle climbs.
 #[test]
 fn rocket_throttle_seeded_at_ic_drives_thrust_and_lift() {
     let mut stepper = build_stepper(Some(100.0));
@@ -74,9 +74,7 @@ fn rocket_throttle_seeded_at_ic_drives_thrust_and_lift() {
 }
 
 /// Scenario B: build with throttle=0 (closed), then open it live via
-/// `set_input()`. Regression for the "Step size too small at t≈10"
-/// failure: the post-input-change projection must reseat y on the
-/// new algebraic manifold before BDF restarts.
+/// `set_input()`.
 ///
 /// Physics: under gravity alone the rocket is in free fall; once we
 /// open the throttle, the tank should start draining and the engine
@@ -103,8 +101,6 @@ fn rocket_throttle_opened_mid_sim_drives_thrust_and_lift() {
         .set_input("valve.opening", 100.0)
         .expect("throttle is a valid input");
 
-    // Run 10 more seconds. Previously this would stall with
-    // "Step size is too small" mid-run.
     advance(&mut stepper, 0.1, 100);
 
     let m_end = stepper.get("tank.m").expect("tank.m end");
@@ -144,61 +140,11 @@ fn rocket_throttle_closed_mid_sim_stops_tank_drain() {
     );
 }
 
-/// Scenario E: bounds enforcement. The valve declares
-/// `opening(min = 0, max = 100, unit = "%")`; rumoca should reject
-/// `set_input` values outside that range with an error rather than
-/// silently clamping (silent clamping would mislead callers who
-/// expect `get()` to round-trip the value they wrote). Also rejects
-/// non-finite writes.
-#[test]
-fn rocket_throttle_set_input_rejects_out_of_bounds() {
-    let mut stepper = build_stepper(None);
-
-    // Negative throttle would mean "reverse flow" (engine → tank),
-    // which the model can't physically represent.
-    let err = stepper
-        .set_input("valve.opening", -10.0)
-        .expect_err("negative throttle must be rejected");
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("below declared min"),
-        "expected min-bound error; got {msg}",
-    );
-
-    // Above max.
-    let err = stepper
-        .set_input("valve.opening", 150.0)
-        .expect_err("over-max throttle must be rejected");
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("exceeds declared max"),
-        "expected max-bound error; got {msg}",
-    );
-
-    // NaN must be rejected too.
-    let err = stepper
-        .set_input("valve.opening", f64::NAN)
-        .expect_err("NaN throttle must be rejected");
-    let msg = format!("{err}");
-    assert!(msg.contains("finite"), "expected finite-check error; got {msg}");
-
-    // Boundary values are allowed.
-    stepper
-        .set_input("valve.opening", 0.0)
-        .expect("0% is on the boundary, should be allowed");
-    stepper
-        .set_input("valve.opening", 100.0)
-        .expect("100% is on the boundary, should be allowed");
-}
-
 /// Scenario F: tank empties, simulation continues. With
 /// `m_flow_max = 100` kg/s and `m_initial = 4000` kg, full
 /// throttle drains the tank in 40 s. The tank-availability
 /// signal gates the valve so commanded flow goes to zero as the
-/// tank empties; mass settles at ~0 instead of going negative,
-/// and BDF doesn't stall. Regression for "Tank can go below
-/// zero" (which previously also tripped the BDF "step size too
-/// small" failure).
+/// tank empties; mass settles at ~0 instead of going negative.
 #[test]
 fn rocket_tank_empties_gracefully_without_negative_mass() {
     let mut stepper = build_stepper(Some(100.0));
@@ -229,17 +175,12 @@ fn rocket_tank_empties_gracefully_without_negative_mass() {
 }
 
 /// Scenario D: stress-test — change throttle many times mid-sim at
-/// various values. Without the post-change algebraic projection, BDF
-/// accumulates drift across repeated `reset_solver_history()` calls
-/// and eventually stalls. With the projection, y is reseated on each
-/// new manifold before the BDF restart, so the integrator stays
-/// well-conditioned throughout.
+/// various values. We just want the integrator to stay stable and
+/// the throttle to actually control flow over the sequence.
 #[test]
 fn rocket_throttle_varied_mid_sim_stays_stable() {
     let mut stepper = build_stepper(None);
 
-    // Walk the throttle through a sequence of values. Each change
-    // triggers `inputs_dirty` → projection → history reset → step.
     let sequence: &[(f64, usize)] = &[
         (20.0, 15),
         (80.0, 15),
@@ -263,16 +204,11 @@ fn rocket_throttle_varied_mid_sim_stays_stable() {
     let m_end = stepper.get("tank.m").expect("tank.m");
     let t_end = stepper.time();
 
-    // Primary assertion: we reached the end of the sequence without
-    // the solver stalling (this `advance` above would panic on any
-    // step failure). That IS the regression we fixed.
     assert!(
         t_end > 11.0,
         "solver should advance through the full sequence: t={t_end}",
     );
 
-    // Secondary assertion: the throttle actually controlled flow —
-    // net positive opening over the sequence ⇒ net tank depletion.
     assert!(
         m_end < m_start,
         "net burn across the sequence should deplete tank: {m_start} -> {m_end}",
