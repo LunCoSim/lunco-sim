@@ -1531,8 +1531,17 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     // dock-app branch below — dock mode wants an opaque backdrop;
     // 3D-app mode leaves the centre transparent for Bevy to render
     // through.
-    let has_dock_tabs = layout.dock.iter_all_tabs().next().is_some();
-    if has_dock_tabs {
+    // Paint a full-window opaque backdrop ONLY when the layout has
+    // chrome panels but no ViewportPanel (Design mode). In View
+    // (empty layout) or Build (ViewportPanel in layout), Camera3d
+    // owns the centre of the framebuffer and the backdrop would
+    // overpaint it — egui composites with alpha-blending, so an
+    // "opaque background" layer at full-window extent really does
+    // hide the 3D underneath. Side/Top/Bottom egui panels paint their
+    // own opaque frames, so chrome stays solid without this fill.
+    let needs_full_backdrop = !viewport::layout_is_empty(layout)
+        && !viewport::layout_contains_panel(layout, viewport::VIEWPORT_PANEL_ID);
+    if needs_full_backdrop {
         let painter = ctx.layer_painter(egui::LayerId::background());
         painter.rect_filled(ctx.content_rect(), 0.0, get_panel_backdrop(theme));
     }

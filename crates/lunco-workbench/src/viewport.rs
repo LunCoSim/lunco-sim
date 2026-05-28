@@ -201,11 +201,17 @@ impl Panel for ViewportPanel {
     }
 
     fn transparent_background(&self) -> bool {
-        // OPAQUE. See the type-level doc-comment: the 3D camera now
-        // renders *inside* this rect, so the backdrop is what we want
-        // to see if rect-sync ever glitches. Flipping this back to
-        // `true` re-introduces the full-window-bleed footgun.
-        false
+        // TRANSPARENT — required by the current render order
+        // (`WorkbenchEguiHost` Camera2d order=1, Camera3d order=0).
+        // Camera3d paints 3D into its viewport rect FIRST; egui paints
+        // chrome on top with `ClearColorConfig::None`. If this panel
+        // painted an opaque backdrop, egui would overpaint the 3D
+        // pixels Camera3d just wrote and the centre area would be
+        // solid theme dark. Bleed safety isn't lost — `apply_workbench
+        // _viewport` sets `Camera::is_active = false` when ViewportPanel
+        // isn't in the active layout, so no 3D ever reaches the
+        // framebuffer to leak.
+        true
     }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
@@ -330,7 +336,7 @@ pub fn apply_workbench_viewport(
 /// True iff every slot Vec is empty AND the dock has no tabs — a View-
 /// style perspective that wants the entire window for the 3D scene with
 /// no chrome painted on top.
-fn layout_is_empty(layout: &crate::WorkbenchLayout) -> bool {
+pub(crate) fn layout_is_empty(layout: &crate::WorkbenchLayout) -> bool {
     layout.side_browser.is_empty()
         && layout.center.is_empty()
         && layout.right_inspector.is_empty()
@@ -338,7 +344,7 @@ fn layout_is_empty(layout: &crate::WorkbenchLayout) -> bool {
         && layout.dock.iter_all_tabs().next().is_none()
 }
 
-fn layout_contains_panel(layout: &crate::WorkbenchLayout, panel: PanelId) -> bool {
+pub(crate) fn layout_contains_panel(layout: &crate::WorkbenchLayout, panel: PanelId) -> bool {
     if layout.side_browser.iter().any(|p| *p == panel)
         || layout.center.iter().any(|p| *p == panel)
         || layout.right_inspector.iter().any(|p| *p == panel)
