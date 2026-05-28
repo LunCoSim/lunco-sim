@@ -103,7 +103,7 @@ pub fn install_fallback_fonts_with_bytes(ctx: &egui::Context, dejavu: Vec<u8>) {
 /// Wasm-only: fetch `url` over HTTP, then install the result as a
 /// fallback font on `ctx`. The page bundle ships DejaVu under
 /// `/fonts/DejaVuSans.ttf`; `build_web.sh` copies it from
-/// `<workspace>/.cache/fonts/DejaVuSans.ttf` into `dist/lunica_web/fonts/`
+/// `<workspace>/.cache/fonts/DejaVuSans.ttf` into `dist/lunica/fonts/`
 /// during pack. Fire-and-forget — failure logs a warning and leaves
 /// egui with default fonts (math/arrow glyphs will tofu).
 #[cfg(target_arch = "wasm32")]

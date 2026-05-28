@@ -7,8 +7,8 @@
 // and call `init()` so `#[wasm_bindgen(start)] fn run()` actually fires.
 //
 // The relative path matches the layout produced by `scripts/build_web.sh`:
-//   dist/lunica_web/worker/lunica_worker.js
-//   dist/lunica_web/worker/worker_bootstrap.js  ← this file
+//   dist/lunica/worker/lunica_worker.js
+//   dist/lunica/worker/worker_bootstrap.js  ← this file
 import init from './lunica_worker.js';
 
 await init();

@@ -18,13 +18,14 @@ lunco-api = ["dep:lunco-api"]
 # session.
 tracy = ["bevy/trace_tracy"]
 
+# Single source for desktop AND web. `scripts/build_web.sh build lunica`
+# builds this bin with `--target wasm32` — the wasm-specific entry /
+# window / worker wiring is gated behind `#[cfg(target_arch = "wasm32")]`
+# inside `lunica.rs`, mirroring how `sandbox` unifies its desktop+web
+# entry. No separate `_web` bin.
 [[bin]]
 name = "lunica"
 path = "src/bin/lunica.rs"
-
-[[bin]]
-name = "lunica_web"
-path = "src/bin/lunica_web.rs"
 
 # Off-thread Modelica worker — wasm32 only. Built as a second wasm bundle
 # the main page launches via `new Worker()`. See
@@ -195,7 +196,7 @@ web-sys = { version = "0.3", features = [
     "Response",
     "Headers",
     "Storage",
-    # `?example=…` URL parameter parsing in lunica_web.rs.
+    # `?example=…` URL parameter parsing in lunica.rs.
     "Location",
     "UrlSearchParams",
     # Web Worker bindings — used by `worker_transport` to offload the

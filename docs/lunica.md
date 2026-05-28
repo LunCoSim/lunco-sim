@@ -18,7 +18,7 @@ browser, with the same sources.
   `lunco-theme`, …), no Bevy renderer extras for celestial/terrain/etc.
 - **Two binaries, one source tree**, both in `crates/lunco-modelica`:
   - `lunica` — desktop (native window via Bevy + bevy_egui).
-  - `lunica_web` — wasm32, served via `scripts/build_web.sh`.
+  - `lunica` — wasm32, served via `scripts/build_web.sh`.
 - **Rumoca** under the hood for parse/compile/sim. The desktop build
   reads MSL from `~/.cache/lunco/msl/` (pre-indexed); the web build
   bundles a pre-parsed MSL artifact at build time so the page doesn't
@@ -42,12 +42,12 @@ cargo run --bin lunica                  # opens the window
 cargo run --bin lunica -- --api 3000    # also serves the typed-command HTTP API
 
 # Web (wasm32)
-./scripts/build_web.sh build lunica_web
-./scripts/build_web.sh serve lunica_web   # http://localhost:8080
+./scripts/build_web.sh build lunica
+./scripts/build_web.sh serve lunica   # http://localhost:8080
 ```
 
-The web pipeline produces `dist/lunica_web/` (wasm + JS glue +
-`index.html` + bundled MSL under `dist/lunica_web/msl/`).
+The web pipeline produces `dist/lunica/` (wasm + JS glue +
+`index.html` + bundled MSL under `dist/lunica/msl/`).
 
 ## MSL cache & `msl_indexer`
 
@@ -70,8 +70,8 @@ machine:
    of wall time for what should be a cache hit.
 
 The web build runs `lunco-assets`'s `build_msl_assets` over the same
-on-disk MSL during `./scripts/build_web.sh build lunica_web`, packaging
-a versioned compressed bundle into `dist/lunica_web/msl/`. That is the
+on-disk MSL during `./scripts/build_web.sh build lunica`, packaging
+a versioned compressed bundle into `dist/lunica/msl/`. That is the
 artifact the wasm runtime fetches at page load — no host filesystem
 access from the browser.
 

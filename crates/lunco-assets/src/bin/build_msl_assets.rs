@@ -21,7 +21,7 @@
 //!
 //! ```bash
 //! cargo run -p lunco-assets --bin build_msl_assets -- \
-//!     --out dist/lunica_web/msl
+//!     --out dist/lunica/msl
 //! ```
 //!
 //! No CLI deps — uses bare `std::env::args` to keep this binary cheap to

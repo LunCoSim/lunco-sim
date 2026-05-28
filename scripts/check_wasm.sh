@@ -65,7 +65,7 @@ build_one() {
 }
 
 # Build both wasm binaries. Failure short-circuits via `set -e`.
-build_one lunica_web   lunco-modelica
+build_one lunica        lunco-modelica
 build_one sandbox_web  lunco-client
 # The companion worker bundle for lunica. Off-thread Modelica compile
 # can break in different ways than the main UI bundle (different deps
@@ -79,7 +79,7 @@ if [ "$QUICK" = "1" ]; then exit 0; fi
 
 # Report sizes for context (not a gate — purely informational).
 target_dir="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
-for bin in lunica_web sandbox_web lunica_worker; do
+for bin in lunica sandbox_web lunica_worker; do
     wasm="$target_dir/wasm32-unknown-unknown/web-dev/$bin.wasm"
     if [ -f "$wasm" ]; then
         size=$(du -h "$wasm" | cut -f1)

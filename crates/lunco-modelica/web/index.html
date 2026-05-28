@@ -151,7 +151,7 @@
     </div>
     <canvas id="bevy"></canvas>
     <script type="module">
-        import init, { __lc_test_worker_ping, __lc_test_dispatch_compile } from './lunica_web.js';
+        import init, { __lc_test_worker_ping, __lc_test_dispatch_compile } from './lunica.js';
         // Expose dev-side bridges to test the off-thread worker round-trip
         // from the Console without going through canvas clicks:
         //   __lc_test_worker_ping('hi')                — pings worker
@@ -293,7 +293,7 @@
         const __LC_WASM_SIZE__ = 0;
 
         try {
-            const wasmResp = await streamWasmResponse('./lunica_web_bg.wasm');
+            const wasmResp = await streamWasmResponse('./lunica_bg.wasm');
             setPhase('Starting workbench');
             setDetail('initialising…');
             setIndeterminate();
