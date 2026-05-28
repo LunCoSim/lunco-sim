@@ -325,7 +325,7 @@ fn render_unified_toolbar(
                 world.get_resource::<crate::ModelicaRunnerResource>().and_then(|r| {
                         use lunco_experiments::ExperimentRunner;
                         r.0.default_bounds(&model_ref)
-                    }).unwrap_or(lunco_experiments::RunBounds { t_start: 0.0, t_end: 10.0, dt: None, tolerance: None, solver: None })
+                    }).unwrap_or(lunco_experiments::RunBounds { t_start: 0.0, t_end: 10.0, dt: None, tolerance: None, solver: None, h0: None })
             });
             let overrides_count = world.get_resource::<crate::experiments_runner::ExperimentDrafts>().and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len())).unwrap_or(0);
             let source_text = world.get_resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(doc)).map(|h| h.document().source().to_string()).unwrap_or_default();
@@ -346,7 +346,7 @@ fn render_unified_toolbar(
                 setup.0 = Some(crate::ui::commands::FastRunSetupEntry { doc, model_ref, bounds, overrides_count, inputs });
             }
         } else {
-            world.commands().trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None });
+            world.commands().trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None, solver: None, h0: None });
         }
     }
     if compile_clicked {

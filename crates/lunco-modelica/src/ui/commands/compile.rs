@@ -327,7 +327,7 @@ pub(crate) fn render_fast_run_setup(
             }
         }
         draft.inputs = new_inputs;
-        commands.trigger(FastRunActiveModel { doc: entry.doc, class: None, t_end: None, dt: None, tolerance: None });
+        commands.trigger(FastRunActiveModel { doc: entry.doc, class: None, t_end: None, dt: None, tolerance: None, solver: None, h0: None });
     } else if cancelled {
         setup.0 = None;
     }
@@ -430,7 +430,7 @@ pub(crate) fn render_compile_class_picker(
             PickerPurpose::FastRun => {
                 // Re-dispatch — second-time-around the drilled-class
                 // pin is set so resolution skips the picker.
-                commands.trigger(FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None });
+                commands.trigger(FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None, solver: None, h0: None });
             }
         }
     } else if cancelled {
@@ -898,6 +898,15 @@ pub struct FastRunActiveModel {
     pub dt: Option<f64>,
     /// Override solver tolerance. `None` = use annotation or fallback.
     pub tolerance: Option<f64>,
+    /// Override solver family: "bdf", "dassl", "ida" → BDF;
+    /// "esdirk34", "rk", "dopri", "trbdf2" → ESDIRK34; "auto" or
+    /// None → backend default (currently BDF in the stepper path).
+    pub solver: Option<String>,
+    /// Override initial step size (seconds) passed to diffsol's
+    /// `problem.h0`. `None` = use the backend's span-based default
+    /// (`span / 5_000_000`). Useful diagnostic when long-horizon
+    /// runs fail at a stiff transient near `t₀`.
+    pub h0: Option<f64>,
 }
 
 #[on_command(FastRunActiveModel)]
@@ -908,6 +917,8 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
     let cmd_t_end = trigger.event().t_end;
     let cmd_dt = trigger.event().dt;
     let cmd_tolerance = trigger.event().tolerance;
+    let cmd_solver = trigger.event().solver.clone();
+    let cmd_h0 = trigger.event().h0;
     commands.queue(move |world: &mut World| {
         let Some(doc) = (if raw.is_unassigned() {
             resolve_active_doc(world)
@@ -1028,6 +1039,7 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
             dt: None,
             tolerance: None,
             solver: None,
+            h0: None,
         };
 
         // Layer 2: annotation (from AST, now seeded into runner cache).
@@ -1055,6 +1067,8 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
         if let Some(t) = cmd_t_end { bounds.t_end = t; }
         if let Some(d) = cmd_dt { bounds.dt = Some(d); }
         if let Some(t) = cmd_tolerance { bounds.tolerance = Some(t); }
+        if let Some(s) = cmd_solver { bounds.solver = Some(s); }
+        if let Some(h) = cmd_h0 { bounds.h0 = Some(h); }
 
         // Insert experiment + dispatch run. Scope to the originating
         // doc so multi-tab workflows keep run histories separate

@@ -749,7 +749,7 @@ impl Panel for ExperimentsPanel {
             {
                 world
                     .commands()
-                    .trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None });
+                    .trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None, solver: None, h0: None });
             }
         }
 
@@ -816,6 +816,7 @@ impl ExperimentsPanel {
                     dt: None,
                     tolerance: None,
                     solver: None,
+                    h0: None,
                 })
         });
         let mut bounds_changed = false;
@@ -988,24 +989,38 @@ impl ExperimentsPanel {
             let label = match current {
                 "auto" => "Auto",
                 "bdf" => "BDF (stiff)",
-                "rk4" => "RK4 (non-stiff)",
+                "esdirk34" => "ESDIRK34 (stiff, sharp transitions)",
+                "tr_bdf2" => "TR-BDF2 (stiff + events)",
+                "tsit45" => "Tsit45 (non-stiff)",
+                // Legacy alias: old saves used "rk4" — keep it readable.
+                "rk4" => "ESDIRK34 (stiff, sharp transitions)",
                 other => other,
             };
             egui::ComboBox::from_id_salt("setup_solver")
                 .selected_text(label)
-                .width(140.0)
+                .width(220.0)
                 .show_ui(ui, |ui| {
                     for (val, label, hover) in [
                         ("auto", "Auto",
-                         "Let the backend pick based on stiffness heuristics."),
+                         "Let the backend pick. Currently maps to BDF for the \
+                          stepper path."),
                         ("bdf", "BDF (stiff)",
-                         "Backward Differentiation Formula — implicit, robust \
-                          on stiff DAEs (thermal, chemical, electrical). \
-                          Slower per step but stable with large dt."),
-                        ("rk4", "RK4 (non-stiff)",
-                         "Explicit Runge-Kutta — fast on smooth, non-stiff \
-                          problems (rigid-body mechanics, kinematics). \
-                          Can blow up on stiff systems."),
+                         "Backward Differentiation Formula — variable-order \
+                          implicit, robust on stiff DAEs (thermal, chemical, \
+                          electrical). OMC's default. Can struggle at startup \
+                          on models with sharp tanh / relop transitions."),
+                        ("esdirk34", "ESDIRK34 (stiff, sharp transitions)",
+                         "Explicit Singly-Diagonally-Implicit RK 3(4). A- and \
+                          L-stable. Better Newton convergence than BDF near \
+                          sharp transitions; often unblocks models BDF chokes on."),
+                        ("tr_bdf2", "TR-BDF2 (stiff + events)",
+                         "Trapezoidal Rule + BDF2, two-stage implicit. A- and \
+                          L-stable. Strong on moderately stiff problems with \
+                          event-driven dynamics — close in spirit to DASSL."),
+                        ("tsit45", "Tsit45 (non-stiff)",
+                         "Tsitouras 4(5) explicit RK — like Dormand-Prince. \
+                          Fast on smooth, non-stiff problems (rigid-body \
+                          mechanics, kinematics). Will blow up on stiff DAEs."),
                     ] {
                         let resp = ui
                             .selectable_label(current == val, label)
@@ -1132,7 +1147,7 @@ impl ExperimentsPanel {
             // Skip the modal — Setup is already filled in.
             world
                 .commands()
-                .trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None });
+                .trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None, solver: None, h0: None });
         }
     }
 

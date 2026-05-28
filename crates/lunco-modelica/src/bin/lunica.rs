@@ -5,6 +5,8 @@ use bevy_egui::EguiPlugin;
 use lunco_modelica::ModelicaPlugin;
 
 fn main() {
+    install_panic_hook();
+
     // Cap rayon's global pool to leave headroom for Bevy's renderer.
     //
     // History: when projection + ast_refresh still ran on rayon, the
@@ -145,6 +147,32 @@ fn main() {
     app.insert_resource(Time::<Fixed>::from_hz(60.0));
 
     app.run();
+}
+
+fn install_panic_hook() {
+    let log_path = std::env::var("LUNICA_PANIC_LOG")
+        .unwrap_or_else(|_| "/tmp/lunica_panic.log".to_string());
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        let msg = format!(
+            "\n===== panic @ {:?} =====\n{info}\nthread: {:?}\n{backtrace}\n",
+            std::time::SystemTime::now(),
+            std::thread::current().name().unwrap_or("<unnamed>"),
+        );
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            use std::io::Write;
+            let _ = f.write_all(msg.as_bytes());
+            let _ = f.flush();
+        }
+        eprint!("{msg}");
+        default(info);
+    }));
+    std::env::set_var("RUST_BACKTRACE", "1");
 }
 
 fn setup_sandbox(mut commands: Commands) {

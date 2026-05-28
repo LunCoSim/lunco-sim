@@ -282,3 +282,54 @@ Quick checklist before you write a `Update` system:
 - **Maintenance Focus**: Comments should primarily aid in **system maintenance** for both **human developers and AI agents**.
 - **The "Why" Over "How"**: Prioritize explaining the design intent, dependencies, and "why" a particular approach was chosen, rather than just restating what the code does. 
 - **Conciseness**: Aim for "the right amount" of documentation—clear, helpful, and never redundant.
+
+## 9. Numeric Experiments & Solver Tuning
+
+When a model wouldn't integrate, or solver behaviour required investigation,
+record the diagnosis under `docs/numeric-experiments/`. **Read existing reports
+before re-deriving** — most stiff-DAE failures fall into one of a few
+already-diagnosed buckets.
+
+Each report follows the template in
+[`docs/numeric-experiments/README.md`](docs/numeric-experiments/README.md):
+problem → symptoms → investigation (including failed hypotheses) → root cause
+→ fix → validation → TBDs.
+
+### Known working solver configurations
+
+- **Stiff radiative thermal models** (lunar rover, anything with σT⁴
+  networks + tanh hysteresis): `solver = "tr_bdf2"`, `tolerance = 1e-3`
+  (not 1e-6), `dt = 3600`. Background:
+  [`docs/numeric-experiments/2026-05-28-lunar-thermal.md`](docs/numeric-experiments/2026-05-28-lunar-thermal.md).
+  Scales linearly to multi-year horizons.
+
+### Outstanding solver / numerics tasks (rumoca)
+
+Priority ranking; each links back to the originating experiment report.
+
+1. **Symbolic Jacobian via rumoca AST + cranelift** (~weeks, highest leverage).
+   Replaces finite-difference Jacobian which loses ~9 sig digits on radiative
+   terms. Closes most of the remaining gap to OMC/DASSL on stiff models.
+   Origin: [2026-05-28 lunar thermal](docs/numeric-experiments/2026-05-28-lunar-thermal.md).
+2. **Per-state `atol` vector honoring Modelica `nominal=`** (~1 day).
+   `SimVariableMeta.nominal` is parsed but ignored by the solver.
+3. **Tiered `SolverStartupProfile`**. Today's aggressive defaults
+   (100k retries, 1e-25 floor, per-step Jacobian) are global. Add
+   `StiffRadiative` profile carrying them; keep `Default` conservative.
+4. **Flatten `StepperOptions.solver_mode + rk_method`** into one
+   `StepperSolver` enum (~30 min). Today's split allows silently-invalid
+   combos like `Bdf + Tsit45`.
+5. **Tsit45 mass-matrix gating** (~30 min). Reject at `build_stepper`
+   time with a clear error instead of failing inside diffsol.
+6. **Hairer-Wanner auto-h0** (~1 day). Currently `problem.h0` is
+   span-relative (`span/5_000_000`) and silently clamped by BDF/SDIRK
+   anyway; only useful once Tsit45 works on DAEs.
+7. **Homotopy initialization** for consistent-IC solve (~½ day).
+   Unblocks models without `start=` annotations.
+
+### Outstanding tasks (lunco-modelica)
+
+8. **Honor `experiment(Solver=, Tolerance=, Interval=)` annotations**
+   at FastRun dispatch time. Half-wired today.
+9. **Stiffness diagnostics in the Experiments panel**: on failure,
+   show `fail_t` as % of horizon + suggest next solver/tolerance.

@@ -102,6 +102,10 @@ pub struct RunBounds {
     pub tolerance: Option<f64>,
     /// Backend-defined solver name. UI doesn't pick one in v1.
     pub solver: Option<String>,
+    /// Initial step size hint (seconds). `None` lets the backend pick
+    /// (currently `span / 5_000_000`). Useful for long-horizon runs
+    /// where the span-based default over-shoots a stiff transient.
+    pub h0: Option<f64>,
 }
 
 impl Default for RunBounds {
@@ -112,6 +116,7 @@ impl Default for RunBounds {
             dt: None,
             tolerance: None,
             solver: None,
+            h0: None,
         }
     }
 }

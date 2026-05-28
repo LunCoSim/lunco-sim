@@ -257,6 +257,7 @@ impl ExperimentRunner for ModelicaRunner {
             dt: d.interval,
             tolerance: d.tolerance,
             solver: d.solver.clone(),
+            h0: None,
         })
     }
 }
@@ -412,6 +413,19 @@ fn run_inner(
     let mut stepper_opts = rumoca_sim::StepperOptions::default();
     stepper_opts.atol = bounds.tolerance.unwrap_or(1e-6);
     stepper_opts.rtol = bounds.tolerance.unwrap_or(1e-6);
+    if let Some(solver_name) = bounds.solver.as_deref() {
+        // Map the bounds string to (family, tableau). Family comes
+        // from rumoca's existing `from_external_name`; tableau is
+        // picked by rumoca-solver-diffsol when the family is RkLike.
+        // Unknown strings fall back to BDF (matches OMC's default).
+        let (mode, _label) =
+            rumoca_sim::SimSolverMode::parse_request(Some(solver_name));
+        stepper_opts.solver_mode = mode;
+        if let Some(rk) = rumoca_sim::RkMethod::from_external_name(solver_name) {
+            stepper_opts.rk_method = rk;
+        }
+    }
+    stepper_opts.initial_step = bounds.h0;
 
     let mut stepper = match rumoca_sim::SimStepper::new(&dae_result.dae, stepper_opts) {
         Ok(s) => s,
