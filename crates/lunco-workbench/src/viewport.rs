@@ -293,16 +293,14 @@ pub fn apply_workbench_viewport(
         None => (true, false),
         Some(l) => (layout_is_empty(l), layout_contains_panel(l, VIEWPORT_PANEL_ID)),
     };
-    let rect = rects.get(VIEWPORT_PANEL_ID);
-    let target_viewport = if layout_has_viewport {
-        rect.map(|r| Viewport {
-            physical_position: r.origin,
-            physical_size: r.size,
-            depth: 0.0..1.0,
-        })
-    } else {
-        None
-    };
+    // Camera3d always renders to the full window now; the chrome
+    // panels (opaque side/top/bottom) overlay where they are and the
+    // 3D shows through every transparent gap — including the dock
+    // tab-strip area above ViewportPanel and the dock padding below.
+    // Sub-rect viewports left a hole of uncleared framebuffer in
+    // those gaps; full-window 3D fills them naturally.
+    let _ = rects; // kept around for diagnostics; no longer drives Camera::viewport
+    let target_viewport: Option<Viewport> = None;
     let want_active = layout_empty || layout_has_viewport;
 
     for mut camera in &mut cameras {

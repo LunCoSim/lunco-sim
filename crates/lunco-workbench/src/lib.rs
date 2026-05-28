@@ -1531,14 +1531,23 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     // dock-app branch below — dock mode wants an opaque backdrop;
     // 3D-app mode leaves the centre transparent for Bevy to render
     // through.
-    // Paint a full-window opaque backdrop ONLY when the layout has
-    // chrome panels but no ViewportPanel (Design mode). In View
-    // (empty layout) or Build (ViewportPanel in layout), Camera3d
-    // owns the centre of the framebuffer and the backdrop would
-    // overpaint it — egui composites with alpha-blending, so an
-    // "opaque background" layer at full-window extent really does
-    // hide the 3D underneath. Side/Top/Bottom egui panels paint their
-    // own opaque frames, so chrome stays solid without this fill.
+    // Backdrop strategy (egui paints over the 3D framebuffer, alpha-
+    // blended; only Camera3d's viewport rect is left transparent so
+    // 3D shows). Three cases:
+    //   - View (empty layout)  → no backdrop. Camera3d paints full
+    //     window; chrome (menu/status) overpaints on top.
+    //   - Design (no ViewportPanel) → full-window backdrop. Camera3d
+    //     is inactive; backdrop fills the framebuffer so no garbage.
+    //   - Build (ViewportPanel in layout) → backdrop EVERYWHERE
+    //     EXCEPT the ViewportPanel rect. Painted as four strips
+    //     around the rect so the dock-leaf gaps (tab-strip header
+    //     above the panel, padding below) match theme instead of
+    //     showing uncleared framebuffer pixels as a black hole.
+    // Only Design (chrome but no ViewportPanel) needs a full-window
+    // backdrop to fill the framebuffer — Camera3d is inactive there.
+    // View and Build both keep Camera3d running full-window; egui
+    // chrome opaquely overlays where panels are and the rest stays
+    // transparent so 3D shows through (including dock-leaf gaps).
     let needs_full_backdrop = !viewport::layout_is_empty(layout)
         && !viewport::layout_contains_panel(layout, viewport::VIEWPORT_PANEL_ID);
     if needs_full_backdrop {
