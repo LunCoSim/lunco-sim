@@ -12,9 +12,8 @@
 #   clean             Remove build artifacts
 #   help              Show this help message
 #
-# Profile (default: dev — fast, no wasm-opt):
-#   --release         Shippable build (fat LTO + wasm-opt size pass)
-#   --dev             Fast inner-loop build (the default; explicit no-op)
+# Profile: default is a fast dev build (no wasm-opt). Pass --release for
+#   a shippable build (fat LTO + wasm-opt size pass).
 #
 # Available binaries:
 #   lunica   - Modelica Workbench IDE
@@ -245,7 +244,10 @@ build_wasm() {
 generate_bindings() {
     local binary="$1"
     local crate="$2"
-    local index_html="$PROJECT_DIR/crates/$crate/web/index.html"
+    # ONE shared index.html template for every app — lives with the rest
+    # of the web library in crates/lunco-web/web/. Per-app differences are
+    # filled in below by substituting __LC_BUNDLE__ / __LC_NAME__.
+    local index_html="$PROJECT_DIR/crates/lunco-web/web/index.html"
 
     # Dynamically find the target directory in case it's overridden in .cargo/config.toml
     local base_target_dir=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
@@ -295,7 +297,7 @@ generate_bindings() {
     # debug-ish wasm is ~20–30 s, which dominates inner-loop cycle
     # time. Bigger payload is fine for `localhost`.
     if [ "${BUILD_PROFILE:-web-dev}" = "web-dev" ]; then
-        info "wasm-opt skipped (--dev profile)"
+        info "wasm-opt skipped (dev profile)"
     elif [ -f "$wasm_in" ] && command -v wasm-opt &> /dev/null; then
         info "Running wasm-opt -Oz --converge (max-size pass)…"
         local before
@@ -341,6 +343,12 @@ generate_bindings() {
     fi
     if [ -f "$index_html" ]; then
         cp "$index_html" "$dist_dir/index.html"
+        # Fill the shared template's per-app placeholders:
+        #   __LC_BUNDLE__ → cargo bin / wasm-bindgen out-name (e.g. lunica)
+        #   __LC_NAME__   → display name (bundle, first letter upper-cased)
+        local app_name="$(tr '[:lower:]' '[:upper:]' <<< "${binary:0:1}")${binary:1}"
+        sed -i "s/__LC_BUNDLE__/$binary/g; s|__LC_NAME__|$app_name|g" "$dist_dir/index.html"
+        info "Filled template: bundle=$binary, name=$app_name"
         # Inject the actual uncompressed WASM size so the loading UI
         # can show accurate progress even when nginx serves a
         # pre-compressed .gz sibling (gzip_static on).
@@ -443,7 +451,7 @@ Run: cargo run -p lunco-assets -- download"
         # wasm-opt the worker too, same flags as the main bundle.
         local worker_wasm_in="$worker_bindgen_dir/${worker_bin}_bg.wasm"
         if [ "${BUILD_PROFILE:-web-dev}" = "web-dev" ]; then
-            info "Worker wasm-opt skipped (--dev profile)"
+            info "Worker wasm-opt skipped (dev profile)"
         elif [ -f "$worker_wasm_in" ] && command -v wasm-opt &> /dev/null; then
             local tmp="$worker_wasm_in.opt.tmp"
             if wasm-opt -Oz --converge --strip-debug -o "$tmp" "$worker_wasm_in"; then
@@ -589,9 +597,8 @@ show_help() {
     echo "  clean             Remove build artifacts"
     echo "  help              Show this help message"
     echo ""
-    echo "Profile (default: dev — fast, no wasm-opt):"
+    echo "Profile (default: fast dev build, no wasm-opt):"
     echo "  --release         Shippable build (fat LTO + wasm-opt size pass)"
-    echo "  --dev             Fast inner-loop build (the default)"
     echo ""
     echo "Available binaries:"
     echo "  lunica       - Modelica Workbench IDE (default port: 8080)"
@@ -618,21 +625,16 @@ main() {
 
     # Profile selection. The DEFAULT is the fast-iteration `web-dev`
     # profile (no LTO, parallel codegen, and the slow `wasm-opt -Oz`
-    # size pass is skipped) — that's what you want 95% of the time.
-    # `--release` opts into the shippable `web-release` profile (fat
-    # LTO + `wasm-opt` shrink pass) for deploys. `--dev` is still
-    # accepted as an explicit no-op so old muscle memory doesn't break.
-    # Either flag may appear in any slot (`build lunica --release`,
-    # `--release build lunica`, …).
+    # size pass is skipped) — what you want 95% of the time. `--release`
+    # opts into the shippable `web-release` profile (fat LTO + `wasm-opt`
+    # shrink pass) for deploys. The flag may appear in any slot
+    # (`build lunica --release`, `--release build lunica`, …).
     export BUILD_PROFILE="web-dev"
     local positional=()
     for arg in "$@"; do
         case "$arg" in
             --release)
                 export BUILD_PROFILE="web-release"
-                ;;
-            --dev)
-                export BUILD_PROFILE="web-dev"
                 ;;
             *)
                 positional+=("$arg")

@@ -182,7 +182,7 @@ wasm-opt: 103.9 MB → ~60 MB
 
 Smaller wasm = less to download, less for the browser to compile.
 Adds ~1–2 min to the build but only matters at deploy time (the
-`--dev` profile skips this pass).
+the default dev profile skips this pass).
 
 The Rust side also contributes — `[profile.web-release]` in
 `Cargo.toml` sets `opt-level = "z"`, `lto = "fat"`,
