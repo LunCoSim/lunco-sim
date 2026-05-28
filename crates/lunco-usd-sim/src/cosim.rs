@@ -26,7 +26,7 @@
 //! is the authoritative path for USD-defined cosim entities.
 
 use bevy::prelude::*;
-use big_space::prelude::{CellCoord, Grid};
+use big_space::prelude::Grid;
 use lunco_assets::assets_dir;
 use lunco_core::{Command, on_command};
 use lunco_cosim::{SimComponent, SimConnection, SimStatus};
@@ -591,16 +591,17 @@ pub fn spawn_scene_root_world(
         return None;
     };
 
+    // Scene-root entity is a logical USD container, not a spatial node.
+    // `LoadIntoGrid(grid)` directs `sync_usd_visuals` to spawn each
+    // top-level USD prim as a Grid-direct `GridAnchor` (under `grid`)
+    // rather than as a Bevy child of this entity. The scene root itself
+    // holds no `Transform`/`CellCoord`/`ChildOf` — it exists only to
+    // track which scene is loaded (despawn via UsdPrimPath prefix match).
     let root = world.spawn((
         Name::new(format!("Scene:{}", asset_path)),
         UsdPrimPath { stage_handle: handle, path: root_prim.clone() },
-        Visibility::Visible,
-        InheritedVisibility::default(),
-        ViewVisibility::default(),
-        Transform::default(),
-        CellCoord::default(),
+        lunco_usd_bevy::LoadIntoGrid(grid),
     )).id();
-    world.entity_mut(grid).add_child(root);
     info!("[scene] spawned `{}` @ `{}` (entity {})", asset_path, root_prim, root);
     Some(root)
 }

@@ -168,6 +168,18 @@ pub struct UsdVisualSynced;
 #[derive(Component, Default, Debug, Clone, Copy)]
 pub struct UsdPreviewOnly;
 
+/// Attached to a scene-root entity to tell `sync_usd_visuals` where to
+/// place top-level USD prims. When this component is present, the
+/// processor spawns each direct USD child as a `GridAnchor` parented
+/// to `0` (the target Grid) — *not* as a Bevy child of this entity.
+///
+/// This is what enforces the architectural rule: top-level USD prims
+/// (rovers, balls, terrain) become Grid-direct entities so big_space's
+/// `propagate_high_precision` runs on them; their own descendants
+/// remain plain-`Transform` children of their USD parent's Bevy entity.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct LoadIntoGrid(pub Entity);
+
 /// System that synchronizes USD prims into Bevy entities with visual components.
 ///
 /// For each entity with `UsdPrimPath` (but not `UsdVisualSynced`):
@@ -191,13 +203,16 @@ pub struct UsdPreviewOnly;
 /// be spawned before the asset is ready.
 pub fn sync_usd_visuals(
     mut commands: Commands,
-    query: Query<(Entity, &UsdPrimPath, Option<&Visibility>, Option<&Transform>), Without<UsdVisualSynced>>,
+    query: Query<
+        (Entity, &UsdPrimPath, Option<&Visibility>, Option<&Transform>, Option<&LoadIntoGrid>),
+        Without<UsdVisualSynced>,
+    >,
     stages: Res<Assets<UsdStageAsset>>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (entity, prim_path, existing_vis, existing_tf) in query.iter() {
+    for (entity, prim_path, existing_vis, existing_tf, load_into_grid) in query.iter() {
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
 
@@ -466,7 +481,7 @@ pub fn sync_usd_visuals(
                 child_tf.rotation = Quat::from_euler(EulerRot::XYZ, rx, ry, rz);
             }
 
-            let child_entity = commands.spawn((
+            let base_components = (
                 Name::new(child_path.to_string()),
                 UsdPrimPath {
                     stage_handle: prim_path.stage_handle.clone(),
@@ -477,8 +492,22 @@ pub fn sync_usd_visuals(
                 Visibility::Visible,
                 InheritedVisibility::VISIBLE,
                 ViewVisibility::default(),
-            )).id();
-            commands.entity(entity).add_child(child_entity);
+            );
+
+            // Top-level USD prims (children of a scene root tagged with
+            // `LoadIntoGrid`) become Grid-direct anchors so big_space's
+            // `propagate_high_precision` updates their GlobalTransform.
+            // Anything deeper stays as plain `Transform` children of
+            // their USD parent's Bevy entity.
+            if let Some(LoadIntoGrid(grid)) = load_into_grid {
+                let child_entity = commands
+                    .spawn((base_components, CellCoord::default(), lunco_core::GridAnchor))
+                    .id();
+                commands.entity(*grid).add_child(child_entity);
+            } else {
+                let child_entity = commands.spawn(base_components).id();
+                commands.entity(entity).add_child(child_entity);
+            }
         }
     }
 }
