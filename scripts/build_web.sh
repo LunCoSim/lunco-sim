@@ -65,6 +65,22 @@ get_binary_config() {
     esac
 }
 
+# Map the friendly web-target name (e.g. "sandbox_web") to the cargo
+# binary actually built. For `sandbox_web` we build the desktop
+# `sandbox` binary with `--target wasm32-unknown-unknown` — same source
+# (`crates/lunco-client/src/bin/sandbox.rs`) compiles to both desktop
+# and wasm via `#[cfg(target_arch = "wasm32")]`. `lunica_web` has its
+# own distinct source file (`lunica_web.rs`) so it stays a separate
+# cargo bin. wasm-bindgen output names are normalised back to the
+# friendly name via `--out-name` so dist/html don't need to know.
+get_cargo_bin_name() {
+    local binary="$1"
+    case "$binary" in
+        sandbox_web) echo "sandbox" ;;
+        *)           echo "$binary" ;;
+    esac
+}
+
 # Check prerequisites
 check_prerequisites() {
     info "Checking prerequisites..."
@@ -183,8 +199,10 @@ build_wasm() {
     # panics with "Unable to find a GPU!" — even when the browser fully
     # supports WebGPU. egui's pipeline requires WebGPU here, so this flag is
     # mandatory, not optional.
+    local cargo_bin
+    cargo_bin=$(get_cargo_bin_name "$binary")
     RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis" \
-        cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$binary" -p "$crate" --no-default-features
+        cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$cargo_bin" -p "$crate" --no-default-features
 
     # Off-thread Modelica worker bundle. wasm32 has no real threads, so
     # without this every rumoca compile (a few seconds for non-trivial
@@ -252,9 +270,17 @@ generate_bindings() {
         info "Using local wasm-bindgen: $wasm_bindgen_cmd"
     fi
 
-    $wasm_bindgen_cmd "$cargo_out_dir/${binary}.wasm" \
+    local cargo_bin
+    cargo_bin=$(get_cargo_bin_name "$binary")
+    # `--out-name "$binary"` normalises wasm-bindgen output to the
+    # friendly name (e.g. `sandbox_web.js`, `sandbox_web_bg.wasm`) even
+    # when the cargo binary is named differently (e.g. `sandbox`).
+    # Downstream code (dist copy, index.html `import init from
+    # './<binary>.js'`) keeps using `$binary` throughout.
+    $wasm_bindgen_cmd "$cargo_out_dir/${cargo_bin}.wasm" \
         --out-dir "$bindgen_out_dir" \
-        --target web
+        --target web \
+        --out-name "$binary"
 
     if [ $? -ne 0 ]; then
         error "Binding generation failed"

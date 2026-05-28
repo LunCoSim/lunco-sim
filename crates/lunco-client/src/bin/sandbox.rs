@@ -16,7 +16,9 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use bevy::prelude::*;
 use bevy::asset::{AssetPlugin, io::AssetSourceBuilder};
-use bevy::render::camera::RenderTarget;
+// `bevy::camera::*` exists on both native and `--no-default-features`
+// wasm; `bevy::render::camera::*` only when `bevy_render` is enabled.
+use bevy::camera::RenderTarget;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use lunco_workbench::WorkbenchViewportCamera;
 use lunco_assets::cache_dir;
@@ -132,6 +134,13 @@ fn main() {
     virtual_time.set_max_delta(std::time::Duration::from_millis(33));
     app.insert_resource(ScenePath(scene_path))
         .insert_resource(virtual_time)
+        // Match the workbench theme's backdrop so the window's first-
+        // frame clear lines up with egui's panel fill. Without this
+        // the inherited Bevy default (mid-gray) shows through the 1px
+        // gaps that non-integer DPRs and egui panel-edge rounding can
+        // leave at panel boundaries — visible as a "left hairline"
+        // against a dark theme. Same idea as `lunica_web.rs:115`.
+        .insert_resource(ClearColor(Color::srgb_u8(0x1a, 0x1a, 0x1a)))
         // `lunco-lib://` shipped-fixture asset source — must be
         // registered *before* `DefaultPlugins`/`AssetPlugin` builds the
         // server. Mirrors the registration in `lunco-client`'s main

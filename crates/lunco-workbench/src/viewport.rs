@@ -51,7 +51,10 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use bevy::render::camera::{RenderTarget, Viewport};
+// `bevy::camera::*` re-exports work on *both* native and
+// `--no-default-features` wasm builds. `bevy::render::camera::*` only
+// exists when the `bevy_render` feature is on, which wasm strips.
+use bevy::camera::{ClearColorConfig, RenderTarget, Viewport};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
 
 use crate::{Panel, PanelId, PanelSlot};
@@ -81,15 +84,16 @@ pub struct WorkbenchViewportCamera;
 #[require(Camera3d, WorkbenchViewportCamera)]
 pub struct WorkbenchSceneCamera;
 
-/// Required-component bundle: the egui-owning camera for one window.
+/// Marker component on the egui-owning camera for one window.
 ///
-/// Spawning `WorkbenchEguiHost` is equivalent to spawning
-/// `(Camera2d, PrimaryEguiContext)`. Auto-spawned by
-/// [`ensure_egui_host`]; binaries do not normally need to spawn it
-/// manually. Spawning a second one will trip
-/// [`check_camera_invariants`].
+/// Auto-inserted by [`ensure_egui_host`] alongside `Camera2d` and
+/// `PrimaryEguiContext`. We can't use Bevy's required-components
+/// feature here because `bevy_egui::PrimaryEguiContext` (0.39.1)
+/// doesn't impl `Default`, so a `#[require(PrimaryEguiContext)]`
+/// would fail to compile. The host spawn is a single-site concern
+/// anyway — `ensure_egui_host` is the only legitimate place — so a
+/// plain marker is sufficient.
 #[derive(Component, Debug, Clone, Copy, Default)]
-#[require(Camera2d, PrimaryEguiContext)]
 pub struct WorkbenchEguiHost;
 
 /// Per-panel screen-space rect, in *physical* pixels.
@@ -113,20 +117,42 @@ pub struct PanelRect {
 }
 
 impl PanelRects {
+    /// Drop every recorded rect. Called each frame by
+    /// [`clear_panel_rects_each_frame`] so panels that *aren't* in the
+    /// active perspective don't leak a stale rect to consumers (e.g.
+    /// after a perspective switch the previous perspective's viewport
+    /// rect would otherwise still drive `Camera::viewport`, leaving
+    /// the 3D scene rendered in a wrong sub-rect).
+    pub fn clear(&mut self) {
+        self.rects.clear();
+    }
+
     /// Record a panel's rect from inside its render method.
     ///
     /// Converts the egui logical rect to physical pixels using the
-    /// current `pixels_per_point`. Clamps size to ≥ 1×1.
+    /// current `pixels_per_point`. Uses **floor on the origin** and
+    /// **ceil on the far edge** so the resulting physical-pixel rect
+    /// fully covers the panel even at non-integer DPRs (1.5, 1.25, …).
+    /// Round-half-away-from-zero could leave a 1-px gap between the
+    /// camera viewport and the panel edge — that's the dark hairline
+    /// some users saw at the top of the 3D scene on a wasm browser
+    /// with `devicePixelRatio = 1.5`. Overshoot into surrounding
+    /// chrome (also 1 px max) is harmless because egui paints over it
+    /// at order > 3D-camera.
     pub fn record_from_ui(&mut self, panel: PanelId, ui: &egui::Ui) {
         let rect = ui.available_rect_before_wrap();
         let ppp = ui.ctx().pixels_per_point();
         let origin = UVec2::new(
-            (rect.min.x.max(0.0) * ppp).round() as u32,
-            (rect.min.y.max(0.0) * ppp).round() as u32,
+            (rect.min.x.max(0.0) * ppp).floor() as u32,
+            (rect.min.y.max(0.0) * ppp).floor() as u32,
+        );
+        let end = UVec2::new(
+            (rect.max.x.max(0.0) * ppp).ceil() as u32,
+            (rect.max.y.max(0.0) * ppp).ceil() as u32,
         );
         let size = UVec2::new(
-            ((rect.width().max(0.0) * ppp).round() as u32).max(1),
-            ((rect.height().max(0.0) * ppp).round() as u32).max(1),
+            end.x.saturating_sub(origin.x).max(1),
+            end.y.saturating_sub(origin.y).max(1),
         );
         self.rects.insert(panel, PanelRect { origin, size });
     }
@@ -205,7 +231,30 @@ pub fn ensure_egui_host(
 ) {
     egui_global.auto_create_primary_context = false;
     if existing.iter().next().is_none() {
-        commands.spawn((WorkbenchEguiHost, Name::new("WorkbenchEguiHost")));
+        commands.spawn((
+            Camera2d,
+            // `order = 1` puts egui's Camera2d strictly AFTER the
+            // default-order (0) `Camera3d`, regardless of which entity
+            // spawned first. Without this, the render order ties on
+            // `order` and falls back to entity-creation order — and
+            // 3D cameras that arrive late (USD avatar, fallback
+            // free-flight, …) end up painting OVER the chrome,
+            // bleeding 3D through the top-right of the menu bar.
+            //
+            // `ClearColorConfig::None` keeps the 3D scene the Camera3d
+            // wrote to the framebuffer instead of wiping it before
+            // egui paints. egui's chrome paints opaque panel frames
+            // on top; the central viewport's framebuffer pixels stay
+            // visible where no chrome covers them.
+            Camera {
+                order: 1,
+                clear_color: ClearColorConfig::None,
+                ..default()
+            },
+            PrimaryEguiContext,
+            WorkbenchEguiHost,
+            Name::new("WorkbenchEguiHost"),
+        ));
     }
 }
 
@@ -220,15 +269,41 @@ pub fn ensure_egui_host(
 /// catch if the target is the window.
 pub fn apply_workbench_viewport(
     rects: Res<PanelRects>,
+    layout: Option<Res<crate::WorkbenchLayout>>,
     mut cameras: Query<&mut Camera, With<WorkbenchViewportCamera>>,
 ) {
-    let target = rects.get(VIEWPORT_PANEL_ID).map(|r| Viewport {
-        physical_position: r.origin,
-        physical_size: r.size,
-        depth: 0.0..1.0,
-    });
+    // Three modes, gated on the *current layout's contents* — never on
+    // `PanelRects`, because that resource intentionally keeps stale
+    // rects across perspective switches:
+    //   (a) Empty layout / no layout (View perspective, tooling
+    //       binaries) → camera active, viewport=None, full window.
+    //   (b) Layout CONTAINS ViewportPanel (Build) → camera active,
+    //       viewport=last recorded rect (or None until first paint).
+    //   (c) Layout has other panels but NO ViewportPanel (Design) →
+    //       camera INACTIVE. No 3D render reaches the framebuffer, so
+    //       no panel gap, no stale rect, and no pass-skip can leak 3D
+    //       under the UI.
+    let (layout_empty, layout_has_viewport) = match layout.as_ref() {
+        None => (true, false),
+        Some(l) => (layout_is_empty(l), layout_contains_panel(l, VIEWPORT_PANEL_ID)),
+    };
+    let rect = rects.get(VIEWPORT_PANEL_ID);
+    let target_viewport = if layout_has_viewport {
+        rect.map(|r| Viewport {
+            physical_position: r.origin,
+            physical_size: r.size,
+            depth: 0.0..1.0,
+        })
+    } else {
+        None
+    };
+    let want_active = layout_empty || layout_has_viewport;
+
     for mut camera in &mut cameras {
-        let same = match (&camera.viewport, &target) {
+        if camera.is_active != want_active {
+            camera.is_active = want_active;
+        }
+        let same = match (&camera.viewport, &target_viewport) {
             (None, None) => true,
             (Some(a), Some(b)) => {
                 a.physical_position == b.physical_position && a.physical_size == b.physical_size
@@ -236,9 +311,45 @@ pub fn apply_workbench_viewport(
             _ => false,
         };
         if !same {
-            camera.viewport = target.clone();
+            camera.viewport = target_viewport.clone();
         }
     }
+}
+
+/// True iff `panel` appears in the active layout — either as a tab in
+/// the dock or in one of the four slot Vecs the perspectives populate.
+///
+/// `dock.iter_all_tabs()` alone isn't enough: a perspective that calls
+/// `set_side_browser/set_center/set_right_inspector/set_bottom` writes
+/// to the slot Vecs first; the dock is *rebuilt from those slots* by
+/// `rebuild_dock`. In steady state both contain the same panels, but
+/// pinning the camera-active decision to layout membership (rather than
+/// `PanelRects` which keeps stale rects on purpose) is what makes the
+/// "is the viewport even part of this perspective?" question
+/// authoritative.
+/// True iff every slot Vec is empty AND the dock has no tabs — a View-
+/// style perspective that wants the entire window for the 3D scene with
+/// no chrome painted on top.
+fn layout_is_empty(layout: &crate::WorkbenchLayout) -> bool {
+    layout.side_browser.is_empty()
+        && layout.center.is_empty()
+        && layout.right_inspector.is_empty()
+        && layout.bottom.is_empty()
+        && layout.dock.iter_all_tabs().next().is_none()
+}
+
+fn layout_contains_panel(layout: &crate::WorkbenchLayout, panel: PanelId) -> bool {
+    if layout.side_browser.iter().any(|p| *p == panel)
+        || layout.center.iter().any(|p| *p == panel)
+        || layout.right_inspector.iter().any(|p| *p == panel)
+        || layout.bottom.iter().any(|p| *p == panel)
+    {
+        return true;
+    }
+    layout
+        .dock
+        .iter_all_tabs()
+        .any(|(_, t)| matches!(t, crate::TabId::Singleton(id) if *id == panel))
 }
 
 /// Sentinel — runs each frame on newly-added Camera3d entities and
@@ -315,11 +426,20 @@ impl Plugin for WorkbenchViewportPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PanelRects>()
             .add_systems(Startup, ensure_egui_host)
+            // (Intentionally no per-frame clear of PanelRects: with the
+            // current Camera::viewport architecture, keeping the last
+            // recorded rect when ViewportPanel isn't in the active
+            // perspective keeps the 3D camera confined to a sub-rect
+            // that chrome easily overpaints. Clearing per frame let
+            // the 3D camera fall back to full-window rendering, and
+            // bevy_egui's alpha-blended chrome can't reliably cover
+            // a full-window 3D bleed through every panel gap. The
+            // permanent fix is RTT — see follow-up design note.)
             .add_systems(Update, (check_camera_invariants, check_host_invariant_once))
             .add_systems(
                 PostUpdate,
                 apply_workbench_viewport
-                    .before(bevy::render::camera::CameraUpdateSystems),
+                    .before(bevy::camera::CameraUpdateSystems),
             );
     }
 }

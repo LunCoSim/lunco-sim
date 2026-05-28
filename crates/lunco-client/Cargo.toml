@@ -6,10 +6,12 @@ edition = "2021"
 [[bin]]
 name = "sandbox"
 path = "src/bin/sandbox.rs"
-
-[[bin]]
-name = "sandbox_web"
-path = "src/bin/sandbox.rs"
+# Note: no separate `sandbox_web` cargo binary. The same `sandbox.rs`
+# is compiled for wasm by building this `sandbox` binary with
+# `--target wasm32-unknown-unknown` — `#[cfg(target_arch = "wasm32")]`
+# blocks in the source handle platform differences. `build_web.sh`
+# maps the friendly name `sandbox_web` to `--bin sandbox` while
+# keeping `dist/sandbox_web/` as the served path.
 
 [[bin]]
 name = "lunco_client_web"

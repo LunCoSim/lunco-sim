@@ -79,7 +79,7 @@ use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened};
 use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
 use lunco_core::{Command, on_command, register_commands};
-use lunco_workbench::{Panel, PanelId, PanelSlot, WorkbenchAppExt};
+use lunco_workbench::{Panel, PanelId, PanelRects, PanelSlot, WorkbenchAppExt};
 use openusd::usda::TextReader;
 
 use crate::registry::UsdDocumentRegistry;
@@ -87,13 +87,21 @@ use crate::registry::UsdDocumentRegistry;
 /// Stable id of the workbench tab the viewport renders into.
 pub const USD_VIEWPORT_PANEL_ID: PanelId = PanelId("usd::viewport");
 
-/// Image dimensions for the offscreen render target. Generous enough
-/// that the panel looks crisp at typical IDE side-dock widths;
-/// scaling-on-resize is a follow-up (would require recreating the
-/// `Image`, the `EguiUserTextures` registration, and the camera
-/// target each time).
-const VIEWPORT_WIDTH: u32 = 1280;
-const VIEWPORT_HEIGHT: u32 = 800;
+/// Initial placeholder dimensions for the offscreen render target.
+/// Tiny on purpose: `resize_viewport_image` resizes the asset to the
+/// actual panel rect on the first frame after the panel has been
+/// drawn, so a small placeholder avoids allocating a multi-megabyte
+/// texture that we'll throw away one frame later. If the panel never
+/// renders (binary doesn't include `UsdViewportPanel`), the wasted
+/// buffer stays at this tiny size.
+const PLACEHOLDER_WIDTH: u32 = 16;
+const PLACEHOLDER_HEIGHT: u32 = 16;
+
+/// Minimum panel-rect delta (in physical pixels, either axis) before
+/// `resize_viewport_image` reallocates the Image. Smaller deltas are
+/// ignored so sub-pixel drift / single-pixel layout jitter doesn't
+/// thrash the wgpu texture allocator.
+const RESIZE_DELTA_PX: u32 = 4;
 
 /// `RenderLayers` channel used to isolate USD preview rendering from
 /// the main simulation world. Every entity in the preview scene
@@ -119,7 +127,10 @@ impl Plugin for UsdViewportPlugin {
         app.add_observer(on_doc_opened_for_viewport);
         app.add_observer(on_doc_changed_for_viewport);
         app.add_observer(on_doc_closed_for_viewport);
-        app.add_systems(Update, propagate_preview_render_layer);
+        app.add_systems(
+            Update,
+            (propagate_preview_render_layer, resize_viewport_image),
+        );
         register_all_commands(app);
     }
 }
@@ -247,8 +258,14 @@ fn bootstrap(world: &mut World) {
         return;
     }
 
+    // Bootstrap with a tiny placeholder. `resize_viewport_image` will
+    // grow it to the actual `UsdViewportPanel` rect on the first
+    // Update tick after the panel records its rect into `PanelRects`.
+    // This keeps wgpu's initial alloc small (32×32×4 = 4KB instead of
+    // 1280×800×4 = ~4MB) while still presenting a valid texture for
+    // the camera and the egui `Image` widget on frame 1.
     let image_handle = {
-        let image = make_target_image(VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+        let image = make_target_image(PLACEHOLDER_WIDTH, PLACEHOLDER_HEIGHT);
         world.resource_mut::<Assets<Image>>().add(image)
     };
 
@@ -370,6 +387,51 @@ fn propagate_preview_render_layer(
             }
         }
     }
+}
+
+/// Resize the offscreen render Image to match the `UsdViewportPanel`'s
+/// recorded screen rect.
+///
+/// Runs every Update. `UsdViewportPanel::render` writes its current
+/// rect (in physical pixels) into `PanelRects` each frame; this system
+/// reads it back and calls `Image::resize` on the asset if the
+/// requested size differs from the last applied by more than
+/// `RESIZE_DELTA_PX` in either axis. The Image handle stays valid, so
+/// `EguiUserTextures` registration and `RenderTarget::Image(handle)`
+/// on the camera also stay valid — only the wgpu texture's pixel
+/// dimensions change.
+///
+/// First-apply (`last_applied == 0`) fires unconditionally so the
+/// placeholder texture from `bootstrap` snaps to panel size on the
+/// first frame the panel is visible.
+fn resize_viewport_image(
+    rects: Res<PanelRects>,
+    state: Res<UsdViewportState>,
+    mut images: ResMut<Assets<Image>>,
+    mut last_applied: Local<UVec2>,
+) {
+    let Some(handle) = state.image.as_ref() else {
+        return;
+    };
+    let Some(rect) = rects.get(USD_VIEWPORT_PANEL_ID) else {
+        return;
+    };
+    let target = rect.size;
+    let first_apply = last_applied.x == 0 || last_applied.y == 0;
+    let dx = target.x.abs_diff(last_applied.x);
+    let dy = target.y.abs_diff(last_applied.y);
+    if !first_apply && dx < RESIZE_DELTA_PX && dy < RESIZE_DELTA_PX {
+        return;
+    }
+    let Some(image) = images.get_mut(handle) else {
+        return;
+    };
+    image.resize(Extent3d {
+        width: target.x.max(1),
+        height: target.y.max(1),
+        depth_or_array_layers: 1,
+    });
+    *last_applied = target;
 }
 
 /// Construct a render-target image with sensible defaults
@@ -662,6 +724,15 @@ impl Panel for UsdViewportPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+        // Record the panel's screen rect into `PanelRects` so
+        // `resize_viewport_image` can match the offscreen Image's
+        // pixel dimensions to it next tick. Recorded *before* any
+        // widgets draw so the rect reflects the full panel body, not
+        // whatever's left after the header / separator below.
+        if let Some(mut rects) = world.get_resource_mut::<PanelRects>() {
+            rects.record_from_ui(USD_VIEWPORT_PANEL_ID, ui);
+        }
+
         let (tex_id, name) = {
             let state = world.resource::<UsdViewportState>();
             let tex_id = state.tex_id;
@@ -696,9 +767,10 @@ impl Panel for UsdViewportPanel {
             return;
         };
 
-        // Stretch to fill the panel rect. Aspect mismatch with the
-        // 1280×800 render target is acceptable; recreating the Image
-        // on resize is a future polish.
+        // Stretch the Image widget to the panel rect. The underlying
+        // texture is auto-resized to match this rect by
+        // `resize_viewport_image` (one frame of lag), so aspect ratio
+        // stays correct and the preview never gets blurry-stretched.
         let size = ui.available_size();
         let response = ui.add(
             egui::Image::new(egui::load::SizedTexture::new(tex_id, size))
