@@ -195,13 +195,19 @@ pub(crate) fn render_fast_run_setup(
                     });
                     ui.end_row();
 
-                    ui.label("Tolerance");
+                    ui.label("Tolerance")
+                        .on_hover_text(
+                            "Solver rtol/atol. Default 1e-4 — matches what \
+                             rumoca's FD Jacobian can deliver. Tighter \
+                             values (1e-6 etc.) burn retry budgets on \
+                             Jacobian noise without improving accuracy.",
+                        );
                     let mut tol_on = entry.bounds.tolerance.is_some();
-                    let mut tol_v = entry.bounds.tolerance.unwrap_or(1e-6);
+                    let mut tol_v = entry.bounds.tolerance.unwrap_or(1e-4);
                     ui.horizontal(|ui| {
                         if ui.checkbox(&mut tol_on, "set").changed() {
                             entry.bounds.tolerance =
-                                if tol_on { Some(1e-6) } else { None };
+                                if tol_on { Some(1e-4) } else { None };
                         }
                         if tol_on
                             && ui

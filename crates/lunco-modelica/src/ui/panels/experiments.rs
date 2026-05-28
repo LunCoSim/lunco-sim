@@ -978,16 +978,18 @@ impl ExperimentsPanel {
             ui.separator();
             ui.label("solver:")
                 .on_hover_text(
-                    "Integration method. Auto picks based on problem \
-                     stiffness. BDF is implicit (good for stiff DAEs — \
-                     thermal, chemical, electrical networks). RK4 is \
-                     explicit Runge-Kutta (faster on non-stiff problems \
-                     like rigid-body mechanics).",
+                    "Integration method. Auto picks the stack's default \
+                     (TR-BDF2 — event-robust, recommended). BDF is \
+                     variable-order implicit (OMC's choice; can struggle \
+                     at sharp transitions). ESDIRK34 is single-step \
+                     implicit, good Newton convergence on sharp tanh \
+                     models. Tsit45 is explicit (only for non-stiff \
+                     problems with M=I).",
                 );
             let current: String = bounds.solver.clone().unwrap_or_else(|| "auto".to_string());
             let current = current.as_str();
             let label = match current {
-                "auto" => "Auto",
+                "auto" => "Auto (TR-BDF2)",
                 "bdf" => "BDF (stiff)",
                 "esdirk34" => "ESDIRK34 (stiff, sharp transitions)",
                 "tr_bdf2" => "TR-BDF2 (stiff + events)",
@@ -1001,9 +1003,12 @@ impl ExperimentsPanel {
                 .width(220.0)
                 .show_ui(ui, |ui| {
                     for (val, label, hover) in [
-                        ("auto", "Auto",
-                         "Let the backend pick. Currently maps to BDF for the \
-                          stepper path."),
+                        ("auto", "Auto (TR-BDF2)",
+                         "Let the backend pick. Currently maps to TR-BDF2 \
+                          — event-robust default for stiff multi-day \
+                          horizons. Tolerance defaults to 1e-4 (FD \
+                          Jacobian noise floor; tighter tols burn retry \
+                          budgets on noise)."),
                         ("bdf", "BDF (stiff)",
                          "Backward Differentiation Formula — variable-order \
                           implicit, robust on stiff DAEs (thermal, chemical, \

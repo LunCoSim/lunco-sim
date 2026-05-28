@@ -410,20 +410,31 @@ fn run_inner(
     }
 
     // Build sim options from bounds.
+    //
+    // Defaults chosen to match what our solver stack can actually
+    // deliver (FD Jacobian + scalar atol can't honor OMC's 1e-6
+    // convention without burning retry budgets on noise) and what
+    // works across stiff multi-day horizons:
+    //   * tolerance default = 1e-4 (was 1e-6; OMC honors 1e-6 because
+    //     it has analytical Jacobian + vector atol — we don't yet)
+    //   * solver default = TR-BDF2 (was BDF via Default trait; BDF
+    //     dies at the second sunrise louver crossing for stiff
+    //     thermal models — TR-BDF2 handles events robustly across
+    //     multi-month horizons).
+    // Background: docs/numeric-experiments/2026-05-28-lunar-thermal.md
     let mut stepper_opts = rumoca_sim::StepperOptions::default();
-    stepper_opts.atol = bounds.tolerance.unwrap_or(1e-6);
-    stepper_opts.rtol = bounds.tolerance.unwrap_or(1e-6);
-    if let Some(solver_name) = bounds.solver.as_deref() {
-        // Map the bounds string to (family, tableau). Family comes
-        // from rumoca's existing `from_external_name`; tableau is
-        // picked by rumoca-solver-diffsol when the family is RkLike.
-        // Unknown strings fall back to BDF (matches OMC's default).
-        let (mode, _label) =
-            rumoca_sim::SimSolverMode::parse_request(Some(solver_name));
-        stepper_opts.solver_mode = mode;
-        if let Some(rk) = rumoca_sim::RkMethod::from_external_name(solver_name) {
-            stepper_opts.rk_method = rk;
-        }
+    stepper_opts.atol = bounds.tolerance.unwrap_or(1e-4);
+    stepper_opts.rtol = bounds.tolerance.unwrap_or(1e-4);
+    let solver_name = bounds.solver.as_deref().unwrap_or("tr_bdf2");
+    // Map the bounds string to (family, tableau). Family comes
+    // from rumoca's existing `from_external_name`; tableau is
+    // picked by rumoca-solver-diffsol when the family is RkLike.
+    // Unknown strings fall back to BDF (matches OMC's default).
+    let (mode, _label) =
+        rumoca_sim::SimSolverMode::parse_request(Some(solver_name));
+    stepper_opts.solver_mode = mode;
+    if let Some(rk) = rumoca_sim::RkMethod::from_external_name(solver_name) {
+        stepper_opts.rk_method = rk;
     }
     stepper_opts.initial_step = bounds.h0;
 
