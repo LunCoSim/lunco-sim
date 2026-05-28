@@ -5941,6 +5941,7 @@ dependencies = [
  "bevy_egui",
  "big_space",
  "console_error_panic_hook",
+ "js-sys",
  "leafwing-input-manager",
  "lunco-api",
  "lunco-assets",
@@ -5968,6 +5969,7 @@ dependencies = [
  "lunco-workbench",
  "mimalloc",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -6206,6 +6208,7 @@ dependencies = [
 name = "lunco-scripting"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bevy",
  "crossbeam-channel",
  "libloading",

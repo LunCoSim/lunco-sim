@@ -16,6 +16,11 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use bevy::prelude::*;
 use bevy::asset::{AssetPlugin, io::AssetSourceBuilder};
+// `bevy::camera::*` exists on both native and `--no-default-features`
+// wasm; `bevy::render::camera::*` only when `bevy_render` is enabled.
+use bevy::camera::RenderTarget;
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
+use lunco_workbench::WorkbenchViewportCamera;
 use lunco_assets::cache_dir;
 use bevy::pbr::wireframe::WireframePlugin;
 use big_space::prelude::*;
@@ -35,7 +40,7 @@ use lunco_core::Avatar;
 use lunco_cosim::CoSimPlugin;
 use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
-use lunco_modelica::{ModelicaPlugin, ModelicaSet};
+use lunco_modelica::{ModelicaPlugin, ModelicaSet, ModelicaUiConfig};
 use big_space::prelude::Grid;
 use lunco_materials::{BlueprintMaterialPlugin, SolarPanelMaterialPlugin};
 
@@ -103,6 +108,19 @@ fn main() {
     };
 
     let mut app = App::new();
+    // Match lunica's pacer: Continuous while focused lets vsync (Fifo
+    // present / requestAnimationFrame on web) act as the frame timer;
+    // ReactiveLowPower keeps fans quiet when the window is in the
+    // background. Applies on wasm too — the original "UI vanishes on
+    // zoom" bug surfaced under reactive mode where the egui chrome
+    // could stay stale while the 3D pass kept refreshing.
+    {
+        use bevy::winit::{UpdateMode, WinitSettings};
+        app.insert_resource(WinitSettings {
+            focused_mode: UpdateMode::Continuous,
+            unfocused_mode: UpdateMode::reactive_low_power(std::time::Duration::from_secs(1)),
+        });
+    }
     // Cap how much catchup `FixedUpdate` does after a slow frame.
     // Default Bevy behaviour: if a frame took 50ms, the next frame
     // runs 3 fixed ticks (16.67ms each) to catch up — *which makes
@@ -116,6 +134,13 @@ fn main() {
     virtual_time.set_max_delta(std::time::Duration::from_millis(33));
     app.insert_resource(ScenePath(scene_path))
         .insert_resource(virtual_time)
+        // Match the workbench theme's backdrop so the window's first-
+        // frame clear lines up with egui's panel fill. Without this
+        // the inherited Bevy default (mid-gray) shows through the 1px
+        // gaps that non-integer DPRs and egui panel-edge rounding can
+        // leave at panel boundaries — visible as a "left hairline"
+        // against a dark theme. Same idea as `lunica_web.rs:115`.
+        .insert_resource(ClearColor(Color::srgb_u8(0x1a, 0x1a, 0x1a)))
         // `lunco-lib://` shipped-fixture asset source — must be
         // registered *before* `DefaultPlugins`/`AssetPlugin` builds the
         // server. Mirrors the registration in `lunco-client`'s main
@@ -136,8 +161,19 @@ fn main() {
             })
             .set(WindowPlugin {
                 primary_window: Some(Window {
+                    #[cfg(not(target_arch = "wasm32"))]
                     resolution: bevy::window::WindowResolution::new(1600, 1000),
+                    #[cfg(not(target_arch = "wasm32"))]
                     position: WindowPosition::Centered(MonitorSelection::Primary),
+                    // On wasm, attach to the `#bevy` canvas in index.html and
+                    // mirror its parent's CSS size to the bevy window. Without
+                    // this winit never sees DOM resize events and the canvas
+                    // stays at its default 1x1 logical size — menu bars and
+                    // panels render outside the visible area.
+                    #[cfg(target_arch = "wasm32")]
+                    canvas: Some("#bevy".to_string()),
+                    #[cfg(target_arch = "wasm32")]
+                    fit_canvas_to_parent: true,
                     present_mode,
                     ..lunco_workbench::merged_titlebar_window(window_title)
                 }),
@@ -171,7 +207,6 @@ fn main() {
         .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
         .add_plugins(CoSimPlugin)
         .add_plugins(lunco_workbench::WorkbenchPlugin)
-        .add_plugins(ModelicaPlugin)
         .add_plugins(lunco_core::LunCoCorePlugin)
         .add_plugins(GravityPlugin)
         .add_plugins(EnvironmentPlugin)
@@ -231,6 +266,25 @@ fn main() {
         ).chain())
         // Selection must run before avatar possession so DragModeActive flag is set
         .add_systems(Update, lunco_sandbox_edit::selection::handle_entity_selection.before(lunco_avatar::avatar_raycast_possession))
+        // Auto-tag every new window-targeting Camera3d with
+        // WorkbenchViewportCamera so the workbench's PostUpdate viewport
+        // sync confines it to the ViewportPanel's rect (preventing the
+        // full-window 3D bleed-on-pass-skip class of bug). USD- and
+        // Avatar-spawned cameras land async over many frames; the
+        // `Added<Camera3d>` filter catches each as it arrives. RTT
+        // cameras (USD preview, vello diagrams) target an Image and
+        // are skipped — they should *not* be confined to the panel.
+        .add_systems(Update, auto_tag_workbench_3d_cameras)
+        // Mirror of `lunco-client/src/main.rs::collect_scroll_input`,
+        // gated to "egui doesn't want the scroll" so scrolling inside a
+        // dock panel (Twin browser, Console, etc.) goes to that
+        // widget, while scrolling over the viewport rect (or any
+        // passive area where egui has no interactive use for it) goes
+        // to the avatar's `CameraScroll` resource. Without this
+        // system, the avatar zoom systems (`SpringArm`, `Orbit`,
+        // `Chase`) never see scroll deltas — sandbox was the one
+        // binary missing this bridge (memory id 5109).
+        .add_systems(EguiPrimaryContextPass, collect_scroll_input_gated)
         // Manual transform/visibility propagation runs ONCE per frame
         // after physics writeback. The earlier triple-call (PreUpdate
         // + two in PostUpdate) ate ~80% of frame time on sandbox
@@ -241,14 +295,148 @@ fn main() {
         .add_systems(PostUpdate, (
             global_transform_propagation_system,
             spawn_fallback_avatar,
-        ).chain().after(avian3d::prelude::PhysicsSystems::Writeback))
-        .add_plugins(lunco_api::LunCoApiPlugin::default());
+        ).chain().after(avian3d::prelude::PhysicsSystems::Writeback));
+
+    // Full Modelica workbench so the sandbox exposes a "Design" workspace
+    // alongside View/Build — same panels (Twin browser, Code editor,
+    // Canvas diagram, MSL palette, …) as lunica. We suppress only the
+    // first-run help overlay and the Welcome landing tab — those are
+    // lunica's onboarding affordances and feel out of place inside a 3D
+    // physics demo. MSL auto-fetches as usual; sandbox_web ships the
+    // bundle next to its wasm so the manifest is same-origin.
+    // Welcome panel stays ON — it's the same landing page lunica uses for
+    // the Design tab (Twin Browser left, Welcome centre, Inspector +
+    // Palette right). Disabling it left the centre empty and the 3D
+    // sandbox viewport bled through, which is *not* what Design should
+    // look like. Only the first-run coach-marks (HelpOverlay) are
+    // suppressed — those are lunica's onboarding affordance and feel out
+    // of place in a 3D physics demo.
+    app.insert_resource(ModelicaUiConfig {
+        include_help_overlay: false,
+        include_welcome_panel: true,
+    });
+    app.add_plugins(ModelicaPlugin);
+
+    // Off-thread Modelica worker. wasm32 has no real threads, so without
+    // this every compile (a few seconds for `AnnotatedRocketStage`) blocks
+    // the render loop and the page appears frozen. The worker bundle
+    // lives at `./worker/lunica_worker.{js,wasm}` next to the main wasm —
+    // `build_web.sh` builds and stages it for both lunica_web and
+    // sandbox_web. Failure is non-fatal: the inline compile path still
+    // works, just stutters the UI.
+    #[cfg(target_arch = "wasm32")]
+    if let Err(e) = lunco_modelica::worker_transport::install_worker("./worker/worker_bootstrap.js") {
+        bevy::log::error!(
+            "[sandbox_web] failed to start off-thread Modelica worker; falling back to inline: {e:?}"
+        );
+    }
+
+    // URL-driven boot. Lets headless test harnesses drive the workbench
+    // without firing canvas pointer events (synthetic DOM events don't
+    // flow through winit's web event handlers, so e.g.
+    // `chrome-devtools-mcp` can't click into the canvas). Supported
+    // query params:
+    //
+    //   ?workspace=<perspective_id>   Activate a registered Perspective.
+    //                                 Sandbox ships: sandbox_view,
+    //                                 rover_build, modelica_analyze.
+    //   ?open=<qualified.class.name>  Trigger `OpenClass`. Waits for
+    //                                 `MslLoadState::Ready` before
+    //                                 firing — without that the
+    //                                 trigger races MSL install and
+    //                                 the workbench logs `could not
+    //                                 locate <class>`.
+    //
+    // Runs on `Update` so it can poll MSL state; self-disables after
+    // both knobs are applied. Failures are logged and non-fatal.
+    #[cfg(target_arch = "wasm32")]
+    app.add_systems(bevy::prelude::Update, sandbox_boot_from_url);
+
+    #[cfg(feature = "lunco-api")]
+    app.add_plugins(lunco_api::LunCoApiPlugin::default());
 
     if log_diag {
         app.add_plugins(bevy::diagnostic::LogDiagnosticsPlugin::default());
     }
 
     app.run();
+}
+
+/// State machine for [`sandbox_boot_from_url`].
+///
+/// Lives in a `Local` so the boot work happens exactly once per app
+/// lifetime — once `open_class` is satisfied the system runs and
+/// no-ops in O(1).
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct SandboxBootState {
+    parsed: bool,
+    workspace: Option<String>,
+    open_class: Option<String>,
+    done: bool,
+}
+
+/// wasm-only `Update` system that reads `window.location.search` and:
+///   - activates the perspective named by `?workspace=…` (once, on
+///     first run);
+///   - triggers an `OpenClass` for `?open=…` once `MslLoadState`
+///     reaches `Ready`. Without that gate the trigger races MSL
+///     install and the workbench can't find the class.
+///
+/// Self-disables after both are applied. Useful for headless test
+/// harnesses (e.g. `chrome-devtools-mcp`) which can't drive the egui
+/// canvas via synthetic DOM events.
+#[cfg(target_arch = "wasm32")]
+fn sandbox_boot_from_url(
+    mut commands: bevy::prelude::Commands,
+    mut layout: Option<bevy::prelude::ResMut<lunco_workbench::WorkbenchLayout>>,
+    msl: Option<bevy::prelude::Res<lunco_assets::msl::MslLoadState>>,
+    mut state: bevy::prelude::Local<SandboxBootState>,
+) {
+    if state.done { return; }
+
+    // ── First-run: parse URL, kick the workspace switch ──────────
+    if !state.parsed {
+        let search = web_sys::window()
+            .and_then(|w| w.location().search().ok())
+            .unwrap_or_default();
+        for kv in search.trim_start_matches('?').split('&') {
+            let mut parts = kv.splitn(2, '=');
+            let key = parts.next().unwrap_or("");
+            let val_enc = parts.next().unwrap_or("");
+            let val = js_sys::decode_uri_component(val_enc)
+                .map(|j| j.as_string().unwrap_or_else(|| val_enc.to_string()))
+                .unwrap_or_else(|_| val_enc.to_string());
+            match key {
+                "workspace" => state.workspace = Some(val),
+                "open" => state.open_class = Some(val),
+                _ => {}
+            }
+        }
+        if let (Some(ws), Some(layout)) = (state.workspace.as_ref(), layout.as_mut()) {
+            let id: &'static str = Box::leak(ws.clone().into_boxed_str());
+            layout.activate_perspective(lunco_workbench::PerspectiveId(id));
+            bevy::log::info!("[sandbox_boot_from_url] activated perspective `{ws}`");
+        }
+        state.parsed = true;
+    }
+
+    // ── Per-frame poll: dispatch OpenClass once MSL is ready ─────
+    if let Some(qual) = state.open_class.clone() {
+        let ready = matches!(
+            msl.as_deref(),
+            Some(lunco_assets::msl::MslLoadState::Ready { .. })
+        );
+        if !ready {
+            return;
+        }
+        commands.trigger(lunco_modelica::ui::commands::OpenClass {
+            qualified: qual.clone(),
+            ..Default::default()
+        });
+        bevy::log::info!("[sandbox_boot_from_url] OpenClass({qual}) triggered (MSL ready)");
+    }
+    state.done = true;
 }
 
 #[derive(Resource, Reflect)]
@@ -276,6 +464,56 @@ impl Default for SandboxSettings {
 /// to load on Startup. Initialised from the `--scene` CLI arg.
 #[derive(Resource)]
 struct ScenePath(String);
+
+/// Bridge egui scroll input into `lunco_avatar::CameraScroll` so the
+/// avatar zoom systems (`SpringArm`, `Orbit`, `Chase`) react to mouse
+/// wheel events.
+///
+/// Gated on `!ctx.wants_pointer_input()` — egui sets that to `true`
+/// when the cursor is over an interactive widget that consumes scroll
+/// (scrollarea, slider, combo box, …). When it's `false`, the cursor
+/// is over a passive region (the `ViewportPanel` placeholder, an empty
+/// dock area, the menu bar background) and the scroll naturally
+/// belongs to the 3D scene. This is the same idiom `lunco-client`'s
+/// non-sandbox binary uses, plus the hover gate so dock-panel
+/// scrolling no longer also zooms the camera.
+fn collect_scroll_input_gated(
+    mut egui_contexts: EguiContexts,
+    mut scroll_res: ResMut<lunco_avatar::CameraScroll>,
+) {
+    let Ok(ctx) = egui_contexts.ctx_mut() else { return };
+    if ctx.wants_pointer_input() {
+        return;
+    }
+    scroll_res.delta += ctx.input(|i: &bevy_egui::egui::InputState| i.raw_scroll_delta.y);
+}
+
+/// Tag freshly-added window-targeting `Camera3d` entities with
+/// `WorkbenchViewportCamera` so the workbench's PostUpdate viewport
+/// sync confines them to the `ViewportPanel` rect.
+///
+/// RTT cameras (`RenderTarget::Image`) are skipped: they paint into
+/// their own offscreen Image (USD preview, vello diagrams) and must
+/// not have a window-scoped viewport written to them.
+///
+/// `Added<Camera3d>` fires once per entity, the same frame the
+/// component is inserted. USD scene-load and async Avatar spawning
+/// can both land Camera3d entities long after `Startup`; this catches
+/// each as it arrives.
+fn auto_tag_workbench_3d_cameras(
+    mut commands: Commands,
+    new_cams: Query<
+        (Entity, Option<&RenderTarget>),
+        (Added<Camera3d>, Without<WorkbenchViewportCamera>),
+    >,
+) {
+    for (entity, target) in &new_cams {
+        let targets_window = matches!(target, None | Some(RenderTarget::Window(_)));
+        if targets_window {
+            commands.entity(entity).insert(WorkbenchViewportCamera);
+        }
+    }
+}
 
 fn setup_sandbox(
     mut commands: Commands,

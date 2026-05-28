@@ -637,6 +637,43 @@ pub mod ui;
 /// Available on all targets, but primarily used for wasm builds.
 pub mod models;
 pub mod msl_remote;
+pub mod source_asset;
+
+/// Tuning resource for [`ModelicaPlugin`] / [`ui::ModelicaUiPlugin`].
+///
+/// Most apps want every panel + the first-run help overlay (lunica is
+/// that app; this is the default). Sandbox-class apps embed the
+/// workbench as a *secondary* workspace and want the panels but not the
+/// onboarding coach-marks — they insert a customised value before
+/// adding `ModelicaPlugin`:
+///
+/// ```ignore
+/// app.insert_resource(lunco_modelica::ModelicaUiConfig {
+///     include_help_overlay: false,
+///     include_welcome_panel: false,
+///     ..default()
+/// });
+/// app.add_plugins(lunco_modelica::ModelicaPlugin);
+/// ```
+#[derive(bevy::prelude::Resource, Clone, Debug)]
+pub struct ModelicaUiConfig {
+    /// First-run multi-screen help overlay (Help → Show Tour, F1).
+    /// Defaults true — lunica's onboarding entry point.
+    pub include_help_overlay: bool,
+    /// Landing-page Welcome panel with bundled-example learning paths.
+    /// Defaults true. Off for sandbox-class embeds where Welcome would
+    /// look out of place inside a 3D-physics demo.
+    pub include_welcome_panel: bool,
+}
+
+impl Default for ModelicaUiConfig {
+    fn default() -> Self {
+        Self {
+            include_help_overlay: true,
+            include_welcome_panel: true,
+        }
+    }
+}
 pub mod msl_settings;
 pub mod indexer;
 pub mod sim_stream;
@@ -795,6 +832,13 @@ fn build_modelica_core(app: &mut App) {
     // The domain is incomplete without MSL access.
     if !app.is_plugin_added::<msl_remote::MslRemotePlugin>() {
         app.add_plugins(msl_remote::MslRemotePlugin);
+    }
+
+    // Register the `.mo` asset loader so domain code can fetch source
+    // through `AssetServer::load(...)` instead of `std::fs::read_to_string`.
+    // See `docs/architecture/40-asset-io.md`.
+    if !app.is_plugin_added::<source_asset::ModelicaSourceAssetPlugin>() {
+        app.add_plugins(source_asset::ModelicaSourceAssetPlugin);
     }
 
     let msl = msl_dir();

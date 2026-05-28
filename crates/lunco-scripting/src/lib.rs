@@ -1,8 +1,10 @@
 use bevy::prelude::*;
 
 pub mod python;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod repl;
 pub mod doc;
+pub mod source_asset;
 
 use std::collections::HashMap;
 use lunco_doc::{DocumentId, DocumentHost};
@@ -21,18 +23,26 @@ impl Plugin for LunCoScriptingPlugin {
     fn build(&self, app: &mut App) {
         info!("Initializing LunCo Scripting Bridge...");
         python::initialize_python();
-        
+
+        if !app.is_plugin_added::<source_asset::PythonSourceAssetPlugin>() {
+            app.add_plugins(source_asset::PythonSourceAssetPlugin);
+        }
+
         app.init_resource::<ScriptRegistry>();
         
-        let repl = repl::spawn_repl_thread();
-        app.insert_resource(repl);
-        
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let repl = repl::spawn_repl_thread();
+            app.insert_resource(repl);
+        }
+
         app.register_type::<ScriptedModel>()
            .register_type::<doc::ScriptLanguage>();
 
         let python_status = python::get_python_status();
         app.insert_resource(python_status);
 
+        #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, repl::process_repl_commands);
         app.add_systems(FixedUpdate, run_scripted_models);
 

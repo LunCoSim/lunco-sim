@@ -14,11 +14,11 @@ lunco-hardware = { path = "../lunco-hardware" }
 lunco-avatar = { path = "../lunco-avatar" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-cosim = { path = "../lunco-cosim" }
-lunco-modelica = { path = "../lunco-modelica" }
+lunco-modelica = { path = "../lunco-modelica", default-features = false }
 rumoca-phase-parse = { workspace = true }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-doc = { path = "../lunco-doc" }
-lunco-api = { path = "../lunco-api" }
+lunco-api = { path = "../lunco-api", default-features = false }
 lunco-assets = { workspace = true }
 avian3d = { workspace = true }
 big_space = { workspace = true }

@@ -15,6 +15,7 @@ lunco-api = { path = "../lunco-api", default-features = false }
 pyo3 = { version = "0.23", optional = true }
 libloading = { version = "0.8", optional = true }
 serde = { workspace = true }
+anyhow = { workspace = true }
 
 [features]
 default = []

@@ -6,10 +6,12 @@ edition = "2021"
 [[bin]]
 name = "sandbox"
 path = "src/bin/sandbox.rs"
-
-[[bin]]
-name = "sandbox_web"
-path = "src/bin/sandbox.rs"
+# Note: no separate `sandbox_web` cargo binary. The same `sandbox.rs`
+# is compiled for wasm by building this `sandbox` binary with
+# `--target wasm32-unknown-unknown` — `#[cfg(target_arch = "wasm32")]`
+# blocks in the source handle platform differences. `build_web.sh`
+# maps the friendly name `sandbox_web` to `--bin sandbox` while
+# keeping `dist/sandbox_web/` as the served path.
 
 [[bin]]
 name = "lunco_client_web"
@@ -31,10 +33,10 @@ lunco-robotics = { path = "../lunco-robotics" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-avatar = { path = "../lunco-avatar" }
-lunco-celestial = { path = "../lunco-celestial", features = ["embed-assets"] }
+lunco-celestial = { path = "../lunco-celestial" }
 lunco-terrain = { path = "../lunco-terrain" }
 lunco-materials = { path = "../lunco-materials" }
-lunco-modelica = { path = "../lunco-modelica" }
+lunco-modelica = { path = "../lunco-modelica", default-features = false }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
@@ -46,7 +48,7 @@ lunco-sandbox-edit = { path = "../lunco-sandbox-edit" }
 lunco-ui = { path = "../lunco-ui" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-assets = { workspace = true }
-lunco-api = { path = "../lunco-api" }
+lunco-api = { path = "../lunco-api", optional = true }
 bevy_egui = { workspace = true }
 
 # Replace glibc's allocator with mimalloc on native targets. Bevy +
@@ -61,9 +63,16 @@ mimalloc = "0.1"
 lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 
 [features]
-default = ["celestial"]
-celestial = []
+# `lunco-api` is on by default so native `cargo run --bin sandbox -- --api`
+# Just Works. Building without it (`--no-default-features`) drops the
+# axum/tokio web stack, which is mandatory for wasm32-unknown-unknown.
+default = ["celestial", "lunco-api"]
+# `celestial` pulls in lunco-celestial's bundled Earth texture + Artemis-II
+# ephemeris (10s of MB). Off for the wasm sandbox build — it only needs
+# `GravityPlugin`, which is always compiled.
+celestial = ["lunco-celestial/embed-assets"]
 sandbox = []
+lunco-api = ["dep:lunco-api"]
 python = ["lunco-scripting/python"]
 # Tracy profiler. Enable with `--features tracy` and connect a Tracy
 # GUI to see per-system flame graphs. Match the GUI version to the
@@ -76,6 +85,9 @@ tracy = ["bevy/trace_tracy"]
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 console_error_panic_hook = "0.1"
+# URL-parameter boot path (`?workspace=…&open=…`) reads `window.location.search`.
+web-sys = { version = "0.3", features = ["Window", "Location"] }
+js-sys = "0.3"
 
 [lints]
 workspace = true

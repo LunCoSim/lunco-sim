@@ -270,7 +270,10 @@ pub use session::{
     DocumentClosed, DocumentOpened, FileRenamed, RegisterDocument, TwinAdded,
     TwinClosed, UnregisterDocument, WorkspacePlugin, WorkspaceResource,
 };
-pub use viewport::{ViewportPanel, WorkbenchViewportCamera, VIEWPORT_PANEL_ID};
+pub use viewport::{
+    PanelRect, PanelRects, ViewportPanel, WorkbenchEguiHost, WorkbenchSceneCamera,
+    WorkbenchViewportCamera, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
+};
 
 /// Get the backdrop colour from the active theme.
 fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
@@ -289,6 +292,14 @@ impl Plugin for WorkbenchPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<bevy_egui::EguiPlugin>() {
             app.add_plugins(bevy_egui::EguiPlugin::default());
+        }
+        // Egui host + viewport-rect sync + invariant sentinels.
+        // See `viewport.rs` doc-comment for the architecture (why we
+        // confine the 3D camera to the panel rect instead of letting it
+        // own the full window). Auto-added so hosts don't have to
+        // remember to wire it up.
+        if !app.is_plugin_added::<viewport::WorkbenchViewportPlugin>() {
+            app.add_plugins(viewport::WorkbenchViewportPlugin);
         }
         if !app.is_plugin_added::<lunco_theme::ThemePlugin>() {
             app.add_plugins(lunco_theme::ThemePlugin);
@@ -1504,18 +1515,33 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     }
 
     // ── Opaque-mode backdrop (must run first) ───────────────────────
-    // In apps where every panel is opaque (no 3D viewport showing
-    // through), paint `get_panel_backdrop(theme)` on the background layer BEFORE
-    // registering any panel shapes. egui draws within a layer in the
-    // order shapes are issued, so a rect_filled issued AFTER the menu
-    // bar / dock / status bar would paint over them — exactly the
-    // "invisible menu" regression the opaque-backdrop change
-    // introduced. Running it first keeps the fill underneath.
-    let any_transparent = layout
-        .panels
-        .values()
-        .any(|p| p.transparent_background());
-    if !any_transparent {
+    // Paint `get_panel_backdrop(theme)` on the background layer BEFORE
+    // any panel shapes. egui draws within a layer in shape-issue order,
+    // so a rect_filled issued AFTER the menu bar / dock / status bar
+    // would paint over them — exactly the "invisible menu" regression
+    // the opaque-backdrop change once introduced. Running it first
+    // keeps the fill underneath.
+    //
+    // The trigger is "are there dock tabs?", not "any registered panel
+    // transparent?". The latter included transparent side-panels
+    // (Inspector, Spawn Palette, …) registered globally but unused in
+    // the current perspective, suppressing the backdrop incorrectly
+    // and letting the 3D camera bleed through Welcome in
+    // modelica_analyze. The dock-tabs check matches the 3D-app vs
+    // dock-app branch below — dock mode wants an opaque backdrop;
+    // 3D-app mode leaves the centre transparent for Bevy to render
+    // through.
+    // Paint a full-window opaque backdrop ONLY when the layout has
+    // chrome panels but no ViewportPanel (Design mode). In View
+    // (empty layout) or Build (ViewportPanel in layout), Camera3d
+    // owns the centre of the framebuffer and the backdrop would
+    // overpaint it — egui composites with alpha-blending, so an
+    // "opaque background" layer at full-window extent really does
+    // hide the 3D underneath. Side/Top/Bottom egui panels paint their
+    // own opaque frames, so chrome stays solid without this fill.
+    let needs_full_backdrop = !viewport::layout_is_empty(layout)
+        && !viewport::layout_contains_panel(layout, viewport::VIEWPORT_PANEL_ID);
+    if needs_full_backdrop {
         let painter = ctx.layer_painter(egui::LayerId::background());
         painter.rect_filled(ctx.content_rect(), 0.0, get_panel_backdrop(theme));
     }

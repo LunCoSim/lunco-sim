@@ -205,6 +205,13 @@ manual_unwrap_or = "warn"
 useless_conversion = "warn"
 redundant_closure = "warn"
 needless_pass_by_value = "allow"
+# Asset I/O policy. Domain crates may not bypass `AssetServer` with raw
+# `std::fs` / `std::thread` / blocking `Instant` — those break wasm32 and
+# the bug only shows in the browser, not in `cargo test`. The full list of
+# banned symbols lives in `clippy.toml` at the workspace root; that file
+# also documents the allow-list (lunco-assets, lunco-storage, build scripts).
+# See `docs/architecture/40-asset-io.md` for the rationale.
+disallowed_methods = "deny"
 
 # ── Dev profile ──────────────────────────────────────────────────────
 # Bevy/avian/parry are unusably slow at opt-level 0. opt-level=1 on our

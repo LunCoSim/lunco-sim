@@ -65,6 +65,22 @@ get_binary_config() {
     esac
 }
 
+# Map the friendly web-target name (e.g. "sandbox_web") to the cargo
+# binary actually built. For `sandbox_web` we build the desktop
+# `sandbox` binary with `--target wasm32-unknown-unknown` — same source
+# (`crates/lunco-client/src/bin/sandbox.rs`) compiles to both desktop
+# and wasm via `#[cfg(target_arch = "wasm32")]`. `lunica_web` has its
+# own distinct source file (`lunica_web.rs`) so it stays a separate
+# cargo bin. wasm-bindgen output names are normalised back to the
+# friendly name via `--out-name` so dist/html don't need to know.
+get_cargo_bin_name() {
+    local binary="$1"
+    case "$binary" in
+        sandbox_web) echo "sandbox" ;;
+        *)           echo "$binary" ;;
+    esac
+}
+
 # Check prerequisites
 check_prerequisites() {
     info "Checking prerequisites..."
@@ -183,27 +199,36 @@ build_wasm() {
     # panics with "Unable to find a GPU!" — even when the browser fully
     # supports WebGPU. egui's pipeline requires WebGPU here, so this flag is
     # mandatory, not optional.
+    local cargo_bin
+    cargo_bin=$(get_cargo_bin_name "$binary")
     RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis" \
-        cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$binary" -p "$crate" --no-default-features
+        cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$cargo_bin" -p "$crate" --no-default-features
 
-    # For lunica_web, also build the off-thread worker bundle. It runs in a
-    # Web Worker so rumoca's compile (~20s) doesn't block the UI.
-    if [ "$binary" = "lunica_web" ]; then
-        local base_target_dir
-        base_target_dir=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
-        local worker_wasm="$base_target_dir/wasm32-unknown-unknown/$profile/lunica_worker.wasm"
-        if should_rebuild_worker "$worker_wasm"; then
-            info "Building companion worker bundle: lunica_worker"
-            RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis" \
-                cargo build --profile "$profile" --target wasm32-unknown-unknown --bin lunica_worker -p "$crate" --no-default-features
-        else
-            # Stamp the existing wasm so the next freshness check
-            # references "now" — cheap dependency change in a sibling
-            # script (build_web.sh edit, copying assets) won't
-            # otherwise re-trigger this reasoning every run.
-            info "Worker bundle up-to-date; skipping cargo build (set WORKER_REBUILD=force to override)"
-        fi
-    fi
+    # Off-thread Modelica worker bundle. wasm32 has no real threads, so
+    # without this every rumoca compile (a few seconds for non-trivial
+    # models) blocks the render loop and the page appears frozen. Both
+    # binaries that embed the Modelica workbench need it — lunica_web is
+    # the workbench, sandbox_web embeds it as the Design workspace.
+    case "$binary" in
+        lunica_web|sandbox_web)
+            local base_target_dir
+            base_target_dir=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
+            local worker_wasm="$base_target_dir/wasm32-unknown-unknown/$profile/lunica_worker.wasm"
+            if should_rebuild_worker "$worker_wasm"; then
+                info "Building companion worker bundle: lunica_worker"
+                # Worker always builds out of lunco-modelica (that's where the
+                # Modelica compile + step pipeline lives) regardless of which
+                # main bundle is asking for it.
+                RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis" \
+                    cargo build --profile "$profile" --target wasm32-unknown-unknown --bin lunica_worker -p lunco-modelica --no-default-features
+            else
+                # See should_rebuild_worker rustdoc — finding "newer" .rs
+                # under crates/ forces a rebuild even when the diff was in a
+                # sibling script.
+                info "Worker bundle up-to-date; skipping cargo build (set WORKER_REBUILD=force to override)"
+            fi
+            ;;
+    esac
 
     if [ $? -eq 0 ]; then
         success "WASM binary built successfully"
@@ -245,9 +270,17 @@ generate_bindings() {
         info "Using local wasm-bindgen: $wasm_bindgen_cmd"
     fi
 
-    $wasm_bindgen_cmd "$cargo_out_dir/${binary}.wasm" \
+    local cargo_bin
+    cargo_bin=$(get_cargo_bin_name "$binary")
+    # `--out-name "$binary"` normalises wasm-bindgen output to the
+    # friendly name (e.g. `sandbox_web.js`, `sandbox_web_bg.wasm`) even
+    # when the cargo binary is named differently (e.g. `sandbox`).
+    # Downstream code (dist copy, index.html `import init from
+    # './<binary>.js'`) keeps using `$binary` throughout.
+    $wasm_bindgen_cmd "$cargo_out_dir/${cargo_bin}.wasm" \
         --out-dir "$bindgen_out_dir" \
-        --target web
+        --target web \
+        --out-name "$binary"
 
     if [ $? -ne 0 ]; then
         error "Binding generation failed"
@@ -345,19 +378,32 @@ generate_bindings() {
 Run: cargo run -p lunco-assets -- download"
     fi
 
+    # sandbox_web loads scene files via the bevy AssetServer over HTTP
+    # (`assets/scenes/sandbox/sandbox_scene.usda` and friends). Copy the
+    # workspace `assets/` tree next to the wasm so they're same-origin.
+    # lunica_web doesn't need this — its models live in the MSL bundle.
+    if [ "$binary" = "sandbox_web" ] && [ -d "$PROJECT_DIR/assets" ]; then
+        info "Copying assets/ → $dist_dir/assets/"
+        rsync -a --delete "$PROJECT_DIR/assets/" "$dist_dir/assets/"
+    fi
+
     # Show output size
     WASM_SIZE=$(du -h "$dist_dir/${binary}_bg.wasm" | cut -f1)
     JS_SIZE=$(du -h "$dist_dir/${binary}.js" | cut -f1)
     info "Bundle sizes: WASM=${WASM_SIZE}, JS=${JS_SIZE}"
     info "Bundle ready: $dist_dir"
 
-    # ── Worker bundle (lunica_web only) ─────────────────────────────────
+    # ── Worker bundle (lunica_web + sandbox_web) ──────────────────────
     # Generate bindings for the off-thread Modelica worker and place its
-    # output under `dist/lunica_web/worker/` so the main page can
-    # `new Worker('./worker/lunica_worker.js', { type: 'module' })`. The
+    # output under `dist/<bin>/worker/` so the main page can
+    # `new Worker('./worker/worker_bootstrap.js', { type: 'module' })`. The
     # worker bundle is a SECOND wasm instance — it has its own memory and
     # state — and there is no way to share Rust globals or `Arc`s with it.
-    if [ "$binary" = "lunica_web" ]; then
+    case "$binary" in
+        lunica_web|sandbox_web) staged_worker=1 ;;
+        *) staged_worker=0 ;;
+    esac
+    if [ "$staged_worker" = "1" ]; then
         local worker_bin="lunica_worker"
         local worker_bindgen_dir="$base_target_dir/web/$worker_bin"
         local worker_dist_dir="$dist_dir/worker"
@@ -403,7 +449,10 @@ Run: cargo run -p lunco-assets -- download"
         # Web Worker entry shim. wasm-bindgen --target web exports `init`
         # but doesn't run it; this tiny module imports + calls it so the
         # `#[wasm_bindgen(start)]` worker entry actually fires.
-        local worker_bootstrap="$PROJECT_DIR/crates/$crate/web/worker_bootstrap.js"
+        # The worker bootstrap shim always lives next to the worker
+        # source (in `lunco-modelica`), regardless of which main bundle
+        # is consuming it. Same file for lunica_web and sandbox_web.
+        local worker_bootstrap="$PROJECT_DIR/crates/lunco-modelica/web/worker_bootstrap.js"
         if [ -f "$worker_bootstrap" ]; then
             cp "$worker_bootstrap" "$worker_dist_dir/worker_bootstrap.js"
         else
@@ -417,13 +466,16 @@ Run: cargo run -p lunco-assets -- download"
 
 # Pack MSL into a versioned, compressed bundle and place it next to the
 # wasm under `dist/<bin>/msl/`. Same-origin so the runtime fetcher doesn't
-# need CORS configuration. Skipped for binaries that don't ship MSL
-# (sandbox_web).
+# need CORS configuration. Both wasm bundles ship MSL — lunica_web because
+# the workbench *is* the MSL editor, sandbox_web because its Design
+# workspace embeds the same Modelica panels and they'd be empty without
+# the standard library.
 build_msl_bundle() {
     local binary="$1"
-    if [ "$binary" != "lunica_web" ]; then
-        return 0
-    fi
+    case "$binary" in
+        lunica_web|sandbox_web) ;;
+        *) return 0 ;;
+    esac
     local dist_dir="$PROJECT_DIR/dist/$binary"
     local msl_dir="$dist_dir/msl"
 

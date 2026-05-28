@@ -33,7 +33,12 @@
             height: 100%;
             display: block;
             background: #1a1a1a;
+            /* Suppress Chrome's blue focus-ring (#a8c7fa, 1-px left
+               edge) when Bevy gives the canvas keyboard focus. egui
+               handles per-widget focus visibility inside the app. */
+            outline: none;
         }
+        #bevy:focus { outline: none; }
 
         /* Centred loader card. Covers ONLY the crucial pre-init steps:
            wasm download → wasm init. Hidden the moment `init()` resolves.

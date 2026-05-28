@@ -18,7 +18,6 @@
 
 use bevy::prelude::*;
 use std::path::PathBuf;
-use bevy_egui::EguiPlugin;
 use lunco_modelica::{
     ModelicaPlugin,
     ModelicaModel,
@@ -129,7 +128,7 @@ pub fn run() {
             }),
             ..default()
         }))
-        .add_plugins(EguiPlugin::default())
+        // EguiPlugin is auto-added by WorkbenchPlugin (idempotent).
         .add_plugins(lunco_workbench::WorkbenchPlugin)
         .add_plugins(ModelicaPlugin)
         // Autosave Untitled / duplicated docs to the browser's
@@ -142,13 +141,11 @@ pub fn run() {
         // broken async wasm clipboard pipeline. See
         // `ui/wasm_clipboard.rs`.
         .add_plugins(lunco_modelica::ui::wasm_clipboard::WasmClipboardPlugin)
-        // Camera lives unconditionally — without it Bevy renders a
-        // black screen even when there's no model tab to open. The
-        // example-specific setup below only handles tab/document
-        // creation.
-        .add_systems(Startup, |mut commands: Commands| {
-            commands.spawn(Camera2d);
-        })
+        // Camera2d + PrimaryEguiContext now auto-spawned by
+        // WorkbenchPlugin (see lunco-workbench/src/viewport.rs::
+        // ensure_egui_host). The old explicit `Camera2d` spawn here was
+        // missing the marker and was the latent cause of the
+        // "UI vanishes" class of bugs.
         .add_systems(Update, hide_html_loader_once_painted);
 
     // Only register the auto-open Startup system + its config resource

@@ -1,7 +1,6 @@
 //! Generic engineering workbench for testing any Modelica model.
 
 use bevy::prelude::*;
-use bevy_egui::EguiPlugin;
 use lunco_modelica::ModelicaPlugin;
 
 fn main() {
@@ -83,7 +82,8 @@ fn main() {
             close_when_requested: false,
             ..default()
         }))
-        .add_plugins(EguiPlugin::default())
+        // EguiPlugin is auto-added by WorkbenchPlugin (lunco-workbench
+        // checks `is_plugin_added` and inserts a default one if missing).
         // Vello-backed diagram canvas — TBD.
         //
         // The pipeline (lunco-canvas's DiagramRenderer trait,
@@ -98,8 +98,10 @@ fn main() {
         // .add_plugins(bevy_vello::VelloPlugin::default())
         // .add_plugins(lunco_modelica::ui::vello_canvas::VelloCanvasPlugin)
         .add_plugins(lunco_workbench::WorkbenchPlugin)
-        .add_plugins(ModelicaPlugin)
-        .add_systems(Startup, setup_sandbox);
+        .add_plugins(ModelicaPlugin);
+    // Note: the egui-owning (Camera2d, PrimaryEguiContext) is auto-spawned
+    // by WorkbenchPlugin via `ensure_egui_host` — no per-binary spawn
+    // needed (see lunco-workbench/src/viewport.rs for why).
 
     #[cfg(feature = "lunco-api")]
     app.add_plugins(lunco_api::LunCoApiPlugin::default());
@@ -174,21 +176,3 @@ fn install_panic_hook() {
     }));
     std::env::set_var("RUST_BACKTRACE", "1");
 }
-
-fn setup_sandbox(mut commands: Commands) {
-    // Start empty: the user lands on the Welcome tab, opens whatever
-    // they need via Package Browser / Twin / Ctrl+N. Auto-loading
-    // Battery was a debug convenience that confused new users —
-    // `cargo run` would show a random model with no explanation.
-    //
-    // `PrimaryEguiContext` pins egui's window-side rendering to *this*
-    // camera. Without the explicit marker, adding a second `Camera2d`
-    // (e.g. the vello-spike's offscreen camera) makes bevy_egui's
-    // auto-context-pick ambiguous and the workbench chrome silently
-    // stops rendering to the window — only the offscreen vello content
-    // shows up in screenshots.
-    commands.spawn((Camera2d, bevy_egui::PrimaryEguiContext));
-}
-
-// Phase-0 spike test scene removed; Phase 1 lives in
-// `lunco_modelica::ui::vello_canvas`.
