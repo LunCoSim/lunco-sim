@@ -102,7 +102,13 @@ impl Plugin for UsdSimPlugin {
            // `try_wire_wheel` runs in PreUpdate so that Wire entities exist
            // before `wire_system` (Update) propagates values through them.
            .add_systems(PreUpdate, try_wire_wheel)
+           // `process_usd_sim_prims` does a per-stage joint scan + per-
+           // entity dispatch — too coupled to fit cleanly into a single
+           // `OnAdd<UsdVisualSynced>` observer. Gating with `run_if`
+           // skips the system entirely on frames with no unprocessed
+           // USD prim (archetype-level check, near-zero cost).
            .add_systems(Update, process_usd_sim_prims
+               .run_if(any_unprocessed_usd_sim)
                .after(lunco_usd_bevy::sync_usd_visuals));
         // USD → cosim wiring (`lunco:modelicaModel`, `lunco:scriptModel`,
         // `lunco:simWires`) — see `cosim.rs`.
@@ -204,6 +210,15 @@ pub struct PendingWheelWiring {
 ///    `PhysicsRevoluteJoint` targets the wheel:
 ///    - **Joint-based** (joint authored): `RigidBody`, `Collider`, `MotorActuator` (constraint built by `lunco-usd-avian`)
 ///    - **Raycast** (no joint): `WheelRaycast`, `RayCaster` (entity split into physics + visual child)
+/// Run condition: true when any `UsdPrimPath` entity still lacks
+/// `UsdSimProcessed`. Lets `process_usd_sim_prims` stay dormant after
+/// scene-load is complete instead of running every frame.
+fn any_unprocessed_usd_sim(
+    q: Query<(), (With<UsdPrimPath>, Without<UsdSimProcessed>)>,
+) -> bool {
+    !q.is_empty()
+}
+
 fn process_usd_sim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath, Option<&Transform>, Option<&Mesh3d>, Option<&MeshMaterial3d<StandardMaterial>>, Option<&ChildOf>), Without<UsdSimProcessed>>,

@@ -45,18 +45,18 @@ pub fn soi_transition_system(
     q_bodies: Query<(Entity, &CellCoord, &Transform, &SOI, &crate::registry::CelestialBody)>,
     q_all_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_spatial: Query<(&CellCoord, &Transform)>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
 ) {
     for (entity, cell, tf, child_of) in q_entities.iter() {
         // Compute the "Universal" position relative to the simulation root (Solar System Center).
-        let current_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(entity, cell, tf, &q_parents, &q_all_grids, &q_spatial);
+        let current_pos = lunco_core::coords::world_position_seeded(entity, cell, tf, &q_parents, &q_all_grids, &q_spatial);
         let current_p_grid = child_of.parent();
         
         let mut best_body = None;
         let mut min_dist = f64::MAX;
 
         for (body_ent, b_cell, b_tf, soi, _body) in q_bodies.iter() {
-            let body_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(body_ent, b_cell, b_tf, &q_parents, &q_all_grids, &q_spatial);
+            let body_pos = lunco_core::coords::world_position_seeded(body_ent, b_cell, b_tf, &q_parents, &q_all_grids, &q_spatial);
             let dist = (current_pos - body_pos).length();
             
             // Check if we have entered a new body's dominance zone.
@@ -76,7 +76,7 @@ pub fn soi_transition_system(
                     // 1. Calculate the new local offset relative to the target body.
                     // 2. Convert that offset into a Grid-local (Cell, Transform) pair.
                     let (_, b_cell, b_tf, _, _) = q_bodies.get(new_parent_grid_ent).unwrap();
-                    let target_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(new_parent_grid_ent, b_cell, b_tf, &q_parents, &q_all_grids, &q_spatial);
+                    let target_pos = lunco_core::coords::world_position_seeded(new_parent_grid_ent, b_cell, b_tf, &q_parents, &q_all_grids, &q_spatial);
                     let (new_cell, new_transform) = new_grid.translation_to_grid(current_pos - target_pos);
                     
                     commands.entity(entity).insert((

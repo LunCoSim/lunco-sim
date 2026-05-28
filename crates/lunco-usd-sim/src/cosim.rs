@@ -63,6 +63,28 @@ pub struct UsdSourcedWire;
 /// Reads cosim attributes from USD prims and dispatches model
 /// compilation + wires. Runs in `Update` after `sync_usd_visuals` so
 /// `Transform` / `Mesh3d` / `Material` are already present.
+/// Run condition: any `UsdPrimPath` entity still lacks `UsdSourcedCosim`.
+fn any_unprocessed_usd_cosim(
+    q: Query<(), (With<UsdPrimPath>, Without<UsdSourcedCosim>)>,
+) -> bool {
+    !q.is_empty()
+}
+
+/// Run condition: any `UsdPrimPath` entity still lacks `UsdSourcedWire`.
+fn any_unprocessed_usd_cosim_wires(
+    q: Query<(), (With<UsdPrimPath>, Without<UsdSourcedWire>)>,
+) -> bool {
+    !q.is_empty()
+}
+
+/// Run condition: any `UsdSourcedCosim` modelica model still needs wrapping
+/// into a `SimComponent`.
+fn any_unwrapped_modelica(
+    q: Query<(), (With<UsdSourcedCosim>, With<ModelicaModel>, Without<SimComponent>)>,
+) -> bool {
+    !q.is_empty()
+}
+
 pub fn process_usd_cosim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath), Without<UsdSourcedCosim>>,
@@ -678,12 +700,15 @@ pub(crate) fn install(app: &mut App) {
     app.add_systems(
         Update,
         (
-            process_usd_cosim_prims,
+            // Gated on `any unprocessed cosim prim`: stay dormant
+            // after scene-load is complete. Same archetype-check
+            // pattern used for `process_usd_sim_prims`.
+            process_usd_cosim_prims.run_if(any_unprocessed_usd_cosim),
             // Cross-entity wires must run after participant prims are
             // processed (so their entities are addressable in the
             // path → entity index built each call).
-            process_usd_cosim_wires,
-            wrap_modelica_into_simcomponent,
+            process_usd_cosim_wires.run_if(any_unprocessed_usd_cosim_wires),
+            wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
         ).chain().after(lunco_usd_bevy::sync_usd_visuals),
     );
 

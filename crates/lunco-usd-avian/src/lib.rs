@@ -42,9 +42,11 @@
 //! `Update` schedule and retries every frame until the asset is available.
 
 use bevy::prelude::*;
+use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::DVec3;
 use avian3d::prelude::*;
 use avian3d::physics_transform::{Position, Rotation};
+use lunco_usd_bevy::UsdVisualSynced;
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 use openusd::sdf::{AbstractData, Path as SdfPath, Value};
 use openusd::usda::TextReader;
@@ -58,8 +60,20 @@ pub struct UsdAvianPlugin;
 
 impl Plugin for UsdAvianPlugin {
     fn build(&self, app: &mut App) {
+        // `on_add_usd_prim`: eager observer for joint pending-state.
+        // `process_usd_avian_prims`: observer on UsdVisualSynced — fires
+        //   right after `sync_usd_visuals` translates each prim, so the
+        //   stage is loaded and Mesh3d/Transform exist.
+        // `build_usd_physics_joints`: stays a per-frame system because
+        //   it's a deferred state-machine waiting on Avian to admit
+        //   both bodies into its island graph (FixedUpdate-driven).
+        //   `run_if(any pending)` makes it idle when no joints await.
         app.add_observer(on_add_usd_prim)
-            .add_systems(Update, (process_usd_avian_prims, build_usd_physics_joints).chain());
+            .add_observer(process_usd_avian_prims)
+            .add_systems(
+                Update,
+                build_usd_physics_joints.run_if(any_with_component::<PendingUsdJoint>),
+            );
     }
 }
 
@@ -299,22 +313,29 @@ fn add_collider_from_usd(
 /// - Their shapes are included in the parent's compound collider
 ///
 /// **Legacy fallback:** `physics:rigidBodyEnabled` attribute for old-style USD files.
+/// Observer: fires once per entity, the moment `sync_usd_visuals` finishes
+/// translating the USD prim (signalled by inserting `UsdVisualSynced`).
+/// By that point the stage is loaded and `Mesh3d`/`Transform` are present —
+/// safe to read schemas and attach physics components in one step.
 fn process_usd_avian_prims(
-    mut commands: Commands,
-    query: Query<(Entity, &UsdPrimPath), Without<UsdAvianProcessed>>,
+    trigger: On<Add, UsdVisualSynced>,
+    query: Query<&UsdPrimPath, Without<UsdAvianProcessed>>,
     q_child_of: Query<&ChildOf>,
     stages: Res<Assets<UsdStageAsset>>,
+    mut commands: Commands,
 ) {
-    for (entity, prim_path) in query.iter() {
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
-        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
+    let entity = trigger.entity;
+    let Ok(prim_path) = query.get(entity) else { return; };
+    {
+        let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
+        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
 
         let reader = (*stage.reader).clone();
 
         // Skip wheel prims — the sim plugin handles those
         if reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleWheel:radius").is_some() {
             commands.entity(entity).insert(UsdAvianProcessed);
-            continue;
+            return;
         }
 
         // Detect API schemas
@@ -331,7 +352,7 @@ fn process_usd_avian_prims(
             ));
             add_collider_from_usd(&mut commands, entity, &reader, &sdf_path);
             commands.entity(entity).insert(UsdAvianProcessed);
-            continue;
+            return;
         }
 
         if has_rigid_body_api {
@@ -432,6 +453,7 @@ fn on_add_usd_prim(
 ) {
     let entity = trigger.entity;
     let Ok(prim_path) = query.get(entity) else { return; };
+    info!("[on_add_usd_prim] {} (stage_loaded={})", prim_path.path, stages.contains(&prim_path.stage_handle));
     let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
     let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
 

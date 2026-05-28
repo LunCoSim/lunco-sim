@@ -171,7 +171,7 @@ pub fn update_local_gravity_field(
     q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf, Option<&GravityBody>)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
-    q_spatial: Query<(&CellCoord, &Transform)>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_bodies: Query<&GravityProvider>,
     gravity: Res<Gravity>,
     mut field: ResMut<LocalGravityField>,
@@ -179,15 +179,16 @@ pub fn update_local_gravity_field(
     let Some((avatar_ent, tf, cell, _, gravity_body)) = q_avatar.iter().next() else { return };
 
     // Avatar absolute position in root frame.
-    let cam_abs = crate::coords::get_absolute_pos_in_root_double_ghost_aware(
+    let cam_abs = crate::coords::world_position_seeded(
         avatar_ent, cell, tf, &q_parents, &q_grids, &q_spatial,
     );
 
     let (body_local, surface_g) = if let Some(gb) = gravity_body {
         // Compute body absolute position.
         let body_abs = if let Ok((b_cell, b_tf)) = q_spatial.get(gb.body_entity) {
-            crate::coords::get_absolute_pos_in_root_double_ghost_aware(
-                gb.body_entity, b_cell, b_tf, &q_parents, &q_grids, &q_spatial,
+            let cell = b_cell.copied().unwrap_or_default();
+            crate::coords::world_position_seeded(
+                gb.body_entity, &cell, b_tf, &q_parents, &q_grids, &q_spatial,
             )
         } else {
             DVec3::ZERO
@@ -203,8 +204,9 @@ pub fn update_local_gravity_field(
     } else if let Some(body_ent) = field.body_entity {
         // Fall back to the last-known body from LocalGravityField.
         let body_abs = if let Ok((b_cell, b_tf)) = q_spatial.get(body_ent) {
-            crate::coords::get_absolute_pos_in_root_double_ghost_aware(
-                body_ent, b_cell, b_tf, &q_parents, &q_grids, &q_spatial,
+            let cell = b_cell.copied().unwrap_or_default();
+            crate::coords::world_position_seeded(
+                body_ent, &cell, b_tf, &q_parents, &q_grids, &q_spatial,
             )
         } else {
             DVec3::ZERO
