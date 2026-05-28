@@ -107,12 +107,11 @@ fn main() {
 
     let mut app = App::new();
     // Match lunica's pacer: Continuous while focused lets vsync (Fifo
-    // present) act as the frame timer; ReactiveLowPower keeps fans
-    // quiet when the window is in the background. Required for the
-    // egui chrome to repaint reliably under camera-zoom load — without
-    // it, frames are issued only on input, and the chrome can stay
-    // stale while the 3D pass keeps refreshing.
-    #[cfg(not(target_arch = "wasm32"))]
+    // present / requestAnimationFrame on web) act as the frame timer;
+    // ReactiveLowPower keeps fans quiet when the window is in the
+    // background. Applies on wasm too — the original "UI vanishes on
+    // zoom" bug surfaced under reactive mode where the egui chrome
+    // could stay stale while the 3D pass kept refreshing.
     {
         use bevy::winit::{UpdateMode, WinitSettings};
         app.insert_resource(WinitSettings {

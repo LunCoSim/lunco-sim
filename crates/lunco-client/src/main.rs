@@ -23,16 +23,25 @@ use lunco_workbench::WorkbenchAppExt;
 use lunco_assets::{cache_dir, textures_dir};
 use bevy_egui::{EguiPrimaryContextPass, EguiContexts};
 
-/// Collects egui scroll input and feeds it to the camera zoom system.
-/// Runs in EguiPrimaryContextPass so egui context is available.
-/// Always passes scroll through to the camera — egui panels don't consume scroll.
+/// Bridge egui scroll input into `lunco_avatar::CameraScroll` so the
+/// avatar zoom systems (`SpringArm`, `Orbit`, `Chase`) react to mouse
+/// wheel events.
+///
+/// Gated on `!ctx.wants_pointer_input()` — egui sets that to `true`
+/// when the cursor is over an interactive widget that consumes scroll
+/// (scrollarea, slider, combo box, …). When `false`, the cursor is
+/// over a passive region (the viewport, empty dock area, menu
+/// background) and the scroll naturally belongs to the 3D scene.
+/// Mirrors `sandbox.rs::collect_scroll_input_gated`.
 fn collect_scroll_input(
     mut egui_contexts: EguiContexts,
     mut scroll_res: ResMut<lunco_avatar::CameraScroll>,
 ) {
-    if let Ok(ctx) = egui_contexts.ctx_mut() {
-        scroll_res.delta += ctx.input(|i: &bevy_egui::egui::InputState| i.raw_scroll_delta.y);
+    let Ok(ctx) = egui_contexts.ctx_mut() else { return };
+    if ctx.wants_pointer_input() {
+        return;
     }
+    scroll_res.delta += ctx.input(|i: &bevy_egui::egui::InputState| i.raw_scroll_delta.y);
 }
 
 /// Main entry point for the simulation.
