@@ -21,4 +21,4 @@ pub(crate) fn ecliptic_to_bevy(pos: bevy::math::DVec3) -> bevy::math::DVec3 {
     bevy::math::DVec3::new(x, z, -y)
 }
 
-pub(crate) use lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware;
+pub(crate) use lunco_core::coords::world_position_seeded;

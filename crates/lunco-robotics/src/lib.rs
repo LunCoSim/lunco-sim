@@ -1,5 +1,4 @@
 pub mod assembler;
-pub mod rover;
 
 use bevy::prelude::*;
 

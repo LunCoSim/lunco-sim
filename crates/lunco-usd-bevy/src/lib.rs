@@ -53,7 +53,17 @@ impl Plugin for UsdBevyPlugin {
         app.init_asset::<UsdStageAsset>()
             .register_asset_loader(UsdLoader)
             .register_type::<UsdPrimPath>()
-            .add_systems(Update, (sync_usd_visuals, hide_glb_placeholder_meshes));
+            .add_observer(on_usd_prim_added)
+            // `sync_usd_visuals` runs only on frames where a stage's
+            // `LoadedWithDependencies` event was emitted. Idle frames
+            // skip it entirely (run-condition short-circuits).
+            .add_systems(
+                Update,
+                (
+                    sync_usd_visuals.run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<UsdStageAsset>>),
+                    hide_glb_placeholder_meshes,
+                ),
+            );
     }
 }
 
@@ -211,38 +221,59 @@ pub struct UsdVisualSynced;
 #[derive(Component, Default, Debug, Clone, Copy)]
 pub struct UsdPreviewOnly;
 
-/// System that synchronizes USD prims into Bevy entities with visual components.
+/// Attached to a scene-root entity to tell the USD instantiator where to
+/// place top-level USD prims. When this component is present, each
+/// direct USD child spawns as a `GridAnchor` parented to the target
+/// Grid — *not* as a Bevy child of this entity.
 ///
-/// For each entity with `UsdPrimPath` (but not `UsdVisualSynced`):
-/// 1. Looks up the prim's attributes from the loaded USD stage
-/// 2. Creates a mesh based on prim type (Cube, Cylinder, Sphere) with explicit dimensions
-/// 3. Applies the prim's transform (position + rotation)
-/// 4. Spawns child entities for each prim child, pre-populating their transforms
-/// 5. Marks the entity with `UsdVisualSynced` to prevent re-processing
+/// This is what enforces the architectural rule: top-level USD prims
+/// (rovers, balls, terrain) become Grid-direct entities so big_space's
+/// `propagate_high_precision` runs on them; their own descendants
+/// remain plain-`Transform` children of their USD parent's Bevy entity.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct LoadIntoGrid(pub Entity);
+
+/// Marker placed on an entity whose `UsdPrimPath` was added before the
+/// referenced `UsdStageAsset` finished loading. `on_stage_loaded`
+/// processes it once the asset becomes available.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct UsdAwaitingStage;
+
+/// Translates a single USD prim into Bevy/big_space/avian components on
+/// `entity`. The caller has already verified that the stage is loaded.
 ///
-/// # Material Handling
+/// **Steady-state cost: zero** — this is invoked exactly once per entity,
+/// either by `on_usd_prim_added` (entity spawned after stage loaded) or
+/// by `on_stage_loaded` (entity spawned before stage loaded; drained
+/// from the `UsdAwaitingStage` queue when the asset becomes ready). No
+/// per-frame polling.
 ///
-/// This system applies `StandardMaterial` to all prims with a mesh.
+/// 1. Looks up the prim's attributes from the loaded USD stage.
+/// 2. Creates a mesh based on prim type (Cube, Cylinder, Sphere).
+/// 3. Applies the prim's transform (position + rotation + scale).
+/// 4. Spawns child entities for each prim child, applying the natural
+///    anchor rule via `LoadIntoGrid` (top-level → `GridAnchor`).
+/// 5. Marks the entity with `UsdVisualSynced` to prevent re-processing.
+///
 /// Custom materials (solar panels, blueprint grids, etc.) are applied
-/// by independent material plugins in `lunco-materials` that run
-/// `.after(sync_usd_visuals)`.
-///
-/// # Important
-///
-/// This system runs in the `Update` schedule and retries every frame until the USD asset
-/// is loaded. This is necessary because asset loading is asynchronous — the entity may
-/// be spawned before the asset is ready.
-pub fn sync_usd_visuals(
-    mut commands: Commands,
-    query: Query<(Entity, &UsdPrimPath, Option<&Visibility>, Option<&Transform>), Without<UsdVisualSynced>>,
-    stages: Res<Assets<UsdStageAsset>>,
-    asset_server: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+/// by independent material plugins in `lunco-materials` that observe
+/// the `UsdVisualSynced` insertion.
+#[allow(clippy::too_many_arguments)]
+fn instantiate_usd_prim(
+    entity: Entity,
+    prim_path: &UsdPrimPath,
+    existing_vis: Option<&Visibility>,
+    existing_tf: Option<&Transform>,
+    load_into_grid: Option<&LoadIntoGrid>,
+    commands: &mut Commands,
+    stages: &Assets<UsdStageAsset>,
+    asset_server: &AssetServer,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
 ) {
-    for (entity, prim_path, existing_vis, existing_tf) in query.iter() {
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
-        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
+    {
+        let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
+        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
 
         let reader = (*stage.reader).clone();
 
@@ -251,7 +282,7 @@ pub fn sync_usd_visuals(
             if let Value::Bool(active) = &*val {
                 if !*active {
                     commands.entity(entity).insert(UsdVisualSynced);
-                    continue;
+                    return;
                 }
             }
         }
@@ -352,7 +383,7 @@ pub fn sync_usd_visuals(
 
         // Apply standard PBR material with USD color
         if let Some(ref m) = mesh_handle {
-            apply_standard_material(&reader, &sdf_path, m, &mut materials, &mut commands.entity(entity));
+            apply_standard_material(&reader, &sdf_path, m, materials, &mut commands.entity(entity));
         }
 
         // glTF / external-mesh branch.
@@ -390,7 +421,7 @@ pub fn sync_usd_visuals(
                         &reader,
                         &sdf_path,
                         &mesh_h,
-                        &mut materials,
+                        materials,
                         &mut commands.entity(entity),
                     );
                 }
@@ -509,20 +540,143 @@ pub fn sync_usd_visuals(
                 child_tf.rotation = Quat::from_euler(EulerRot::XYZ, rx, ry, rz);
             }
 
-            let child_entity = commands.spawn((
+            let base_components = (
                 Name::new(child_path.to_string()),
                 UsdPrimPath {
                     stage_handle: prim_path.stage_handle.clone(),
                     path: child_path.to_string(),
                 },
                 child_tf,
-                CellCoord::default(),
                 GlobalTransform::default(),
                 Visibility::Visible,
                 InheritedVisibility::VISIBLE,
                 ViewVisibility::default(),
-            )).id();
-            commands.entity(entity).add_child(child_entity);
+            );
+
+            // Top-level USD prims (children of a scene root tagged with
+            // `LoadIntoGrid`) become Grid-direct anchors so big_space's
+            // `propagate_high_precision` updates their GlobalTransform.
+            // Anything deeper stays as plain `Transform` children of
+            // their USD parent's Bevy entity.
+            // ChildOf must be set atomically with UsdPrimPath so that
+            // observers triggered by the spawn (on_usd_prim_added →
+            // instantiate_usd_prim → UsdVisualSynced → process_usd_avian_prims)
+            // see the established parentage. Setting ChildOf later via
+            // add_child queues a separate command applied AFTER the
+            // observer cascade, causing `q_child_of.get(entity).is_err()`
+            // to take the root-collider branch and silently mark
+            // collider-child prims (e.g. Chassis) as RigidBody::Static.
+            // Bevy's relationship system fans the reverse `Children`
+            // edge from ChildOf automatically.
+            if let Some(LoadIntoGrid(grid)) = load_into_grid {
+                commands.spawn((
+                    base_components,
+                    CellCoord::default(),
+                    lunco_core::GridAnchor,
+                    ChildOf(*grid),
+                ));
+            } else {
+                commands.spawn((base_components, ChildOf(entity)));
+            }
+        }
+    }
+}
+
+/// Observer: fires the moment a new `UsdPrimPath` is added to an entity.
+/// If the referenced `UsdStageAsset` is already loaded, the prim is
+/// instantiated immediately. Otherwise the entity is tagged
+/// `UsdAwaitingStage` and waits for `sync_usd_visuals` to drain it once
+/// the asset becomes ready.
+///
+/// This is the **happy path** in steady state — once a scene is loaded,
+/// any newly-spawned `UsdPrimPath` entity (API command, attach
+/// operation, recursive child spawn) is processed in the same frame
+/// without per-frame polling.
+fn on_usd_prim_added(
+    trigger: On<Add, UsdPrimPath>,
+    q: Query<
+        (&UsdPrimPath, Option<&Visibility>, Option<&Transform>, Option<&LoadIntoGrid>),
+        Without<UsdVisualSynced>,
+    >,
+    mut commands: Commands,
+    stages: Res<Assets<UsdStageAsset>>,
+    asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let entity = trigger.entity;
+    let Ok((prim_path, vis, tf, load_into)) = q.get(entity) else { return; };
+
+    if stages.get(&prim_path.stage_handle).is_none() {
+        commands.entity(entity).insert(UsdAwaitingStage);
+        return;
+    }
+
+    instantiate_usd_prim(
+        entity,
+        prim_path,
+        vis,
+        tf,
+        load_into,
+        &mut commands,
+        &stages,
+        &asset_server,
+        &mut meshes,
+        &mut materials,
+    );
+}
+
+/// Drains the `UsdAwaitingStage` queue when a stage finishes loading.
+/// Each entity whose `UsdPrimPath.stage_handle` matches the newly-loaded
+/// asset gets processed exactly once.
+///
+/// Registered with `run_if(on_message::<AssetEvent<UsdStageAsset>>())`
+/// so the system body executes only on frames where an asset event
+/// actually fires — zero per-frame cost in steady state.
+///
+/// **Name retained for compatibility**: downstream systems
+/// (`lunco-materials`, `lunco-usd-sim`, `lunco-usd-avian`) order
+/// themselves with `.after(sync_usd_visuals)` to ensure they see
+/// USD-spawned components. The deferred-stage path now goes through
+/// this system; the eager path goes through the `on_usd_prim_added`
+/// observer (which fires synchronously during command application, so
+/// downstream `.after()` ordering covers it too).
+pub fn sync_usd_visuals(
+    mut ev: MessageReader<AssetEvent<UsdStageAsset>>,
+    q: Query<
+        (Entity, &UsdPrimPath, Option<&Visibility>, Option<&Transform>, Option<&LoadIntoGrid>),
+        (With<UsdAwaitingStage>, Without<UsdVisualSynced>),
+    >,
+    mut commands: Commands,
+    stages: Res<Assets<UsdStageAsset>>,
+    asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    use bevy::asset::AssetId;
+    let mut loaded: Vec<AssetId<UsdStageAsset>> = Vec::new();
+    for event in ev.read() {
+        if let AssetEvent::LoadedWithDependencies { id } = event {
+            loaded.push(*id);
+        }
+    }
+    if loaded.is_empty() { return; }
+
+    for (entity, prim_path, vis, tf, load_into) in q.iter() {
+        if loaded.iter().any(|id| prim_path.stage_handle.id() == *id) {
+            commands.entity(entity).remove::<UsdAwaitingStage>();
+            instantiate_usd_prim(
+                entity,
+                prim_path,
+                vis,
+                tf,
+                load_into,
+                &mut commands,
+                &stages,
+                &asset_server,
+                &mut meshes,
+                &mut materials,
+            );
         }
     }
 }
@@ -532,7 +686,7 @@ fn apply_standard_material(
     reader: &TextReader,
     sdf_path: &SdfPath,
     mesh_handle: &Handle<Mesh>,
-    materials: &mut ResMut<Assets<StandardMaterial>>,
+    materials: &mut Assets<StandardMaterial>,
     entity_cmd: &mut EntityCommands,
 ) {
     // Get color from primvars:displayColor attribute

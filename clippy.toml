@@ -55,4 +55,18 @@ disallowed-methods = [
     # `web_time::Instant` is a drop-in that uses `performance.now()` on
     # wasm and `std::time::Instant` on native.
     { path = "std::time::Instant::now",  reason = "Use web_time::Instant — std::time::Instant panics on wasm" },
+
+    # ── Atomic re-parenting of big_space `GridAnchor` entities ─────────
+    # Splitting `(ChildOf, CellCoord, Transform)` writes across separate
+    # commands races against synchronous observers (this is the bug class
+    # that silently marked rover chassis as `RigidBody::Static`).
+    # Re-parenting `GridAnchor` entities must go through
+    # `lunco_core::attach::migrate_to_grid` — see
+    # `crates/lunco-core/src/attach.rs`. One-time scene-setup callsites in
+    # `lunco-celestial::big_space_setup` and similar bootstrap code may
+    # `#[allow(clippy::disallowed_methods)]` locally — they run before any
+    # observer is registered.
+    { path = "bevy_ecs::system::EntityCommands::add_child", reason = "Re-parenting a GridAnchor must use lunco_core::attach::migrate_to_grid for atomic (ChildOf, CellCoord, Transform) writes. Local #[allow] for non-spatial parenting (visuals, ports, wires)." },
+    { path = "bevy_ecs::world::EntityWorldMut::add_child", reason = "See EntityCommands::add_child — same atomicity contract. Direct-World mode flushes synchronously, so a local #[allow] is fine for bootstrap code." },
+    { path = "bevy_transform::commands::BuildChildrenTransformExt::set_parent_in_place", reason = "Use lunco_core::attach::migrate_to_grid. Local #[allow] for one-time scene construction in big_space_setup." },
 ]

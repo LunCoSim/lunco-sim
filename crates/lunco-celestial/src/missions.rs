@@ -278,7 +278,12 @@ pub fn spacecraft_alignment_system(
                 };
                 
                 if !is_current_parent {
-                    commands.entity(sc_entity).set_parent_in_place(f_entity); 
+                    // Parent is a `CelestialReferenceFrame`, not a `Grid` — spacecraft
+                    // here are NOT `GridAnchor`s, so the atomic-migration contract
+                    // doesn't apply. `set_parent_in_place` preserves GlobalTransform
+                    // for the visual hierarchy.
+                    #[allow(clippy::disallowed_methods)]
+                    commands.entity(sc_entity).set_parent_in_place(f_entity);
                 }
                 break;
             }

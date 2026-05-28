@@ -7,7 +7,7 @@ use crate::clock::CelestialClock;
 use crate::ephemeris::EphemerisResource;
 use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
 use crate::coords::ecliptic_to_bevy;
-use crate::coords::get_absolute_pos_in_root_double_ghost_aware;
+use crate::coords::world_position_seeded;
 use lunco_materials::BlueprintMaterial;
 
 /// Update body and frame positions based on ephemeris data.
@@ -156,10 +156,10 @@ pub fn celestial_visuals_system(
     q_tiles: Query<(&MeshMaterial3d<BlueprintMaterial>, &lunco_terrain::TileCoord), With<lunco_terrain::TerrainTile>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
-    q_spatial: Query<(&CellCoord, &Transform)>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
 ) {
     let Some((cam_ent, cam_cell, cam_tf)) = q_camera.iter().next() else { return; };
-    let cam_abs = get_absolute_pos_in_root_double_ghost_aware(cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial);
+    let cam_abs = world_position_seeded(cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial);
 
     // Find nearest body and compute altitude using body-local distance.
     // Using body-local coords (camera relative to body center) prevents
@@ -168,7 +168,7 @@ pub fn celestial_visuals_system(
     let mut nearest_altitude = f64::MAX;
     let mut nearest_body_entity = None;
     for (body_ent, body_cell, body_tf, body) in q_bodies.iter() {
-        let body_abs = get_absolute_pos_in_root_double_ghost_aware(body_ent, body_cell, body_tf, &q_parents, &q_grids, &q_spatial);
+        let body_abs = world_position_seeded(body_ent, body_cell, body_tf, &q_parents, &q_grids, &q_spatial);
         // Body-local distance: camera position relative to body center
         let camera_body_local = cam_abs - body_abs;
         let altitude = (camera_body_local.length() - body.radius_m).max(0.0);

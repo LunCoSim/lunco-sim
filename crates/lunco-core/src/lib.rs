@@ -9,6 +9,12 @@ pub mod mocks;
 pub mod telemetry;
 pub mod coords;
 pub mod log;
+/// Architectural marker components for the big_space integration.
+pub mod markers;
+/// Atomic re-parenting helpers for SOI/Grid migration.
+pub mod attach;
+/// Debug-build invariant checks for the big_space hierarchy.
+pub mod invariants;
 /// Unified diagram data model — pure Rust, no Bevy dependency.
 pub mod diagram;
 /// Shared 53-bit time-sorted id generator backing `GlobalEntityId`
@@ -24,6 +30,8 @@ pub use mocks::*;
 pub use telemetry::*;
 pub use log::*;
 pub use commands::{Ack, Mutation, OpId, Reject, Replication, SessionId};
+pub use markers::{GridAnchor, SoiMigrant};
+pub use invariants::BigSpaceInvariantsPlugin;
 
 // ── Typed Command Macros ──────────────────────────────────────────────────────
 //
@@ -225,7 +233,10 @@ impl Default for CelestialClock {
 impl Plugin for LunCoCorePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(LunCoLogPlugin);
-        app.register_type::<Severity>()
+        app.add_plugins(BigSpaceInvariantsPlugin);
+        app.register_type::<GridAnchor>()
+           .register_type::<SoiMigrant>()
+           .register_type::<Severity>()
            .register_type::<TelemetryValue>()
            .register_type::<TelemetryEvent>()
            .register_type::<Parameter>()

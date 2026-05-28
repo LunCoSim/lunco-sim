@@ -102,7 +102,13 @@ impl Plugin for UsdSimPlugin {
            // `try_wire_wheel` runs in PreUpdate so that Wire entities exist
            // before `wire_system` (Update) propagates values through them.
            .add_systems(PreUpdate, try_wire_wheel)
+           // `process_usd_sim_prims` does a per-stage joint scan + per-
+           // entity dispatch — too coupled to fit cleanly into a single
+           // `OnAdd<UsdVisualSynced>` observer. Gating with `run_if`
+           // skips the system entirely on frames with no unprocessed
+           // USD prim (archetype-level check, near-zero cost).
            .add_systems(Update, process_usd_sim_prims
+               .run_if(any_unprocessed_usd_sim)
                .after(lunco_usd_bevy::sync_usd_visuals));
         // USD → cosim wiring (`lunco:modelicaModel`, `lunco:scriptModel`,
         // `lunco:simWires`) — see `cosim.rs`.
@@ -204,6 +210,15 @@ pub struct PendingWheelWiring {
 ///    `PhysicsRevoluteJoint` targets the wheel:
 ///    - **Joint-based** (joint authored): `RigidBody`, `Collider`, `MotorActuator` (constraint built by `lunco-usd-avian`)
 ///    - **Raycast** (no joint): `WheelRaycast`, `RayCaster` (entity split into physics + visual child)
+/// Run condition: true when any `UsdPrimPath` entity still lacks
+/// `UsdSimProcessed`. Lets `process_usd_sim_prims` stay dormant after
+/// scene-load is complete instead of running every frame.
+fn any_unprocessed_usd_sim(
+    q: Query<(), (With<UsdPrimPath>, Without<UsdSimProcessed>)>,
+) -> bool {
+    !q.is_empty()
+}
+
 fn process_usd_sim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath, Option<&Transform>, Option<&Mesh3d>, Option<&MeshMaterial3d<StandardMaterial>>, Option<&ChildOf>), Without<UsdSimProcessed>>,
@@ -538,26 +553,25 @@ fn setup_raycast_wheel(
     let wheel_rotation = existing_tf.rotation;
 
     if wheel_mesh.is_some() {
-        let visual_entity = commands.spawn((
+        // Atomic spawn: `ChildOf(entity)` in the bundle so parent + transform
+        // land together — same contract as `migrate_to_grid`.
+        let mut visual = commands.spawn((
             Name::new(format!("{}_visual", prim_path.path.split('/').next_back().unwrap_or("wheel"))),
             Transform {
                 translation: Vec3::ZERO,
                 rotation: wheel_rotation,
                 scale: existing_tf.scale,
             },
-            CellCoord::default(),
             Visibility::Inherited,
             InheritedVisibility::default(),
             ViewVisibility::default(),
             wheel_mesh.unwrap(),
-        )).id();
-
+            ChildOf(entity),
+        ));
         if let Some(mat) = maybe_mat.cloned() {
-            commands.entity(visual_entity).insert(mat);
+            visual.insert(mat);
         }
-
-        commands.entity(entity).add_child(visual_entity);
-        wheel.visual_entity = Some(visual_entity);
+        wheel.visual_entity = Some(visual.id());
         commands.entity(entity).remove::<Mesh3d>();
         commands.entity(entity).remove::<MeshMaterial3d<StandardMaterial>>();
     }
@@ -661,7 +675,7 @@ fn setup_physical_wheel(
     let motor_axis = -(wheel_axis_rot * Vec3::Y).as_dvec3();
 
     if let Some(mesh) = maybe_mesh.cloned() {
-        let visual = commands.spawn((
+        let mut visual = commands.spawn((
             Name::new(format!(
                 "{}_visual",
                 prim_path.path.split('/').next_back().unwrap_or("wheel")
@@ -671,11 +685,11 @@ fn setup_physical_wheel(
             InheritedVisibility::default(),
             ViewVisibility::default(),
             mesh,
-        )).id();
+            ChildOf(entity),
+        ));
         if let Some(mat) = maybe_mat.cloned() {
-            commands.entity(visual).insert(mat);
+            visual.insert(mat);
         }
-        commands.entity(entity).add_child(visual);
         commands.entity(entity).remove::<Mesh3d>();
         commands.entity(entity).remove::<MeshMaterial3d<StandardMaterial>>();
     }

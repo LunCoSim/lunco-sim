@@ -513,6 +513,11 @@ pub fn trajectory_alignment_system(
         if let Some(parent_ent) = target_parent {
             let is_current_parent = current_parent.map(|p| p.parent() == parent_ent).unwrap_or(false);
             if !is_current_parent {
+                // Trajectory views are NOT `GridAnchor`s — they parent to
+                // `CelestialBody` / `CelestialReferenceFrame` entities. Cell/Transform
+                // are reset to default just below; the deferred-vs-immediate split
+                // is harmless because no observers fire on this archetype.
+                #[allow(clippy::disallowed_methods)]
                 commands.entity(parent_ent).add_child(v_entity);
             }
             transform.translation = Vec3::ZERO;

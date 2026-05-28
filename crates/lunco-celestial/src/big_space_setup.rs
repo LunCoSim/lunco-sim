@@ -1,3 +1,10 @@
+// One-time scene bootstrap: spawning the Grid/Body/Surface hierarchy at
+// startup. `set_parent_in_place` is fine here because no observers are
+// registered against these archetypes yet, and the entities have default
+// (CellCoord, Transform), so the lint's atomic-migration concern doesn't
+// apply. See `lunco_core::attach::migrate_to_grid` for the runtime path.
+#![allow(clippy::disallowed_methods)]
+
 //! Sets up the big_space coordinate hierarchy for the solar system.
 //!
 //! ## Architecture: Inertial Grid + Rotating Body
@@ -15,18 +22,28 @@
 //!
 //! ```text
 //! BigSpace Root
-//!   └── Solar Grid (inertial)
+//!   └── Solar Grid (inertial, edge=1e9)
 //!         ├── Sun (simple entity, no grid)
 //!         ├── Sun Light
-//!         ├── EMB Grid (inertial)
-//!         │     ├── Earth Grid (inertial, ephemeris)
-//!         │     │     └── Earth Body (rotates, mesh+collider)
-//!         │     │           └── 24 terrain tiles (inherit rotation)
-//!         │     └── Moon Grid (inertial, ephemeris)
-//!         │           └── Moon Body (rotates, mesh+collider)
-//!         │                 └── 24 terrain tiles (inherit rotation)
+//!         ├── EMB Grid (inertial, edge=1e8)
+//!         │     ├── Earth Grid (rotating, ephemeris, edge=1e4)
+//!         │     │     ├── Earth Body (mesh+collider, identity transform)
+//!         │     │     └── Earth Surface Grid (edge=1e3, surface sub-frame)
+//!         │     │           └── 24 terrain tiles + rovers + surface ops
+//!         │     └── Moon Grid (rotating, ephemeris, edge=1e4)
+//!         │           ├── Moon Body (mesh+collider, identity transform)
+//!         │           └── Moon Surface Grid (edge=1e3, surface sub-frame)
+//!         │                 └── 24 terrain tiles + rovers + surface ops
 //!         └── Other planets (simple entities)
 //! ```
+//!
+//! ## Surface sub-Grids
+//!
+//! Surface ops (rovers, avatars, terrain) live in a finer sub-Grid (edge=1e3 m,
+//! ULP ≈ 60 µm at half-cell) under each body's rotating Grid. This keeps avian's
+//! `Position` near zero in the rover's frame so f64 → f32 narrowing preserves
+//! sub-mm precision on wheel raycasts even at body-radius distances from the
+//! parent Grid's origin.
 //!
 //! ## Why two layers?
 //!
@@ -64,6 +81,18 @@ pub struct EarthRoot;
 /// Marker for Moon's inertial grid anchor.
 #[derive(Component)]
 pub struct MoonRoot;
+
+/// Marker for Earth's surface sub-grid (edge=1e3 m).
+///
+/// Surface entities — rovers, avatars, terrain tiles, future surface ops —
+/// live here so their `Transform.translation` stays small in `f32` and
+/// inherits Earth's sidereal rotation via the parent Grid.
+#[derive(Component)]
+pub struct EarthSurfaceRoot;
+
+/// Marker for Moon's surface sub-grid (edge=1e3 m). See [`EarthSurfaceRoot`].
+#[derive(Component)]
+pub struct MoonSurfaceRoot;
 
 /// Sets up the complete big_space entity hierarchy.
 ///
@@ -209,9 +238,21 @@ pub fn setup_big_space_hierarchy(
         Name::new("Earth Body (Rotating)"),
     )).set_parent_in_place(earth_grid).id();
 
-    // Earth terrain tiles — spawned with CellCoord, parented to Earth Grid.
+    // ── Earth Surface Grid (edge=1e3 m, inside the rotating Earth Grid) ────
+    let earth_surface_grid = commands.spawn((
+        EarthSurfaceRoot,
+        Grid::new(1_000.0, 1.0e30),
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Visibility::default(),
+        InheritedVisibility::default(),
+        Name::new("Earth Surface Grid"),
+    )).set_parent_in_place(earth_grid).id();
+
+    // Earth terrain tiles — spawned with CellCoord, parented to Earth Surface Grid.
     // big_space's propagate_high_precision inherits Grid rotation to all children.
-    let earth_grid_ref = Grid::new(10_000.0, 1.0e30);
+    let earth_grid_ref = Grid::new(1_000.0, 1.0e30);
     for face in 0..6 {
         for i in 0..2 {
             for j in 0..2 {
@@ -257,7 +298,7 @@ pub fn setup_big_space_hierarchy(
                     InheritedVisibility::default(),
                     NoFrustumCulling,
                     Name::new(format!("Earth Tile f{} i{} j{}", face, i, j)),
-                )).set_parent_in_place(earth_grid);
+                )).set_parent_in_place(earth_surface_grid);
             }
         }
     }
@@ -305,9 +346,20 @@ pub fn setup_big_space_hierarchy(
         Name::new("Moon Body (Rotating)"),
     )).set_parent_in_place(moon_grid).id();
 
-    // Moon terrain tiles — spawned with CellCoord, parented to Moon Grid.
-    // Rotation is synced separately via body_rotation_system.
-    let moon_grid_ref = Grid::new(10_000.0, 1.0e30);
+    // ── Moon Surface Grid (edge=1e3 m, inside the rotating Moon Grid) ──────
+    let moon_surface_grid = commands.spawn((
+        MoonSurfaceRoot,
+        Grid::new(1_000.0, 1.0e30),
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Visibility::default(),
+        InheritedVisibility::default(),
+        Name::new("Moon Surface Grid"),
+    )).set_parent_in_place(moon_grid).id();
+
+    // Moon terrain tiles — spawned with CellCoord, parented to Moon Surface Grid.
+    let moon_grid_ref = Grid::new(1_000.0, 1.0e30);
     for face in 0..6 {
         for i in 0..2 {
             for j in 0..2 {
@@ -354,7 +406,7 @@ pub fn setup_big_space_hierarchy(
                     InheritedVisibility::default(),
                     NoFrustumCulling,
                     Name::new(format!("Moon Tile f{} i{} j{}", face, i, j)),
-                )).set_parent_in_place(moon_grid);
+                )).set_parent_in_place(moon_surface_grid);
             }
         }
     }

@@ -1,6 +1,11 @@
+// Ports and wires are ECS-structural children, not `GridAnchor`s. The
+// atomic-migration contract enforced by `clippy::disallowed_methods`
+// doesn't apply here.
+#![allow(clippy::disallowed_methods)]
+
 //! Utilities for programmatically assembling robotic systems.
 //!
-//! This module provides helper functions to spawn and connect digital/physical 
+//! This module provides helper functions to spawn and connect digital/physical
 //! ports, forming the control backbone of complex robotic entities.
 
 use bevy::prelude::*;

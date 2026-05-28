@@ -23,6 +23,7 @@ use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 use transform_gizmo_bevy::GizmoTarget;
 use lunco_controller::ControllerLink;
 use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands};
+use lunco_core::attach::migrate_to_grid;
 use lunco_celestial::{CelestialClock, GravityBody, LocalGravityField, TeleportToSurface, LeaveSurface};
 
 pub mod commands;
@@ -333,6 +334,8 @@ pub fn spawn_avatar_camera(
     initial_offset: DVec3,
 ) -> Entity {
     let (yaw, pitch) = (std::f32::consts::PI * 0.5, -0.3);
+    // Initial spawn: anchor `ChildOf` in the bundle so parent + cell +
+    // transform land atomically (same contract as `migrate_to_grid`).
     commands.spawn((
         Camera3d::default(),
         FreeFlightCamera { yaw, pitch, damping: None },
@@ -346,7 +349,8 @@ pub fn spawn_avatar_camera(
         ActionState::<lunco_core::UserIntent>::default(),
         lunco_controller::get_avatar_input_map(),
         Name::new("Avatar Camera"),
-    )).set_parent_in_place(grid_entity).id()
+        ChildOf(grid_entity),
+    )).id()
 }
 
 // ─── Behavior Systems ────────────────────────────────────────────────────────
@@ -382,7 +386,7 @@ fn spring_arm_system(
         &ChildOf,
         Option<&SurfaceRelativeMode>,
     ), (With<Avatar>, Without<FrameBlend>)>,
-    q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     _q_parents: Query<&ChildOf>,
     q_gizmo: Query<&GizmoTarget>,
@@ -405,10 +409,11 @@ fn spring_arm_system(
         }
 
         let Ok((t_cell, t_tf)) = q_spatial.get(arm.target) else { continue; };
+        let t_cell = t_cell.copied().unwrap_or_default();
         let Ok(grid) = q_grids.get(child_of.0) else { continue; };
 
         // Target position in grid-local coordinates.
-        let target_pos = grid.grid_position_double(t_cell, t_tf);
+        let target_pos = grid.grid_position_double(&t_cell, t_tf);
 
         // Scroll zoom: fixed multiplier (matches old working code).
         let min_dist = 5.0;
@@ -520,7 +525,7 @@ fn spring_arm_system(
 fn chase_camera_system(
     time: Res<Time>,
     mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut ChaseCamera, &ChildOf), (With<Avatar>, Without<FrameBlend>)>,
-    q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_gizmo: Query<&GizmoTarget>,
     defaults: Res<CameraDefaults>,
@@ -539,10 +544,11 @@ fn chase_camera_system(
         }
 
         let Ok((t_cell, t_tf)) = q_spatial.get(chase.target) else { continue; };
+        let t_cell = t_cell.copied().unwrap_or_default();
         let Ok(grid) = q_grids.get(child_of.0) else { continue; };
 
         // Target position in grid-local coordinates.
-        let target_pos = grid.grid_position_double(t_cell, t_tf);
+        let target_pos = grid.grid_position_double(&t_cell, t_tf);
 
         // Multiplicative zoom using exponential scaling.
         // Scroll up (delta > 0) -> zoom in. Scroll down (delta < 0) -> zoom out.
@@ -581,7 +587,7 @@ fn chase_camera_system(
 fn orbit_system(
     time: Res<Time>,
     mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut OrbitCamera, &ChildOf), (With<Avatar>, Without<FrameBlend>)>,
-    q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_bodies: Query<&CelestialBody>,
@@ -631,33 +637,31 @@ fn orbit_system(
         // Preserve the camera's CURRENT absolute position during migration
         // — don't snap to the target body.
         if current_grid != target_grid {
-            let cam_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+            let cam_abs = lunco_core::coords::world_position_seeded(
                 avatar_ent, &cell, &tf, &q_parents, &q_grids, &q_spatial,
             );
             if let Ok(target_grid_ref) = q_grids.get(target_grid) {
-                let target_grid_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+                let target_grid_abs = lunco_core::coords::world_position_seeded(
                     target_grid, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial,
                 );
-                let local_pos = cam_abs - target_grid_abs;
-                let (new_cell, new_tf) = target_grid_ref.translation_to_grid(local_pos);
-                *cell = new_cell;
-                tf.translation = new_tf;
-                commands.entity(target_grid).add_child(avatar_ent);
+                let (new_cell, new_translation) =
+                    target_grid_ref.translation_to_grid(cam_abs - target_grid_abs);
+                let local_tf = Transform::from_translation(new_translation).with_rotation(tf.rotation);
+                migrate_to_grid(&mut commands, avatar_ent, target_grid, new_cell, local_tf);
             }
-            // Skip this frame — set_parent command runs at end of stage.
-            // Next frame, child_of will resolve to the new grid.
+            // Migration is deferred; next frame `child_of` resolves to the new grid.
             continue;
         }
 
         // Now both camera and target are on the same grid — simple position lookup.
         let (t_cell_now, t_tf_now) = if let Ok((c, t)) = q_spatial.get(orbit.target) {
-            (c, t)
+            (c.copied().unwrap_or_default(), t)
         } else { continue; };
         let grid_ref = if let Ok(g) = q_grids.get(child_of.parent()) {
             g
         } else { continue; };
 
-        let target_pos = grid_ref.grid_position_double(t_cell_now, t_tf_now);
+        let target_pos = grid_ref.grid_position_double(&t_cell_now, t_tf_now);
 
         // Multiplicative zoom: proportional to current distance using exponential scaling.
         // Scroll up (delta > 0) -> zoom in. Scroll down (delta < 0) -> zoom out.
@@ -1230,10 +1234,10 @@ fn on_possess_command(
     trigger: On<PossessVessel>,
     mut commands: Commands,
     q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf, Option<&ControllerLink>), With<Avatar>>,
-    q_spatial_abs: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_spatial_abs: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_sc: Query<&Spacecraft>,
     q_vessel_gravity: Query<&GravityBody>,
     _q_orbit: Query<&OrbitCamera>,
@@ -1254,14 +1258,15 @@ fn on_possess_command(
     }
 
     // Compute camera absolute position in root frame.
-    let cam_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+    let cam_abs = lunco_core::coords::world_position_seeded(
         avatar_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial_abs,
     );
 
     // Compute target absolute position.
     let target_abs = if let Ok((t_cell, t_tf)) = q_spatial.get(cmd.target) {
-        lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-            cmd.target, t_cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,
+        let cell = t_cell.copied().unwrap_or_default();
+        lunco_core::coords::world_position_seeded(
+            cmd.target, &cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,
         )
     } else {
         cam_abs // Fallback
@@ -1289,16 +1294,14 @@ fn on_possess_command(
     if let Some(tg) = target_grid {
         if tg != Entity::PLACEHOLDER {
             if let Ok(target_grid_ref) = q_grids.get(tg) {
-                let target_grid_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+                let target_grid_abs = lunco_core::coords::world_position_seeded(
                     tg, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
                 );
-                let local_pos = final_abs_pos - target_grid_abs;
-                let (new_cell, new_tf) = target_grid_ref.translation_to_grid(local_pos);
-
-                commands.entity(avatar_ent)
-                    .insert(new_cell)
-                    .insert(Transform::from_translation(new_tf).with_rotation(final_rot));
-                commands.entity(tg).add_child(avatar_ent);
+                let (new_cell, new_translation) =
+                    target_grid_ref.translation_to_grid(final_abs_pos - target_grid_abs);
+                let local_tf =
+                    Transform::from_translation(new_translation).with_rotation(final_rot);
+                migrate_to_grid(&mut commands, avatar_ent, tg, new_cell, local_tf);
             }
         }
     }
@@ -1370,10 +1373,10 @@ fn on_follow_command(
     trigger: On<FollowTarget>,
     mut commands: Commands,
     q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf, Option<&SpringArmCamera>), With<Avatar>>,
-    q_spatial_abs: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_spatial_abs: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_vessel_gravity: Query<&GravityBody>,
 ) {
     let cmd = trigger.event();
@@ -1387,12 +1390,13 @@ fn on_follow_command(
 
     // Target absolute position in root frame.
     let target_abs = if let Ok((t_cell, t_tf)) = q_spatial.get(cmd.target) {
-        lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-            cmd.target, t_cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,
+        let cell = t_cell.copied().unwrap_or_default();
+        lunco_core::coords::world_position_seeded(
+            cmd.target, &cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,
         )
     } else {
         // Fallback: keep camera where it is.
-        lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+        lunco_core::coords::world_position_seeded(
             avatar_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial_abs,
         )
     };
@@ -1410,15 +1414,14 @@ fn on_follow_command(
     if let Some(tg) = target_grid {
         if tg != Entity::PLACEHOLDER {
             if let Ok(target_grid_ref) = q_grids.get(tg) {
-                let target_grid_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+                let target_grid_abs = lunco_core::coords::world_position_seeded(
                     tg, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
                 );
-                let local_pos = final_abs_pos - target_grid_abs;
-                let (new_cell, new_tf) = target_grid_ref.translation_to_grid(local_pos);
-                commands.entity(avatar_ent)
-                    .insert(new_cell)
-                    .insert(Transform::from_translation(new_tf).with_rotation(final_rot));
-                commands.entity(tg).add_child(avatar_ent);
+                let (new_cell, new_translation) =
+                    target_grid_ref.translation_to_grid(final_abs_pos - target_grid_abs);
+                let local_tf =
+                    Transform::from_translation(new_translation).with_rotation(final_rot);
+                migrate_to_grid(&mut commands, avatar_ent, tg, new_cell, local_tf);
             }
         }
     }
@@ -1461,8 +1464,8 @@ fn on_focus_command(
     q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf), With<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
-    q_spatial_abs: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_spatial_abs: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_bodies: Query<&CelestialBody>,
     q_sc: Query<&Spacecraft>,
     q_children: Query<&Children>,
@@ -1479,17 +1482,18 @@ fn on_focus_command(
     };
 
     // Compute camera absolute position in root frame.
-    let _cam_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+    let _cam_abs = lunco_core::coords::world_position_seeded(
         avatar_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial_abs,
     );
 
     // Compute target absolute position.
     let target_abs = if let Ok((t_cell, t_tf)) = q_spatial.get(cmd.target) {
-        lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-            cmd.target, t_cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,
+        let cell = t_cell.copied().unwrap_or_default();
+        lunco_core::coords::world_position_seeded(
+            cmd.target, &cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,
         )
     } else {
-        lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+        lunco_core::coords::world_position_seeded(
             cmd.target, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
         )
     };
@@ -1515,16 +1519,14 @@ fn on_focus_command(
     if let Some(tg) = target_grid {
         if tg != Entity::PLACEHOLDER {
             if let Ok(target_grid_ref) = q_grids.get(tg) {
-                let target_grid_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+                let target_grid_abs = lunco_core::coords::world_position_seeded(
                     tg, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
                 );
-                let local_pos = final_abs_pos - target_grid_abs;
-                let (new_cell, new_tf) = target_grid_ref.translation_to_grid(local_pos);
-
-                commands.entity(avatar_ent)
-                    .insert(new_cell)
-                    .insert(Transform::from_translation(new_tf).with_rotation(final_rot));
-                commands.entity(tg).add_child(avatar_ent);
+                let (new_cell, new_translation) =
+                    target_grid_ref.translation_to_grid(final_abs_pos - target_grid_abs);
+                let local_tf =
+                    Transform::from_translation(new_translation).with_rotation(final_rot);
+                migrate_to_grid(&mut commands, avatar_ent, tg, new_cell, local_tf);
             }
         }
     }
@@ -1604,7 +1606,7 @@ fn on_surface_teleport_command(
     q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf), With<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    _q_spatial_abs: Query<(&CellCoord, &Transform)>,
+    _q_spatial_abs: Query<(Option<&CellCoord>, &Transform)>,
     q_bodies: Query<(Entity, &CelestialBody)>,
     q_gravity_providers: Query<&lunco_celestial::GravityProvider>,
     mut field: ResMut<LocalGravityField>,
@@ -1675,9 +1677,13 @@ fn on_surface_teleport_command(
         let fwd_v = up_v.cross(right_v);
         let surface_rot = Quat::from_mat3(&Mat3::from_cols(right_v, up_v, -fwd_v));
 
+        // Parent camera to the Body's Grid (inertial), NOT the Body.
+        // FloatingOrigin must be on a Grid.
+        let local_tf =
+            Transform::from_translation(new_tf_translation).with_rotation(surface_rot);
+        migrate_to_grid(&mut commands, avatar_ent, grid_entity, new_cell, local_tf);
+
         commands.entity(avatar_ent)
-            .insert(new_cell)
-            .insert(Transform::from_translation(new_tf_translation).with_rotation(surface_rot))
             .insert(GravityBody { body_entity })
             .insert(SurfaceRelativeMode)
             .insert(SurfaceCamera {
@@ -1688,10 +1694,6 @@ fn on_surface_teleport_command(
             .remove::<OrbitCamera>()
             .remove::<SpringArmCamera>()
             .remove::<FrameBlend>();
-
-        // Parent camera to the Body's Grid (inertial), NOT the Body.
-        // FloatingOrigin must be on a Grid.
-        commands.entity(grid_entity).add_child(avatar_ent);
 
         // Update LocalGravityField (world-space "up")
         field.body_entity = Some(body_entity);
@@ -1740,9 +1742,10 @@ fn on_leave_surface_command(
     let orbit_pos_local = DVec3::new(0.0, altitude, altitude * 0.5);
     let (new_cell, new_tf) = emb_grid_ref.translation_to_grid(orbit_pos_local);
 
+    let local_tf = Transform::from_translation(new_tf).with_rotation(cam_tf.rotation);
+    migrate_to_grid(&mut commands, avatar_ent, emb_grid, new_cell, local_tf);
+
     commands.entity(avatar_ent)
-        .insert(new_cell)
-        .insert(Transform::from_translation(new_tf).with_rotation(cam_tf.rotation))
         .insert(OrbitCamera {
             target: body_entity,
             distance: altitude,
@@ -1757,8 +1760,6 @@ fn on_leave_surface_command(
         .remove::<FrameBlend>()
         .remove::<GravityBody>()
         .remove::<SurfaceRelativeMode>();
-
-    commands.entity(emb_grid).add_child(avatar_ent);
 
     // Clear gravity field
     field.body_entity = None;
@@ -1788,7 +1789,7 @@ fn surface_mode_transition_system(
     ), With<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_spatial: Query<(&CellCoord, &Transform)>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_bodies: Query<&CelestialBody>,
     thresholds: Res<SurfaceModeThreshold>,
     field: Res<LocalGravityField>,
@@ -1797,15 +1798,16 @@ fn surface_mode_transition_system(
     let Some((avatar_ent, tf, cell, _, maybe_gb, maybe_mode, maybe_ff, maybe_sc)) = q_avatar.iter().next() else { return };
 
     // Use absolute coordinates to handle nested grids correctly
-    let cam_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+    let cam_abs = lunco_core::coords::world_position_seeded(
         avatar_ent, cell, tf, &q_parents, &q_grids, &q_spatial,
     );
 
     // Compute altitude above the bound body
     let (_full_body_local, altitude) = if let Some(gb) = maybe_gb {
         if let Ok((b_cell, b_tf)) = q_spatial.get(gb.body_entity) {
-            let body_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-                gb.body_entity, b_cell, b_tf, &q_parents, &q_grids, &q_spatial,
+            let cell = b_cell.copied().unwrap_or_default();
+            let body_abs = lunco_core::coords::world_position_seeded(
+                gb.body_entity, &cell, b_tf, &q_parents, &q_grids, &q_spatial,
             );
             let rel_pos = cam_abs - body_abs;
             let alt = if let Ok(body) = q_bodies.get(gb.body_entity) {
@@ -1815,8 +1817,9 @@ fn surface_mode_transition_system(
         } else { (cam_abs, f64::MAX) }
     } else if let Some(body_ent) = field.body_entity {
         if let Ok((b_cell, b_tf)) = q_spatial.get(body_ent) {
-            let body_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-                body_ent, b_cell, b_tf, &q_parents, &q_grids, &q_spatial,
+            let cell = b_cell.copied().unwrap_or_default();
+            let body_abs = lunco_core::coords::world_position_seeded(
+                body_ent, &cell, b_tf, &q_parents, &q_grids, &q_spatial,
             );
             let rel_pos = cam_abs - body_abs;
             let alt = if let Ok(body) = q_bodies.get(body_ent) {

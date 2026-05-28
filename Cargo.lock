@@ -6356,6 +6356,7 @@ dependencies = [
  "anyhow",
  "bevy",
  "big_space",
+ "lunco-core",
  "lunco-usd-composer",
  "openusd",
 ]

@@ -39,7 +39,7 @@ pub fn capture_gizmo_start(
     gizmo_targets: Query<&GizmoTarget>,
     q_rigid_bodies: Query<&RigidBody>,
     q_prev_pos: Query<&GizmoPrevPos>,
-    q_spatial: Query<(&big_space::prelude::CellCoord, &Transform)>,
+    q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_interpolation: Query<(Has<TranslationInterpolation>, Has<RotationInterpolation>)>,
@@ -71,8 +71,9 @@ pub fn capture_gizmo_start(
 
     // Resolve initial absolute world position.
     let Ok((cell, tf)) = q_spatial.get(entity) else { return; };
-    let abs_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-        entity, cell, tf, &q_parents, &q_grids, &q_spatial
+    let cell = cell.copied().unwrap_or_default();
+    let abs_pos = lunco_core::coords::world_position_seeded(
+        entity, &cell, tf, &q_parents, &q_grids, &q_spatial
     );
 
     info!("GIZMO: drag started for {:?}, abs_pos={:?}", entity, abs_pos);
@@ -91,7 +92,7 @@ pub fn capture_gizmo_start(
 pub fn sync_gizmo_transforms(
     selected: Res<SelectedEntity>,
     gizmo_targets: Query<&GizmoTarget>,
-    q_spatial: Query<(&big_space::prelude::CellCoord, &Transform)>,
+    q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     mut q_position: Query<&mut avian3d::physics_transform::Position>,
@@ -106,9 +107,10 @@ pub fn sync_gizmo_transforms(
     if !gizmo_target.is_active() { return; }
 
     let Ok((cell, tf)) = q_spatial.get(entity) else { return; };
-    
-    let current_abs_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-        entity, cell, tf, &q_parents, &q_grids, &q_spatial
+    let cell = cell.copied().unwrap_or_default();
+
+    let current_abs_pos = lunco_core::coords::world_position_seeded(
+        entity, &cell, tf, &q_parents, &q_grids, &q_spatial
     );
 
     if let Ok(mut pos) = q_position.get_mut(entity) {

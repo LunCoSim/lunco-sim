@@ -207,12 +207,15 @@ manual_unwrap_or = "warn"
 useless_conversion = "warn"
 redundant_closure = "warn"
 needless_pass_by_value = "allow"
-# Asset I/O policy. Domain crates may not bypass `AssetServer` with raw
-# `std::fs` / `std::thread` / blocking `Instant` — those break wasm32 and
-# the bug only shows in the browser, not in `cargo test`. The full list of
-# banned symbols lives in `clippy.toml` at the workspace root; that file
-# also documents the allow-list (lunco-assets, lunco-storage, build scripts).
-# See `docs/architecture/40-asset-io.md` for the rationale.
+# Asset I/O policy AND the GridAnchor atomic-re-parenting invariant.
+# Domain crates may not bypass `AssetServer` with raw `std::fs` /
+# `std::thread` / blocking `Instant` (those break wasm32 — the bug only
+# shows in the browser, not in `cargo test`), and re-parenting of
+# big_space `GridAnchor` entities must go through
+# `lunco_core::attach::migrate_to_grid`. The full list of banned symbols
+# (plus the local `#[allow]` escape-hatch policy) lives in `clippy.toml`
+# at the workspace root. See `docs/architecture/40-asset-io.md` and
+# `crates/lunco-core/src/attach.rs` for the rationale.
 disallowed_methods = "deny"
 
 # ── Dev profile ──────────────────────────────────────────────────────
