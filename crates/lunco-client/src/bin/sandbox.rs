@@ -16,6 +16,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use bevy::prelude::*;
 use bevy::asset::{AssetPlugin, io::AssetSourceBuilder};
+use bevy::render::camera::RenderTarget;
+use lunco_workbench::WorkbenchViewportCamera;
 use lunco_assets::cache_dir;
 use bevy::pbr::wireframe::WireframePlugin;
 use big_space::prelude::*;
@@ -103,6 +105,20 @@ fn main() {
     };
 
     let mut app = App::new();
+    // Match lunica's pacer: Continuous while focused lets vsync (Fifo
+    // present) act as the frame timer; ReactiveLowPower keeps fans
+    // quiet when the window is in the background. Required for the
+    // egui chrome to repaint reliably under camera-zoom load — without
+    // it, frames are issued only on input, and the chrome can stay
+    // stale while the 3D pass keeps refreshing.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use bevy::winit::{UpdateMode, WinitSettings};
+        app.insert_resource(WinitSettings {
+            focused_mode: UpdateMode::Continuous,
+            unfocused_mode: UpdateMode::reactive_low_power(std::time::Duration::from_secs(1)),
+        });
+    }
     // Cap how much catchup `FixedUpdate` does after a slow frame.
     // Default Bevy behaviour: if a frame took 50ms, the next frame
     // runs 3 fixed ticks (16.67ms each) to catch up — *which makes
@@ -241,6 +257,15 @@ fn main() {
         ).chain())
         // Selection must run before avatar possession so DragModeActive flag is set
         .add_systems(Update, lunco_sandbox_edit::selection::handle_entity_selection.before(lunco_avatar::avatar_raycast_possession))
+        // Auto-tag every new window-targeting Camera3d with
+        // WorkbenchViewportCamera so the workbench's PostUpdate viewport
+        // sync confines it to the ViewportPanel's rect (preventing the
+        // full-window 3D bleed-on-pass-skip class of bug). USD- and
+        // Avatar-spawned cameras land async over many frames; the
+        // `Added<Camera3d>` filter catches each as it arrives. RTT
+        // cameras (USD preview, vello diagrams) target an Image and
+        // are skipped — they should *not* be confined to the panel.
+        .add_systems(Update, auto_tag_workbench_3d_cameras)
         // Manual transform/visibility propagation runs ONCE per frame
         // after physics writeback. The earlier triple-call (PreUpdate
         // + two in PostUpdate) ate ~80% of frame time on sandbox
@@ -420,6 +445,33 @@ impl Default for SandboxSettings {
 /// to load on Startup. Initialised from the `--scene` CLI arg.
 #[derive(Resource)]
 struct ScenePath(String);
+
+/// Tag freshly-added window-targeting `Camera3d` entities with
+/// `WorkbenchViewportCamera` so the workbench's PostUpdate viewport
+/// sync confines them to the `ViewportPanel` rect.
+///
+/// RTT cameras (`RenderTarget::Image`) are skipped: they paint into
+/// their own offscreen Image (USD preview, vello diagrams) and must
+/// not have a window-scoped viewport written to them.
+///
+/// `Added<Camera3d>` fires once per entity, the same frame the
+/// component is inserted. USD scene-load and async Avatar spawning
+/// can both land Camera3d entities long after `Startup`; this catches
+/// each as it arrives.
+fn auto_tag_workbench_3d_cameras(
+    mut commands: Commands,
+    new_cams: Query<
+        (Entity, Option<&RenderTarget>),
+        (Added<Camera3d>, Without<WorkbenchViewportCamera>),
+    >,
+) {
+    for (entity, target) in &new_cams {
+        let targets_window = matches!(target, None | Some(RenderTarget::Window(_)));
+        if targets_window {
+            commands.entity(entity).insert(WorkbenchViewportCamera);
+        }
+    }
+}
 
 fn setup_sandbox(
     mut commands: Commands,

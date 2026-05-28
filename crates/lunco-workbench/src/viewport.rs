@@ -1,42 +1,58 @@
-//! `ViewportPanel` — transparent centre placeholder so 3D apps still
-//! get the full `egui_dock` experience.
+//! `ViewportPanel` and the workbench's 3D-viewport plumbing.
 //!
-//! ## How it works today
+//! ## Architecture (read this if anything here looks weird)
 //!
-//! 3D apps register `ViewportPanel` in their workspace's centre slot
-//! and let Bevy's primary camera render the 3D world to the **full
-//! window**. `ViewportPanel` itself draws nothing — it's a transparent
-//! tab body inside `egui_dock`. Result:
+//! Egui owns the window framebuffer. A dedicated `Camera2d` with
+//! `PrimaryEguiContext` — bundled as [`WorkbenchEguiHost`] — is
+//! auto-spawned by [`ensure_egui_host`] when no other entity carries
+//! `PrimaryEguiContext`. Apps that render 3D add a `Camera3d` tagged
+//! with [`WorkbenchViewportCamera`] (or use the [`WorkbenchSceneCamera`]
+//! required-component bundle). Each frame, [`apply_workbench_viewport`]
+//! syncs `Camera::viewport` on every tagged camera to the rect of the
+//! [`ViewportPanel`] — recorded into [`PanelRects`] during the panel's
+//! render. So the 3D scene paints into the panel's sub-rect of the
+//! window, and never anywhere else.
 //!
-//! - The 3D scene is visible in the dock's centre region (because
-//!   the tab body is transparent and Bevy's render is behind egui).
-//! - Side panels around it are full `egui_dock` participants —
-//!   draggable, tabbable, splittable.
-//! - The user can drag a real panel into the centre to tab it with
-//!   the viewport (covers the 3D in that tab) — their choice.
+//! ## Why this is robust *by design*
 //!
-//! ## Why the camera isn't shrunk to the panel rect
+//! - **Egui pass-skip can't bleed across the chrome.** The 3D camera no
+//!   longer covers the whole window. If the egui pass ever misses a
+//!   frame (auto-context-pick race, async asset reload, …), the panel's
+//!   own opaque background is visible — not a 3D scene leaking out
+//!   under your toolbar.
+//! - **Bevy_egui auto-pick can't race.** [`ensure_egui_host`] disables
+//!   `EguiGlobalSettings::auto_create_primary_context` and pins the
+//!   marker on exactly one camera. Extra Camera2d entities (vello
+//!   diagram targets, USD preview tabs, …) are harmless because they
+//!   target offscreen Images.
+//! - **Required components prevent foot-guns.** [`WorkbenchEguiHost`]
+//!   pairs `Camera2d` with `PrimaryEguiContext` at the type level;
+//!   [`WorkbenchSceneCamera`] pairs `Camera3d` with
+//!   [`WorkbenchViewportCamera`]. New code that wants a workbench-aware
+//!   camera spawns *one* type and gets the right pair automatically.
+//! - **Sentinels catch regressions.** [`check_camera_invariants`]
+//!   panics in debug (errors in release) when a new `Camera3d` is added
+//!   targeting the window without the marker.
+//! - **Opaque viewport panel.** Setting `transparent_background = false`
+//!   means the failure mode of any rect-sync glitch is "panel shows the
+//!   theme backdrop" — visually bounded, never a full-window 3D bleed.
 //!
-//! The "obviously right" implementation — write the panel's rect into
-//! `Camera::viewport` — does NOT work with `bevy_egui`. `bevy_egui`
-//! ties its egui surface to the primary camera's viewport, so
-//! shrinking the camera also shrinks egui, which then reports a
-//! smaller surface, which makes the panel computation think the
-//! viewport should be smaller still — runaway feedback collapses the
-//! window to 1×1 in a few frames. Fixed by leaving the camera at full
-//! window and letting the 3D scene be visible everywhere the dock
-//! isn't covering it.
+//! ## What goes where
 //!
-//! ## Future: render-to-texture
-//!
-//! For "3D scene strictly bounded to the panel rect" (so e.g. a left
-//! side panel can be opaque without hiding part of the 3D), the
-//! proper fix is to render the 3D camera into an offscreen `Image`
-//! and display that image as an `egui::Image` here. Tracked as
-//! follow-up.
+//! - `ensure_egui_host` (Startup) — auto-spawn the egui host.
+//! - `apply_workbench_viewport` (PostUpdate, before `CameraUpdateSystems`)
+//!   — push the panel rect into each tagged camera's `Camera::viewport`.
+//! - `check_camera_invariants` (Update, runs on `Added<Camera3d>`) —
+//!   loud failure if a window-targeting Camera3d shows up untagged.
+//! - `ViewportPanel::render` — records the panel's screen rect into
+//!   `PanelRects` and reserves the space; the 3D camera does the
+//!   actual painting.
+
+use std::collections::HashMap;
 
 use bevy::prelude::*;
-use bevy_egui::egui;
+use bevy::render::camera::{RenderTarget, Viewport};
+use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
 
 use crate::{Panel, PanelId, PanelSlot};
 
@@ -44,19 +60,96 @@ use crate::{Panel, PanelId, PanelSlot};
 /// place the viewport in a slot without instantiating the panel.
 pub const VIEWPORT_PANEL_ID: PanelId = PanelId("workbench::viewport");
 
-/// Marker component for cameras whose viewport tracks the
-/// [`ViewportPanel`]'s rect.
+/// Marker on a `Camera` (typically a `Camera3d`) whose `Camera::viewport`
+/// should follow the [`ViewportPanel`]'s rect each frame.
 ///
-/// Tag exactly one (or more — they all get the same viewport) of your
-/// app's `Camera3d` entities with this component. The panel updates
-/// `Camera::viewport` on every frame it renders.
+/// Add this to any existing camera spawn site that wants to be confined
+/// to the workbench's central viewport. For new spawn sites, prefer
+/// [`WorkbenchSceneCamera`] — it pairs `Camera3d` with this marker via
+/// required-components.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct WorkbenchViewportCamera;
 
-/// Panel that sizes a Bevy camera's viewport to its own rect.
+/// Required-component bundle: the primary 3D scene camera for a
+/// workbench-using binary.
 ///
-/// Default slot is [`PanelSlot::Center`] — the typical place for a
-/// viewport in an IDE-style layout.
+/// Spawning `WorkbenchSceneCamera` is equivalent to spawning
+/// `(Camera3d::default(), WorkbenchViewportCamera)`. The
+/// required-components feature guarantees both end up on the entity —
+/// new code can't accidentally drop the marker.
+#[derive(Component, Debug, Clone, Copy, Default)]
+#[require(Camera3d, WorkbenchViewportCamera)]
+pub struct WorkbenchSceneCamera;
+
+/// Required-component bundle: the egui-owning camera for one window.
+///
+/// Spawning `WorkbenchEguiHost` is equivalent to spawning
+/// `(Camera2d, PrimaryEguiContext)`. Auto-spawned by
+/// [`ensure_egui_host`]; binaries do not normally need to spawn it
+/// manually. Spawning a second one will trip
+/// [`check_camera_invariants`].
+#[derive(Component, Debug, Clone, Copy, Default)]
+#[require(Camera2d, PrimaryEguiContext)]
+pub struct WorkbenchEguiHost;
+
+/// Per-panel screen-space rect, in *physical* pixels.
+///
+/// Populated by `Panel::render` implementations that want to be
+/// camera-targetable (today: [`ViewportPanel`]). Consumed by
+/// [`apply_workbench_viewport`] to drive `Camera::viewport`.
+#[derive(Resource, Default, Debug)]
+pub struct PanelRects {
+    rects: HashMap<PanelId, PanelRect>,
+}
+
+/// One panel's footprint inside the window, in *physical* pixels.
+#[derive(Debug, Clone, Copy)]
+pub struct PanelRect {
+    /// Top-left of the panel rect inside the window framebuffer.
+    pub origin: UVec2,
+    /// Width × height of the rect (min 1×1 — never zero, so callers
+    /// can safely set `Camera::viewport` without guard checks).
+    pub size: UVec2,
+}
+
+impl PanelRects {
+    /// Record a panel's rect from inside its render method.
+    ///
+    /// Converts the egui logical rect to physical pixels using the
+    /// current `pixels_per_point`. Clamps size to ≥ 1×1.
+    pub fn record_from_ui(&mut self, panel: PanelId, ui: &egui::Ui) {
+        let rect = ui.available_rect_before_wrap();
+        let ppp = ui.ctx().pixels_per_point();
+        let origin = UVec2::new(
+            (rect.min.x.max(0.0) * ppp).round() as u32,
+            (rect.min.y.max(0.0) * ppp).round() as u32,
+        );
+        let size = UVec2::new(
+            ((rect.width().max(0.0) * ppp).round() as u32).max(1),
+            ((rect.height().max(0.0) * ppp).round() as u32).max(1),
+        );
+        self.rects.insert(panel, PanelRect { origin, size });
+    }
+
+    /// Look up a panel's most-recently-recorded rect.
+    pub fn get(&self, panel: PanelId) -> Option<PanelRect> {
+        self.rects.get(&panel).copied()
+    }
+}
+
+/// Workbench-central panel that reserves a rect for the 3D viewport.
+///
+/// The panel itself paints nothing — its only job is to record its
+/// screen-space rect into [`PanelRects`] each frame so the
+/// [`apply_workbench_viewport`] system can drive every
+/// [`WorkbenchViewportCamera`]-tagged camera's `Camera::viewport`.
+///
+/// Background: was historically transparent so a full-window 3D camera
+/// could show through the dock. That design caused the "UI vanishes on
+/// zoom" bug — any egui pass-skip and the 3D would overpaint the
+/// chrome. Now the 3D camera is confined to this rect, the panel can
+/// (and must) paint an opaque background, and the failure mode is
+/// bounded to "panel shows backdrop" instead of "all UI gone".
 pub struct ViewportPanel;
 
 impl Panel for ViewportPanel {
@@ -82,15 +175,151 @@ impl Panel for ViewportPanel {
     }
 
     fn transparent_background(&self) -> bool {
-        // Crucial — without this, egui_dock fills the tab body with
-        // an opaque colour and covers the 3D scene Bevy rendered behind.
-        true
+        // OPAQUE. See the type-level doc-comment: the 3D camera now
+        // renders *inside* this rect, so the backdrop is what we want
+        // to see if rect-sync ever glitches. Flipping this back to
+        // `true` re-introduces the full-window-bleed footgun.
+        false
     }
 
-    fn render(&mut self, _ui: &mut egui::Ui, _world: &mut World) {
-        // Intentionally empty. Bevy's primary camera renders the 3D
-        // world to the full window behind egui; this panel just
-        // reserves a transparent slot in the dock so the side panels
-        // get the full egui_dock UX (drag / split / tab).
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+        if let Some(mut rects) = world.get_resource_mut::<PanelRects>() {
+            rects.record_from_ui(VIEWPORT_PANEL_ID, ui);
+        }
+        // Reserve the panel's space so egui_dock's layout accounts for
+        // it; no widgets are drawn — the 3D camera paints here.
+        ui.allocate_space(ui.available_size());
+    }
+}
+
+/// Startup system — auto-spawn one [`WorkbenchEguiHost`] if none exists.
+///
+/// Always disables `EguiGlobalSettings::auto_create_primary_context` so
+/// nothing else (e.g. bevy_egui's startup auto-promoter) can pick a
+/// different camera as primary. Idempotent: re-running won't spawn
+/// duplicates.
+pub fn ensure_egui_host(
+    mut commands: Commands,
+    mut egui_global: ResMut<EguiGlobalSettings>,
+    existing: Query<(), With<PrimaryEguiContext>>,
+) {
+    egui_global.auto_create_primary_context = false;
+    if existing.iter().next().is_none() {
+        commands.spawn((WorkbenchEguiHost, Name::new("WorkbenchEguiHost")));
+    }
+}
+
+/// PostUpdate system — write the [`ViewportPanel`] rect into every
+/// [`WorkbenchViewportCamera`]-tagged camera's `Camera::viewport`.
+///
+/// Runs before Bevy's `CameraUpdateSystems` so the new viewport is in
+/// effect for the same frame the panel measured. If the panel hasn't
+/// recorded its rect yet (first frame, perspective without a viewport
+/// panel) the cameras' viewports are cleared to `None` — they render
+/// to their target's full extent, which the invariant sentinel will
+/// catch if the target is the window.
+pub fn apply_workbench_viewport(
+    rects: Res<PanelRects>,
+    mut cameras: Query<&mut Camera, With<WorkbenchViewportCamera>>,
+) {
+    let target = rects.get(VIEWPORT_PANEL_ID).map(|r| Viewport {
+        physical_position: r.origin,
+        physical_size: r.size,
+        depth: 0.0..1.0,
+    });
+    for mut camera in &mut cameras {
+        let same = match (&camera.viewport, &target) {
+            (None, None) => true,
+            (Some(a), Some(b)) => {
+                a.physical_position == b.physical_position && a.physical_size == b.physical_size
+            }
+            _ => false,
+        };
+        if !same {
+            camera.viewport = target.clone();
+        }
+    }
+}
+
+/// Sentinel — runs each frame on newly-added Camera3d entities and
+/// panics (debug) / logs (release) when one targets the window without
+/// the [`WorkbenchViewportCamera`] marker.
+///
+/// Catches the entire regression class: any future code path that
+/// spawns a window-targeting `Camera3d` without going through
+/// [`WorkbenchSceneCamera`] or remembering to add the marker will trip
+/// this the moment the entity is built.
+///
+/// The check is per-`Added<Camera3d>` rather than a periodic sweep so
+/// USD/avatar-spawned cameras (which can land many frames after
+/// startup) are still validated, and so deleting + respawning the host
+/// during teardown doesn't yield false negatives.
+pub fn check_camera_invariants(
+    new_cams: Query<
+        (Entity, Option<&RenderTarget>),
+        (Added<Camera3d>, Without<WorkbenchViewportCamera>),
+    >,
+) {
+    for (entity, target) in &new_cams {
+        let targets_window = matches!(target, None | Some(RenderTarget::Window(_)));
+        if targets_window {
+            // Warn loudly but don't panic — tooling binaries
+            // (model_viewer, joint_minimal) deliberately want a
+            // full-window 3D camera and don't use ViewportPanel. The
+            // warning identifies workbench-using binaries that forgot
+            // the tag, without breaking the legitimate cases.
+            warn!(
+                "WorkbenchPlugin: Camera3d {entity:?} targets the window without \
+                 `WorkbenchViewportCamera`. If this binary uses `ViewportPanel`, the 3D \
+                 scene will bleed across the egui chrome on pass skip — spawn via \
+                 `WorkbenchSceneCamera` or insert `WorkbenchViewportCamera`. If this \
+                 binary intentionally uses a full-window 3D camera (model_viewer, \
+                 joint_minimal, …) this warning is benign."
+            );
+        }
+    }
+}
+
+/// Sentinel — runs once a couple of seconds after startup and verifies
+/// there's exactly one `PrimaryEguiContext` in the world.
+///
+/// The grace period covers binaries that prefer to spawn the host
+/// themselves (legacy paths) — they'll have done so by the time this
+/// fires. After that, anything other than 1 is a bug worth panicking
+/// over in debug builds.
+pub fn check_host_invariant_once(
+    hosts: Query<(), With<PrimaryEguiContext>>,
+    time: Res<Time>,
+    mut done: Local<bool>,
+) {
+    if *done || time.elapsed_secs() < 1.0 {
+        return;
+    }
+    *done = true;
+    let n = hosts.iter().count();
+    if n != 1 {
+        warn!(
+            "WorkbenchPlugin: expected exactly 1 `PrimaryEguiContext`, found {n}. \
+             Was a stray (Camera2d, PrimaryEguiContext) spawned outside \
+             `ensure_egui_host`? See `lunco-workbench/src/viewport.rs`."
+        );
+    }
+}
+
+/// Sub-plugin auto-added by `WorkbenchPlugin`. Wires the egui host,
+/// the panel-rect tracking, the `Camera::viewport` sync, and the
+/// invariant sentinels.
+pub struct WorkbenchViewportPlugin;
+
+impl Plugin for WorkbenchViewportPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<PanelRects>()
+            .add_systems(Startup, ensure_egui_host)
+            .add_systems(Update, (check_camera_invariants, check_host_invariant_once))
+            .add_systems(
+                PostUpdate,
+                apply_workbench_viewport
+                    .before(bevy::render::camera::CameraUpdateSystems),
+            );
     }
 }

@@ -270,7 +270,10 @@ pub use session::{
     DocumentClosed, DocumentOpened, FileRenamed, RegisterDocument, TwinAdded,
     TwinClosed, UnregisterDocument, WorkspacePlugin, WorkspaceResource,
 };
-pub use viewport::{ViewportPanel, WorkbenchViewportCamera, VIEWPORT_PANEL_ID};
+pub use viewport::{
+    PanelRect, PanelRects, ViewportPanel, WorkbenchEguiHost, WorkbenchSceneCamera,
+    WorkbenchViewportCamera, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
+};
 
 /// Get the backdrop colour from the active theme.
 fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
@@ -289,6 +292,14 @@ impl Plugin for WorkbenchPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<bevy_egui::EguiPlugin>() {
             app.add_plugins(bevy_egui::EguiPlugin::default());
+        }
+        // Egui host + viewport-rect sync + invariant sentinels.
+        // See `viewport.rs` doc-comment for the architecture (why we
+        // confine the 3D camera to the panel rect instead of letting it
+        // own the full window). Auto-added so hosts don't have to
+        // remember to wire it up.
+        if !app.is_plugin_added::<viewport::WorkbenchViewportPlugin>() {
+            app.add_plugins(viewport::WorkbenchViewportPlugin);
         }
         if !app.is_plugin_added::<lunco_theme::ThemePlugin>() {
             app.add_plugins(lunco_theme::ThemePlugin);
