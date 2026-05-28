@@ -186,6 +186,11 @@ fn main() {
     // sandbox embeds as its Design tab, so the two can't drift.
     app.add_plugins(ModelicaWorkbenchPlugin::default());
 
+    // Dismiss the HTML loading screen once the first frame paints
+    // (wasm-only; no-op on native). Pairs with `web/index.html` →
+    // `lunco-boot.js`. See `lunco_web`.
+    app.add_plugins(lunco_web::WebReadyPlugin);
+
     // Native-only HTTP automation bridge. The feature is off on wasm
     // (`--no-default-features` drops the axum/tokio stack), so the cfg is
     // false there and `lunco_api` isn't even linked.
@@ -232,7 +237,6 @@ fn main() {
             })
             .add_systems(Startup, setup_web_workbench);
         }
-        app.add_systems(Update, hide_html_loader_once_painted);
     }
 
     app.run();
@@ -319,21 +323,4 @@ fn setup_web_workbench(
     // No automatic compile on boot: the user clicks Compile when ready.
     // Avoids racing the MSL fetch (lands seconds later on web).
     let _ = (entity, model_name, source, channels);
-}
-
-/// Hide the centred HTML loader once Bevy has actually started ticking.
-/// We wait two Update frames so the first egui frame has been queued and
-/// (likely) painted — hiding earlier leaves the user staring at a dark
-/// canvas with no UI while plugins finish building.
-#[cfg(target_arch = "wasm32")]
-fn hide_html_loader_once_painted(mut frame: bevy::prelude::Local<u32>) {
-    use wasm_bindgen::JsCast;
-    *frame += 1;
-    if *frame != 2 {
-        return;
-    }
-    let Some(win) = web_sys::window() else { return };
-    let Ok(fnval) = js_sys::Reflect::get(&win, &"__lc_app_ready".into()) else { return };
-    let Ok(func) = fnval.dyn_into::<js_sys::Function>() else { return };
-    let _ = func.call0(&win.into());
 }

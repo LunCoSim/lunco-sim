@@ -34,6 +34,7 @@ members = [
     "crates/lunco-twin",
     "crates/lunco-twin-journal",
     "crates/lunco-workbench",
+    "crates/lunco-web",
     "crates/lunco-scripting",
     "crates/lunco-viz",
     "crates/lunco-canvas",
@@ -141,6 +142,7 @@ lunco-terrain = { path = "crates/lunco-terrain" }
 lunco-cosim = { path = "crates/lunco-cosim" }
 lunco-environment = { path = "crates/lunco-environment" }
 lunco-theme = { path = "crates/lunco-theme" }
+lunco-web = { path = "crates/lunco-web" }
 
 # Rumoca crates — single source-of-truth for the git URL + branch.
 # Crates opt in via `rumoca-xxx = { workspace = true }`.

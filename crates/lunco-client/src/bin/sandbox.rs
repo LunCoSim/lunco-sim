@@ -312,6 +312,11 @@ fn main() {
         },
     });
 
+    // Dismiss the HTML loading screen once the first frame paints
+    // (wasm-only; no-op on native). Pairs with `web/index.html` →
+    // `lunco-boot.js`.
+    app.add_plugins(lunco_web::WebReadyPlugin);
+
     // URL-driven boot. Lets headless test harnesses drive the workbench
     // without firing canvas pointer events (synthetic DOM events don't
     // flow through winit's web event handlers, so e.g.

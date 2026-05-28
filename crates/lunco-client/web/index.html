@@ -3,37 +3,35 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sandbox</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { width: 100%; height: 100%; overflow: hidden; }
-        body { background: #000; }
-        /* Remove Chrome's default focus outline (#a8c7fa, ≈1px on the
-           left edge) — Bevy gives the canvas keyboard focus, the
-           browser draws a blue accent ring against the dark theme.
-           Keyboard accessibility isn't compromised: focus visibility
-           is handled by the app's own widgets (egui's focus ring).
-        */
-        #bevy { width: 100%; height: 100%; display: block; outline: none; }
-        #bevy:focus { outline: none; }
-        #loading {
-            position: fixed; top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            color: #4CAF50; font-family: sans-serif; text-align: center;
-        }
-    </style>
+    <title>Sandbox (LunCoSim)</title>
+    <!-- Shared boot styles + loader card. Copied next to this file by
+         scripts/build_web.sh from crates/lunco-web/web/. -->
+    <link rel="stylesheet" href="./lunco-boot.css">
 </head>
 <body>
-    <div id="loading">Loading Sandbox...</div>
-    <!-- Bevy owns the canvas size on wasm via `fit_canvas_to_parent` — it
-         observes the parent (`body`) and writes width/height in CSS px
-         every frame. Don't set width/height attrs manually; bevy's
-         attrs win on each resize and a JS resize handler just fights
-         the engine. -->
+    <!-- Bevy owns the canvas size on wasm via `fit_canvas_to_parent` —
+         don't set width/height attrs; bevy's attrs win each resize. -->
     <canvas id="bevy"></canvas>
     <script type="module">
-        import init from './sandbox.js';
-        init().then(() => { document.getElementById('loading').remove(); });
+        import init, * as wasm from './sandbox.js';
+        import { boot } from './lunco-boot.js';
+
+        // Uncompressed wasm size in bytes; the `0` is replaced at build
+        // time by scripts/build_web.sh.
+        const __LC_WASM_SIZE__ = 0;
+
+        // Dev console bridges — exposed only if this bundle exports them
+        // (the sandbox embeds the Modelica workbench, which carries them).
+        for (const k of ['__lc_test_worker_ping', '__lc_test_dispatch_compile']) {
+            if (wasm[k]) window[k] = wasm[k];
+        }
+
+        boot({
+            init,
+            wasmUrl: './sandbox_bg.wasm',
+            wasmSize: __LC_WASM_SIZE__,
+            title: 'Sandbox',
+        });
     </script>
 </body>
 </html>

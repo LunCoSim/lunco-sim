@@ -52,6 +52,7 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-workbench = { path = "../lunco-workbench" }
+lunco-web = { workspace = true }
 lunco-ui = { path = "../lunco-ui" }
 lunco-viz = { path = "../lunco-viz" }
 lunco-canvas = { path = "../lunco-canvas" }

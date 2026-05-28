@@ -355,6 +355,18 @@ generate_bindings() {
         warn "No index.html found at $index_html — bundle will lack an entry point"
     fi
 
+    # Shared web boot library — the streaming loader (lunco-boot.js) +
+    # its styles (lunco-boot.css), maintained once in crates/lunco-web/.
+    # Every app's index.html imports `./lunco-boot.js`, so copy them next
+    # to the bundle. Missing = the page can't start, so warn loudly.
+    local boot_src="$PROJECT_DIR/crates/lunco-web/web"
+    if [ -f "$boot_src/lunco-boot.js" ] && [ -f "$boot_src/lunco-boot.css" ]; then
+        cp "$boot_src/lunco-boot.js" "$boot_src/lunco-boot.css" "$dist_dir/"
+        info "Copied lunco-boot.{js,css} → $dist_dir/"
+    else
+        warn "Missing crates/lunco-web/web/lunco-boot.{js,css} — page won't boot"
+    fi
+
     # DejaVu Sans — wasm has no filesystem, lunco-theme fetches this
     # over HTTP at startup (see crates/lunco-theme/src/fonts.rs::
     # spawn_wasm_font_fetch). Source lives in the workspace cache
