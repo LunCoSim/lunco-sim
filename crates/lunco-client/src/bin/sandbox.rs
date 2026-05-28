@@ -231,17 +231,7 @@ fn main() {
         ).chain())
         // Selection must run before avatar possession so DragModeActive flag is set
         .add_systems(Update, lunco_sandbox_edit::selection::handle_entity_selection.before(lunco_avatar::avatar_raycast_possession))
-        // Manual transform/visibility propagation runs ONCE per frame
-        // after physics writeback. The earlier triple-call (PreUpdate
-        // + two in PostUpdate) ate ~80% of frame time on sandbox
-        // because each call rebuilds a HashMap of every spatial entity
-        // four times. Big_space's own BigSpacePropagationPlugin handles
-        // the CellCoord-rooted hierarchy; this fallback exists only to
-        // cover USD-spawned children that lack CellCoord.
-        .add_systems(PostUpdate, (
-            global_transform_propagation_system,
-            spawn_fallback_avatar,
-        ).chain().after(avian3d::prelude::PhysicsSystems::Writeback))
+        .add_systems(PostUpdate, spawn_fallback_avatar.after(avian3d::prelude::PhysicsSystems::Writeback))
         .add_plugins(lunco_api::LunCoApiPlugin::default());
 
     if log_diag {
@@ -388,44 +378,3 @@ fn apply_sandbox_settings(
     }
 }
 
-fn global_transform_propagation_system(
-    mut commands: Commands,
-    // Only newly-spawned entities need the missing-component patch.
-    // Without `Added<Transform>` this query iterates the entire scene
-    // every frame even though almost all entities already have the
-    // components inserted on a previous tick.
-    q_needs: Query<Entity, (Added<Transform>, Or<(With<Visibility>, With<Mesh3d>, With<Text2d>, With<Transform>)>, Without<InheritedVisibility>, Without<CellCoord>)>,
-    mut q_spatial: Query<(Entity, &mut GlobalTransform, &Transform, Option<&ChildOf>)>,
-    mut q_visibility: Query<(Entity, &mut InheritedVisibility, &mut ViewVisibility, &Visibility, Option<&ChildOf>)>,
-) {
-    for ent in q_needs.iter() {
-        commands.entity(ent).insert((InheritedVisibility::default(), ViewVisibility::default(), GlobalTransform::default()));
-    }
-    for _ in 0..4 {
-        let mut gtf_cache = std::collections::HashMap::new();
-        for (ent, gtf, _, _) in q_spatial.iter() { gtf_cache.insert(ent, *gtf); }
-        for (_ent, mut gtf, local_tf, child_of_opt) in q_spatial.iter_mut() {
-            let parent_gtf = if let Some(child_of) = child_of_opt { gtf_cache.get(&child_of.parent()).cloned().unwrap_or_default() } else { GlobalTransform::default() };
-            *gtf = parent_gtf.mul_transform(*local_tf);
-        }
-    }
-    for _ in 0..4 {
-        let mut vis_cache = std::collections::HashMap::new();
-        for (ent, inherited, _, _, _) in q_visibility.iter() { vis_cache.insert(ent, inherited.get()); }
-        for (_, mut inherited, _view, visibility, child_of_opt) in q_visibility.iter_mut() {
-            // If entity is explicitly Visible, it's always visible regardless of parent
-            if *visibility == Visibility::Visible {
-                *inherited = InheritedVisibility::VISIBLE;
-                continue;
-            }
-            // If entity is explicitly Hidden, it's always hidden
-            if *visibility == Visibility::Hidden {
-                *inherited = InheritedVisibility::HIDDEN;
-                continue;
-            }
-            // Otherwise inherit from parent
-            let parent_visible = if let Some(child_of) = child_of_opt { *vis_cache.get(&child_of.parent()).unwrap_or(&true) } else { true };
-            *inherited = if parent_visible { InheritedVisibility::VISIBLE } else { InheritedVisibility::HIDDEN };
-        }
-    }
-}

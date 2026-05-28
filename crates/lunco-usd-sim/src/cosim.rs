@@ -93,10 +93,7 @@ pub fn process_usd_cosim_prims(
             continue;
         }
 
-        // big_space spatial query (used by camera follow) requires CellCoord;
-        // sync_usd_visuals doesn't add it for non-rigid prims.
         commands.entity(entity).insert((
-            CellCoord::default(),
             UsdSourcedCosim,
             UsdSimProcessed,
             lunco_core::SelectableRoot,

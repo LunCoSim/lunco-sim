@@ -473,7 +473,6 @@ pub fn sync_usd_visuals(
                     path: child_path.to_string(),
                 },
                 child_tf,
-                CellCoord::default(),
                 GlobalTransform::default(),
                 Visibility::Visible,
                 InheritedVisibility::VISIBLE,

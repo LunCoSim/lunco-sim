@@ -545,7 +545,6 @@ fn setup_raycast_wheel(
                 rotation: wheel_rotation,
                 scale: existing_tf.scale,
             },
-            CellCoord::default(),
             Visibility::Inherited,
             InheritedVisibility::default(),
             ViewVisibility::default(),
