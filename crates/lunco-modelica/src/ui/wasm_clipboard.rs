@@ -2,7 +2,7 @@
 //!
 //! ## The problem
 //!
-//! `bin/lunica_web.rs` configures Bevy's window with
+//! `bin/lunica.rs` configures Bevy's window with
 //! `prevent_default_event_handling: true` so the browser doesn't
 //! scroll / tab away on arrow keys etc. Side effect: bevy_winit
 //! installs a canvas-level keydown listener that calls

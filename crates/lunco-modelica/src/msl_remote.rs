@@ -160,7 +160,7 @@ impl Plugin for MslRemotePlugin {
 
         // Web: kick off the async fetcher and have a system promote the
         // shared `Mutex` slot into a Bevy resource once the task completes.
-        // Apps that don't ship an MSL bundle (sandbox_web) can pre-insert
+        // Apps that don't ship an MSL bundle (sandbox) can pre-insert
         // `SkipMslAutoLoad` to suppress the fetch entirely.
         #[cfg(target_arch = "wasm32")]
         {

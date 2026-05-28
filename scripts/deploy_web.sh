@@ -10,10 +10,10 @@
 #     # or:
 #     DEPLOY_TARGET="user@host:/var/www/lunco" ./scripts/deploy_web.sh
 #     # build a different binary first:
-#     BIN=sandbox_web ./scripts/deploy_web.sh user@host:/path
+#     BIN=sandbox ./scripts/deploy_web.sh user@host:/path
 #
 # Environment variables:
-#     BIN              binary name (default: lunica_web)
+#     BIN              binary name (default: lunica)
 #     DEPLOY_TARGET    rsync destination (overrides positional arg)
 #     SSH_PORT         non-default SSH port (passed via -e "ssh -p N")
 #     EXTRA_RSYNC      extra rsync args, e.g. "-n" for dry-run
@@ -45,7 +45,7 @@ error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-BIN="${BIN:-lunica_web}"
+BIN="${BIN:-lunica}"
 TARGET="${DEPLOY_TARGET:-${1:-}}"
 SSH_PORT="${SSH_PORT:-}"
 EXTRA_RSYNC="${EXTRA_RSYNC:-}"
@@ -60,14 +60,14 @@ usage: $0 <user@host:/remote/path>
 
 example:
    ./scripts/deploy_web.sh deploy@lunco.dev:/var/www/lunco
-   BIN=sandbox_web $0 deploy@lunco.dev:/var/www/rover
+   BIN=sandbox $0 deploy@lunco.dev:/var/www/rover
 EOF
     exit 2
 fi
 
 if [ ! -d "$DIST_DIR" ]; then
     error "No bundle at $DIST_DIR"
-    info  "Run: ./scripts/build_web.sh build $BIN  (then deploy)"
+    info  "Run: ./scripts/build_web.sh build $BIN --release  (then deploy)"
     exit 1
 fi
 
@@ -226,8 +226,8 @@ on every request, or not at all):
 After config change: `sudo nginx -t && sudo systemctl reload nginx`.
 
 Verify the pre-compressed sibling is actually served:
-    curl -I -H "Accept-Encoding: br" https://lunco.example/lunica_web_bg.wasm
+    curl -I -H "Accept-Encoding: br" https://lunco.example/lunica_bg.wasm
     # expect:  Content-Encoding: br
-    curl -I -H "Accept-Encoding: gzip" https://lunco.example/lunica_web_bg.wasm
+    curl -I -H "Accept-Encoding: gzip" https://lunco.example/lunica_bg.wasm
     # expect:  Content-Encoding: gzip
 EOF

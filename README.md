@@ -68,7 +68,7 @@ cargo run --bin lunica
 cargo run --bin lunica -- --api 3000     # also exposes the typed-command HTTP API
 
 # Web (wasm32)
-./scripts/build_web.sh all lunica_web    # builds and serves on http://localhost:8080
+./scripts/build_web.sh all lunica    # builds and serves on http://localhost:8080
 ```
 
 Full guide — what Lunica includes, MSL cache bootstrap, and the

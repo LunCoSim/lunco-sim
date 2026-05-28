@@ -679,7 +679,7 @@ impl Plugin for ModelicaUiPlugin {
         // Multi-screen help/tour overlay. Pops on first launch (per
         // `HelpOverlaySettings.seen` in settings.json), reachable
         // thereafter from Help → Show Tour or F1. Apps that embed the
-        // Modelica workbench as a *secondary* workspace (sandbox_web's
+        // Modelica workbench as a *secondary* workspace (sandbox's
         // Design tab) pre-insert `ModelicaUiConfig { include_help_overlay:
         // false, .. }` to suppress the tour — there's no point coaching
         // a sandbox user through lunica's onboarding.

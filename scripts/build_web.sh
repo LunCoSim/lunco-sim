@@ -12,9 +12,12 @@
 #   clean             Remove build artifacts
 #   help              Show this help message
 #
+# Profile: default is a fast dev build (no wasm-opt). Pass --release for
+#   a shippable build (fat LTO + wasm-opt size pass).
+#
 # Available binaries:
-#   lunica_web  - Modelica Workbench IDE
-#   sandbox_web       - Simulation Sandbox
+#   lunica   - Modelica Workbench IDE
+#   sandbox  - Simulation Sandbox
 # ============================================================================
 
 set -e
@@ -51,34 +54,27 @@ error() {
 get_binary_config() {
     local binary="$1"
     case "$binary" in
-        lunica_web)
+        lunica)
             echo "lunco-modelica"
             ;;
-        sandbox_web)
+        sandbox)
             echo "lunco-client"
             ;;
         *)
             error "Unknown binary: $binary"
-            error "Available binaries: lunica_web, sandbox_web"
+            error "Available binaries: lunica, sandbox"
             exit 1
             ;;
     esac
 }
 
-# Map the friendly web-target name (e.g. "sandbox_web") to the cargo
-# binary actually built. For `sandbox_web` we build the desktop
-# `sandbox` binary with `--target wasm32-unknown-unknown` — same source
-# (`crates/lunco-client/src/bin/sandbox.rs`) compiles to both desktop
-# and wasm via `#[cfg(target_arch = "wasm32")]`. `lunica_web` has its
-# own distinct source file (`lunica_web.rs`) so it stays a separate
-# cargo bin. wasm-bindgen output names are normalised back to the
-# friendly name via `--out-name` so dist/html don't need to know.
+# The web-target name IS the cargo bin name — both `lunica` and `sandbox`
+# are single cfg-gated sources that compile to desktop and wasm via
+# `#[cfg(target_arch = "wasm32")]`. No `_web` aliases, no `--out-name`
+# rename. Kept as a function so the build flow has one obvious seam if a
+# future target ever does need a different cargo bin name.
 get_cargo_bin_name() {
-    local binary="$1"
-    case "$binary" in
-        sandbox_web) echo "sandbox" ;;
-        *)           echo "$binary" ;;
-    esac
+    echo "$1"
 }
 
 # Check prerequisites
@@ -177,11 +173,11 @@ build_wasm() {
     local crate="$2"
 
     # `BUILD_PROFILE` is exported by `main` once the CLI args are
-    # parsed. Defaults to web-release; `--dev` flips it to web-dev for
-    # a fast inner-loop build (no fat LTO, no shrink-first codegen,
-    # parallel codegen units, incremental). The `wasm-opt` post-pass
-    # is skipped in dev mode too — see `generate_bindings`.
-    local profile="${BUILD_PROFILE:-web-release}"
+    # parsed. Defaults to the fast web-dev profile (no fat LTO, parallel
+    # codegen units, incremental); `--release` flips it to web-release
+    # for a shippable build. The `wasm-opt` post-pass is skipped in dev
+    # mode too — see `generate_bindings`.
+    local profile="${BUILD_PROFILE:-web-dev}"
     info "Building $binary for WebAssembly..."
     info "Crate: $crate"
     info "Target: wasm32-unknown-unknown"
@@ -207,10 +203,10 @@ build_wasm() {
     # Off-thread Modelica worker bundle. wasm32 has no real threads, so
     # without this every rumoca compile (a few seconds for non-trivial
     # models) blocks the render loop and the page appears frozen. Both
-    # binaries that embed the Modelica workbench need it — lunica_web is
-    # the workbench, sandbox_web embeds it as the Design workspace.
+    # binaries that embed the Modelica workbench need it — lunica is
+    # the workbench, sandbox embeds it as the Design workspace.
     case "$binary" in
-        lunica_web|sandbox_web)
+        lunica|sandbox)
             local base_target_dir
             base_target_dir=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
             local worker_wasm="$base_target_dir/wasm32-unknown-unknown/$profile/lunica_worker.wasm"
@@ -248,11 +244,14 @@ build_wasm() {
 generate_bindings() {
     local binary="$1"
     local crate="$2"
-    local index_html="$PROJECT_DIR/crates/$crate/web/index.html"
+    # ONE shared index.html template for every app — lives with the rest
+    # of the web library in crates/lunco-web/web/. Per-app differences are
+    # filled in below by substituting __LC_BUNDLE__ / __LC_NAME__.
+    local index_html="$PROJECT_DIR/crates/lunco-web/web/index.html"
 
     # Dynamically find the target directory in case it's overridden in .cargo/config.toml
     local base_target_dir=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
-    local profile="${BUILD_PROFILE:-web-release}"
+    local profile="${BUILD_PROFILE:-web-dev}"
     local cargo_out_dir="$base_target_dir/wasm32-unknown-unknown/$profile"
     local bindgen_out_dir="$base_target_dir/web/$binary"
     local dist_dir="$PROJECT_DIR/dist/$binary"
@@ -273,7 +272,7 @@ generate_bindings() {
     local cargo_bin
     cargo_bin=$(get_cargo_bin_name "$binary")
     # `--out-name "$binary"` normalises wasm-bindgen output to the
-    # friendly name (e.g. `sandbox_web.js`, `sandbox_web_bg.wasm`) even
+    # friendly name (e.g. `sandbox.js`, `sandbox_bg.wasm`) even
     # when the cargo binary is named differently (e.g. `sandbox`).
     # Downstream code (dist copy, index.html `import init from
     # './<binary>.js'`) keeps using `$binary` throughout.
@@ -297,8 +296,8 @@ generate_bindings() {
     # Skip the size pass entirely in dev mode — wasm-opt on a 28 MB
     # debug-ish wasm is ~20–30 s, which dominates inner-loop cycle
     # time. Bigger payload is fine for `localhost`.
-    if [ "${BUILD_PROFILE:-web-release}" = "web-dev" ]; then
-        info "wasm-opt skipped (--dev profile)"
+    if [ "${BUILD_PROFILE:-web-dev}" = "web-dev" ]; then
+        info "wasm-opt skipped (dev profile)"
     elif [ -f "$wasm_in" ] && command -v wasm-opt &> /dev/null; then
         info "Running wasm-opt -Oz --converge (max-size pass)…"
         local before
@@ -344,6 +343,12 @@ generate_bindings() {
     fi
     if [ -f "$index_html" ]; then
         cp "$index_html" "$dist_dir/index.html"
+        # Fill the shared template's per-app placeholders:
+        #   __LC_BUNDLE__ → cargo bin / wasm-bindgen out-name (e.g. lunica)
+        #   __LC_NAME__   → display name (bundle, first letter upper-cased)
+        local app_name="$(tr '[:lower:]' '[:upper:]' <<< "${binary:0:1}")${binary:1}"
+        sed -i "s/__LC_BUNDLE__/$binary/g; s|__LC_NAME__|$app_name|g" "$dist_dir/index.html"
+        info "Filled template: bundle=$binary, name=$app_name"
         # Inject the actual uncompressed WASM size so the loading UI
         # can show accurate progress even when nginx serves a
         # pre-compressed .gz sibling (gzip_static on).
@@ -356,6 +361,18 @@ generate_bindings() {
         fi
     else
         warn "No index.html found at $index_html — bundle will lack an entry point"
+    fi
+
+    # Shared web boot library — the streaming loader (lunco-boot.js) +
+    # its styles (lunco-boot.css), maintained once in crates/lunco-web/.
+    # Every app's index.html imports `./lunco-boot.js`, so copy them next
+    # to the bundle. Missing = the page can't start, so warn loudly.
+    local boot_src="$PROJECT_DIR/crates/lunco-web/web"
+    if [ -f "$boot_src/lunco-boot.js" ] && [ -f "$boot_src/lunco-boot.css" ]; then
+        cp "$boot_src/lunco-boot.js" "$boot_src/lunco-boot.css" "$dist_dir/"
+        info "Copied lunco-boot.{js,css} → $dist_dir/"
+    else
+        warn "Missing crates/lunco-web/web/lunco-boot.{js,css} — page won't boot"
     fi
 
     # DejaVu Sans — wasm has no filesystem, lunco-theme fetches this
@@ -378,11 +395,11 @@ generate_bindings() {
 Run: cargo run -p lunco-assets -- download"
     fi
 
-    # sandbox_web loads scene files via the bevy AssetServer over HTTP
+    # sandbox loads scene files via the bevy AssetServer over HTTP
     # (`assets/scenes/sandbox/sandbox_scene.usda` and friends). Copy the
     # workspace `assets/` tree next to the wasm so they're same-origin.
-    # lunica_web doesn't need this — its models live in the MSL bundle.
-    if [ "$binary" = "sandbox_web" ] && [ -d "$PROJECT_DIR/assets" ]; then
+    # lunica doesn't need this — its models live in the MSL bundle.
+    if [ "$binary" = "sandbox" ] && [ -d "$PROJECT_DIR/assets" ]; then
         info "Copying assets/ → $dist_dir/assets/"
         rsync -a --delete "$PROJECT_DIR/assets/" "$dist_dir/assets/"
     fi
@@ -393,14 +410,14 @@ Run: cargo run -p lunco-assets -- download"
     info "Bundle sizes: WASM=${WASM_SIZE}, JS=${JS_SIZE}"
     info "Bundle ready: $dist_dir"
 
-    # ── Worker bundle (lunica_web + sandbox_web) ──────────────────────
+    # ── Worker bundle (lunica + sandbox) ──────────────────────
     # Generate bindings for the off-thread Modelica worker and place its
     # output under `dist/<bin>/worker/` so the main page can
     # `new Worker('./worker/worker_bootstrap.js', { type: 'module' })`. The
     # worker bundle is a SECOND wasm instance — it has its own memory and
     # state — and there is no way to share Rust globals or `Arc`s with it.
     case "$binary" in
-        lunica_web|sandbox_web) staged_worker=1 ;;
+        lunica|sandbox) staged_worker=1 ;;
         *) staged_worker=0 ;;
     esac
     if [ "$staged_worker" = "1" ]; then
@@ -433,8 +450,8 @@ Run: cargo run -p lunco-assets -- download"
         fi
         # wasm-opt the worker too, same flags as the main bundle.
         local worker_wasm_in="$worker_bindgen_dir/${worker_bin}_bg.wasm"
-        if [ "${BUILD_PROFILE:-web-release}" = "web-dev" ]; then
-            info "Worker wasm-opt skipped (--dev profile)"
+        if [ "${BUILD_PROFILE:-web-dev}" = "web-dev" ]; then
+            info "Worker wasm-opt skipped (dev profile)"
         elif [ -f "$worker_wasm_in" ] && command -v wasm-opt &> /dev/null; then
             local tmp="$worker_wasm_in.opt.tmp"
             if wasm-opt -Oz --converge --strip-debug -o "$tmp" "$worker_wasm_in"; then
@@ -451,7 +468,7 @@ Run: cargo run -p lunco-assets -- download"
         # `#[wasm_bindgen(start)]` worker entry actually fires.
         # The worker bootstrap shim always lives next to the worker
         # source (in `lunco-modelica`), regardless of which main bundle
-        # is consuming it. Same file for lunica_web and sandbox_web.
+        # is consuming it. Same file for lunica and sandbox.
         local worker_bootstrap="$PROJECT_DIR/crates/lunco-modelica/web/worker_bootstrap.js"
         if [ -f "$worker_bootstrap" ]; then
             cp "$worker_bootstrap" "$worker_dist_dir/worker_bootstrap.js"
@@ -466,14 +483,14 @@ Run: cargo run -p lunco-assets -- download"
 
 # Pack MSL into a versioned, compressed bundle and place it next to the
 # wasm under `dist/<bin>/msl/`. Same-origin so the runtime fetcher doesn't
-# need CORS configuration. Both wasm bundles ship MSL — lunica_web because
-# the workbench *is* the MSL editor, sandbox_web because its Design
+# need CORS configuration. Both wasm bundles ship MSL — lunica because
+# the workbench *is* the MSL editor, sandbox because its Design
 # workspace embeds the same Modelica panels and they'd be empty without
 # the standard library.
 build_msl_bundle() {
     local binary="$1"
     case "$binary" in
-        lunica_web|sandbox_web) ;;
+        lunica|sandbox) ;;
         *) return 0 ;;
     esac
     local dist_dir="$PROJECT_DIR/dist/$binary"
@@ -559,8 +576,11 @@ clean() {
     base_target_dir=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
     rm -rf "$base_target_dir/web"
     rm -rf "$PROJECT_DIR/dist"
-    rm -f "$base_target_dir/wasm32-unknown-unknown/web-release/"*_web.wasm
-    rm -f "$base_target_dir/wasm32-unknown-unknown/web-release/"*_web.d
+    # Drop cargo wasm outputs from both profiles (lunica + sandbox + worker).
+    for profile in web-dev web-release; do
+        rm -f "$base_target_dir/wasm32-unknown-unknown/$profile/"{lunica,sandbox,lunica_worker}.wasm
+        rm -f "$base_target_dir/wasm32-unknown-unknown/$profile/"{lunica,sandbox,lunica_worker}.d
+    done
     success "Cleaned"
 }
 
@@ -577,16 +597,19 @@ show_help() {
     echo "  clean             Remove build artifacts"
     echo "  help              Show this help message"
     echo ""
+    echo "Profile (default: fast dev build, no wasm-opt):"
+    echo "  --release         Shippable build (fat LTO + wasm-opt size pass)"
+    echo ""
     echo "Available binaries:"
-    echo "  lunica_web  - Modelica Workbench IDE (default port: 8080)"
-    echo "  sandbox_web       - Rover Physics Sandbox (default port: 8081)"
+    echo "  lunica       - Modelica Workbench IDE (default port: 8080)"
+    echo "  sandbox  - Rover Physics Sandbox (default port: 8081)"
     echo ""
     echo "Examples:"
-    echo "  $0 build lunica_web    # Build Modelica Workbench"
-    echo "  $0 serve sandbox_web         # Serve Sandbox"
-    echo "  $0 all lunica_web      # Build and serve Modelica Workbench"
-    echo "  $0 all sandbox_web 8082      # Build and serve on custom port"
-    echo "  $0 clean                           # Clean all artifacts"
+    echo "  $0 build lunica            # Fast dev build"
+    echo "  $0 build lunica --release  # Shippable optimized build"
+    echo "  $0 all lunica              # Build (dev) and serve"
+    echo "  $0 all sandbox 8082    # Build and serve on custom port"
+    echo "  $0 clean                   # Clean all artifacts"
     echo ""
     echo "Prerequisites:"
     echo "  - Rust with wasm32-unknown-unknown target"
@@ -600,17 +623,18 @@ main() {
     local binary="${2:-}"
     local port="${3:-}"
 
-    # Pull `--dev` out of the positional args so it can appear in any
-    # slot (`build lunica_web --dev`, `--dev build lunica_web`, …).
-    # Sets `BUILD_PROFILE=web-dev` for `build_wasm` + `generate_bindings`,
-    # which selects the fast-iteration cargo profile and skips the
-    # `wasm-opt` size pass.
-    export BUILD_PROFILE="web-release"
+    # Profile selection. The DEFAULT is the fast-iteration `web-dev`
+    # profile (no LTO, parallel codegen, and the slow `wasm-opt -Oz`
+    # size pass is skipped) — what you want 95% of the time. `--release`
+    # opts into the shippable `web-release` profile (fat LTO + `wasm-opt`
+    # shrink pass) for deploys. The flag may appear in any slot
+    # (`build lunica --release`, `--release build lunica`, …).
+    export BUILD_PROFILE="web-dev"
     local positional=()
     for arg in "$@"; do
         case "$arg" in
-            --dev)
-                export BUILD_PROFILE="web-dev"
+            --release)
+                export BUILD_PROFILE="web-release"
                 ;;
             *)
                 positional+=("$arg")
@@ -644,7 +668,7 @@ main() {
             check_prerequisites
             local crate=$(get_binary_config "$binary")
             local default_port=8080
-            if [ "$binary" = "sandbox_web" ]; then
+            if [ "$binary" = "sandbox" ]; then
                 default_port=8081
             fi
             serve_web "$binary" "$crate" "${port:-$default_port}"
@@ -658,7 +682,7 @@ main() {
             check_prerequisites
             local crate=$(get_binary_config "$binary")
             local default_port=8080
-            if [ "$binary" = "sandbox_web" ]; then
+            if [ "$binary" = "sandbox" ]; then
                 default_port=8081
             fi
             build_wasm "$binary" "$crate"

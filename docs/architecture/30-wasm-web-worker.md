@@ -22,7 +22,7 @@ a transport layer that bridges the channels to the worker over
 
 ```
 ┌─────────────────────────────────────────┐         ┌─────────────────────────────┐
-│ Main page (lunica_web bundle)           │         │ Worker (lunica_worker)      │
+│ Main page (lunica bundle)           │         │ Worker (lunica_worker)      │
 │ ─────────────────────────────────────── │         │ ─────────────────────────── │
 │ Bevy app, egui UI, MSL fetcher          │         │ no Bevy app                 │
 │ ModelicaChannels (crossbeam)            │         │ InlineWorkerInner state     │
@@ -38,12 +38,12 @@ a transport layer that bridges the channels to the worker over
 └─────────────────────────────────────────┘         └─────────────────────────────┘
 ```
 
-1. **Page boot.** Main wasm runs `lunica_web`'s `wasm_bindgen(start) run()`.
+1. **Page boot.** Main wasm runs `lunica`'s `wasm_bindgen(start) run()`.
    `ModelicaPlugin::build` creates two crossbeam channels (cmd, res), stores
    them on `ModelicaChannels`, and registers the `tx_res` / `tx_cmd` handles
    with `worker_transport::register_result_sender` /
    `register_command_sender` so JS-side bridges can reach them.
-2. **Worker spawn.** `lunica_web::run` calls
+2. **Worker spawn.** `lunica::run` calls
    `worker_transport::install_worker("./worker/worker_bootstrap.js")`. That
    constructs a `web_sys::Worker` of `type=module`, attaches an
    `onmessage` closure that decodes `WireResult` and pushes `Result` into
@@ -114,20 +114,20 @@ for command dispatch is `worker::process_inline_command` (also wasm-only,
 extracted from `inline_worker_process` for reuse). The native
 `worker::modelica_worker` loop kept its own dispatch.
 
-## Build (`scripts/build_web.sh build lunica_web`)
+## Build (`scripts/build_web.sh build lunica`)
 
 Two cargo builds, two `wasm-bindgen` passes:
 
 ```
-target/wasm32-unknown-unknown/web-release/lunica_web.wasm
+target/wasm32-unknown-unknown/web-release/lunica.wasm
                                         /lunica_worker.wasm
 
-target/web/lunica_web/{lunica_web.js, lunica_web_bg.wasm, …}
+target/web/lunica/{lunica.js, lunica_bg.wasm, …}
 target/web/lunica_worker/{lunica_worker.js, lunica_worker_bg.wasm, …}
 
-dist/lunica_web/
-├── index.html             ← imports & calls init('lunica_web.js')
-├── lunica_web.js, …       ← main bundle
+dist/lunica/
+├── index.html             ← imports & calls init('lunica.js')
+├── lunica.js, …       ← main bundle
 ├── msl/                   ← parsed MSL artefacts
 └── worker/
     ├── lunica_worker.js, …  ← worker bundle (wasm-bindgen output)
@@ -151,7 +151,7 @@ forever.
 The fix is a tiny shim:
 
 ```js
-// dist/lunica_web/worker/worker_bootstrap.js
+// dist/lunica/worker/worker_bootstrap.js
 import init from './lunica_worker.js';
 await init();
 ```

@@ -5966,6 +5966,7 @@ dependencies = [
  "lunco-ui",
  "lunco-usd",
  "lunco-viz",
+ "lunco-web",
  "lunco-workbench",
  "mimalloc",
  "wasm-bindgen",
@@ -6132,6 +6133,7 @@ dependencies = [
  "lunco-twin-journal",
  "lunco-ui",
  "lunco-viz",
+ "lunco-web",
  "lunco-workbench",
  "lunco-workspace",
  "lyon_geom",
@@ -6404,6 +6406,16 @@ dependencies = [
  "lunco-workbench",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lunco-web"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

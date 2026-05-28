@@ -24,8 +24,8 @@
 #   * build scripts (*build.rs)— run at compile time on the host
 #   * `tests/` modules         — test fixtures live on disk
 #   * native-only binaries     — `lunica`, `sandbox`, etc. (the wasm
-#                                pair lives in `lunica_web` /
-#                                `sandbox_web` and uses AssetServer).
+#                                pair lives in `lunica` /
+#                                `sandbox` and uses AssetServer).
 #
 # Adding new entries to the allow-list requires PR review; the override
 # is local (a single `#![allow(...)]`), so reviewers can see and

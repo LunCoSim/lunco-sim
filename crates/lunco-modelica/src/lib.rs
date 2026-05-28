@@ -824,6 +824,86 @@ impl Plugin for ModelicaPlugin {
     }
 }
 
+/// One-call workbench bundle — the canonical "lunica IDE" wiring.
+///
+/// Everything the Modelica workbench needs to behave **identically**
+/// whether it runs standalone (`lunica`, native or wasm) or embedded as a
+/// host app's workspace (sandbox's "Design" tab) lives here, so there is
+/// exactly one place to fix and no second site to drift against.
+///
+/// Bundles:
+///   - [`lunco_workbench::WorkbenchPlugin`] (added only if the host
+///     hasn't already — sandbox adds it early in its own chain);
+///   - the passed [`ModelicaUiConfig`];
+///   - [`ModelicaPlugin`] (panels + core + viz);
+///   - **wasm-only**: the JS clipboard bridge ([`ui::wasm_clipboard`]),
+///     localStorage autosave ([`ui::wasm_autosave`]), and the off-thread
+///     compile worker ([`worker_transport::install_worker`]).
+///
+/// History: before this existed, `lunica_web.rs` and `sandbox.rs` each
+/// re-wired the workbench by hand and drifted — the sandbox embed shipped
+/// with no clipboard bridge (paste broken) and no autosave (reload lost
+/// docs), while neither standalone web path nor sandbox stayed in sync on
+/// the worker/UI-config knobs. Host apps select the embed flavour via the
+/// `config` field:
+///
+/// ```ignore
+/// app.add_plugins(lunco_modelica::ModelicaWorkbenchPlugin {
+///     config: lunco_modelica::ModelicaUiConfig {
+///         include_help_overlay: false,
+///         ..Default::default()
+///     },
+/// });
+/// ```
+///
+/// App-global frame pacing (`WinitSettings`, `Time<Virtual>` cap,
+/// `ClearColor`) is deliberately **not** owned here — Bevy always inserts
+/// defaults for those resources so an "insert-if-absent" guard can't tell
+/// a host's choice from the default. Those stay an app-shell concern.
+#[derive(Default)]
+pub struct ModelicaWorkbenchPlugin {
+    /// UI knobs (help overlay, welcome panel). Defaults to the full
+    /// lunica onboarding experience; embeds typically disable the
+    /// help overlay.
+    pub config: ModelicaUiConfig,
+}
+
+impl Plugin for ModelicaWorkbenchPlugin {
+    fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_workbench::WorkbenchPlugin>() {
+            app.add_plugins(lunco_workbench::WorkbenchPlugin);
+        }
+        app.insert_resource(self.config.clone());
+        app.add_plugins(ModelicaPlugin);
+
+        // Web-only affordances. Absent on native (native uses the OS
+        // clipboard and a real worker thread):
+        //  - clipboard: document-level capture-phase copy/cut/paste that
+        //    pre-empts bevy_egui's broken async wasm clipboard pipeline.
+        //  - autosave: persists Untitled / dirty docs to localStorage so
+        //    a page reload doesn't silently lose work.
+        #[cfg(target_arch = "wasm32")]
+        {
+            app.add_plugins(ui::wasm_clipboard::WasmClipboardPlugin);
+            app.add_plugins(ui::wasm_autosave::WasmAutosavePlugin);
+        }
+
+        // Off-thread Modelica worker. wasm32 has no real threads, so an
+        // inline rumoca compile (seconds for non-trivial models) freezes
+        // the render loop and the page appears hung. `ModelicaPlugin`
+        // above already registered the result sender, so the JS Worker
+        // can be attached now. Non-fatal: the inline worker remains a
+        // fallback if the bundle is missing or COOP/COEP is misconfigured.
+        #[cfg(target_arch = "wasm32")]
+        if let Err(e) = worker_transport::install_worker("./worker/worker_bootstrap.js") {
+            bevy::log::error!(
+                "[ModelicaWorkbenchPlugin] off-thread worker failed to start; \
+                 falling back to inline compile path: {e:?}"
+            );
+        }
+    }
+}
+
 fn build_modelica_core(app: &mut App) {
     let (tx_cmd, rx_cmd) = unbounded();
     let (tx_res, rx_res) = unbounded();

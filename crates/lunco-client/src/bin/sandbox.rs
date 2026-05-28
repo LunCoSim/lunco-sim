@@ -40,7 +40,7 @@ use lunco_core::Avatar;
 use lunco_cosim::CoSimPlugin;
 use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
-use lunco_modelica::{ModelicaPlugin, ModelicaSet, ModelicaUiConfig};
+use lunco_modelica::{ModelicaWorkbenchPlugin, ModelicaSet, ModelicaUiConfig};
 use big_space::prelude::Grid;
 use lunco_materials::{BlueprintMaterialPlugin, SolarPanelMaterialPlugin};
 
@@ -139,7 +139,7 @@ fn main() {
         // the inherited Bevy default (mid-gray) shows through the 1px
         // gaps that non-integer DPRs and egui panel-edge rounding can
         // leave at panel boundaries — visible as a "left hairline"
-        // against a dark theme. Same idea as `lunica_web.rs:115`.
+        // against a dark theme. Same idea as the ClearColor in `lunica.rs`.
         .insert_resource(ClearColor(Color::srgb_u8(0x1a, 0x1a, 0x1a)))
         // `lunco-lib://` shipped-fixture asset source — must be
         // registered *before* `DefaultPlugins`/`AssetPlugin` builds the
@@ -297,39 +297,25 @@ fn main() {
             spawn_fallback_avatar,
         ).chain().after(avian3d::prelude::PhysicsSystems::Writeback));
 
-    // Full Modelica workbench so the sandbox exposes a "Design" workspace
-    // alongside View/Build — same panels (Twin browser, Code editor,
-    // Canvas diagram, MSL palette, …) as lunica. We suppress only the
-    // first-run help overlay and the Welcome landing tab — those are
-    // lunica's onboarding affordances and feel out of place inside a 3D
-    // physics demo. MSL auto-fetches as usual; sandbox_web ships the
-    // bundle next to its wasm so the manifest is same-origin.
-    // Welcome panel stays ON — it's the same landing page lunica uses for
-    // the Design tab (Twin Browser left, Welcome centre, Inspector +
-    // Palette right). Disabling it left the centre empty and the 3D
-    // sandbox viewport bled through, which is *not* what Design should
-    // look like. Only the first-run coach-marks (HelpOverlay) are
-    // suppressed — those are lunica's onboarding affordance and feel out
-    // of place in a 3D physics demo.
-    app.insert_resource(ModelicaUiConfig {
-        include_help_overlay: false,
-        include_welcome_panel: true,
+    // Embed the FULL lunica workbench as the "Design" workspace via the
+    // shared bundle — same clipboard bridge, autosave, worker, and panels
+    // as standalone lunica, so the Design tab can't drift from the real
+    // IDE. We pass only the one intentional embed knob: suppress the
+    // first-run help overlay (lunica's onboarding coach-marks, out of
+    // place inside a 3D physics demo). Welcome panel stays ON — it's the
+    // same landing page lunica uses for the Design tab; disabling it left
+    // the centre empty and the 3D sandbox viewport bled through.
+    app.add_plugins(ModelicaWorkbenchPlugin {
+        config: ModelicaUiConfig {
+            include_help_overlay: false,
+            include_welcome_panel: true,
+        },
     });
-    app.add_plugins(ModelicaPlugin);
 
-    // Off-thread Modelica worker. wasm32 has no real threads, so without
-    // this every compile (a few seconds for `AnnotatedRocketStage`) blocks
-    // the render loop and the page appears frozen. The worker bundle
-    // lives at `./worker/lunica_worker.{js,wasm}` next to the main wasm —
-    // `build_web.sh` builds and stages it for both lunica_web and
-    // sandbox_web. Failure is non-fatal: the inline compile path still
-    // works, just stutters the UI.
-    #[cfg(target_arch = "wasm32")]
-    if let Err(e) = lunco_modelica::worker_transport::install_worker("./worker/worker_bootstrap.js") {
-        bevy::log::error!(
-            "[sandbox_web] failed to start off-thread Modelica worker; falling back to inline: {e:?}"
-        );
-    }
+    // Dismiss the HTML loading screen once the first frame paints
+    // (wasm-only; no-op on native). Pairs with `web/index.html` →
+    // `lunco-boot.js`.
+    app.add_plugins(lunco_web::WebReadyPlugin);
 
     // URL-driven boot. Lets headless test harnesses drive the workbench
     // without firing canvas pointer events (synthetic DOM events don't

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>__LC_NAME__ — LunCoSim</title>
+    <!-- Empty data-URI icon suppresses the browser's automatic
+         /favicon.ico request (and its 404) without shipping a file. -->
+    <link rel="icon" href="data:,">
+    <!-- Shared boot styles + loader card (lunco-boot.css, copied here). -->
+    <link rel="stylesheet" href="./lunco-boot.css">
+</head>
+<body>
+    <!-- Bevy owns the canvas size on wasm via `fit_canvas_to_parent` —
+         don't set width/height attrs; bevy's attrs win each resize. -->
+    <canvas id="bevy"></canvas>
+    <script type="module">
+        // ONE template for every LunCoSim wasm app. scripts/build_web.sh
+        // fills the placeholders per target:
+        //   __LC_BUNDLE__    cargo bin / wasm-bindgen out-name (e.g. lunica)
+        //   __LC_NAME__      display name (capitalised bundle, e.g. Lunica)
+        //   __LC_WASM_SIZE__ uncompressed wasm bytes (accurate gzip_static progress)
+        import init, * as wasm from './__LC_BUNDLE__.js';
+        import { boot } from './lunco-boot.js';
+
+        const __LC_WASM_SIZE__ = 0;
+
+        // Dev console bridges for the off-thread worker — exposed only if
+        // this bundle actually exports them (lunica does; sandbox does via
+        // the embedded workbench; a future app might not).
+        for (const k of ['__lc_test_worker_ping', '__lc_test_dispatch_compile']) {
+            if (wasm[k]) window[k] = wasm[k];
+        }
+
+        boot({
+            init,
+            wasmUrl: './__LC_BUNDLE___bg.wasm',
+            wasmSize: __LC_WASM_SIZE__,
+            title: '__LC_NAME__',
+        });
+    </script>
+</body>
+</html>

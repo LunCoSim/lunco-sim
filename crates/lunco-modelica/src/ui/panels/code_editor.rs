@@ -764,7 +764,7 @@ impl Panel for CodeEditorPanel {
         // On wasm, the browser's native `copy`/`cut`/`paste` JS
         // events are suppressed by Bevy's
         // `prevent_default_event_handling: true` window setting (see
-        // `bin/lunica_web.rs`). That means neither bevy_egui's
+        // `bin/lunica.rs`). That means neither bevy_egui's
         // built-in clipboard listeners nor any custom JS listener
         // can ever fire for Ctrl/Cmd+C/X/V. Egui's keyboard input,
         // however, *is* delivered correctly — so we detect the
