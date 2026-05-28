@@ -35,7 +35,7 @@ use lunco_core::Avatar;
 use lunco_cosim::CoSimPlugin;
 use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
-use lunco_modelica::{ModelicaCorePlugin, ModelicaSet};
+use lunco_modelica::{ModelicaPlugin, ModelicaSet, ModelicaUiConfig};
 use big_space::prelude::Grid;
 use lunco_materials::{BlueprintMaterialPlugin, SolarPanelMaterialPlugin};
 
@@ -253,13 +253,60 @@ fn main() {
             spawn_fallback_avatar,
         ).chain().after(avian3d::prelude::PhysicsSystems::Writeback));
 
-    // ModelicaCorePlugin owns `ModelicaChannels` and `ModelicaSet` system
-    // sets that many sandbox systems hard-depend on. On wasm we suppress
-    // the MSL auto-fetch (no manifest shipped with sandbox_web — sandbox
-    // cosim doesn't compile against Modelica.Library classes).
+    // Full Modelica workbench so the sandbox exposes a "Design" workspace
+    // alongside View/Build — same panels (Twin browser, Code editor,
+    // Canvas diagram, MSL palette, …) as lunica. We suppress only the
+    // first-run help overlay and the Welcome landing tab — those are
+    // lunica's onboarding affordances and feel out of place inside a 3D
+    // physics demo. MSL auto-fetches as usual; sandbox_web ships the
+    // bundle next to its wasm so the manifest is same-origin.
+    // Welcome panel stays ON — it's the same landing page lunica uses for
+    // the Design tab (Twin Browser left, Welcome centre, Inspector +
+    // Palette right). Disabling it left the centre empty and the 3D
+    // sandbox viewport bled through, which is *not* what Design should
+    // look like. Only the first-run coach-marks (HelpOverlay) are
+    // suppressed — those are lunica's onboarding affordance and feel out
+    // of place in a 3D physics demo.
+    app.insert_resource(ModelicaUiConfig {
+        include_help_overlay: false,
+        include_welcome_panel: true,
+    });
+    app.add_plugins(ModelicaPlugin);
+
+    // Off-thread Modelica worker. wasm32 has no real threads, so without
+    // this every compile (a few seconds for `AnnotatedRocketStage`) blocks
+    // the render loop and the page appears frozen. The worker bundle
+    // lives at `./worker/lunica_worker.{js,wasm}` next to the main wasm —
+    // `build_web.sh` builds and stages it for both lunica_web and
+    // sandbox_web. Failure is non-fatal: the inline compile path still
+    // works, just stutters the UI.
     #[cfg(target_arch = "wasm32")]
-    app.insert_resource(lunco_modelica::msl_remote::SkipMslAutoLoad);
-    app.add_plugins(ModelicaCorePlugin);
+    if let Err(e) = lunco_modelica::worker_transport::install_worker("./worker/worker_bootstrap.js") {
+        bevy::log::error!(
+            "[sandbox_web] failed to start off-thread Modelica worker; falling back to inline: {e:?}"
+        );
+    }
+
+    // URL-driven boot. Lets headless test harnesses drive the workbench
+    // without firing canvas pointer events (synthetic DOM events don't
+    // flow through winit's web event handlers, so e.g.
+    // `chrome-devtools-mcp` can't click into the canvas). Supported
+    // query params:
+    //
+    //   ?workspace=<perspective_id>   Activate a registered Perspective.
+    //                                 Sandbox ships: sandbox_view,
+    //                                 rover_build, modelica_analyze.
+    //   ?open=<qualified.class.name>  Trigger `OpenClass`. Waits for
+    //                                 `MslLoadState::Ready` before
+    //                                 firing — without that the
+    //                                 trigger races MSL install and
+    //                                 the workbench logs `could not
+    //                                 locate <class>`.
+    //
+    // Runs on `Update` so it can poll MSL state; self-disables after
+    // both knobs are applied. Failures are logged and non-fatal.
+    #[cfg(target_arch = "wasm32")]
+    app.add_systems(bevy::prelude::Update, sandbox_boot_from_url);
 
     #[cfg(feature = "lunco-api")]
     app.add_plugins(lunco_api::LunCoApiPlugin::default());
@@ -269,6 +316,83 @@ fn main() {
     }
 
     app.run();
+}
+
+/// State machine for [`sandbox_boot_from_url`].
+///
+/// Lives in a `Local` so the boot work happens exactly once per app
+/// lifetime — once `open_class` is satisfied the system runs and
+/// no-ops in O(1).
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct SandboxBootState {
+    parsed: bool,
+    workspace: Option<String>,
+    open_class: Option<String>,
+    done: bool,
+}
+
+/// wasm-only `Update` system that reads `window.location.search` and:
+///   - activates the perspective named by `?workspace=…` (once, on
+///     first run);
+///   - triggers an `OpenClass` for `?open=…` once `MslLoadState`
+///     reaches `Ready`. Without that gate the trigger races MSL
+///     install and the workbench can't find the class.
+///
+/// Self-disables after both are applied. Useful for headless test
+/// harnesses (e.g. `chrome-devtools-mcp`) which can't drive the egui
+/// canvas via synthetic DOM events.
+#[cfg(target_arch = "wasm32")]
+fn sandbox_boot_from_url(
+    mut commands: bevy::prelude::Commands,
+    mut layout: Option<bevy::prelude::ResMut<lunco_workbench::WorkbenchLayout>>,
+    msl: Option<bevy::prelude::Res<lunco_assets::msl::MslLoadState>>,
+    mut state: bevy::prelude::Local<SandboxBootState>,
+) {
+    if state.done { return; }
+
+    // ── First-run: parse URL, kick the workspace switch ──────────
+    if !state.parsed {
+        let search = web_sys::window()
+            .and_then(|w| w.location().search().ok())
+            .unwrap_or_default();
+        for kv in search.trim_start_matches('?').split('&') {
+            let mut parts = kv.splitn(2, '=');
+            let key = parts.next().unwrap_or("");
+            let val_enc = parts.next().unwrap_or("");
+            let val = js_sys::decode_uri_component(val_enc)
+                .map(|j| j.as_string().unwrap_or_else(|| val_enc.to_string()))
+                .unwrap_or_else(|_| val_enc.to_string());
+            match key {
+                "workspace" => state.workspace = Some(val),
+                "open" => state.open_class = Some(val),
+                _ => {}
+            }
+        }
+        if let (Some(ws), Some(layout)) = (state.workspace.as_ref(), layout.as_mut()) {
+            let id: &'static str = Box::leak(ws.clone().into_boxed_str());
+            layout.activate_perspective(lunco_workbench::PerspectiveId(id));
+            bevy::log::info!("[sandbox_boot_from_url] activated perspective `{ws}`");
+        }
+        state.parsed = true;
+    }
+
+    // ── Per-frame poll: dispatch OpenClass once MSL is ready ─────
+    if let Some(qual) = state.open_class.clone() {
+        let ready = matches!(
+            msl.as_deref(),
+            Some(lunco_assets::msl::MslLoadState::Ready { .. })
+        );
+        if !ready {
+            return;
+        }
+        commands.trigger(lunco_modelica::ui::commands::OpenClass {
+            qualified: qual.clone(),
+            ..Default::default()
+        });
+        bevy::log::info!("[sandbox_boot_from_url] OpenClass({qual}) triggered (MSL ready)");
+    }
+    state.done = true;
 }
 
 #[derive(Resource, Reflect)]

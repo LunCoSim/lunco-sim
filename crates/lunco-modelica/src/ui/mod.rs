@@ -514,7 +514,18 @@ fn cleanup_removed_documents(
 ///
 /// Mirrors the "Analyze — Modelica deep dive" slot map from the workbench
 /// design doc (`docs/architecture/11-workbench.md` § 4).
-pub struct AnalyzePerspective;
+pub struct AnalyzePerspective {
+    /// When true, seed the centre with the Welcome tab so a freshly
+    /// switched-into Design workspace has *some* visible content.
+    /// Sandbox-class embeds disable this (`ModelicaUiConfig
+    /// { include_welcome_panel: false }`) so the Design tab opens
+    /// empty — the user is expected to drill into a model first.
+    pub seed_welcome: bool,
+}
+
+impl Default for AnalyzePerspective {
+    fn default() -> Self { Self { seed_welcome: true } }
+}
 
 impl Perspective for AnalyzePerspective {
     fn id(&self) -> PerspectiveId { PerspectiveId("modelica_analyze") }
@@ -547,8 +558,12 @@ impl Perspective for AnalyzePerspective {
         // still builds on apps with nothing open yet. When the first
         // real model tab opens, the placeholder stays docked next
         // to it — users can close it.
-        layout.set_center(vec![PanelId("modelica_welcome")]);
-        layout.set_active_center_tab(0);
+        if self.seed_welcome {
+            layout.set_center(vec![PanelId("modelica_welcome")]);
+            layout.set_active_center_tab(0);
+        } else {
+            layout.set_center(vec![]);
+        }
         // Right dock — Telemetry (parameters, inputs, variable
         // toggles), Inspector (selected node's modifications), and
         // Component Palette (MSL instantiation). The Telemetry panel
@@ -599,6 +614,15 @@ pub struct ModelicaUiPlugin;
 
 impl Plugin for ModelicaUiPlugin {
     fn build(&self, app: &mut App) {
+        // Read embed config once. Defaults to "everything on" (lunica).
+        // Sandbox-class embeds insert `ModelicaUiConfig { include_*: false }`
+        // before adding this plugin. See `lib.rs::ModelicaUiConfig`.
+        let config = app
+            .world()
+            .get_resource::<crate::ModelicaUiConfig>()
+            .cloned()
+            .unwrap_or_default();
+
         // ModalQueue + modal host live in lunco-ui. `render_close_dialogs`
         // (added below by ModelicaCommandsPlugin) consumes ModalQueue, so
         // LuncoUiPlugin must be present whenever Modelica UI is mounted —
@@ -654,8 +678,14 @@ impl Plugin for ModelicaUiPlugin {
 
         // Multi-screen help/tour overlay. Pops on first launch (per
         // `HelpOverlaySettings.seen` in settings.json), reachable
-        // thereafter from Help → Show Tour or F1.
-        app.add_plugins(help_overlay::HelpOverlayPlugin);
+        // thereafter from Help → Show Tour or F1. Apps that embed the
+        // Modelica workbench as a *secondary* workspace (sandbox_web's
+        // Design tab) pre-insert `ModelicaUiConfig { include_help_overlay:
+        // false, .. }` to suppress the tour — there's no point coaching
+        // a sandbox user through lunica's onboarding.
+        if config.include_help_overlay {
+            app.add_plugins(help_overlay::HelpOverlayPlugin);
+        }
 
         // Reflect-registered query providers exposed over the
         // ApiQueryRegistry (cf. spec 032). Feature-gated because the
@@ -823,7 +853,9 @@ impl Plugin for ModelicaUiPlugin {
             // Multi-instance: one tab per open document. Instances are
             // opened at runtime by the Package Browser.
             .register_instance_panel(panels::model_view::ModelViewPanel::default())
-            .register_perspective(AnalyzePerspective);
+            .register_perspective(AnalyzePerspective {
+                seed_welcome: config.include_welcome_panel,
+            });
 
         // Contribute the Modelica section to the Twin Browser's
         // section registry. The workbench's WorkbenchPlugin already
