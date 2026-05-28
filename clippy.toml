@@ -25,7 +25,7 @@
 #   * `tests/` modules         — test fixtures live on disk
 #   * native-only binaries     — `lunica`, `sandbox`, etc. (the wasm
 #                                pair lives in `lunica` /
-#                                `sandbox_web` and uses AssetServer).
+#                                `sandbox` and uses AssetServer).
 #
 # Adding new entries to the allow-list requires PR review; the override
 # is local (a single `#![allow(...)]`), so reviewers can see and

@@ -361,7 +361,7 @@ Useful env vars on `deploy_web.sh`:
 Example:
 
 ```bash
-BIN=sandbox_web SSH_PORT=2222 EXTRA_RSYNC=-n \
+BIN=sandbox SSH_PORT=2222 EXTRA_RSYNC=-n \
     ./scripts/deploy_web.sh deploy@host:/var/www/rover
 ```
 
