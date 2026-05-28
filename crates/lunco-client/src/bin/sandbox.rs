@@ -17,6 +17,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use bevy::prelude::*;
 use bevy::asset::{AssetPlugin, io::AssetSourceBuilder};
 use bevy::render::camera::RenderTarget;
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use lunco_workbench::WorkbenchViewportCamera;
 use lunco_assets::cache_dir;
 use bevy::pbr::wireframe::WireframePlugin;
@@ -266,6 +267,16 @@ fn main() {
         // cameras (USD preview, vello diagrams) target an Image and
         // are skipped — they should *not* be confined to the panel.
         .add_systems(Update, auto_tag_workbench_3d_cameras)
+        // Mirror of `lunco-client/src/main.rs::collect_scroll_input`,
+        // gated to "egui doesn't want the scroll" so scrolling inside a
+        // dock panel (Twin browser, Console, etc.) goes to that
+        // widget, while scrolling over the viewport rect (or any
+        // passive area where egui has no interactive use for it) goes
+        // to the avatar's `CameraScroll` resource. Without this
+        // system, the avatar zoom systems (`SpringArm`, `Orbit`,
+        // `Chase`) never see scroll deltas — sandbox was the one
+        // binary missing this bridge (memory id 5109).
+        .add_systems(EguiPrimaryContextPass, collect_scroll_input_gated)
         // Manual transform/visibility propagation runs ONCE per frame
         // after physics writeback. The earlier triple-call (PreUpdate
         // + two in PostUpdate) ate ~80% of frame time on sandbox
@@ -445,6 +456,29 @@ impl Default for SandboxSettings {
 /// to load on Startup. Initialised from the `--scene` CLI arg.
 #[derive(Resource)]
 struct ScenePath(String);
+
+/// Bridge egui scroll input into `lunco_avatar::CameraScroll` so the
+/// avatar zoom systems (`SpringArm`, `Orbit`, `Chase`) react to mouse
+/// wheel events.
+///
+/// Gated on `!ctx.wants_pointer_input()` — egui sets that to `true`
+/// when the cursor is over an interactive widget that consumes scroll
+/// (scrollarea, slider, combo box, …). When it's `false`, the cursor
+/// is over a passive region (the `ViewportPanel` placeholder, an empty
+/// dock area, the menu bar background) and the scroll naturally
+/// belongs to the 3D scene. This is the same idiom `lunco-client`'s
+/// non-sandbox binary uses, plus the hover gate so dock-panel
+/// scrolling no longer also zooms the camera.
+fn collect_scroll_input_gated(
+    mut egui_contexts: EguiContexts,
+    mut scroll_res: ResMut<lunco_avatar::CameraScroll>,
+) {
+    let Ok(ctx) = egui_contexts.ctx_mut() else { return };
+    if ctx.wants_pointer_input() {
+        return;
+    }
+    scroll_res.delta += ctx.input(|i: &bevy_egui::egui::InputState| i.raw_scroll_delta.y);
+}
 
 /// Tag freshly-added window-targeting `Camera3d` entities with
 /// `WorkbenchViewportCamera` so the workbench's PostUpdate viewport

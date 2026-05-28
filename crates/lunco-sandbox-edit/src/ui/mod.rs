@@ -21,8 +21,10 @@ pub mod entity_list;
 /// - **Build** — 3D + Entities, Inspector, Spawn palette around the edges.
 ///
 /// The user switches via the workspace tabs in the transport bar.
-/// `ViewportPanel` is a transparent centre tab in both — Bevy's
-/// full-window 3D scene shows through it.
+/// `ViewportPanel` reserves the centre slot in both perspectives; the
+/// 3D camera (tagged `WorkbenchViewportCamera`) is confined to that
+/// rect each frame by `lunco_workbench::apply_workbench_viewport`, and
+/// the panel paints its theme backdrop around it.
 pub struct SandboxEditUiPlugin;
 
 impl Plugin for SandboxEditUiPlugin {
