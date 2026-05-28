@@ -26,7 +26,7 @@
 //! is the authoritative path for USD-defined cosim entities.
 
 use bevy::prelude::*;
-use big_space::prelude::Grid;
+use big_space::prelude::{CellCoord, Grid};
 use lunco_assets::assets_dir;
 use lunco_core::{Command, on_command};
 use lunco_cosim::{SimComponent, SimConnection, SimStatus};
@@ -613,17 +613,26 @@ pub fn spawn_scene_root_world(
         return None;
     };
 
-    // Scene-root entity is a logical USD container, not a spatial node.
-    // `LoadIntoGrid(grid)` directs `sync_usd_visuals` to spawn each
-    // top-level USD prim as a Grid-direct `GridAnchor` (under `grid`)
-    // rather than as a Bevy child of this entity. The scene root itself
-    // holds no `Transform`/`CellCoord`/`ChildOf` — it exists only to
-    // track which scene is loaded (despawn via UsdPrimPath prefix match).
+    // Scene-root entity is itself the Grid-direct `GridAnchor`. Its
+    // children — top-level USD prims (rovers, balls, terrain) — stay
+    // as plain Bevy children, inheriting GlobalTransform from this
+    // anchor via Bevy's normal transform propagation (handled by
+    // big_space's `propagate_low_precision`). This restores the working
+    // hierarchy where avian rigid bodies on rover roots compute
+    // `Position` relative to the scene-root anchor instead of needing
+    // their own CellCoord, which conflicted with avian's writeback.
     let root = world.spawn((
         Name::new(format!("Scene:{}", asset_path)),
         UsdPrimPath { stage_handle: handle, path: root_prim.clone() },
-        lunco_usd_bevy::LoadIntoGrid(grid),
+        Transform::default(),
+        GlobalTransform::default(),
+        Visibility::Visible,
+        InheritedVisibility::default(),
+        ViewVisibility::default(),
+        CellCoord::default(),
+        lunco_core::GridAnchor,
     )).id();
+    world.entity_mut(grid).add_child(root);
     info!("[scene] spawned `{}` @ `{}` (entity {})", asset_path, root_prim, root);
     Some(root)
 }

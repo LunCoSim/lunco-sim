@@ -11,6 +11,8 @@ pub mod coords;
 pub mod log;
 /// Architectural marker components for the big_space integration.
 pub mod markers;
+/// Atomic re-parenting helpers for SOI/Grid migration.
+pub mod attach;
 /// Debug-build invariant checks for the big_space hierarchy.
 pub mod invariants;
 /// Unified diagram data model — pure Rust, no Bevy dependency.

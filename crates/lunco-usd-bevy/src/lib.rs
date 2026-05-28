@@ -515,14 +515,25 @@ fn instantiate_usd_prim(
             // `propagate_high_precision` updates their GlobalTransform.
             // Anything deeper stays as plain `Transform` children of
             // their USD parent's Bevy entity.
+            // ChildOf must be set atomically with UsdPrimPath so that
+            // observers triggered by the spawn (on_usd_prim_added →
+            // instantiate_usd_prim → UsdVisualSynced → process_usd_avian_prims)
+            // see the established parentage. Setting ChildOf later via
+            // add_child queues a separate command applied AFTER the
+            // observer cascade, causing `q_child_of.get(entity).is_err()`
+            // to take the root-collider branch and silently mark
+            // collider-child prims (e.g. Chassis) as RigidBody::Static.
+            // Bevy's relationship system fans the reverse `Children`
+            // edge from ChildOf automatically.
             if let Some(LoadIntoGrid(grid)) = load_into_grid {
-                let child_entity = commands
-                    .spawn((base_components, CellCoord::default(), lunco_core::GridAnchor))
-                    .id();
-                commands.entity(*grid).add_child(child_entity);
+                commands.spawn((
+                    base_components,
+                    CellCoord::default(),
+                    lunco_core::GridAnchor,
+                    ChildOf(*grid),
+                ));
             } else {
-                let child_entity = commands.spawn(base_components).id();
-                commands.entity(entity).add_child(child_entity);
+                commands.spawn((base_components, ChildOf(entity)));
             }
         }
     }

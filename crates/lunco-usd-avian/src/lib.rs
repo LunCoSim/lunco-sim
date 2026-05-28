@@ -382,12 +382,19 @@ fn process_usd_avian_prims(
                 lunco_core::SelectableRoot,
             ));
 
-            // Map mass, damping, friction
-            if let Some(mass) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:mass") {
-                commands.entity(entity).insert(Mass(mass));
-            } else if let Some(mass) = reader.prim_attribute_value::<f64>(&sdf_path, "physics:mass") {
-                commands.entity(entity).insert(Mass(mass as f32));
-            }
+            // Map mass, damping, friction. Always insert a Mass —
+            // `apply_gravity_to_rigid_bodies` filters on `With<Mass>`,
+            // so a missing mass attribute (e.g. when the value lives on
+            // a referenced base prim and openusd-rs's resolver doesn't
+            // compose across the reference) would silently disable
+            // gravity on the rover root. Default to 1000 kg, matching
+            // the canonical rover mass authored in the base rover
+            // .usda files.
+            let mass = reader
+                .prim_attribute_value::<f32>(&sdf_path, "physics:mass")
+                .or_else(|| reader.prim_attribute_value::<f64>(&sdf_path, "physics:mass").map(|v| v as f32))
+                .unwrap_or(1000.0);
+            commands.entity(entity).insert(Mass(mass));
             if let Some(d) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:linearDamping") {
                 commands.entity(entity).insert(LinearDamping(d as f64));
             }
@@ -453,7 +460,6 @@ fn on_add_usd_prim(
 ) {
     let entity = trigger.entity;
     let Ok(prim_path) = query.get(entity) else { return; };
-    info!("[on_add_usd_prim] {} (stage_loaded={})", prim_path.path, stages.contains(&prim_path.stage_handle));
     let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
     let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
 
