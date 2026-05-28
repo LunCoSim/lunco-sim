@@ -29,6 +29,13 @@
 //! let dir = cache_dir();  // → ~/.cache/luncosim/ on Linux
 //! ```
 
+// This crate owns the on-disk asset cache layout, so it legitimately
+// uses raw `std::fs` / `std::thread` / `Instant`. The workspace lint
+// (`disallowed_methods = "deny"` in the root `Cargo.toml`, symbols
+// enumerated in `clippy.toml`) bans those for *domain* crates because
+// they break wasm32; lunco-assets is on the documented allow-list.
+#![allow(clippy::disallowed_methods)]
+
 use std::path::PathBuf;
 
 pub mod download;

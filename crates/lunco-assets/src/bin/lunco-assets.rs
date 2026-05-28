@@ -10,6 +10,10 @@
 //!   cargo run -p lunco-assets -- list              # list all workspace assets
 //!   cargo run -p lunco-assets -- list -p lunco-celestial     # list for one crate
 
+// Native-only CLI on the documented `clippy.toml` allow-list — owns
+// raw `std::fs` access to the on-disk asset cache.
+#![allow(clippy::disallowed_methods)]
+
 use std::path::PathBuf;
 use lunco_assets::{download, process};
 

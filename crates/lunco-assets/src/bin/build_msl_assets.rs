@@ -35,6 +35,9 @@
 //!   once we know the wasm runtime needs them — most compile paths don't.
 
 #![cfg(not(target_arch = "wasm32"))]
+// Native-only build-time bundler on the documented `clippy.toml`
+// allow-list — owns raw `std::fs` access to the on-disk MSL tree.
+#![allow(clippy::disallowed_methods)]
 
 use std::fmt::Write as _;
 use std::fs::{self, File};
