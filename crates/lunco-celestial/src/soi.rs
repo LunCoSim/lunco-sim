@@ -63,13 +63,8 @@ pub fn soi_transition_system(
         if new_grid_ent == current_grid { continue };
         let Ok(new_grid) = q_all_grids.get(new_grid_ent) else { continue };
 
-        migrate_to_grid(
-            &mut commands,
-            entity,
-            new_grid_ent,
-            new_grid,
-            current_pos,
-            new_grid_pos,
-        );
+        let (new_cell, local_translation) = new_grid.translation_to_grid(current_pos - new_grid_pos);
+        let local_tf = Transform::from_translation(local_translation).with_rotation(tf.rotation);
+        migrate_to_grid(&mut commands, entity, new_grid_ent, new_cell, local_tf);
     }
 }

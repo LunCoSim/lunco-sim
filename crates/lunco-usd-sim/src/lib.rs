@@ -553,7 +553,9 @@ fn setup_raycast_wheel(
     let wheel_rotation = existing_tf.rotation;
 
     if wheel_mesh.is_some() {
-        let visual_entity = commands.spawn((
+        // Atomic spawn: `ChildOf(entity)` in the bundle so parent + transform
+        // land together — same contract as `migrate_to_grid`.
+        let mut visual = commands.spawn((
             Name::new(format!("{}_visual", prim_path.path.split('/').next_back().unwrap_or("wheel"))),
             Transform {
                 translation: Vec3::ZERO,
@@ -564,14 +566,12 @@ fn setup_raycast_wheel(
             InheritedVisibility::default(),
             ViewVisibility::default(),
             wheel_mesh.unwrap(),
-        )).id();
-
+            ChildOf(entity),
+        ));
         if let Some(mat) = maybe_mat.cloned() {
-            commands.entity(visual_entity).insert(mat);
+            visual.insert(mat);
         }
-
-        commands.entity(entity).add_child(visual_entity);
-        wheel.visual_entity = Some(visual_entity);
+        wheel.visual_entity = Some(visual.id());
         commands.entity(entity).remove::<Mesh3d>();
         commands.entity(entity).remove::<MeshMaterial3d<StandardMaterial>>();
     }
@@ -675,7 +675,7 @@ fn setup_physical_wheel(
     let motor_axis = -(wheel_axis_rot * Vec3::Y).as_dvec3();
 
     if let Some(mesh) = maybe_mesh.cloned() {
-        let visual = commands.spawn((
+        let mut visual = commands.spawn((
             Name::new(format!(
                 "{}_visual",
                 prim_path.path.split('/').next_back().unwrap_or("wheel")
@@ -685,11 +685,11 @@ fn setup_physical_wheel(
             InheritedVisibility::default(),
             ViewVisibility::default(),
             mesh,
-        )).id();
+            ChildOf(entity),
+        ));
         if let Some(mat) = maybe_mat.cloned() {
-            commands.entity(visual).insert(mat);
+            visual.insert(mat);
         }
-        commands.entity(entity).add_child(visual);
         commands.entity(entity).remove::<Mesh3d>();
         commands.entity(entity).remove::<MeshMaterial3d<StandardMaterial>>();
     }

@@ -1,3 +1,10 @@
+// One-time scene bootstrap: spawning the Grid/Body/Surface hierarchy at
+// startup. `set_parent_in_place` is fine here because no observers are
+// registered against these archetypes yet, and the entities have default
+// (CellCoord, Transform), so the lint's atomic-migration concern doesn't
+// apply. See `lunco_core::attach::migrate_to_grid` for the runtime path.
+#![allow(clippy::disallowed_methods)]
+
 //! Sets up the big_space coordinate hierarchy for the solar system.
 //!
 //! ## Architecture: Inertial Grid + Rotating Body

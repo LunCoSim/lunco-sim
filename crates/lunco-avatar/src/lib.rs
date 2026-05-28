@@ -23,6 +23,7 @@ use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 use transform_gizmo_bevy::GizmoTarget;
 use lunco_controller::ControllerLink;
 use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands};
+use lunco_core::attach::migrate_to_grid;
 use lunco_celestial::{CelestialClock, GravityBody, LocalGravityField, TeleportToSurface, LeaveSurface};
 
 pub mod commands;
@@ -333,6 +334,8 @@ pub fn spawn_avatar_camera(
     initial_offset: DVec3,
 ) -> Entity {
     let (yaw, pitch) = (std::f32::consts::PI * 0.5, -0.3);
+    // Initial spawn: anchor `ChildOf` in the bundle so parent + cell +
+    // transform land atomically (same contract as `migrate_to_grid`).
     commands.spawn((
         Camera3d::default(),
         FreeFlightCamera { yaw, pitch, damping: None },
@@ -346,7 +349,8 @@ pub fn spawn_avatar_camera(
         ActionState::<lunco_core::UserIntent>::default(),
         lunco_controller::get_avatar_input_map(),
         Name::new("Avatar Camera"),
-    )).set_parent_in_place(grid_entity).id()
+        ChildOf(grid_entity),
+    )).id()
 }
 
 // ─── Behavior Systems ────────────────────────────────────────────────────────
@@ -640,14 +644,12 @@ fn orbit_system(
                 let target_grid_abs = lunco_core::coords::world_position_seeded(
                     target_grid, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial,
                 );
-                let local_pos = cam_abs - target_grid_abs;
-                let (new_cell, new_tf) = target_grid_ref.translation_to_grid(local_pos);
-                *cell = new_cell;
-                tf.translation = new_tf;
-                commands.entity(target_grid).add_child(avatar_ent);
+                let (new_cell, new_translation) =
+                    target_grid_ref.translation_to_grid(cam_abs - target_grid_abs);
+                let local_tf = Transform::from_translation(new_translation).with_rotation(tf.rotation);
+                migrate_to_grid(&mut commands, avatar_ent, target_grid, new_cell, local_tf);
             }
-            // Skip this frame — set_parent command runs at end of stage.
-            // Next frame, child_of will resolve to the new grid.
+            // Migration is deferred; next frame `child_of` resolves to the new grid.
             continue;
         }
 
@@ -1295,13 +1297,11 @@ fn on_possess_command(
                 let target_grid_abs = lunco_core::coords::world_position_seeded(
                     tg, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
                 );
-                let local_pos = final_abs_pos - target_grid_abs;
-                let (new_cell, new_tf) = target_grid_ref.translation_to_grid(local_pos);
-
-                commands.entity(avatar_ent)
-                    .insert(new_cell)
-                    .insert(Transform::from_translation(new_tf).with_rotation(final_rot));
-                commands.entity(tg).add_child(avatar_ent);
+                let (new_cell, new_translation) =
+                    target_grid_ref.translation_to_grid(final_abs_pos - target_grid_abs);
+                let local_tf =
+                    Transform::from_translation(new_translation).with_rotation(final_rot);
+                migrate_to_grid(&mut commands, avatar_ent, tg, new_cell, local_tf);
             }
         }
     }
@@ -1417,12 +1417,11 @@ fn on_follow_command(
                 let target_grid_abs = lunco_core::coords::world_position_seeded(
                     tg, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
                 );
-                let local_pos = final_abs_pos - target_grid_abs;
-                let (new_cell, new_tf) = target_grid_ref.translation_to_grid(local_pos);
-                commands.entity(avatar_ent)
-                    .insert(new_cell)
-                    .insert(Transform::from_translation(new_tf).with_rotation(final_rot));
-                commands.entity(tg).add_child(avatar_ent);
+                let (new_cell, new_translation) =
+                    target_grid_ref.translation_to_grid(final_abs_pos - target_grid_abs);
+                let local_tf =
+                    Transform::from_translation(new_translation).with_rotation(final_rot);
+                migrate_to_grid(&mut commands, avatar_ent, tg, new_cell, local_tf);
             }
         }
     }
@@ -1523,13 +1522,11 @@ fn on_focus_command(
                 let target_grid_abs = lunco_core::coords::world_position_seeded(
                     tg, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
                 );
-                let local_pos = final_abs_pos - target_grid_abs;
-                let (new_cell, new_tf) = target_grid_ref.translation_to_grid(local_pos);
-
-                commands.entity(avatar_ent)
-                    .insert(new_cell)
-                    .insert(Transform::from_translation(new_tf).with_rotation(final_rot));
-                commands.entity(tg).add_child(avatar_ent);
+                let (new_cell, new_translation) =
+                    target_grid_ref.translation_to_grid(final_abs_pos - target_grid_abs);
+                let local_tf =
+                    Transform::from_translation(new_translation).with_rotation(final_rot);
+                migrate_to_grid(&mut commands, avatar_ent, tg, new_cell, local_tf);
             }
         }
     }
@@ -1680,9 +1677,13 @@ fn on_surface_teleport_command(
         let fwd_v = up_v.cross(right_v);
         let surface_rot = Quat::from_mat3(&Mat3::from_cols(right_v, up_v, -fwd_v));
 
+        // Parent camera to the Body's Grid (inertial), NOT the Body.
+        // FloatingOrigin must be on a Grid.
+        let local_tf =
+            Transform::from_translation(new_tf_translation).with_rotation(surface_rot);
+        migrate_to_grid(&mut commands, avatar_ent, grid_entity, new_cell, local_tf);
+
         commands.entity(avatar_ent)
-            .insert(new_cell)
-            .insert(Transform::from_translation(new_tf_translation).with_rotation(surface_rot))
             .insert(GravityBody { body_entity })
             .insert(SurfaceRelativeMode)
             .insert(SurfaceCamera {
@@ -1693,10 +1694,6 @@ fn on_surface_teleport_command(
             .remove::<OrbitCamera>()
             .remove::<SpringArmCamera>()
             .remove::<FrameBlend>();
-
-        // Parent camera to the Body's Grid (inertial), NOT the Body.
-        // FloatingOrigin must be on a Grid.
-        commands.entity(grid_entity).add_child(avatar_ent);
 
         // Update LocalGravityField (world-space "up")
         field.body_entity = Some(body_entity);
@@ -1745,9 +1742,10 @@ fn on_leave_surface_command(
     let orbit_pos_local = DVec3::new(0.0, altitude, altitude * 0.5);
     let (new_cell, new_tf) = emb_grid_ref.translation_to_grid(orbit_pos_local);
 
+    let local_tf = Transform::from_translation(new_tf).with_rotation(cam_tf.rotation);
+    migrate_to_grid(&mut commands, avatar_ent, emb_grid, new_cell, local_tf);
+
     commands.entity(avatar_ent)
-        .insert(new_cell)
-        .insert(Transform::from_translation(new_tf).with_rotation(cam_tf.rotation))
         .insert(OrbitCamera {
             target: body_entity,
             distance: altitude,
@@ -1762,8 +1760,6 @@ fn on_leave_surface_command(
         .remove::<FrameBlend>()
         .remove::<GravityBody>()
         .remove::<SurfaceRelativeMode>();
-
-    commands.entity(emb_grid).add_child(avatar_ent);
 
     // Clear gravity field
     field.body_entity = None;

@@ -621,6 +621,9 @@ pub fn spawn_scene_root_world(
     // hierarchy where avian rigid bodies on rover roots compute
     // `Position` relative to the scene-root anchor instead of needing
     // their own CellCoord, which conflicted with avian's writeback.
+    // Atomic spawn: `ChildOf(grid)` in the bundle so parent + CellCoord +
+    // Transform land together — same contract as `migrate_to_grid`. Avoids
+    // the observer race that mis-tagged rover chassis as `RigidBody::Static`.
     let root = world.spawn((
         Name::new(format!("Scene:{}", asset_path)),
         UsdPrimPath { stage_handle: handle, path: root_prim.clone() },
@@ -631,8 +634,8 @@ pub fn spawn_scene_root_world(
         ViewVisibility::default(),
         CellCoord::default(),
         lunco_core::GridAnchor,
+        ChildOf(grid),
     )).id();
-    world.entity_mut(grid).add_child(root);
     info!("[scene] spawned `{}` @ `{}` (entity {})", asset_path, root_prim, root);
     Some(root)
 }

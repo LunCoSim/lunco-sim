@@ -205,6 +205,9 @@ manual_unwrap_or = "warn"
 useless_conversion = "warn"
 redundant_closure = "warn"
 needless_pass_by_value = "allow"
+# Enforces the GridAnchor atomic-re-parenting invariant via clippy.toml
+# `disallowed-methods`. See clippy.toml header for rationale.
+disallowed_methods = "warn"
 
 # ── Dev profile ──────────────────────────────────────────────────────
 # Bevy/avian/parry are unusably slow at opt-level 0. opt-level=1 on our

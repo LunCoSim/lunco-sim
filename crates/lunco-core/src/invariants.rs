@@ -8,7 +8,7 @@
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 
-use crate::markers::GridAnchor;
+use crate::markers::{GridAnchor, SoiMigrant};
 
 /// Warns when a newly-inserted `CellCoord` lands on an entity whose parent
 /// is not a `Grid`. big_space's `propagate_high_precision` will silently
@@ -52,6 +52,48 @@ fn warn_on_orphaned_grid_anchor(
     }
 }
 
+/// Warns when `SoiMigrant` lacks `GridAnchor`. SOI migration writes
+/// `(ChildOf, CellCoord, Transform)` assuming the entity is a Grid-direct
+/// child; a non-anchor migrant ends up half-migrated.
+fn warn_on_soi_migrant_without_anchor(
+    q: Query<(Entity, Option<&Name>), (Added<SoiMigrant>, Without<GridAnchor>)>,
+) {
+    for (e, name) in q.iter() {
+        warn!(
+            "[bigspace-invariant] SoiMigrant on entity {:?} ({}) is missing GridAnchor. \
+             SOI re-parenting requires a Grid-direct anchor.",
+            e,
+            name.map(|n| n.as_str()).unwrap_or("<unnamed>"),
+        );
+    }
+}
+
+/// Warns when a `GridAnchor` is nested under another `GridAnchor`. Anchors
+/// must be Grid-direct; nesting them breaks selection / SOI semantics.
+fn warn_on_nested_grid_anchor(
+    q: Query<(Entity, &ChildOf, Option<&Name>), Added<GridAnchor>>,
+    q_parents: Query<&ChildOf>,
+    q_anchors: Query<(), With<GridAnchor>>,
+) {
+    for (e, child_of, name) in q.iter() {
+        let mut current = child_of.parent();
+        for _ in 0..32 {
+            if q_anchors.contains(current) {
+                warn!(
+                    "[bigspace-invariant] GridAnchor on entity {:?} ({}) is nested under \
+                     another GridAnchor {:?}. Anchors must be direct children of a Grid.",
+                    e,
+                    name.map(|n| n.as_str()).unwrap_or("<unnamed>"),
+                    current,
+                );
+                break;
+            }
+            let Ok(p) = q_parents.get(current) else { break };
+            current = p.parent();
+        }
+    }
+}
+
 /// Registers the invariant checks. Only adds systems in debug builds.
 pub struct BigSpaceInvariantsPlugin;
 
@@ -60,7 +102,12 @@ impl Plugin for BigSpaceInvariantsPlugin {
         #[cfg(debug_assertions)]
         app.add_systems(
             PostUpdate,
-            (warn_on_mid_hierarchy_cellcoord, warn_on_orphaned_grid_anchor),
+            (
+                warn_on_mid_hierarchy_cellcoord,
+                warn_on_orphaned_grid_anchor,
+                warn_on_soi_migrant_without_anchor,
+                warn_on_nested_grid_anchor,
+            ),
         );
         let _ = app;
     }
