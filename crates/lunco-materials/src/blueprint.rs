@@ -98,37 +98,50 @@ impl Plugin for BlueprintMaterialPlugin {
             Shader::from_wgsl
         );
         app.add_plugins(MaterialPlugin::<BlueprintMaterial>::default());
-        app.add_systems(Update, apply_blueprint_material.after(lunco_usd_bevy::sync_usd_visuals));
+        // Observer-driven, NOT a per-frame poll. Fires once per prim, the
+        // moment `sync_usd_visuals` inserts `UsdVisualSynced`. See the doc
+        // comment on `apply_blueprint_material` for why this shape makes the
+        // §7.5 perf bugs structurally impossible.
+        app.add_observer(apply_blueprint_material);
     }
 }
 
-/// Marker component preventing re-processing.
-#[derive(Component)]
-pub struct BlueprintMaterialApplied;
-
-/// Post-sync system that applies BlueprintMaterial to matching USD entities.
-/// Gracefully skips if no USD stage assets are loaded (e.g. in headless tests).
-pub fn apply_blueprint_material(
-    mut commands: Commands,
-    stages: Option<Res<Assets<lunco_usd_bevy::UsdStageAsset>>>,
+/// Applies [`BlueprintMaterial`] to a USD prim the instant its visuals are
+/// instantiated, if the prim declares `primvars:materialType = "BlueprintGrid"`.
+///
+/// **Observer-driven, not a per-frame poll** — fires exactly once per prim,
+/// triggered by `sync_usd_visuals` inserting `UsdVisualSynced`. See
+/// [`crate::solar_panel::apply_solar_panel_material`] for the full rationale:
+/// this shape removes the `Without<Marker>` poll gate (so no per-frame
+/// full-scene re-scan) and borrows the reader (so no whole-stage deep clone) —
+/// the two recurring §7.5 regressions become structurally impossible.
+///
+/// Needs no headless guard: the observer only fires when `UsdVisualSynced` is
+/// added, which only happens once `Assets<UsdStageAsset>` exists.
+fn apply_blueprint_material(
+    trigger: On<Add, lunco_usd_bevy::UsdVisualSynced>,
+    q: Query<&lunco_usd_bevy::UsdPrimPath>,
+    stages: Res<Assets<lunco_usd_bevy::UsdStageAsset>>,
     mut materials: ResMut<Assets<BlueprintMaterial>>,
-    q_all: Query<(Entity, &lunco_usd_bevy::UsdPrimPath), (With<Mesh3d>, Without<BlueprintMaterialApplied>)>,
+    mut commands: Commands,
 ) {
-    let Some(stages) = stages else { return };
-    for (entity, prim_path) in q_all.iter() {
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
-        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue };
-        let reader = (*stage.reader).clone();
+    let entity = trigger.entity;
+    let Ok(prim_path) = q.get(entity) else { return };
+    let Some(stage) = stages.get(&prim_path.stage_handle) else { return };
+    let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return };
+    let reader = &*stage.reader;
 
-        let mat_type: Option<String> = reader.prim_attribute_value(&sdf_path, "primvars:materialType");
-        if mat_type.as_deref() != Some("BlueprintGrid") { continue; }
-
-        let bp_mat = create_blueprint_material(&reader, &sdf_path, &mut materials);
-        commands.entity(entity).insert((
-            MeshMaterial3d(bp_mat),
-            BlueprintMaterialApplied,
-        ));
+    let mat_type: Option<String> = reader.prim_attribute_value(&sdf_path, "primvars:materialType");
+    if mat_type.as_deref() != Some("BlueprintGrid") {
+        return;
     }
+
+    let bp_mat = create_blueprint_material(reader, &sdf_path, &mut materials);
+    // Replace the default StandardMaterial so the prim renders with one material.
+    commands
+        .entity(entity)
+        .remove::<MeshMaterial3d<StandardMaterial>>()
+        .insert(MeshMaterial3d(bp_mat));
 }
 
 /// Creates a BlueprintMaterial from USD primvars attributes.

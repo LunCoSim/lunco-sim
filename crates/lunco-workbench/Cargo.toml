@@ -65,13 +65,5 @@ web-sys = { version = "0.3", features = [
     "Url",
 ] }
 
-[dev-dependencies]
-# For the hello_workbench example. The full DefaultPlugins pull in a winit
-# window + renderer so the example produces an actual window.
-
-[[example]]
-name = "hello_workbench"
-path = "examples/hello_workbench.rs"
-
 [lints]
 workspace = true

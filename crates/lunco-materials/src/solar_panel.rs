@@ -103,38 +103,57 @@ impl Plugin for SolarPanelMaterialPlugin {
             Shader::from_wgsl
         );
         app.add_plugins(MaterialPlugin::<SolarPanelMaterial>::default());
-        app.add_systems(Update, apply_solar_panel_material.after(lunco_usd_bevy::sync_usd_visuals));
+        // Observer-driven, NOT a per-frame poll. Fires once per prim, the
+        // moment `sync_usd_visuals` inserts `UsdVisualSynced` (mesh present,
+        // stage loaded). See the doc comment on `apply_solar_panel_material`
+        // for why this shape makes the §7.5 perf bugs structurally impossible.
+        app.add_observer(apply_solar_panel_material);
     }
 }
 
 /// Solar panel material type.
 pub type SolarPanelMaterial = ExtendedMaterial<StandardMaterial, SolarPanelExtension>;
 
-/// Marker component preventing re-processing of BlueprintMaterial assignment.
-#[derive(Component)]
-pub struct SolarPanelMaterialApplied;
-
-/// Post-sync system that applies SolarPanelMaterial to matching USD entities.
-pub fn apply_solar_panel_material(
-    mut commands: Commands,
+/// Applies [`SolarPanelMaterial`] to a USD prim the instant its visuals are
+/// instantiated, if the prim declares `primvars:materialType = "solar_panel"`.
+///
+/// **Observer-driven, not a per-frame poll.** It fires exactly once per prim,
+/// triggered by `sync_usd_visuals` inserting `UsdVisualSynced` (by which point
+/// the stage is loaded and `Mesh3d` is present). This shape makes the two
+/// recurring perf regressions (AGENTS.md §7.5) *structurally impossible*:
+///
+/// 1. **No poll gate to leave open.** There is no `Without<Marker>` query that
+///    can stay non-empty, so non-matching prims cost nothing — the observer
+///    simply never runs again for them. The old `Update` poll re-scanned every
+///    unmarked prim every frame and, with the marker only added on matches,
+///    re-scanned the *entire* scene forever when no solar panels existed.
+/// 2. **No whole-stage clone.** We borrow `&*stage.reader`; cloning the
+///    `Arc<TextReader>`'s target would deep-copy the stage's sdf `HashMap`s.
+fn apply_solar_panel_material(
+    trigger: On<Add, lunco_usd_bevy::UsdVisualSynced>,
+    q: Query<&UsdPrimPath>,
     stages: Res<Assets<lunco_usd_bevy::UsdStageAsset>>,
     mut materials: ResMut<Assets<SolarPanelMaterial>>,
-    q_all: Query<(Entity, &UsdPrimPath), (With<Mesh3d>, Without<SolarPanelMaterialApplied>)>,
+    mut commands: Commands,
 ) {
-    for (entity, prim_path) in q_all.iter() {
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
-        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue };
-        let reader = (*stage.reader).clone();
+    let entity = trigger.entity;
+    let Ok(prim_path) = q.get(entity) else { return };
+    let Some(stage) = stages.get(&prim_path.stage_handle) else { return };
+    let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return };
+    let reader = &*stage.reader;
 
-        let mat_type: Option<String> = reader.prim_attribute_value(&sdf_path, "primvars:materialType");
-        if mat_type.as_deref() != Some("solar_panel") { continue; }
-
-        let solar_mat = create_solar_panel_material(&reader, &sdf_path, &mut materials);
-        commands.entity(entity).insert((
-            MeshMaterial3d(solar_mat),
-            SolarPanelMaterialApplied,
-        ));
+    let mat_type: Option<String> = reader.prim_attribute_value(&sdf_path, "primvars:materialType");
+    if mat_type.as_deref() != Some("solar_panel") {
+        return;
     }
+
+    let solar_mat = create_solar_panel_material(reader, &sdf_path, &mut materials);
+    // Replace the default StandardMaterial that `sync_usd_visuals` attached so
+    // the prim renders with exactly one material.
+    commands
+        .entity(entity)
+        .remove::<MeshMaterial3d<StandardMaterial>>()
+        .insert(MeshMaterial3d(solar_mat));
 }
 
 /// Creates a SolarPanelMaterial from USD primvars attributes.
