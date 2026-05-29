@@ -19,7 +19,7 @@ pub mod inspect;
 pub use compile::{
     CompileActiveModel, CompileClassPickerEntry, CompileClassPickerState, CompileModel,
     FastRunActiveModel, FastRunInput, FastRunSetupEntry, FastRunSetupState, PauseActiveModel,
-    PickerPurpose, ResetActiveModel, ResumeActiveModel,
+    PickerPurpose, ResetActiveModel, RestartActiveModel, ResumeActiveModel, RunActiveModel,
 };
 pub use doc::{Undo, Redo, FormatDocument, SaveActiveDocument, SaveActiveDocumentAs};
 pub use lifecycle::{

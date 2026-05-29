@@ -43,6 +43,10 @@ pub struct CompileModel {
     /// Used by API callers that need deterministic behaviour without
     /// a GUI (cf. spec 033 User Story 1.5).
     pub class: Option<String>,
+    /// Force a recompile even if the model is already compiled and
+    /// clean (same document generation). Defaults to `false` so a
+    /// Compile on an up-to-date model is an idempotent no-op.
+    pub force: bool,
 }
 
 /// Run the Auto-Arrange layout: assign each component of the active
@@ -431,7 +435,7 @@ pub(crate) fn render_compile_class_picker(
         picker.0 = None;
         match purpose {
             PickerPurpose::Compile => {
-                commands.trigger(CompileModel { doc, class: None });
+                commands.trigger(CompileModel { doc, class: None, force: false });
             }
             PickerPurpose::FastRun => {
                 // Re-dispatch — second-time-around the drilled-class
@@ -472,6 +476,7 @@ pub fn on_compile_model(
 ) {
     let doc = trigger.event().doc;
     let explicit_class = trigger.event().class.clone();
+    let force = trigger.event().force;
 
     // Ownership check. Read-only docs are fair game to compile —
     // the Save button is what's gated on writability, not compile.
@@ -496,11 +501,15 @@ pub fn on_compile_model(
     // compile (see `ModelicaCommand::Compile`), so any AST staleness
     // here only affects telemetry-panel labels for one debounce
     // cycle, not the compiled model itself.
-    let (source, ast_for_extract, candidate_classes, preferred_count, detected_first_class, params, inputs_with_defaults, runtime_inputs) =
+    let (source, doc_generation, ast_for_extract, candidate_classes, preferred_count, detected_first_class, params, inputs_with_defaults, runtime_inputs) =
         match registry.host(doc) {
             Some(h) => {
                 let doc_ref = h.document();
                 let ast = doc_ref.strict_ast();
+                // Document generation at this compile dispatch — recorded as
+                // `pending_generation` and promoted to `compiled_generation`
+                // on success, and used for the idempotency / staleness gate.
+                let doc_generation = doc_ref.generation_owned();
                 // Class candidates + first-non-package detection via
                 // the per-doc Index (sees optimistic patches; no extra
                 // AST walk per call).
@@ -540,6 +549,7 @@ pub fn on_compile_model(
                 }
                 (
                     doc_ref.source().to_string(),
+                    doc_generation,
                     ast,
                     candidates,
                     preferred_count,
@@ -647,6 +657,30 @@ pub fn on_compile_model(
     // Find or spawn the entity linked to this document.
     let linked = registry.entities_linked_to(doc);
 
+    // Idempotency gate: a Compile on a model that is already compiled,
+    // clean (same document generation as the last successful compile),
+    // and not currently building is a no-op — we skip the worker
+    // dispatch entirely. This is what makes `CompileModel` safe to call
+    // repeatedly (e.g. by `RunActiveModel`'s compile-if-stale path)
+    // without churning the worker. Pass `force = true` to override.
+    // Crucially this does NOT touch `paused` — it leaves whatever
+    // run-state the model is already in.
+    if !force {
+        if let Some(&entity) = linked.first() {
+            if let Ok(model) = q_models.get(entity) {
+                let stale = !model.is_compiled || model.compiled_generation != doc_generation;
+                if model.is_compiled && !stale && !model.is_compiling {
+                    bevy::log::debug!(
+                        "[Modelica] compile skipped: already up to date (doc {}, gen {})",
+                        doc.raw(),
+                        doc_generation
+                    );
+                    return;
+                }
+            }
+        }
+    }
+
     let target_entity = if let Some(&entity) = linked.first() {
         // Update existing entity in place.
         if let Ok(mut model) = q_models.get_mut(entity) {
@@ -660,6 +694,9 @@ pub fn on_compile_model(
             // second Modelica compiles.
             model.is_stepping = true;
             model.is_compiling = true;
+            // Capture the generation being compiled; promoted to
+            // `compiled_generation` by the post-compile success handler.
+            model.pending_generation = doc_generation;
             model.model_name = model_name.clone();
             model.parameters = params;
             model.inputs.clear();
@@ -678,7 +715,10 @@ pub fn on_compile_model(
                     .or_insert_with(|| existing.unwrap_or(0.0));
             }
             model.variables.clear();
-            model.paused = false;
+            // Compile leaves the model PAUSED/ready — no auto-start of a live
+            // realtime sim. The user starts live stepping explicitly via
+            // ResumeActiveModel (FastRunActiveModel batch runs are unaffected).
+            model.paused = true;
             model.current_time = 0.0;
             model.last_step_time = 0.0;
         }
@@ -703,7 +743,8 @@ pub fn on_compile_model(
                     current_time: 0.0,
                     last_step_time: 0.0,
                     session_id,
-                    paused: false,
+                    // Newly-compiled model starts paused/ready — no auto-start.
+                    paused: true,
                     parameters: params,
                     inputs: runtime_inputs.into_iter().map(|n| (n, 0.0)).collect(),
                     variables: HashMap::new(),
@@ -711,6 +752,9 @@ pub fn on_compile_model(
                     is_stepping: true,
                     is_compiling: true,
                     is_compiled: false,
+                    compiled_generation: 0,
+                    pending_generation: doc_generation,
+                    resume_after_compile: false,
                 },
             ))
             .id();
@@ -851,6 +895,29 @@ pub struct ResetActiveModel {
     pub doc: DocumentId,
 }
 
+/// Start a live realtime simulation: compile-if-stale, then play.
+///
+/// This is the user-facing "Run" verb. If the model is already
+/// compiled and clean (same document generation), it simply unpauses —
+/// no recompile. Otherwise it sets [`ModelicaModel::resume_after_compile`]
+/// and triggers a [`CompileModel`]; the post-compile success handler in
+/// the worker then unpauses, so play begins as soon as the stepper is
+/// installed. Contrast with [`CompileModel`] (compile only, never auto-
+/// starts) and [`ResumeActiveModel`] (unpause only, never compiles).
+#[Command(default)]
+pub struct RunActiveModel {
+    pub doc: DocumentId,
+    /// Optional explicit target class, forwarded to the compile.
+    pub class: Option<String>,
+}
+
+/// Reset to `t=0` and run again. Composition of [`ResetActiveModel`]
+/// followed by [`RunActiveModel`].
+#[Command(default)]
+pub struct RestartActiveModel {
+    pub doc: DocumentId,
+}
+
 #[on_command(PauseActiveModel)]
 pub fn on_pause_active_model(trigger: On<PauseActiveModel>, mut commands: Commands) {
     let raw = trigger.event().doc;
@@ -889,6 +956,76 @@ pub fn on_resume_active_model(trigger: On<ResumeActiveModel>, mut commands: Comm
     });
 }
 
+#[on_command(RunActiveModel)]
+pub fn on_run_active_model(trigger: On<RunActiveModel>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    let class = trigger.event().class.clone();
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = (if raw.is_unassigned() {
+            resolve_active_doc(world)
+        } else {
+            Some(raw)
+        }) else {
+            return;
+        };
+        let Some(entity) = entity_for_doc(world, doc) else {
+            // No entity yet — never compiled. The compile handler spawns
+            // the entity (deferred) with `resume_after_compile: false`,
+            // so we can't flip the resume flag before it exists. Just
+            // compile; the model lands paused/ready and the user presses
+            // Run again to step it. (A first Run can't both spawn and
+            // pre-arm resume in one pass without a dedicated spawn-time
+            // flag, which isn't worth the surface area here.)
+            world.commands().trigger(CompileModel { doc, class, force: false });
+            return;
+        };
+        // Document generation for the staleness check.
+        let doc_generation = world
+            .get_resource::<ModelicaDocumentRegistry>()
+            .and_then(|r| r.host(doc))
+            .map(|h| h.document().generation_owned())
+            .unwrap_or(0);
+        let (is_compiled, is_compiling, stale) = world
+            .get::<ModelicaModel>(entity)
+            .map(|m| {
+                let stale = !m.is_compiled || m.compiled_generation != doc_generation;
+                (m.is_compiled, m.is_compiling, stale)
+            })
+            .unwrap_or((false, false, true));
+        if is_compiled && !stale && !is_compiling {
+            // Already up to date — just play, no recompile.
+            if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
+                model.paused = false;
+            }
+            return;
+        }
+        // Stale or never-compiled: mark the resume intent so the
+        // post-compile success handler unpauses, then compile.
+        if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
+            model.resume_after_compile = true;
+        }
+        world.commands().trigger(CompileModel { doc, class, force: false });
+    });
+}
+
+#[on_command(RestartActiveModel)]
+pub fn on_restart_active_model(trigger: On<RestartActiveModel>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = (if raw.is_unassigned() {
+            resolve_active_doc(world)
+        } else {
+            Some(raw)
+        }) else {
+            return;
+        };
+        // Reset to t=0, then run. Mirrors the toolbar's Reset+Run
+        // composition; the two triggers run in dispatch order.
+        world.commands().trigger(ResetActiveModel { doc });
+        world.commands().trigger(RunActiveModel { doc, class: None });
+    });
+}
+
 /// Fast Run — compile + simulate end-to-end off-thread (Web Worker on
 /// wasm, std::thread on native). The result is stored as an Experiment
 /// in [`lunco_experiments::ExperimentRegistry`]. See
@@ -915,24 +1052,94 @@ pub struct FastRunActiveModel {
     pub h0: Option<f64>,
 }
 
-#[on_command(FastRunActiveModel)]
-pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: Commands) {
+/// Bounds fields a command may override on top of annotation/draft.
+/// Each `None` leaves the composed value untouched.
+#[derive(Default, Clone)]
+struct BoundsOverride {
+    t_start: Option<f64>,
+    t_end: Option<f64>,
+    dt: Option<f64>,
+    tolerance: Option<f64>,
+    solver: Option<String>,
+    h0: Option<f64>,
+}
+
+/// Parse a textual override/input value into a typed `ParamValue`.
+/// Mirrors the Simulation-Setup input parser: `true`/`false` → `Bool`,
+/// integer-looking → `Int`, otherwise `Real`, else `String`. Empty → `None`
+/// (skip the entry). Values are string-injected into source before compile,
+/// so the exact variant mostly affects formatting; numeric model parameters
+/// accept either `Int` or `Real`.
+fn parse_param_value(txt: &str) -> Option<lunco_experiments::ParamValue> {
+    use lunco_experiments::ParamValue;
+    let t = txt.trim();
+    if t.is_empty() {
+        return None;
+    }
+    match t {
+        "true" => return Some(ParamValue::Bool(true)),
+        "false" => return Some(ParamValue::Bool(false)),
+        _ => {}
+    }
+    let looks_float = t.contains('.') || t.contains('e') || t.contains('E');
+    if !looks_float {
+        if let Ok(i) = t.parse::<i64>() {
+            return Some(ParamValue::Int(i));
+        }
+    }
+    if let Ok(f) = t.parse::<f64>() {
+        return Some(ParamValue::Real(f));
+    }
+    Some(ParamValue::String(t.to_string()))
+}
+
+/// Turn API `[{name, value}]` rows into a typed param map (skips empties).
+fn param_map_from_mods(
+    mods: &[crate::api::ApiModification],
+) -> std::collections::BTreeMap<lunco_experiments::ParamPath, lunco_experiments::ParamValue> {
+    let mut map = std::collections::BTreeMap::new();
+    for m in mods {
+        if let Some(v) = parse_param_value(&m.value) {
+            map.insert(lunco_experiments::ParamPath(m.name.clone()), v);
+        }
+    }
+    map
+}
+
+/// Shared batch-experiment dispatch behind both `FastRunActiveModel`
+/// (active-model convenience: annotation + UI draft) and `RunExperiment`
+/// (explicit API spec). Resolves the target class, snapshots source into the
+/// runner, composes bounds across four layers (fallback → annotation → draft
+/// → command), merges command-supplied parameter `overrides`/`inputs` over
+/// any UI draft (command wins), inserts the experiment, and dispatches it.
+///
+/// `label`, when set, replaces the auto-generated "Run N" name so sweep rows
+/// are identifiable in `ListRuns`. Returns the new experiment id, or `None`
+/// when dispatch can't proceed (no doc, ambiguous class → picker, etc.).
+fn dispatch_experiment(
+    world: &mut World,
+    raw: DocumentId,
+    explicit_class: Option<String>,
+    cmd_overrides: std::collections::BTreeMap<
+        lunco_experiments::ParamPath,
+        lunco_experiments::ParamValue,
+    >,
+    cmd_inputs: std::collections::BTreeMap<
+        lunco_experiments::ParamPath,
+        lunco_experiments::ParamValue,
+    >,
+    cmd_bounds: BoundsOverride,
+    label: Option<String>,
+) -> Option<lunco_experiments::ExperimentId> {
     use lunco_experiments::ExperimentRunner;
-    let raw = trigger.event().doc;
-    let explicit_class = trigger.event().class.clone();
-    let cmd_t_end = trigger.event().t_end;
-    let cmd_dt = trigger.event().dt;
-    let cmd_tolerance = trigger.event().tolerance;
-    let cmd_solver = trigger.event().solver.clone();
-    let cmd_h0 = trigger.event().h0;
-    commands.queue(move |world: &mut World| {
+    {
         let Some(doc) = (if raw.is_unassigned() {
             resolve_active_doc(world)
         } else {
             Some(raw)
         }) else {
-            bevy::log::warn!("[FastRunActiveModel] no active document");
-            return;
+            bevy::log::warn!("[dispatch_experiment] no active document");
+            return None;
         };
 
         // Resolve source + target class. Mirrors `on_compile_model`
@@ -945,8 +1152,8 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
             let host = match registry.host(doc) {
                 Some(h) => h,
                 None => {
-                    bevy::log::warn!("[FastRunActiveModel] doc {} not in registry", doc.raw());
-                    return;
+                    bevy::log::warn!("[dispatch_experiment] doc {} not in registry", doc.raw());
+                    return None;
                 }
             };
             let document = host.document();
@@ -973,10 +1180,10 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
                 None => match candidates.len() {
                     0 => {
                         bevy::log::warn!(
-                            "[FastRunActiveModel] doc {} has no compilable top-level class",
+                            "[dispatch_experiment] doc {} has no compilable top-level class",
                             doc.raw()
                         );
-                        return;
+                        return None;
                     }
                     1 => candidates[0].clone(),
                     _ => {
@@ -995,7 +1202,7 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
                                 });
                             }
                         }
-                        return;
+                        return None;
                     }
                 },
             },
@@ -1008,8 +1215,8 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
         let runner_res = match world.get_resource::<crate::ModelicaRunnerResource>() {
             Some(r) => r.clone(),
             None => {
-                bevy::log::error!("[FastRunActiveModel] runner resource missing");
-                return;
+                bevy::log::error!("[dispatch_experiment] runner resource missing");
+                return None;
             }
         };
         runner_res.0.set_model_source(
@@ -1039,9 +1246,15 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
 
         // Bounds priority: fallback → annotation → draft override →
         // command override. Each layer overrides the previous.
+        //
+        // Layer 1 fallback = the Modelica `experiment` annotation defaults
+        // (StartTime=0, StopTime=1). `dt`/`tolerance` stay `None` so the run
+        // loop resolves them to their spec defaults (Interval via
+        // numberOfIntervals=500; tolerance per the runner's stack). This is
+        // only hit when the model carries no experiment annotation at all.
         let mut bounds = lunco_experiments::RunBounds {
             t_start: 0.0,
-            t_end: 10.0,
+            t_end: 1.0,
             dt: None,
             tolerance: None,
             solver: None,
@@ -1049,14 +1262,17 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
         };
 
         // Layer 2: annotation (from AST, now seeded into runner cache).
+        // `default_bounds` returns `Some` only when the model actually
+        // carries an `experiment(StopTime=…)` annotation, so we can apply
+        // it unconditionally — including its `Interval` → `dt`, which the
+        // run loop needs to avoid defaulting to a 10 ms sample interval on
+        // long horizons.
         if let Some(annotated) = runner_res.0.default_bounds(&model_ref) {
-            if annotated.t_start != 0.0 || annotated.t_end != 1.0 {
-                bounds = annotated;
-            }
+            bounds = annotated;
         }
 
         // Layer 3: experiment draft override (from UI setup dialog).
-        let (overrides, inputs, bounds) = {
+        let (mut overrides, mut inputs, bounds) = {
             let drafts = world.resource::<crate::experiments_runner::ExperimentDrafts>();
             match drafts.get(doc, &model_ref) {
                 Some(d) => (
@@ -1068,13 +1284,19 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
             }
         };
 
-        // Layer 4: command override (explicit API params, highest priority).
+        // Layer 3.5: command-supplied parameter overrides / inputs win over
+        // the draft. Empty maps (the FastRunActiveModel path) are a no-op.
+        overrides.extend(cmd_overrides);
+        inputs.extend(cmd_inputs);
+
+        // Layer 4: command bounds override (explicit API params, highest priority).
         let mut bounds = bounds;
-        if let Some(t) = cmd_t_end { bounds.t_end = t; }
-        if let Some(d) = cmd_dt { bounds.dt = Some(d); }
-        if let Some(t) = cmd_tolerance { bounds.tolerance = Some(t); }
-        if let Some(s) = cmd_solver { bounds.solver = Some(s); }
-        if let Some(h) = cmd_h0 { bounds.h0 = Some(h); }
+        if let Some(t) = cmd_bounds.t_start { bounds.t_start = t; }
+        if let Some(t) = cmd_bounds.t_end { bounds.t_end = t; }
+        if let Some(d) = cmd_bounds.dt { bounds.dt = Some(d); }
+        if let Some(t) = cmd_bounds.tolerance { bounds.tolerance = Some(t); }
+        if let Some(s) = cmd_bounds.solver { bounds.solver = Some(s); }
+        if let Some(h) = cmd_bounds.h0 { bounds.h0 = Some(h); }
 
         // Insert experiment + dispatch run. Scope to the originating
         // doc so multi-tab workflows keep run histories separate
@@ -1082,15 +1304,23 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
         let twin_id = crate::ui::doc_pin::twin_id_for_doc(doc);
         let exp_id = {
             let mut reg = world.resource_mut::<lunco_experiments::ExperimentRegistry>();
-            reg.insert_new(twin_id, model_ref, overrides, inputs, bounds)
+            let id = reg.insert_new(twin_id, model_ref, overrides, inputs, bounds);
+            // Apply a caller-supplied label so sweep rows are identifiable
+            // in ListRuns (e.g. "Isp=300") instead of the auto "Run N".
+            if let Some(name) = label {
+                if let Some(e) = reg.get_mut(id) {
+                    e.name = name;
+                }
+            }
+            id
         };
         let exp = world
             .resource::<lunco_experiments::ExperimentRegistry>()
             .get(exp_id)
             .cloned();
         let Some(exp) = exp else {
-            bevy::log::error!("[FastRunActiveModel] experiment vanished after insert");
-            return;
+            bevy::log::error!("[dispatch_experiment] experiment vanished after insert");
+            return None;
         };
 
         let handle = runner_res.0.run_fast(&exp);
@@ -1107,18 +1337,166 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
             .0
             .push(handle);
         bevy::log::info!(
-            "[FastRunActiveModel] dispatched run {:?} for class '{}'",
+            "[dispatch_experiment] dispatched run {:?} '{}' for class '{}'",
             exp_id,
+            exp.name,
             model_name
         );
         if let Some(mut console) =
             world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
         {
             console.info(format!(
-                "▶ Fast Run: '{}' (t={:.2}→{:.2}s)",
+                "▶ Run: '{}' (t={:.2}→{:.2}s)",
                 model_name, exp.bounds.t_start, exp.bounds.t_end
             ));
         }
+        Some(exp_id)
+    }
+}
+
+#[on_command(FastRunActiveModel)]
+pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    let explicit_class = trigger.event().class.clone();
+    let cmd_bounds = BoundsOverride {
+        t_start: None,
+        t_end: trigger.event().t_end,
+        dt: trigger.event().dt,
+        tolerance: trigger.event().tolerance,
+        solver: trigger.event().solver.clone(),
+        h0: trigger.event().h0,
+    };
+    commands.queue(move |world: &mut World| {
+        // Active-model convenience: no command overrides — bounds come from
+        // annotation/draft, parameters from the UI draft (if any).
+        dispatch_experiment(
+            world,
+            raw,
+            explicit_class,
+            Default::default(),
+            Default::default(),
+            cmd_bounds,
+            None,
+        );
+    });
+}
+
+/// Define + dispatch a batch experiment with explicit parameter overrides,
+/// inputs, and bounds — the programmatic counterpart to the Experiments
+/// panel. Unlike `FastRunActiveModel`, overrides come from the command (not
+/// the UI draft), so an agent can sweep parameters without touching source.
+/// Discover the resulting `experiment_id` via `ListRuns` (newest, or by
+/// `label`); read the trajectory with `GetExperimentResult`.
+#[Command(default)]
+pub struct RunExperiment {
+    /// Target document. Unassigned → the active document.
+    pub doc: DocumentId,
+    /// Target class. `None` → drilled-in class or sole non-package class.
+    pub class: Option<String>,
+    /// Parameter overrides `[{name, value}]` (e.g. `{name:"Isp", value:"300"}`).
+    pub overrides: Vec<crate::api::ApiModification>,
+    /// Runtime input overrides `[{name, value}]`.
+    pub inputs: Vec<crate::api::ApiModification>,
+    pub t_start: Option<f64>,
+    pub t_end: Option<f64>,
+    pub dt: Option<f64>,
+    pub tolerance: Option<f64>,
+    pub solver: Option<String>,
+    pub h0: Option<f64>,
+    /// Optional run name (shown in ListRuns). Defaults to auto "Run N".
+    pub label: Option<String>,
+}
+
+#[on_command(RunExperiment)]
+pub fn on_run_experiment(trigger: On<RunExperiment>, mut commands: Commands) {
+    let ev = trigger.event();
+    let raw = ev.doc;
+    let explicit_class = ev.class.clone();
+    let overrides = param_map_from_mods(&ev.overrides);
+    let inputs = param_map_from_mods(&ev.inputs);
+    let label = ev.label.clone();
+    let cmd_bounds = BoundsOverride {
+        t_start: ev.t_start,
+        t_end: ev.t_end,
+        dt: ev.dt,
+        tolerance: ev.tolerance,
+        solver: ev.solver.clone(),
+        h0: ev.h0,
+    };
+    commands.queue(move |world: &mut World| {
+        dispatch_experiment(world, raw, explicit_class, overrides, inputs, cmd_bounds, label);
+    });
+}
+
+/// Cancel in-flight batch run(s). Signals the runner's cancel flag, which is
+/// honored at compile boundaries and on every solver step; the run then ends
+/// `Cancelled`. Target a specific run by `experiment_id`, or set `all`.
+#[Command(default)]
+pub struct CancelExperiment {
+    /// Cancel one run by id (uuid string). Ignored when `all` is set.
+    pub experiment_id: Option<String>,
+    /// Cancel every in-flight run.
+    pub all: bool,
+}
+
+#[on_command(CancelExperiment)]
+pub fn on_cancel_experiment(trigger: On<CancelExperiment>, mut commands: Commands) {
+    let target = trigger.event().experiment_id.clone();
+    let all = trigger.event().all;
+    commands.queue(move |world: &mut World| {
+        let handles = world.resource::<crate::experiments_runner::PendingHandles>();
+        let mut n = 0u32;
+        for h in handles.0.iter() {
+            if all || target.as_deref() == Some(h.run_id.0.to_string().as_str()) {
+                h.cancel();
+                n += 1;
+            }
+        }
+        bevy::log::info!(
+            "[CancelExperiment] signalled {n} run(s) (all={all}, id={target:?})"
+        );
+    });
+}
+
+/// Remove experiment record(s) from the registry. Terminal runs only —
+/// in-flight runs (via id / `all`) are skipped; cancel them first. Scope by
+/// `experiment_id`, `doc` (every run for that doc's twin), or `all`.
+#[Command(default)]
+pub struct DeleteExperiment {
+    pub experiment_id: Option<String>,
+    pub doc: Option<DocumentId>,
+    pub all: bool,
+}
+
+#[on_command(DeleteExperiment)]
+pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Commands) {
+    let target = trigger.event().experiment_id.clone();
+    let doc = trigger.event().doc;
+    let all = trigger.event().all;
+    commands.queue(move |world: &mut World| {
+        let mut reg = world.resource_mut::<lunco_experiments::ExperimentRegistry>();
+        let mut removed = 0usize;
+        if all {
+            let ids: Vec<_> = reg.iter_all().map(|e| e.id).collect();
+            for id in ids {
+                if reg.delete(id) {
+                    removed += 1;
+                }
+            }
+        } else if let Some(t) = target.as_deref() {
+            let id = reg.iter_all().find(|e| e.id.0.to_string() == t).map(|e| e.id);
+            if let Some(id) = id {
+                if reg.delete(id) {
+                    removed += 1;
+                }
+            }
+        } else if let Some(doc) = doc {
+            let twin = crate::ui::doc_pin::twin_id_for_doc(doc);
+            removed = reg.delete_for_twin(&twin);
+        }
+        bevy::log::info!(
+            "[DeleteExperiment] removed {removed} run(s) (all={all}, id={target:?}, doc={doc:?})"
+        );
     });
 }
 
@@ -1194,7 +1572,7 @@ pub fn on_compile_active_model(trigger: On<CompileActiveModel>, mut commands: Co
             return;
         };
         let target_class = if class.is_empty() { None } else { Some(class) };
-        world.commands().trigger(CompileModel { doc, class: target_class });
+        world.commands().trigger(CompileModel { doc, class: target_class, force: false });
     });
 }
 
@@ -1217,6 +1595,11 @@ impl Plugin for CompilePlugin {
         __register_on_pause_active_model(app);
         __register_on_resume_active_model(app);
         __register_on_reset_active_model(app);
+        __register_on_run_active_model(app);
+        __register_on_restart_active_model(app);
         __register_on_fast_run_active_model(app);
+        __register_on_run_experiment(app);
+        __register_on_cancel_experiment(app);
+        __register_on_delete_experiment(app);
     }
 }

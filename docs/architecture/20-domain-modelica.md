@@ -84,6 +84,58 @@ FixedUpdate:
 
 See [`22-domain-cosim.md`](22-domain-cosim.md) for the full pipeline.
 
+### 4.1 Run-state machine + command semantics
+
+Live stepping is gated per-entity by run-state on `ModelicaModel`.
+**Compiling a model never auto-starts a live realtime sim** — a fresh
+compile leaves the model paused/ready, and live stepping begins only on
+an explicit Run.
+
+```
+Uncompiled/Stale ──[Compile]──▶ Ready (paused) ──[Run]──▶ Running
+                                      ▲                      │
+                                      └────────[Pause]───────┘
+Compile error ─────────────────▶ Blocked (paused)
+```
+
+State on `ModelicaModel`:
+
+- `paused: bool` — the per-frame gate in `spawn_modelica_requests`
+  (`if model.paused { continue }`). Running ⇔ `is_compiled && !paused`.
+- `is_compiled: bool` — worker has installed a stepper.
+- `is_compiling: bool` — a Compile is in flight.
+- `compiled_generation: u64` — document `generation_owned()` at the last
+  *successful* compile.
+- `pending_generation: u64` — generation captured at compile dispatch;
+  promoted to `compiled_generation` on success so an edit landing
+  mid-compile does not mark the just-built model as up to date.
+- `resume_after_compile: bool` — transient; set by `RunActiveModel` so
+  the post-compile success handler unpauses (instead of staying paused).
+  Cleared on both success and error so a failed Run never silently
+  auto-plays on a later unrelated success.
+
+Staleness: `stale = !is_compiled || compiled_generation != gen`, where
+`gen` is the document's current `generation_owned()`.
+
+Verb semantics:
+
+| Verb | Effect |
+|---|---|
+| `CompileModel` / `CompileActiveModel` | Compile only, idempotent. Skips the worker dispatch when `is_compiled && !stale && !is_compiling` (logged at debug); pass `force: true` to override. Never changes `paused`. |
+| `RunActiveModel` | Compile-if-stale, then play. If already compiled & clean, just sets `paused = false` (no recompile); otherwise sets `resume_after_compile = true` and triggers `CompileModel`, which resumes on success. |
+| `ResumeActiveModel` | Unpause (`paused = false`); no compile. |
+| `PauseActiveModel` | Pause (`paused = true`). |
+| `ResetActiveModel` | Bump `session_id`, send `ModelicaCommand::Reset`, zero `current_time` / `last_step_time`. Cheap — no recompile. |
+| `RestartActiveModel` | Composition of `ResetActiveModel` + `RunActiveModel`. |
+| `FastRunActiveModel` | Orthogonal: batch compile + simulate off-thread → `Experiment`. Never touches live run-state. |
+
+The toolbar (`ui/panels/model_view/render.rs`) maps these to one
+Compile button (🚀 → `CompileActiveModel`, compile only), a Run/Pause
+toggle (▶ → `RunActiveModel`, ⏸ → `PauseActiveModel`), Reset (⟲), and
+Restart (⟳ → `RestartActiveModel`). The `CompileStatus` API query
+reports the run-state (`is_compiled`, `is_compiling`, `paused`,
+`running`, `stale`, `current_time`) alongside the compile state.
+
 ## 5. Document System integration
 
 `ModelicaDocument` implements the Document System trait

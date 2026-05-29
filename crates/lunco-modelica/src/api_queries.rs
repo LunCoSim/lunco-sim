@@ -58,6 +58,7 @@ impl Plugin for ModelicaApiQueriesPlugin {
         registry.register(CompileStatusProvider);
         registry.register(RunStatusProvider);
         registry.register(ListRunsProvider);
+        registry.register(GetExperimentResultProvider);
         registry.register(GetDocumentSourceProvider);
         registry.register(DescribeModelProvider);
         registry.register(SnapshotVariablesProvider);
@@ -480,6 +481,33 @@ impl ApiQueryProvider for CompileStatusProvider {
             .get_resource::<crate::ui::CompileStates>()
             .and_then(|cs| cs.error_for(doc_id).map(str::to_string));
 
+        // Live run-state, read from the `ModelicaModel` for this doc's
+        // entity (if one exists yet). Lets a single CompileStatus call
+        // answer "is it compiled / running / stale?" without a second
+        // entity query. Defaults (no entity) report uncompiled + stale.
+        let doc_generation = world
+            .get_resource::<ModelicaDocumentRegistry>()
+            .and_then(|r| r.host(doc_id))
+            .map(|h| h.document().generation_owned())
+            .unwrap_or(0);
+        let run_entity = world
+            .get_resource::<ModelicaDocumentRegistry>()
+            .and_then(|r| r.entities_linked_to(doc_id).into_iter().next());
+        let (is_compiled, is_compiling, paused, running, run_stale, current_time) = run_entity
+            .and_then(|e| world.get::<crate::ModelicaModel>(e))
+            .map(|m| {
+                let stale = !m.is_compiled || m.compiled_generation != doc_generation;
+                (
+                    m.is_compiled,
+                    m.is_compiling,
+                    m.paused,
+                    m.is_compiled && !m.paused,
+                    stale,
+                    m.current_time,
+                )
+            })
+            .unwrap_or((false, false, false, false, true, 0.0));
+
         // Convenience pointer to the most recent run for this doc.
         // Run errors live on `RunStatus::Failed`, not here — this is
         // just a hint so a single CompileStatus call can tell the
@@ -501,6 +529,12 @@ impl ApiQueryProvider for CompileStatusProvider {
             "ast_parsed": has_ast,
             "error_message": error_message,
             "latest_run": latest_run,
+            "is_compiled": is_compiled,
+            "is_compiling": is_compiling,
+            "paused": paused,
+            "running": running,
+            "stale": run_stale,
+            "current_time": current_time,
         }))
     }
 }
@@ -680,7 +714,37 @@ fn run_summary(
         }
         RunStatus::Pending | RunStatus::Cancelled => {}
     }
+    // Self-describing rows: which parameter overrides produced this run,
+    // and the bounds it ran under. Lets a sweep's runs be matched back to
+    // their inputs (e.g. which Isp → which propUsed) without a side table.
+    let mut ovr = serde_json::Map::new();
+    for (k, v) in &exp.overrides {
+        ovr.insert(k.0.clone(), param_value_json(v));
+    }
+    obj.insert("overrides".into(), serde_json::Value::Object(ovr));
+    obj.insert(
+        "bounds".into(),
+        serde_json::json!({
+            "t_start": exp.bounds.t_start,
+            "t_end": exp.bounds.t_end,
+            "dt": exp.bounds.dt,
+            "tolerance": exp.bounds.tolerance,
+            "solver": exp.bounds.solver,
+        }),
+    );
     serde_json::Value::Object(obj)
+}
+
+/// Render a `ParamValue` as JSON for API rows.
+fn param_value_json(v: &lunco_experiments::ParamValue) -> serde_json::Value {
+    use lunco_experiments::ParamValue;
+    match v {
+        ParamValue::Real(x) => serde_json::json!(x),
+        ParamValue::Int(i) => serde_json::json!(i),
+        ParamValue::Bool(b) => serde_json::json!(b),
+        ParamValue::String(s) | ParamValue::Enum(s) => serde_json::json!(s),
+        ParamValue::RealArray(a) => serde_json::json!(a),
+    }
 }
 
 fn parse_experiment_id(
@@ -692,6 +756,173 @@ fn parse_experiment_id(
         .and_then(|v| v.as_str())
         .and_then(|s| uuid::Uuid::parse_str(s).ok())
         .map(ExperimentId)
+}
+
+/// Resolve the most-recently-created experiment for `doc_id` to its id.
+/// Mirrors [`latest_run_for_doc`] but returns the id so a caller can
+/// look up the full result. `None` when the doc has no runs.
+fn latest_experiment_id_for_doc(
+    world: &World,
+    doc_id: DocumentId,
+) -> Option<ExperimentId> {
+    let sources = world.get_resource::<ExperimentSources>()?;
+    let registry = world.get_resource::<ExperimentRegistry>()?;
+    let mut best: Option<&lunco_experiments::Experiment> = None;
+    for (id, d) in &sources.0 {
+        if *d != doc_id {
+            continue;
+        }
+        if let Some(exp) = registry.get(*id) {
+            best = match best {
+                Some(prev) if prev.created_at >= exp.created_at => Some(prev),
+                _ => Some(exp),
+            };
+        }
+    }
+    best.map(|e| e.id)
+}
+
+// ─── GetExperimentResult ───────────────────────────────────────────────
+//
+// Reads completed FastRun trajectory data (`times` + `series`) out of the
+// `ExperimentRegistry` so clients can analyse runs without screenshotting
+// plot widgets — the programmatic counterpart to the UI's CSV export.
+//
+// Params:
+//   - `experiment_id` (string)  — run to read; OR
+//   - `doc` (u64)               — read the doc's latest run (convenience).
+//   - `variables` (string[])    — optional filter; default = all series.
+//   - `max_points` (u64)        — optional cap; strided downsample, last
+//                                 sample always kept. Default = uncapped.
+struct GetExperimentResultProvider;
+
+impl ApiQueryProvider for GetExperimentResultProvider {
+    fn name(&self) -> &'static str {
+        "GetExperimentResult"
+    }
+
+    fn execute(
+        &self,
+        world: &mut World,
+        params: &serde_json::Value,
+    ) -> ApiResponse {
+        // Resolve target run: explicit id wins, else latest for `doc`.
+        let id = match parse_experiment_id(params, "experiment_id") {
+            Some(id) => id,
+            None => match parse_doc_id(params, "doc") {
+                Some(doc) => match latest_experiment_id_for_doc(world, doc) {
+                    Some(id) => id,
+                    None => {
+                        return ApiResponse::error(
+                            ApiErrorCode::EntityNotFound,
+                            format!("no runs for doc {}", doc.raw()),
+                        );
+                    }
+                },
+                None => {
+                    return ApiResponse::error(
+                        ApiErrorCode::DeserializationError,
+                        "provide `experiment_id` or `doc`".to_string(),
+                    );
+                }
+            },
+        };
+
+        // Optional variable filter.
+        let want: Option<Vec<String>> = params
+            .get("variables")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            });
+        // Optional downsample cap.
+        let max_points = params
+            .get("max_points")
+            .and_then(|v| v.as_u64())
+            .map(|n| n.max(2) as usize);
+
+        let Some(registry) = world.get_resource::<ExperimentRegistry>() else {
+            return ApiResponse::error(
+                ApiErrorCode::EntityNotFound,
+                "experiment registry not installed".to_string(),
+            );
+        };
+        let Some(exp) = registry.get(id) else {
+            return ApiResponse::error(
+                ApiErrorCode::EntityNotFound,
+                format!("experiment {id:?} not in registry"),
+            );
+        };
+        let Some(result) = &exp.result else {
+            // Run dispatched but not done (pending/running/failed-no-partial).
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                format!(
+                    "experiment {} has no result (state: {})",
+                    exp.id.0,
+                    run_state_label(&exp.status)
+                ),
+            );
+        };
+
+        let total = result.times.len();
+        // Strided downsample: stride 1 when uncapped or already small.
+        let stride = match max_points {
+            Some(cap) if total > cap => total.div_ceil(cap),
+            _ => 1,
+        };
+        let sample = |v: &[f64]| -> Vec<f64> {
+            if stride <= 1 {
+                return v.to_vec();
+            }
+            let mut out: Vec<f64> = v.iter().step_by(stride).copied().collect();
+            // Always keep the final sample so the horizon endpoint shows.
+            if let (Some(&last), Some(&got)) = (v.last(), out.last()) {
+                if last != got {
+                    out.push(last);
+                }
+            }
+            out
+        };
+
+        let times = sample(&result.times);
+        let mut series_json = serde_json::Map::new();
+        let mut missing: Vec<String> = Vec::new();
+        match &want {
+            Some(names) => {
+                for n in names {
+                    match result.series.get(n) {
+                        Some(v) => {
+                            series_json
+                                .insert(n.clone(), serde_json::json!(sample(v)));
+                        }
+                        None => missing.push(n.clone()),
+                    }
+                }
+            }
+            None => {
+                for (n, v) in &result.series {
+                    series_json
+                        .insert(n.clone(), serde_json::json!(sample(v)));
+                }
+            }
+        }
+
+        ApiResponse::ok(serde_json::json!({
+            "experiment_id": exp.id.0.to_string(),
+            "name": exp.name,
+            "state": run_state_label(&exp.status),
+            "total_points": total,
+            "returned_points": times.len(),
+            "downsampled": stride > 1,
+            "variable_count": series_json.len(),
+            "missing_variables": missing,
+            "times": times,
+            "series": serde_json::Value::Object(series_json),
+        }))
+    }
 }
 
 // ─── GetDocumentSource (spec 033 P0, US 1.6) ───────────────────────────

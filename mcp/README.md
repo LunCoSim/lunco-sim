@@ -57,12 +57,14 @@ These tools are always available:
 | `list_twin` | List files in the open Twin folder, paginated, classified by kind |
 | `list_msl` | Paginated, filterable enumeration of Modelica Standard Library classes |
 | `open_uri` | Unified scheme-aware open (`bundled://`, `mem://`, qualified MSL name, fs path) |
-| `compile_model` | Compile an open document, optionally targeting a specific class (bypasses GUI picker) |
-| `compile_status` | Read per-doc compile state without triggering compile |
+| `compile_model` | Compile an open document, optionally targeting a specific class (bypasses GUI picker). **Compile-only & idempotent** — never starts a live sim, and skips the build if the model is already compiled & clean (pass `force` to override) |
+| `compile_status` | Read per-doc compile state without triggering compile. Now also reports live run-state: `is_compiled`, `is_compiling`, `paused`, `running`, `stale`, `current_time` |
 | `list_compile_candidates` | List the non-package classes a multi-class doc would let you compile |
 | `get_document_source` | Fetch the in-memory source of an open doc (incl. unsaved edits) |
 | `describe_model` | Full structural view of a class: `class_kind`, `extends`, `components`, `connections`, plus typed `inputs / parameters / outputs` with units & bounds |
-| `snapshot_variables` | One-shot read of current parameter / input / variable values from a running sim |
+| `snapshot_variables` | One-shot read of current parameter / input / variable values from a running **live** sim (not FastRun batch results — use `GetExperimentResult` for those) |
+| `GetExperimentResult` | Read a completed **FastRun/RunExperiment** trajectory programmatically: returns `times` + `series` (var → values). Target by `experiment_id`, or `doc` for that doc's latest run. Optional `variables` filter and `max_points` strided downsample (last sample always kept). The programmatic counterpart to the UI's CSV export — call via `execute_command` |
+| `ListRuns` | List experiments (optionally `doc`-filtered), newest first. Each row is self-describing: `experiment_id`, `name`, `state`, `has_result`, plus **`overrides`** (`{name:value}`) and **`bounds`** (`t_start/t_end/dt/tolerance/solver`) so a sweep's runs map back to their inputs. Call via `execute_command` |
 | `set_input` | Push a runtime input value into a compiled model. Returns `{ok}` or structured error listing known input names |
 | `find_model` | Fuzzy search across bundled / Twin / MSL / open docs. Returns ranked URIs with relevance scores |
 | `cosim_status` | Snapshot every USD-driven cosim entity (`UsdSourcedCosim`): position, velocity, Modelica state, propagated `force_y`. Probe-the-running-sim alternative to log polling |
@@ -82,6 +84,11 @@ Mutation commands are reachable via `execute_command`:
 | `RemoveModelicaComponent` | Remove a sub-component |
 | `ConnectComponents` | Add a `connect(a.p, b.q)` equation |
 | `DisconnectComponents` | Remove a connect equation |
+| `RunActiveModel` | Start a live realtime sim: compile-if-stale, then play. Already-compiled-and-clean models just unpause (no recompile) |
+| `RestartActiveModel` | Reset the live sim to `t=0` and run again (= `ResetActiveModel` + `RunActiveModel`) |
+| `RunExperiment` | **Batch experiment with explicit parameter overrides** — the programmatic Experiments panel. Fields: `doc`, `class?`, `overrides:[{name,value}]`, `inputs:[{name,value}]`, bounds `t_start?/t_end?/dt?/tolerance?/solver?/h0?`, `label?`. No source mutation, no UI-draft dependency — the verb for parameter sweeps. Discover the new `experiment_id` via `ListRuns` (newest or by `label`), read results with `GetExperimentResult` |
+| `CancelExperiment` | Cancel in-flight batch run(s): `{experiment_id?}` or `{all:true}`. Run ends `cancelled` (cancel is honored at compile boundaries + every solver step) |
+| `DeleteExperiment` | Remove run record(s) from the registry: `{experiment_id?}`, `{doc?}` (whole twin), or `{all:true}`. Terminal runs only — cancel in-flight first |
 | `ApplyModelicaOps` | **Batched** — apply N ops (`Add/RemoveComponent`, `Add/RemoveConnection`, `SetPlacement`, `SetParameter`) in a single observer pass. The same Reflect event the canvas drag-drop pipeline fires — agents and the GUI share one path. Each op still produces an independent undo entry today; transactional grouping is a follow-up. |
 
 Every op flows through the same `ModelicaOp` undo/redo pipeline the
@@ -101,8 +108,9 @@ The combination above is designed so an agent can run:
 ```
 1. find / list                  list_bundled  →  pick "AnnotatedRocketStage.mo"
 2. open                         open_uri(uri="bundled://AnnotatedRocketStage.mo")
-3. compile + run                execute_command(CompileActiveModel, …) +
-                                execute_command(ResumeActiveModel, …)
+3. compile + run                execute_command(RunActiveModel, …)
+                                (compile-if-stale then play; or
+                                 CompileActiveModel to build without running)
 4. inspect what's running       list_open_documents
 5. tweak a value, observe       (covered by spec 033 — describe_model,
                                  set_input, snapshot_variables)

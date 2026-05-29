@@ -13,6 +13,57 @@ Modelica simulation integration for LunCoSim using Rumoca.
 > resolution, diagram ↔ code sync) lives in
 > [**`docs/architecture/20-domain-modelica.md`**](../../docs/architecture/20-domain-modelica.md).
 
+## Compile / Run lifecycle
+
+Compiling a model **never** auto-starts a live realtime sim. The
+per-doc run-state is a small machine over `ModelicaModel`:
+
+```
+Uncompiled/Stale ──[Compile]──▶ Ready (paused) ──[Run]──▶ Running
+                                      ▲                      │
+                                      └────────[Pause]───────┘
+Compile error ─────────────────▶ Blocked (paused)
+```
+
+Key rules:
+
+- **Compile never auto-starts a live sim.** A successful compile leaves
+  the model paused/ready; you start stepping explicitly with Run.
+- **Run = compile-if-stale, then play.** If the model is already
+  compiled and clean it just unpauses (no recompile); otherwise it
+  compiles and resumes on success.
+- **Compiled + clean is never recompiled.** `CompileModel` is idempotent
+  — it skips the worker dispatch when `is_compiled && !stale &&
+  !is_compiling`. Pass `force: true` to override. Staleness is
+  `!is_compiled || compiled_generation != document.generation`.
+- **Fast Run is orthogonal.** It runs a batch experiment off-thread and
+  never touches the live run-state.
+
+| Verb | Effect |
+|---|---|
+| `CompileModel` / `CompileActiveModel` | Compile only, idempotent (skip if compiled & clean unless `force`). Never plays |
+| `RunActiveModel` | Compile-if-stale, then play |
+| `ResumeActiveModel` | Unpause (no compile) |
+| `PauseActiveModel` | Pause |
+| `ResetActiveModel` | Reset `t → 0` |
+| `RestartActiveModel` | Reset + Run |
+| `FastRunActiveModel` | Batch run of the active model → Experiment (annotation + UI draft). Orthogonal to live run-state |
+| `RunExperiment` | Batch run with **explicit** parameter `overrides` / `inputs` / bounds / `label` — the API path for parameter sweeps (no source mutation, no UI draft) |
+| `CancelExperiment` | Cancel in-flight run(s) (`experiment_id` or `all`) → ends `cancelled` |
+| `DeleteExperiment` | Remove run record(s) from the registry (`experiment_id` / `doc` / `all`) |
+
+`FastRunActiveModel` / `RunExperiment` results are read back
+programmatically via the `GetExperimentResult` query (`times` + `series`,
+optional `variables` filter / `max_points` downsample) — the API
+counterpart to the UI's CSV export. `ListRuns` enumerates experiments
+with their `overrides` + `bounds` so a sweep's runs are self-describing.
+`snapshot_variables` reads the **live** sim only, not batch results.
+
+For parameter sweeps, prefer `RunExperiment` (explicit `overrides`) over
+mutating the source — each run becomes a proper `Experiment` with its
+override set recorded. Runs are one-at-a-time today (single-run gate);
+parallel + compile-once is a roadmap item.
+
 ## Architecture at a glance
 
 ### Document as source of truth
