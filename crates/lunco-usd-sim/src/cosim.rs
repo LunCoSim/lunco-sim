@@ -116,7 +116,24 @@ pub fn process_usd_cosim_prims(
     for (entity, prim_path) in query.iter() {
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
-        let reader = (*stage.reader).clone();
+
+        // Mark examined up front so each prim is inspected exactly once.
+        // Without this, every *non-cosim* prim (wheels, ground, ramps — the
+        // bulk of the scene) failed the `lunco:simWires` check below via the
+        // early `continue` WITHOUT ever gaining `UsdSourcedCosim`, so it stayed
+        // in the `Without<UsdSourcedCosim>` query forever — and this system
+        // re-ran every frame, deep-cloning the whole stage per prim. That was
+        // the dominant sandbox CPU cost (docs/performance/2026-05-29-sandbox-fps.md).
+        // Safe: every other `UsdSourcedCosim` consumer also requires a
+        // `ModelicaModel` / `SimComponent` / `ScriptedModel` that a non-cosim
+        // prim never gains, so marking it here matches nothing downstream.
+        commands.entity(entity).insert(UsdSourcedCosim);
+
+        // Borrow the stage reader — `stage.reader` is `Arc<TextReader>`, and
+        // `(*stage.reader).clone()` deep-copied the entire stage's
+        // `HashMap<String, sdf::Value>`. The attribute reads below only need
+        // `&self`.
+        let reader = &*stage.reader;
 
         // Gate on `lunco:simWires` presence — that's the attribute that
         // distinguishes a *wired* cosim entity (balloons, future devices)
@@ -136,8 +153,8 @@ pub fn process_usd_cosim_prims(
             continue;
         }
 
+        // `UsdSourcedCosim` already inserted above; add the cosim-only markers.
         commands.entity(entity).insert((
-            UsdSourcedCosim,
             UsdSimProcessed,
             lunco_core::SelectableRoot,
         ));
@@ -420,10 +437,22 @@ pub fn process_usd_cosim_wires(
     for (entity, prim_path) in q_unprocessed.iter() {
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
-        let reader = (*stage.reader).clone();
+        // Borrow, don't deep-clone the `Arc<TextReader>` (whole-stage copy).
+        let reader = &*stage.reader;
 
-        let Some(from_path) = read_rel_target(&reader, &sdf_path, "lunco:wireFrom") else { continue; };
-        let Some(to_path) = read_rel_target(&reader, &sdf_path, "lunco:wireTo") else { continue; };
+        // A prim with no wire rels is not a wire — mark it examined so it
+        // leaves the `Without<UsdSourcedWire>` query. Without this the query
+        // never empties, the `is_empty()` bail above never fires, and this
+        // system rebuilt the `by_path` index (a String clone per prim) and
+        // re-cloned the stage every frame for the whole scene.
+        let Some(from_path) = read_rel_target(reader, &sdf_path, "lunco:wireFrom") else {
+            commands.entity(entity).insert(UsdSourcedWire);
+            continue;
+        };
+        let Some(to_path) = read_rel_target(reader, &sdf_path, "lunco:wireTo") else {
+            commands.entity(entity).insert(UsdSourcedWire);
+            continue;
+        };
         let from_port = reader.prim_attribute_value::<String>(&sdf_path, "lunco:fromPort");
         let to_port = reader.prim_attribute_value::<String>(&sdf_path, "lunco:toPort");
 
