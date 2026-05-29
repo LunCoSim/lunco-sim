@@ -20,6 +20,10 @@ pub mod diagram;
 /// Shared 53-bit time-sorted id generator backing `GlobalEntityId`
 /// and `commands::OpId`.
 pub mod ids;
+/// M1 — deterministic identity from `Provenance`. The only place network
+/// ids are *derived*; the assignment system below is the only place they
+/// are *minted*.
+pub mod identity;
 /// Command envelope — `Mutation<P>`, `Ack`, `Reject`, `Replication`.
 /// The shape every locally- or remotely-originated mutation flows
 /// through.
@@ -32,6 +36,7 @@ pub use log::*;
 pub use commands::{Ack, Mutation, OpId, Reject, Replication, SessionId};
 pub use markers::{GridAnchor, SoiMigrant};
 pub use invariants::BigSpaceInvariantsPlugin;
+pub use identity::Provenance;
 
 // ── Typed Command Macros ──────────────────────────────────────────────────────
 //
@@ -65,25 +70,41 @@ pub struct LunCoCorePlugin;
 
 /// Stable identity for entities across the simulation and API.
 ///
-/// Implements a **53-bit** time-sorted identifier, safe for use as a 
-/// raw Number in JavaScript/JSON without precision loss.
-/// - 32 bits: Seconds since LunCo Epoch (2025-01-01)
-/// - 21 bits: Random instance ID + sequence
+/// A **53-bit** identifier, safe as a raw Number in JavaScript/JSON without
+/// precision loss. Ids are no longer minted ad-hoc: the field is **private**
+/// and there is no public `new()`/`Default`. An id is produced in exactly one
+/// of two ways, both routed through [`assign_global_entity_ids`]:
+/// - **derived** from [`Provenance`] (Content/Derived) — deterministic, same on
+///   every peer, no coordination;
+/// - **server-allocated** ([`Provenance::Authoritative`]) via [`crate::ids`],
+///   then replicated down.
+///
+/// [`from_raw`](Self::from_raw) reconstructs an id from a value already known
+/// (the API boundary resolving a wire `u64`, deserialization) — it does not
+/// *mint*.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash, Reflect, serde::Serialize, serde::Deserialize)]
 #[reflect(Component)]
-pub struct GlobalEntityId(pub u64);
+pub struct GlobalEntityId(u64);
 
 impl GlobalEntityId {
-    /// Create a new globally unique, time-sorted ID (53-bit). Shares
-    /// the generator with [`crate::OpId`] — see [`crate::ids`].
-    pub fn new() -> Self {
-        Self(crate::ids::make_id_53())
+    /// Read the raw 53-bit value (e.g. to put on the wire or into JSON).
+    pub fn get(&self) -> u64 {
+        self.0
     }
-}
 
-impl Default for GlobalEntityId {
-    fn default() -> Self {
-        Self::new()
+    /// Reconstruct an id from a value that already exists — a wire/JSON `u64`
+    /// the API layer is resolving back to an [`Entity`], or serde. This is
+    /// *reconstruction*, not minting: callers must not pass freshly-invented
+    /// numbers here (attach a [`Provenance`] and let the assignment system mint).
+    pub fn from_raw(v: u64) -> Self {
+        Self(v)
+    }
+
+    /// Server-only mint for [`Provenance::Authoritative`] entities. Wraps
+    /// [`crate::ids::make_id_53`]; crate-internal so the assignment system is
+    /// the sole caller.
+    pub(crate) fn allocate_authoritative() -> Self {
+        Self(crate::ids::make_id_53())
     }
 }
 
@@ -230,6 +251,40 @@ impl Default for CelestialClock {
     }
 }
 
+/// Monotonic discrete **simulation tick** — the netcode time substrate (M6).
+///
+/// `CelestialClock`/`TimeWarpState` give *continuous* sim time + warp; netcode
+/// also needs a monotonic integer counter that prediction, rollback,
+/// input-stamping and the shared clock all key off. Advanced once per
+/// `FixedUpdate` step (see [`advance_sim_tick`]). Warp-independent: warp scales
+/// `dt`, not the tick count, so peers can compare ticks directly. Not yet
+/// consumed anywhere — it's the substrate the networking layer (Ph3/Ph4) drives.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq, Reflect,
+         serde::Serialize, serde::Deserialize)]
+#[reflect(Resource)]
+pub struct SimTick(pub u64);
+
+impl SimTick {
+    /// Signed tick distance `self - other`, wrapping-safe.
+    pub fn wrapping_diff(self, other: SimTick) -> i64 {
+        self.0.wrapping_sub(other.0) as i64
+    }
+}
+
+/// Does this process mint [`Provenance::Authoritative`] ids? One bool, set once
+/// at startup; the networking layer (Ph1+) owns *how* it's set (host/server =
+/// `true`, pure client = `false`). Single-process today ⇒ `true` ⇒ behavior
+/// matches the pre-Ph1 "everything gets an id" world, except `Local`-tagged
+/// entities now correctly opt out and Content/Derived become deterministic.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct IsServer(pub bool);
+
+impl Default for IsServer {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
 impl Plugin for LunCoCorePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(LunCoLogPlugin);
@@ -253,18 +308,75 @@ impl Plugin for LunCoCorePlugin {
            .register_type::<ActiveAction>()
            .register_type::<ActionStatus>()
            .register_type::<GlobalEntityId>()
+           .register_type::<Provenance>()
+           .register_type::<SimTick>()
+           .init_resource::<SimTick>()
+           .init_resource::<IsServer>()
            .add_systems(Update, wire_system)
+           .add_systems(FixedUpdate, advance_sim_tick)
            .add_systems(PostUpdate, assign_global_entity_ids);
     }
 }
 
-/// Automatically assigns a [GlobalEntityId] to every entity that lacks one.
+/// Advance the discrete [`SimTick`] once per fixed step, *only while physics is
+/// actually running* (so a paused/zero-speed world freezes the tick and peers
+/// stay comparable). `TimeWarpState` is read optionally: if a binary hasn't
+/// inserted it, we treat the world as running and advance.
+fn advance_sim_tick(mut tick: ResMut<SimTick>, warp: Option<Res<TimeWarpState>>) {
+    let running = warp.map_or(true, |w| w.physics_enabled && w.speed > 0.0);
+    if running {
+        tick.0 = tick.0.wrapping_add(1);
+    }
+}
+
+/// The **only** place [`GlobalEntityId`]s are minted. [`Provenance`] decides how:
+/// Content/Derived → deterministic hash (same on every peer); Authoritative →
+/// server-allocated (clients receive it via replication); Local → no id at all.
+///
+/// **Migration (safe/incremental):** entities not yet tagged with a `Provenance`
+/// keep the pre-Ph1 behavior — an auto-allocated id — and we `warn!` once. This
+/// lands the machinery with zero day-one breakage; spawners get migrated to
+/// attach `Provenance` over time, after which the fallback arm can flip to a
+/// hard skip.
 fn assign_global_entity_ids(
     mut commands: Commands,
-    q_new: Query<Entity, Without<GlobalEntityId>>,
+    q_new: Query<(Entity, Option<&Provenance>), Without<GlobalEntityId>>,
+    is_server: Res<IsServer>,
+    mut warned: Local<bool>,
 ) {
-    for entity in q_new.iter() {
-        commands.entity(entity).insert(GlobalEntityId::new());
+    for (entity, prov) in q_new.iter() {
+        match prov {
+            Some(Provenance::Local) => { /* never networked, no id */ }
+            Some(p @ (Provenance::Content { .. } | Provenance::Derived { .. })) => {
+                if let Some(id) = identity::derive_id(p) {
+                    commands.entity(entity).insert(GlobalEntityId::from_raw(id));
+                }
+            }
+            Some(Provenance::Authoritative) => {
+                // Only the server mints; clients receive the id via replication.
+                if is_server.0 {
+                    commands
+                        .entity(entity)
+                        .insert(GlobalEntityId::allocate_authoritative());
+                }
+            }
+            None => {
+                // Untagged entity — preserve pre-Ph1 behavior (auto-allocate),
+                // warn once. Migrate spawners to attach `Provenance` to opt into
+                // deterministic identity / Local opt-out.
+                if !*warned {
+                    warn!(
+                        "entity without `Provenance` got an auto-allocated \
+                         GlobalEntityId (Ph1 migration fallback). Tag spawners \
+                         with a Provenance to opt into deterministic identity."
+                    );
+                    *warned = true;
+                }
+                commands
+                    .entity(entity)
+                    .insert(GlobalEntityId::allocate_authoritative());
+            }
+        }
     }
 }
 
@@ -284,5 +396,99 @@ fn wire_system(
                 physical.value = (digital.raw_value as f32 / 32767.0) * wire.scale;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod ph1_identity_tests {
+    //! Ph1 Bevy-wiring layer over the pure logic already proven in
+    //! `lunco-networking/proto-tests`. Runs on a bare headless `App` (no
+    //! rendering, no backend) — we invoke the schedules directly so no time
+    //! plumbing is needed.
+    use super::*;
+
+    /// App with just the Ph1 systems + resources, nothing else.
+    fn ph1_app(is_server: bool) -> App {
+        let mut app = App::new();
+        app.insert_resource(IsServer(is_server))
+            .init_resource::<SimTick>()
+            .add_systems(FixedUpdate, advance_sim_tick)
+            .add_systems(PostUpdate, assign_global_entity_ids);
+        app
+    }
+
+    fn id_of(app: &mut App, e: Entity) -> Option<u64> {
+        app.world().get::<GlobalEntityId>(e).map(GlobalEntityId::get)
+    }
+
+    #[test]
+    fn content_entity_gets_deterministic_id() {
+        let mut app = ph1_app(true);
+        let prov = identity::content("usd", "scene.usda", "/World/Rover");
+        let expected = identity::derive_id(&prov).unwrap();
+        let e = app.world_mut().spawn(prov).id();
+        app.world_mut().run_schedule(PostUpdate);
+        assert_eq!(id_of(&mut app, e), Some(expected));
+    }
+
+    #[test]
+    fn local_entity_gets_no_id() {
+        let mut app = ph1_app(true);
+        let e = app.world_mut().spawn(Provenance::Local).id();
+        app.world_mut().run_schedule(PostUpdate);
+        assert_eq!(id_of(&mut app, e), None);
+    }
+
+    #[test]
+    fn authoritative_minted_only_on_server() {
+        // Pure client: no id.
+        let mut client = ph1_app(false);
+        let ce = client.world_mut().spawn(Provenance::Authoritative).id();
+        client.world_mut().run_schedule(PostUpdate);
+        assert_eq!(id_of(&mut client, ce), None);
+
+        // Server: id present.
+        let mut server = ph1_app(true);
+        let se = server.world_mut().spawn(Provenance::Authoritative).id();
+        server.world_mut().run_schedule(PostUpdate);
+        assert!(id_of(&mut server, se).is_some());
+    }
+
+    #[test]
+    fn derived_id_matches_parent_role() {
+        let mut app = ph1_app(true);
+        let parent_prov = identity::content("usd", "scene.usda", "/World/Rover");
+        let parent_id = identity::derive_id(&parent_prov).unwrap();
+        let child_prov = Provenance::Derived {
+            parent: parent_id,
+            role: "wheel.fl".into(),
+        };
+        let expected = identity::derive_id(&child_prov).unwrap();
+        let child = app.world_mut().spawn(child_prov).id();
+        app.world_mut().run_schedule(PostUpdate);
+        assert_eq!(id_of(&mut app, child), Some(expected));
+    }
+
+    #[test]
+    fn sim_tick_advances_under_run_paused_does_not() {
+        let mut app = ph1_app(true);
+
+        // Running world: tick advances each fixed step.
+        app.insert_resource(TimeWarpState {
+            speed: 1.0,
+            physics_enabled: true,
+        });
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(app.world().resource::<SimTick>().0, 1);
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(app.world().resource::<SimTick>().0, 2);
+
+        // Paused: tick frozen.
+        app.insert_resource(TimeWarpState {
+            speed: 0.0,
+            physics_enabled: false,
+        });
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(app.world().resource::<SimTick>().0, 2);
     }
 }

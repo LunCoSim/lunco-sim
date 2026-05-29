@@ -68,7 +68,7 @@ mod tests {
     fn test_assign_and_resolve() {
         let mut registry = ApiEntityRegistry::default();
         let entity = Entity::PLACEHOLDER;
-        let id = GlobalEntityId::new();
+        let id = GlobalEntityId::from_raw(42);
         registry.assign(entity, id);
         assert_eq!(registry.resolve(&id), Some(entity));
     }
@@ -77,7 +77,7 @@ mod tests {
     fn test_remove() {
         let mut registry = ApiEntityRegistry::default();
         let entity = Entity::PLACEHOLDER;
-        let id = GlobalEntityId::new();
+        let id = GlobalEntityId::from_raw(43);
         registry.assign(entity, id);
         registry.remove(entity);
         assert_eq!(registry.resolve(&id), None);

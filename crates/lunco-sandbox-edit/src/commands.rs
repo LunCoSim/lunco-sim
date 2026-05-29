@@ -110,7 +110,7 @@ pub fn on_move_entity_command(
     q_has_rb: Query<(), With<RigidBody>>,
 ) {
     let cmd = trigger.event();
-    let global_id = lunco_core::GlobalEntityId(cmd.entity_id);
+    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
     let Some(target) = registry.resolve(&global_id) else {
         warn!("MOVE_ENTITY: no api_id={} in registry", cmd.entity_id);
         return;

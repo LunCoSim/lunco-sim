@@ -1,0 +1,16 @@
+# Detached throwaway crate: pure-logic prototype + test suite for the
+# backend-agnostic networking core (M1 identity, mechanism selection, big_space
+# rebasing). NO bevy, NO lightyear, NO deps — builds in seconds, runs fast.
+# The `[workspace]` table detaches it from the main workspace so it never touches
+# the main Cargo.lock or build graph.
+[package]
+name = "lunco-net-proto-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+
+[dev-dependencies]
