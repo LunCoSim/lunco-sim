@@ -251,10 +251,20 @@ impl ExperimentRunner for ModelicaRunner {
     fn default_bounds(&self, model: &ModelRef) -> Option<RunBounds> {
         let s = self.state.lock().ok()?;
         let d = s.defaults.get(model)?;
+        // Only report bounds when the annotation actually specified a
+        // horizon. Returning a fabricated `t_end=1.0` here forced callers
+        // to guess "is this a real annotation?" with a fragile
+        // `t_end != 1.0` check that silently dropped a legitimate
+        // `experiment(StopTime=1)`. A stop time is the one field that makes
+        // an experiment annotation usable, so gate on it.
+        let t_end = d.t_end?;
         Some(RunBounds {
             t_start: d.t_start.unwrap_or(0.0),
-            t_end: d.t_end.unwrap_or(1.0),
-            dt: d.interval,
+            t_end,
+            // `Interval=0` is the Modelica spec's "unspecified" sentinel —
+            // map it to `None` so the run loop derives the spec default
+            // (numberOfIntervals=500) instead of treating 0 as a real step.
+            dt: d.interval.filter(|&i| i > 0.0),
             tolerance: d.tolerance,
             solver: d.solver.clone(),
             h0: None,
@@ -457,7 +467,37 @@ fn run_inner(
     );
 
     let t_end = bounds.t_end;
-    let step_dt = bounds.dt.unwrap_or(0.01);
+    // Output sample spacing (`Interval` in the Modelica `experiment`
+    // annotation). The Modelica spec defaults `Interval` to 0, which is a
+    // sentinel for "unspecified" — tools then derive it from a default
+    // `numberOfIntervals` of 500 over [StartTime, StopTime]. So:
+    //   * dt missing OR <= 0 (the spec's 0 sentinel)  → span / 500.
+    //   * an explicit positive Interval               → honoured as given.
+    // The old `unwrap_or(0.01)` ignored the spec entirely and pinned 10 ms
+    // regardless of horizon, so a 1-year run (t_end=3.15e7) tried to emit
+    // ~3.15 BILLION samples and appeared to hang forever.
+    //
+    // SAMPLE_CAP is a non-spec safety backstop: even an explicit (or
+    // derived) interval never emits more than this many points — clamp dt
+    // up and warn. Guards against a pathological hand-authored `Interval`
+    // that would exhaust memory; well-formed models never hit it.
+    const NUM_INTERVALS: f64 = 500.0;
+    const SAMPLE_CAP: f64 = 200_000.0;
+    let span = (t_end - bounds.t_start).max(0.0);
+    let mut step_dt = match bounds.dt {
+        Some(dt) if dt > 0.0 => dt,
+        _ if span > 0.0 => span / NUM_INTERVALS,
+        _ => 0.01, // degenerate zero-length span; emit a couple of points
+    };
+    if span > 0.0 && step_dt > 0.0 && span / step_dt > SAMPLE_CAP {
+        let capped = span / SAMPLE_CAP;
+        bevy::log::warn!(
+            "[runner] Interval={step_dt}s over span={span}s would emit {:.0} \
+             samples (>{SAMPLE_CAP:.0}); clamping to Interval={capped}s",
+            span / step_dt
+        );
+        step_dt = capped;
+    }
     let mut last_progress_emit = std::time::Instant::now();
     
     // Get variable names from the initial state.

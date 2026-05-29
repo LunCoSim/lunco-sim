@@ -62,7 +62,8 @@ These tools are always available:
 | `list_compile_candidates` | List the non-package classes a multi-class doc would let you compile |
 | `get_document_source` | Fetch the in-memory source of an open doc (incl. unsaved edits) |
 | `describe_model` | Full structural view of a class: `class_kind`, `extends`, `components`, `connections`, plus typed `inputs / parameters / outputs` with units & bounds |
-| `snapshot_variables` | One-shot read of current parameter / input / variable values from a running sim |
+| `snapshot_variables` | One-shot read of current parameter / input / variable values from a running **live** sim (not FastRun batch results — use `GetExperimentResult` for those) |
+| `GetExperimentResult` | Read a completed **FastRun** trajectory programmatically: returns `times` + `series` (var → values). Target by `experiment_id`, or `doc` for that doc's latest run. Optional `variables` filter and `max_points` strided downsample (last sample always kept). The programmatic counterpart to the UI's CSV export — call via `execute_command` |
 | `set_input` | Push a runtime input value into a compiled model. Returns `{ok}` or structured error listing known input names |
 | `find_model` | Fuzzy search across bundled / Twin / MSL / open docs. Returns ranked URIs with relevance scores |
 | `cosim_status` | Snapshot every USD-driven cosim entity (`UsdSourcedCosim`): position, velocity, Modelica state, propagated `force_y`. Probe-the-running-sim alternative to log polling |

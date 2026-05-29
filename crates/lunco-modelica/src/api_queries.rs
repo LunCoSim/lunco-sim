@@ -58,6 +58,7 @@ impl Plugin for ModelicaApiQueriesPlugin {
         registry.register(CompileStatusProvider);
         registry.register(RunStatusProvider);
         registry.register(ListRunsProvider);
+        registry.register(GetExperimentResultProvider);
         registry.register(GetDocumentSourceProvider);
         registry.register(DescribeModelProvider);
         registry.register(SnapshotVariablesProvider);
@@ -725,6 +726,173 @@ fn parse_experiment_id(
         .and_then(|v| v.as_str())
         .and_then(|s| uuid::Uuid::parse_str(s).ok())
         .map(ExperimentId)
+}
+
+/// Resolve the most-recently-created experiment for `doc_id` to its id.
+/// Mirrors [`latest_run_for_doc`] but returns the id so a caller can
+/// look up the full result. `None` when the doc has no runs.
+fn latest_experiment_id_for_doc(
+    world: &World,
+    doc_id: DocumentId,
+) -> Option<ExperimentId> {
+    let sources = world.get_resource::<ExperimentSources>()?;
+    let registry = world.get_resource::<ExperimentRegistry>()?;
+    let mut best: Option<&lunco_experiments::Experiment> = None;
+    for (id, d) in &sources.0 {
+        if *d != doc_id {
+            continue;
+        }
+        if let Some(exp) = registry.get(*id) {
+            best = match best {
+                Some(prev) if prev.created_at >= exp.created_at => Some(prev),
+                _ => Some(exp),
+            };
+        }
+    }
+    best.map(|e| e.id)
+}
+
+// ─── GetExperimentResult ───────────────────────────────────────────────
+//
+// Reads completed FastRun trajectory data (`times` + `series`) out of the
+// `ExperimentRegistry` so clients can analyse runs without screenshotting
+// plot widgets — the programmatic counterpart to the UI's CSV export.
+//
+// Params:
+//   - `experiment_id` (string)  — run to read; OR
+//   - `doc` (u64)               — read the doc's latest run (convenience).
+//   - `variables` (string[])    — optional filter; default = all series.
+//   - `max_points` (u64)        — optional cap; strided downsample, last
+//                                 sample always kept. Default = uncapped.
+struct GetExperimentResultProvider;
+
+impl ApiQueryProvider for GetExperimentResultProvider {
+    fn name(&self) -> &'static str {
+        "GetExperimentResult"
+    }
+
+    fn execute(
+        &self,
+        world: &mut World,
+        params: &serde_json::Value,
+    ) -> ApiResponse {
+        // Resolve target run: explicit id wins, else latest for `doc`.
+        let id = match parse_experiment_id(params, "experiment_id") {
+            Some(id) => id,
+            None => match parse_doc_id(params, "doc") {
+                Some(doc) => match latest_experiment_id_for_doc(world, doc) {
+                    Some(id) => id,
+                    None => {
+                        return ApiResponse::error(
+                            ApiErrorCode::EntityNotFound,
+                            format!("no runs for doc {}", doc.raw()),
+                        );
+                    }
+                },
+                None => {
+                    return ApiResponse::error(
+                        ApiErrorCode::DeserializationError,
+                        "provide `experiment_id` or `doc`".to_string(),
+                    );
+                }
+            },
+        };
+
+        // Optional variable filter.
+        let want: Option<Vec<String>> = params
+            .get("variables")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            });
+        // Optional downsample cap.
+        let max_points = params
+            .get("max_points")
+            .and_then(|v| v.as_u64())
+            .map(|n| n.max(2) as usize);
+
+        let Some(registry) = world.get_resource::<ExperimentRegistry>() else {
+            return ApiResponse::error(
+                ApiErrorCode::EntityNotFound,
+                "experiment registry not installed".to_string(),
+            );
+        };
+        let Some(exp) = registry.get(id) else {
+            return ApiResponse::error(
+                ApiErrorCode::EntityNotFound,
+                format!("experiment {id:?} not in registry"),
+            );
+        };
+        let Some(result) = &exp.result else {
+            // Run dispatched but not done (pending/running/failed-no-partial).
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                format!(
+                    "experiment {} has no result (state: {})",
+                    exp.id.0,
+                    run_state_label(&exp.status)
+                ),
+            );
+        };
+
+        let total = result.times.len();
+        // Strided downsample: stride 1 when uncapped or already small.
+        let stride = match max_points {
+            Some(cap) if total > cap => total.div_ceil(cap),
+            _ => 1,
+        };
+        let sample = |v: &[f64]| -> Vec<f64> {
+            if stride <= 1 {
+                return v.to_vec();
+            }
+            let mut out: Vec<f64> = v.iter().step_by(stride).copied().collect();
+            // Always keep the final sample so the horizon endpoint shows.
+            if let (Some(&last), Some(&got)) = (v.last(), out.last()) {
+                if last != got {
+                    out.push(last);
+                }
+            }
+            out
+        };
+
+        let times = sample(&result.times);
+        let mut series_json = serde_json::Map::new();
+        let mut missing: Vec<String> = Vec::new();
+        match &want {
+            Some(names) => {
+                for n in names {
+                    match result.series.get(n) {
+                        Some(v) => {
+                            series_json
+                                .insert(n.clone(), serde_json::json!(sample(v)));
+                        }
+                        None => missing.push(n.clone()),
+                    }
+                }
+            }
+            None => {
+                for (n, v) in &result.series {
+                    series_json
+                        .insert(n.clone(), serde_json::json!(sample(v)));
+                }
+            }
+        }
+
+        ApiResponse::ok(serde_json::json!({
+            "experiment_id": exp.id.0.to_string(),
+            "name": exp.name,
+            "state": run_state_label(&exp.status),
+            "total_points": total,
+            "returned_points": times.len(),
+            "downsampled": stride > 1,
+            "variable_count": series_json.len(),
+            "missing_variables": missing,
+            "times": times,
+            "series": serde_json::Value::Object(series_json),
+        }))
+    }
 }
 
 // ─── GetDocumentSource (spec 033 P0, US 1.6) ───────────────────────────

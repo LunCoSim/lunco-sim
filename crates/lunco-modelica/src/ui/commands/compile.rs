@@ -1176,9 +1176,15 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
 
         // Bounds priority: fallback → annotation → draft override →
         // command override. Each layer overrides the previous.
+        //
+        // Layer 1 fallback = the Modelica `experiment` annotation defaults
+        // (StartTime=0, StopTime=1). `dt`/`tolerance` stay `None` so the run
+        // loop resolves them to their spec defaults (Interval via
+        // numberOfIntervals=500; tolerance per the runner's stack). This is
+        // only hit when the model carries no experiment annotation at all.
         let mut bounds = lunco_experiments::RunBounds {
             t_start: 0.0,
-            t_end: 10.0,
+            t_end: 1.0,
             dt: None,
             tolerance: None,
             solver: None,
@@ -1186,10 +1192,13 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
         };
 
         // Layer 2: annotation (from AST, now seeded into runner cache).
+        // `default_bounds` returns `Some` only when the model actually
+        // carries an `experiment(StopTime=…)` annotation, so we can apply
+        // it unconditionally — including its `Interval` → `dt`, which the
+        // run loop needs to avoid defaulting to a 10 ms sample interval on
+        // long horizons.
         if let Some(annotated) = runner_res.0.default_bounds(&model_ref) {
-            if annotated.t_start != 0.0 || annotated.t_end != 1.0 {
-                bounds = annotated;
-            }
+            bounds = annotated;
         }
 
         // Layer 3: experiment draft override (from UI setup dialog).

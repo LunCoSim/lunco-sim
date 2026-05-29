@@ -49,6 +49,12 @@ Key rules:
 | `RestartActiveModel` | Reset + Run |
 | `FastRunActiveModel` | Batch run → Experiment (orthogonal, unchanged) |
 
+`FastRunActiveModel` results are read back programmatically via the
+`GetExperimentResult` query (`times` + `series`, optional `variables`
+filter / `max_points` downsample) — the API counterpart to the UI's CSV
+export. `snapshot_variables` reads the **live** sim only, not FastRun
+batch results.
+
 ## Architecture at a glance
 
 ### Document as source of truth
