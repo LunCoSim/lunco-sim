@@ -223,7 +223,7 @@ fn fire_app_exit(world: &mut World) {
 /// detached watchdog that force-terminates the process after a short grace
 /// period if the clean shutdown hasn't finished. Idempotent via `Once`, so
 /// arming it from both exit commit points (no-dirty path + finalizer) is safe.
-fn arm_shutdown_watchdog() {
+pub(crate) fn arm_shutdown_watchdog() {
     use std::sync::Once;
     static WATCHDOG: Once = Once::new();
     WATCHDOG.call_once(|| {
@@ -244,7 +244,7 @@ fn arm_shutdown_watchdog() {
 /// graceful path so the watchdog rarely has to fire; it can't interrupt a
 /// thread stuck inside a rumoca compile (no cancel hook there) — that's what
 /// the watchdog is for.
-fn cancel_inflight_runs(world: &World) {
+pub(crate) fn cancel_inflight_runs(world: &World) {
     if let Some(pending) =
         world.get_resource::<crate::experiments_runner::PendingHandles>()
     {
