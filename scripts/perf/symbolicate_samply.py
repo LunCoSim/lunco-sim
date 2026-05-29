@@ -35,6 +35,53 @@ import shutil
 PARK_LIBS = ("libc.so", "libpthread", "ld-linux", "libstdc++")
 
 
+def _find_symbolizer():
+    """Prefer llvm-symbolizer — GNU addr2line takes >60s per batch on our
+    multi-GB optimized+debuginfo binaries and times out, leaving every
+    address unresolved. Returns (cmd_list_builder, parse_mode) or None."""
+    for cand in ("llvm-symbolizer", "llvm-symbolizer-18", "llvm-symbolizer-17",
+                 "llvm-symbolizer-16", "llvm-symbolizer-15"):
+        exe = shutil.which(cand) or shutil.which(f"/usr/bin/{cand}")
+        if exe:
+            return (exe, "llvm")
+    exe = shutil.which("addr2line")
+    if exe:
+        return (exe, "addr2line")
+    return None
+
+
+def _resolve(symbolizer, binpath, addrs):
+    """Return {addr: (func, 'file:line')} for the given lib-relative addrs."""
+    exe, mode = symbolizer
+    if mode == "llvm":
+        # llvm-symbolizer reads addresses on stdin; emits per address:
+        #   <func>\n<file>:<line>:<col>\n  (one extra blank line as separator)
+        stdin = "".join(f"{hex(a)}\n" for a in addrs)
+        out = subprocess.run(
+            [exe, "--obj", binpath, "-f", "-C", "--output-style=LLVM"],
+            input=stdin, capture_output=True, text=True, timeout=300,
+        ).stdout
+        blocks = out.split("\n\n")
+        result = {}
+        for a, block in zip(addrs, blocks):
+            lines = [l for l in block.splitlines() if l.strip()]
+            fnc = lines[0].strip() if lines else "??"
+            loc = lines[1].strip() if len(lines) > 1 else "??"
+            result[a] = (fnc, loc)
+        return result
+    # GNU addr2line fallback: 2 lines per addr (func, then file:line).
+    out = subprocess.run(
+        [exe, "-f", "-C", "-e", binpath] + [hex(a) for a in addrs],
+        capture_output=True, text=True, timeout=300,
+    ).stdout.splitlines()
+    result = {}
+    for i, a in enumerate(addrs):
+        fnc = out[2 * i].strip() if 2 * i < len(out) else "??"
+        loc = out[2 * i + 1].strip() if 2 * i + 1 < len(out) else "??"
+        result[a] = (fnc, loc)
+    return result
+
+
 def load(path):
     op = gzip.open if path.endswith(".gz") else open
     with op(path, "rt") as f:
@@ -51,8 +98,9 @@ def main():
         skip_start = float(sys.argv[i + 1]) * 1000.0  # ms
         del sys.argv[i:i + 2]
     top_n = int(sys.argv[2]) if len(sys.argv) > 2 else 40
-    if not shutil.which("addr2line"):
-        sys.exit("addr2line not found (install binutils)")
+    symbolizer = _find_symbolizer()
+    if symbolizer is None:
+        sys.exit("no symbolizer found (install llvm or binutils)")
 
     prof = load(path)
     libs = prof["libs"]  # index-aligned with resourceTable .lib
@@ -107,18 +155,10 @@ def main():
                 resolved[(lib_idx, a)] = f"[park/syscall in {name}]"
             continue
         try:
-            # addr2line wants hex offsets; samply addresses are already
-            # library-relative virtual addresses.
-            out = subprocess.run(
-                ["addr2line", "-f", "-C", "-e", binpath]
-                + [hex(a) for a in addrs],
-                capture_output=True, text=True, timeout=60,
-            ).stdout.splitlines()
-            # addr2line prints 2 lines per addr: function, then file:line
-            for i, a in enumerate(addrs):
-                fnc = out[2 * i].strip() if 2 * i < len(out) else "??"
-                loc = out[2 * i + 1].strip() if 2 * i + 1 < len(out) else "??"
-                if fnc == "??":
+            res_map = _resolve(symbolizer, binpath, addrs)
+            for a in addrs:
+                fnc, loc = res_map.get(a, ("??", "??"))
+                if fnc == "??" or not fnc:
                     resolved[(lib_idx, a)] = f"[{name} {hex(a)}]"
                 else:
                     loc = loc.split("/")[-1]
