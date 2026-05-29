@@ -1494,6 +1494,18 @@ pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Command
             let twin = crate::ui::doc_pin::twin_id_for_doc(doc);
             removed = reg.delete_for_twin(&twin);
         }
+        // Drop the borrow before touching ExperimentSources.
+        let live: std::collections::HashSet<lunco_experiments::ExperimentId> =
+            reg.iter_all().map(|e| e.id).collect();
+        drop(reg);
+        // Keep the doc→run mapping in lockstep with the registry: any id no
+        // longer present was just deleted, so forget it here (the drainer no
+        // longer prunes on terminal). Robust across all delete paths above.
+        if let Some(mut sources) =
+            world.get_resource_mut::<crate::experiments_runner::ExperimentSources>()
+        {
+            sources.0.retain(|id, _| live.contains(id));
+        }
         bevy::log::info!(
             "[DeleteExperiment] removed {removed} run(s) (all={all}, id={target:?}, doc={doc:?})"
         );

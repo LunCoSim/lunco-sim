@@ -1025,7 +1025,7 @@ pub fn drain_pending_handles(
     mut ev_completed: MessageWriter<RunCompleted>,
     mut ev_failed: MessageWriter<RunFailed>,
     mut ev_cancelled: MessageWriter<RunCancelled>,
-    mut sources: ResMut<ExperimentSources>,
+    sources: Res<ExperimentSources>,
     mut console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
     mut plot_states: Option<ResMut<crate::ui::panels::experiments::PlotPanelStates>>,
     active_plot: Option<Res<crate::ui::panels::experiments::ActivePlot>>,
@@ -1190,9 +1190,12 @@ pub fn drain_pending_handles(
                 }
             }
         }
-        if terminal {
-            sources.0.remove(&handle.run_id);
-        } else {
+        // NOTE: do NOT drop sources.0[run_id] when a run goes terminal.
+        // Completed runs must stay resolvable by `doc` (GetExperimentResult
+        // / ListRuns `doc` filter, CompileStatus.latest_run). The mapping is
+        // cleared in lockstep with the registry by DeleteExperiment instead;
+        // dropping it here made every finished run unreachable by doc.
+        if !terminal {
             keep.push(handle);
         }
     }
