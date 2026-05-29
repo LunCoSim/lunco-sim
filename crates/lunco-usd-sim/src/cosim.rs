@@ -354,15 +354,31 @@ pub fn wrap_modelica_into_simcomponent(
     }
 }
 
+/// Copy `f64` port values into a destination map, allocating a `String`
+/// key only on the *first* tick a port appears. The cosim sync systems
+/// below run every `FixedUpdate`; the keys (`"height"`, `"netForce"`, …)
+/// are stable, so after the first step every port already exists and
+/// this updates in place with zero allocation. The old
+/// `dst.insert(name.clone(), v)` re-allocated every key every tick.
+#[inline]
+fn upsert_ports<'a>(dst: &mut HashMap<String, f64>, src: impl Iterator<Item = (&'a String, &'a f64)>) {
+    for (name, val) in src {
+        match dst.get_mut(name) {
+            Some(slot) => *slot = *val,
+            None => {
+                dst.insert(name.clone(), *val);
+            }
+        }
+    }
+}
+
 /// Per-tick: ModelicaModel.variables → SimComponent.outputs.
 /// Lets `propagate_connections` see fresh Modelica outputs each step.
 pub fn sync_modelica_outputs(
     mut q: Query<(&ModelicaModel, &mut SimComponent), With<UsdSourcedCosim>>,
 ) {
     for (model, mut comp) in &mut q {
-        for (name, val) in &model.variables {
-            comp.outputs.insert(name.clone(), *val);
-        }
+        upsert_ports(&mut comp.outputs, model.variables.iter());
         comp.status = if model.paused { SimStatus::Paused } else { SimStatus::Running };
     }
 }
@@ -374,9 +390,7 @@ pub fn sync_modelica_inputs(
     mut q: Query<(&SimComponent, &mut ModelicaModel), With<UsdSourcedCosim>>,
 ) {
     for (comp, mut model) in &mut q {
-        for (name, val) in &comp.inputs {
-            model.inputs.insert(name.clone(), *val);
-        }
+        upsert_ports(&mut model.inputs, comp.inputs.iter());
     }
 }
 
@@ -385,9 +399,7 @@ pub fn sync_script_outputs(
     mut q: Query<(&ScriptedModel, &mut SimComponent), With<UsdSourcedCosim>>,
 ) {
     for (model, mut comp) in &mut q {
-        for (name, val) in &model.outputs {
-            comp.outputs.insert(name.clone(), *val);
-        }
+        upsert_ports(&mut comp.outputs, model.outputs.iter());
     }
 }
 
@@ -396,9 +408,7 @@ pub fn sync_script_inputs(
     mut q: Query<(&SimComponent, &mut ScriptedModel), With<UsdSourcedCosim>>,
 ) {
     for (comp, mut model) in &mut q {
-        for (name, val) in &comp.inputs {
-            model.inputs.insert(name.to_string(), *val);
-        }
+        upsert_ports(&mut model.inputs, comp.inputs.iter());
     }
 }
 
