@@ -275,7 +275,9 @@ fn instantiate_usd_prim(
         let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
 
-        let reader = (*stage.reader).clone();
+        // Borrow — `stage.reader` is `Arc<TextReader>`; deep-cloning it copies
+        // the whole stage `HashMap`. Every read below is `&self`.
+        let reader = &*stage.reader;
 
         // Skip inactive prims
         if let Ok(val) = reader.get(&sdf_path, "active") {
@@ -303,7 +305,7 @@ fn instantiate_usd_prim(
         // collider-only Cube prims hidden behind a glTF visual, and
         // raycast wheel cylinders that have no visible representation).
         let invisible = matches!(
-            get_attribute_as_string(&reader, &sdf_path, "visibility").as_deref(),
+            get_attribute_as_string(reader, &sdf_path, "visibility").as_deref(),
             Some("invisible")
         );
 
@@ -383,7 +385,7 @@ fn instantiate_usd_prim(
 
         // Apply standard PBR material with USD color
         if let Some(ref m) = mesh_handle {
-            apply_standard_material(&reader, &sdf_path, m, materials, &mut commands.entity(entity));
+            apply_standard_material(reader, &sdf_path, m, materials, &mut commands.entity(entity));
         }
 
         // glTF / external-mesh branch.
@@ -404,10 +406,10 @@ fn instantiate_usd_prim(
         //   attach as a `SceneRoot` child. Preserves hierarchy,
         //   materials, and lights at the cost of being opaque to the
         //   USD prim-path tree.
-        if let Some(asset_uri) = get_attribute_as_string(&reader, &sdf_path, "lunco:resolvedAsset") {
-            let mode = get_attribute_as_string(&reader, &sdf_path, "lunco:assetMode")
+        if let Some(asset_uri) = get_attribute_as_string(reader, &sdf_path, "lunco:resolvedAsset") {
+            let mode = get_attribute_as_string(reader, &sdf_path, "lunco:assetMode")
                 .unwrap_or_else(|| "scene".to_string());
-            let label = get_attribute_as_string(&reader, &sdf_path, "lunco:assetLabel");
+            let label = get_attribute_as_string(reader, &sdf_path, "lunco:assetLabel");
 
             match mode.as_str() {
                 "mesh" => {
@@ -418,7 +420,7 @@ fn instantiate_usd_prim(
                     // construction unchanged — the entity ends up with
                     // a `Mesh3d` exactly like the Cube/Sphere branches.
                     apply_standard_material(
-                        &reader,
+                        reader,
                         &sdf_path,
                         &mesh_h,
                         materials,
@@ -446,13 +448,13 @@ fn instantiate_usd_prim(
         // Only override position/rotation if the USD prim has explicit NON-ZERO values.
         // A zero translation in USD means "no offset" — it shouldn't overwrite a spawn position.
         let mut transform = existing_tf.cloned().unwrap_or_default();
-        if let Some(v) = get_attribute_as_vec3(&reader, &sdf_path, "xformOp:translate") {
+        if let Some(v) = get_attribute_as_vec3(reader, &sdf_path, "xformOp:translate") {
             // Only apply USD translation if it's non-zero (to avoid overwriting spawn positions)
             if v.length_squared() > 1e-6 {
                 transform.translation = v;
             }
         }
-        if let Some(v) = get_attribute_as_vec3(&reader, &sdf_path, "xformOp:rotateXYZ") {
+        if let Some(v) = get_attribute_as_vec3(reader, &sdf_path, "xformOp:rotateXYZ") {
             // USD stores rotation in degrees; convert to radians for Bevy
             // Only apply USD rotation if it's non-zero (to preserve existing spawn rotation)
             let is_zero = v.x.abs() < 1e-6 && v.y.abs() < 1e-6 && v.z.abs() < 1e-6;
@@ -476,7 +478,7 @@ fn instantiate_usd_prim(
                 },
                 Err(_) => None,
             }
-            .or_else(|| get_attribute_as_string(&reader, &sdf_path, "axis"))
+            .or_else(|| get_attribute_as_string(reader, &sdf_path, "axis"))
             .unwrap_or_else(|| "Z".to_string());
             let axis_rot = match axis.as_str() {
                 "X" => Some(Quat::from_rotation_arc(Vec3::Y, Vec3::X)),
@@ -492,7 +494,7 @@ fn instantiate_usd_prim(
         // composed with translate + rotate. Spec-compliant `Cube`
         // prims rely on this to express width/height/depth without
         // the legacy `width`/`height`/`depth` attributes.
-        if let Some(v) = get_attribute_as_vec3(&reader, &sdf_path, "xformOp:scale") {
+        if let Some(v) = get_attribute_as_vec3(reader, &sdf_path, "xformOp:scale") {
             let nonzero = v.x.abs() > 1e-6 || v.y.abs() > 1e-6 || v.z.abs() > 1e-6;
             if nonzero {
                 transform.scale = v;
@@ -530,10 +532,10 @@ fn instantiate_usd_prim(
 
             // Pre-read child transform from USD
             let mut child_tf = Transform::default();
-            if let Some(v) = get_attribute_as_vec3(&reader, &child_path, "xformOp:translate") {
+            if let Some(v) = get_attribute_as_vec3(reader, &child_path, "xformOp:translate") {
                 child_tf.translation = v;
             }
-            if let Some(v) = get_attribute_as_vec3(&reader, &child_path, "xformOp:rotateXYZ") {
+            if let Some(v) = get_attribute_as_vec3(reader, &child_path, "xformOp:rotateXYZ") {
                 let rx = v.x.to_radians();
                 let ry = v.y.to_radians();
                 let rz = v.z.to_radians();

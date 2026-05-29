@@ -123,7 +123,7 @@ pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
 ///
 /// Handles both `TokenVec` (resolved) and `TokenListOp` (with prepend/append ops)
 /// since the USD parser stores apiSchemas as a list operation.
-fn has_api_schema(reader: &mut TextReader, path: &SdfPath, schema_name: &str) -> bool {
+fn has_api_schema(reader: &TextReader, path: &SdfPath, schema_name: &str) -> bool {
     if let Ok(val) = reader.get(path, "apiSchemas") {
         match val.as_ref() {
             Value::TokenVec(tokens) => {
@@ -249,7 +249,10 @@ fn process_usd_sim_prims(
     for prim_path in q_all_prims.iter() {
         if !seen_stages.insert(prim_path.stage_handle.clone()) { continue; }
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
-        let reader = (*stage.reader).clone();
+        // Borrow — `stage.reader` is `Arc<TextReader>`; `(*…).clone()` deep-copied
+        // the whole stage `HashMap<String, sdf::Value>` once per stage. The
+        // reads below (`iter`/`get`/`read_rel_target`) only need `&self`.
+        let reader = &*stage.reader;
         for (path, _spec) in reader.iter() {
             let Ok(val) = reader.get(path, "typeName") else { continue; };
             let type_name = match &*val {
@@ -258,7 +261,7 @@ fn process_usd_sim_prims(
                 _ => None,
             };
             if type_name.as_deref() == Some("PhysicsRevoluteJoint") {
-                if let Some(body1) = read_rel_target(&reader, path, "physics:body1") {
+                if let Some(body1) = read_rel_target(reader, path, "physics:body1") {
                     debug!("USD joint dispatch: {} → wheel {}", path.as_str(), body1);
                     joint_targets.insert(
                         (prim_path.stage_handle.clone(), body1),
@@ -286,7 +289,9 @@ fn process_usd_sim_prims(
             continue;
         }
 
-        let mut reader = (*stage.reader).clone();
+        // Borrow, not deep-clone (per prim, every frame until the scene
+        // settles — see the pass-1 note above). All reads below are `&self`.
+        let reader = &*stage.reader;
         let existing_tf = maybe_tf.cloned().unwrap_or_default();
 
         // 0. Detect Avatar prim
@@ -404,7 +409,7 @@ fn process_usd_sim_prims(
 
         // 1. Detect PhysxVehicleContextAPI (The Rover Root)
         // Creates FlightSoftware with 4 digital ports + RoverVessel + Vessel markers
-        if has_api_schema(&mut reader, &sdf_path, "PhysxVehicleContextAPI") {
+        if has_api_schema(reader, &sdf_path, "PhysxVehicleContextAPI") {
             info!("Intercepted PhysxVehicleContextAPI for {}, initializing Flight Software", prim_path.path);
 
             let mut port_map = HashMap::new();
@@ -432,7 +437,7 @@ fn process_usd_sim_prims(
             // downstream code that needs to know wheels and chassis
             // are kinematically coupled even after the wheels are
             // reparented out of the Bevy hierarchy.
-            if has_api_schema(&mut reader, &sdf_path, "PhysicsArticulationRootAPI") {
+            if has_api_schema(reader, &sdf_path, "PhysicsArticulationRootAPI") {
                 commands.entity(entity).insert(ArticulationRoot);
                 info!("Detected PhysicsArticulationRootAPI on {}", prim_path.path);
             }
@@ -441,13 +446,13 @@ fn process_usd_sim_prims(
         }
 
         // 2. Detect Drive Schemas (Chassis Logic)
-        if has_api_schema(&mut reader, &sdf_path, "PhysxVehicleDriveSkidAPI") {
+        if has_api_schema(reader, &sdf_path, "PhysxVehicleDriveSkidAPI") {
             info!("Detected Skid Drive for {}", prim_path.path);
             commands.entity(entity).insert(DifferentialDrive {
                 left_port: "drive_left".to_string(),
                 right_port: "drive_right".to_string(),
             });
-        } else if has_api_schema(&mut reader, &sdf_path, "PhysxVehicleDrive4WAPI") {
+        } else if has_api_schema(reader, &sdf_path, "PhysxVehicleDrive4WAPI") {
             info!("Detected Ackermann Drive for {}", prim_path.path);
             commands.entity(entity).insert(AckermannSteer {
                 drive_left_port: "drive_left".to_string(),
@@ -493,7 +498,7 @@ fn process_usd_sim_prims(
                     &mut commands, entity, prim_path, &existing_tf,
                     maybe_mesh, maybe_mat, maybe_child_of,
                     radius, p_drive,
-                    &mut reader, joint_sdf.as_ref(),
+                    reader, joint_sdf.as_ref(),
                 );
             } else {
                 setup_raycast_wheel(
@@ -630,7 +635,7 @@ fn setup_physical_wheel(
     maybe_child_of: Option<&ChildOf>,
     radius: f32,
     p_drive: Entity,
-    reader: &mut TextReader,
+    reader: &TextReader,
     joint_sdf: Option<&SdfPath>,
 ) {
     info!("Setting up PHYSICAL wheel {}", prim_path.path);

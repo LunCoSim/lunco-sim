@@ -69,4 +69,17 @@ disallowed-methods = [
     { path = "bevy_ecs::system::EntityCommands::add_child", reason = "Re-parenting a GridAnchor must use lunco_core::attach::migrate_to_grid for atomic (ChildOf, CellCoord, Transform) writes. Local #[allow] for non-spatial parenting (visuals, ports, wires)." },
     { path = "bevy_ecs::world::EntityWorldMut::add_child", reason = "See EntityCommands::add_child — same atomicity contract. Direct-World mode flushes synchronously, so a local #[allow] is fine for bootstrap code." },
     { path = "bevy_transform::commands::BuildChildrenTransformExt::set_parent_in_place", reason = "Use lunco_core::attach::migrate_to_grid. Local #[allow] for one-time scene construction in big_space_setup." },
+
+    # ── Deep-cloning a USD stage reader ───────────────────────────────
+    # `UsdStageAsset.reader` is `Arc<TextReader>` precisely so the whole
+    # stage `HashMap<String, sdf::Value>` is shared by *borrow*. Writing
+    # `(*stage.reader).clone()` deep-copies the entire stage per call —
+    # the bug behind the 2026-05-29 sandbox FPS regression (a per-prim,
+    # per-frame full-stage copy in the USD→cosim translators). Every read
+    # the translators need (`get`, `iter`, `prim_attribute_value`,
+    # `read_rel_target`) takes `&self`, so borrow `&*stage.reader`.
+    # NOTE: cloning the `Arc` itself (`stage.reader.clone()`, a refcount
+    # bump) resolves to `Arc::clone` and is NOT matched by this entry —
+    # only the inner `TextReader::clone` is banned. See scripts/perf/README.md.
+    { path = "openusd::usda::TextReader::clone", reason = "Borrow `&*stage.reader` — deep-cloning the stage reader copies the whole HashMap per call (caused the 2026-05-29 FPS regression). Arc::clone is fine." },
 ]

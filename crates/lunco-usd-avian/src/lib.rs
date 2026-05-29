@@ -330,7 +330,9 @@ fn process_usd_avian_prims(
         let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
 
-        let reader = (*stage.reader).clone();
+        // Borrow — `stage.reader` is `Arc<TextReader>`; deep-cloning it copies
+        // the whole stage `HashMap`. Every read here is `&self`.
+        let reader = &*stage.reader;
 
         // Skip wheel prims — the sim plugin handles those
         if reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleWheel:radius").is_some() {
@@ -339,9 +341,9 @@ fn process_usd_avian_prims(
         }
 
         // Detect API schemas
-        let has_rigid_body_api = has_api_schema(&reader, &sdf_path, "PhysicsRigidBodyAPI");
-        let has_collision_api = has_api_schema(&reader, &sdf_path, "PhysicsCollisionAPI");
-        let has_terrain_api = has_api_schema(&reader, &sdf_path, "PhysxTerrainAPI");
+        let has_rigid_body_api = has_api_schema(reader, &sdf_path, "PhysicsRigidBodyAPI");
+        let has_collision_api = has_api_schema(reader, &sdf_path, "PhysicsCollisionAPI");
+        let has_terrain_api = has_api_schema(reader, &sdf_path, "PhysxTerrainAPI");
 
         // ── TERRAIN HANDLING ──
         // Terrain is a static collider with the TerrainTile marker.
@@ -350,7 +352,7 @@ fn process_usd_avian_prims(
                 RigidBody::Static,
                 lunco_terrain::TerrainTile,
             ));
-            add_collider_from_usd(&mut commands, entity, &reader, &sdf_path);
+            add_collider_from_usd(&mut commands, entity, reader, &sdf_path);
             commands.entity(entity).insert(UsdAvianProcessed);
             return;
         }
@@ -358,14 +360,14 @@ fn process_usd_avian_prims(
         if has_rigid_body_api {
             // ── COMPOUND BODY ROOT ──
             // Read child collider shapes from USD and build compound collider
-            let compound_shapes = collect_child_colliders_from_usd(&reader, &sdf_path);
+            let compound_shapes = collect_child_colliders_from_usd(reader, &sdf_path);
 
             if !compound_shapes.is_empty() {
                 let compound = Collider::compound(compound_shapes);
                 commands.entity(entity).insert(compound);
             } else {
                 // No children with colliders — try this prim itself
-                add_collider_from_usd(&mut commands, entity, &reader, &sdf_path);
+                add_collider_from_usd(&mut commands, entity, reader, &sdf_path);
             }
 
             // Honour `bool physics:kinematicEnabled = true` for
@@ -412,7 +414,7 @@ fn process_usd_avian_prims(
             // Exception: root-level (no parent) → static collider.
             if q_child_of.get(entity).is_err() {
                 commands.entity(entity).insert(RigidBody::Static);
-                add_collider_from_usd(&mut commands, entity, &reader, &sdf_path);
+                add_collider_from_usd(&mut commands, entity, reader, &sdf_path);
             }
 
             commands.entity(entity).insert(UsdAvianProcessed);
@@ -437,10 +439,10 @@ fn process_usd_avian_prims(
                 if let Some(f) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:friction") {
                     commands.entity(entity).insert(Friction::new(f.into()));
                 }
-                add_collider_from_usd(&mut commands, entity, &reader, &sdf_path);
+                add_collider_from_usd(&mut commands, entity, reader, &sdf_path);
             } else if let Some(false) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
                 commands.entity(entity).insert(RigidBody::Static);
-                add_collider_from_usd(&mut commands, entity, &reader, &sdf_path);
+                add_collider_from_usd(&mut commands, entity, reader, &sdf_path);
             }
 
             commands.entity(entity).insert(UsdAvianProcessed);
@@ -463,7 +465,8 @@ fn on_add_usd_prim(
     let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
     let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
 
-    let reader = (*stage.reader).clone();
+    // Borrow, not deep-clone the `Arc<TextReader>` (whole-stage copy).
+    let reader = &*stage.reader;
 
     // Skip wheel prims — the sim plugin handles those (raycast wheels don't need physical bodies)
     if reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleWheel:radius").is_some() {
@@ -474,8 +477,8 @@ fn on_add_usd_prim(
     if let Ok(val) = reader.get(&sdf_path, "typeName") {
         if let Value::Token(type_name) = &*val {
             if type_name.starts_with("Physics") && type_name.ends_with("Joint") {
-                let body0 = read_rel_target(&reader, &sdf_path, "physics:body0");
-                let body1 = read_rel_target(&reader, &sdf_path, "physics:body1");
+                let body0 = read_rel_target(reader, &sdf_path, "physics:body0");
+                let body1 = read_rel_target(reader, &sdf_path, "physics:body1");
 
                 // Wheel-targeted joints are owned by `lunco-usd-sim` —
                 // it spawns them synchronously inside `setup_physical_wheel`
@@ -499,14 +502,14 @@ fn on_add_usd_prim(
                         // authoring used a `physics:axis0` Vec3 — keep
                         // that as a fallback for any in-tree scenes
                         // that haven't been migrated yet.
-                        let axis = read_token_attribute(&reader, &sdf_path, "physics:axis")
+                        let axis = read_token_attribute(reader, &sdf_path, "physics:axis")
                             .and_then(|t| match t.as_str() {
                                 "X" => Some(DVec3::X),
                                 "Y" => Some(DVec3::Y),
                                 "Z" => Some(DVec3::Z),
                                 _ => None,
                             })
-                            .or_else(|| read_vec3_attribute(&reader, &sdf_path, "physics:axis0"))
+                            .or_else(|| read_vec3_attribute(reader, &sdf_path, "physics:axis0"))
                             .unwrap_or(DVec3::Y);
                         // UsdPhysics `physics:localPos0/1` give the
                         // joint anchor on each body in that body's
@@ -514,9 +517,9 @@ fn on_add_usd_prim(
                         // both body centres to coincide — useful only
                         // when the bodies are co-located, which is
                         // rarely true in practice.
-                        let local_pos0 = read_vec3_attribute(&reader, &sdf_path, "physics:localPos0")
+                        let local_pos0 = read_vec3_attribute(reader, &sdf_path, "physics:localPos0")
                             .unwrap_or(DVec3::ZERO);
-                        let local_pos1 = read_vec3_attribute(&reader, &sdf_path, "physics:localPos1")
+                        let local_pos1 = read_vec3_attribute(reader, &sdf_path, "physics:localPos1")
                             .unwrap_or(DVec3::ZERO);
                         let limit_lower = reader.prim_attribute_value::<f64>(&sdf_path, "physics:limitLower")
                             .unwrap_or(f64::NEG_INFINITY);
