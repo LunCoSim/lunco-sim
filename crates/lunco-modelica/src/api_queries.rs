@@ -714,7 +714,37 @@ fn run_summary(
         }
         RunStatus::Pending | RunStatus::Cancelled => {}
     }
+    // Self-describing rows: which parameter overrides produced this run,
+    // and the bounds it ran under. Lets a sweep's runs be matched back to
+    // their inputs (e.g. which Isp → which propUsed) without a side table.
+    let mut ovr = serde_json::Map::new();
+    for (k, v) in &exp.overrides {
+        ovr.insert(k.0.clone(), param_value_json(v));
+    }
+    obj.insert("overrides".into(), serde_json::Value::Object(ovr));
+    obj.insert(
+        "bounds".into(),
+        serde_json::json!({
+            "t_start": exp.bounds.t_start,
+            "t_end": exp.bounds.t_end,
+            "dt": exp.bounds.dt,
+            "tolerance": exp.bounds.tolerance,
+            "solver": exp.bounds.solver,
+        }),
+    );
     serde_json::Value::Object(obj)
+}
+
+/// Render a `ParamValue` as JSON for API rows.
+fn param_value_json(v: &lunco_experiments::ParamValue) -> serde_json::Value {
+    use lunco_experiments::ParamValue;
+    match v {
+        ParamValue::Real(x) => serde_json::json!(x),
+        ParamValue::Int(i) => serde_json::json!(i),
+        ParamValue::Bool(b) => serde_json::json!(b),
+        ParamValue::String(s) | ParamValue::Enum(s) => serde_json::json!(s),
+        ParamValue::RealArray(a) => serde_json::json!(a),
+    }
 }
 
 fn parse_experiment_id(

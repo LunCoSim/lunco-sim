@@ -47,13 +47,22 @@ Key rules:
 | `PauseActiveModel` | Pause |
 | `ResetActiveModel` | Reset `t → 0` |
 | `RestartActiveModel` | Reset + Run |
-| `FastRunActiveModel` | Batch run → Experiment (orthogonal, unchanged) |
+| `FastRunActiveModel` | Batch run of the active model → Experiment (annotation + UI draft). Orthogonal to live run-state |
+| `RunExperiment` | Batch run with **explicit** parameter `overrides` / `inputs` / bounds / `label` — the API path for parameter sweeps (no source mutation, no UI draft) |
+| `CancelExperiment` | Cancel in-flight run(s) (`experiment_id` or `all`) → ends `cancelled` |
+| `DeleteExperiment` | Remove run record(s) from the registry (`experiment_id` / `doc` / `all`) |
 
-`FastRunActiveModel` results are read back programmatically via the
-`GetExperimentResult` query (`times` + `series`, optional `variables`
-filter / `max_points` downsample) — the API counterpart to the UI's CSV
-export. `snapshot_variables` reads the **live** sim only, not FastRun
-batch results.
+`FastRunActiveModel` / `RunExperiment` results are read back
+programmatically via the `GetExperimentResult` query (`times` + `series`,
+optional `variables` filter / `max_points` downsample) — the API
+counterpart to the UI's CSV export. `ListRuns` enumerates experiments
+with their `overrides` + `bounds` so a sweep's runs are self-describing.
+`snapshot_variables` reads the **live** sim only, not batch results.
+
+For parameter sweeps, prefer `RunExperiment` (explicit `overrides`) over
+mutating the source — each run becomes a proper `Experiment` with its
+override set recorded. Runs are one-at-a-time today (single-run gate);
+parallel + compile-once is a roadmap item.
 
 ## Architecture at a glance
 
