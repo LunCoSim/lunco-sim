@@ -123,7 +123,7 @@ pub fn process_usd_cosim_prims(
         // early `continue` WITHOUT ever gaining `UsdSourcedCosim`, so it stayed
         // in the `Without<UsdSourcedCosim>` query forever — and this system
         // re-ran every frame, deep-cloning the whole stage per prim. That was
-        // the dominant sandbox CPU cost (docs/performance/2026-05-29-sandbox-fps.md).
+        // the dominant sandbox CPU cost (see scripts/perf/README.md).
         // Safe: every other `UsdSourcedCosim` consumer also requires a
         // `ModelicaModel` / `SimComponent` / `ScriptedModel` that a non-cosim
         // prim never gains, so marking it here matches nothing downstream.

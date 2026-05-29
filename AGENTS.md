@@ -277,6 +277,34 @@ Quick checklist before you write a `Update` system:
 - [ ] None of the above → it's probably the wrong abstraction.
       Reshape it.
 
+### 7.5 Profiling subsystem — measure, don't guess
+
+When FPS drops, **do not optimise from code reading.** A frame loop runs the
+3D scene + Avian + an embedded egui IDE together, and the dominant cost is
+rarely the obvious one. Use the profiling subsystem:
+
+```sh
+scripts/perf/profile.sh --release            # build → samply → symbolicated hot functions
+scripts/perf/profile.sh --release --diag-only # frame time + GPU adapter only (no sudo)
+```
+
+Full reference: [`scripts/perf/README.md`](scripts/perf/README.md)
+(toolkit, setup, how to read results, mechanics gotchas). Workflow:
+**profile → A/B-disable to confirm → fix → re-measure**, in that order.
+
+Two regressions keep recurring; prefer the by-design fix:
+
+- **Never `(*arc).clone()` a heavy, shared, read-only container** (e.g. a USD
+  `TextReader`) to read it — that's a deep copy. Borrow `&*arc`; share via
+  `Arc`. (This was a real ~⅔-of-frame regression in the USD cosim path.)
+- **Once-per-entity setup belongs in an observer** (`OnAdd<T>`), not a polling
+  `run_if(Without<Marker>)` system — the latter re-scans the whole scene every
+  frame if any code path forgets to insert the marker. If you must poll, mark
+  **every** examined entity, including on `else { continue }` exits.
+
+A `run_if`-gated system that still appears in a steady-state profile means its
+gate isn't closing — that's the bug, not the cost.
+
 ## 8. Documentation Standards
 - **MANDATORY Documentation**: All produced code MUST be documented using Rust's built-in doc comments (`///` for functions/structs/enums and `//!` for modules).
 - **Maintenance Focus**: Comments should primarily aid in **system maintenance** for both **human developers and AI agents**.

@@ -12,6 +12,7 @@ design, and reference documentation.
 | [`architecture/01-ontology.md`](architecture/01-ontology.md) | Terminology reference — the authoritative source for terms like "Space System", "Port", "Connection", "Attribute" |
 | `../specs/` | Detailed feature specifications (contracts for implementation) |
 | `../crates/<crate>/README.md` | Per-crate quick-start (use this when you want to use a crate) |
+| [`../scripts/perf/README.md`](../scripts/perf/README.md) | Performance profiling subsystem — how to profile a binary, read results, and the by-design rules that prevent per-frame regressions |
 | [`architecture/research/`](architecture/research/) | Historical analysis, inspiration, rejected paths |
 | Legacy files (top-level: `api.md`, `USD_SYSTEM.md`, `GRAVITY_ARCHITECTURE.md`, `WEB_BUILD.md`) | To be retired or migrated into numbered architecture docs |
 
