@@ -151,12 +151,12 @@ fn resolve_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegist
                 // Heuristic: fields that typically store Entity IDs
                 if k == "target" || k == "entity" || k == "body" || k == "parent" || k == "avatar" {
                     if let Some(id_u64) = v.as_u64() {
-                        if let Some(entity) = registry.resolve(&GlobalEntityId(id_u64)) {
+                        if let Some(entity) = registry.resolve(&GlobalEntityId::from_raw(id_u64)) {
                             *v = serde_json::json!(entity.to_bits());
                         }
                     } else if let Some(id_str) = v.as_str() {
                         if let Ok(id_u64) = id_str.parse::<u64>() {
-                            if let Some(entity) = registry.resolve(&GlobalEntityId(id_u64)) {
+                            if let Some(entity) = registry.resolve(&GlobalEntityId::from_raw(id_u64)) {
                                 // Bevy `Entity` reflection round-trips via
                             // `to_bits()` (u64 packing index + generation).
                             // Using just `index()` drops the generation
