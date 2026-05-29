@@ -31,10 +31,23 @@
 //! - Perspective presets (slot-assignment DSL) — see [`Perspective`]
 //! - Auto-add of `bevy_egui::EguiPlugin` if the host hasn't
 //!
+//! ## What's persisted across restarts
+//!
+//! - **Window geometry** (size / position / maximized) — global default
+//!   in `~/.lunco/settings.json` via `lunco-settings`. See
+//!   [`window_persistence`].
+//! - **Per-Twin UI state** (active perspective + open-document list) —
+//!   `~/.lunco/workspace-state/<hash>.json`, keyed by Twin path,
+//!   VSCode-`workspaceStorage` style. See [`workspace_state`].
+//!
 //! ## What's deferred
 //!
-//! - **Layout persistence** — dock changes reset on launch (egui_dock
-//!   has serde support for the tree; wiring it is a follow-up).
+//! - **Free-form dock-tree fidelity** — restore re-applies the
+//!   *perspective* preset, not arbitrary user split rearrangements
+//!   (egui_dock's tree isn't serialized; `TabId`/`PanelId` hold
+//!   `&'static str`).
+//! - **Document auto-reopen** — open paths are persisted but not yet
+//!   replayed on launch (needs per-domain open commands).
 //! - **Command palette** — `Ctrl+P` unbound.
 //! - **Theming / keybinds** — egui defaults only.
 
@@ -66,12 +79,14 @@ pub mod twin_browser;
 pub mod uri;
 pub mod window_command;
 pub mod window_persistence;
+pub mod workspace_state;
 
 pub use window_command::{merged_titlebar_window, MaximizeWindow, MinimizeWindow, CloseWindow, WindowMaximized};
 pub use window_persistence::{
     load_window_geometry, restored_window, WindowGeometry, WindowPersistencePlugin,
     DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
 };
+pub use workspace_state::{workspace_state_path, WorkspaceState, WorkspaceStatePlugin};
 pub use render_robustness::preferred_wgpu_settings;
 
 pub use panel::{InstancePanel, Panel, PanelId, PanelSlot, TabId};
@@ -347,6 +362,13 @@ impl Plugin for WorkbenchPlugin {
         // maximized) via `lunco-settings`. Native-only; no-op on wasm.
         if !app.is_plugin_added::<window_persistence::WindowPersistencePlugin>() {
             app.add_plugins(window_persistence::WindowPersistencePlugin);
+        }
+        // Per-Twin (per-project) volatile UI state — active perspective +
+        // open-document list — keyed by Twin path, VSCode `workspaceStorage`
+        // style. Needs `WorkbenchLayout`, so it lives here, not in the
+        // headless `WorkspacePlugin`.
+        if !app.is_plugin_added::<workspace_state::WorkspaceStatePlugin>() {
+            app.add_plugins(workspace_state::WorkspaceStatePlugin);
         }
         // Plugin-driven registry of `DocumentKind`s. Domain crates
         // (modelica, future julia/usd/sysml/...) register their kinds
@@ -924,6 +946,30 @@ impl WorkbenchLayout {
     /// Which perspective is currently active, if any.
     pub fn active_perspective(&self) -> Option<PerspectiveId> {
         self.active_perspective
+    }
+
+    /// Activate a perspective by its raw string id, matching against the
+    /// registered set. Returns `true` if a perspective with that id
+    /// exists in this app and was activated; `false` (no-op) otherwise.
+    ///
+    /// The reconciliation seam for persisted state: a `PerspectiveId`
+    /// holds a `&'static str` and can't be rebuilt from a runtime
+    /// `String`, so restore looks the string up here and drops ids that
+    /// aren't registered in the current binary (e.g. a perspective only
+    /// `sandbox` ships, loaded into `lunica`).
+    pub fn activate_perspective_by_str(&mut self, id: &str) -> bool {
+        let found = self
+            .perspectives
+            .iter()
+            .find(|p| p.id().as_str() == id)
+            .map(|p| p.id());
+        match found {
+            Some(pid) => {
+                self.activate_perspective(pid);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Rebuild the dock tree from the current slot intent.
