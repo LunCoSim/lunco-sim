@@ -65,8 +65,13 @@ pub mod tracked_task;
 pub mod twin_browser;
 pub mod uri;
 pub mod window_command;
+pub mod window_persistence;
 
 pub use window_command::{merged_titlebar_window, MaximizeWindow, MinimizeWindow, CloseWindow, WindowMaximized};
+pub use window_persistence::{
+    load_window_geometry, restored_window, WindowGeometry, WindowPersistencePlugin,
+    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
+};
 pub use render_robustness::preferred_wgpu_settings;
 
 pub use panel::{InstancePanel, Panel, PanelId, PanelSlot, TabId};
@@ -337,6 +342,11 @@ impl Plugin for WorkbenchPlugin {
         }
         if !app.is_plugin_added::<window_command::WindowCommandPlugin>() {
             app.add_plugins(window_command::WindowCommandPlugin);
+        }
+        // Persist & restore primary-window geometry (size / position /
+        // maximized) via `lunco-settings`. Native-only; no-op on wasm.
+        if !app.is_plugin_added::<window_persistence::WindowPersistencePlugin>() {
+            app.add_plugins(window_persistence::WindowPersistencePlugin);
         }
         // Plugin-driven registry of `DocumentKind`s. Domain crates
         // (modelica, future julia/usd/sysml/...) register their kinds

@@ -161,9 +161,9 @@ fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            resolution: bevy::window::WindowResolution::new(1600, 1000),
-            position: WindowPosition::Centered(MonitorSelection::Primary),
-            ..lunco_workbench::merged_titlebar_window(window_title)
+            // Centralized merged-titlebar chrome + persisted-geometry
+            // restore. Ship-default size lives in `lunco-workbench`.
+            ..lunco_workbench::restored_window(window_title)
         }),
         close_when_requested: false,
         ..default()

@@ -9707,13 +9707,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "spike-probe"
-version = "0.0.0"
-dependencies = [
- "bevy",
-]
-
-[[package]]
 name = "spin"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

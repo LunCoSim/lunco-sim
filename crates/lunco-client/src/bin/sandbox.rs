@@ -161,10 +161,6 @@ fn main() {
             })
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    resolution: bevy::window::WindowResolution::new(1600, 1000),
-                    #[cfg(not(target_arch = "wasm32"))]
-                    position: WindowPosition::Centered(MonitorSelection::Primary),
                     // On wasm, attach to the `#bevy` canvas in index.html and
                     // mirror its parent's CSS size to the bevy window. Without
                     // this winit never sees DOM resize events and the canvas
@@ -175,7 +171,10 @@ fn main() {
                     #[cfg(target_arch = "wasm32")]
                     fit_canvas_to_parent: true,
                     present_mode,
-                    ..lunco_workbench::merged_titlebar_window(window_title)
+                    // Centralized merged-titlebar chrome + persisted-geometry
+                    // restore (size/position). Ship defaults live as named
+                    // constants in `lunco-workbench`, not here.
+                    ..lunco_workbench::restored_window(window_title)
                 }),
                 ..default()
             })
