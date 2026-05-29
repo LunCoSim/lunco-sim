@@ -8,6 +8,12 @@ description = "LunCoSim's own workbench shell — activity bar, side browsers, c
 [dependencies]
 bevy = { workspace = true }
 bevy_egui = { workspace = true }
+# Needed only to name `wgpu::Error` in the uncaptured-error handler
+# (`render_robustness.rs`). No version unification risk: `27` resolves to the
+# exact 27.0.x bevy already locks, so `RenderDevice::wgpu_device()` and our
+# handler agree on the same `wgpu::Device` type. `default-features = false` —
+# bevy enables every backend/feature we actually use; we only need the type.
+wgpu = { version = "27", default-features = false }
 lunco-theme = { path = "../lunco-theme" }
 egui_dock = "0.18"
 # `Command` / `on_command` / `register_commands!` macros (re-exports

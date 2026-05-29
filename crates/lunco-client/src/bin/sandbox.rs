@@ -187,6 +187,13 @@ fn main() {
                 filter: "wgpu=error,naga=warn,cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
                 ..default()
             })
+            .set(bevy::render::RenderPlugin {
+                // DX12 on Windows avoids the Vulkan window-resize panics
+                // (depth/color size mismatch + SurfaceAcquireSemaphores). Other
+                // platforms keep wgpu defaults. See lunco_workbench::render_robustness.
+                render_creation: lunco_workbench::preferred_wgpu_settings().into(),
+                ..default()
+            })
             .build()
             .disable::<TransformPlugin>())
         .add_plugins({

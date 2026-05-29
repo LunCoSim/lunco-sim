@@ -51,6 +51,7 @@ use std::collections::HashMap;
 
 mod panel;
 mod perspective;
+mod render_robustness;
 mod session;
 mod viewport;
 
@@ -66,6 +67,7 @@ pub mod uri;
 pub mod window_command;
 
 pub use window_command::{merged_titlebar_window, MaximizeWindow, MinimizeWindow, CloseWindow, WindowMaximized};
+pub use render_robustness::preferred_wgpu_settings;
 
 pub use panel::{InstancePanel, Panel, PanelId, PanelSlot, TabId};
 
@@ -290,6 +292,13 @@ pub struct WorkbenchPlugin;
 
 impl Plugin for WorkbenchPlugin {
     fn build(&self, app: &mut App) {
+        // Survive transient GPU validation errors (e.g. the Windows
+        // window-resize depth/color size mismatch) instead of panicking the
+        // render thread. No-op when there's no RenderApp (headless/API-only).
+        // The companion backend preference lives in
+        // `preferred_wgpu_settings()`, which each binary feeds into its
+        // `RenderPlugin` at `DefaultPlugins` build time.
+        render_robustness::install_wgpu_error_handler(app);
         if !app.is_plugin_added::<bevy_egui::EguiPlugin>() {
             app.add_plugins(bevy_egui::EguiPlugin::default());
         }

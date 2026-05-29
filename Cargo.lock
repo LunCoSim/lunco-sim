@@ -6444,6 +6444,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
+ "wgpu",
 ]
 
 [[package]]
@@ -9703,6 +9704,13 @@ dependencies = [
  "num-traits",
  "robust",
  "smallvec",
+]
+
+[[package]]
+name = "spike-probe"
+version = "0.0.0"
+dependencies = [
+ "bevy",
 ]
 
 [[package]]

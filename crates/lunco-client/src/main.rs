@@ -72,6 +72,12 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(lunco_workbench::merged_titlebar_window("LunCo")),
             ..default()
+        }).set(bevy::render::RenderPlugin {
+            // DX12 on Windows avoids the Vulkan window-resize panics
+            // (depth/color size mismatch + SurfaceAcquireSemaphores). Other
+            // platforms keep wgpu defaults. See lunco_workbench::render_robustness.
+            render_creation: lunco_workbench::preferred_wgpu_settings().into(),
+            ..default()
         }).build().disable::<TransformPlugin>())
         .add_plugins(big_space::prelude::BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
         .add_plugins(lunco_core::LunCoCorePlugin)
