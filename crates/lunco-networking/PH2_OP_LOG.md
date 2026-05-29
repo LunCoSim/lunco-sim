@@ -5,8 +5,13 @@ over the network, reliable + ordered, routed by `WireChannel`. First phase that
 links lightyear behind the `networking` feature (D7). No smooth motion yet — that's
 M2/M4 (Ph3/Ph4).
 
-**Verify:** host possesses a vessel (and changes a parameter) → a joined client sees
-the ownership/parameter change apply. Reliable, no interpolation.
+**Verify:** two clients connect; each `SpawnEntity`s a rover (both appear on **both**
+peers with **distinct** ids); each possesses **its own**; a possess targeting another
+session's rover is rejected. Reliable, no interpolation, no motion yet.
+
+**Ph2 = stages 1–4 of the MVP scenario** (connect → identity → create → possess). Stage 5
+("drive only mine, everyone sees it") needs Ph3 (motion) + Ph4 (prediction). Full arc +
+the 5 gaps (G1–G5): [`MVP_MULTIPLAYER_GAPS.md`](MVP_MULTIPLAYER_GAPS.md).
 
 ---
 
@@ -266,16 +271,27 @@ Validate the guard in a Tier-2 test (loopback must not re-broadcast).
 |---|---|---|---|
 | `PossessVessel` / `ReleaseVessel` | lunco-avatar | **CommandBus** | ownership change — the headline demo |
 | a `ParameterChanged`/`MoveEntity` | lunco-sandbox-edit | **CommandBus** | `parent_gen` validation exercised |
-| `SpawnEntity` (runtime) | lunco-sandbox-edit | **CommandBus** | see caveat ↓ |
+| `SpawnEntity` (runtime) | lunco-sandbox-edit | **CommandBus** | **CORE** — stage 3 of the scenario; see G2 ↓ |
 | `DriveRover`/`BrakeRover` | lunco-mobility | ControlStream | **declare now, route in Ph4** |
 
-**Runtime-spawn caveat (D4):** for the client to *see a spawned entity appear* via the
-op-log, the server allocates its `GlobalEntityId` (Ph1 `Provenance::Authoritative`) and
-the broadcast mutation must **carry that id** so peers converge. Content-instanced
-spawns (AddReference to a USD asset) need no id in the envelope — they converge
-deterministically via Ph1 identity. The spawned entity's *pose* still doesn't replicate
-until Ph3 (M2). Keep the Ph2 demo on **possession + parameter change** (existing
-entities); treat runtime-spawn-over-op-log as the stretch goal of this phase.
+**Runtime-spawn = CORE this phase (it's "create a rover"), and B.1 must be fixed here (G2 /
+DESIGN_GAPS §B.1 — no longer deferrable).** For the client to *see a spawned entity appear*
+via the op-log, the server allocates its `GlobalEntityId` and the broadcast mutation must
+**carry that id** so peers converge. The catalog rovers are USD assets (`skid_rover.usda`),
+so the naive "Content-instanced spawns need no id, they converge deterministically" path is
+**wrong for runtime instances**: two spawns of the same asset derive the **same** Content id
+→ collision. Therefore:
+
+- **Runtime-spawned rovers get `Provenance::Authoritative`** (server-allocated unique root,
+  id in the envelope) **+ `Derived` children — NOT `Content`.** Geometry still loads locally
+  from the shared USD on each peer (no streaming).
+- The USD loader's unconditional `Content` stamp is right for **startup-scene** prims but must
+  be **suppressed for runtime subtrees**; the spawn path stamps `Authoritative`+`Derived`
+  instead. (Today `spawn.rs` stamps nothing and relies on the loader → would silently collide.)
+
+The spawned entity's *pose* still doesn't replicate until Ph3 (M2) — at Ph2 it appears at its
+spawn position and stays put. The Ph2 demo is **two clients each spawn + possess their own
+rover** (stages 1–4), not just parameter change.
 
 ---
 
@@ -298,6 +314,11 @@ Per `NETWORKING_TEST_PLAN.md`:
 4. **id-resolves** — `Entity` field round-trips Entity→GlobalEntityId→Entity across the boundary.
 5. **no-echo** — a wire-applied command does **not** get re-broadcast (validates the capture guard).
 6. **stale-parent** — `parent_gen` mismatch ⇒ `Reject::StaleParent`, no apply.
+7. **two-clients-spawn (G2 guard)** — A and B each `SpawnEntity("skid_rover")`; assert the
+   two roots get **distinct** `GlobalEntityId`s (the B.1 collision regression guard) and both
+   entities exist on both peers.
+8. **possession-isolation (G4)** — A possesses rover-A, B possesses rover-B; a `PossessVessel`
+   (or, in Ph4, `DriveRover`) from A targeting rover-B is **rejected** server-side.
 
 ---
 

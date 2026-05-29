@@ -11,6 +11,13 @@ a **visible-in-app** verification the user runs, not automated curl loops.
 Target MVP (from `STACK_COMPARISON.md §3`): native host + browser client, both see
 each other's rovers, owner predicts its rover, cosim telemetry streamed read-only.
 
+**The concrete user scenario** — *N people connect to one world, each creates + possesses
++ individually drives their own rover, everyone sees them move* — is **not a single phase**:
+it spans **Ph2** (connect, identity, spawn, possess — reliable, no motion) → **Ph3** (rovers
+move, everyone sees it — laggy) → **Ph4** (your own rover feels responsive, you can't drive
+anyone else's). Stage-by-stage breakdown + the 5 gaps it surfaced (G1–G5):
+[`MVP_MULTIPLAYER_GAPS.md`](MVP_MULTIPLAYER_GAPS.md).
+
 ---
 
 ## Phase 0 — Spike + backend decision  *(DONE 2026-05-29)*
@@ -74,16 +81,41 @@ same prims (log/inspect); both report the same sim-tick. No motion yet.
 
 ---
 
-## Phase 2 — M3: op-log over the wire (reuse `#[Command]`/`Mutation<P>`)
-Lowest new code — the envelope and dispatch already exist.
+## Phase 2 — M3 op-log + connect/identity/spawn/possess (stages 1–4 of the MVP scenario)
+Lowest new code — the envelope and dispatch already exist. This phase delivers
+**connect → per-user identity → create a rover → possess it**, reliably, with **no
+motion yet** (that's Ph3). Full rationale + the code audit behind these items:
+[`MVP_MULTIPLAYER_GAPS.md`](MVP_MULTIPLAYER_GAPS.md).
+
 - `declare_channel` routes by `WireChannel`: `CommandBus`→reliable-ordered
   channel, `ControlStream`→best-effort INPUT channel (later, Phase 4).
 - Resolve `GlobalEntityId`↔`Entity` at the boundary via `ApiEntityRegistry`.
 - `OpId` dedupe for idempotent apply; server validates + broadcasts.
-- Flow `PossessVessel`, runtime spawn, `ParameterChanged` server→clients.
+- **`SessionId` allocation** — server assigns one per connection; fills today's bare-`u64`
+  stub with a real per-client session table.
+- **Minimal session→avatar handshake (G3, pulled forward from Ph6):** server provisions one
+  `Provenance::Authoritative` avatar per `SessionId`; reply tells the client its own avatar's
+  `GlobalEntityId`; client stores it as a `LocalAvatar` resource. (Other players' avatars need
+  **not** replicate — you see rovers, not cameras.) Just `avatar-id + sim-tick + scene-id`;
+  full snapshot/op-log-checkpoint baseline stays Ph6.
+- **`SpawnEntity` over the wire — now CORE, not stretch (it is stage 3 of the scenario):**
+  server spawns, allocates the `Authoritative` root id, and broadcasts it in the mutation so
+  peers converge. Geometry loads locally from the shared USD asset (no streaming).
+- **Runtime-spawn identity fix (G2 / DESIGN_GAPS §B.1 — REQUIRED here, no longer deferrable):**
+  runtime-spawned rovers get `Provenance::Authoritative` (server-allocated unique root) +
+  `Derived` children — **not** `Content`. The USD loader's unconditional `Content` stamp is
+  correct for startup-scene prims but **wrong for runtime instances** (two `skid_rover.usda`
+  spawns would derive the same id → collision). The spawn path must suppress the loader's
+  `Content` stamp for runtime subtrees and stamp `Authoritative`+`Derived` instead.
+- **Server-side ownership validation (G4):** `PossessVessel` rejects if the target is already
+  possessed by another session, or the inbound `avatar` ≠ the sender's session-bound avatar.
+  Accepted → apply + broadcast + `Ack`; rejected → `Reject` (add `NotAuthorized`).
+- Replicate `ControllerLink` (minimal M2) so peers see who owns what.
+- Flow `PossessVessel`, `SpawnEntity`, `ParameterChanged` server→clients.
 
-**Verify:** host possesses/spawns a rover → browser client sees the entity appear
-and ownership change. Reliable, still no smooth motion.
+**Verify (scenario stages 1–4):** two clients connect; each `SpawnEntity`s a rover (both
+appear on **both** peers with **distinct** ids — the B.1/G2 guard); each possesses **its own**;
+a possess targeting someone else's rover is rejected. Rovers do **not** move yet.
 
 ---
 
@@ -98,19 +130,32 @@ and ownership change. Reliable, still no smooth motion.
 
 **Verify:** host + browser client both see each other's rovers move smoothly
 (interpolated); the cosim-driven balloon moves (interpolated) without desync as the
-camera rebases origin.
+camera rebases origin. **Scenario milestone:** at end of Ph3 the full "create + possess +
+drive, everyone sees it" loop *works* but feels laggy (input still server-authoritative,
+no prediction) — Ph4 makes your own rover feel responsive.
 
 ---
 
-## Phase 4 — M4: input + prediction + reconciliation
+## Phase 4 — M4: input + prediction + reconciliation (stage 5 of the MVP scenario)
+- **Input isolation (G1) — load-bearing for "drive only MY rover":**
+  `translate_intents_to_commands` reads **process-global** `ButtonInput` today and fans
+  WASD to **every** `(VesselIntentState, ControllerLink)` controller — two possessing
+  avatars in one world would drive both rovers. Gate raw-input→intent→command to
+  `With<LocalAvatar>` only; the **server runs no input mapping for remote clients** (their
+  input arrives as `ControlStream`/`DriveRover` messages). Remote-avatar proxies never map input.
 - Sample local intent → **redundant, tick-stamped** send (M4) **and** apply to the
   owned rover locally (M2-Predicted) — moves now.
 - Server **jitter buffer**: consume one input per tick.
+- **Drive-side ownership validation (G4 extended):** server applies a client's `DriveRover`
+  only if that session possesses the target rover.
 - **Reconciliation = smooth error-correction** toward server state (projective
   velocity blend), **not** full avian rollback (global solver — gap F).
+- **Disconnect cleanup (G5):** on session drop, release its `ControllerLink` (free the
+  rover) and despawn/retire its avatar.
 
-**Verify:** you drive *your* rover with no perceived input latency; others see it
-interpolated; corrections are smooth, no teleport snaps under normal LAN latency.
+**Verify (scenario stage 5, the full target):** you drive *your* rover with no perceived
+input latency; others see it interpolated; you **cannot** drive anyone else's; corrections
+are smooth, no teleport snaps under normal LAN latency.
 
 ---
 
