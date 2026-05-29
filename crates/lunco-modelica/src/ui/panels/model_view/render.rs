@@ -263,7 +263,7 @@ fn render_unified_toolbar(
         };
         let r_compile = ui
             .add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("🚀"))
-            .on_hover_text("Interactive compile — build & run the model live; step, pause and tweak inputs as it simulates")
+            .on_hover_text("Compile — build the model (does not start a live sim); press ▶ Run to step it")
             .on_disabled_hover_text(compile_busy_hint);
         compile_clicked = r_compile.clicked();
         let r_fast = ui
@@ -282,7 +282,7 @@ fn render_unified_toolbar(
             ui.separator();
             run_pause_clicked = ui
                 .button(if paused { "▶" } else { "⏸" })
-                .on_hover_text(if paused { "Resume simulation" } else { "Pause simulation" })
+                .on_hover_text(if paused { "Run — compile if needed, then step the simulation live" } else { "Pause simulation" })
                 .clicked();
             reset_clicked = ui.button("⟲").on_hover_text("Reset simulation to t=0").clicked();
             restart_clicked = ui.button("⟳").on_hover_text("Restart — reset to t=0 and run again").clicked();
@@ -306,13 +306,16 @@ fn render_unified_toolbar(
     if duplicate_clicked { world.commands().trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc: doc }); }
     if run_pause_clicked {
         let paused = sim_state.map(|(p, _)| p).unwrap_or(false);
-        if paused { world.commands().trigger(crate::ui::commands::ResumeActiveModel { doc }); }
+        // Run = compile-if-stale then play (RunActiveModel); Pause just
+        // freezes stepping. Resume-without-compile is no longer a
+        // primary toolbar verb — RunActiveModel subsumes it (it unpauses
+        // directly when the model is already compiled & clean).
+        if paused { world.commands().trigger(crate::ui::commands::RunActiveModel { doc, class: None }); }
         else { world.commands().trigger(crate::ui::commands::PauseActiveModel { doc }); }
     }
     if reset_clicked { world.commands().trigger(crate::ui::commands::ResetActiveModel { doc }); }
     if restart_clicked {
-        world.commands().trigger(crate::ui::commands::ResetActiveModel { doc });
-        world.commands().trigger(crate::ui::commands::ResumeActiveModel { doc });
+        world.commands().trigger(crate::ui::commands::RestartActiveModel { doc });
     }
     if auto_arrange_clicked { world.commands().trigger(crate::ui::commands::AutoArrangeDiagram { doc }); }
     if fast_run_clicked {

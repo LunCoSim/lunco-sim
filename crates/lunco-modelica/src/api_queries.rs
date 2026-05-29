@@ -480,6 +480,33 @@ impl ApiQueryProvider for CompileStatusProvider {
             .get_resource::<crate::ui::CompileStates>()
             .and_then(|cs| cs.error_for(doc_id).map(str::to_string));
 
+        // Live run-state, read from the `ModelicaModel` for this doc's
+        // entity (if one exists yet). Lets a single CompileStatus call
+        // answer "is it compiled / running / stale?" without a second
+        // entity query. Defaults (no entity) report uncompiled + stale.
+        let doc_generation = world
+            .get_resource::<ModelicaDocumentRegistry>()
+            .and_then(|r| r.host(doc_id))
+            .map(|h| h.document().generation_owned())
+            .unwrap_or(0);
+        let run_entity = world
+            .get_resource::<ModelicaDocumentRegistry>()
+            .and_then(|r| r.entities_linked_to(doc_id).into_iter().next());
+        let (is_compiled, is_compiling, paused, running, run_stale, current_time) = run_entity
+            .and_then(|e| world.get::<crate::ModelicaModel>(e))
+            .map(|m| {
+                let stale = !m.is_compiled || m.compiled_generation != doc_generation;
+                (
+                    m.is_compiled,
+                    m.is_compiling,
+                    m.paused,
+                    m.is_compiled && !m.paused,
+                    stale,
+                    m.current_time,
+                )
+            })
+            .unwrap_or((false, false, false, false, true, 0.0));
+
         // Convenience pointer to the most recent run for this doc.
         // Run errors live on `RunStatus::Failed`, not here — this is
         // just a hint so a single CompileStatus call can tell the
@@ -501,6 +528,12 @@ impl ApiQueryProvider for CompileStatusProvider {
             "ast_parsed": has_ast,
             "error_message": error_message,
             "latest_run": latest_run,
+            "is_compiled": is_compiled,
+            "is_compiling": is_compiling,
+            "paused": paused,
+            "running": running,
+            "stale": run_stale,
+            "current_time": current_time,
         }))
     }
 }

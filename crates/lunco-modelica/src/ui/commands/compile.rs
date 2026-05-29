@@ -43,6 +43,10 @@ pub struct CompileModel {
     /// Used by API callers that need deterministic behaviour without
     /// a GUI (cf. spec 033 User Story 1.5).
     pub class: Option<String>,
+    /// Force a recompile even if the model is already compiled and
+    /// clean (same document generation). Defaults to `false` so a
+    /// Compile on an up-to-date model is an idempotent no-op.
+    pub force: bool,
 }
 
 /// Run the Auto-Arrange layout: assign each component of the active
@@ -431,7 +435,7 @@ pub(crate) fn render_compile_class_picker(
         picker.0 = None;
         match purpose {
             PickerPurpose::Compile => {
-                commands.trigger(CompileModel { doc, class: None });
+                commands.trigger(CompileModel { doc, class: None, force: false });
             }
             PickerPurpose::FastRun => {
                 // Re-dispatch — second-time-around the drilled-class
@@ -472,6 +476,7 @@ pub fn on_compile_model(
 ) {
     let doc = trigger.event().doc;
     let explicit_class = trigger.event().class.clone();
+    let force = trigger.event().force;
 
     // Ownership check. Read-only docs are fair game to compile —
     // the Save button is what's gated on writability, not compile.
@@ -496,11 +501,15 @@ pub fn on_compile_model(
     // compile (see `ModelicaCommand::Compile`), so any AST staleness
     // here only affects telemetry-panel labels for one debounce
     // cycle, not the compiled model itself.
-    let (source, ast_for_extract, candidate_classes, preferred_count, detected_first_class, params, inputs_with_defaults, runtime_inputs) =
+    let (source, doc_generation, ast_for_extract, candidate_classes, preferred_count, detected_first_class, params, inputs_with_defaults, runtime_inputs) =
         match registry.host(doc) {
             Some(h) => {
                 let doc_ref = h.document();
                 let ast = doc_ref.strict_ast();
+                // Document generation at this compile dispatch — recorded as
+                // `pending_generation` and promoted to `compiled_generation`
+                // on success, and used for the idempotency / staleness gate.
+                let doc_generation = doc_ref.generation_owned();
                 // Class candidates + first-non-package detection via
                 // the per-doc Index (sees optimistic patches; no extra
                 // AST walk per call).
@@ -540,6 +549,7 @@ pub fn on_compile_model(
                 }
                 (
                     doc_ref.source().to_string(),
+                    doc_generation,
                     ast,
                     candidates,
                     preferred_count,
@@ -647,6 +657,30 @@ pub fn on_compile_model(
     // Find or spawn the entity linked to this document.
     let linked = registry.entities_linked_to(doc);
 
+    // Idempotency gate: a Compile on a model that is already compiled,
+    // clean (same document generation as the last successful compile),
+    // and not currently building is a no-op — we skip the worker
+    // dispatch entirely. This is what makes `CompileModel` safe to call
+    // repeatedly (e.g. by `RunActiveModel`'s compile-if-stale path)
+    // without churning the worker. Pass `force = true` to override.
+    // Crucially this does NOT touch `paused` — it leaves whatever
+    // run-state the model is already in.
+    if !force {
+        if let Some(&entity) = linked.first() {
+            if let Ok(model) = q_models.get(entity) {
+                let stale = !model.is_compiled || model.compiled_generation != doc_generation;
+                if model.is_compiled && !stale && !model.is_compiling {
+                    bevy::log::debug!(
+                        "[Modelica] compile skipped: already up to date (doc {}, gen {})",
+                        doc.raw(),
+                        doc_generation
+                    );
+                    return;
+                }
+            }
+        }
+    }
+
     let target_entity = if let Some(&entity) = linked.first() {
         // Update existing entity in place.
         if let Ok(mut model) = q_models.get_mut(entity) {
@@ -660,6 +694,9 @@ pub fn on_compile_model(
             // second Modelica compiles.
             model.is_stepping = true;
             model.is_compiling = true;
+            // Capture the generation being compiled; promoted to
+            // `compiled_generation` by the post-compile success handler.
+            model.pending_generation = doc_generation;
             model.model_name = model_name.clone();
             model.parameters = params;
             model.inputs.clear();
@@ -678,7 +715,10 @@ pub fn on_compile_model(
                     .or_insert_with(|| existing.unwrap_or(0.0));
             }
             model.variables.clear();
-            model.paused = false;
+            // Compile leaves the model PAUSED/ready — no auto-start of a live
+            // realtime sim. The user starts live stepping explicitly via
+            // ResumeActiveModel (FastRunActiveModel batch runs are unaffected).
+            model.paused = true;
             model.current_time = 0.0;
             model.last_step_time = 0.0;
         }
@@ -703,7 +743,8 @@ pub fn on_compile_model(
                     current_time: 0.0,
                     last_step_time: 0.0,
                     session_id,
-                    paused: false,
+                    // Newly-compiled model starts paused/ready — no auto-start.
+                    paused: true,
                     parameters: params,
                     inputs: runtime_inputs.into_iter().map(|n| (n, 0.0)).collect(),
                     variables: HashMap::new(),
@@ -711,6 +752,9 @@ pub fn on_compile_model(
                     is_stepping: true,
                     is_compiling: true,
                     is_compiled: false,
+                    compiled_generation: 0,
+                    pending_generation: doc_generation,
+                    resume_after_compile: false,
                 },
             ))
             .id();
@@ -851,6 +895,29 @@ pub struct ResetActiveModel {
     pub doc: DocumentId,
 }
 
+/// Start a live realtime simulation: compile-if-stale, then play.
+///
+/// This is the user-facing "Run" verb. If the model is already
+/// compiled and clean (same document generation), it simply unpauses —
+/// no recompile. Otherwise it sets [`ModelicaModel::resume_after_compile`]
+/// and triggers a [`CompileModel`]; the post-compile success handler in
+/// the worker then unpauses, so play begins as soon as the stepper is
+/// installed. Contrast with [`CompileModel`] (compile only, never auto-
+/// starts) and [`ResumeActiveModel`] (unpause only, never compiles).
+#[Command(default)]
+pub struct RunActiveModel {
+    pub doc: DocumentId,
+    /// Optional explicit target class, forwarded to the compile.
+    pub class: Option<String>,
+}
+
+/// Reset to `t=0` and run again. Composition of [`ResetActiveModel`]
+/// followed by [`RunActiveModel`].
+#[Command(default)]
+pub struct RestartActiveModel {
+    pub doc: DocumentId,
+}
+
 #[on_command(PauseActiveModel)]
 pub fn on_pause_active_model(trigger: On<PauseActiveModel>, mut commands: Commands) {
     let raw = trigger.event().doc;
@@ -886,6 +953,76 @@ pub fn on_resume_active_model(trigger: On<ResumeActiveModel>, mut commands: Comm
                 model.paused = false;
             }
         }
+    });
+}
+
+#[on_command(RunActiveModel)]
+pub fn on_run_active_model(trigger: On<RunActiveModel>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    let class = trigger.event().class.clone();
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = (if raw.is_unassigned() {
+            resolve_active_doc(world)
+        } else {
+            Some(raw)
+        }) else {
+            return;
+        };
+        let Some(entity) = entity_for_doc(world, doc) else {
+            // No entity yet — never compiled. The compile handler spawns
+            // the entity (deferred) with `resume_after_compile: false`,
+            // so we can't flip the resume flag before it exists. Just
+            // compile; the model lands paused/ready and the user presses
+            // Run again to step it. (A first Run can't both spawn and
+            // pre-arm resume in one pass without a dedicated spawn-time
+            // flag, which isn't worth the surface area here.)
+            world.commands().trigger(CompileModel { doc, class, force: false });
+            return;
+        };
+        // Document generation for the staleness check.
+        let doc_generation = world
+            .get_resource::<ModelicaDocumentRegistry>()
+            .and_then(|r| r.host(doc))
+            .map(|h| h.document().generation_owned())
+            .unwrap_or(0);
+        let (is_compiled, is_compiling, stale) = world
+            .get::<ModelicaModel>(entity)
+            .map(|m| {
+                let stale = !m.is_compiled || m.compiled_generation != doc_generation;
+                (m.is_compiled, m.is_compiling, stale)
+            })
+            .unwrap_or((false, false, true));
+        if is_compiled && !stale && !is_compiling {
+            // Already up to date — just play, no recompile.
+            if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
+                model.paused = false;
+            }
+            return;
+        }
+        // Stale or never-compiled: mark the resume intent so the
+        // post-compile success handler unpauses, then compile.
+        if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
+            model.resume_after_compile = true;
+        }
+        world.commands().trigger(CompileModel { doc, class, force: false });
+    });
+}
+
+#[on_command(RestartActiveModel)]
+pub fn on_restart_active_model(trigger: On<RestartActiveModel>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = (if raw.is_unassigned() {
+            resolve_active_doc(world)
+        } else {
+            Some(raw)
+        }) else {
+            return;
+        };
+        // Reset to t=0, then run. Mirrors the toolbar's Reset+Run
+        // composition; the two triggers run in dispatch order.
+        world.commands().trigger(ResetActiveModel { doc });
+        world.commands().trigger(RunActiveModel { doc, class: None });
     });
 }
 
@@ -1194,7 +1331,7 @@ pub fn on_compile_active_model(trigger: On<CompileActiveModel>, mut commands: Co
             return;
         };
         let target_class = if class.is_empty() { None } else { Some(class) };
-        world.commands().trigger(CompileModel { doc, class: target_class });
+        world.commands().trigger(CompileModel { doc, class: target_class, force: false });
     });
 }
 
@@ -1217,6 +1354,8 @@ impl Plugin for CompilePlugin {
         __register_on_pause_active_model(app);
         __register_on_resume_active_model(app);
         __register_on_reset_active_model(app);
+        __register_on_run_active_model(app);
+        __register_on_restart_active_model(app);
         __register_on_fast_run_active_model(app);
     }
 }

@@ -13,6 +13,42 @@ Modelica simulation integration for LunCoSim using Rumoca.
 > resolution, diagram ↔ code sync) lives in
 > [**`docs/architecture/20-domain-modelica.md`**](../../docs/architecture/20-domain-modelica.md).
 
+## Compile / Run lifecycle
+
+Compiling a model **never** auto-starts a live realtime sim. The
+per-doc run-state is a small machine over `ModelicaModel`:
+
+```
+Uncompiled/Stale ──[Compile]──▶ Ready (paused) ──[Run]──▶ Running
+                                      ▲                      │
+                                      └────────[Pause]───────┘
+Compile error ─────────────────▶ Blocked (paused)
+```
+
+Key rules:
+
+- **Compile never auto-starts a live sim.** A successful compile leaves
+  the model paused/ready; you start stepping explicitly with Run.
+- **Run = compile-if-stale, then play.** If the model is already
+  compiled and clean it just unpauses (no recompile); otherwise it
+  compiles and resumes on success.
+- **Compiled + clean is never recompiled.** `CompileModel` is idempotent
+  — it skips the worker dispatch when `is_compiled && !stale &&
+  !is_compiling`. Pass `force: true` to override. Staleness is
+  `!is_compiled || compiled_generation != document.generation`.
+- **Fast Run is orthogonal.** It runs a batch experiment off-thread and
+  never touches the live run-state.
+
+| Verb | Effect |
+|---|---|
+| `CompileModel` / `CompileActiveModel` | Compile only, idempotent (skip if compiled & clean unless `force`). Never plays |
+| `RunActiveModel` | Compile-if-stale, then play |
+| `ResumeActiveModel` | Unpause (no compile) |
+| `PauseActiveModel` | Pause |
+| `ResetActiveModel` | Reset `t → 0` |
+| `RestartActiveModel` | Reset + Run |
+| `FastRunActiveModel` | Batch run → Experiment (orthogonal, unchanged) |
+
 ## Architecture at a glance
 
 ### Document as source of truth

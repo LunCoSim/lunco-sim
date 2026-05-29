@@ -1337,6 +1337,25 @@ pub struct ModelicaModel {
     /// when a result reports an error or a fresh Compile is in flight.
     #[reflect(ignore)]
     pub is_compiled: bool,
+    /// Document `generation_owned()` at the last SUCCESSFUL compile.
+    /// Compared against the document's current generation to decide
+    /// staleness: `stale = !is_compiled || compiled_generation != gen`.
+    /// A stale model needs a recompile before live stepping is valid.
+    #[reflect(ignore)]
+    pub compiled_generation: u64,
+    /// Document generation captured at the moment a Compile is
+    /// dispatched. Promoted to [`Self::compiled_generation`] when that
+    /// compile reports success, so an edit landing mid-compile doesn't
+    /// mark the just-built model as already up to date.
+    #[reflect(ignore)]
+    pub pending_generation: u64,
+    /// Transient flag set by `RunActiveModel` when a compile-if-stale is
+    /// needed before play: the post-compile success handler unpauses the
+    /// model (instead of leaving it paused) and clears this. A plain
+    /// Compile leaves it `false`, so compiling never auto-starts a live
+    /// sim.
+    #[reflect(ignore)]
+    pub resume_after_compile: bool,
 }
 
 /// Sends `Step` commands for each active model.
@@ -1376,6 +1395,7 @@ pub fn spawn_modelica_requests(
                     } else {
                         Some(model.model_name.clone())
                     },
+                    force: false,
                 });
             }
             // Don't ship a Step this frame either way — let the
@@ -1620,6 +1640,10 @@ pub fn handle_modelica_responses(
                     c.error(format!("[{}] {prefix}: {err}", model.model_name));
                 }
                 model.paused = true;
+                // A failed Compile/Step must not silently auto-play on a
+                // later, unrelated successful compile: clear the resume
+                // intent that an earlier `RunActiveModel` may have set.
+                model.resume_after_compile = false;
                 // Solver errors destroy the stepper in the worker
                 // (lib.rs ~1176 removes it). Clear the flag so the
                 // next Run after the user fixes things triggers a
@@ -1635,15 +1659,19 @@ pub fn handle_modelica_responses(
                     .join(format!("{}_{}", result.entity.index(), result.entity.generation()))
                     .join("model.mo");
                 model.variables.clear();
-                // Only unpause on a *successful* Compile. A failed
-                // Compile leaves the stepper empty, and unpausing would
-                // cause `spawn_modelica_requests` to ship a Step →
-                // worker recompiles from scratch (~10s) → error → repeat
-                // forever. The earlier error-branch `paused = true`
-                // marks the model as blocked; the user resumes
-                // explicitly after fixing the source.
+                // A successful Compile leaves the model PAUSED/ready — we do
+                // NOT auto-start a live realtime sim. The one exception is
+                // `RunActiveModel`, which set `resume_after_compile = true`
+                // before triggering the compile; in that case we unpause here
+                // so the user-requested play begins as soon as the stepper is
+                // installed. `is_compiled = true` records that the worker
+                // installed a stepper. We promote `pending_generation` (the
+                // generation captured at dispatch) to `compiled_generation` so
+                // staleness checks see the model as up to date.
                 if result.error.is_none() {
-                    model.paused = false;
+                    model.compiled_generation = model.pending_generation;
+                    model.paused = !model.resume_after_compile;
+                    model.resume_after_compile = false;
                     // Worker has installed a stepper for this entity.
                     // `spawn_modelica_requests` reads this to decide
                     // whether to ship Step or trigger Compile-on-first-step.

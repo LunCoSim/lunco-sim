@@ -57,8 +57,8 @@ These tools are always available:
 | `list_twin` | List files in the open Twin folder, paginated, classified by kind |
 | `list_msl` | Paginated, filterable enumeration of Modelica Standard Library classes |
 | `open_uri` | Unified scheme-aware open (`bundled://`, `mem://`, qualified MSL name, fs path) |
-| `compile_model` | Compile an open document, optionally targeting a specific class (bypasses GUI picker) |
-| `compile_status` | Read per-doc compile state without triggering compile |
+| `compile_model` | Compile an open document, optionally targeting a specific class (bypasses GUI picker). **Compile-only & idempotent** — never starts a live sim, and skips the build if the model is already compiled & clean (pass `force` to override) |
+| `compile_status` | Read per-doc compile state without triggering compile. Now also reports live run-state: `is_compiled`, `is_compiling`, `paused`, `running`, `stale`, `current_time` |
 | `list_compile_candidates` | List the non-package classes a multi-class doc would let you compile |
 | `get_document_source` | Fetch the in-memory source of an open doc (incl. unsaved edits) |
 | `describe_model` | Full structural view of a class: `class_kind`, `extends`, `components`, `connections`, plus typed `inputs / parameters / outputs` with units & bounds |
@@ -82,6 +82,8 @@ Mutation commands are reachable via `execute_command`:
 | `RemoveModelicaComponent` | Remove a sub-component |
 | `ConnectComponents` | Add a `connect(a.p, b.q)` equation |
 | `DisconnectComponents` | Remove a connect equation |
+| `RunActiveModel` | Start a live realtime sim: compile-if-stale, then play. Already-compiled-and-clean models just unpause (no recompile) |
+| `RestartActiveModel` | Reset the live sim to `t=0` and run again (= `ResetActiveModel` + `RunActiveModel`) |
 | `ApplyModelicaOps` | **Batched** — apply N ops (`Add/RemoveComponent`, `Add/RemoveConnection`, `SetPlacement`, `SetParameter`) in a single observer pass. The same Reflect event the canvas drag-drop pipeline fires — agents and the GUI share one path. Each op still produces an independent undo entry today; transactional grouping is a follow-up. |
 
 Every op flows through the same `ModelicaOp` undo/redo pipeline the
@@ -101,8 +103,9 @@ The combination above is designed so an agent can run:
 ```
 1. find / list                  list_bundled  →  pick "AnnotatedRocketStage.mo"
 2. open                         open_uri(uri="bundled://AnnotatedRocketStage.mo")
-3. compile + run                execute_command(CompileActiveModel, …) +
-                                execute_command(ResumeActiveModel, …)
+3. compile + run                execute_command(RunActiveModel, …)
+                                (compile-if-stale then play; or
+                                 CompileActiveModel to build without running)
 4. inspect what's running       list_open_documents
 5. tweak a value, observe       (covered by spec 033 — describe_model,
                                  set_input, snapshot_variables)
