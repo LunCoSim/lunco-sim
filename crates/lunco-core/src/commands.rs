@@ -102,27 +102,40 @@ impl fmt::Display for SessionId {
     }
 }
 
-/// Replication policy for a command type. Set at registration time
-/// (see `lunco-api::register_command`); the dispatcher reads it to
-/// decide whether to forward locally only, ship to the server, or
-/// fan out best-effort.
+/// Which Twin write-channel a command's networked form rides. Set at
+/// registration time (see `lunco-api::declare_channel`); the dispatcher
+/// reads it to decide whether to keep a command in-process, ship it on
+/// the reliable Command Bus, or fan it out best-effort on a ControlStream.
 ///
-/// Single-user runs treat all three identically (everything is
-/// applied locally). The network layer (future) consults this to
-/// route correctly.
+/// These are the ontology's three write surfaces (`docs/architecture/
+/// 01-ontology.md` §4) — the ROS 2 Service / Action / Topic trichotomy —
+/// **not** generic netcode adjectives. The variant names ARE the channel
+/// names so a domain author who's read the ontology picks the right one
+/// without translation. Note this axis is orthogonal to *authority* (who
+/// may issue a command against an entity): authority is a runtime gate on
+/// the target, not a property of the channel — see `crates/lunco-networking/
+/// AUTHORITY.md`.
+///
+/// Single-user runs treat all three identically (everything is applied
+/// locally, `IsServer = true`). The network layer (future) consults this
+/// to route correctly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Replication {
-    /// Apply on the originating process only — camera, view toggles,
-    /// editor focus, debug overlays. Never crosses the wire.
+pub enum WireChannel {
+    /// In-process only; never serialized. Camera, view toggles, editor
+    /// focus/selection, debug overlays. Not on any bus.
     Local,
-    /// Server-of-record edits. Client applies optimistically, server
-    /// reconciles + acks. Examples: `AddComponent`, `SetPlacement`,
-    /// USD prim edits. Stale `parent_gen` is rejected.
-    Authoritative,
-    /// Real-time best-effort. Latest-wins on the receiver, no `Ack`
-    /// expected. Examples: rover throttle, manual joystick input,
-    /// camera-follow targets in shared scenes.
-    Ephemeral,
+    /// **Command Bus** — reliable, ordered, ack'd (XTCE Telecommand /
+    /// ROS Service / F′ Command). Client applies optimistically, server
+    /// reconciles + acks; stale `parent_gen` is rejected. Examples:
+    /// `PossessVessel`, `AddComponent`, `SetPlacement`, USD prim edits,
+    /// spawn. Possession/authority arbitration rides here (the ontology's
+    /// `AcquireStream` pattern).
+    CommandBus,
+    /// **ControlStream** — best-effort, latest-sample-wins, no ack, no
+    /// replay (ROS 2 Topic / `cmd_vel` / F′ setpoint+rate-group). Examples:
+    /// rover throttle, manual joystick input, live parameter scrubs,
+    /// presence cursors. This is AGENTS.md §4.2 made declarative.
+    ControlStream,
 }
 
 /// Wire-shape carrier for a mutation. The payload is whatever the

@@ -134,6 +134,29 @@ A continuous, best-effort data channel orthogonal to the **Command Bus** and **A
 - **Transport**: unreliable/unordered (UDP / WebRTC datachannel) for the network case; in-process channel for local. Distinct from the Command Bus transport (reliable/ordered, TCP/HTTP/gRPC).
 - **Read-side dual**: `Parameter (TM)` and `TelemetryEvent` already cover the read direction — ControlStream is the symmetric continuous *write* channel that was previously missing from the ontology.
 
+### Wire channel (networking tag)
+When a Twin runs distributed (server + clients), each typed `#[Command]` declares
+**which of these write channels its networked form rides**, via
+`lunco_core::WireChannel` (set with `declare_channel::<C>(…)`):
+
+| `WireChannel` variant | Ontology channel | Contract | Transport |
+|---|---|---|---|
+| `CommandBus` | **Command Bus** (`CommandMessage`) | discrete, ordered, reliable, ack'd (`CommandResponse`) | reliable/ordered — TCP / WebTransport-reliable |
+| `ControlStream` | **ControlStream** | continuous, best-effort, latest-sample-wins, no ack | unreliable/unordered — UDP / WebRTC datachannel |
+| `Local` | *(no bus)* | in-process only; never serialized — camera, selection, view toggles | none |
+
+So the networking tag is **not** new vocabulary — it is exactly the §4 / §9
+Command-Bus-vs-ControlStream split made declarative per command. (`Action`s ride the
+reliable Command Bus transport like `CommandBus`, distinguished by lifecycle, not
+channel.) This is the same rule AGENTS.md §4.2 states in prose: high-frequency
+continuous signals → ControlStream, discrete intents → Command Bus.
+
+**`WireChannel` is orthogonal to *authority*.** The tag picks the channel; whether a
+given client *may* issue a command against a given entity is a separate runtime gate
+on the target (the `AcquireStream` / `Possess` arbitration above). Channel = how it
+travels; authority = who may send it. See `crates/lunco-networking/` (`PH2_OP_LOG.md`,
+authority notes) for the full split.
+
 ### Port
 The universal interface for data and power flow between architectural layers.
 - **Physical Port (Level 1)**: Located on Actuators/Sensors. Uses **`f32`** for high-fidelity physical units (Torque, Force, AngularVelocity).

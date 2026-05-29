@@ -47,8 +47,15 @@ exact port of the green proto-tests), `GlobalEntityId` locked (private field, no
 `new()`/`Default`, `pub get`/`from_raw`, crate-internal `allocate_authoritative`),
 provenance-aware `assign_global_entity_ids` (safe/incremental fallback), `SimTick`
 resource + `advance_sim_tick` (FixedUpdate), `IsServer` resource, +5 Bevy-wiring
-tests. USD-loader provenance stamping + the concrete warp-in-MP wiring are the
-remaining Phase-1 items (see below); they ride on later phases' integration.
+tests. **USD-loader provenance stamping DONE** (2026-05-29):
+`lunco-usd-bevy::instantiate_usd_prim` — the one chokepoint every prim entity (root +
+recursive children) passes through — stamps `Provenance::Content { namespace:"usd",
+source:<stage asset path via AssetServer::get_path>, path:<prim path> }`, so USD prims
+get deterministic ids instead of the warn-once fallback (verified: `lunco-usd-bevy`
+compiles green via `cargo check -p lunco-sandbox-edit -j2`). Known follow-up: instancing
+collision (same asset twice → same id; caught by D3a debug check) — see DESIGN_GAPS §B.1.
+The concrete warp-in-MP wiring is the last Phase-1 item; it rides on later phases'
+integration.
 
 **M1 — identity (`lunco-core`):**
 - Add `Provenance` enum; lock down `GlobalEntityId` (no public int constructor).
@@ -69,8 +76,8 @@ same prims (log/inspect); both report the same sim-tick. No motion yet.
 
 ## Phase 2 — M3: op-log over the wire (reuse `#[Command]`/`Mutation<P>`)
 Lowest new code — the envelope and dispatch already exist.
-- `register_command` routes by `Replication`: `Authoritative`→COMMANDS (reliable
-  ordered), `Ephemeral`→INPUT (later, Phase 4).
+- `declare_channel` routes by `WireChannel`: `CommandBus`→reliable-ordered
+  channel, `ControlStream`→best-effort INPUT channel (later, Phase 4).
 - Resolve `GlobalEntityId`↔`Entity` at the boundary via `ApiEntityRegistry`.
 - `OpId` dedupe for idempotent apply; server validates + broadcasts.
 - Flow `PossessVessel`, runtime spawn, `ParameterChanged` server→clients.

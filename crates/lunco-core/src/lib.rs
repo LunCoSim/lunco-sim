@@ -24,7 +24,7 @@ pub mod ids;
 /// ids are *derived*; the assignment system below is the only place they
 /// are *minted*.
 pub mod identity;
-/// Command envelope — `Mutation<P>`, `Ack`, `Reject`, `Replication`.
+/// Command envelope — `Mutation<P>`, `Ack`, `Reject`, `WireChannel`.
 /// The shape every locally- or remotely-originated mutation flows
 /// through.
 pub mod commands;
@@ -33,7 +33,7 @@ pub use architecture::*;
 pub use mocks::*;
 pub use telemetry::*;
 pub use log::*;
-pub use commands::{Ack, Mutation, OpId, Reject, Replication, SessionId};
+pub use commands::{Ack, Mutation, OpId, Reject, SessionId, WireChannel};
 pub use markers::{GridAnchor, SoiMigrant};
 pub use invariants::BigSpaceInvariantsPlugin;
 pub use identity::Provenance;

@@ -43,7 +43,7 @@ Grounded in the current code (2026-05-29):
 | `GlobalEntityId(pub u64)` + `new()`/`Default` | `lunco-core/src/lib.rs:64-93` |
 | `assign_global_entity_ids()` (PostUpdate auto-assign) | `lunco-core/src/lib.rs:250-258` |
 | `make_id_53()` (time+random, **non-deterministic**) | `lunco-core/src/ids.rs:23-50` |
-| `Replication{Local,Authoritative,Ephemeral}` | `lunco-core/src/commands.rs:114-126` |
+| `WireChannel{Local,CommandBus,ControlStream}` (renamed from `Replication`) | `lunco-core/src/commands.rs` |
 | `Mutation<P>`,`OpId`,`SessionId` | `lunco-core/src/commands.rs` |
 | `TimeWarpState`, `CelestialClock` | `lunco-core/src/lib.rs:168-223` |
 | observer idiom `On<Add, T>` + `trigger.entity` | `lunco-cosim/src/lib.rs:77-142` |

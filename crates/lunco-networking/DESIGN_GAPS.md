@@ -61,6 +61,23 @@ entities or orphaned state.
   explicitly: *USD-instanced = deterministic id, locally spawned; runtime = server
   spawns + replicates.*
 
+**DONE (Ph1, 2026-05-29):** `lunco-usd-bevy::instantiate_usd_prim` stamps
+`Provenance::Content { namespace:"usd", source:<stage asset path>, path:<prim path> }`
+on every USD prim entity (root + recursive children, the one chokepoint they all
+pass through). `source` is the stage's **stable logical asset path** via
+`AssetServer::get_path(stage_handle.id())` — explicitly the asset path, **not** the
+content-hash `AssetId`, per D3b. `lunco-core`'s assignment system then derives the id.
+
+> **KNOWN LIMITATION — instancing collision (B.1, follow-up).** `source` keys on the
+> *referenced stage's* asset path and `path` is the prim's *in-stage* path, both
+> identical across instances. Adding the **same** USD asset twice in one scene
+> (two rovers from `rucheyok.usda`) makes both roots derive the same id from
+> `(usd, rucheyok.usda, /Rucheyok)` — a collision. Correct for the
+> single-instance MVP scene; not yet for instancing. Fix = fold the *composed/instance
+> root path* into `source` (or use the composed scene path as `path`) so
+> `/World/Rover1/...` and `/World/Rover2/...` diverge. The D3a debug-time collision
+> check **catches** this at content load (loud, not silent) — acceptable to defer.
+
 ### C. Cosim coupling decides prediction eligibility
 Prediction works only if the client can compute the same forces the server does.
 - A **driven rover**: motion is dominated by wheel drive/suspension = **local

@@ -279,6 +279,22 @@ fn instantiate_usd_prim(
         // the whole stage `HashMap`. Every read below is `&self`.
         let reader = &*stage.reader;
 
+        // M1 identity (Ph1): this entity is reconstructed from shared USD
+        // content, so stamp a deterministic `Provenance::Content`. The
+        // `source` is the stage's **stable logical asset path** (NOT the
+        // content-hash `AssetId` — D3b in DECISIONS.md), so the same prim
+        // derives the same `GlobalEntityId` on every peer with zero
+        // coordination. `derive_id` canonicalizes `path` itself. Stages not
+        // loaded from a path (runtime-authored, `get_path` → None) get no
+        // stamp here, so the core assignment fallback allocates instead.
+        if let Some(source) = asset_server.get_path(prim_path.stage_handle.id()) {
+            commands.entity(entity).insert(lunco_core::Provenance::Content {
+                namespace: "usd".into(),
+                source: source.path().to_string_lossy().into_owned(),
+                path: prim_path.path.clone(),
+            });
+        }
+
         // Skip inactive prims
         if let Ok(val) = reader.get(&sdf_path, "active") {
             if let Value::Bool(active) = &*val {
