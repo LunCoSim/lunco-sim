@@ -39,6 +39,14 @@ pub mod file_storage;
 
 pub use file_storage::FileStorage;
 
+/// Browser-`localStorage` backend. Only built for wasm targets — the
+/// native build has no `localStorage` and uses [`FileStorage`] instead.
+#[cfg(target_arch = "wasm32")]
+pub mod web_storage;
+
+#[cfg(target_arch = "wasm32")]
+pub use web_storage::WebStorage;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Errors
 // ─────────────────────────────────────────────────────────────────────────────

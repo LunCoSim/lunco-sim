@@ -16,6 +16,11 @@
 //! the arms are unreachable — silence the warning file-wide rather
 //! than splitting every match by cfg.
 #![allow(unreachable_patterns)]
+// This crate *owns* local-fs persistence (native only) and is on the
+// clippy.toml `disallowed_methods` allow-list (see workspace `clippy.toml`
+// header). The `std::fs` calls below are all `#[cfg(not(wasm32))]`-guarded;
+// on wasm the `WebStorage` backend in `web_storage.rs` is used instead.
+#![cfg_attr(not(target_arch = "wasm32"), allow(clippy::disallowed_methods))]
 
 use std::collections::HashMap;
 use std::sync::Mutex;
