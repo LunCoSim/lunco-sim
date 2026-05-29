@@ -705,11 +705,16 @@ impl Panel for ExperimentsPanel {
             }
         }
         if let Some(id) = delete {
-            if let Some(mut reg) = world.get_resource_mut::<ExperimentRegistry>() {
-                reg.delete(id);
-            }
-            if let Some(mut s) = world.get_resource_mut::<PlotPanelStates>() {
-                s.forget_experiment(id);
+            let removed = world
+                .get_resource_mut::<ExperimentRegistry>()
+                .map(|mut reg| reg.delete(id))
+                .unwrap_or(false);
+            if removed {
+                // Purge doc-mapping + per-plot visibility together so the UI
+                // delete is symmetric with the API `DeleteExperiment` command
+                // (neither leaks stale ids). Was: forget_experiment only,
+                // which left the ExperimentSources doc→run entry dangling.
+                crate::ui::commands::compile::purge_experiment_side_state(world, &[id]);
             }
         }
         if let Some(id) = cancel {
