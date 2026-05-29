@@ -40,7 +40,7 @@ rebuild.
 
 ---
 
-## Phase 1 — Substrate: M6 (clock) + M1 (identity)  *(code APPLIED 2026-05-29, pending -j2 build verify)*
+## Phase 1 — Substrate: M6 (clock) + M1 (identity)  *(APPLIED + BUILT GREEN 2026-05-29)*
 Nothing can sync correctly without a shared tick and matching ids. Build both.
 **Landed** in `lunco-core`: `identity.rs` (`Provenance` + deterministic `derive_id`,
 exact port of the green proto-tests), `GlobalEntityId` locked (private field, no

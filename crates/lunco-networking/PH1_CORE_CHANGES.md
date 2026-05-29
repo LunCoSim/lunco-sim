@@ -16,10 +16,16 @@
 >    defaults to "running".
 >
 > Migration: used the **safe/incremental** path (untagged entity → auto-allocate +
-> warn-once), so nothing breaks day one. Blast radius was tiny: 3 real construction
-> sites (`executor.rs` ×2, `sandbox-edit/commands.rs`) + 2 test sites
-> (`lunco-api/registry.rs`) flipped to `from_raw`. **Pending: user runs the
-> `-j2` build/test to confirm (see below).**
+> warn-once), so nothing breaks day one. Blast radius: 3 real construction sites
+> (`executor.rs` ×2, `sandbox-edit/commands.rs`) + 2 test sites
+> (`lunco-api/registry.rs`) flipped to `from_raw`, **plus one the grep-audit missed**
+> — `lunco-api/transports/http.rs:72` `QueryEntity` parsed an id via `FromStr` then
+> `.unwrap_or_default()`, relying on the now-removed `Default`; fixed to
+> `.unwrap_or(GlobalEntityId::from_raw(0))` (a non-resolving sentinel — the old
+> `Default` minted a random, equally non-matching id).
+>
+> **BUILT GREEN 2026-05-29** (`-j2`): `cargo test -p lunco-core` → all 5 Ph1 tests
+> pass (+ existing 14+2); `cargo check -p lunco-api -p lunco-sandbox-edit` clean.
 
 
 Concrete patch for the parts **no networking library gives us**: deterministic

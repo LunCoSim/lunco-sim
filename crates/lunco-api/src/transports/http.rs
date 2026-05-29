@@ -69,7 +69,14 @@ impl From<ApiRequestUnified> for ApiRequest {
             Some("DiscoverSchema") => ApiRequest::DiscoverSchema,
             Some("ListEntities") => ApiRequest::ListEntities,
             Some("QueryEntity") => ApiRequest::QueryEntity {
-                id: env.id.unwrap_or_default().parse().unwrap_or_default(),
+                // No/invalid id → a non-resolving sentinel (id 0 is never in the
+                // registry). Mirrors the prior behavior, where the removed
+                // `Default` minted a fresh — equally non-matching — id.
+                id: env
+                    .id
+                    .unwrap_or_default()
+                    .parse()
+                    .unwrap_or(lunco_core::GlobalEntityId::from_raw(0)),
             },
             Some("ExecuteScript") => ApiRequest::ExecuteScript {
                 language: env.language.unwrap_or_default(),
