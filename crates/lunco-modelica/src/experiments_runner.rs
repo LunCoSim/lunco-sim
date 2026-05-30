@@ -19,13 +19,19 @@
 //! once upstream exposes `ClassModification` on the public API.
 //! See `rumoca-ir-ast::visitor`.
 //!
-//! ## TODO(perf)
-//! Override changes currently force rumoca reflatten. Measure flatten
-//! time on representative models; if >100ms, add (source_hash,
-//! override_set) -> Dae LRU cache here. Long-term: upstream a
-//! `SimStepper::set_parameter()` to rumoca to skip reflatten.
+//! ## Compile-once parameter sweeps
+//! Overrides are applied at the *DAE* level, not by reflattening per run.
+//! `run_inner` compiles the input-substituted source ONCE, caches the
+//! resulting `Dae` keyed by source hash (`dae_cache`), and for each sweep
+//! point rebinds the target parameters' `start` to literals via
+//! [`apply_overrides_to_dae`]. This relies on rumoca's
+//! `preserve_overridable_param_starts` fold (commit 6a849ac) keeping computed
+//! derived params symbolic so they recompute at `SimStepper::new` time. If an
+//! override can't be set at the DAE level (non-top-level param, array/enum
+//! value), it falls back to the legacy string-injection recompile.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -36,6 +42,7 @@ use lunco_experiments::{
     ParamValue, RunBounds, RunCancelled, RunCompleted, RunFailed, RunHandle, RunMeta,
     RunProgress, RunResult, RunStatus, RunUpdate,
 };
+use rumoca_sim::ir_dae::{Dae, Expression as DaeExpression, Literal as DaeLiteral, VarName as DaeVarName};
 
 /// Bound to the model source kept by the runner. The runner doesn't
 /// own the live document state — `lunco-modelica` injects the current
@@ -73,6 +80,10 @@ struct RunnerState {
     /// flight; subsequent run_fast calls fail-fast in v1 (no internal
     /// queue — caller-side queueing handled by the panel).
     busy_with: Option<ExperimentId>,
+    /// Compile-once cache: `dae_cache_key(source, after_inputs)` → compiled
+    /// DAE. A parameter sweep reuses one rumoca compile and applies overrides
+    /// at the DAE level. Cleared when a model's source actually changes.
+    dae_cache: HashMap<u64, Arc<Dae>>,
 }
 
 /// Runner state shared between the trait wrapper and the worker
@@ -102,7 +113,20 @@ impl ModelicaRunner {
     /// UI on every compile-relevant edit.
     pub fn set_model_source(&self, model_ref: ModelRef, source: ModelSource) {
         if let Ok(mut s) = self.state.lock() {
+            // Only invalidate the compile-once cache when the source text (or
+            // extras) actually changed — dispatch re-registers the same raw
+            // source on every run of a sweep, and clearing then would defeat
+            // the cache. (Correctness doesn't depend on this: the cache key
+            // already folds in the source hash; this only bounds memory.)
+            let changed = s
+                .sources
+                .get(&model_ref)
+                .map(|old| old.source != source.source || old.extras != source.extras)
+                .unwrap_or(true);
             s.sources.insert(model_ref, source);
+            if changed {
+                s.dae_cache.clear();
+            }
         }
     }
 
@@ -339,6 +363,50 @@ pub fn pump_wasm_forwarders() {
 /// Body of the run thread. Compiles, runs the simulation, posts
 /// updates. All errors funnel into `RunUpdate::Failed`. Cancellation
 /// observed between steps via the shared `AtomicBool`.
+/// Key for the compile-once DAE cache. Folds in model identity, extra sources,
+/// and the input-substituted source — but NOT overrides (those are applied to
+/// the cached DAE), so a sweep that varies only overrides hits one cache entry.
+fn dae_cache_key(src: &ModelSource, after_inputs: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.model_name.hash(&mut h);
+    src.filename.hash(&mut h);
+    after_inputs.hash(&mut h);
+    for (name, body) in &src.extras {
+        name.hash(&mut h);
+        body.hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Apply parameter overrides directly to a compiled DAE by rebinding each
+/// target parameter's `start` to a literal. Relies on rumoca's
+/// `preserve_overridable_param_starts` fold keeping computed dependents
+/// symbolic, so overriding a base (e.g. `Isp`) recomputes its dependents
+/// (e.g. `massRatio`) at `SimStepper::new` via `build_params`. Returns `Err`
+/// (→ caller recompiles with string-injected source) when a target isn't a
+/// top-level DAE parameter or the value isn't a scalar literal.
+fn apply_overrides_to_dae(
+    dae: &mut Dae,
+    overrides: &BTreeMap<ParamPath, ParamValue>,
+) -> Result<(), String> {
+    for (path, value) in overrides {
+        let key = DaeVarName::new(path.0.clone());
+        let var = dae
+            .parameters
+            .get_mut(&key)
+            .ok_or_else(|| format!("'{}' is not a top-level DAE parameter", path.0))?;
+        let lit = match value {
+            ParamValue::Real(x) => DaeLiteral::Real(*x),
+            ParamValue::Int(x) => DaeLiteral::Integer(*x),
+            ParamValue::Bool(b) => DaeLiteral::Boolean(*b),
+            ParamValue::String(s) => DaeLiteral::String(s.clone()),
+            _ => return Err(format!("override for '{}' is not a scalar literal", path.0)),
+        };
+        var.start = Some(DaeExpression::Literal(lit));
+    }
+    Ok(())
+}
+
 fn run_inner(
     state: Arc<Mutex<RunnerState>>,
     model_ref: ModelRef,
@@ -383,14 +451,41 @@ fn run_inner(
             return;
         }
     };
-    let injected = match apply_overrides_to_source(&after_inputs, &overrides) {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = tx.send(RunUpdate::Failed {
-                error: format!("override application failed: {e}"),
-                partial: None,
-            });
-            return;
+    if cancel.load(Ordering::SeqCst) {
+        let _ = tx.send(RunUpdate::Cancelled);
+        return;
+    }
+
+    // Compile-once: compile the input-substituted source (NO overrides baked
+    // in) a single time and cache the resulting DAE keyed by source hash. A
+    // parameter sweep recompiles zero times after the first run.
+    let key = dae_cache_key(&source, &after_inputs);
+    let cached = state.lock().ok().and_then(|s| s.dae_cache.get(&key).cloned());
+    let base_dae: Arc<Dae> = match cached {
+        Some(d) => d,
+        None => {
+            let mut compiler = crate::ModelicaCompiler::new();
+            match compiler.compile_str_multi(
+                &source.model_name,
+                &after_inputs,
+                &source.filename,
+                &source.extras,
+            ) {
+                Ok(d) => {
+                    let dae = d.dae.clone();
+                    if let Ok(mut s) = state.lock() {
+                        s.dae_cache.insert(key, dae.clone());
+                    }
+                    dae
+                }
+                Err(e) => {
+                    let _ = tx.send(RunUpdate::Failed {
+                        error: format!("compile failed: {e}"),
+                        partial: None,
+                    });
+                    return;
+                }
+            }
         }
     };
 
@@ -399,18 +494,46 @@ fn run_inner(
         return;
     }
 
-    // Compile.
-    let mut compiler = crate::ModelicaCompiler::new();
-    let compile_result =
-        compiler.compile_str_multi(&source.model_name, &injected, &source.filename, &source.extras);
-    let dae_result = match compile_result {
-        Ok(d) => d,
-        Err(e) => {
-            let _ = tx.send(RunUpdate::Failed {
-                error: format!("compile failed: {e}"),
-                partial: None,
-            });
-            return;
+    // Apply parameter overrides at the DAE level (the compile-once fast path).
+    // Fall back to a string-injected recompile if any override can't be set
+    // there (non-top-level param, or non-scalar value).
+    let run_dae: Arc<Dae> = if overrides.is_empty() {
+        base_dae
+    } else {
+        let mut d = (*base_dae).clone();
+        match apply_overrides_to_dae(&mut d, &overrides) {
+            Ok(()) => Arc::new(d),
+            Err(reason) => {
+                bevy::log::debug!(
+                    "[runner] DAE override fast-path unavailable ({reason}); recompiling with injected source"
+                );
+                let injected = match apply_overrides_to_source(&after_inputs, &overrides) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let _ = tx.send(RunUpdate::Failed {
+                            error: format!("override application failed: {e}"),
+                            partial: None,
+                        });
+                        return;
+                    }
+                };
+                let mut compiler = crate::ModelicaCompiler::new();
+                match compiler.compile_str_multi(
+                    &source.model_name,
+                    &injected,
+                    &source.filename,
+                    &source.extras,
+                ) {
+                    Ok(d) => d.dae,
+                    Err(e) => {
+                        let _ = tx.send(RunUpdate::Failed {
+                            error: format!("compile failed: {e}"),
+                            partial: None,
+                        });
+                        return;
+                    }
+                }
+            }
         }
     };
 
@@ -448,7 +571,7 @@ fn run_inner(
     }
     stepper_opts.initial_step = bounds.h0;
 
-    let mut stepper = match rumoca_sim::SimStepper::new(&dae_result.dae, stepper_opts) {
+    let mut stepper = match rumoca_sim::SimStepper::new(&run_dae, stepper_opts) {
         Ok(s) => s,
         Err(e) => {
             let _ = tx.send(RunUpdate::Failed {
