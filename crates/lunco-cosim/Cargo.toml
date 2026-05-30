@@ -7,6 +7,7 @@ edition = "2021"
 [dependencies]
 bevy.workspace = true
 avian3d.workspace = true
+lunco-core = { path = "../lunco-core" }
 
 [dev-dependencies]
 avian3d = { workspace = true, features = ["default-collider"] }

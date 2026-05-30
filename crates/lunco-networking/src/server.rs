@@ -8,8 +8,13 @@ use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
-use lunco_api::{HandshakeMsg, SpawnReplicationMsg, WireEnvelope, WireInbox, WireOutbox};
-use lunco_core::{GlobalEntityId, NetSpawn, NetStatus, SessionRegistry, SimTick, WireChannel};
+use lunco_api::{
+    HandshakeMsg, OwnershipMsg, SnapshotEntry, SnapshotMsg, SpawnReplicationMsg, WireEnvelope,
+    WireInbox, WireOutbox,
+};
+use lunco_core::{
+    GlobalEntityId, NetReplicate, NetSpawn, NetStatus, SessionRegistry, SimTick, WireChannel,
+};
 
 use crate::protocol::{CmdChannel, Frame, SnapChannel};
 use crate::shared::{deserialize_env, peer_to_session, serialize_env, PRIVATE_KEY, PROTOCOL_ID};
@@ -51,7 +56,30 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     });
     app.add_observer(on_server_connected);
     app.add_observer(on_server_disconnected);
-    app.add_systems(Update, (host_send_outbox, host_recv_inbox, update_host_netstatus));
+    app.add_systems(
+        Update,
+        (
+            host_send_outbox,
+            host_recv_inbox,
+            update_host_netstatus,
+            broadcast_ownership,
+        ),
+    );
+}
+
+/// Broadcast the authoritative ownership table to all clients whenever it
+/// changes (a claim or release). Reliable channel so the who-owns-what view
+/// stays consistent. Host-only (registered in `setup_host`).
+fn broadcast_ownership(registry: Res<SessionRegistry>, mut outbox: ResMut<WireOutbox>) {
+    if !registry.is_changed() {
+        return;
+    }
+    outbox.0.push((
+        WireChannel::CommandBus,
+        WireEnvelope::Ownership(OwnershipMsg {
+            entries: registry.snapshot(),
+        }),
+    ));
 }
 
 /// Mirror the live connected-client count into [`NetStatus`] for the status bar.
@@ -90,6 +118,8 @@ fn on_server_connected(
     trigger: On<Add, Connected>,
     q_client: Query<&RemoteId, With<ClientOf>>,
     q_spawns: Query<(&GlobalEntityId, &NetSpawn)>,
+    q_repl: Query<(&GlobalEntityId, &Transform), With<NetReplicate>>,
+    registry: Res<SessionRegistry>,
     server: Single<&Server>,
     tick: Res<SimTick>,
     mut sender: ServerMultiMessageSender,
@@ -125,6 +155,43 @@ fn on_server_connected(
             }),
         );
     }
+    // Full state baseline: current pose of every replicated body (balloons,
+    // cosim targets, rovers) so the joiner sees them at the right place
+    // immediately — not just future spawns/changes. Rides the snapshot channel,
+    // applied by the client's `apply_incoming_snapshots`.
+    let entries: Vec<SnapshotEntry> = q_repl
+        .iter()
+        .map(|(gid, tf)| SnapshotEntry {
+            gid: gid.get(),
+            t: tf.translation.to_array(),
+            r: tf.rotation.to_array(),
+        })
+        .collect();
+    if !entries.is_empty() {
+        let n = entries.len();
+        server_send(
+            &mut sender,
+            server,
+            &target,
+            WireChannel::ControlStream,
+            &WireEnvelope::Snapshot(SnapshotMsg {
+                tick: tick.0,
+                entries,
+            }),
+        );
+        info!("[net] sent {n}-entity state baseline to new client");
+    }
+    // Current ownership table, so the joiner immediately knows who owns what
+    // (the periodic broadcast only fires on change).
+    server_send(
+        &mut sender,
+        server,
+        &target,
+        WireChannel::CommandBus,
+        &WireEnvelope::Ownership(OwnershipMsg {
+            entries: registry.snapshot(),
+        }),
+    );
     info!("[net] client connected: peer={peer:?} session={}", session.0);
 }
 

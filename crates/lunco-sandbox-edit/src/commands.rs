@@ -10,7 +10,7 @@
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
-use avian3d::prelude::{LinearVelocity, RigidBody};
+use avian3d::prelude::{AngularVelocity, LinearVelocity, RigidBody};
 use avian3d::physics_transform::Position;
 use big_space::prelude::Grid;
 use lunco_core::Command;
@@ -137,20 +137,45 @@ pub fn apply_replicated_spawns(
 
 /// Client: force replicated proxies to `Kinematic` so the host-authoritative
 /// transform (applied via snapshots) is not fought by local physics
-/// integration. Catches the USD loader's `Dynamic` body via `Changed`.
+/// integration — and, crucially, so the proxy does **not** free-fall under
+/// gravity while the host is idle (snapshots pause under `only_if_changed`).
+///
+/// Re-asserts every frame rather than keying on `Changed<RigidBody>`: the USD
+/// rover's cosim/flight-software re-inserts a `Dynamic` body *after* the asset
+/// loads, which a one-shot `Changed` filter races and misses — leaving the
+/// proxy dynamic and sinking through the floor. The `!Kinematic` guard makes
+/// the steady state a no-op.
 pub fn force_kinematic_proxies(
     role: Res<lunco_core::NetworkRole>,
     mut commands: Commands,
-    q: Query<(Entity, &RigidBody), (With<lunco_core::NetReplicate>, Changed<RigidBody>)>,
+    mut q: Query<
+        (
+            Entity,
+            &RigidBody,
+            Option<&mut LinearVelocity>,
+            Option<&mut AngularVelocity>,
+        ),
+        With<lunco_core::NetReplicate>,
+    >,
 ) {
     if !matches!(*role, lunco_core::NetworkRole::Client) {
         return;
     }
-    // `RigidBody` is an immutable Avian component — replace it via `insert`
-    // (same contract as `MoveEntity`).
-    for (e, rb) in q.iter() {
+    for (e, rb, lin, ang) in q.iter_mut() {
+        // `RigidBody` is an immutable Avian component — replace it via `insert`.
         if !matches!(*rb, RigidBody::Kinematic) {
             commands.entity(e).insert(RigidBody::Kinematic);
+        }
+        // A kinematic body keeps gliding at whatever velocity it carried when it
+        // turned kinematic (a settled rover micro-jitters → glides → the next
+        // snapshot snaps it back → *blinking*; a balloon glides smoothly →
+        // drifts off). Zero it every frame so the proxy HOLDS the last snapshot
+        // between updates instead of running its own physics.
+        if let Some(mut l) = lin {
+            l.0 = DVec3::ZERO;
+        }
+        if let Some(mut a) = ang {
+            a.0 = DVec3::ZERO;
         }
     }
 }
@@ -179,6 +204,49 @@ pub fn apply_incoming_snapshots(
                 pos.0 = DVec3::new(t.x as f64, t.y as f64, t.z as f64);
             }
         }
+    }
+}
+
+/// Server-authoritative state sync: tag the scene's **top-level dynamic /
+/// kinematic** physics bodies (the cosim balloons, the cosim target, free
+/// cubes, rover chassis) as [`NetReplicate`] so they ride the snapshot channel.
+///
+/// Runs on BOTH peers and keys off deterministic USD identity — the same prim
+/// derives the same `GlobalEntityId` on host and client (`Provenance::Content`),
+/// so each peer tags the same set with no coordination. On the host they become
+/// snapshot SOURCES (`gather_snapshot`); on the client `force_kinematic_proxies`
+/// pins them kinematic and `apply_incoming_snapshots` drives them. Single-player
+/// (`Standalone`) tags them too but nothing serializes — harmless.
+///
+/// Excludes:
+/// - **static** colliders (the ground) — never move;
+/// - **runtime spawns** (`SkipContentStamp`) — already tagged at spawn time;
+/// - **nested** bodies (parent is itself a rigid body, e.g. rover wheels) — a
+///   child-local snapshot would fight `apply_incoming_snapshots`' world-space
+///   avian `Position` write; only top-level bodies have local≈world. (Full
+///   articulated per-body pose replication is a follow-up.)
+pub fn tag_networked_physics(
+    mut commands: Commands,
+    q_candidates: Query<
+        (Entity, &RigidBody, Option<&ChildOf>),
+        (
+            With<lunco_core::GlobalEntityId>,
+            Without<lunco_core::NetReplicate>,
+            Without<lunco_core::SkipContentStamp>,
+        ),
+    >,
+    q_bodies: Query<(), With<RigidBody>>,
+) {
+    for (e, rb, parent) in q_candidates.iter() {
+        if matches!(*rb, RigidBody::Static) {
+            continue;
+        }
+        if let Some(p) = parent {
+            if q_bodies.contains(p.parent()) {
+                continue; // nested body (e.g. rover wheel) — skip for now
+            }
+        }
+        commands.entity(e).insert(lunco_core::NetReplicate);
     }
 }
 
@@ -336,6 +404,7 @@ impl Plugin for SpawnCommandPlugin {
                 apply_replicated_spawns,
                 apply_incoming_snapshots,
                 force_kinematic_proxies,
+                tag_networked_physics,
             ),
         );
     }

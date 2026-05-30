@@ -85,5 +85,6 @@ fn add_protocol(app: &mut App) {
     app.declare_channel::<lunco_mobility::DriveRover>(WireChannel::ControlStream);
     app.declare_channel::<lunco_mobility::BrakeRover>(WireChannel::ControlStream);
     app.declare_channel::<lunco_avatar::PossessVessel>(WireChannel::CommandBus);
+    app.declare_channel::<lunco_avatar::ReleaseVessel>(WireChannel::CommandBus);
     app.declare_channel::<lunco_sandbox_edit::commands::SpawnEntity>(WireChannel::CommandBus);
 }

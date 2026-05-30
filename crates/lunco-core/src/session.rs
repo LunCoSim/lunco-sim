@@ -130,6 +130,18 @@ impl SessionRegistry {
         }
         freed
     }
+
+    /// Snapshot the full `(gid, session)` table — the host broadcasts this so
+    /// clients hold the same authoritative ownership view.
+    pub fn snapshot(&self) -> Vec<(u64, u64)> {
+        self.owners.iter().map(|(&g, &s)| (g, s.0)).collect()
+    }
+
+    /// Replace the whole table from a host broadcast (client side). Idempotent;
+    /// the host's table is authoritative.
+    pub fn replace_all(&mut self, entries: impl IntoIterator<Item = (u64, SessionId)>) {
+        self.owners = entries.into_iter().collect();
+    }
 }
 
 /// Suppress the USD loader's automatic [`crate::Provenance::Content`] stamping

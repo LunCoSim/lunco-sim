@@ -77,6 +77,17 @@ pub struct HandshakeMsg {
     pub tick: u64,
 }
 
+/// Host → clients: the authoritative who-owns-what map (`gid → session`).
+/// Replaces the client's view of [`lunco_core::SessionRegistry`] so possession
+/// is exclusive and synced across peers — clients refuse to possess an
+/// already-owned vessel and drop control of one they've lost. Broadcast on
+/// change over the reliable CommandBus.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OwnershipMsg {
+    /// `(gid, session)` pairs — the full current ownership table.
+    pub entries: Vec<(u64, u64)>,
+}
+
 /// Everything that crosses the wire, tagged for reliable/unreliable routing by
 /// the accompanying [`WireChannel`]. `lunco-networking` (de)serializes these.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -85,6 +96,7 @@ pub enum WireEnvelope {
     Snapshot(SnapshotMsg),
     Spawn(SpawnReplicationMsg),
     Handshake(HandshakeMsg),
+    Ownership(OwnershipMsg),
     Ack(lunco_core::Ack),
 }
 
@@ -323,6 +335,7 @@ pub fn drain_wire_inbox(
     mut tick: ResMut<SimTick>,
     mut pending_spawns: ResMut<PendingReplicatedSpawns>,
     mut snapshots: ResMut<IncomingSnapshots>,
+    mut registry: ResMut<SessionRegistry>,
 ) {
     if inbox.0.is_empty() {
         return;
@@ -364,6 +377,13 @@ pub fn drain_wire_inbox(
                 local.0 = SessionId(h.session);
                 tick.0 = h.tick;
                 info!("[wire] handshake: session={} tick={}", h.session, h.tick);
+            }
+            WireEnvelope::Ownership(o) => {
+                // Clients adopt the host's authoritative who-owns-what table.
+                // (The host never receives this — it *is* the authority.)
+                if !role.is_host() {
+                    registry.replace_all(o.entries.into_iter().map(|(g, s)| (g, SessionId(s))));
+                }
             }
             WireEnvelope::Ack(_) => { /* MVP is optimistic; acks unused */ }
         }

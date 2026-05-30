@@ -97,6 +97,13 @@ fn main() {
     // for avian — the physics step time, every second. Off by default
     // because the lines are noisy; flip it on while hunting perf.
     let log_diag = args.iter().any(|a| a == "--log-diag");
+    // Networking present? (`--host`/`--connect`). When networked, the window
+    // must keep ticking even when unfocused: lightyear's netcode link sends
+    // keepalives on the update loop, and the default unfocused throttle
+    // (~1 FPS) starves them past the timeout, dropping the connection a few
+    // seconds after the window loses focus. Two side-by-side windows means one
+    // is always unfocused — so we keep it Continuous while networked.
+    let networked = args.iter().any(|a| a == "--host" || a == "--connect");
     let present_mode = if no_vsync {
         bevy::window::PresentMode::Mailbox
     } else {
@@ -118,7 +125,13 @@ fn main() {
         use bevy::winit::{UpdateMode, WinitSettings};
         app.insert_resource(WinitSettings {
             focused_mode: UpdateMode::Continuous,
-            unfocused_mode: UpdateMode::reactive_low_power(std::time::Duration::from_secs(1)),
+            // Networked: stay Continuous unfocused so keepalives keep flowing.
+            // Single-player: low-power when backgrounded to keep fans quiet.
+            unfocused_mode: if networked {
+                UpdateMode::Continuous
+            } else {
+                UpdateMode::reactive_low_power(std::time::Duration::from_secs(1))
+            },
         });
     }
     // Cap how much catchup `FixedUpdate` does after a slow frame.
