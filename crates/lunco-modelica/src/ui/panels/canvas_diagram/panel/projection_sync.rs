@@ -175,7 +175,7 @@ fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: 
     
     let bg_handle = docstate.background_diagram.clone();
     let diag = decorations::diagram_annotation_for_target(ast_arc.as_ref(), target_class.as_deref());
-    if let Ok(mut guard) = bg_handle.write() { *guard = diag.map(|d| (d.coordinate_system, d.graphics, d.plot_nodes)); }
+    if let Ok(mut guard) = bg_handle.write() { *guard = diag; }
     
     if let Some(t) = docstate.projection_task.as_ref() { if t.gen_at_spawn != gen { t.cancel.store(true, std::sync::atomic::Ordering::Relaxed); } }
     docstate.projection_task = None;
