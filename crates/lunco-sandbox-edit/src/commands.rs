@@ -36,8 +36,17 @@ pub fn on_spawn_entity_command(
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
     q_grids: Query<Entity, With<Grid>>,
+    role: Res<lunco_core::NetworkRole>,
 ) {
     let cmd = trigger.event();
+
+    // On a pure client, spawning is the host's job: the command is captured and
+    // sent to the host, which spawns the authoritative rover and replicates it
+    // back (arriving via `apply_replicated_spawns`). Don't spawn locally, or the
+    // client would get a duplicate with no server identity.
+    if matches!(*role, lunco_core::NetworkRole::Client) {
+        return;
+    }
 
     let entry = match catalog.get(&cmd.entry_id) {
         Some(e) => e,
@@ -47,22 +56,128 @@ pub fn on_spawn_entity_command(
         }
     };
 
-    let grid = match q_grids.get(cmd.target) {
-        Ok(g) => g,
-        Err(_) => {
-            warn!("SPAWN_ENTITY: target entity is not a Grid");
+    // Prefer the requested grid; fall back to the first grid (a wire-applied
+    // spawn may carry a grid id that doesn't resolve on this peer).
+    let grid = match q_grids.get(cmd.target).ok().or_else(|| q_grids.iter().next()) {
+        Some(g) => g,
+        None => {
+            warn!("SPAWN_ENTITY: no grid to spawn under");
             return;
         }
     };
 
     info!("SPAWN_ENTITY: {} at {:?}", cmd.entry_id, cmd.position);
 
-    match entry.source {
+    let result = match entry.source {
         crate::catalog::SpawnSource::Procedural(_) => {
-            spawn_procedural(&mut commands, &mut meshes, &mut materials, entry, cmd.position, grid);
+            spawn_procedural(&mut commands, &mut meshes, &mut materials, entry, cmd.position, grid)
         }
         crate::catalog::SpawnSource::UsdFile(_) => {
-            spawn_usd_entry(&mut commands, &asset_server, entry, cmd.position, grid);
+            spawn_usd_entry(&mut commands, &asset_server, entry, cmd.position, grid)
+        }
+    };
+
+    // Networked identity (gap G2): a runtime instance gets a server-allocated
+    // unique id (SkipContentStamp → assign_global_entity_ids mints
+    // Authoritative, never colliding `Content`), is marked for transform
+    // replication, and records what to replicate so the host can broadcast the
+    // spawn to clients.
+    commands.entity(result.root_entity).insert((
+        lunco_core::SkipContentStamp,
+        lunco_core::NetReplicate,
+        lunco_core::NetSpawn {
+            entry_id: cmd.entry_id.clone(),
+            position: cmd.position,
+        },
+    ));
+}
+
+/// Client: instantiate rovers the host has replicated to us (M1 content
+/// reconstruction — geometry loads locally, pinned to the host-allocated id).
+/// No-op on host/standalone (queue stays empty).
+pub fn apply_replicated_spawns(
+    mut pending: ResMut<lunco_core::PendingReplicatedSpawns>,
+    mut commands: Commands,
+    catalog: Res<SpawnCatalog>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
+    q_grids: Query<Entity, With<Grid>>,
+) {
+    if pending.0.is_empty() {
+        return;
+    }
+    // Wait until a grid exists (scene still loading) — keep the queue.
+    let Some(grid) = q_grids.iter().next() else {
+        return;
+    };
+    for job in pending.0.drain(..).collect::<Vec<_>>() {
+        let Some(entry) = catalog.get(&job.entry_id) else {
+            warn!("REPL_SPAWN: unknown entry '{}'", job.entry_id);
+            continue;
+        };
+        let pos = job.position;
+        let result = match entry.source {
+            crate::catalog::SpawnSource::Procedural(_) => {
+                spawn_procedural(&mut commands, &mut meshes, &mut materials, entry, pos, grid)
+            }
+            crate::catalog::SpawnSource::UsdFile(_) => {
+                spawn_usd_entry(&mut commands, &asset_server, entry, pos, grid)
+            }
+        };
+        // Pin the host id; mark runtime instance + replication target. Forced
+        // Kinematic by `force_kinematic_proxies` so snapshots drive it.
+        commands.entity(result.root_entity).insert((
+            lunco_core::GlobalEntityId::from_raw(job.gid),
+            lunco_core::SkipContentStamp,
+            lunco_core::NetReplicate,
+        ));
+    }
+}
+
+/// Client: force replicated proxies to `Kinematic` so the host-authoritative
+/// transform (applied via snapshots) is not fought by local physics
+/// integration. Catches the USD loader's `Dynamic` body via `Changed`.
+pub fn force_kinematic_proxies(
+    role: Res<lunco_core::NetworkRole>,
+    mut commands: Commands,
+    q: Query<(Entity, &RigidBody), (With<lunco_core::NetReplicate>, Changed<RigidBody>)>,
+) {
+    if !matches!(*role, lunco_core::NetworkRole::Client) {
+        return;
+    }
+    // `RigidBody` is an immutable Avian component — replace it via `insert`
+    // (same contract as `MoveEntity`).
+    for (e, rb) in q.iter() {
+        if !matches!(*rb, RigidBody::Kinematic) {
+            commands.entity(e).insert(RigidBody::Kinematic);
+        }
+    }
+}
+
+/// Client: apply replicated transform snapshots. Sets avian `Position` (the
+/// physics-authoritative pose) as well as `Transform`, so the avian
+/// transform-sync doesn't immediately overwrite the snapshot. (Rotation is set
+/// on `Transform`; full avian-rotation replication is a follow-up.)
+pub fn apply_incoming_snapshots(
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    mut snaps: ResMut<lunco_core::IncomingSnapshots>,
+    mut q: Query<(&mut Transform, Option<&mut Position>)>,
+) {
+    if snaps.0.is_empty() {
+        return;
+    }
+    for s in snaps.0.drain(..).collect::<Vec<_>>() {
+        let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(s.gid)) else {
+            continue;
+        };
+        if let Ok((mut tf, pos)) = q.get_mut(e) {
+            let t = Vec3::from(s.t);
+            tf.translation = t;
+            tf.rotation = Quat::from_array(s.r);
+            if let Some(mut pos) = pos {
+                pos.0 = DVec3::new(t.x as f64, t.y as f64, t.z as f64);
+            }
         }
     }
 }
@@ -213,6 +328,16 @@ impl Plugin for SpawnCommandPlugin {
         app.add_observer(on_spawn_entity_command);
         app.add_observer(on_move_entity_command);
         app.add_systems(FixedPostUpdate, clear_kinematic_pulse_velocity);
+        // Networking: instantiate host-replicated spawns, drive proxies from
+        // snapshots, and keep proxies kinematic. All no-op in single-player.
+        app.add_systems(
+            Update,
+            (
+                apply_replicated_spawns,
+                apply_incoming_snapshots,
+                force_kinematic_proxies,
+            ),
+        );
     }
 }
 

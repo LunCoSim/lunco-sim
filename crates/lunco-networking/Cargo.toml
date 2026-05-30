@@ -2,24 +2,49 @@
 name = "lunco-networking"
 version = "0.1.0-dev"
 edition = "2021"
-description = "Networking layer for LunCoSim — transport abstraction, ECS replication, and space-standards compatibility"
+description = "Networking layer for LunCoSim — thin lightyear (WebTransport) adapter over the always-on wire substrate in lunco-api/lunco-core."
 
-[dependencies]
-bevy = { workspace = true }
-# bevy_renet2 = { version = "..." }       # Transport backend (feature-gated)
-# bevy_replicon = { version = "..." }     # ECS entity/component replication
-# lz4_flex = { version = "..." }          # Optional general-purpose compression
-# ulid = { version = "..." }              # Global stable entity identifiers
-# bincode = { version = "..." }           # Serialization
-# serde = { version = "1", features = ["derive"] }
+[[bin]]
+name = "net_smoke"
+path = "src/bin/net_smoke.rs"
+required-features = ["networking"]
 
 [features]
 default = []
-# Transport selection (compile-time, Godot-like swapping)
-# transport-udp = ["bevy_renet2/netcode"]         # Desktop: native UDP
-# transport-ws = ["bevy_renet2/ws_client"]        # Browser: WebSockets
-# transport-wt = ["bevy_renet2/webtransport"]     # Future: WebTransport
-# transport-server = ["bevy_renet2/netcode"]      # Dedicated server mode
+# Turns the crate from a no-op facade into the real lightyear WebTransport
+# adapter. Gated per D7 (substrate is always-on; only the wire is optional).
+networking = ["dep:lightyear", "dep:serde", "dep:serde_json"]
+
+[dependencies]
+bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-api = { path = "../lunco-api" }
+lunco-mobility = { path = "../lunco-mobility" }
+lunco-avatar = { path = "../lunco-avatar" }
+lunco-sandbox-edit = { path = "../lunco-sandbox-edit" }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+# Native (desktop / dedicated server): full client+server WebTransport.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+lightyear = { version = "0.26.4", default-features = false, optional = true, features = [
+  "client",
+  "server",
+  "netcode",
+  "webtransport",
+  "webtransport_self_signed",
+  "webtransport_dangerous_configuration",
+] }
+
+# Browser (wasm): client-only WebTransport. Cert digest comes from the URL hash.
+[target.'cfg(target_family = "wasm")'.dependencies]
+lightyear = { version = "0.26.4", default-features = false, optional = true, features = [
+  "client",
+  "netcode",
+  "webtransport",
+  "webtransport_self_signed",
+] }
+web-sys = { version = "0.3", optional = true, features = ["Window", "Location"] }
 
 [lints]
 workspace = true

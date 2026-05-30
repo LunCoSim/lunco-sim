@@ -240,6 +240,35 @@ impl Default for SurfaceModeThreshold {
 /// Plugin for managing user avatar logic, input processing, and possession.
 pub struct LunCoAvatarPlugin;
 
+/// Host-only: record that the possessing session now owns the target vessel, so
+/// the authority gate ([`lunco_core::authorize`]) accepts that session's
+/// `DriveRover`s (gap G4). Runs for both local-host and wire-applied
+/// possessions; the origin is the wire-apply guard (remote) or the local
+/// session (host's own).
+fn record_possession_authority(
+    trigger: On<PossessVessel>,
+    role: Res<lunco_core::NetworkRole>,
+    guard: Res<lunco_core::WireApplyGuard>,
+    local: Res<lunco_core::LocalSession>,
+    q_gid: Query<&lunco_core::GlobalEntityId>,
+    mut registry: ResMut<lunco_core::SessionRegistry>,
+) {
+    if !role.is_host() {
+        return;
+    }
+    let cmd = trigger.event();
+    let origin = guard.0.unwrap_or(local.0);
+    if let Ok(gid) = q_gid.get(cmd.target) {
+        match registry.claim(origin, gid.get()) {
+            Ok(()) => info!("[auth] session {origin} possesses entity {}", gid.get()),
+            Err(cur) => warn!(
+                "[auth] entity {} already owned by {cur}; {origin} possession denied",
+                gid.get()
+            ),
+        }
+    }
+}
+
 impl Plugin for LunCoAvatarPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CameraScroll>()
@@ -250,6 +279,7 @@ impl Plugin for LunCoAvatarPlugin {
         app.add_plugins(InputManagerPlugin::<UserIntent>::default());
         app.add_observer(on_user_intent);
         app.add_observer(on_possess_command);
+        app.add_observer(record_possession_authority);
         app.add_observer(on_release_command);
         app.add_observer(on_focus_command);
         app.add_observer(on_follow_command);
@@ -1243,8 +1273,16 @@ fn on_possess_command(
     _q_orbit: Query<&OrbitCamera>,
     _q_spring: Query<&SpringArmCamera>,
     _q_chase: Query<&ChaseCamera>,
+    guard: Res<lunco_core::WireApplyGuard>,
 ) {
     let cmd = trigger.event();
+    // A *remote* possession applied from the wire (host attributing a client's
+    // claim) must NOT bind a local camera — the host has no camera for that
+    // player. Authority is recorded separately by `record_possession_authority`;
+    // here we only do the local camera-bind for our own (non-wire) possessions.
+    if guard.is_from_wire() {
+        return;
+    }
     let (avatar_ent, cam_tf, cam_cell, _child_of, existing_link) = if let Ok(data) = q_avatar.get(cmd.avatar) {
         data
     } else {

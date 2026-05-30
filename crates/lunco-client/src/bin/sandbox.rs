@@ -343,6 +343,15 @@ fn main() {
     #[cfg(feature = "lunco-api")]
     app.add_plugins(lunco_api::LunCoApiPlugin::default());
 
+    // Multiplayer (opt-in): `--host [port]` runs the listen-server,
+    // `--connect <addr>` joins one over WebTransport. Absent ⇒ single-player
+    // (the networking substrate stays inert).
+    #[cfg(feature = "networking")]
+    if let Some(mode) = lunco_networking::NetworkMode::from_args() {
+        info!("[net] networking mode: {mode:?}");
+        app.add_plugins(lunco_networking::LunCoNetworkingPlugin { mode });
+    }
+
     if log_diag {
         app.add_plugins(bevy::diagnostic::LogDiagnosticsPlugin::default());
     }
