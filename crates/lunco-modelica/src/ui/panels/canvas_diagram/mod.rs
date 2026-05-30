@@ -345,6 +345,13 @@ pub struct CanvasDocState {
     /// but for newly-added connections. Drives the wire-flash
     /// rendered by `EdgePulseLayer`.
     pub edge_pulse_handle: EdgePulseHandle,
+    /// Hot-exit zoom/pan restore: a saved [`lunco_canvas::Viewport`]
+    /// seeded when this tab's entry is created for a *restored* document
+    /// (see [`CanvasDiagramState::stash_pending_view`]). The initial
+    /// projection consumes it (`take`) and `snap_to`s the saved camera
+    /// instead of running fit-to-content, so a reopened diagram looks
+    /// exactly as it did at exit. `None` for normally-opened docs.
+    pub pending_view: Option<lunco_canvas::Viewport>,
 }
 
 impl Default for CanvasDocState {
@@ -396,6 +403,7 @@ impl Default for CanvasDocState {
             background_diagram,
             pulse_handle,
             edge_pulse_handle,
+            pending_view: None,
         }
     }
 }
@@ -433,6 +441,15 @@ pub struct CanvasDiagramState {
     /// and project-spawn, and the canvas overlay flickers off then on.
     pending_projection_handoff:
         std::collections::HashMap<lunco_doc::DocumentId, lunco_workbench::status_bus::BusyHandle>,
+    /// Hot-exit camera restore, keyed by document. Populated by
+    /// [`stash_pending_view`](Self::stash_pending_view) when a document
+    /// is restored from the per-Twin workspace-state (its tab doesn't
+    /// exist yet at restore time). When the tab's `CanvasDocState` is
+    /// first created in [`get_mut_for_tab`](Self::get_mut_for_tab) the
+    /// saved viewport is moved onto it; the initial projection then
+    /// `snap_to`s it instead of fitting.
+    pending_view_restore:
+        std::collections::HashMap<lunco_doc::DocumentId, lunco_canvas::Viewport>,
 }
 
 impl CanvasDiagramState {
@@ -501,7 +518,27 @@ impl CanvasDiagramState {
         doc: lunco_doc::DocumentId,
     ) -> &mut CanvasDocState {
         self.tab_doc.entry(tab_id).or_insert(doc);
-        self.per_tab.entry(tab_id).or_default()
+        // Seed a hot-exit-restored camera onto the *first* tab opened for
+        // a restored doc. `remove` returns `Some` only on that first
+        // entry creation; later calls are a cheap empty-map miss.
+        let restored_view = self.pending_view_restore.remove(&doc);
+        let entry = self.per_tab.entry(tab_id).or_default();
+        if let Some(v) = restored_view {
+            entry.pending_view = Some(v);
+        }
+        entry
+    }
+
+    /// Stash a hot-exit-restored [`lunco_canvas::Viewport`] for `doc`.
+    /// Applied to the doc's first tab when it's created (see
+    /// [`get_mut_for_tab`](Self::get_mut_for_tab)). Called by the Modelica
+    /// session codec on workspace-state restore.
+    pub fn stash_pending_view(
+        &mut self,
+        doc: lunco_doc::DocumentId,
+        view: lunco_canvas::Viewport,
+    ) {
+        self.pending_view_restore.insert(doc, view);
     }
 
     /// Iterate `(tab_id, doc_id)` for every tab known to the per-tab

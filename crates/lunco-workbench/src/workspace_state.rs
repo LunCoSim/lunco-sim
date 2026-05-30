@@ -58,6 +58,18 @@ pub struct DocumentSnapshot {
     pub source: String,
     /// Whether the doc had unsaved changes (best-effort on restore).
     pub dirty: bool,
+    /// This session's live `DocumentId.raw()` at save time. **Not** stable
+    /// across runs — used only to remap the persisted dock tree's tab
+    /// instance ids (`TabId::Instance { instance, .. }`) onto the
+    /// freshly-restored documents. Defaults to 0 for older state files.
+    #[serde(default)]
+    pub id: u64,
+    /// Opaque per-domain view state — canvas zoom/pan, etc. `null` when
+    /// the domain has none. The Modelica codec serializes its per-tab
+    /// `Viewport` here; USD leaves it null. Generic `Value` keeps
+    /// `lunco-workbench` domain-agnostic.
+    #[serde(default)]
+    pub view_state: serde_json::Value,
 }
 
 /// Per-domain hook letting `lunco-workbench` capture and restore open
@@ -81,7 +93,18 @@ pub trait DocumentSessionCodec: Send + Sync + 'static {
     fn capture(&self, world: &mut World) -> Vec<(u64, DocumentSnapshot)>;
     /// Recreate one document from a snapshot, replaying the domain's
     /// normal open path (which opens the tab + registers the entry).
-    fn restore(&self, world: &mut World, snap: &DocumentSnapshot);
+    /// Returns the freshly-allocated `DocumentId.raw()` so the workbench
+    /// can remap the persisted dock tree's tab instance ids onto it;
+    /// `None` if restore was a no-op (e.g. the registry was missing).
+    fn restore(&self, world: &mut World, snap: &DocumentSnapshot) -> Option<u64>;
+    /// Apply the snapshot's opaque [`view_state`](DocumentSnapshot::view_state)
+    /// (canvas zoom/pan, …) to the **live** document identified by
+    /// `live_id` (`DocumentId.raw()`). Called for *every* restored doc —
+    /// both freshly [`restore`](Self::restore)d ones **and** docs the app
+    /// auto-opened that matched a snapshot (so a reopened diagram restores
+    /// its camera even when the open itself was deduped). Default no-op for
+    /// domains without per-doc view state (USD). Runs after `restore`.
+    fn apply_view_state(&self, _world: &mut World, _live_id: u64, _snap: &DocumentSnapshot) {}
 }
 
 /// Registry of per-domain [`DocumentSessionCodec`]s. Populated at plugin
@@ -116,6 +139,21 @@ impl AppDocumentSessionExt for App {
     }
 }
 
+/// Live sizes of the sandbox-style egui side panels (lunica keeps its
+/// sizes inside the dock tree instead). egui owns these widths in its
+/// own memory, which it does **not** persist across launches — so we
+/// mirror them here and feed them back as the panels' `default_width` /
+/// `default_height` on a fresh launch. `None` ⇒ use the computed default.
+#[derive(Resource, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Debug)]
+pub struct PanelSizes {
+    /// Left side-browser width in points.
+    pub side_width: Option<f32>,
+    /// Right inspector width in points.
+    pub right_width: Option<f32>,
+    /// Bottom dock height in points.
+    pub bottom_height: Option<f32>,
+}
+
 /// Per-Twin volatile UI state. One of these per project, stored at
 /// [`workspace_state_path`].
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
@@ -132,6 +170,16 @@ pub struct WorkspaceState {
     pub documents: Vec<DocumentSnapshot>,
     /// Index into [`documents`](Self::documents) of the active tab.
     pub active_document: Option<usize>,
+    /// Serialized `egui_dock::DockState<TabId>` — the full center/side
+    /// arrangement plus split sizes and the active leaf (lunica's whole
+    /// layout lives here). `None` ⇒ no dock captured (older file, or an
+    /// app that doesn't use the dock); restore falls back to the
+    /// perspective preset + codec-opened tabs.
+    #[serde(default)]
+    pub dock: Option<serde_json::Value>,
+    /// Sandbox egui side-panel sizes (lunica stores sizes in `dock`).
+    #[serde(default)]
+    pub panel_sizes: PanelSizes,
 }
 
 impl WorkspaceState {
@@ -236,6 +284,19 @@ struct AppliedTwin {
     settle_budget: u32,
 }
 
+/// **Phase 5a (dock-arrangement restore) is GATED OFF.** Serializing and
+/// re-installing the full `egui_dock::DockState` on restore leaves the
+/// focused center tab (a model-view document tab) rendering a **blank**
+/// body — the document/active-tab binding desyncs from the deserialized
+/// tree, so the user sees an empty center on relaunch. Until that's
+/// fixed, we neither capture nor re-apply the dock; restore falls back to
+/// the known-good behavior (perspective preset + reopen docs via codecs,
+/// which open + focus their tabs correctly). The serde machinery
+/// (`dock_json`/`set_dock_from_json`, `PanelId` interning, the
+/// `DocumentId` remap) stays in place behind this flag for a future fix.
+/// Phase 5b (panel sizes) and 5c (canvas zoom) are independent and remain ON.
+const RESTORE_DOCK_ARRANGEMENT: bool = false;
+
 /// Frames the open-doc set must hold steady before the startup restore
 /// runs — long enough for async auto-open to land, short enough to feel
 /// instant (~3 frames ≈ 50 ms at 60 Hz).
@@ -308,7 +369,32 @@ fn gate_value(world: &mut World) -> u64 {
         })
         .map(|raw| raw.wrapping_mul(0x9E37_79B9_7F4A_7C15))
         .unwrap_or(0);
-    docs.wrapping_add(persp).wrapping_add(twin).wrapping_add(active)
+    // Fold the dock arrangement (split sizes + tab layout + active leaf)
+    // so a drag re-fires the save. Only when 5a is on — otherwise the
+    // dock isn't persisted and folding it would re-save needlessly.
+    let dock = if RESTORE_DOCK_ARRANGEMENT {
+        world
+            .resource::<WorkbenchLayout>()
+            .dock_json()
+            .and_then(|v| serde_json::to_string(&v).ok())
+            .map(|s| fnv1a64(s.as_bytes()))
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let sizes = {
+        let p = world.resource::<PanelSizes>();
+        let pack = |o: Option<f32>| o.map(|f| f.to_bits() as u64).unwrap_or(0);
+        pack(p.side_width)
+            .wrapping_mul(0x1000_0001)
+            .wrapping_add(pack(p.right_width).wrapping_mul(0x1_0001))
+            .wrapping_add(pack(p.bottom_height))
+    };
+    docs.wrapping_add(persp)
+        .wrapping_add(twin)
+        .wrapping_add(active)
+        .wrapping_add(dock)
+        .wrapping_add(sizes)
 }
 
 /// Build the full hot-exit state from live resources.
@@ -335,12 +421,28 @@ fn build_state(world: &mut World) -> WorkspaceState {
         });
     let active_document =
         active_id.and_then(|aid| pairs.iter().position(|(id, _)| *id == aid));
-    let documents: Vec<DocumentSnapshot> = pairs.into_iter().map(|(_, s)| s).collect();
+    // Stamp each snapshot with its live id so the persisted dock tree's
+    // tab instances can be remapped onto the restored docs next launch.
+    let documents: Vec<DocumentSnapshot> = pairs
+        .into_iter()
+        .map(|(id, mut s)| {
+            s.id = id;
+            s
+        })
+        .collect();
+    let dock = if RESTORE_DOCK_ARRANGEMENT {
+        world.resource::<WorkbenchLayout>().dock_json()
+    } else {
+        None // 5a gated off — see RESTORE_DOCK_ARRANGEMENT
+    };
+    let panel_sizes = *world.resource::<PanelSizes>();
     WorkspaceState {
         twin_root,
         perspective,
         documents,
         active_document,
+        dock,
+        panel_sizes,
     }
 }
 
@@ -395,7 +497,21 @@ fn restore_workspace_state(world: &mut World) {
             .activate_perspective_by_str(persp);
     }
 
+    // Restore the sandbox panel sizes regardless of whether any docs are
+    // saved (a no-doc 3D session still has resized panels to restore).
+    world.insert_resource(state.panel_sizes);
+
     if state.documents.is_empty() {
+        // No docs, but a saved dock layout (e.g. side panels arrangement)
+        // can still apply with an empty id-map. (Gated off — see
+        // RESTORE_DOCK_ARRANGEMENT.)
+        if RESTORE_DOCK_ARRANGEMENT {
+            if let Some(dock) = state.dock.clone() {
+                world
+                    .resource_mut::<WorkbenchLayout>()
+                    .set_dock_from_json(dock, &std::collections::HashMap::new());
+            }
+        }
         return;
     }
 
@@ -403,9 +519,9 @@ fn restore_workspace_state(world: &mut World) {
     // cosim): skip any saved snapshot whose origin is already present.
     // Untitled origins carry a per-run name so they never collide and
     // always re-open — exactly right for scratch buffers.
-    let existing: Vec<DocumentOrigin> = capture_documents(world)
+    let existing: Vec<(u64, DocumentOrigin)> = capture_documents(world)
         .into_iter()
-        .map(|(_, s)| s.origin)
+        .map(|(id, s)| (id, s.origin))
         .collect();
 
     // Restore order: non-active first, the active doc last, so the
@@ -418,22 +534,51 @@ fn restore_workspace_state(world: &mut World) {
         }
     }
 
+    // old (saved) DocumentId.raw() → new (restored / already-open) id, so
+    // the persisted dock tree's `TabId::Instance` ids can be remapped.
+    let mut id_map: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+
     world.resource_scope(|world, reg: Mut<DocumentSessionRegistry>| {
         for idx in order {
             let snap = &state.documents[idx];
-            if existing.contains(&snap.origin) {
-                continue; // already open — don't duplicate
-            }
-            if let Some(codec) = reg.codecs.iter().find(|c| c.kind() == snap.kind) {
-                codec.restore(world, snap);
+            let codec = reg.codecs.iter().find(|c| c.kind() == snap.kind);
+            // Resolve the live id: an already-open doc (auto-open / cosim /
+            // dedup) reuses its live id; otherwise the codec recreates it.
+            let live_id = if let Some((live, _)) =
+                existing.iter().find(|(_, o)| o == &snap.origin)
+            {
+                Some(*live)
+            } else if let Some(c) = codec {
+                c.restore(world, snap)
             } else {
                 warn!(
                     "[WorkspaceState] no codec for kind {:?}; dropping restored doc {:?}",
                     snap.kind, snap.title
                 );
+                None
+            };
+            // Map saved id → live id for the dock remap, and apply the
+            // per-doc view state (zoom/pan) regardless of whether the doc
+            // was freshly restored or matched an already-open one.
+            if let (Some(c), Some(lid)) = (codec, live_id) {
+                id_map.insert(snap.id, lid);
+                c.apply_view_state(world, lid, snap);
             }
         }
     });
+
+    // Apply the persisted dock tree last, overwriting the default-position
+    // tabs the codecs just opened with the saved arrangement + split sizes.
+    // (Gated off — see RESTORE_DOCK_ARRANGEMENT; `id_map` kept warm so the
+    // remap path stays exercised/compiled for the future fix.)
+    let _ = &id_map;
+    if RESTORE_DOCK_ARRANGEMENT {
+        if let Some(dock) = state.dock.clone() {
+            world
+                .resource_mut::<WorkbenchLayout>()
+                .set_dock_from_json(dock, &id_map);
+        }
+    }
 }
 
 /// Persist the active session when it changes. Cheaply gated by
@@ -531,6 +676,8 @@ mod tests {
                     title: "a.mo".into(),
                     source: "model A end A;".into(),
                     dirty: true,
+                    id: 1,
+                    view_state: serde_json::Value::Null,
                 },
                 DocumentSnapshot {
                     kind: "modelica".into(),
@@ -538,9 +685,17 @@ mod tests {
                     title: "Untitled-2".into(),
                     source: "model Scratch end Scratch;".into(),
                     dirty: true,
+                    id: 2,
+                    view_state: serde_json::json!({"zoom": 1.5}),
                 },
             ],
             active_document: Some(0),
+            dock: None,
+            panel_sizes: PanelSizes {
+                side_width: Some(220.0),
+                right_width: None,
+                bottom_height: Some(150.0),
+            },
         };
         state.save().unwrap();
 
@@ -568,6 +723,7 @@ impl Plugin for WorkspaceStatePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorkspaceStateLast>()
             .init_resource::<AppliedTwin>()
+            .init_resource::<PanelSizes>()
             .init_resource::<DocumentSessionRegistry>()
             .add_systems(
                 Update,

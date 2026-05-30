@@ -17,6 +17,9 @@ lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-usd-composer = { path = "../lunco-usd-composer" }
 bevy_egui.workspace = true
 serde = { workspace = true }
+# `serde_json::Value` for the hot-exit `DocumentSnapshot.view_state`
+# field (USD leaves it null; Modelica fills it with a canvas Viewport).
+serde_json = { workspace = true }
 
 [dev-dependencies]
 avian3d = { workspace = true }

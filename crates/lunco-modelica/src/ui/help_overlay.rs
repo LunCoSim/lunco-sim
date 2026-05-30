@@ -22,6 +22,8 @@ use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_workbench::HelpAnchors;
 use serde::{Deserialize, Serialize};
 
+use crate::ui::state::ModelicaDocumentRegistry;
+
 /// Persisted "seen the tour" flag.
 #[derive(Resource, Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
 pub struct HelpOverlaySettings {
@@ -238,6 +240,25 @@ fn manage_tutorial_doc(world: &mut World) {
     // pick up the new active doc once the open-observer has run.
     let wants_open = world.resource::<HelpOverlayState>().wants_open_doc;
     if wants_open {
+        // Only the tour-opened doc may be torn down on Skip/finish. If the
+        // user already has the demo model open (a restored session, or a
+        // manual open), the tour must NOT take ownership of it — otherwise
+        // closing the tour would close the user's document, collapsing the
+        // workspace to just Welcome. In that case we leave `tutorial_doc`
+        // None and capture disarmed, so the teardown in Step 3 is a no-op
+        // and the user's doc stays exactly where it was. We only revert
+        // what the tour itself opened.
+        let already_open = world
+            .get_resource::<ModelicaDocumentRegistry>()
+            .and_then(|reg| reg.find_bundled("CascadedRCFilter.mo"))
+            .is_some();
+        if already_open {
+            let mut state = world.resource_mut::<HelpOverlayState>();
+            state.wants_open_doc = false;
+            state.wants_capture_doc = false;
+            state.tutorial_doc = None;
+            return;
+        }
         crate::ui::panels::package_browser::open_class(
             world,
             crate::class_ref::ClassRef::bundled(["CascadedRCFilter"]),

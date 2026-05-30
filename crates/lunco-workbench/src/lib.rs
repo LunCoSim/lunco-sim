@@ -88,7 +88,7 @@ pub use window_persistence::{
 };
 pub use workspace_state::{
     workspace_state_path, AppDocumentSessionExt, DocumentSessionCodec, DocumentSessionRegistry,
-    DocumentSnapshot, WorkspaceState, WorkspaceStatePlugin,
+    DocumentSnapshot, PanelSizes, WorkspaceState, WorkspaceStatePlugin,
 };
 pub use render_robustness::preferred_wgpu_settings;
 
@@ -972,6 +972,71 @@ impl WorkbenchLayout {
         None
     }
 
+    /// Serialize the live dock tree (split sizes, tab arrangement, active
+    /// leaf) to JSON for per-Twin hot-exit. `TabId`/`PanelId` carry serde
+    /// impls (`panel.rs`); the egui_dock `serde` feature does the rest.
+    /// Returns `None` if serialization fails (never expected).
+    pub(crate) fn dock_json(&self) -> Option<serde_json::Value> {
+        serde_json::to_value(&self.dock).ok()
+    }
+
+    /// Replace the dock tree from a previously [`dock_json`](Self::dock_json)
+    /// snapshot, reconciling it against *this* app's live state:
+    ///
+    /// - **Singleton** tabs whose `PanelId` isn't registered here are
+    ///   dropped (e.g. a `sandbox`-only panel loaded into `lunica`).
+    /// - **Instance** tabs are remapped: each carries the *old* session's
+    ///   `DocumentId.raw()`; `id_map` translates it to the freshly-restored
+    ///   id. A tab whose kind isn't registered, or whose document didn't
+    ///   restore (absent from `id_map`), is dropped.
+    ///
+    /// Empty leaves collapse via egui_dock's `retain_tabs`. Returns `false`
+    /// (leaving the current dock untouched) when the JSON won't parse or the
+    /// reconciled tree would be empty — the caller then keeps whatever the
+    /// codec-driven open path produced.
+    pub(crate) fn set_dock_from_json(
+        &mut self,
+        value: serde_json::Value,
+        id_map: &HashMap<u64, u64>,
+    ) -> bool {
+        use std::collections::HashSet;
+        let valid_singletons: HashSet<&'static str> =
+            self.panels.keys().map(|p| p.0).collect();
+        let valid_kinds: HashSet<&'static str> =
+            self.instance_panels.keys().map(|p| p.0).collect();
+
+        let mut new_dock: DockState<TabId> = match serde_json::from_value(value) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("[WorkspaceState] dock JSON parse failed: {e}; keeping default layout");
+                return false;
+            }
+        };
+
+        // One pass: remap instance ids, drop unregistered/unrestored tabs.
+        new_dock.retain_tabs(|tab| match tab {
+            TabId::Singleton(pid) => valid_singletons.contains(pid.0),
+            TabId::Instance { kind, instance } => {
+                if !valid_kinds.contains(kind.0) {
+                    return false;
+                }
+                match id_map.get(instance) {
+                    Some(&new_id) => {
+                        *instance = new_id;
+                        true
+                    }
+                    None => false,
+                }
+            }
+        });
+
+        if new_dock.iter_all_tabs().next().is_none() {
+            return false; // nothing survived reconciliation — keep current
+        }
+        self.dock = new_dock;
+        true
+    }
+
     /// Activate a perspective by its raw string id, matching against the
     /// registered set. Returns `true` if a perspective with that id
     /// exists in this app and was activated; `false` (no-op) otherwise.
@@ -1158,9 +1223,56 @@ impl WorkbenchLayout {
             .map(TabId::Singleton)
             .collect();
 
+        // Preserve dynamically-opened instance (document/model/viz) tabs
+        // across the rebuild. The skeleton below is built purely from the
+        // *singleton* slot intent, so without this every instance tab —
+        // open model docs, plot instances — would silently vanish on any
+        // slot change or perspective switch (and the doc would be left
+        // live in its registry with no visible tab). VSCode never closes
+        // open editors when you change the layout; neither do we. We walk
+        // the current dock, remember each instance tab (in order) and
+        // which one was focused, then re-attach them via `open_instance`
+        // after the skeleton is rebuilt. Tabs whose kind is no longer
+        // registered are dropped.
+        let preserved_instances: Vec<(PanelId, u64)> = {
+            let main = self.dock.main_surface();
+            let mut acc = Vec::new();
+            for node in main.iter() {
+                if let egui_dock::Node::Leaf(leaf) = node {
+                    for tab in &leaf.tabs {
+                        if let TabId::Instance { kind, instance } = tab {
+                            if self.instance_panels.contains_key(kind) {
+                                acc.push((*kind, *instance));
+                            }
+                        }
+                    }
+                }
+            }
+            acc
+        };
+        let active_instance: Option<(PanelId, u64)> = {
+            let tree = self.dock.main_surface();
+            tree.focused_leaf().and_then(|node| {
+                if let egui_dock::Node::Leaf(leaf) = &tree[node] {
+                    match leaf.tabs.get(leaf.active.0) {
+                        Some(TabId::Instance { kind, instance })
+                            if self.instance_panels.contains_key(kind) =>
+                        {
+                            Some((*kind, *instance))
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+        };
+
         // 3D apps: no central tabs → don't build a dock tree at all.
         // The renderer will lay out side panels with egui's SidePanels
-        // and leave the central area transparent.
+        // and leave the central area transparent. (Such apps keep no
+        // instance tabs in the dock — center is the Bevy viewport — so
+        // there is nothing to preserve.)
         if center_tabs.is_empty() {
             self.dock = DockState::new(Vec::new());
             return;
@@ -1206,6 +1318,22 @@ impl WorkbenchLayout {
 
         let _ = central;
         self.dock = dock;
+
+        // Re-attach the instance tabs we remembered above. `open_instance`
+        // resolves each kind's preferred-slot leaf and appends there, so a
+        // model doc lands back in the centre and a plot back in the bottom
+        // — exactly where they were, even though the skeleton only knows
+        // about singleton slots. It focuses each as it goes; we restore the
+        // originally-focused instance tab last so the right one stays
+        // active.
+        for (kind, instance) in &preserved_instances {
+            self.open_instance(*kind, *instance);
+        }
+        if let Some((kind, instance)) = active_instance {
+            // Idempotent: the tab is already present, so this just
+            // re-focuses it.
+            self.open_instance(kind, instance);
+        }
     }
 }
 
@@ -2276,8 +2404,22 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         // mirror a 10/80/10 split: side panels 10% of window width each;
         // bottom dock 20% of window height.
         let screen = ctx.content_rect();
-        let side_default = (screen.width() * 0.10).max(140.0);
-        let bottom_default = (screen.height() * 0.20).max(120.0);
+        // Per-Twin restored sizes win over the computed default on a fresh
+        // launch (egui has no memory of last session); `None` ⇒ default.
+        // See [`workspace_state::PanelSizes`].
+        let saved = world
+            .get_resource::<workspace_state::PanelSizes>()
+            .copied()
+            .unwrap_or_default();
+        let side_default = saved
+            .side_width
+            .unwrap_or_else(|| (screen.width() * 0.10).max(140.0));
+        let right_default = saved
+            .right_width
+            .unwrap_or_else(|| (screen.width() * 0.10).max(140.0));
+        let bottom_default = saved
+            .bottom_height
+            .unwrap_or_else(|| (screen.height() * 0.20).max(120.0));
 
         if let Some(id) = layout.side_browser.first().copied() {
             let r = egui::SidePanel::left("lunco_workbench_side_panel_left")
@@ -2289,6 +2431,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });
+            write_panel_size(world, |s| s.side_width = Some(r.response.rect.width()));
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.side_browser", r.response.rect);
             }
@@ -2296,13 +2439,14 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         if let Some(id) = layout.right_inspector.first().copied() {
             let r = egui::SidePanel::right("lunco_workbench_side_panel_right")
                 .resizable(true)
-                .default_width(side_default)
+                .default_width(right_default)
                 .min_width(140.0)
                 .max_width(screen.width() * 0.3)
                 .show(ctx, |ui| {
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });
+            write_panel_size(world, |s| s.right_width = Some(r.response.rect.width()));
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.right_inspector", r.response.rect);
             }
@@ -2316,6 +2460,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });
+            write_panel_size(world, |s| s.bottom_height = Some(r.response.rect.height()));
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.bottom", r.response.rect);
             }
@@ -2323,6 +2468,29 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         // Central area: do NOT call CentralPanel — egui's bottom/side
         // panels reserve their space and the remaining region stays
         // free for the 3D scene that Bevy renders to the full window.
+    }
+}
+
+/// Write back a live egui side-panel size into [`workspace_state::PanelSizes`],
+/// but only when it actually moved (≥0.5 pt). Change-gated so the resource
+/// isn't marked mutated every frame (which would defeat the persist gate
+/// and churn the disk). Mirrors the lazy-systems rule (AGENTS.md §7.1).
+fn write_panel_size(world: &mut World, set: impl FnOnce(&mut workspace_state::PanelSizes)) {
+    let mut next = world
+        .get_resource::<workspace_state::PanelSizes>()
+        .copied()
+        .unwrap_or_default();
+    let before = next;
+    set(&mut next);
+    let moved = |a: Option<f32>, b: Option<f32>| match (a, b) {
+        (Some(x), Some(y)) => (x - y).abs() >= 0.5,
+        (a, b) => a != b,
+    };
+    if moved(before.side_width, next.side_width)
+        || moved(before.right_width, next.right_width)
+        || moved(before.bottom_height, next.bottom_height)
+    {
+        world.insert_resource(next);
     }
 }
 

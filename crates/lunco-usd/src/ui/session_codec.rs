@@ -69,6 +69,9 @@ impl DocumentSessionCodec for UsdSessionCodec {
                             source: doc.source().to_string(),
                             dirty: doc.is_dirty(),
                             origin,
+                            id: id.raw(),
+                            // USD has no canvas-zoom equivalent to persist.
+                            view_state: serde_json::Value::Null,
                         },
                     )
                 })
@@ -76,10 +79,10 @@ impl DocumentSessionCodec for UsdSessionCodec {
             .collect()
     }
 
-    fn restore(&self, world: &mut World, snap: &DocumentSnapshot) {
-        if let Some(mut reg) = world.get_resource_mut::<UsdDocumentRegistry>() {
-            // Fires `DocumentOpened` → the USD UI's stage registration.
-            reg.allocate(snap.source.clone(), snap.origin.clone());
-        }
+    fn restore(&self, world: &mut World, snap: &DocumentSnapshot) -> Option<u64> {
+        let mut reg = world.get_resource_mut::<UsdDocumentRegistry>()?;
+        // Fires `DocumentOpened` → the USD UI's stage registration.
+        let id = reg.allocate(snap.source.clone(), snap.origin.clone());
+        Some(id.raw())
     }
 }

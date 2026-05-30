@@ -1,7 +1,11 @@
 //! The `Panel` trait and companion types.
 
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
+
 use bevy::prelude::*;
 use bevy_egui::egui;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Stable identifier for a panel.
 ///
@@ -15,6 +19,38 @@ impl PanelId {
     /// The raw string form, for debug output and serialization.
     pub const fn as_str(self) -> &'static str {
         self.0
+    }
+}
+
+/// Process-global intern pool for panel-id strings deserialized from a
+/// persisted layout. `PanelId` holds a `&'static str`, which can't be
+/// produced from owned `String` data without leaking — so on
+/// deserialize we intern (leak once, dedup) and hand back the `'static`
+/// slice. `PanelId`'s `Eq`/`Hash` are by str *value*, so an interned id
+/// compares equal to the original `'static` literal the app registered;
+/// registry lookups keep working.
+fn intern(s: &str) -> &'static str {
+    static POOL: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let pool = POOL.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut guard = pool.lock().expect("panel-id intern pool poisoned");
+    if let Some(found) = guard.get(s) {
+        return found;
+    }
+    let leaked: &'static str = Box::leak(s.to_owned().into_boxed_str());
+    guard.insert(leaked);
+    leaked
+}
+
+impl Serialize for PanelId {
+    fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for PanelId {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(de)?;
+        Ok(PanelId(intern(&s)))
     }
 }
 
@@ -163,7 +199,7 @@ pub trait InstancePanel: Send + Sync + 'static {
 /// - `Instance { kind, instance }` — one of many tabs of the same
 ///   kind, dispatched to the matching [`InstancePanel`] with the
 ///   given `instance` discriminant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TabId {
     /// A singleton panel tab (legacy one-per-id).
     Singleton(PanelId),

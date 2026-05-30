@@ -15,7 +15,10 @@ bevy_egui = { workspace = true }
 # bevy enables every backend/feature we actually use; we only need the type.
 wgpu = { version = "27", default-features = false }
 lunco-theme = { path = "../lunco-theme" }
-egui_dock = "0.18"
+# `serde` feature lets us persist `DockState<TabId>` for per-Twin layout
+# restore (Phase 5). `TabId`/`PanelId` carry their own serde impls
+# (see `panel.rs` — `PanelId` interns on deserialize).
+egui_dock = { version = "0.18", features = ["serde"] }
 # `Command` / `on_command` / `register_commands!` macros (re-exports
 # from `lunco-command-macro`). Brings file-workflow verbs (`OpenFile`,
 # `OpenFolder`, `OpenTwin`, ...) onto the same typed-command bus that

@@ -98,6 +98,11 @@ pub(crate) fn poll_and_swap_projection(
         docstate.last_seen_source_hash = source_hash;
 
         if is_initial_projection {
+          if let Some(saved) = docstate.pending_view.take() {
+            // Hot-exit restore: honour the saved camera instead of
+            // fitting, so a reopened diagram looks exactly as at exit.
+            docstate.canvas.viewport.snap_to(saved.center, saved.zoom);
+          } else {
             let physical_zoom = lunco_canvas::Viewport::physical_mm_zoom(ui.ctx());
             if let Some(world_rect) = docstate.canvas.scene.bounds() {
                 let avail = ui.available_size();
@@ -109,6 +114,7 @@ pub(crate) fn poll_and_swap_projection(
             } else {
                 docstate.canvas.viewport.snap_to(lunco_canvas::Pos::new(0.0, 0.0), physical_zoom);
             }
+          }
         }
         ui.ctx().request_repaint();
     } else if docstate.projection_task.is_some() {
