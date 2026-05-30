@@ -20,6 +20,7 @@
 //!   HZ; clients apply them in `drain_wire_inbox`. [`broadcast_new_spawns`]
 //!   replicates runtime spawns with the host-allocated id.
 
+use avian3d::prelude::{AngularVelocity, LinearVelocity};
 use bevy::ecs::reflect::ReflectEvent;
 use bevy::prelude::*;
 use bevy::reflect::serde::{TypedReflectDeserializer, TypedReflectSerializer};
@@ -28,9 +29,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use lunco_core::{
-    authorize, GlobalEntityId, IncomingSnapshots, LocalSession, Mutation, NetReplicate, NetSpawn,
-    NetworkRole, OpId, PendingReplicatedSpawns, ReplicatedSpawn, SessionId, SessionRegistry,
-    SimTick, SnapshotSample, WireApplyGuard, WireChannel,
+    authorize, AppliedInputSeq, GlobalEntityId, IncomingSnapshots, LocalSession, Mutation,
+    NetReplicate, NetSpawn, NetworkRole, OpId, PendingReplicatedSpawns, ReplicatedSpawn, SessionId,
+    SessionRegistry, SimTick, SnapshotSample, WireApplyGuard, WireChannel,
 };
 
 use crate::executor::{globalize_ids_in_json, resolve_ids_in_json};
@@ -46,12 +47,25 @@ pub struct WireCommand {
     pub data: serde_json::Value,
 }
 
-/// One entity's replicated transform, keyed by [`GlobalEntityId`] raw `u64`.
+/// One entity's replicated transform (+ velocity), keyed by [`GlobalEntityId`]
+/// raw `u64`. `lv`/`av` are `#[serde(default)]` so the wire stays
+/// forward/backward-compatible (an old peer omits them → zero).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SnapshotEntry {
     pub gid: u64,
     pub t: [f32; 3],
     pub r: [f32; 4],
+    /// Authoritative linear velocity (avian `LinearVelocity`, f64→f32) — the
+    /// owned-rover prediction seats the body with this for replay.
+    #[serde(default)]
+    pub lv: [f32; 3],
+    /// Authoritative angular velocity (avian `AngularVelocity`, f64→f32).
+    #[serde(default)]
+    pub av: [f32; 3],
+    /// Highest input `seq` the host has applied for this gid (0 = none) — the
+    /// reconcile ack for the owning client.
+    #[serde(default)]
+    pub last_input_seq: u32,
 }
 
 /// A batch of changed transforms at a given sim tick (M2 state replication).
@@ -253,6 +267,14 @@ fn capture_command<C: Event + Reflect + TypePath>(
     };
     // Local Entity refs (to_bits) → portable GlobalEntityId.
     globalize_ids_in_json(&mut data, &entity_registry);
+    // The avatar is a *local* camera concern — control identity on the wire is
+    // the session (`origin`), never the avatar entity. Strip it so we don't leak
+    // this peer's local entity bits: the receiver ignores it anyway (the host
+    // records authority by `origin`, and a wire-applied possession skips the
+    // local camera-bind). A placeholder keeps the field reflect-deserializable.
+    if let Some(av) = data.get_mut("avatar") {
+        *av = serde_json::json!(Entity::PLACEHOLDER.to_bits());
+    }
 
     let mut mutation = Mutation::local(WireCommand { type_name, data });
     mutation.origin = local.0;
@@ -274,6 +296,7 @@ pub fn apply_wire_command(
     session_registry: Res<SessionRegistry>,
     role: Res<NetworkRole>,
     mut dedup: ResMut<WireDedup>,
+    mut applied: ResMut<AppliedInputSeq>,
 ) {
     let ev = trigger.event();
     if !dedup.check_and_insert(ev.op_id) {
@@ -288,6 +311,16 @@ pub fn apply_wire_command(
                 ev.type_name, ev.origin, reject
             );
             return;
+        }
+        // P3 reconcile ack: record the highest input seq applied per gid, to stamp
+        // into snapshots so the owning client can drop acked inputs + replay the rest.
+        if matches!(ev.type_name.as_str(), "DriveRover" | "BrakeRover") {
+            if let (Some(gid), Some(seq)) =
+                (target_gid, ev.params.get("seq").and_then(|v| v.as_u64()))
+            {
+                let slot = applied.0.entry(gid).or_insert(0);
+                *slot = (*slot).max(seq as u32);
+            }
         }
     }
 
@@ -362,6 +395,9 @@ pub fn drain_wire_inbox(
                         gid: e.gid,
                         t: e.t,
                         r: e.r,
+                        lv: e.lv,
+                        av: e.av,
+                        last_input_seq: e.last_input_seq,
                     });
                 }
                 tick.0 = snap.tick;
@@ -410,7 +446,16 @@ pub fn gather_snapshot(
     tick: Res<SimTick>,
     mut acc: Local<f32>,
     mut last_sent: Local<HashMap<u64, ([f32; 3], [f32; 4])>>,
-    q: Query<(&GlobalEntityId, &Transform), With<NetReplicate>>,
+    applied: Res<AppliedInputSeq>,
+    q: Query<
+        (
+            &GlobalEntityId,
+            &Transform,
+            Option<&LinearVelocity>,
+            Option<&AngularVelocity>,
+        ),
+        With<NetReplicate>,
+    >,
     mut outbox: ResMut<WireOutbox>,
 ) {
     if !role.is_host() {
@@ -424,10 +469,13 @@ pub fn gather_snapshot(
     *acc = 0.0;
 
     let mut entries = Vec::new();
-    for (gid, tf) in q.iter() {
+    for (gid, tf, lin, ang) in q.iter() {
         let key = gid.get();
         let t = tf.translation.to_array();
         let r = tf.rotation.to_array();
+        // only_if_changed gates on POSE — velocity rides along when the pose
+        // changes (at rest the body emits nothing and the client holds the last
+        // sample, whose velocity is ~0 by then). Good enough for prediction.
         if config.only_if_changed {
             if let Some((lt, lr)) = last_sent.get(&key) {
                 if arr3_eq(lt, &t) && arr4_eq(lr, &r) {
@@ -436,7 +484,16 @@ pub fn gather_snapshot(
             }
         }
         last_sent.insert(key, (t, r));
-        entries.push(SnapshotEntry { gid: key, t, r });
+        let lv = lin.map(|v| v.0.as_vec3().to_array()).unwrap_or([0.0; 3]);
+        let av = ang.map(|v| v.0.as_vec3().to_array()).unwrap_or([0.0; 3]);
+        entries.push(SnapshotEntry {
+            gid: key,
+            t,
+            r,
+            lv,
+            av,
+            last_input_seq: applied.0.get(&key).copied().unwrap_or(0),
+        });
     }
     if entries.is_empty() {
         return;
@@ -486,6 +543,7 @@ impl Plugin for WirePlugin {
             .init_resource::<WireDedup>()
             .init_resource::<NetworkConfig>()
             .init_resource::<WireChannelRegistry>()
+            .init_resource::<AppliedInputSeq>()
             .add_observer(apply_wire_command)
             .add_systems(Update, (drain_wire_inbox, broadcast_new_spawns, gather_snapshot));
     }

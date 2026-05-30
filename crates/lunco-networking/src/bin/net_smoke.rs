@@ -6,44 +6,74 @@
 //!   net_smoke --host 5888
 //!   net_smoke --connect 127.0.0.1:5888
 //!
-//! The two processes must overlap (both self-exit after ~15s). The harness
-//! exercises the full **possess → drive → snapshot** loop end-to-end:
+//! The two processes must overlap (both self-exit after `RUN_SECS`). The harness
+//! exercises the full **possess → drive → snapshot** loop *and* the
+//! **exclusive-possession / ownership-sync** guarantees end-to-end, with two
+//! rovers:
 //!
-//! - host spawns a `NetReplicate` stand-in rover (fixed id `TEST_GID`);
-//! - client spawns a proxy at the same id, then (after the handshake) sends a
-//!   real `PossessVessel` followed by continuous `DriveRover`s;
-//! - host authorizes (ownership from the possession), applies the drive, and a
-//!   *synthetic* integrator moves the rover (real physics/cosim is not a
-//!   networking concern and is out of scope here);
-//! - the host snapshots the moved transform; the client applies it to its proxy.
+//! - **G1** — the host claims it at startup (its own rover);
+//! - **G2** — free; the client claims it after the handshake.
 //!
-//! PASS = the client logs `[test] RESULT: PASS` (its proxy moved purely from
-//! networked drive + snapshot). Everything on the wire — the command reflect
-//! round-trip, `Entity`↔`GlobalEntityId` mapping, authority, and the snapshot —
-//! is the production code path.
+//! After the handshake the client:
+//!   1. possesses **G2** (free → granted; host records the client as owner),
+//!   2. *also* tries to possess **G1** (owned by the host → must be **denied**
+//!      under the default `Exclusive` policy),
+//!   3. continuously drives **both** G1 and G2 forward.
+//!
+//! The host authorizes each drive against ownership: G2's drives are applied (a
+//! synthetic integrator moves it) and snapshotted back; G1's drives are
+//! **rejected** (the client doesn't own it), so G1 never moves. The host also
+//! broadcasts the authoritative ownership table, which the client adopts.
+//!
+//! PASS (logged by the client as `[test] RESULT: PASS`) requires ALL of:
+//!   - G2 proxy moved   (owned + driven + snapshot round-trip works);
+//!   - G1 proxy did NOT move (unauthorized drive correctly rejected);
+//!   - synced ownership shows G2 = me, G1 = host (`SessionId::LOCAL`).
+//!
+//! Everything on the wire — the command reflect round-trip, `Entity`↔
+//! `GlobalEntityId` mapping, the avatar-strip, authority, ownership broadcast,
+//! and the snapshot — is the production code path.
 
 use bevy::app::AppExit;
 use bevy::prelude::*;
+use lunco_core::SessionId;
 use lunco_networking::{LunCoNetworkingPlugin, NetworkMode};
 
-/// Fixed id both peers pin their stand-in rover to (bypasses catalog/USD spawn
-/// replication, which needs the asset pipeline — tested in the GUI build).
-const TEST_GID: u64 = 0x00AB_CDEF;
+/// Each peer self-exits after this many seconds. Generous so the host stays up
+/// well past the client's connect/handshake latency (the active-overlap window
+/// must comfortably cover the possess→drive→snapshot exchange).
+const RUN_SECS: f32 = 25.0;
+
+/// Host-owned rover id (claimed by the host at startup).
+const G1_GID: u64 = 0x00AB_C001;
+/// Free rover id (claimed by the client after the handshake).
+const G2_GID: u64 = 0x00AB_C002;
 
 #[derive(Component)]
 struct TestRover;
 
-/// Host: forward speed last commanded by an applied `DriveRover`.
+/// Which rover this entity stands in for (so reports/asserts can tell them
+/// apart on both peers).
+#[derive(Component, Clone, Copy)]
+struct RoverGid(u64);
+
+/// Host: forward speed last commanded by an *applied* (authorized) `DriveRover`.
 #[derive(Component, Default)]
 struct DriveVel(f32);
 
-/// The local stand-in rover entity (host's authoritative one / client's proxy).
-#[derive(Resource)]
-struct LocalRover(Entity);
+/// The local stand-in rover entities (host's authoritative ones / client proxies).
+#[derive(Resource, Clone, Copy)]
+struct Rovers {
+    g1: Entity,
+    g2: Entity,
+}
 
-/// Client: furthest x the proxy reached (the PASS metric).
+/// Client: furthest x each proxy reached (the PASS metric).
 #[derive(Resource, Default)]
-struct MaxProxyX(f32);
+struct MaxProxyX {
+    g1: f32,
+    g2: f32,
+}
 
 fn main() {
     let Some(mode) = NetworkMode::from_args() else {
@@ -65,14 +95,14 @@ fn main() {
     app.register_type::<lunco_avatar::PossessVessel>();
 
     if is_host {
-        app.add_systems(Startup, host_spawn_rover);
+        app.add_systems(Startup, host_spawn_rovers);
         app.add_observer(host_on_possess);
         app.add_observer(host_on_drive);
         app.add_systems(Update, (host_integrate, host_report));
     } else {
         app.init_resource::<MaxProxyX>();
-        app.add_systems(Startup, client_spawn_proxy);
-        app.add_systems(Update, (client_drive, test_apply_snapshots, client_report));
+        app.add_systems(Startup, client_spawn_proxies);
+        app.add_systems(Update, (client_act, test_apply_snapshots, client_report));
     }
 
     app.add_systems(Update, (report_session, exit_after_timeout));
@@ -81,24 +111,35 @@ fn main() {
 
 // ── Host (authoritative) ──────────────────────────────────────────────────────
 
-fn host_spawn_rover(mut commands: Commands) {
-    let e = commands
-        .spawn((
-            Name::new("HostRover"),
-            Transform::default(),
-            GlobalTransform::default(),
-            lunco_core::GlobalEntityId::from_raw(TEST_GID),
-            lunco_core::NetReplicate,
-            TestRover,
-            DriveVel::default(),
-        ))
-        .id();
-    commands.insert_resource(LocalRover(e));
-    info!("[test] host rover spawned entity={e:?} gid={TEST_GID}");
+fn host_spawn_rovers(mut commands: Commands) {
+    let spawn = |commands: &mut Commands, name: &str, gid: u64| {
+        commands
+            .spawn((
+                Name::new(name.to_string()),
+                Transform::default(),
+                GlobalTransform::default(),
+                lunco_core::GlobalEntityId::from_raw(gid),
+                lunco_core::NetReplicate,
+                TestRover,
+                RoverGid(gid),
+                DriveVel::default(),
+            ))
+            .id()
+    };
+    let g1 = spawn(&mut commands, "HostRover_G1", G1_GID);
+    let g2 = spawn(&mut commands, "HostRover_G2", G2_GID);
+    commands.insert_resource(Rovers { g1, g2 });
+
+    // The host claims its own rover (G1) through the real possession observer.
+    // `guard` is None here → the claim is attributed to the host's `LocalSession`
+    // (`SessionId::LOCAL`). The client must NOT be able to take it.
+    commands.trigger(lunco_avatar::PossessVessel { avatar: g1, target: g1 });
+    info!("[test] host rovers spawned g1(self)={G1_GID:#x} g2(free)={G2_GID:#x}");
 }
 
 /// Mirror of `record_possession_authority`: claim ownership for the possessing
-/// session (origin from the wire-apply guard) so its drives are authorized (G4).
+/// session (origin from the wire-apply guard, else the local host session) so
+/// its drives are authorized (G4). Exclusivity is enforced by `claim`.
 fn host_on_possess(
     trigger: On<lunco_avatar::PossessVessel>,
     guard: Res<lunco_core::WireApplyGuard>,
@@ -110,14 +151,19 @@ fn host_on_possess(
     let origin = guard.0.unwrap_or(local.0);
     match q_gid.get(cmd.target) {
         Ok(g) => match reg.claim(origin, g.get()) {
-            Ok(()) => info!("[test] possession CLAIMED gid={} by session={origin}", g.get()),
-            Err(c) => warn!("[test] possession denied gid={} (owned by {c})", g.get()),
+            Ok(()) => info!("[test] possession CLAIMED gid={:#x} by session={origin}", g.get()),
+            Err(c) => warn!(
+                "[test] possession DENIED gid={:#x} for {origin} (owned by {c})",
+                g.get()
+            ),
         },
         Err(_) => warn!("[test] possess target {:?} has no gid", cmd.target),
     }
 }
 
-/// Applied (authorized) drive → set the rover's synthetic forward speed.
+/// Applied (authorized) drive → set the rover's synthetic forward speed. An
+/// *unauthorized* drive never reaches here — `apply_wire_command` rejects it at
+/// the authority gate before triggering the event.
 fn host_on_drive(trigger: On<lunco_mobility::DriveRover>, mut q: Query<&mut DriveVel>) {
     let cmd = trigger.event();
     if let Ok(mut v) = q.get_mut(cmd.target) {
@@ -137,61 +183,65 @@ fn host_integrate(time: Res<Time>, mut q: Query<(&DriveVel, &mut Transform), Wit
 fn host_report(
     time: Res<Time>,
     mut t: Local<f32>,
-    q: Query<(&Transform, &DriveVel), With<TestRover>>,
+    q: Query<(&RoverGid, &Transform, &DriveVel), With<TestRover>>,
 ) {
     *t += time.delta_secs();
     if *t > 1.0 {
         *t = 0.0;
-        if let Some((tf, v)) = q.iter().next() {
-            info!("[test] host rover x={:.2} drive={:.2}", tf.translation.x, v.0);
+        for (gid, tf, v) in q.iter() {
+            info!("[test] host rover {:#x} x={:.2} drive={:.2}", gid.0, tf.translation.x, v.0);
         }
     }
 }
 
 // ── Client (proxy) ────────────────────────────────────────────────────────────
 
-fn client_spawn_proxy(mut commands: Commands) {
-    let e = commands
-        .spawn((
-            Name::new("ClientProxy"),
-            Transform::default(),
-            GlobalTransform::default(),
-            lunco_core::GlobalEntityId::from_raw(TEST_GID),
-            TestRover,
-        ))
-        .id();
-    commands.insert_resource(LocalRover(e));
-    info!("[test] client proxy spawned entity={e:?} gid={TEST_GID}");
+fn client_spawn_proxies(mut commands: Commands) {
+    let spawn = |commands: &mut Commands, name: &str, gid: u64| {
+        commands
+            .spawn((
+                Name::new(name.to_string()),
+                Transform::default(),
+                GlobalTransform::default(),
+                lunco_core::GlobalEntityId::from_raw(gid),
+                TestRover,
+                RoverGid(gid),
+            ))
+            .id()
+    };
+    let g1 = spawn(&mut commands, "ClientProxy_G1", G1_GID);
+    let g2 = spawn(&mut commands, "ClientProxy_G2", G2_GID);
+    commands.insert_resource(Rovers { g1, g2 });
+    info!("[test] client proxies spawned g1={G1_GID:#x} g2={G2_GID:#x}");
 }
 
-/// After the handshake lands (LocalSession non-zero), possess the rover once,
-/// then drive forward every frame (robust to reliable/unreliable channel
-/// ordering — drives keep coming until the possession is recorded).
-fn client_drive(
+/// After the handshake lands (LocalSession non-zero): possess G2 (free → should
+/// be granted) and *also* try to possess G1 (host-owned → should be denied),
+/// then drive **both** every frame. G2's drives are authorized and move it;
+/// G1's are rejected by the host (the client never owns it).
+fn client_act(
     local: Res<lunco_core::LocalSession>,
-    rover: Option<Res<LocalRover>>,
+    rovers: Option<Res<Rovers>>,
     mut commands: Commands,
-    mut possessed: Local<bool>,
+    mut acted: Local<bool>,
 ) {
     if local.0 .0 == 0 {
         return; // handshake not yet received
     }
-    let Some(rover) = rover else {
+    let Some(rovers) = rovers else {
         return;
     };
-    if !*possessed {
-        commands.trigger(lunco_avatar::PossessVessel {
-            avatar: rover.0,
-            target: rover.0,
-        });
-        *possessed = true;
-        info!("[test] client sent PossessVessel target={:?}", rover.0);
+    if !*acted {
+        // Claim the free rover…
+        commands.trigger(lunco_avatar::PossessVessel { avatar: rovers.g2, target: rovers.g2 });
+        // …and attempt to steal the host's rover (must be refused).
+        commands.trigger(lunco_avatar::PossessVessel { avatar: rovers.g1, target: rovers.g1 });
+        *acted = true;
+        info!("[test] client requested possession of G2 (free) and G1 (host-owned)");
     }
-    commands.trigger(lunco_mobility::DriveRover {
-        target: rover.0,
-        forward: 1.0,
-        steer: 0.0,
-    });
+    // Drive both — only the owned one (G2) should actually move.
+    commands.trigger(lunco_mobility::DriveRover { target: rovers.g2, forward: 1.0, steer: 0.0, seq: 0, tick: 0 });
+    commands.trigger(lunco_mobility::DriveRover { target: rovers.g1, forward: 1.0, steer: 0.0, seq: 0, tick: 0 });
 }
 
 /// Client-side snapshot apply (mirrors `lunco_sandbox_edit::apply_incoming_snapshots`
@@ -217,22 +267,25 @@ fn test_apply_snapshots(
 fn client_report(
     time: Res<Time>,
     mut t: Local<f32>,
-    rover: Option<Res<LocalRover>>,
-    q: Query<&Transform, With<TestRover>>,
+    rovers: Option<Res<Rovers>>,
+    q: Query<(&RoverGid, &Transform), With<TestRover>>,
     mut maxx: ResMut<MaxProxyX>,
 ) {
-    let Some(rover) = rover else {
+    if rovers.is_none() {
         return;
-    };
-    if let Ok(tf) = q.get(rover.0) {
-        if tf.translation.x > maxx.0 {
-            maxx.0 = tf.translation.x;
+    }
+    for (gid, tf) in q.iter() {
+        let x = tf.translation.x;
+        match gid.0 {
+            G1_GID => maxx.g1 = maxx.g1.max(x),
+            G2_GID => maxx.g2 = maxx.g2.max(x),
+            _ => {}
         }
-        *t += time.delta_secs();
-        if *t > 1.0 {
-            *t = 0.0;
-            info!("[test] client proxy x={:.2}", tf.translation.x);
-        }
+    }
+    *t += time.delta_secs();
+    if *t > 1.0 {
+        *t = 0.0;
+        info!("[test] client proxies x: g1={:.2} g2={:.2}", maxx.g1, maxx.g2);
     }
 }
 
@@ -250,19 +303,36 @@ fn exit_after_timeout(
     time: Res<Time>,
     mut exit: MessageWriter<AppExit>,
     maxx: Option<Res<MaxProxyX>>,
+    local: Res<lunco_core::LocalSession>,
+    registry: Option<Res<lunco_core::SessionRegistry>>,
 ) {
-    if time.elapsed_secs() > 15.0 {
-        if let Some(m) = maxx {
-            if m.0 > 0.5 {
-                info!(
-                    "[test] RESULT: PASS — proxy drove to x={:.2} via networked drive+snapshot",
-                    m.0
-                );
-            } else {
-                warn!("[test] RESULT: FAIL — proxy did not move (x={:.2})", m.0);
-            }
-        }
-        info!("[smoke] timeout reached, exiting");
-        exit.write(AppExit::Success);
+    if time.elapsed_secs() <= RUN_SECS {
+        return;
     }
+    // Only the client renders a verdict (it's the peer that observes both the
+    // snapshot result and the synced ownership table).
+    if let (Some(m), Some(reg)) = (maxx, registry) {
+        let me = local.0;
+        let g2_owner = reg.owner_of(G2_GID);
+        let g1_owner = reg.owner_of(G1_GID);
+
+        let g2_moved = m.g2 > 0.5; // owned + driven + snapshot round-trip
+        let g1_still = m.g1 < 0.1; // unauthorized drive rejected → no motion
+        let g2_mine = g2_owner == Some(me); // ownership broadcast adopted
+        let g1_host = g1_owner == Some(SessionId::LOCAL); // host kept its rover
+
+        info!(
+            "[test] checks: g2_moved={g2_moved} (x={:.2})  g1_still={g1_still} (x={:.2})  \
+             g2_mine={g2_mine} (owner={g2_owner:?}, me={me})  g1_host={g1_host} (owner={g1_owner:?})",
+            m.g2, m.g1
+        );
+
+        if g2_moved && g1_still && g2_mine && g1_host {
+            info!("[test] RESULT: PASS — exclusive possession + ownership-gated drive + sync all hold");
+        } else {
+            warn!("[test] RESULT: FAIL — see checks above");
+        }
+    }
+    info!("[smoke] timeout reached, exiting");
+    exit.write(AppExit::Success);
 }

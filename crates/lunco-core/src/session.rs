@@ -9,7 +9,7 @@
 
 use crate::commands::{Reject, SessionId};
 use bevy::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 /// Which side of the wire is this process? Drives three decisions:
 /// capture (`Standalone` never serializes), id minting (`Host` mints
@@ -84,6 +84,24 @@ impl WireApplyGuard {
     }
 }
 
+/// How [`SessionRegistry::claim`] arbitrates competing possession claims.
+///
+/// The default models "one user → one rover": a vessel already controlled by
+/// another session can't be taken. [`PossessionPolicy::LastWins`] instead lets
+/// anyone grab any vessel, stealing it from its previous owner (who is dropped
+/// via the client's `enforce_ownership` once the new ownership table
+/// propagates). **Host-authoritative** — the host's policy governs the actual
+/// claim; clients read it only for an optimistic UI / camera-bind gate
+/// ([`SessionRegistry::may_possess`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PossessionPolicy {
+    /// First claim wins; not stealable. Default ("one user, one rover").
+    #[default]
+    Exclusive,
+    /// Most recent claim wins; steals the vessel from its prior owner.
+    LastWins,
+}
+
 /// Server-side ownership: which session may issue authoritative commands against
 /// which entity (keyed by [`crate::GlobalEntityId`] raw `u64`). The home of the
 /// single [`authorize`] gate. On a pure client this stays empty (the client
@@ -93,20 +111,54 @@ impl WireApplyGuard {
 pub struct SessionRegistry {
     /// rover gid → owning session.
     owners: HashMap<u64, SessionId>,
+    /// Arbitration rule consulted by [`Self::claim`] / [`Self::may_possess`].
+    /// Survives [`Self::replace_all`] (only the owner table is replaced).
+    policy: PossessionPolicy,
 }
 
 impl SessionRegistry {
-    /// Record `session` as the owner of `gid`. **Exclusive**: returns
-    /// `Err(current_owner)` if a *different* session already owns it (possession
-    /// is not stealable in the MVP). Idempotent for the same session.
+    /// Record `session` as the owner of `gid`, arbitrated by the current
+    /// [`PossessionPolicy`]:
+    /// - `Exclusive` (default): returns `Err(current_owner)` if a *different*
+    ///   session already owns it (not stealable). Idempotent for the same session.
+    /// - `LastWins`: always succeeds, stealing the vessel from any prior owner.
     pub fn claim(&mut self, session: SessionId, gid: u64) -> Result<(), SessionId> {
-        match self.owners.get(&gid) {
-            Some(&cur) if cur != session => Err(cur),
-            _ => {
+        match self.policy {
+            PossessionPolicy::LastWins => {
                 self.owners.insert(gid, session);
                 Ok(())
             }
+            PossessionPolicy::Exclusive => match self.owners.get(&gid) {
+                Some(&cur) if cur != session => Err(cur),
+                _ => {
+                    self.owners.insert(gid, session);
+                    Ok(())
+                }
+            },
         }
+    }
+
+    /// Optimistic-bind gate for the *claiming* peer (client camera-bind / UI
+    /// enable). `true` if `session` may take `gid` under the current policy.
+    /// Host arbitration still happens in [`Self::claim`]; this only avoids an
+    /// obviously-doomed optimistic bind under `Exclusive`.
+    pub fn may_possess(&self, session: SessionId, gid: u64) -> bool {
+        match self.policy {
+            PossessionPolicy::LastWins => true,
+            PossessionPolicy::Exclusive => {
+                self.owners.get(&gid).is_none_or(|&cur| cur == session)
+            }
+        }
+    }
+
+    /// The arbitration rule currently in force.
+    pub fn policy(&self) -> PossessionPolicy {
+        self.policy
+    }
+
+    /// Set the arbitration rule (host-authoritative).
+    pub fn set_policy(&mut self, policy: PossessionPolicy) {
+        self.policy = policy;
     }
 
     pub fn owner_of(&self, gid: u64) -> Option<SessionId> {
@@ -159,6 +211,21 @@ pub struct SkipContentStamp;
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct NetReplicate;
 
+/// **Client-side predict-own marker:** this session owns *and locally predicts*
+/// this replicated body (its possessed rover). Maintained only on a client, by
+/// `maintain_owned_locally`, from the authoritative [`SessionRegistry`] +
+/// [`LocalSession`] — inserted when this peer owns the gid, removed when
+/// ownership lapses (released / stolen).
+///
+/// It is the single classifier the predict-own seams read: the owned body is
+/// excluded from kinematic-pinning and snapshot interpolation, runs its own
+/// avian + mobility step (so input feels crisp, not `INTERP_DELAY` behind), and
+/// is smooth-corrected toward authoritative snapshots instead of hard-applied.
+/// **Never present on host/standalone** — those peers simulate every body
+/// authoritatively, so no per-body distinction is needed there.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct OwnedLocally;
+
 /// Server-side record of a runtime spawn the host must replicate to clients,
 /// carrying the catalog id + spawn position so peers can reconstruct the
 /// geometry locally (M1) pinned to the host-allocated id. Added to the spawn
@@ -193,11 +260,57 @@ pub struct SnapshotSample {
     pub gid: u64,
     pub t: [f32; 3],
     pub r: [f32; 4],
+    /// Authoritative linear velocity (avian `LinearVelocity`, f64→f32). Used by
+    /// the owned-rover prediction to seat the body for replay; remote bodies
+    /// ignore it.
+    pub lv: [f32; 3],
+    /// Authoritative angular velocity (avian `AngularVelocity`, f64→f32).
+    pub av: [f32; 3],
+    /// The highest input `seq` the host has applied for this gid (0 = none). The
+    /// owning client uses it to drop acked inputs and replay the rest.
+    pub last_input_seq: u32,
 }
 
 /// Inbound transform samples awaiting application on a client.
 #[derive(Resource, Default)]
 pub struct IncomingSnapshots(pub Vec<SnapshotSample>);
+
+/// One sampled vessel input, stamped with a dense per-vessel sequence number and
+/// the client `SimTick` it was sampled at. Buffered for client-prediction replay:
+/// after a snapshot snaps the owned body to the authoritative state, the reconcile
+/// re-applies the still-unacked frames in order to advance back to "now".
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InputFrame {
+    pub seq: u32,
+    pub tick: u64,
+    pub forward: f64,
+    pub steer: f64,
+    pub brake: f64,
+}
+
+/// Per-vessel input log: a monotonic `seq` counter plus the unacked frames.
+#[derive(Default)]
+pub struct VesselInputLog {
+    /// Next sequence number to assign (monotonic per vessel; `seq` 0 is reserved
+    /// for "no input applied yet" in the snapshot ack).
+    pub next_seq: u32,
+    /// Unacked input frames, oldest first (the reconcile drops `seq <= acked`).
+    pub frames: VecDeque<InputFrame>,
+}
+
+/// Client-side unacked input logs keyed by [`crate::GlobalEntityId`] raw `u64`.
+/// Populated only for vessels this peer owns + predicts (`OwnedLocally`); the
+/// reconcile drops acked frames and replays the rest over the owned avian body.
+/// Empty on host/standalone.
+#[derive(Resource, Default)]
+pub struct OwnedInputLog(pub HashMap<u64, VesselInputLog>);
+
+/// Host-side record of the highest input `seq` applied per gid, written when a
+/// `DriveRover`/`BrakeRover` is authorized + applied. Stamped into each snapshot's
+/// `last_input_seq` so the owning client knows how far the authoritative sim has
+/// integrated its inputs (the reconcile ack). Empty on client/standalone.
+#[derive(Resource, Default)]
+pub struct AppliedInputSeq(pub HashMap<u64, u32>);
 
 /// The single authority gate. Given the `origin` session of a command, the
 /// command's short type name, and the target entity's [`crate::GlobalEntityId`]
@@ -225,5 +338,123 @@ pub fn authorize(
             None => Err(Reject::InvalidOp(format!("{type_name} has no target"))),
         },
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::SessionId;
+
+    const A: SessionId = SessionId(1);
+    const B: SessionId = SessionId(2);
+    const R1: u64 = 0xA1;
+    const R2: u64 = 0xB2;
+
+    #[test]
+    fn default_policy_is_exclusive() {
+        assert_eq!(SessionRegistry::default().policy(), PossessionPolicy::Exclusive);
+    }
+
+    #[test]
+    fn exclusive_first_claim_wins_and_blocks_others() {
+        let mut reg = SessionRegistry::default();
+        assert!(reg.claim(A, R1).is_ok());
+        assert_eq!(reg.owner_of(R1), Some(A));
+        // A different session cannot take an owned vessel.
+        assert_eq!(reg.claim(B, R1), Err(A));
+        assert_eq!(reg.owner_of(R1), Some(A)); // unchanged
+        // Same session re-claim is idempotent.
+        assert!(reg.claim(A, R1).is_ok());
+        assert_eq!(reg.owner_of(R1), Some(A));
+    }
+
+    #[test]
+    fn exclusive_may_possess_reflects_ownership() {
+        let mut reg = SessionRegistry::default();
+        assert!(reg.may_possess(A, R1)); // free
+        reg.claim(A, R1).unwrap();
+        assert!(reg.may_possess(A, R1)); // owns it
+        assert!(!reg.may_possess(B, R1)); // taken by another
+        assert!(reg.may_possess(B, R2)); // a different, free rover
+    }
+
+    #[test]
+    fn lastwins_steals_and_always_permits() {
+        let mut reg = SessionRegistry::default();
+        reg.set_policy(PossessionPolicy::LastWins);
+        reg.claim(A, R1).unwrap();
+        assert_eq!(reg.owner_of(R1), Some(A));
+        // B steals it — claim succeeds and ownership flips.
+        assert!(reg.claim(B, R1).is_ok());
+        assert_eq!(reg.owner_of(R1), Some(B));
+        // may_possess is unconditionally true under LastWins.
+        assert!(reg.may_possess(A, R1));
+        assert!(reg.may_possess(B, R1));
+    }
+
+    #[test]
+    fn release_session_frees_all_its_vessels_only() {
+        let mut reg = SessionRegistry::default();
+        reg.claim(A, R1).unwrap();
+        reg.claim(A, R2).unwrap();
+        reg.claim(B, 0xC3).unwrap();
+        let mut freed = reg.release_session(A);
+        freed.sort_unstable();
+        assert_eq!(freed, vec![R1, R2]);
+        assert_eq!(reg.owner_of(R1), None);
+        assert_eq!(reg.owner_of(R2), None);
+        assert_eq!(reg.owner_of(0xC3), Some(B)); // B untouched
+        // Freed vessel is now claimable by anyone, even under Exclusive.
+        assert!(reg.claim(B, R1).is_ok());
+    }
+
+    #[test]
+    fn owns_is_exact_session_match() {
+        let mut reg = SessionRegistry::default();
+        reg.claim(A, R1).unwrap();
+        assert!(reg.owns(A, R1));
+        assert!(!reg.owns(B, R1));
+        assert!(!reg.owns(A, R2)); // unowned
+    }
+
+    #[test]
+    fn replace_all_preserves_policy() {
+        // The host broadcasts only the owner table; a client's replace_all must
+        // NOT reset the arbitration policy (it's a separate field).
+        let mut reg = SessionRegistry::default();
+        reg.set_policy(PossessionPolicy::LastWins);
+        reg.replace_all([(R1, A), (R2, B)]);
+        assert_eq!(reg.policy(), PossessionPolicy::LastWins); // survived
+        assert_eq!(reg.owner_of(R1), Some(A));
+        assert_eq!(reg.owner_of(R2), Some(B));
+    }
+
+    #[test]
+    fn snapshot_roundtrips_host_to_client() {
+        let mut host = SessionRegistry::default();
+        host.claim(A, R1).unwrap();
+        host.claim(B, R2).unwrap();
+        let mut client = SessionRegistry::default();
+        client.replace_all(host.snapshot().into_iter().map(|(g, s)| (g, SessionId(s))));
+        assert_eq!(client.owner_of(R1), Some(A));
+        assert_eq!(client.owner_of(R2), Some(B));
+    }
+
+    #[test]
+    fn authorize_drive_requires_ownership() {
+        let mut reg = SessionRegistry::default();
+        reg.claim(A, R1).unwrap();
+        // The owner may issue control commands.
+        assert!(authorize(&reg, A, "DriveRover", Some(R1)).is_ok());
+        assert!(authorize(&reg, A, "BrakeRover", Some(R1)).is_ok());
+        // A non-owner may not.
+        assert!(authorize(&reg, B, "DriveRover", Some(R1)).is_err());
+        // A control command with no target is rejected.
+        assert!(authorize(&reg, A, "DriveRover", None).is_err());
+        // Possession + structural commands are always allowed (arbitration is in
+        // `claim`, not the authority gate).
+        assert!(authorize(&reg, B, "PossessVessel", Some(R1)).is_ok());
+        assert!(authorize(&reg, B, "SpawnEntity", None).is_ok());
     }
 }

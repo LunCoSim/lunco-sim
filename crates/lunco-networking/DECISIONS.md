@@ -32,15 +32,41 @@ payload regardless of backend, so fallback cost is bounded.
   AND browser WebTransport.**
 - Supersedes STACK_COMPARISON §2.4 "open" status and DESIGN_GAPS Q4.
 
-## D2 — Reconciliation: **smooth error-correction, never full avian rollback**
-Predict the rover kinematically; error-correct toward server state (projective
-velocity blending). Full rollback is ruled out *by construction*: avian's solver is
-global (contact islands couple bodies) and non-deterministic across platforms — a
-wasm client can't reproduce it bit-exact. This is the mainstream FPS choice
-(Source/Overwatch/Unreal reconcile only the local movement component).
+## D2 — Reconciliation: **input-replay reconciliation, re-stepping our own avian for the OWNED rover** (REOPENED 2026-05-30)
+Predict the owned rover by running real **f64 avian** dynamics locally. On each
+snapshot that acks an input sequence number, snap the owned body's 4 integrator
+components (`Position`/`Rotation`/`LinearVelocity`/`AngularVelocity`) to authoritative
+state and re-step avian over the unacked-input buffer (~3–6 fixed ticks). This is
+**state replication + re-anchoring** (NOT deterministic lockstep), so f64 non-determinism
+only matters across the unacked window before the next snapshot snaps back to truth. All
+**remote** bodies stay `Kinematic`-pinned + interpolated, unchanged. Design + phased plan:
+`PREDICTION_RECONCILIATION.md`.
+
+**Why the old D2 was reopened:** continuous smooth-correction toward the latest snapshot is
+an *unfixable rubber-band* — the authoritative echo is always one link-latency behind a
+forward-moving client, so blending toward it is a permanent backward tug (no `CORRECTION_RATE`
+is both responsive and smooth). The old "full rollback ruled out by construction" premises
+(global solver, cross-platform non-determinism) do **not** apply here: on a *client* the owned
+chassis is the **only `Dynamic` body** (every other replicated rover is `Kinematic`-pinned,
+wheel systems early-out on `Kinematic`), so a replay tick solves a **1-body island** — no
+coupling to replay — and re-anchoring bounds drift to the unacked window.
+
+**Why NOT lightyear-native prediction** (the natural "do it via lightyear" instinct): hard-blocked,
+verified firsthand — `lightyear_avian3d`/`lightyear_replication` 0.26.4 require **avian `^0.5`**
+(we're on 0.6.1) and are **f32-only** (`default = [..,"avian3d/parry-f32"]`, no `f64`/`parry-f64`
+feature; `.f32()` hardcoded in the correction path). Going native would force downgrading avian
+**and** de-precisioning the whole physics stack to f32 — reversing the f64 double-precision that
+big-space/lunar-orbital coordinates depend on. lightyear release notes (through 0.26.0, 2026-01)
+have **never mentioned f64**. Full analysis: `LIGHTYEAR_NATIVE_REVIEW.md`. **lightyear stays the
+transport/netcode/sync substrate (D1); prediction is hand-rolled over our own f64 avian** — the
+exact Source/Overwatch predict+reconcile algorithm, minus the f64/version wall. Re-open native
+only if a future lightyear targets avian 0.6 **and** ships a `parry-f64` path.
+
 - Rover-rover contact corrections: accept the snap (or disable inter-player rover
   collision) — deferred, see DESIGN_GAPS.
-- Supersedes DESIGN_GAPS Q1.
+- Supersedes DESIGN_GAPS Q1. Reverses original D2 (smooth-correction) on our own terms;
+  keeps D3/D4/D5/D6/D7 intact (the hand-rolled path is D7-clean — no lightyear types in
+  always-on substrate, no avian schedule surgery).
 
 ## D3 — Identity: **deterministic from provenance** (confirmed)
 Network id = pure function of provenance. Content/Derived → deterministic hash

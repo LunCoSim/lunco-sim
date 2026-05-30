@@ -1254,6 +1254,8 @@ fn on_release_command(
             target: link.vessel_entity,
             forward: 0.0,
             steer: 0.0,
+            seq: 0,
+            tick: 0,
         });
     }
 
@@ -1345,19 +1347,19 @@ fn on_possess_command(
     if guard.is_from_wire() {
         return;
     }
-    // EXCLUSIVE possession: refuse to bind a vessel the (synced) ownership table
-    // says another session already controls. The host's `SessionRegistry` is
-    // authoritative; clients hold a replicated copy (via `OwnershipMsg`). In
-    // single-player the table is empty so this never blocks.
+    // Possession arbitration (policy-driven): under the default `Exclusive`
+    // policy, refuse to bind a vessel the (synced) ownership table says another
+    // session already controls; under `LastWins` the bind is always allowed and
+    // steals the vessel. The host's `SessionRegistry` is authoritative; clients
+    // hold a replicated copy (via `OwnershipMsg`). Single-player's table is empty
+    // so this never blocks.
     if let Ok(gid) = q_owned.get(cmd.target) {
-        if let Some(owner) = registry.owner_of(gid.get()) {
-            if owner != session.0 {
-                info!(
-                    "[possess] vessel {} already owned by session {owner} — refused",
-                    gid.get()
-                );
-                return;
-            }
+        if !registry.may_possess(session.0, gid.get()) {
+            info!(
+                "[possess] vessel {} owned by another session — refused (exclusive policy)",
+                gid.get()
+            );
+            return;
         }
     }
     let (avatar_ent, cam_tf, cam_cell, _child_of, existing_link) = if let Ok(data) = q_avatar.get(cmd.avatar) {

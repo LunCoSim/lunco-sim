@@ -43,8 +43,9 @@ pub use markers::{GridAnchor, SoiMigrant};
 pub use invariants::BigSpaceInvariantsPlugin;
 pub use identity::Provenance;
 pub use session::{
-    authorize, IncomingSnapshots, LocalSession, NetReplicate, NetSpawn, NetStatus, NetworkRole,
-    PendingReplicatedSpawns, ReplicatedSpawn, SessionRegistry, SkipContentStamp, SnapshotSample,
+    authorize, AppliedInputSeq, IncomingSnapshots, InputFrame, LocalSession, NetReplicate, NetSpawn,
+    NetStatus, NetworkRole, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns, PossessionPolicy,
+    ReplicatedSpawn, SessionRegistry, SkipContentStamp, SnapshotSample, VesselInputLog,
     WireApplyGuard,
 };
 

@@ -165,6 +165,11 @@ fn on_server_connected(
             gid: gid.get(),
             t: tf.translation.to_array(),
             r: tf.rotation.to_array(),
+            // Baseline is a one-shot placement at connect; velocity zero is fine —
+            // the next 20 Hz snapshot carries real velocity within ~50 ms.
+            lv: [0.0; 3],
+            av: [0.0; 3],
+            last_input_seq: 0,
         })
         .collect();
     if !entries.is_empty() {

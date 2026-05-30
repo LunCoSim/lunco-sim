@@ -116,22 +116,108 @@ impl MissionControl {
 
         // ── Rovers ──
         ui.collapsing("Rovers", |ui| {
-            let mut rover_q = world.query::<(Entity, &Name)>();
-            let rovers: Vec<(Entity, String)> = rover_q.iter(world)
-                .filter(|(e, _)| world.get::<RoverVessel>(*e).is_some())
-                .map(|(e, n)| (e, n.as_str().to_string()))
-                .collect();
-            for (entity, name) in &rovers {
+            // Networking context, read from the always-on substrate. In
+            // single-player (Standalone, empty registry) `networked` is false so
+            // the ownership UI stays hidden and rovers behave as before.
+            let local_session = world.get_resource::<lunco_core::LocalSession>().map(|l| l.0);
+            let (networked, is_host) = world
+                .get_resource::<lunco_core::NetworkRole>()
+                .map(|r| (r.is_networked(), r.is_host()))
+                .unwrap_or((false, false));
+
+            // Possession policy selector (host-authoritative — only the host's
+            // choice governs `claim`). Default `Exclusive` = "one each".
+            let policy = world
+                .get_resource::<lunco_core::SessionRegistry>()
+                .map(|r| r.policy())
+                .unwrap_or_default();
+            if networked {
+                let mut chosen = policy;
                 ui.horizontal(|ui| {
+                    ui.label("Control:");
+                    ui.add_enabled_ui(is_host, |ui| {
+                        ui.selectable_value(
+                            &mut chosen,
+                            lunco_core::PossessionPolicy::Exclusive,
+                            "One each",
+                        );
+                        ui.selectable_value(
+                            &mut chosen,
+                            lunco_core::PossessionPolicy::LastWins,
+                            "Anyone",
+                        );
+                    });
+                });
+                if chosen != policy && is_host {
+                    if let Some(mut reg) = world.get_resource_mut::<lunco_core::SessionRegistry>() {
+                        reg.set_policy(chosen);
+                    }
+                }
+            }
+
+            let mut rover_q = world.query::<(Entity, &Name)>();
+            let rovers: Vec<(Entity, String, Option<u64>)> = rover_q.iter(world)
+                .filter(|(e, _)| world.get::<RoverVessel>(*e).is_some())
+                .map(|(e, n)| {
+                    (e, n.as_str().to_string(),
+                     world.get::<lunco_core::GlobalEntityId>(e).map(|g| g.get()))
+                })
+                .collect();
+
+            // Resolve owner per rover (registry borrow kept out of the query iter).
+            let owners: Vec<Option<lunco_core::SessionId>> = {
+                let reg = world.get_resource::<lunco_core::SessionRegistry>();
+                rovers.iter()
+                    .map(|(_, _, gid)| gid.and_then(|g| reg.and_then(|r| r.owner_of(g))))
+                    .collect()
+            };
+
+            for ((entity, name, _gid), owner) in rovers.iter().zip(owners.iter()) {
+                let mine = matches!((owner, local_session), (Some(o), Some(l)) if *o == l);
+                let taken_by_other = owner.is_some() && !mine;
+                ui.horizontal(|ui| {
+                    // Ownership chip (only meaningful with the wire live).
+                    if networked {
+                        if mine {
+                            ui.colored_label(egui::Color32::from_rgb(0x4c, 0xff, 0x88), "●")
+                                .on_hover_text("You control this rover");
+                        } else if taken_by_other {
+                            ui.colored_label(egui::Color32::from_rgb(0xff, 0x6b, 0x4c), "🔒")
+                                .on_hover_text(format!(
+                                    "Controlled by session {}",
+                                    owner.map(|s| s.0).unwrap_or(0)
+                                ));
+                        } else {
+                            ui.weak("○").on_hover_text("Free to possess");
+                        }
+                    }
                     ui.label(name);
                     if ui.small_button("Focus").clicked() {
                         if let Some(av) = avatar_ent {
                             world.commands().trigger(FocusTarget { avatar: av, target: *entity });
                         }
                     }
-                    if ui.small_button("🚗 Possess").clicked() {
-                        if let Some(av) = avatar_ent {
-                            world.commands().trigger(PossessVessel { avatar: av, target: *entity });
+                    if mine {
+                        if ui.small_button("🚪 Release").clicked() {
+                            if let Some(av) = avatar_ent {
+                                world.commands().trigger(ReleaseVessel { target: av });
+                            }
+                        }
+                    } else {
+                        // Under `Exclusive` a rover held by another is locked;
+                        // under `LastWins` anyone can take it (button stays live).
+                        let locked = taken_by_other
+                            && matches!(policy, lunco_core::PossessionPolicy::Exclusive);
+                        let resp =
+                            ui.add_enabled(!locked, egui::Button::new("🚗 Possess").small());
+                        if locked {
+                            resp.on_disabled_hover_text(
+                                "Controlled by another player (One-each policy)",
+                            );
+                        } else if resp.clicked() {
+                            if let Some(av) = avatar_ent {
+                                world.commands().trigger(PossessVessel { avatar: av, target: *entity });
+                            }
                         }
                     }
                 });
