@@ -324,20 +324,40 @@ Multi-monitor workflows this enables:
 - Workspace switching only affects the main window; detached panels
   stay put regardless of workspace
 
-## 9. Layout persistence
+## 9. Window & layout persistence
 
-Each workspace has a stored layout. When a user drags a panel, saves, or
-switches workspaces:
+LunCoSim follows **VS Code's two-tier split** for what survives a
+restart:
 
-- Per-user layouts persist to `~/.lunco/layouts.toml` via
-  `lunco_assets::user_config_dir()` (cross-platform: Linux/macOS
-  `~/.lunco`, Windows `C:\Users\<user>\.lunco`; overridable via
-  `LUNCOSIM_CONFIG` env var)
-- Per-project layouts can live in `project.toml` (overriding user defaults)
-- Default ship layouts are hardcoded in each workspace module
+- **Global, app-wide prefs** (theme, perf HUD, **default window
+  geometry**) → one shared `~/.lunco/settings.json` via `lunco-settings`
+  (§9b). No new file per feature.
+- **Per-project volatile UI state** (active perspective, open-document
+  list, and — in future — per-window layout) → **global storage keyed by
+  a hash of the project path**, *not* written into the Twin folder:
+  `~/.lunco/workspace-state/<fnv1a-hex>.json`. This is VS Code's
+  `workspaceStorage/<hash>/` model — repos stay clean, no `.gitignore`
+  churn, and personal layout never leaks into a shared project.
 
-Layout is a tree of slot occupancies + panel IDs + sizes. Not a TOML
-abstraction leak — just what's needed to rebuild the layout.
+> **Implemented (2026-05-30).** `lunco-workbench::window_persistence`
+> (global `WindowGeometry` settings section, restored before the
+> `Window` is built via `restored_window()`; ship-default size is the
+> named `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants, not magic numbers in
+> the binaries) and `lunco-workbench::workspace_state` (per-Twin
+> `WorkspaceState`, loaded on Twin activation, saved snapshot-gated like
+> recents). This **supersedes the earlier `layouts.toml` /
+> in-`project.toml` sketch** below.
+
+**Reconciliation.** Restore maps stored string ids back to the panels /
+perspectives registered in *this* binary (sandbox and lunica ship
+different sets) and **drops anything unknown** — `PanelId` /
+`PerspectiveId` hold `&'static str`, so the live registry is the source
+of truth, never the file.
+
+**Deferred.** Free-form dock-tree fidelity (arbitrary user split
+rearrangements) and document auto-reopen are follow-ups — see the crate
+docs. Today restore re-applies the perspective preset and persists the
+open-document paths; it does not yet replay per-domain open commands.
 
 ### 9a. Recents
 
@@ -390,8 +410,11 @@ the API/script bus (e.g. `TogglePerfHud`), and direct mutation. All
 three converge on the same persisted resource.
 
 **Don't** invent per-feature JSON files for new settings. **Do**
-keep `recents.json` separate (different lifetime / churn) and
-`layouts.toml` separate (TOML schema, structural).
+keep the intentional exceptions separate, each for a documented
+reason: `recents.json` (different lifetime / churn), the planned
+`layouts.toml` (TOML schema, structural), and
+`workspace-state/<hash>.json` (per-project, path-keyed, high-churn —
+the VS Code `workspaceStorage` analog in §9).
 
 #### 9b.1 Multi-level namespacing
 

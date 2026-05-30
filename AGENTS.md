@@ -23,7 +23,7 @@ As per Article X of the Project Constitution, **hardcoded magic numbers are forb
 *   **Visuals**: Colors, line widths, fade ranges, and subdivisions must be stored in Bevy `Resources` (for global settings) or `Components` (for entity-specific settings).
 *   **Physics**: Gravity constants, SOI thresholds, and orbital sampling rates must be exposed as configurable parameters.
 *   **UI**: Padding, margins, transition speeds, and every color must come from the `lunco-theme` crate — never hard-coded in a panel.
-*   **Persisted user preferences** must go through `lunco-settings` (one shared `~/.lunco/settings.json`, namespaced keys). Implement `SettingsSection` on a typed resource and call `app.register_settings_section::<MySection>()`. Do **not** invent new per-feature JSON files. Layouts (`layouts.toml`) and recents (`recents.json`) are intentional exceptions — different lifetimes / schemas. See `docs/architecture/11-workbench.md` § 9b.
+*   **Persisted user preferences** must go through `lunco-settings` (one shared `~/.lunco/settings.json`, namespaced keys). Implement `SettingsSection` on a typed resource and call `app.register_settings_section::<MySection>()`. Do **not** invent new per-feature JSON files. The intentional exceptions — each documented in `docs/architecture/11-workbench.md` § 9/§9b — are `layouts.toml`, `recents.json`, and per-project `workspace-state/<hash>.json` (VS Code `workspaceStorage`-style, path-keyed volatile UI state: active perspective + open docs). Global window geometry still goes through `lunco-settings` (the `"window"` section), **not** a new file.
 
 ### 3.1 Theme binding (`lunco-theme`)
 

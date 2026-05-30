@@ -103,6 +103,9 @@ pub mod browser_dispatch;
 /// Per-panel "pin to model" overrides for singleton inspector panels.
 pub mod doc_pin;
 
+/// Document hot-exit codec — persists & restores open Modelica buffers.
+pub mod session_codec;
+
 use crate::ModelicaModel;
 
 /// Fan queued document lifecycle notifications out as observer triggers.
@@ -641,6 +644,14 @@ impl Plugin for ModelicaUiPlugin {
         // round-trips them.
         use lunco_settings::AppSettingsExt;
         app.register_settings_section::<panels::journal::JournalPanelSettings>();
+
+        // Document hot-exit: persist every open Modelica buffer into the
+        // per-Twin workspace-state and restore it (with unsaved edits) on
+        // next launch. The workbench owns the file + lifecycle; this
+        // codec just reads/writes Modelica buffers (AGENTS.md §3 + the
+        // VS Code `workspaceStorage` model in 11-workbench §9).
+        use lunco_workbench::AppDocumentSessionExt;
+        app.register_document_session_codec(session_codec::ModelicaSessionCodec);
 
         // MSL class cache lives inside `class_cache::msl_engine` —
         // no Bevy plugin / resource needed. `peek_or_load_msl_class_blocking`

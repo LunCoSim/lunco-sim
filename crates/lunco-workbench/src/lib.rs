@@ -86,7 +86,10 @@ pub use window_persistence::{
     load_window_geometry, restored_window, WindowGeometry, WindowPersistencePlugin,
     DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
 };
-pub use workspace_state::{workspace_state_path, WorkspaceState, WorkspaceStatePlugin};
+pub use workspace_state::{
+    workspace_state_path, AppDocumentSessionExt, DocumentSessionCodec, DocumentSessionRegistry,
+    DocumentSnapshot, WorkspaceState, WorkspaceStatePlugin,
+};
 pub use render_robustness::preferred_wgpu_settings;
 
 pub use panel::{InstancePanel, Panel, PanelId, PanelSlot, TabId};
@@ -946,6 +949,27 @@ impl WorkbenchLayout {
     /// Which perspective is currently active, if any.
     pub fn active_perspective(&self) -> Option<PerspectiveId> {
         self.active_perspective
+    }
+
+    /// The `instance` discriminant of the currently *focused* tab, when
+    /// it's a multi-instance tab. Document tabs open with their
+    /// `DocumentId.raw()` as the instance (see `open_instance` callers),
+    /// so for a focused document this is the active document's id.
+    ///
+    /// The dock's focused leaf is the source of truth for which tab is
+    /// active — `WorkspaceResource.active_document` isn't set on every
+    /// open path, so reading it here is what makes hot-exit restore the
+    /// *correct* active tab. Returns `None` when the focused tab is a
+    /// singleton panel (not a document) or nothing is focused.
+    pub fn active_tab_instance(&self) -> Option<u64> {
+        let tree = self.dock.main_surface();
+        let node = tree.focused_leaf()?;
+        if let egui_dock::Node::Leaf(leaf) = &tree[node] {
+            if let Some(TabId::Instance { instance, .. }) = leaf.tabs.get(leaf.active.0) {
+                return Some(*instance);
+            }
+        }
+        None
     }
 
     /// Activate a perspective by its raw string id, matching against the

@@ -33,28 +33,105 @@
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
+use lunco_doc::DocumentOrigin;
 use serde::{Deserialize, Serialize};
 
 use crate::session::WorkspaceResource;
 use crate::WorkbenchLayout;
 
+/// Hot-exit snapshot of one open document — VSCode-style. Carries the
+/// **live editor buffer** (`source`), not just a path, so unsaved edits
+/// survive a restart and are restored as in-memory content rather than
+/// re-read from disk.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct DocumentSnapshot {
+    /// Codec id this doc belongs to (e.g. `"modelica"`). Matched against
+    /// the registered [`DocumentSessionCodec`]s on restore; unknown
+    /// kinds are dropped (an app that doesn't host that domain).
+    pub kind: String,
+    /// Where the doc came from (Untitled / File / Bundled). Already
+    /// serde in `lunco-doc`.
+    pub origin: DocumentOrigin,
+    /// Tab title at save time.
+    pub title: String,
+    /// The editor buffer text — the UI state being preserved.
+    pub source: String,
+    /// Whether the doc had unsaved changes (best-effort on restore).
+    pub dirty: bool,
+}
+
+/// Per-domain hook letting `lunco-workbench` capture and restore open
+/// documents **without depending on the domain crate** (domains depend
+/// on the workbench, not the reverse). Each domain registers one impl
+/// via [`AppDocumentSessionExt::register_document_session_codec`];
+/// mirrors the `BrowserSectionRegistry` pattern (11-workbench §5a).
+pub trait DocumentSessionCodec: Send + Sync + 'static {
+    /// Stable codec id, stored in [`DocumentSnapshot::kind`].
+    fn kind(&self) -> &'static str;
+    /// Cheap monotonic-ish signal that changes when this domain's open
+    /// set or any buffer changes (fold of doc ids + generations). Lets
+    /// capture skip the (allocating) snapshot build in the steady state
+    /// — no per-frame buffer clones (AGENTS.md §7.1).
+    fn revision(&self, world: &World) -> u64;
+    /// Snapshot every open document of this kind, each paired with its
+    /// **live** `DocumentId` (`raw()`) for *this* session. The id lets
+    /// the workbench match the active tab reliably (origins can differ
+    /// between the registry and the Workspace entry); it is not
+    /// persisted — ids aren't stable across runs.
+    fn capture(&self, world: &mut World) -> Vec<(u64, DocumentSnapshot)>;
+    /// Recreate one document from a snapshot, replaying the domain's
+    /// normal open path (which opens the tab + registers the entry).
+    fn restore(&self, world: &mut World, snap: &DocumentSnapshot);
+}
+
+/// Registry of per-domain [`DocumentSessionCodec`]s. Populated at plugin
+/// `build` time; iterated by the capture / restore systems.
+#[derive(Resource, Default)]
+pub struct DocumentSessionRegistry {
+    codecs: Vec<Box<dyn DocumentSessionCodec>>,
+}
+
+impl DocumentSessionRegistry {
+    /// Register a codec. Last-registered-wins is irrelevant — kinds are
+    /// expected unique.
+    pub fn register(&mut self, codec: impl DocumentSessionCodec) {
+        self.codecs.push(Box::new(codec));
+    }
+}
+
+/// App extension to register a [`DocumentSessionCodec`] from a domain
+/// plugin's `build`.
+pub trait AppDocumentSessionExt {
+    /// Register a per-domain document session codec for hot-exit
+    /// capture / restore.
+    fn register_document_session_codec(&mut self, codec: impl DocumentSessionCodec) -> &mut Self;
+}
+
+impl AppDocumentSessionExt for App {
+    fn register_document_session_codec(&mut self, codec: impl DocumentSessionCodec) -> &mut Self {
+        self.world_mut()
+            .get_resource_or_init::<DocumentSessionRegistry>()
+            .register(codec);
+        self
+    }
+}
+
 /// Per-Twin volatile UI state. One of these per project, stored at
 /// [`workspace_state_path`].
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
 pub struct WorkspaceState {
-    /// The Twin root this state belongs to. Stored so a hash collision
-    /// (two different paths landing on the same file stem) is
-    /// detectable — a mismatch is treated as a miss, not silently
-    /// applied to the wrong project.
+    /// The Twin root this state belongs to (empty when no Twin is
+    /// active — a "no-folder" session still hot-exits its docs). Stored
+    /// so a hash collision (two paths landing on the same file stem) is
+    /// detectable — a mismatch is treated as a miss.
     pub twin_root: PathBuf,
     /// `PerspectiveId` string of the perspective active at save time.
     /// `None` ⇒ leave the app's startup default.
     pub perspective: Option<String>,
-    /// Absolute paths of the documents open in this Twin at save time.
-    /// Persisted for future session-restore; not auto-reopened yet.
-    pub open_documents: Vec<PathBuf>,
-    /// Absolute path of the active document, if it was path-backed.
-    pub active_document: Option<PathBuf>,
+    /// Hot-exit snapshots of every open document, in open order.
+    pub documents: Vec<DocumentSnapshot>,
+    /// Index into [`documents`](Self::documents) of the active tab.
+    pub active_document: Option<usize>,
 }
 
 impl WorkspaceState {
@@ -134,87 +211,256 @@ struct WorkspaceStateLast {
     key: Option<String>,
     /// Pretty-printed JSON of the last-saved [`WorkspaceState`].
     json: String,
+    /// Cheap fold gating the (allocating) snapshot build — see
+    /// [`gate_value`].
+    rev: u64,
+    /// Set once `rev` has been computed at least once.
+    seeded: bool,
 }
 
-/// Tracks which Twin we last applied state for, so activation-driven
-/// restore fires once per switch rather than every frame.
+/// Tracks restore progress so it fires once the app's own startup docs
+/// have *settled* (apps like lunica auto-open a default doc, async), and
+/// then once per later Twin switch.
 #[derive(Resource, Default)]
-struct AppliedTwin(Option<lunco_workspace::TwinId>);
+struct AppliedTwin {
+    /// Set after the initial (startup) restore has run.
+    initialized: bool,
+    /// Twin we last restored for (re-runs on change).
+    twin: Option<lunco_workspace::TwinId>,
+    /// Last-seen session revision while waiting for startup to settle.
+    settle_rev: u64,
+    /// Consecutive frames the revision has held steady.
+    settle_frames: u32,
+    /// Frames waited overall — a hard cap so restore still fires even if
+    /// the doc set never stops churning.
+    settle_budget: u32,
+}
 
-/// Build a [`WorkspaceState`] for the currently-active Twin from live
-/// resources. `None` when there's no active Twin (⇒ nothing per-project
-/// to persist; global settings cover that case).
-fn current_state(
-    ws: &WorkspaceResource,
-    layout: &WorkbenchLayout,
-) -> Option<WorkspaceState> {
-    let twin_id = ws.active_twin?;
-    let twin_root = ws.twin(twin_id)?.root.clone();
+/// Frames the open-doc set must hold steady before the startup restore
+/// runs — long enough for async auto-open to land, short enough to feel
+/// instant (~3 frames ≈ 50 ms at 60 Hz).
+const SETTLE_FRAMES: u32 = 3;
+/// Hard cap on settle waiting (~1 s at 60 Hz) so restore can't be
+/// starved by a perpetually-churning doc set.
+const SETTLE_BUDGET: u32 = 60;
 
-    let open_documents: Vec<PathBuf> = ws
-        .documents_in_twin(twin_id)
-        .filter_map(|d| d.origin.canonical_path().map(Path::to_path_buf))
+/// Absolute root of the active Twin, or the empty path for a "no-folder"
+/// session (which still hot-exits its docs into a sentinel file).
+fn active_twin_root(world: &World) -> PathBuf {
+    let ws = world.resource::<WorkspaceResource>();
+    ws.active_twin
+        .and_then(|id| ws.twin(id))
+        .map(|t| t.root.clone())
+        .unwrap_or_default()
+}
+
+/// Concat every registered codec's open-doc snapshots, each paired with
+/// its live `DocumentId` (`raw()`) for active-tab matching.
+fn capture_documents(world: &mut World) -> Vec<(u64, DocumentSnapshot)> {
+    let mut out = Vec::new();
+    if world.get_resource::<DocumentSessionRegistry>().is_none() {
+        return out;
+    }
+    world.resource_scope(|world, reg: Mut<DocumentSessionRegistry>| {
+        for codec in &reg.codecs {
+            out.extend(codec.capture(world));
+        }
+    });
+    out
+}
+
+/// Fold of every codec's `revision` — changes when any open buffer or
+/// the open set changes. Cheap (no buffer clones).
+fn session_revision(world: &mut World) -> u64 {
+    let mut r = 0u64;
+    if world.get_resource::<DocumentSessionRegistry>().is_none() {
+        return 0;
+    }
+    world.resource_scope(|world, reg: Mut<DocumentSessionRegistry>| {
+        for codec in &reg.codecs {
+            r = r.wrapping_add(codec.revision(world));
+        }
+    });
+    r
+}
+
+/// Cheap value that changes when anything we persist changes (docs,
+/// perspective, active Twin) — gates the expensive capture/serialize.
+fn gate_value(world: &mut World) -> u64 {
+    let docs = session_revision(world);
+    let persp = world
+        .resource::<WorkbenchLayout>()
+        .active_perspective()
+        .map(|p| fnv1a64(p.as_str().as_bytes()))
+        .unwrap_or(0);
+    let twin = fnv1a64(active_twin_root(world).to_string_lossy().as_bytes());
+    // Fold in the focused tab so switching tabs re-fires the gate and
+    // re-saves the active index (the dock focus is the real signal;
+    // `active_document` is the fallback the build also uses).
+    let active = world
+        .resource::<WorkbenchLayout>()
+        .active_tab_instance()
+        .or_else(|| {
+            world
+                .resource::<WorkspaceResource>()
+                .active_document
+                .map(|id| id.raw())
+        })
+        .map(|raw| raw.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+        .unwrap_or(0);
+    docs.wrapping_add(persp).wrapping_add(twin).wrapping_add(active)
+}
+
+/// Build the full hot-exit state from live resources.
+fn build_state(world: &mut World) -> WorkspaceState {
+    let twin_root = active_twin_root(world);
+    let perspective = world
+        .resource::<WorkbenchLayout>()
+        .active_perspective()
+        .map(|p| p.as_str().to_string());
+    let pairs = capture_documents(world);
+    // Active tab = index of the document whose live id matches the
+    // focused dock tab. The dock's focused leaf is authoritative;
+    // `WorkspaceResource.active_document` is a fallback for the rare
+    // path that sets it but never focuses a tab. Doc tabs carry their
+    // `DocumentId.raw()` as the instance, so this matches `pairs` ids.
+    let active_id = world
+        .resource::<WorkbenchLayout>()
+        .active_tab_instance()
+        .or_else(|| {
+            world
+                .resource::<WorkspaceResource>()
+                .active_document
+                .map(|id| id.raw())
+        });
+    let active_document =
+        active_id.and_then(|aid| pairs.iter().position(|(id, _)| *id == aid));
+    let documents: Vec<DocumentSnapshot> = pairs.into_iter().map(|(_, s)| s).collect();
+    WorkspaceState {
+        twin_root,
+        perspective,
+        documents,
+        active_document,
+    }
+}
+
+/// Restore the active Twin's saved session — perspective + open
+/// documents (with their preserved buffers) — on startup and on every
+/// Twin switch. Exclusive system: codecs need `&mut World`.
+fn restore_workspace_state(world: &mut World) {
+    let active = world.resource::<WorkspaceResource>().active_twin;
+
+    // Decide whether to run this frame. Startup restore waits for the
+    // doc set to settle (apps auto-open async); a later Twin switch runs
+    // immediately (no startup churn to race).
+    let twin_changed = {
+        let applied = world.resource::<AppliedTwin>();
+        applied.initialized && applied.twin != active
+    };
+    if !twin_changed {
+        let rev = session_revision(world);
+        let mut applied = world.resource_mut::<AppliedTwin>();
+        if applied.initialized {
+            return; // startup restore already done, twin unchanged
+        }
+        if rev == applied.settle_rev {
+            applied.settle_frames += 1;
+        } else {
+            applied.settle_rev = rev;
+            applied.settle_frames = 0;
+        }
+        applied.settle_budget += 1;
+        let settled =
+            applied.settle_frames >= SETTLE_FRAMES || applied.settle_budget >= SETTLE_BUDGET;
+        if !settled {
+            return;
+        }
+    }
+
+    {
+        let mut applied = world.resource_mut::<AppliedTwin>();
+        applied.initialized = true;
+        applied.twin = active;
+    }
+
+    let root = active_twin_root(world);
+    let Some(state) = WorkspaceState::load(&root) else {
+        return;
+    };
+
+    // Perspective: reconcile against the registered set (unknown → drop).
+    if let Some(persp) = &state.perspective {
+        world
+            .resource_mut::<WorkbenchLayout>()
+            .activate_perspective_by_str(persp);
+    }
+
+    if state.documents.is_empty() {
+        return;
+    }
+
+    // Dedup against docs the app already opened on its own (auto-open,
+    // cosim): skip any saved snapshot whose origin is already present.
+    // Untitled origins carry a per-run name so they never collide and
+    // always re-open — exactly right for scratch buffers.
+    let existing: Vec<DocumentOrigin> = capture_documents(world)
+        .into_iter()
+        .map(|(_, s)| s.origin)
         .collect();
 
-    let active_document = ws
-        .active_document
-        .and_then(|id| ws.document(id))
-        .and_then(|d| d.origin.canonical_path().map(Path::to_path_buf));
+    // Restore order: non-active first, the active doc last, so the
+    // existing open pipeline leaves it focused.
+    let mut order: Vec<usize> = (0..state.documents.len()).collect();
+    if let Some(active_idx) = state.active_document {
+        if active_idx < order.len() {
+            order.retain(|&i| i != active_idx);
+            order.push(active_idx);
+        }
+    }
 
-    Some(WorkspaceState {
-        twin_root,
-        perspective: layout.active_perspective().map(|p| p.as_str().to_string()),
-        open_documents,
-        active_document,
-    })
+    world.resource_scope(|world, reg: Mut<DocumentSessionRegistry>| {
+        for idx in order {
+            let snap = &state.documents[idx];
+            if existing.contains(&snap.origin) {
+                continue; // already open — don't duplicate
+            }
+            if let Some(codec) = reg.codecs.iter().find(|c| c.kind() == snap.kind) {
+                codec.restore(world, snap);
+            } else {
+                warn!(
+                    "[WorkspaceState] no codec for kind {:?}; dropping restored doc {:?}",
+                    snap.kind, snap.title
+                );
+            }
+        }
+    });
 }
 
-/// On Twin activation, restore that Twin's saved perspective. Open
-/// documents are loaded into the state but not reopened (see module
-/// docs). Runs every frame but early-returns unless the active Twin
-/// changed — no per-frame work in the steady state (AGENTS.md §7.1).
-fn apply_workspace_state_on_twin_change(
-    ws: Res<WorkspaceResource>,
-    mut layout: ResMut<WorkbenchLayout>,
-    mut applied: ResMut<AppliedTwin>,
-) {
-    let active = ws.active_twin;
-    if applied.0 == active {
+/// Persist the active session when it changes. Cheaply gated by
+/// [`gate_value`] (so buffers aren't cloned every frame), then
+/// snapshot-compared like recents before any disk write. Native-only.
+fn persist_workspace_state(world: &mut World) {
+    // Don't persist until the startup restore has run — otherwise the
+    // app's own auto-opened docs would overwrite the saved session
+    // before `restore_workspace_state` gets to read it (the systems are
+    // chained restore→persist, so by the settle frame this is true).
+    if !world.resource::<AppliedTwin>().initialized {
         return;
     }
-    applied.0 = active;
-    let Some(twin_id) = active else { return };
-    let Some(twin) = ws.twin(twin_id) else { return };
-    let Some(state) = WorkspaceState::load(&twin.root) else {
-        return;
-    };
-    if let Some(persp) = &state.perspective {
-        // Reconcile: only activates if a perspective with this id is
-        // registered in *this* app; unknown ids are dropped.
-        layout.activate_perspective_by_str(persp);
+    let rev = gate_value(world);
+    {
+        let last = world.resource::<WorkspaceStateLast>();
+        if last.seeded && last.rev == rev {
+            return;
+        }
     }
-}
-
-/// Persist the active Twin's state when it changes. Snapshot-gated like
-/// recents so unrelated `WorkspaceResource` / layout mutations don't
-/// touch the disk. Native-only (wasm has no filesystem).
-fn persist_workspace_state_when_changed(
-    ws: Res<WorkspaceResource>,
-    layout: Res<WorkbenchLayout>,
-    mut last: ResMut<WorkspaceStateLast>,
-) {
-    let Some(state) = current_state(&ws, &layout) else {
-        return;
-    };
-    let key = format!(
-        "{:016x}",
-        fnv1a64(
-            std::fs::canonicalize(&state.twin_root)
-                .unwrap_or_else(|_| state.twin_root.clone())
-                .to_string_lossy()
-                .as_bytes()
-        )
-    );
+    let state = build_state(world);
+    let key = format!("{:016x}", fnv1a64(
+        std::fs::canonicalize(&state.twin_root)
+            .unwrap_or_else(|_| state.twin_root.clone())
+            .to_string_lossy()
+            .as_bytes(),
+    ));
     let current = match serde_json::to_string_pretty(&state) {
         Ok(s) => s,
         Err(e) => {
@@ -222,7 +468,9 @@ fn persist_workspace_state_when_changed(
             return;
         }
     };
-    // Same Twin and identical content ⇒ nothing to do.
+    let mut last = world.resource_mut::<WorkspaceStateLast>();
+    last.rev = rev;
+    last.seeded = true;
     if last.key.as_deref() == Some(key.as_str()) && current == last.json {
         return;
     }
@@ -276,8 +524,23 @@ mod tests {
         let state = WorkspaceState {
             twin_root: root.clone(),
             perspective: Some("analyze".into()),
-            open_documents: vec![root.join("a.mo"), root.join("b.mo")],
-            active_document: Some(root.join("a.mo")),
+            documents: vec![
+                DocumentSnapshot {
+                    kind: "modelica".into(),
+                    origin: DocumentOrigin::writable_file(root.join("a.mo")),
+                    title: "a.mo".into(),
+                    source: "model A end A;".into(),
+                    dirty: true,
+                },
+                DocumentSnapshot {
+                    kind: "modelica".into(),
+                    origin: DocumentOrigin::untitled("Untitled-2"),
+                    title: "Untitled-2".into(),
+                    source: "model Scratch end Scratch;".into(),
+                    dirty: true,
+                },
+            ],
+            active_document: Some(0),
         };
         state.save().unwrap();
 
@@ -305,13 +568,10 @@ impl Plugin for WorkspaceStatePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorkspaceStateLast>()
             .init_resource::<AppliedTwin>()
+            .init_resource::<DocumentSessionRegistry>()
             .add_systems(
                 Update,
-                (
-                    apply_workspace_state_on_twin_change,
-                    persist_workspace_state_when_changed,
-                )
-                    .chain(),
+                (restore_workspace_state, persist_workspace_state).chain(),
             );
     }
 }

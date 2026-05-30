@@ -28,6 +28,7 @@ use crate::registry::UsdDocumentRegistry;
 pub mod browser_dispatch;
 pub mod browser_section;
 pub mod loaded_stages;
+pub mod session_codec;
 pub mod viewport;
 
 pub use browser_section::UsdSceneSection;
@@ -57,6 +58,13 @@ impl Plugin for UsdUiPlugin {
 
         app.add_observer(register_workspace_stage_on_doc_opened);
         app.add_observer(drop_workspace_stage_on_doc_closed);
+
+        // Document hot-exit: persist & restore open USD buffers via the
+        // per-Twin workspace-state, mirroring Modelica. Restore replays
+        // `UsdDocumentRegistry::allocate`, which fires `DocumentOpened`
+        // → the stage registration above. See `session_codec`.
+        use lunco_workbench::AppDocumentSessionExt;
+        app.register_document_session_codec(session_codec::UsdSessionCodec);
 
         // Click-to-open: `.usda` / `.usdc` rows in the Twin browser
         // become USD documents (async file read, then registry
