@@ -38,6 +38,23 @@ impl NetworkRole {
     }
 }
 
+/// Human-readable networking status for the status bar. Always present
+/// (default = single-player → the chip stays hidden). The optional
+/// `lunco-networking` adapter populates it; the workbench reads it with **no**
+/// lightyear / lunco-networking dependency — the same always-on-seam trick the
+/// substrate uses everywhere (D7).
+#[derive(Resource, Clone, Debug, Default)]
+pub struct NetStatus {
+    /// Host / Client / Standalone (`Standalone` ⇒ status chip hidden).
+    pub role: NetworkRole,
+    /// Endpoint label: the host's listen `:PORT`, or the client's `host:port`.
+    pub endpoint: String,
+    /// Host: count of connected clients. Client: `1` once connected, else `0`.
+    pub peers: u32,
+    /// Client: handshake completed (session assigned). Always `true` on a host.
+    pub connected: bool,
+}
+
 /// This peer's own session id. [`SessionId::LOCAL`] until a client handshake
 /// replaces it. Stamped as `origin` on every outgoing mutation so the host can
 /// attribute authority.

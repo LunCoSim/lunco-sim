@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use core::time::Duration;
 use lightyear::prelude::*;
 use lunco_api::{DeclareChannelExt, WireEnvelope};
-use lunco_core::{IsServer, NetworkRole, SessionId, WireChannel};
+use lunco_core::{IsServer, NetStatus, NetworkRole, SessionId, WireChannel};
 
 use crate::NetworkMode;
 
@@ -42,6 +42,12 @@ pub(crate) fn build_networking(app: &mut App, mode: &NetworkMode) {
             {
                 app.insert_resource(NetworkRole::Host);
                 app.insert_resource(IsServer(true));
+                app.insert_resource(NetStatus {
+                    role: NetworkRole::Host,
+                    endpoint: format!(":{port}"),
+                    peers: 0,
+                    connected: true,
+                });
                 app.add_plugins(lightyear::prelude::server::ServerPlugins { tick_duration: tick });
                 add_protocol(app);
                 crate::server::setup_host(app, *port);
@@ -55,6 +61,12 @@ pub(crate) fn build_networking(app: &mut App, mode: &NetworkMode) {
         NetworkMode::Connect { server, client_id } => {
             app.insert_resource(NetworkRole::Client);
             app.insert_resource(IsServer(false));
+            app.insert_resource(NetStatus {
+                role: NetworkRole::Client,
+                endpoint: server.to_string(),
+                peers: 0,
+                connected: false,
+            });
             app.add_plugins(lightyear::prelude::client::ClientPlugins { tick_duration: tick });
             add_protocol(app);
             crate::client::setup_client(app, *server, *client_id);

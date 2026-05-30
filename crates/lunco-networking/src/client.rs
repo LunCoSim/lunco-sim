@@ -10,7 +10,7 @@ use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use lunco_api::{WireInbox, WireOutbox};
-use lunco_core::{SessionId, WireChannel};
+use lunco_core::{LocalSession, NetStatus, SessionId, WireChannel};
 
 use crate::protocol::{CmdChannel, Frame, SnapChannel};
 use crate::shared::{deserialize_env, serialize_env, PRIVATE_KEY, PROTOCOL_ID};
@@ -53,7 +53,20 @@ pub(crate) fn setup_client(app: &mut App, server_addr: SocketAddr, client_id: u6
     app.add_systems(Startup, move |mut commands: Commands| {
         commands.trigger(Connect { entity: client });
     });
-    app.add_systems(Update, (client_send_outbox, client_recv_inbox));
+    app.add_systems(
+        Update,
+        (client_send_outbox, client_recv_inbox, update_client_netstatus),
+    );
+}
+
+/// Reflect the handshake (non-zero [`LocalSession`]) into [`NetStatus`] so the
+/// status bar flips from "connecting…" to "connected".
+fn update_client_netstatus(local: Res<LocalSession>, mut status: ResMut<NetStatus>) {
+    let connected = local.0 .0 != 0;
+    if status.connected != connected {
+        status.connected = connected;
+        status.peers = u32::from(connected);
+    }
 }
 
 /// Native: empty digest + the `dangerous-configuration` feature ⇒ no cert

@@ -9,7 +9,7 @@ use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use lunco_api::{HandshakeMsg, SpawnReplicationMsg, WireEnvelope, WireInbox, WireOutbox};
-use lunco_core::{GlobalEntityId, NetSpawn, SessionRegistry, SimTick, WireChannel};
+use lunco_core::{GlobalEntityId, NetSpawn, NetStatus, SessionRegistry, SimTick, WireChannel};
 
 use crate::protocol::{CmdChannel, Frame, SnapChannel};
 use crate::shared::{deserialize_env, peer_to_session, serialize_env, PRIVATE_KEY, PROTOCOL_ID};
@@ -51,7 +51,18 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     });
     app.add_observer(on_server_connected);
     app.add_observer(on_server_disconnected);
-    app.add_systems(Update, (host_send_outbox, host_recv_inbox));
+    app.add_systems(Update, (host_send_outbox, host_recv_inbox, update_host_netstatus));
+}
+
+/// Mirror the live connected-client count into [`NetStatus`] for the status bar.
+fn update_host_netstatus(
+    q: Query<(), (With<ClientOf>, With<Connected>)>,
+    mut status: ResMut<NetStatus>,
+) {
+    let n = q.iter().count() as u32;
+    if status.peers != n {
+        status.peers = n;
+    }
 }
 
 /// Serialize + send one envelope to `target` on the channel matching its

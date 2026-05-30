@@ -43,7 +43,7 @@ pub use markers::{GridAnchor, SoiMigrant};
 pub use invariants::BigSpaceInvariantsPlugin;
 pub use identity::Provenance;
 pub use session::{
-    authorize, IncomingSnapshots, LocalSession, NetReplicate, NetSpawn, NetworkRole,
+    authorize, IncomingSnapshots, LocalSession, NetReplicate, NetSpawn, NetStatus, NetworkRole,
     PendingReplicatedSpawns, ReplicatedSpawn, SessionRegistry, SkipContentStamp, SnapshotSample,
     WireApplyGuard,
 };
@@ -332,6 +332,7 @@ impl Plugin for LunCoCorePlugin {
            .init_resource::<session::NetworkRole>()
            .init_resource::<session::LocalSession>()
            .init_resource::<session::WireApplyGuard>()
+           .init_resource::<session::NetStatus>()
            .init_resource::<session::SessionRegistry>()
            .init_resource::<session::PendingReplicatedSpawns>()
            .init_resource::<session::IncomingSnapshots>()
