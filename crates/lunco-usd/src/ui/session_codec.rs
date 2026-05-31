@@ -70,6 +70,9 @@ impl DocumentSessionCodec for UsdSessionCodec {
                             dirty: doc.is_dirty(),
                             origin,
                             id: id.raw(),
+                            // USD docs aren't model-view dock tabs, so no
+                            // tab instance to remap (5a).
+                            tab_instance: 0,
                             // USD has no canvas-zoom equivalent to persist.
                             view_state: serde_json::Value::Null,
                         },

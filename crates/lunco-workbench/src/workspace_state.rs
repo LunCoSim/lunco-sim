@@ -64,6 +64,17 @@ pub struct DocumentSnapshot {
     /// freshly-restored documents. Defaults to 0 for older state files.
     #[serde(default)]
     pub id: u64,
+    /// This session's **dock tab instance id** for this doc's primary tab
+    /// — the value carried in the persisted dock tree as
+    /// `TabId::Instance { instance, .. }`. For Modelica this is the
+    /// `ModelTabs` tab id, which is a SEPARATE counter from
+    /// [`id`](Self::id) (`DocumentId.raw()`) — they only coincide when docs
+    /// and tabs open in lockstep, so the dock remap (5a) must key on this,
+    /// not on `id`. The codec fills it in `capture` and reports the live
+    /// replacement via [`DocumentSessionCodec::instance_remap`] on restore.
+    /// 0 when the domain has no dock tab (USD) or for older state files.
+    #[serde(default)]
+    pub tab_instance: u64,
     /// Opaque per-domain view state — canvas zoom/pan, etc. `null` when
     /// the domain has none. The Modelica codec serializes its per-tab
     /// `Viewport` here; USD leaves it null. Generic `Value` keeps
@@ -105,6 +116,32 @@ pub trait DocumentSessionCodec: Send + Sync + 'static {
     /// its camera even when the open itself was deduped). Default no-op for
     /// domains without per-doc view state (USD). Runs after `restore`.
     fn apply_view_state(&self, _world: &mut World, _live_id: u64, _snap: &DocumentSnapshot) {}
+    /// Report how this doc's **dock tab instance id** maps from the saved
+    /// session to this one: `(old, new)` where `old` is
+    /// [`DocumentSnapshot::tab_instance`] (the instance id in the persisted
+    /// dock tree) and `new` is the live instance id after [`restore`] opened
+    /// the tab. Used only by 5a (dock-arrangement restore) to remap
+    /// `TabId::Instance` ids in the deserialized dock onto the live tabs.
+    /// `live_id` is the freshly-restored `DocumentId.raw()`. Returns `None`
+    /// when the domain has no dock tab to remap (USD) — the default.
+    fn instance_remap(
+        &self,
+        _world: &mut World,
+        _snap: &DocumentSnapshot,
+        _live_id: u64,
+    ) -> Option<(u64, u64)> {
+        None
+    }
+    /// The workbench `PanelId` string of the dock tab kind this codec's
+    /// documents use (e.g. `"modelica_model_view"`). The dock remap (5a)
+    /// keys on `(kind, instance)` so tab ids are only rewritten within the
+    /// codec's own kind — different kinds share the `u64` instance space
+    /// (e.g. a model-view tab and a plot tab can both be instance 1), so a
+    /// flat instance→instance map would cross-rewrite them. `None` (default)
+    /// means [`instance_remap`](Self::instance_remap) is unused.
+    fn dock_tab_kind(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// Registry of per-domain [`DocumentSessionCodec`]s. Populated at plugin
@@ -282,20 +319,29 @@ struct AppliedTwin {
     /// Frames waited overall — a hard cap so restore still fires even if
     /// the doc set never stops churning.
     settle_budget: u32,
+    /// Set when the loaded state had documents but NONE resolved to a live
+    /// doc (restore produced nothing). Guards against the clobber footgun:
+    /// `initialized` is set before the restore body runs, so a restore that
+    /// silently no-ops would otherwise let the next persist overwrite the
+    /// saved session with an empty state. When this is set we skip persist
+    /// for the rest of the session, preserving the file untouched.
+    restore_failed: bool,
 }
 
-/// **Phase 5a (dock-arrangement restore) is GATED OFF.** Serializing and
-/// re-installing the full `egui_dock::DockState` on restore leaves the
-/// focused center tab (a model-view document tab) rendering a **blank**
-/// body — the document/active-tab binding desyncs from the deserialized
-/// tree, so the user sees an empty center on relaunch. Until that's
-/// fixed, we neither capture nor re-apply the dock; restore falls back to
-/// the known-good behavior (perspective preset + reopen docs via codecs,
-/// which open + focus their tabs correctly). The serde machinery
-/// (`dock_json`/`set_dock_from_json`, `PanelId` interning, the
-/// `DocumentId` remap) stays in place behind this flag for a future fix.
-/// Phase 5b (panel sizes) and 5c (canvas zoom) are independent and remain ON.
-const RESTORE_DOCK_ARRANGEMENT: bool = false;
+/// **Phase 5a (dock-arrangement restore).** Serialize the full
+/// `egui_dock::DockState` (split sizes + tab arrangement) and re-install it
+/// on restore. The earlier blank-center regression was caused by remapping
+/// `TabId::Instance` ids in the wrong key space: the dock instance is the
+/// domain's tab id (Modelica `ModelTabs` counter), NOT `DocumentId.raw()`,
+/// so the stale instance pointed at no live tab and rendered empty. Fixed
+/// by [`DocumentSessionCodec::instance_remap`] + [`DocumentSnapshot::tab_instance`]
+/// (old tab id → live tab id); `set_dock_from_json` now remaps mapped
+/// instances and KEEPS unmapped ones (stable-id tabs like the default plot).
+/// The codec's own `OpenTab` (fired before the dock is re-installed) opens +
+/// focuses the live tab, so the re-installed dock's matching instance
+/// renders. Restore still falls back gracefully (keeps the codec-opened
+/// layout) if the saved dock won't parse or nothing survives reconciliation.
+const RESTORE_DOCK_ARRANGEMENT: bool = true;
 
 /// Frames the open-doc set must hold steady before the startup restore
 /// runs — long enough for async auto-open to land, short enough to feel
@@ -502,9 +548,9 @@ fn restore_workspace_state(world: &mut World) {
     world.insert_resource(state.panel_sizes);
 
     if state.documents.is_empty() {
-        // No docs, but a saved dock layout (e.g. side panels arrangement)
-        // can still apply with an empty id-map. (Gated off — see
-        // RESTORE_DOCK_ARRANGEMENT.)
+        // No docs, but a saved dock layout (e.g. side-panel arrangement /
+        // split sizes) can still apply with an empty remap (no instance
+        // tabs to remap).
         if RESTORE_DOCK_ARRANGEMENT {
             if let Some(dock) = state.dock.clone() {
                 world
@@ -534,9 +580,14 @@ fn restore_workspace_state(world: &mut World) {
         }
     }
 
-    // old (saved) DocumentId.raw() → new (restored / already-open) id, so
-    // the persisted dock tree's `TabId::Instance` ids can be remapped.
-    let mut id_map: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+    // (dock kind, saved tab instance) → live instance (see
+    // `DocumentSnapshot::tab_instance` / `instance_remap` / `dock_tab_kind`),
+    // so the persisted dock tree's `TabId::Instance` ids are remapped onto
+    // the live tabs — scoped per kind so a model-view tab and a plot tab that
+    // share an instance number aren't cross-rewritten.
+    let mut id_map: std::collections::HashMap<(&'static str, u64), u64> =
+        std::collections::HashMap::new();
+    let mut any_live = false;
 
     world.resource_scope(|world, reg: Mut<DocumentSessionRegistry>| {
         for idx in order {
@@ -557,21 +608,39 @@ fn restore_workspace_state(world: &mut World) {
                 );
                 None
             };
-            // Map saved id → live id for the dock remap, and apply the
-            // per-doc view state (zoom/pan) regardless of whether the doc
-            // was freshly restored or matched an already-open one.
+            // Apply the per-doc view state (zoom/pan) and collect the dock
+            // tab-instance remap, regardless of whether the doc was freshly
+            // restored or matched an already-open one.
             if let (Some(c), Some(lid)) = (codec, live_id) {
-                id_map.insert(snap.id, lid);
+                any_live = true;
                 c.apply_view_state(world, lid, snap);
+                if let (Some(kind), Some((old_inst, new_inst))) =
+                    (c.dock_tab_kind(), c.instance_remap(world, snap, lid))
+                {
+                    id_map.insert((kind, old_inst), new_inst);
+                }
             }
         }
     });
 
-    // Apply the persisted dock tree last, overwriting the default-position
-    // tabs the codecs just opened with the saved arrangement + split sizes.
-    // (Gated off — see RESTORE_DOCK_ARRANGEMENT; `id_map` kept warm so the
-    // remap path stays exercised/compiled for the future fix.)
-    let _ = &id_map;
+    // Clobber guard: the saved state had docs but none resolved live →
+    // restore effectively failed. Flag it so `persist_workspace_state`
+    // skips writing (an empty state would overwrite the good session).
+    if !state.documents.is_empty() && !any_live {
+        world.resource_mut::<AppliedTwin>().restore_failed = true;
+        warn!(
+            "[WorkspaceState] restore loaded {} doc(s) but none became live; \
+             skipping persist this session to preserve the saved file",
+            state.documents.len()
+        );
+    }
+
+    // Apply the persisted dock tree last (5a), overwriting the
+    // default-position tabs the codecs just opened with the saved
+    // arrangement + split sizes. `id_map` remaps doc tab instances (old
+    // tab id → live tab id) so the re-installed dock's `TabId::Instance`
+    // entries point at the live tabs; the codecs' deferred `OpenTab` then
+    // focuses them. See RESTORE_DOCK_ARRANGEMENT.
     if RESTORE_DOCK_ARRANGEMENT {
         if let Some(dock) = state.dock.clone() {
             world
@@ -589,8 +658,17 @@ fn persist_workspace_state(world: &mut World) {
     // app's own auto-opened docs would overwrite the saved session
     // before `restore_workspace_state` gets to read it (the systems are
     // chained restore→persist, so by the settle frame this is true).
-    if !world.resource::<AppliedTwin>().initialized {
-        return;
+    {
+        let applied = world.resource::<AppliedTwin>();
+        if !applied.initialized {
+            return;
+        }
+        // A restore that loaded docs but resolved none live must NOT be
+        // followed by a persist — that would write an empty state over the
+        // still-good saved session. Leave the file as-is this session.
+        if applied.restore_failed {
+            return;
+        }
     }
     let rev = gate_value(world);
     {
@@ -677,6 +755,7 @@ mod tests {
                     source: "model A end A;".into(),
                     dirty: true,
                     id: 1,
+                    tab_instance: 0,
                     view_state: serde_json::Value::Null,
                 },
                 DocumentSnapshot {
@@ -686,6 +765,7 @@ mod tests {
                     source: "model Scratch end Scratch;".into(),
                     dirty: true,
                     id: 2,
+                    tab_instance: 0,
                     view_state: serde_json::json!({"zoom": 1.5}),
                 },
             ],

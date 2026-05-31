@@ -19,6 +19,18 @@ impl ModelTabs {
         self.next_id
     }
 
+    /// The tab id of this doc's primary (non-drilled) tab if open, else
+    /// any tab on the doc, else `None`. Read-only — used by session
+    /// hot-exit to record / re-resolve the dock tab instance for a doc
+    /// without mutating the table.
+    pub fn primary_tab_for(&self, doc: DocumentId) -> Option<TabId> {
+        self.tabs
+            .iter()
+            .find(|(_, s)| s.doc == doc && s.drilled_class.is_none())
+            .or_else(|| self.tabs.iter().find(|(_, s)| s.doc == doc))
+            .map(|(id, _)| *id)
+    }
+
     pub fn ensure_for(
         &mut self,
         doc: DocumentId,

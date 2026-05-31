@@ -997,7 +997,7 @@ impl WorkbenchLayout {
     pub(crate) fn set_dock_from_json(
         &mut self,
         value: serde_json::Value,
-        id_map: &HashMap<u64, u64>,
+        id_map: &HashMap<(&'static str, u64), u64>,
     ) -> bool {
         use std::collections::HashSet;
         let valid_singletons: HashSet<&'static str> =
@@ -1013,20 +1013,26 @@ impl WorkbenchLayout {
             }
         };
 
-        // One pass: remap instance ids, drop unregistered/unrestored tabs.
+        // One pass: drop unregistered-kind tabs, remap instance ids that the
+        // restore reported a mapping for, and KEEP instances with no mapping
+        // as-is. The "keep" case covers stable-instance tabs whose id is a
+        // compile-time constant the app re-creates with the same value on
+        // every launch (e.g. the default Graphs plot pinned to
+        // `DEFAULT_MODELICA_GRAPH`) — dropping those would lose the plot tab.
+        // A document tab whose doc failed to restore also lands here; it
+        // keeps its stale id and renders empty, which is strictly better than
+        // collapsing its leaf and losing the saved split sizes (and the
+        // codec's own `OpenTab` re-adds the live tab alongside it).
         new_dock.retain_tabs(|tab| match tab {
             TabId::Singleton(pid) => valid_singletons.contains(pid.0),
             TabId::Instance { kind, instance } => {
                 if !valid_kinds.contains(kind.0) {
                     return false;
                 }
-                match id_map.get(instance) {
-                    Some(&new_id) => {
-                        *instance = new_id;
-                        true
-                    }
-                    None => false,
+                if let Some(&new_id) = id_map.get(&(kind.0, *instance)) {
+                    *instance = new_id;
                 }
+                true
             }
         });
 

@@ -88,6 +88,23 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
             })
             .unwrap_or_default();
 
+        // Each doc's dock tab instance (ModelTabs id), so 5a can remap the
+        // persisted dock tree's `TabId::Instance` ids — this is a SEPARATE
+        // counter from `DocumentId.raw()`.
+        let tab_ids: HashMap<DocumentId, u64> = world
+            .get_resource::<ModelTabs>()
+            .map(|tabs| {
+                world
+                    .get_resource::<ModelicaDocumentRegistry>()
+                    .map(|reg| {
+                        reg.iter()
+                            .filter_map(|(id, _)| tabs.primary_tab_for(id).map(|t| (id, t)))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+
         let Some(reg) = world.get_resource::<ModelicaDocumentRegistry>() else {
             return Vec::new();
         };
@@ -105,6 +122,7 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
                         dirty: doc.is_dirty(),
                         origin,
                         id: id.raw(),
+                        tab_instance: tab_ids.get(&id).copied().unwrap_or(0),
                         view_state,
                     },
                 )
@@ -155,5 +173,28 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
             // projection snaps to it instead of fitting.
             cds.stash_pending_view(doc, view);
         }
+    }
+
+    fn instance_remap(
+        &self,
+        world: &mut World,
+        snap: &DocumentSnapshot,
+        live_id: u64,
+    ) -> Option<(u64, u64)> {
+        // Map the saved dock tab instance (old ModelTabs id) to the live one
+        // `restore` just opened for this doc. `restore` calls
+        // `ensure_for(doc, None)`, so the live primary tab exists; look it up
+        // read-only. No old id recorded (0, e.g. legacy file) → nothing to
+        // remap.
+        if snap.tab_instance == 0 {
+            return None;
+        }
+        let doc = DocumentId::new(live_id);
+        let new_inst = world.get_resource::<ModelTabs>()?.primary_tab_for(doc)?;
+        Some((snap.tab_instance, new_inst))
+    }
+
+    fn dock_tab_kind(&self) -> Option<&'static str> {
+        Some(MODEL_VIEW_KIND.0)
     }
 }
