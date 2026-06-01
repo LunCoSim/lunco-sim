@@ -1,12 +1,19 @@
 //! Wheel material for the general `ShaderMaterial`.
 //!
-//! Draws a wheel on a cylinder so its rotation is obvious: tire tread + bright
-//! rim + radial spokes + hubcap, with one marker spoke for direction.
+//! Draws a wheel on a cylinder so its rotation is obvious: tire tread on the
+//! rolling surface + bright rim + radial spokes + hubcap on the faces, with one
+//! marker spoke for direction.
 //!
-//! Bevy's `Cylinder` maps each circular cap to a UV disc centred at (0.5,0.5),
-//! radius 0.5 — so polar coords from UV give a mesh-fixed wheel face that spins
-//! with the wheel (the dominant side view on a rover). UV is mesh-fixed (unlike
-//! world_position), so the pattern rotates with the geometry.
+//! ## Cap vs. barrel — handled in object space
+//! A cylinder has two distinct surfaces that need different treatment:
+//!   * the two circular **faces** (caps) → the wheel "disc": spokes, rim, hub;
+//!   * the **barrel** (the rolling tread surface) → tire rubber + lugs.
+//! Bevy's cylinder UVs only map the *caps* to a centred disc; the barrel UV is
+//! (around, height), so a UV-polar pattern is correct on the faces but garbage
+//! on the tread. We therefore recover the **mesh-local normal** from the model
+//! matrix (Bevy cylinders run along local Y) and branch on it: |n.y|≈1 ⇒ a
+//! face (use the cap UV disc), else ⇒ the barrel (tread from the local angle).
+//! Object space is mesh-fixed, so everything spins with the wheel.
 //!
 //! ## Params
 //!   param0 = spoke_count   (default 6)
@@ -18,6 +25,7 @@
 //! Edit live (hot-reload) or tweak via `SetObjectProperty { property:"param0".. }`.
 
 #import bevy_pbr::forward_io::VertexOutput
+#import bevy_pbr::mesh_functions
 
 const TAU: f32 = 6.28318530718;
 
@@ -34,11 +42,6 @@ var<uniform> mat: ShaderParams;
 
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
-    // Polar coords from UV: r = 0 at hub centre, 1 at the rim (on a cap).
-    let c = input.uv - vec2<f32>(0.5, 0.5);
-    let r = length(c) * 2.0;
-    let ang = atan2(c.y, c.x) / TAU + 0.5;   // 0..1, mesh-fixed
-
     let spoke_count = select(mat.params.x, 6.0,  mat.params.x < 0.5);
     let lug_count   = select(mat.params.y, 24.0, mat.params.y < 0.5);
     let spoke_w     = select(mat.params.z, 0.35, mat.params.z < 0.0001);
@@ -46,24 +49,48 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
 
     let rubber = mat.color_b;                              // dark tire
     let metal  = mat.color_a;                              // bright spoke/rim
-    let tread  = mix(mat.color_b, mat.color_a, 0.35);      // lug highlight
+    let tread  = mix(mat.color_b, mat.color_a, 0.22);      // subtle lug highlight (reads as rubber)
+
+    // Mesh-local normal: normalize the model matrix' basis columns to recover
+    // the pure rotation R, then n_local = Rᵀ · n_world. A Bevy cylinder's axis
+    // is local Y, so |n_local.y|≈1 on the circular faces and ≈0 on the barrel.
+    let m = mesh_functions::get_world_from_local(input.instance_index);
+    let R = mat3x3<f32>(normalize(m[0].xyz), normalize(m[1].xyz), normalize(m[2].xyz));
+    let n_local = normalize(transpose(R) * normalize(input.world_normal));
 
     var color: vec4<f32>;
-    if (r > 1.0) {
-        color = rubber;                                    // barrel corners → tire
-    } else if (r > 0.80) {
-        // Tire tread: dark rubber with bright lugs around the circumference.
+    if (abs(n_local.y) > 0.5) {
+        // ---- Circular face: the wheel disc (UV-polar) ----
+        // Bevy maps each cap to a UV disc centred at (0.5,0.5), radius 0.5.
+        let c = input.uv - vec2<f32>(0.5, 0.5);
+        let r = length(c) * 2.0;                          // 0 at hub, 1 at rim
+        let ang = atan2(c.y, c.x) / TAU + 0.5;            // 0..1, mesh-fixed
+        if (r > 0.74) {
+            // Black tire ring — smooth sidewall (a tire's side has no tread).
+            // The rolling tread lives on the barrel branch below.
+            color = rubber;
+        } else if (r > 0.60) {
+            color = metal;                                // rim ring
+        } else if (r > 0.22) {
+            // Radial spokes over a dark hub disc. One spoke is darker gunmetal
+            // (not a colour) as a subtle rotation reference — no garish accent.
+            let gunmetal = mix(metal, vec4<f32>(0.0, 0.0, 0.0, 1.0), 0.55);
+            let s = fract(ang * spoke_count);
+            let is_spoke = s < spoke_w;
+            let is_marker = floor(ang * spoke_count) < marker;
+            let spoke_col = select(metal, gunmetal, is_marker);
+            color = select(mat.color_b, spoke_col, is_spoke);
+        } else {
+            // Hubcap: dark metal centre (no coloured blob).
+            color = mix(metal, vec4<f32>(0.0, 0.0, 0.0, 1.0), 0.45);
+        }
+    } else {
+        // ---- Barrel: the rolling tread surface ----
+        // Angle around the axle from the local normal (radial on the barrel),
+        // so lugs are mesh-fixed and stream past as the wheel rolls.
+        let ang = atan2(n_local.z, n_local.x) / TAU + 0.5;
         let lug = fract(ang * lug_count) < 0.5;
         color = select(rubber, tread, lug);
-    } else if (r > 0.70) {
-        color = metal;                                     // bright rim ring
-    } else if (r > 0.24) {
-        // Radial spokes over a dark hub disc.
-        let s = fract(ang * spoke_count);
-        color = select(mat.color_b, metal, s < spoke_w);
-        if (floor(ang * spoke_count) < marker) { color = mat.color_c; } // marker spoke
-    } else {
-        color = mat.color_c;                               // hubcap centre
     }
 
     // Mild normal-based shading so the form reads, without full PBR.

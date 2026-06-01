@@ -67,7 +67,8 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     var color = select(mat.color_a, mat.color_b, checker);
 
     if (marker > 0.5 && wi < marker) { color = mat.color_c; }  // opt-in lead wedge
-    if (v < 0.03 || v > 0.97) { color = mat.color_c; }         // small pole caps = spin axis
+    // (no pole caps — the checkerboard runs all the way to the poles; a coloured
+    //  cap read as a stray white dot on top.)
 
     // Mild normal-based shading so the form reads, without full PBR.
     let n = normalize(input.world_normal);

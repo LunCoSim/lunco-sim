@@ -444,6 +444,70 @@ mod tests {
         assert!(!is_binary_asset(""));
     }
 
+    /// Regression: a file referenced by multiple prims (directly, and through
+    /// a chain) must be fully composed for EVERY referencer — not composed for
+    /// the first and handed raw to the rest. This reproduces the bug where only
+    /// one rover instance's wheels received `wheel.usda`'s primvars (the rest
+    /// read `materialType = None` and rendered plain), nondeterministically by
+    /// HashMap iteration order.
+    #[test]
+    fn nested_reference_composes_for_every_instance() {
+        use std::collections::HashMap;
+
+        fn parse(text: &str) -> TextReader {
+            let mut parser = openusd::usda::parser::Parser::new(text);
+            TextReader::from_data(parser.parse().expect("parse"))
+        }
+
+        // Leaf component carrying a distinctive primvar.
+        let wheel = "#usda 1.0\n\
+            def Cylinder \"Wheel\"\n{\n    string primvars:materialType = \"shader\"\n}\n";
+        // References the leaf TWICE (two wheels).
+        let rover = "#usda 1.0\n(\n    defaultPrim = \"Rover\"\n)\n\
+            def Xform \"Rover\"\n{\n\
+            def Cylinder \"Wheel_FL\" (prepend references = @wheel.usda@</Wheel>)\n{\n}\n\
+            def Cylinder \"Wheel_FR\" (prepend references = @wheel.usda@</Wheel>)\n{\n}\n}\n";
+        // References the rover TWICE (two instances) → nested, multi-instance.
+        let scene = "#usda 1.0\n\
+            def Xform \"SceneRoot\"\n{\n\
+            def Xform \"Rover_A\" (prepend references = @rover.usda@</Rover>)\n{\n}\n\
+            def Xform \"Rover_B\" (prepend references = @rover.usda@</Rover>)\n{\n}\n}\n";
+
+        let base = PathBuf::from("/assets/scenes");
+        let mut files: HashMap<PathBuf, TextReader> = HashMap::new();
+        files.insert(normalize_path(&base.join("wheel.usda")), parse(wheel));
+        files.insert(normalize_path(&base.join("rover.usda")), parse(rover));
+
+        let mut fetcher = |p: &Path| -> Result<TextReader> {
+            files
+                .get(&normalize_path(p))
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing sublayer {:?}", p))
+        };
+
+        let scene_reader = parse(scene);
+        let composed =
+            UsdComposer::flatten_with_fetcher(&scene_reader, &base, &mut fetcher).expect("flatten");
+
+        // Every leaf wheel — both wheels of BOTH rovers — must have composed the
+        // primvar. Pre-fix, only one rover's wheels did.
+        for path in [
+            "/SceneRoot/Rover_A/Wheel_FL",
+            "/SceneRoot/Rover_A/Wheel_FR",
+            "/SceneRoot/Rover_B/Wheel_FL",
+            "/SceneRoot/Rover_B/Wheel_FR",
+        ] {
+            let sdf_path = sdf::Path::new(path).expect("sdf path");
+            let mat: Option<String> =
+                composed.prim_attribute_value(&sdf_path, "primvars:materialType");
+            assert_eq!(
+                mat.as_deref(),
+                Some("shader"),
+                "wheel {path} did not receive wheel.usda's composed primvar"
+            );
+        }
+    }
+
     #[test]
     fn resolve_uri_passes_through_schemes() {
         let asset_root = Path::new("/ws/assets");

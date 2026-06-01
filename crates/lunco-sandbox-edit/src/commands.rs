@@ -300,7 +300,162 @@ pub fn on_set_object_property(
     }
 }
 
-/// Plugin that registers SPAWN_ENTITY / MOVE_ENTITY / SET_OBJECT_PROPERTY
+/// Point the free-flight avatar camera at an entity (by API id), from a fixed
+/// side-on-and-above angle at `distance` metres. Lets API clients (MCP tools,
+/// automated screenshots) frame a subject — e.g. a wheel — without hand-driving
+/// the camera. `entity_id` is the API id from `ListEntities` (a `u64`), same as
+/// [`MoveEntity`]/[`SetObjectProperty`].
+#[Command(default)]
+pub struct FocusEntityById {
+    pub entity_id: u64,
+    /// Camera distance from the target, metres. `<= 0` → default 6.
+    pub distance: f32,
+}
+
+/// Observer that aims the avatar at the requested entity.
+pub fn on_focus_entity_by_id(
+    trigger: On<FocusEntityById>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    q_target: Query<&GlobalTransform>,
+    mut q_avatar: Query<(&mut Transform, &mut lunco_avatar::FreeFlightCamera), With<lunco_core::Avatar>>,
+) {
+    let cmd = trigger.event();
+    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
+    let Some(target) = registry.resolve(&global_id) else {
+        warn!("FOCUS_ENTITY: no api_id={} in registry", cmd.entity_id);
+        return;
+    };
+    let Ok(target_gt) = q_target.get(target) else {
+        warn!("FOCUS_ENTITY: target {:?} has no GlobalTransform", target);
+        return;
+    };
+    let Ok((mut tf, mut ff)) = q_avatar.single_mut() else {
+        warn!("FOCUS_ENTITY: no Avatar with FreeFlightCamera in the scene");
+        return;
+    };
+    // In big_space, `GlobalTransform` is expressed relative to the floating
+    // origin — which is the avatar — so this IS the avatar→target vector in
+    // render space (grid-aligned, unit scale).
+    // `GlobalTransform.translation()` is the target's absolute world position in
+    // this sandbox (the avatar's CellCoord is 0, so local == world).
+    let target_pos = target_gt.translation();
+    let dist = if cmd.distance > 0.1 { cmd.distance } else { 6.0 };
+    // Camera sits mostly to the SIDE (+X, the wheel axle direction → we see the
+    // spoke face) plus a little up and forward.
+    let offset = Vec3::new(1.0, 0.4, 0.25).normalize() * dist;
+    // Set the avatar to target + offset (absolute, like MoveEntity).
+    tf.translation = target_pos + offset;
+    // Camera forward = (camera → target) = -offset. The freeflight system rebuilds
+    // rotation from yaw/pitch every frame (YXZ euler), so we must set those.
+    let d = (-offset).normalize();
+    ff.yaw = (-d.x).atan2(-d.z);
+    ff.pitch = d.y.clamp(-1.0, 1.0).asin();
+    info!("FOCUS_ENTITY: framed api_id={} at {:.1} m", cmd.entity_id, dist);
+}
+
+/// Aim the free-flight avatar camera: place it at `eye` and look at `target`
+/// (both absolute world-space). The flexible primitive — the client computes the
+/// angle (e.g. approach a wheel from its outboard side) and distance. Sets the
+/// `FreeFlightCamera` yaw/pitch (the camera system rebuilds rotation from those
+/// each frame), so the aim sticks.
+#[Command(default)]
+pub struct SetCameraLookAt {
+    pub eye: Vec3,
+    pub target: Vec3,
+}
+
+/// Observer for [`SetCameraLookAt`].
+pub fn on_set_camera_look_at(
+    trigger: On<SetCameraLookAt>,
+    mut q_avatar: Query<(&mut Transform, &mut lunco_avatar::FreeFlightCamera), With<lunco_core::Avatar>>,
+) {
+    let cmd = trigger.event();
+    let Ok((mut tf, mut ff)) = q_avatar.single_mut() else {
+        warn!("SET_CAMERA: no Avatar with FreeFlightCamera in the scene");
+        return;
+    };
+    tf.translation = cmd.eye;
+    let look = cmd.target - cmd.eye;
+    if look.length() > 1e-4 {
+        let d = look.normalize();
+        ff.yaw = (-d.x).atan2(-d.z);
+        ff.pitch = d.y.clamp(-1.0, 1.0).asin();
+    }
+    info!(
+        "SET_CAMERA: eye=({:.2},{:.2},{:.2}) target=({:.2},{:.2},{:.2})",
+        cmd.eye.x, cmd.eye.y, cmd.eye.z, cmd.target.x, cmd.target.y, cmd.target.z
+    );
+}
+
+/// Force-reload shader assets from disk so live WGSL edits apply without
+/// restarting the app. Bypasses the file watcher (unreliable in this build):
+/// calls [`AssetServer::reload`], which re-runs the loader and triggers
+/// dependent material pipelines to rebuild. Empty `path` → reload the standard
+/// `assets/shaders/*` set; otherwise reload just that path (e.g.
+/// `"shaders/wheel.wgsl"`).
+#[Command(default)]
+pub struct ReloadShader {
+    pub path: String,
+}
+
+/// Observer for [`ReloadShader`].
+pub fn on_reload_shader(trigger: On<ReloadShader>, asset_server: Res<AssetServer>) {
+    let p = trigger.event().path.trim().to_string();
+    let paths: Vec<String> = if p.is_empty() {
+        ["shaders/wheel.wgsl", "shaders/balloon.wgsl", "shaders/solar_panel.wgsl"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        vec![p]
+    };
+    for path in paths {
+        // Owned `String` → `AssetPath<'static>`, so the queued reload doesn't
+        // borrow the (short-lived) trigger.
+        asset_server.reload(path.clone());
+        info!("RELOAD_SHADER: {}", path);
+    }
+}
+
+/// Replace a shader asset's WGSL **source in place** from text sent over the
+/// API, recompiling it live without touching disk or restarting. Overwrites the
+/// `Shader` asset currently at `path` (e.g. `"shaders/wheel.wgsl"`), so every
+/// material using it re-specializes its pipeline next frame. Compile/validation
+/// outcome surfaces in the render log (naga errors on a bad shader). Pairs with
+/// [`ReloadShader`] (disk) — this one is for pushing edits directly.
+#[Command(default)]
+pub struct SetShaderSource {
+    /// Asset path of the shader to overwrite, e.g. `"shaders/wheel.wgsl"`.
+    pub path: String,
+    /// New WGSL source text.
+    pub source: String,
+}
+
+/// Observer for [`SetShaderSource`].
+pub fn on_set_shader_source(
+    trigger: On<SetShaderSource>,
+    asset_server: Res<AssetServer>,
+    mut shaders: ResMut<Assets<bevy::shader::Shader>>,
+) {
+    let ev = trigger.event();
+    if ev.path.is_empty() || ev.source.is_empty() {
+        warn!("SET_SHADER_SOURCE: empty path or source");
+        return;
+    }
+    // `load` returns the handle the materials are already using (the asset is
+    // loaded), so overwriting that asset id propagates to them.
+    let handle = asset_server.load::<bevy::shader::Shader>(ev.path.clone());
+    let shader = bevy::shader::Shader::from_wgsl(ev.source.clone(), ev.path.clone());
+    shaders.insert(handle.id(), shader);
+    info!(
+        "SET_SHADER_SOURCE: recompiled {} from {} bytes of WGSL",
+        ev.path,
+        ev.source.len()
+    );
+}
+
+/// Plugin that registers SPAWN_ENTITY / MOVE_ENTITY / SET_OBJECT_PROPERTY /
+/// FOCUS_ENTITY_BY_ID / SET_CAMERA_LOOK_AT / RELOAD_SHADER / SET_SHADER_SOURCE
 /// command observers and the kinematic-pulse cleanup system.
 pub struct SpawnCommandPlugin;
 
@@ -309,9 +464,17 @@ impl Plugin for SpawnCommandPlugin {
         app.add_observer(on_spawn_entity_command);
         app.add_observer(on_move_entity_command);
         app.add_observer(on_set_object_property);
+        app.add_observer(on_focus_entity_by_id);
+        app.add_observer(on_set_camera_look_at);
+        app.add_observer(on_reload_shader);
+        app.add_observer(on_set_shader_source);
         // Register with AppTypeRegistry so the reflection-based HTTP executor
         // (`get_with_short_type_path`) can construct it from `{"command":"SetObjectProperty",...}`.
         app.register_type::<SetObjectProperty>();
+        app.register_type::<FocusEntityById>();
+        app.register_type::<SetCameraLookAt>();
+        app.register_type::<ReloadShader>();
+        app.register_type::<SetShaderSource>();
         app.add_systems(FixedPostUpdate, clear_kinematic_pulse_velocity);
     }
 }

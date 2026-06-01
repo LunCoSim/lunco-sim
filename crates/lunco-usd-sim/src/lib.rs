@@ -483,14 +483,16 @@ fn process_usd_sim_prims(
                 continue;
             }
 
-            // Same deferral for the USD-authored shader. A `materialType="shader"`
-            // wheel gets its `ShaderMaterial` from the material observer
-            // (On<Add, UsdVisualSynced>), which is queued asynchronously. If it
-            // hasn't landed yet, wait — otherwise the wheel split below would
-            // carry only the default `StandardMaterial` and the shader would be
-            // lost (manifests as plain colored wheels on some instances but not
-            // others, depending on observer/flush ordering). Retry next frame
-            // (don't mark UsdSimProcessed).
+            // Backstop for the USD-authored shader. `apply_usd_shader_materials`
+            // (see shader.rs) is ordered `before` this system, and Bevy's
+            // automatic sync-point insertion normally flushes its `ShaderMaterial`
+            // insert before we run — so in the default configuration this guard
+            // never fires. It exists to keep the wheel split correct even if that
+            // ordering guarantee is ever weakened (e.g. `auto_insert_apply_deferred`
+            // disabled): without the material we'd split the wheel carrying only
+            // the default `StandardMaterial` and lose the shader. If a wheel wants
+            // a shader but it hasn't landed, retry next frame (don't mark
+            // UsdSimProcessed).
             let wants_shader = matches!(
                 reader.prim_attribute_value::<String>(&sdf_path, "primvars:materialType").as_deref(),
                 Some("shader") | Some("usd_shader")
@@ -499,9 +501,7 @@ fn process_usd_sim_prims(
                 debug!("Wheel {} awaits ShaderMaterial from observer, deferring", prim_path.path);
                 continue;
             }
-            info!("Intercepted PhysxVehicleWheelAPI for {} [material: {}]",
-                prim_path.path,
-                if maybe_shader_mat.is_some() { "ShaderMaterial" } else { "StandardMaterial" });
+            info!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
 
             // Create physical ports for drive and steering
             let p_drive = commands.spawn((PhysicalPort::default(), Name::new("PhysicalPort_Drive"))).id();

@@ -22,7 +22,7 @@
 //! Adding a new consumer needs no special handling — the ordering guarantees it.
 
 use bevy::prelude::*;
-use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, UsdVisualSynced};
+use lunco_usd_bevy::{get_attribute_as_vec3, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
 use openusd::sdf::Path as SdfPath;
 use openusd::usda::TextReader;
 use lunco_materials::{apply_param, ShaderMaterial};
@@ -80,7 +80,7 @@ pub fn apply_usd_shader_materials(
         read_authored_params(reader, &sdf_path, &mut material);
         material.shader = asset_server.load(&shader_path);
 
-        info!("[shader] applied {} to {}", shader_path, prim_path.path);
+        debug!("[shader] applied {} to {}", shader_path, prim_path.path);
         let handle = materials.add(material);
         commands
             .entity(entity)
@@ -109,26 +109,4 @@ fn read_authored_params(reader: &TextReader, sdf_path: &SdfPath, m: &mut ShaderM
             apply_param(m, &key, &(v as f32).to_string());
         }
     }
-}
-
-/// Reads a 3-component vector attribute (`color3f` / `double3` / `float3` / array
-/// forms) from a USD prim. `None` if absent or unconvertible.
-fn get_attribute_as_vec3(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<Vec3> {
-    if let Some(v) = reader.prim_attribute_value::<[f32; 3]>(path, attr) {
-        return Some(Vec3::new(v[0], v[1], v[2]));
-    }
-    if let Some(v) = reader.prim_attribute_value::<[f64; 3]>(path, attr) {
-        return Some(Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32));
-    }
-    if let Some(v) = reader.prim_attribute_value::<Vec<f32>>(path, attr) {
-        if v.len() >= 3 {
-            return Some(Vec3::new(v[0], v[1], v[2]));
-        }
-    }
-    if let Some(v) = reader.prim_attribute_value::<Vec<f64>>(path, attr) {
-        if v.len() >= 3 {
-            return Some(Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32));
-        }
-    }
-    None
 }

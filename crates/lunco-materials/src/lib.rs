@@ -1,26 +1,20 @@
 //! LunCoSim Custom Materials
 //!
-//! Self-contained material plugins for USD-driven rendering.
-//! Each material is an independent Plugin that can be added
-//! to any Bevy App without cross-crate dependencies.
+//! Bevy render materials, kept **engine-agnostic**: nothing here is USD-specific.
 //!
-//! ## Architecture
-//!
-//! Each material is a self-contained unit:
-//! - `ExtendedMaterial<StandardMaterial, Extension>` definition
-//! - Shader registration via `load_internal_asset!`
-//! - `MaterialPlugin<T>::default()` registration
-//! - Post-sync system that reads `primvars:materialType` from USD and applies the material
-//!
-//! ## Adding New Materials
-//!
-//! 1. Define your `MyMaterialExtension` with `#[derive(AsBindGroup)]`
-//! 2. Implement `MaterialExtension` for your extension
-//! 3. Create `MyMaterialShaderPlugin` that registers your shader
-//! 4. Create `MyMaterialPlugin` that registers everything
-//! 5. Add `.add_plugins(MyMaterialPlugin)` to your binary
-//!
-//! No changes to `lunco-usd-bevy` needed.
+//! ## What lives here
+//! - [`ShaderMaterial`] — the *one* general custom-shader material. Any `.wgsl`,
+//!   chosen per-instance; new shaders are pure asset files, no Rust. Authoring it
+//!   from USD is **not** here — that binding is a deterministically-ordered system
+//!   in `lunco-usd-sim` (`apply_usd_shader_materials`), so material application can
+//!   never race a downstream consumer. Note the coupling: a binary that adds
+//!   `ShaderMaterialPlugin` but not `UsdSimPlugin` registers the render pipeline
+//!   but performs no USD authoring — a `materialType="shader"` prim would render
+//!   with its plain `StandardMaterial`.
+//! - [`BlueprintMaterial`] — an `ExtendedMaterial<StandardMaterial, _>` that still
+//!   uses an `On<Add, UsdVisualSynced>` observer to self-apply. That's safe only
+//!   because nothing consumes it synchronously; prefer the `ShaderMaterial` pattern
+//!   for anything that downstream systems read in the same frame.
 
 mod blueprint;
 mod shader_material;

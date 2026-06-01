@@ -743,7 +743,11 @@ fn get_attribute_as_string(reader: &TextReader, path: &SdfPath, attr: &str) -> O
     }
 }
 
-fn get_attribute_as_vec3(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<Vec3> {
+/// Reads a 3-component vector attribute (`color3f` / `double3` / `float3` and
+/// `Vec<f32>`/`Vec<f64>` array forms) from a USD prim. Shared helper — reused by
+/// downstream crates (e.g. `lunco-usd-sim`'s shader authoring) so there is one
+/// canonical vec3 reader. `None` if absent or unconvertible.
+pub fn get_attribute_as_vec3(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<Vec3> {
     // Handle fixed-size array types first (Vec3f, Vec3d)
     if let Some(v) = reader.prim_attribute_value::<[f32; 3]>(path, attr) {
         return Some(Vec3::new(v[0], v[1], v[2]));
