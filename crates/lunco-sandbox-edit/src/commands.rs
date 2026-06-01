@@ -317,11 +317,6 @@ pub fn interpolate_proxies(
     // render instant is decoupled from when packets happen to arrive.
     mut playback: Local<f64>,
     mut clock_init: Local<bool>,
-    // NET_DIAG-only: count how often the buffer starves (we extrapolate) vs.
-    // brackets two samples (true interpolation), to confirm the starvation cause.
-    mut diag_sec: Local<f32>,
-    mut diag_bracket: Local<u32>,
-    mut diag_extrap: Local<u32>,
 ) {
     // Newest host generation time across ALL bodies drives the shared clock: the
     // busiest body anchors it (a resting body stops emitting, so keying the clock
@@ -381,7 +376,6 @@ pub fn interpolate_proxies(
         // scale-free).
         let (out_world, out_rot) = match (a, b) {
             (Some(a), Some(b)) => {
-                *diag_bracket += 1;
                 let span = (b.gen_t - a.gen_t).max(1e-5);
                 let alpha = ((render_t - a.gen_t) / span).clamp(0.0, 1.0);
                 (
@@ -398,7 +392,6 @@ pub fn interpolate_proxies(
             // hold. Capped at INTERP_MAX_EXTRAPOLATION so a stalled body doesn't
             // drift away.
             (Some(a), None) => {
-                *diag_extrap += 1;
                 let dt = (render_t - a.gen_t).clamp(0.0, INTERP_MAX_EXTRAPOLATION);
                 let mut delta = a.lv.as_dvec3() * dt;
                 // Hard distance clamp: a body whose authoritative physics is
@@ -429,23 +422,6 @@ pub fn interpolate_proxies(
         // that's turning). Position already sticks because we write `Position` above.
         if let Some(mut r) = rot {
             r.0 = out_rot.as_dquat();
-        }
-    }
-
-    // NET_DIAG: report how often we had to extrapolate (buffer starved) vs.
-    // interpolate between two real samples. High starvation % confirms the
-    // 20 Hz cadence / INTERP_DELAY is too tight and was causing the snaps.
-    *diag_sec += time.delta_secs();
-    if *diag_sec >= 1.0 {
-        *diag_sec = 0.0;
-        let (b, e) = (*diag_bracket, *diag_extrap);
-        *diag_bracket = 0;
-        *diag_extrap = 0;
-        if (b + e) > 0 && std::env::var("NET_DIAG").is_ok() {
-            info!(
-                "[net-diag interp] bracketed={b} extrapolated/starved={e} ({}% starved)",
-                100 * e / (b + e)
-            );
         }
     }
 }
@@ -861,100 +837,6 @@ pub fn clear_kinematic_pulse_velocity(
     }
 }
 
-// ── Networking diagnostics (opt-in via `NET_DIAG` env) ─────────────────────────
-
-/// Last post-physics pose of each replicated body, for the jump diagnostic.
-#[derive(Resource, Default)]
-pub struct NetDiagLastPose(HashMap<u64, (Vec3, Quat)>);
-
-/// A single-frame jump larger than this (metres) is logged as a blow-up.
-const NET_DIAG_JUMP_THRESH: f32 = 0.3;
-
-/// DIAGNOSTIC (opt-in: set `NET_DIAG=1`). Pins down the rover-vs-rover collision
-/// explosion (symptom #3) and quantifies rest jitter (#1/#2). Runs in
-/// `FixedPostUpdate` AFTER avian writeback, so it sees the **raw physics result**
-/// for each replicated body *before* `interpolate_proxies` (Update) re-pins the
-/// proxies — that's the only place the physics-induced displacement is visible.
-///
-/// For any `NetReplicate` body that moved more than [`NET_DIAG_JUMP_THRESH`] in a
-/// single fixed step it logs: role (host/client), gid, ownership, **RigidBody
-/// kind**, and **speed**. That triple is the discriminator:
-/// - proxy jump with `rb=Kinematic, |v|≈0`  → an interpolation/teleport conflict
-///   (a Kinematic body repositioned into a Dynamic one → explosive contact);
-/// - proxy jump with `rb=Kinematic, |v|≫0`  → physics gave a kinematic body
-///   velocity (it shouldn't have one);
-/// - owned jump with `rb=Dynamic,  |v|≫0`   → the predicted own-rover itself is
-///   being launched by the contact solver.
-///
-/// Also emits a once-per-second per-body rest-jitter line (max single-step delta
-/// seen that second) so the sub-centimetre #1/#2 jitter is quantified, not just
-/// the metre-scale blow-ups.
-pub fn net_diag_pose_jumps(
-    role: Res<lunco_core::NetworkRole>,
-    time: Res<Time>,
-    mut last: ResMut<NetDiagLastPose>,
-    mut sec: Local<f32>,
-    mut max_step: Local<HashMap<u64, f32>>,
-    mut max_rot: Local<HashMap<u64, f32>>,
-    q: Query<
-        (
-            &lunco_core::GlobalEntityId,
-            &Transform,
-            &RigidBody,
-            Option<&LinearVelocity>,
-            Has<lunco_core::OwnedLocally>,
-        ),
-        With<lunco_core::NetReplicate>,
-    >,
-) {
-    for (gid, tf, rb, lin, owned) in q.iter() {
-        let g = gid.get();
-        let now = tf.translation;
-        let now_rot = tf.rotation;
-        if let Some((prev, prev_rot)) = last.0.get(&g) {
-            let d = (now - *prev).length();
-            // Single-step rotation delta (degrees) — catches the "two systems
-            // fighting" orientation jitter that a translation-only metric misses.
-            let mut dq = now_rot * prev_rot.inverse();
-            if dq.w < 0.0 {
-                dq = -dq;
-            }
-            let dded = dq.to_axis_angle().1.abs().to_degrees();
-            let m = max_step.entry(g).or_insert(0.0);
-            if d > *m {
-                *m = d;
-            }
-            let mr = max_rot.entry(g).or_insert(0.0);
-            if dded > *mr {
-                *mr = dded;
-            }
-            if d > NET_DIAG_JUMP_THRESH {
-                let v = lin.map(|l| l.0.length()).unwrap_or(0.0);
-                warn!(
-                    "[net-diag {:?}] gid={:#x} STEP-JUMP {:.3}m owned={} rb={:?} |v|={:.2}",
-                    *role, g, d, owned, rb, v
-                );
-            }
-        }
-        last.0.insert(g, (now, now_rot));
-    }
-    *sec += time.delta_secs();
-    if *sec >= 1.0 {
-        *sec = 0.0;
-        for (g, m) in max_step.iter() {
-            let mr = max_rot.get(g).copied().unwrap_or(0.0);
-            if *m > 1e-4 || mr > 0.05 {
-                info!(
-                    "[net-diag {:?}] gid={:#x} max single-step Δ this sec = {:.4}m  Δrot = {:.3}°",
-                    *role, g, m, mr
-                );
-            }
-        }
-        max_step.clear();
-        max_rot.clear();
-    }
-}
-
 /// Plugin that registers SPAWN_ENTITY / MOVE_ENTITY command observers
 /// and the kinematic-pulse cleanup system.
 pub struct SpawnCommandPlugin;
@@ -976,10 +858,11 @@ impl Plugin for SpawnCommandPlugin {
         // - `correct_owned_prediction` AFTER `force_kinematic_proxies` so the
         //   smooth correction it writes to the owned (Dynamic) body isn't
         //   clobbered the same frame.
-        // Kept in `Update` (the snapshot ingest reads what `drain_wire_inbox`
-        // produces, which rides the lightyear ferry — also Update). Splitting the
-        // ingest/interpolate across schedules is the right end-state but only once
-        // the lightyear IO itself ticks in FixedUpdate.
+        // Kept in `Update`: the snapshot ingest reads what `drain_wire_inbox`
+        // produces, which rides the lightyear ferry (also Update). Smoothness under
+        // a render-throttled sender does NOT come from rescheduling these — it comes
+        // from `gather_snapshot` generating tick-stamped snapshots at a steady 20 Hz
+        // in `FixedUpdate` and `interpolate_proxies` playing them back in tick-space.
         app.add_systems(
             Update,
             (
@@ -1004,19 +887,6 @@ impl Plugin for SpawnCommandPlugin {
                 .chain()
                 .after(PhysicsSystems::Writeback),
         );
-        // Opt-in collision/jitter diagnostic (set `NET_DIAG=1`). Samples the raw
-        // post-physics pose so it can tell a teleport-into-dynamic blow-up from a
-        // contact-solver launch. Ordered after reconcile so its writes are
-        // included in the sampled pose.
-        if std::env::var("NET_DIAG").is_ok() {
-            app.init_resource::<NetDiagLastPose>();
-            app.add_systems(
-                FixedPostUpdate,
-                net_diag_pose_jumps
-                    .after(PhysicsSystems::Writeback)
-                    .after(record_predicted_state),
-            );
-        }
     }
 }
 

@@ -289,9 +289,6 @@ fn capture_command<C: Event + Reflect + TypePath>(
         *av = serde_json::json!(Entity::PLACEHOLDER.to_bits());
     }
 
-    if std::env::var("NET_DIAG").is_ok() {
-        info!("[net-diag capture] {type_name} → {channel:?} (queued to outbox)");
-    }
     let mut mutation = Mutation::local(WireCommand { type_name, data });
     mutation.origin = local.0;
     outbox.0.push((channel, WireEnvelope::Command(mutation)));
@@ -390,13 +387,6 @@ pub fn drain_wire_inbox(
                 // Host attributes to the connection-derived session (don't trust
                 // a client-claimed origin); a client trusts the host.
                 let origin = if role.is_host() { sender } else { m.origin };
-                if std::env::var("NET_DIAG").is_ok() {
-                    info!(
-                        "[net-diag drain] {} received cmd {} from {origin}",
-                        if role.is_host() { "HOST" } else { "client" },
-                        m.payload.type_name
-                    );
-                }
                 commands.trigger(WireCommandEvent {
                     type_name: m.payload.type_name,
                     params: m.payload.data,
