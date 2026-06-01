@@ -176,21 +176,6 @@ impl AppDocumentSessionExt for App {
     }
 }
 
-/// Live sizes of the sandbox-style egui side panels (lunica keeps its
-/// sizes inside the dock tree instead). egui owns these widths in its
-/// own memory, which it does **not** persist across launches — so we
-/// mirror them here and feed them back as the panels' `default_width` /
-/// `default_height` on a fresh launch. `None` ⇒ use the computed default.
-#[derive(Resource, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Debug)]
-pub struct PanelSizes {
-    /// Left side-browser width in points.
-    pub side_width: Option<f32>,
-    /// Right inspector width in points.
-    pub right_width: Option<f32>,
-    /// Bottom dock height in points.
-    pub bottom_height: Option<f32>,
-}
-
 /// Per-Twin volatile UI state. One of these per project, stored at
 /// [`workspace_state_path`].
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
@@ -214,9 +199,6 @@ pub struct WorkspaceState {
     /// perspective preset + codec-opened tabs.
     #[serde(default)]
     pub dock: Option<serde_json::Value>,
-    /// Sandbox egui side-panel sizes (lunica stores sizes in `dock`).
-    #[serde(default)]
-    pub panel_sizes: PanelSizes,
 }
 
 impl WorkspaceState {
@@ -428,19 +410,10 @@ fn gate_value(world: &mut World) -> u64 {
     } else {
         0
     };
-    let sizes = {
-        let p = world.resource::<PanelSizes>();
-        let pack = |o: Option<f32>| o.map(|f| f.to_bits() as u64).unwrap_or(0);
-        pack(p.side_width)
-            .wrapping_mul(0x1000_0001)
-            .wrapping_add(pack(p.right_width).wrapping_mul(0x1_0001))
-            .wrapping_add(pack(p.bottom_height))
-    };
     docs.wrapping_add(persp)
         .wrapping_add(twin)
         .wrapping_add(active)
         .wrapping_add(dock)
-        .wrapping_add(sizes)
 }
 
 /// Build the full hot-exit state from live resources.
@@ -479,16 +452,14 @@ fn build_state(world: &mut World) -> WorkspaceState {
     let dock = if RESTORE_DOCK_ARRANGEMENT {
         world.resource::<WorkbenchLayout>().dock_json()
     } else {
-        None // 5a gated off — see RESTORE_DOCK_ARRANGEMENT
+        None // see RESTORE_DOCK_ARRANGEMENT
     };
-    let panel_sizes = *world.resource::<PanelSizes>();
     WorkspaceState {
         twin_root,
         perspective,
         documents,
         active_document,
         dock,
-        panel_sizes,
     }
 }
 
@@ -545,8 +516,6 @@ fn restore_workspace_state(world: &mut World) {
 
     // Restore the sandbox panel sizes regardless of whether any docs are
     // saved (a no-doc 3D session still has resized panels to restore).
-    world.insert_resource(state.panel_sizes);
-
     if state.documents.is_empty() {
         // No docs, but a saved dock layout (e.g. side-panel arrangement /
         // split sizes) can still apply with an empty remap (no instance
@@ -771,11 +740,6 @@ mod tests {
             ],
             active_document: Some(0),
             dock: None,
-            panel_sizes: PanelSizes {
-                side_width: Some(220.0),
-                right_width: None,
-                bottom_height: Some(150.0),
-            },
         };
         state.save().unwrap();
 
@@ -803,7 +767,6 @@ impl Plugin for WorkspaceStatePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorkspaceStateLast>()
             .init_resource::<AppliedTwin>()
-            .init_resource::<PanelSizes>()
             .init_resource::<DocumentSessionRegistry>()
             .add_systems(
                 Update,
