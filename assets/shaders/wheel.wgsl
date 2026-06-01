@@ -45,7 +45,6 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let spoke_count = select(mat.params.x, 6.0,  mat.params.x < 0.5);
     let lug_count   = select(mat.params.y, 24.0, mat.params.y < 0.5);
     let spoke_w     = select(mat.params.z, 0.35, mat.params.z < 0.0001);
-    let marker      = max(mat.params.w, 1.0);
 
     let rubber = mat.color_b;                              // dark tire
     let metal  = mat.color_a;                              // bright spoke/rim
@@ -72,17 +71,16 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         } else if (r > 0.60) {
             color = metal;                                // rim ring
         } else if (r > 0.22) {
-            // Radial spokes over a dark hub disc. One spoke is darker gunmetal
-            // (not a colour) as a subtle rotation reference — no garish accent.
-            let gunmetal = mix(metal, vec4<f32>(0.0, 0.0, 0.0, 1.0), 0.55);
+            // Radial spokes — all bright metal (white). Rotation stays legible
+            // from the tread lugs streaming past on the barrel, so we no longer
+            // darken one spoke into a gray marker (which read as a stray gray
+            // patch on an otherwise white wheel).
             let s = fract(ang * spoke_count);
             let is_spoke = s < spoke_w;
-            let is_marker = floor(ang * spoke_count) < marker;
-            let spoke_col = select(metal, gunmetal, is_marker);
-            color = select(mat.color_b, spoke_col, is_spoke);
+            color = select(mat.color_b, metal, is_spoke);
         } else {
-            // Hubcap: dark metal centre (no coloured blob).
-            color = mix(metal, vec4<f32>(0.0, 0.0, 0.0, 1.0), 0.45);
+            // Hubcap: bright metal centre (kept white, not a gray disc).
+            color = metal;
         }
     } else {
         // ---- Barrel: the rolling tread surface ----
@@ -93,9 +91,11 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         color = select(rubber, tread, lug);
     }
 
-    // Mild normal-based shading so the form reads, without full PBR.
+    // Mild normal-based shading so the form reads, without full PBR. High floor
+    // so the bright metal rim/spokes read white (not gray) across the wheel; the
+    // lit top reaches the full base colour.
     let n = normalize(input.world_normal);
     let light_dir = normalize(vec3<f32>(0.4, 1.0, 0.6));
-    let shade = 0.55 + 0.45 * clamp(dot(n, light_dir), 0.0, 1.0);
+    let shade = 0.72 + 0.28 * clamp(dot(n, light_dir), 0.0, 1.0);
     return vec4<f32>(color.rgb * shade, color.a);
 }

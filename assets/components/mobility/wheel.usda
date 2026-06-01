@@ -28,7 +28,7 @@ def Cylinder "Wheel" (
     # physics/visual wheel split (lunco_usd_sim::setup_*_wheel carry it through).
     string primvars:materialType = "shader"
     string primvars:shaderPath = "shaders/wheel.wgsl"
-    color3f primvars:colorA = (0.80, 0.80, 0.85)   # spoke / rim (metal)
+    color3f primvars:colorA = (0.98, 0.98, 1.00)   # spoke / rim (bright metal → white on the lit side)
     color3f primvars:colorB = (0.10, 0.10, 0.11)   # tire (rubber)
     color3f primvars:colorC = (0.90, 0.20, 0.20)   # marker spoke + hub
     float primvars:param0 = 6.0    # spoke count
