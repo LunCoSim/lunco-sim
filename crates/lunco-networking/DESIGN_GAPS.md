@@ -45,6 +45,21 @@ re-bases its floating origin independently** around its own camera. A raw
   gets *easier and cheaper* than the README's generic scheme (quantize a known
   small range; send the cell as ints).
 
+**PARTIALLY DONE (2026-05-31):** the snapshot wire now carries the **absolute f64
+`pos`** (from avian's f64 `Position`) **and the `CellCoord`** (i64/axis) alongside
+the legacy f32 `t` (`SnapshotEntry`/`SnapshotSample`). `gather_snapshot` reads
+`Option<&Position>` + `Option<&CellCoord>`; the client interpolates `pos` in **f64**
+and seats avian `Position` precisely (`interpolate_proxies`), so lunar/orbital-scale
+bodies no longer collapse to f32 on the wire. **Why "partial":** the live app runs a
+single huge cell (`Grid::new(2000.0, 1.0e10)` ⇒ `maximum_distance_from_origin ≈ 1e10`,
+bodies never recenter ⇒ `CellCoord` is always `[0,0,0]`), so the cell is *carried but
+not yet consumed*. The TODO that remains is the **per-client cell→origin rebase**: once
+recentering is enabled (lower `switching_threshold`), the apply must decompose the
+absolute `pos` into the client's own `(CellCoord, Transform)` via
+`lunco_core::coords::world_to_grid_local` instead of assuming cell 0 (the
+`interpolate_proxies` comment marks the exact spot). The rebase math itself is already
+proven by the `proto-tests` `rebase_*` / `world_roundtrip_*` suite.
+
 ### B. Stable identity must be **deterministic from USD**, not random
 The README's plan is "replicate state, reconstruct topology from USD" — both sides
 load the same scene and **don't** re-spawn replicated entities. But `GlobalEntityId`
@@ -131,6 +146,20 @@ contact island at that tick. Static terrain is fine; other dynamic bodies are no
   toward the server state** (position/velocity blend, "projective velocity
   blending") rather than full physics rollback. Accept small corrections on
   rover-rover contact. Revisit true rollback only if corrections feel bad.
+
+**DONE (2026-05-31) — and it went further than a blend.** Continuous
+smooth-correction toward the latest snapshot was tried first and **rubber-banded
+unavoidably** (it pulls the present toward a *stale* pose — the snapshot answers an
+older input than the client has since applied). The shipped model is **input-replay
+reconciliation** (Source/Overwatch): the owned body records its post-step pose each
+tick keyed by the input `seq`; on a snapshot that acks a `seq`, it compares
+*prediction-at-that-seq* vs *authority-at-that-seq* (**apples-to-apples**, so the
+latency lead cancels) and, **only on genuine divergence**, eases the error into the
+present + seats velocity to authority. The pure decision lives in
+`lunco_core::reconcile_decision` (5 unit tests, no wire). Re-stepping our **f64 avian**
+for the owned body (a 1-body island on a client — others are kinematic-pinned) reopened
+**D2**; full-world rollback stays ruled out by the global solver. See
+`PREDICTION_RECONCILIATION.md` + `DECISIONS.md` D2.
 
 ### G. Input redundancy + server-side jitter buffer
 Inputs go on an **unreliable** channel (loss happens). A dropped input = a hitch.

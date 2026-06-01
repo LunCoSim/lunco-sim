@@ -82,6 +82,15 @@ same prims (log/inspect); both report the same sim-tick. No motion yet.
 ---
 
 ## Phase 2 — M3 op-log + connect/identity/spawn/possess (stages 1–4 of the MVP scenario)
+**STATUS 2026-05-31: ✅ largely DONE + committed.** lightyear WebTransport host+client
+wired in-app (`server.rs`/`client.rs`); `SessionId` allocation + `SessionRegistry`;
+handshake (session+tick); `SpawnEntity` over wire + replicate with **G2 fixed**
+(`SkipContentStamp`→Authoritative id, no collision); over-wire `PossessVessel` with
+**server ownership validation** (`authorize()`, G4) + `broadcast_ownership`; `ControllerLink`
+ownership replicated; **G5 disconnect cleanup** (`release_session`). Verified headless by
+`net_smoke` (possess→drive→snapshot + exclusivity). Remaining: **G3** server-provisioned
+session avatars (avatars are still client-local), and the live two-browser eyeball test.
+
 Lowest new code — the envelope and dispatch already exist. This phase delivers
 **connect → per-user identity → create a rover → possess it**, reliably, with **no
 motion yet** (that's Ph3). Full rationale + the code audit behind these items:
@@ -120,6 +129,17 @@ a possess targeting someone else's rover is rejected. Rovers do **not** move yet
 ---
 
 ## Phase 3 — M2: state replication (the core; absorbs gaps A & C)
+**STATUS 2026-05-31: 🟡 PARTIAL.** 20 Hz snapshot replication is built (`gather_snapshot`
+host → `ingest_snapshots`/`interpolate_proxies` client), with velocity on the wire and a
+client interpolation buffer (`INTERP_DELAY`, folded so a body at rest holds its pose).
+**Gap A advanced (2026-05-31):** the snapshot now carries the **absolute f64 `pos`**
+(avian `Position`) + the **`CellCoord`**, and the client interpolates `pos` in f64 + seats
+avian `Position` precisely — so lunar/orbital-scale bodies don't collapse to f32. **TODO
+still open:** the per-client **cell→origin rebase** (cells are `[0,0,0]` today under
+`switching_threshold=1e10`; the apply assumes cell 0 — see DESIGN_GAPS §A) and gap C
+(predict-eligibility by cosim-computability — today the owner predicts any owned dynamic
+body; a cosim-driven owned body should interpolate).
+
 - Replicate **`(CellCoord, Transform)`** + drive state — *not* bare Transform.
 - **Per-client floating-origin rebasing** at render (gap A): map server cell+offset
   into each client's own origin. Quantize the bounded within-cell offset.
@@ -137,6 +157,21 @@ no prediction) — Ph4 makes your own rover feel responsive.
 ---
 
 ## Phase 4 — M4: input + prediction + reconciliation (stage 5 of the MVP scenario)
+**STATUS 2026-05-31: ✅ CORE DONE.** Per-tick seq+tick-stamped input
+(`compute_vessel_input` in Update for edge-safe latches → `emit_vessel_input` in
+FixedUpdate), buffered in `OwnedInputLog`; host records last-applied seq
+(`AppliedInputSeq`) and echoes it in every snapshot; **predict-own** (`OwnedLocally` +
+`RigidBody::Dynamic`, others kinematic-pinned); **input-replay reconciliation**
+(`reconcile_owned_prediction` + the pure `lunco_core::reconcile_decision`, 5 unit tests) —
+compare-at-acked-seq so the latency lead cancels (no rubber-band), correct only genuine
+divergence + seat velocity, smoothing blend on the rare correction. **Drive-side ownership
+validation (G4) enforced** (`authorize()` — net_smoke confirms cross-rover drive is
+rejected). **Remaining for "feels right under loss/latency":** client-ahead **tick-sync** +
+**server jitter buffer** + redundant input on a dedicated unreliable channel (inputs ride
+the reliable command bus today — correct, not yet loss-optimized); **G1** input-isolation
+gating to `LocalAvatar` (moot while a client has one avatar, needed for 2-avatar-in-one-world);
+**G5** is done (`release_session`); and end-to-end GUI verification under RAM headroom.
+
 - **Input isolation (G1) — load-bearing for "drive only MY rover":**
   `translate_intents_to_commands` reads **process-global** `ButtonInput` today and fans
   WASD to **every** `(VesselIntentState, ControllerLink)` controller — two possessing

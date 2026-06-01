@@ -10,6 +10,30 @@ Reviewed 2026-05-30 against the code (two read-only audits) + all `crates/lunco-
 
 ---
 
+## ⏩ STATUS UPDATE 2026-05-31 — much of this is now BUILT (read this first)
+
+This doc was written 2026-05-30 and **predates** the transport/ownership/prediction
+commits. Reconciled against the committed code, the picture today is:
+
+| Stage | 2026-05-30 status | **2026-05-31 actual** |
+|---|---|---|
+| 1 Connect (transport) | spike only | ✅ **DONE** — lightyear WebTransport host+client wired in-app (`server.rs`/`client.rs`), `SessionId` allocation, `SessionRegistry`, late-join replay (`ad638410`) |
+| 2 Per-user identity | substrate only | ✅ session table + handshake (session+tick); **G3 server-owned avatar still client-local** |
+| 3 Create a rover | local only | ✅ **DONE** — `SpawnEntity` over wire + replicate (`apply_replicated_spawns`); **G2 collision FIXED** (`SkipContentStamp` → Authoritative id) |
+| 4 Possess | local only | ✅ **DONE** — over-wire `PossessVessel` + server ownership validation + `broadcast_ownership` (`f9976ed5`); **G4 drive-auth enforced** via `authorize()` |
+| 5 Individually drive + predict | all missing | ✅ **CORE DONE** — 20 Hz snapshot replication, input-replay **prediction + reconciliation** (`717f8d66` + reconcile extraction); polish (tick-sync/jitter) remains |
+| G5 disconnect cleanup | unspecified | ✅ **DONE** — `on_server_disconnected` → `release_session` frees owned entities |
+| gap A big_space coords | missing | 🟡 **PARTIAL** — f64 `pos` + `cell` now on the wire; per-client cell→origin rebase still TODO (cells are 0 today). See DESIGN_GAPS §A. |
+
+**So the laggy-but-correct loop (stages 1–4 + drive) is essentially built and
+committed.** What still genuinely blocks the *full* experience: end-to-end
+verification under real RAM headroom, tick-sync + server jitter buffer for
+feels-right-under-latency, G3 server-provisioned avatars for true N-user, and
+cosim-value replication (Ph5). The per-row "Missing" notes below are the original
+2026-05-30 analysis — treat the table above as the current truth.
+
+---
+
 ## The scenario decomposes into 5 stages
 
 | # | Stage | Mechanism | Phase that delivers it |

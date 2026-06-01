@@ -56,6 +56,12 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     });
     app.add_observer(on_server_connected);
     app.add_observer(on_server_disconnected);
+    // NOTE: these MUST stay in `Update` (the lightyear message ferry). Moving them
+    // to `FixedUpdate` silently breaks the RELIABLE `CmdChannel` (client→host
+    // PossessVessel/SpawnEntity never arrive) — lightyear's reliable flush is
+    // schedule-sensitive. The render-throttle-when-unfocused issue (snapshots
+    // emitted at render rate) needs a lightyear-tick-in-FixedUpdate fix instead,
+    // NOT a naive reschedule of the ferry.
     app.add_systems(
         Update,
         (
@@ -165,11 +171,18 @@ fn on_server_connected(
             gid: gid.get(),
             t: tf.translation.to_array(),
             r: tf.rotation.to_array(),
-            // Baseline is a one-shot placement at connect; velocity zero is fine —
-            // the next 20 Hz snapshot carries real velocity within ~50 ms.
+            // Baseline is a one-shot placement at connect; velocity zero + the f32
+            // transform as the absolute `pos` + cell 0 is fine — the next 20 Hz
+            // snapshot carries real velocity + precise f64 `pos` within ~50 ms.
             lv: [0.0; 3],
             av: [0.0; 3],
             last_input_seq: 0,
+            pos: [
+                tf.translation.x as f64,
+                tf.translation.y as f64,
+                tf.translation.z as f64,
+            ],
+            cell: [0; 3],
         })
         .collect();
     if !entries.is_empty() {

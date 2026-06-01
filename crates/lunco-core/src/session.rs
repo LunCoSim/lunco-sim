@@ -269,6 +269,14 @@ pub struct SnapshotSample {
     /// The highest input `seq` the host has applied for this gid (0 = none). The
     /// owning client uses it to drop acked inputs and replay the rest.
     pub last_input_seq: u32,
+    /// Authoritative **absolute** position from avian f64 `Position` (gap A). `t`
+    /// above is the f32 render-space offset; `pos` is the precise physics truth
+    /// the proxy apply seats `Position` from, so lunar/orbital-scale bodies don't
+    /// lose precision to f32. Falls back to `t` when the host had no `Position`.
+    pub pos: [f64; 3],
+    /// big_space `CellCoord` (i64/axis). `[0,0,0]` in the current single-cell
+    /// config; carried so replication stays correct once recentering is enabled.
+    pub cell: [i64; 3],
 }
 
 /// Inbound transform samples awaiting application on a client.

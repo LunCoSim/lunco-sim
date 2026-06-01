@@ -53,6 +53,8 @@ pub(crate) fn setup_client(app: &mut App, server_addr: SocketAddr, client_id: u6
     app.add_systems(Startup, move |mut commands: Commands| {
         commands.trigger(Connect { entity: client });
     });
+    // MUST stay in `Update` — the lightyear ferry. FixedUpdate breaks the reliable
+    // CmdChannel (see server.rs note).
     app.add_systems(
         Update,
         (client_send_outbox, client_recv_inbox, update_client_netstatus),

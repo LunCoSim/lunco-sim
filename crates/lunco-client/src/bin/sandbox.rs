@@ -104,7 +104,14 @@ fn main() {
     // seconds after the window loses focus. Two side-by-side windows means one
     // is always unfocused — so we keep it Continuous while networked.
     let networked = args.iter().any(|a| a == "--host" || a == "--connect");
-    let present_mode = if no_vsync {
+    // Present mode. Networked side-by-side windows: one is ALWAYS unfocused, and an
+    // unfocused window under `Fifo` (vsync) can block on present when the compositor
+    // stops servicing it — which stalls the WHOLE update loop (sim + netcode + the
+    // 20 Hz snapshot send), not just rendering. That's the "fps collapses when not
+    // in focus → clunky sync" symptom. `Continuous` update mode alone doesn't help
+    // because the stall is in `present`, not the redraw request. Use non-blocking
+    // `Mailbox` while networked so the background window keeps ticking at full rate.
+    let present_mode = if no_vsync || networked {
         bevy::window::PresentMode::Mailbox
     } else {
         bevy::window::PresentMode::Fifo

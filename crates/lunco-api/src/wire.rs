@@ -20,7 +20,8 @@
 //!   HZ; clients apply them in `drain_wire_inbox`. [`broadcast_new_spawns`]
 //!   replicates runtime spawns with the host-allocated id.
 
-use avian3d::prelude::{AngularVelocity, LinearVelocity};
+use avian3d::prelude::{AngularVelocity, LinearVelocity, Position};
+use big_space::prelude::CellCoord;
 use bevy::ecs::reflect::ReflectEvent;
 use bevy::prelude::*;
 use bevy::reflect::serde::{TypedReflectDeserializer, TypedReflectSerializer};
@@ -66,6 +67,18 @@ pub struct SnapshotEntry {
     /// reconcile ack for the owning client.
     #[serde(default)]
     pub last_input_seq: u32,
+    /// Authoritative **absolute** position as avian f64 `Position` (gap A). The
+    /// f32 `t` above is the render-space (cell-relative) offset and loses
+    /// precision far from origin; `pos` is the precise physics truth used to seat
+    /// replicated proxies at lunar/orbital scale. `#[serde(default)]` → an old
+    /// peer omits it and the apply path falls back to `t`.
+    #[serde(default)]
+    pub pos: [f64; 3],
+    /// big_space `CellCoord` of the body (i64 per axis). `[0,0,0]` in the current
+    /// single-cell config (`switching_threshold = 1e10`, bodies never recenter);
+    /// carried so replication stays correct once recentering is enabled.
+    #[serde(default)]
+    pub cell: [i64; 3],
 }
 
 /// A batch of changed transforms at a given sim tick (M2 state replication).
@@ -276,6 +289,9 @@ fn capture_command<C: Event + Reflect + TypePath>(
         *av = serde_json::json!(Entity::PLACEHOLDER.to_bits());
     }
 
+    if std::env::var("NET_DIAG").is_ok() {
+        info!("[net-diag capture] {type_name} → {channel:?} (queued to outbox)");
+    }
     let mut mutation = Mutation::local(WireCommand { type_name, data });
     mutation.origin = local.0;
     outbox.0.push((channel, WireEnvelope::Command(mutation)));
@@ -296,7 +312,6 @@ pub fn apply_wire_command(
     session_registry: Res<SessionRegistry>,
     role: Res<NetworkRole>,
     mut dedup: ResMut<WireDedup>,
-    mut applied: ResMut<AppliedInputSeq>,
 ) {
     let ev = trigger.event();
     if !dedup.check_and_insert(ev.op_id) {
@@ -312,16 +327,11 @@ pub fn apply_wire_command(
             );
             return;
         }
-        // P3 reconcile ack: record the highest input seq applied per gid, to stamp
-        // into snapshots so the owning client can drop acked inputs + replay the rest.
-        if matches!(ev.type_name.as_str(), "DriveRover" | "BrakeRover") {
-            if let (Some(gid), Some(seq)) =
-                (target_gid, ev.params.get("seq").and_then(|v| v.as_u64()))
-            {
-                let slot = applied.0.entry(gid).or_insert(0);
-                *slot = (*slot).max(seq as u32);
-            }
-        }
+        // NOTE: the reconcile ack (highest applied input seq per gid) is no longer
+        // recorded here. It now lives in the single `record_drive_input` /
+        // `record_brake_input` observers (lunco-controller), which fire when the
+        // command below is triggered — so the ack is recorded identically whether a
+        // drive arrives over the wire, from the API, or from the local keyboard.
     }
 
     let mut params = ev.params.clone();
@@ -380,6 +390,13 @@ pub fn drain_wire_inbox(
                 // Host attributes to the connection-derived session (don't trust
                 // a client-claimed origin); a client trusts the host.
                 let origin = if role.is_host() { sender } else { m.origin };
+                if std::env::var("NET_DIAG").is_ok() {
+                    info!(
+                        "[net-diag drain] {} received cmd {} from {origin}",
+                        if role.is_host() { "HOST" } else { "client" },
+                        m.payload.type_name
+                    );
+                }
                 commands.trigger(WireCommandEvent {
                     type_name: m.payload.type_name,
                     params: m.payload.data,
@@ -398,6 +415,8 @@ pub fn drain_wire_inbox(
                         lv: e.lv,
                         av: e.av,
                         last_input_seq: e.last_input_seq,
+                        pos: e.pos,
+                        cell: e.cell,
                     });
                 }
                 tick.0 = snap.tick;
@@ -453,6 +472,8 @@ pub fn gather_snapshot(
             &Transform,
             Option<&LinearVelocity>,
             Option<&AngularVelocity>,
+            Option<&Position>,
+            Option<&CellCoord>,
         ),
         With<NetReplicate>,
     >,
@@ -469,7 +490,7 @@ pub fn gather_snapshot(
     *acc = 0.0;
 
     let mut entries = Vec::new();
-    for (gid, tf, lin, ang) in q.iter() {
+    for (gid, tf, lin, ang, position, cell) in q.iter() {
         let key = gid.get();
         let t = tf.translation.to_array();
         let r = tf.rotation.to_array();
@@ -486,6 +507,12 @@ pub fn gather_snapshot(
         last_sent.insert(key, (t, r));
         let lv = lin.map(|v| v.0.as_vec3().to_array()).unwrap_or([0.0; 3]);
         let av = ang.map(|v| v.0.as_vec3().to_array()).unwrap_or([0.0; 3]);
+        // Absolute position: prefer the precise avian f64 `Position`; fall back to
+        // the f32 `Transform` (as f64) for bodies without a physics Position.
+        let pos = position
+            .map(|p| [p.0.x, p.0.y, p.0.z])
+            .unwrap_or([t[0] as f64, t[1] as f64, t[2] as f64]);
+        let cell = cell.map(|c| [c.x as i64, c.y as i64, c.z as i64]).unwrap_or([0; 3]);
         entries.push(SnapshotEntry {
             gid: key,
             t,
@@ -493,6 +520,8 @@ pub fn gather_snapshot(
             lv,
             av,
             last_input_seq: applied.0.get(&key).copied().unwrap_or(0),
+            pos,
+            cell,
         });
     }
     if entries.is_empty() {
@@ -545,6 +574,9 @@ impl Plugin for WirePlugin {
             .init_resource::<WireChannelRegistry>()
             .init_resource::<AppliedInputSeq>()
             .add_observer(apply_wire_command)
+            // Kept in `Update` alongside the lightyear ferry (see server.rs note:
+            // FixedUpdate breaks the reliable CmdChannel). The proper render-throttle
+            // fix is ticking lightyear's IO in FixedUpdate, not rescheduling these.
             .add_systems(Update, (drain_wire_inbox, broadcast_new_spawns, gather_snapshot));
     }
 }

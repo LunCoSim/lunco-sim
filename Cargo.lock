@@ -6950,6 +6950,7 @@ dependencies = [
  "avian3d 0.6.1",
  "axum",
  "bevy",
+ "big_space",
  "image",
  "lunco-core",
  "serde",

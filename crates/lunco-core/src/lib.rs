@@ -33,6 +33,10 @@ pub mod commands;
 /// single `authorize` gate. The seam the optional `lunco-networking` layer
 /// drives; trivially inert in single-player.
 pub mod session;
+/// M4 — pure predict-own reconciliation decision (input-replay, D2). The
+/// dependency-free geometry the spawn-domain `reconcile_owned_prediction` system
+/// applies; unit-tested without the avian/render build.
+pub mod reconcile;
 
 pub use architecture::*;
 pub use mocks::*;
@@ -42,6 +46,7 @@ pub use commands::{Ack, Mutation, OpId, Reject, SessionId, WireChannel};
 pub use markers::{GridAnchor, SoiMigrant};
 pub use invariants::BigSpaceInvariantsPlugin;
 pub use identity::Provenance;
+pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use session::{
     authorize, AppliedInputSeq, IncomingSnapshots, InputFrame, LocalSession, NetReplicate, NetSpawn,
     NetStatus, NetworkRole, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns, PossessionPolicy,

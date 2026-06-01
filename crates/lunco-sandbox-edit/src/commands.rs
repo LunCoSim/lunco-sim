@@ -11,7 +11,7 @@
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use avian3d::prelude::{AngularVelocity, LinearVelocity, PhysicsSystems, RigidBody};
-use avian3d::physics_transform::Position;
+use avian3d::physics_transform::{Position, Rotation};
 use big_space::prelude::Grid;
 use lunco_core::Command;
 use std::collections::{HashMap, VecDeque};
@@ -192,8 +192,14 @@ pub fn force_kinematic_proxies(
 #[derive(Clone, Copy)]
 struct InterpSample {
     t_recv: f32,
+    /// f32 render-space pose (cell-relative). Used by `reconcile_owned_prediction`
+    /// to compare against the f32 predicted-Transform history (apples-to-apples).
     pos: Vec3,
     rot: Quat,
+    /// Authoritative **absolute** position (avian f64 `Position`, gap A) — the
+    /// remote-proxy interpolation seats `Position` from this so lunar/orbital-scale
+    /// bodies keep f64 precision instead of collapsing to the f32 `pos`.
+    pos_world: DVec3,
     /// Authoritative velocities from the snapshot (owned-rover prediction uses
     /// these; remote interpolation ignores them).
     lv: Vec3,
@@ -211,11 +217,27 @@ struct InterpSample {
 pub struct InterpBuffers(HashMap<u64, VecDeque<InterpSample>>);
 
 /// Render this far behind real time so two samples normally bracket the render
-/// instant to interpolate between (≈2–3 snapshots at the 20 Hz default). Higher
-/// = smoother under jitter but more visible lag on the bodies you watch.
-const INTERP_DELAY: f32 = 0.12;
+/// instant to interpolate between (≈3–4 snapshots at the 20 Hz default). Higher
+/// = smoother under jitter (less buffer starvation → less reliance on
+/// extrapolation) but more visible lag on the bodies you watch. 0.18 keeps a
+/// fast-moving proxy reliably bracketed by two real samples so it lerps instead
+/// of extrapolate-then-snapping (~1 m jumps under the old 0.12).
+const INTERP_DELAY: f32 = 0.18;
 /// Cap per-body history (seconds of buffer at 20 Hz; only the recent tail is read).
 const INTERP_MAX_SAMPLES: usize = 16;
+/// When the buffer starves (`render_t` past the newest sample — common at 20 Hz
+/// with network jitter), extrapolate along the newest sample's velocity for up to
+/// this long instead of freezing the body and snapping to the next snapshot. This
+/// is what turns a fast mover's ~0.6 m teleport-stutter into smooth motion. Capped
+/// so a body whose updates genuinely stopped doesn't fly off.
+const INTERP_MAX_EXTRAPOLATION: f32 = 0.25;
+/// Hard cap on how far (metres) extrapolation may move a starved proxy, so a
+/// diverging/runaway authoritative body can't be flung across the scene. Set
+/// GENEROUS: a real rover at ~30 m/s over the 0.25 s time cap legitimately needs
+/// ~7 m, so a tight cap (the old 0.5) clipped normal motion and CAUSED ~1 m
+/// snap-jumps. This only backstops a catastrophic body (e.g. the diverging
+/// cosim balloon), which is a separate bug.
+const INTERP_MAX_EXTRAP_DIST: f64 = 8.0;
 
 /// Client: file each incoming snapshot into its per-entity interpolation buffer,
 /// stamped with local receipt time. Replaces the old hard-set so motion is
@@ -237,6 +259,7 @@ pub fn ingest_snapshots(
             t_recv: now,
             pos: Vec3::from(s.t),
             rot: Quat::from_array(s.r),
+            pos_world: DVec3::from_array(s.pos),
             lv: Vec3::from(s.lv),
             av: Vec3::from(s.av),
             last_input_seq: s.last_input_seq,
@@ -268,7 +291,12 @@ pub fn interpolate_proxies(
     // (`correct_owned_prediction`), so it must NOT be dragged back to the
     // `INTERP_DELAY`-old interpolated pose here.
     q_owned: Query<(), With<lunco_core::OwnedLocally>>,
-    mut q: Query<(&mut Transform, Option<&mut Position>)>,
+    mut q: Query<(&mut Transform, Option<&mut Position>, Option<&mut Rotation>)>,
+    // NET_DIAG-only: count how often the buffer starves (we extrapolate) vs.
+    // brackets two samples (true interpolation), to confirm the starvation cause.
+    mut diag_sec: Local<f32>,
+    mut diag_bracket: Local<u32>,
+    mut diag_extrap: Local<u32>,
 ) {
     let render_t = time.elapsed_secs() - INTERP_DELAY;
     for (gid, buf) in buffers.0.iter() {
@@ -281,7 +309,7 @@ pub fn interpolate_proxies(
         if q_owned.contains(e) {
             continue; // predict-own: my vessel is driven locally, not interpolated
         }
-        let Ok((mut tf, pos)) = q.get_mut(e) else {
+        let Ok((mut tf, pos, rot)) = q.get_mut(e) else {
             continue;
         };
 
@@ -298,23 +326,76 @@ pub fn interpolate_proxies(
             }
         }
 
-        let (out_pos, out_rot) = match (a, b) {
+        // Interpolate the absolute position in f64 (gap A) so far-from-origin
+        // bodies don't lose precision; rotation lerps in f32 (orientation is
+        // scale-free).
+        let (out_world, out_rot) = match (a, b) {
             (Some(a), Some(b)) => {
+                *diag_bracket += 1;
                 let span = (b.t_recv - a.t_recv).max(1e-5);
                 let alpha = ((render_t - a.t_recv) / span).clamp(0.0, 1.0);
-                (a.pos.lerp(b.pos, alpha), a.rot.slerp(b.rot, alpha))
+                (
+                    a.pos_world.lerp(b.pos_world, alpha as f64),
+                    a.rot.slerp(b.rot, alpha),
+                )
             }
-            // render_t before the oldest sample → snap to oldest; past the
-            // newest (starved / at rest) → hold newest.
-            (None, Some(b)) => (b.pos, b.rot),
-            (Some(a), None) => (a.pos, a.rot),
+            // render_t before the oldest sample → snap to oldest.
+            (None, Some(b)) => (b.pos_world, b.rot),
+            // Starved (render_t past the newest sample). Holding the pose here is
+            // what made a moving body freeze then snap ~0.6 m when the next
+            // snapshot landed. Extrapolate along the sample's velocity instead, so
+            // it keeps gliding; a body genuinely at rest has lv≈0 → this is still a
+            // hold. Capped at INTERP_MAX_EXTRAPOLATION so a stalled body doesn't
+            // drift away.
+            (Some(a), None) => {
+                *diag_extrap += 1;
+                let dt = (render_t - a.t_recv).clamp(0.0, INTERP_MAX_EXTRAPOLATION) as f64;
+                let mut delta = a.lv.as_dvec3() * dt;
+                // Hard distance clamp: a body whose authoritative physics is
+                // diverging (or whose velocity sample is stale) must not be flung
+                // metres away by extrapolation. Bound the glide so the worst case
+                // is a small offset, not a teleport.
+                let len = delta.length();
+                if len > INTERP_MAX_EXTRAP_DIST {
+                    delta *= INTERP_MAX_EXTRAP_DIST / len;
+                }
+                (a.pos_world + delta, a.rot)
+            }
             (None, None) => continue,
         };
 
-        tf.translation = out_pos;
+        // Seat the precise f64 physics `Position`; the f32 render `Transform` is
+        // its projection (cell-relative — identical to absolute while cells stay
+        // 0; once recentering is enabled this must subtract the body's cell origin).
+        tf.translation = out_world.as_vec3();
         tf.rotation = out_rot;
         if let Some(mut p) = pos {
-            p.0 = DVec3::new(out_pos.x as f64, out_pos.y as f64, out_pos.z as f64);
+            p.0 = out_world;
+        }
+        // Also write avian's f64 `Rotation` (the physics truth), not just the f32
+        // `Transform.rotation`. Without this, avian's writeback re-derives Transform
+        // from the un-updated `Rotation` next frame and CLOBBERS the interpolated
+        // orientation → the proxy's rotation fights/jitters (very visible on a body
+        // that's turning). Position already sticks because we write `Position` above.
+        if let Some(mut r) = rot {
+            r.0 = out_rot.as_dquat();
+        }
+    }
+
+    // NET_DIAG: report how often we had to extrapolate (buffer starved) vs.
+    // interpolate between two real samples. High starvation % confirms the
+    // 20 Hz cadence / INTERP_DELAY is too tight and was causing the snaps.
+    *diag_sec += time.delta_secs();
+    if *diag_sec >= 1.0 {
+        *diag_sec = 0.0;
+        let (b, e) = (*diag_bracket, *diag_extrap);
+        *diag_bracket = 0;
+        *diag_extrap = 0;
+        if (b + e) > 0 && std::env::var("NET_DIAG").is_ok() {
+            info!(
+                "[net-diag interp] bracketed={b} extrapolated/starved={e} ({}% starved)",
+                100 * e / (b + e)
+            );
         }
     }
 }
@@ -367,26 +448,13 @@ pub fn maintain_owned_locally(
     }
 }
 
-/// Below this positional error (m) between our prediction-at-the-acked-seq and the
-/// authoritative state, the prediction is "correct" and we do **nothing**. This is
-/// the whole point of input-replay reconciliation: we compare at the SAME input
-/// `seq` (not against the latency-delayed pose), so the legitimate latency lead
-/// never triggers a pull — no rubber-band. Only a genuine divergence past this
-/// tolerance (numerical drift accumulation, or a misprediction) is reconciled.
-const RECONCILE_EPS_POS: f32 = 0.25;
-/// Angular tolerance (rad, ≈1.7°) for the same "prediction correct" test.
-const RECONCILE_EPS_ROT: f32 = 0.03;
-/// Beyond this positional divergence (m) the prediction has grossly desynced
-/// (teleport / respawn / long stall) — hard-snap fully to authority.
-const RECONCILE_SNAP_POS: f32 = 6.0;
 /// Cap on the predicted-state history ring (~2 s at 60 Hz). Only the recent tail
 /// (the unacked window) is ever compared.
 const MAX_PREDICTED_HISTORY: usize = 128;
-/// P5 render-smoothing: fraction of a misprediction's POSE error applied per ack;
-/// the rest eases in over the next few snapshots, so the (rare) correction slides
-/// rather than jumps. Velocity is seated fully regardless, so the body stops
-/// re-diverging and the residual converges in ~3–4 acks.
-const RECONCILE_CORRECT_BLEND: f32 = 0.3;
+// The reconciliation thresholds (eps_pos / eps_rot / snap_pos / blend) and the
+// decision geometry live in `lunco_core::reconcile_decision` /
+// `ReconcileParams::default()` — the single source of truth shared by this live
+// system and the `reconcile` unit tests (no avian/render build needed to test).
 
 /// One recorded predicted state of the owned rover after the fixed step that
 /// applied input `seq`. Compared against the authoritative snapshot acking that
@@ -473,6 +541,7 @@ pub fn reconcile_owned_prediction(
     mut q: Query<(
         &mut Transform,
         Option<&mut Position>,
+        Option<&mut Rotation>,
         Option<&mut LinearVelocity>,
         Option<&mut AngularVelocity>,
     )>,
@@ -511,42 +580,44 @@ pub fn reconcile_owned_prediction(
         let Some(hs) = predicted else {
             continue; // no recorded prediction for that seq — can't compare
         };
-        let auth_pos = sample.pos;
-        let auth_rot = sample.rot;
-        let err_pos = auth_pos - hs.pos;
-        let dist = err_pos.length();
-        let mut err_rot = auth_rot * hs.rot.inverse();
-        if err_rot.w < 0.0 {
-            err_rot = -err_rot; // shortest arc
-        }
-        let angle = err_rot.to_axis_angle().1.abs();
 
-        // COMMON CASE: prediction matched authority → leave the rover alone.
-        if dist < RECONCILE_EPS_POS && angle < RECONCILE_EPS_ROT {
-            continue;
-        }
-
-        // MISPREDICTION: correct the present by the divergence + seat velocity.
+        // Resolve the body so we can read its present pose (the correction is
+        // expressed relative to "now") and mutate it.
         let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(g)) else {
             continue;
         };
-        let Ok((mut tf, pos, lin, ang)) = q.get_mut(e) else {
+        let Ok((mut tf, pos, rot, lin, ang)) = q.get_mut(e) else {
             continue;
         };
-        let (new_pos, new_rot) = if dist > RECONCILE_SNAP_POS {
-            (auth_pos, auth_rot) // gross desync — hard-snap fully to authority
-        } else {
-            // P5: ease the correction in over a few acks (velocity seated fully
-            // below) so a rare misprediction slides rather than jumps.
-            (
-                tf.translation + err_pos * RECONCILE_CORRECT_BLEND,
-                (Quat::IDENTITY.slerp(err_rot, RECONCILE_CORRECT_BLEND) * tf.rotation).normalize(),
-            )
+
+        // Compare prediction-at-the-acked-seq vs authority-at-that-seq — the
+        // apples-to-apples test that cancels the latency lead, so a correct
+        // prediction is left alone (no rubber-band). Only divergence corrects.
+        let (new_pos, new_rot) = match lunco_core::reconcile_decision(
+            hs.pos,
+            hs.rot,
+            tf.translation,
+            tf.rotation,
+            sample.pos,
+            sample.rot,
+            lunco_core::ReconcileParams::default(),
+        ) {
+            // COMMON CASE: prediction matched authority → leave the body alone.
+            lunco_core::Reconciliation::InSync => continue,
+            lunco_core::Reconciliation::Correct { pos, rot } => (pos, rot),
+            lunco_core::Reconciliation::Snap { pos, rot } => (pos, rot),
         };
         tf.translation = new_pos;
         tf.rotation = new_rot;
         if let Some(mut p) = pos {
             p.0 = DVec3::new(new_pos.x as f64, new_pos.y as f64, new_pos.z as f64);
+        }
+        // Write avian's f64 `Rotation` too — otherwise avian's writeback re-derives
+        // `Transform.rotation` from the stale f64 `Rotation` next frame and the
+        // correction is lost, so the owned rover's orientation fights the physics
+        // every frame (the "two systems fighting" jitter when steering).
+        if let Some(mut r) = rot {
+            r.0 = new_rot.as_dquat();
         }
         // Seat velocity to authoritative so the body stops re-diverging next tick.
         let auth_lv = sample.lv;
@@ -740,6 +811,100 @@ pub fn clear_kinematic_pulse_velocity(
     }
 }
 
+// ── Networking diagnostics (opt-in via `NET_DIAG` env) ─────────────────────────
+
+/// Last post-physics pose of each replicated body, for the jump diagnostic.
+#[derive(Resource, Default)]
+pub struct NetDiagLastPose(HashMap<u64, (Vec3, Quat)>);
+
+/// A single-frame jump larger than this (metres) is logged as a blow-up.
+const NET_DIAG_JUMP_THRESH: f32 = 0.3;
+
+/// DIAGNOSTIC (opt-in: set `NET_DIAG=1`). Pins down the rover-vs-rover collision
+/// explosion (symptom #3) and quantifies rest jitter (#1/#2). Runs in
+/// `FixedPostUpdate` AFTER avian writeback, so it sees the **raw physics result**
+/// for each replicated body *before* `interpolate_proxies` (Update) re-pins the
+/// proxies — that's the only place the physics-induced displacement is visible.
+///
+/// For any `NetReplicate` body that moved more than [`NET_DIAG_JUMP_THRESH`] in a
+/// single fixed step it logs: role (host/client), gid, ownership, **RigidBody
+/// kind**, and **speed**. That triple is the discriminator:
+/// - proxy jump with `rb=Kinematic, |v|≈0`  → an interpolation/teleport conflict
+///   (a Kinematic body repositioned into a Dynamic one → explosive contact);
+/// - proxy jump with `rb=Kinematic, |v|≫0`  → physics gave a kinematic body
+///   velocity (it shouldn't have one);
+/// - owned jump with `rb=Dynamic,  |v|≫0`   → the predicted own-rover itself is
+///   being launched by the contact solver.
+///
+/// Also emits a once-per-second per-body rest-jitter line (max single-step delta
+/// seen that second) so the sub-centimetre #1/#2 jitter is quantified, not just
+/// the metre-scale blow-ups.
+pub fn net_diag_pose_jumps(
+    role: Res<lunco_core::NetworkRole>,
+    time: Res<Time>,
+    mut last: ResMut<NetDiagLastPose>,
+    mut sec: Local<f32>,
+    mut max_step: Local<HashMap<u64, f32>>,
+    mut max_rot: Local<HashMap<u64, f32>>,
+    q: Query<
+        (
+            &lunco_core::GlobalEntityId,
+            &Transform,
+            &RigidBody,
+            Option<&LinearVelocity>,
+            Has<lunco_core::OwnedLocally>,
+        ),
+        With<lunco_core::NetReplicate>,
+    >,
+) {
+    for (gid, tf, rb, lin, owned) in q.iter() {
+        let g = gid.get();
+        let now = tf.translation;
+        let now_rot = tf.rotation;
+        if let Some((prev, prev_rot)) = last.0.get(&g) {
+            let d = (now - *prev).length();
+            // Single-step rotation delta (degrees) — catches the "two systems
+            // fighting" orientation jitter that a translation-only metric misses.
+            let mut dq = now_rot * prev_rot.inverse();
+            if dq.w < 0.0 {
+                dq = -dq;
+            }
+            let dded = dq.to_axis_angle().1.abs().to_degrees();
+            let m = max_step.entry(g).or_insert(0.0);
+            if d > *m {
+                *m = d;
+            }
+            let mr = max_rot.entry(g).or_insert(0.0);
+            if dded > *mr {
+                *mr = dded;
+            }
+            if d > NET_DIAG_JUMP_THRESH {
+                let v = lin.map(|l| l.0.length()).unwrap_or(0.0);
+                warn!(
+                    "[net-diag {:?}] gid={:#x} STEP-JUMP {:.3}m owned={} rb={:?} |v|={:.2}",
+                    *role, g, d, owned, rb, v
+                );
+            }
+        }
+        last.0.insert(g, (now, now_rot));
+    }
+    *sec += time.delta_secs();
+    if *sec >= 1.0 {
+        *sec = 0.0;
+        for (g, m) in max_step.iter() {
+            let mr = max_rot.get(g).copied().unwrap_or(0.0);
+            if *m > 1e-4 || mr > 0.05 {
+                info!(
+                    "[net-diag {:?}] gid={:#x} max single-step Δ this sec = {:.4}m  Δrot = {:.3}°",
+                    *role, g, m, mr
+                );
+            }
+        }
+        max_step.clear();
+        max_rot.clear();
+    }
+}
+
 /// Plugin that registers SPAWN_ENTITY / MOVE_ENTITY command observers
 /// and the kinematic-pulse cleanup system.
 pub struct SpawnCommandPlugin;
@@ -761,6 +926,10 @@ impl Plugin for SpawnCommandPlugin {
         // - `correct_owned_prediction` AFTER `force_kinematic_proxies` so the
         //   smooth correction it writes to the owned (Dynamic) body isn't
         //   clobbered the same frame.
+        // Kept in `Update` (the snapshot ingest reads what `drain_wire_inbox`
+        // produces, which rides the lightyear ferry — also Update). Splitting the
+        // ingest/interpolate across schedules is the right end-state but only once
+        // the lightyear IO itself ticks in FixedUpdate.
         app.add_systems(
             Update,
             (
@@ -785,6 +954,19 @@ impl Plugin for SpawnCommandPlugin {
                 .chain()
                 .after(PhysicsSystems::Writeback),
         );
+        // Opt-in collision/jitter diagnostic (set `NET_DIAG=1`). Samples the raw
+        // post-physics pose so it can tell a teleport-into-dynamic blow-up from a
+        // contact-solver launch. Ordered after reconcile so its writes are
+        // included in the sampled pose.
+        if std::env::var("NET_DIAG").is_ok() {
+            app.init_resource::<NetDiagLastPose>();
+            app.add_systems(
+                FixedPostUpdate,
+                net_diag_pose_jumps
+                    .after(PhysicsSystems::Writeback)
+                    .after(record_predicted_state),
+            );
+        }
     }
 }
 
@@ -799,5 +981,144 @@ mod tests {
             position: bevy::math::Vec3::ZERO,
         };
         assert_eq!(cmd.entry_id, "test");
+    }
+}
+
+/// Headless integration tests for the networked-pose write path. They run the
+/// real `reconcile_owned_prediction` / `interpolate_proxies` systems against a
+/// hand-built `World` (no GPU, no `PhysicsPlugins`) — so they execute at full
+/// speed and are immune to the ~1 FPS GUI-thrash that makes on-screen
+/// verification on a memory-constrained machine unreliable.
+///
+/// The invariant under test is the one whose violation produced the "two systems
+/// fighting" turning jitter: a corrected/interpolated orientation must land on
+/// avian's f64 `Rotation` (the physics truth), not only the f32
+/// `Transform.rotation` — otherwise avian's writeback re-derives Transform from
+/// the stale `Rotation` next tick and clobbers the correction.
+#[cfg(test)]
+mod pose_write_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    fn registry_with(world: &mut World, e: Entity, gid: u64) {
+        let mut reg = lunco_api::registry::ApiEntityRegistry::default();
+        reg.assign(e, lunco_core::GlobalEntityId::from_raw(gid));
+        world.insert_resource(reg);
+    }
+
+    /// Reconcile (owned rover) must write avian `Rotation`, not just `Transform`.
+    #[test]
+    fn reconcile_correction_writes_avian_rotation() {
+        let mut world = World::new();
+        world.init_resource::<InterpBuffers>();
+        world.init_resource::<PredictedStateLog>();
+        world.init_resource::<lunco_core::OwnedInputLog>();
+
+        let gid = 0x00AB_CDEFu64;
+        let predicted = Quat::IDENTITY; // == Transform::default().rotation
+        let authoritative = Quat::from_rotation_y(0.5); // 0.5 rad ≫ eps_rot (0.03)
+
+        let e = world
+            .spawn((
+                Transform::default(),
+                Position::default(),
+                Rotation::default(),
+                LinearVelocity::default(),
+                AngularVelocity::default(),
+                lunco_core::GlobalEntityId::from_raw(gid),
+                lunco_core::OwnedLocally,
+                lunco_core::NetReplicate,
+            ))
+            .id();
+        registry_with(&mut world, e, gid);
+
+        // We predicted `predicted` at input seq 1…
+        world
+            .resource_mut::<PredictedStateLog>()
+            .0
+            .entry(gid)
+            .or_default()
+            .ring
+            .push_back(PredictedState { seq: 1, pos: Vec3::ZERO, rot: predicted });
+        // …and the host acks seq 1 with a divergent authoritative orientation.
+        world
+            .resource_mut::<InterpBuffers>()
+            .0
+            .entry(gid)
+            .or_default()
+            .push_back(InterpSample {
+                t_recv: 0.0,
+                pos: Vec3::ZERO,
+                rot: authoritative,
+                pos_world: DVec3::ZERO,
+                lv: Vec3::ZERO,
+                av: Vec3::ZERO,
+                last_input_seq: 1,
+            });
+
+        world.run_system_once(reconcile_owned_prediction).unwrap();
+
+        let tf_rot = world.entity(e).get::<Transform>().unwrap().rotation;
+        let avian_rot = world.entity(e).get::<Rotation>().unwrap().0.as_quat();
+        // The correction moved orientation off the (identity) prediction…
+        assert!(
+            tf_rot.angle_between(predicted) > 1e-3,
+            "reconcile should have corrected rotation; got {tf_rot:?}"
+        );
+        // …and avian's f64 Rotation matches Transform (the bug = divergence here).
+        assert!(
+            tf_rot.angle_between(avian_rot) < 1e-4,
+            "avian Rotation {avian_rot:?} must match Transform.rotation {tf_rot:?}"
+        );
+    }
+
+    /// Proxy interpolation must likewise write avian `Rotation`.
+    #[test]
+    fn interpolate_proxy_writes_avian_rotation() {
+        let mut world = World::new();
+        world.init_resource::<InterpBuffers>();
+        world.insert_resource(Time::<bevy::time::Real>::default());
+
+        let gid = 0x00AB_0002u64;
+        let target = Quat::from_rotation_y(0.8);
+
+        let e = world
+            .spawn((
+                Transform::default(),
+                Position::default(),
+                Rotation::default(),
+                lunco_core::GlobalEntityId::from_raw(gid),
+                lunco_core::NetReplicate, // NOT OwnedLocally → treated as a proxy
+            ))
+            .id();
+        registry_with(&mut world, e, gid);
+
+        world
+            .resource_mut::<InterpBuffers>()
+            .0
+            .entry(gid)
+            .or_default()
+            .push_back(InterpSample {
+                t_recv: 0.0,
+                pos: Vec3::ZERO,
+                rot: target,
+                pos_world: DVec3::ZERO,
+                lv: Vec3::ZERO,
+                av: Vec3::ZERO,
+                last_input_seq: 0,
+            });
+
+        world.run_system_once(interpolate_proxies).unwrap();
+
+        let tf_rot = world.entity(e).get::<Transform>().unwrap().rotation;
+        let avian_rot = world.entity(e).get::<Rotation>().unwrap().0.as_quat();
+        assert!(
+            tf_rot.angle_between(target) < 1e-4,
+            "proxy Transform should take the sample rotation; got {tf_rot:?}"
+        );
+        assert!(
+            tf_rot.angle_between(avian_rot) < 1e-4,
+            "proxy avian Rotation {avian_rot:?} must match Transform.rotation {tf_rot:?}"
+        );
     }
 }
