@@ -144,9 +144,9 @@ fn main() {
 
     let mut app = App::new();
 
-    // Physics fixed timestep: 60 Hz. Modelica stepping runs in
+    // Physics fixed timestep (lunco_core::FIXED_HZ). Modelica stepping runs in
     // FixedUpdate so the worker receives a predictable per-tick dt.
-    app.insert_resource(Time::<Fixed>::from_hz(60.0));
+    app.insert_resource(Time::<Fixed>::from_hz(lunco_core::FIXED_HZ));
 
     // wasm: match the index.html backdrop so the first wgpu clear paints
     // the same dark colour the canvas already has — kills the gray flash

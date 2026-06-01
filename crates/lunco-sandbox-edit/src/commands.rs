@@ -187,11 +187,18 @@ pub fn force_kinematic_proxies(
     }
 }
 
-/// One buffered transform sample for client-side interpolation, stamped with
-/// the local receipt time.
+/// One buffered transform sample for client-side interpolation, stamped with the
+/// host's **generation time** (its `SimTick` × [`SECS_PER_TICK`]), NOT the local
+/// receipt time. Tick-stamping is what makes interpolation robust to bursty /
+/// render-throttled delivery: when the sending peer's window is unfocused, several
+/// 20 Hz snapshots arrive in one frame, but they carry distinct host ticks, so the
+/// bracket search below still spaces them correctly instead of collapsing them to
+/// one effective sample (which produced the visible proxy "jumps").
 #[derive(Clone, Copy)]
 struct InterpSample {
-    t_recv: f32,
+    /// Host generation time in seconds (`tick × SECS_PER_TICK`). The
+    /// interpolation/extrapolation clock (`render_t`) lives in this same timebase.
+    gen_t: f64,
     /// f32 render-space pose (cell-relative). Used by `reconcile_owned_prediction`
     /// to compare against the f32 predicted-Transform history (apples-to-apples).
     pos: Vec3,
@@ -222,7 +229,19 @@ pub struct InterpBuffers(HashMap<u64, VecDeque<InterpSample>>);
 /// extrapolation) but more visible lag on the bodies you watch. 0.18 keeps a
 /// fast-moving proxy reliably bracketed by two real samples so it lerps instead
 /// of extrapolate-then-snapping (~1 m jumps under the old 0.12).
-const INTERP_DELAY: f32 = 0.18;
+const INTERP_DELAY: f64 = 0.18;
+// Seconds per host `SimTick` — the shared fixed-step period (every app's
+// `Time::<Fixed>` is built from `lunco_core::FIXED_HZ`). Snapshot ticks are
+// multiplied by this to place each sample on the interpolation timebase.
+use lunco_core::SECS_PER_TICK;
+/// Per-frame easing of the playback clock toward its target (`newest_gen −
+/// INTERP_DELAY`). The clock advances at real time between snapshots and is gently
+/// nudged so it tracks the host's tick stream without stepping. ~0.1 ⇒ smooth
+/// correction of small drift; large desyncs snap (see [`CLOCK_SNAP`]).
+const CLOCK_EASE: f64 = 0.1;
+/// If the playback clock is more than this far from its target (seconds), snap
+/// instead of easing — e.g. first sample, a long stall, or a tick discontinuity.
+const CLOCK_SNAP: f64 = 1.0;
 /// Cap per-body history (seconds of buffer at 20 Hz; only the recent tail is read).
 const INTERP_MAX_SAMPLES: usize = 16;
 /// When the buffer starves (`render_t` past the newest sample — common at 20 Hz
@@ -230,7 +249,7 @@ const INTERP_MAX_SAMPLES: usize = 16;
 /// this long instead of freezing the body and snapping to the next snapshot. This
 /// is what turns a fast mover's ~0.6 m teleport-stutter into smooth motion. Capped
 /// so a body whose updates genuinely stopped doesn't fly off.
-const INTERP_MAX_EXTRAPOLATION: f32 = 0.25;
+const INTERP_MAX_EXTRAPOLATION: f64 = 0.25;
 /// Hard cap on how far (metres) extrapolation may move a starved proxy, so a
 /// diverging/runaway authoritative body can't be flung across the scene. Set
 /// GENEROUS: a real rover at ~30 m/s over the 0.25 s time cap legitimately needs
@@ -240,23 +259,22 @@ const INTERP_MAX_EXTRAPOLATION: f32 = 0.25;
 const INTERP_MAX_EXTRAP_DIST: f64 = 8.0;
 
 /// Client: file each incoming snapshot into its per-entity interpolation buffer,
-/// stamped with local receipt time. Replaces the old hard-set so motion is
-/// smoothed by [`interpolate_proxies`] rather than teleported.
+/// stamped with the host's **generation time** (`tick × SECS_PER_TICK`), NOT local
+/// receipt time. Keying on the host tick means a burst of snapshots that arrive in
+/// the same frame (sender render-throttled while unfocused) still land at distinct,
+/// correctly-spaced times in the buffer — so [`interpolate_proxies`] brackets them
+/// smoothly instead of collapsing the burst into one sample (the proxy "jumps").
 pub fn ingest_snapshots(
-    // REAL (wall-clock) time, not the virtual clock — the client may run paused
-    // (no local sim), which would freeze `Time<Virtual>` and stall interpolation.
-    time: Res<Time<bevy::time::Real>>,
     mut snaps: ResMut<lunco_core::IncomingSnapshots>,
     mut buffers: ResMut<InterpBuffers>,
 ) {
     if snaps.0.is_empty() {
         return;
     }
-    let now = time.elapsed_secs();
     for s in snaps.0.drain(..).collect::<Vec<_>>() {
         let buf = buffers.0.entry(s.gid).or_default();
         buf.push_back(InterpSample {
-            t_recv: now,
+            gen_t: s.tick as f64 * SECS_PER_TICK,
             pos: Vec3::from(s.t),
             rot: Quat::from_array(s.r),
             pos_world: DVec3::from_array(s.pos),
@@ -282,8 +300,9 @@ pub fn ingest_snapshots(
 /// Client-side prediction for the possessed rover is the follow-up that makes
 /// your own vessel crisp; everyone else's stays interpolated.)
 pub fn interpolate_proxies(
-    // Must share the same clock `ingest_snapshots` stamps with — REAL time, so a
-    // paused client still renders smooth replicated motion.
+    // REAL (wall-clock) time advances the playback clock BETWEEN snapshots so a
+    // paused client still renders smooth motion. The clock itself lives in the
+    // host-tick timebase (anchored to the snapshot stream), not wall time directly.
     time: Res<Time<bevy::time::Real>>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     buffers: Res<InterpBuffers>,
@@ -292,13 +311,44 @@ pub fn interpolate_proxies(
     // `INTERP_DELAY`-old interpolated pose here.
     q_owned: Query<(), With<lunco_core::OwnedLocally>>,
     mut q: Query<(&mut Transform, Option<&mut Position>, Option<&mut Rotation>)>,
+    // Playback clock in the host-tick timebase: advances at real time and is eased
+    // toward `newest_gen − INTERP_DELAY` so it tracks the host's tick stream without
+    // stepping. This is what makes interpolation robust to bursty delivery — the
+    // render instant is decoupled from when packets happen to arrive.
+    mut playback: Local<f64>,
+    mut clock_init: Local<bool>,
     // NET_DIAG-only: count how often the buffer starves (we extrapolate) vs.
     // brackets two samples (true interpolation), to confirm the starvation cause.
     mut diag_sec: Local<f32>,
     mut diag_bracket: Local<u32>,
     mut diag_extrap: Local<u32>,
 ) {
-    let render_t = time.elapsed_secs() - INTERP_DELAY;
+    // Newest host generation time across ALL bodies drives the shared clock: the
+    // busiest body anchors it (a resting body stops emitting, so keying the clock
+    // off its own buffer would stall playback).
+    let newest_gen = buffers
+        .0
+        .values()
+        .filter_map(|b| b.back())
+        .map(|s| s.gen_t)
+        .fold(f64::NEG_INFINITY, f64::max);
+    if !newest_gen.is_finite() {
+        return; // no samples yet
+    }
+    let target = newest_gen - INTERP_DELAY;
+    if !*clock_init || (target - *playback).abs() > CLOCK_SNAP {
+        // First run, or a large desync (long stall / tick discontinuity): snap.
+        *playback = target;
+        *clock_init = true;
+    } else {
+        *playback += time.delta_secs() as f64;
+        *playback += (target - *playback) * CLOCK_EASE;
+        // Never render past the freshest sample we hold.
+        if *playback > newest_gen {
+            *playback = newest_gen;
+        }
+    }
+    let render_t = *playback;
     for (gid, buf) in buffers.0.iter() {
         if buf.is_empty() {
             continue;
@@ -318,7 +368,7 @@ pub fn interpolate_proxies(
         let mut a: Option<&InterpSample> = None;
         let mut b: Option<&InterpSample> = None;
         for s in buf.iter() {
-            if s.t_recv <= render_t {
+            if s.gen_t <= render_t {
                 a = Some(s);
             } else {
                 b = Some(s);
@@ -332,11 +382,11 @@ pub fn interpolate_proxies(
         let (out_world, out_rot) = match (a, b) {
             (Some(a), Some(b)) => {
                 *diag_bracket += 1;
-                let span = (b.t_recv - a.t_recv).max(1e-5);
-                let alpha = ((render_t - a.t_recv) / span).clamp(0.0, 1.0);
+                let span = (b.gen_t - a.gen_t).max(1e-5);
+                let alpha = ((render_t - a.gen_t) / span).clamp(0.0, 1.0);
                 (
-                    a.pos_world.lerp(b.pos_world, alpha as f64),
-                    a.rot.slerp(b.rot, alpha),
+                    a.pos_world.lerp(b.pos_world, alpha),
+                    a.rot.slerp(b.rot, alpha as f32),
                 )
             }
             // render_t before the oldest sample → snap to oldest.
@@ -349,7 +399,7 @@ pub fn interpolate_proxies(
             // drift away.
             (Some(a), None) => {
                 *diag_extrap += 1;
-                let dt = (render_t - a.t_recv).clamp(0.0, INTERP_MAX_EXTRAPOLATION) as f64;
+                let dt = (render_t - a.gen_t).clamp(0.0, INTERP_MAX_EXTRAPOLATION);
                 let mut delta = a.lv.as_dvec3() * dt;
                 // Hard distance clamp: a body whose authoritative physics is
                 // diverging (or whose velocity sample is stale) must not be flung
@@ -1047,7 +1097,7 @@ mod pose_write_tests {
             .entry(gid)
             .or_default()
             .push_back(InterpSample {
-                t_recv: 0.0,
+                gen_t: 0.0,
                 pos: Vec3::ZERO,
                 rot: authoritative,
                 pos_world: DVec3::ZERO,
@@ -1099,7 +1149,7 @@ mod pose_write_tests {
             .entry(gid)
             .or_default()
             .push_back(InterpSample {
-                t_recv: 0.0,
+                gen_t: 0.0,
                 pos: Vec3::ZERO,
                 rot: target,
                 pos_world: DVec3::ZERO,
@@ -1119,6 +1169,81 @@ mod pose_write_tests {
         assert!(
             tf_rot.angle_between(avian_rot) < 1e-4,
             "proxy avian Rotation {avian_rot:?} must match Transform.rotation {tf_rot:?}"
+        );
+    }
+
+    /// The bursty-delivery fix: a batch of snapshots that all arrive in the SAME
+    /// frame (sender render-throttled while unfocused) must still interpolate
+    /// smoothly, because each carries its host `SimTick` and is keyed in tick-space
+    /// — not the local receipt time (which would be identical for the whole burst
+    /// and collapse it to one effective sample → the visible proxy "jump").
+    ///
+    /// We push 7 samples in one `ingest_snapshots` call (one frame), positioned
+    /// linearly along the host-tick timebase, then run `interpolate_proxies` once
+    /// and assert the rendered pose is a true mid-bracket lerp, not a snap to an
+    /// endpoint.
+    #[test]
+    fn bursty_snapshots_interpolate_in_tick_space() {
+        use lunco_core::{IncomingSnapshots, SnapshotSample};
+
+        let mut world = World::new();
+        world.init_resource::<InterpBuffers>();
+        world.init_resource::<IncomingSnapshots>();
+        world.insert_resource(Time::<bevy::time::Real>::default());
+
+        let gid = 0x00AB_0003u64;
+        let e = world
+            .spawn((
+                Transform::default(),
+                Position::default(),
+                Rotation::default(),
+                lunco_core::GlobalEntityId::from_raw(gid),
+                lunco_core::NetReplicate,
+            ))
+            .id();
+        registry_with(&mut world, e, gid);
+
+        // 7 snapshots at 20 Hz (3 host ticks apart at 60 Hz), spanning gen_t
+        // 0.20‥0.50 s, with absolute X moving linearly at 100 m per second of
+        // tick-time (so X == gen_t × 100). ALL queued before a single ingest →
+        // they arrive as one burst at identical local receipt time.
+        let identity_r = [0.0, 0.0, 0.0, 1.0];
+        for k in 0..7u64 {
+            let tick = 12 + k * 3; // 12,15,…,30  ⇒ gen_t 0.20,0.25,…,0.50
+            let gen_t = tick as f64 * SECS_PER_TICK;
+            let x = (gen_t * 100.0) as f32;
+            world.resource_mut::<IncomingSnapshots>().0.push(SnapshotSample {
+                gid,
+                tick,
+                t: [x, 0.0, 0.0],
+                r: identity_r,
+                lv: [100.0, 0.0, 0.0], // unused here (we bracket, never extrapolate)
+                av: [0.0; 3],
+                last_input_seq: 0,
+                pos: [gen_t * 100.0, 0.0, 0.0],
+                cell: [0; 3],
+            });
+        }
+
+        // One frame: the whole burst lands in the buffer at once.
+        world.run_system_once(ingest_snapshots).unwrap();
+        assert_eq!(
+            world.resource::<InterpBuffers>().0.get(&gid).map(|b| b.len()),
+            Some(7),
+            "all 7 burst samples must be distinct buffer entries"
+        );
+
+        world.run_system_once(interpolate_proxies).unwrap();
+
+        // newest_gen = 0.50; render_t = 0.50 − INTERP_DELAY(0.18) = 0.32, which
+        // brackets the samples at gen_t 0.30 (x=30) and 0.35 (x=35):
+        //   alpha = (0.32 − 0.30)/0.05 = 0.4  ⇒  x = 30 + 0.4·5 = 32.
+        // A receipt-time-keyed buffer would have collapsed the burst and snapped to
+        // an endpoint (x=20 or x=50) instead.
+        let x = world.entity(e).get::<Transform>().unwrap().translation.x;
+        assert!(
+            (x - 32.0).abs() < 0.1,
+            "expected mid-bracket lerp x≈32 (proof of tick-space interpolation), got {x}"
         );
     }
 }

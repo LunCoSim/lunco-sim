@@ -274,6 +274,18 @@ impl Default for CelestialClock {
     }
 }
 
+/// The fixed-simulation rate, in Hz. The **single source of truth** for every
+/// fixed-step clock in the system: it drives `Time::<Fixed>` (set by each app
+/// binary), [`SimTick`] advancement ([`advance_sim_tick`], one tick per fixed
+/// step), and the lightyear tick. The snapshot interpolation converts host ticks
+/// → seconds via [`SECS_PER_TICK`], so every one of these MUST agree — hence one
+/// constant rather than a `60.0` literal sprinkled across crates.
+pub const FIXED_HZ: f64 = 60.0;
+
+/// Seconds per fixed tick / per [`SimTick`] (= `1.0 / FIXED_HZ`). Used to place
+/// snapshot samples on the interpolation timebase.
+pub const SECS_PER_TICK: f64 = 1.0 / FIXED_HZ;
+
 /// Monotonic discrete **simulation tick** — the netcode time substrate (M6).
 ///
 /// `CelestialClock`/`TimeWarpState` give *continuous* sim time + warp; netcode

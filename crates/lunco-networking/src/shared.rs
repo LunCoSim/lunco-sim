@@ -35,7 +35,7 @@ pub(crate) fn peer_to_session(peer: PeerId) -> SessionId {
 /// Add the lightyear plugins, the protocol, the wire-channel declarations, and
 /// the host/client setup for `mode`.
 pub(crate) fn build_networking(app: &mut App, mode: &NetworkMode) {
-    let tick = Duration::from_secs_f64(1.0 / 60.0);
+    let tick = Duration::from_secs_f64(lunco_core::SECS_PER_TICK);
     match mode {
         NetworkMode::Host { port } => {
             #[cfg(not(target_family = "wasm"))]

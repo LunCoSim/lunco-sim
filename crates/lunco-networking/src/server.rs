@@ -59,9 +59,12 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     // NOTE: these MUST stay in `Update` (the lightyear message ferry). Moving them
     // to `FixedUpdate` silently breaks the RELIABLE `CmdChannel` (client→host
     // PossessVessel/SpawnEntity never arrive) — lightyear's reliable flush is
-    // schedule-sensitive. The render-throttle-when-unfocused issue (snapshots
-    // emitted at render rate) needs a lightyear-tick-in-FixedUpdate fix instead,
-    // NOT a naive reschedule of the ferry.
+    // schedule-sensitive. The render-throttle-when-unfocused issue (this peer's
+    // `Update` drops to ~5 Hz, so the ferry sends snapshots in bursts) is handled
+    // WITHOUT touching the ferry: snapshot GENERATION (`gather_snapshot`) runs in
+    // `FixedUpdate` at a steady 20 Hz and tick-stamps each batch, and the client
+    // interpolates in tick-space (`interpolate_proxies`), so bursty sends still
+    // render smoothly. See `lunco_api::wire::WirePlugin`.
     app.add_systems(
         Update,
         (

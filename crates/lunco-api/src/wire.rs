@@ -410,6 +410,7 @@ pub fn drain_wire_inbox(
                 for e in snap.entries {
                     snapshots.0.push(SnapshotSample {
                         gid: e.gid,
+                        tick: snap.tick,
                         t: e.t,
                         r: e.r,
                         lv: e.lv,
@@ -574,9 +575,20 @@ impl Plugin for WirePlugin {
             .init_resource::<WireChannelRegistry>()
             .init_resource::<AppliedInputSeq>()
             .add_observer(apply_wire_command)
-            // Kept in `Update` alongside the lightyear ferry (see server.rs note:
-            // FixedUpdate breaks the reliable CmdChannel). The proper render-throttle
-            // fix is ticking lightyear's IO in FixedUpdate, not rescheduling these.
-            .add_systems(Update, (drain_wire_inbox, broadcast_new_spawns, gather_snapshot));
+            // `drain_wire_inbox` + `broadcast_new_spawns` stay in `Update` alongside
+            // the lightyear ferry (see server.rs note: FixedUpdate breaks the reliable
+            // CmdChannel — it does NOT touch lightyear, but it consumes what the ferry
+            // produced this frame and feeds the ferry's send, so it shares the ferry's
+            // schedule).
+            .add_systems(Update, (drain_wire_inbox, broadcast_new_spawns))
+            // `gather_snapshot` moves to `FixedUpdate`: it only writes our `WireOutbox`
+            // (never calls lightyear), so it's safe to run on the sim clock. This
+            // decouples snapshot GENERATION (now a steady 20 Hz, tick-stamped, even
+            // when the window is unfocused and `Update` is render-throttled to ~5 Hz)
+            // from snapshot SEND (the ferry, still `Update`). The ferry then drains
+            // several queued snapshots in one throttled frame — a burst — but each
+            // carries its host `SimTick`, so the client interpolates them in tick-space
+            // and motion stays smooth (see `interpolate_proxies`).
+            .add_systems(FixedUpdate, gather_snapshot);
     }
 }

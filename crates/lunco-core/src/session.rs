@@ -258,6 +258,12 @@ pub struct PendingReplicatedSpawns(pub Vec<ReplicatedSpawn>);
 #[derive(Clone, Copy, Debug)]
 pub struct SnapshotSample {
     pub gid: u64,
+    /// Host `SimTick` this batch was generated at (60 Hz). The client interpolates
+    /// in this tick-derived timebase rather than local receipt time, so bursty /
+    /// render-throttled delivery (several 20 Hz snapshots arriving in one frame,
+    /// e.g. when the sending peer's window is unfocused) still reconstructs smooth
+    /// motion instead of collapsing to one effective sample per burst.
+    pub tick: u64,
     pub t: [f32; 3],
     pub r: [f32; 4],
     /// Authoritative linear velocity (avian `LinearVelocity`, f64→f32). Used by

@@ -170,7 +170,7 @@ fn main() {
             "lunco-lib",
             AssetSourceBuilder::platform_default(&cache_dir().to_string_lossy(), None),
         )
-        .insert_resource(Time::<Fixed>::from_hz(60.0))
+        .insert_resource(Time::<Fixed>::from_hz(lunco_core::FIXED_HZ))
         .insert_resource(lunco_core::TimeWarpState { physics_enabled: true, ..default() })
         .insert_resource(avian3d::prelude::Gravity::ZERO)
         .insert_resource(lunco_celestial::Gravity::flat(9.81, bevy::math::DVec3::NEG_Y))
