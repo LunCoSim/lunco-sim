@@ -383,7 +383,10 @@ fn instantiate_usd_prim(
                     let height = reader
                         .prim_attribute_value::<f64>(&sdf_path, "height")
                         .unwrap_or(2.0) as f32;
-                    Some(meshes.add(Cylinder::new(radius, height)))
+                    // Bump radial resolution well above the default so the tire
+                    // silhouette reads as round, not faceted — the low-poly
+                    // barrel made the top edge of the wheel look chunky.
+                    Some(meshes.add(Cylinder::new(radius, height).mesh().resolution(64)))
                 }
                 _ => None,
             }

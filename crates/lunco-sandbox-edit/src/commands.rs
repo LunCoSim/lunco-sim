@@ -227,6 +227,11 @@ pub fn clear_kinematic_pulse_velocity(
 ///   shader uniforms in place (requires `shader` to have been set first, or a
 ///   USD `usd_shader` material).
 /// - `visible` → `true`/`false` toggles `Visibility`.
+/// - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
+///   `drive_torque`, `brake_torque`, `slip_stiffness`, `bearing_damping`,
+///   `friction_mu`, `mass`, `moi`, `wheel_radius`, `rest_length`, `spring_k`,
+///   `damping_c` → set that `f64` field on the wheel's `WheelRaycast` live.
+///   Each wheel is its own entity, so this gives independent per-wheel control.
 #[Command(default)]
 pub struct SetObjectProperty {
     /// API-stable global entity ID (the `api_id` from `ListEntities`), same
@@ -239,6 +244,28 @@ pub struct SetObjectProperty {
     pub value: String,
 }
 
+/// Maps a `SetObjectProperty` property name to a setter on `WheelRaycast`, or
+/// `None` if the name isn't a wheel field. Non-capturing closures coerce to
+/// `fn` pointers, so this stays a cheap lookup table. Accepts both the Rust
+/// field names and the USD-style aliases (`radius`, `spring_stiffness`, …).
+fn wheel_param_setter(name: &str) -> Option<fn(&mut lunco_mobility::WheelRaycast, f64)> {
+    use lunco_mobility::WheelRaycast as W;
+    Some(match name {
+        "drive_torque" | "drive_torque_max" => |w: &mut W, v| w.drive_torque_max = v,
+        "brake_torque" | "brake_torque_max" => |w: &mut W, v| w.brake_torque_max = v,
+        "slip_stiffness" => |w: &mut W, v| w.slip_stiffness = v,
+        "bearing_damping" | "damping_rate" => |w: &mut W, v| w.bearing_damping = v,
+        "friction_mu" | "friction" => |w: &mut W, v| w.friction_mu = v,
+        "mass" => |w: &mut W, v| w.mass = v,
+        "moi" | "moment_of_inertia" => |w: &mut W, v| w.moment_of_inertia = v,
+        "wheel_radius" | "radius" => |w: &mut W, v| w.wheel_radius = v,
+        "rest_length" => |w: &mut W, v| w.rest_length = v,
+        "spring_k" | "spring_stiffness" => |w: &mut W, v| w.spring_k = v,
+        "damping_c" | "spring_damping" => |w: &mut W, v| w.damping_c = v,
+        _ => return None,
+    })
+}
+
 /// Observer for [`SetObjectProperty`].
 pub fn on_set_object_property(
     trigger: On<SetObjectProperty>,
@@ -247,6 +274,7 @@ pub fn on_set_object_property(
     mut materials: ResMut<Assets<lunco_materials::ShaderMaterial>>,
     q_mat: Query<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
     mut q_vis: Query<&mut Visibility>,
+    mut q_wheel: Query<&mut lunco_mobility::WheelRaycast>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
@@ -255,6 +283,22 @@ pub fn on_set_object_property(
         warn!("SET_PROPERTY: no api_id={} in registry", cmd.entity_id);
         return;
     };
+
+    // Per-wheel tire-spin dynamics. Each wheel is its own entity, so addressing
+    // a single `api_id` sets the field on just that wheel — independent control.
+    if let Some(setter) = wheel_param_setter(&cmd.property) {
+        let Ok(value) = cmd.value.trim().parse::<f64>() else {
+            warn!("SET_PROPERTY: '{}' expects a number, got '{}'", cmd.property, cmd.value);
+            return;
+        };
+        let Ok(mut wheel) = q_wheel.get_mut(target) else {
+            warn!("SET_PROPERTY: entity {} has no WheelRaycast", cmd.entity_id);
+            return;
+        };
+        setter(&mut wheel, value);
+        info!("SET_PROPERTY: wheel {} {} = {}", cmd.entity_id, cmd.property, value);
+        return;
+    }
 
     match cmd.property.as_str() {
         "shader" => {
