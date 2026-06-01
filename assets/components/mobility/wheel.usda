@@ -58,4 +58,16 @@ def Cylinder "Wheel" (
     bool physics:rigidBodyEnabled = true
     float physics:mass = 25.0
     bool physics:collisionEnabled = true
+
+    # --- PhysX vehicle dynamics (Omniverse schema) — drive the tire spin ---
+    # The raycast-wheel spin integrator (lunco_mobility::update_wheel_spin)
+    # reads these so the visible rotation is grounded in authored data:
+    #   ω̇ = (τ_drive + τ_brake − τ_traction − dampingRate·ω) / I
+    # with I = ½·m·r² (from physics:mass + physxVehicleWheel:radius). The motor
+    # is a constant-torque source up to maxRotationSpeed; bearing drag is derived
+    # so a free (airborne) wheel terminates at maxRotationSpeed.
+    float physxVehicleEngine:peakTorque = 220.0           # N·m axle drive torque at full throttle
+    float physxVehicleEngine:maxRotationSpeed = 60.0      # rad/s free-spin (no-load) cap
+    float physxVehicleWheel:maxBrakeTorque = 1500.0       # N·m brake authority (locks the wheel → skid)
+    float physxVehicleTire:longitudinalStiffness = 8000.0 # N per (m/s) of contact slip
 }

@@ -520,6 +520,39 @@ fn process_usd_sim_prims(
             let damping_c = reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleSuspension:springDamping")
                 .unwrap_or(3000.0) as f64;
 
+            // Tire spin dynamics — read from the standard Omniverse PhysX
+            // vehicle schema (`PhysxVehicleWheelAPI` / `PhysxVehicleEngineAPI` /
+            // `PhysxVehicleTireAPI`) plus standard UsdPhysics `physics:mass`.
+            let read_f = |name: &str| -> Option<f64> {
+                reader.prim_attribute_value::<f32>(&sdf_path, name)
+                    .map(|v| v as f64)
+                    .or_else(|| reader.prim_attribute_value::<f64>(&sdf_path, name))
+            };
+            // Mass (UsdPhysicsMassAPI) → rotational inertia. `physxVehicleWheel:moi`
+            // overrides the derived ½·m·r² if explicitly authored.
+            let wheel_mass = read_f("physics:mass").unwrap_or(25.0);
+            let wheel_moi = read_f("physxVehicleWheel:moi").unwrap_or(0.0);
+            // Engine peak torque drives the axle; max rotation speed bounds the
+            // free spin. Bearing drag uses the wheel's own `dampingRate` when
+            // authored, else is derived so the airborne spin terminates at the
+            // engine's max rotation speed (peakTorque / maxRotationSpeed).
+            let drive_torque_max = read_f("physxVehicleEngine:peakTorque").unwrap_or(220.0);
+            let max_rotation_speed = read_f("physxVehicleEngine:maxRotationSpeed")
+                .unwrap_or(600.0)
+                .max(1e-3);
+            let bearing_damping = read_f("physxVehicleWheel:dampingRate")
+                .filter(|&d| d > 0.0)
+                .unwrap_or(drive_torque_max / max_rotation_speed);
+            // Tire longitudinal stiffness → grip toward v/r before saturation.
+            let slip_stiffness = read_f("physxVehicleTire:longitudinalStiffness").unwrap_or(8000.0);
+            // Wheel brake torque caps the lock-up authority.
+            let brake_torque_max = read_f("physxVehicleWheel:maxBrakeTorque")
+                .unwrap_or(drive_torque_max * 3.0);
+            // Coulomb μ matches the drive-traction model (apply_wheel_drive); the
+            // PhysX tire friction table is ground-material dependent and not a
+            // single wheel scalar, so we keep the unit-friction default here.
+            let friction_mu = 1.0;
+
             // Standard-USD discriminator: an authored `PhysicsRevoluteJoint`
             // pointing at this wheel via `physics:body1` ⇒ joint-based.
             let key = (prim_path.stage_handle.clone(), prim_path.path.clone());
@@ -537,12 +570,34 @@ fn process_usd_sim_prims(
                     maybe_mesh, maybe_mat, maybe_shader_mat, maybe_child_of,
                     radius, index, rest_length, spring_k, damping_c,
                     p_drive, p_steer,
+                    WheelSpinParams {
+                        mass: wheel_mass,
+                        moment_of_inertia: wheel_moi,
+                        drive_torque_max,
+                        bearing_damping,
+                        friction_mu,
+                        slip_stiffness,
+                        brake_torque_max,
+                    },
                 );
             }
         }
 
         commands.entity(entity).insert(UsdSimProcessed);
     }
+}
+
+/// USD-derived tire spin dynamics, forwarded onto the `WheelRaycast` so the
+/// spin integrator (`lunco_mobility::update_wheel_spin`) runs on authored data.
+struct WheelSpinParams {
+    mass: f64,
+    /// Explicit axle moment of inertia (kg·m²); 0 ⇒ derive ½·m·r².
+    moment_of_inertia: f64,
+    drive_torque_max: f64,
+    bearing_damping: f64,
+    friction_mu: f64,
+    slip_stiffness: f64,
+    brake_torque_max: f64,
 }
 
 /// Sets up a raycast wheel with entity splitting for correct raycasting.
@@ -566,6 +621,7 @@ fn setup_raycast_wheel(
     damping_c: f64,
     p_drive: Entity,
     p_steer: Entity,
+    spin: WheelSpinParams,
 ) {
     info!("Setting up RAYCAST wheel {}", prim_path.path);
 
@@ -577,6 +633,13 @@ fn setup_raycast_wheel(
         rest_length,
         spring_k,
         damping_c,
+        mass: spin.mass,
+        moment_of_inertia: spin.moment_of_inertia,
+        drive_torque_max: spin.drive_torque_max,
+        bearing_damping: spin.bearing_damping,
+        friction_mu: spin.friction_mu,
+        slip_stiffness: spin.slip_stiffness,
+        brake_torque_max: spin.brake_torque_max,
         ..default()
     };
 
