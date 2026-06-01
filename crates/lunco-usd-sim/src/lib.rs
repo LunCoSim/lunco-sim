@@ -102,6 +102,14 @@ impl Plugin for UsdSimPlugin {
            // `try_wire_wheel` runs in PreUpdate so that Wire entities exist
            // before `wire_system` (Update) propagates values through them.
            .add_systems(PreUpdate, try_wire_wheel)
+           // USD → ShaderMaterial authoring. Ordered AFTER the visuals exist
+           // and BEFORE `process_usd_sim_prims` consumes them, so the material
+           // is always present before a wheel is split onto its visual child
+           // (Bevy auto-inserts the sync point). Race-free by construction —
+           // see `shader.rs`.
+           .add_systems(Update, shader::apply_usd_shader_materials
+               .after(lunco_usd_bevy::sync_usd_visuals)
+               .before(process_usd_sim_prims))
            // `process_usd_sim_prims` does a per-stage joint scan + per-
            // entity dispatch — too coupled to fit cleanly into a single
            // `OnAdd<UsdVisualSynced>` observer. Gating with `run_if`
@@ -118,6 +126,10 @@ impl Plugin for UsdSimPlugin {
 
 pub mod cosim;
 pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
+
+/// USD → [`ShaderMaterial`](lunco_materials::ShaderMaterial) authoring,
+/// deterministically ordered so it can never race a downstream consumer.
+pub mod shader;
 
 /// Helper to check if a prim has a specific API schema applied.
 ///
@@ -470,7 +482,26 @@ fn process_usd_sim_prims(
                 debug!("Wheel {} has no mesh yet, skipping until next frame", prim_path.path);
                 continue;
             }
-            info!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
+
+            // Same deferral for the USD-authored shader. A `materialType="shader"`
+            // wheel gets its `ShaderMaterial` from the material observer
+            // (On<Add, UsdVisualSynced>), which is queued asynchronously. If it
+            // hasn't landed yet, wait — otherwise the wheel split below would
+            // carry only the default `StandardMaterial` and the shader would be
+            // lost (manifests as plain colored wheels on some instances but not
+            // others, depending on observer/flush ordering). Retry next frame
+            // (don't mark UsdSimProcessed).
+            let wants_shader = matches!(
+                reader.prim_attribute_value::<String>(&sdf_path, "primvars:materialType").as_deref(),
+                Some("shader") | Some("usd_shader")
+            ) && reader.prim_attribute_value::<String>(&sdf_path, "primvars:shaderPath").is_some();
+            if wants_shader && maybe_shader_mat.is_none() {
+                debug!("Wheel {} awaits ShaderMaterial from observer, deferring", prim_path.path);
+                continue;
+            }
+            info!("Intercepted PhysxVehicleWheelAPI for {} [material: {}]",
+                prim_path.path,
+                if maybe_shader_mat.is_some() { "ShaderMaterial" } else { "StandardMaterial" });
 
             // Create physical ports for drive and steering
             let p_drive = commands.spawn((PhysicalPort::default(), Name::new("PhysicalPort_Drive"))).id();

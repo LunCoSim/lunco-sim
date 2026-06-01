@@ -368,7 +368,13 @@ fn instantiate_usd_prim(
                     let radius = reader
                         .prim_attribute_value::<f64>(&sdf_path, "radius")
                         .unwrap_or(1.0) as f32;
-                    Some(meshes.add(Sphere::new(radius).mesh().ico(32).unwrap()))
+                    // Lat-long (UV) sphere, NOT an icosphere: a UV sphere has a
+                    // clean rectangular UV unwrap (uv.x = longitude, uv.y =
+                    // pole-to-pole latitude), which our ShaderMaterial checker
+                    // (e.g. shaders/balloon.wgsl) needs to tile across the whole
+                    // surface. An icosphere's UVs are distorted/seamed and leave
+                    // large uncovered-looking patches.
+                    Some(meshes.add(Sphere::new(radius).mesh().uv(48, 32)))
                 }
                 Some("Cylinder") => {
                     let radius = reader

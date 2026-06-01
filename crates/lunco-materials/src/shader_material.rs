@@ -3,8 +3,9 @@
 //! This is the *one* Rust material you ever need for custom shaders. After it
 //! exists, new shaders are pure `.wgsl` files (+ optional USD properties) — no
 //! Rust. It is engine-agnostic: nothing here is USD-specific. USD is just *one*
-//! way to author it (see [`apply_shader_material_from_usd`]); the live
-//! `SetObjectProperty` command is another.
+//! way to author it (the USD→material binding lives in `lunco-usd-sim`'s
+//! `apply_usd_shader_materials`, deterministically ordered so it can never race
+//! a downstream consumer); the live `SetObjectProperty` command is another.
 //!
 //! ## Why one material can drive many shaders
 //! Bevy resolves `fragment_shader()` per material *type*, not per instance. To let
@@ -39,10 +40,6 @@ use bevy::render::render_resource::{
     AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
 };
 use bevy::shader::Shader;
-
-use lunco_usd_bevy::UsdPrimPath;
-use openusd::sdf::Path as SdfPath;
-use crate::get_attribute_as_vec3;
 
 /// A general custom-shader material. Field order/types must match the
 /// `ShaderParams` struct in WGSL exactly (all `vec4` → no std140 padding).
@@ -106,16 +103,20 @@ impl Material for ShaderMaterial {
     }
 }
 
-/// Plugin: registers the material and the USD-authoring observer.
+/// Plugin: registers the [`ShaderMaterial`] render pipeline.
 ///
 /// **No `load_internal_asset!`** — shaders load from `assets/shaders/*` by path,
 /// so they hot-reload when edited (with asset watching enabled).
+///
+/// This plugin is intentionally *only* the engine-agnostic material. Authoring
+/// from USD is a separate, deterministically-ordered system in `lunco-usd-sim`
+/// (`apply_usd_shader_materials`) so material application can never race a
+/// downstream consumer (e.g. the wheel physics/visual split).
 pub struct ShaderMaterialPlugin;
 
 impl Plugin for ShaderMaterialPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<ShaderMaterial>::default());
-        app.add_observer(apply_shader_material_from_usd);
     }
 }
 
@@ -166,71 +167,5 @@ fn set_color(slot: &mut LinearRgba, value: &str) -> bool {
         true
     } else {
         false
-    }
-}
-
-/// Observer: applies [`ShaderMaterial`] the instant a prim's visuals are
-/// instantiated, if it declares `primvars:materialType = "shader"` (or the
-/// legacy alias `"usd_shader"`) and a `primvars:shaderPath`.
-///
-/// Observer-driven (fires once per prim on `Add<UsdVisualSynced>`) — no
-/// per-frame poll, no whole-stage clone.
-fn apply_shader_material_from_usd(
-    trigger: On<Add, lunco_usd_bevy::UsdVisualSynced>,
-    q: Query<&UsdPrimPath>,
-    stages: Res<Assets<lunco_usd_bevy::UsdStageAsset>>,
-    asset_server: Res<AssetServer>,
-    mut materials: ResMut<Assets<ShaderMaterial>>,
-    mut commands: Commands,
-) {
-    let entity = trigger.entity;
-    let Ok(prim_path) = q.get(entity) else { return };
-    let Some(stage) = stages.get(&prim_path.stage_handle) else { return };
-    let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return };
-    let reader = &*stage.reader;
-
-    let mat_type: Option<String> = reader.prim_attribute_value(&sdf_path, "primvars:materialType");
-    if !matches!(mat_type.as_deref(), Some("shader") | Some("usd_shader")) {
-        return;
-    }
-
-    let Some(shader_path) = reader.prim_attribute_value::<String>(&sdf_path, "primvars:shaderPath")
-    else {
-        warn!("[shader] prim {} has materialType=shader but no primvars:shaderPath", prim_path.path);
-        return;
-    };
-
-    // The shader is chosen by `primvars:shaderPath` (e.g. "shaders/wheel.wgsl"
-    // or "shaders/balloon.wgsl"); generic colors/params come from primvars.
-    let mut material = ShaderMaterial::default();
-    read_authored_params(reader, &sdf_path, &mut material);
-    material.shader = asset_server.load(&shader_path);
-
-    let handle = materials.add(material);
-    commands
-        .entity(entity)
-        .remove::<MeshMaterial3d<StandardMaterial>>()
-        .insert(MeshMaterial3d(handle));
-}
-
-/// Reads `primvars:colorA/B/C` and `primvars:param0..7` into the material.
-fn read_authored_params(reader: &openusd::usda::TextReader, sdf_path: &SdfPath, m: &mut ShaderMaterial) {
-    for (attr, key) in [
-        ("primvars:colorA", "colorA"),
-        ("primvars:colorB", "colorB"),
-        ("primvars:colorC", "colorC"),
-    ] {
-        if let Some(c) = get_attribute_as_vec3(reader, sdf_path, attr) {
-            apply_param(m, key, &format!("{},{},{}", c.x, c.y, c.z));
-        }
-    }
-    for i in 0..8 {
-        let attr = format!("primvars:param{i}");
-        let key = format!("param{i}");
-        if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, &attr) {
-            apply_param(m, &key, &v.to_string());
-        } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, &attr) {
-            apply_param(m, &key, &(v as f32).to_string());
-        }
     }
 }

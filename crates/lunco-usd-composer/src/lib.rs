@@ -177,9 +177,12 @@ impl UsdComposer {
         fetcher: SublayerFetcher<'_>,
     ) -> Result<TextReader> {
         let mut data_map: HashMap<sdf::Path, sdf::Spec> = reader.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        let mut processed_references = HashSet::new();
+        // Per-file composed-data cache (compose once, reuse for every referencer)
+        // + the active-chain set used only to break reference cycles.
+        let mut cache: HashMap<PathBuf, HashMap<sdf::Path, sdf::Spec>> = HashMap::new();
+        let mut in_progress: HashSet<PathBuf> = HashSet::new();
         let usd_root = find_assets_root(base_dir);
-        Self::flatten_recursive(&mut data_map, &usd_root, base_dir, &mut processed_references, fetcher)?;
+        Self::flatten_recursive(&mut data_map, &usd_root, base_dir, &mut cache, &mut in_progress, fetcher)?;
         Ok(TextReader::from_data(data_map))
     }
 
@@ -187,7 +190,8 @@ impl UsdComposer {
         data_map: &mut HashMap<sdf::Path, sdf::Spec>,
         asset_root: &Path,
         current_dir: &Path,
-        processed: &mut HashSet<PathBuf>,
+        cache: &mut HashMap<PathBuf, HashMap<sdf::Path, sdf::Spec>>,
+        in_progress: &mut HashSet<PathBuf>,
         fetcher: SublayerFetcher<'_>
     ) -> Result<()> {
         // Collect all prim paths and prepare merges
@@ -253,16 +257,41 @@ impl UsdComposer {
                         normalize_path(&current_dir.join(&asset_path))
                     };
 
-                    let sub_reader = fetcher(&ref_path)?;
-                    let ref_current_dir = ref_path.parent().unwrap_or_else(|| Path::new("."));
-                    let mut sub_data: HashMap<sdf::Path, sdf::Spec> = sub_reader.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    let ref_current_dir = ref_path
+                        .parent()
+                        .unwrap_or_else(|| Path::new("."))
+                        .to_path_buf();
 
-                    // Only recurse into referenced file's own refs if not already processed
-                    // (prevents infinite loops from circular references)
-                    if !processed.contains(&ref_path) {
-                        processed.insert(ref_path.clone());
-                        Self::flatten_recursive(&mut sub_data, asset_root, ref_current_dir, processed, fetcher)?;
-                    }
+                    // Fully-composed sub-data for the referenced file. **Memoised
+                    // per file**: a file referenced by many prims (e.g.
+                    // `wheel.usda` under every rover, or a rover referenced as
+                    // several instances) is composed ONCE and the composed result
+                    // reused for every referencer. The previous global "processed"
+                    // set instead composed the file for the *first* referencer and
+                    // handed every later referencer the *raw* sub-data — dropping
+                    // that file's own nested references (so only one rover's wheels
+                    // received `wheel.usda`'s primvars, nondeterministically by
+                    // HashMap order). `in_progress` breaks reference *cycles* within
+                    // the current chain without suppressing legitimate reuse.
+                    let sub_data: HashMap<sdf::Path, sdf::Spec> =
+                        if let Some(cached) = cache.get(&ref_path) {
+                            cached.clone()
+                        } else {
+                            let sub_reader = fetcher(&ref_path)?;
+                            let mut sub_data: HashMap<sdf::Path, sdf::Spec> =
+                                sub_reader.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                            if in_progress.insert(ref_path.clone()) {
+                                Self::flatten_recursive(
+                                    &mut sub_data, asset_root, &ref_current_dir,
+                                    cache, in_progress, fetcher,
+                                )?;
+                                in_progress.remove(&ref_path);
+                                cache.insert(ref_path.clone(), sub_data.clone());
+                            }
+                            // else: cyclic reference up the current chain — use the
+                            // raw sub-data (one level, uncached) to break the loop.
+                            sub_data
+                        };
 
                     let root = if ref_prim_path.is_empty() {
                         Self::get_default_prim_from_data(&sub_data).ok_or_else(|| {
