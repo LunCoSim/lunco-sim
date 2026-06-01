@@ -221,7 +221,7 @@ fn any_unprocessed_usd_sim(
 
 fn process_usd_sim_prims(
     mut commands: Commands,
-    query: Query<(Entity, &UsdPrimPath, Option<&Transform>, Option<&Mesh3d>, Option<&MeshMaterial3d<StandardMaterial>>, Option<&ChildOf>), Without<UsdSimProcessed>>,
+    query: Query<(Entity, &UsdPrimPath, Option<&Transform>, Option<&Mesh3d>, Option<&MeshMaterial3d<StandardMaterial>>, Option<&MeshMaterial3d<lunco_materials::ShaderMaterial>>, Option<&ChildOf>), Without<UsdSimProcessed>>,
     q_all_prims: Query<&UsdPrimPath>,
     q_grids: Query<Entity, With<Grid>>,
     q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
@@ -273,7 +273,7 @@ fn process_usd_sim_prims(
     }
 
     // --- Pass 2: Process all prims ---
-    for (entity, prim_path, maybe_tf, maybe_mesh, maybe_mat, maybe_child_of) in query.iter() {
+    for (entity, prim_path, maybe_tf, maybe_mesh, maybe_mat, maybe_shader_mat, maybe_child_of) in query.iter() {
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
 
@@ -496,14 +496,14 @@ fn process_usd_sim_prims(
                 let joint_sdf = SdfPath::new(&joint_path_str).ok();
                 setup_physical_wheel(
                     &mut commands, entity, prim_path, &existing_tf,
-                    maybe_mesh, maybe_mat, maybe_child_of,
+                    maybe_mesh, maybe_mat, maybe_shader_mat, maybe_child_of,
                     radius, p_drive,
                     reader, joint_sdf.as_ref(),
                 );
             } else {
                 setup_raycast_wheel(
                     &mut commands, entity, prim_path, &existing_tf,
-                    maybe_mesh, maybe_mat, maybe_child_of,
+                    maybe_mesh, maybe_mat, maybe_shader_mat, maybe_child_of,
                     radius, index, rest_length, spring_k, damping_c,
                     p_drive, p_steer,
                 );
@@ -526,6 +526,7 @@ fn setup_raycast_wheel(
     existing_tf: &Transform,
     maybe_mesh: Option<&Mesh3d>,
     maybe_mat: Option<&MeshMaterial3d<StandardMaterial>>,
+    maybe_shader_mat: Option<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
     maybe_child_of: Option<&ChildOf>,
     radius: f32,
     _index: i32,
@@ -573,12 +574,19 @@ fn setup_raycast_wheel(
             wheel_mesh.unwrap(),
             ChildOf(entity),
         ));
-        if let Some(mat) = maybe_mat.cloned() {
+        // Move whichever material the prim received onto the visual child. A USD
+        // `materialType="shader"` prim gets a `ShaderMaterial` (applied by the
+        // material observer before this split runs) — prefer it over the default
+        // `StandardMaterial` so USD-authored shaders survive the wheel split.
+        if let Some(sm) = maybe_shader_mat.cloned() {
+            visual.insert(sm);
+        } else if let Some(mat) = maybe_mat.cloned() {
             visual.insert(mat);
         }
         wheel.visual_entity = Some(visual.id());
         commands.entity(entity).remove::<Mesh3d>();
         commands.entity(entity).remove::<MeshMaterial3d<StandardMaterial>>();
+        commands.entity(entity).remove::<MeshMaterial3d<lunco_materials::ShaderMaterial>>();
     }
 
     // Physics entity: identity rotation, position preserved
@@ -632,6 +640,7 @@ fn setup_physical_wheel(
     existing_tf: &Transform,
     maybe_mesh: Option<&Mesh3d>,
     maybe_mat: Option<&MeshMaterial3d<StandardMaterial>>,
+    maybe_shader_mat: Option<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
     maybe_child_of: Option<&ChildOf>,
     radius: f32,
     p_drive: Entity,
@@ -692,11 +701,18 @@ fn setup_physical_wheel(
             mesh,
             ChildOf(entity),
         ));
-        if let Some(mat) = maybe_mat.cloned() {
+        // Move whichever material the prim received onto the visual child. A USD
+        // `materialType="shader"` prim gets a `ShaderMaterial` (applied by the
+        // material observer before this split runs) — prefer it over the default
+        // `StandardMaterial` so USD-authored shaders survive the wheel split.
+        if let Some(sm) = maybe_shader_mat.cloned() {
+            visual.insert(sm);
+        } else if let Some(mat) = maybe_mat.cloned() {
             visual.insert(mat);
         }
         commands.entity(entity).remove::<Mesh3d>();
         commands.entity(entity).remove::<MeshMaterial3d<StandardMaterial>>();
+        commands.entity(entity).remove::<MeshMaterial3d<lunco_materials::ShaderMaterial>>();
     }
 
     commands.entity(entity).remove::<WheelRaycast>()

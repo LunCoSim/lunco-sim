@@ -142,8 +142,12 @@ lunco-celestial  →  lunco-materials   (BlueprintMaterial consumer)
 crates/lunco-materials/
 ├── src/
 │   ├── lib.rs              # Re-exports + shared get_attribute_as_vec3() helper
-│   ├── solar_panel.rs      # SolarPanelMaterialPlugin + shader + post-sync system
+│   ├── shader_material.rs  # General ShaderMaterial: any WGSL per-instance, USD/curl-driven
 │   └── blueprint.rs        # BlueprintMaterialPlugin + shader + post-sync system
 └── tests/
-    └── materials_test.rs   # Extension defaults validation
+    └── materials_test.rs   # Defaults validation
+
+The solar panel is no longer a bespoke material — it is the general `ShaderMaterial`
++ `assets/shaders/solar_panel.wgsl`, authored from USD via
+`primvars:materialType = "shader"` + `primvars:shaderPath`.
 ```

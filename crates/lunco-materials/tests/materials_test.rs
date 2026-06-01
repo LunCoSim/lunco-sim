@@ -1,32 +1,17 @@
 //! Unit tests for lunco-materials crate.
 
-use lunco_materials::{SolarPanelExtension, BlueprintExtension};
+use lunco_materials::{ShaderMaterial, BlueprintExtension};
 
-/// Verifies SolarPanelExtension has sensible default values
+/// Verifies the general ShaderMaterial has sensible default uniforms.
+/// (The solar panel is now driven by this material + `shaders/solar_panel.wgsl`,
+/// not a bespoke `SolarPanelExtension`.)
 #[test]
-fn test_solar_panel_extension_defaults() {
-    let ext = SolarPanelExtension::default();
-
-    // Panel dimensions
-    assert_eq!(ext.panel_half_width, 3.0);
-    assert_eq!(ext.panel_half_depth, 1.5);
-
-    // Grid layout
-    assert_eq!(ext.cell_rows, 12.0);
-    assert_eq!(ext.cell_cols, 6.0);
-
-    // Colors are non-default (should be deep blue — blue channel > red channel)
-    assert!(ext.cell_color.blue > ext.cell_color.red);
-
-    // Dimensional parameters
-    assert_eq!(ext.cell_gap, 0.02);
-    assert_eq!(ext.bus_line_width, 0.003);
-    assert_eq!(ext.frame_border_width, 0.05);
-
-    // Optical properties
-    assert_eq!(ext.glass_reflectivity, 0.15);
-    assert_eq!(ext.glass_roughness, 0.05);
-    assert_eq!(ext.specular_intensity, 0.8);
+fn test_shader_material_defaults() {
+    let m = ShaderMaterial::default();
+    // Default colors are non-zero and params start cleared.
+    assert!(m.color_a.red > 0.0 || m.color_a.green > 0.0 || m.color_a.blue > 0.0);
+    assert_eq!(m.params, bevy::math::Vec4::ZERO);
+    assert_eq!(m.params2, bevy::math::Vec4::ZERO);
 }
 
 /// Verifies BlueprintExtension has sensible default values

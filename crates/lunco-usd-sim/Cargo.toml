@@ -7,6 +7,7 @@ edition = "2021"
 bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking"] }
 openusd = { workspace = true }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-materials = { path = "../lunco-materials" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-core = { path = "../lunco-core" }
 lunco-fsw = { path = "../lunco-fsw" }

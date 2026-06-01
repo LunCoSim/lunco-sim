@@ -6390,6 +6390,7 @@ dependencies = [
  "lunco-doc",
  "lunco-fsw",
  "lunco-hardware",
+ "lunco-materials",
  "lunco-mobility",
  "lunco-modelica",
  "lunco-scripting",

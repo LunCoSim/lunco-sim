@@ -126,11 +126,10 @@ impl Plugin for BlueprintMaterialPlugin {
 /// instantiated, if the prim declares `primvars:materialType = "BlueprintGrid"`.
 ///
 /// **Observer-driven, not a per-frame poll** — fires exactly once per prim,
-/// triggered by `sync_usd_visuals` inserting `UsdVisualSynced`. See
-/// [`crate::solar_panel::apply_solar_panel_material`] for the full rationale:
-/// this shape removes the `Without<Marker>` poll gate (so no per-frame
-/// full-scene re-scan) and borrows the reader (so no whole-stage deep clone) —
-/// the two recurring §7.5 regressions become structurally impossible.
+/// triggered by `sync_usd_visuals` inserting `UsdVisualSynced`. This shape
+/// removes the `Without<Marker>` poll gate (so no per-frame full-scene re-scan)
+/// and borrows the reader (so no whole-stage deep clone) — the two recurring
+/// §7.5 regressions become structurally impossible.
 ///
 /// Needs no headless guard: the observer only fires when `UsdVisualSynced` is
 /// added, which only happens once `Assets<UsdStageAsset>` exists.

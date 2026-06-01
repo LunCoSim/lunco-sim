@@ -22,15 +22,19 @@ fn test_solar_panel_usda_has_rigid_body_api() {
     );
 }
 
-/// Verifies the solar_panel.usda has the correct material type primvar
+/// Verifies the solar_panel.usda drives the general ShaderMaterial.
 #[test]
 fn test_solar_panel_usda_has_material_type() {
     let usda_path = std::path::Path::new("../../assets/components/power/solar_panel.usda");
     let content = std::fs::read_to_string(usda_path)
         .unwrap_or_else(|e| panic!("solar_panel.usda should exist at {:?}: {}", usda_path, e));
     assert!(
-        content.contains("primvars:materialType = \"solar_panel\""),
-        "PanelSurface must have primvars:materialType = solar_panel"
+        content.contains("primvars:materialType = \"shader\""),
+        "PanelSurface must have primvars:materialType = shader"
+    );
+    assert!(
+        content.contains("shaders/solar_panel.wgsl"),
+        "PanelSurface must point primvars:shaderPath at shaders/solar_panel.wgsl"
     );
 }
 

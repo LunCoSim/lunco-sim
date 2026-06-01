@@ -23,6 +23,18 @@ def Cylinder "Wheel" (
     uniform token[] xformOpOrder = ["xformOp:translate"]
     color3f primvars:displayColor = (0.3, 0.3, 0.3)
 
+    # Spin-revealing wheel (tire + rim + spokes) via the general ShaderMaterial,
+    # loaded at USD-load time (see assets/shaders/wheel.wgsl). Survives the
+    # physics/visual wheel split (lunco_usd_sim::setup_*_wheel carry it through).
+    string primvars:materialType = "shader"
+    string primvars:shaderPath = "shaders/wheel.wgsl"
+    color3f primvars:colorA = (0.80, 0.80, 0.85)   # spoke / rim (metal)
+    color3f primvars:colorB = (0.10, 0.10, 0.11)   # tire (rubber)
+    color3f primvars:colorC = (0.90, 0.20, 0.20)   # marker spoke + hub
+    float primvars:param0 = 6.0    # spoke count
+    float primvars:param1 = 24.0   # tread lugs
+    float primvars:param3 = 1.0    # marker spokes
+
     # --- Modelica model ---
     string lunco:modelicaModel = "models/wheel.mo"
     string lunco:modelicaClassName = "LunCo.Mobility.Wheel.Motorized"
