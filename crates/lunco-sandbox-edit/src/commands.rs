@@ -204,14 +204,114 @@ pub fn clear_kinematic_pulse_velocity(
     }
 }
 
-/// Plugin that registers SPAWN_ENTITY / MOVE_ENTITY command observers
-/// and the kinematic-pulse cleanup system.
+// ─────────────────────────────────────────────────────────────────────
+// SetObjectProperty — ONE general verb to set any property on an object
+// ─────────────────────────────────────────────────────────────────────
+
+/// Set a property on a scene object at runtime (live override — not persisted
+/// to USD). One general command instead of many narrow ones; new properties
+/// just add a `match` arm. Drive it from curl after a screenshot to iterate:
+///
+/// ```jsonc
+/// {"command":"SetObjectProperty",
+///  "params":{"entity_id":42,"property":"shader","value":"shaders/spin_reveal.wgsl"}}
+/// {"command":"SetObjectProperty",
+///  "params":{"entity_id":42,"property":"param0","value":"12"}}   // wedge count
+/// {"command":"SetObjectProperty",
+///  "params":{"entity_id":42,"property":"colorA","value":"0.1,0.8,0.2"}}
+/// ```
+///
+/// Recognised `property` values:
+/// - `shader` → load that `.wgsl` (asset path) and bind it via `UsdShaderMaterial`.
+/// - `param0`..`param7`, `colorA`/`color`/`colorB`/`colorC` → update the object's
+///   shader uniforms in place (requires `shader` to have been set first, or a
+///   USD `usd_shader` material).
+/// - `visible` → `true`/`false` toggles `Visibility`.
+#[Command(default)]
+pub struct SetObjectProperty {
+    /// API-stable global entity ID (the `api_id` from `ListEntities`), same
+    /// resolution path as [`MoveEntity`].
+    pub entity_id: u64,
+    /// Property name (see struct docs).
+    pub property: String,
+    /// Value; comma-separated `r,g,b` for colors, a single float for params,
+    /// an asset path for `shader`, `true`/`false` for `visible`.
+    pub value: String,
+}
+
+/// Observer for [`SetObjectProperty`].
+pub fn on_set_object_property(
+    trigger: On<SetObjectProperty>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    asset_server: Res<AssetServer>,
+    mut materials: ResMut<Assets<lunco_materials::ShaderMaterial>>,
+    q_mat: Query<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    mut q_vis: Query<&mut Visibility>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
+    let Some(target) = registry.resolve(&global_id) else {
+        warn!("SET_PROPERTY: no api_id={} in registry", cmd.entity_id);
+        return;
+    };
+
+    match cmd.property.as_str() {
+        "shader" => {
+            // Preserve existing uniforms if the object already has a
+            // ShaderMaterial, so swapping the .wgsl keeps tuned params.
+            let template = q_mat
+                .get(target)
+                .ok()
+                .and_then(|m| materials.get(&m.0))
+                .cloned()
+                .unwrap_or_default();
+            let shader = asset_server.load(&cmd.value);
+            let handle = materials.add(lunco_materials::build_shader_material(shader, template));
+            commands
+                .entity(target)
+                .remove::<MeshMaterial3d<StandardMaterial>>()
+                .insert(MeshMaterial3d(handle));
+            info!("SET_PROPERTY: {} shader = {}", cmd.entity_id, cmd.value);
+        }
+        "visible" => {
+            let Ok(mut vis) = q_vis.get_mut(target) else {
+                warn!("SET_PROPERTY: entity {} has no Visibility", cmd.entity_id);
+                return;
+            };
+            let v = cmd.value.trim();
+            *vis = if matches!(v, "false" | "0" | "hidden") {
+                Visibility::Hidden
+            } else {
+                Visibility::Visible
+            };
+        }
+        key => {
+            // param/color → mutate the live shader material's uniforms in place.
+            let Ok(m) = q_mat.get(target) else {
+                warn!("SET_PROPERTY: entity {} has no usd_shader material — set 'shader' first", cmd.entity_id);
+                return;
+            };
+            let Some(mat) = materials.get_mut(&m.0) else { return };
+            if !lunco_materials::apply_param(mat, key, &cmd.value) {
+                warn!("SET_PROPERTY: unknown property '{}'", key);
+            }
+        }
+    }
+}
+
+/// Plugin that registers SPAWN_ENTITY / MOVE_ENTITY / SET_OBJECT_PROPERTY
+/// command observers and the kinematic-pulse cleanup system.
 pub struct SpawnCommandPlugin;
 
 impl Plugin for SpawnCommandPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_spawn_entity_command);
         app.add_observer(on_move_entity_command);
+        app.add_observer(on_set_object_property);
+        // Register with AppTypeRegistry so the reflection-based HTTP executor
+        // (`get_with_short_type_path`) can construct it from `{"command":"SetObjectProperty",...}`.
+        app.register_type::<SetObjectProperty>();
         app.add_systems(FixedPostUpdate, clear_kinematic_pulse_velocity);
     }
 }

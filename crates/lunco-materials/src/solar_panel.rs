@@ -16,6 +16,7 @@
 use bevy::prelude::*;
 use bevy::pbr::{MaterialExtension, MaterialPlugin, ExtendedMaterial};
 use bevy::render::render_resource::AsBindGroup;
+#[cfg(target_arch = "wasm32")]
 use bevy::asset::load_internal_asset;
 use bevy::shader::{Shader, ShaderRef};
 use std::marker::PhantomData;
@@ -26,7 +27,13 @@ use openusd::usda::TextReader;
 use openusd::sdf::Path as SdfPath;
 use crate::get_attribute_as_vec3;
 
-/// UUID for the solar panel shader.
+/// Asset path of the solar panel shader, relative to the `assets/` root. Used on
+/// native so editing the `.wgsl` hot-reloads.
+#[cfg(not(target_arch = "wasm32"))]
+const SOLAR_PANEL_SHADER_PATH: &str = "shaders/solar_panel_extension.wgsl";
+
+/// UUID for the solar panel shader. Used on wasm (no filesystem) where the
+/// source is embedded to this handle; native loads by path instead.
 const SOLAR_PANEL_SHADER_UUID: Uuid = Uuid::from_u128(0x9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d);
 pub const SOLAR_PANEL_SHADER_HANDLE: Handle<Shader> = Handle::Uuid(SOLAR_PANEL_SHADER_UUID, PhantomData);
 
@@ -83,7 +90,11 @@ impl Default for SolarPanelExtension {
 
 impl MaterialExtension for SolarPanelExtension {
     fn fragment_shader() -> ShaderRef {
-        SOLAR_PANEL_SHADER_HANDLE.into()
+        // Native: load by path → hot-reloadable. Wasm: the embedded const handle.
+        #[cfg(not(target_arch = "wasm32"))]
+        { SOLAR_PANEL_SHADER_PATH.into() }
+        #[cfg(target_arch = "wasm32")]
+        { SOLAR_PANEL_SHADER_HANDLE.into() }
     }
 }
 
@@ -96,6 +107,9 @@ pub struct SolarPanelMaterialPlugin;
 
 impl Plugin for SolarPanelMaterialPlugin {
     fn build(&self, app: &mut App) {
+        // Native loads the shader from `assets/` by path (hot-reload). Only wasm
+        // (no filesystem) needs the source embedded to the const handle.
+        #[cfg(target_arch = "wasm32")]
         load_internal_asset!(
             app,
             SOLAR_PANEL_SHADER_HANDLE,

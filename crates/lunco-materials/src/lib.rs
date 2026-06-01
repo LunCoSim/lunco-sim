@@ -24,9 +24,11 @@
 
 mod solar_panel;
 mod blueprint;
+mod shader_material;
 
 pub use solar_panel::*;
 pub use blueprint::*;
+pub use shader_material::*;
 
 use bevy::prelude::*;
 use openusd::usda::TextReader;

@@ -88,7 +88,7 @@ pub use window_persistence::{
 };
 pub use workspace_state::{
     workspace_state_path, AppDocumentSessionExt, DocumentSessionCodec, DocumentSessionRegistry,
-    DocumentSnapshot, PanelSizes, WorkspaceState, WorkspaceStatePlugin,
+    DocumentSnapshot, WorkspaceState, WorkspaceStatePlugin,
 };
 pub use render_robustness::preferred_wgpu_settings;
 
@@ -2410,22 +2410,15 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         // mirror a 10/80/10 split: side panels 10% of window width each;
         // bottom dock 20% of window height.
         let screen = ctx.content_rect();
-        // Per-Twin restored sizes win over the computed default on a fresh
-        // launch (egui has no memory of last session); `None` ⇒ default.
-        // See [`workspace_state::PanelSizes`].
-        let saved = world
-            .get_resource::<workspace_state::PanelSizes>()
-            .copied()
-            .unwrap_or_default();
-        let side_default = saved
-            .side_width
-            .unwrap_or_else(|| (screen.width() * 0.10).max(140.0));
-        let right_default = saved
-            .right_width
-            .unwrap_or_else(|| (screen.width() * 0.10).max(140.0));
-        let bottom_default = saved
-            .bottom_height
-            .unwrap_or_else(|| (screen.height() * 0.20).max(120.0));
+        // Defaults are percentages of the current window so the layout
+        // looks right whether the user runs in 1280×720 or 4K. Targets
+        // mirror a 10/80/10 split: side panels 10% of window width each;
+        // bottom dock 20% of window height. egui then owns the live width
+        // in its own memory for the session (not persisted — sandbox-style
+        // perspectives keep their sizes in the dock tree via 5a instead).
+        let side_default = (screen.width() * 0.10).max(140.0);
+        let right_default = (screen.width() * 0.10).max(140.0);
+        let bottom_default = (screen.height() * 0.20).max(120.0);
 
         if let Some(id) = layout.side_browser.first().copied() {
             let r = egui::SidePanel::left("lunco_workbench_side_panel_left")
@@ -2437,7 +2430,6 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });
-            write_panel_size(world, |s| s.side_width = Some(r.response.rect.width()));
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.side_browser", r.response.rect);
             }
@@ -2452,7 +2444,6 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });
-            write_panel_size(world, |s| s.right_width = Some(r.response.rect.width()));
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.right_inspector", r.response.rect);
             }
@@ -2466,7 +2457,6 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });
-            write_panel_size(world, |s| s.bottom_height = Some(r.response.rect.height()));
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.bottom", r.response.rect);
             }
@@ -2474,29 +2464,6 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         // Central area: do NOT call CentralPanel — egui's bottom/side
         // panels reserve their space and the remaining region stays
         // free for the 3D scene that Bevy renders to the full window.
-    }
-}
-
-/// Write back a live egui side-panel size into [`workspace_state::PanelSizes`],
-/// but only when it actually moved (≥0.5 pt). Change-gated so the resource
-/// isn't marked mutated every frame (which would defeat the persist gate
-/// and churn the disk). Mirrors the lazy-systems rule (AGENTS.md §7.1).
-fn write_panel_size(world: &mut World, set: impl FnOnce(&mut workspace_state::PanelSizes)) {
-    let mut next = world
-        .get_resource::<workspace_state::PanelSizes>()
-        .copied()
-        .unwrap_or_default();
-    let before = next;
-    set(&mut next);
-    let moved = |a: Option<f32>, b: Option<f32>| match (a, b) {
-        (Some(x), Some(y)) => (x - y).abs() >= 0.5,
-        (a, b) => a != b,
-    };
-    if moved(before.side_width, next.side_width)
-        || moved(before.right_width, next.right_width)
-        || moved(before.bottom_height, next.bottom_height)
-    {
-        world.insert_resource(next);
     }
 }
 

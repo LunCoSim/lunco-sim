@@ -6199,6 +6199,7 @@ dependencies = [
  "lunco-api",
  "lunco-controller",
  "lunco-core",
+ "lunco-materials",
  "lunco-mobility",
  "lunco-modelica",
  "lunco-theme",

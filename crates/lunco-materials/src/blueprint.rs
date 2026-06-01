@@ -6,6 +6,7 @@
 use bevy::prelude::*;
 use bevy::pbr::{MaterialExtension, MaterialPlugin, ExtendedMaterial};
 use bevy::render::render_resource::AsBindGroup;
+#[cfg(target_arch = "wasm32")]
 use bevy::asset::load_internal_asset;
 use bevy::shader::{Shader, ShaderRef};
 use std::marker::PhantomData;
@@ -13,7 +14,15 @@ use uuid::Uuid;
 
 use openusd::sdf::Path as SdfPath;
 
-/// UUID for the blueprint shader.
+/// Asset path of the blueprint shader, relative to the `assets/` root. Used on
+/// native so editing the `.wgsl` hot-reloads.
+#[cfg(not(target_arch = "wasm32"))]
+const BLUEPRINT_SHADER_PATH: &str = "shaders/blueprint_extension.wgsl";
+
+/// UUID for the blueprint shader. **Load-bearing on wasm**: the `embed-assets`
+/// build has no filesystem, so `lunco-celestial`'s `EmbeddedAssetsPlugin`
+/// registers the shader source to this const handle. Native loads by path
+/// instead (see [`BlueprintExtension::fragment_shader`]).
 const BLUEPRINT_SHADER_UUID: Uuid = Uuid::from_u128(0x1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d);
 pub const BLUEPRINT_SHADER_HANDLE: Handle<Shader> = Handle::Uuid(BLUEPRINT_SHADER_UUID, PhantomData);
 
@@ -79,7 +88,11 @@ impl Default for BlueprintExtension {
 
 impl MaterialExtension for BlueprintExtension {
     fn fragment_shader() -> ShaderRef {
-        BLUEPRINT_SHADER_HANDLE.into()
+        // Native: load by path → hot-reloadable. Wasm: the embedded const handle.
+        #[cfg(not(target_arch = "wasm32"))]
+        { BLUEPRINT_SHADER_PATH.into() }
+        #[cfg(target_arch = "wasm32")]
+        { BLUEPRINT_SHADER_HANDLE.into() }
     }
 }
 
@@ -91,6 +104,9 @@ pub struct BlueprintMaterialPlugin;
 
 impl Plugin for BlueprintMaterialPlugin {
     fn build(&self, app: &mut App) {
+        // Native loads the shader from `assets/` by path (hot-reload). Only wasm
+        // (no filesystem) needs the source embedded to the const handle.
+        #[cfg(target_arch = "wasm32")]
         load_internal_asset!(
             app,
             BLUEPRINT_SHADER_HANDLE,
