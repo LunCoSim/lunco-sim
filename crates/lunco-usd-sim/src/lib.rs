@@ -53,6 +53,7 @@ use bevy::math::DVec3;
 use avian3d::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy::{has_api_schema, read_rel_target};
 use openusd::sdf::{Path as SdfPath, AbstractData, Value};
 use openusd::usda::TextReader;
 use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
@@ -130,29 +131,6 @@ pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
 /// USD → [`ShaderMaterial`](lunco_materials::ShaderMaterial) authoring,
 /// deterministically ordered so it can never race a downstream consumer.
 pub mod shader;
-
-/// Helper to check if a prim has a specific API schema applied.
-///
-/// Handles both `TokenVec` (resolved) and `TokenListOp` (with prepend/append ops)
-/// since the USD parser stores apiSchemas as a list operation.
-fn has_api_schema(reader: &TextReader, path: &SdfPath, schema_name: &str) -> bool {
-    if let Ok(val) = reader.get(path, "apiSchemas") {
-        match val.as_ref() {
-            Value::TokenVec(tokens) => {
-                return tokens.iter().any(|s| s == schema_name);
-            }
-            Value::TokenListOp(list_op) => {
-                let mut all_items = list_op.explicit_items.iter()
-                    .chain(list_op.prepended_items.iter())
-                    .chain(list_op.appended_items.iter())
-                    .chain(list_op.added_items.iter());
-                return all_items.any(|s| s.as_str() == schema_name);
-            }
-            _ => {}
-        }
-    }
-    false
-}
 
 /// Logical link from a joint-based wheel rigid body up to its rover.
 ///
@@ -966,24 +944,3 @@ fn try_wire_wheel(
     }
 }
 
-/// Reads the first target path from a USD relationship (e.g. `physics:body1`).
-///
-/// USD relationship specs live at `<prim_path>.<rel_name>`. This mirrors
-/// `lunco-usd-avian::read_rel_target` — kept local rather than re-exported
-/// to avoid a public-API hop for one helper.
-fn read_rel_target(reader: &TextReader, prim_path: &SdfPath, rel_name: &str) -> Option<String> {
-    let rel_path_str = format!("{}.{}", prim_path.as_str(), rel_name);
-    let Ok(rel_sdf) = SdfPath::new(&rel_path_str) else { return None; };
-    if let Ok(val) = reader.get(&rel_sdf, "targetPaths") {
-        if let Value::PathListOp(op) = &*val {
-            if let Some(target) = op.explicit_items.first()
-                .or_else(|| op.prepended_items.first())
-                .or_else(|| op.appended_items.first())
-                .or_else(|| op.added_items.first())
-            {
-                return Some(target.as_str().to_string());
-            }
-        }
-    }
-    None
-}

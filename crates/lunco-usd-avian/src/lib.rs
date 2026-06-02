@@ -46,7 +46,7 @@ use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::DVec3;
 use avian3d::prelude::*;
 use avian3d::physics_transform::{Position, Rotation};
-use lunco_usd_bevy::UsdVisualSynced;
+use lunco_usd_bevy::{has_api_schema, read_rel_target, UsdVisualSynced};
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 use openusd::sdf::{AbstractData, Path as SdfPath, Value};
 use openusd::usda::TextReader;
@@ -112,27 +112,6 @@ pub struct PendingUsdJoint {
 }
 
 /// Checks if a USD prim has a specific API schema applied.
-///
-/// Reads the `apiSchemas` attribute. Handles all value types including
-/// `TokenListOp` which stores `prepend`/`append`/`add` operations separately.
-fn has_api_schema(reader: &TextReader, sdf_path: &SdfPath, schema_name: &str) -> bool {
-    if let Ok(val) = reader.get(sdf_path, "apiSchemas") {
-        match &*val {
-            Value::Token(s) => return s.contains(schema_name),
-            Value::TokenVec(ss) => return ss.iter().any(|s| s.contains(schema_name)),
-            Value::String(s) => return s.contains(schema_name),
-            Value::TokenListOp(list_op) => {
-                for s in &list_op.explicit_items { if s.as_str() == schema_name { return true; } }
-                for s in &list_op.prepended_items { if s.as_str() == schema_name { return true; } }
-                for s in &list_op.appended_items { if s.as_str() == schema_name { return true; } }
-                for s in &list_op.added_items { if s.as_str() == schema_name { return true; } }
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
 /// Collects collider shapes from all child prims of a compound body root,
 /// reading directly from the USD stage.
 ///
@@ -620,29 +599,6 @@ fn build_usd_physics_joints(
 
         commands.entity(joint_entity).remove::<PendingUsdJoint>();
     }
-}
-
-/// Reads a relationship target from a child relationship spec.
-///
-/// In the SDF data model, `rel physics:body0 = [</path>]` creates a property
-/// spec at `<prim_path>.physics:body0` with `FieldKey::TargetPaths`.
-fn read_rel_target(reader: &TextReader, prim_path: &SdfPath, rel_name: &str) -> Option<String> {
-    // USD relationship specs live at <prim_path>.<rel_name> (dot-separated property path)
-    let rel_path_str = format!("{}.{}", prim_path.as_str(), rel_name);
-    let Ok(rel_sdf) = SdfPath::new(&rel_path_str) else { return None; };
-
-    if let Ok(val) = reader.get(&rel_sdf, "targetPaths") {
-        if let Value::PathListOp(op) = &*val {
-            if let Some(target) = op.explicit_items.first()
-                .or_else(|| op.prepended_items.first())
-                .or_else(|| op.appended_items.first())
-                .or_else(|| op.added_items.first())
-            {
-                return Some(target.as_str().to_string());
-            }
-        }
-    }
-    None
 }
 
 /// Reads a USD token attribute (e.g., `uniform token axis = "X"`).

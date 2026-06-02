@@ -798,6 +798,56 @@ pub fn stage_default_prim(reader: &TextReader) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
+/// True if the prim at `path` applies the named API schema, by exact
+/// token match against its `apiSchemas` list (or list-op). Canonical
+/// shared helper — `lunco-usd-avian` and `lunco-usd-sim` both call
+/// this instead of keeping their own (previously diverged) copies.
+///
+/// Handles every form `apiSchemas` can take: a single `Token`/`String`,
+/// a `TokenVec`, or a `TokenListOp` (explicit/prepended/appended/added).
+pub fn has_api_schema(reader: &TextReader, path: &SdfPath, schema_name: &str) -> bool {
+    let Ok(val) = reader.get(path, "apiSchemas") else {
+        return false;
+    };
+    match &*val {
+        Value::Token(s) | Value::String(s) => s == schema_name,
+        Value::TokenVec(ss) => ss.iter().any(|s| s == schema_name),
+        Value::TokenListOp(op) => op
+            .explicit_items
+            .iter()
+            .chain(op.prepended_items.iter())
+            .chain(op.appended_items.iter())
+            .chain(op.added_items.iter())
+            .any(|s| s.as_str() == schema_name),
+        _ => false,
+    }
+}
+
+/// First target path of relationship `rel_name` on `prim_path`, as a
+/// string (`None` if the relationship is absent/empty). Canonical
+/// shared helper — replaces the byte-identical copies that lived in
+/// `lunco-usd-avian` and `lunco-usd-sim`.
+pub fn read_rel_target(reader: &TextReader, prim_path: &SdfPath, rel_name: &str) -> Option<String> {
+    let rel_path_str = format!("{}.{}", prim_path.as_str(), rel_name);
+    let Ok(rel_sdf) = SdfPath::new(&rel_path_str) else {
+        return None;
+    };
+    if let Ok(val) = reader.get(&rel_sdf, "targetPaths") {
+        if let Value::PathListOp(op) = &*val {
+            if let Some(target) = op
+                .explicit_items
+                .first()
+                .or_else(|| op.prepended_items.first())
+                .or_else(|| op.appended_items.first())
+                .or_else(|| op.added_items.first())
+            {
+                return Some(target.as_str().to_string());
+            }
+        }
+    }
+    None
+}
+
 fn get_attribute_as_string(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<String> {
     let attr_path = path.append_property(attr).ok()?;
     let val = reader.get(&attr_path, "default").ok()?;
