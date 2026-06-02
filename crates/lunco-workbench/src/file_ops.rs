@@ -98,6 +98,18 @@ pub struct OpenFile {
     pub path: String,
 }
 
+/// Produce a shareable link for the active document and copy it to the
+/// clipboard.
+///
+/// Like [`OpenFile`], the workbench owns only the typed struct — the
+/// behaviour is domain-specific and lives in the domain crate
+/// (`lunco-modelica` encodes the active model's source into a URL
+/// fragment). Over the HTTP API the same name is served by a *query*
+/// that **returns** the link in its `data` payload instead of touching a
+/// clipboard (a headless server has none); see the query registry.
+#[Command(default)]
+pub struct CopyShareLink {}
+
 /// Open a folder (no `twin.toml` requirement).
 ///
 /// Empty `path` triggers a native folder picker. Resolved folders are
@@ -821,6 +833,9 @@ impl Plugin for FileOpsPlugin {
         // crate registers an observer. Idempotent — re-registration
         // by a domain's `register_commands!()` is a no-op.
         app.register_type::<OpenFile>();
+        // CopyShareLink: workbench owns the typed struct so HTTP-API
+        // introspection sees it; the observer lives in lunco-modelica.
+        app.register_type::<CopyShareLink>();
         app.add_observer(on_show_open_file_picker);
         app.add_observer(on_show_open_folder_picker);
         app.add_observer(on_open_file);

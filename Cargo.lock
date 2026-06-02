@@ -7244,6 +7244,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "arc-swap",
+ "base64",
  "bevy",
  "bevy_egui",
  "bevy_vello",

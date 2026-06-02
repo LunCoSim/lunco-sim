@@ -60,6 +60,9 @@ lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-storage = { path = "../lunco-storage" }
 egui_plot = { workspace = true }
+# base64url encode/decode for shareable model links (see `model_share.rs`).
+# Already resolved transitively (0.22.x) — no new download.
+base64 = "0.22"
 # Docs view (ModelViewMode::Docs): HTML → Markdown → egui render.
 # `egui_commonmark` pulls the right `egui` version transitively to
 # match bevy_egui 0.39 (→ egui 0.33). Syntax highlighting is enabled

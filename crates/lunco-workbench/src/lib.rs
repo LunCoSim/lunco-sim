@@ -2017,6 +2017,25 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 }
                 ui.separator();
 
+                // -- Share --------------------------------------------
+                // Copy a link that encodes the active model's source in
+                // the URL fragment — opening it elsewhere recreates the
+                // model. Behaviour lives in the domain crate
+                // (lunco-modelica observes `CopyShareLink`).
+                if ui
+                    .add_enabled(has_active, egui::Button::new("Copy Share Link"))
+                    .on_hover_text(
+                        "Copy a URL that encodes this model's source — \
+                         anyone who opens it gets the model (nothing is uploaded)",
+                    )
+                    .on_disabled_hover_text("Copy Share Link — no active document")
+                    .clicked()
+                {
+                    world.trigger(file_ops::CopyShareLink {});
+                    ui.close();
+                }
+                ui.separator();
+
                 // -- Close --------------------------------------------
                 if ui
                     .add_enabled(has_active, egui::Button::new("Close\tCtrl+W"))
