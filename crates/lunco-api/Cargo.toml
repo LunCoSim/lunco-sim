@@ -11,6 +11,14 @@ transport-http = ["dep:axum", "dep:tokio"]
 [dependencies]
 lunco-core = { path = "../lunco-core" }
 bevy = { workspace = true }
+# Read avian velocity (LinearVelocity/AngularVelocity) in `gather_snapshot` to
+# replicate it for client-side prediction. lunco-api already queries `Transform`;
+# this is the same kind of ECS state read for the wire (still transport-agnostic).
+avian3d = { workspace = true }
+# Read the body's big_space `CellCoord` in `gather_snapshot` so replication
+# carries the integer cell alongside the f64 absolute position (gap A) — keeps
+# replication correct once the grid switches to active cell recentering.
+big_space = { workspace = true }
 image = "0.25"
 serde = { workspace = true }
 serde_json = { workspace = true }

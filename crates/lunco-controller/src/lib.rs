@@ -15,8 +15,78 @@ pub struct LunCoControllerPlugin;
 impl Plugin for LunCoControllerPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(InputManagerPlugin::<VesselIntent>::default())
-           .add_systems(Update, translate_intents_to_commands);
+           .init_resource::<lunco_core::OwnedInputLog>()
+           // Input is SENSED at frame rate (leafwing's `just_pressed` latch edges
+           // only work in `Update`) but EMITTED once per fixed tick, so the
+           // prediction replay is a clean 1:1 loop over `InputFrame`s.
+           .add_systems(Update, compute_vessel_input)
+           .add_systems(FixedUpdate, emit_vessel_input);
+        // The SINGLE input-bookkeeping chokepoint: every `DriveRover`/`BrakeRover`
+        // — keyboard, API, or wire-replayed — flows through these observers, so the
+        // client prediction log and the host reconcile-ack no longer depend on how
+        // the command was produced. (Was previously split between `emit_vessel_input`
+        // and `apply_wire_command`.)
+        app.add_observer(record_drive_input);
+        app.add_observer(record_brake_input);
     }
+}
+
+/// The single chokepoint where a [`DriveRover`] records its input bookkeeping,
+/// regardless of origin (local keyboard via [`emit_vessel_input`], the HTTP/MCP
+/// API, or a wire-replayed remote input). Unifying it here is what makes
+/// "DriveRover and inputs go through the same path": prediction logging (client)
+/// and the reconcile ack (host) no longer depend on *how* the command was made.
+fn record_drive_input(
+    trigger: On<DriveRover>,
+    role: Res<lunco_core::NetworkRole>,
+    mut owned_log: ResMut<lunco_core::OwnedInputLog>,
+    mut applied: ResMut<lunco_core::AppliedInputSeq>,
+    q: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
+) {
+    let cmd = trigger.event();
+    let Ok((gid, owned)) = q.get(cmd.target) else { return };
+    let g = gid.get();
+    if role.is_host() {
+        // Host ack (moved out of `apply_wire_command`): highest applied seq per gid,
+        // stamped into snapshots so the owning client can drop acked inputs.
+        let slot = applied.0.entry(g).or_insert(0);
+        *slot = (*slot).max(cmd.seq);
+    } else if owned && cmd.seq != 0 {
+        // Client predict (moved out of `emit_vessel_input`): buffer the frame keyed
+        // by seq so `record_predicted_state` keys its pose and reconcile can prune.
+        let entry = owned_log.0.entry(g).or_default();
+        if entry.frames.back().map_or(true, |f| f.seq != cmd.seq) {
+            entry.frames.push_back(lunco_core::InputFrame {
+                seq: cmd.seq,
+                tick: cmd.tick,
+                forward: cmd.forward,
+                steer: cmd.steer,
+                // Brake rides `BrakeRover`; the frame's brake is unused by the
+                // current positional reconcile (awaits true input-replay).
+                brake: 0.0,
+            });
+            while entry.frames.len() > MAX_INPUT_FRAMES {
+                entry.frames.pop_front();
+            }
+        }
+    }
+}
+
+/// Sibling of [`record_drive_input`] for [`BrakeRover`], so a brake-only input
+/// still advances the host ack (mirrors the old `DriveRover | BrakeRover` ack).
+fn record_brake_input(
+    trigger: On<BrakeRover>,
+    role: Res<lunco_core::NetworkRole>,
+    mut applied: ResMut<lunco_core::AppliedInputSeq>,
+    q: Query<&lunco_core::GlobalEntityId>,
+) {
+    if !role.is_host() {
+        return;
+    }
+    let cmd = trigger.event();
+    let Ok(gid) = q.get(cmd.target) else { return };
+    let slot = applied.0.entry(gid.get()).or_insert(0);
+    *slot = (*slot).max(cmd.seq);
 }
 
 /// Abstract intents specifically for controlling a vessel's movement.
@@ -45,6 +115,21 @@ pub struct ControllerLink {
     pub vessel_entity: Entity,
 }
 
+/// The latest control setpoint computed for a controller's vessel this frame.
+/// Written by [`compute_vessel_input`] (frame rate, edge-safe) and consumed by
+/// [`emit_vessel_input`] (fixed tick). Decouples input *sensing* from input
+/// *emission* so per-tick emission (needed for prediction replay) doesn't run in
+/// `FixedUpdate`, where leafwing's `just_pressed` latch edges would misfire.
+#[derive(Component, Clone, Copy, Default)]
+pub struct VesselInput {
+    /// Longitudinal throttle, −1..=1.
+    pub forward: f64,
+    /// Steering, −1..=1.
+    pub steer: f64,
+    /// Brake, 0..=1.
+    pub brake: f64,
+}
+
 /// Translates abstract human WASD actions into typed command events.
 ///
 /// This system implements the 'Level 4' Controller logic, mixing various
@@ -54,11 +139,13 @@ pub struct ControllerLink {
 /// that axis. While latched, the rover keeps driving/steering hands-off so you
 /// can hold `Ctrl` to detach the camera and inspect rover behaviour. Re-tap
 /// the same `Shift+key` to release, or press `Space` (brake) to clear all.
-fn translate_intents_to_commands(
-    q_controllers: Query<(Entity, &VesselIntentState, &ControllerLink)>,
+fn compute_vessel_input(
+    mut q_controllers: Query<
+        (Entity, &VesselIntentState, Option<&mut VesselInput>),
+        With<ControllerLink>,
+    >,
     keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
-    mut last_intents: Local<HashMap<Entity, (f64, f64, f64)>>,
     mut latches: Local<HashMap<Entity, (f64, f64)>>,
 ) {
     // Ctrl = camera free-look mode: live key signal stops flowing to the
@@ -68,7 +155,7 @@ fn translate_intents_to_commands(
     let ctrl_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let shift_pressed = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
 
-    for (ent, intent_state, link) in q_controllers.iter() {
+    for (ent, intent_state, vi_opt) in q_controllers.iter_mut() {
         let latch = latches.entry(ent).or_insert((0.0, 0.0));
 
         // Shift + axis key toggles a latched setpoint on that axis.
@@ -112,22 +199,79 @@ fn translate_intents_to_commands(
 
         let brake_intent = if intent_state.pressed(&VesselIntent::Brake) { 1.0 } else { 0.0 };
 
-        let current = (forward_intent, steer_intent, brake_intent);
-        let prev = last_intents.get(&ent).copied();
-        if prev.map_or(true, |last| last != current) {
-            commands.trigger(DriveRover {
-                target: link.vessel_entity,
-                forward: forward_intent,
-                steer: steer_intent,
-            });
-
-            commands.trigger(BrakeRover {
-                target: link.vessel_entity,
-                intensity: brake_intent,
-            });
-
-            last_intents.insert(ent, current);
+        let setpoint = VesselInput {
+            forward: forward_intent,
+            steer: steer_intent,
+            brake: brake_intent,
+        };
+        match vi_opt {
+            Some(mut vi) => *vi = setpoint,
+            None => {
+                commands.entity(ent).insert(setpoint);
+            }
         }
+    }
+}
+
+/// Cap on the unacked input ring (~2 s at 60 Hz). The reconcile normally drains
+/// it to the acked `seq` each snapshot; this only bounds a stalled/disconnected
+/// client so the buffer can't grow without limit.
+const MAX_INPUT_FRAMES: usize = 128;
+
+/// Fixed-tick input emission for prediction. Emits exactly one [`DriveRover`] +
+/// [`BrakeRover`] per fixed tick from each controller's latest [`VesselInput`]
+/// setpoint, stamped with a dense per-vessel `seq` + `SimTick`. For a vessel this
+/// client owns + predicts ([`lunco_core::OwnedLocally`]), the frame is also
+/// buffered in [`lunco_core::OwnedInputLog`] so the reconcile can replay it. On
+/// host/standalone the commands still fire (driving the rover) with `seq = 0` and
+/// no buffering.
+fn emit_vessel_input(
+    role: Res<lunco_core::NetworkRole>,
+    tick: Res<lunco_core::SimTick>,
+    mut log: ResMut<lunco_core::OwnedInputLog>,
+    q_ctrl: Query<(&VesselInput, &ControllerLink)>,
+    q_vessel: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
+    mut commands: Commands,
+) {
+    let client = matches!(*role, lunco_core::NetworkRole::Client);
+    for (vi, link) in q_ctrl.iter() {
+        // Owned + predicted on a client → assign a real seq and buffer for replay.
+        let owned_gid = client
+            .then(|| match q_vessel.get(link.vessel_entity) {
+                Ok((gid, true)) => Some(gid.get()),
+                _ => None,
+            })
+            .flatten();
+
+        // Assign a dense per-vessel input seq for an owned+predicted client vessel.
+        // seq MUST be stamped HERE (the origin) because the wire-capture serializes
+        // the command we trigger below. The actual input-frame buffering (and the
+        // host-side ack) is NOT done here any more — it happens in the single
+        // `record_drive_input` observer on `DriveRover`, so a drive from ANY source
+        // (this keyboard path, the API, or a wire-replayed remote input) records
+        // identically. That is what keeps "DriveRover and inputs on the same path".
+        let seq = if let Some(g) = owned_gid {
+            let entry = log.0.entry(g).or_default();
+            let s = entry.next_seq.wrapping_add(1); // seq 0 reserved = "no input yet"
+            entry.next_seq = s;
+            s
+        } else {
+            0
+        };
+
+        commands.trigger(DriveRover {
+            target: link.vessel_entity,
+            forward: vi.forward,
+            steer: vi.steer,
+            seq,
+            tick: tick.0,
+        });
+        commands.trigger(BrakeRover {
+            target: link.vessel_entity,
+            intensity: vi.brake,
+            seq,
+            tick: tick.0,
+        });
     }
 }
 

@@ -100,8 +100,8 @@ pub enum Delivery { ReliableOrdered, ReliableUnordered, Unreliable }
 pub struct Channel { pub name: &'static str, pub delivery: Delivery }
 
 // Canonical set:
-//   INPUT      Unreliable        rover throttle/steer @60Hz  (Mutation, Ephemeral)
-//   COMMANDS   ReliableOrdered   possess, spawn, scene edits (Mutation, Authoritative)
+//   INPUT      Unreliable        rover throttle/steer @60Hz  (Mutation, ControlStream)
+//   COMMANDS   ReliableOrdered   possess, spawn, scene edits (Mutation, CommandBus)
 //   SNAPSHOTS  Unreliable        replicated state deltas
 //   BULK       ReliableUnordered ephemeris, cosim history, asset sync
 ```
@@ -120,17 +120,17 @@ domain code can always ask for `Unreliable` and get the best each peer supports.
 // In a domain crate's replication submodule (feature-gated, never imports a backend):
 app.replicate::<Transform>();                              // state sync
 app.replicate::<DifferentialDrive>();
-app.register_command::<DriveRover>(Replication::Ephemeral);   // ties #[Command] + Mutation envelope to a channel
-app.register_command::<PossessVessel>(Replication::Authoritative);
+app.declare_channel::<DriveRover>(WireChannel::ControlStream);   // ties #[Command] + Mutation envelope to a channel
+app.declare_channel::<PossessVessel>(WireChannel::CommandBus);
 ```
 
-`register_command` is the bridge from the **existing** `#[Command]`/`Mutation<P>`
-layer to the wire: it picks the channel from the `Replication` policy
-(`Ephemeral`→INPUT, `Authoritative`→COMMANDS), serializes the envelope, and
+`declare_channel` is the bridge from the **existing** `#[Command]`/`Mutation<P>`
+layer to the wire: it picks the transport channel from the `WireChannel` tag
+(`ControlStream`→INPUT, `CommandBus`→COMMANDS), serializes the envelope, and
 resolves `GlobalEntityId`↔`Entity` at the boundary via `ApiEntityRegistry`. No new
 command types — reuses what `lunco-api` already dispatches.
 
-That's the entire domain-facing API: `replicate::<T>()`, `register_command::<C>()`,
+That's the entire domain-facing API: `replicate::<T>()`, `declare_channel::<C>()`,
 read `Peer`/`SessionId`. Transports, certs, channels, backend — all invisible.
 
 ---

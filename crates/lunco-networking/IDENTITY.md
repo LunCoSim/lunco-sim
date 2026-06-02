@@ -150,7 +150,7 @@ sources, closed to changes in the identity machinery.
 
 ## 6. How it wires into the rest
 
-- **Replication policy** (`lunco-core::Replication`) is now *derivable* from
+- **Wire-channel policy** (`lunco-core::WireChannel`) is now *derivable* from
   provenance kind: `Content`→state-replicated/local-spawn, `Authoritative`→
   spawn-replicated, `Derived`→follows parent, `Local`→never. One source of truth.
 - **`ApiEntityRegistry`** (GlobalEntityId↔Entity) is populated by the same hook —

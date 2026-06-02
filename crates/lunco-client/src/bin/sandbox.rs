@@ -97,7 +97,21 @@ fn main() {
     // for avian — the physics step time, every second. Off by default
     // because the lines are noisy; flip it on while hunting perf.
     let log_diag = args.iter().any(|a| a == "--log-diag");
-    let present_mode = if no_vsync {
+    // Networking present? (`--host`/`--connect`). When networked, the window
+    // must keep ticking even when unfocused: lightyear's netcode link sends
+    // keepalives on the update loop, and the default unfocused throttle
+    // (~1 FPS) starves them past the timeout, dropping the connection a few
+    // seconds after the window loses focus. Two side-by-side windows means one
+    // is always unfocused — so we keep it Continuous while networked.
+    let networked = args.iter().any(|a| a == "--host" || a == "--connect");
+    // Present mode. Networked side-by-side windows: one is ALWAYS unfocused, and an
+    // unfocused window under `Fifo` (vsync) can block on present when the compositor
+    // stops servicing it — which stalls the WHOLE update loop (sim + netcode + the
+    // 20 Hz snapshot send), not just rendering. That's the "fps collapses when not
+    // in focus → clunky sync" symptom. `Continuous` update mode alone doesn't help
+    // because the stall is in `present`, not the redraw request. Use non-blocking
+    // `Mailbox` while networked so the background window keeps ticking at full rate.
+    let present_mode = if no_vsync || networked {
         bevy::window::PresentMode::Mailbox
     } else {
         bevy::window::PresentMode::Fifo
@@ -118,7 +132,13 @@ fn main() {
         use bevy::winit::{UpdateMode, WinitSettings};
         app.insert_resource(WinitSettings {
             focused_mode: UpdateMode::Continuous,
-            unfocused_mode: UpdateMode::reactive_low_power(std::time::Duration::from_secs(1)),
+            // Networked: stay Continuous unfocused so keepalives keep flowing.
+            // Single-player: low-power when backgrounded to keep fans quiet.
+            unfocused_mode: if networked {
+                UpdateMode::Continuous
+            } else {
+                UpdateMode::reactive_low_power(std::time::Duration::from_secs(1))
+            },
         });
     }
     // Cap how much catchup `FixedUpdate` does after a slow frame.
@@ -150,7 +170,7 @@ fn main() {
             "lunco-lib",
             AssetSourceBuilder::platform_default(&cache_dir().to_string_lossy(), None),
         )
-        .insert_resource(Time::<Fixed>::from_hz(60.0))
+        .insert_resource(Time::<Fixed>::from_hz(lunco_core::FIXED_HZ))
         .insert_resource(lunco_core::TimeWarpState { physics_enabled: true, ..default() })
         .insert_resource(avian3d::prelude::Gravity::ZERO)
         .insert_resource(lunco_celestial::Gravity::flat(9.81, bevy::math::DVec3::NEG_Y))
@@ -348,6 +368,15 @@ fn main() {
 
     #[cfg(feature = "lunco-api")]
     app.add_plugins(lunco_api::LunCoApiPlugin::default());
+
+    // Multiplayer (opt-in): `--host [port]` runs the listen-server,
+    // `--connect <addr>` joins one over WebTransport. Absent ⇒ single-player
+    // (the networking substrate stays inert).
+    #[cfg(feature = "networking")]
+    if let Some(mode) = lunco_networking::NetworkMode::from_args() {
+        info!("[net] networking mode: {mode:?}");
+        app.add_plugins(lunco_networking::LunCoNetworkingPlugin { mode });
+    }
 
     if log_diag {
         app.add_plugins(bevy::diagnostic::LogDiagnosticsPlugin::default());

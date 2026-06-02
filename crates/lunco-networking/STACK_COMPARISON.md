@@ -17,7 +17,7 @@ in `README.md` (which predates the typed `#[Command]` system and the
 | Asset | Where | Relevance |
 |---|---|---|
 | `GlobalEntityId(u64)` on **every** entity, time-sorted | `lunco-core` | The cross-process key. README assumed it's added only on `Replicated`; reality is simpler — it's unconditional. |
-| `Mutation<P>` / `OpId` / `SessionId` / `Replication{Local,Authoritative,Ephemeral}` | `lunco-core::commands` | The server-authority routing envelope, already typed. `Ephemeral` = rover throttle; `Authoritative` = scene edits. |
+| `Mutation<P>` / `OpId` / `SessionId` / `WireChannel{Local,CommandBus,ControlStream}` | `lunco-core::commands` | The server-authority routing envelope, already typed. `ControlStream` = rover throttle; `CommandBus` = scene edits. |
 | `#[Command]` → `Event + Reflect`, reflection dispatch, `ApiEntityRegistry` (GlobalEntityId↔Entity) | `lunco-api`, `lunco-command-macro` | The RPC layer. `DriveRover`, `BrakeRover`, `PossessVessel` already exist as typed commands. |
 | Input already decoupled from physics | `lunco-controller` | `ControllerLink → VesselIntent → DriveRover/BrakeRover`. Prediction-friendly: inputs are already discrete, replayable commands. |
 | avian3d 0.6 (f64), fixed 60 Hz, 33 ms clamp | `lunco-client` | Rover motion = avian forces from raycast-wheel suspension (`lunco-mobility`). |
@@ -163,7 +163,7 @@ the rover's Modelica/cosim telemetry (thermal/forces) streamed read-only.
 
 ### Control flow
 1. Client possesses a rover → `PossessVessel` command to server → server sets ownership.
-2. Owner client: input → `DriveRover` (the `Ephemeral` `Mutation`) applied **locally immediately** (prediction) **and** sent to server with a sequence number.
+2. Owner client: input → `DriveRover` (the `ControlStream` `Mutation`) applied **locally immediately** (prediction) **and** sent to server with a sequence number.
 3. Server applies authoritative avian step, replicates `Transform`.
 4. Owner reconciles (snap + replay unconfirmed inputs); non-owners interpolate.
 

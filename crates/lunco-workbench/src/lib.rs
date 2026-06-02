@@ -2566,6 +2566,11 @@ fn render_status_bar_inner(
         // also pushes events into the bus, so click-history works.
         render_msl_chip(ui, world, theme);
 
+        // Pinned networking chip — host/client role, endpoint + ports, and a
+        // live peer / connection readout. Silent in single-player. Sits next to
+        // the MSL chip; reads `lunco_core::NetStatus` (no lightyear dep here).
+        render_net_chip(ui, world, theme);
+
         // Right-aligned perf segment. Hidden when the HUD is off so
         // we don't show stale zeroes; toggled via `TogglePerfHud` or
         // the Settings menu.
@@ -2707,6 +2712,48 @@ fn render_msl_chip(
                 .desired_height(6.0),
         );
     }
+    ui.separator();
+}
+
+/// Render the always-visible networking chip in the status bar, mirroring the
+/// MSL chip. Reads `lunco_core::NetStatus` (always present; populated by the
+/// optional `lunco-networking` adapter when it's wired). Silent (zero pixels)
+/// in single-player (`Standalone`), so non-networked apps show nothing.
+///
+/// - **Host**: green dot, `HOST :PORT · N peers` (this window's listen port).
+/// - **Client (connected)**: green dot, `CLIENT → host:port`.
+/// - **Client (connecting)**: amber dot, `connecting → host:port`.
+fn render_net_chip(
+    ui: &mut egui::Ui,
+    world: &mut World,
+    theme: &lunco_theme::Theme,
+) {
+    use lunco_core::{NetStatus, NetworkRole};
+    let Some(status) = world.get_resource::<NetStatus>().cloned() else {
+        return;
+    };
+    let (dot, label) = match status.role {
+        // Single-player — the wire is inert, so show nothing.
+        NetworkRole::Standalone => return,
+        NetworkRole::Host => {
+            let s = if status.peers == 1 { "" } else { "s" };
+            (
+                theme.tokens.success,
+                format!("HOST {} · {} peer{s}", status.endpoint, status.peers),
+            )
+        }
+        NetworkRole::Client if status.connected => {
+            (theme.tokens.success, format!("CLIENT → {}", status.endpoint))
+        }
+        NetworkRole::Client => (
+            theme.tokens.warning,
+            format!("connecting → {}", status.endpoint),
+        ),
+    };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.0, dot);
+    ui.label(egui::RichText::new(label).small())
+        .on_hover_text("LunCoSim networking");
     ui.separator();
 }
 

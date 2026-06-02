@@ -152,7 +152,7 @@ pub fn api_command_dispatcher(
 /// Note: This is a heuristic. We assume fields named 'target', 'entity',
 /// 'body', 'parent', or 'avatar' that contain a large number or numeric
 /// string are meant to be GlobalEntityIds.
-fn resolve_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegistry) {
+pub(crate) fn resolve_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegistry) {
     use lunco_core::GlobalEntityId;
 
     match value {
@@ -184,6 +184,39 @@ fn resolve_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegist
         serde_json::Value::Array(list) => {
             for v in list.iter_mut() {
                 resolve_ids_in_json(v, registry);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Inverse of [`resolve_ids_in_json`]: rewrites local Bevy `Entity` references
+/// (serialized as `to_bits()` `u64` by Bevy reflection) into wire-portable
+/// [`GlobalEntityId`](lunco_core::GlobalEntityId) `u64`s, using the same
+/// field-name heuristic. Used by the networking **capture** path so an outgoing
+/// command carries global ids the receiving peer can resolve back to its own
+/// local entities. Entities with no `GlobalEntityId` (e.g. a peer's local-only
+/// avatar) are left untouched — the receiver simply won't resolve them.
+pub(crate) fn globalize_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegistry) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                if k == "target" || k == "entity" || k == "body" || k == "parent" || k == "avatar" {
+                    if let Some(bits) = v.as_u64() {
+                        if let Some(entity) = Entity::try_from_bits(bits) {
+                            if let Some(gid) = registry.api_id_for(entity) {
+                                *v = serde_json::json!(gid.get());
+                            }
+                        }
+                    }
+                } else {
+                    globalize_ids_in_json(v, registry);
+                }
+            }
+        }
+        serde_json::Value::Array(list) => {
+            for v in list.iter_mut() {
+                globalize_ids_in_json(v, registry);
             }
         }
         _ => {}

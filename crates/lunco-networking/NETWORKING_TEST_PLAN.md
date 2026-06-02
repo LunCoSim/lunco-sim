@@ -14,8 +14,29 @@ cargo test -j 2            # 23 tests, ~3s, zero deps
 
 ## Tier 1 — backend-agnostic core (AUTOMATED NOW ✅)
 
-Implemented in `proto-tests/`, all green (23 tests). These are the parts no
-networking library gives us, so they're the most important to lock down early.
+Implemented in `proto-tests/` (23 tests) **plus** `lunco-core` unit tests (the
+reconciliation decision, 5 tests), all green. These are the parts no networking
+library gives us, so they're the most important to lock down early.
+
+**Reconciliation decision (M4 / gap F) — `lunco-core/src/reconcile.rs`:** the
+predict-own correction math (`reconcile_decision`) was extracted into a pure,
+dependency-free helper that the live `reconcile_owned_prediction` system calls, so
+it is unit-tested **without** the heavy avian/render build (run:
+`cargo test -p lunco-core -j2 reconcile`). This pulls the planned Tier-2
+`mispredict_corrects_without_teleport` test *forward* into Tier-1 — the decision
+logic (the no-rubber-band guarantee, blend-not-teleport, gross-desync snap,
+shortest-arc rotation, convergence) needs no wire to verify:
+
+| Requirement | Test | Status |
+|---|---|---|
+| No-rubber-band: correct prediction left alone despite latency lead | `in_sync_even_with_a_large_latency_lead` | ✅ |
+| Small mispredict nudges (blend), does not teleport | `corrects_small_mispredict_without_teleport` | ✅ |
+| Gross desync hard-snaps to authority | `snaps_on_gross_desync` | ✅ |
+| Correction converges to in-sync, no oscillation | `correction_converges_to_in_sync` | ✅ |
+| Rotation correction takes the shortest arc | `rotation_correction_takes_shortest_arc` | ✅ |
+
+The remaining Tier-2 reconciliation work (re-stepping the *actual* avian body
+end-to-end against a server App) stays below — the pure decision is now locked.
 
 | Requirement (mechanism / gap) | Test(s) | Status |
 |---|---|---|
@@ -68,7 +89,8 @@ assert!(client_has_replicated_entity(&client));
 | **M4** client input mutates server state | `input_mutates_server` | send `DriveRover`, step, assert server pos changed |
 | **M2-Predicted** owner entity has Predicted | `owner_is_predicted` | assert `Predicted` marker on client-owned |
 | **M2-Interpolated** remote entity interpolates | `remote_is_interpolated` | assert `Interpolated` + buffer fills |
-| **Reconciliation** mispredict → smooth correct (gap F) | `mispredict_corrects_without_teleport` | inject divergence, assert bounded correction step |
+| **Reconciliation** decision (gap F) — ✅ DONE as Tier-1 pure-logic in `lunco-core` | `reconcile::tests::*` | inject divergence, assert bounded correction step — **no wire needed** |
+| **Reconciliation** end-to-end: real avian body re-anchors on ack | `avian_body_reconciles_e2e` | crossbeam, drive owned body, inject server divergence, assert it converges |
 | **M6** client tick runs ahead of server | `client_tick_leads_server` | assert tick offset ≈ RTT/2 |
 | **M3** `Mutation`/`#[Command]` over wire, OpId dedupe | `command_idempotent` | replay same OpId, assert applied once |
 | **Host-client** (listen-server) replicates to a joiner | `host_client_replicates` | host App + client App, assert joiner sees host entity |
@@ -94,7 +116,8 @@ Can't meaningfully assert in code; verify by eye.
 
 ## Coverage summary
 - **Now (no backend, no heavy build):** identity, mechanism selection, enforced
-  contradictions, big_space math — **23 automated tests, green.**
+  contradictions, big_space math (23 in `proto-tests/`) + the predict-own
+  reconciliation decision (5 in `lunco-core`) — **28 automated tests, green.**
 - **After backend commit:** ~12 headless crossbeam integration tests (replication,
   input, prediction, reconciliation, clock, host-client, loss, multi-transport).
 - **Manual:** browser/WebTransport + latency feel (5 checks) — inherently visual.

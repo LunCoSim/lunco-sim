@@ -90,12 +90,20 @@ impl Plugin for CoSimPlugin {
                 .chain(),
         );
 
+        // Server-authoritative networking: a pure client must NOT run cosim on
+        // replicated objects — it renders host snapshots. Running cosim here
+        // would fight the snapshot (objects drift/jitter when the server is
+        // briefly static). Gated off on `NetworkRole::Client`; host + single-
+        // player run it normally.
         app.add_systems(
             FixedUpdate,
             (
                 systems::propagate::propagate_connections.in_set(systems::propagate::CosimSet::Propagate),
                 systems::apply_forces::apply_sim_forces.in_set(systems::apply_forces::CosimSet::ApplyForces),
-            ),
+            )
+                .run_if(|role: Res<lunco_core::NetworkRole>| {
+                    !matches!(*role, lunco_core::NetworkRole::Client)
+                }),
         );
 
         // Read Avian outputs AFTER Avian's Writeback (Position → Transform sync).

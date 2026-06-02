@@ -38,7 +38,7 @@ socket, a backend, or a serializer.
 // In a domain crate's replication submodule. Backend types never imported.
 app.sync::<Transform>(SyncClass::Continuous);          // → M2 (role decided at runtime by ownership/computability)
 app.sync::<NetworkAuthority>(SyncClass::Discrete);     // → M2 replicated component / M3
-app.register_command::<DriveRover>(Replication::Ephemeral);   // → M4/M3 (reuses existing #[Command])
+app.declare_channel::<DriveRover>(WireChannel::ControlStream);   // → M4/M3 (reuses existing #[Command])
 ```
 
 **To add an entity from content:** stamp provenance (the loader does this) —

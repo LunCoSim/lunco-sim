@@ -36,7 +36,7 @@ pub fn run() {
     console_error_panic_hook::set_once();
 
     let mut app = App::new();
-    app.insert_resource(Time::<Fixed>::from_hz(60.0))
+    app.insert_resource(Time::<Fixed>::from_hz(lunco_core::FIXED_HZ))
         .insert_resource(ClearColor(Color::BLACK))
         .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>().set(WindowPlugin {
             primary_window: Some(Window {

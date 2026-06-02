@@ -24,19 +24,35 @@ pub mod ids;
 /// ids are *derived*; the assignment system below is the only place they
 /// are *minted*.
 pub mod identity;
-/// Command envelope — `Mutation<P>`, `Ack`, `Reject`, `Replication`.
+/// Command envelope — `Mutation<P>`, `Ack`, `Reject`, `WireChannel`.
 /// The shape every locally- or remotely-originated mutation flows
 /// through.
 pub mod commands;
+/// Always-on networking **authority** substrate (no wire dependency):
+/// `NetworkRole`, `LocalSession`, `WireApplyGuard`, `SessionRegistry` + the
+/// single `authorize` gate. The seam the optional `lunco-networking` layer
+/// drives; trivially inert in single-player.
+pub mod session;
+/// M4 — pure predict-own reconciliation decision (input-replay, D2). The
+/// dependency-free geometry the spawn-domain `reconcile_owned_prediction` system
+/// applies; unit-tested without the avian/render build.
+pub mod reconcile;
 
 pub use architecture::*;
 pub use mocks::*;
 pub use telemetry::*;
 pub use log::*;
-pub use commands::{Ack, Mutation, OpId, Reject, Replication, SessionId};
+pub use commands::{Ack, Mutation, OpId, Reject, SessionId, WireChannel};
 pub use markers::{GridAnchor, SoiMigrant};
 pub use invariants::BigSpaceInvariantsPlugin;
 pub use identity::Provenance;
+pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
+pub use session::{
+    authorize, AppliedInputSeq, IncomingSnapshots, InputFrame, LocalSession, NetReplicate, NetSpawn,
+    NetStatus, NetworkRole, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns, PossessionPolicy,
+    ReplicatedSpawn, SessionRegistry, SkipContentStamp, SnapshotSample, VesselInputLog,
+    WireApplyGuard,
+};
 
 // ── Typed Command Macros ──────────────────────────────────────────────────────
 //
@@ -124,6 +140,13 @@ impl std::str::FromStr for GlobalEntityId {
 /// Marker component for the user's active avatar/entity in the simulation.
 #[derive(Component)]
 pub struct Avatar;
+
+/// Marks **this peer's own** avatar — the one its local input drives. Each
+/// process has exactly one (its camera); other players' avatars are not
+/// replicated (gap G3), so this is what gates raw-input→command mapping to "my"
+/// vessel only (gap G1). Inserted by `lunco-avatar`'s `mark_local_avatar`.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct LocalAvatar;
 
 /// Defines a spacecraft entity with its ephemeris and physical constraints.
 #[derive(Component, Reflect, Default)]
@@ -251,6 +274,18 @@ impl Default for CelestialClock {
     }
 }
 
+/// The fixed-simulation rate, in Hz. The **single source of truth** for every
+/// fixed-step clock in the system: it drives `Time::<Fixed>` (set by each app
+/// binary), [`SimTick`] advancement ([`advance_sim_tick`], one tick per fixed
+/// step), and the lightyear tick. The snapshot interpolation converts host ticks
+/// → seconds via [`SECS_PER_TICK`], so every one of these MUST agree — hence one
+/// constant rather than a `60.0` literal sprinkled across crates.
+pub const FIXED_HZ: f64 = 60.0;
+
+/// Seconds per fixed tick / per [`SimTick`] (= `1.0 / FIXED_HZ`). Used to place
+/// snapshot samples on the interpolation timebase.
+pub const SECS_PER_TICK: f64 = 1.0 / FIXED_HZ;
+
 /// Monotonic discrete **simulation tick** — the netcode time substrate (M6).
 ///
 /// `CelestialClock`/`TimeWarpState` give *continuous* sim time + warp; netcode
@@ -312,6 +347,13 @@ impl Plugin for LunCoCorePlugin {
            .register_type::<SimTick>()
            .init_resource::<SimTick>()
            .init_resource::<IsServer>()
+           .init_resource::<session::NetworkRole>()
+           .init_resource::<session::LocalSession>()
+           .init_resource::<session::WireApplyGuard>()
+           .init_resource::<session::NetStatus>()
+           .init_resource::<session::SessionRegistry>()
+           .init_resource::<session::PendingReplicatedSpawns>()
+           .init_resource::<session::IncomingSnapshots>()
            .add_systems(Update, wire_system)
            .add_systems(FixedUpdate, advance_sim_tick)
            .add_systems(PostUpdate, assign_global_entity_ids);
@@ -340,11 +382,28 @@ fn advance_sim_tick(mut tick: ResMut<SimTick>, warp: Option<Res<TimeWarpState>>)
 /// hard skip.
 fn assign_global_entity_ids(
     mut commands: Commands,
-    q_new: Query<(Entity, Option<&Provenance>), Without<GlobalEntityId>>,
+    q_new: Query<
+        (Entity, Option<&Provenance>, Has<session::SkipContentStamp>),
+        Without<GlobalEntityId>,
+    >,
     is_server: Res<IsServer>,
     mut warned: Local<bool>,
 ) {
-    for (entity, prov) in q_new.iter() {
+    for (entity, prov, runtime_instance) in q_new.iter() {
+        // Runtime-instanced subtree root (gap G2 / B.1): server-allocated unique
+        // identity, ignoring any `Content` stamp the USD loader adds. Two
+        // instances of the same asset would otherwise derive the *same*
+        // content id and collide. Clients receive the id via spawn-replication
+        // (they pin `GlobalEntityId::from_raw` directly, so they never reach
+        // here for these roots).
+        if runtime_instance {
+            if is_server.0 {
+                commands
+                    .entity(entity)
+                    .insert(GlobalEntityId::allocate_authoritative());
+            }
+            continue;
+        }
         match prov {
             Some(Provenance::Local) => { /* never networked, no id */ }
             Some(p @ (Provenance::Content { .. } | Provenance::Derived { .. })) => {
