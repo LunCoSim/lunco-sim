@@ -67,24 +67,14 @@ impl Plugin for UsdUiPlugin {
         app.register_document_session_codec(session_codec::UsdSessionCodec);
 
         // Click-to-open: `.usda` / `.usdc` rows in the Twin browser
-        // become USD documents (async file read, then registry
-        // allocate + viewport activate). Modelica owns `.mo`; the
-        // shared `BrowserActions` outbox is partitioned by extension
-        // so the two drains coexist without ordering coupling.
-        app.init_resource::<browser_dispatch::PendingUsdLoads>();
-        app.add_systems(
-            Update,
-            (
-                browser_dispatch::drain_browser_actions_for_usd,
-                browser_dispatch::drain_pending_usd_file_loads,
-            ),
-        );
-        // Typed-command parity: `OpenFile { path }` from HTTP / MCP /
-        // the unified `Open` URI router also routes USD paths into the
-        // same load pipeline. Modelica registers its own
-        // `on_open_file` observer for `.mo`; the two coexist.
-        browser_dispatch::__register_on_open_file_for_usd(app);
-        bevy::log::info!("[UsdUiPlugin] registered on_open_file_for_usd observer");
+        // become USD documents. This system only *translates* the
+        // browser-panel click into the domain load pipeline owned by
+        // `UsdCommandsPlugin` (the file read, registry allocate, and the
+        // typed `OpenFile` command observer all live there, so HTTP /
+        // MCP / `Open`-URI dispatch and headless bins work too). Modelica
+        // owns `.mo`; the shared `BrowserActions` outbox is partitioned
+        // by extension so the two drains coexist without ordering coupling.
+        app.add_systems(Update, browser_dispatch::drain_browser_actions_for_usd);
     }
 }
 

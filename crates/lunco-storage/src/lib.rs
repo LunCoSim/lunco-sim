@@ -261,6 +261,28 @@ pub trait Storage: Send + Sync {
     /// where the backend supports it.
     async fn write(&self, handle: &StorageHandle, bytes: &[u8]) -> StorageResult<()>;
 
+    /// Synchronous convenience wrapper around [`Storage::write`].
+    ///
+    /// Blocks the calling thread on the write future. Safe for backends
+    /// whose futures resolve without yielding — notably [`FileStorage`],
+    /// whose async fns wrap synchronous `std::fs`, so the future is
+    /// already `Ready` and `block_on` returns immediately. Do **not**
+    /// call this on a genuinely-async backend (HTTP, IndexedDB) from the
+    /// main thread; `.await` or a task pool instead.
+    ///
+    /// Exists so callers in clippy-gated crates (which ban direct
+    /// `std::fs`) can do a one-shot file write through the storage
+    /// abstraction without standing up an async task pipeline.
+    fn write_sync(&self, handle: &StorageHandle, bytes: &[u8]) -> StorageResult<()> {
+        futures_lite::future::block_on(self.write(handle, bytes))
+    }
+
+    /// Synchronous convenience wrapper around [`Storage::read`]. Same
+    /// caveats as [`Storage::write_sync`].
+    fn read_sync(&self, handle: &StorageHandle) -> StorageResult<Vec<u8>> {
+        futures_lite::future::block_on(self.read(handle))
+    }
+
     /// Cheap "does this exist?" probe. Backends that can't implement
     /// it cheaply (e.g. always-fetch HTTP) should answer `false` on
     /// error rather than making a round-trip.

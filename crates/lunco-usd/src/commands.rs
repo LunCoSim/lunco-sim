@@ -26,9 +26,13 @@
 //! so File menus, picker dialogs, and `twin.toml` parsers see USD
 //! without any central edit.
 
+use std::path::PathBuf;
+
 use bevy::prelude::*;
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_core::{Command, on_command, register_commands};
 use lunco_doc::{DocumentId, DocumentOrigin};
+use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened, SaveDocument};
 use lunco_twin::{DocumentKind, DocumentKindId, DocumentKindMeta, DocumentKindRegistry, FileKind};
 use lunco_workbench::file_ops::{NewDocument, OpenFile};
@@ -72,6 +76,15 @@ impl Plugin for UsdCommandsPlugin {
                 },
             );
 
+        // Document *open/load* pipeline (domain-layer, so it works in
+        // headless / sandbox bins that don't add `UsdUiPlugin`). Reads
+        // run on the `AsyncComputeTaskPool` through `lunco-storage` and
+        // land in the registry via `drain_pending_usd_file_loads`. The
+        // UI's `browser_dispatch` only translates browser-panel clicks
+        // into calls on this pipeline.
+        app.init_resource::<PendingUsdLoads>();
+        app.add_systems(Update, drain_pending_usd_file_loads);
+
         app.add_systems(Update, drain_usd_pending_events);
         app.add_observer(open_usd_docs_on_twin_added);
         register_all_commands(app);
@@ -110,6 +123,7 @@ register_commands!(
     on_apply_usd_op,
     on_new_document,
     on_open_file,
+    on_open_file_for_usd,
     on_save_document,
 );
 
@@ -117,19 +131,18 @@ register_commands!(
 // OpenFile — gated on USD extensions
 // ─────────────────────────────────────────────────────────────────────
 
-// NOTE: document *registration* (reading the file into the
-// `UsdDocumentRegistry`) is owned by `ui::browser_dispatch`'s
-// `on_open_file_for_usd` — an async, idempotent, wasm-safe load. This
-// observer is the additive **scene import** half only (Blender's
-// File → Append): it brings the stage into the running 3D scene so
-// `UsdSimPlugin` can wire `lunco:modelicaModel` / `lunco:simWires`
-// participants (the path `open_usd_docs_on_twin_added` relies on).
+// `OpenFile` for a USD path drives two independent halves, each its own
+// observer so headless bins get both without the UI:
 //
-// Previously this observer ALSO did a blocking `std::fs::read_to_string`
-// + a non-idempotent `registry.allocate`, duplicating the async handler:
-// every USD `OpenFile` read the file twice and could register the same
-// document twice. The read/allocate are removed here; `spawn_scene_root_world`
-// loads the stage through the `AssetServer` (by path, no fs), so it stays.
+//   1. `on_open_file_for_usd` — document **registration**: async read via
+//      `lunco-storage`, idempotent allocate into `UsdDocumentRegistry`.
+//   2. `on_open_file` (this one) — additive **scene import** (Blender's
+//      File → Append): brings the stage into the running 3D scene so
+//      `UsdSimPlugin` can wire `lunco:modelicaModel` / `lunco:simWires`
+//      participants (the path `open_usd_docs_on_twin_added` relies on).
+//
+// `spawn_scene_root_world` loads the stage through the `AssetServer` (by
+// path, no fs), so this half carries no I/O of its own.
 #[on_command(OpenFile)]
 fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
     let path = trigger.event().path.clone();
@@ -141,6 +154,119 @@ fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
         // and warns + skips for files outside the asset root.
         lunco_usd_sim::cosim::spawn_scene_root_world(world, &path, "");
     });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// USD document open/load pipeline (domain layer)
+//
+// Moved here from `ui/browser_dispatch.rs` (2026-06-02): file I/O and the
+// `OpenFile` command observer are document-lifecycle concerns, not UI.
+// Living in `UsdCommandsPlugin` means HTTP API / MCP / `Open`-URI dispatch
+// register USD documents even in headless / sandbox bins that never add
+// `UsdUiPlugin`. The UI's `browser_dispatch` keeps only the browser-panel
+// `BrowserAction` → `spawn_usd_load` translation.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Pending file-read kicked off by [`spawn_usd_load`]. Polled by
+/// [`drain_pending_usd_file_loads`] each frame until it completes; the
+/// resulting source is allocated as a USD document and the viewport
+/// picks it up via the standard `DocumentOpened` lifecycle observer.
+struct PendingUsdLoad {
+    path: PathBuf,
+    task: Task<Result<String, String>>,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct PendingUsdLoads {
+    tasks: Vec<PendingUsdLoad>,
+}
+
+/// Observer for the workbench's typed [`OpenFile`] command. Picks up
+/// `.usd*` paths so HTTP API / MCP / `Open` URI dispatch all route into
+/// the same async-load pipeline the Twin browser uses. Modelica's
+/// `on_open_file` ignores non-`.mo` paths, so the observers coexist.
+#[on_command(OpenFile)]
+fn on_open_file_for_usd(trigger: On<OpenFile>, mut commands: Commands) {
+    let path = trigger.event().path.clone();
+    commands.queue(move |world: &mut World| {
+        if path.is_empty() || path.starts_with("mem://") || path.starts_with("bundled://") {
+            return;
+        }
+        let stripped = path.strip_prefix("file://").unwrap_or(&path);
+        if !is_usd_path(stripped) {
+            return;
+        }
+        spawn_usd_load(world, PathBuf::from(stripped));
+    });
+}
+
+/// Spawn the async file-read for `abs_path` and queue the result in
+/// [`PendingUsdLoads`]. Callers should have already established that the
+/// path looks like a USD file. Shared by the [`OpenFile`] observer and
+/// the UI's `browser_dispatch::drain_browser_actions_for_usd`.
+pub(crate) fn spawn_usd_load(world: &mut World, abs_path: PathBuf) {
+    let pool = AsyncComputeTaskPool::get();
+    let path_for_task = abs_path.clone();
+    let task = pool.spawn(async move {
+        // Read through the storage abstraction — `std::fs` is clippy-banned
+        // in domain crates and absent on wasm; `lunco-storage` owns it.
+        // `FileStorage`'s read future wraps synchronous fs, so awaiting on
+        // the task thread parks no reactor.
+        let storage = lunco_storage::FileStorage::new();
+        let handle = lunco_storage::StorageHandle::File(path_for_task.clone());
+        match storage.read(&handle).await {
+            Ok(bytes) => String::from_utf8(bytes)
+                .map_err(|e| format!("invalid UTF-8 in {}: {e}", path_for_task.display())),
+            Err(e) => Err(format!("failed to read {}: {e:?}", path_for_task.display())),
+        }
+    });
+    world
+        .resource_mut::<PendingUsdLoads>()
+        .tasks
+        .push(PendingUsdLoad { path: abs_path, task });
+}
+
+/// Poll outstanding [`PendingUsdLoads`] and finish the open once each
+/// file's bytes are in hand. Skips and warns on read errors — continuing
+/// leaves no half-loaded document behind.
+pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
+    if world.resource::<PendingUsdLoads>().tasks.is_empty() {
+        return;
+    }
+
+    let taken = std::mem::take(&mut world.resource_mut::<PendingUsdLoads>().tasks);
+    let mut still_pending: Vec<PendingUsdLoad> = Vec::new();
+
+    for mut load in taken {
+        match block_on(future::poll_once(&mut load.task)) {
+            None => still_pending.push(load),
+            Some(Err(err)) => {
+                bevy::log::warn!("[UsdOpenFile] {}", err);
+            }
+            Some(Ok(source)) => {
+                // Idempotent re-open: if this exact path already lives in
+                // the registry, don't re-allocate.
+                let existing = {
+                    let reg = world.resource::<UsdDocumentRegistry>();
+                    reg.ids().find(|id| {
+                        reg.host(*id)
+                            .map(|h| match h.document().origin() {
+                                DocumentOrigin::File { path, .. } => path == &load.path,
+                                _ => false,
+                            })
+                            .unwrap_or(false)
+                    })
+                };
+                if existing.is_none() {
+                    world
+                        .resource_mut::<UsdDocumentRegistry>()
+                        .allocate(source, DocumentOrigin::writable_file(load.path.clone()));
+                }
+            }
+        }
+    }
+
+    world.resource_mut::<PendingUsdLoads>().tasks = still_pending;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -209,8 +335,14 @@ fn on_save_document(trigger: On<SaveDocument>, mut commands: Commands) {
             }
         };
         let source = doc.source().to_string();
-        if let Err(e) = std::fs::write(&path, &source) {
-            bevy::log::error!("[SaveUsd] {} write to {} failed: {}", doc_id, path.display(), e);
+        // Route through the storage abstraction instead of a direct
+        // `std::fs::write` (clippy-banned in domain crates, wasm-broken).
+        // `write_sync` blocks on `FileStorage`'s write future, which wraps
+        // synchronous fs and is already `Ready` — no reactor, no hang.
+        let storage = lunco_storage::FileStorage::new();
+        let handle = lunco_storage::StorageHandle::File(path.clone());
+        if let Err(e) = storage.write_sync(&handle, source.as_bytes()) {
+            bevy::log::error!("[SaveUsd] {} write to {} failed: {:?}", doc_id, path.display(), e);
             return;
         }
         // Borrow mut to mark saved. `host_mut` doesn't bump the
@@ -345,21 +477,6 @@ mod tests {
         assert_eq!(meta.extensions, vec!["usda", "usdc", "usd"]);
     }
 
-    /// Wire the async USD `OpenFile` registration path (normally provided
-    /// by `UsdUiPlugin`) on top of a minimal app. Document *registration*
-    /// is owned by `browser_dispatch`, not the command-layer observer, so
-    /// command-layer tests bring it in explicitly — without the UI/render
-    /// stack. `MinimalPlugins` already supplies the `AsyncComputeTaskPool`
-    /// the async read uses.
-    fn add_async_open_path(app: &mut App) {
-        app.init_resource::<crate::ui::browser_dispatch::PendingUsdLoads>();
-        crate::ui::browser_dispatch::__register_on_open_file_for_usd(app);
-        app.add_systems(
-            Update,
-            crate::ui::browser_dispatch::drain_pending_usd_file_loads,
-        );
-    }
-
     #[test]
     fn open_file_for_usd_path_creates_document() {
         // Write a tiny .usda to a tempfile we can resolve.
@@ -367,10 +484,12 @@ mod tests {
         let tmp_path = tmp_dir.join("lunco_usd_open_file_test.usda");
         std::fs::write(&tmp_path, "#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
 
+        // `UsdCommandsPlugin` now owns the whole open pipeline (observer +
+        // PendingUsdLoads + drain) — no UI plugin needed. `MinimalPlugins`
+        // supplies the `AsyncComputeTaskPool` the read runs on.
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(UsdCommandsPlugin);
-        add_async_open_path(&mut app);
         app.update();
 
         app.world_mut().trigger(OpenFile {
@@ -394,7 +513,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(UsdCommandsPlugin);
-        add_async_open_path(&mut app);
         app.update();
 
         app.world_mut().trigger(OpenFile {
