@@ -10,10 +10,10 @@
 //! it without upstream changes. If it returns `Some`, the problem is upstream
 //! of the stepper (something else in lunco-modelica isn't calling `get`).
 
-use lunco_modelica::{ModelicaCompiler, extract_variable_names};
+use lunco_modelica::{ModelicaCompiler, ast_extract::extract_variable_names};
 use rumoca_sim::{SimStepper, StepperOptions};
 
-const BALLOON_MO: &str = include_str!("../../../assets/models/balloon.mo");
+const BALLOON_MO: &str = include_str!("../../../assets/models/Balloon.mo");
 
 #[test]
 fn balloon_stepper_variable_names_contain_states_only() {
