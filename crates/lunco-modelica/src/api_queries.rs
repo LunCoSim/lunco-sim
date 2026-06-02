@@ -661,6 +661,7 @@ fn latest_run_for_doc(
 fn run_state_label(s: &RunStatus) -> &'static str {
     match s {
         RunStatus::Pending => "pending",
+        RunStatus::Queued => "queued",
         RunStatus::Running { .. } => "running",
         RunStatus::Done { .. } => "done",
         RunStatus::Failed { .. } => "failed",
@@ -712,7 +713,7 @@ fn run_summary(
             obj.insert("error".into(), serde_json::Value::String(error.clone()));
             obj.insert("partial".into(), serde_json::Value::Bool(*partial));
         }
-        RunStatus::Pending | RunStatus::Cancelled => {}
+        RunStatus::Pending | RunStatus::Queued | RunStatus::Cancelled => {}
     }
     // Self-describing rows: which parameter overrides produced this run,
     // and the bounds it ran under. Lets a sweep's runs be matched back to

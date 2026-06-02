@@ -126,6 +126,12 @@ impl Default for RunBounds {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum RunStatus {
     Pending,
+    /// Accepted by the runner but waiting for a concurrency slot (the
+    /// scheduler is at `max_parallel`). Distinct from `Pending` (just
+    /// created) so the UI can show "N running · M queued". Not terminal;
+    /// transitions to `Running` when a slot frees, or `Cancelled` if
+    /// cancelled while still queued.
+    Queued,
     Running { t_current: f64 },
     Done { wall_time_ms: u64 },
     /// `partial` is true when a partial trajectory was salvaged before

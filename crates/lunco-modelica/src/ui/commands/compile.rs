@@ -1336,6 +1336,14 @@ fn dispatch_experiment(
             .resource_mut::<crate::experiments_runner::PendingHandles>()
             .0
             .push(handle);
+        // Mark the run Queued. The scheduler may start it immediately (then
+        // its first progress update flips it to Running via
+        // drain_pending_handles) or hold it behind the concurrency cap, in
+        // which case it stays Queued until a slot frees — letting the panel
+        // show "N running · M queued".
+        world
+            .resource_mut::<lunco_experiments::ExperimentRegistry>()
+            .set_status(exp_id, lunco_experiments::RunStatus::Queued);
         bevy::log::info!(
             "[dispatch_experiment] dispatched run {:?} '{}' for class '{}'",
             exp_id,

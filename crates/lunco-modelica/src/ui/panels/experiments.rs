@@ -858,10 +858,15 @@ impl ExperimentsPanel {
         let mut inputs_changed = false;
         let mut run_clicked = false;
 
-        let runner_busy = world
+        // Live scheduler state: how many runs are executing, how many are
+        // queued behind the concurrency cap. Drives the "N running · M
+        // queued" chip and means the Run button queues (rather than being
+        // disabled) when the runner is saturated.
+        let (running_now, queued_now, max_par) = world
             .get_resource::<crate::ModelicaRunnerResource>()
-            .map(|r| r.0.is_busy())
-            .unwrap_or(false);
+            .map(|r| (r.0.in_flight_count(), r.0.queued_count(), r.0.max_parallel()))
+            .unwrap_or((0, 0, 1));
+        let any_in_flight = running_now > 0;
 
         // Annotation-default reference for "is this what the model
         // says?" tagging next to the bounds inputs.
@@ -884,24 +889,28 @@ impl ExperimentsPanel {
                 ui.weak("· bounds default from experiment(...) annotation");
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if runner_busy
+                if any_in_flight
                     && ui
                         .small_button("⊘ Cancel")
-                        .on_hover_text("Stop the current run.")
+                        .on_hover_text("Cancel the most recently started run.")
                         .clicked()
                 {
                     cancel_active = true;
                 }
-                let label = if runner_busy { "⏩ Running…" } else { "⏩ Run" };
                 let valid = bounds.t_end > bounds.t_start;
-                let btn = ui.add_enabled(valid && !runner_busy, egui::Button::new(label));
-                let btn = if runner_busy {
-                    btn.on_disabled_hover_text(
-                        "A run is already in progress — use ⊘ Cancel.",
-                    )
-                } else if !valid {
+                // Run is never blocked by an in-flight run now — extra runs
+                // queue behind the concurrency cap. Only invalid bounds
+                // disable it.
+                let btn = ui.add_enabled(valid, egui::Button::new("⏩ Run"));
+                let btn = if !valid {
                     btn.on_disabled_hover_text(
                         "Bounds invalid — t_end must be greater than t_start.",
+                    )
+                } else if any_in_flight || queued_now > 0 {
+                    btn.on_hover_text(
+                        "Fast Run — queues behind the running experiments \
+                         (up to the parallel-runs limit) and starts as soon \
+                         as a slot frees.",
                     )
                 } else {
                     btn.on_hover_text(
@@ -914,6 +923,18 @@ impl ExperimentsPanel {
                 };
                 if btn.clicked() {
                     run_clicked = true;
+                }
+                // Live concurrency chip: "▶ 2/4 · ⏳ 3" (running/limit · queued).
+                if any_in_flight || queued_now > 0 {
+                    let mut chip = format!("▶ {running_now}/{max_par}");
+                    if queued_now > 0 {
+                        chip.push_str(&format!(" · ⏳ {queued_now}"));
+                    }
+                    ui.label(chip).on_hover_text(format!(
+                        "{running_now} run(s) executing (limit {max_par}), \
+                         {queued_now} queued. Change the limit via \
+                         settings.json `experiments.max_parallel`."
+                    ));
                 }
                 ui.label(format!("t: {:.2}→{:.2}s", bounds.t_start, bounds.t_end));
             });
@@ -2256,6 +2277,7 @@ fn format_overrides_summary(
 fn status_label(s: &RunStatus) -> String {
     match s {
         RunStatus::Pending => "⌛ Pending".into(),
+        RunStatus::Queued => "⏳ Queued".into(),
         RunStatus::Running { t_current } => format!("▶ {t_current:.2}s"),
         RunStatus::Done { wall_time_ms } => format!("✓ Done ({wall_time_ms} ms)"),
         RunStatus::Failed { .. } => "⚠ Failed".into(),

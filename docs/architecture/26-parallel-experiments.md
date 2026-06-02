@@ -1,157 +1,105 @@
 # Parallel experiment execution — implementation plan
 
-Status: PLAN (not started). Companion to `25-experiments.md`.
+Status: COMPLETE. Steps 1–5 DONE; step 4's rumoca rayon pin dropped as
+unnecessary (see step 4 and Open questions). Companion to `25-experiments.md`.
 
-## What already exists (do not rebuild)
+## What already existed (do not rebuild)
 
 - **Compile-once sweep.** `experiments_runner.rs` caches the compiled `Dae`
   keyed by source hash (`dae_cache`, `dae_cache_key`) and applies parameter
   overrides at the DAE level (`apply_overrides_to_dae`) instead of
   reflattening per run. A sweep that varies only top-level scalar params
   recompiles **zero** times after the first point. This is the main
-  efficiency win and it is DONE (commit 6997). Parallelism is additive on
-  top of it.
+  efficiency win and it is DONE (commit 6997). Parallelism is additive.
 - **Per-run demux.** Results route by `run_id`:
   - native: one `crossbeam` channel per `RunHandle`, drained by
-    `drain_pending_handles` (`PendingHandles` already a `Vec` — multi-handle
-    capable today).
+    `drain_pending_handles` (`PendingHandles` is a `Vec` — multi-handle).
   - wasm: `RUN_SENDERS` map (`run_id → Sender`) in `worker_transport.rs`,
-    forwarded by `forward_run_update`. Already multiplexed.
+    forwarded by `forward_run_update`.
 - **Cancel** is per-run (native `AtomicBool`; wasm `CancelRun{run_id}`).
-
-So the substrate is parallel-ready. Three things block it:
-
-1. The **artificial serial gate** (`busy_with: Option<ExperimentId>`,
-   runner.rs:82,154-176) rejects the 2nd in-flight run instead of queueing.
-2. **Native** spawns an unbounded thread per run (runner.rs:261) — no cap.
-3. **Wasm** has a **single** worker (`WORKER: OnceLock<WorkerHandle>`,
-   worker_transport.rs:181) — runs serialize inside it.
 
 ## Design: one bounded scheduler + a platform spawn primitive
 
-### A. Shared bounded scheduler (platform-neutral) — the "limit parallel spawns"
+### A. Shared bounded scheduler (platform-neutral) — the cap
 
-Replace the boolean busy gate with a small scheduler living in `RunnerState`:
-
-```
-max_parallel: usize           // the cap
-in_flight:    HashSet<ExperimentId>
-pending:      VecDeque<QueuedJob>   // snapshotted run inputs
-```
-
-- `run_fast` → build the job; if `in_flight.len() < max_parallel`, **start**
-  it; else **enqueue** and return a `RunHandle` whose `progress_rx` stays
-  silent until it starts (registry status = `Queued`).
-- On any terminal `RunUpdate` (the existing busy-clear sites:
-  native thread-end runner.rs:263, wasm `pump_wasm_forwarders` runner.rs:351),
-  remove from `in_flight`, pop `pending`, **start next**.
-- Cancelling a *queued* job = drop from `pending` (free, never started).
-  In-flight cancel unchanged.
-
-This queue+cap logic is identical on both platforms. New registry status
-`RunStatus::Queued` so the panel shows "3 running, 5 queued".
+`RunnerState` holds `{max_parallel, in_flight: HashSet, pending:
+VecDeque<QueuedJob>}`. `run_fast` snapshots a `QueuedJob`, pushes to
+`pending`, and calls `pump_scheduler` (starts while `in_flight < max_parallel`,
+outside the lock). On terminal, `finish_run` frees the slot and re-pumps.
+Queued-cancel is checked at `start_job`.
 
 ### B. Platform spawn primitive (the only `#[cfg]` split)
 
-`start(job)` is the one thing that differs:
-
-- **Native** (`#[cfg(not(wasm32))]`): `std::thread::spawn` per job, exactly
-  as today — but the scheduler cap bounds live threads to `max_parallel`.
-  Thread-per-run (not a reused pool) is the right call: a fresh thread gives
-  fresh rumoca `thread_local` caches (clock/timeout) and avoids cross-run
-  state reuse; spawn cost is trivial vs a multi-second sim. The shared
-  `Arc<Mutex<RunnerState>>` already lets all run threads share `dae_cache`.
-- **Wasm** (`#[cfg(wasm32)]`): a **persistent pool** of `max_parallel`
-  workers. Extend `worker_transport.rs`:
-  - `WORKER: OnceLock<WorkerHandle>` → `WORKERS: OnceLock<Vec<WorkerHandle>>`,
-    each instantiating the worker wasm **once** at install and **reused**
-    across runs (re-spawning a worker per run is the big web waste).
-  - MSL is installed into **every** worker (loop `install_msl_in_worker` over
-    the pool); the boot-race gate (`MSL_INSTALLED`, `PENDING_*`) becomes
-    per-worker or "all-ready".
-  - `dispatch_run_fast` picks an **idle** worker. The scheduler only
-    dispatches when `in_flight < pool size`, so a free worker always exists;
-    track which worker owns which `run_id` for routing + cancel.
-  - `pump_commands_to_worker` (compile/parse path) keeps using worker[0] —
-    pool is for RunFast fan-out only, to keep that change small.
-
-### C. Picking `max_parallel` (auto, per platform, configurable)
-
-- native: `std::thread::available_parallelism()` → `clamp(n-1, 1..=8)`.
-- wasm: `navigator.hardwareConcurrency` (web-sys) → `clamp(n-1, 1..=4)`
-  — lower, each worker is a full wasm instance (memory + browser budget).
-- Expose as a `lunco-settings` value (`experiments.max_parallel`, default
-  `auto`). **Default conservative** (this machine struggles → start at 2).
-
-### D. Don't oversubscribe rumoca's inner rayon
-
-Each rumoca compile uses rayon (`RAYON_INIT`). `max_parallel` concurrent
-*first*-points (cache-cold) × rayon = N×cores threads → thrash. After
-compile-once warms the cache, sweep points don't recompile, so the window is
-small — but a cold sweep or distinct-model batch hits it. Mitigation: run the
-inner compile single-threaded under the parallel executor (pin rumoca to a
-1-thread rayon pool / `RAYON_NUM_THREADS=1` for run threads) and let the
-**outer scheduler own core-level parallelism**. Outer = N models, inner = 1
-thread ⇒ total ≈ cores. (rumoca change — coordinate; see
-`feedback_no_unsolicited_rumoca_edits`. Until then: keep `max_parallel` low.)
+- Native: `std::thread::spawn` per run (fresh rumoca thread-locals), capped by
+  `in_flight`.
+- Wasm: a persistent pool of workers reused across runs; worker 0 is primary
+  (compile/parse/MSL), Fast Runs prefer a free non-primary worker.
 
 ## Work breakdown
 
-1. **[DONE] Scheduler in `RunnerState`** — replaced `busy_with` with
-   `{max_parallel, in_flight: HashSet, pending: VecDeque<QueuedJob>}`;
-   `run_fast` enqueues + `pump_scheduler` starts-or-queues; free fns
-   `pump_scheduler`/`finish_run` + platform `start_job` (native thread-per-run
-   → `finish_run` on return; wasm dispatch + forwarder `finish_run` on
-   terminal). Dropped the unused `cancel_flag` slot; queued-cancel checked at
-   `start_job`. `RunStatus::Queued` deliberately NOT added — queued runs sit
-   at `Pending` (no updates until started), which already reads correctly;
-   the dedicated variant is deferred to the step-5 UX pass to avoid rippling
-   every match site. *Native parallel works now.* (`experiments_runner.rs`.)
+1. **[DONE] Scheduler in `RunnerState`** — `busy_with` reject-gate replaced by
+   `{max_parallel, in_flight, pending}`; `pump_scheduler`/`finish_run` + a
+   platform `start_job`. Dropped the unused `cancel_flag`. *Native parallel
+   works.* (`experiments_runner.rs`.)
 2. **[DONE] `max_parallel` from settings** — `ExperimentSettings` section
-   (`settings.json` key `experiments`, field `max_parallel: Option<usize>`,
-   `None`/`0` = auto). `default_max_parallel()` = native
-   `available_parallelism()-1` clamped `1..=4`; wasm `1`. Reactive
-   `apply_experiment_settings` system (change-driven, applies on startup +
-   edits) registered in the modelica plugin. `set_max_parallel`/`max_parallel`
-   /`in_flight_count`/`queued_count` added for UI. Tests: 4 new + fixed a
-   pre-existing modifier-`=` override regex bug. (Web `hardwareConcurrency`
-   read folds in with step 3's pool.)
-3. **[DONE] Wasm worker pool** — `worker_transport.rs`: replaced
-   `WORKER: OnceLock<WorkerHandle>` with `POOL: OnceLock<Mutex<WorkerPool>>`
+   (`settings.json` key `experiments`, `max_parallel: Option<usize>`, None/0 =
+   auto). `default_max_parallel()` native = `available_parallelism()-1` clamped
+   `1..=4`. Reactive `apply_experiment_settings` system applies on startup +
+   edits. `set_max_parallel`/`max_parallel`/`in_flight_count`/`queued_count`
+   exposed. Also fixed a pre-existing modifier-`=` override regex bug in
+   `replace_param_literal`.
+3. **[DONE] Wasm worker pool** — `worker_transport.rs`:
+   `WORKER: OnceLock<WorkerHandle>` → `POOL: OnceLock<Mutex<WorkerPool>>`
    (`workers: Vec`, per-worker `running` occupant, `run_to_worker` map).
    `install_worker` sizes the pool from `experiments.max_parallel`
-   (`load_section_from_disk`, clamped `1..=MAX_WORKERS=8`); worker 0 is the
-   primary (compile/parse/MSL), all workers run Fast Runs. `dispatch_run_fast`
-   prefers a free non-primary worker (keeps 0 free for compiles), falls back
-   to 0 (serialize) when saturated; `forward_run_update` frees the slot on
-   terminal; `dispatch_cancel_run` routes by `run_to_worker` (broadcast if
-   unknown); `install_msl_in_worker` installs into ALL workers (single-worker
-   keeps the zero-copy transfer fast path, pool copies per worker). Pool size
-   is read at install via the persisted setting (auto=1 on wasm), so it agrees
-   with the runner's scheduler cap. **Prereq fix:** the storage-crate merge
-   had dropped the wasm branch of `lunco_settings::load_section_from_disk`
-   (it hit `FileStorage`'s native-only `File` arm → `Default`); restored the
-   `localStorage` branch to match `Settings::load_from_disk`. *Web parallel
-   works after this step* (runtime cap changes still need a reload to resize
-   the pool — documented limitation).
-4. **wasm auto-cap [DONE] + rayon pin [pending, rumoca]** — `default_max_parallel`
-   wasm branch now reads `navigator.hardwareConcurrency` (`-1`, clamped
-   `1..=4`; tighter than native because each worker holds its own MSL copy).
-   Still pending: pin rumoca's inner compile rayon to 1 thread under the
-   scheduler so concurrent cold compiles don't oversubscribe (rumoca change,
-   gated by ask).
-5. **Panel UI** — show running/queued counts; remove the "Fast Run busy"
-   disable; allow cancelling queued jobs.
+   (`load_section_from_disk`, clamped `1..=MAX_WORKERS=8`). Worker 0 = primary;
+   `dispatch_run_fast` prefers a free non-primary worker, falls back to 0 when
+   saturated; `forward_run_update` frees the slot on terminal;
+   `dispatch_cancel_run` routes by `run_to_worker`; `install_msl_in_worker`
+   installs into ALL workers (single keeps the zero-copy transfer, pool copies
+   per worker). **Prereq fix:** the storage-crate merge dropped the wasm branch
+   of `lunco_settings::load_section_from_disk` (hit `FileStorage`'s native-only
+   `File` arm → `Default`); restored the `localStorage` branch to match
+   `Settings::load_from_disk`. Verified by the wasm gate (`scripts/check_wasm.sh`
+   flags). *Web parallel works* (runtime cap changes still need a reload to
+   resize the pool — documented limitation).
+4. **wasm auto-cap [DONE]; rayon pin [DROPPED — unnecessary]** —
+   `default_max_parallel` wasm branch reads `navigator.hardwareConcurrency`
+   (`-1`, clamped `1..=4`; tighter than native because each worker holds its own
+   MSL copy). The rayon pin was dropped: rumoca uses a **single process-wide
+   global** rayon pool (`rumoca-compile/src/parse.rs` `init_rayon_pool`:
+   `ThreadPoolBuilder::new().num_threads(available_parallelism()-2).build_global().ok()`),
+   not one pool per compile — so N concurrent compiles share that one bounded
+   pool (no N×cores explosion), and work-stealing self-limits CPU use. The
+   `.ok()` deliberately defers to any pre-existing pool, so if tuning is ever
+   wanted we can `build_global()` from the app at startup (downstream, no rumoca
+   edit). Compile-once caching makes concurrent cold compiles rare anyway (a
+   sweep cold-compiles only the first point). No change shipped or needed.
+5. **[DONE] Panel UI** — added `RunStatus::Queued` (registry-only, NOT on the
+   `RunUpdate` wire → no worker changes); dispatch marks each run `Queued`,
+   `drain_pending_handles` flips it to `Running` on first progress (or
+   `Cancelled` if cancelled while queued). Experiments panel: `status_label`
+   shows "⏳ Queued"; the setup header shows a live "▶ running/limit · ⏳
+   queued" chip and the Run button *queues* instead of being disabled when
+   busy. model_view ⏩ Fast toolbar button likewise no longer disabled when
+   busy. Cancel-queued works via the per-row context-menu Cancel (Queued is
+   non-terminal, and exempt from registry eviction). api_queries gained the
+   `"queued"` state label. Exhaustive matches updated: api_queries ×2, panel
+   ×1. Tests green: lunco-experiments 5/5, scheduler 8/8.
 
-Steps 1–2 unlock desktop parallelism with the least risk; 3 unlocks web; 4 is
-the efficiency polish; 5 is UX. Each is independently shippable.
-
-## Open questions
+## Open questions / known limits
 
 - **Cold-sweep cache race:** two cache-miss runs of the same model can compile
-  the same DAE concurrently (harmless double work). Optional: an "in-progress
-  compile" dedup keyed by `dae_cache_key`. Skip for v1.
-- **Per-model vs global cap:** start global. A distinct-model batch and a
-  same-model sweep both honor one `max_parallel`.
-- **Memory:** N concurrent runs hold N result buffers + N DAE clones. The
-  20-run registry cap bounds retained results; in-flight RAM ≈ N × one run.
+  the same DAE concurrently (harmless double work). Optional dedup later.
+- **Per-model vs global cap:** global. One `max_parallel` across sweeps/models.
+- **Memory:** N concurrent runs hold N result buffers + N DAE clones; on wasm,
+  N workers each hold an MSL copy. The 20-run registry cap bounds retained
+  results; `MAX_WORKERS=8` + the setting bound the worker count.
+- **Runtime cap change on wasm** needs a page reload to resize the pool (no
+  retained MSL bundle to backfill new workers post-install).
+- **rumoca rayon oversubscription** — NOT an issue: rumoca's single global
+  rayon pool (`available_parallelism()-2`) is shared across all concurrent
+  compiles, so it self-bounds. Keep `max_parallel` modest anyway (default
+  clamps `1..=4`) since each native run also carries orchestration + result
+  buffers. If profiling ever shows compile contention, pre-init rayon's global
+  pool from the app (no rumoca edit). Resolved 2026-06-02.
