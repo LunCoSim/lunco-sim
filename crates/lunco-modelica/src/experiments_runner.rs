@@ -72,10 +72,15 @@ pub struct ModelDefaults {
 }
 
 /// Platform default for the number of runs allowed to execute
-/// concurrently. Native: one less than the core count, clamped low
-/// (this is refined into a `lunco-settings` value in step 2; the cap is
-/// kept conservative until then). Wasm: 1 — there is a single Web Worker
-/// today, so runs serialize inside it; the worker pool (step 3) raises it.
+/// concurrently (the "auto" setting). Both branches leave one logical core
+/// for the UI/main thread and clamp low; the user can override via
+/// `experiments.max_parallel`.
+///
+/// Native: `available_parallelism() - 1`. Wasm: `hardwareConcurrency - 1`,
+/// clamped tighter because each pooled worker is a full second wasm instance
+/// carrying its own copy of the (large) MSL bundle — so concurrency there
+/// trades real memory, not just CPU. `hardwareConcurrency` is logical cores
+/// (or 0/absent when the browser hides it → fall back to 1).
 fn default_max_parallel() -> usize {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -85,7 +90,12 @@ fn default_max_parallel() -> usize {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        1
+        let cores = web_sys::window()
+            .map(|w| w.navigator().hardware_concurrency())
+            .filter(|n| n.is_finite() && *n >= 1.0)
+            .map(|n| n as usize)
+            .unwrap_or(1);
+        cores.saturating_sub(1).clamp(1, 4)
     }
 }
 

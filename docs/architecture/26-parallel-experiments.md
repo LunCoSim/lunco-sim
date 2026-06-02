@@ -134,8 +134,12 @@ thread ⇒ total ≈ cores. (rumoca change — coordinate; see
    `localStorage` branch to match `Settings::load_from_disk`. *Web parallel
    works after this step* (runtime cap changes still need a reload to resize
    the pool — documented limitation).
-4. **rayon pin** (rumoca, gated by ask) — inner compile single-threaded so
-   outer parallelism doesn't thrash.
+4. **wasm auto-cap [DONE] + rayon pin [pending, rumoca]** — `default_max_parallel`
+   wasm branch now reads `navigator.hardwareConcurrency` (`-1`, clamped
+   `1..=4`; tighter than native because each worker holds its own MSL copy).
+   Still pending: pin rumoca's inner compile rayon to 1 thread under the
+   scheduler so concurrent cold compiles don't oversubscribe (rumoca change,
+   gated by ask).
 5. **Panel UI** — show running/queued counts; remove the "Fast Run busy"
    disable; allow cancelling queued jobs.
 
