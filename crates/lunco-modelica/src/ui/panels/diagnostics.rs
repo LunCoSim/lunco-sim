@@ -113,7 +113,7 @@ impl Panel for DiagnosticsPanel {
             .unwrap_or_else(lunco_theme::Theme::dark);
         let muted = theme.tokens.text_subdued;
         let mut clear_requested = false;
-        render_log_view(
+        let jump = render_log_view(
             ui,
             &snapshot,
             "(no diagnostics — model parses cleanly)",
@@ -123,6 +123,17 @@ impl Panel for DiagnosticsPanel {
         );
         if clear_requested {
             world.resource_mut::<DiagnosticsLog>().clear();
+        }
+        // A located diagnostic was clicked — ask the code editor to
+        // jump to it. The target is the currently active document
+        // (lint runs on the bound doc, so it's already the open tab).
+        if let Some(loc) = jump {
+            let doc = world
+                .get_resource::<lunco_workbench::WorkspaceResource>()
+                .and_then(|ws| ws.active_document);
+            world
+                .get_resource_or_insert_with(crate::ui::panels::code_editor::EditorJumpRequest::default)
+                .request(doc, loc);
         }
     }
 }
@@ -224,6 +235,9 @@ pub fn refresh_diagnostics(
             level: LogLevel::Error,
             text: msg.clone(),
             model: model_tag.clone(),
+            // Rumoca's recovering parser surfaces these as plain
+            // strings — no span threaded through yet, so not clickable.
+            loc: None,
         });
     }
 
@@ -237,6 +251,8 @@ pub fn refresh_diagnostics(
             level: LogLevel::Error,
             text: msg.to_string(),
             model: model_tag.clone(),
+            // Worker error is a stringified message; no location.
+            loc: None,
         });
     }
 
@@ -322,15 +338,15 @@ pub fn refresh_diagnostics(
                     LogEntry {
                         at: web_time::Instant::now(),
                         level,
-                        text: format!(
-                            "{}:{}:{}  [{}] {}",
-                            msg.file,
-                            msg.line,
-                            msg.column,
-                            msg.rule,
-                            msg.message
-                        ),
+                        // Position now lives on `loc` (rendered as a
+                        // chip + makes the row clickable), so the text
+                        // carries just rule + message.
+                        text: format!("[{}] {}", msg.rule, msg.message),
                         model: tag_for_worker.clone(),
+                        loc: Some(crate::ui::panels::log::SourceLoc {
+                            line: msg.line,
+                            column: msg.column,
+                        }),
                     }
                 })
                 .collect();

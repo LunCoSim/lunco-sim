@@ -786,6 +786,7 @@ pub fn on_compile_model(
             level: crate::ui::panels::log::LogLevel::Info,
             text: format!("⏵ Compile started: '{model_name}'"),
             model: Some(model_name.clone()),
+            loc: None,
         }]);
     }
 

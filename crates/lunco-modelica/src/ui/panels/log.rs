@@ -32,6 +32,15 @@ pub enum LogLevel {
     Error,
 }
 
+/// A 1-based source position (line, column) attached to a diagnostic.
+/// Present only for entries the linter located precisely; clicking such
+/// an entry jumps the code editor to this spot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceLoc {
+    pub line: u32,
+    pub column: u32,
+}
+
 impl LogLevel {
     /// Theme-driven colour. Info reads as plain text; warn/error use
     /// the semantic warn/error tokens so both Light and Dark stay
@@ -68,6 +77,11 @@ pub struct LogEntry {
     /// looking at.
     #[doc(hidden)]
     pub model: Option<String>,
+    /// Precise source position, when known (linter findings carry
+    /// line+column). `Some` makes the row clickable → jump-to-source.
+    /// `None` for entries without a location (compile-started notices,
+    /// AST/compile error strings that don't yet thread a span).
+    pub loc: Option<SourceLoc>,
 }
 
 /// Render a scrolling log view. Shared body of Console and
@@ -75,6 +89,9 @@ pub struct LogEntry {
 ///
 /// `empty_hint` appears when `entries` is empty — each panel provides
 /// its own text so the empty state reads naturally.
+///
+/// Returns the [`SourceLoc`] of a located entry the user clicked this
+/// frame (if any), so the caller can drive jump-to-source.
 pub fn render_log_view(
     ui: &mut egui::Ui,
     entries: &VecDeque<LogEntry>,
@@ -82,7 +99,8 @@ pub fn render_log_view(
     clear_requested: &mut bool,
     muted: egui::Color32,
     theme: &lunco_theme::Theme,
-) {
+) -> Option<SourceLoc> {
+    let mut clicked: Option<SourceLoc> = None;
     // Header row: count + Clear button.
     let count = entries.len();
     ui.horizontal(|ui| {
@@ -111,7 +129,7 @@ pub fn render_log_view(
                     .color(muted),
             );
         });
-        return;
+        return clicked;
     }
 
     egui::ScrollArea::both()
@@ -170,13 +188,45 @@ pub fn render_log_view(
                         )
                         .on_hover_text(model.to_string());
                     }
-                    ui.label(
-                        egui::RichText::new(&entry.text)
-                            .monospace()
-                            .size(11.0)
-                            .color(color),
-                    );
+                    // Location chip + clickable message for located
+                    // entries (linter findings). Clicking jumps the
+                    // editor to the spot. Unlocated entries render as
+                    // plain labels.
+                    if let Some(loc) = entry.loc {
+                        ui.label(
+                            egui::RichText::new(format!("L{}:{}", loc.line, loc.column))
+                                .monospace()
+                                .size(10.0)
+                                .color(theme.tokens.accent),
+                        );
+                        let resp = ui
+                            .add(
+                                egui::Label::new(
+                                    egui::RichText::new(&entry.text)
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(color),
+                                )
+                                .sense(egui::Sense::click()),
+                            )
+                            .on_hover_text(format!(
+                                "Go to line {}, column {}",
+                                loc.line, loc.column
+                            ))
+                            .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if resp.clicked() {
+                            clicked = Some(loc);
+                        }
+                    } else {
+                        ui.label(
+                            egui::RichText::new(&entry.text)
+                                .monospace()
+                                .size(11.0)
+                                .color(color),
+                        );
+                    }
                 });
             }
         });
+    clicked
 }
