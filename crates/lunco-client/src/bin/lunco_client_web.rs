@@ -58,52 +58,14 @@ pub fn run() {
         .add_plugins(lunco_avatar::LunCoAvatarPlugin)
         .add_plugins(lunco_workbench::WorkbenchPlugin);
 
-    // THE UNIVERSAL SYNC BRIDGE
-    // Required since TransformPlugin is disabled for BigSpace support.
-    app.add_systems(PreUpdate, global_transform_propagation_system);
-    app.add_systems(PostUpdate, global_transform_propagation_system.after(avian3d::prelude::PhysicsSystems::Writeback));
+    // Transform/visibility propagation is owned entirely by big_space
+    // (`BigSpaceDefaultPlugins` via `get_big_space_plugins`). The custom
+    // `global_transform_propagation_system` that previously ran here —
+    // twice per frame, in PreUpdate and PostUpdate — was removed
+    // (2026-06-02): it fought big_space's propagation and corrupted
+    // `GlobalTransform` on every entity (camera roll in surface mode),
+    // mirroring the fix already applied to `main.rs` and `sandbox.rs`.
 
     #[cfg(not(target_arch = "wasm32"))]
     app.run();
-}
-
-/// A robust multi-pass system to propagate [GlobalTransform] and [Visibility] across grids.
-fn global_transform_propagation_system(
-    mut commands: Commands,
-    q_needs: Query<Entity, (Or<(With<Visibility>, With<Mesh3d>, With<Text2d>, With<Transform>)>, Without<InheritedVisibility>, Without<CellCoord>)>,
-    mut q_spatial: Query<(Entity, &mut GlobalTransform, &Transform, Option<&ChildOf>)>,
-    mut q_visibility: Query<(Entity, &mut InheritedVisibility, &mut ViewVisibility, &Visibility, Option<&ChildOf>)>,
-) {
-    for ent in q_needs.iter() {
-        commands.entity(ent).insert((
-            InheritedVisibility::default(),
-            ViewVisibility::default(),
-            GlobalTransform::default(),
-        ));
-    }
-    for _ in 0..4 {
-        let mut gtf_cache = std::collections::HashMap::new();
-        for (ent, gtf, _, _) in q_spatial.iter() { gtf_cache.insert(ent, *gtf); }
-        for (_ent, mut gtf, local_tf, child_of_opt) in q_spatial.iter_mut() {
-            let parent_gtf = if let Some(child_of) = child_of_opt {
-                gtf_cache.get(&child_of.parent()).cloned().unwrap_or_default()
-            } else {
-                GlobalTransform::default()
-            };
-            *gtf = parent_gtf.mul_transform(*local_tf);
-        }
-    }
-    for _ in 0..4 {
-        let mut vis_cache = std::collections::HashMap::new();
-        for (ent, inherited, _, _, _) in q_visibility.iter() { vis_cache.insert(ent, inherited.get()); }
-        for (_, mut inherited, _view, visibility, child_of_opt) in q_visibility.iter_mut() {
-            let parent_visible = if let Some(child_of) = child_of_opt {
-                *vis_cache.get(&child_of.parent()).unwrap_or(&true)
-            } else { true };
-            let is_visible = parent_visible && visibility != Visibility::Hidden;
-            if inherited.get() != is_visible {
-                *inherited = if is_visible { InheritedVisibility::VISIBLE } else { InheritedVisibility::HIDDEN };
-            }
-        }
-    }
 }
