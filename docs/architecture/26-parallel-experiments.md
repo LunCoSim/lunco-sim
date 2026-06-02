@@ -116,9 +116,24 @@ thread ⇒ total ≈ cores. (rumoca change — coordinate; see
    /`in_flight_count`/`queued_count` added for UI. Tests: 4 new + fixed a
    pre-existing modifier-`=` override regex bug. (Web `hardwareConcurrency`
    read folds in with step 3's pool.)
-3. **Wasm worker pool** — `WORKERS: Vec`, install N, MSL into all, idle-worker
-   pick in `dispatch_run_fast`, per-run→worker routing + cancel.
-   (`worker_transport.rs`.) *Web parallel works after this step.*
+3. **[DONE] Wasm worker pool** — `worker_transport.rs`: replaced
+   `WORKER: OnceLock<WorkerHandle>` with `POOL: OnceLock<Mutex<WorkerPool>>`
+   (`workers: Vec`, per-worker `running` occupant, `run_to_worker` map).
+   `install_worker` sizes the pool from `experiments.max_parallel`
+   (`load_section_from_disk`, clamped `1..=MAX_WORKERS=8`); worker 0 is the
+   primary (compile/parse/MSL), all workers run Fast Runs. `dispatch_run_fast`
+   prefers a free non-primary worker (keeps 0 free for compiles), falls back
+   to 0 (serialize) when saturated; `forward_run_update` frees the slot on
+   terminal; `dispatch_cancel_run` routes by `run_to_worker` (broadcast if
+   unknown); `install_msl_in_worker` installs into ALL workers (single-worker
+   keeps the zero-copy transfer fast path, pool copies per worker). Pool size
+   is read at install via the persisted setting (auto=1 on wasm), so it agrees
+   with the runner's scheduler cap. **Prereq fix:** the storage-crate merge
+   had dropped the wasm branch of `lunco_settings::load_section_from_disk`
+   (it hit `FileStorage`'s native-only `File` arm → `Default`); restored the
+   `localStorage` branch to match `Settings::load_from_disk`. *Web parallel
+   works after this step* (runtime cap changes still need a reload to resize
+   the pool — documented limitation).
 4. **rayon pin** (rumoca, gated by ask) — inner compile single-threaded so
    outer parallelism doesn't thrash.
 5. **Panel UI** — show running/queued counts; remove the "Fast Run busy"

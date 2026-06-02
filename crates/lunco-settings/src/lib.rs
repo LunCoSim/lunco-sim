@@ -77,15 +77,30 @@ pub fn settings_path() -> PathBuf {
 /// runtime won't retro-actively register/unregister plugins; that
 /// requires an app restart.
 pub fn load_section_from_disk<S: SettingsSection>() -> S {
-    let path = settings_path();
-    use lunco_storage::Storage;
-    let Ok(bytes) = lunco_storage::FileStorage::new()
-        .read_sync(&lunco_storage::StorageHandle::File(path))
-    else {
-        return S::default();
+    // Same blob the App-built `Settings` resource loads, read before the
+    // App exists. Native: `<config>/settings.json` via lunco-storage. Wasm:
+    // the `localStorage` mirror — mirrors `Settings::load_from_disk`. The
+    // storage-crate `FileStorage` has no wasm `File` backend, so without
+    // this branch every pre-App read on wasm fell back to `S::default()`
+    // and a persisted value was silently ignored at boot.
+    #[cfg(target_arch = "wasm32")]
+    let text = match wasm_storage_read() {
+        Some(s) => s,
+        None => return S::default(),
     };
-    let Ok(text) = String::from_utf8(bytes) else {
-        return S::default();
+    #[cfg(not(target_arch = "wasm32"))]
+    let text = {
+        use lunco_storage::Storage;
+        let path = settings_path();
+        let Ok(bytes) = lunco_storage::FileStorage::new()
+            .read_sync(&lunco_storage::StorageHandle::File(path))
+        else {
+            return S::default();
+        };
+        match String::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_) => return S::default(),
+        }
     };
     let raw: BTreeMap<String, serde_json::Value> = match serde_json::from_str(&text) {
         Ok(v) => v,
