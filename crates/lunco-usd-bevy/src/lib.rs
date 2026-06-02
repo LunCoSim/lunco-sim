@@ -273,11 +273,41 @@ fn instantiate_usd_prim(
 ) {
     {
         let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
-        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
 
         // Borrow — `stage.reader` is `Arc<TextReader>`; deep-cloning it copies
         // the whole stage `HashMap`. Every read below is `&self`.
         let reader = &*stage.reader;
+
+        // Deferred `defaultPrim` resolution. A scene-root spawned with an
+        // empty path is the "use the stage's defaultPrim" sentinel
+        // (`resolve_root_prim` no longer reads the file with `std::fs` —
+        // that always returned `None` on wasm, so every web scene load
+        // mounted the whole stage at `/` instead of the defaultPrim
+        // subtree). The stage is parsed via the `AssetServer` (works on
+        // web), so we read it here, where the reader is guaranteed loaded,
+        // and write the concrete path back so downstream consumers
+        // (cosim prim scan, dedup) see a real prim instead of the sentinel.
+        let resolved_path = if prim_path.path.is_empty() {
+            let p = match stage_default_prim(reader) {
+                Some(name) => format!("/{name}"),
+                None => {
+                    warn!(
+                        "[usd] stage has no `defaultPrim` — mounting whole stage at `/`. \
+                         Add `( defaultPrim = \"Name\" )` to the stage header if this \
+                         file will be referenced from other USD files."
+                    );
+                    "/".to_string()
+                }
+            };
+            commands.entity(entity).insert(UsdPrimPath {
+                stage_handle: prim_path.stage_handle.clone(),
+                path: p.clone(),
+            });
+            p
+        } else {
+            prim_path.path.clone()
+        };
+        let Ok(sdf_path) = SdfPath::new(&resolved_path) else { return; };
 
         // M1 identity (Ph1): this entity is reconstructed from shared USD
         // content, so stamp a deterministic `Provenance::Content`. The
@@ -291,7 +321,7 @@ fn instantiate_usd_prim(
             commands.entity(entity).insert(lunco_core::Provenance::Content {
                 namespace: "usd".into(),
                 source: source.path().to_string_lossy().into_owned(),
-                path: prim_path.path.clone(),
+                path: resolved_path.clone(),
             });
         }
 
@@ -753,6 +783,21 @@ fn apply_standard_material(
 /// `prim_attribute_value::<String>` covers `String`/`Token` only,
 /// so we go through `reader.get` for the attribute path directly
 /// to also catch `AssetPath`.
+/// Read the stage's `defaultPrim` metadata from the parsed pseudo-root.
+///
+/// This is the wasm-correct source for the default prim: it reads the
+/// already-parsed `TextReader` (populated through the `AssetServer`,
+/// which works on web) instead of re-reading the `.usda` file with
+/// `std::fs`, which silently returns `None` on wasm. Returns the bare
+/// prim name (no leading slash), or `None` when the stage declares no
+/// `defaultPrim`. The metadata lives on the pseudo-root spec at the
+/// absolute root path.
+pub fn stage_default_prim(reader: &TextReader) -> Option<String> {
+    let val = reader.get(&SdfPath::abs_root(), "defaultPrim").ok()?;
+    let name = String::try_from(val.into_owned()).ok()?;
+    (!name.is_empty()).then_some(name)
+}
+
 fn get_attribute_as_string(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<String> {
     let attr_path = path.append_property(attr).ok()?;
     let val = reader.get(&attr_path, "default").ok()?;
@@ -855,5 +900,27 @@ fn hide_glb_placeholder_meshes(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reader(source: &str) -> TextReader {
+        let mut parser = openusd::usda::parser::Parser::new(source);
+        TextReader::from_data(parser.parse().unwrap())
+    }
+
+    #[test]
+    fn stage_default_prim_reads_metadata() {
+        let r = reader("#usda 1.0\n(\n    defaultPrim = \"SandboxScene\"\n    upAxis = \"Y\"\n)\n\ndef Xform \"SandboxScene\" {}\n");
+        assert_eq!(stage_default_prim(&r), Some("SandboxScene".to_string()));
+    }
+
+    #[test]
+    fn stage_default_prim_none_when_absent() {
+        let r = reader("#usda 1.0\n\ndef Xform \"World\" {}\n");
+        assert_eq!(stage_default_prim(&r), None);
     }
 }

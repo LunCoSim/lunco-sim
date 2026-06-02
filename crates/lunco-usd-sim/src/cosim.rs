@@ -742,58 +742,30 @@ pub fn spawn_scene_root_world(
 /// Resolve the SDF mount path for a scene load.
 ///
 /// Priority:
-/// 1. explicit `override_in` (non-empty caller-supplied path)
-/// 2. stage's `defaultPrim` metadata
-/// 3. `/` — mount the whole stage (matches `usdview` / Omniverse
-///    behavior when a stage lacks `defaultPrim`).
+/// 1. explicit `override_in` (non-empty caller-supplied path) wins.
+/// 2. otherwise return the empty *deferred-resolution sentinel* — the
+///    scene-root entity is spawned with an empty path, and
+///    `lunco_usd_bevy::instantiate_usd_prim` resolves it from the
+///    stage's `defaultPrim` metadata once the asset has parsed
+///    (falling back to `/` — whole-stage mount — when none is declared).
+///
+/// The defaultPrim lookup is deliberately deferred rather than read
+/// here: this runs synchronously at command time, before the stage
+/// asset finishes loading, and the old `std::fs::read_to_string`
+/// shortcut silently returned `None` on wasm (no filesystem) — so every
+/// web scene load mounted the whole stage at `/` instead of the
+/// defaultPrim subtree. Reading from the parsed `TextReader` at
+/// instantiate time is correct on both native and web.
 ///
 /// Per USD spec, `defaultPrim` is only required for files that will be
 /// *referenced* by other USD files (composition arcs need a target
-/// prim). Opening a stage directly works fine without it. We warn at
-/// load time so authors notice missing metadata before another file
-/// tries to reference theirs.
-pub fn resolve_root_prim(asset_path: &str, override_in: &str) -> String {
+/// prim). Opening a stage directly works fine without it.
+pub fn resolve_root_prim(_asset_path: &str, override_in: &str) -> String {
     if !override_in.is_empty() {
         return override_in.to_string();
     }
-    let abs = assets_dir().join(asset_path);
-    match read_default_prim(&abs) {
-        Some(name) => {
-            info!("[scene] `{}` defaultPrim = `{}`", asset_path, name);
-            format!("/{}", name)
-        }
-        None => {
-            warn!(
-                "[scene] `{}` has no `defaultPrim` — mounting at `/`. \
-                 Add `( defaultPrim = \"Name\" )` to the stage header if \
-                 this file will be referenced from other USD files.",
-                asset_path
-            );
-            "/".to_string()
-        }
-    }
-}
-
-/// Scan a `.usda` file's metadata header for `defaultPrim = "Name"`.
-/// Returns the prim name (without leading slash) or `None` if the file
-/// can't be read or no `defaultPrim` is declared.
-///
-/// The metadata block sits in the first few hundred bytes of every
-/// stage, right after `#usda 1.0`, so we only read the file head.
-fn read_default_prim(path: &std::path::Path) -> Option<String> {
-    let raw = std::fs::read_to_string(path).ok()?;
-    let head = &raw[..raw.len().min(4096)];
-    for line in head.lines() {
-        let line = line.trim();
-        let Some(rest) = line.strip_prefix("defaultPrim") else { continue };
-        // Accept `defaultPrim = "Name"` and `defaultPrim="Name"`.
-        let rest = rest.trim_start_matches(|c: char| c == '=' || c.is_whitespace());
-        let name = rest.trim_matches('"');
-        if !name.is_empty() {
-            return Some(name.to_string());
-        }
-    }
-    None
+    // Deferred sentinel — resolved against the parsed stage downstream.
+    String::new()
 }
 
 /// Plugin install hook — registers translator systems, per-tick sync
@@ -872,89 +844,24 @@ mod tests {
         assert_eq!(parse_wire(""), None);
     }
 
-    // ── defaultPrim resolution ───────────────────────────────────────
-
-    use std::io::Write;
-
-    /// Write a `.usda` source into a unique tempfile and return its
-    /// absolute path. Each call uses a counter so parallel tests don't
-    /// collide on the same name.
-    fn tmp_usda(source: &str) -> std::path::PathBuf {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static N: AtomicUsize = AtomicUsize::new(0);
-        let n = N.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!(
-            "lunco_usd_sim_default_prim_{}_{}.usda",
-            std::process::id(),
-            n
-        ));
-        let mut f = std::fs::File::create(&p).unwrap();
-        f.write_all(source.as_bytes()).unwrap();
-        p
-    }
-
-    #[test]
-    fn read_default_prim_extracts_name() {
-        let p = tmp_usda(
-            "#usda 1.0\n(\n    defaultPrim = \"SandboxScene\"\n    upAxis = \"Y\"\n)\n\ndef Xform \"SandboxScene\" {}\n",
-        );
-        assert_eq!(read_default_prim(&p), Some("SandboxScene".to_string()));
-    }
-
-    #[test]
-    fn read_default_prim_accepts_unspaced_equals() {
-        let p = tmp_usda("#usda 1.0\n(\n    defaultPrim=\"Foo\"\n)\n");
-        assert_eq!(read_default_prim(&p), Some("Foo".to_string()));
-    }
-
-    #[test]
-    fn read_default_prim_returns_none_when_absent() {
-        // Top-level prims declared but no metadata block.
-        let p = tmp_usda("#usda 1.0\n\ndef Xform \"World\" {}\n");
-        assert_eq!(read_default_prim(&p), None);
-    }
-
-    #[test]
-    fn read_default_prim_returns_none_for_missing_file() {
-        let p = std::env::temp_dir().join("lunco_usd_sim_no_such_file.usda");
-        let _ = std::fs::remove_file(&p);
-        assert_eq!(read_default_prim(&p), None);
-    }
-
     // ── resolve_root_prim ────────────────────────────────────────────
     //
-    // `resolve_root_prim` joins its `asset_path` arg with `assets_dir()`
-    // (= relative `"assets"`). To exercise it hermetically we hand it
-    // absolute temp paths — `PathBuf::join` of a base with an absolute
-    // path returns the absolute path, so the join is a no-op.
+    // `resolve_root_prim` no longer touches the filesystem: an explicit
+    // override wins, and an empty override yields the deferred-resolution
+    // sentinel (empty string). The actual `defaultPrim` lookup is done
+    // from the parsed stage in `lunco_usd_bevy::instantiate_usd_prim`
+    // (covered by `stage_default_prim` tests there) — that path is
+    // correct on wasm, where the old `std::fs` read always failed.
 
     #[test]
     fn resolve_root_prim_override_wins() {
-        let p = tmp_usda("#usda 1.0\n(\n    defaultPrim = \"Stage\"\n)\n");
-        let p_str = p.to_string_lossy().into_owned();
-        assert_eq!(resolve_root_prim(&p_str, "/Override"), "/Override");
+        assert_eq!(resolve_root_prim("scene.usda", "/Override"), "/Override");
     }
 
     #[test]
-    fn resolve_root_prim_uses_default_prim_when_override_empty() {
-        let p = tmp_usda("#usda 1.0\n(\n    defaultPrim = \"SandboxScene\"\n)\n");
-        let p_str = p.to_string_lossy().into_owned();
-        assert_eq!(resolve_root_prim(&p_str, ""), "/SandboxScene");
-    }
-
-    #[test]
-    fn resolve_root_prim_falls_back_to_root_when_no_default_prim() {
-        let p = tmp_usda("#usda 1.0\n\ndef Xform \"World\" {}\n");
-        let p_str = p.to_string_lossy().into_owned();
-        assert_eq!(resolve_root_prim(&p_str, ""), "/");
-    }
-
-    #[test]
-    fn resolve_root_prim_falls_back_to_root_when_file_missing() {
-        // Nonexistent path → no defaultPrim → "/" fallback.
-        let p = std::env::temp_dir().join("lunco_usd_sim_resolve_missing.usda");
-        let _ = std::fs::remove_file(&p);
-        let p_str = p.to_string_lossy().into_owned();
-        assert_eq!(resolve_root_prim(&p_str, ""), "/");
+    fn resolve_root_prim_empty_override_defers() {
+        // Empty override → empty sentinel; resolved downstream against
+        // the parsed stage, not here.
+        assert_eq!(resolve_root_prim("scene.usda", ""), "");
     }
 }
