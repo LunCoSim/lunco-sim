@@ -225,6 +225,24 @@ fn fmt_num(n: f32) -> String {
     s
 }
 
+/// Like [`fmt_num`] but preserves full `f64` precision. Used for solver
+/// configuration (`Tolerance`, `Interval`) where small values such as
+/// `1e-7` must survive the round-trip — an `f32` cast *or* the fixed
+/// `{:.6}` format in [`fmt_num`] silently collapses them to `0`.
+///
+/// Rust's default `f64` `Display` already emits the shortest round-tripping
+/// decimal and never switches to scientific notation, which is exactly the
+/// hand-authored Modelica shape — so we lean on it directly.
+fn fmt_num_f64(n: f64) -> String {
+    if n.is_nan() {
+        return "0".to_string();
+    }
+    if n == n.trunc() && n.abs() < 1e15 {
+        return format!("{}", n as i64);
+    }
+    format!("{}", n)
+}
+
 fn fmt_point(x: f32, y: f32) -> String {
     format!("{{{},{}}}", fmt_num(x), fmt_num(y))
 }
@@ -669,10 +687,10 @@ pub fn equation_decl(eq: &EquationDecl) -> String {
 pub fn experiment_inner(start_time: f64, stop_time: f64, tolerance: f64, interval: f64) -> String {
     format!(
         "experiment(StartTime={}, StopTime={}, Tolerance={}, Interval={})",
-        fmt_num(start_time as f32),
-        fmt_num(stop_time as f32),
-        fmt_num(tolerance as f32),
-        fmt_num(interval as f32),
+        fmt_num_f64(start_time),
+        fmt_num_f64(stop_time),
+        fmt_num_f64(tolerance),
+        fmt_num_f64(interval),
     )
 }
 
@@ -692,6 +710,17 @@ mod tests {
         assert_eq!(fmt_num(0.5), "0.5");
         assert_eq!(fmt_num(0.001), "0.001");
         assert_eq!(fmt_num(100.25), "100.25");
+    }
+
+    #[test]
+    fn experiment_inner_preserves_small_tolerance() {
+        // Regression: an `as f32` cast + `{:.6}` format used to write
+        // Tolerance/Interval of 1e-7 back to the .mo source as `0`.
+        let s = experiment_inner(0.0, 10.0, 1e-7, 1e-7);
+        assert_eq!(
+            s,
+            "experiment(StartTime=0, StopTime=10, Tolerance=0.0000001, Interval=0.0000001)"
+        );
     }
 
     #[test]

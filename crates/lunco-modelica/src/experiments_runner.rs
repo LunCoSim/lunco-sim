@@ -621,8 +621,8 @@ fn run_inner(
         );
         step_dt = capped;
     }
-    let mut last_progress_emit = std::time::Instant::now();
-    
+    let mut last_progress_emit = web_time::Instant::now();
+
     // Get variable names from the initial state.
     let names: Vec<String> = stepper.state().values.keys()
         .filter(|n| *n != "time")
@@ -694,7 +694,7 @@ fn run_inner(
                 t_current: t,
                 delta: Some(delta),
             });
-            last_progress_emit = std::time::Instant::now();
+            last_progress_emit = web_time::Instant::now();
             last_emit_idx = all_times.len();
         }
     }
