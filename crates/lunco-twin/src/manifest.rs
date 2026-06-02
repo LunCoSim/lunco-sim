@@ -3,7 +3,20 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use lunco_storage::{FileStorage, Storage, StorageError, StorageHandle};
+
 use crate::error::TwinError;
+
+/// Collapse a [`StorageError`] into the `std::io::Error` that
+/// [`TwinError::Io`] carries, so routing manifest I/O through
+/// `lunco-storage` (instead of direct `std::fs`, which is clippy-banned
+/// here and absent on wasm) keeps the existing error shape.
+fn storage_io(e: StorageError) -> std::io::Error {
+    match e {
+        StorageError::Io(io) => io,
+        other => std::io::Error::other(other.to_string()),
+    }
+}
 
 /// Name of the Twin manifest file at the root of a Twin folder.
 pub const MANIFEST_FILENAME: &str = "twin.toml";
@@ -70,20 +83,30 @@ pub struct TwinChildRef {
 impl TwinManifest {
     /// Read and parse `twin.toml` from disk.
     pub fn read(path: &Path) -> Result<Self, TwinError> {
-        let bytes = std::fs::read_to_string(path).map_err(|e| TwinError::Io {
+        let handle = StorageHandle::File(path.to_path_buf());
+        let bytes = FileStorage::new()
+            .read_sync(&handle)
+            .map_err(|e| TwinError::Io {
+                path: path.to_path_buf(),
+                source: storage_io(e),
+            })?;
+        let text = String::from_utf8(bytes).map_err(|e| TwinError::Io {
             path: path.to_path_buf(),
-            source: e,
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, e),
         })?;
-        Ok(toml::from_str(&bytes)?)
+        Ok(toml::from_str(&text)?)
     }
 
     /// Serialize and write this manifest to disk. Overwrites if present.
     pub fn write(&self, path: &Path) -> Result<(), TwinError> {
         let text = toml::to_string_pretty(self)?;
-        std::fs::write(path, text).map_err(|e| TwinError::Io {
-            path: path.to_path_buf(),
-            source: e,
-        })
+        let handle = StorageHandle::File(path.to_path_buf());
+        FileStorage::new()
+            .write_sync(&handle, text.as_bytes())
+            .map_err(|e| TwinError::Io {
+                path: path.to_path_buf(),
+                source: storage_io(e),
+            })
     }
 }
 
@@ -128,6 +151,26 @@ mod tests {
         let text = toml::to_string_pretty(&manifest).unwrap();
         let parsed: TwinManifest = toml::from_str(&text).unwrap();
         assert_eq!(parsed, manifest);
+    }
+
+    #[test]
+    fn disk_round_trip_via_storage() {
+        // Exercises the `lunco-storage`-backed read/write path end-to-end.
+        let manifest = TwinManifest {
+            name: "disk_demo".into(),
+            description: Some("written via FileStorage".into()),
+            version: "0.1.0".into(),
+            default_perspective: None,
+            children: vec![],
+        };
+        let path = std::env::temp_dir().join(format!(
+            "lunco_twin_manifest_{}.toml",
+            std::process::id()
+        ));
+        manifest.write(&path).expect("write via storage");
+        let read_back = TwinManifest::read(&path).expect("read via storage");
+        assert_eq!(read_back, manifest);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
