@@ -51,7 +51,6 @@ pub mod canvas;
 pub mod event;
 pub mod layer;
 pub mod overlay;
-pub mod renderer;
 pub mod scene;
 pub mod selection;
 pub mod tool;
@@ -64,11 +63,6 @@ pub use layer::{
     EdgesLayer, GridLayer, Layer, NodesLayer, SelectionLayer, ToolPreviewLayer,
 };
 pub use overlay::{Anchor, NavBarOverlay, Overlay, OverlayCtx};
-pub use renderer::{
-    ActiveRenderer, Backend, Color as RColor, DiagramRenderer, FontStyle,
-    GradientKind, ImageHandle, LinePattern as RLinePattern, Point as RPoint,
-    Rect as RRect, Stroke as RStroke, TextAnchor,
-};
 pub use scene::{
     empty_node_data, Edge, EdgeHitKind, EdgeId, Node, NodeData, NodeId, NodeHitKind, Port,
     PortId, PortRef, Pos, Rect, Scene,

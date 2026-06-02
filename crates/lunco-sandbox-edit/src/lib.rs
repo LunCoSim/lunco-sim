@@ -40,9 +40,6 @@ pub mod undo;
 /// UI panels — WorkbenchPanel implementations (for editor mode).
 pub mod ui;
 
-/// Overlay panels for 3D-embedded mode.
-pub mod overlay;
-
 use bevy::prelude::*;
 
 pub use undo::{UndoStack, UndoAction};
