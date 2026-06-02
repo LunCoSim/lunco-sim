@@ -93,7 +93,12 @@ impl Command for ApplyReflectedSet {
         } else { return; };
 
         // 3. Mutable access to the component via reflection.
-        let mut reflect_mut = reflect_component.reflect_mut(&mut entity_mut).expect("Failed to get reflect_mut");
+        //    `reflect_mut` returns `Err` when the entity doesn't actually have
+        //    the component (e.g. a stale AttributeAddress from the optimizer
+        //    tuning path). Bail instead of panicking the whole app.
+        let Some(mut reflect_mut) = reflect_component.reflect_mut(&mut entity_mut) else {
+            return;
+        };
 
         // 4. Resolve the specific field within the component.
         let target_field: Option<&mut dyn PartialReflect> = if self.address.field.is_empty() {

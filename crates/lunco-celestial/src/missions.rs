@@ -219,8 +219,16 @@ pub fn load_missions_system(
         if let Ok(entries) = fs::read_dir(missions_dir) {
             for entry in entries.flatten() {
                 if entry.path().extension().map(|e| e == "json").unwrap_or(false) {
-                    if let Ok(content) = fs::read_to_string(entry.path()) {
-                        spawn_mission(&mut commands, &mut meshes, &mut materials, &mut registry, &content);
+                    // Read through lunco-storage (clippy-banned `std::fs::read_to_string`,
+                    // wasm-incompatible). `fs::read_dir` above isn't on the ban list and the
+                    // whole block is `cfg(not(wasm32))` — wasm uses the embedded data path.
+                    use lunco_storage::Storage;
+                    if let Ok(bytes) = lunco_storage::FileStorage::new()
+                        .read_sync(&lunco_storage::StorageHandle::File(entry.path()))
+                    {
+                        if let Ok(content) = String::from_utf8(bytes) {
+                            spawn_mission(&mut commands, &mut meshes, &mut materials, &mut registry, &content);
+                        }
                     }
                 }
             }

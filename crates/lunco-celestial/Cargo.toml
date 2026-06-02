@@ -24,6 +24,7 @@ big_space = { workspace = true }
 # planetary positions add the ephemeris crate's plugin.
 lunco-core = { path = "../lunco-core" }
 lunco-assets = { workspace = true }
+lunco-storage = { path = "../lunco-storage" }
 avian3d = { workspace = true }
 chrono = { workspace = true }
 lunco-controller = { path = "../lunco-controller" }

@@ -20,11 +20,20 @@ impl Panel for AvatarStatusPanel {
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+        // Capture the palette up front: semantic status colours for this
+        // panel come from the active Theme (falls back to plain white when
+        // headless / no theme registered).
+        let palette = world.get_resource::<lunco_theme::Theme>().map(|t| t.colors.clone());
         if let Some(theme) = world.get_resource::<lunco_theme::Theme>() {
             let raised = theme.tokens.surface_raised;
             ui.style_mut().visuals.widgets.inactive.weak_bg_fill = raised;
             ui.style_mut().visuals.widgets.inactive.bg_fill = raised;
         }
+        // No theme (headless) → PLACEHOLDER lets egui use its default text colour.
+        let body_color = palette
+            .as_ref()
+            .map(|p| p.peach)
+            .unwrap_or(egui::Color32::PLACEHOLDER);
 
         ui.heading("Avatar Status");
         ui.separator();
@@ -40,7 +49,7 @@ impl Panel for AvatarStatusPanel {
             if let Some(body) = gf.0 {
                 ui.horizontal(|ui| {
                     ui.label("Surface Mode — Body:");
-                    ui.colored_label(egui::Color32::from_rgb(255, 180, 50), format!("{:?}", body));
+                    ui.colored_label(body_color, format!("{:?}", body));
                 });
                 ui.label(format!("Gravity: {:.3} m/s²", gf.1));
 
@@ -118,28 +127,36 @@ fn compute_lat_lon_height(world: &mut World, avatar_ent: Entity, body: Entity) -
 }
 
 fn get_camera_mode_info(world: &mut World) -> (egui::Color32, String, String) {
+    // Status colours come from the active Theme palette; fall back to the
+    // original literals when headless / no theme registered.
+    let palette = world.get_resource::<lunco_theme::Theme>().map(|t| t.colors.clone());
+    // No theme (headless) → PLACEHOLDER lets egui use its default text colour.
+    let c = |pick: fn(&lunco_theme::ColorPalette) -> egui::Color32| {
+        palette.as_ref().map(pick).unwrap_or(egui::Color32::PLACEHOLDER)
+    };
+
     let mut blend_q = world.query::<&FrameBlend>();
     if let Ok(blend) = blend_q.single(world) {
         let progress = (blend.t / blend.duration * 100.0).min(100.0) as i32;
-        return (egui::Color32::from_rgb(200, 200, 50), format!("TRANSITION ({}%)", progress), String::new());
+        return (c(|p| p.yellow), format!("TRANSITION ({}%)", progress), String::new());
     }
 
     let mut spring_q = world.query::<&SpringArmCamera>();
     if let Ok(arm) = spring_q.single(world) {
-        return (egui::Color32::from_rgb(255, 100, 50), "SPRING ARM".to_string(), format!("Distance: {:.1} m", arm.distance));
+        return (c(|p| p.maroon), "SPRING ARM".to_string(), format!("Distance: {:.1} m", arm.distance));
     }
 
     let mut orbit_q = world.query::<&OrbitCamera>();
     if let Ok(orbit) = orbit_q.single(world) {
-        return (egui::Color32::from_rgb(100, 150, 255), "ORBIT".to_string(), format!("Distance: {:.1} m", orbit.distance));
+        return (c(|p| p.blue), "ORBIT".to_string(), format!("Distance: {:.1} m", orbit.distance));
     }
 
     let mut ff_q = world.query::<&FreeFlightCamera>();
     if ff_q.single(world).is_ok() {
-        return (egui::Color32::from_rgb(255, 200, 50), "FREE FLIGHT".to_string(), String::new());
+        return (c(|p| p.peach), "FREE FLIGHT".to_string(), String::new());
     }
 
-    (egui::Color32::WHITE, "UNKNOWN".to_string(), String::new())
+    (c(|p| p.text), "UNKNOWN".to_string(), String::new())
 }
 
 /// Plugin that registers avatar UI panels.
