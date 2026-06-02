@@ -7486,6 +7486,7 @@ dependencies = [
  "lunco-fsw",
  "lunco-mobility",
  "lunco-storage",
+ "lunco-theme",
  "lunco-twin",
  "lunco-usd-avian",
  "lunco-usd-bevy",

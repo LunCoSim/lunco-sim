@@ -38,6 +38,8 @@ pub struct CanvasLayerTheme {
     pub ghost_edge: Color32,
     /// Snap-target highlight ring during drag-to-connect.
     pub snap_target: Color32,
+    /// Dashed alignment-guide lines shown while dragging (snap grid).
+    pub snap_guide: Color32,
     /// Rubber-band marquee fill (semi-transparent).
     pub rubber_band_fill: Color32,
     /// Rubber-band marquee stroke.
@@ -59,6 +61,7 @@ impl Default for CanvasLayerTheme {
             selection_outline: Color32::from_rgb(120, 170, 255),
             ghost_edge: Color32::from_rgb(140, 200, 255),
             snap_target: Color32::from_rgb(90, 220, 140),
+            snap_guide: Color32::from_rgba_unmultiplied(255, 196, 60, 180),
             rubber_band_fill: Color32::from_rgba_premultiplied(120, 170, 255, 30),
             rubber_band_stroke: Color32::from_rgb(120, 170, 255),
             overlay_fill: Color32::from_rgb(34, 38, 48),

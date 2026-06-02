@@ -82,6 +82,11 @@ impl InstancePanel for VizPanel {
             (cfg, viz)
         };
 
+        let muted = world
+            .get_resource::<lunco_theme::Theme>()
+            .map(|t| t.tokens.text_subdued)
+            .unwrap_or(egui::Color32::GRAY);
+
         match config.view {
             ViewTarget::Panel2D => {
                 let mut ctx = Panel2DCtx { ui, world };
@@ -96,13 +101,13 @@ impl InstancePanel for VizPanel {
                 // 3D view lands.
                 ui.label(
                     egui::RichText::new("3D viewport viz — controls coming.")
-                        .color(egui::Color32::GRAY),
+                        .color(muted),
                 );
             }
             ViewTarget::Panel3D => {
                 ui.label(
                     egui::RichText::new("3D sub-panel — not implemented yet.")
-                        .color(egui::Color32::GRAY),
+                        .color(muted),
                 );
             }
         }

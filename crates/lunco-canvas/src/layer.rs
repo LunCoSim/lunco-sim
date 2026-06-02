@@ -440,8 +440,7 @@ impl Layer for ToolPreviewLayer {
                     crate::scene::Pos::new(sr.max.x, sr.max.y),
                     sr,
                 );
-                let guide_color = egui::Color32::from_rgba_unmultiplied(255, 196, 60, 180);
-                let stroke = egui::Stroke::new(1.0, guide_color);
+                let stroke = egui::Stroke::new(1.0, theme.snap_guide);
                 if let Some(gx) = x {
                     let top = ctx.viewport.world_to_screen(
                         crate::scene::Pos::new(*gx, screen_min.y),

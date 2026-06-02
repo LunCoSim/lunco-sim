@@ -234,8 +234,14 @@ impl LoadedStage for WorkspaceStage {
 
         self.ensure_parsed(&source, generation);
 
+        let error_color = ctx
+            .world
+            .get_resource::<lunco_theme::Theme>()
+            .map(|t| t.tokens.error)
+            .unwrap_or(egui::Color32::LIGHT_RED);
+
         if let Some(err) = &self.parse_error {
-            ui.colored_label(egui::Color32::LIGHT_RED, err);
+            ui.colored_label(error_color, err);
             return;
         }
         let Some(parsed) = &self.parsed else {
@@ -252,7 +258,7 @@ impl LoadedStage for WorkspaceStage {
         let root = match sdf::path("/") {
             Ok(p) => p,
             Err(e) => {
-                ui.colored_label(egui::Color32::LIGHT_RED, format!("root path: {e}"));
+                ui.colored_label(error_color, format!("root path: {e}"));
                 return;
             }
         };

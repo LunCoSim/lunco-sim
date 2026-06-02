@@ -84,6 +84,10 @@ pub(super) fn layer_theme_from(theme: &lunco_theme::Theme) -> lunco_canvas::Canv
         selection_outline: t.accent,
         ghost_edge: t.accent,
         snap_target: t.success,
+        snap_guide: {
+            let w = t.warning;
+            egui::Color32::from_rgba_unmultiplied(w.r(), w.g(), w.b(), 180)
+        },
         rubber_band_fill: rubber_fill,
         rubber_band_stroke: t.accent,
         overlay_fill: c.surface0,

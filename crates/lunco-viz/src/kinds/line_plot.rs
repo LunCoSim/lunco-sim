@@ -64,20 +64,6 @@ const ROLE_Y: RoleSpec = RoleSpec {
     single: false,
 };
 
-/// Default palette for auto-assigned colors. Each binding without an
-/// explicit `color` picks the next slot round-robin. Same palette as
-/// the old Graphs panel for visual continuity.
-const PALETTE: &[egui::Color32] = &[
-    egui::Color32::from_rgb(80, 160, 255),
-    egui::Color32::from_rgb(255, 120, 80),
-    egui::Color32::from_rgb(80, 220, 120),
-    egui::Color32::from_rgb(255, 220, 80),
-    egui::Color32::from_rgb(200, 120, 255),
-    egui::Color32::from_rgb(120, 200, 200),
-    egui::Color32::from_rgb(230, 120, 180),
-    egui::Color32::from_rgb(180, 230, 100),
-];
-
 #[derive(Default)]
 pub struct LinePlot;
 
@@ -187,13 +173,9 @@ impl Visualization for LinePlot {
                         _ => b.source.path.clone(),
                     }
                 });
-                let color = b.color.unwrap_or_else(|| {
-                    if b.source.path.is_empty() {
-                        PALETTE[0]
-                    } else {
-                        crate::signal::color_for_signal(&b.source.path)
-                    }
-                });
+                let color = b
+                    .color
+                    .unwrap_or_else(|| crate::signal::color_for_signal(&b.source.path));
                 Some(Line::new(label, PlotPoints::new(pts)).color(color))
             })
             .collect();
@@ -284,6 +266,11 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
         (available, current)
     };
     let style = LinePlotStyle::load(config);
+    let muted = ctx
+        .world
+        .get_resource::<lunco_theme::Theme>()
+        .map(|t| t.tokens.text_subdued)
+        .unwrap_or(egui::Color32::DARK_GRAY);
 
     let mut edit: Option<Edit> = None;
     ctx.ui.horizontal_wrapped(|ui| {
@@ -350,7 +337,7 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
         } else if current_y_paths.is_empty() {
             ui.label(
                 egui::RichText::new("no signals yet")
-                    .color(egui::Color32::DARK_GRAY)
+                    .color(muted)
                     .size(10.0),
             );
         }

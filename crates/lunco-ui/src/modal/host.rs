@@ -12,11 +12,19 @@ use super::{ModalBody, ModalButton, ModalOutcome, ModalQueue};
 
 /// Renders the head of the modal queue. Runs every frame from
 /// [`crate::LuncoUiPlugin`].
-pub fn render_modal_host(mut egui_ctx: EguiContexts, mut queue: ResMut<ModalQueue>) {
+pub fn render_modal_host(
+    mut egui_ctx: EguiContexts,
+    mut queue: ResMut<ModalQueue>,
+    theme: Option<Res<lunco_theme::Theme>>,
+) {
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     if queue.pending.is_empty() {
         return;
     }
+    let destructive_fill = theme
+        .as_ref()
+        .map(|t| t.tokens.error)
+        .unwrap_or(egui::Color32::from_rgb(180, 60, 60));
     // Take the head; we put it back if the user didn't resolve it.
     let (id, request) = queue.pending.remove(0);
     let mut outcome: Option<ModalOutcome> = None;
@@ -52,8 +60,7 @@ pub fn render_modal_host(mut egui_ctx: EguiContexts, mut queue: ResMut<ModalQueu
                     ModalButton::Destructive(label) => {
                         if ui
                             .add(
-                                egui::Button::new(label)
-                                    .fill(egui::Color32::from_rgb(180, 60, 60)),
+                                egui::Button::new(label).fill(destructive_fill),
                             )
                             .clicked()
                         {
