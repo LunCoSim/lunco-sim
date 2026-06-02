@@ -50,10 +50,11 @@ pub fn propagate_connections(
             continue;
         }
 
-        if conn.start_connector == "__gravity__" {
-            writes.push((conn.end_element, conn.end_connector.clone(), 9.81));
-            continue;
-        }
+        // No special cases: the master algorithm is a pure output→input copy.
+        // Environmental sources (e.g. gravity) are populated as ordinary
+        // SimComponent outputs by domain crates BEFORE this runs — see
+        // `GRAVITY_SOURCE_CONNECTOR` / `lunco-environment`'s gravity bridge —
+        // so they flow through the same path with no hardcoded constants here.
 
         // Check BOTH SimComponent and AvianSim — an entity might have both.
         let value = set.p0().get(conn.start_element)

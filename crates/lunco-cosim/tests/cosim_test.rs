@@ -325,9 +325,10 @@ fn test_suggestions_for_balloon_model() {
         .collect();
     assert_eq!(collider_suggestions.len(), 1);
 
-    // Should suggest gravity for g
+    // Should suggest gravity for g — sourced from the local-gravity output
+    // (populated by lunco-environment), not a hardcoded constant.
     let gravity_suggestions: Vec<_> = suggestions.iter()
-        .filter(|s| s.start_connector == "__gravity__")
+        .filter(|s| s.start_connector == lunco_cosim::GRAVITY_SOURCE_CONNECTOR)
         .collect();
     assert_eq!(gravity_suggestions.len(), 1);
 }

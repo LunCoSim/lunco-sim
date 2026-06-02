@@ -38,8 +38,19 @@ pub struct WireSuggestion {
 const KNOWN_FORCE_OUTPUTS: &[&str] = &["netForce", "force", "thrust", "buoyancy", "lift", "drag"];
 /// Known output variable names that suggest a collider volume connection.
 const KNOWN_VOLUME_OUTPUTS: &[&str] = &["volume", "vol"];
-/// Known input variable names that suggest a gravity resource connection.
+/// Known input variable names that suggest a gravity connection.
 const KNOWN_GRAVITY_INPUTS: &[&str] = &["g", "gravity", "grav_accel"];
+
+/// SimComponent **output** connector carrying an entity's local gravitational
+/// acceleration magnitude (m/s²).
+///
+/// Cosim itself never produces this value — it would have to hardcode a
+/// constant, and the master algorithm stays domain-agnostic. Instead a domain
+/// system (lunco-environment's gravity bridge) writes the entity's real
+/// [`LocalGravity`](https://docs.rs) magnitude into this output each tick, so
+/// gravity flows through an ordinary output→input [`crate::SimConnection`] like
+/// any other signal — correct on the Moon, Earth, or any body.
+pub const GRAVITY_SOURCE_CONNECTOR: &str = "gravity_accel";
 /// Known input variable names that suggest a height connection.
 const KNOWN_HEIGHT_INPUTS: &[&str] = &["height", "altitude", "h", "z"];
 /// Known input variable names that suggest a velocity connection.
@@ -93,10 +104,10 @@ pub fn generate_suggestions(
         if KNOWN_GRAVITY_INPUTS.contains(&input_name.as_str()) {
             suggestions.push(WireSuggestion {
                 start_element: entity,
-                start_connector: "__gravity__".into(),
+                start_connector: GRAVITY_SOURCE_CONNECTOR.into(),
                 end_element: entity,
                 end_connector: input_name.clone(),
-                reason: format!("'{input_name}' is a known gravity parameter"),
+                reason: format!("'{input_name}' is a known gravity parameter — connect to the local gravity source"),
                 confidence: 0.95,
             });
         }

@@ -20,6 +20,30 @@ use crate::ast_extract::strip_input_defaults;
 use crate::sim_stream::{SimSnapshot, SimStream};
 use crate::ModelicaCompiler;
 
+/// Default relative / absolute tolerances for the adaptive DAE stepper.
+///
+/// Split because the two knobs do different jobs: `rtol` bounds the *relative*
+/// (fractional) error and dominates for large-magnitude states (temperatures,
+/// positions); `atol` is the *absolute* floor that takes over near zero (small
+/// fluxes, rates) where a relative bound is meaningless. Forcing them equal —
+/// the previous `1e-1` for both — is wrong for models that mix wildly different
+/// magnitudes. These are the conventional SUNDIALS-style defaults.
+///
+/// Single source of truth for every `SimStepper::new` call in this worker
+/// (previously copy-pasted at ~9 sites).
+///
+/// TRADE-OFF: tighter than the old `1e-1` → more accurate, but the BDF
+/// integrator may take smaller steps on very stiff models (radiative thermal
+/// over lunar-day horizons, smooth-abs/max contact). If live sim stalls, loosen
+/// `DEFAULT_RTOL` first.
+///
+/// NOTE: a model's own `experiment(Tolerance=…)` annotation is captured as
+/// `experiment_tolerance` but is NOT yet applied here — wiring that through
+/// would let models request their own solver tolerance (separate change;
+/// behaviour-affecting).
+const DEFAULT_RTOL: f64 = 1e-3;
+const DEFAULT_ATOL: f64 = 1e-6;
+
 /// Channels for communicating with the background simulation worker.
 ///
 /// This resource holds the crossbeam channel endpoints that the main Bevy thread
@@ -375,7 +399,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
 
                             let mut opts = StepperOptions::default();
-                            opts.atol = 1e-1; opts.rtol = 1e-1;
+                            opts.atol = DEFAULT_ATOL; opts.rtol = DEFAULT_RTOL;
                             // Recompile stripped source to get a fresh stepper with input slots
                             let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                             match compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
@@ -443,7 +467,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
                             Ok(comp_res) => {
                                 let mut opts = StepperOptions::default();
-                                opts.atol = 1e-1; opts.rtol = 1e-1;
+                                opts.atol = DEFAULT_ATOL; opts.rtol = DEFAULT_RTOL;
                                 match SimStepper::new(&comp_res.dae, opts) {
                                     Ok(mut stepper) => {
                                         apply_input_defaults_validated(&mut stepper, &input_defaults, "Compile");
@@ -543,7 +567,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 let exp_interval = comp_res.experiment_interval;
                                 let exp_solver = comp_res.experiment_solver.clone();
                                 let mut opts = StepperOptions::default();
-                                opts.atol = 1e-1; opts.rtol = 1e-1;
+                                opts.atol = DEFAULT_ATOL; opts.rtol = DEFAULT_RTOL;
                                 match SimStepper::new(&comp_res.dae, opts) {
                                     Ok(mut stepper) => {
                                         // Set input defaults via set_input so they're runtime-changeable
@@ -616,7 +640,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                                     if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                                         let mut opts = StepperOptions::default();
-                                        opts.atol = 1e-1; opts.rtol = 1e-1;
+                                        opts.atol = DEFAULT_ATOL; opts.rtol = DEFAULT_RTOL;
                                         if let Ok(mut s) = SimStepper::new(&comp_res.dae, opts) {
                                             apply_input_defaults_validated(&mut s, &input_defaults, "Compile");
                                             // Then apply any user-provided input overrides
@@ -635,7 +659,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 match compiler.compile_str(&model_name, &source, &model_path.to_string_lossy()) {
                                     Ok(comp_res) => {
                                         let mut opts = StepperOptions::default();
-                                        opts.atol = 1e-1; opts.rtol = 1e-1;
+                                        opts.atol = DEFAULT_ATOL; opts.rtol = DEFAULT_RTOL;
                                         if let Ok(mut s) = SimStepper::new(&comp_res.dae, opts) {
                                             for (name, val) in &inputs { let _ = s.set_input(name, *val); }
                                             cached_models.insert(entity, CachedModel {
@@ -987,7 +1011,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                         let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
                         if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                             let mut opts = StepperOptions::default();
-                            opts.atol = 1e-1; opts.rtol = 1e-1;
+                            opts.atol = DEFAULT_ATOL; opts.rtol = DEFAULT_RTOL;
                             if let Ok(mut s) = SimStepper::new(&comp_res.dae, opts) {
                                 apply_input_defaults_validated(&mut s, &input_defaults, "Compile");
                                 for (name, val) in &inputs { let _ = s.set_input(name, *val); }
@@ -1063,7 +1087,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             let (stripped_source, input_defaults) = strip_input_defaults(&source);
 
             let mut opts = StepperOptions::default();
-            opts.atol = 1e-1; opts.rtol = 1e-1;
+            opts.atol = DEFAULT_ATOL; opts.rtol = DEFAULT_RTOL;
 
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             let compile_outcome = if extra_sources.is_empty() {
@@ -1134,7 +1158,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             if let Some(cached) = w.cached_models.get(&entity) {
                 let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
                 let mut opts = StepperOptions::default();
-                opts.atol = 1e-1; opts.rtol = 1e-1;
+                opts.atol = DEFAULT_ATOL; opts.rtol = DEFAULT_RTOL;
                 let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
                 match compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                     Ok(comp_res) => {
@@ -1198,7 +1222,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             let (stripped_source, input_defaults) = strip_input_defaults(&source);
 
             let mut opts = StepperOptions::default();
-            opts.atol = 1e-1; opts.rtol = 1e-1;
+            opts.atol = DEFAULT_ATOL; opts.rtol = DEFAULT_RTOL;
 
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             match compiler.compile_str(&model_name, &stripped_source, "model.mo") {

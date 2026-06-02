@@ -129,6 +129,34 @@ pub fn apply_gravity_to_rigid_bodies(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Consumer: feed local gravity into the co-simulation graph
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Publishes each entity's [`LocalGravity`] magnitude as a [`SimComponent`]
+/// **output** named [`lunco_cosim::GRAVITY_SOURCE_CONNECTOR`], so co-sim models
+/// that take a gravity input (`g`, `gravity`, …) receive the *real* local value
+/// through an ordinary output→input wire.
+///
+/// This is the domain half of keeping `lunco-cosim` pure: the master
+/// propagation algorithm has no gravity special-case and no hardcoded constant
+/// (it used to inject Earth's `9.81` for a magic `__gravity__` source, which was
+/// wrong on the Moon). Gravity now flows like any other signal, correct on any
+/// body, because the value comes from the position-dependent `LocalGravity`.
+///
+/// Runs in [`EnvironmentSet::Apply`] (after `LocalGravity` is computed) and
+/// before cosim's propagation, so the freshly-written output is read the same
+/// tick. Writes every tick because a model's own output sync may rewrite its
+/// outputs map.
+pub fn inject_local_gravity_into_cosim(
+    mut q: Query<(&LocalGravity, &mut lunco_cosim::SimComponent)>,
+) {
+    for (gravity, mut comp) in &mut q {
+        comp.outputs
+            .insert(lunco_cosim::GRAVITY_SOURCE_CONNECTOR.to_string(), gravity.magnitude());
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Plugin
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -153,6 +181,12 @@ impl Plugin for EnvironmentPlugin {
             (
                 compute_local_gravity.in_set(EnvironmentSet::Compute),
                 apply_gravity_to_rigid_bodies.in_set(EnvironmentSet::Apply),
+                // Publish gravity into the cosim graph after it's computed and
+                // before cosim copies outputs→inputs, so models read the real
+                // local value the same tick.
+                inject_local_gravity_into_cosim
+                    .in_set(EnvironmentSet::Apply)
+                    .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
             ),
         );
     }

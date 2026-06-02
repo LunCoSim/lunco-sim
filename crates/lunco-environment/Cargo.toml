@@ -8,6 +8,7 @@ description = "Per-entity environmental state (gravity, atmosphere, radiation) c
 bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking"] }
 avian3d = { workspace = true, features = ["default-collider"] }
 lunco-celestial = { path = "../lunco-celestial" }
+lunco-cosim = { path = "../lunco-cosim" }
 
 [lints]
 workspace = true

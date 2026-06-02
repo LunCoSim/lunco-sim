@@ -7189,6 +7189,7 @@ dependencies = [
  "avian3d 0.6.1",
  "bevy",
  "lunco-celestial",
+ "lunco-cosim",
 ]
 
 [[package]]
