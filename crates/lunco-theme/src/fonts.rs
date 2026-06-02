@@ -46,7 +46,13 @@ pub struct FontsInstalled(pub bool);
 /// Silently no-ops if the font file is missing — the app still runs,
 /// just without the expanded glyph coverage. A warning is logged so the
 /// missing-font condition is visible.
+// Native-only (the wasm path hands in pre-fetched bytes via
+// `install_fallback_fonts_with_bytes`), one-shot font load at startup —
+// a direct `std::fs::read` is correct here, so the `disallowed_methods`
+// ban (wasm-safety) is locally allowed rather than routed through an
+// async asset load.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::disallowed_methods)]
 pub fn install_fallback_fonts(ctx: &egui::Context) {
     let dejavu = match std::fs::read(lunco_assets::dejavu_sans_path()) {
         Ok(bytes) => bytes,

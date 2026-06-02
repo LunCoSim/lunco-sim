@@ -667,11 +667,13 @@ impl Panel for ExperimentsPanel {
         // wins over cancel wins over start. Avoids flicker when a
         // single frame sees both an Enter (commit) and a focus-loss.
         if let Some((id, new_name)) = commit_rename {
-            if let Some(mut reg) = world.get_resource_mut::<ExperimentRegistry>() {
-                if let Some(exp) = reg.get_mut(id) {
-                    exp.name = new_name;
-                }
-            }
+            // Route the registry mutation through the typed command so the
+            // panel doesn't mutate `ExperimentRegistry` inline (R3) and the
+            // rename is reachable via API/MCP too.
+            world.trigger(crate::ui::commands::compile::RenameExperiment {
+                experiment_id: id.0.to_string(),
+                name: new_name,
+            });
             if let Some(mut v) = world.get_resource_mut::<ExperimentVisibility>() {
                 v.editing_name = None;
             }
@@ -705,17 +707,15 @@ impl Panel for ExperimentsPanel {
             }
         }
         if let Some(id) = delete {
-            let removed = world
-                .get_resource_mut::<ExperimentRegistry>()
-                .map(|mut reg| reg.delete(id))
-                .unwrap_or(false);
-            if removed {
-                // Purge doc-mapping + per-plot visibility together so the UI
-                // delete is symmetric with the API `DeleteExperiment` command
-                // (neither leaks stale ids). Was: forget_experiment only,
-                // which left the ExperimentSources doc→run entry dangling.
-                crate::ui::commands::compile::purge_experiment_side_state(world, &[id]);
-            }
+            // Route through the typed `DeleteExperiment` command — its
+            // observer deletes from the registry AND purges doc-mapping +
+            // per-plot visibility in lockstep, so the panel no longer
+            // mutates the registry inline (R3) or duplicates the purge.
+            world.trigger(crate::ui::commands::compile::DeleteExperiment {
+                experiment_id: Some(id.0.to_string()),
+                doc: None,
+                all: false,
+            });
         }
         if let Some(id) = cancel {
             // Best-effort cancel via the runner's RunHandle. The
@@ -1963,8 +1963,8 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
         // name is included for readability when filing multiple
         // exports of the same model.
         let model_short = exp.model_ref.0.rsplit('.').next().unwrap_or(&exp.model_ref.0);
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let ts = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let raw = format!("{model_short}_{}_{ts}", exp.name);

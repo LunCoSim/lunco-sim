@@ -54,7 +54,10 @@ impl Recents {
     /// platform-appropriate config-dir path (e.g.
     /// `lunco_assets::user_config_dir().join("recents.json")`).
     pub fn load(path: &Path) -> Self {
-        let bytes = match std::fs::read(path) {
+        use lunco_storage::Storage;
+        let bytes = match lunco_storage::FileStorage::new()
+            .read_sync(&lunco_storage::StorageHandle::File(path.to_path_buf()))
+        {
             Ok(b) => b,
             Err(_) => return Self::default(),
         };
@@ -80,7 +83,15 @@ impl Recents {
         // is killed mid-write. The rename is atomic on POSIX and
         // ReplaceFile-equivalent on Windows.
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, &bytes)?;
+        // Write through lunco-storage (clippy-banned `std::fs::write`,
+        // wasm-incompatible); `rename` isn't on the ban list, so the
+        // atomic tmp→final swap is preserved.
+        {
+            use lunco_storage::Storage;
+            lunco_storage::FileStorage::new()
+                .write_sync(&lunco_storage::StorageHandle::File(tmp.clone()), &bytes)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+        }
         std::fs::rename(&tmp, path)?;
         Ok(())
     }

@@ -1542,6 +1542,37 @@ pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Command
     });
 }
 
+/// Rename an experiment run in the [`ExperimentRegistry`]. Mirrors
+/// `DeleteExperiment`'s id-as-string addressing so the same value the UI
+/// holds (and API callers pass) resolves the run.
+#[Command(default)]
+pub struct RenameExperiment {
+    /// Target run id (the `ExperimentId`'s inner value as a string).
+    pub experiment_id: String,
+    /// New display name.
+    pub name: String,
+}
+
+#[on_command(RenameExperiment)]
+pub fn on_rename_experiment(trigger: On<RenameExperiment>, mut commands: Commands) {
+    let target = trigger.event().experiment_id.clone();
+    let name = trigger.event().name.clone();
+    commands.queue(move |world: &mut World| {
+        let mut reg = world.resource_mut::<lunco_experiments::ExperimentRegistry>();
+        let id = reg
+            .iter_all()
+            .find(|e| e.id.0.to_string() == target)
+            .map(|e| e.id);
+        match id.and_then(|id| reg.get_mut(id)) {
+            Some(exp) => {
+                exp.name = name;
+                bevy::log::info!("[RenameExperiment] {target} → renamed");
+            }
+            None => bevy::log::warn!("[RenameExperiment] no run with id {target}"),
+        }
+    });
+}
+
 #[on_command(ResetActiveModel)]
 pub fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Commands) {
     let raw = trigger.event().doc;
@@ -1643,5 +1674,6 @@ impl Plugin for CompilePlugin {
         __register_on_run_experiment(app);
         __register_on_cancel_experiment(app);
         __register_on_delete_experiment(app);
+        __register_on_rename_experiment(app);
     }
 }

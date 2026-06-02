@@ -165,9 +165,18 @@ impl ModelicaDocument {
             String::from_utf8(bytes)
                 .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
         } else {
-            std::fs::read_to_string(path).map_err(|e| {
-                format!("read failed `{}`: {e}", path.display())
-            })?
+            {
+                // Native-disk fallback when the bundled MSL source doesn't
+                // hold this path. Routed through lunco-storage — `std::fs`
+                // is clippy-banned in domain crates and absent on wasm
+                // (where `global_msl_source` is the primary path above).
+                use lunco_storage::Storage;
+                let bytes = lunco_storage::FileStorage::new()
+                    .read_sync(&lunco_storage::StorageHandle::File(path.to_path_buf()))
+                    .map_err(|e| format!("read failed `{}`: {e}", path.display()))?;
+                String::from_utf8(bytes)
+                    .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
+            }
         };
 
         let short_name = qualified.rsplit('.').next().unwrap_or(qualified);
@@ -228,9 +237,18 @@ impl ModelicaDocument {
             String::from_utf8(bytes)
                 .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
         } else {
-            std::fs::read_to_string(path).map_err(|e| {
-                format!("read failed `{}`: {e}", path.display())
-            })?
+            {
+                // Native-disk fallback when the bundled MSL source doesn't
+                // hold this path. Routed through lunco-storage — `std::fs`
+                // is clippy-banned in domain crates and absent on wasm
+                // (where `global_msl_source` is the primary path above).
+                use lunco_storage::Storage;
+                let bytes = lunco_storage::FileStorage::new()
+                    .read_sync(&lunco_storage::StorageHandle::File(path.to_path_buf()))
+                    .map_err(|e| format!("read failed `{}`: {e}", path.display()))?;
+                String::from_utf8(bytes)
+                    .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
+            }
         };
 
         let parsed: Result<Arc<StoredDefinition>, String> =

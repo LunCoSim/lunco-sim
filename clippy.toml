@@ -54,7 +54,19 @@ disallowed-methods = [
     # `std::time::Instant::now()` panics on wasm32-unknown-unknown.
     # `web_time::Instant` is a drop-in that uses `performance.now()` on
     # wasm and `std::time::Instant` on native.
-    { path = "std::time::Instant::now",  reason = "Use web_time::Instant — std::time::Instant panics on wasm" },
+    #
+    # ⚠️ FREQUENT FALSE POSITIVE on the *native* target: `web_time`
+    # achieves its native impl via `pub use std::time::*`, so on native
+    # `web_time::Instant` IS `std::time::Instant` (same DefId). clippy
+    # resolves through the re-export, so it flags *correct* code that
+    # already uses `web_time::Instant` (e.g. `lunco-workbench`'s
+    # status_bus). There is no way to distinguish the two on native — the
+    # ban only reads true on `--target wasm32-unknown-unknown`, where
+    # `web_time::Instant` is a distinct struct. So: treat native hits here
+    # as noise *if* the call site imports `web_time::Instant`; only a
+    # literal `std::time::Instant::now` written out is a real bug. Kept
+    # for the wasm-target run and as a documentation signpost.
+    { path = "std::time::Instant::now",  reason = "Use web_time::Instant — std::time::Instant panics on wasm (NOTE: false-positives on native for web_time users; see comment above)" },
 
     # ── Atomic re-parenting of big_space `GridAnchor` entities ─────────
     # Splitting `(ChildOf, CellCoord, Transform)` writes across separate

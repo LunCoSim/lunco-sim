@@ -405,12 +405,17 @@ fn propagate_preview_render_layer(
 /// placeholder texture from `bootstrap` snaps to panel size on the
 /// first frame the panel is visible.
 fn resize_viewport_image(
-    rects: Res<PanelRects>,
+    // `Option` so the system is headless-safe — `PanelRects` is owned by
+    // the workbench UI plugin, absent in lifecycle / headless tests.
+    rects: Option<Res<PanelRects>>,
     state: Res<UsdViewportState>,
-    mut images: ResMut<Assets<Image>>,
+    images: Option<ResMut<Assets<Image>>>,
     mut last_applied: Local<UVec2>,
 ) {
     let Some(handle) = state.image.as_ref() else {
+        return;
+    };
+    let (Some(rects), Some(mut images)) = (rects, images) else {
         return;
     };
     let Some(rect) = rects.get(USD_VIEWPORT_PANEL_ID) else {

@@ -4,7 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking", "tonemapping_luts"] }
+# `tonemapping_luts` turns on `bevy_image/zstd` (KTX2-compressed LUTs) but
+# does not pick a backend; without one bevy_image fails to compile when this
+# crate is built alone (in the full workspace, feature unification supplies it).
+# Select the pure-Rust `zstd_rust` (ruzstd) backend so per-crate `cargo
+# test -p lunco-usd-bevy` works and to stay wasm-compatible (matches the
+# ruzstd choice already used by lunco-modelica).
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking", "tonemapping_luts", "zstd_rust"] }
 openusd = { workspace = true }
 lunco-usd-composer = { path = "../lunco-usd-composer" }
 lunco-core = { path = "../lunco-core" }

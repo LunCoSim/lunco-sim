@@ -102,7 +102,12 @@ fn load_vello_font(
     mut fonts: ResMut<Assets<VelloFont>>,
     mut store: ResMut<VelloFontHandle>,
 ) {
-    match std::fs::read(lunco_assets::dejavu_sans_path()) {
+    // Route through lunco-storage — `std::fs` is clippy-banned in domain
+    // crates and absent on wasm; the `Err` arm already degrades gracefully.
+    use lunco_storage::Storage;
+    match lunco_storage::FileStorage::new()
+        .read_sync(&lunco_storage::StorageHandle::File(lunco_assets::dejavu_sans_path()))
+    {
         Ok(bytes) => {
             let asset = VelloFont::new(bytes);
             store.handle = Some(fonts.add(asset));

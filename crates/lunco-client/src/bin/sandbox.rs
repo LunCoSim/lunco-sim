@@ -538,6 +538,12 @@ fn auto_tag_workbench_3d_cameras(
     }
 }
 
+// `set_parent_in_place` is `disallowed_methods`-banned for its atomicity
+// hazard (a `GridAnchor`/`RigidBody` parented after spawn can be mis-tagged
+// `RigidBody::Static`). The two uses here parent the big_space root → Grid
+// and a `DirectionalLight` → Grid — neither is a rigid body / GridAnchor, so
+// that hazard doesn't apply, and this is a native-only bin. Locally allowed.
+#[allow(clippy::disallowed_methods)]
 fn setup_sandbox(
     mut commands: Commands,
     scene_path: Res<ScenePath>,
