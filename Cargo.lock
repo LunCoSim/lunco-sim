@@ -7025,6 +7025,7 @@ dependencies = [
  "bevy_egui",
  "bevy_vello",
  "indexmap",
+ "lunco-theme",
  "serde",
  "serde_json",
  "smol_str",

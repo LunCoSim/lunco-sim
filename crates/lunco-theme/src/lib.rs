@@ -6,6 +6,51 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+/// Terse "same colour, different alpha" for opaque design tokens.
+///
+/// Every palette entry / design token in this crate is **opaque**
+/// (`Color32::from_rgb`). Overlays (grid dots, shadows, marquees,
+/// dashed guides) need the *same hue* at reduced opacity. Before this
+/// trait that meant `Color32::from_rgba_unmultiplied(c.r(), c.g(),
+/// c.b(), a)` spelled out at every site; now it's just `c.alpha(a)`.
+pub trait ColorAlpha {
+    /// Return this colour with its alpha set to `a` (0–255), keeping
+    /// the RGB hue. Source is assumed opaque (true for all tokens).
+    fn alpha(self, a: u8) -> egui::Color32;
+}
+
+impl ColorAlpha for egui::Color32 {
+    #[inline]
+    fn alpha(self, a: u8) -> egui::Color32 {
+        egui::Color32::from_rgba_unmultiplied(self.r(), self.g(), self.b(), a)
+    }
+}
+
+/// egui data-cache id under which the active [`Theme`] is published for
+/// the current frame.
+fn active_theme_id() -> egui::Id {
+    egui::Id::new("lunco_theme.active")
+}
+
+/// Publish the active theme into the egui data cache for this frame.
+///
+/// egui paint callbacks (canvas layers, node/edge painters, overlays)
+/// run *outside* the Bevy world, so they can't read `Res<Theme>`. The
+/// app calls this **once per frame** (before any egui paint) and every
+/// paint helper then reads it back via [`active`]. One theme, one
+/// transport — no per-consumer projection structs.
+pub fn store_active(ctx: &egui::Context, theme: &Theme) {
+    ctx.data_mut(|d| d.insert_temp(active_theme_id(), Arc::new(theme.clone())));
+}
+
+/// Read the active theme published this frame, or a dark-mode default
+/// (tests, standalone demos, or a frame before the app pushed one).
+pub fn active(ctx: &egui::Context) -> Arc<Theme> {
+    ctx.data(|d| d.get_temp::<Arc<Theme>>(active_theme_id()))
+        .unwrap_or_else(|| Arc::new(Theme::dark()))
+}
 
 /// Supported theme modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Reflect, serde::Serialize, serde::Deserialize)]

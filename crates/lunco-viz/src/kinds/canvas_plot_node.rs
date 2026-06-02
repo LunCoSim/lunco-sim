@@ -31,6 +31,7 @@ use bevy::prelude::Entity;
 use bevy_egui::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use lunco_canvas::{visual::DrawCtx, NodeVisual};
+use lunco_theme::ColorAlpha;
 use lunco_canvas::scene::Node;
 use serde::{Deserialize, Serialize};
 
@@ -283,8 +284,8 @@ impl NodeVisual for PlotNodeVisual {
                 centre,
                 egui::vec2(2.0, 2.0),
             );
-            let theme = lunco_canvas::theme::current(ctx.ui.ctx());
-            ctx.ui.painter().rect_filled(marker, 1.0, theme.overlay_stroke);
+            let theme = lunco_theme::active(ctx.ui.ctx());
+            ctx.ui.painter().rect_filled(marker, 1.0, theme.colors.surface2);
             return;
         }
 
@@ -294,16 +295,16 @@ impl NodeVisual for PlotNodeVisual {
         // area (e.g. paint over the Telemetry panel when the plot
         // node is dragged near the right edge of the canvas).
         let canvas_clip = ctx.ui.clip_rect();
-        let theme = lunco_canvas::theme::current(ctx.ui.ctx());
+        let theme = lunco_theme::active(ctx.ui.ctx());
         let stroke = if selected {
-            egui::Stroke::new(2.0, theme.selection_outline)
+            egui::Stroke::new(2.0, theme.tokens.accent)
         } else {
-            egui::Stroke::new(1.0, theme.overlay_stroke)
+            egui::Stroke::new(1.0, theme.colors.surface2)
         };
         // Card fill comes from the canvas theme so the plot matches
         // the rest of the diagram nodes (no jarring near-black box
         // when the active theme is light or mid-grey).
-        ctx.ui.painter().rect_filled(egui_rect, 6.0, theme.overlay_fill);
+        ctx.ui.painter().rect_filled(egui_rect, 6.0, theme.colors.surface0);
         // `Inside` so the stroke stays *within* the node's rect —
         // `Outside` would visually extend the plot 1-2 px past
         // node.rect on every side, decoupling the apparent size
@@ -316,7 +317,7 @@ impl NodeVisual for PlotNodeVisual {
         // can find the drag handle. Sized in screen pixels so the
         // grip stays usable at any zoom level.
         let grip = egui::pos2(egui_rect.max.x - 2.0, egui_rect.max.y - 2.0);
-        let grip_color = theme.overlay_stroke;
+        let grip_color = theme.colors.surface2;
         for off in [4.0_f32, 8.0_f32] {
             ctx.ui.painter().line_segment(
                 [
@@ -422,7 +423,7 @@ impl NodeVisual for PlotNodeVisual {
                 egui::Label::new(
                     egui::RichText::new(title)
                         .small()
-                        .color(theme.overlay_text),
+                        .color(theme.tokens.text),
                 )
                 .sense(egui::Sense::hover()),
             );
@@ -532,12 +533,9 @@ impl NodeVisual for PlotNodeVisual {
                 vmax = vmax.max(p[1]);
             }
             // Faint horizontal grid (3 lines) + one vertical mid-line.
-            // Derived from theme.overlay_stroke at low alpha so the
+            // Derived from theme.colors.surface2 at low alpha so the
             // grid stays subtle on whichever card fill is active.
-            let grid_color = {
-                let s = theme.overlay_stroke;
-                egui::Color32::from_rgba_unmultiplied(s.r(), s.g(), s.b(), 60)
-            };
+            let grid_color = theme.colors.surface2.alpha(60);
             let grid_stroke = egui::Stroke::new(1.0, grid_color);
             for f in [0.25, 0.5, 0.75] {
                 let y = plot_rect.min.y + plot_rect.height() * f;
@@ -556,7 +554,7 @@ impl NodeVisual for PlotNodeVisual {
             // axis ("F: 26.0k", not just "26.0k") and an explicit
             // `t` on the X axis. Theme-driven colour so they stay
             // readable on any card fill.
-            let label_color = theme.overlay_text;
+            let label_color = theme.tokens.text;
             let font = egui::FontId::monospace(9.0);
             let pad = 3.0;
             let var = short_name(&self.data.signal_path);

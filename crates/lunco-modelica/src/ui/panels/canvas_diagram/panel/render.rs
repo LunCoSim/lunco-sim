@@ -4,7 +4,6 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use crate::ui::panels::model_view::TabRenderContext;
 use super::super::{CanvasDiagramState, CanvasSnapSettings, ops, overlays};
-use super::super::theme::{CanvasThemeSnapshot, layer_theme_from, store_canvas_theme, store_modelica_icon_palette};
 use super::util::{mark, log_frame_times};
 use super::snapshots::stash_snapshots;
 use super::interaction::{handle_context_menu, handle_drag_and_drop, handle_node_double_click};
@@ -29,10 +28,12 @@ pub(crate) fn render_diagram_canvas(
     let snap_settings = world.get_resource::<CanvasSnapSettings>().filter(|s| s.enabled).map(|s| lunco_canvas::SnapSettings { step: s.step });
 
     {
+        // Publish the active theme once per frame. Every egui paint
+        // helper (canvas built-in layers, node/edge painters, icon
+        // remap) reads it back via `lunco_theme::active(ctx)` — one
+        // theme, one transport, no per-consumer projection caches.
         let theme = world.get_resource::<lunco_theme::Theme>().cloned().unwrap_or_else(lunco_theme::Theme::dark);
-        store_canvas_theme(ui.ctx(), CanvasThemeSnapshot::from_theme(&theme));
-        store_modelica_icon_palette(ui.ctx(), theme.modelica_icons.clone());
-        lunco_canvas::theme::store(ui.ctx(), layer_theme_from(&theme));
+        lunco_theme::store_active(ui.ctx(), &theme);
     }
 
     stash_snapshots(ui.ctx(), world, doc_id);

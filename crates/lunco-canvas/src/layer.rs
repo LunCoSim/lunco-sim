@@ -32,6 +32,7 @@
 //!   scene, just a viewport.
 
 use bevy_egui::egui;
+use lunco_theme::ColorAlpha;
 
 use crate::scene::Scene;
 use crate::selection::Selection;
@@ -67,8 +68,8 @@ impl Layer for GridLayer {
         if !self.enabled {
             return;
         }
-        let theme = crate::theme::current(ctx.ui.ctx());
-        let grid_color = theme.grid;
+        let theme = lunco_theme::active(ctx.ui.ctx());
+        let grid_color = theme.colors.overlay0.alpha(60);
         let painter = ctx.ui.painter();
         let sr = ctx.screen_rect;
         let zoom = ctx.viewport.zoom.max(f32::EPSILON);
@@ -233,8 +234,8 @@ impl Layer for EdgesLayer {
         // port that hosts ≥3 incident wires. Drawn on top of the
         // edges (last in this layer) but still under the nodes
         // layer, so the icon body covers it where they overlap.
-        let theme = crate::theme::current(ctx.ui.ctx());
-        let dot_color = theme.overlay_text;
+        let theme = lunco_theme::active(ctx.ui.ctx());
+        let dot_color = theme.tokens.text;
         for ((node_id, port_id), count) in &endpoint_counts {
             if *count < 3 {
                 continue;
@@ -300,9 +301,9 @@ impl Layer for SelectionLayer {
             return;
         }
         let sr = ctx.screen_rect;
-        let theme = crate::theme::current(ctx.ui.ctx());
+        let theme = lunco_theme::active(ctx.ui.ctx());
         let painter = ctx.ui.painter();
-        let outline = theme.selection_outline;
+        let outline = theme.tokens.accent;
         for item in selection.iter() {
             if let crate::selection::SelectItem::Node(nid) = *item {
                 if let Some(node) = scene.node(nid) {
@@ -341,7 +342,12 @@ impl Layer for ToolPreviewLayer {
             return;
         };
         let Some(preview) = preview_opt else { return };
-        let theme = crate::theme::current(ctx.ui.ctx());
+        let theme = lunco_theme::active(ctx.ui.ctx());
+        let ghost_edge = theme.tokens.accent;
+        let snap_target_ring = theme.tokens.success;
+        let snap_guide = theme.tokens.warning.alpha(180);
+        let rubber_band_fill = theme.tokens.accent.alpha(40);
+        let rubber_band_stroke = theme.tokens.accent;
         let painter = ctx.ui.painter();
         let sr = ctx.screen_rect;
         match preview {
@@ -354,19 +360,19 @@ impl Layer for ToolPreviewLayer {
                 let b = ctx.viewport.world_to_screen(*to_world, sr);
                 painter.line_segment(
                     [egui::pos2(a.x, a.y), egui::pos2(b.x, b.y)],
-                    egui::Stroke::new(2.0, theme.ghost_edge),
+                    egui::Stroke::new(2.0, ghost_edge),
                 );
                 painter.circle_filled(
                     egui::pos2(a.x, a.y),
                     4.0,
-                    theme.ghost_edge,
+                    ghost_edge,
                 );
                 if let Some(t) = snap_target {
                     let s = ctx.viewport.world_to_screen(*t, sr);
                     painter.circle_stroke(
                         egui::pos2(s.x, s.y),
                         8.0,
-                        egui::Stroke::new(2.0, theme.snap_target),
+                        egui::Stroke::new(2.0, snap_target_ring),
                     );
                 }
             }
@@ -411,20 +417,20 @@ impl Layer for ToolPreviewLayer {
                     pts.push(pivot);
                 }
                 pts.push(egui::pos2(b.x, b.y));
-                let stroke = egui::Stroke::new(2.0, theme.ghost_edge);
+                let stroke = egui::Stroke::new(2.0, ghost_edge);
                 for w in pts.windows(2) {
                     painter.line_segment([w[0], w[1]], stroke);
                 }
-                painter.circle_filled(pts[0], 4.0, theme.ghost_edge);
+                painter.circle_filled(pts[0], 4.0, ghost_edge);
                 for p in &pts[1..pts.len().saturating_sub(1)] {
-                    painter.circle_filled(*p, 3.0, theme.ghost_edge);
+                    painter.circle_filled(*p, 3.0, ghost_edge);
                 }
                 if let Some(t) = snap_target {
                     let s = ctx.viewport.world_to_screen(*t, sr);
                     painter.circle_stroke(
                         egui::pos2(s.x, s.y),
                         8.0,
-                        egui::Stroke::new(2.0, theme.snap_target),
+                        egui::Stroke::new(2.0, snap_target_ring),
                     );
                 }
             }
@@ -440,7 +446,7 @@ impl Layer for ToolPreviewLayer {
                     crate::scene::Pos::new(sr.max.x, sr.max.y),
                     sr,
                 );
-                let stroke = egui::Stroke::new(1.0, theme.snap_guide);
+                let stroke = egui::Stroke::new(1.0, snap_guide);
                 if let Some(gx) = x {
                     let top = ctx.viewport.world_to_screen(
                         crate::scene::Pos::new(*gx, screen_min.y),
@@ -479,11 +485,11 @@ impl Layer for ToolPreviewLayer {
                     egui::pos2(sr_rect.min.x, sr_rect.min.y),
                     egui::pos2(sr_rect.max.x, sr_rect.max.y),
                 );
-                painter.rect_filled(rect, 2.0, theme.rubber_band_fill);
+                painter.rect_filled(rect, 2.0, rubber_band_fill);
                 painter.rect_stroke(
                     rect,
                     2.0,
-                    egui::Stroke::new(1.0, theme.rubber_band_stroke),
+                    egui::Stroke::new(1.0, rubber_band_stroke),
                     egui::StrokeKind::Outside,
                 );
             }

@@ -9,6 +9,7 @@
 
 use bevy_egui::egui;
 use lunco_canvas::{DrawCtx, Node as CanvasNode, NodeVisual, Pos as CanvasPos};
+use lunco_theme::ColorAlpha;
 
 use super::edge::port_edge_dir;
 use super::paint::paint_dashed_rect;
@@ -581,7 +582,11 @@ pub(super) fn paint_hover_card(
     class_name: &str,
     rows: &[(&String, &f64)],
 ) {
-    let theme = lunco_canvas::theme::current(ui.ctx());
+    let theme = lunco_theme::active(ui.ctx());
+    let overlay_shadow = theme.colors.base.alpha(110);
+    let overlay_fill = theme.colors.surface0;
+    let overlay_stroke = theme.colors.surface2;
+    let overlay_text = theme.tokens.text;
     let layer_id = egui::LayerId::new(
         egui::Order::Tooltip,
         egui::Id::new(("modelica_icon_hover_card", instance)),
@@ -640,13 +645,13 @@ pub(super) fn paint_hover_card(
     painter.rect_filled(
         card_rect.translate(egui::vec2(0.0, 2.0)),
         6.0,
-        theme.overlay_shadow,
+        overlay_shadow,
     );
-    painter.rect_filled(card_rect, 6.0, theme.overlay_fill);
+    painter.rect_filled(card_rect, 6.0, overlay_fill);
     painter.rect_stroke(
         card_rect,
         6.0,
-        egui::Stroke::new(1.0, theme.overlay_stroke),
+        egui::Stroke::new(1.0, overlay_stroke),
         egui::StrokeKind::Outside,
     );
 
@@ -658,9 +663,9 @@ pub(super) fn paint_hover_card(
             egui::FontId::monospace(11.0)
         };
         let color = if *is_title {
-            theme.overlay_text
+            overlay_text
         } else {
-            theme.overlay_text.gamma_multiply(0.85)
+            overlay_text.gamma_multiply(0.85)
         };
         painter.text(
             egui::pos2(origin.x + pad, y),

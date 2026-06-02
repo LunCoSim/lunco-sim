@@ -334,12 +334,12 @@ impl lunco_canvas::Layer for PulseGlowLayer {
             return;
         }
         let painter = ctx.ui.painter();
-        let theme = lunco_canvas::theme::current(ctx.ui.ctx());
-        // Use the theme's selection color as the glow base — ties
+        let theme = lunco_theme::active(ctx.ui.ctx());
+        // Use the theme's accent color as the glow base — ties
         // visually to the rest of the canvas chrome and shifts with
         // the active theme. Multiplied by per-entry alpha and a
         // global pulse intensity (0.65) so the glow stays subtle.
-        let base = theme.selection_outline;
+        let base = theme.tokens.accent;
         for (node_id, alpha) in live {
             let Some(node) = scene.node(node_id) else {
                 continue;

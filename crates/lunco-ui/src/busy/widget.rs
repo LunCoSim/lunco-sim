@@ -7,8 +7,8 @@
 
 use std::time::Duration;
 
-use bevy_egui::egui::{self, Align2, Color32, FontId, Rect, Vec2};
-use lunco_theme::Theme;
+use bevy_egui::egui::{self, Align2, FontId, Rect, Vec2};
+use lunco_theme::{ColorAlpha, Theme};
 use web_time::Instant;
 
 use super::spinner::paint_three_dot;
@@ -68,10 +68,7 @@ impl LoadingIndicator {
 
         // Drop shadow tinted from the theme base so it reads on both
         // light and dark themes.
-        let shadow = {
-            let b = theme.colors.base;
-            Color32::from_rgba_unmultiplied(b.r(), b.g(), b.b(), 100)
-        };
+        let shadow = theme.colors.base.alpha(100);
         painter.rect_filled(card_rect.translate(Vec2::new(0.0, 3.0)), 8.0, shadow);
         painter.rect_filled(card_rect, 8.0, theme.tokens.surface_raised);
         painter.rect_stroke(

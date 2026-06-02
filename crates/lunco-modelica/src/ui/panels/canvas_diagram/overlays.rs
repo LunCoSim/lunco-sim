@@ -7,6 +7,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_theme::ColorAlpha;
 
 use crate::ui::state::ModelicaDocumentRegistry;
 use crate::ui::theme::ModelicaThemeExt;
@@ -39,10 +40,7 @@ pub(super) fn render_drill_in_error_overlay(
     );
     let painter = ui.painter().clone().with_clip_rect(ui.clip_rect().intersect(canvas_rect));
     let painter = &painter;
-    let shadow = {
-        let b = theme.colors.base;
-        egui::Color32::from_rgba_unmultiplied(b.r(), b.g(), b.b(), 100)
-    };
+    let shadow = theme.colors.base.alpha(100);
     painter.rect_filled(
         card_rect.translate(egui::vec2(0.0, 3.0)),
         8.0,

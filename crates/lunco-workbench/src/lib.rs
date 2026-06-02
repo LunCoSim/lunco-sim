@@ -60,6 +60,7 @@ use egui_dock::{
     widgets::tab_viewer::OnCloseResponse, DockArea, DockState, NodeIndex, Style, TabViewer,
 };
 use lunco_core::{Command, on_command, register_commands};
+use lunco_theme::ColorAlpha;
 use std::collections::HashMap;
 
 mod panel;
@@ -2788,7 +2789,7 @@ fn draw_frame_time_sparkline(
     // 16.67 ms (60 FPS) reference line — pulls from `text_subdued`
     // and softens with alpha so it doesn't compete with the trace.
     let muted = theme.tokens.text_subdued;
-    let muted_soft = egui::Color32::from_rgba_unmultiplied(muted.r(), muted.g(), muted.b(), 80);
+    let muted_soft = muted.alpha(80);
     let ref_y = rect.bottom() - rect.height() * (16.67 / max_ms).min(1.0);
     painter.line_segment(
         [egui::pos2(rect.left(), ref_y), egui::pos2(rect.right(), ref_y)],
@@ -2816,7 +2817,7 @@ fn draw_frame_time_sparkline(
         prev = Some(here);
     }
     // Outline so the plot reads as a chart, not random pixels.
-    let outline = egui::Color32::from_rgba_unmultiplied(muted.r(), muted.g(), muted.b(), 100);
+    let outline = muted.alpha(100);
     painter.rect_stroke(
         rect,
         0.0,

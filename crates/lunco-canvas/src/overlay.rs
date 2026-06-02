@@ -20,6 +20,7 @@
 //! them.
 
 use bevy_egui::egui;
+use lunco_theme::ColorAlpha;
 
 use crate::scene::{Rect, Scene};
 use crate::selection::Selection;
@@ -122,7 +123,11 @@ impl Overlay for NavBarOverlay {
         };
         let bar_rect = egui::Rect::from_min_max(min, max);
 
-        let layer_theme = crate::theme::current(ui.ctx());
+        let theme = lunco_theme::active(ui.ctx());
+        let overlay_shadow = theme.colors.base.alpha(110);
+        let overlay_fill = theme.colors.surface0;
+        let overlay_stroke = theme.colors.surface2;
+        let overlay_text = theme.tokens.text;
         // Promote the nav bar to a foreground layer so it always
         // paints on top of canvas content. The previous
         // `ui.painter()` shared the same layer as the nodes/edges,
@@ -148,13 +153,13 @@ impl Overlay for NavBarOverlay {
         painter.rect_filled(
             bar_rect.translate(egui::vec2(0.0, 2.0)),
             8.0,
-            layer_theme.overlay_shadow,
+            overlay_shadow,
         );
-        painter.rect_filled(bar_rect, 8.0, layer_theme.overlay_fill);
+        painter.rect_filled(bar_rect, 8.0, overlay_fill);
         painter.rect_stroke(
             bar_rect,
             8.0,
-            egui::Stroke::new(1.0, layer_theme.overlay_stroke),
+            egui::Stroke::new(1.0, overlay_stroke),
             egui::StrokeKind::Outside,
         );
 
@@ -199,7 +204,7 @@ impl Overlay for NavBarOverlay {
             egui::Label::new(
                 egui::RichText::new(format!("{}%", zoom_pct))
                     .monospace()
-                    .color(layer_theme.overlay_text),
+                    .color(overlay_text),
             ),
         );
 

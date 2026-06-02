@@ -20,6 +20,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_theme::ColorAlpha;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 
 use crate::visual_diagram::msl_class_library;
@@ -681,7 +682,7 @@ fn chip(
         egui::Color32::TRANSPARENT
     };
     let stroke_color = if count == 0 {
-        egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 90)
+        color.alpha(90)
     } else {
         color
     };
