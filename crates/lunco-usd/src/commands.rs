@@ -117,6 +117,19 @@ register_commands!(
 // OpenFile — gated on USD extensions
 // ─────────────────────────────────────────────────────────────────────
 
+// NOTE: document *registration* (reading the file into the
+// `UsdDocumentRegistry`) is owned by `ui::browser_dispatch`'s
+// `on_open_file_for_usd` — an async, idempotent, wasm-safe load. This
+// observer is the additive **scene import** half only (Blender's
+// File → Append): it brings the stage into the running 3D scene so
+// `UsdSimPlugin` can wire `lunco:modelicaModel` / `lunco:simWires`
+// participants (the path `open_usd_docs_on_twin_added` relies on).
+//
+// Previously this observer ALSO did a blocking `std::fs::read_to_string`
+// + a non-idempotent `registry.allocate`, duplicating the async handler:
+// every USD `OpenFile` read the file twice and could register the same
+// document twice. The read/allocate are removed here; `spawn_scene_root_world`
+// loads the stage through the `AssetServer` (by path, no fs), so it stays.
 #[on_command(OpenFile)]
 fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
     let path = trigger.event().path.clone();
@@ -124,26 +137,7 @@ fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
         return;
     }
     commands.queue(move |world: &mut World| {
-        let path_buf = std::path::PathBuf::from(&path);
-        let source = match std::fs::read_to_string(&path_buf) {
-            Ok(s) => s,
-            Err(e) => {
-                bevy::log::warn!("[OpenUsd] {} read failed: {}", path, e);
-                return;
-            }
-        };
-        let mut registry = world.resource_mut::<UsdDocumentRegistry>();
-        let doc_id = registry.allocate(
-            source,
-            DocumentOrigin::File {
-                path: path_buf,
-                writable: true,
-            },
-        );
-        bevy::log::info!("[OpenUsd] opened `{}` as {}", path, doc_id);
-
-        // Also import into the running scene (additive — Blender's
-        // File → Append). Helper no-ops on same `(asset, root_prim)`,
+        // Additive import. Helper no-ops on same `(asset, root_prim)`,
         // and warns + skips for files outside the asset root.
         lunco_usd_sim::cosim::spawn_scene_root_world(world, &path, "");
     });
@@ -351,6 +345,21 @@ mod tests {
         assert_eq!(meta.extensions, vec!["usda", "usdc", "usd"]);
     }
 
+    /// Wire the async USD `OpenFile` registration path (normally provided
+    /// by `UsdUiPlugin`) on top of a minimal app. Document *registration*
+    /// is owned by `browser_dispatch`, not the command-layer observer, so
+    /// command-layer tests bring it in explicitly — without the UI/render
+    /// stack. `MinimalPlugins` already supplies the `AsyncComputeTaskPool`
+    /// the async read uses.
+    fn add_async_open_path(app: &mut App) {
+        app.init_resource::<crate::ui::browser_dispatch::PendingUsdLoads>();
+        crate::ui::browser_dispatch::__register_on_open_file_for_usd(app);
+        app.add_systems(
+            Update,
+            crate::ui::browser_dispatch::drain_pending_usd_file_loads,
+        );
+    }
+
     #[test]
     fn open_file_for_usd_path_creates_document() {
         // Write a tiny .usda to a tempfile we can resolve.
@@ -361,18 +370,21 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(UsdCommandsPlugin);
+        add_async_open_path(&mut app);
         app.update();
 
         app.world_mut().trigger(OpenFile {
             path: tmp_path.to_string_lossy().to_string(),
         });
-        // Two ticks: one to flush the queued world-command, one for
-        // the drain system to publish DocumentOpened.
-        app.update();
-        app.update();
+        // Flush the queued world-command (spawns the async read task),
+        // then poll the drain system across a few ticks until the read
+        // completes and the document is allocated.
+        for _ in 0..5 {
+            app.update();
+        }
 
         let reg = app.world().resource::<UsdDocumentRegistry>();
-        assert_eq!(reg.ids().count(), 1, "exactly one USD doc opened");
+        assert_eq!(reg.ids().count(), 1, "exactly one USD doc opened (no duplicate)");
 
         let _ = std::fs::remove_file(&tmp_path);
     }
@@ -382,13 +394,15 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(UsdCommandsPlugin);
+        add_async_open_path(&mut app);
         app.update();
 
         app.world_mut().trigger(OpenFile {
             path: "/tmp/some_model.mo".to_string(),
         });
-        app.update();
-        app.update();
+        for _ in 0..5 {
+            app.update();
+        }
 
         let reg = app.world().resource::<UsdDocumentRegistry>();
         assert_eq!(reg.ids().count(), 0, "non-USD path must not allocate");
