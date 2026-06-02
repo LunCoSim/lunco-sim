@@ -5,7 +5,7 @@ pub mod core;
 pub mod apply;
 pub mod duplicate;
 
-pub use core::{ModelicaDocument, SyntaxCache, AstCache};
+pub use core::{ModelicaDocument, SyntaxCache, AstCache, ParseDiag, parse_diag_from_error};
 pub use ops::{ModelicaOp, ModelicaChange, OpKind, FreshAst, CHANGE_HISTORY_CAPACITY};
 
 #[cfg(test)]

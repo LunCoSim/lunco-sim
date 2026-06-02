@@ -229,15 +229,17 @@ pub fn refresh_diagnostics(
     let model_tag = Some(host.document().origin().display_name());
 
     // 1. AST parse errors — caught by rumoca's recovering parser.
-    for msg in host.document().ast().errors.iter() {
+    for diag in host.document().ast().errors.iter() {
         entries.push(LogEntry {
             at: web_time::Instant::now(),
             level: LogLevel::Error,
-            text: msg.clone(),
+            text: diag.message.clone(),
             model: model_tag.clone(),
-            // Rumoca's recovering parser surfaces these as plain
-            // strings — no span threaded through yet, so not clickable.
-            loc: None,
+            // Located when the lenient parser gave us a span — makes
+            // the row click-to-source like lint findings.
+            loc: diag.line.zip(diag.column).map(|(line, column)| {
+                crate::ui::panels::log::SourceLoc { line, column }
+            }),
         });
     }
 
