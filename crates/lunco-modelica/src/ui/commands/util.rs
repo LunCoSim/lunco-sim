@@ -40,11 +40,23 @@ pub fn on_exit(
         // The sandbox auto-compiles Modelica models that are marked unsaved, so
         // the prompt flow (below) would otherwise hang over the API — the
         // Save/Don't-save/Cancel modal needs a human at the window.
+        //
+        // `AppExit` still waits for Bevy's schedule + TaskPool to wind down, and
+        // a runaway compute thread (e.g. a rumoca compile that never yields) can
+        // block that join. Signal in-flight runs to cancel and arm the hard-exit
+        // watchdog so the process can't wedge with no human to recover it.
         bevy::log::info!("[Exit] force — firing AppExit immediately (no save prompt)");
+        crate::ui::commands::lifecycle::arm_shutdown_watchdog();
+        commands.queue(|world: &mut World| {
+            crate::ui::commands::lifecycle::cancel_inflight_runs(world);
+        });
         exit.write(bevy::app::AppExit::Success);
     } else {
         // Interactive close: route through the dirty-document save-prompt flow,
-        // same as the window-X button.
+        // same as the window-X button. A human is expected to answer the
+        // Save/Don't-save/Cancel modal, so we must NOT arm the 4s watchdog here
+        // — `request_app_close` arms it itself on the actual-exit commit points
+        // (no-dirty path + post-prompt finalizer), after the human has answered.
         bevy::log::info!("[Exit] requested — routing through app-close flow");
         commands.queue(|world: &mut World| {
             crate::ui::commands::lifecycle::request_app_close(world);

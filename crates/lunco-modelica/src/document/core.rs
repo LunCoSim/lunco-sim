@@ -140,7 +140,17 @@ impl ModelicaDocument {
         let syntax = Arc::new(SyntaxCache::empty(0));
         let mut doc = Self::from_parts(id, source, origin, syntax);
         doc.last_source_edit_at = Some(web_time::Instant::now());
+        // Start at gen 1 so it mismatches the empty placeholder SyntaxCache
+        // (gen 0) and the async parse / index rebuild fires. That bump is a
+        // "needs parse" signal, NOT an edit — so for a file-backed doc the
+        // saved baseline must follow it, else a freshly-OPENED, never-edited
+        // file reports is_dirty()=true (gen 1 ≠ saved 0) and wrongly triggers
+        // the unsaved-changes close prompt. Re-sync the baseline here; an
+        // Untitled doc keeps last_saved_generation=None (genuinely unsaved).
         doc.generation = 1;
+        if !doc.origin.is_untitled() {
+            doc.last_saved_generation = Some(doc.generation);
+        }
         doc
     }
 

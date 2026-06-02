@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use super::types::{Extent, Point, CoordinateSystem};
-use super::graphics::{GraphicItem, LunCoPlotNode};
+use super::graphics::GraphicItem;
 
 /// Decoded `Icon(coordinateSystem=..., graphics={...})` annotation.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -116,24 +116,21 @@ impl Icon {
     }
 }
 
-/// Decoded `Diagram(coordinateSystem=..., graphics={...})` annotation,
-/// plus LunCo vendor plot tiles parsed from the sibling
-/// `__LunCo(plotNodes={...})` annotation. The split is intentional:
+/// Decoded `Diagram(coordinateSystem=..., graphics={...})` annotation.
 ///
-/// * `graphics` is what OMEdit (and every standards-compliant
-///   Modelica editor) renders — typically a `Rectangle` + `Text`
-///   placeholder for each plot region. Static fallback.
-/// * `plot_nodes` is Lunica-only: each entry carries a `signal=`
-///   binding the live runtime sample to a rectangular plot tile
-///   painted on the canvas. Lunica draws this on top of the static
-///   placeholder, so users see a real graph while OMEdit users see
-///   a labelled region.
+/// This maps *only* the standard Modelica `Diagram` annotation — the
+/// `graphics` OMEdit (and every standards-compliant editor) renders.
+/// LunCo's live plot tiles are deliberately NOT modelled here: they
+/// live in the orthogonal `__LunCo(plotNodes={...})` vendor annotation
+/// and are extracted independently via
+/// [`super::parsing::extract_lunco_plot_nodes`]. Keeping them separate
+/// means a pure behaviour model (no `Diagram` block at all) can still
+/// carry plot tiles — bundling them here made plot extraction depend
+/// on a `Diagram` block existing, which silently dropped the tiles.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Diagram {
     pub coordinate_system: CoordinateSystem,
     pub graphics: Vec<GraphicItem>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub plot_nodes: Vec<LunCoPlotNode>,
 }
 
 /// Decoded `experiment(StartTime=..., StopTime=..., Tolerance=..., Interval=...)`

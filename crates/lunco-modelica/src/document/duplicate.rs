@@ -85,7 +85,10 @@ pub(crate) fn extract_class_spans_inline(
 
 pub(crate) fn spans_from_ast(
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
-    source: &str,
+    // Unused since `full_span_with_leading_comments` was dropped (see below);
+    // spans now come straight off the class location. Kept in the signature
+    // for call-site symmetry with the source-based extractors.
+    _source: &str,
     class_name: &str,
 ) -> Option<DuplicateExtract> {
     let class = crate::ast_extract::find_class_by_short_name(ast, class_name)?;

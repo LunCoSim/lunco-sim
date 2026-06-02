@@ -77,11 +77,12 @@ fn fixture_parses_and_extracts() {
     assert_eq!(text_count, 6, "1 header + 5 plot labels");
     assert_eq!(rect_count, 5, "5 plot region rectangles");
 
-    // The vendor `__LunCo(plotNodes=…)` annotation should carry one
-    // typed `LunCoAnnotations.PlotNode` per plot region, with their
-    // `signal=` bindings preserved.
-    assert_eq!(diag.plot_nodes.len(), 5);
-    let signals: Vec<&str> = diag.plot_nodes.iter().map(|p| p.signal.as_str()).collect();
+    // The vendor `__LunCo(plotNodes=…)` annotation is orthogonal to
+    // `Diagram` and is extracted separately. It should carry one typed
+    // `LunCoAnnotations.PlotNode` per plot region, `signal=` preserved.
+    let plot_nodes = lunco_modelica::annotations::extract_lunco_plot_nodes(&stage.annotation);
+    assert_eq!(plot_nodes.len(), 5);
+    let signals: Vec<&str> = plot_nodes.iter().map(|p| p.signal.as_str()).collect();
     for expected in [
         "tank.m",
         "airframe.altitude",

@@ -1468,6 +1468,36 @@ pub struct DeleteExperiment {
     pub all: bool,
 }
 
+/// Clear all per-experiment side-state for runs that were just removed from
+/// the `ExperimentRegistry`. Keeps the doc→run mapping (`ExperimentSources`)
+/// and the per-plot run-visibility (`PlotPanelStates`) in lockstep with the
+/// registry. Shared by the API `DeleteExperiment` command and the Experiments
+/// panel's delete button so neither leaks stale ids. (Playback entities are
+/// keyed per-doc, not per-run, so they are intentionally left alone — a run
+/// delete doesn't despawn a doc's playback entity.)
+pub(crate) fn purge_experiment_side_state(
+    world: &mut World,
+    removed: &[lunco_experiments::ExperimentId],
+) {
+    if removed.is_empty() {
+        return;
+    }
+    if let Some(mut sources) =
+        world.get_resource_mut::<crate::experiments_runner::ExperimentSources>()
+    {
+        for id in removed {
+            sources.0.remove(id);
+        }
+    }
+    if let Some(mut states) =
+        world.get_resource_mut::<crate::ui::panels::experiments::PlotPanelStates>()
+    {
+        for id in removed {
+            states.forget_experiment(*id);
+        }
+    }
+}
+
 #[on_command(DeleteExperiment)]
 pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Commands) {
     let target = trigger.event().experiment_id.clone();
@@ -1475,9 +1505,14 @@ pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Command
     let all = trigger.event().all;
     commands.queue(move |world: &mut World| {
         let mut reg = world.resource_mut::<lunco_experiments::ExperimentRegistry>();
+        // Snapshot ids before deletion so we can compute exactly which runs
+        // were removed and purge their side-state (doc mapping + per-plot
+        // visibility), matching the UI delete path.
+        let before: std::collections::HashSet<lunco_experiments::ExperimentId> =
+            reg.iter_all().map(|e| e.id).collect();
         let mut removed = 0usize;
         if all {
-            let ids: Vec<_> = reg.iter_all().map(|e| e.id).collect();
+            let ids: Vec<_> = before.iter().copied().collect();
             for id in ids {
                 if reg.delete(id) {
                     removed += 1;
@@ -1494,6 +1529,13 @@ pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Command
             let twin = crate::ui::doc_pin::twin_id_for_doc(doc);
             removed = reg.delete_for_twin(&twin);
         }
+        // Drop the borrow before touching other resources.
+        let live: std::collections::HashSet<lunco_experiments::ExperimentId> =
+            reg.iter_all().map(|e| e.id).collect();
+        drop(reg);
+        let purged: Vec<lunco_experiments::ExperimentId> =
+            before.difference(&live).copied().collect();
+        crate::ui::commands::compile::purge_experiment_side_state(world, &purged);
         bevy::log::info!(
             "[DeleteExperiment] removed {removed} run(s) (all={all}, id={target:?}, doc={doc:?})"
         );

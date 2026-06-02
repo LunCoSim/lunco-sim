@@ -106,6 +106,16 @@ pub fn api_command_dispatcher(
 
     // 2. Resolve IDs: recursively find fields that should be Entities and look them up in the registry
     let mut resolved_params = event.params.clone();
+    // Coerce absent/null params to an empty object. Unit-struct commands
+    // (e.g. `Exit`, `Ping`) and commands whose fields are all defaulted are
+    // sent as `{"command":"X"}` with no `params`; TypedReflectDeserializer
+    // rejects a bare `null` ("invalid type: null, expected reflected struct
+    // value") and the command silently never fires (the HTTP layer still
+    // returns a command_id, so it *looks* accepted). An empty map deserializes
+    // fine — missing fields fall back to their reflect/serde defaults.
+    if resolved_params.is_null() {
+        resolved_params = serde_json::Value::Object(serde_json::Map::new());
+    }
     resolve_ids_in_json(&mut resolved_params, &registry);
 
     // 3. Deserialize JSON into reflected struct

@@ -211,10 +211,23 @@ pub(super) fn emit_diagram_decorations(
     origins
 }
 
+/// Resolve the canvas background decorations for the target class:
+/// the standard `Diagram(graphics=…)` shapes AND the LunCo
+/// `__LunCo(plotNodes=…)` live tiles, extracted *independently*.
+///
+/// The two are orthogonal annotations (see [`crate::annotations::Diagram`]):
+/// a model can have diagram graphics, plot tiles, both, or neither.
+/// We therefore never gate one on the other — a pure behaviour model
+/// with only plot tiles (no `Diagram` block) still returns its tiles.
+/// Returns `None` only when the class isn't found or carries neither.
 pub(super) fn diagram_annotation_for_target(
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
     target: Option<&str>,
-) -> Option<crate::annotations::Diagram> {
+) -> Option<(
+    crate::annotations::CoordinateSystem,
+    Vec<crate::annotations::GraphicItem>,
+    Vec<crate::annotations::LunCoPlotNode>,
+)> {
     // Route through the canonical AST class lookup
     // `crate::diagram::find_class_by_qualified_name`. It already
     // handles within-clause stripping correctly — at segment
@@ -238,7 +251,20 @@ pub(super) fn diagram_annotation_for_target(
             .find(|(_, c)| !matches!(c.class_type, ClassType::Package))
             .map(|(_, c)| c)
     };
-    class.and_then(|c| crate::annotations::extract_diagram(&c.annotation))
+    let class = class?;
+    // Two orthogonal sources, extracted independently so neither
+    // gates the other:
+    //   * standard `Diagram(graphics=…)` → background shapes
+    //   * `__LunCo(plotNodes=…)`          → live signal tiles
+    let diagram = crate::annotations::extract_diagram(&class.annotation);
+    let plot_nodes = crate::annotations::extract_lunco_plot_nodes(&class.annotation);
+    if diagram.is_none() && plot_nodes.is_empty() {
+        return None;
+    }
+    let (coordinate_system, graphics) = diagram
+        .map(|d| (d.coordinate_system, d.graphics))
+        .unwrap_or_default();
+    Some((coordinate_system, graphics, plot_nodes))
 }
 
 // `walk_qualified` deleted: was a near-duplicate of

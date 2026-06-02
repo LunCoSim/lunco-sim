@@ -206,11 +206,57 @@ pub fn request_app_close(world: &mut World) {
 }
 
 fn fire_app_exit(world: &mut World) {
+    cancel_inflight_runs(world);
+    arm_shutdown_watchdog();
     if let Some(mut messages) =
         world.get_resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
     {
         bevy::log::info!("[AppClose] no dirty docs — exiting");
         messages.write(bevy::app::AppExit::Success);
+    }
+}
+
+/// Hard-exit safety net. The graceful `AppExit` path waits for Bevy's
+/// schedule + TaskPool to wind down; a runaway compute thread (e.g. a
+/// rumoca compile that never yields) can block that join indefinitely,
+/// forcing the user to SIGKILL. Once we're committed to exiting we arm a
+/// detached watchdog that force-terminates the process after a short grace
+/// period if the clean shutdown hasn't finished. Idempotent via `Once`, so
+/// arming it from both exit commit points (no-dirty path + finalizer) is safe.
+pub(crate) fn arm_shutdown_watchdog() {
+    use std::sync::Once;
+    static WATCHDOG: Once = Once::new();
+    WATCHDOG.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("shutdown-watchdog".into())
+            .spawn(|| {
+                std::thread::sleep(std::time::Duration::from_secs(4));
+                bevy::log::warn!(
+                    "[AppClose] graceful exit stalled >4s (busy compute thread) — forcing process exit"
+                );
+                std::process::exit(0);
+            });
+    });
+}
+
+/// Best-effort: signal every in-flight experiment to cancel so worker
+/// threads stop at their next solver-step / compile boundary. Speeds the
+/// graceful path so the watchdog rarely has to fire; it can't interrupt a
+/// thread stuck inside a rumoca compile (no cancel hook there) — that's what
+/// the watchdog is for.
+pub(crate) fn cancel_inflight_runs(world: &World) {
+    if let Some(pending) =
+        world.get_resource::<crate::experiments_runner::PendingHandles>()
+    {
+        if !pending.0.is_empty() {
+            bevy::log::info!(
+                "[AppClose] cancelling {} in-flight run(s) before exit",
+                pending.0.len()
+            );
+            for handle in &pending.0 {
+                handle.cancel();
+            }
+        }
     }
 }
 
@@ -243,6 +289,7 @@ pub fn finalize_app_close(
     pending_save_close: Option<Res<PendingCloseAfterSave>>,
     pending_tab_closes: Option<Res<lunco_workbench::PendingTabCloses>>,
     registry: Option<Res<ModelicaDocumentRegistry>>,
+    pending_runs: Option<Res<crate::experiments_runner::PendingHandles>>,
     mut exit_events: bevy::ecs::message::MessageWriter<bevy::app::AppExit>,
 ) {
     let Some(mut flow) = flow else { return };
@@ -293,6 +340,18 @@ pub fn finalize_app_close(
     }
     bevy::log::info!("[AppClose] all prompts resolved — exiting");
     flow.armed = false;
+    if let Some(pending) = pending_runs.as_ref() {
+        if !pending.0.is_empty() {
+            bevy::log::info!(
+                "[AppClose] cancelling {} in-flight run(s) before exit",
+                pending.0.len()
+            );
+            for handle in &pending.0 {
+                handle.cancel();
+            }
+        }
+    }
+    arm_shutdown_watchdog();
     exit_events.write(bevy::app::AppExit::Success);
 }
 
