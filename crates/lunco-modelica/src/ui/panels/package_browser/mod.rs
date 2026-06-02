@@ -314,6 +314,36 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
     };
     let already_open = world.resource::<ModelicaDocumentRegistry>().find_by_path(&path);
     if let Some(doc) = already_open {
+        // Re-Opening an already-open file reloads it from disk so external
+        // edits (an editor, a tool, an agent writing the `.mo`) are picked up
+        // — previously this just focused the stale tab. Read synchronously
+        // (user-initiated, small file) and apply through the op pipeline so
+        // canvas/plots/compile reproject; skip if the buffer already matches.
+        if let Ok(disk) = std::fs::read_to_string(&path) {
+            let differs = world
+                .resource::<ModelicaDocumentRegistry>()
+                .host(doc)
+                .map(|h| h.document().source() != disk)
+                .unwrap_or(false);
+            if differs {
+                use crate::document::ModelicaOp;
+                match crate::ui::panels::canvas_diagram::apply_one_op_as(
+                    world,
+                    doc,
+                    ModelicaOp::ReplaceSource { new: disk },
+                    lunco_twin_journal::AuthorTag::for_tool("open-file-reload"),
+                ) {
+                    Ok(_) => bevy::log::info!(
+                        "[OpenFile] reloaded `{}` from disk",
+                        path.display()
+                    ),
+                    Err(e) => bevy::log::warn!(
+                        "[OpenFile] reload-from-disk failed for {}: {e:?}",
+                        path.display()
+                    ),
+                }
+            }
+        }
         let tab_id = world
             .resource_mut::<crate::ui::panels::model_view::ModelTabs>()
             .ensure_for(doc, drilled.clone());
