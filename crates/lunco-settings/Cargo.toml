@@ -9,6 +9,9 @@ bevy = { workspace = true, default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
 lunco-assets = { path = "../lunco-assets" }
+# Native settings I/O routes through the storage abstraction rather than
+# raw `std::fs` (clippy-banned, wasm-incompatible).
+lunco-storage = { path = "../lunco-storage" }
 
 # Wasm-only: persist settings to `localStorage` instead of disk
 # (`std::fs::write` panics on `wasm32-unknown-unknown` for relative

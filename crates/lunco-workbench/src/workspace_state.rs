@@ -207,7 +207,11 @@ impl WorkspaceState {
     /// match (hash collision guard) — all of which mean "use defaults".
     pub fn load(twin_root: &Path) -> Option<Self> {
         let path = workspace_state_path(twin_root);
-        let text = std::fs::read_to_string(&path).ok()?;
+        use lunco_storage::Storage;
+        let bytes = lunco_storage::FileStorage::new()
+            .read_sync(&lunco_storage::StorageHandle::File(path.clone()))
+            .ok()?;
+        let text = String::from_utf8(bytes).ok()?;
         let state: WorkspaceState = serde_json::from_str(&text).ok()?;
         if state.twin_root != twin_root {
             warn!(
@@ -230,7 +234,15 @@ impl WorkspaceState {
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, json)?;
+        // Write through lunco-storage (clippy-banned `std::fs::write`,
+        // wasm-incompatible); `rename` isn't on the ban list, so the
+        // atomic tmp→final swap is preserved.
+        {
+            use lunco_storage::Storage;
+            lunco_storage::FileStorage::new()
+                .write_sync(&lunco_storage::StorageHandle::File(tmp.clone()), json.as_bytes())
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+        }
         std::fs::rename(&tmp, &path)
     }
 }

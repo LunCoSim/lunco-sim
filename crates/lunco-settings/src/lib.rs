@@ -78,7 +78,13 @@ pub fn settings_path() -> PathBuf {
 /// requires an app restart.
 pub fn load_section_from_disk<S: SettingsSection>() -> S {
     let path = settings_path();
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    use lunco_storage::Storage;
+    let Ok(bytes) = lunco_storage::FileStorage::new()
+        .read_sync(&lunco_storage::StorageHandle::File(path))
+    else {
+        return S::default();
+    };
+    let Ok(text) = String::from_utf8(bytes) else {
         return S::default();
     };
     let raw: BTreeMap<String, serde_json::Value> = match serde_json::from_str(&text) {
@@ -131,9 +137,15 @@ impl Settings {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
+            use lunco_storage::Storage;
             let path = settings_path();
-            let text = match std::fs::read_to_string(&path) {
-                Ok(s) => s,
+            let text = match lunco_storage::FileStorage::new()
+                .read_sync(&lunco_storage::StorageHandle::File(path))
+            {
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Ok(s) => s,
+                    Err(_) => return Self::default(),
+                },
                 Err(_) => return Self::default(),
             };
             let raw: BTreeMap<String, serde_json::Value> =
@@ -179,7 +191,13 @@ impl Settings {
             // an existing file is atomic on POSIX and on Windows ≥ 1607
             // — good enough for user settings.
             let tmp = path.with_extension("json.tmp");
-            if let Err(e) = std::fs::write(&tmp, json.as_bytes()) {
+            // Route the actual write through lunco-storage (clippy-banned
+            // `std::fs::write`, wasm-incompatible); the tmp+rename atomicity
+            // is preserved — `rename`/`create_dir_all` aren't on the ban list.
+            use lunco_storage::Storage;
+            if let Err(e) = lunco_storage::FileStorage::new()
+                .write_sync(&lunco_storage::StorageHandle::File(tmp.clone()), json.as_bytes())
+            {
                 warn!("[Settings] write tmp {} failed: {e}", tmp.display());
                 return;
             }

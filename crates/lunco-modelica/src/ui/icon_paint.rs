@@ -1085,7 +1085,14 @@ fn load_bitmap_bytes(filename: &str) -> Option<Vec<u8>> {
     };
     let msl_root = lunco_assets::msl_dir();
     let candidate = msl_root.join(&rel);
-    std::fs::read(&candidate).ok()
+    // Route through lunco-storage — `std::fs` is clippy-banned in domain
+    // crates and absent on wasm. `FileStorage` reads native disk; on wasm
+    // it errors → `.ok()` → `None`, which the icon renderer already
+    // tolerates (bitmap simply doesn't draw).
+    use lunco_storage::Storage;
+    lunco_storage::FileStorage::new()
+        .read_sync(&lunco_storage::StorageHandle::File(candidate))
+        .ok()
 }
 
 // ---------------------------------------------------------------------------

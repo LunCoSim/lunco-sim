@@ -53,18 +53,44 @@ impl HttpBridge {
     }
 }
 
+// A long-lived OS thread hosting a blocking tokio HTTP-server runtime is
+// the correct shape here — not an `AsyncComputeTaskPool` task (which is
+// for short compute jobs and would occupy a pool slot forever). The
+// `disallowed_methods` ban targets wasm + short tasks, neither of which
+// applies to this native, `transport-http`-gated server, so it's locally
+// allowed. The previous triple `.unwrap()` panicked this *detached*
+// thread silently (e.g. on port-in-use → the API just never came up);
+// failures are now logged and the thread returns.
 #[cfg(feature = "transport-http")]
+#[allow(clippy::disallowed_methods)]
 pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) {
     let port = config.port;
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                bevy::log::error!("[lunco-api] failed to start HTTP server runtime: {e}");
+                return;
+            }
+        };
         rt.block_on(async move {
             let app = axum::Router::new()
                 .route("/api/commands", axum::routing::post(http::handle_api_commands))
                 .with_state(bridge);
-            
-            let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await.unwrap();
-            axum::serve(listener, app).await.unwrap();
+
+            let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
+                Ok(l) => l,
+                Err(e) => {
+                    bevy::log::error!(
+                        "[lunco-api] HTTP server failed to bind 127.0.0.1:{port}: {e} \
+                         (port already in use?) — API will be unavailable"
+                    );
+                    return;
+                }
+            };
+            if let Err(e) = axum::serve(listener, app).await {
+                bevy::log::error!("[lunco-api] HTTP server stopped with error: {e}");
+            }
         });
     });
 }

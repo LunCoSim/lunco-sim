@@ -260,8 +260,8 @@ fn execute_request(
                 use bevy::render::view::screenshot::Screenshot;
                 if save_to_file {
                     let path = format!("screenshot_{}.png",
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
+                        web_time::SystemTime::now()
+                            .duration_since(web_time::UNIX_EPOCH)
                             .unwrap()
                             .as_secs());
                     commands.insert_resource(PendingScreenshotRequest {

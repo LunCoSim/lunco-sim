@@ -1963,8 +1963,8 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
         // name is included for readability when filing multiple
         // exports of the same model.
         let model_short = exp.model_ref.0.rsplit('.').next().unwrap_or(&exp.model_ref.0);
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let ts = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let raw = format!("{model_short}_{}_{ts}", exp.name);
