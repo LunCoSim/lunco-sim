@@ -22,8 +22,17 @@ pub fn ephemeris_update_system(
     mut last_jd: Local<f64>,
 ) {
     let Some(ephemeris) = ephemeris else { return; };
+
+    // Gate: re-project the whole body/frame hierarchy only when the epoch
+    // has actually advanced. `last_jd` starts at 0.0 (a JD this clock never
+    // takes), so the first real epoch always runs; thereafter a paused /
+    // time-warp-stopped clock skips the full recompute. (This is the gate
+    // the doc comment always promised but never wired up.)
+    if (clock.epoch - *last_jd).abs() < 1e-9 {
+        return;
+    }
     *last_jd = clock.epoch;
-    
+
     for (entity, mut cell, mut tf, body, frame) in q_entities.iter_mut() {
         let ephemeris_id = if let Some(b) = body { b.ephemeris_id } else if let Some(f) = frame { f.ephemeris_id } else { continue; };
         

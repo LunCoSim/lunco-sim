@@ -363,9 +363,20 @@ fn propagate_preview_render_layer(
     state: Res<UsdViewportState>,
     q_children: Query<&Children>,
     q_has_layers: Query<(), With<RenderLayers>>,
+    q_newly_parented: Query<(), Added<ChildOf>>,
     mut commands: Commands,
 ) {
     let Some(root) = state.scene_root else { return };
+
+    // Only re-walk the preview subtree when there's something new to seed:
+    // either the scene root was just (re)assigned (`state` changed this
+    // frame) or some entity was newly parented this frame (USD prims spawn
+    // incrementally as the stage loads). Once the scene is static this DFS
+    // would otherwise run every frame for no effect.
+    if !state.is_changed() && q_newly_parented.is_empty() {
+        return;
+    }
+
     let preview_layers = RenderLayers::layer(PREVIEW_RENDER_LAYER);
 
     // Iterative DFS over the subtree rooted at scene_root. USD scenes

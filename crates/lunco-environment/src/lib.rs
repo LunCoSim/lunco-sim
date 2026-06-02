@@ -73,9 +73,19 @@ pub fn compute_local_gravity(
     mut commands: Commands,
     gravity: Res<Gravity>,
     q_bodies: Query<&GravityProvider>,
-    q_entities: Query<(Entity, &Transform, Option<&GravityBody>)>,
+    q_entities: Query<(Entity, Ref<Transform>, Option<&GravityBody>, Option<&LocalGravity>)>,
 ) {
-    for (entity, tf, gravity_body) in &q_entities {
+    // Recompute an entity's gravity only when something it depends on changed:
+    // the global `Gravity` definition (Flat vector / Flat↔Surface switch) or
+    // this entity's own Transform (Surface gravity is position-dependent; Flat
+    // is not). Entities that don't yet have a `LocalGravity` always run once.
+    // This stops both the per-frame provider lookups and the change-detection
+    // storm caused by blindly re-inserting an identical value every frame.
+    let gravity_changed = gravity.is_changed();
+    for (entity, tf, gravity_body, existing) in &q_entities {
+        if existing.is_some() && !gravity_changed && !tf.is_changed() {
+            continue;
+        }
         let g = match gravity.as_ref() {
             Gravity::Flat { g, direction } => *direction * *g,
             Gravity::Surface => {
@@ -84,6 +94,13 @@ pub fn compute_local_gravity(
                 provider.model.acceleration(tf.translation.as_dvec3())
             }
         };
+        // Don't re-insert (and re-trigger change detection) when the value is
+        // unchanged — e.g. a `gravity_changed` pass that recomputes the same g.
+        if let Some(LocalGravity(prev)) = existing {
+            if *prev == g {
+                continue;
+            }
+        }
         commands.entity(entity).insert(LocalGravity(g));
     }
 }
