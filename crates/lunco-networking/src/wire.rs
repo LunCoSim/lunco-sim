@@ -1,6 +1,8 @@
-//! Always-on networking **codec + capture + apply + snapshots** — no lightyear
-//! dependency. This is the substrate the optional `lunco-networking` adapter
-//! drives; it is inert in single-player ([`NetworkRole::Standalone`]).
+//! Networking **codec + capture + apply + snapshots** — no lightyear
+//! dependency. This is the transport-agnostic wire the lightyear adapter (this
+//! same crate's `client`/`server`) drives. It lives behind the `networking`
+//! feature; single-player builds (which omit `lunco-networking` entirely) never
+//! compile or register it, so they carry no networking resources at all.
 //!
 //! Flow:
 //! - **capture** (`capture_command::<C>`, registered by [`DeclareChannelExt`]):
@@ -35,8 +37,8 @@ use lunco_core::{
     SessionRegistry, SimTick, SnapshotSample, WireApplyGuard, WireChannel,
 };
 
-use crate::executor::{globalize_ids_in_json, resolve_ids_in_json};
-use crate::registry::ApiEntityRegistry;
+use lunco_api::executor::{globalize_ids_in_json, resolve_ids_in_json};
+use lunco_api::registry::ApiEntityRegistry;
 
 // ── Wire payloads ─────────────────────────────────────────────────────────────
 

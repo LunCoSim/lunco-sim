@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// One serialized [`lunco_api::WireEnvelope`] on the wire.
+/// One serialized [`crate::wire::WireEnvelope`] on the wire.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub(crate) struct Frame(pub Vec<u8>);
 

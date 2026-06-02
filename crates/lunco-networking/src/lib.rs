@@ -1,13 +1,16 @@
 //! LunCoSim networking — a **thin lightyear (WebTransport) adapter**.
 //!
-//! All command capture/apply, session/authority, codec and snapshot logic lives
-//! in the always-on substrate (`lunco-core` + `lunco-api::wire`). This crate's
-//! only job, behind the `networking` feature (D7), is to:
+//! Identity/session/authority primitives (`Provenance`, `GlobalEntityId`,
+//! `SimTick`, `IsServer`, `NetworkRole`, `Mutation`) live always-on in
+//! `lunco-core`. The networking **wire** (codec, command capture/apply, snapshot
+//! state — see [`wire`]) lives in *this* crate behind the `networking` feature,
+//! so single-player builds that omit `lunco-networking` carry no networking code
+//! at all. On top of the wire, this crate's job is to:
 //! - configure the lightyear WebTransport transport (native + wasm) and run it
 //!   as host or client;
 //! - allocate sessions on connect and send the handshake;
-//! - ferry pre-serialized [`lunco_api::WireEnvelope`]s between
-//!   [`lunco_api::WireOutbox`]/[`lunco_api::WireInbox`] and two lightyear
+//! - ferry pre-serialized [`wire::WireEnvelope`]s between
+//!   [`wire::WireOutbox`]/[`wire::WireInbox`] and two lightyear
 //!   messages (reliable `CmdChannel` + best-effort `SnapChannel`).
 //!
 //! With the feature off the plugin is a no-op and single-player is unaffected.
@@ -19,6 +22,10 @@ use std::net::SocketAddr;
 mod protocol;
 #[cfg(feature = "networking")]
 mod shared;
+/// Transport-agnostic networking wire: codec, command capture/apply, and state
+/// snapshots (no lightyear dep). Driven by this crate's lightyear adapter.
+#[cfg(feature = "networking")]
+pub mod wire;
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
 mod server;
 #[cfg(feature = "networking")]

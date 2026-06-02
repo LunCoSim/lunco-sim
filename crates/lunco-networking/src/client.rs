@@ -9,7 +9,7 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
-use lunco_api::{WireInbox, WireOutbox};
+use crate::wire::{WireInbox, WireOutbox};
 use lunco_core::{LocalSession, NetStatus, SessionId, WireChannel};
 
 use crate::protocol::{CmdChannel, Frame, SnapChannel};

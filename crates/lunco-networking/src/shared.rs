@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use core::time::Duration;
 use lightyear::prelude::*;
-use lunco_api::{DeclareChannelExt, WireEnvelope};
+use crate::wire::{DeclareChannelExt, WireEnvelope};
 use lunco_core::{IsServer, NetStatus, NetworkRole, SessionId, WireChannel};
 
 use crate::NetworkMode;
@@ -35,6 +35,10 @@ pub(crate) fn peer_to_session(peer: PeerId) -> SessionId {
 /// Add the lightyear plugins, the protocol, the wire-channel declarations, and
 /// the host/client setup for `mode`.
 pub(crate) fn build_networking(app: &mut App, mode: &NetworkMode) {
+    // The transport-agnostic wire (codec, capture/apply, snapshots) the lightyear
+    // ferry below drives. Both Host and Client need it.
+    app.add_plugins(crate::wire::WirePlugin);
+
     let tick = Duration::from_secs_f64(lunco_core::SECS_PER_TICK);
     match mode {
         NetworkMode::Host { port } => {

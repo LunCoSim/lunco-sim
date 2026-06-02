@@ -8,7 +8,7 @@ use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
-use lunco_api::{
+use crate::wire::{
     HandshakeMsg, OwnershipMsg, SnapshotEntry, SnapshotMsg, SpawnReplicationMsg, WireEnvelope,
     WireInbox, WireOutbox,
 };
@@ -64,7 +64,7 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     // WITHOUT touching the ferry: snapshot GENERATION (`gather_snapshot`) runs in
     // `FixedUpdate` at a steady 20 Hz and tick-stamps each batch, and the client
     // interpolates in tick-space (`interpolate_proxies`), so bursty sends still
-    // render smoothly. See `lunco_api::wire::WirePlugin`.
+    // render smoothly. See `crate::wire::WirePlugin`.
     app.add_systems(
         Update,
         (

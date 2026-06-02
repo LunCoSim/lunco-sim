@@ -52,9 +52,6 @@ pub mod registry;
 pub mod schema;
 pub mod subscription;
 pub mod transports;
-/// Always-on networking codec/capture/apply/snapshots (no lightyear dep). The
-/// substrate `lunco-networking` drives; inert in single-player.
-pub mod wire;
 
 // Re-export public types for convenience
 pub use discovery::*;
@@ -63,7 +60,6 @@ pub use queries::*;
 pub use registry::*;
 pub use schema::*;
 pub use subscription::*;
-pub use wire::*;
 
 /// Configuration for the API plugin.
 #[derive(Debug, Clone)]
@@ -144,10 +140,10 @@ impl Plugin for LunCoApiPlugin {
             ApiTelemetryPlugin,
         ));
 
-        // Always-on networking substrate (D7): codec, capture/apply, snapshots.
-        // Inert in single-player; driven by the optional `lunco-networking`
-        // adapter when present.
-        app.add_plugins(wire::WirePlugin);
+        // The networking wire (codec, capture/apply, snapshots) lives in the
+        // optional `lunco-networking` crate and is registered by its plugin only
+        // when the `networking` feature is on. This crate stays transport- and
+        // networking-agnostic.
 
         // HTTP transport (feature-gated)
         #[cfg(feature = "transport-http")]

@@ -22,6 +22,11 @@ lunco-api = { path = "../lunco-api" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-avatar = { path = "../lunco-avatar" }
 lunco-sandbox-edit = { path = "../lunco-sandbox-edit" }
+# Read by the wire's `gather_snapshot`: avian velocity (LinearVelocity/
+# AngularVelocity) for client-side prediction, big_space `CellCoord` so
+# replication carries the integer cell alongside the f64 absolute position.
+avian3d = { workspace = true }
+big_space = { workspace = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 

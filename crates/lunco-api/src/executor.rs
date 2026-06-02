@@ -152,7 +152,7 @@ pub fn api_command_dispatcher(
 /// Note: This is a heuristic. We assume fields named 'target', 'entity',
 /// 'body', 'parent', or 'avatar' that contain a large number or numeric
 /// string are meant to be GlobalEntityIds.
-pub(crate) fn resolve_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegistry) {
+pub fn resolve_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegistry) {
     use lunco_core::GlobalEntityId;
 
     match value {
@@ -197,7 +197,7 @@ pub(crate) fn resolve_ids_in_json(value: &mut serde_json::Value, registry: &ApiE
 /// command carries global ids the receiving peer can resolve back to its own
 /// local entities. Entities with no `GlobalEntityId` (e.g. a peer's local-only
 /// avatar) are left untouched — the receiver simply won't resolve them.
-pub(crate) fn globalize_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegistry) {
+pub fn globalize_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegistry) {
     match value {
         serde_json::Value::Object(map) => {
             for (k, v) in map.iter_mut() {
