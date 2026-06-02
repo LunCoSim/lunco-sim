@@ -97,13 +97,25 @@ thread ⇒ total ≈ cores. (rumoca change — coordinate; see
 
 ## Work breakdown
 
-1. **Scheduler in `RunnerState`** — replace `busy_with` with
-   `{max_parallel, in_flight, pending}`; `run_fast` start-or-queue; terminal
-   sites pop the queue. Add `RunStatus::Queued`. (`experiments_runner.rs`,
-   `lunco-experiments/src/lib.rs`.) *Native parallel works after this step
-   alone — thread-per-run already capped by `in_flight`.*
-2. **`max_parallel` from settings** — `available_parallelism` /
-   `hardwareConcurrency`, `lunco-settings` key, conservative default.
+1. **[DONE] Scheduler in `RunnerState`** — replaced `busy_with` with
+   `{max_parallel, in_flight: HashSet, pending: VecDeque<QueuedJob>}`;
+   `run_fast` enqueues + `pump_scheduler` starts-or-queues; free fns
+   `pump_scheduler`/`finish_run` + platform `start_job` (native thread-per-run
+   → `finish_run` on return; wasm dispatch + forwarder `finish_run` on
+   terminal). Dropped the unused `cancel_flag` slot; queued-cancel checked at
+   `start_job`. `RunStatus::Queued` deliberately NOT added — queued runs sit
+   at `Pending` (no updates until started), which already reads correctly;
+   the dedicated variant is deferred to the step-5 UX pass to avoid rippling
+   every match site. *Native parallel works now.* (`experiments_runner.rs`.)
+2. **[DONE] `max_parallel` from settings** — `ExperimentSettings` section
+   (`settings.json` key `experiments`, field `max_parallel: Option<usize>`,
+   `None`/`0` = auto). `default_max_parallel()` = native
+   `available_parallelism()-1` clamped `1..=4`; wasm `1`. Reactive
+   `apply_experiment_settings` system (change-driven, applies on startup +
+   edits) registered in the modelica plugin. `set_max_parallel`/`max_parallel`
+   /`in_flight_count`/`queued_count` added for UI. Tests: 4 new + fixed a
+   pre-existing modifier-`=` override regex bug. (Web `hardwareConcurrency`
+   read folds in with step 3's pool.)
 3. **Wasm worker pool** — `WORKERS: Vec`, install N, MSL into all, idle-worker
    pick in `dispatch_run_fast`, per-run→worker routing + cancel.
    (`worker_transport.rs`.) *Web parallel works after this step.*

@@ -30,13 +30,15 @@
 //! override can't be set at the DAE level (non-top-level param, array/enum
 //! value), it falls back to the legacy string-injection recompile.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::prelude::*;
 use crossbeam_channel::{Sender, unbounded};
+use lunco_settings::SettingsSection;
+use serde::{Deserialize, Serialize};
 use lunco_experiments::{
     Experiment, ExperimentId, ExperimentRegistry, ExperimentRunner, ModelRef, ParamPath,
     ParamValue, RunBounds, RunCancelled, RunCompleted, RunFailed, RunHandle, RunMeta,
@@ -69,29 +71,126 @@ pub struct ModelDefaults {
     pub solver: Option<String>,
 }
 
+/// Platform default for the number of runs allowed to execute
+/// concurrently. Native: one less than the core count, clamped low
+/// (this is refined into a `lunco-settings` value in step 2; the cap is
+/// kept conservative until then). Wasm: 1 — there is a single Web Worker
+/// today, so runs serialize inside it; the worker pool (step 3) raises it.
+fn default_max_parallel() -> usize {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::thread::available_parallelism()
+            .map(|n| n.get().saturating_sub(1).clamp(1, 4))
+            .unwrap_or(2)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        1
+    }
+}
+
+/// Persisted experiment-execution settings (`settings.json` key
+/// `experiments`). Owned here, the feature that consumes it.
+#[derive(Resource, Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
+pub struct ExperimentSettings {
+    /// Max Fast Runs allowed to execute concurrently. `None` (or `0`) means
+    /// "auto" — the platform default ([`default_max_parallel`]). A user
+    /// value is clamped to at least 1. Kept conservative by default because
+    /// each concurrent run holds a full DAE + result buffer and (cache-cold)
+    /// a rumoca compile; raise it to use more cores.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_parallel: Option<usize>,
+}
+
+impl SettingsSection for ExperimentSettings {
+    const KEY: &'static str = "experiments";
+}
+
+impl ExperimentSettings {
+    /// Resolve to a concrete cap: the user value (clamped ≥1) when set and
+    /// non-zero, else the platform default.
+    pub fn resolved_max_parallel(&self) -> usize {
+        match self.max_parallel {
+            Some(n) if n >= 1 => n,
+            _ => default_max_parallel(),
+        }
+    }
+}
+
+/// Push the persisted `experiments.max_parallel` into the live runner.
+/// Change-driven: `is_changed()` is true on the frame the section is first
+/// inserted (so this also applies the on-disk value at startup) and again
+/// whenever the settings UI edits it. Per the lazy-systems convention it
+/// bails when the section hasn't changed.
+pub fn apply_experiment_settings(
+    settings: Res<ExperimentSettings>,
+    runner: Res<crate::ModelicaRunnerResource>,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+    let n = settings.resolved_max_parallel();
+    runner.0.set_max_parallel(n);
+    bevy::log::info!("[experiments] max parallel runs = {n}");
+}
+
+/// A run snapshotted and waiting for (or being handed) a scheduler slot.
+/// Captures everything `run_inner` / the worker dispatch needs so a
+/// queued run can start later without re-touching the experiment record.
+struct QueuedJob {
+    run_id: ExperimentId,
+    model_ref: ModelRef,
+    overrides: BTreeMap<ParamPath, ParamValue>,
+    inputs: BTreeMap<ParamPath, ParamValue>,
+    bounds: RunBounds,
+    /// Update channel the `RunHandle` consumer drains. Created in
+    /// `run_fast` so a queued handle is valid before the job starts.
+    tx: Sender<RunUpdate>,
+    /// Per-run cancel flag. Set true by the handle's cancel hook; checked
+    /// at start (queued-cancel) and between solver steps (in-flight).
+    cancel: Arc<AtomicBool>,
+}
+
 /// Native + wasm-shared runner state. Stores the latest model source +
 /// annotation defaults the UI provides, so `run_fast` can recompile
 /// without round-tripping through the editor.
-#[derive(Default)]
 struct RunnerState {
     sources: BTreeMap<ModelRef, ModelSource>,
     defaults: BTreeMap<ModelRef, ModelDefaults>,
-    /// Currently-executing run id. Some(id) means a Fast Run is in
-    /// flight; subsequent run_fast calls fail-fast in v1 (no internal
-    /// queue — caller-side queueing handled by the panel).
-    busy_with: Option<ExperimentId>,
+    /// Max concurrently-executing runs. `run_fast` starts a run
+    /// immediately while `in_flight.len() < max_parallel`, else queues it.
+    max_parallel: usize,
+    /// Run ids currently executing (native: a live thread; wasm: dispatched
+    /// to the worker). A run leaves this set on its terminal update.
+    in_flight: HashSet<ExperimentId>,
+    /// FIFO of runs waiting for a slot. Drained by `pump_scheduler` as
+    /// in-flight runs finish.
+    pending: VecDeque<QueuedJob>,
     /// Compile-once cache: `dae_cache_key(source, after_inputs)` → compiled
     /// DAE. A parameter sweep reuses one rumoca compile and applies overrides
     /// at the DAE level. Cleared when a model's source actually changes.
     dae_cache: HashMap<u64, Arc<Dae>>,
 }
 
-/// Runner state shared between the trait wrapper and the worker
-/// thread. The cancel flag is per-run, swapped on each `run_fast`.
+impl Default for RunnerState {
+    fn default() -> Self {
+        Self {
+            sources: BTreeMap::new(),
+            defaults: BTreeMap::new(),
+            max_parallel: default_max_parallel(),
+            in_flight: HashSet::new(),
+            pending: VecDeque::new(),
+            dae_cache: HashMap::new(),
+        }
+    }
+}
+
+/// Runner state shared between the trait wrapper and the worker thread.
+/// All concurrency bookkeeping lives in `state` so the scheduler can be
+/// pumped from both `run_fast` and the off-thread completion path without
+/// holding a `&ModelicaRunner`.
 pub struct ModelicaRunner {
     state: Arc<Mutex<RunnerState>>,
-    /// Cancel flag for the *currently in-flight* run, if any.
-    cancel_flag: Arc<Mutex<Option<(ExperimentId, Arc<AtomicBool>)>>>,
 }
 
 impl Default for ModelicaRunner {
@@ -104,8 +203,25 @@ impl ModelicaRunner {
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(RunnerState::default())),
-            cancel_flag: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Override the max number of concurrently-executing runs. Called by
+    /// the settings wiring (step 2) / tests. Takes effect on the next
+    /// scheduler pump — already-running runs are never preempted, and
+    /// lowering the cap below the current in-flight count simply lets
+    /// those drain before new ones start.
+    pub fn set_max_parallel(&self, n: usize) {
+        if let Ok(mut s) = self.state.lock() {
+            s.max_parallel = n.max(1);
+        }
+        // A raised cap may free slots for already-queued runs.
+        pump_scheduler(&self.state);
+    }
+
+    /// Current max-parallel cap.
+    pub fn max_parallel(&self) -> usize {
+        self.state.lock().map(|s| s.max_parallel).unwrap_or(1)
     }
 
     /// Register or update the source for a model so subsequent
@@ -138,10 +254,25 @@ impl ModelicaRunner {
         }
     }
 
-    /// `true` when a Fast Run is currently in flight. UI uses this to
-    /// disable the Fast button.
+    /// `true` when no scheduler slot is free — i.e. starting another run
+    /// right now would queue rather than execute immediately. UI uses this
+    /// to reflect a saturated runner. (A click while saturated now queues
+    /// the run instead of being rejected; the "busy" state is advisory.)
     pub fn is_busy(&self) -> bool {
-        self.state.lock().map(|s| s.busy_with.is_some()).unwrap_or(false)
+        self.state
+            .lock()
+            .map(|s| s.in_flight.len() >= s.max_parallel)
+            .unwrap_or(false)
+    }
+
+    /// Number of runs currently executing.
+    pub fn in_flight_count(&self) -> usize {
+        self.state.lock().map(|s| s.in_flight.len()).unwrap_or(0)
+    }
+
+    /// Number of runs queued and waiting for a slot.
+    pub fn queued_count(&self) -> usize {
+        self.state.lock().map(|s| s.pending.len()).unwrap_or(0)
     }
 }
 
@@ -151,124 +282,42 @@ impl ExperimentRunner for ModelicaRunner {
         let cancel = Arc::new(AtomicBool::new(false));
         let run_id = exp.id;
 
-        // Mark busy. If something else is in flight, immediately fail
-        // this run with a clear message rather than queue silently —
-        // the panel knows to surface "busy" before calling.
-        let already_busy = {
-            let mut s = self.state.lock().unwrap();
-            if s.busy_with.is_some() {
-                true
-            } else {
-                s.busy_with = Some(run_id);
-                false
-            }
-        };
-        if already_busy {
-            let _ = tx.send(RunUpdate::Failed {
-                error: "another Fast Run is already in flight".to_string(),
-                partial: None,
-            });
-            return RunHandle {
-                run_id,
-                progress_rx: rx,
-                cancel: Box::new(|| {}),
-            };
-        }
-
-        // Install cancel hook for this run.
-        {
-            let mut slot = self.cancel_flag.lock().unwrap();
-            *slot = Some((run_id, cancel.clone()));
-        }
-
-        // Snapshot inputs for the worker thread.
-        let model_ref = exp.model_ref.clone();
-        let overrides = exp.overrides.clone();
-        let inputs = exp.inputs.clone();
-        let bounds = exp.bounds.clone();
-        let state = self.state.clone();
-        let busy_clear = self.state.clone();
-
-        // wasm: dispatch to the Web Worker via worker_transport.
-        // Native: spawn a std::thread and run inline.
+        // Cancel hook: flip the per-run flag (honored at start for a still
+        // -queued run, and between solver steps once running). On wasm also
+        // tell the worker so an in-flight run stops promptly.
+        let cancel_for_hook = cancel.clone();
         #[cfg(target_arch = "wasm32")]
-        {
-            // Resolve source on the main thread (worker has no
-            // editor-state access).
-            let source_snapshot = state
-                .lock()
-                .ok()
-                .and_then(|s| s.sources.get(&model_ref).cloned());
-            let cancel_for_handle = run_id;
-            let cancel_hook = Box::new(move || {
-                crate::worker_transport::dispatch_cancel_run(cancel_for_handle);
-            });
-            match source_snapshot {
-                Some(src) => {
-                    // Forward updates from the dispatch tx (registered with
-                    // worker_transport) into our local tx + clear busy on
-                    // terminal.
-                    let (forward_tx, forward_rx) = unbounded::<RunUpdate>();
-                    crate::worker_transport::register_run_sender(run_id, forward_tx);
-                    // Pump in a background task — wasm is single-threaded
-                    // but the receiver is drained via spawn_local-friendly
-                    // poll. v1: use a Bevy system to forward updates.
-                    // Here we let the panel's drain_run_updates system
-                    // consume the rx instead of bouncing through tx —
-                    // expose the rx via a side channel:
-                    spawn_forwarder(run_id, forward_rx, tx, busy_clear);
-                    let dispatched = crate::worker_transport::dispatch_run_fast(
-                        run_id,
-                        src.model_name,
-                        src.source,
-                        src.filename,
-                        src.extras,
-                        overrides,
-                        inputs,
-                        bounds,
-                    );
-                    if !dispatched {
-                        // Fall back: no worker — fail the run.
-                        if let Ok(mut s) = state.lock() {
-                            s.busy_with = None;
-                        }
-                    }
-                }
-                None => {
-                    let _ = tx.send(RunUpdate::Failed {
-                        error: format!("no source registered for model {}", model_ref.0),
-                        partial: None,
-                    });
-                    if let Ok(mut s) = state.lock() {
-                        s.busy_with = None;
-                    }
-                }
-            }
-            return RunHandle {
-                run_id,
-                progress_rx: rx,
-                cancel: cancel_hook,
-            };
-        }
-
+        let cancel_hook: Box<dyn Fn() + Send + Sync> = Box::new(move || {
+            cancel_for_hook.store(true, Ordering::SeqCst);
+            crate::worker_transport::dispatch_cancel_run(run_id);
+        });
         #[cfg(not(target_arch = "wasm32"))]
+        let cancel_hook: Box<dyn Fn() + Send + Sync> = Box::new(move || {
+            cancel_for_hook.store(true, Ordering::SeqCst);
+        });
+
+        // Enqueue the snapshotted job, then start as many as slots allow.
+        // A queued run sits silent (no updates) until a slot frees — its
+        // registry status stays `Pending`, which already reads as "queued"
+        // in the panel.
         {
-            let cancel_for_handle = cancel.clone();
-            let cancel_hook = Box::new(move || {
-                cancel_for_handle.store(true, Ordering::SeqCst);
-            });
-            let _ = run_id;
-            std::thread::spawn(move || {
-                run_inner(state, model_ref, overrides, inputs, bounds, cancel, tx);
-                if let Ok(mut s) = busy_clear.lock() {
-                    s.busy_with = None;
-                }
-            });
-            RunHandle {
+            let mut s = self.state.lock().unwrap();
+            s.pending.push_back(QueuedJob {
                 run_id,
-                progress_rx: rx,
-                cancel: cancel_hook,
-            }
+                model_ref: exp.model_ref.clone(),
+                overrides: exp.overrides.clone(),
+                inputs: exp.inputs.clone(),
+                bounds: exp.bounds.clone(),
+                tx,
+                cancel,
+            });
+        }
+        pump_scheduler(&self.state);
+
+        RunHandle {
+            run_id,
+            progress_rx: rx,
+            cancel: cancel_hook,
         }
     }
 
@@ -293,6 +342,133 @@ impl ExperimentRunner for ModelicaRunner {
             solver: d.solver.clone(),
             h0: None,
         })
+    }
+}
+
+/// Start as many queued runs as there are free scheduler slots. Called
+/// after enqueuing in `run_fast`, after a run finishes (`finish_run`), and
+/// when the cap is raised. Each started run is moved into `in_flight` and
+/// handed to the platform `start_job`. Safe to call redundantly — it's a
+/// no-op when no slot is free or the queue is empty.
+///
+/// Locking: only the brief pop/insert critical section holds the state
+/// lock; `start_job` runs outside it (it spawns a thread / posts to the
+/// worker), so a finishing run re-entering via `finish_run` never deadlocks.
+fn pump_scheduler(state: &Arc<Mutex<RunnerState>>) {
+    loop {
+        let job = {
+            let mut s = match state.lock() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            if s.in_flight.len() >= s.max_parallel {
+                return;
+            }
+            match s.pending.pop_front() {
+                Some(j) => {
+                    s.in_flight.insert(j.run_id);
+                    j
+                }
+                None => return,
+            }
+        };
+        start_job(state.clone(), job);
+    }
+}
+
+/// Mark a run as no longer in flight and pump the queue so the freed slot
+/// is filled. Called from the off-thread completion path (native thread
+/// end; wasm forwarder on terminal update).
+fn finish_run(state: &Arc<Mutex<RunnerState>>, run_id: ExperimentId) {
+    if let Ok(mut s) = state.lock() {
+        s.in_flight.remove(&run_id);
+    }
+    pump_scheduler(state);
+}
+
+/// Begin executing one already-slotted job. Native: spawn a thread running
+/// `run_inner`, calling `finish_run` when it returns. The thread-per-run
+/// model gives each run fresh rumoca `thread_local` caches; the scheduler
+/// caps live threads at `max_parallel`.
+#[cfg(not(target_arch = "wasm32"))]
+fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
+    let QueuedJob {
+        run_id,
+        model_ref,
+        overrides,
+        inputs,
+        bounds,
+        tx,
+        cancel,
+    } = job;
+    // Queued-cancel: if the run was cancelled before a slot freed, finish
+    // it immediately without compiling.
+    if cancel.load(Ordering::SeqCst) {
+        let _ = tx.send(RunUpdate::Cancelled);
+        finish_run(&state, run_id);
+        return;
+    }
+    let state_for_thread = state.clone();
+    std::thread::spawn(move || {
+        run_inner(state_for_thread.clone(), model_ref, overrides, inputs, bounds, cancel, tx);
+        finish_run(&state_for_thread, run_id);
+    });
+}
+
+/// Begin executing one already-slotted job. Wasm: resolve the source on the
+/// main thread and dispatch to the Web Worker; the forwarder relays updates
+/// and calls `finish_run` on the terminal one. (Today there is a single
+/// worker, so `max_parallel` is 1 and these serialize; the worker pool in
+/// step 3 raises the cap.)
+#[cfg(target_arch = "wasm32")]
+fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
+    let QueuedJob {
+        run_id,
+        model_ref,
+        overrides,
+        inputs,
+        bounds,
+        tx,
+        cancel,
+    } = job;
+    if cancel.load(Ordering::SeqCst) {
+        let _ = tx.send(RunUpdate::Cancelled);
+        finish_run(&state, run_id);
+        return;
+    }
+    let source_snapshot = state
+        .lock()
+        .ok()
+        .and_then(|s| s.sources.get(&model_ref).cloned());
+    let src = match source_snapshot {
+        Some(src) => src,
+        None => {
+            let _ = tx.send(RunUpdate::Failed {
+                error: format!("no source registered for model {}", model_ref.0),
+                partial: None,
+            });
+            finish_run(&state, run_id);
+            return;
+        }
+    };
+    // Forward worker updates into the handle's tx; the forwarder frees the
+    // slot via `finish_run` when a terminal update arrives.
+    let (forward_tx, forward_rx) = unbounded::<RunUpdate>();
+    crate::worker_transport::register_run_sender(run_id, forward_tx);
+    spawn_forwarder(run_id, forward_rx, tx, state.clone());
+    let dispatched = crate::worker_transport::dispatch_run_fast(
+        run_id,
+        src.model_name,
+        src.source,
+        src.filename,
+        src.extras,
+        overrides,
+        inputs,
+        bounds,
+    );
+    if !dispatched {
+        // No worker installed — free the slot so the queue isn't stuck.
+        finish_run(&state, run_id);
     }
 }
 
@@ -333,31 +509,36 @@ fn wasm_forwarders() -> &'static Mutex<Vec<WasmForwarder>> {
 /// removes the forwarder when a terminal update arrives.
 #[cfg(target_arch = "wasm32")]
 pub fn pump_wasm_forwarders() {
-    let mut slot = wasm_forwarders().lock().unwrap();
-    let mut keep = Vec::with_capacity(slot.len());
-    for fwd in slot.drain(..) {
-        let mut terminal = false;
-        while let Ok(update) = fwd.forward_rx.try_recv() {
-            let is_term = matches!(
-                update,
-                RunUpdate::Completed(_) | RunUpdate::Failed { .. } | RunUpdate::Cancelled
-            );
-            let _ = fwd.tx.send(update);
-            if is_term {
-                terminal = true;
-            }
-        }
-        if terminal {
-            if let Ok(mut s) = fwd.state.lock() {
-                if s.busy_with == Some(fwd.run_id) {
-                    s.busy_with = None;
+    // Collect terminal runs while holding the forwarders lock, then release
+    // it before calling `finish_run` — that path re-enters the scheduler and
+    // may push a new forwarder, which would deadlock under the same lock.
+    let mut terminated: Vec<(Arc<Mutex<RunnerState>>, ExperimentId)> = Vec::new();
+    {
+        let mut slot = wasm_forwarders().lock().unwrap();
+        let mut keep = Vec::with_capacity(slot.len());
+        for fwd in slot.drain(..) {
+            let mut terminal = false;
+            while let Ok(update) = fwd.forward_rx.try_recv() {
+                let is_term = matches!(
+                    update,
+                    RunUpdate::Completed(_) | RunUpdate::Failed { .. } | RunUpdate::Cancelled
+                );
+                let _ = fwd.tx.send(update);
+                if is_term {
+                    terminal = true;
                 }
             }
-        } else {
-            keep.push(fwd);
+            if terminal {
+                terminated.push((fwd.state.clone(), fwd.run_id));
+            } else {
+                keep.push(fwd);
+            }
         }
+        *slot = keep;
     }
-    *slot = keep;
+    for (state, run_id) in terminated {
+        finish_run(&state, run_id);
+    }
 }
 
 /// Body of the run thread. Compiles, runs the simulation, posts
@@ -991,27 +1172,28 @@ fn format_literal(v: &ParamValue) -> String {
     }
 }
 
-/// Find `parameter ... <name> = <literal>;` and substitute the literal.
+/// Find `parameter ... <name> [(modifiers)] = <literal>;` and substitute
+/// the literal.
 ///
-/// We can't use a full Modelica parser here without re-flattening,
-/// which defeats the point. The regex tolerates whitespace and
-/// modifiers (`final`, `each`, attribute clauses) and stops at the
-/// first `=` followed by a literal up to `;` or `,`.
+/// We can't use a full Modelica parser here without re-flattening, which
+/// defeats the point. So we anchor a loose regex on the declaration up to
+/// the parameter name, then scan forward tracking bracket depth to find the
+/// declaration's *own* `=` (the first `=` at depth 0) and the terminating
+/// `;`/`,`. Tracking depth is what lets a value-modifier such as
+/// `g(unit="m/s2") = 9.81` keep its `unit="m/s2"` — the `=` inside the
+/// parentheses is at depth 1 and correctly skipped (a plain `[^=;]*=` regex
+/// would wrongly match that inner `=` and clobber the modifier).
 fn replace_param_literal(
     source: &str,
     name: &str,
     new_literal: &str,
 ) -> Result<String, String> {
-    // Build a regex that matches:
-    //   parameter [final] [each] <type-and-modifiers> <name> [(...)] = <literal>
-    // and captures the literal so we can replace just that span.
-    //
-    // The literal capture is anything up to the next comma or
-    // semicolon at the same nesting level. To keep this simple in v1
-    // we scan manually rather than relying on regex backrefs.
+    // Anchor on `parameter [final] [each] <type…> <name>` only — do NOT let
+    // the regex consume the `=`, since the binding `=` must be located by
+    // the depth-aware scan below.
     let escaped = regex::escape(name);
     let re = regex::Regex::new(&format!(
-        r"(?m)\bparameter\b[^;]*?\b{}\b[^=;]*=\s*",
+        r"(?m)\bparameter\b[^;]*?\b{}\b",
         escaped
     ))
     .map_err(|e| format!("override regex build failed: {e}"))?;
@@ -1024,28 +1206,46 @@ fn replace_param_literal(
             ));
         }
     };
-    let head_end = mat.end(); // position right after `=` whitespace
-    // Find end of literal: nearest top-level `;` or `,`. v1 doesn't
-    // support nested arrays/records in overrides, so a naive scan is
-    // fine.
-    let tail = &source[head_end..];
+    // Scan from just after the name for the declaration's `=` and end.
+    let scan_start = mat.end();
+    let tail = &source[scan_start..];
     let mut depth: i32 = 0;
-    let mut end_off = tail.len();
+    let mut eq_off: Option<usize> = None;
+    let mut end_off: Option<usize> = None;
     for (i, ch) in tail.char_indices() {
         match ch {
             '{' | '(' | '[' => depth += 1,
             '}' | ')' | ']' => depth -= 1,
+            '=' if depth == 0 && eq_off.is_none() => eq_off = Some(i),
             ';' | ',' if depth == 0 => {
-                end_off = i;
+                end_off = Some(i);
                 break;
             }
             _ => {}
         }
     }
-    let mut out = String::with_capacity(source.len() + new_literal.len());
-    out.push_str(&source[..head_end]);
+    let end_off = end_off.unwrap_or(tail.len());
+    let eq_off = match eq_off {
+        Some(e) if e < end_off => e,
+        // No top-level `=` before the terminator → no literal binding to
+        // replace (expression-bound / no default). Same v1 limitation as
+        // the UI detector flags.
+        _ => {
+            return Err(format!(
+                "parameter '{name}' has no literal default binding — \
+                 override unsupported in v1"
+            ));
+        }
+    };
+    // Replace the span after the `=` (the value) with ` <literal>`, keeping
+    // everything up to and including the `=` and the terminator onward.
+    let value_start = scan_start + eq_off + 1; // byte right after `=`
+    let value_end = scan_start + end_off;
+    let mut out = String::with_capacity(source.len() + new_literal.len() + 1);
+    out.push_str(&source[..value_start]);
+    out.push(' ');
     out.push_str(new_literal);
-    out.push_str(&source[head_end + end_off..]);
+    out.push_str(&source[value_end..]);
     Ok(out)
 }
 
@@ -1362,5 +1562,100 @@ mod tests {
         assert_eq!(format_literal(&ParamValue::Int(7)), "7");
         assert_eq!(format_literal(&ParamValue::Bool(true)), "true");
         assert_eq!(format_literal(&ParamValue::Real(3.0)), "3.0");
+    }
+
+    // ── Step 2: settings / cap resolution ──
+
+    #[test]
+    fn default_max_parallel_is_at_least_one() {
+        assert!(default_max_parallel() >= 1);
+    }
+
+    #[test]
+    fn resolved_max_parallel_honours_setting_and_falls_back() {
+        assert_eq!(
+            ExperimentSettings { max_parallel: Some(3) }.resolved_max_parallel(),
+            3
+        );
+        assert_eq!(
+            ExperimentSettings { max_parallel: Some(1) }.resolved_max_parallel(),
+            1
+        );
+        // None and the 0 sentinel both fall back to the platform auto
+        // default, which is always a valid (≥1) cap.
+        assert!(ExperimentSettings { max_parallel: None }.resolved_max_parallel() >= 1);
+        assert!(ExperimentSettings { max_parallel: Some(0) }.resolved_max_parallel() >= 1);
+    }
+
+    #[test]
+    fn set_max_parallel_floors_at_one() {
+        let r = ModelicaRunner::new();
+        r.set_max_parallel(0);
+        assert_eq!(r.max_parallel(), 1, "cap must never drop below 1");
+        r.set_max_parallel(4);
+        assert_eq!(r.max_parallel(), 4);
+    }
+
+    // ── Step 1: bounded scheduler ──
+
+    fn mint_exp(reg: &mut ExperimentRegistry, model: &str) -> Experiment {
+        let id = reg.insert_new(
+            lunco_experiments::TwinId("test-twin".into()),
+            ModelRef(model.into()),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            RunBounds::default(),
+        );
+        reg.get(id).cloned().expect("just inserted")
+    }
+
+    /// Submitting more runs than `max_parallel` must NOT reject the extras
+    /// (the old busy-gate behaviour) — they queue and drain as slots free,
+    /// every run reaching a terminal update, and the scheduler settling
+    /// back to empty. Runs target a model with no registered source, so
+    /// each fails fast in `run_inner` without invoking the compiler.
+    #[test]
+    fn scheduler_queues_beyond_cap_and_drains_all() {
+        use std::time::Duration;
+
+        let runner = ModelicaRunner::new();
+        runner.set_max_parallel(2);
+
+        let mut reg = ExperimentRegistry::new();
+        let mut handles = Vec::new();
+        for _ in 0..5 {
+            let exp = mint_exp(&mut reg, "NoSuchModel");
+            handles.push(runner.run_fast(&exp));
+        }
+
+        // Every submitted run must terminate (none rejected).
+        let mut terminal = 0usize;
+        for h in &handles {
+            loop {
+                match h.progress_rx.recv_timeout(Duration::from_secs(5)) {
+                    Ok(RunUpdate::Failed { .. })
+                    | Ok(RunUpdate::Completed(_))
+                    | Ok(RunUpdate::Cancelled) => {
+                        terminal += 1;
+                        break;
+                    }
+                    Ok(RunUpdate::Progress { .. }) => continue,
+                    Err(_) => break, // timed out / disconnected
+                }
+            }
+        }
+        assert_eq!(terminal, 5, "all queued runs should run and terminate");
+
+        // The last run's `finish_run` may lag its terminal update slightly
+        // (it runs after the worker thread sends Failed). Allow it to settle.
+        let mut settled = false;
+        for _ in 0..100 {
+            if runner.in_flight_count() == 0 && runner.queued_count() == 0 {
+                settled = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(settled, "scheduler should drain to empty after all runs end");
     }
 }

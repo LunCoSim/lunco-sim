@@ -1000,7 +1000,18 @@ fn build_modelica_core(app: &mut App) {
     app.init_resource::<experiments_runner::ExperimentDrafts>();
     app.init_resource::<experiments_runner::ExperimentSources>();
     app.init_resource::<experiments_runner::PlaybackEntities>();
-    app.add_systems(Update, experiments_runner::drain_pending_handles);
+    // Persisted concurrency cap for parallel Fast Runs (settings.json
+    // `experiments.max_parallel`; None = platform auto). The apply system
+    // pushes it into the runner on startup and on later edits.
+    use lunco_settings::AppSettingsExt;
+    app.register_settings_section::<experiments_runner::ExperimentSettings>();
+    app.add_systems(
+        Update,
+        (
+            experiments_runner::apply_experiment_settings,
+            experiments_runner::drain_pending_handles,
+        ),
+    );
 
     // Keep the winit event loop pumping at full speed while any sim
     // is active, even when the window loses focus. Otherwise the
