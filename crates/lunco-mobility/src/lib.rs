@@ -289,7 +289,7 @@ fn apply_wheel_suspension(
 fn apply_wheel_drive(
     q_wheels: Query<(
         &WheelRaycast,
-        &GlobalTransform,
+        &Transform,
         &RayHits,
         &ChildOf,
     )>,
@@ -311,12 +311,22 @@ fn apply_wheel_drive(
                         continue;
                     }
 
-                    // Compute wheel world-space position and basis vectors from the
-                    // GlobalTransform, which already includes parent transforms.
-                    let hub_pos_world = wheel_tf.translation().as_dvec3();
-                    let wheel_rot = wheel_tf.rotation();
-                    let forward: DVec3 = wheel_rot.mul_vec3(Vec3::NEG_Z).as_dvec3();
-                    let right: DVec3 = wheel_rot.mul_vec3(Vec3::X).as_dvec3();
+                    // Reconstruct the wheel's world pose in the AVIAN physics frame
+                    // from the chassis Position/Rotation + the wheel's LOCAL transform
+                    // (exactly as `apply_wheel_suspension` does). Using `GlobalTransform`
+                    // here mixed the big_space floating-origin/render frame into avian's
+                    // cell-local frame: `forces.apply_force_at_point` and the lever arm
+                    // `hub - forces.position()` then used a point offset by the whole
+                    // origin-rebasing distance, producing spurious torque/slip once the
+                    // rover drove away from the floating origin (masked near it).
+                    // `wheel_tf.rotation` carries the steer angle (set in
+                    // `apply_wheel_steering`); roll-spin lives on the child visual, so the
+                    // drive direction stays correct.
+                    let wheel_world_rot = forces.rotation().0 * wheel_tf.rotation.as_dquat();
+                    let hub_pos_world =
+                        forces.position().0 + forces.rotation().0 * wheel_tf.translation.as_dvec3();
+                    let forward: DVec3 = wheel_world_rot * DVec3::NEG_Z;
+                    let right: DVec3 = wheel_world_rot * DVec3::X;
 
                     // --- Drive force ---
                     // Physical port value is already scaled by the wire gain.
