@@ -49,6 +49,33 @@ the active `Run`s, which reference `Scenario`s materialised from
 steps forever" is the degenerate case: one implicit Twin, one implicit
 Run, one participant — same master loop.
 
+## Control plane vs data plane
+
+The master loop is the **data plane**: it runs *directly* as `FixedUpdate`
+systems every tick (`propagate_connections`, `sync_*`, the stepper, etc.).
+It must **never** be driven through the typed-command pipeline. A command
+per tick — minting a request id, dispatching a Reflect event, recording a
+`CommandResults` outcome — would put a `HashMap` insert and an envelope in
+the hot loop for no benefit. Commands gate the run; the loop then runs free
+(the ROS/F′ shape: a Service/Action call activates a node, whose rate group
+ticks autonomously thereafter).
+
+The **control plane** is typed commands (see AGENTS.md § 4.2 and
+[`../api.md`](../api.md)). It owns discrete, occasional intents only:
+
+| Plane | Examples | Mechanism |
+|---|---|---|
+| **Control** — discrete, occasional | `LoadScene`, `CompileModel`, `RunExperiment`, Pause/Resume/Reset, time-warp | typed `#[Command]` / `TwinCommand`. May return an `Ack` ("launched"); a long-running run then reports **completion/progress via domain state** (`Run.status`, `CompileStatus`, `RunStatus`), *not* by polling `QueryCommandResult` per tick. |
+| **Data** — continuous, per-tick | the FMI master loop, the solver step, `run_scripted_models` | plain `FixedUpdate` systems. No command, no id, no result store. |
+| **Live inputs** — high-frequency, latest-wins | parameter scrubs during a run, joystick/throttle (`SetModelInput`) | the **`ControlStream`** channel ([`01-ontology.md`](01-ontology.md)), applied directly (e.g. `sim.rs::apply_set_model_input` bypasses the event bus by design). Never a pollable result-returning command. |
+
+Rule of thumb: **commands start/stop/configure a run and one-shot actions;
+the simulation runs directly once started; live continuous inputs ride
+ControlStream.** The result/requestId machinery (`QueryCommandResult`,
+`CommandResults`) stays on the discrete control surface and never enters
+the per-tick loop. Async completion of long-running runs is reported via
+domain state, so it is an explicit **non-goal** of the command-result store.
+
 ## Backend registry (dynamic, plugin-driven)
 
 Backends self-register at app boot. Each domain crate ships a Bevy
