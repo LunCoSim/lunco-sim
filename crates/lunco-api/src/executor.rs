@@ -40,6 +40,10 @@ pub struct ApiCommandEvent {
     pub command: String,
     #[reflect(ignore)]
     pub params: serde_json::Value,
+    /// Request id minted at ingress; the dispatcher sets `ActiveCommandId`
+    /// to this around the observer trigger so a result-reporting handler
+    /// records its outcome under the id the caller can poll.
+    pub id: u64,
 }
 
 /// Request to execute a script snippet.
@@ -63,6 +67,7 @@ pub fn api_request_observer(
     query_registry: Res<ApiQueryRegistry>,
     visibility: Res<ApiVisibility>,
     type_registry: Res<AppTypeRegistry>,
+    cmd_results: Res<lunco_core::CommandResults>,
     q_meta: Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
     q_cameras: Query<Entity, With<Camera3d>>,
     // World pose for QueryEntity / future telemetry. `GlobalTransform`
@@ -76,7 +81,7 @@ pub fn api_request_observer(
 
     let maybe_response = {
         let type_reg = type_registry.read();
-        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &visibility, &type_reg, &q_meta, &q_cameras, &q_transforms, correlation_id)
+        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &visibility, &type_reg, &cmd_results, &q_meta, &q_cameras, &q_transforms, correlation_id)
     };
 
     // None means the response is deferred (e.g. waiting for ScreenshotCaptured).
@@ -126,18 +131,25 @@ pub fn api_command_dispatcher(
         Ok(_reflected) => {
             // 4. Trigger the event dynamically via commands.queue to access World
             let cmd_name = event.command.clone();
-            
+            let cmd_id = event.id;
+
             commands.queue(move |world: &mut World| {
                 let registry = world.resource::<AppTypeRegistry>().clone();
                 let type_reg = registry.read();
-                
+
                 let Some(registration) = type_reg.get_with_short_type_path(&cmd_name) else { return };
                 let Some(reflect_event) = registration.data::<bevy::ecs::reflect::ReflectEvent>() else { return };
-                
+
                 // Re-deserialize inside the world queue where we have access to everything
                 let reflect_deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
                 if let Ok(reflected) = reflect_deserializer.deserialize(resolved_params) {
+                    // Scope the active request id around the trigger so a
+                    // result-reporting `#[on_command]` wrapper records its
+                    // outcome under this id. Observers run synchronously
+                    // inside `trigger`, so set-before / clear-after is sound.
+                    world.resource_mut::<lunco_core::ActiveCommandId>().set(Some(cmd_id));
                     reflect_event.trigger(world, reflected.as_ref(), &type_reg);
+                    world.resource_mut::<lunco_core::ActiveCommandId>().set(None);
                 }
             });
         },
@@ -233,6 +245,7 @@ fn execute_request(
     query_registry: &ApiQueryRegistry,
     visibility: &ApiVisibility,
     type_registry: &TypeRegistry,
+    cmd_results: &lunco_core::CommandResults,
     q_meta: &Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
     _q_cameras: &Query<Entity, With<Camera3d>>,
     q_transforms: &Query<&GlobalTransform>,
@@ -325,6 +338,7 @@ fn execute_request(
             commands.trigger(ApiCommandEvent {
                 command: command.clone(),
                 params: params.clone(),
+                id: command_id,
             });
 
             Some(ApiResponse::command_accepted(command_id))
@@ -381,6 +395,16 @@ fn execute_request(
         ApiRequest::SubscribeTelemetry { filter: _ } => {
             Some(ApiResponse::ok(serde_json::json!({ "message": "Subscription created" })))
         }
+        ApiRequest::QueryCommandResult { id } => {
+            // `outcome: null` means no result recorded for this id — either a
+            // bad id, or a fire-and-forget command whose handler reports no
+            // outcome. Callers that need a result use result-reporting commands.
+            let outcome = cmd_results.get(*id);
+            Some(ApiResponse::ok(serde_json::json!({
+                "id": id,
+                "outcome": outcome,
+            })))
+        }
     }
 }
 
@@ -404,6 +428,11 @@ impl Plugin for ApiExecutorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ApiIdCounter>()
             .init_resource::<PendingScreenshotRequest>()
+            // Command-result store + active-id scope. Also init'd by
+            // lunco-core; idempotent, kept here so the API plugin is
+            // self-contained (the executor reads CommandResults as a Res).
+            .init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
             .add_observer(api_request_observer)
             .add_observer(api_command_dispatcher)
             .add_observer(save_screenshot);
@@ -446,6 +475,9 @@ fn save_screenshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_core::{
+        on_command, ActiveCommandId, Ack, Command, CommandOutcome, CommandResults, OpId,
+    };
 
     #[test]
     fn test_command_id_generation() {
@@ -453,5 +485,50 @@ mod tests {
         assert_eq!(counter.next(), 0);
         assert_eq!(counter.next(), 1);
         assert_eq!(counter.next(), 2);
+    }
+
+    // A result-reporting command: `Ok` → Succeeded, `Err` → Failed.
+    #[Command(default)]
+    struct TestEcho {
+        pub fail: bool,
+    }
+
+    #[on_command(TestEcho)]
+    fn on_test_echo(_t: On<TestEcho>) -> Result<Ack, String> {
+        if cmd.fail {
+            Err("boom".into())
+        } else {
+            Ok(Ack::new(OpId::new()))
+        }
+    }
+
+    #[test]
+    fn result_handler_records_outcome_under_active_id() {
+        let mut app = App::new();
+        app.init_resource::<CommandResults>()
+            .init_resource::<ActiveCommandId>();
+        __register_on_test_echo(&mut app);
+
+        // Success path, id scoped → recorded as Succeeded.
+        app.world_mut().resource_mut::<ActiveCommandId>().set(Some(7));
+        app.world_mut().trigger(TestEcho { fail: false });
+        app.world_mut().resource_mut::<ActiveCommandId>().set(None);
+        assert!(matches!(
+            app.world().resource::<CommandResults>().get(7),
+            Some(CommandOutcome::Succeeded(_))
+        ));
+
+        // Failure path → recorded as Failed (ran-and-errored, not Rejected).
+        app.world_mut().resource_mut::<ActiveCommandId>().set(Some(8));
+        app.world_mut().trigger(TestEcho { fail: true });
+        app.world_mut().resource_mut::<ActiveCommandId>().set(None);
+        assert!(matches!(
+            app.world().resource::<CommandResults>().get(8),
+            Some(CommandOutcome::Failed(_))
+        ));
+
+        // No active id (in-process trigger) → nothing recorded.
+        app.world_mut().trigger(TestEcho { fail: false });
+        assert!(app.world().resource::<CommandResults>().get(99).is_none());
     }
 }

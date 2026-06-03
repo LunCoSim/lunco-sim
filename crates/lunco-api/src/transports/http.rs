@@ -82,6 +82,9 @@ impl From<ApiRequestUnified> for ApiRequest {
                 language: env.language.unwrap_or_default(),
                 code: env.code.unwrap_or_default(),
             },
+            Some("QueryCommandResult") => ApiRequest::QueryCommandResult {
+                id: env.id.unwrap_or_default().parse().unwrap_or(0),
+            },
             Some("SubscribeTelemetry") => ApiRequest::SubscribeTelemetry {
                 filter: env.filter.and_then(|v| serde_json::from_value(v).ok()),
             },

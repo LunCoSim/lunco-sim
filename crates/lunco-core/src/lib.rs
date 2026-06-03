@@ -42,7 +42,10 @@ pub use architecture::*;
 pub use mocks::*;
 pub use telemetry::*;
 pub use log::*;
-pub use commands::{Ack, Mutation, OpId, Reject, SessionId, WireChannel};
+pub use commands::{
+    Ack, ActiveCommandId, CommandOutcome, CommandResults, Mutation, OpId, Reject, SessionId,
+    WireChannel,
+};
 pub use markers::{GridAnchor, SoiMigrant};
 pub use invariants::BigSpaceInvariantsPlugin;
 pub use identity::Provenance;
@@ -382,7 +385,12 @@ pub(crate) fn register_core_resources(app: &mut App) {
         // lunco-controller observers read/write these every frame whether
         // or not the optional networking wire is present.
         .init_resource::<session::OwnedInputLog>()
-        .init_resource::<session::AppliedInputSeq>();
+        .init_resource::<session::AppliedInputSeq>()
+        // Command-result substrate: result-reporting `#[on_command]` observers
+        // require these to exist (same always-on rule as the session resources
+        // above — see the AppliedInputSeq fix).
+        .init_resource::<CommandResults>()
+        .init_resource::<ActiveCommandId>();
 }
 
 /// Advance the discrete [`SimTick`] once per fixed step, *only while physics is

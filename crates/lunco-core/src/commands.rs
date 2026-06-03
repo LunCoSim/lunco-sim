@@ -28,7 +28,9 @@
 //!   retry, or surface to the user.
 
 use crate::ids::make_id_53;
+use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
 /// Identity of a single command invocation. Same 53-bit time-sorted
@@ -262,3 +264,96 @@ impl fmt::Display for Reject {
 }
 
 impl std::error::Error for Reject {}
+
+// ── Command outcomes (pollable results) ────────────────────────────────────
+//
+// A command invoked through a transport (HTTP API, MCP, future wire) gets a
+// request id and, if its observer reports one, a terminal outcome the caller
+// can poll for. This is the deliberately-minimal model: robotics practice
+// (F′ response codes, MAVLink `COMMAND_ACK`, behaviour-tree SUCCESS/FAILURE/
+// RUNNING) converges on *one result code + an in-progress state*, not XTCE's
+// multi-stage ground-verification pipeline. Richer lifecycles (queued,
+// progress, cancel) stay as per-domain state where they already live
+// (e.g. experiments' `RunStatus`), not promoted into this substrate.
+//
+// Distinctions kept (and only these):
+// - `Rejected` (never ran — validation/auth/dedup) vs `Failed` (ran, errored):
+//   the caller reverts an optimistic edit on `Rejected`, not on `Failed`
+//   (MAVLink's `DENIED` vs `FAILED`).
+// - `Pending`: accepted, terminal not yet known (async/long-running). MVP
+//   handlers are synchronous and never leave a result `Pending`.
+
+/// Terminal (or in-flight) state of a command invocation, keyed by request id.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum CommandOutcome {
+    /// Accepted; the observer hasn't reported a terminal state yet.
+    Pending,
+    /// Ran successfully; carries the [`Ack`] (new generation, assigned values).
+    Succeeded(Ack),
+    /// Never ran — rejected before/at validation. Client should revert.
+    Rejected(Reject),
+    /// Ran and errored. Client should not revert.
+    Failed(String),
+}
+
+/// Maximum retained outcomes; oldest are evicted FIFO. A simple cap (not a
+/// wall-clock TTL) avoids `Instant`/time on wasm and keeps the store bounded.
+const MAX_COMMAND_RESULTS: usize = 1024;
+
+/// Pollable store of command outcomes, keyed by the transport's request id
+/// (the `command_id` the API mints). Always-on substrate — initialised by
+/// `register_core_resources` so result-reporting observers can't panic on a
+/// missing resource. Transports read it via a `QueryCommandResult`-style
+/// request; observers write it through the `#[on_command]`-generated wrapper.
+#[derive(Resource, Default)]
+pub struct CommandResults {
+    map: HashMap<u64, CommandOutcome>,
+    order: VecDeque<u64>,
+}
+
+impl CommandResults {
+    /// Insert or overwrite an outcome, evicting the oldest entries past the cap.
+    pub fn insert(&mut self, id: u64, outcome: CommandOutcome) {
+        if !self.map.contains_key(&id) {
+            self.order.push_back(id);
+        }
+        self.map.insert(id, outcome);
+        while self.order.len() > MAX_COMMAND_RESULTS {
+            if let Some(old) = self.order.pop_front() {
+                self.map.remove(&old);
+            }
+        }
+    }
+
+    /// Record a handler's `Result<Ack, String>` as a terminal outcome.
+    /// `Ok` → [`CommandOutcome::Succeeded`], `Err` → [`CommandOutcome::Failed`]
+    /// (a handler that ran and errored — not a pre-execution `Rejected`).
+    pub fn record(&mut self, id: u64, result: Result<Ack, String>) {
+        let outcome = match result {
+            Ok(ack) => CommandOutcome::Succeeded(ack),
+            Err(msg) => CommandOutcome::Failed(msg),
+        };
+        self.insert(id, outcome);
+    }
+
+    pub fn get(&self, id: u64) -> Option<&CommandOutcome> {
+        self.map.get(&id)
+    }
+}
+
+/// The request id of the command currently being dispatched, set by the
+/// transport dispatcher immediately around the observer trigger so the
+/// `#[on_command]` wrapper can record its outcome under the right id.
+/// `None` for in-process triggers (UI `commands.trigger`) — those aren't
+/// polled, so their result handlers simply don't record.
+#[derive(Resource, Default)]
+pub struct ActiveCommandId(Option<u64>);
+
+impl ActiveCommandId {
+    pub fn get(&self) -> Option<u64> {
+        self.0
+    }
+    pub fn set(&mut self, id: Option<u64>) {
+        self.0 = id;
+    }
+}

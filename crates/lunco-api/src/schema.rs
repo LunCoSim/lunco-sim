@@ -38,6 +38,9 @@ pub enum ApiRequest {
     ListEntities,
     DiscoverSchema,
     SubscribeTelemetry { filter: Option<TelemetryFilter> },
+    /// Poll the outcome of a previously-accepted command by its
+    /// `command_id` (the request id returned in `command_accepted`).
+    QueryCommandResult { id: u64 },
 }
 
 /// Response status codes for API errors.

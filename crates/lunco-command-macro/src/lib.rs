@@ -192,6 +192,43 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
         fn_name.span(),
     );
 
+    // A handler with a return type (`-> Result<Ack, String>`) opts into
+    // result recording: the wrapper runs the body, then — if a transport
+    // set the active request id — records the outcome in `CommandResults`.
+    // Void handlers (the common, fire-and-forget case) keep the lean
+    // passthrough wrapper with no extra params or resource access.
+    let returns_result = !matches!(func.sig.output, syn::ReturnType::Default);
+
+    let observer_fn = if returns_result {
+        quote! {
+            /// Observer function for `#cmd_type` (records its outcome).
+            #fn_vis fn #fn_name(
+                trigger: bevy::prelude::On<#cmd_type>,
+                #(#existing_params,)*
+                mut __lunco_cmd_results: bevy::prelude::ResMut<::lunco_core::CommandResults>,
+                __lunco_active_id: bevy::prelude::Res<::lunco_core::ActiveCommandId>,
+            ) {
+                let cmd = trigger.event();
+                let __lunco_outcome: ::core::result::Result<::lunco_core::Ack, ::std::string::String> =
+                    (|| #fn_body)();
+                if let Some(__id) = __lunco_active_id.get() {
+                    __lunco_cmd_results.record(__id, __lunco_outcome);
+                }
+            }
+        }
+    } else {
+        quote! {
+            /// Observer function for `#cmd_type`.
+            #fn_vis fn #fn_name(
+                trigger: bevy::prelude::On<#cmd_type>,
+                #(#existing_params),*
+            ) {
+                let cmd = trigger.event();
+                #fn_body
+            }
+        }
+    };
+
     let expanded = quote! {
         /// Generated registration function — call via `register_commands!`.
         #fn_vis fn #register_fn_name(app: &mut bevy::prelude::App) {
@@ -199,14 +236,7 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
             app.add_observer(#fn_name);
         }
 
-        /// Observer function for `#cmd_type`.
-        #fn_vis fn #fn_name(
-            trigger: bevy::prelude::On<#cmd_type>,
-            #(#existing_params),*
-        ) {
-            let cmd = trigger.event();
-            #fn_body
-        }
+        #observer_fn
     };
 
     TokenStream::from(expanded)
