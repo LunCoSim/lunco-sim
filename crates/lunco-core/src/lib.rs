@@ -344,20 +344,43 @@ impl Plugin for LunCoCorePlugin {
            .register_type::<ActionStatus>()
            .register_type::<GlobalEntityId>()
            .register_type::<Provenance>()
-           .register_type::<SimTick>()
-           .init_resource::<SimTick>()
-           .init_resource::<IsServer>()
-           .init_resource::<session::NetworkRole>()
-           .init_resource::<session::LocalSession>()
-           .init_resource::<session::WireApplyGuard>()
-           .init_resource::<session::NetStatus>()
-           .init_resource::<session::SessionRegistry>()
-           .init_resource::<session::PendingReplicatedSpawns>()
-           .init_resource::<session::IncomingSnapshots>()
-           .add_systems(Update, wire_system)
+           .register_type::<SimTick>();
+        // All always-on core/substrate resources live in one function so a
+        // unit test can assert the full set is present without building the
+        // heavier LunCoCorePlugin (log + big-space). See its doc comment for
+        // the invariant this enforces.
+        register_core_resources(app);
+        app.add_systems(Update, wire_system)
            .add_systems(FixedUpdate, advance_sim_tick)
            .add_systems(PostUpdate, assign_global_entity_ids);
     }
+}
+
+/// Initialize every always-on core/substrate resource.
+///
+/// **Invariant:** any resource consumed via `Res`/`ResMut` by a system or
+/// observer that is registered unconditionally (i.e. not behind the
+/// `networking` feature or some other optional plugin) MUST be initialized
+/// here — never only inside a feature-gated plugin like
+/// `lunco_networking::WirePlugin`. Otherwise builds without that feature
+/// panic at runtime with "Resource does not exist". `lunco-core` is a
+/// dependency of every crate, so initializing here guarantees presence
+/// everywhere. The `core_substrate_resources_present` test guards this.
+pub(crate) fn register_core_resources(app: &mut App) {
+    app.init_resource::<SimTick>()
+        .init_resource::<IsServer>()
+        .init_resource::<session::NetworkRole>()
+        .init_resource::<session::LocalSession>()
+        .init_resource::<session::WireApplyGuard>()
+        .init_resource::<session::NetStatus>()
+        .init_resource::<session::SessionRegistry>()
+        .init_resource::<session::PendingReplicatedSpawns>()
+        .init_resource::<session::IncomingSnapshots>()
+        // Input-sequence bookkeeping is always-on substrate: the
+        // lunco-controller observers read/write these every frame whether
+        // or not the optional networking wire is present.
+        .init_resource::<session::OwnedInputLog>()
+        .init_resource::<session::AppliedInputSeq>();
 }
 
 /// Advance the discrete [`SimTick`] once per fixed step, *only while physics is
@@ -474,6 +497,34 @@ mod ph1_identity_tests {
             .add_systems(FixedUpdate, advance_sim_tick)
             .add_systems(PostUpdate, assign_global_entity_ids);
         app
+    }
+
+    /// Guards the "substrate resource initialized only behind an optional
+    /// feature" bug class (the `AppliedInputSeq` single-player panic,
+    /// 2026-06-03). Builds the resource set exactly as `LunCoCorePlugin`
+    /// does — via `register_core_resources` — and asserts every always-on
+    /// substrate resource exists. If an init is moved out into a
+    /// feature-gated plugin (e.g. `WirePlugin`), this fails in CI (default
+    /// features = networking off) long before a real single-player run can
+    /// panic.
+    #[test]
+    fn core_substrate_resources_present() {
+        let mut app = App::new();
+        register_core_resources(&mut app);
+        let w = app.world();
+        assert!(w.get_resource::<SimTick>().is_some());
+        assert!(w.get_resource::<IsServer>().is_some());
+        assert!(w.get_resource::<session::NetworkRole>().is_some());
+        assert!(w.get_resource::<session::LocalSession>().is_some());
+        assert!(w.get_resource::<session::WireApplyGuard>().is_some());
+        assert!(w.get_resource::<session::NetStatus>().is_some());
+        assert!(w.get_resource::<session::SessionRegistry>().is_some());
+        assert!(w.get_resource::<session::PendingReplicatedSpawns>().is_some());
+        assert!(w.get_resource::<session::IncomingSnapshots>().is_some());
+        // The two resources that caused the original panic — nailed down
+        // explicitly so a regression names them.
+        assert!(w.get_resource::<session::OwnedInputLog>().is_some());
+        assert!(w.get_resource::<session::AppliedInputSeq>().is_some());
     }
 
     fn id_of(app: &mut App, e: Entity) -> Option<u64> {
