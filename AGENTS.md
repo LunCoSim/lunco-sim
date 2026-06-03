@@ -131,23 +131,43 @@ pub struct OpenFile {                       //   #[derive(Event, Reflect, Clone,
 ### Defining the observer
 
 ```rust
-#[on_command(OpenFile)]                     // ← generates `__register_on_open_file(app)`
+#[on_command(OpenFile)]                     // ← emits an internal register helper
 fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
     let path = trigger.event().path.clone();
     /* … */
 }
 ```
 
-The macro keeps `trigger: On<X>` as the synthetic first parameter and binds `cmd = trigger.event()` automatically — bodies that already use `trigger.event()` work unchanged. New observer bodies should prefer `cmd.field`.
+The macro keeps `trigger: On<X>` as the synthetic first parameter and binds `cmd = trigger.event()` automatically — bodies that already use `trigger.event()` work unchanged. New observer bodies should prefer `cmd.field`. The generated `__register_*` helper is an internal detail — never call it by hand; list the observer in `register_commands!` (below).
+
+### Result-returning commands (`-> Result<Ack, String>`)
+
+Most commands are fire-and-forget (return `()`). A command whose caller needs a **result** (script stdout, a computed value, a hard pass/fail) instead returns `Result<Ack, String>`:
+
+```rust
+#[on_command(RunPython)]
+fn on_run_python(_t: On<RunPython>, backends: Res<ScriptBackends>) -> Result<Ack, String> {
+    let out = backends.get(ScriptLanguage::Python)
+        .ok_or("python backend not registered")?
+        .eval(&cmd.code)?;
+    let mut ack = Ack::new(OpId::new());
+    ack.assigned = serde_json::json!({ "stdout": out });
+    Ok(ack)          // Ok → Succeeded, Err → Failed
+}
+```
+
+The macro records the outcome in `CommandResults` (`lunco-core`) under the request id the transport minted. The caller gets that id back as `command_id` and polls `QueryCommandResult{id}` → `Succeeded(Ack) | Failed(msg) | Pending | Rejected`. In-process triggers (UI `commands.trigger`) set no active id, so nothing is recorded — only transport-dispatched calls are pollable. This is deliberately minimal (one result + states), matching F′/MAVLink/behaviour-tree practice rather than XTCE's multi-stage verifier pipeline; rich long-running lifecycles (queued/progress/cancel) stay as per-domain state (e.g. experiments' `RunStatus`).
 
 ### Registering inside `Plugin::build`
 
 ```rust
 // One source-of-truth list at module scope. Alphabetical for diff hygiene.
+// Entries may be bare idents or `module::fn` paths — the path form lets
+// observers live in split submodules without per-fn `use` shims.
 register_commands!(
     on_open_file,
     on_compile_model,
-    on_set_view_mode,
+    nav::on_set_view_mode,      // observer in a submodule → path form
     /* … */
 );
 
@@ -159,7 +179,7 @@ impl Plugin for ModelicaCommandsPlugin {
 }
 ```
 
-`register_commands!()` collapses a per-observer `__register_on_X(app)` boilerplate cascade into a single function call. Adding a new typed command is a three-line change: struct + observer + one identifier in the list.
+`register_commands!()` collapses a per-observer `__register_on_X(app)` boilerplate cascade into a single function call. Adding a new typed command is a three-line change: struct + observer + one entry in the list. (A future change to make commands self-register and drop the list entirely is tracked in `docs/api.md` → "TBD: grouped self-submitting command registration".)
 
 ### Field types
 

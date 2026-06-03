@@ -46,13 +46,6 @@ pub struct ApiCommandEvent {
     pub id: u64,
 }
 
-/// Request to execute a script snippet.
-#[derive(Event, Debug, Clone, Reflect)]
-pub struct ScriptRequestEvent {
-    pub language: String,
-    pub code: String,
-}
-
 /// System counter for generating unique IDs.
 #[derive(Resource, Default)]
 pub struct ApiIdCounter { next: u64 }
@@ -342,13 +335,6 @@ fn execute_request(
             });
 
             Some(ApiResponse::command_accepted(command_id))
-        }
-        ApiRequest::ExecuteScript { language, code } => {
-            commands.trigger(ScriptRequestEvent {
-                language: language.clone(),
-                code: code.clone(),
-            });
-            Some(ApiResponse::ok(serde_json::json!({ "status": "sent_to_engine" })))
         }
         ApiRequest::QueryEntity { id } => {
             Some(match registry.resolve(id) {
