@@ -35,7 +35,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
-    parse_macro_input, DeriveInput, Ident, ItemFn, Token, Data, Fields,
+    parse_macro_input, DeriveInput, Ident, ItemFn, Path, Token, Data, Fields,
     punctuated::Punctuated,
 };
 
@@ -209,17 +209,29 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
 // ── register_commands!() ───────────────────────────────────────────────────
 
 /// Generates a `register_all_commands(app)` function.
+///
+/// Accepts bare idents (`on_ping`) or module paths
+/// (`lifecycle::on_open`) — the latter lets observers live in split
+/// submodules and still be listed in one place. Each entry's final
+/// segment is rewritten to its generated `__register_<name>` helper,
+/// preserving any module prefix.
 #[proc_macro]
 pub fn register_commands(input: TokenStream) -> TokenStream {
-    let args: Punctuated<Ident, Token![,]> =
+    let args: Punctuated<Path, Token![,]> =
         match syn::parse::Parser::parse2(Punctuated::parse_terminated, input.into()) {
             Ok(p) => p,
             Err(e) => return e.to_compile_error().into(),
         };
 
-    let calls: Vec<TokenStream2> = args.iter().map(|name| {
-        let register_fn = Ident::new(&format!("__register_{}", name), name.span());
-        quote! { #register_fn(app); }
+    let calls: Vec<TokenStream2> = args.iter().map(|path| {
+        // Rebuild the path with its final segment renamed to the
+        // generated `__register_<name>` helper, keeping the module
+        // prefix (e.g. `lifecycle::on_open` -> `lifecycle::__register_on_open`).
+        let mut path = path.clone();
+        if let Some(last) = path.segments.last_mut() {
+            last.ident = Ident::new(&format!("__register_{}", last.ident), last.ident.span());
+        }
+        quote! { #path(app); }
     }).collect();
 
     let expanded = quote! {

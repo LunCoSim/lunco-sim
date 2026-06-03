@@ -1,6 +1,7 @@
 //! Command bus for Modelica documents.
 
 use bevy::prelude::*;
+use lunco_core::register_commands;
 use lunco_doc::DocumentId;
 
 pub mod compile;
@@ -77,37 +78,44 @@ impl Plugin for ModelicaCommandsPlugin {
                 lifecycle::render_close_dialogs,
             );
 
-        // Manually register all commands for now to avoid macro issues with split modules
-        diagram::__register_on_add_canvas_plot(app);
-        plot::__register_on_add_signal_to_plot(app);
-        lifecycle::__register_on_create_new_scratch_model(app);
-        lifecycle::__register_on_duplicate_active_doc(app);
-        lifecycle::__register_on_duplicate_model_from_read_only(app);
-        util::__register_on_exit(app);
-        nav::__register_on_fit_canvas(app);
-        nav::__register_on_focus_component(app);
-        nav::__register_on_focus_document_by_name(app);
-        doc::__register_on_format_document(app);
-        lifecycle::__register_on_get_file(app);
-        inspect::__register_on_inspect_active_doc(app);
-        diagram::__register_on_move_component(app);
-        lifecycle::__register_on_new_modelica_document(app);
-        plot::__register_on_new_plot_panel(app);
-        lifecycle::__register_on_open(app);
-        lifecycle::__register_on_open_class(app);
-        lifecycle::__register_on_open_example(app);
-        lifecycle::__register_on_open_file(app);
-        nav::__register_on_pan_canvas(app);
-        util::__register_on_ping(app);
-        doc::__register_on_redo(app);
-        doc::__register_on_save_active_document(app);
-        doc::__register_on_save_active_document_as(app);
-        sim::__register_on_set_model_input(app);
-        nav::__register_on_set_view_mode(app);
-        nav::__register_on_set_zoom(app);
-        doc::__register_on_undo(app);
+        // All typed commands, collected by the `register_commands!`
+        // invocation below (path form supports the split submodules).
+        register_all_commands(app);
     }
 }
+
+// Generates `register_all_commands(app)` at module scope. Observers live
+// in split submodules, so each entry uses the `module::fn` path form.
+register_commands!(
+    diagram::on_add_canvas_plot,
+    plot::on_add_signal_to_plot,
+    lifecycle::on_create_new_scratch_model,
+    lifecycle::on_duplicate_active_doc,
+    lifecycle::on_duplicate_model_from_read_only,
+    util::on_exit,
+    nav::on_fit_canvas,
+    nav::on_focus_component,
+    nav::on_focus_document_by_name,
+    doc::on_format_document,
+    lifecycle::on_get_file,
+    inspect::on_inspect_active_doc,
+    diagram::on_move_component,
+    lifecycle::on_new_modelica_document,
+    plot::on_new_plot_panel,
+    lifecycle::on_open,
+    lifecycle::on_open_class,
+    lifecycle::on_open_example,
+    lifecycle::on_open_file,
+    nav::on_pan_canvas,
+    util::on_ping,
+    doc::on_redo,
+    doc::on_save_active_document,
+    doc::on_save_active_document_as,
+    sim::on_set_model_input,
+    nav::on_set_view_mode,
+    nav::on_set_zoom,
+    doc::on_undo,
+);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
