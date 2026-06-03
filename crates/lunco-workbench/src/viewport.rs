@@ -331,15 +331,28 @@ pub fn apply_workbench_viewport(
 /// `PanelRects` which keeps stale rects on purpose) is what makes the
 /// "is the viewport even part of this perspective?" question
 /// authoritative.
-/// True iff every slot Vec is empty AND the dock has no tabs — a View-
-/// style perspective that wants the entire window for the 3D scene with
-/// no chrome painted on top.
+/// True iff every slot Vec is empty AND the dock has no *singleton panel*
+/// tabs — a View-style perspective that wants the entire window for the
+/// 3D scene with no chrome painted on top.
+///
+/// Parked *instance* tabs (open documents/models) are deliberately
+/// ignored: a hybrid app (the rover sandbox embeds the Modelica
+/// workbench) can have documents open while a viewport-only perspective
+/// is active. `rebuild_dock` parks those instance tabs in the dock so
+/// they survive and re-attach on switch, and `render_layout` keeps the
+/// workbench in 3D mode (it gates on the centre intent, not the dock).
+/// They never paint chrome here, so the camera must stay full-window —
+/// counting them as "non-empty" would wrongly flip the camera inactive
+/// (the Design-style "panels but no viewport" branch) and blank the 3D.
 pub(crate) fn layout_is_empty(layout: &crate::WorkbenchLayout) -> bool {
     layout.side_browser.is_empty()
         && layout.center.is_empty()
         && layout.right_inspector.is_empty()
         && layout.bottom.is_empty()
-        && layout.dock.iter_all_tabs().next().is_none()
+        && !layout
+            .dock
+            .iter_all_tabs()
+            .any(|(_, t)| matches!(t, crate::TabId::Singleton(_)))
 }
 
 pub(crate) fn layout_contains_panel(layout: &crate::WorkbenchLayout, panel: PanelId) -> bool {

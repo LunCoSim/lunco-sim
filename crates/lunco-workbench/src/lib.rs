@@ -1275,13 +1275,30 @@ impl WorkbenchLayout {
             })
         };
 
-        // 3D apps: no central tabs → don't build a dock tree at all.
-        // The renderer will lay out side panels with egui's SidePanels
-        // and leave the central area transparent. (Such apps keep no
-        // instance tabs in the dock — center is the Bevy viewport — so
-        // there is nothing to preserve.)
+        // Viewport-only perspectives: no central singleton tabs → don't
+        // build a side-panel dock tree. The renderer lays out side panels
+        // with egui's SidePanels and leaves the central area transparent
+        // (it stays in 3D mode — see the `has_dock_tabs` gate in
+        // `render_layout` — so a non-empty dock here is *not* shown).
+        //
+        // A pure 3D app keeps no instance tabs at all, but a hybrid app
+        // (the rover sandbox embeds the Modelica workbench) can have
+        // document/model tabs open while a viewport-only perspective is
+        // active. Park those instance tabs in the dock rather than dropping
+        // them — wiping would lose the open documents on every viewport
+        // perspective activation. They render nowhere while this
+        // perspective is active and re-attach to the centre when the user
+        // switches to a centre-driven perspective (which collects them as
+        // `preserved_instances` on its own rebuild).
         if center_tabs.is_empty() {
-            self.dock = DockState::new(Vec::new());
+            let parked: Vec<TabId> = preserved_instances
+                .iter()
+                .map(|(kind, instance)| TabId::Instance {
+                    kind: *kind,
+                    instance: *instance,
+                })
+                .collect();
+            self.dock = DockState::new(parked);
             return;
         }
 
@@ -2310,12 +2327,25 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
 
     // ── Dock area / side panels ─────────────────────────────────────
     // Two-mode rendering:
-    //   1. If the dock has tabs (centre-driven app like modelica
-    //      workbench), render the full DockArea.
-    //   2. Otherwise (3D app like sandbox), render the side
-    //      panels with plain SidePanel / TopBottomPanel and leave the
-    //      central area transparent for the 3D viewport.
-    let has_dock_tabs = layout.dock.iter_all_tabs().next().is_some();
+    //   1. If the active perspective is centre-driven (non-empty centre
+    //      intent, e.g. the modelica workbench's Code/Diagram), render the
+    //      full DockArea.
+    //   2. Otherwise (viewport-only perspective like the sandbox's `View`),
+    //      render the side panels with plain SidePanel / TopBottomPanel and
+    //      leave the central area transparent for the 3D viewport.
+    //
+    // The gate is the centre *intent* (`layout.center`), not merely "does
+    // the dock hold any tab". A hybrid app (the rover sandbox embeds the
+    // Modelica workbench) can have document/model instance tabs parked in
+    // the dock while a viewport-only perspective is active — e.g. restored
+    // on boot before the user switches to a doc-capable perspective.
+    // Keying off the dock alone would flip the whole workbench into
+    // dock-mode and paint tab chrome over the 3D scene; keying off the
+    // perspective's centre intent keeps `View` pure-3D and leaves the
+    // parked docs hidden until the user switches to a centre-driven
+    // perspective (which re-attaches them via `rebuild_dock`).
+    let has_dock_tabs =
+        !layout.center.is_empty() && layout.dock.iter_all_tabs().next().is_some();
 
     if has_dock_tabs {
         let WorkbenchLayout {
