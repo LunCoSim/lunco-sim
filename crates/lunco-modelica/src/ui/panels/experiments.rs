@@ -67,16 +67,23 @@ pub struct PlotPanelState {
     pub scrub_time: Option<f64>,
     pub visible_experiments: std::collections::HashSet<ExperimentId>,
     pub last_twin: Option<lunco_experiments::TwinId>,
-    /// True once the plot has auto-promoted the latest run for this
-    /// twin (mark-visible + pick top dynamic vars). Prevents the
-    /// auto-show from fighting the user after they explicitly empty
-    /// the plot. Reset on twin switch by `sync_twin`'s restore path
-    /// (a fresh state for a new twin starts at `false`).
+    /// True once the plot has auto-promoted a run for this twin and
+    /// auto-picked its top dynamic vars. Gates the one-time variable
+    /// auto-pick so clearing picks later doesn't re-fire it.
     pub auto_show_attempted: bool,
+    /// Run ids this plot has already auto-shown (made visible without
+    /// the user ticking 👁). Every completed run auto-plots exactly
+    /// once; recording it here means a later un-tick sticks instead of
+    /// being re-promoted next frame.
+    pub auto_shown: std::collections::HashSet<ExperimentId>,
     /// Plot the Y axis on a log10 scale for this plot tab. Per-VizId so
     /// each plot window chooses independently; survives like the rest
     /// of the per-plot state.
     pub log_y: bool,
+    /// True once the user has manually toggled `log_y`. Suppresses the
+    /// auto-log-Y default (which kicks in on mixed-unit / wide-magnitude
+    /// plots) so we never fight an explicit choice in either direction.
+    pub log_y_user_set: bool,
 }
 
 #[derive(Resource, Default, Debug)]
@@ -158,9 +165,11 @@ impl PlotPanelStates {
     pub fn forget_experiment(&mut self, id: ExperimentId) {
         for s in self.by_viz.values_mut() {
             s.visible_experiments.remove(&id);
+            s.auto_shown.remove(&id);
         }
         for s in self.archived.values_mut() {
             s.visible_experiments.remove(&id);
+            s.auto_shown.remove(&id);
         }
     }
 
@@ -1790,25 +1799,30 @@ fn render_experiments_plot_inner(
         }
     }
 
-    // Empty-state auto-promote — when this plot tab has no visible
-    // runs but the doc *has* completed runs, automatically mark the
-    // latest run visible and auto-pick top dynamic vars. Gated by
-    // `auto_show_attempted` so clearing curves later doesn't re-fire
-    // the promote on the next frame. The flag is reset on twin
-    // switch (sync_twin restores a fresh state for new twins).
-    let auto_show_pending = {
-        let needs_auto = series.is_empty() && run_count > 0;
-        if needs_auto {
-            world
-                .get_resource::<PlotPanelStates>()
-                .and_then(|s| s.by_viz.get(&viz_id))
-                .map(|st| !st.auto_show_attempted)
-                .unwrap_or(true)
-        } else {
-            false
-        }
+    // Auto-plot — every completed run becomes visible exactly once,
+    // automatically, so a finished Fast Run shows its curve without the
+    // user hunting for the 👁 toggle. `auto_shown` records each id we
+    // promote, so a later un-tick sticks (we never re-promote it). This
+    // fires for the first run AND every subsequent completed run, not
+    // just when the plot is empty.
+    let _ = run_count;
+    let pending_auto: Vec<ExperimentId> = {
+        let already = world
+            .get_resource::<PlotPanelStates>()
+            .and_then(|s| s.by_viz.get(&viz_id))
+            .map(|st| st.auto_shown.clone())
+            .unwrap_or_default();
+        world
+            .get_resource::<ExperimentRegistry>()
+            .map(|reg| {
+                reg.list_for_twin(&twin)
+                    .iter()
+                    .filter(|e| e.result.is_some() && !already.contains(&e.id))
+                    .map(|e| e.id)
+                    .collect()
+            })
+            .unwrap_or_default()
     };
-    let show_latest_clicked = auto_show_pending;
 
     // Drain any one-shot Fit request for this plot. The Graphs
     // panel's shared header queues it via `VizFitRequests`; the
@@ -1819,23 +1833,50 @@ fn render_experiments_plot_inner(
         .map(|mut r| r.take(viz_id))
         .unwrap_or(false);
 
-    // Log-Y toggle for this plot tab. Sits just above the chart so it
-    // reads as a chart control; mirrors the live LinePlot's toolbar
-    // toggle.
-    let log_y = world
+    // Auto-default to log-Y when the plot mixes units (a strong proxy
+    // for wide magnitude spread — e.g. E_night_kWh ~1e6 next to Isp=360,
+    // which on a linear axis flattens everything but the largest). Only
+    // when it's SAFE — every visible value strictly positive, so log-Y
+    // drops nothing — and only until the user toggles it themselves.
+    let mixed_units =
+        shared_unit.is_none() && !series.is_empty() && picked_vars.len() > 1;
+    let all_positive = !series.is_empty()
+        && series.iter().all(|s| s.points.iter().all(|p| p[1] > 0.0));
+    let (stored_log_y, log_y_user_set) = world
         .get_resource::<PlotPanelStates>()
         .and_then(|s| s.by_viz.get(&viz_id))
-        .map(|st| st.log_y)
-        .unwrap_or(false);
+        .map(|st| (st.log_y, st.log_y_user_set))
+        .unwrap_or((false, false));
+    let auto_log = mixed_units && all_positive && !log_y_user_set;
+    // Persist the auto choice so the toggle below reflects it and the
+    // setting survives across frames / tab switches.
+    if auto_log && !stored_log_y {
+        if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
+            states.entry(viz_id).log_y = true;
+        }
+    }
+    let log_y = stored_log_y || auto_log;
+
+    // Log-Y toggle for this plot tab. Sits just above the chart so it
+    // reads as a chart control; mirrors the live LinePlot's toolbar
+    // toggle. Toggling marks it user-set so the auto-default backs off.
     {
         let mut log_y_ui = log_y;
+        let hover = if auto_log {
+            "Auto-enabled: picked variables have mixed units / wide magnitude \
+             range. Click to override (log₁₀, drops values ≤ 0)."
+        } else {
+            "Plot the Y axis on a log₁₀ scale (drops values ≤ 0)"
+        };
         if ui
             .toggle_value(&mut log_y_ui, "log Y")
-            .on_hover_text("Plot the Y axis on a log₁₀ scale (drops values ≤ 0)")
+            .on_hover_text(hover)
             .changed()
         {
             if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
-                states.entry(viz_id).log_y = log_y_ui;
+                let e = states.entry(viz_id);
+                e.log_y = log_y_ui;
+                e.log_y_user_set = true;
             }
         }
     }
@@ -1932,51 +1973,51 @@ fn render_experiments_plot_inner(
             states.set_scrub(viz_id, s);
         }
     }
-    if show_latest_clicked {
-        // Find the most recently completed run on this twin and
-        // promote it: mark visible + auto-pick top-3 dynamic vars
-        // by series variance (mirrors the auto-pick the runner
-        // does on first completion).
-        let latest = world
+    if !pending_auto.is_empty() {
+        // Auto-pick top-3 dynamic vars (by series variance) from the
+        // most recently completed run, but only if the user hasn't
+        // picked anything yet — mirrors the first-completion behavior.
+        let latest_result = world
             .get_resource::<ExperimentRegistry>()
             .and_then(|reg| {
                 reg.list_for_twin(&twin)
                     .into_iter()
                     .rev()
                     .find(|e| e.result.is_some())
-                    .cloned()
+                    .and_then(|e| e.result.clone())
             });
-        if let Some(exp) = latest {
-            if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
-                let entry = states.entry(viz_id);
-                entry.visible_experiments.insert(exp.id);
-                entry.auto_show_attempted = true;
-                if entry.picked_vars.is_empty() {
-                    if let Some(result) = &exp.result {
-                        let mut by_var: Vec<(&String, f64)> = result
-                            .series
-                            .iter()
-                            .map(|(k, v)| {
-                                let n = v.len().max(1) as f64;
-                                let mean = v.iter().copied().sum::<f64>() / n;
-                                let var = v
-                                    .iter()
-                                    .map(|x| (x - mean) * (x - mean))
-                                    .sum::<f64>()
-                                    / n;
-                                (k, var)
-                            })
-                            .filter(|(_, v)| v.is_finite() && *v > 1e-12)
-                            .collect();
-                        by_var.sort_by(|a, b| {
-                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-                        });
-                        for (k, _) in by_var.into_iter().take(3) {
-                            entry.picked_vars.insert(k.clone());
-                        }
+        if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
+            let entry = states.entry(viz_id);
+            for id in &pending_auto {
+                entry.visible_experiments.insert(*id);
+                entry.auto_shown.insert(*id);
+            }
+            if !entry.auto_show_attempted && entry.picked_vars.is_empty() {
+                if let Some(result) = &latest_result {
+                    let mut by_var: Vec<(&String, f64)> = result
+                        .series
+                        .iter()
+                        .map(|(k, v)| {
+                            let n = v.len().max(1) as f64;
+                            let mean = v.iter().copied().sum::<f64>() / n;
+                            let var = v
+                                .iter()
+                                .map(|x| (x - mean) * (x - mean))
+                                .sum::<f64>()
+                                / n;
+                            (k, var)
+                        })
+                        .filter(|(_, v)| v.is_finite() && *v > 1e-12)
+                        .collect();
+                    by_var.sort_by(|a, b| {
+                        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    for (k, _) in by_var.into_iter().take(3) {
+                        entry.picked_vars.insert(k.clone());
                     }
                 }
             }
+            entry.auto_show_attempted = true;
         }
     }
     ExpPlotSummary {
