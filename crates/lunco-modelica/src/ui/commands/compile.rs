@@ -1293,14 +1293,18 @@ fn dispatch_experiment(
             let source = document.source().to_string();
             let filename = document.origin().display_name();
             let index = document.index();
-            let mut candidates: Vec<String> = Vec::new();
+            // Tier-ranked candidates (an `experiment(...)`-annotated class
+            // sorts first), the SAME ranking the Experiments Setup form and
+            // Fast Run popup use — not arbitrary HashMap order. Also filters to
+            // genuinely simulatable, non-partial classes. Without this, the
+            // sole/ambiguous fallback (`candidates[0]`) could pick a leaf model
+            // over the annotated system.
+            let candidates: Vec<String> = index.simulation_candidates();
             let mut experiment_map: HashMap<String, crate::annotations::Experiment> = HashMap::new();
             for c in index.classes.values() {
-                if matches!(c.kind, crate::index::ClassKind::Package) { continue; }
                 if let Some(exp) = &c.experiment {
                     experiment_map.insert(c.name.clone(), *exp);
                 }
-                candidates.push(c.name.clone());
             }
             (source, filename, candidates, experiment_map)
         };
@@ -1388,53 +1392,29 @@ fn dispatch_experiment(
             );
         }
 
-        // Bounds priority: fallback → annotation → draft override →
-        // command override. Each layer overrides the previous.
-        //
-        // Layer 1 fallback = the Modelica `experiment` annotation defaults
-        // (StartTime=0, StopTime=1). `dt`/`tolerance` stay `None` so the run
-        // loop resolves them to their spec defaults (Interval via
-        // numberOfIntervals=500; tolerance per the runner's stack). This is
-        // only hit when the model carries no experiment annotation at all.
-        let mut bounds = lunco_experiments::RunBounds {
-            t_start: 0.0,
-            t_end: 1.0,
-            dt: None,
-            tolerance: None,
-            solver: None,
-            h0: None,
-        };
+        // Bounds: reuse the single source of truth `resolve_setup_bounds`
+        // (draft override → runner annotation cache → AST `experiment(...)`
+        // → default), then apply the command override on top. This keeps the
+        // Fast Run API path bit-identical to the Experiments-tab Setup form
+        // and the Fast Run popup, and removes the divergent `t_end: 1.0`
+        // fallback that silently ran 1 s while the UI displayed 10 s. The
+        // annotation cache seeding above is what makes the cache layer here
+        // resolve without a prior interactive compile.
+        let mut bounds = resolve_setup_bounds(world, doc, &model_ref);
 
-        // Layer 2: annotation (from AST, now seeded into runner cache).
-        // `default_bounds` returns `Some` only when the model actually
-        // carries an `experiment(StopTime=…)` annotation, so we can apply
-        // it unconditionally — including its `Interval` → `dt`, which the
-        // run loop needs to avoid defaulting to a 10 ms sample interval on
-        // long horizons.
-        if let Some(annotated) = runner_res.0.default_bounds(&model_ref) {
-            bounds = annotated;
-        }
-
-        // Layer 3: experiment draft override (from UI setup dialog).
-        let (mut overrides, mut inputs, bounds) = {
+        // Parameter overrides / inputs from the draft, with command-supplied
+        // values winning. Empty maps (the FastRunActiveModel path) = no-op.
+        let (mut overrides, mut inputs) = {
             let drafts = world.resource::<crate::experiments_runner::ExperimentDrafts>();
             match drafts.get(doc, &model_ref) {
-                Some(d) => (
-                    d.overrides.clone(),
-                    d.inputs.clone(),
-                    d.bounds_override.clone().unwrap_or(bounds),
-                ),
-                None => (Default::default(), Default::default(), bounds),
+                Some(d) => (d.overrides.clone(), d.inputs.clone()),
+                None => (Default::default(), Default::default()),
             }
         };
-
-        // Layer 3.5: command-supplied parameter overrides / inputs win over
-        // the draft. Empty maps (the FastRunActiveModel path) are a no-op.
         overrides.extend(cmd_overrides);
         inputs.extend(cmd_inputs);
 
-        // Layer 4: command bounds override (explicit API params, highest priority).
-        let mut bounds = bounds;
+        // Command bounds override (explicit API params, highest priority).
         if let Some(t) = cmd_bounds.t_start { bounds.t_start = t; }
         if let Some(t) = cmd_bounds.t_end { bounds.t_end = t; }
         if let Some(d) = cmd_bounds.dt { bounds.dt = Some(d); }
