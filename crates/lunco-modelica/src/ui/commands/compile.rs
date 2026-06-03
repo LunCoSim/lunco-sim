@@ -1364,7 +1364,18 @@ fn dispatch_experiment(
 
         // Seed the runner's annotation cache from the AST so
         // `default_bounds` works even without a prior interactive compile.
-        if let Some(exp) = experiment_map.get(&model_name) {
+        // Match by the canonical (qualified) key OR by leaf name: a bare
+        // `FastRunActiveModel{class:"RoverThermalSystem"}` passes a short
+        // name, but `experiment_map` is keyed by `c.name` (qualified), so an
+        // exact-only lookup would miss the `experiment(...)` annotation and
+        // silently fall back to the 1 s default.
+        let annotation = experiment_map.get(&model_name).or_else(|| {
+            experiment_map
+                .iter()
+                .find(|(k, _)| k.rsplit('.').next() == Some(model_name.as_str()))
+                .map(|(_, v)| v)
+        });
+        if let Some(exp) = annotation {
             runner_res.0.set_model_defaults(
                 model_ref.clone(),
                 crate::experiments_runner::ModelDefaults {

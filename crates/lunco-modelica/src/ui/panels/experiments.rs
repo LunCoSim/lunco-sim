@@ -819,13 +819,14 @@ impl ExperimentsPanel {
                 let drilled = world
                     .get_resource::<crate::ui::panels::model_view::ModelTabs>()
                     .and_then(|t| t.drilled_class_for_doc(doc));
-                let first_non_pkg = document
-                    .index()
-                    .classes
-                    .values()
-                    .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
-                    .map(|c| c.name.clone());
-                let class = drilled.or(first_non_pkg);
+                // Prefer the tier-ranked simulation root (an
+                // `experiment(...)`-annotated class sorts first) over an
+                // arbitrary HashMap-order class. Otherwise a package whose
+                // only annotated model is `RoverThermalSystem` would default
+                // the setup to e.g. `LunarEnvironment` → the 10 s fallback.
+                let preferred =
+                    document.index().simulation_candidates().into_iter().next();
+                let class = drilled.or(preferred);
                 match class {
                     Some(c) => (c, document.source().to_string()),
                     None => return,

@@ -335,7 +335,11 @@ fn render_unified_toolbar(
     if auto_arrange_clicked { world.commands().trigger(crate::ui::commands::AutoArrangeDiagram { doc }); }
     if fast_run_clicked {
         let model_ref = super::context::drilled_class_for_doc(world, doc).or_else(|| {
-                world.get_resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(doc)).and_then(|h| h.document().index().classes.values().find(|c| !matches!(c.kind, crate::index::ClassKind::Package)).map(|c| c.name.clone()))
+                // Prefer the tier-ranked simulation root (experiment-annotated
+                // class first) over an arbitrary HashMap-order class, so the
+                // Fast Run popup defaults to the runnable system, not e.g. a
+                // leaf model with no `experiment(...)` annotation (→ 10 s).
+                world.get_resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(doc)).and_then(|h| h.document().index().simulation_candidates().into_iter().next())
             }).map(lunco_experiments::ModelRef);
         if let Some(model_ref) = model_ref {
             // Same resolver the Experiments-tab Setup uses, so the two
