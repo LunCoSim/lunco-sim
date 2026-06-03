@@ -142,7 +142,7 @@ impl Panel for InspectorPanel {
         // optimistically on every structural op (see
         // `ModelicaDocument::apply_patch`) so this read sees fresh
         // state even during the 2.5 s AST-reparse debounce.
-        let (component_info, class) = {
+        let (component_info, class, param_desc) = {
             let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
             let Some(host) = registry.host(doc_id) else {
                 placeholder(ui, "Document not in registry.");
@@ -185,7 +185,37 @@ impl Panel for InspectorPanel {
                 description: entry.description.clone(),
                 modifications: entry.modifications.clone(),
             };
-            (info, class)
+            // Build a name→description map for the component TYPE's own
+            // parameters so each modification row can show the original
+            // Modelica `"..."` comment on hover. Modifications are keyed
+            // by the type's parameter names, so resolve the type class
+            // (direct, then short-name suffix match) and harvest its
+            // component descriptions.
+            let type_name = entry.type_name.clone();
+            let mut param_desc: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            let type_path = if index.classes.contains_key(&type_name) {
+                Some(type_name.clone())
+            } else {
+                index
+                    .classes
+                    .keys()
+                    .find(|k| k.rsplit('.').next() == Some(type_name.as_str()))
+                    .cloned()
+            };
+            if let Some(tp) = type_path {
+                if let Some(keys) = index.components_by_class.get(&tp) {
+                    for key in keys {
+                        if let Some(comp) = index.components.get(key.0 as usize) {
+                            if !comp.description.is_empty() {
+                                param_desc
+                                    .insert(comp.name.clone(), comp.description.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            (info, class, param_desc)
         };
 
         // ── Render header ───────────────────────────────────────
@@ -234,7 +264,11 @@ impl Panel for InspectorPanel {
                 .spacing([10.0, 4.0])
                 .show(ui, |ui| {
                     for (k, v) in entries {
-                        ui.label(k);
+                        let name_resp =
+                            ui.add(egui::Label::new(k).sense(egui::Sense::hover()));
+                        if let Some(d) = param_desc.get(k) {
+                            name_resp.on_hover_text(d);
+                        }
                         let mut buf = v.clone();
                         // `add_enabled` disables the input on read-only
                         // tabs — egui dims it and ignores keystrokes,
@@ -243,6 +277,9 @@ impl Panel for InspectorPanel {
                             !read_only,
                             egui::TextEdit::singleline(&mut buf),
                         );
+                        if let Some(d) = param_desc.get(k) {
+                            resp.clone().on_hover_text(d);
+                        }
                         if !read_only && resp.lost_focus() && buf != *v {
                             edits.push((k.clone(), buf));
                         }

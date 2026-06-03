@@ -230,7 +230,7 @@ impl Panel for TelemetryPanel {
                                     }
                                     let mut v = row.value;
                                     let avail = ui.available_width().max(60.0);
-                                    ui.add_sized(
+                                    let val_resp = ui.add_sized(
                                         [avail, 20.0],
                                         egui::DragValue::new(&mut v)
                                             .speed(0.1)
@@ -240,6 +240,9 @@ impl Panel for TelemetryPanel {
                                                     ..=row.max.unwrap_or(f64::INFINITY),
                                             ),
                                     );
+                                    if let Some(desc) = &row.description {
+                                        val_resp.on_hover_text(desc);
+                                    }
                                     ui.end_row();
                                     if (v - row.value).abs() > 1e-10 {
                                         if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
@@ -635,8 +638,10 @@ fn render_selected_components_inspector(
         qualified_type: String,
         // (param_name, current_value).
         parameters: Vec<(String, String)>,
+        // param_name → Modelica description-comment, for hover help.
+        param_desc: std::collections::HashMap<String, String>,
     }
-    let rows: Vec<NodeRow> = {
+    let mut rows: Vec<NodeRow> = {
         let Some(state) = world.get_resource::<CanvasDiagramState>() else {
             return;
         };
@@ -653,6 +658,7 @@ fn render_selected_components_inspector(
                         instance: node.label.clone(),
                         qualified_type: icon.qualified_type.clone(),
                         parameters: icon.parameters.clone(),
+                        param_desc: std::collections::HashMap::new(),
                     })
                 }
                 _ => None,
@@ -661,6 +667,18 @@ fn render_selected_components_inspector(
     };
     if rows.is_empty() {
         return;
+    }
+    // Second pass (canvas borrow released): harvest each component
+    // type's parameter description-comments from the index for hover
+    // help on the rows below.
+    {
+        let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+        if let Some(host) = registry.host(doc_id) {
+            let index = host.document().index();
+            for row in &mut rows {
+                row.param_desc = type_param_descriptions(index, &row.qualified_type);
+            }
+        }
     }
 
     let editing_class = active_class_for_doc(world, doc_id);
@@ -714,12 +732,22 @@ fn render_selected_components_inspector(
                 let mut edits: Vec<(String, String)> = Vec::new();
                 for (name, value) in &row.parameters {
                     let mut buf = value.clone();
+                    let desc = row.param_desc.get(name);
                     ui.horizontal(|ui| {
-                        ui.label(format!("{name:14}"));
+                        let name_resp = ui.add(
+                            egui::Label::new(format!("{name:14}"))
+                                .sense(egui::Sense::hover()),
+                        );
+                        if let Some(d) = desc {
+                            name_resp.on_hover_text(d);
+                        }
                         let resp = ui.add(
                             egui::TextEdit::singleline(&mut buf)
                                 .desired_width(120.0),
                         );
+                        if let Some(d) = desc {
+                            resp.clone().on_hover_text(d);
+                        }
                         if resp.lost_focus()
                             && ui.input(|i| i.key_pressed(egui::Key::Enter))
                         {
@@ -770,6 +798,10 @@ struct FlatParam {
     chain: Vec<String>,
     leaf: String,
     value: String,
+    /// Modelica description-comment for this parameter
+    /// (`parameter Real g = 9.81 "Gravity"`). Empty when none authored.
+    /// Surfaced as hover help on the parameter row.
+    description: String,
 }
 
 impl FlatParam {
@@ -812,6 +844,39 @@ impl FlatParam {
 /// path and the extends-recursion path. Dedupe-by-leaf within a class
 /// so an `extends` and a direct declaration of the same param don't
 /// double-emit (deriving class wins, Modelica-correct).
+/// Map a class's directly-declared parameter/component names to their
+/// Modelica description-comments. Resolves `type_name` against the
+/// index (direct key, then short-name suffix match) and harvests
+/// non-empty descriptions. Used for hover help on parameter rows.
+fn type_param_descriptions(
+    index: &crate::index::ModelicaIndex,
+    type_name: &str,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let type_path = if index.classes.contains_key(type_name) {
+        Some(type_name.to_string())
+    } else {
+        let short = type_name.rsplit('.').next().unwrap_or(type_name);
+        index
+            .classes
+            .keys()
+            .find(|k| k.rsplit('.').next() == Some(short))
+            .cloned()
+    };
+    if let Some(tp) = type_path {
+        if let Some(keys) = index.components_by_class.get(&tp) {
+            for key in keys {
+                if let Some(comp) = index.components.get(key.0 as usize) {
+                    if !comp.description.is_empty() {
+                        out.insert(comp.name.clone(), comp.description.clone());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 fn flatten_class_parameters(
     index: &crate::index::ModelicaIndex,
     class: &str,
@@ -918,6 +983,7 @@ fn flatten_class_parameters(
                             chain: chain.clone(),
                             leaf: comp.name.clone(),
                             value,
+                            description: comp.description.clone(),
                         });
                     }
                 }
@@ -1064,8 +1130,17 @@ fn render_active_class_parameters(
                 let path = row.path();
                 ui.horizontal(|ui| {
                     let display_value = format_param_value(&row.value);
+                    // Modelica description-comment, shown as hover help on
+                    // both the name and the value cell.
+                    let desc = (!row.description.is_empty()).then(|| row.description.clone());
                     if editable {
-                        ui.label(format!("{:18}", path));
+                        let name_resp = ui.add(
+                            egui::Label::new(format!("{:18}", path))
+                                .sense(egui::Sense::hover()),
+                        );
+                        if let Some(d) = &desc {
+                            name_resp.on_hover_text(d);
+                        }
                         // Persist the edit buffer in egui memory keyed
                         // by the row's path. The naive `let mut buf =
                         // row.value.clone()` resets keystrokes every
@@ -1094,6 +1169,9 @@ fn render_active_class_parameters(
                                 .id(edit_id)
                                 .desired_width(120.0),
                         );
+                        if let Some(d) = &desc {
+                            resp.clone().on_hover_text(d);
+                        }
                         if resp.has_focus() {
                             ui.data_mut(|d| d.insert_temp(edit_id, buf.clone()));
                         }
@@ -1135,11 +1213,17 @@ fn render_active_class_parameters(
                         // Deeper than one level — read-only label. Edit
                         // by drilling into the component's class via
                         // the canvas, then editing there.
-                        ui.label(
-                            egui::RichText::new(format!("{:18}", path))
-                                .color(muted)
-                                .size(11.0),
+                        let ro_name = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("{:18}", path))
+                                    .color(muted)
+                                    .size(11.0),
+                            )
+                            .sense(egui::Sense::hover()),
                         );
+                        if let Some(d) = &desc {
+                            ro_name.on_hover_text(d);
+                        }
                         ui.label(
                             egui::RichText::new(&display_value)
                                 .monospace()

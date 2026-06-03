@@ -185,12 +185,20 @@ pub(crate) fn render_fast_run_setup(
                             entry.bounds.dt =
                                 if adaptive { None } else { Some(0.01) };
                         }
+                        // Cap dt at the horizon, not a fixed 10 s. `dt` is the
+                        // output sample interval (the solver stays adaptive), so
+                        // a year-long run with `Interval=3600` is legitimate —
+                        // the old `..=10.0` range silently clamped 3600→10 and
+                        // made the field look empty/wrong. Speed scales with the
+                        // current value so dragging stays usable at any magnitude.
+                        let dt_max = entry.bounds.t_end.max(10.0);
+                        let dt_speed = (dt_v.abs() * 0.01).max(0.001);
                         if !adaptive
                             && ui
                                 .add(
                                     egui::DragValue::new(&mut dt_v)
-                                        .speed(0.001)
-                                        .range(1e-6..=10.0),
+                                        .speed(dt_speed)
+                                        .range(1e-6..=dt_max),
                                 )
                                 .changed()
                         {

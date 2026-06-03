@@ -1234,7 +1234,19 @@ impl ExperimentsPanel {
 
                         for p in &detected {
                             ui.label(&p.type_name);
-                            ui.label(&p.name);
+                            // Surface the Modelica description-comment as
+                            // hover help so users know what each parameter
+                            // means without cross-referencing the source.
+                            // Use an explicit hover-sensing Label — a plain
+                            // `ui.label` inside a Grid doesn't reliably
+                            // register hover for tooltips.
+                            let name_label = ui.add(
+                                egui::Label::new(&p.name)
+                                    .sense(egui::Sense::hover()),
+                            );
+                            if let Some(desc) = &p.description {
+                                name_label.on_hover_text(desc);
+                            }
                             ui.label(p.default_literal.as_deref().unwrap_or("—"));
                             let path = ParamPath(p.name.clone());
                             if !p.supportable {

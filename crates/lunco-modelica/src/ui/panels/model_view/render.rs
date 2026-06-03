@@ -324,12 +324,22 @@ fn render_unified_toolbar(
             }).map(lunco_experiments::ModelRef);
         if let Some(model_ref) = model_ref {
             let drafted_bounds = world.get_resource::<crate::experiments_runner::ExperimentDrafts>().and_then(|d| d.get(doc, &model_ref).and_then(|dr| dr.bounds_override.clone()));
-            let bounds = drafted_bounds.unwrap_or_else(|| {
-                world.get_resource::<crate::ModelicaRunnerResource>().and_then(|r| {
+            let bounds = drafted_bounds
+                .or_else(|| {
+                    world.get_resource::<crate::ModelicaRunnerResource>().and_then(|r| {
                         use lunco_experiments::ExperimentRunner;
                         r.0.default_bounds(&model_ref)
-                    }).unwrap_or(lunco_experiments::RunBounds { t_start: 0.0, t_end: 10.0, dt: None, tolerance: None, solver: None, h0: None })
-            });
+                    })
+                })
+                // Fall back to the model's `experiment(...)` annotation read
+                // straight from the AST. The runner cache `default_bounds`
+                // reads is only seeded by a prior interactive compile or run,
+                // so the FIRST Fast Run on a freshly-opened model would
+                // otherwise ignore its StopTime/Tolerance/Interval, show the
+                // 10 s placeholder, and then persist that placeholder into the
+                // draft on Run (clobbering the annotation for the actual run).
+                .or_else(|| bounds_from_annotation(world, doc, &model_ref))
+                .unwrap_or(lunco_experiments::RunBounds { t_start: 0.0, t_end: 10.0, dt: None, tolerance: None, solver: None, h0: None });
             let overrides_count = world.get_resource::<crate::experiments_runner::ExperimentDrafts>().and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len())).unwrap_or(0);
             let source_text = world.get_resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(doc)).map(|h| h.document().source().to_string()).unwrap_or_default();
             let detected = crate::experiments_runner::detect_top_level_inputs(&source_text);
@@ -356,6 +366,38 @@ fn render_unified_toolbar(
         world.commands().trigger(crate::ui::commands::CompileActiveModel { doc, class: String::new() });
     }
     new_view_mode
+}
+
+/// Build [`RunBounds`] from a model's `experiment(...)` annotation in
+/// the AST. Used as the Fast Run setup fallback when the runner cache
+/// hasn't been seeded yet (first run on a freshly-opened model).
+/// Returns `None` when the class carries no annotation or no StopTime —
+/// matching `ExperimentRunner::default_bounds`, a StopTime is the field
+/// that makes the annotation usable.
+fn bounds_from_annotation(
+    world: &World,
+    doc: DocumentId,
+    model_ref: &lunco_experiments::ModelRef,
+) -> Option<lunco_experiments::RunBounds> {
+    let reg = world.get_resource::<ModelicaDocumentRegistry>()?;
+    let host = reg.host(doc)?;
+    let index = host.document().index();
+    let class = index
+        .classes
+        .get(&model_ref.0)
+        .or_else(|| index.classes.values().find(|c| c.name == model_ref.0))?;
+    let exp = class.experiment.as_ref()?;
+    let t_end = exp.stop_time?;
+    Some(lunco_experiments::RunBounds {
+        t_start: exp.start_time.unwrap_or(0.0),
+        t_end,
+        // `Interval=0` is the spec's "unspecified" sentinel → None so the
+        // run loop derives numberOfIntervals=500.
+        dt: exp.interval.filter(|&i| i > 0.0),
+        tolerance: exp.tolerance,
+        solver: None,
+        h0: None,
+    })
 }
 
 fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {

@@ -925,6 +925,10 @@ pub struct DetectedParam {
     /// Reason override is unsupported, when `!supportable`. Surfaced
     /// in the editor as a tooltip.
     pub reason: Option<String>,
+    /// The Modelica description-comment string (e.g. the `"Gravity"` in
+    /// `parameter Real g = 9.81 "Gravity";`), if present. Shown as hover
+    /// help on the parameter row in the override editor.
+    pub description: Option<String>,
 }
 
 /// One detected top-level `input` declaration. Modelica `input` vars
@@ -1038,6 +1042,23 @@ pub fn detect_top_level_literal_parameters(source: &str) -> Vec<DetectedParam> {
                 _ => {}
             }
         }
+        // Trailing Modelica description-comment: `... "Gravity";`.
+        // Capture the last quoted string before the terminating `;` so
+        // the override editor can show it as hover help. (For a
+        // bare String default with no comment this picks up the value
+        // instead — a benign edge case; String params aren't override-
+        // supportable in v1 anyway.)
+        let description = end_pos.and_then(|end| {
+            let decl = &tail[..end];
+            let close = decl.rfind('"')?;
+            let open = decl[..close].rfind('"')?;
+            let s = &decl[open + 1..close];
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        });
         let (default_literal, supportable, reason) = match (eq_pos, end_pos) {
             (Some(eq), Some(end)) if end > eq + 1 => {
                 // Modelica allows a trailing description string after
@@ -1074,6 +1095,7 @@ pub fn detect_top_level_literal_parameters(source: &str) -> Vec<DetectedParam> {
             default_literal,
             supportable,
             reason,
+            description,
         });
     }
     // Dedupe by parameter name. The scan is regex-based over the
