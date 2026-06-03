@@ -25,10 +25,13 @@
 //!
 //! # Registration: `register_commands!(fn_a, fn_b)`
 //!
-//! Generates `pub fn register_all_commands(app)`.
+//! Generates `pub fn register_all_commands(app)`. Entries may be bare
+//! idents (same module) or module paths — the path form lets observers
+//! live in split submodules without per-fn `use` shims.
 //!
 //! ```ignore
 //! register_commands!(on_drive_rover, on_brake_rover);
+//! register_commands!(nav::on_set_zoom, doc::on_undo);
 //! ```
 
 use proc_macro::TokenStream;
@@ -167,7 +170,10 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Annotates an observer function for a typed command.
 ///
 /// 1. Wraps the function to accept `On<T>` as the first parameter.
-/// 2. Generates `__register_<fn_name>(app)` that calls `register_type` + `add_observer`.
+/// 2. Generates a `__register_<fn_name>(app)` helper (`register_type` +
+///    `add_observer`). Don't call it by hand — list the observer in a
+///    [`register_commands!`] invocation (bare or `module::fn` path) and
+///    let the generated `register_all_commands(app)` wire it up.
 #[proc_macro_attribute]
 pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
     let cmd_type: Ident = match syn::parse(attr) {

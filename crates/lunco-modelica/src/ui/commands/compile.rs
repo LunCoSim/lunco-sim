@@ -24,7 +24,7 @@ use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use std::collections::HashMap;
 
-use lunco_core::{Command, on_command};
+use lunco_core::{Command, on_command, register_commands};
 
 use crate::ui::{CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 use crate::{ModelicaChannels, ModelicaCommand, ModelicaModel};
@@ -1680,17 +1680,23 @@ impl Plugin for CompilePlugin {
                 bevy_egui::EguiPrimaryContextPass,
                 (render_compile_class_picker, render_fast_run_setup),
             );
-        __register_on_compile_model(app);
-        __register_on_compile_active_model(app);
-        __register_on_pause_active_model(app);
-        __register_on_resume_active_model(app);
-        __register_on_reset_active_model(app);
-        __register_on_run_active_model(app);
-        __register_on_restart_active_model(app);
-        __register_on_fast_run_active_model(app);
-        __register_on_run_experiment(app);
-        __register_on_cancel_experiment(app);
-        __register_on_delete_experiment(app);
-        __register_on_rename_experiment(app);
+        register_all_commands(app);
     }
 }
+
+// Generates `register_all_commands(app)` for this module's compile/run
+// commands (all defined in this file, so bare idents).
+register_commands!(
+    on_compile_model,
+    on_compile_active_model,
+    on_pause_active_model,
+    on_resume_active_model,
+    on_reset_active_model,
+    on_run_active_model,
+    on_restart_active_model,
+    on_fast_run_active_model,
+    on_run_experiment,
+    on_cancel_experiment,
+    on_delete_experiment,
+    on_rename_experiment,
+);

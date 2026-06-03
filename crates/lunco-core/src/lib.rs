@@ -63,10 +63,12 @@ pub use session::{
 //   → struct becomes #[derive(Event, Reflect, Clone, Debug)]
 //
 // #[on_command(StructName)]
-//   → fn wrapped with On<T>, generates __register_<fn>(app)
+//   → fn wrapped with On<T>; emits an internal registration helper
+//     (don't call it by hand — list the observer below)
 //
-// register_commands!(fn_a, fn_b)
-//   → generates pub fn register_all_commands(app) that wires everything up
+// register_commands!(fn_a, mod::fn_b)
+//   → generates pub fn register_all_commands(app) that wires every
+//     listed observer up. Entries may be bare idents or module paths.
 
 pub use lunco_command_macro::{Command, on_command, register_commands};
 
