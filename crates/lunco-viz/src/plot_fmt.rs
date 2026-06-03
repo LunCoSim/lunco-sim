@@ -37,13 +37,36 @@ pub fn log_y_points(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
 
 /// Y-axis tick label for a log10-transformed axis. The grid mark sits
 /// at `log10(value)`, so we raise it back to the real value for the
-/// label — scientific notation for very large/small magnitudes,
-/// plain decimal otherwise.
+/// label, then format it compactly — no trailing zeros, and scientific
+/// notation only for extreme magnitudes — so a decade axis reads
+/// `1, 10, 100, 1000, 1e4` instead of `1.0000, 10.0000, … 1e3`.
 pub fn log_y_tick(mark_value: f64) -> String {
-    let real = 10f64.powf(mark_value);
-    if real != 0.0 && (real >= 1000.0 || real.abs() < 0.001) {
-        format!("{real:.0e}")
+    compact_number(10f64.powf(mark_value))
+}
+
+/// Format a value with ~3 significant figures, trimming trailing zeros.
+/// Magnitudes ≥ 1e4 or < 1e-3 switch to scientific notation (also with a
+/// trimmed mantissa, e.g. `1e4`, `2.5e-5`); everything else is a plain
+/// decimal, e.g. `1`, `31.6`, `0.001`.
+fn compact_number(v: f64) -> String {
+    if v == 0.0 {
+        return "0".to_string();
+    }
+    if !v.is_finite() {
+        return format!("{v}");
+    }
+    let exp = v.abs().log10().floor() as i32;
+    if exp >= 4 || exp < -3 {
+        // Scientific: one mantissa decimal, then drop a trailing ".0".
+        format!("{v:.1e}").replace(".0e", "e")
     } else {
-        format!("{real:.4}")
+        // Plain decimal with just enough places for 3 sig-figs, trimmed.
+        let decimals = (2 - exp).max(0) as usize;
+        let s = format!("{v:.decimals$}");
+        if s.contains('.') {
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            s
+        }
     }
 }

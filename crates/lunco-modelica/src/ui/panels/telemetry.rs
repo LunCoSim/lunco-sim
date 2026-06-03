@@ -382,7 +382,13 @@ impl Panel for TelemetryPanel {
             }
         }
 
-        egui::ScrollArea::vertical().id_salt("telemetry_scroll").show(ui, |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("telemetry_scroll")
+            // Fill the panel's full width instead of shrinking to the
+            // (short) variable-name content — otherwise the scrollbar
+            // floats mid-panel with dead space to its right.
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
             let (model_vars, model_inputs) = if let Some(e) = entity {
                 if let Some(m) = world.get::<ModelicaModel>(e) {
                     (m.variables.keys().cloned().collect::<Vec<_>>(),
@@ -1131,20 +1137,27 @@ fn render_active_class_parameters(
                 .max_height(320.0)
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
+            // Two-column grid so every value field starts at the same x,
+            // regardless of name length. (Space-padding a proportional
+            // font never lines up.)
+            egui::Grid::new("active_params_grid")
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
             for row in &rows {
                 // Read-only docs (bundled examples) can't accept any
                 // edits — fall back to the muted display path for
                 // every row.
                 let editable = !read_only && row.depth() <= 1;
                 let path = row.path();
-                ui.horizontal(|ui| {
+                {
                     let display_value = format_param_value(&row.value);
                     // Modelica description-comment, shown as hover help on
                     // both the name and the value cell.
                     let desc = (!row.description.is_empty()).then(|| row.description.clone());
                     if editable {
                         let name_resp = ui.add(
-                            egui::Label::new(format!("{:18}", path))
+                            egui::Label::new(path.clone())
                                 .sense(egui::Sense::hover()),
                         );
                         if let Some(d) = &desc {
@@ -1224,7 +1237,7 @@ fn render_active_class_parameters(
                         // the canvas, then editing there.
                         let ro_name = ui.add(
                             egui::Label::new(
-                                egui::RichText::new(format!("{:18}", path))
+                                egui::RichText::new(path.clone())
                                     .color(muted)
                                     .size(11.0),
                             )
@@ -1239,8 +1252,10 @@ fn render_active_class_parameters(
                                 .size(11.0),
                         );
                     }
-                });
+                }
+                ui.end_row();
             }
+                }); // end parameter grid
             }); // end bounded parameter-list scroll
             if edits.is_empty() {
                 return;

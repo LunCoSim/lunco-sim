@@ -462,7 +462,17 @@ fn build_state(world: &mut World) -> WorkspaceState {
         })
         .collect();
     let dock = if RESTORE_DOCK_ARRANGEMENT {
-        world.resource::<WorkbenchLayout>().dock_json()
+        let layout = world.resource::<WorkbenchLayout>();
+        if layout.perspective_chrome_complete() {
+            layout.dock_json()
+        } else {
+            // Don't persist a transient chrome-less dock (a centre-driven
+            // perspective whose dock momentarily lost its side/right/bottom
+            // panels — e.g. mid-switch through the viewport-only rebuild
+            // branch). Writing it would round-trip as a layout with missing
+            // panels; dropping it lets restore rebuild chrome from intent.
+            None
+        }
     } else {
         None // see RESTORE_DOCK_ARRANGEMENT
     };
@@ -534,9 +544,13 @@ fn restore_workspace_state(world: &mut World) {
         // tabs to remap).
         if RESTORE_DOCK_ARRANGEMENT {
             if let Some(dock) = state.dock.clone() {
-                world
-                    .resource_mut::<WorkbenchLayout>()
-                    .set_dock_from_json(dock, &std::collections::HashMap::new());
+                let mut layout = world.resource_mut::<WorkbenchLayout>();
+                layout.set_dock_from_json(dock, &std::collections::HashMap::new());
+                // A persisted tree can omit the active perspective's
+                // chrome (saved during a viewport-only state / older
+                // layout); re-attach it so side/right panels don't
+                // silently vanish in dock-mode.
+                layout.ensure_chrome_present();
             }
         }
         return;
@@ -624,9 +638,13 @@ fn restore_workspace_state(world: &mut World) {
     // focuses them. See RESTORE_DOCK_ARRANGEMENT.
     if RESTORE_DOCK_ARRANGEMENT {
         if let Some(dock) = state.dock.clone() {
-            world
-                .resource_mut::<WorkbenchLayout>()
-                .set_dock_from_json(dock, &id_map);
+            let mut layout = world.resource_mut::<WorkbenchLayout>();
+            layout.set_dock_from_json(dock, &id_map);
+            // Guarantee the perspective's chrome (side browser /
+            // inspectors / bottom) survives a partial or viewport-only
+            // persisted tree. Open documents are preserved by the
+            // rebuild; only split sizes reset.
+            layout.ensure_chrome_present();
         }
     }
 }

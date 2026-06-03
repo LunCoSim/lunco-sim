@@ -1359,6 +1359,68 @@ impl WorkbenchLayout {
             self.open_instance(kind, instance);
         }
     }
+
+    /// Reconcile a freshly-restored dock tree against the active
+    /// perspective's declared chrome (side browser / inspectors /
+    /// bottom singletons).
+    ///
+    /// A persisted dock can omit those panels — e.g. it was last saved
+    /// while a viewport-only perspective was active (which parks only
+    /// instance tabs, no chrome — see [`Self::rebuild_dock`]'s
+    /// `center_tabs.is_empty()` branch), or from an older layout. In
+    /// dock-mode the renderer draws the dock tree verbatim, so any
+    /// missing chrome silently never appears (open documents show, but
+    /// the side/right panels are gone).
+    ///
+    /// When the active perspective is centre-driven (it declares
+    /// registered centre singletons) yet the restored dock is missing
+    /// any declared chrome, rebuild the full layout from intent.
+    /// [`Self::rebuild_dock`] re-attaches the open document/instance
+    /// tabs, so only the saved split *sizes* are lost — not the open
+    /// documents or the chrome. Viewport-only perspectives (no
+    /// registered centre singleton — the sandbox's `View`) are left
+    /// untouched: their chrome lives outside the dock by design.
+    pub(crate) fn ensure_chrome_present(&mut self) {
+        if !self.perspective_chrome_complete() {
+            warn!(
+                "[WorkspaceState] restored dock missing perspective chrome; \
+                 rebuilding layout (open documents preserved, split sizes reset)"
+            );
+            self.rebuild_dock();
+        }
+    }
+
+    /// True when the live dock is consistent with the active
+    /// perspective's declared chrome. Either the perspective is
+    /// viewport-only (declares no *registered* centre singleton — its
+    /// side panels render outside the dock, so a chrome-less dock is
+    /// correct), or every declared+registered chrome panel
+    /// (side/right/bottom/centre singleton) is present in the dock tree.
+    ///
+    /// Used at both ends of persistence: [`Self::ensure_chrome_present`]
+    /// heals a restored dock that fails this, and `build_state` refuses
+    /// to persist a dock that fails it (so a transient chrome-less dock —
+    /// e.g. mid perspective-switch through the viewport-only
+    /// [`Self::rebuild_dock`] branch — never round-trips as a layout with
+    /// missing side panels).
+    pub(crate) fn perspective_chrome_complete(&self) -> bool {
+        let is_centre_driven = self.center.iter().any(|id| self.panels.contains_key(id));
+        if !is_centre_driven {
+            return true; // viewport-only — chrome renders outside the dock
+        }
+        let in_dock: std::collections::HashSet<PanelId> = self
+            .dock
+            .iter_all_tabs()
+            .filter_map(|(_, t)| if let TabId::Singleton(id) = t { Some(*id) } else { None })
+            .collect();
+        self.side_browser
+            .iter()
+            .chain(self.right_inspector.iter())
+            .chain(self.bottom.iter())
+            .chain(self.center.iter())
+            .filter(|id| self.panels.contains_key(id))
+            .all(|id| in_dock.contains(id))
+    }
 }
 
 /// Content options for the status bar.

@@ -118,19 +118,16 @@ fn render_modelica_plot(ui: &mut egui::Ui, world: &mut World, viz_id: VizId) {
     let has_live = bound_count > 0;
     let has_exp = exp_summary.total_runs > 0;
 
-    // Single shared action header — New / Duplicate / Fit / CSV —
-    // rendered once here regardless of which plot body follows.
-    // Both bodies (the live LinePlot and the experiments plot) used
-    // to grow their own action clusters; the live path's toolbar
-    // never had one, so binding a live variable made the tab-copy
-    // buttons vanish. One header, one place, every state.
-    render_plot_header(ui, world, viz_id, has_live);
-
     if has_live && !has_exp {
-        // Pure live mode keeps the dedicated LinePlot rendering so
-        // the X/Y/+add binding picker stays accessible.
+        // Pure live mode keeps its own one-line action header above the
+        // dedicated LinePlot (which owns the X/Y/+add binding picker and
+        // its own log-Y toggle).
+        render_plot_header(ui, world, viz_id);
         render_line_plot(ui, world, viz_id);
     } else {
+        // The experiments body draws the action buttons (New / Dup / Fit /
+        // CSV) and the log-Y toggle inline on its Variables/Runs row, so
+        // the whole toolbar is a single line — no separate header here.
         let extras = if has_live {
             collect_live_extras(world, viz_id)
         } else {
@@ -142,53 +139,64 @@ fn render_modelica_plot(ui: &mut egui::Ui, world: &mut World, viz_id: VizId) {
     }
 }
 
-/// The shared action cluster for every Modelica plot tab, drawn once
-/// above the plot body. `➕` opens a fresh plot panel, `📄` duplicates
-/// this one (same bindings + picked vars), `📐 Fit` queues a one-shot
-/// auto-fit via [`VizFitRequests`] (both the LinePlot and experiments
-/// bodies drain it), and `💾 CSV` exports live signal histories.
-fn render_plot_header(ui: &mut egui::Ui, world: &mut World, viz_id: VizId, has_live: bool) {
+/// The pure-live action header: a single right-aligned button row above
+/// the dedicated LinePlot. The experiments body doesn't use this — it
+/// renders [`plot_action_buttons`] inline on its own pickers row.
+fn render_plot_header(ui: &mut egui::Ui, world: &mut World, viz_id: VizId) {
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            plot_action_buttons(ui, world, viz_id);
+        });
+    });
+    ui.separator();
+}
+
+/// The shared action cluster for every Modelica plot tab: `➕` opens a
+/// fresh plot panel, `📄` duplicates this one (same bindings + picked
+/// vars), `📐 Fit` queues a one-shot auto-fit via [`VizFitRequests`]
+/// (both the LinePlot and experiments bodies drain it), and `💾 CSV`
+/// exports the plot's curves. Renders in the caller's current layout
+/// direction (the callers use right-to-left, so `➕` lands rightmost).
+pub(crate) fn plot_action_buttons(
+    ui: &mut egui::Ui,
+    world: &mut World,
+    viz_id: VizId,
+) {
     let mut new_plot = false;
     let mut dup = false;
     let mut fit = false;
     let mut csv = false;
-    ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .small_button("➕")
-                .on_hover_text("New plot panel — opens a fresh tab.")
-                .clicked()
-            {
-                new_plot = true;
-            }
-            if ui
-                .small_button("📄")
-                .on_hover_text(
-                    "Duplicate this plot — new tab with the same \
-                     signal bindings and picked variables.",
-                )
-                .clicked()
-            {
-                dup = true;
-            }
-            if ui
-                .small_button("📐 Fit")
-                .on_hover_text("Auto-fit axes to data")
-                .clicked()
-            {
-                fit = true;
-            }
-            if has_live
-                && ui
-                    .small_button("💾 CSV")
-                    .on_hover_text("Export live signal histories to CSV.")
-                    .clicked()
-            {
-                csv = true;
-            }
-        });
-    });
-    ui.separator();
+    if ui
+        .small_button("➕")
+        .on_hover_text("New plot panel — opens a fresh tab.")
+        .clicked()
+    {
+        new_plot = true;
+    }
+    if ui
+        .small_button("📄")
+        .on_hover_text(
+            "Duplicate this plot — new tab with the same \
+             signal bindings and picked variables.",
+        )
+        .clicked()
+    {
+        dup = true;
+    }
+    if ui
+        .small_button("📐 Fit")
+        .on_hover_text("Auto-fit axes to data")
+        .clicked()
+    {
+        fit = true;
+    }
+    if ui
+        .small_button("💾 CSV")
+        .on_hover_text("Export the plot's curves to CSV.")
+        .clicked()
+    {
+        csv = true;
+    }
 
     if new_plot {
         world

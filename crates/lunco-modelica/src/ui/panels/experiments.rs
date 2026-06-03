@@ -84,6 +84,13 @@ pub struct PlotPanelState {
     /// auto-log-Y default (which kicks in on mixed-unit / wide-magnitude
     /// plots) so we never fight an explicit choice in either direction.
     pub log_y_user_set: bool,
+    /// Comparison mode for the curve palette. `false` (default) →
+    /// colour encodes the *variable* and line-style encodes the *run*
+    /// (good for tracking one variable across sweeps). `true` → colour
+    /// encodes the *run* and line-style encodes the *variable* (good
+    /// for comparing the same variable across many runs, where the
+    /// dash-only distinction is unreadable past ~3 runs).
+    pub color_by_run: bool,
 }
 
 #[derive(Resource, Default, Debug)]
@@ -1578,6 +1585,11 @@ fn render_experiments_plot_inner(
         .get_resource::<PlotPanelStates>()
         .map(|s| (s.visible(viz_id), s.picked(viz_id)))
         .unwrap_or_default();
+    let color_by_run = world
+        .get_resource::<PlotPanelStates>()
+        .and_then(|s| s.by_viz.get(&viz_id))
+        .map(|st| st.color_by_run)
+        .unwrap_or(false);
 
     // Build var -> unit map from the active doc index.
     let units: std::collections::HashMap<String, String> = active_doc_units(world, viz_id);
@@ -1638,14 +1650,21 @@ fn render_experiments_plot_inner(
                         .zip(values.iter())
                         .map(|(t, y)| [*t, *y])
                         .collect();
-                    // Convention: color = variable identity, line
-                    // style = run identity. So `airframe.altitude`
-                    // is always blue, but Run 1 = solid, Run 2 =
-                    // dashed, Run 3 = dotted. Lets the eye track a
-                    // variable across sweeps without legend hopping.
+                    // Two encodings, user-selectable via `color_by_run`:
+                    //   default  → colour = variable, style = run.
+                    //     `airframe.altitude` is always blue; Run 1 =
+                    //     solid, Run 2 = dashed… Tracks one variable
+                    //     across sweeps without legend hopping.
+                    //   by-run   → colour = run, style = variable.
+                    //     Each run gets a distinct colour so a single
+                    //     variable across many runs is legible (the
+                    //     dash-only distinction breaks down past ~3).
                     let v_idx = var_idx.get(var).copied().unwrap_or(0) as u8;
-                    let color = palette_color(v_idx);
-                    let style_idx = exp.color_hint % 4;
+                    let (color, style_idx) = if color_by_run {
+                        (palette_color(exp.color_hint), v_idx % 4)
+                    } else {
+                        (palette_color(v_idx), exp.color_hint % 4)
+                    };
                     series.push(PlotSeries {
                         label,
                         color,
@@ -1691,6 +1710,32 @@ fn render_experiments_plot_inner(
     // plot.
     let mut toggle_var: Option<String> = None;
     let mut reset_clicked = false;
+    // Deferred run-comparison actions, applied after the header (the
+    // menu closures borrow `world`-derived locals, so we collect intent
+    // and mutate `PlotPanelStates` once afterwards).
+    let mut toggle_run: Option<ExperimentId> = None;
+    let mut set_color_by_run: Option<bool> = None;
+    // Completed runs for this twin: (id, name, visible?, colour_hint).
+    // Drives the "▾ Runs" dropdown so the user picks overlays right on
+    // the graph instead of leaving for the Experiments table.
+    let runs_info: Vec<(ExperimentId, String, bool, u8)> = world
+        .get_resource::<ExperimentRegistry>()
+        .map(|reg| {
+            reg.list_for_twin(&twin)
+                .iter()
+                .filter(|e| e.result.is_some())
+                .map(|e| (e.id, e.name.clone(), visible.contains(&e.id), e.color_hint))
+                .collect()
+        })
+        .unwrap_or_default();
+    // Picker filter lives on the shared `ExperimentVisibility`
+    // resource (read into a local for the popup, written back after).
+    // A blank filter shows the whole tree; a non-empty one force-opens
+    // every surviving group so matches are visible without a click.
+    let mut var_filter = world
+        .get_resource::<ExperimentVisibility>()
+        .map(|v| v.var_filter.clone())
+        .unwrap_or_default();
     // Header — doc badge + var picker chips. Plot action buttons
     // (New / Dup / Fit / CSV) live in the Graphs panel's shared
     // header rendered above this body, so they stay reachable in
@@ -1705,7 +1750,15 @@ fn render_experiments_plot_inner(
         };
         groups.entry(head).or_default().push(tail);
     }
-    let group_count = groups.len();
+    // Current log-Y state for the inline toggle button on this row.
+    // Reflects the stored value; the auto-default (mixed units) is
+    // persisted further down, so it shows pressed from the next frame.
+    let log_y_now = world
+        .get_resource::<PlotPanelStates>()
+        .and_then(|s| s.by_viz.get(&viz_id))
+        .map(|st| st.log_y)
+        .unwrap_or(false);
+    let mut log_y_toggle: Option<bool> = None;
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(format!(
@@ -1715,9 +1768,175 @@ fn render_experiments_plot_inner(
             .color(col_muted)
             .small(),
         );
-        // Right-aligned action cluster first so the picker scroll
-        // area gets the remaining middle space.
+        // Variable picker — a compact menu button that opens the
+        // component tree as a FLOATING popup over the plot. Replaces
+        // the old inline CollapsingHeader strip, which unfolded
+        // downward and (on a 59-variable model) filled the whole dock,
+        // pushing the chart off the bottom. The plot now keeps the
+        // panel's full height in every state; variables are one click
+        // away in the dropdown instead of dumped inline.
+        if !groups.is_empty() {
+            let total_vars = all_vars.len();
+            ui.menu_button(
+                format!("▾ Variables {}/{}", picked_vars.len(), total_vars),
+                |ui| {
+                    ui.set_min_width(240.0);
+                    ui.horizontal(|ui| {
+                        ui.label("🔍");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut var_filter)
+                                .hint_text("filter…")
+                                .desired_width(150.0),
+                        );
+                        if !var_filter.is_empty()
+                            && ui.small_button("✕").on_hover_text("Clear filter").clicked()
+                        {
+                            var_filter.clear();
+                        }
+                    });
+                    let needle = var_filter.to_lowercase();
+                    let filtering = !needle.is_empty();
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .id_salt("exp_picker_menu_scroll")
+                        .max_height(360.0)
+                        // Fill the popup's width instead of shrinking to
+                        // the variable names, so the scrollbar sits at the
+                        // right edge with no dead space beside it.
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            for (head, tails) in &groups {
+                                // Filter leaves; hide a group entirely
+                                // when nothing under it matches.
+                                let matching: Vec<&String> = tails
+                                    .iter()
+                                    .filter(|t| {
+                                        if !filtering {
+                                            return true;
+                                        }
+                                        let full = if head.is_empty() {
+                                            (*t).clone()
+                                        } else {
+                                            format!("{head}.{t}")
+                                        };
+                                        full.to_lowercase().contains(&needle)
+                                    })
+                                    .collect();
+                                if matching.is_empty() {
+                                    continue;
+                                }
+                                let picked_in_group = matching
+                                    .iter()
+                                    .filter(|t| {
+                                        let full = if head.is_empty() {
+                                            (**t).clone()
+                                        } else {
+                                            format!("{head}.{t}")
+                                        };
+                                        picked_vars.contains(&full)
+                                    })
+                                    .count();
+                                let label = if head.is_empty() {
+                                    format!("(top) {}/{}", picked_in_group, matching.len())
+                                } else {
+                                    format!("{head} {}/{}", picked_in_group, matching.len())
+                                };
+                                let mut header = egui::CollapsingHeader::new(label)
+                                    .id_salt(format!("exp_picker_group_{head}"))
+                                    .default_open(false);
+                                // While filtering, force every surviving
+                                // group open so matches show without a
+                                // second click.
+                                if filtering {
+                                    header = header.open(Some(true));
+                                }
+                                header.show(ui, |ui| {
+                                    for t in matching {
+                                        let full = if head.is_empty() {
+                                            t.clone()
+                                        } else {
+                                            format!("{head}.{t}")
+                                        };
+                                        let mut on = picked_vars.contains(&full);
+                                        if ui
+                                            .checkbox(&mut on, t)
+                                            .on_hover_text(&full)
+                                            .changed()
+                                        {
+                                            toggle_var = Some(full);
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                },
+            );
+        }
+        // Runs picker — pick which completed runs overlay, right on
+        // the graph. Each row: visibility checkbox + colour swatch +
+        // name. The "Colour by run" toggle at the top flips the curve
+        // palette so a one-variable / many-run sweep is legible.
+        if !runs_info.is_empty() {
+            let vis_n = runs_info.iter().filter(|r| r.2).count();
+            ui.menu_button(
+                format!("▾ Runs {}/{}", vis_n, runs_info.len()),
+                |ui| {
+                    ui.set_min_width(200.0);
+                    let mut cbr = color_by_run;
+                    if ui
+                        .checkbox(&mut cbr, "Colour by run")
+                        .on_hover_text(
+                            "Colour encodes the run (best for comparing one \
+                             variable across many runs). Off → colour encodes \
+                             the variable, line-style the run.",
+                        )
+                        .changed()
+                    {
+                        set_color_by_run = Some(cbr);
+                    }
+                    ui.separator();
+                    for (id, name, vis, hint) in &runs_info {
+                        ui.horizontal(|ui| {
+                            let mut on = *vis;
+                            if ui.checkbox(&mut on, "").changed() {
+                                toggle_run = Some(*id);
+                            }
+                            let (r, g, b) = palette_color(*hint);
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(10.0, 10.0),
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().rect_filled(
+                                rect,
+                                2.0,
+                                egui::Color32::from_rgb(r, g, b),
+                            );
+                            ui.label(name);
+                        });
+                    }
+                },
+            );
+        }
+        // Right-aligned status cluster: scrub readout + mixed-units
+        // warning. The picker no longer lives here (it's the menu
+        // button above), so it never competes for the row's width.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Action buttons (New / Dup / Fit / CSV) land rightmost, so the
+            // whole toolbar — pickers on the left, actions + log-Y on the
+            // right — sits on this single line.
+            crate::ui::panels::graphs::plot_action_buttons(ui, world, viz_id);
+            // log-Y toggle, styled as a button (framed even when off) and
+            // grouped on the same row as the Variables/Runs pickers.
+            if ui
+                .add(egui::Button::new("log Y").small().selected(log_y_now))
+                .on_hover_text(
+                    "Plot the Y axis on a log₁₀ scale (drops values ≤ 0). \
+                     Auto-enabled on mixed-unit plots until you toggle it.",
+                )
+                .clicked()
+            {
+                log_y_toggle = Some(!log_y_now);
+            }
             if scrub_time.is_some() {
                 if ui
                     .small_button("↻")
@@ -1742,60 +1961,36 @@ fn render_experiments_plot_inner(
                 )
                 .on_hover_text("Picked variables have different units; y-axis label suppressed.");
             }
-            // Middle/left: picker chips. Inside the right-to-left
-            // layout but rendered as a horizontal-scroll area
-            // consuming the remaining width.
-            if !groups.is_empty() {
-                egui::ScrollArea::horizontal()
-                    .id_salt("exp_picker_scroll")
-                    .max_height(20.0)
-                    .show(ui, |ui| {
-                        ui.with_layout(
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                for (head, tails) in &groups {
-                                    let picked_in_group = tails.iter().filter(|t| {
-                                        let full = if head.is_empty() {
-                                            (*t).clone()
-                                        } else {
-                                            format!("{head}.{t}")
-                                        };
-                                        picked_vars.contains(&full)
-                                    }).count();
-                                    let label = if head.is_empty() {
-                                        format!("(top) {}/{}", picked_in_group, tails.len())
-                                    } else {
-                                        format!("{head} {}/{}", picked_in_group, tails.len())
-                                    };
-                                    egui::CollapsingHeader::new(label)
-                                        .id_salt(format!("exp_picker_group_{head}"))
-                                        .default_open(group_count <= 1)
-                                        .show(ui, |ui| {
-                                            for t in tails {
-                                                let full = if head.is_empty() {
-                                                    t.clone()
-                                                } else {
-                                                    format!("{head}.{t}")
-                                                };
-                                                let mut on = picked_vars.contains(&full);
-                                                if ui.checkbox(&mut on, t)
-                                                    .on_hover_text(&full)
-                                                    .changed()
-                                                {
-                                                    toggle_var = Some(full);
-                                                }
-                                            }
-                                        });
-                                }
-                            },
-                        );
-                    });
-            }
         });
     });
     if let Some(v) = toggle_var {
         if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
             states.toggle_var(viz_id, v);
+        }
+    }
+    if let Some(v) = log_y_toggle {
+        if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
+            let e = states.entry(viz_id);
+            e.log_y = v;
+            e.log_y_user_set = true;
+        }
+    }
+    // Persist the popup's filter text back onto the shared resource so
+    // it survives across frames (the menu rebuilds every frame).
+    if let Some(mut vis) = world.get_resource_mut::<ExperimentVisibility>() {
+        if vis.var_filter != var_filter {
+            vis.var_filter = var_filter;
+        }
+    }
+    // Apply deferred run-comparison actions from the Runs dropdown.
+    if toggle_run.is_some() || set_color_by_run.is_some() {
+        if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
+            if let Some(id) = toggle_run {
+                states.toggle_visible(viz_id, id);
+            }
+            if let Some(v) = set_color_by_run {
+                states.entry(viz_id).color_by_run = v;
+            }
         }
     }
 
@@ -1856,30 +2051,9 @@ fn render_experiments_plot_inner(
         }
     }
     let log_y = stored_log_y || auto_log;
-
-    // Log-Y toggle for this plot tab. Sits just above the chart so it
-    // reads as a chart control; mirrors the live LinePlot's toolbar
-    // toggle. Toggling marks it user-set so the auto-default backs off.
-    {
-        let mut log_y_ui = log_y;
-        let hover = if auto_log {
-            "Auto-enabled: picked variables have mixed units / wide magnitude \
-             range. Click to override (log₁₀, drops values ≤ 0)."
-        } else {
-            "Plot the Y axis on a log₁₀ scale (drops values ≤ 0)"
-        };
-        if ui
-            .toggle_value(&mut log_y_ui, "log Y")
-            .on_hover_text(hover)
-            .changed()
-        {
-            if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
-                let e = states.entry(viz_id);
-                e.log_y = log_y_ui;
-                e.log_y_user_set = true;
-            }
-        }
-    }
+    // The log-Y toggle UI now lives in the shared Graphs header
+    // (`render_plot_header`), grouped top-right with Fit / + / CSV.
+    // This body only computes `log_y` and persists the auto-default.
 
     // Plot frame always renders. x-axis label dropped: time is
     // implicit in this panel and the label was burning a row of
@@ -1903,11 +2077,11 @@ fn render_experiments_plot_inner(
                 lunco_viz::plot_fmt::log_y_tick(mark.value)
             });
         }
+        // Only label the axis with the unit (when shared). The "(log₁₀)"
+        // marker is dropped — it rendered as a wide vertical strip on the
+        // left and the `log Y` toggle button already signals the scale.
         if let Some(u) = shared_unit.as_ref().filter(|u| !u.is_empty()) {
-            let label = if log_y { format!("[{u}] (log₁₀)") } else { format!("[{u}]") };
-            plot = plot.y_axis_label(label);
-        } else if log_y {
-            plot = plot.y_axis_label("(log₁₀)");
+            plot = plot.y_axis_label(format!("[{u}]"));
         }
         let captured_x: std::cell::Cell<Option<f64>> = std::cell::Cell::new(None);
         plot.show(ui, |plot_ui| {
