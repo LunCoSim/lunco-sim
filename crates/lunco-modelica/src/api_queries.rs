@@ -55,6 +55,7 @@ impl Plugin for ModelicaApiQueriesPlugin {
         registry.register(ListTwinProvider);
         registry.register(ListMslProvider);
         registry.register(ListCompileCandidatesProvider);
+        registry.register(QueryExperimentBoundsProvider);
         registry.register(CompileStatusProvider);
         registry.register(RunStatusProvider);
         registry.register(ListRunsProvider);
@@ -412,6 +413,124 @@ impl ApiQueryProvider for ListCompileCandidatesProvider {
             "ast_parsed": true,
         }))
     }
+}
+
+// ─── QueryExperimentBounds ─────────────────────────────────────────────
+
+/// Reports, per non-package class in a document, the simulation bounds the
+/// Fast Run popup / Experiments Setup would use — and *where they come
+/// from*. Answers "why does it propose 10 s?": a class with no
+/// `experiment(...)` annotation (or one missing `StopTime`) resolves to the
+/// 10 s fallback, while an annotated class surfaces its authored `StopTime`.
+///
+/// Params: `{doc}` (required), `{class}` (optional — short or qualified
+/// name; default = every non-package class).
+struct QueryExperimentBoundsProvider;
+
+impl ApiQueryProvider for QueryExperimentBoundsProvider {
+    fn name(&self) -> &'static str {
+        "QueryExperimentBounds"
+    }
+
+    fn execute(
+        &self,
+        world: &mut World,
+        params: &serde_json::Value,
+    ) -> ApiResponse {
+        let Some(doc_id) = parse_doc_id(params, "doc") else {
+            return err_missing_field("doc");
+        };
+        let class_filter = params
+            .get("class")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+
+        // Snapshot (class-name, has-annotation) up front, then drop the
+        // registry borrow before calling the resolve helpers — they take
+        // `&World` and would otherwise alias the registry borrow.
+        let class_list: Vec<(String, bool)> = {
+            let registry = world.resource::<ModelicaDocumentRegistry>();
+            let Some(host) = registry.host(doc_id) else {
+                return err_doc_not_found(doc_id);
+            };
+            host.document()
+                .index()
+                .classes
+                .values()
+                .filter(|c| !matches!(c.kind, crate::index::ClassKind::Package))
+                .filter(|c| {
+                    class_filter.as_ref().map_or(true, |f| {
+                        c.name == *f || c.name.rsplit('.').next() == Some(f.as_str())
+                    })
+                })
+                .map(|c| (c.name.clone(), c.experiment.is_some()))
+                .collect()
+        };
+
+        if class_list.is_empty() {
+            return ApiResponse::error(
+                ApiErrorCode::EntityNotFound,
+                "no matching non-package class in document".to_string(),
+            );
+        }
+
+        use crate::ui::commands::compile::{bounds_from_annotation, resolve_setup_bounds};
+        use lunco_experiments::{ExperimentRunner, ModelRef};
+
+        let classes: Vec<serde_json::Value> = class_list
+            .into_iter()
+            .map(|(name, has_ann)| {
+                let mref = ModelRef(name.clone());
+                let annotation = bounds_from_annotation(world, doc_id, &mref);
+                let resolved = resolve_setup_bounds(world, doc_id, &mref);
+                // Mirror resolve_setup_bounds' precedence to label the source.
+                let has_draft = world
+                    .get_resource::<crate::experiments_runner::ExperimentDrafts>()
+                    .and_then(|d| {
+                        d.get(doc_id, &mref).and_then(|dr| dr.bounds_override.clone())
+                    })
+                    .is_some();
+                let has_runner_cache = world
+                    .get_resource::<crate::ModelicaRunnerResource>()
+                    .and_then(|r| r.0.default_bounds(&mref))
+                    .is_some();
+                let source = if has_draft {
+                    "draft_override"
+                } else if has_runner_cache {
+                    "runner_cache"
+                } else if annotation.is_some() {
+                    "annotation"
+                } else {
+                    "fallback_10s"
+                };
+                serde_json::json!({
+                    "class": name,
+                    "has_experiment_annotation": has_ann,
+                    "annotation_bounds": annotation.as_ref().map(bounds_to_json),
+                    "resolved_bounds": bounds_to_json(&resolved),
+                    "source": source,
+                })
+            })
+            .collect();
+
+        ApiResponse::ok(serde_json::json!({
+            "doc_id": doc_id.raw(),
+            "classes": classes,
+            "count": classes.len(),
+        }))
+    }
+}
+
+/// Compact JSON for a [`lunco_experiments::RunBounds`] (the simulation
+/// time window + sampling/tolerance), used by `QueryExperimentBounds`.
+fn bounds_to_json(b: &lunco_experiments::RunBounds) -> serde_json::Value {
+    serde_json::json!({
+        "t_start": b.t_start,
+        "t_end": b.t_end,
+        "dt": b.dt,
+        "tolerance": b.tolerance,
+    })
 }
 
 // ─── CompileStatus (spec 033 P0) ───────────────────────────────────────
