@@ -123,6 +123,11 @@ pub mod visual_diagram;
 /// See `docs/architecture/REFACTOR_PLAN.md`.
 pub mod index;
 
+/// Pure simulation-target & run-configuration resolution (which class to
+/// run, what bounds to run it with). No `World`/UI deps — the `ui/` layer
+/// gathers inputs and calls down. See [`sim_target`].
+pub mod sim_target;
+
 /// Per-Twin Modelica domain engine: long-lived `rumoca_compile::Session`
 /// + per-doc URI mapping. Provides cross-file inheritance-merged queries.
 pub mod engine;

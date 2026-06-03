@@ -8,7 +8,7 @@ pub mod parsing;
 
 pub use types::{MODEL_VIEW_KIND, ModelTabState, ModelViewMode, TabId, TabRenderContext};
 pub use tabs::ModelTabs;
-pub use context::{drilled_class_for_doc, sync_active_tab_to_doc};
+pub use context::{default_simulation_class, drilled_class_for_doc, sync_active_tab_to_doc};
 pub use render::ModelViewPanel;
 pub use parsing::extract_documentation;
 

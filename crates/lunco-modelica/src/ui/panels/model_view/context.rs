@@ -24,6 +24,32 @@ pub fn drilled_class_for_doc(
     world.resource::<ModelTabs>().drilled_class_for_doc(doc)
 }
 
+/// The class a doc's simulation surfaces default to, in precedence order:
+///   1. drilled-in class — the UI drill-in pin; the user is looking at a
+///      leaf model and expects *that* to run, not the enclosing package.
+///   2. tier-ranked simulation root — `simulation_candidates()[0]`, where an
+///      `experiment(...)`-annotated, non-partial class sorts first. This is
+///      NOT arbitrary `HashMap` order: a package whose only annotated model
+///      is `RoverThermalSystem` must not default to e.g. `LunarEnvironment`.
+/// Returns `None` when the doc has no host or no simulatable candidate.
+///
+/// Single source of truth for "which class does a simulation surface default
+/// to" — the Fast Run popup, the Experiments Setup form, and (for the
+/// non-ambiguous path) `dispatch_experiment` all route through here so the
+/// precedence can't drift between surfaces. Callers that need to disambiguate
+/// multiple candidates (e.g. open a picker modal) layer that on top.
+pub fn default_simulation_class(world: &World, doc: DocumentId) -> Option<String> {
+    // Gather the two inputs from live state; the precedence rule lives in
+    // `sim_target::default_class` (shared with every other run surface).
+    let drilled = drilled_class_for_doc(world, doc);
+    let candidates = world
+        .get_resource::<ModelicaDocumentRegistry>()
+        .and_then(|r| r.host(doc))
+        .map(|h| h.document().index().simulation_candidates())
+        .unwrap_or_default();
+    crate::sim_target::default_class(drilled.as_deref(), &candidates)
+}
+
 pub fn resolve_tab_target(world: &World, instance: u64) -> (DocumentId, Option<String>) {
     if let Some(state) = world.get_resource::<ModelTabs>().and_then(|t| t.get(instance)) {
         return (state.doc, state.drilled_class.clone());

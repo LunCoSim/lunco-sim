@@ -1201,16 +1201,8 @@ pub(crate) fn bounds_from_annotation(
         .get(&model_ref.0)
         .or_else(|| index.classes.values().find(|c| c.name == model_ref.0))?;
     let exp = class.experiment.as_ref()?;
-    let t_end = exp.stop_time?;
-    Some(lunco_experiments::RunBounds {
-        t_start: exp.start_time.unwrap_or(0.0),
-        t_end,
-        // `Interval=0` is the spec's "unspecified" sentinel → None.
-        dt: exp.interval.filter(|&i| i > 0.0),
-        tolerance: exp.tolerance,
-        solver: None,
-        h0: None,
-    })
+    // World-gathering done; the annotation→bounds mapping is pure.
+    crate::sim_target::bounds_from_experiment(exp)
 }
 
 /// Single source of truth for the simulation bounds shown in BOTH the
@@ -1224,29 +1216,17 @@ pub(crate) fn resolve_setup_bounds(
     model_ref: &lunco_experiments::ModelRef,
 ) -> lunco_experiments::RunBounds {
     use lunco_experiments::ExperimentRunner;
-    if let Some(b) = world
+    // Gather the three precedence tiers from live state; the precedence +
+    // fallback are owned by `sim_target::resolve_bounds` (single source of
+    // truth, incl. the canonical `DEFAULT_STOP_TIME`).
+    let draft = world
         .get_resource::<crate::experiments_runner::ExperimentDrafts>()
-        .and_then(|d| d.get(doc, model_ref).and_then(|dr| dr.bounds_override.clone()))
-    {
-        return b;
-    }
-    if let Some(b) = world
+        .and_then(|d| d.get(doc, model_ref).and_then(|dr| dr.bounds_override.clone()));
+    let runner_cached = world
         .get_resource::<crate::ModelicaRunnerResource>()
-        .and_then(|r| r.0.default_bounds(model_ref))
-    {
-        return b;
-    }
-    if let Some(b) = bounds_from_annotation(world, doc, model_ref) {
-        return b;
-    }
-    lunco_experiments::RunBounds {
-        t_start: 0.0,
-        t_end: 10.0,
-        dt: None,
-        tolerance: None,
-        solver: None,
-        h0: None,
-    }
+        .and_then(|r| r.0.default_bounds(model_ref));
+    let annotation = bounds_from_annotation(world, doc, model_ref);
+    crate::sim_target::resolve_bounds(draft, runner_cached, annotation)
 }
 
 fn dispatch_experiment(
@@ -1308,41 +1288,47 @@ fn dispatch_experiment(
             }
             (source, filename, candidates, experiment_map)
         };
-        let drilled =
-            crate::ui::panels::model_view::drilled_class_for_doc(world, doc);
+        // Class resolution precedence:
+        //   1. explicit_class on the command — API/agent caller knows exactly.
+        //   2. no drill pin + several candidates → open the picker modal
+        //      (same one Compile uses, tagged FastRun so confirmation
+        //      re-dispatches FastRunActiveModel). This is the one rule
+        //      `default_simulation_class` deliberately does NOT encode —
+        //      it silently takes the first candidate.
+        //   3. otherwise the shared default: drilled-in pin → tier-ranked
+        //      simulation root (`default_simulation_class`), so this API
+        //      path can't drift from the Fast Run popup / Setup form.
         let model_name = match explicit_class {
             Some(c) => c,
-            None => match drilled {
-                Some(c) => c,
-                None => match candidates.len() {
-                    0 => {
+            None => {
+                let has_drill =
+                    crate::ui::panels::model_view::drilled_class_for_doc(world, doc).is_some();
+                if !has_drill && candidates.len() > 1 {
+                    if let Some(mut picker) =
+                        world.get_resource_mut::<CompileClassPickerState>()
+                    {
+                        if picker.0.as_ref().map(|p| p.doc) != Some(doc) {
+                            picker.0 = Some(CompileClassPickerEntry {
+                                doc,
+                                candidates,
+                                preselected: 0,
+                                purpose: PickerPurpose::FastRun,
+                            });
+                        }
+                    }
+                    return None;
+                }
+                match crate::ui::panels::model_view::default_simulation_class(world, doc) {
+                    Some(c) => c,
+                    None => {
                         bevy::log::warn!(
                             "[dispatch_experiment] doc {} has no compilable top-level class",
                             doc.raw()
                         );
                         return None;
                     }
-                    1 => candidates[0].clone(),
-                    _ => {
-                        // Ambiguous — open the same modal Compile uses,
-                        // tagged with FastRun purpose so confirmation
-                        // re-dispatches FastRunActiveModel.
-                        if let Some(mut picker) =
-                            world.get_resource_mut::<CompileClassPickerState>()
-                        {
-                            if picker.0.as_ref().map(|p| p.doc) != Some(doc) {
-                                picker.0 = Some(CompileClassPickerEntry {
-                                    doc,
-                                    candidates,
-                                    preselected: 0,
-                                    purpose: PickerPurpose::FastRun,
-                                });
-                            }
-                        }
-                        return None;
-                    }
-                },
-            },
+                }
+            }
         };
 
         let model_ref = lunco_experiments::ModelRef(model_name.clone());

@@ -816,18 +816,10 @@ impl ExperimentsPanel {
         {
             Some(h) => {
                 let document = h.document();
-                let drilled = world
-                    .get_resource::<crate::ui::panels::model_view::ModelTabs>()
-                    .and_then(|t| t.drilled_class_for_doc(doc));
-                // Prefer the tier-ranked simulation root (an
-                // `experiment(...)`-annotated class sorts first) over an
-                // arbitrary HashMap-order class. Otherwise a package whose
-                // only annotated model is `RoverThermalSystem` would default
-                // the setup to e.g. `LunarEnvironment` → the 10 s fallback.
-                let preferred =
-                    document.index().simulation_candidates().into_iter().next();
-                let class = drilled.or(preferred);
-                match class {
+                // Drilled-in pin → tier-ranked simulation root (shared
+                // precedence; see `default_simulation_class`). Keeps this
+                // Setup form in lock-step with the Fast Run popup.
+                match crate::ui::panels::model_view::default_simulation_class(world, doc) {
                     Some(c) => (c, document.source().to_string()),
                     None => return,
                 }
