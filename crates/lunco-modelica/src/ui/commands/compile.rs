@@ -192,20 +192,18 @@ pub(crate) fn render_fast_run_setup(
                             entry.bounds.dt =
                                 if adaptive { None } else { Some(0.01) };
                         }
-                        // Cap dt at the horizon, not a fixed 10 s. `dt` is the
-                        // output sample interval (the solver stays adaptive), so
-                        // a year-long run with `Interval=3600` is legitimate —
-                        // the old `..=10.0` range silently clamped 3600→10 and
-                        // made the field look empty/wrong. Speed scales with the
-                        // current value so dragging stays usable at any magnitude.
-                        let dt_max = entry.bounds.t_end.max(10.0);
-                        let dt_speed = (dt_v.abs() * 0.01).max(0.001);
+                        // No upper clamp BY DESIGN: dt is the output sample
+                        // interval and has no meaningful maximum. A fixed
+                        // `..=10.0` range silently rewrote a legitimate value
+                        // (Interval=3600 → 10) and persisted the clamped 10
+                        // into the shared draft. Speed scales with magnitude.
+                        let dt_speed = (dt_v.abs() * 0.01).max(1e-6);
                         if !adaptive
                             && ui
                                 .add(
                                     egui::DragValue::new(&mut dt_v)
                                         .speed(dt_speed)
-                                        .range(1e-6..=dt_max),
+                                        .range(1e-9..=f64::INFINITY),
                                 )
                                 .changed()
                         {
@@ -240,6 +238,60 @@ pub(crate) fn render_fast_run_setup(
                             entry.bounds.tolerance = Some(tol_v);
                         }
                     });
+                    ui.end_row();
+
+                    // Solver picker — mirrors the Experiments-tab Setup so
+                    // both surfaces expose the same control. `None` = use
+                    // the annotation / backend default (TR-BDF2).
+                    ui.label("Solver")
+                        .on_hover_text(
+                            "Integration method. Auto picks the backend default \
+                             (TR-BDF2 — event-robust, recommended for stiff \
+                             multi-day horizons).",
+                        );
+                    let current: String =
+                        entry.bounds.solver.clone().unwrap_or_else(|| "auto".to_string());
+                    let label = match current.as_str() {
+                        "auto" => "Auto (TR-BDF2)",
+                        "bdf" => "BDF (stiff)",
+                        "esdirk34" | "rk4" => "ESDIRK34 (stiff, sharp transitions)",
+                        "tr_bdf2" => "TR-BDF2 (stiff + events)",
+                        "tsit45" => "Tsit45 (non-stiff)",
+                        other => other,
+                    };
+                    egui::ComboBox::from_id_salt("fastrun_setup_solver")
+                        .selected_text(label)
+                        .width(240.0)
+                        .show_ui(ui, |ui| {
+                            for (val, label, hover) in [
+                                ("auto", "Auto (TR-BDF2)",
+                                 "Let the backend pick. Currently TR-BDF2 — \
+                                  event-robust default for stiff horizons."),
+                                ("bdf", "BDF (stiff)",
+                                 "Backward Differentiation Formula — variable-order \
+                                  implicit. OMC's default; can struggle at sharp \
+                                  tanh / relop transitions."),
+                                ("esdirk34", "ESDIRK34 (stiff, sharp transitions)",
+                                 "Explicit Singly-Diagonally-Implicit RK 3(4). \
+                                  A/L-stable; better Newton convergence than BDF \
+                                  near sharp transitions."),
+                                ("tr_bdf2", "TR-BDF2 (stiff + events)",
+                                 "Trapezoidal + BDF2, two-stage implicit. Strong on \
+                                  moderately stiff event-driven dynamics."),
+                                ("tsit45", "Tsit45 (non-stiff)",
+                                 "Tsitouras 4(5) explicit RK. Fast on smooth \
+                                  non-stiff problems; blows up on stiff DAEs."),
+                            ] {
+                                if ui
+                                    .selectable_label(current == val, label)
+                                    .on_hover_text(hover)
+                                    .clicked()
+                                {
+                                    entry.bounds.solver =
+                                        if val == "auto" { None } else { Some(val.to_string()) };
+                                }
+                            }
+                        });
                     ui.end_row();
                 });
 
@@ -1133,6 +1185,70 @@ fn param_map_from_mods(
 /// `label`, when set, replaces the auto-generated "Run N" name so sweep rows
 /// are identifiable in `ListRuns`. Returns the new experiment id, or `None`
 /// when dispatch can't proceed (no doc, ambiguous class → picker, etc.).
+/// Build [`RunBounds`] from a model's `experiment(...)` annotation in
+/// the AST. `None` when the class has no annotation or no StopTime
+/// (a StopTime is what makes the annotation usable).
+pub(crate) fn bounds_from_annotation(
+    world: &World,
+    doc: DocumentId,
+    model_ref: &lunco_experiments::ModelRef,
+) -> Option<lunco_experiments::RunBounds> {
+    let reg = world.get_resource::<crate::ui::state::ModelicaDocumentRegistry>()?;
+    let host = reg.host(doc)?;
+    let index = host.document().index();
+    let class = index
+        .classes
+        .get(&model_ref.0)
+        .or_else(|| index.classes.values().find(|c| c.name == model_ref.0))?;
+    let exp = class.experiment.as_ref()?;
+    let t_end = exp.stop_time?;
+    Some(lunco_experiments::RunBounds {
+        t_start: exp.start_time.unwrap_or(0.0),
+        t_end,
+        // `Interval=0` is the spec's "unspecified" sentinel → None.
+        dt: exp.interval.filter(|&i| i > 0.0),
+        tolerance: exp.tolerance,
+        solver: None,
+        h0: None,
+    })
+}
+
+/// Single source of truth for the simulation bounds shown in BOTH the
+/// Fast Run popup and the Experiments-tab Setup form, so the two
+/// surfaces never disagree. Precedence: saved draft override → runner
+/// annotation cache (`default_bounds`) → AST `experiment(...)`
+/// annotation → 10 s fallback.
+pub(crate) fn resolve_setup_bounds(
+    world: &World,
+    doc: DocumentId,
+    model_ref: &lunco_experiments::ModelRef,
+) -> lunco_experiments::RunBounds {
+    use lunco_experiments::ExperimentRunner;
+    if let Some(b) = world
+        .get_resource::<crate::experiments_runner::ExperimentDrafts>()
+        .and_then(|d| d.get(doc, model_ref).and_then(|dr| dr.bounds_override.clone()))
+    {
+        return b;
+    }
+    if let Some(b) = world
+        .get_resource::<crate::ModelicaRunnerResource>()
+        .and_then(|r| r.0.default_bounds(model_ref))
+    {
+        return b;
+    }
+    if let Some(b) = bounds_from_annotation(world, doc, model_ref) {
+        return b;
+    }
+    lunco_experiments::RunBounds {
+        t_start: 0.0,
+        t_end: 10.0,
+        dt: None,
+        tolerance: None,
+        solver: None,
+        h0: None,
+    }
+}
+
 fn dispatch_experiment(
     world: &mut World,
     raw: DocumentId,

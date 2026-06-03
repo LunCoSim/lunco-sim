@@ -420,17 +420,28 @@ impl Panel for ExperimentsPanel {
             return;
         }
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.weak(format!("{} experiment(s)", rows.len()));
-            // Surface the most recent terminal run's outcome inline
-            // so users get clear "did it finish?" feedback without
-            // hunting in Console. Picks the last Done/Failed/Cancelled
-            // by registry insertion order (rows are appended).
-            if let Some(last) = rows
-                .iter()
-                .rev()
-                .find(|r| r.is_terminal)
-            {
+            // Show EVERY non-terminal run's live status (running /
+            // queued) — when several experiments run at once the user
+            // needs to see all of them, not just one summary. Falls back
+            // to the most recent terminal outcome when nothing is active.
+            let active: Vec<&Row> = rows.iter().filter(|r| !r.is_terminal).collect();
+            if !active.is_empty() {
+                for r in active {
+                    ui.separator();
+                    // `progress` is Some(t_current) while Running; None
+                    // means queued (waiting for a scheduler slot).
+                    let (txt, color) = match r.progress {
+                        Some(t) => (
+                            format!("▶ {} running (t={:.0})", r.name, t),
+                            col_success,
+                        ),
+                        None => (format!("⏳ {} queued", r.name), col_subdued),
+                    };
+                    ui.label(egui::RichText::new(txt).color(color).strong());
+                }
+            } else if let Some(last) = rows.iter().rev().find(|r| r.is_terminal) {
                 ui.separator();
                 let (txt, color) = if let Some(_err) = &last.error {
                     (format!("⚠ {} failed", last.name), col_error)
@@ -808,26 +819,11 @@ impl ExperimentsPanel {
         };
         let model_ref = lunco_experiments::ModelRef(model_name.clone());
 
-        // Snapshot draft + runner defaults for prefill.
-        let draft_bounds = world
-            .get_resource::<crate::experiments_runner::ExperimentDrafts>()
-            .and_then(|d| d.get(doc, &model_ref).and_then(|dr| dr.bounds_override.clone()));
-        let mut bounds = draft_bounds.unwrap_or_else(|| {
-            world
-                .get_resource::<crate::ModelicaRunnerResource>()
-                .and_then(|r| {
-                    use lunco_experiments::ExperimentRunner;
-                    r.0.default_bounds(&model_ref)
-                })
-                .unwrap_or(lunco_experiments::RunBounds {
-                    t_start: 0.0,
-                    t_end: 10.0,
-                    dt: None,
-                    tolerance: None,
-                    solver: None,
-                    h0: None,
-                })
-        });
+        // Resolve via the SAME path the Fast Run popup uses, so the two
+        // setup surfaces never disagree (draft → runner cache → AST
+        // `experiment(...)` annotation → fallback).
+        let mut bounds =
+            crate::ui::commands::compile::resolve_setup_bounds(world, doc, &model_ref);
         let mut bounds_changed = false;
 
         let detected_inputs =
@@ -983,12 +979,18 @@ impl ExperimentsPanel {
                 bounds.dt = if adaptive { None } else { Some(0.01) };
                 bounds_changed = true;
             }
+            // No upper clamp BY DESIGN: dt is the output sample interval
+            // and has no meaningful maximum. A `..=10.0` range silently
+            // rewrote a legitimate value (e.g. Interval=3600 → 10) and
+            // then persisted the clamped 10 into the shared draft. Speed
+            // scales with magnitude so dragging stays usable at any scale.
+            let dt_speed = (dt_v.abs() * 0.01).max(1e-6);
             if !adaptive
                 && ui
                     .add(
                         egui::DragValue::new(&mut dt_v)
-                            .speed(0.001)
-                            .range(1e-6..=10.0),
+                            .speed(dt_speed)
+                            .range(1e-9..=f64::INFINITY),
                     )
                     .changed()
             {

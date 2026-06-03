@@ -172,10 +172,15 @@ fn render_unified_toolbar(
     // before the action buttons) can surface "⏩ Running…" — the
     // background Fast Run was previously invisible, making the toolbar
     // look frozen mid-simulation.
-    let runner_busy = world
+    // `is_busy()` is "saturated" (in_flight >= max_parallel), NOT "any
+    // run active" — a single Fast Run with a 4-wide pool reads as
+    // not-busy, which is why the toolbar showed "Idle" mid-run. For the
+    // status pill we want "is anything running or queued?".
+    let (runner_running, runner_queued) = world
         .get_resource::<crate::ModelicaRunnerResource>()
-        .map(|r| r.0.is_busy())
-        .unwrap_or(false);
+        .map(|r| (r.0.in_flight_count(), r.0.queued_count()))
+        .unwrap_or((0, 0));
+    let runner_busy = runner_running > 0 || runner_queued > 0;
 
     let mut compile_clicked = false;
     let mut fast_run_clicked = false;
@@ -229,7 +234,13 @@ fn render_unified_toolbar(
         if let Some(ref err) = compilation_error {
             if ui.colored_label(tokens.error, "⚠ Error").on_hover_text(format!("{err}\n(click to dismiss)")).clicked() { dismiss_error = true; }
         } else if runner_busy {
-            ui.colored_label(tokens.warning, "⏩ Running…").on_hover_text("Fast Run in progress — background simulation");
+            // Show the live count so several concurrent Fast Runs are
+            // visible at a glance (e.g. "⏩ 3 running · ⏳ 2").
+            let mut pill = format!("⏩ {runner_running} running");
+            if runner_queued > 0 { pill.push_str(&format!(" · ⏳ {runner_queued}")); }
+            ui.colored_label(tokens.warning, pill).on_hover_text(
+                format!("Fast Run in progress — {runner_running} executing, {runner_queued} queued (background simulation)")
+            );
         } else if realtime_active {
             ui.colored_label(tokens.warning, "⏩ Running…").on_hover_text("Realtime simulation stepping");
         } else {
@@ -327,23 +338,10 @@ fn render_unified_toolbar(
                 world.get_resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(doc)).and_then(|h| h.document().index().classes.values().find(|c| !matches!(c.kind, crate::index::ClassKind::Package)).map(|c| c.name.clone()))
             }).map(lunco_experiments::ModelRef);
         if let Some(model_ref) = model_ref {
-            let drafted_bounds = world.get_resource::<crate::experiments_runner::ExperimentDrafts>().and_then(|d| d.get(doc, &model_ref).and_then(|dr| dr.bounds_override.clone()));
-            let bounds = drafted_bounds
-                .or_else(|| {
-                    world.get_resource::<crate::ModelicaRunnerResource>().and_then(|r| {
-                        use lunco_experiments::ExperimentRunner;
-                        r.0.default_bounds(&model_ref)
-                    })
-                })
-                // Fall back to the model's `experiment(...)` annotation read
-                // straight from the AST. The runner cache `default_bounds`
-                // reads is only seeded by a prior interactive compile or run,
-                // so the FIRST Fast Run on a freshly-opened model would
-                // otherwise ignore its StopTime/Tolerance/Interval, show the
-                // 10 s placeholder, and then persist that placeholder into the
-                // draft on Run (clobbering the annotation for the actual run).
-                .or_else(|| bounds_from_annotation(world, doc, &model_ref))
-                .unwrap_or(lunco_experiments::RunBounds { t_start: 0.0, t_end: 10.0, dt: None, tolerance: None, solver: None, h0: None });
+            // Same resolver the Experiments-tab Setup uses, so the two
+            // surfaces always agree (draft → runner cache → AST
+            // annotation → fallback).
+            let bounds = crate::ui::commands::compile::resolve_setup_bounds(world, doc, &model_ref);
             let overrides_count = world.get_resource::<crate::experiments_runner::ExperimentDrafts>().and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len())).unwrap_or(0);
             let source_text = world.get_resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(doc)).map(|h| h.document().source().to_string()).unwrap_or_default();
             let detected = crate::experiments_runner::detect_top_level_inputs(&source_text);
@@ -370,38 +368,6 @@ fn render_unified_toolbar(
         world.commands().trigger(crate::ui::commands::CompileActiveModel { doc, class: String::new() });
     }
     new_view_mode
-}
-
-/// Build [`RunBounds`] from a model's `experiment(...)` annotation in
-/// the AST. Used as the Fast Run setup fallback when the runner cache
-/// hasn't been seeded yet (first run on a freshly-opened model).
-/// Returns `None` when the class carries no annotation or no StopTime —
-/// matching `ExperimentRunner::default_bounds`, a StopTime is the field
-/// that makes the annotation usable.
-fn bounds_from_annotation(
-    world: &World,
-    doc: DocumentId,
-    model_ref: &lunco_experiments::ModelRef,
-) -> Option<lunco_experiments::RunBounds> {
-    let reg = world.get_resource::<ModelicaDocumentRegistry>()?;
-    let host = reg.host(doc)?;
-    let index = host.document().index();
-    let class = index
-        .classes
-        .get(&model_ref.0)
-        .or_else(|| index.classes.values().find(|c| c.name == model_ref.0))?;
-    let exp = class.experiment.as_ref()?;
-    let t_end = exp.stop_time?;
-    Some(lunco_experiments::RunBounds {
-        t_start: exp.start_time.unwrap_or(0.0),
-        t_end,
-        // `Interval=0` is the spec's "unspecified" sentinel → None so the
-        // run loop derives numberOfIntervals=500.
-        dt: exp.interval.filter(|&i| i > 0.0),
-        tolerance: exp.tolerance,
-        solver: None,
-        h0: None,
-    })
 }
 
 fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
