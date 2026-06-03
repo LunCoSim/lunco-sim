@@ -14,8 +14,11 @@ pub struct LunCoControllerPlugin;
 
 impl Plugin for LunCoControllerPlugin {
     fn build(&self, app: &mut App) {
+        // NOTE: OwnedInputLog / AppliedInputSeq are always-on substrate owned by
+        // LunCoCorePlugin (lunco-core). The controller's observers consume them
+        // unconditionally, but it does NOT init them here — single source of
+        // truth lives in lunco-core, which every consumer depends on.
         app.add_plugins(InputManagerPlugin::<VesselIntent>::default())
-           .init_resource::<lunco_core::OwnedInputLog>()
            // Input is SENSED at frame rate (leafwing's `just_pressed` latch edges
            // only work in `Update`) but EMITTED once per fixed tick, so the
            // prediction replay is a clean 1:1 loop over `InputFrame`s.

@@ -16,6 +16,82 @@ use crate::index::ModelicaIndex;
 // SyntaxCache
 // ---------------------------------------------------------------------------
 
+/// One parse diagnostic, optionally located.
+///
+/// `line`/`column` are **1-based char positions** (matching the linter
+/// and the editor's char-indexed cursor jump), resolved from a rumoca
+/// parse error's byte span when present. `None` means the underlying
+/// error carried no usable span (e.g. compile/strict-fallback strings),
+/// in which case the Diagnostics row renders but isn't clickable.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ParseDiag {
+    pub message: String,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+
+impl ParseDiag {
+    /// A diagnostic with no source location.
+    pub fn message_only(message: String) -> Self {
+        Self {
+            message,
+            line: None,
+            column: None,
+        }
+    }
+}
+
+impl From<String> for ParseDiag {
+    fn from(message: String) -> Self {
+        Self::message_only(message)
+    }
+}
+
+/// Resolve a rumoca [`rumoca_phase_parse::ParseError`] into a
+/// [`ParseDiag`], converting its byte span to a 1-based (line, column)
+/// over `source` when it has one. This is the single place the lenient
+/// parser's structured errors are turned into the panel's clickable
+/// form — every parse path (file-open, native async, wasm worker)
+/// funnels through it.
+pub fn parse_diag_from_error(e: &rumoca_phase_parse::ParseError, source: &str) -> ParseDiag {
+    use rumoca_phase_parse::ParseError;
+    match e {
+        ParseError::SyntaxError { message, span, .. } => {
+            let (line, column) = byte_offset_to_line_col(source, span.start.0);
+            ParseDiag {
+                message: message.clone(),
+                line: Some(line),
+                column: Some(column),
+            }
+        }
+        // No span variants (NoAstProduced, IoError) — keep the debug
+        // text so nothing is lost, just not located.
+        other => ParseDiag::message_only(format!("{other:?}")),
+    }
+}
+
+/// Convert a 0-based byte offset into a 1-based (line, column) of
+/// **char** positions over `source`. Char-based (not byte / UTF-16) so
+/// the column lines up with the editor's char-indexed caret jump
+/// ([`crate::ui::panels::code_editor`]). Clamped to the buffer end.
+fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (u32, u32) {
+    let clamped = byte_offset.min(source.len());
+    let mut line = 1u32;
+    let mut col = 1u32;
+    for (idx, ch) in source.char_indices() {
+        if idx >= clamped {
+            break;
+        }
+        if ch == '\n' {
+            line = line.saturating_add(1);
+            col = 1;
+        } else {
+            col = col.saturating_add(1);
+        }
+    }
+    (line, col)
+}
+
 /// Single parse cache attached to a [`ModelicaDocument`].
 #[derive(Debug, Clone)]
 pub struct SyntaxCache {
@@ -23,8 +99,8 @@ pub struct SyntaxCache {
     pub generation: u64,
     /// Best-effort parsed AST.
     pub ast: Arc<StoredDefinition>,
-    /// Diagnostic strings from the parse.
-    pub errors: Vec<String>,
+    /// Parse diagnostics, located where the parser gave us a span.
+    pub errors: Vec<ParseDiag>,
 }
 
 pub type AstCache = SyntaxCache;
@@ -53,7 +129,7 @@ impl SyntaxCache {
             let errors = recovery
                 .parse_errors()
                 .iter()
-                .map(|e| format!("{e:?}"))
+                .map(|e| parse_diag_from_error(e, source))
                 .collect();
             let ast = Arc::new(recovery.best_effort().clone());
             Self {
@@ -67,7 +143,7 @@ impl SyntaxCache {
     pub fn install_from_worker(
         &mut self,
         ast: Arc<StoredDefinition>,
-        errors: Vec<String>,
+        errors: Vec<ParseDiag>,
     ) {
         self.ast = ast;
         self.errors = errors;
@@ -78,7 +154,7 @@ impl SyntaxCache {
     }
 
     pub fn first_error(&self) -> Option<&str> {
-        self.errors.first().map(|s| s.as_str())
+        self.errors.first().map(|d| d.message.as_str())
     }
 
     pub fn ast(&self) -> &StoredDefinition {
@@ -288,7 +364,7 @@ impl ModelicaDocument {
             Err(msg) => SyntaxCache {
                 generation: 0,
                 ast: Arc::new(StoredDefinition::default()),
-                errors: vec![msg],
+                errors: vec![ParseDiag::message_only(msg)],
             },
         });
 
@@ -561,7 +637,7 @@ impl ModelicaDocument {
                 self.syntax = Arc::new(SyntaxCache {
                     generation: self.generation,
                     ast: Arc::new(StoredDefinition::default()),
-                    errors: vec!["strict parse failed".into()],
+                    errors: vec![ParseDiag::message_only("strict parse failed".into())],
                 });
             }
         }

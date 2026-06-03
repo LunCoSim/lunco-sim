@@ -956,7 +956,7 @@ impl Panel for WelcomePanel {
         if create_new {
             world
                 .commands()
-                .trigger(crate::ui::commands::CreateNewScratchModel {});
+                .trigger(crate::ui::commands::CreateNewScratchModel::default());
         }
         if open_folder {
             // Native OpenFolder picker. Classified at the observer

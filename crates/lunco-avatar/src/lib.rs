@@ -2008,6 +2008,6 @@ fn get_physical_body(
 
 // ── Command Registration ────────────────────────────────────────────────────────
 
-// Register CaptureScreenshot command - generates __register_on_capture_screenshot
-// which is called by register_all_commands(app) in LunCoAvatarPlugin::build()
+// Wires CaptureScreenshot into `register_all_commands(app)`, called from
+// LunCoAvatarPlugin::build().
 register_commands!(on_capture_screenshot);

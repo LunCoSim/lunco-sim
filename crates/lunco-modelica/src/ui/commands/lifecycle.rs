@@ -21,8 +21,21 @@ use crate::ui::panels::package_browser::PackageTreeCache;
 // ─── Command Structs ─────────────────────────────────────────────────────────
 
 /// Request to create a new untitled Modelica model and open its tab.
+///
+/// Both fields default to `None` for the plain "New model" entry points
+/// (File ▸ New, the package browser, the welcome screen). The URL-share
+/// loader (`crate::model_share`) fires this with `source`/`name`
+/// populated so a shared model reuses this exact creation + tab-open
+/// path instead of duplicating it.
 #[Command(default)]
-pub struct CreateNewScratchModel {}
+pub struct CreateNewScratchModel {
+    /// Initial source. `None` → a minimal `model <name> end <name>;` stub.
+    pub source: Option<String>,
+    /// Display name, deduplicated against existing in-memory models.
+    /// `None` → the model name parsed from `source`, else an
+    /// auto-incremented "Untitled".
+    pub name: Option<String>,
+}
 
 /// Request to duplicate a read-only (library) model into a new
 /// editable Untitled document.
@@ -359,7 +372,7 @@ pub fn finalize_app_close(
 
 #[on_command(CreateNewScratchModel)]
 pub fn on_create_new_scratch_model(
-    _trigger: On<CreateNewScratchModel>,
+    trigger: On<CreateNewScratchModel>,
     mut registry: ResMut<ModelicaDocumentRegistry>,
     mut cache: ResMut<PackageTreeCache>,
     mut model_tabs: ResMut<ModelTabs>,
@@ -367,25 +380,29 @@ pub fn on_create_new_scratch_model(
     mut workspace: ResMut<lunco_workbench::WorkspaceResource>,
     mut commands: Commands,
 ) {
+    let req_source = trigger.event().source.clone();
+    let req_name = trigger.event().name.clone();
+
     let taken: std::collections::HashSet<String> = cache
         .in_memory_models
         .iter()
         .map(|e| e.display_name.clone())
         .collect();
-    let mut n: u32 = 0;
-    let name = loop {
-        let candidate = if n == 0 {
-            "Untitled".to_string()
-        } else {
-            format!("Untitled{}", n + 1)
-        };
-        if !taken.contains(&candidate) {
-            break candidate;
-        }
-        n += 1;
-    };
 
-    let source = format!("model {name}\nend {name};\n");
+    // Base name: explicit request name → else the model name parsed from
+    // the supplied source → else "Untitled". Then dedup with a numeric
+    // suffix ("Untitled", "Untitled2", … — matching the prior scheme).
+    let base = req_name
+        .or_else(|| req_source.as_deref().and_then(crate::extract_model_name))
+        .unwrap_or_else(|| "Untitled".to_string());
+    let mut name = base.clone();
+    let mut n: u32 = 2;
+    while taken.contains(&name) {
+        name = format!("{base}{n}");
+        n += 1;
+    }
+
+    let source = req_source.unwrap_or_else(|| format!("model {name}\nend {name};\n"));
     let mem_id = format!("mem://{name}");
     let doc_id = registry.allocate_with_origin(
         source.clone(),
@@ -1245,7 +1262,7 @@ pub fn on_new_modelica_document(trigger: On<lunco_workbench::file_ops::NewDocume
     if trigger.event().kind != "modelica" {
         return;
     }
-    commands.trigger(CreateNewScratchModel {});
+    commands.trigger(CreateNewScratchModel::default());
 }
 
 #[Command(default)]

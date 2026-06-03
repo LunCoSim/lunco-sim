@@ -32,7 +32,7 @@ pub fn on_inspect_active_doc(_trigger: On<InspectActiveDoc>, mut commands: Comma
         );
         if cache.has_errors() {
             for e in &cache.errors {
-                bevy::log::warn!("[InspectActiveDoc]   parse ERR: {}", e);
+                bevy::log::warn!("[InspectActiveDoc]   parse ERR: {}", e.message);
             }
         } else if let Some(ast) = document.strict_ast() {
             bevy::log::info!(

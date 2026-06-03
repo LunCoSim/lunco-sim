@@ -580,10 +580,13 @@ pub fn run() -> Result<(), JsValue> {
                 // `SyntaxCache` shape the doc now uses.
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let recovery = rumoca_phase_parse::parse_to_syntax(&source, &uri);
-                    let errors: Vec<String> = recovery
+                    // Resolve byte spans → located diagnostics here, where
+                    // the source is in hand, so the main thread receives
+                    // clickable parse errors (not just debug strings).
+                    let errors: Vec<lunco_modelica::document::ParseDiag> = recovery
                         .parse_errors()
                         .iter()
-                        .map(|e| format!("{e:?}"))
+                        .map(|e| lunco_modelica::document::parse_diag_from_error(e, &source))
                         .collect();
                     let ast = recovery.best_effort().clone();
                     (ast, errors)
@@ -602,7 +605,9 @@ pub fn run() -> Result<(), JsValue> {
                         );
                         (
                             rumoca_compile::parsing::ast::StoredDefinition::default(),
-                            vec![format!("worker panic: {msg}")],
+                            vec![lunco_modelica::document::ParseDiag::message_only(format!(
+                                "worker panic: {msg}"
+                            ))],
                         )
                     }
                 };

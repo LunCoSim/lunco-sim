@@ -25,17 +25,20 @@
 //!
 //! # Registration: `register_commands!(fn_a, fn_b)`
 //!
-//! Generates `pub fn register_all_commands(app)`.
+//! Generates `pub fn register_all_commands(app)`. Entries may be bare
+//! idents (same module) or module paths — the path form lets observers
+//! live in split submodules without per-fn `use` shims.
 //!
 //! ```ignore
 //! register_commands!(on_drive_rover, on_brake_rover);
+//! register_commands!(nav::on_set_zoom, doc::on_undo);
 //! ```
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
-    parse_macro_input, DeriveInput, Ident, ItemFn, Token, Data, Fields,
+    parse_macro_input, DeriveInput, Ident, ItemFn, Path, Token, Data, Fields,
     punctuated::Punctuated,
 };
 
@@ -167,7 +170,10 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Annotates an observer function for a typed command.
 ///
 /// 1. Wraps the function to accept `On<T>` as the first parameter.
-/// 2. Generates `__register_<fn_name>(app)` that calls `register_type` + `add_observer`.
+/// 2. Generates a `__register_<fn_name>(app)` helper (`register_type` +
+///    `add_observer`). Don't call it by hand — list the observer in a
+///    [`register_commands!`] invocation (bare or `module::fn` path) and
+///    let the generated `register_all_commands(app)` wire it up.
 #[proc_macro_attribute]
 pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
     let cmd_type: Ident = match syn::parse(attr) {
@@ -186,6 +192,43 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
         fn_name.span(),
     );
 
+    // A handler with a return type (`-> Result<Ack, String>`) opts into
+    // result recording: the wrapper runs the body, then — if a transport
+    // set the active request id — records the outcome in `CommandResults`.
+    // Void handlers (the common, fire-and-forget case) keep the lean
+    // passthrough wrapper with no extra params or resource access.
+    let returns_result = !matches!(func.sig.output, syn::ReturnType::Default);
+
+    let observer_fn = if returns_result {
+        quote! {
+            /// Observer function for `#cmd_type` (records its outcome).
+            #fn_vis fn #fn_name(
+                trigger: bevy::prelude::On<#cmd_type>,
+                #(#existing_params,)*
+                mut __lunco_cmd_results: bevy::prelude::ResMut<::lunco_core::CommandResults>,
+                __lunco_active_id: bevy::prelude::Res<::lunco_core::ActiveCommandId>,
+            ) {
+                let cmd = trigger.event();
+                let __lunco_outcome: ::core::result::Result<::lunco_core::Ack, ::std::string::String> =
+                    (|| #fn_body)();
+                if let Some(__id) = __lunco_active_id.get() {
+                    __lunco_cmd_results.record(__id, __lunco_outcome);
+                }
+            }
+        }
+    } else {
+        quote! {
+            /// Observer function for `#cmd_type`.
+            #fn_vis fn #fn_name(
+                trigger: bevy::prelude::On<#cmd_type>,
+                #(#existing_params),*
+            ) {
+                let cmd = trigger.event();
+                #fn_body
+            }
+        }
+    };
+
     let expanded = quote! {
         /// Generated registration function — call via `register_commands!`.
         #fn_vis fn #register_fn_name(app: &mut bevy::prelude::App) {
@@ -193,14 +236,7 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
             app.add_observer(#fn_name);
         }
 
-        /// Observer function for `#cmd_type`.
-        #fn_vis fn #fn_name(
-            trigger: bevy::prelude::On<#cmd_type>,
-            #(#existing_params),*
-        ) {
-            let cmd = trigger.event();
-            #fn_body
-        }
+        #observer_fn
     };
 
     TokenStream::from(expanded)
@@ -209,17 +245,29 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
 // ── register_commands!() ───────────────────────────────────────────────────
 
 /// Generates a `register_all_commands(app)` function.
+///
+/// Accepts bare idents (`on_ping`) or module paths
+/// (`lifecycle::on_open`) — the latter lets observers live in split
+/// submodules and still be listed in one place. Each entry's final
+/// segment is rewritten to its generated `__register_<name>` helper,
+/// preserving any module prefix.
 #[proc_macro]
 pub fn register_commands(input: TokenStream) -> TokenStream {
-    let args: Punctuated<Ident, Token![,]> =
+    let args: Punctuated<Path, Token![,]> =
         match syn::parse::Parser::parse2(Punctuated::parse_terminated, input.into()) {
             Ok(p) => p,
             Err(e) => return e.to_compile_error().into(),
         };
 
-    let calls: Vec<TokenStream2> = args.iter().map(|name| {
-        let register_fn = Ident::new(&format!("__register_{}", name), name.span());
-        quote! { #register_fn(app); }
+    let calls: Vec<TokenStream2> = args.iter().map(|path| {
+        // Rebuild the path with its final segment renamed to the
+        // generated `__register_<name>` helper, keeping the module
+        // prefix (e.g. `lifecycle::on_open` -> `lifecycle::__register_on_open`).
+        let mut path = path.clone();
+        if let Some(last) = path.segments.last_mut() {
+            last.ident = Ident::new(&format!("__register_{}", last.ident), last.ident.span());
+        }
+        quote! { #path(app); }
     }).collect();
 
     let expanded = quote! {

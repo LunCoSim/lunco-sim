@@ -167,10 +167,20 @@ impl ModelicaEngineHandle {
             let recovery = rumoca_phase_parse::parse_to_syntax(&*source, &uri);
             let parse_ms = t_parse.elapsed().as_secs_f64() * 1000.0;
             let has_errors = recovery.has_errors();
+            // Resolve the lenient parser's structured errors into located
+            // diagnostics now, while we still hold the source. Stashed on
+            // the engine for the drain to fold into the doc's SyntaxCache
+            // — without this the native live-edit path lost them entirely.
+            let diags: Vec<crate::document::ParseDiag> = recovery
+                .parse_errors()
+                .iter()
+                .map(|e| crate::document::parse_diag_from_error(e, &*source))
+                .collect();
             let ast = recovery.best_effort().clone();
             let t_install = web_time::Instant::now();
             let mut engine = me.lock();
             engine.install_parsed_ast(doc_id, ast);
+            engine.set_parse_diags(doc_id, diags);
             engine.finish_parse(doc_id, gen);
             let install_ms = t_install.elapsed().as_secs_f64() * 1000.0;
             bevy::log::info!(
@@ -268,14 +278,21 @@ pub fn drive_engine_sync(
             );
             continue;
         }
-        let parsed_ast = handle.lock().parsed_for_doc(doc_id).cloned();
+        let (parsed_ast, parse_diags) = {
+            let mut engine = handle.lock();
+            (
+                engine.parsed_for_doc(doc_id).cloned(),
+                engine.take_parse_diags(doc_id),
+            )
+        };
         match (parsed_ast, registry.host_mut(doc_id)) {
             (Some(ast), Some(host)) => {
                 let arc_ast = std::sync::Arc::new(ast);
                 let syntax = crate::document::SyntaxCache {
                     generation: parse_gen,
                     ast: arc_ast,
-                    errors: Vec::new(),
+                    // Located parse diagnostics captured at spawn time.
+                    errors: parse_diags,
                 };
                 host.document_mut().install_parse_results(syntax);
                 bevy::log::info!(
@@ -290,12 +307,21 @@ pub fn drive_engine_sync(
                 // doc's parse cache so the diagnostics panel can
                 // show a row.
                 if let Some(host) = registry.host_mut(doc_id) {
+                    // Prefer the located diagnostics; fall back to a
+                    // generic note only when the parser gave us none.
+                    let errors = if parse_diags.is_empty() {
+                        vec![crate::document::ParseDiag::message_only(
+                            "strict parse failed (lenient recovered)".into(),
+                        )]
+                    } else {
+                        parse_diags
+                    };
                     let syntax = crate::document::SyntaxCache {
                         generation: parse_gen,
                         ast: std::sync::Arc::new(
                             rumoca_compile::parsing::ast::StoredDefinition::default(),
                         ),
-                        errors: vec!["strict parse failed (lenient recovered)".into()],
+                        errors,
                     };
                     host.document_mut().install_parse_results(syntax);
                 }

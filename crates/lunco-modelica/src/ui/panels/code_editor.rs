@@ -97,6 +97,58 @@ pub struct EditorBufferState {
     pub per_doc: HashMap<lunco_doc::DocumentId, TabBuffer>,
 }
 
+/// One-shot request to move the editor caret to a source position,
+/// raised by the Diagnostics panel when a located finding is clicked
+/// and consumed by [`CodeEditorPanel::render`] on the next frame.
+///
+/// `doc` is the document the position belongs to (the active doc at
+/// click time). The editor applies the jump only when that doc is the
+/// tab it's currently showing, so a stale request can't scroll the
+/// wrong file. Unconditionally drained after one read either way.
+#[derive(Resource, Default)]
+pub struct EditorJumpRequest {
+    pending: Option<(Option<lunco_doc::DocumentId>, crate::ui::panels::log::SourceLoc)>,
+}
+
+impl EditorJumpRequest {
+    /// Queue a jump to `loc` within `doc`.
+    pub fn request(
+        &mut self,
+        doc: Option<lunco_doc::DocumentId>,
+        loc: crate::ui::panels::log::SourceLoc,
+    ) {
+        self.pending = Some((doc, loc));
+    }
+
+    /// Take the queued jump, leaving the request empty.
+    fn take(
+        &mut self,
+    ) -> Option<(Option<lunco_doc::DocumentId>, crate::ui::panels::log::SourceLoc)> {
+        self.pending.take()
+    }
+}
+
+/// Convert a 1-based (line, column) into a char offset within `text`,
+/// clamped to the buffer. Columns past a line's end clamp to its end;
+/// lines past EOF clamp to the last position. egui cursors index by
+/// `char`, so we count chars (not bytes) — correct for non-ASCII
+/// source.
+fn line_col_to_char_offset(text: &str, line: u32, column: u32) -> usize {
+    let target_line = line.saturating_sub(1) as usize;
+    let target_col = column.saturating_sub(1) as usize;
+    let mut offset = 0usize;
+    for (idx, l) in text.split_inclusive('\n').enumerate() {
+        // chars in this line excluding the trailing '\n'
+        let line_chars = l.chars().filter(|&c| c != '\n').count();
+        if idx == target_line {
+            return offset + target_col.min(line_chars);
+        }
+        offset += l.chars().count();
+    }
+    // Line beyond EOF — clamp to end of buffer.
+    text.chars().count()
+}
+
 /// Return the byte index of the newline character when `new` differs
 /// from `old` by exactly one inserted `'\n'`. Otherwise returns `None`.
 ///
@@ -756,6 +808,33 @@ impl Panel for CodeEditorPanel {
                     ),
                 ));
                 state.store(ui.ctx(), text_edit_id);
+            }
+        }
+
+        // ── Jump-to-source (Diagnostics click) ──
+        //
+        // A located finding was clicked in the Diagnostics panel; move
+        // the caret to it and focus the editor so its ScrollArea brings
+        // the line into view. Applied only when the request targets the
+        // document this tab is showing, so a stale request can't scroll
+        // the wrong file. The request is one-shot — `take` drains it.
+        if let Some((jump_doc, loc)) = world
+            .get_resource_mut::<EditorJumpRequest>()
+            .and_then(|mut r| r.take())
+        {
+            if jump_doc.is_none() || jump_doc == tab_target {
+                let offset = line_col_to_char_offset(&text, loc.line, loc.column);
+                if let Some(mut state) =
+                    egui::TextEdit::load_state(ui.ctx(), text_edit_id)
+                {
+                    state.cursor.set_char_range(Some(
+                        egui::text::CCursorRange::one(egui::text::CCursor::new(offset)),
+                    ));
+                    state.store(ui.ctx(), text_edit_id);
+                }
+                // Focus the TextEdit so egui scrolls the caret into view
+                // within the panel's vertical ScrollArea.
+                ui.ctx().memory_mut(|m| m.request_focus(text_edit_id));
             }
         }
 

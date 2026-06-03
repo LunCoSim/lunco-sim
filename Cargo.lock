@@ -7246,6 +7246,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "arc-swap",
+ "base64",
  "bevy",
  "bevy_egui",
  "bevy_vello",
@@ -7370,10 +7371,11 @@ dependencies = [
  "bevy",
  "crossbeam-channel",
  "libloading",
- "lunco-api",
+ "lunco-core",
  "lunco-doc",
  "pyo3",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

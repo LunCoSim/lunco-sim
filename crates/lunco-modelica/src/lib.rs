@@ -704,6 +704,9 @@ pub mod api_queries;
 // but the events themselves carry no `lunco-api` dependency.
 /// External JSON-RPC API handlers.
 pub mod api;
+
+/// Shareable model links (encode model source into a URL fragment).
+pub mod model_share;
 pub use sim_stream::{new_sim_stream, SimSnapshot, SimStream, VarHistory, SimSample};
 
 /// UI-thread registry of per-entity lock-free sim streams (Phase A
@@ -887,6 +890,12 @@ impl Plugin for ModelicaWorkbenchPlugin {
             app.add_plugins(ui::wasm_clipboard::WasmClipboardPlugin);
             app.add_plugins(ui::wasm_autosave::WasmAutosavePlugin);
         }
+
+        // Shareable model links — `CopyShareLink` clipboard command (all
+        // platforms) + the wasm boot loader that opens a model carried in
+        // the page URL fragment. Cross-platform: the command works on
+        // native too (copies a public link).
+        app.add_plugins(model_share::ModelSharePlugin);
 
         // Off-thread Modelica worker. wasm32 has no real threads, so an
         // inline rumoca compile (seconds for non-trivial models) freezes

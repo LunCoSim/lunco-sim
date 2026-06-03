@@ -560,12 +560,18 @@ pub struct WirePlugin;
 
 impl Plugin for WirePlugin {
     fn build(&self, app: &mut App) {
+        // CONVENTION: WirePlugin initializes ONLY wire-only state (envelope
+        // queues, dedup, transport/replication config). Always-on substrate
+        // resources — anything read by systems that run even with networking
+        // off (e.g. AppliedInputSeq / OwnedInputLog) — belong in
+        // LunCoCorePlugin (lunco-core), never here. WirePlugin is behind the
+        // `networking` feature, so initializing substrate here panics
+        // single-player builds.
         app.init_resource::<WireOutbox>()
             .init_resource::<WireInbox>()
             .init_resource::<WireDedup>()
             .init_resource::<NetworkConfig>()
             .init_resource::<WireChannelRegistry>()
-            .init_resource::<AppliedInputSeq>()
             .add_observer(apply_wire_command)
             // `drain_wire_inbox` + `broadcast_new_spawns` stay in `Update` alongside
             // the lightyear ferry (see server.rs note: FixedUpdate breaks the reliable

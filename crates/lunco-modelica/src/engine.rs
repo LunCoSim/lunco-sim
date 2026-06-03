@@ -91,6 +91,12 @@ pub struct ModelicaEngine {
     /// Each entry carries the doc's generation **at parse spawn**, so
     /// the adapter can ignore stale results when the doc moved on.
     completed: Vec<(DocumentId, u64)>,
+    /// Located parse diagnostics from the most recent async parse,
+    /// keyed by doc. Set off-lock by the native spawn (which holds the
+    /// source + recovery) and taken by `drive_engine_sync` on drain to
+    /// fill the doc's `SyntaxCache`. Lets the native live-edit path
+    /// surface clickable parse errors instead of a generic string.
+    parse_diags: HashMap<DocumentId, Vec<crate::document::ParseDiag>>,
 }
 
 impl Default for ModelicaEngine {
@@ -106,7 +112,28 @@ impl ModelicaEngine {
             uri_for_doc: HashMap::new(),
             pending: HashSet::new(),
             completed: Vec::new(),
+            parse_diags: HashMap::new(),
         }
+    }
+
+    /// Stash the located parse diagnostics for `doc_id` produced by an
+    /// off-lock async parse. Overwrites any prior set — only the latest
+    /// parse's diagnostics matter.
+    pub fn set_parse_diags(
+        &mut self,
+        doc_id: DocumentId,
+        diags: Vec<crate::document::ParseDiag>,
+    ) {
+        self.parse_diags.insert(doc_id, diags);
+    }
+
+    /// Take (and clear) the parse diagnostics stashed for `doc_id`.
+    /// Returns an empty vec when none were recorded.
+    pub fn take_parse_diags(
+        &mut self,
+        doc_id: DocumentId,
+    ) -> Vec<crate::document::ParseDiag> {
+        self.parse_diags.remove(&doc_id).unwrap_or_default()
     }
 
     /// URI we'd use for `doc_id` — same value `uri()` would produce, but
@@ -213,6 +240,7 @@ impl ModelicaEngine {
     /// caches, and any resolved-tree state referencing it are
     /// invalidated. Reopening the same `DocumentId` starts fresh.
     pub fn close_document(&mut self, doc_id: DocumentId) {
+        self.parse_diags.remove(&doc_id);
         if let Some(uri) = self.uri_for_doc.remove(&doc_id) {
             self.session.remove_document(&uri);
         }

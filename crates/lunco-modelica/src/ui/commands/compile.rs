@@ -24,7 +24,7 @@ use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use std::collections::HashMap;
 
-use lunco_core::{Command, on_command};
+use lunco_core::{Command, on_command, register_commands};
 
 use crate::ui::{CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 use crate::{ModelicaChannels, ModelicaCommand, ModelicaModel};
@@ -153,6 +153,13 @@ pub(crate) fn render_fast_run_setup(
     .show(ctx, |ui| {
         ui.heading("Simulation Setup — Fast Run");
         ui.separator();
+        // Scroll the setup body so the Run/Cancel row below stays pinned
+        // and reachable even when inputs/params make the form taller than
+        // the screen.
+        egui::ScrollArea::vertical()
+            .max_height(440.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
             ui.label(
                 egui::RichText::new(format!("Class: {}", entry.model_ref.0))
                     .strong(),
@@ -270,13 +277,14 @@ pub(crate) fn render_fast_run_setup(
                 ui.colored_label(
                     egui::Color32::from_rgb(180, 180, 100),
                     format!(
-                        "{} parameter override(s) active — edit in 🧪 Experiments",
+                        "{} parameter override(s) active — edit in the Experiments panel",
                         entry.overrides_count
                     ),
                 );
             } else {
-                ui.weak("Tip: open 🧪 Experiments → ⚙ Overrides + Bounds to override parameters.");
+                ui.weak("Tip: open the Experiments panel → ⚙ Overrides + Bounds to override parameters.");
             }
+            }); // end scrollable setup body
             ui.add_space(8.0);
 
             // Validation
@@ -794,6 +802,7 @@ pub fn on_compile_model(
             level: crate::ui::panels::log::LogLevel::Info,
             text: format!("⏵ Compile started: '{model_name}'"),
             model: Some(model_name.clone()),
+            loc: None,
         }]);
     }
 
@@ -1344,6 +1353,14 @@ fn dispatch_experiment(
             .resource_mut::<crate::experiments_runner::PendingHandles>()
             .0
             .push(handle);
+        // Mark the run Queued. The scheduler may start it immediately (then
+        // its first progress update flips it to Running via
+        // drain_pending_handles) or hold it behind the concurrency cap, in
+        // which case it stays Queued until a slot frees — letting the panel
+        // show "N running · M queued".
+        world
+            .resource_mut::<lunco_experiments::ExperimentRegistry>()
+            .set_status(exp_id, lunco_experiments::RunStatus::Queued);
         bevy::log::info!(
             "[dispatch_experiment] dispatched run {:?} '{}' for class '{}'",
             exp_id,
@@ -1671,17 +1688,23 @@ impl Plugin for CompilePlugin {
                 bevy_egui::EguiPrimaryContextPass,
                 (render_compile_class_picker, render_fast_run_setup),
             );
-        __register_on_compile_model(app);
-        __register_on_compile_active_model(app);
-        __register_on_pause_active_model(app);
-        __register_on_resume_active_model(app);
-        __register_on_reset_active_model(app);
-        __register_on_run_active_model(app);
-        __register_on_restart_active_model(app);
-        __register_on_fast_run_active_model(app);
-        __register_on_run_experiment(app);
-        __register_on_cancel_experiment(app);
-        __register_on_delete_experiment(app);
-        __register_on_rename_experiment(app);
+        register_all_commands(app);
     }
 }
+
+// Generates `register_all_commands(app)` for this module's compile/run
+// commands (all defined in this file, so bare idents).
+register_commands!(
+    on_compile_model,
+    on_compile_active_model,
+    on_pause_active_model,
+    on_resume_active_model,
+    on_reset_active_model,
+    on_run_active_model,
+    on_restart_active_model,
+    on_fast_run_active_model,
+    on_run_experiment,
+    on_cancel_experiment,
+    on_delete_experiment,
+    on_rename_experiment,
+);

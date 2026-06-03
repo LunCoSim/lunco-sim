@@ -45,6 +45,10 @@ pub struct LinePlotStyle {
     pub x_label: Option<String>,
     #[serde(default)]
     pub y_label: Option<String>,
+    /// Plot the Y axis on a log10 scale. Values ≤ 0 are dropped (gaps,
+    /// not clamped). Persists with the plot like the other style.
+    #[serde(default)]
+    pub log_y: bool,
 }
 
 impl LinePlotStyle {
@@ -147,7 +151,7 @@ impl Visualization for LinePlot {
                 if hist.is_empty() {
                     return None;
                 }
-                let pts: Vec<[f64; 2]> = match &x_samples {
+                let mut pts: Vec<[f64; 2]> = match &x_samples {
                     None => {
                         // Classic time on X. Each sample's own `time`
                         // is its X coordinate.
@@ -155,6 +159,9 @@ impl Visualization for LinePlot {
                     }
                     Some(xs) => pair_by_time(xs, hist.iter().copied()),
                 };
+                if style.log_y {
+                    pts = crate::plot_fmt::log_y_points(&pts);
+                }
                 if pts.is_empty() {
                     return None;
                 }
@@ -200,13 +207,17 @@ impl Visualization for LinePlot {
             None => "time (s)".to_string(),
             Some(xs) => xs.path.clone(),
         });
-        let y_label = style.y_label.unwrap_or_else(|| {
+        let mut y_label = style.y_label.unwrap_or_else(|| {
             if y_bindings.len() == 1 {
                 y_bindings[0].source.path.clone()
             } else {
                 "(see legend)".to_string()
             }
         });
+        let log_y = style.log_y;
+        if log_y {
+            y_label = format!("{y_label} (log₁₀)");
+        }
 
         // Use the space *remaining* after the toolbar + separator
         // above; `max_rect()` would double-count that strip and push
@@ -218,11 +229,19 @@ impl Visualization for LinePlot {
             .x_axis_label(x_label)
             .y_axis_label(y_label)
             .auto_bounds(bevy_egui::egui::emath::Vec2b::new(true, true))
+            // Hover any line → name + time + de-logged value.
+            .label_formatter(move |name, point| {
+                crate::plot_fmt::hover_label(name, point, log_y)
+            })
             .legend(
                 Legend::default()
                     .position(Corner::RightTop)
                     .background_alpha(0.7),
             );
+        if log_y {
+            // Grid marks live in log space; relabel them as real values.
+            plot = plot.y_axis_formatter(|mark, _range| crate::plot_fmt::log_y_tick(mark.value));
+        }
         if fit_requested {
             plot = plot.reset();
         }
@@ -243,6 +262,7 @@ enum Edit {
     SetX(Option<SignalRef>),
     AddY(SignalRef),
     RemoveY(SignalRef),
+    SetLogY(bool),
 }
 
 fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<Edit> {
@@ -341,6 +361,18 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
                     .size(10.0),
             );
         }
+
+        ui.separator();
+        // Log-Y toggle. Mirrors the experiments plot's toggle so both
+        // surfaces feel the same.
+        let mut log_y = style.log_y;
+        if ui
+            .toggle_value(&mut log_y, "log Y")
+            .on_hover_text("Plot the Y axis on a log₁₀ scale (drops values ≤ 0)")
+            .changed()
+        {
+            edit = Some(Edit::SetLogY(log_y));
+        }
     });
     ctx.ui.separator();
     edit
@@ -372,6 +404,11 @@ fn apply_edit(world: &mut World, viz: crate::viz::VizId, edit: Edit) {
         }
         Edit::RemoveY(sig) => {
             cfg.inputs.retain(|b| b.source != sig);
+        }
+        Edit::SetLogY(on) => {
+            let mut style = LinePlotStyle::load(cfg);
+            style.log_y = on;
+            style.save(cfg);
         }
     }
 }
@@ -447,11 +484,13 @@ mod tests {
             x_signal: Some(SignalRef::new(bevy::prelude::Entity::PLACEHOLDER, "phi")),
             x_label: Some("phi [rad]".into()),
             y_label: Some("w [rad/s]".into()),
+            log_y: true,
         };
         style.save(&mut cfg);
         let roundtrip = LinePlotStyle::load(&cfg);
         assert_eq!(roundtrip.x_signal.map(|s| s.path), Some("phi".into()));
         assert_eq!(roundtrip.x_label.as_deref(), Some("phi [rad]"));
         assert_eq!(roundtrip.y_label.as_deref(), Some("w [rad/s]"));
+        assert!(roundtrip.log_y);
     }
 }

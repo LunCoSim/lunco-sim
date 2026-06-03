@@ -29,15 +29,13 @@ pub enum ApiRequest {
         command: String,
         params: serde_json::Value,
     },
-    /// Execute a raw Python/Lua script snippet.
-    ExecuteScript {
-        language: String,
-        code: String,
-    },
     QueryEntity { id: ApiEntityId },
     ListEntities,
     DiscoverSchema,
     SubscribeTelemetry { filter: Option<TelemetryFilter> },
+    /// Poll the outcome of a previously-accepted command by its
+    /// `command_id` (the request id returned in `command_accepted`).
+    QueryCommandResult { id: u64 },
 }
 
 /// Response status codes for API errors.

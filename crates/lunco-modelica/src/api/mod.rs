@@ -17,25 +17,19 @@ use crate::pretty::{
 };
 use util::{resolve_doc, strip_same_package_prefix};
 
-// Import generated registration functions for the macro
-use doc::__register_on_set_document_source;
-use component::__register_on_add_modelica_component;
-use component::__register_on_remove_modelica_component;
-use diagram::__register_on_connect_components;
-use diagram::__register_on_disconnect_components;
-use class::__register_on_rename_modelica_class;
-
 /// Plugin that registers the Modelica edit events + observers.
 pub struct ModelicaApiEditPlugin;
 
+// Observers live in split submodules; the path form resolves their
+// generated registration helpers without per-fn `use` shims.
 register_commands!(
-    on_set_document_source,
-    on_add_modelica_component,
-    on_remove_modelica_component,
-    on_connect_components,
-    on_disconnect_components,
+    doc::on_set_document_source,
+    component::on_add_modelica_component,
+    component::on_remove_modelica_component,
+    diagram::on_connect_components,
+    diagram::on_disconnect_components,
     on_apply_modelica_ops,
-    on_rename_modelica_class
+    class::on_rename_modelica_class,
 );
 
 impl Plugin for ModelicaApiEditPlugin {

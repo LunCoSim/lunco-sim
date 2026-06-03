@@ -266,10 +266,14 @@ fn render_unified_toolbar(
             .on_hover_text("Compile — build the model (does not start a live sim); press ▶ Run to step it")
             .on_disabled_hover_text(compile_busy_hint);
         compile_clicked = r_compile.clicked();
+        // Fast Run is no longer blocked by an in-flight run — extra runs
+        // queue behind the concurrency cap (see the Experiments panel for
+        // the running/queued count). Only an in-progress *compile* disables
+        // it.
         let r_fast = ui
-            .add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("⏩"))
-            .on_hover_text("Fast Run — compile and simulate to completion in one go, then show results")
-            .on_disabled_hover_text(compile_busy_hint);
+            .add_enabled(!matches!(compile_state, CompileState::Compiling), egui::Button::new("⏩"))
+            .on_hover_text("Fast Run — compile and simulate to completion; queues behind any running experiments")
+            .on_disabled_hover_text("Compiling — wait for the current build to finish");
         fast_run_clicked = r_fast.clicked();
         // Publish a combined anchor over the two compilation-mode
         // buttons (🚀 Interactive compile, ⏩ Fast Run) so the help

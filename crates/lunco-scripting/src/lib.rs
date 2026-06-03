@@ -1,5 +1,7 @@
 use bevy::prelude::*;
 
+pub mod backend;
+pub mod commands;
 pub mod python;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod repl;
@@ -46,8 +48,19 @@ impl Plugin for LunCoScriptingPlugin {
         app.add_systems(Update, repl::process_repl_commands);
         app.add_systems(FixedUpdate, run_scripted_models);
 
-        // Handle remote script requests from the API
-        app.add_observer(handle_script_request);
+        // Pluggable script backends — one per language, per cargo feature.
+        // The matching `RunPython` command is `#[cfg]`-gated on the same
+        // feature, so the language only appears on the API when its runtime
+        // is actually compiled in (no "accepted but no-op" lie). Python is
+        // the only backend today.
+        #[allow(unused_mut)]
+        let mut backends = backend::ScriptBackends::default();
+        #[cfg(feature = "python")]
+        backends.insert(doc::ScriptLanguage::Python, Box::new(backend::PythonBackend));
+        app.insert_resource(backends);
+
+        #[cfg(feature = "python")]
+        commands::register_all_commands(app);
     }
 }
 
@@ -118,38 +131,3 @@ fn run_scripted_models(
     }
 }
 
-fn handle_script_request(
-    trigger: On<lunco_api::ScriptRequestEvent>,
-    python_status: Res<python::PythonStatus>,
-) {
-    let event = trigger.event();
-    info!("Executing Remote Script ({}): {}", event.language, event.code);
-    
-    if event.language.to_lowercase() == "python" {
-        #[cfg(feature = "python")]
-        {
-            if *python_status != python::PythonStatus::Available {
-                error!("Python is not available on this system. Cannot execute remote Python script.");
-                return;
-            }
-            pyo3::Python::with_gil(|py| {
-                let c_str = match std::ffi::CString::new(event.code.as_str()) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        error!("Remote Python: code contains a NUL byte; rejected");
-                        return;
-                    }
-                };
-                if let Err(e) = py.run(&c_str, None, None) {
-                    error!("Remote Python Error: {}", e);
-                }
-            });
-        }
-        #[cfg(not(feature = "python"))]
-        {
-            error!("Python support was not compiled into this binary.");
-        }
-    } else {
-        warn!("Unsupported script language: {}", event.language);
-    }
-}

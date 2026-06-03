@@ -94,7 +94,7 @@ impl Panel for PackageBrowserPanel {
         }
 
         if create_new {
-            world.commands().trigger(crate::ui::commands::CreateNewScratchModel {});
+            world.commands().trigger(crate::ui::commands::CreateNewScratchModel::default());
         }
         if open_twin_picker {
             world.commands().trigger(lunco_workbench::picker::PickHandle {

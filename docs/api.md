@@ -255,11 +255,12 @@ app.run();
 
 There are **two response shapes** behind `POST /api/commands`:
 
-1. **Reflect Event commands** — fire-and-forget side effects.
-   `OpenFile`, `MoveComponent`, `DriveRover`, etc. The executor
-   reflects on the type, deserialises params, and triggers the
-   matching `Event` for domain observers to handle. Returns
-   `command_accepted` immediately.
+1. **Reflect Event commands** — side effects. `OpenFile`,
+   `MoveComponent`, `DriveRover`, etc. The executor reflects on the
+   type, deserialises params, and triggers the matching `Event` for
+   domain observers to handle. Returns `command_accepted` (with a
+   request id) immediately; commands that report a result also record
+   a pollable outcome — see *Command results* below.
 
 2. **Query providers** — return structured data.
    `ListBundled`, `ListTwin`, `ListMsl`, `MslStatus`,
@@ -310,6 +311,73 @@ for the design.
 
 **Adding a new typed command** (side-effect): follow the existing
 pattern in `skills/test-via-api/SKILL.md`.
+
+### Command results — `QueryCommandResult`
+
+Every accepted command returns a `command_id` (the request id). Most
+commands are fire-and-forget and record nothing. A command whose
+observer returns `Result<Ack, String>` (see AGENTS.md § 4.2) records a
+**terminal outcome** under that id, which the caller polls:
+
+```bash
+# 1. dispatch → get the request id
+curl -s :3000/api/commands -d '{"command":"RunPython","params":{"code":"print(2+2)"}}'
+# → {"command_id": 7}
+
+# 2. poll the outcome by id
+curl -s :3000/api/commands -d '{"type":"QueryCommandResult","id":"7"}'
+# → {"data":{"id":7,"outcome":{"Succeeded":{"assigned":{"stdout":"4\n"}}}}}
+```
+
+`outcome` is one of `Succeeded(Ack)` (ran OK — `Ack.assigned` carries any
+returned data), `Failed(msg)` (ran and errored — do **not** revert),
+`Rejected(Reject)` (never ran — revert an optimistic edit), `Pending`
+(accepted, async not yet done), or `null` (unknown id / fire-and-forget).
+
+The store (`CommandResults` in `lunco-core`) is bounded (FIFO-evicted),
+so poll reasonably soon after dispatch. The model is deliberately minimal
+— one result + a few states (F′/MAVLink/behaviour-tree style), not XTCE's
+multi-stage verifier pipeline. Long-running lifecycles (queued, progress,
+cancel) live as per-domain state (e.g. experiments' `RunStatus`), not here.
+
+### TBD: grouped self-submitting command registration
+
+Today each `#[on_command]` generates an internal `__register_*` helper
+and the owning plugin enumerates its observers in a
+`register_commands!(...)` list (bare idents or `module::fn` paths). The
+list is hand-maintained and can drift — a forgotten entry silently
+omits the command from the API surface.
+
+**Proposed (Option C):** each `#[on_command(Cmd, group = "x")]`
+self-submits its registration thunk into an `inventory` collection
+(already a transitive dep via `bevy_reflect`; verified to work on
+`wasm32-unknown-unknown` under wasm-bindgen). A plugin then registers
+its commands with one call — `register_group(app, "x")` — and **no
+list is maintained anywhere**.
+
+The `group` tag is load-bearing: a flat global `register_all` would
+register every command in every *linked* crate regardless of which
+plugins are added, which breaks feature-gating (a command would become
+API-triggerable whenever its crate compiles, not when its plugin is
+added) and reintroduces the missing-resource panic class. The group
+namespaces registration to the owning plugin, preserving per-plugin
+scoping while removing the list.
+
+Scope of the change (orthogonal to dispatch/results — pure
+registration polish):
+- macro: parse `group =`, emit `inventory::submit!`;
+- `lunco-core`: a `CommandReg { group, register: fn(&mut App) }` type +
+  `inventory::collect!` + `register_group`, plus an idempotency guard
+  (re-running a group must not double-`add_observer`);
+- `inventory` becomes a direct dep of `lunco-core`;
+- migration: add `group = "…"` to every `#[on_command]` and replace
+  each `register_commands!` + `register_all_commands(app)` with one
+  `register_group(app, "…")` (~all commands, ~10 crates).
+
+Failure mode shifts from "forgot a list line" to "wrong/missing
+`group`" — mitigable by making `group` a const/enum rather than a free
+string. Decision pending; current state stays on the explicit-list
+form.
 
 ### External API visibility (optional)
 

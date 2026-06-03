@@ -73,6 +73,10 @@ pub struct PlotPanelState {
     /// the plot. Reset on twin switch by `sync_twin`'s restore path
     /// (a fresh state for a new twin starts at `false`).
     pub auto_show_attempted: bool,
+    /// Plot the Y axis on a log10 scale for this plot tab. Per-VizId so
+    /// each plot window chooses independently; survives like the rest
+    /// of the per-plot state.
+    pub log_y: bool,
 }
 
 #[derive(Resource, Default, Debug)]
@@ -858,10 +862,15 @@ impl ExperimentsPanel {
         let mut inputs_changed = false;
         let mut run_clicked = false;
 
-        let runner_busy = world
+        // Live scheduler state: how many runs are executing, how many are
+        // queued behind the concurrency cap. Drives the "N running · M
+        // queued" chip and means the Run button queues (rather than being
+        // disabled) when the runner is saturated.
+        let (running_now, queued_now, max_par) = world
             .get_resource::<crate::ModelicaRunnerResource>()
-            .map(|r| r.0.is_busy())
-            .unwrap_or(false);
+            .map(|r| (r.0.in_flight_count(), r.0.queued_count(), r.0.max_parallel()))
+            .unwrap_or((0, 0, 1));
+        let any_in_flight = running_now > 0;
 
         // Annotation-default reference for "is this what the model
         // says?" tagging next to the bounds inputs.
@@ -884,24 +893,28 @@ impl ExperimentsPanel {
                 ui.weak("· bounds default from experiment(...) annotation");
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if runner_busy
+                if any_in_flight
                     && ui
                         .small_button("⊘ Cancel")
-                        .on_hover_text("Stop the current run.")
+                        .on_hover_text("Cancel the most recently started run.")
                         .clicked()
                 {
                     cancel_active = true;
                 }
-                let label = if runner_busy { "⏩ Running…" } else { "⏩ Run" };
                 let valid = bounds.t_end > bounds.t_start;
-                let btn = ui.add_enabled(valid && !runner_busy, egui::Button::new(label));
-                let btn = if runner_busy {
-                    btn.on_disabled_hover_text(
-                        "A run is already in progress — use ⊘ Cancel.",
-                    )
-                } else if !valid {
+                // Run is never blocked by an in-flight run now — extra runs
+                // queue behind the concurrency cap. Only invalid bounds
+                // disable it.
+                let btn = ui.add_enabled(valid, egui::Button::new("⏩ Run"));
+                let btn = if !valid {
                     btn.on_disabled_hover_text(
                         "Bounds invalid — t_end must be greater than t_start.",
+                    )
+                } else if any_in_flight || queued_now > 0 {
+                    btn.on_hover_text(
+                        "Fast Run — queues behind the running experiments \
+                         (up to the parallel-runs limit) and starts as soon \
+                         as a slot frees.",
                     )
                 } else {
                     btn.on_hover_text(
@@ -914,6 +927,18 @@ impl ExperimentsPanel {
                 };
                 if btn.clicked() {
                     run_clicked = true;
+                }
+                // Live concurrency chip: "▶ 2/4 · ⏳ 3" (running/limit · queued).
+                if any_in_flight || queued_now > 0 {
+                    let mut chip = format!("▶ {running_now}/{max_par}");
+                    if queued_now > 0 {
+                        chip.push_str(&format!(" · ⏳ {queued_now}"));
+                    }
+                    ui.label(chip).on_hover_text(format!(
+                        "{running_now} run(s) executing (limit {max_par}), \
+                         {queued_now} queued. Change the limit via \
+                         settings.json `experiments.max_parallel`."
+                    ));
                 }
                 ui.label(format!("t: {:.2}→{:.2}s", bounds.t_start, bounds.t_end));
             });
@@ -1792,6 +1817,27 @@ fn render_experiments_plot_inner(
         .map(|mut r| r.take(viz_id))
         .unwrap_or(false);
 
+    // Log-Y toggle for this plot tab. Sits just above the chart so it
+    // reads as a chart control; mirrors the live LinePlot's toolbar
+    // toggle.
+    let log_y = world
+        .get_resource::<PlotPanelStates>()
+        .and_then(|s| s.by_viz.get(&viz_id))
+        .map(|st| st.log_y)
+        .unwrap_or(false);
+    {
+        let mut log_y_ui = log_y;
+        if ui
+            .toggle_value(&mut log_y_ui, "log Y")
+            .on_hover_text("Plot the Y axis on a log₁₀ scale (drops values ≤ 0)")
+            .changed()
+        {
+            if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
+                states.entry(viz_id).log_y = log_y_ui;
+            }
+        }
+    }
+
     // Plot frame always renders. x-axis label dropped: time is
     // implicit in this panel and the label was burning a row of
     // pixels for one symbol.
@@ -1801,12 +1847,24 @@ fn render_experiments_plot_inner(
             // Don't let the dragger eat clicks — we want clicks to set
             // the scrub cursor instead of pan/zoom. Box-zoom stays on
             // the modifier defaults; double-click still resets bounds.
-            .allow_drag(false);
+            .allow_drag(false)
+            // Hover any curve → run·var name + time + de-logged value.
+            .label_formatter(move |name, point| {
+                lunco_viz::plot_fmt::hover_label(name, point, log_y)
+            });
         if fit_requested {
             plot = plot.reset();
         }
+        if log_y {
+            plot = plot.y_axis_formatter(|mark, _range| {
+                lunco_viz::plot_fmt::log_y_tick(mark.value)
+            });
+        }
         if let Some(u) = shared_unit.as_ref().filter(|u| !u.is_empty()) {
-            plot = plot.y_axis_label(format!("[{u}]"));
+            let label = if log_y { format!("[{u}] (log₁₀)") } else { format!("[{u}]") };
+            plot = plot.y_axis_label(label);
+        } else if log_y {
+            plot = plot.y_axis_label("(log₁₀)");
         }
         let captured_x: std::cell::Cell<Option<f64>> = std::cell::Cell::new(None);
         plot.show(ui, |plot_ui| {
@@ -1818,7 +1876,12 @@ fn render_experiments_plot_inner(
                     2 => LineStyle::dotted_dense(),
                     _ => LineStyle::dashed_loose(),
                 };
-                let line = Line::new(s.label.clone(), PlotPoints::from(s.points.clone()))
+                let pts = if log_y {
+                    lunco_viz::plot_fmt::log_y_points(&s.points)
+                } else {
+                    s.points.clone()
+                };
+                let line = Line::new(s.label.clone(), PlotPoints::from(pts))
                     .color(egui::Color32::from_rgb(r, g, b))
                     .style(style);
                 plot_ui.line(line);
@@ -1831,7 +1894,12 @@ fn render_experiments_plot_inner(
             if visible.contains(&ExperimentId::live()) {
                 for ex in extras {
                     let (r, g, b) = ex.color;
-                    let line = Line::new(ex.label.clone(), PlotPoints::from(ex.points.clone()))
+                    let pts = if log_y {
+                        lunco_viz::plot_fmt::log_y_points(&ex.points)
+                    } else {
+                        ex.points.clone()
+                    };
+                    let line = Line::new(ex.label.clone(), PlotPoints::from(pts))
                         .color(egui::Color32::from_rgb(r, g, b));
                     plot_ui.line(line);
                 }
@@ -2268,6 +2336,7 @@ fn format_overrides_summary(
 fn status_label(s: &RunStatus) -> String {
     match s {
         RunStatus::Pending => "⌛ Pending".into(),
+        RunStatus::Queued => "⏳ Queued".into(),
         RunStatus::Running { t_current } => format!("▶ {t_current:.2}s"),
         RunStatus::Done { wall_time_ms } => format!("✓ Done ({wall_time_ms} ms)"),
         RunStatus::Failed { .. } => "⚠ Failed".into(),
