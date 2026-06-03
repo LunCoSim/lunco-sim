@@ -15,6 +15,7 @@ pub mod viz;
 pub mod registry;
 pub mod panel;
 pub mod kinds;
+pub mod plot_fmt;
 
 pub use signal::{
     export_signals_to_csv, ScalarHistory, ScalarSample, SignalMeta, SignalRef, SignalRegistry,

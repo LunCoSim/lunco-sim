@@ -1056,6 +1056,15 @@ fn render_active_class_parameters(
             // render read-only with the muted style. Two-pass: collect
             // edits, apply after the borrow on `rows` is released.
             let mut edits: Vec<(String, String, String)> = Vec::new(); // (component, param, value)
+            // Bound the list height so a model with dozens of parameters
+            // (40+ here) scrolls within its own region instead of pushing
+            // the rest of the Telemetry panel off-screen — this section
+            // renders outside the panel's main scroll (pre-compile path).
+            egui::ScrollArea::vertical()
+                .id_salt("active_params_scroll")
+                .max_height(320.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
             for row in &rows {
                 // Read-only docs (bundled examples) can't accept any
                 // edits — fall back to the muted display path for
@@ -1148,6 +1157,7 @@ fn render_active_class_parameters(
                     }
                 });
             }
+            }); // end bounded parameter-list scroll
             if edits.is_empty() {
                 return;
             }

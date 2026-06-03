@@ -16,6 +16,13 @@ impl Plugin for LunCoControllerPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(InputManagerPlugin::<VesselIntent>::default())
            .init_resource::<lunco_core::OwnedInputLog>()
+           // Sibling of OwnedInputLog — both are read/written unconditionally by
+           // record_drive_input / record_brake_input below. lunco-networking also
+           // init_resource's this, but networking is an opt-in feature; without
+           // this line the observers panic ("Resource does not exist") whenever
+           // the wire is off. init_resource is idempotent, so the double-register
+           // when networking IS on is harmless.
+           .init_resource::<lunco_core::AppliedInputSeq>()
            // Input is SENSED at frame rate (leafwing's `just_pressed` latch edges
            // only work in `Update`) but EMITTED once per fixed tick, so the
            // prediction replay is a clean 1:1 loop over `InputFrame`s.

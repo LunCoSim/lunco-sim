@@ -73,6 +73,10 @@ pub struct PlotPanelState {
     /// the plot. Reset on twin switch by `sync_twin`'s restore path
     /// (a fresh state for a new twin starts at `false`).
     pub auto_show_attempted: bool,
+    /// Plot the Y axis on a log10 scale for this plot tab. Per-VizId so
+    /// each plot window chooses independently; survives like the rest
+    /// of the per-plot state.
+    pub log_y: bool,
 }
 
 #[derive(Resource, Default, Debug)]
@@ -1801,6 +1805,27 @@ fn render_experiments_plot_inner(
         .map(|mut r| r.take(viz_id))
         .unwrap_or(false);
 
+    // Log-Y toggle for this plot tab. Sits just above the chart so it
+    // reads as a chart control; mirrors the live LinePlot's toolbar
+    // toggle.
+    let log_y = world
+        .get_resource::<PlotPanelStates>()
+        .and_then(|s| s.by_viz.get(&viz_id))
+        .map(|st| st.log_y)
+        .unwrap_or(false);
+    {
+        let mut log_y_ui = log_y;
+        if ui
+            .toggle_value(&mut log_y_ui, "log Y")
+            .on_hover_text("Plot the Y axis on a log₁₀ scale (drops values ≤ 0)")
+            .changed()
+        {
+            if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
+                states.entry(viz_id).log_y = log_y_ui;
+            }
+        }
+    }
+
     // Plot frame always renders. x-axis label dropped: time is
     // implicit in this panel and the label was burning a row of
     // pixels for one symbol.
@@ -1810,12 +1835,24 @@ fn render_experiments_plot_inner(
             // Don't let the dragger eat clicks — we want clicks to set
             // the scrub cursor instead of pan/zoom. Box-zoom stays on
             // the modifier defaults; double-click still resets bounds.
-            .allow_drag(false);
+            .allow_drag(false)
+            // Hover any curve → run·var name + time + de-logged value.
+            .label_formatter(move |name, point| {
+                lunco_viz::plot_fmt::hover_label(name, point, log_y)
+            });
         if fit_requested {
             plot = plot.reset();
         }
+        if log_y {
+            plot = plot.y_axis_formatter(|mark, _range| {
+                lunco_viz::plot_fmt::log_y_tick(mark.value)
+            });
+        }
         if let Some(u) = shared_unit.as_ref().filter(|u| !u.is_empty()) {
-            plot = plot.y_axis_label(format!("[{u}]"));
+            let label = if log_y { format!("[{u}] (log₁₀)") } else { format!("[{u}]") };
+            plot = plot.y_axis_label(label);
+        } else if log_y {
+            plot = plot.y_axis_label("(log₁₀)");
         }
         let captured_x: std::cell::Cell<Option<f64>> = std::cell::Cell::new(None);
         plot.show(ui, |plot_ui| {
@@ -1827,7 +1864,12 @@ fn render_experiments_plot_inner(
                     2 => LineStyle::dotted_dense(),
                     _ => LineStyle::dashed_loose(),
                 };
-                let line = Line::new(s.label.clone(), PlotPoints::from(s.points.clone()))
+                let pts = if log_y {
+                    lunco_viz::plot_fmt::log_y_points(&s.points)
+                } else {
+                    s.points.clone()
+                };
+                let line = Line::new(s.label.clone(), PlotPoints::from(pts))
                     .color(egui::Color32::from_rgb(r, g, b))
                     .style(style);
                 plot_ui.line(line);
@@ -1840,7 +1882,12 @@ fn render_experiments_plot_inner(
             if visible.contains(&ExperimentId::live()) {
                 for ex in extras {
                     let (r, g, b) = ex.color;
-                    let line = Line::new(ex.label.clone(), PlotPoints::from(ex.points.clone()))
+                    let pts = if log_y {
+                        lunco_viz::plot_fmt::log_y_points(&ex.points)
+                    } else {
+                        ex.points.clone()
+                    };
+                    let line = Line::new(ex.label.clone(), PlotPoints::from(pts))
                         .color(egui::Color32::from_rgb(r, g, b));
                     plot_ui.line(line);
                 }

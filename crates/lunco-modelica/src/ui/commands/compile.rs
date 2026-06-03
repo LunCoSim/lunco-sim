@@ -153,6 +153,13 @@ pub(crate) fn render_fast_run_setup(
     .show(ctx, |ui| {
         ui.heading("Simulation Setup — Fast Run");
         ui.separator();
+        // Scroll the setup body so the Run/Cancel row below stays pinned
+        // and reachable even when inputs/params make the form taller than
+        // the screen.
+        egui::ScrollArea::vertical()
+            .max_height(440.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
             ui.label(
                 egui::RichText::new(format!("Class: {}", entry.model_ref.0))
                     .strong(),
@@ -262,13 +269,14 @@ pub(crate) fn render_fast_run_setup(
                 ui.colored_label(
                     egui::Color32::from_rgb(180, 180, 100),
                     format!(
-                        "{} parameter override(s) active — edit in 🧪 Experiments",
+                        "{} parameter override(s) active — edit in the Experiments panel",
                         entry.overrides_count
                     ),
                 );
             } else {
-                ui.weak("Tip: open 🧪 Experiments → ⚙ Overrides + Bounds to override parameters.");
+                ui.weak("Tip: open the Experiments panel → ⚙ Overrides + Bounds to override parameters.");
             }
+            }); // end scrollable setup body
             ui.add_space(8.0);
 
             // Validation
