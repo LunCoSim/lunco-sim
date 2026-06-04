@@ -78,19 +78,21 @@ impl ModelicaThemeExt for Theme {
         }
     }
     fn class_badge_bg_by_keyword(&self, keyword: &str) -> Color32 {
-        let s = &self.schematic;
-        match keyword {
-            "model" => s.class_model_badge,
-            "block" => s.class_block_badge,
-            "class" => s.class_class_badge,
-            "connector" => s.class_connector_badge,
-            "record" => s.class_record_badge,
-            "type" => s.class_type_badge,
-            "package" => s.class_package_badge,
-            "function" => s.class_function_badge,
-            "operator" => s.class_operator_badge,
-            _ => s.class_class_badge,
-        }
+        // Normalize the string to a `ClassType`, then reuse the single
+        // ClassType→badge color map in `class_badge_bg`. Keeps the color
+        // mapping in exactly one place; this match is only keyword parsing.
+        let kind = match keyword {
+            "model" => ClassType::Model,
+            "block" => ClassType::Block,
+            "connector" => ClassType::Connector,
+            "record" => ClassType::Record,
+            "type" => ClassType::Type,
+            "package" => ClassType::Package,
+            "function" => ClassType::Function,
+            "operator" => ClassType::Operator,
+            _ => ClassType::Class, // "class" + any unknown keyword
+        };
+        self.class_badge_bg(&kind)
     }
     fn class_badge_fg(&self) -> Color32 {
         self.schematic.class_badge_fg
