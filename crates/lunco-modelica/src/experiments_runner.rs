@@ -344,10 +344,9 @@ impl ExperimentRunner for ModelicaRunner {
         Some(RunBounds {
             t_start: d.t_start.unwrap_or(0.0),
             t_end,
-            // `Interval=0` is the Modelica spec's "unspecified" sentinel —
-            // map it to `None` so the run loop derives the spec default
-            // (numberOfIntervals=500) instead of treating 0 as a real step.
-            dt: d.interval.filter(|&i| i > 0.0),
+            // `Interval=0` sentinel handling shared with every other
+            // annotation→bounds path (preserves this struct's own `solver`).
+            dt: crate::sim_target::interval_to_dt(d.interval),
             tolerance: d.tolerance,
             solver: d.solver.clone(),
             h0: None,

@@ -1209,7 +1209,8 @@ pub(crate) fn bounds_from_annotation(
 /// Fast Run popup and the Experiments-tab Setup form, so the two
 /// surfaces never disagree. Precedence: saved draft override → runner
 /// annotation cache (`default_bounds`) → AST `experiment(...)`
-/// annotation → 10 s fallback.
+/// annotation → `sim_target::DEFAULT_STOP_TIME` (1 s, the Modelica spec
+/// default) fallback.
 pub(crate) fn resolve_setup_bounds(
     world: &World,
     doc: DocumentId,
@@ -1380,12 +1381,12 @@ fn dispatch_experiment(
 
         // Bounds: reuse the single source of truth `resolve_setup_bounds`
         // (draft override → runner annotation cache → AST `experiment(...)`
-        // → default), then apply the command override on top. This keeps the
-        // Fast Run API path bit-identical to the Experiments-tab Setup form
-        // and the Fast Run popup, and removes the divergent `t_end: 1.0`
-        // fallback that silently ran 1 s while the UI displayed 10 s. The
-        // annotation cache seeding above is what makes the cache layer here
-        // resolve without a prior interactive compile.
+        // → `sim_target::DEFAULT_STOP_TIME`), then apply the command override
+        // on top. This keeps the Fast Run API path bit-identical to the
+        // Experiments-tab Setup form and the Fast Run popup — one resolver,
+        // no per-surface divergence. The annotation cache seeding above is
+        // what makes the cache layer here resolve without a prior
+        // interactive compile.
         let mut bounds = resolve_setup_bounds(world, doc, &model_ref);
 
         // Parameter overrides / inputs from the draft, with command-supplied

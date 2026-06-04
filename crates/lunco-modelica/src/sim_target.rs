@@ -8,8 +8,8 @@
 //!
 //! These rules used to be inlined, and drifted, across the Fast Run popup,
 //! the Experiments Setup form, and the `FastRunActiveModel`/`RunExperiment`
-//! command handlers — N copies of the same precedence, with at least one
-//! diverged fallback constant (1 s vs 10 s). They now live here, once.
+//! command handlers — N copies of the same precedence and the same
+//! `Interval=0` sentinel handling. They now live here, once.
 //!
 //! Everything in this module is **pure**: no `World`, no Bevy resources, no
 //! UI types. The `ui/` layer is responsible for *gathering* the inputs
@@ -21,10 +21,20 @@
 use lunco_experiments::RunBounds;
 
 /// The fallback simulation horizon when nothing else supplies one (no draft,
-/// no runner cache, no `experiment(...)` annotation). The single canonical
-/// value — surfaces that display "defaults to 10 s" and the run that
-/// actually executes must agree, so both read this.
-pub const DEFAULT_STOP_TIME: f64 = 10.0;
+/// no runner cache, no `experiment(...)` annotation). `1.0` is the Modelica
+/// spec default for `experiment(StopTime=...)`. The single canonical value —
+/// surfaces that display the default and the run that actually executes must
+/// agree, so both read this.
+pub const DEFAULT_STOP_TIME: f64 = 1.0;
+
+/// Map a Modelica `experiment(Interval=...)` value to an output step (`dt`).
+/// `Interval=0` is the spec's "unspecified" sentinel → `None`, so the run
+/// loop derives the spec default (numberOfIntervals) instead of treating 0
+/// as a real step. Shared by every annotation→bounds path so the sentinel
+/// rule can't drift.
+pub fn interval_to_dt(interval: Option<f64>) -> Option<f64> {
+    interval.filter(|&i| i > 0.0)
+}
 
 /// The bounds used when no source supplies any: `[0, DEFAULT_STOP_TIME]`,
 /// adaptive solver, no fixed output interval.
@@ -65,8 +75,7 @@ pub fn bounds_from_experiment(exp: &crate::annotations::Experiment) -> Option<Ru
     Some(RunBounds {
         t_start: exp.start_time.unwrap_or(0.0),
         t_end,
-        // `Interval=0` is the Modelica spec's "unspecified" sentinel → None.
-        dt: exp.interval.filter(|&i| i > 0.0),
+        dt: interval_to_dt(exp.interval),
         tolerance: exp.tolerance,
         solver: None,
         h0: None,
@@ -115,7 +124,14 @@ mod tests {
         assert_eq!(resolve_bounds(None, Some(rb(2.0)), Some(rb(3.0))).t_end, 2.0);
         assert_eq!(resolve_bounds(None, None, Some(rb(3.0))).t_end, 3.0);
         assert_eq!(resolve_bounds(None, None, None).t_end, DEFAULT_STOP_TIME);
-        assert_eq!(DEFAULT_STOP_TIME, 10.0);
+        assert_eq!(DEFAULT_STOP_TIME, 1.0); // Modelica spec default StopTime
+    }
+
+    #[test]
+    fn interval_zero_is_unspecified_sentinel() {
+        assert_eq!(interval_to_dt(Some(0.0)), None);
+        assert_eq!(interval_to_dt(Some(3600.0)), Some(3600.0));
+        assert_eq!(interval_to_dt(None), None);
     }
 
     #[test]
