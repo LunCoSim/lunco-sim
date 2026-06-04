@@ -340,6 +340,11 @@ fn render_unified_toolbar(
         let model_ref = super::context::default_simulation_class(world, doc)
             .map(lunco_experiments::ModelRef);
         if let Some(model_ref) = model_ref {
+            // Canvas ⏩ always opens the setup modal — one predictable
+            // behaviour regardless of whether the Experiments panel happens
+            // to be open. (The modal is the only bounds/class surface when
+            // the panel is closed; keeping it unconditional avoids a hidden
+            // mode switch on the same button.)
             // Same resolver the Experiments-tab Setup uses, so the two
             // surfaces always agree (draft → runner cache → AST
             // annotation → fallback).
@@ -359,8 +364,9 @@ fn render_unified_toolbar(
                         }).unwrap_or_default();
                     crate::ui::commands::FastRunInput { name: d.name, type_name: d.type_name, value_text }
                 }).collect();
+            let candidates = world.get_resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(doc)).map(|h| h.document().index().simulation_candidates()).unwrap_or_default();
             if let Some(mut setup) = world.get_resource_mut::<crate::ui::commands::FastRunSetupState>() {
-                setup.0 = Some(crate::ui::commands::FastRunSetupEntry { doc, model_ref, bounds, overrides_count, inputs });
+                setup.0 = Some(crate::ui::commands::FastRunSetupEntry { doc, model_ref, candidates, bounds, overrides_count, inputs });
             }
         } else {
             world.commands().trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None, solver: None, h0: None });

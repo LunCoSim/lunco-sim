@@ -106,6 +106,10 @@ pub struct FastRunSetupState(pub Option<FastRunSetupEntry>);
 pub struct FastRunSetupEntry {
     pub doc: DocumentId,
     pub model_ref: lunco_experiments::ModelRef,
+    /// Tier-ranked simulatable classes for this doc. Drives the inline
+    /// class dropdown so a multi-model package picks its target here
+    /// instead of through the separate disambiguation modal.
+    pub candidates: Vec<String>,
     pub bounds: lunco_experiments::RunBounds,
     /// Set when overrides are non-empty so the dialog hint nudges
     /// users toward the Experiments panel for full editing.
@@ -129,6 +133,7 @@ pub(crate) fn render_fast_run_setup(
     mut egui_ctx: bevy_egui::EguiContexts,
     mut setup: ResMut<FastRunSetupState>,
     mut drafts: ResMut<crate::experiments_runner::ExperimentDrafts>,
+    mut run_targets: ResMut<crate::ui::panels::model_view::RunTargetOverrides>,
     mut commands: Commands,
 ) {
     let Ok(ctx) = egui_ctx.ctx_mut() else {
@@ -160,10 +165,36 @@ pub(crate) fn render_fast_run_setup(
             .max_height(440.0)
             .auto_shrink([false, true])
             .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(format!("Class: {}", entry.model_ref.0))
-                    .strong(),
-            );
+            // Class selector. Multi-model packages pick the run target
+            // here (parity with the Experiments Setup dropdown) instead of
+            // through the separate disambiguation modal. Switching records
+            // the explicit run-target override so every other surface
+            // re-resolves to it — the canvas view is left untouched.
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Class").strong());
+                if entry.candidates.len() > 1 {
+                    let mut pick: Option<String> = None;
+                    egui::ComboBox::from_id_salt("fastrun_setup_class")
+                        .selected_text(entry.model_ref.0.clone())
+                        .show_ui(ui, |ui| {
+                            for cand in &entry.candidates {
+                                if ui
+                                    .selectable_label(*cand == entry.model_ref.0, cand)
+                                    .clicked()
+                                    && *cand != entry.model_ref.0
+                                {
+                                    pick = Some(cand.clone());
+                                }
+                            }
+                        });
+                    if let Some(cls) = pick {
+                        entry.model_ref = lunco_experiments::ModelRef(cls.clone());
+                        run_targets.0.insert(entry.doc, cls);
+                    }
+                } else {
+                    ui.label(egui::RichText::new(&entry.model_ref.0).strong());
+                }
+            });
             ui.add_space(6.0);
             egui::Grid::new("fastrun_setup_grid")
                 .num_columns(2)
@@ -405,7 +436,9 @@ pub(crate) fn render_fast_run_setup(
             }
         }
         draft.inputs = new_inputs;
-        commands.trigger(FastRunActiveModel { doc: entry.doc, class: None, t_end: None, dt: None, tolerance: None, solver: None, h0: None });
+        // Pass the chosen class explicitly so dispatch skips the
+        // disambiguation modal — the dropdown above already resolved it.
+        commands.trigger(FastRunActiveModel { doc: entry.doc, class: Some(entry.model_ref.0.clone()), t_end: None, dt: None, tolerance: None, solver: None, h0: None });
     } else if cancelled {
         setup.0 = None;
     }

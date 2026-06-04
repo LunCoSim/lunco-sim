@@ -709,6 +709,7 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<ModelicaDocumentRegistry>()
             .init_resource::<CompileStates>()
             .init_resource::<panels::model_view::ModelTabs>()
+            .init_resource::<panels::model_view::RunTargetOverrides>()
             .init_resource::<panels::model_view::TabRenderContext>()
             .init_resource::<panels::code_editor::EditorBufferState>()
             .init_resource::<panels::console::ConsoleLog>()

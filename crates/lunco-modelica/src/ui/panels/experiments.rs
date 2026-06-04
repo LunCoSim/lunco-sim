@@ -810,17 +810,22 @@ impl ExperimentsPanel {
         else {
             return;
         };
-        let (model_name, source) = match world
+        let (model_name, source, candidates) = match world
             .get_resource::<crate::ui::state::ModelicaDocumentRegistry>()
             .and_then(|r| r.host(doc))
         {
             Some(h) => {
                 let document = h.document();
+                // Tier-ranked simulatable classes — same list the Fast Run
+                // popup and dispatch picker use. Drives the class dropdown
+                // below so multi-model packages pick a target inline rather
+                // than through a separate disambiguation modal.
+                let candidates = document.index().simulation_candidates();
                 // Drilled-in pin → tier-ranked simulation root (shared
                 // precedence; see `default_simulation_class`). Keeps this
                 // Setup form in lock-step with the Fast Run popup.
                 match crate::ui::panels::model_view::default_simulation_class(world, doc) {
-                    Some(c) => (c, document.source().to_string()),
+                    Some(c) => (c, document.source().to_string(), candidates),
                     None => return,
                 }
             }
@@ -891,8 +896,34 @@ impl ExperimentsPanel {
         // ▾ chip toggles the bounds/inputs detail section. This keeps
         // the table area maximised when the dock is shrunk.
         let mut cancel_active = false;
+        // Class the user picks in the dropdown this frame. Applied after
+        // the row via the drill pin so every run surface re-resolves to it.
+        let mut pick_class: Option<String> = None;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(format!("Setup — {}", model_name)).strong())
+            ui.label(egui::RichText::new("Setup —").strong());
+            if candidates.len() > 1 {
+                // Multi-model package: let the user choose the run target
+                // inline. Selecting sets the explicit run-target override
+                // (NOT the drill pin — the canvas view stays put), so the
+                // bounds/inputs/overrides below re-resolve to the chosen
+                // class next frame and Run never needs the picker modal.
+                egui::ComboBox::from_id_salt("experiments_setup_class")
+                    .selected_text(model_name.clone())
+                    .show_ui(ui, |ui| {
+                        for cand in &candidates {
+                            if ui
+                                .selectable_label(*cand == model_name, cand)
+                                .clicked()
+                                && *cand != model_name
+                            {
+                                pick_class = Some(cand.clone());
+                            }
+                        }
+                    });
+            } else {
+                ui.label(egui::RichText::new(&model_name).strong());
+            }
+            ui.label("·")
                 .on_hover_text("Bounds + inputs apply to the next run from this model.");
             if from_annotation {
                 ui.weak("· bounds default from experiment(...) annotation");
@@ -948,6 +979,12 @@ impl ExperimentsPanel {
                 ui.label(format!("t: {:.2}→{:.2}s", bounds.t_start, bounds.t_end));
             });
         });
+        // Commit the class pick (if any) as the explicit run target. Next
+        // frame default_simulation_class — and the whole Setup form /
+        // override editor — resolve to it, without moving the canvas view.
+        if let Some(cls) = pick_class {
+            crate::ui::panels::model_view::set_run_target_for_doc(world, doc, &cls);
+        }
         if bounds.t_end <= bounds.t_start {
             ui.label(
                 egui::RichText::new("⚠ t_end must be greater than t_start")
@@ -1190,10 +1227,12 @@ impl ExperimentsPanel {
             }
         }
         if run_clicked {
-            // Skip the modal — Setup is already filled in.
+            // Pass the resolved class explicitly so dispatch never opens the
+            // disambiguation modal — the dropdown above already chose the
+            // target. Setup (bounds/inputs/overrides) is already in the draft.
             world
                 .commands()
-                .trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None, solver: None, h0: None });
+                .trigger(crate::ui::commands::FastRunActiveModel { doc, class: Some(model_name.clone()), t_end: None, dt: None, tolerance: None, solver: None, h0: None });
         }
     }
 

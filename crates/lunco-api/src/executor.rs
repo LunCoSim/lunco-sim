@@ -407,6 +407,17 @@ fn execute_request(
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
+                // Optional crop region [x, y, w, h] in physical pixels.
+                // Cropped server-side before save/encode so callers don't
+                // need an external image tool to zoom into a panel.
+                let region = params.get("region").and_then(|v| {
+                    let a = v.as_array()?;
+                    if a.len() != 4 { return None; }
+                    let n: Vec<u32> = a.iter().filter_map(|x| x.as_u64().map(|u| u as u32)).collect();
+                    if n.len() != 4 { return None; }
+                    Some((n[0], n[1], n[2], n[3]))
+                });
+
                 // Spawn Bevy's screenshot capture entity directly here
                 // instead of relying on a domain-side observer. Earlier
                 // the executor only triggered `ApiCommandEvent` and
@@ -419,14 +430,21 @@ fn execute_request(
                 // self-contained in lunco-api.
                 use bevy::render::view::screenshot::Screenshot;
                 if save_to_file {
-                    let path = format!("screenshot_{}.png",
-                        web_time::SystemTime::now()
-                            .duration_since(web_time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs());
+                    // Honor a caller-supplied path (e.g. /tmp/lunco_screenshot.png),
+                    // else fall back to a timestamped name in the cwd.
+                    let path = params
+                        .get("path")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| format!("screenshot_{}.png",
+                            web_time::SystemTime::now()
+                                .duration_since(web_time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs()));
                     commands.insert_resource(PendingScreenshotRequest {
                         correlation_id: None,   // response already sent
                         save_path: Some(path.clone()),
+                        region,
                     });
                     commands.spawn(Screenshot::primary_window());
                     return Some(ApiResponse::ok(serde_json::json!({ "path": path })));
@@ -435,6 +453,7 @@ fn execute_request(
                     commands.insert_resource(PendingScreenshotRequest {
                         correlation_id: Some(correlation_id),
                         save_path: None,
+                        region,
                     });
                     commands.spawn(Screenshot::primary_window());
                     return None; // response deferred
@@ -559,6 +578,9 @@ pub struct PendingScreenshotRequest {
     pub correlation_id: Option<u64>,
     /// When Some, save to this path and do not return bytes to the caller.
     pub save_path: Option<String>,
+    /// Optional crop region [x, y, w, h] in physical pixels, applied before
+    /// save/encode. None = full frame.
+    pub region: Option<(u32, u32, u32, u32)>,
 }
 
 /// Plugin that registers the API executor observer.
@@ -587,11 +609,25 @@ fn save_screenshot(
     let event = trigger.event();
     let correlation_id = pending.correlation_id.take();
     let save_path = pending.save_path.take();
+    let region = pending.region.take();
 
-    let Ok(dyn_img) = event.image.clone().try_into_dynamic() else {
+    let Ok(mut dyn_img) = event.image.clone().try_into_dynamic() else {
         error!("[lunco-api] Screenshot: failed to convert image");
         return;
     };
+
+    // Crop to the requested region (clamped to image bounds) so callers can
+    // zoom into a panel without an external image tool.
+    if let Some((x, y, w, h)) = region {
+        let (iw, ih) = (dyn_img.width(), dyn_img.height());
+        if x < iw && y < ih && w > 0 && h > 0 {
+            let cw = w.min(iw - x);
+            let ch = h.min(ih - y);
+            dyn_img = dyn_img.crop_imm(x, y, cw, ch);
+        } else {
+            error!("[lunco-api] Screenshot region {:?} outside image {}x{} — saving full frame", region, iw, ih);
+        }
+    }
 
     if let Some(path) = save_path {
         // save_to_file mode — write to disk, response already sent
