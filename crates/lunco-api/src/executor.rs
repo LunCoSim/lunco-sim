@@ -114,7 +114,7 @@ pub fn api_command_dispatcher(
     if resolved_params.is_null() {
         resolved_params = serde_json::Value::Object(serde_json::Map::new());
     }
-    resolve_ids_in_json(&mut resolved_params, &registry);
+    resolve_command_ids(&mut resolved_params, registration.type_id(), &type_reg, &registry);
 
     // 3. Deserialize JSON into reflected struct
     let reflect_deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
@@ -152,79 +152,233 @@ pub fn api_command_dispatcher(
     }
 }
 
-/// Recursively finds fields that look like stable IDs and resolves them to Bevy Entity indices.
-///
-/// Note: This is a heuristic. We assume fields named 'target', 'entity',
-/// 'body', 'parent', or 'avatar' that contain a large number or numeric
-/// string are meant to be GlobalEntityIds.
-pub fn resolve_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegistry) {
-    use lunco_core::GlobalEntityId;
+// ── Entity-id conversion (schema-driven) ──────────────────────────────────
+//
+// Replaces an older heuristic that rewrote fields by NAME
+// (`target`/`entity`/`body`/`parent`/`avatar`). We now walk the command's
+// reflect `TypeInfo` alongside its JSON and convert every leaf whose declared
+// type is `Entity` — name-independent, so renamed/new entity fields,
+// `Vec<Entity>`, `Option<Entity>`, and nested structs/enums all convert, while
+// a same-named non-entity field (`parent: String`, `target: f64`) is left
+// alone. See `crates/lunco-networking/PH2_ID_CODEC.md`.
 
-    match value {
-        serde_json::Value::Object(map) => {
-            for (k, v) in map.iter_mut() {
-                // Heuristic: fields that typically store Entity IDs
-                if k == "target" || k == "entity" || k == "body" || k == "parent" || k == "avatar" {
-                    if let Some(id_u64) = v.as_u64() {
-                        if let Some(entity) = registry.resolve(&GlobalEntityId::from_raw(id_u64)) {
-                            *v = serde_json::json!(entity.to_bits());
-                        }
-                    } else if let Some(id_str) = v.as_str() {
-                        if let Ok(id_u64) = id_str.parse::<u64>() {
-                            if let Some(entity) = registry.resolve(&GlobalEntityId::from_raw(id_u64)) {
-                                // Bevy `Entity` reflection round-trips via
-                            // `to_bits()` (u64 packing index + generation).
-                            // Using just `index()` drops the generation
-                            // and produces a placeholder Entity that no
-                            // query matches.
-                            *v = serde_json::json!(entity.to_bits());
-                            }
-                        }
-                    }
-                } else {
-                    resolve_ids_in_json(v, registry);
+/// Incoming: wire `GlobalEntityId` (u64 or numeric string) → local
+/// `Entity::to_bits()` (generation-preserving), in place, before deserialize.
+/// `type_id` is the command struct's type id (`registration.type_id()`).
+pub fn resolve_command_ids(
+    value: &mut serde_json::Value,
+    type_id: std::any::TypeId,
+    reg: &bevy::reflect::TypeRegistry,
+    entities: &ApiEntityRegistry,
+) {
+    convert_node(value, type_id, reg, IdDir::Resolve, entities, false);
+}
+
+/// Outgoing/capture: local `Entity::to_bits()` → wire `GlobalEntityId` u64. A
+/// field tagged `#[wire_local]` (the `WireLocal` reflect attribute) is replaced
+/// with `Entity::PLACEHOLDER` instead, so a peer's local-only references (camera
+/// avatar) never leak onto the wire.
+pub fn globalize_command_ids(
+    value: &mut serde_json::Value,
+    type_id: std::any::TypeId,
+    reg: &bevy::reflect::TypeRegistry,
+    entities: &ApiEntityRegistry,
+) {
+    convert_node(value, type_id, reg, IdDir::Globalize, entities, false);
+}
+
+/// The global entity id a networked command authorizes against: the u64 value
+/// of the top-level field tagged `#[authz_target]` (`AuthzTarget` reflect
+/// attribute) in the command's schema. Runs on RAW wire params (global gids,
+/// pre-resolve); `None` when the command has no such field (the host then
+/// treats it as target-less). Replaces a hardcoded `params["target"]` lookup —
+/// authorization no longer depends on a field being literally named `target`.
+pub fn authz_target_gid(
+    params: &serde_json::Value,
+    type_id: std::any::TypeId,
+    reg: &bevy::reflect::TypeRegistry,
+) -> Option<u64> {
+    use bevy::reflect::TypeInfo;
+    let TypeInfo::Struct(s) = reg.get_type_info(type_id)? else {
+        return None;
+    };
+    for i in 0..s.field_len() {
+        let f = s.field_at(i)?;
+        if f.has_attribute::<lunco_core::AuthzTarget>() {
+            return params.get(f.name()).and_then(|v| {
+                v.as_u64()
+                    .or_else(|| v.as_str().and_then(|x| x.parse::<u64>().ok()))
+            });
+        }
+    }
+    None
+}
+
+#[derive(Clone, Copy)]
+enum IdDir {
+    Resolve,
+    Globalize,
+}
+
+/// Recursively convert `Entity` leaves in `value`, using `type_id`'s reflect
+/// schema to find them. `wire_local` is set when the parent struct field
+/// carried the `WireLocal` attribute (only acted on for a direct `Entity` leaf
+/// on the `Globalize` path).
+fn convert_node(
+    value: &mut serde_json::Value,
+    type_id: std::any::TypeId,
+    reg: &bevy::reflect::TypeRegistry,
+    dir: IdDir,
+    entities: &ApiEntityRegistry,
+    wire_local: bool,
+) {
+    use bevy::reflect::{TypeInfo, VariantInfo};
+    use std::any::TypeId;
+
+    // Leaf: the declared type IS Entity → convert the scalar.
+    if type_id == TypeId::of::<Entity>() {
+        convert_leaf(value, dir, entities, wire_local);
+        return;
+    }
+
+    // Need the field type's schema to recurse. Unregistered (primitive like
+    // f64/String, or simply not in the registry) → cannot contain an Entity
+    // we can locate; leave it untouched.
+    let Some(info) = reg.get_type_info(type_id) else { return };
+
+    match info {
+        TypeInfo::Struct(s) => {
+            let Some(map) = value.as_object_mut() else { return };
+            for i in 0..s.field_len() {
+                let Some(f) = s.field_at(i) else { continue };
+                if let Some(child) = map.get_mut(f.name()) {
+                    let wl = f.has_attribute::<lunco_core::WireLocal>();
+                    convert_node(child, f.type_id(), reg, dir, entities, wl);
                 }
             }
         }
-        serde_json::Value::Array(list) => {
-            for v in list.iter_mut() {
-                resolve_ids_in_json(v, registry);
+        TypeInfo::TupleStruct(ts) => match value {
+            serde_json::Value::Array(arr) => {
+                for i in 0..ts.field_len() {
+                    if let (Some(f), Some(child)) = (ts.field_at(i), arr.get_mut(i)) {
+                        convert_node(child, f.type_id(), reg, dir, entities, false);
+                    }
+                }
+            }
+            // A 1-field tuple struct serializes as the bare inner value.
+            other if ts.field_len() == 1 => {
+                if let Some(f) = ts.field_at(0) {
+                    convert_node(other, f.type_id(), reg, dir, entities, false);
+                }
+            }
+            _ => {}
+        },
+        TypeInfo::List(l) => {
+            if let Some(arr) = value.as_array_mut() {
+                let item = l.item_ty().id();
+                for child in arr.iter_mut() {
+                    convert_node(child, item, reg, dir, entities, false);
+                }
             }
         }
-        _ => {}
+        TypeInfo::Array(a) => {
+            if let Some(arr) = value.as_array_mut() {
+                let item = a.item_ty().id();
+                for child in arr.iter_mut() {
+                    convert_node(child, item, reg, dir, entities, false);
+                }
+            }
+        }
+        TypeInfo::Map(m) => {
+            // bevy reflect serializes maps as a JSON array of [k, v] pairs
+            // (some paths emit an object); convert values only.
+            let vty = m.value_ty().id();
+            if let Some(arr) = value.as_array_mut() {
+                for pair in arr.iter_mut() {
+                    if let Some(child) = pair.as_array_mut().and_then(|p| p.get_mut(1)) {
+                        convert_node(child, vty, reg, dir, entities, false);
+                    }
+                }
+            } else if let Some(obj) = value.as_object_mut() {
+                for (_, child) in obj.iter_mut() {
+                    convert_node(child, vty, reg, dir, entities, false);
+                }
+            }
+        }
+        TypeInfo::Enum(e) => {
+            // unit variant → bare string (no payload); data variant →
+            // single-key object `{"Variant": payload}`.
+            let serde_json::Value::Object(map) = value else { return };
+            let Some((vname, payload)) = map.iter_mut().next() else { return };
+            let Some(var) = e.variant(vname) else { return };
+            match var {
+                VariantInfo::Struct(sv) => {
+                    if let Some(pobj) = payload.as_object_mut() {
+                        for i in 0..sv.field_len() {
+                            if let Some(f) = sv.field_at(i) {
+                                if let Some(child) = pobj.get_mut(f.name()) {
+                                    convert_node(child, f.type_id(), reg, dir, entities, false);
+                                }
+                            }
+                        }
+                    }
+                }
+                VariantInfo::Tuple(tv) if tv.field_len() == 1 => {
+                    if let Some(f) = tv.field_at(0) {
+                        convert_node(payload, f.type_id(), reg, dir, entities, false);
+                    }
+                }
+                VariantInfo::Tuple(tv) => {
+                    if let Some(arr) = payload.as_array_mut() {
+                        for i in 0..tv.field_len() {
+                            if let (Some(f), Some(child)) = (tv.field_at(i), arr.get_mut(i)) {
+                                convert_node(child, f.type_id(), reg, dir, entities, false);
+                            }
+                        }
+                    }
+                }
+                VariantInfo::Unit(_) => {}
+            }
+        }
+        _ => {} // Tuple, Set, Opaque — no Entity leaves in commands.
     }
 }
 
-/// Inverse of [`resolve_ids_in_json`]: rewrites local Bevy `Entity` references
-/// (serialized as `to_bits()` `u64` by Bevy reflection) into wire-portable
-/// [`GlobalEntityId`](lunco_core::GlobalEntityId) `u64`s, using the same
-/// field-name heuristic. Used by the networking **capture** path so an outgoing
-/// command carries global ids the receiving peer can resolve back to its own
-/// local entities. Entities with no `GlobalEntityId` (e.g. a peer's local-only
-/// avatar) are left untouched — the receiver simply won't resolve them.
-pub fn globalize_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegistry) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (k, v) in map.iter_mut() {
-                if k == "target" || k == "entity" || k == "body" || k == "parent" || k == "avatar" {
-                    if let Some(bits) = v.as_u64() {
-                        if let Some(entity) = Entity::try_from_bits(bits) {
-                            if let Some(gid) = registry.api_id_for(entity) {
-                                *v = serde_json::json!(gid.get());
-                            }
-                        }
-                    }
-                } else {
-                    globalize_ids_in_json(v, registry);
+fn convert_leaf(
+    value: &mut serde_json::Value,
+    dir: IdDir,
+    entities: &ApiEntityRegistry,
+    wire_local: bool,
+) {
+    use lunco_core::GlobalEntityId;
+    match dir {
+        IdDir::Resolve => {
+            // wire gid (u64 or numeric string) → local Entity::to_bits().
+            let gid = value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|s| s.parse::<u64>().ok()));
+            if let Some(g) = gid {
+                if let Some(entity) = entities.resolve(&GlobalEntityId::from_raw(g)) {
+                    // to_bits() keeps index+generation so the deserialized
+                    // Entity matches a live query (index() alone would not).
+                    *value = serde_json::json!(entity.to_bits());
                 }
             }
         }
-        serde_json::Value::Array(list) => {
-            for v in list.iter_mut() {
-                globalize_ids_in_json(v, registry);
+        IdDir::Globalize => {
+            // Local-only field (e.g. avatar): never put local bits on the wire.
+            if wire_local {
+                *value = serde_json::json!(Entity::PLACEHOLDER.to_bits());
+                return;
+            }
+            if let Some(bits) = value.as_u64() {
+                if let Some(entity) = Entity::try_from_bits(bits) {
+                    if let Some(gid) = entities.api_id_for(entity) {
+                        *value = serde_json::json!(gid.get());
+                    }
+                }
             }
         }
-        _ => {}
     }
 }
 
@@ -516,5 +670,150 @@ mod tests {
         // No active id (in-process trigger) → nothing recorded.
         app.world_mut().trigger(TestEcho { fail: false });
         assert!(app.world().resource::<CommandResults>().get(99).is_none());
+    }
+}
+
+#[cfg(test)]
+mod id_codec_tests {
+    use super::{authz_target_gid, globalize_command_ids, resolve_command_ids};
+    use crate::registry::ApiEntityRegistry;
+    use bevy::prelude::*;
+    use bevy::reflect::TypeRegistry;
+    use lunco_core::GlobalEntityId;
+    use serde_json::json;
+    use std::any::TypeId;
+
+    // Test command shapes. `#[reflect(@..)]` is exactly what the `#[Command]`
+    // macro emits for `#[wire_local]` / `#[authz_target]`, so this exercises
+    // the same runtime read path without pulling the whole command machinery.
+    #[derive(Reflect)]
+    struct TDrive {
+        target: Entity,
+        forward: f64,
+    }
+    #[derive(Reflect)]
+    struct TVessel {
+        // Name is OFF the old `[target,entity,body,parent,avatar]` allowlist —
+        // the heuristic would have silently missed it.
+        vessel: Entity,
+    }
+    #[derive(Reflect)]
+    struct TNonEntity {
+        // Heuristic field NAMES, but not entity TYPES — must be left alone.
+        parent: String,
+        target: f64,
+    }
+    #[derive(Reflect)]
+    struct TInner {
+        body: Entity,
+    }
+    #[derive(Reflect)]
+    struct TColl {
+        many: Vec<Entity>,
+        maybe: Option<Entity>,
+        inner: TInner,
+    }
+    #[derive(Reflect)]
+    struct TPossess {
+        #[reflect(@lunco_core::WireLocal)]
+        avatar: Entity,
+        #[reflect(@lunco_core::AuthzTarget)]
+        target: Entity,
+    }
+
+    fn setup() -> (TypeRegistry, ApiEntityRegistry, Entity, GlobalEntityId) {
+        // A real Entity (valid index+generation bits) we control the mapping of.
+        let mut world = World::new();
+        let e = world.spawn_empty().id();
+        let gid = GlobalEntityId::from_raw(7000);
+        let mut entities = ApiEntityRegistry::default();
+        entities.assign(e, gid);
+
+        let mut reg = TypeRegistry::new();
+        reg.register::<TDrive>();
+        reg.register::<TVessel>();
+        reg.register::<TNonEntity>();
+        reg.register::<TColl>();
+        reg.register::<TInner>();
+        reg.register::<TPossess>();
+        reg.register::<Entity>();
+        reg.register::<Vec<Entity>>();
+        reg.register::<Option<Entity>>();
+        (reg, entities, e, gid)
+    }
+
+    #[test]
+    fn resolve_converts_entity_field_by_type_not_name() {
+        let (reg, ent, e, gid) = setup();
+        let mut v = json!({ "target": gid.get(), "forward": 1.5 });
+        resolve_command_ids(&mut v, TypeId::of::<TDrive>(), &reg, &ent);
+        assert_eq!(v["target"], json!(e.to_bits())); // gid → local bits
+        assert_eq!(v["forward"], json!(1.5)); // non-entity untouched
+    }
+
+    #[test]
+    fn resolve_handles_field_off_the_old_heuristic_list() {
+        let (reg, ent, e, gid) = setup();
+        let mut v = json!({ "vessel": gid.get() });
+        resolve_command_ids(&mut v, TypeId::of::<TVessel>(), &reg, &ent);
+        assert_eq!(v["vessel"], json!(e.to_bits()));
+    }
+
+    #[test]
+    fn resolve_skips_same_named_non_entity_fields() {
+        let (reg, ent, _e, _gid) = setup();
+        let mut v = json!({ "parent": "123", "target": 99 });
+        let before = v.clone();
+        resolve_command_ids(&mut v, TypeId::of::<TNonEntity>(), &reg, &ent);
+        assert_eq!(v, before); // String/f64 left alone despite the names
+    }
+
+    #[test]
+    fn resolve_descends_into_vec_option_and_nested_struct() {
+        let (reg, ent, e, gid) = setup();
+        let mut v = json!({
+            "many": [gid.get(), gid.get()],
+            "maybe": { "Some": gid.get() },
+            "inner": { "body": gid.get() }
+        });
+        resolve_command_ids(&mut v, TypeId::of::<TColl>(), &reg, &ent);
+        assert_eq!(v["many"], json!([e.to_bits(), e.to_bits()]));
+        assert_eq!(v["maybe"], json!({ "Some": e.to_bits() }));
+        assert_eq!(v["inner"]["body"], json!(e.to_bits()));
+    }
+
+    #[test]
+    fn resolve_leaves_unmapped_gid_untouched() {
+        let (reg, ent, _e, _gid) = setup();
+        let mut v = json!({ "target": 999_999, "forward": 0.0 });
+        resolve_command_ids(&mut v, TypeId::of::<TDrive>(), &reg, &ent);
+        assert_eq!(v["target"], json!(999_999u64)); // no mapping → unchanged
+    }
+
+    #[test]
+    fn globalize_inverts_resolve_and_strips_wire_local() {
+        let (reg, ent, e, gid) = setup();
+        let mut v = json!({ "avatar": e.to_bits(), "target": e.to_bits() });
+        globalize_command_ids(&mut v, TypeId::of::<TPossess>(), &reg, &ent);
+        assert_eq!(v["target"], json!(gid.get())); // local bits → gid
+        // wire_local field never carries real local bits onto the wire.
+        assert_eq!(v["avatar"], json!(Entity::PLACEHOLDER.to_bits()));
+    }
+
+    #[test]
+    fn authz_target_reads_tagged_field_by_type() {
+        let (reg, _ent, _e, gid) = setup();
+        // Raw wire params carry the GLOBAL gid in the #[authz_target] field.
+        let tagged = json!({ "avatar": 5, "target": gid.get() });
+        assert_eq!(
+            authz_target_gid(&tagged, TypeId::of::<TPossess>(), &reg),
+            Some(gid.get())
+        );
+        // A command with no #[authz_target] field → None (target-less).
+        let untagged = json!({ "target": 5, "forward": 1.0 });
+        assert_eq!(
+            authz_target_gid(&untagged, TypeId::of::<TDrive>(), &reg),
+            None
+        );
     }
 }

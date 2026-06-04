@@ -135,6 +135,26 @@ impl std::fmt::Display for GlobalEntityId {
     }
 }
 
+/// Field marker for the wire codec: an `Entity` field tagged with this is a
+/// **local-only** reference (e.g. a peer's camera avatar) that must never carry
+/// real local entity bits onto the wire — the codec substitutes
+/// `Entity::PLACEHOLDER` instead of globalizing it. Attach it on a `#[Command]`
+/// field via `#[wire_local]` (sugar that expands to
+/// `#[reflect(@::lunco_core::WireLocal)]`); the codec reads it back with
+/// `NamedField::has_attribute::<WireLocal>()`. Derives `Reflect` because
+/// reflect custom-attribute values must be `Reflect + 'static`.
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WireLocal;
+
+/// Field marker for host authorization: the gid field a networked command is
+/// checked for ownership against (e.g. `DriveRover.target`). The wire apply
+/// path finds it via `has_attribute::<AuthzTarget>()` to read which global id
+/// to authorize, instead of hardcoding a `"target"` field name. Attach via
+/// `#[authz_target]` on a `#[Command]` field. Derives `Reflect` because reflect
+/// custom-attribute values must be `Reflect + 'static`.
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AuthzTarget;
+
 impl std::str::FromStr for GlobalEntityId {
     type Err = std::num::ParseIntError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {

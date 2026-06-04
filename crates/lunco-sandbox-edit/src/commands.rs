@@ -717,13 +717,19 @@ pub fn tag_networked_physics(
 /// Kinematic until another command (or a gizmo drag-end) restores it.
 #[Command(default)]
 pub struct MoveEntity {
-    /// API-stable global entity ID (the `api_id` from `ListEntities`).
-    /// Resolved to a Bevy `Entity` inside the observer via
-    /// `ApiEntityRegistry`. Using `u64` rather than `Entity` here is
-    /// deliberate — the API's typed-command resolver only forwards
-    /// the entity index, dropping the generation, which makes a
-    /// `target: Entity` field lookup fail for any entity whose
-    /// generation is non-zero.
+    /// API-stable global entity ID (the `api_id` from `ListEntities`),
+    /// resolved to a Bevy `Entity` in the observer via `ApiEntityRegistry`.
+    ///
+    /// Deliberately `u64`, not `Entity` — this is "**Pattern B**". The
+    /// type-driven id codec (`crates/lunco-networking/PH2_ID_CODEC.md`)
+    /// auto-converts only `Entity`-typed fields, so a `u64` field opts out and
+    /// is resolved here instead. NOT migrated to `Entity` because this command
+    /// is `#[Command(default)]`, which derives `Default`, and `Entity` has no
+    /// `Default`. Leaving it `u64` is a cleanliness leftover, not a
+    /// names/correctness issue — the codec no longer keys off field names at
+    /// all, so this `u64` is simply ignored by it. (An earlier comment here
+    /// blamed the resolver "dropping the generation"; that was stale — the
+    /// codec preserves index+generation via `Entity::to_bits()`.)
     pub entity_id: u64,
     /// Target world-space translation.
     pub translation: Vec3,
@@ -868,7 +874,8 @@ pub fn clear_kinematic_pulse_velocity(
 #[Command(default)]
 pub struct SetObjectProperty {
     /// API-stable global entity ID (the `api_id` from `ListEntities`), same
-    /// resolution path as [`MoveEntity`].
+    /// resolution path as [`MoveEntity`] — `u64` "Pattern B", resolved in the
+    /// observer; see [`MoveEntity`]'s `entity_id` for why it stays `u64`.
     pub entity_id: u64,
     /// Property name (see struct docs).
     pub property: String,
@@ -984,6 +991,9 @@ pub fn on_set_object_property(
 /// [`MoveEntity`]/[`SetObjectProperty`].
 #[Command(default)]
 pub struct FocusEntityById {
+    /// API id from `ListEntities` — `u64` "Pattern B", resolved in the observer
+    /// via `ApiEntityRegistry`; see [`MoveEntity`]'s `entity_id` for why it
+    /// stays `u64` and isn't auto-converted by the id codec.
     pub entity_id: u64,
     /// Camera distance from the target, metres. `<= 0` → default 6.
     pub distance: f32,

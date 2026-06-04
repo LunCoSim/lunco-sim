@@ -10,6 +10,7 @@ use lunco_core::Command;
 #[Command]
 pub struct PossessVessel {
     /// The avatar entity that is taking possession.
+    #[wire_local]
     pub avatar: Entity,
     /// The entity to possess (becomes the controlled vessel).
     pub target: Entity,
@@ -31,6 +32,7 @@ pub struct ReleaseVessel {
 #[Command]
 pub struct FocusTarget {
     /// The avatar entity that is focusing.
+    #[wire_local]
     pub avatar: Entity,
     /// The entity to focus on.
     pub target: Entity,
@@ -47,6 +49,7 @@ pub struct FocusTarget {
 #[Command]
 pub struct FollowTarget {
     /// The avatar entity that will follow.
+    #[wire_local]
     pub avatar: Entity,
     /// The entity to follow.
     pub target: Entity,

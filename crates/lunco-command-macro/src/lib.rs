@@ -38,7 +38,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
-    parse_macro_input, DeriveInput, Ident, ItemFn, Path, Token, Data, Fields,
+    parse_macro_input, parse_quote, DeriveInput, Field, Ident, ItemFn, Path, Token, Data, Fields,
     punctuated::Punctuated,
 };
 
@@ -111,6 +111,29 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => return syn::Error::new_spanned(&input, "Command can only be used on structs")
             .to_compile_error().into(),
     };
+
+    // Rewrite field-role sugar into bevy reflect custom attributes, consumed
+    // here (they never reach rustc as real attributes); everything else on the
+    // field is forwarded untouched.
+    //   `#[wire_local]`   → local-only Entity: the wire codec substitutes
+    //                       `Entity::PLACEHOLDER` instead of leaking local bits.
+    //   `#[authz_target]` → the gid the host authorizes ownership against.
+    // The codec/apply paths read these via `NamedField::has_attribute::<_>()`.
+    let fields: Punctuated<Field, Token![,]> = fields
+        .iter()
+        .cloned()
+        .map(|mut f| {
+            if f.attrs.iter().any(|a| a.path().is_ident("wire_local")) {
+                f.attrs.retain(|a| !a.path().is_ident("wire_local"));
+                f.attrs.push(parse_quote!(#[reflect(@::lunco_core::WireLocal)]));
+            }
+            if f.attrs.iter().any(|a| a.path().is_ident("authz_target")) {
+                f.attrs.retain(|a| !a.path().is_ident("authz_target"));
+                f.attrs.push(parse_quote!(#[reflect(@::lunco_core::AuthzTarget)]));
+            }
+            f
+        })
+        .collect();
 
     let mut derives: Vec<TokenStream2> = vec![
         quote!(bevy::prelude::Event),

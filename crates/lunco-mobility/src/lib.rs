@@ -522,6 +522,7 @@ fn suspension_system(
 /// them (`DriveRover` can't derive `Default` — `Entity` has none).
 #[Command]
 pub struct DriveRover {
+    #[authz_target]
     pub target: Entity,
     pub forward: f64,
     pub steer: f64,
@@ -537,6 +538,7 @@ pub struct DriveRover {
 /// shares the same `seq`).
 #[Command]
 pub struct BrakeRover {
+    #[authz_target]
     pub target: Entity,
     pub intensity: f64,
     #[serde(default)]

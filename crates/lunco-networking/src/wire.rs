@@ -37,7 +37,7 @@ use lunco_core::{
     SessionRegistry, SimTick, SnapshotSample, WireApplyGuard, WireChannel,
 };
 
-use lunco_api::executor::{globalize_ids_in_json, resolve_ids_in_json};
+use lunco_api::executor::{authz_target_gid, globalize_command_ids, resolve_command_ids};
 use lunco_api::registry::ApiEntityRegistry;
 
 // ── Wire payloads ─────────────────────────────────────────────────────────────
@@ -280,15 +280,19 @@ fn capture_command<C: Event + Reflect + TypePath>(
             }
         }
     };
-    // Local Entity refs (to_bits) → portable GlobalEntityId.
-    globalize_ids_in_json(&mut data, &entity_registry);
-    // The avatar is a *local* camera concern — control identity on the wire is
-    // the session (`origin`), never the avatar entity. Strip it so we don't leak
-    // this peer's local entity bits: the receiver ignores it anyway (the host
-    // records authority by `origin`, and a wire-applied possession skips the
-    // local camera-bind). A placeholder keeps the field reflect-deserializable.
-    if let Some(av) = data.get_mut("avatar") {
-        *av = serde_json::json!(Entity::PLACEHOLDER.to_bits());
+    // Local Entity refs (to_bits) → portable GlobalEntityId, driven by `C`'s
+    // reflect schema. Fields tagged `#[wire_local]` (e.g. a possession's
+    // `avatar`) are replaced with `Entity::PLACEHOLDER` inside the walker — a
+    // local camera concern whose bits must never leak; wire control identity is
+    // the session `origin`, not the avatar entity. No field-name special-casing.
+    {
+        let type_reg = type_registry.read();
+        globalize_command_ids(
+            &mut data,
+            std::any::TypeId::of::<C>(),
+            &type_reg,
+            &entity_registry,
+        );
     }
 
     let mut mutation = Mutation::local(WireCommand { type_name, data });
@@ -298,16 +302,12 @@ fn capture_command<C: Event + Reflect + TypePath>(
 
 // ── Apply ─────────────────────────────────────────────────────────────────────
 
-fn extract_target_gid(params: &serde_json::Value) -> Option<u64> {
-    params.get("target").and_then(|v| v.as_u64())
-}
-
 /// Apply an inbound command through the *same* reflect-trigger path as a local /
 /// HTTP command, with dedupe + authority + an echo guard.
 pub fn apply_wire_command(
     trigger: On<WireCommandEvent>,
     mut commands: Commands,
-    entity_registry: Res<ApiEntityRegistry>,
+    type_registry: Res<AppTypeRegistry>,
     session_registry: Res<SessionRegistry>,
     role: Res<NetworkRole>,
     mut dedup: ResMut<WireDedup>,
@@ -318,7 +318,15 @@ pub fn apply_wire_command(
     }
     // Host authorizes against ownership; a client trusts the host.
     if role.is_host() {
-        let target_gid = extract_target_gid(&ev.params);
+        // The gid to authorize against is the command's `#[authz_target]`
+        // field (schema-driven), read from the raw global-gid wire params —
+        // no hardcoded field name.
+        let target_gid = {
+            let type_reg = type_registry.read();
+            type_reg
+                .get_with_short_type_path(&ev.type_name)
+                .and_then(|r| authz_target_gid(&ev.params, r.type_id(), &type_reg))
+        };
         if let Err(reject) = authorize(&session_registry, ev.origin, &ev.type_name, target_gid) {
             warn!(
                 "[wire] rejected {} from {}: {:?}",
@@ -334,7 +342,6 @@ pub fn apply_wire_command(
     }
 
     let mut params = ev.params.clone();
-    resolve_ids_in_json(&mut params, &entity_registry);
     let type_name = ev.type_name.clone();
     let origin = ev.origin;
 
@@ -349,6 +356,13 @@ pub fn apply_wire_command(
             warn!("[wire] command '{type_name}' has no ReflectEvent");
             return;
         };
+        // Wire gids → local Entity bits, driven by the command's schema (needs
+        // `registration`, hence inside the queued closure). Mirrors the capture
+        // side's `globalize_command_ids`.
+        {
+            let entity_registry = world.resource::<ApiEntityRegistry>();
+            resolve_command_ids(&mut params, registration.type_id(), &type_reg, entity_registry);
+        }
         let deserializer = TypedReflectDeserializer::new(registration, &type_reg);
         use serde::de::DeserializeSeed;
         let reflected = match deserializer.deserialize(params) {
