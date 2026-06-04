@@ -52,6 +52,7 @@ impl Plugin for ModelicaApiQueriesPlugin {
         let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
         registry.register(ListBundledProvider);
         registry.register(ListOpenDocumentsProvider);
+        registry.register(ListRecentFilesProvider);
         registry.register(ListTwinProvider);
         registry.register(ListMslProvider);
         registry.register(ListCompileCandidatesProvider);
@@ -140,6 +141,59 @@ impl ApiQueryProvider for ListOpenDocumentsProvider {
             "open_documents": items,
             "count": items.len(),
             "active_doc_id": active.map(|d| d.raw()),
+        }))
+    }
+}
+
+// ─── ListRecentFiles ───────────────────────────────────────────────────
+
+/// Surfaces the user's recently-opened loose files and Twin folders — the
+/// "latest files" list backing the File ▸ Open Recent menu. Reads
+/// [`WorkspaceResource`]'s persisted `recents` (`~/.lunco/recents.json`),
+/// which are kept in most-recently-used order (front = newest). For each
+/// path we also report whether it still exists on disk and its mtime, so
+/// automation can pick the freshest model without a filesystem sweep.
+struct ListRecentFilesProvider;
+
+impl ApiQueryProvider for ListRecentFilesProvider {
+    fn name(&self) -> &'static str {
+        "ListRecentFiles"
+    }
+
+    fn execute(
+        &self,
+        world: &mut World,
+        _params: &serde_json::Value,
+    ) -> ApiResponse {
+        fn entry(path: &std::path::Path) -> serde_json::Value {
+            // mtime as whole seconds since the Unix epoch; `None` when the
+            // path is gone or the platform/file has no modified time.
+            let modified_secs = std::fs::metadata(path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
+            serde_json::json!({
+                "path": path.display().to_string(),
+                "name": path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default(),
+                "exists": path.exists(),
+                "modified_secs": modified_secs,
+            })
+        }
+
+        let ws = world.resource::<WorkspaceResource>();
+        let files: Vec<serde_json::Value> =
+            ws.recents.loose_paths.iter().map(|p| entry(p)).collect();
+        let twins: Vec<serde_json::Value> =
+            ws.recents.twin_paths.iter().map(|p| entry(p)).collect();
+
+        ApiResponse::ok(serde_json::json!({
+            "recent_files": files,
+            "recent_twins": twins,
+            "count": files.len(),
         }))
     }
 }
