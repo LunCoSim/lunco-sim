@@ -1,7 +1,8 @@
 //! AST and text utility helpers.
 
 use std::sync::Arc;
-use rumoca_compile::parsing::ast::{ClassDef, ComponentReference, Expression, StoredDefinition, Token};
+use rumoca_compile::parsing::ast::{ClassDef, ComponentReference, Expression, StoredDefinition};
+use rumoca_compile::parsing::Token;
 use super::errors::AstMutError;
 use crate::pretty;
 
@@ -79,7 +80,7 @@ pub fn extract_points_named_argument(
     annotation: &[Expression],
 ) -> Option<Expression> {
     for e in annotation {
-        if let Expression::FunctionCall { comp, args } = e {
+        if let Expression::FunctionCall { comp, args, .. } = e {
             if !ref_is_simple(comp, "Line") {
                 continue;
             }
@@ -125,7 +126,7 @@ pub fn graphic_entry_arg<'a>(expr: &'a Expression, key: &str) -> Option<&'a Expr
     match expr {
         Expression::FunctionCall { args, .. } => {
             for a in args {
-                if let Expression::NamedArgument { name, value } = a {
+                if let Expression::NamedArgument { name, value, .. } = a {
                     if &*name.text == key {
                         return Some(value.as_ref());
                     }
@@ -135,7 +136,7 @@ pub fn graphic_entry_arg<'a>(expr: &'a Expression, key: &str) -> Option<&'a Expr
         }
         Expression::ClassModification { modifications, .. } => {
             for m in modifications {
-                if let Expression::Modification { target, value } = m {
+                if let Expression::Modification { target, value, .. } = m {
                     if target.parts.len() == 1
                         && &*target.parts[0].ident.text == key
                     {
@@ -175,8 +176,8 @@ pub fn point_pair(e: &Expression) -> Option<(f32, f32)> {
 pub fn number_literal_value(e: &Expression) -> Option<f64> {
     match e {
         Expression::Terminal { token, .. } => token.text.parse::<f64>().ok(),
-        Expression::Unary { op, rhs }
-            if matches!(op, rumoca_compile::parsing::ast::OpUnary::Minus(_)) =>
+        Expression::Unary { op, rhs, .. }
+            if matches!(op, rumoca_compile::parsing::ir_core::OpUnary::Minus) =>
         {
             number_literal_value(rhs).map(|v| -v)
         }

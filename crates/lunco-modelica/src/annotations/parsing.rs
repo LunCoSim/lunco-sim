@@ -2,7 +2,9 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use rumoca_compile::parsing::ast::{Expression, OpBinary, OpUnary, TerminalType, ClassDef, Import};
+use rumoca_compile::parsing::ast::{Expression, TerminalType, ClassDef, Import};
+use rumoca_compile::parsing::OpBinary;
+use rumoca_compile::parsing::ir_core::OpUnary;
 use super::types::*;
 use super::graphics::*;
 use super::layers::*;
@@ -366,7 +368,7 @@ fn collect_falsy_bool_params(
             continue;
         }
         let Some(binding) = comp.binding.as_ref() else { continue };
-        if let Expression::Terminal { terminal_type, token } = binding {
+        if let Expression::Terminal { terminal_type, token, .. } = binding {
             if matches!(terminal_type, TerminalType::Bool)
                 && token.text.as_ref() == "false"
             {
@@ -450,7 +452,7 @@ fn eval_visibility_falsy(
     falsy_params: &HashSet<String>,
 ) -> bool {
     match expr {
-        Expression::Terminal { terminal_type, token } => {
+        Expression::Terminal { terminal_type, token, .. } => {
             matches!(terminal_type, TerminalType::Bool)
                 && token.text.as_ref() == "false"
         }
@@ -460,10 +462,10 @@ fn eval_visibility_falsy(
             .map(|p| falsy_params.contains(p.ident.text.as_ref()))
             .unwrap_or(false),
         Expression::Unary { op, .. } => match op {
-            OpUnary::Not(_) => false,
+            OpUnary::Not => false,
             _ => false,
         },
-        Expression::Parenthesized { inner } => {
+        Expression::Parenthesized { inner, .. } => {
             eval_visibility_falsy(inner, falsy_params)
         }
         _ => false,
@@ -728,12 +730,13 @@ fn call_args(expr: &Expression) -> Option<&[Expression]> {
 
 fn named_arg<'a>(args: &'a [Expression], name: &str) -> Option<&'a Expression> {
     args.iter().find_map(|e| match e {
-        Expression::Modification { target, value } => {
+        Expression::Modification { target, value, .. } => {
             (target.parts.last().map(|t| t.ident.text.as_ref()) == Some(name)).then_some(value.as_ref())
         }
         Expression::NamedArgument {
             name: arg_name,
             value,
+            ..
         } => (arg_name.text.as_ref() == name).then_some(value),
         _ => None,
     })
@@ -780,12 +783,13 @@ fn extract_number(expr: &Expression) -> Option<f64> {
         Expression::Terminal {
             terminal_type,
             token,
+            ..
         } => match terminal_type {
             TerminalType::UnsignedReal | TerminalType::UnsignedInteger => token.text.parse().ok(),
             _ => None,
         },
-        Expression::Unary { op, rhs } => match op {
-            OpUnary::Minus(_) => extract_number(rhs).map(|n| -n),
+        Expression::Unary { op, rhs, .. } => match op {
+            OpUnary::Minus => extract_number(rhs).map(|n| -n),
             _ => None,
         },
         _ => None,
@@ -797,6 +801,7 @@ fn extract_string(expr: &Expression) -> Option<String> {
         Expression::Terminal {
             terminal_type: TerminalType::String,
             token,
+            ..
         } => Some(token.text.to_string()),
         _ => None,
     }
@@ -829,6 +834,7 @@ fn expr_to_dyn(expr: &Expression) -> Option<DynExpr> {
         Expression::Terminal {
             terminal_type,
             token,
+            ..
         } => match terminal_type {
             TerminalType::UnsignedReal | TerminalType::UnsignedInteger => token.text.parse().ok().map(DynExpr::Const),
             TerminalType::String => Some(DynExpr::StringLit(token.text.trim_matches('"').to_string())),
@@ -843,22 +849,22 @@ fn expr_to_dyn(expr: &Expression) -> Option<DynExpr> {
                 .join(".");
             Some(DynExpr::Var(s))
         }
-        Expression::Unary { op, rhs } => match op {
-            OpUnary::Minus(_) => expr_to_dyn(rhs).map(|e| DynExpr::Neg(Box::new(e))),
+        Expression::Unary { op, rhs, .. } => match op {
+            OpUnary::Minus => expr_to_dyn(rhs).map(|e| DynExpr::Neg(Box::new(e))),
             _ => None,
         },
-        Expression::Binary { op, lhs, rhs } => {
+        Expression::Binary { op, lhs, rhs, .. } => {
             let l = expr_to_dyn(lhs)?;
             let r = expr_to_dyn(rhs)?;
             match op {
-                OpBinary::Add(_) => Some(DynExpr::Add(Box::new(l), Box::new(r))),
-                OpBinary::Sub(_) => Some(DynExpr::Sub(Box::new(l), Box::new(r))),
-                OpBinary::Mul(_) => Some(DynExpr::Mul(Box::new(l), Box::new(r))),
-                OpBinary::Div(_) => Some(DynExpr::Div(Box::new(l), Box::new(r))),
+                OpBinary::Add => Some(DynExpr::Add(Box::new(l), Box::new(r))),
+                OpBinary::Sub => Some(DynExpr::Sub(Box::new(l), Box::new(r))),
+                OpBinary::Mul => Some(DynExpr::Mul(Box::new(l), Box::new(r))),
+                OpBinary::Div => Some(DynExpr::Div(Box::new(l), Box::new(r))),
                 _ => None,
             }
         }
-        Expression::FunctionCall { comp, args } => {
+        Expression::FunctionCall { comp, args, .. } => {
             let n = comp.parts.last()?.ident.text.as_ref();
             if n == "String" && args.len() == 1 {
                 expr_to_dyn(&args[0]).map(|e| DynExpr::StringCall(Box::new(e)))
@@ -866,7 +872,7 @@ fn expr_to_dyn(expr: &Expression) -> Option<DynExpr> {
                 None
             }
         }
-        Expression::Parenthesized { inner } => expr_to_dyn(inner),
+        Expression::Parenthesized { inner, .. } => expr_to_dyn(inner),
         _ => None,
     }
 }

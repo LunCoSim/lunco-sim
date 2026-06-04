@@ -6,7 +6,10 @@ use rumoca_compile::parsing::ast::Expression;
 const SRC: &str = include_str!("../../../assets/models/AnnotatedRocketStage.mo");
 
 fn class_annotations<'a>(
-    classes: &'a indexmap::IndexMap<String, rumoca_compile::parsing::ast::ClassDef>,
+    classes: &'a rumoca_compile::parsing::ast::AstIndexMap<
+        String,
+        rumoca_compile::parsing::ast::ClassDef,
+    >,
     name: &str,
 ) -> Option<Vec<Expression>> {
     for (cname, class) in classes {

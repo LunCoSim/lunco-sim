@@ -58,14 +58,14 @@
 //! to this bug — `cargo test` skips them by default so CI stays
 //! green; run with `cargo test -- --ignored` to reproduce.
 
-use rumoca_sim::{SimStepper, StepperOptions};
+use rumoca_sim::{SimOptions, SimStepper};
 
 fn try_run(label: &str, model_name: &str, source: &str) -> Result<(), String> {
     let mut compiler = lunco_modelica::ModelicaCompiler::new();
     let dae = compiler
         .compile_str(model_name, source, "tier.mo")
         .map_err(|e| format!("{label}: compile failed: {e}"))?;
-    let mut opts = StepperOptions::default();
+    let mut opts = SimOptions::default();
     opts.atol = 1e-2;
     opts.rtol = 1e-2;
     let mut stepper = SimStepper::new(&dae.dae, opts)

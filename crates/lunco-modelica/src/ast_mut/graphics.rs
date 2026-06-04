@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use rumoca_compile::parsing::ast::{ClassDef, Expression};
+use rumoca_compile::parsing::Span;
 use super::errors::AstMutError;
 use super::util::{is_annotation_entry_named, synth_token, is_graphic_entry_named, graphic_entry_arg, string_literal_value, point_pair, render_text_spec, read_text_spec, plot_node_signal_matches};
 use super::parsing::{parse_graphics_entry, parse_experiment_expression, parse_placement_expression, parse_plot_node_record};
@@ -39,9 +40,14 @@ fn graphics_array_mut<'a>(
                         ident: synth_token(section_name.to_string()),
                         subs: None,
                     }],
+                    span: Span::default(),
                     def_id: None,
                 },
                 modifications: Vec::new(),
+                each_flags: Vec::new(),
+                final_flags: Vec::new(),
+                redeclare_flags: Vec::new(),
+                span: Span::default(),
             });
             class.annotation.len() - 1
         }
@@ -69,12 +75,15 @@ fn graphics_array_mut<'a>(
                         ident: synth_token("graphics".to_string()),
                         subs: None,
                     }],
+                    span: Span::default(),
                     def_id: None,
                 },
                 value: Arc::new(Expression::Array {
                     elements: Vec::new(),
                     is_matrix: false,
+                    span: Span::default(),
                 }),
+                span: Span::default(),
             });
             mods.len() - 1
         }
@@ -89,6 +98,7 @@ fn graphics_array_mut<'a>(
             *other = Expression::Array {
                 elements: Vec::new(),
                 is_matrix: false,
+                span: Span::default(),
             };
             match other {
                 Expression::Array { elements, .. } => elements,
@@ -116,9 +126,14 @@ fn lunco_plot_nodes_array_mut(class: &mut ClassDef) -> &mut Vec<Expression> {
                         ident: synth_token("__LunCo".to_string()),
                         subs: None,
                     }],
+                    span: Span::default(),
                     def_id: None,
                 },
                 modifications: Vec::new(),
+                each_flags: Vec::new(),
+                final_flags: Vec::new(),
+                redeclare_flags: Vec::new(),
+                span: Span::default(),
             });
             class.annotation.len() - 1
         }
@@ -144,12 +159,15 @@ fn lunco_plot_nodes_array_mut(class: &mut ClassDef) -> &mut Vec<Expression> {
                         ident: synth_token("plotNodes".to_string()),
                         subs: None,
                     }],
+                    span: Span::default(),
                     def_id: None,
                 },
                 value: Arc::new(Expression::Array {
                     elements: Vec::new(),
                     is_matrix: false,
+                    span: Span::default(),
                 }),
+                span: Span::default(),
             });
             mods.len() - 1
         }
@@ -164,6 +182,7 @@ fn lunco_plot_nodes_array_mut(class: &mut ClassDef) -> &mut Vec<Expression> {
             *other = Expression::Array {
                 elements: Vec::new(),
                 is_matrix: false,
+                span: Span::default(),
             };
             match other {
                 Expression::Array { elements, .. } => elements,
@@ -188,7 +207,7 @@ fn prune_empty_lunco_annotation(class: &mut ClassDef) {
         Expression::ClassModification { modifications, .. } => modifications.iter().all(|m| {
             matches!(
                 m,
-                Expression::Modification { target, value }
+                Expression::Modification { target, value, .. }
                     if target.parts.len() == 1
                         && &*target.parts[0].ident.text == "plotNodes"
                         && matches!(value.as_ref(), Expression::Array { elements, .. } if elements.is_empty())

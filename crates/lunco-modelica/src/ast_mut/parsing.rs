@@ -123,7 +123,7 @@ pub(crate) fn parse_graphics_entry(text: &str) -> Result<rumoca_compile::parsing
     let graphics_mod = modifications
         .iter()
         .find_map(|m| match m {
-            rumoca_compile::parsing::ast::Expression::Modification { target, value }
+            rumoca_compile::parsing::ast::Expression::Modification { target, value, .. }
                 if target.parts.len() == 1
                     && &*target.parts[0].ident.text == "graphics" =>
             {
@@ -164,7 +164,7 @@ pub(crate) fn parse_plot_node_record(text: &str) -> Result<rumoca_compile::parsi
     let plot_nodes_mod = modifications
         .iter()
         .find_map(|m| match m {
-            rumoca_compile::parsing::ast::Expression::Modification { target, value }
+            rumoca_compile::parsing::ast::Expression::Modification { target, value, .. }
                 if target.parts.len() == 1
                     && &*target.parts[0].ident.text == "plotNodes" =>
             {

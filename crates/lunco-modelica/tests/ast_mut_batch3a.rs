@@ -89,7 +89,7 @@ fn add_variable_with_parameter_variability_round_trips() {
     assert!(
         matches!(
             comp.variability,
-            rumoca_compile::parsing::ast::Variability::Parameter(_)
+            rumoca_compile::parsing::Variability::Parameter(_)
         ),
         "expected parameter variability, got {:?}",
         comp.variability

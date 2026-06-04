@@ -44,7 +44,10 @@ use lunco_experiments::{
     ParamValue, RunBounds, RunCancelled, RunCompleted, RunFailed, RunHandle, RunMeta,
     RunProgress, RunResult, RunStatus, RunUpdate,
 };
-use rumoca_sim::ir_dae::{Dae, Expression as DaeExpression, Literal as DaeLiteral, VarName as DaeVarName};
+use rumoca_compile::compile::Dae;
+use rumoca_compile::parsing::ir_core::{
+    Expression as DaeExpression, Literal as DaeLiteral, Span as DaeSpan, VarName as DaeVarName,
+};
 
 /// Bound to the model source kept by the runner. The runner doesn't
 /// own the live document state — `lunco-modelica` injects the current
@@ -582,6 +585,7 @@ fn apply_overrides_to_dae(
     for (path, value) in overrides {
         let key = DaeVarName::new(path.0.clone());
         let var = dae
+            .variables
             .parameters
             .get_mut(&key)
             .ok_or_else(|| format!("'{}' is not a top-level DAE parameter", path.0))?;
@@ -592,7 +596,7 @@ fn apply_overrides_to_dae(
             ParamValue::String(s) => DaeLiteral::String(s.clone()),
             _ => return Err(format!("override for '{}' is not a scalar literal", path.0)),
         };
-        var.start = Some(DaeExpression::Literal(lit));
+        var.start = Some(DaeExpression::Literal { value: lit, span: DaeSpan::default() });
     }
     Ok(())
 }
@@ -745,21 +749,23 @@ fn run_inner(
     //     thermal models — TR-BDF2 handles events robustly across
     //     multi-month horizons).
     // Background: docs/numeric-experiments/2026-05-28-lunar-thermal.md
-    let mut stepper_opts = rumoca_sim::StepperOptions::default();
+    let mut stepper_opts = rumoca_sim::SimOptions::default();
     stepper_opts.atol = bounds.tolerance.unwrap_or(1e-4);
     stepper_opts.rtol = bounds.tolerance.unwrap_or(1e-4);
     let solver_name = bounds.solver.as_deref().unwrap_or("tr_bdf2");
-    // Map the bounds string to (family, tableau). Family comes
-    // from rumoca's existing `from_external_name`; tableau is
-    // picked by rumoca-solver-diffsol when the family is RkLike.
-    // Unknown strings fall back to BDF (matches OMC's default).
+    // Map the bounds string to (family, tableau). `parse_request` selects the
+    // solver *family* (Auto / implicit-BDF / explicit-RK); `DiffsolMethod`
+    // selects the implicit tableau (ESDIRK34 / TR-BDF2) on the BDF-family path.
+    // Implicit tableau names like "tr_bdf2" now resolve to `SimSolverMode::Bdf`
+    // + the matching `DiffsolMethod`. Unknown strings fall back to BDF (matches
+    // OMC's default).
     let (mode, _label) =
         rumoca_sim::SimSolverMode::parse_request(Some(solver_name));
     stepper_opts.solver_mode = mode;
-    if let Some(rk) = rumoca_sim::RkMethod::from_external_name(solver_name) {
-        stepper_opts.rk_method = rk;
-    }
-    stepper_opts.initial_step = bounds.h0;
+    stepper_opts.diffsol_method =
+        rumoca_sim::DiffsolMethod::from_external_name(solver_name).unwrap_or_default();
+    // `SimOptions.dt` is the solver's initial step (h0) on the diffsol path.
+    stepper_opts.dt = bounds.h0;
 
     let mut stepper = match rumoca_sim::SimStepper::new(&run_dae, stepper_opts) {
         Ok(s) => s,

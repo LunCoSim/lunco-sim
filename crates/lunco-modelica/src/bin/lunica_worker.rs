@@ -269,7 +269,7 @@ fn run_fast_in_worker(
         return;
     }
 
-    let mut stepper_opts = rumoca_sim::StepperOptions::default();
+    let mut stepper_opts = rumoca_sim::SimOptions::default();
     stepper_opts.atol = bounds.tolerance.unwrap_or(1e-6);
     stepper_opts.rtol = bounds.tolerance.unwrap_or(1e-6);
 

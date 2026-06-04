@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
-use rumoca_sim::{SimStepper, StepperOptions};
+use rumoca_sim::{SimOptions, SimStepper};
 use serde::{Serialize, Deserialize};
 
 use lunco_assets::modelica_dir;
@@ -39,15 +39,15 @@ const DEFAULT_ATOL: f64 = 1e-6;
 /// Build a `SimStepper` from a freshly-compiled model.
 ///
 /// **Single source of truth** for stepper construction across the worker — every
-/// site routes through here instead of copy-pasting the `StepperOptions` setup +
+/// site routes through here instead of copy-pasting the `SimOptions` setup +
 /// `SimStepper::new` call (there were ~9 such copies). Centralises the solver
 /// tolerance policy: `rtol` honors the model's `experiment(Tolerance=…)`
 /// annotation when present (the conventional reading of Modelica `Tolerance`),
 /// else [`DEFAULT_RTOL`]; `atol` stays at [`DEFAULT_ATOL`].
 fn build_stepper(
     comp_res: &rumoca_compile::compile::DaeCompilationResult,
-) -> Result<SimStepper, rumoca_sim::SimError> {
-    let mut opts = StepperOptions::default();
+) -> Result<SimStepper, rumoca_sim::SimulationDiagnosticError> {
+    let mut opts = SimOptions::default();
     opts.rtol = comp_res.experiment_tolerance.unwrap_or(DEFAULT_RTOL);
     opts.atol = DEFAULT_ATOL;
     SimStepper::new(&comp_res.dae, opts)

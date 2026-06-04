@@ -1244,7 +1244,7 @@ pub struct ModelicaOutput { pub variable_name: String, pub value: f64 }
 mod observables_smoke {
     use super::*;
     #[cfg(any())]
-    use rumoca_sim::{SimStepper, StepperOptions};
+    use rumoca_sim::{SimOptions, SimStepper};
 
     /// End-to-end smoke test for the observables pipeline: compile the
     /// bundled RocketEngine, run one step at full throttle, and assert
@@ -1265,7 +1265,7 @@ mod observables_smoke {
         let mut c = ModelicaCompiler::new();
         let r = c.compile_str("RocketEngine", &src, "RocketEngine.mo")
             .expect("compile ok");
-        let mut stepper = SimStepper::new(&r.dae, StepperOptions::default())
+        let mut stepper = SimStepper::new(&r.dae, SimOptions::default())
             .expect("stepper ok");
         stepper.set_input("throttle", 1.0).expect("throttle is an input");
         stepper.step(0.01).expect("step ok");

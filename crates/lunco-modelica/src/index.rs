@@ -23,8 +23,8 @@
 
 use crate::pretty::Placement;
 use lunco_doc::{NodeId, TextRange};
-use rumoca_compile::parsing::ast::{
-    self as ast,
+use rumoca_compile::parsing::ast::{self as ast};
+use rumoca_compile::parsing::{
     ClassType as AstClassType,
     Causality as AstCausality,
     Variability as AstVariability,
@@ -994,7 +994,7 @@ fn map_causality(c: &AstCausality) -> Causality {
 
 fn map_variability(v: &AstVariability) -> Variability {
     match v {
-        AstVariability::Empty => Variability::Continuous,
+        AstVariability::Empty | AstVariability::Continuous(_) => Variability::Continuous,
         AstVariability::Constant(_) => Variability::Constant,
         AstVariability::Discrete(_) => Variability::Discrete,
         AstVariability::Parameter(_) => Variability::Parameter,

@@ -342,7 +342,7 @@ impl EdgeVisual for PlaceholderEdgeVisual {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{Port, PortId};
+    use crate::scene::{empty_node_data, Port, PortId};
 
     fn mk_node() -> Node {
         Node {
@@ -422,8 +422,8 @@ mod tests {
         let mut reg = VisualRegistry::new();
         reg.register_node_kind("test.placeholder", |_| PlaceholderNodeVisual);
         assert!(reg.has_node_kind("test.placeholder"));
-        let v = reg.build_node("test.placeholder", &JsonValue::Null);
+        let v = reg.build_node("test.placeholder", &empty_node_data());
         assert!(v.is_some());
-        assert!(reg.build_node("test.unknown", &JsonValue::Null).is_none());
+        assert!(reg.build_node("test.unknown", &empty_node_data()).is_none());
     }
 }

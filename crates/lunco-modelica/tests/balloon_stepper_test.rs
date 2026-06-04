@@ -11,7 +11,7 @@
 //! of the stepper (something else in lunco-modelica isn't calling `get`).
 
 use lunco_modelica::{ModelicaCompiler, ast_extract::extract_variable_names};
-use rumoca_sim::{SimStepper, StepperOptions};
+use rumoca_sim::{SimOptions, SimStepper};
 
 const BALLOON_MO: &str = include_str!("../../../assets/models/Balloon.mo");
 
@@ -25,7 +25,7 @@ fn balloon_stepper_variable_names_contain_states_only() {
         .compile_str("Balloon", &stripped, "balloon.mo")
         .expect("balloon.mo should compile cleanly");
 
-    let mut opts = StepperOptions::default();
+    let mut opts = SimOptions::default();
     opts.atol = 1e-3;
     opts.rtol = 1e-3;
     let stepper = SimStepper::new(&dae_result.dae, opts).expect("stepper build");
@@ -54,7 +54,7 @@ fn balloon_stepper_get_recovers_algebraics() {
         .compile_str("Balloon", &stripped, "balloon.mo")
         .expect("balloon.mo should compile cleanly");
 
-    let mut opts = StepperOptions::default();
+    let mut opts = SimOptions::default();
     opts.atol = 1e-3;
     opts.rtol = 1e-3;
     let stepper = SimStepper::new(&dae_result.dae, opts).expect("stepper build");
@@ -98,7 +98,7 @@ fn balloon_stepper_initial_netforce_is_positive() {
         .compile_str("Balloon", &stripped, "balloon.mo")
         .expect("balloon.mo should compile cleanly");
 
-    let mut opts = StepperOptions::default();
+    let mut opts = SimOptions::default();
     opts.atol = 1e-3;
     opts.rtol = 1e-3;
     let mut stepper = SimStepper::new(&dae_result.dae, opts).expect("stepper build");

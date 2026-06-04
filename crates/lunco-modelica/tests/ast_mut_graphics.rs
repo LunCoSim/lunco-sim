@@ -69,12 +69,12 @@ fn count_plot_nodes(class_src: &str, class: &str) -> usize {
     let sd = parse_to_ast(class_src, "test.mo").unwrap();
     let class_def = sd.classes.get(class).expect("class present");
     for entry in &class_def.annotation {
-        let Expression::ClassModification { target, modifications } = entry else { continue };
+        let Expression::ClassModification { target, modifications, .. } = entry else { continue };
         if !(target.parts.len() == 1 && &*target.parts[0].ident.text == "__LunCo") {
             continue;
         }
         for m in modifications {
-            let Expression::Modification { target: t, value } = m else { continue };
+            let Expression::Modification { target: t, value, .. } = m else { continue };
             if !(t.parts.len() == 1 && &*t.parts[0].ident.text == "plotNodes") {
                 continue;
             }

@@ -1099,7 +1099,7 @@ fn register_local_class(
         let _ = class_def;
         return;
     }
-    use rumoca_compile::parsing::ast::ClassType;
+    use rumoca_compile::parsing::ClassType;
     // Walk the class's connector sub-components into `PortDef`s.
     // Without this, locally-defined classes (Tank, Engine, …) have an
     // empty ports list, so wires from `connect()` statements have
@@ -1150,7 +1150,7 @@ fn extract_local_class_ports(
     class_qualified_path: &str,
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
 ) -> Vec<crate::visual_diagram::PortDef> {
-    use rumoca_compile::parsing::ast::Causality;
+    use rumoca_compile::parsing::Causality;
     let mut out = Vec::new();
     for (sub_name, sub) in &class_def.components {
         let sub_type = sub.type_name.to_string();
@@ -1244,7 +1244,8 @@ fn classify_connector(
     msl_mode: crate::class_cache::MslLookupMode,
 ) -> (crate::visual_diagram::PortKind, Vec<crate::visual_diagram::FlowVarMeta>) {
     use crate::visual_diagram::{FlowVarMeta, PortKind};
-    use rumoca_compile::parsing::ast::{Causality, Connection};
+    use rumoca_compile::parsing::Causality;
+    use rumoca_compile::parsing::ast::Connection;
 
     // Short-form type alias (`connector X = input Real`) — causality
     // is on the class itself, no components to walk.
@@ -1374,7 +1375,9 @@ fn eval_condition(
     expr: &rumoca_compile::parsing::ast::Expression,
     params_map: &std::collections::HashMap<&str, &rumoca_compile::parsing::ast::Component>,
 ) -> bool {
-    use rumoca_compile::parsing::ast::{Expression, OpBinary, OpUnary};
+    use rumoca_compile::parsing::ast::Expression;
+    use rumoca_compile::parsing::OpBinary;
+    use rumoca_compile::parsing::ir_core::OpUnary;
     match expr {
         Expression::Terminal { token, .. } => {
             // Accept any terminal whose text reads "true"/"false"; the
@@ -1395,14 +1398,14 @@ fn eval_condition(
                 .map(|d| eval_condition(d, params_map))
                 .unwrap_or(true)
         }
-        Expression::Unary { op, rhs } => match op {
-            OpUnary::Not(_) => !eval_condition(rhs, params_map),
+        Expression::Unary { op, rhs, .. } => match op {
+            OpUnary::Not => !eval_condition(rhs, params_map),
             _ => true,
         },
-        Expression::Parenthesized { inner } => eval_condition(inner, params_map),
-        Expression::Binary { op, lhs, rhs } => match op {
-            OpBinary::And(_) => eval_condition(lhs, params_map) && eval_condition(rhs, params_map),
-            OpBinary::Or(_) => eval_condition(lhs, params_map) || eval_condition(rhs, params_map),
+        Expression::Parenthesized { inner, .. } => eval_condition(inner, params_map),
+        Expression::Binary { op, lhs, rhs, .. } => match op {
+            OpBinary::And => eval_condition(lhs, params_map) && eval_condition(rhs, params_map),
+            OpBinary::Or => eval_condition(lhs, params_map) || eval_condition(rhs, params_map),
             _ => true,
         },
         _ => true,
@@ -1410,9 +1413,11 @@ fn eval_condition(
 }
 
 fn format_modifier_expr(expr: &rumoca_compile::parsing::ast::Expression) -> String {
-    use rumoca_compile::parsing::ast::{Expression, OpBinary, OpUnary, TerminalType};
+    use rumoca_compile::parsing::ast::{Expression, TerminalType};
+    use rumoca_compile::parsing::OpBinary;
+    use rumoca_compile::parsing::ir_core::OpUnary;
     match expr {
-        Expression::Terminal { terminal_type, token } => {
+        Expression::Terminal { terminal_type, token, .. } => {
             let raw = token.text.as_ref();
             match terminal_type {
                 TerminalType::String => raw.trim_matches('"').to_string(),
@@ -1424,36 +1429,36 @@ fn format_modifier_expr(expr: &rumoca_compile::parsing::ast::Expression) -> Stri
             .last()
             .map(|p| p.ident.text.as_ref().to_string())
             .unwrap_or_default(),
-        Expression::Unary { op, rhs } => match (op, rhs.as_ref()) {
-            (OpUnary::Minus(_), inner) => {
+        Expression::Unary { op, rhs, .. } => match (op, rhs.as_ref()) {
+            (OpUnary::Minus, inner) => {
                 let inner = format_modifier_expr(inner);
                 if inner.is_empty() { String::new() } else { format!("-{}", inner) }
             }
-            (OpUnary::Plus(_), inner) => {
+            (OpUnary::Plus, inner) => {
                 let inner = format_modifier_expr(inner);
                 if inner.is_empty() { String::new() } else { format!("+{}", inner) }
             }
             _ => String::new(),
         },
-        Expression::Parenthesized { inner } => {
+        Expression::Parenthesized { inner, .. } => {
             let inner = format_modifier_expr(inner);
             if inner.is_empty() { String::new() } else { format!("({})", inner) }
         }
         // Render simple arithmetic so MSL params like `k=1/(k*Ni)`
         // (gainTrack in LimPID) substitute as the expression text
         // OMEdit shows underneath the gain block, not a blank.
-        Expression::Binary { op, lhs, rhs } => {
+        Expression::Binary { op, lhs, rhs, .. } => {
             let l = format_modifier_expr(lhs);
             let r = format_modifier_expr(rhs);
             if l.is_empty() || r.is_empty() {
                 return String::new();
             }
             let sym = match op {
-                OpBinary::Add(_) => "+",
-                OpBinary::Sub(_) => "-",
-                OpBinary::Mul(_) => "*",
-                OpBinary::Div(_) => "/",
-                OpBinary::Exp(_) => "^",
+                OpBinary::Add => "+",
+                OpBinary::Sub => "-",
+                OpBinary::Mul => "*",
+                OpBinary::Div => "/",
+                OpBinary::Exp => "^",
                 _ => return String::new(),
             };
             format!("{}{}{}", l, sym, r)

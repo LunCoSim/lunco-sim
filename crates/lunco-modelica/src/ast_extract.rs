@@ -15,10 +15,10 @@
 //!   just regex-captured number literals.
 
 use rumoca_phase_parse::parse_to_ast;
-use rumoca_compile::parsing::ast::{
-    Causality, ClassDef, Expression, StoredDefinition, TerminalType, Variability,
+use rumoca_compile::parsing::{
+    Causality, ClassDef, ClassType, Expression, StoredDefinition, TerminalType, Variability,
 };
-use rumoca_compile::parsing::ClassType;
+use rumoca_compile::parsing::ast::AstIndexMap;
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ pub fn string_literal_value(
 ) -> Option<String> {
     use rumoca_compile::parsing::ast::Expression;
     use rumoca_compile::parsing::TerminalType;
-    let Expression::Terminal { terminal_type, token } = e else {
+    let Expression::Terminal { terminal_type, token, .. } = e else {
         return None;
     };
     if !matches!(terminal_type, TerminalType::String) {
@@ -189,7 +189,7 @@ pub fn collect_non_package_classes_qualified(
 }
 
 fn collect_non_package_qualified(
-    classes: &indexmap::IndexMap<String, ClassDef>,
+    classes: &AstIndexMap<String, ClassDef>,
     parent: &str,
     out: &mut Vec<String>,
 ) {
@@ -215,7 +215,7 @@ fn collect_non_package_qualified(
 /// Depth-first walk of `classes` returning the first non-package
 /// class found, qualified by its path inside the surrounding packages.
 fn find_first_non_package_qualified(
-    classes: &indexmap::IndexMap<String, ClassDef>,
+    classes: &AstIndexMap<String, ClassDef>,
     parent: &str,
 ) -> Option<String> {
     // Runnable = Model / Block / Class. Skip connectors, records,
@@ -376,7 +376,7 @@ pub fn strip_input_defaults(source: &str) -> (String, HashMap<String, f64>) {
 }
 
 fn collect_input_binding_ranges(
-    _classes: &indexmap::IndexMap<String, ClassDef>,
+    _classes: &AstIndexMap<String, ClassDef>,
     _source: &str,
     _out: &mut Vec<(usize, usize)>,
 ) {
@@ -390,7 +390,7 @@ fn collect_input_binding_ranges(
 // ---------------------------------------------------------------------------
 
 fn collect_parameters_from_classes(
-    classes: &indexmap::IndexMap<String, ClassDef>,
+    classes: &AstIndexMap<String, ClassDef>,
     params: &mut HashMap<String, f64>,
 ) {
     for class in classes.values() {
@@ -406,7 +406,7 @@ fn collect_parameters_from_classes(
 }
 
 fn collect_inputs_with_defaults_from_classes(
-    classes: &indexmap::IndexMap<String, ClassDef>,
+    classes: &AstIndexMap<String, ClassDef>,
     inputs: &mut HashMap<String, f64>,
 ) {
     for class in classes.values() {
@@ -422,7 +422,7 @@ fn collect_inputs_with_defaults_from_classes(
 }
 
 fn collect_variable_names_from_classes(
-    classes: &indexmap::IndexMap<String, ClassDef>,
+    classes: &AstIndexMap<String, ClassDef>,
     names: &mut Vec<String>,
 ) {
     for class in classes.values() {
@@ -465,15 +465,15 @@ fn extract_numeric_binding(expr: &Option<Expression>) -> Option<f64> {
 /// minus — rumoca represents `-5` as `Unary(Minus, 5)`). Used for
 /// `min`/`max` modifier extraction where negative bounds are common.
 fn numeric_of(expr: &Expression) -> Option<f64> {
-    use rumoca_compile::parsing::ast::OpUnary;
+    use rumoca_compile::parsing::ir_core::OpUnary;
     match expr {
-        Expression::Terminal { terminal_type, token } => match terminal_type {
+        Expression::Terminal { terminal_type, token, .. } => match terminal_type {
             TerminalType::UnsignedReal | TerminalType::UnsignedInteger => {
                 token.text.parse::<f64>().ok()
             }
             _ => None,
         },
-        Expression::Unary { op, rhs } if matches!(op, OpUnary::Minus(_)) => {
+        Expression::Unary { op, rhs, .. } if matches!(op, OpUnary::Minus) => {
             numeric_of(rhs).map(|v| -v)
         }
         _ => None,
@@ -511,7 +511,7 @@ pub fn find_class_by_short_name<'a>(
 }
 
 fn find_in_classes<'a>(
-    classes: &'a indexmap::IndexMap<String, ClassDef>,
+    classes: &'a AstIndexMap<String, ClassDef>,
     short_name: &str,
 ) -> Option<&'a ClassDef> {
     if let Some((_, class)) = classes.iter().find(|(name, _)| name.as_str() == short_name) {
@@ -661,7 +661,7 @@ fn tokens_to_description(tokens: &[rumoca_compile::parsing::Token]) -> String {
 /// `get_document_source`.
 fn expression_to_string(expr: &Expression) -> String {
     match expr {
-        Expression::Terminal { terminal_type, token } => match terminal_type {
+        Expression::Terminal { terminal_type, token, .. } => match terminal_type {
             TerminalType::String => token.text.trim_matches('"').to_string(),
             _ => token.text.to_string(),
         },
@@ -745,7 +745,7 @@ fn unit_of_component(comp: &rumoca_compile::parsing::ast::Component) -> Option<S
     comp.modifications
         .get("unit")
         .and_then(|expr| match expr {
-            Expression::Terminal { terminal_type: TerminalType::String, token } => {
+            Expression::Terminal { terminal_type: TerminalType::String, token, .. } => {
                 Some(token.text.trim_matches('"').to_string())
             }
             _ => None,

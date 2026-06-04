@@ -280,7 +280,7 @@ pub(super) fn empty_overlay_class_info(
         return (None, None, None, vec![], vec![], vec![]);
     };
 
-    use rumoca_compile::parsing::ast::Causality;
+    use rumoca_compile::parsing::Causality;
     use rumoca_compile::parsing::ClassType;
 
     // Engine-driven Icon merge: hand the qualified class path to
@@ -332,7 +332,7 @@ pub(super) fn empty_overlay_class_info(
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
     for (name, comp) in class.components.iter() {
-        use rumoca_compile::parsing::ast::Variability;
+        use rumoca_compile::parsing::Variability;
         if matches!(comp.variability, Variability::Parameter(_)) {
             params.push(name.clone());
         }

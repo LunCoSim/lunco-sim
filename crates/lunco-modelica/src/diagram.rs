@@ -24,8 +24,8 @@
 use lunco_core::diagram::{
     ComponentGraph, ComponentPort, EdgeKind, NodeId, NodeKind,
 };
-use rumoca_compile::parsing::ast::{ClassDef, Component, Equation, Expression, Name, StoredDefinition, Variability, Causality};
-use rumoca_compile::parsing::ClassType;
+use rumoca_compile::parsing::ast::{ClassDef, Component, Equation, Expression, Name, StoredDefinition};
+use rumoca_compile::parsing::{Causality, ClassType, Variability};
 use std::collections::HashMap;
 
 /// The type of diagram to generate from a Modelica model.
@@ -752,7 +752,7 @@ fn ports_for_component(
         let sub_type = sub.type_name.to_string();
         // Causality wins when present (input/output declarations are
         // unambiguously ports). Otherwise consult the type's class.
-        use rumoca_compile::parsing::ast::Causality;
+        use rumoca_compile::parsing::Causality;
         let is_port = match sub.causality {
             Causality::Input(_) | Causality::Output(_) => true,
             Causality::Empty => is_connector_type(&sub_type, type_qpath, ast, msl_mode),
@@ -1143,7 +1143,8 @@ end MyLib;
 
     #[test]
     fn test_parse_connect_reference() {
-        use rumoca_compile::parsing::ast::{ComponentRefPart, Token as AstToken};
+        use rumoca_compile::parsing::ast::ComponentRefPart;
+        use rumoca_compile::parsing::{Span, Token as AstToken};
         use std::sync::Arc;
 
         fn make_ref(parts: &[(&str, &str)]) -> rumoca_compile::parsing::ast::ComponentReference {
@@ -1160,6 +1161,7 @@ end MyLib;
                     })
                     .collect(),
                 def_id: None,
+                span: Span::default(),
             }
         }
 

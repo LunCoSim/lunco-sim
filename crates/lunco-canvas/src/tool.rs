@@ -1614,7 +1614,7 @@ fn cleanup_collinear(pts: &[Pos]) -> Vec<Pos> {
 mod tests {
     use super::*;
     use crate::event::Modifiers;
-    use crate::scene::{Edge, EdgeId, Node, PortId, Port};
+    use crate::scene::{empty_node_data, Edge, EdgeId, Node, PortId, Port};
 
     fn mk_scene() -> Scene {
         let mut s = Scene::new();
@@ -1846,7 +1846,7 @@ mod tests {
         let created: Vec<_> = ev
             .iter()
             .filter_map(|e| match e {
-                SceneEvent::EdgeCreated { from, to } => Some((from.clone(), to.clone())),
+                SceneEvent::EdgeCreated { from, to, .. } => Some((from.clone(), to.clone())),
                 _ => None,
             })
             .collect();

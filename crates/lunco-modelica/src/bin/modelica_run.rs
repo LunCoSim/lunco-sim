@@ -52,7 +52,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use lunco_modelica::ModelicaCompiler;
-use rumoca_sim::{SimStepper, StepperOptions};
+use rumoca_sim::{SimOptions, SimStepper};
 
 /// CLI options. Hand-parsed (no `clap`) so the binary stays cheap to
 /// build and link — same rationale as `msl_indexer`.
@@ -244,11 +244,11 @@ fn main() {
         t_compile.elapsed().as_secs_f64()
     );
 
-    // StepperOptions: mirror what the workbench uses (lib.rs ~899) so
+    // SimOptions: mirror what the workbench uses (lib.rs ~899) so
     // headless and interactive runs see the same numerics. atol/rtol
     // 1e-1 is loose for production but matches the workbench default;
     // override via env vars if you want tighter convergence.
-    let mut stepper_opts = StepperOptions::default();
+    let mut stepper_opts = SimOptions::default();
     stepper_opts.atol = 1e-1;
     stepper_opts.rtol = 1e-1;
 

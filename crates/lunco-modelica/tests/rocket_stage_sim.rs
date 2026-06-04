@@ -12,7 +12,7 @@
 //!      solver.
 
 use lunco_modelica::ModelicaCompiler;
-use rumoca_sim::{SimStepper, StepperOptions};
+use rumoca_sim::{SimOptions, SimStepper};
 
 const SRC: &str = include_str!("../../../assets/models/AnnotatedRocketStage.mo");
 
@@ -27,7 +27,7 @@ fn build_stepper(initial_throttle: Option<f64>) -> SimStepper {
         )
         .expect("RocketStage should compile");
 
-    let opts = StepperOptions {
+    let opts = SimOptions {
         atol: 1e-2,
         rtol: 1e-2,
         ..Default::default()

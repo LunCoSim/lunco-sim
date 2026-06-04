@@ -38,11 +38,11 @@ fn main() -> anyhow::Result<()> {
 
     // 3. Dump DAE state list + equations before stepper init.
     println!("\n--- DAE states ---");
-    for (name, v) in result.dae.states.iter() {
+    for (name, v) in result.dae.variables.states.iter() {
         println!("  {} (size={})", name, v.size());
     }
-    println!("--- DAE equations ({}) ---", result.dae.f_x.len());
-    for (i, eq) in result.dae.f_x.iter().enumerate() {
+    println!("--- DAE equations ({}) ---", result.dae.continuous.equations.len());
+    for (i, eq) in result.dae.continuous.equations.iter().enumerate() {
         println!("  [{i}] origin={} scalar_count={}", eq.origin, eq.scalar_count);
     }
 
@@ -61,7 +61,7 @@ fn main() -> anyhow::Result<()> {
         "\n--- Building stepper (atol={:.1e} rtol={:.1e} dt={:.1e} n={}) ---",
         atol, rtol, dt, n_steps
     );
-    let mut opts = rumoca_sim::StepperOptions::default();
+    let mut opts = rumoca_sim::SimOptions::default();
     opts.atol = atol;
     opts.rtol = rtol;
     let mut stepper = match rumoca_sim::SimStepper::new(&result.dae, opts) {

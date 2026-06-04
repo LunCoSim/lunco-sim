@@ -4,7 +4,8 @@
 // (`<workspace>/.cache/rumoca/parsed-files/`). Second indexer runs and
 // the workbench's runtime drill-ins share the same cache entries, so
 // a file parsed here is instant at runtime and vice versa.
-use rumoca_compile::parsing::ast::{Causality, ClassDef, ClassType, StoredDefinition, Token, Variability};
+use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
+use rumoca_compile::parsing::{Causality, ClassType, Token, Variability};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -81,9 +82,10 @@ impl Options {
 /// - `Unary{op:Minus, rhs:Terminal..}`     → `"-100"`
 /// - anything else                          → `""`
 fn format_default_expr(expr: &rumoca_compile::parsing::ast::Expression) -> String {
-    use rumoca_compile::parsing::ast::{Expression, OpUnary, TerminalType};
+    use rumoca_compile::parsing::ast::{Expression, TerminalType};
+    use rumoca_compile::parsing::ir_core::OpUnary;
     match expr {
-        Expression::Terminal { terminal_type, token } => {
+        Expression::Terminal { terminal_type, token, .. } => {
             let raw = token.text.as_ref();
             match terminal_type {
                 TerminalType::String => raw.trim_matches('"').to_string(),
@@ -95,8 +97,8 @@ fn format_default_expr(expr: &rumoca_compile::parsing::ast::Expression) -> Strin
             .last()
             .map(|p| p.ident.text.as_ref().to_string())
             .unwrap_or_default(),
-        Expression::Unary { op, rhs } => match (op, rhs.as_ref()) {
-            (OpUnary::Minus(_), inner) => {
+        Expression::Unary { op, rhs, .. } => match (op, rhs.as_ref()) {
+            (OpUnary::Minus, inner) => {
                 let inner = format_default_expr(inner);
                 if inner.is_empty() {
                     String::new()
@@ -108,7 +110,7 @@ fn format_default_expr(expr: &rumoca_compile::parsing::ast::Expression) -> Strin
             // this branch the leading `+` swallowed the whole
             // expression to empty, so MSL params declared as `k1=+1`
             // (Math.Add, Math.Add3) had blank defaults in the index.
-            (OpUnary::Plus(_), inner) => {
+            (OpUnary::Plus, inner) => {
                 let inner = format_default_expr(inner);
                 if inner.is_empty() {
                     String::new()
@@ -118,7 +120,7 @@ fn format_default_expr(expr: &rumoca_compile::parsing::ast::Expression) -> Strin
             }
             _ => String::new(),
         },
-        Expression::Parenthesized { inner } => format_default_expr(inner),
+        Expression::Parenthesized { inner, .. } => format_default_expr(inner),
         // Array literals like `{1}`, `{1, 2, 3}` — render with
         // braces so the Modelica icon text reads natively (matches
         // what OMEdit shows for `qd_max=%qd_max` on KinematicPTP).
@@ -1075,7 +1077,7 @@ impl MSLIndexer {
                 // with the `expandable` keyword — folded into the
                 // typed enum so consumers don't need a separate flag.
                 let class_kind = match (&class.class_type, class.expandable) {
-                    (rumoca_compile::parsing::ast::ClassType::Connector, true) => {
+                    (rumoca_compile::parsing::ClassType::Connector, true) => {
                         crate::index::ClassKind::ExpandableConnector
                     }
                     (t, _) => crate::index::map_class_type(t),

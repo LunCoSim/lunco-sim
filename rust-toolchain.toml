@@ -1,0 +1,8 @@
+# Match the toolchain rumoca (our core simulation dependency) pins. rumoca main
+# uses features (e.g. stabilized `if_let_guard`) not yet on older stable, and
+# pins this nightly for wasm-bindgen-rayon threading. Keeping lunica on the same
+# nightly guarantees the rumoca git dependency builds.
+[toolchain]
+channel = "nightly-2026-02-27"
+components = ["rust-src"]
+targets = ["wasm32-unknown-unknown"]

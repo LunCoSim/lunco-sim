@@ -22,10 +22,10 @@ pub fn extract_documentation(
     let str_arg = |name: &str| -> Option<String> {
         for a in args {
             let (arg_name, value) = match a {
-                Expression::NamedArgument { name, value } => {
+                Expression::NamedArgument { name, value, .. } => {
                     (name.text.as_ref(), value.as_ref())
                 }
-                Expression::Modification { target, value } => (
+                Expression::Modification { target, value, .. } => (
                     target.parts.first().map(|p| p.ident.text.as_ref()).unwrap_or(""),
                     value.as_ref(),
                 ),

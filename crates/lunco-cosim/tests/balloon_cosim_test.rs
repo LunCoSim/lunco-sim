@@ -65,6 +65,7 @@ fn compile_balloon_model(
             session_id: 0,
             model_name,
             source,
+            extra_sources: Vec::new(),
             stream: None,
         });
 
