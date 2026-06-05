@@ -47,7 +47,10 @@ lunco-ui = { path = "../lunco-ui" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-web = { workspace = true }
 lunco-assets = { workspace = true }
-lunco-api = { path = "../lunco-api", optional = true }
+# `default-features = false` so the native (`lunco-api`) and web (`web`)
+# features choose the transport: `transport-http` (axum/TcpListener) vs.
+# `transport-wasm` (the `window.lunco_api` JS bridge).
+lunco-api = { path = "../lunco-api", optional = true, default-features = false }
 lunco-networking = { path = "../lunco-networking", optional = true }
 bevy_egui = { workspace = true }
 
@@ -66,12 +69,16 @@ lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 # `lunco-api` is on by default so native `cargo run --bin sandbox -- --api`
 # Just Works. Building without it (`--no-default-features`) drops the
 # axum/tokio web stack, which is mandatory for wasm32-unknown-unknown.
-default = ["celestial", "lunco-api"]
+default = ["celestial", "lunco-api", "lunco-api/transport-http"]
 # `celestial` pulls in lunco-celestial's bundled Earth texture + Artemis-II
 # ephemeris (10s of MB). Off for the wasm sandbox build — it only needs
 # `GravityPlugin`, which is always compiled.
 celestial = ["lunco-celestial/embed-assets"]
 sandbox = []
+# Compile the API in. Transport is chosen automatically: the native HTTP
+# server comes from `lunco-api/transport-http` (added to `default` above);
+# the wasm build (`build_web.sh --features lunco-api`) gets the
+# `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
 lunco-api = ["dep:lunco-api"]
 # Multiplayer over WebTransport (lightyear). Pulls in the real networking
 # adapter; the wire substrate (lunco-api) is required.

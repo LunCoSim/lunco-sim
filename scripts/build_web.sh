@@ -186,8 +186,11 @@ build_wasm() {
     maybe_sccache_env
 
     # We use --no-default-features to avoid pulling in the full tokio/axum stack
-    # from lunco-api, which depends on mio and other networking primitives
-    # that are unsupported on wasm32-unknown-unknown.
+    # from lunco-api (the native `transport-http` server lives in the crate's
+    # default features and needs mio — unsupported on wasm32). `--features
+    # lunco-api` then opts the API crate back in *without* transport-http; on
+    # wasm32 it auto-compiles the `window.lunco_api(...)` JS bridge instead (no
+    # TcpListener) via `cfg(target_arch="wasm32")`.
     #
     # `--cfg=web_sys_unstable_apis` is REQUIRED for wgpu's WebGPU backend on
     # wasm (web-sys's `Gpu*` bindings are gated behind that flag). Without it
@@ -198,7 +201,7 @@ build_wasm() {
     local cargo_bin
     cargo_bin=$(get_cargo_bin_name "$binary")
     RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis" \
-        cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$cargo_bin" -p "$crate" --no-default-features
+        cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$cargo_bin" -p "$crate" --no-default-features --features lunco-api
 
     # Off-thread Modelica worker bundle. wasm32 has no real threads, so
     # without this every rumoca compile (a few seconds for non-trivial

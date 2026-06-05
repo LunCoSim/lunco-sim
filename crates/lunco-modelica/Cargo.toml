@@ -9,7 +9,11 @@ description = "Native Modelica simulation integration for LunCoSim using Rumoca"
 # --api` Just Works for screenshot-driven debugging. Building without it
 # (`cargo build --no-default-features`) drops the axum/tokio web stack,
 # which matters for the wasm32 binary.
-default = ["lunco-api"]
+default = ["lunco-api", "lunco-api/transport-http"]
+# Compile the API in. Transport is chosen automatically: the native HTTP
+# server comes from `lunco-api/transport-http` (added to `default` above);
+# the wasm build (`build_web.sh --features lunco-api`) gets the
+# `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
 lunco-api = ["dep:lunco-api"]
 # Opt-in Tracy profiler hook. Off by default because tracy-client-sys needs a
 # C++ compile that breaks on wasm32 and on Windows MSVC 2019 (missing
@@ -152,7 +156,9 @@ regex = "1.10"
 indexmap = { workspace = true }
 futures-lite = "2.3"
 crossbeam-channel = { workspace = true }
-lunco-api = { path = "../lunco-api", optional = true }
+# `default-features = false`: the `lunco-api` (native) and `web` features pick
+# the transport — `transport-http` vs. `transport-wasm`.
+lunco-api = { path = "../lunco-api", optional = true, default-features = false }
 log = "0.4"
 uuid = { workspace = true }
 # Native file-picker dialogs for Open Folder + Save-As. Uses the

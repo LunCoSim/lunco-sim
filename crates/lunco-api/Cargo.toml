@@ -6,7 +6,16 @@ description = "Transport-agnostic API layer for LunCoSim — HTTP, ROS2, IPC, et
 
 [features]
 default = ["transport-http"]
-transport-http = ["dep:axum", "dep:tokio"]
+# Native HTTP server (axum + TcpListener). Opt-in so library consumers that
+# only need the registry/schema types stay axum-free. Pulls tokio's full
+# runtime/net — wasm-incompatible, so never enable this for wasm32 (the web
+# build leaves it off; the wasm JS bridge needs no feature — see below).
+transport-http = ["dep:axum", "dep:tokio", "tokio/full"]
+
+# NOTE: there is no `transport-wasm` feature. On wasm32 the only usable
+# transport is the `window.lunco_api` JS bridge (a browser can't bind TCP), so
+# it compiles *automatically* under `cfg(target_arch = "wasm32")`. Its deps
+# live in the wasm target table below — present on wasm, absent on native.
 
 [dependencies]
 lunco-core = { path = "../lunco-core" }
@@ -18,9 +27,20 @@ serde_json = { workspace = true }
 # panics on wasm and trips the disallowed_methods lint).
 web-time = { workspace = true }
 
-# Transport: HTTP (optional, feature-gated)
+# Transport: HTTP (optional, native only). `tokio/full` is added by the
+# `transport-http` feature; the base dep stays featureless.
 axum = { version = "0.8", features = ["ws"], optional = true }
-tokio = { version = "1", features = ["full"], optional = true }
+tokio = { version = "1", default-features = false, optional = true }
+
+# Wasm-only: the JS bridge (`window.lunco_api`) and its deps compile
+# automatically on wasm32 — no feature gate. `tokio/sync` gives the bridge its
+# runtime-agnostic channels without dragging in `net`/`rt` (which need mio and
+# break on wasm).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tokio = { version = "1", default-features = false, features = ["sync"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+base64 = "0.22"
 
 [lints]
 workspace = true

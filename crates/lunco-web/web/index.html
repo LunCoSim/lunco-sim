@@ -25,10 +25,13 @@
 
         const __LC_WASM_SIZE__ = 0;
 
-        // Dev console bridges for the off-thread worker — exposed only if
-        // this bundle actually exports them (lunica does; sandbox does via
-        // the embedded workbench; a future app might not).
-        for (const k of ['__lc_test_worker_ping', '__lc_test_dispatch_compile']) {
+        // Bridges exposed on `window` only if this bundle actually exports
+        // them (a future app might not):
+        //   __lc_test_*  — dev console hooks for the off-thread worker.
+        //   lunco_api    — the in-browser API bridge (lunco-api compiled for
+        //                  wasm). Same JSON envelope as the native HTTP API:
+        //                  `await window.lunco_api('{"command":"Ping"}')`.
+        for (const k of ['__lc_test_worker_ping', '__lc_test_dispatch_compile', 'lunco_api']) {
             if (wasm[k]) window[k] = wasm[k];
         }
 

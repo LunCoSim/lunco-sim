@@ -145,58 +145,72 @@ impl Plugin for LunCoApiPlugin {
         // when the `networking` feature is on. This crate stays transport- and
         // networking-agnostic.
 
-        // HTTP transport (feature-gated)
-        #[cfg(feature = "transport-http")]
+        // Bridge transport (feature-gated). The ECS-side plumbing — receiver,
+        // router system, response observer — is identical whether the outward
+        // transport is the native HTTP server or the in-browser JS bridge.
+        // Only the final hand-off differs: `spawn_server` (TcpListener) vs.
+        // `set_wasm_bridge` (the `window.lunco_api` export).
+        #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
         {
-            use transports::{HttpBridge, spawn_server};
+            use transports::HttpBridge;
             use crate::{http_bridge_request_router, http_response_observer, ApiHttpResponsePending};
 
-            let bridge = {
-                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                let mut bridge = HttpBridge::new(tx);
-                // Hook the winit event loop so HTTP requests wake the
-                // app immediately instead of waiting for the next
-                // reactive tick. WinitPlugin runs first inside
-                // DefaultPlugins, so the proxy resource is already in
-                // place by the time we build here.
-                if let Some(proxy) = app.world().get_resource::<bevy::winit::EventLoopProxyWrapper>() {
-                    let proxy = (**proxy).clone();
-                    bridge = bridge.with_waker(std::sync::Arc::new(move || {
-                        let _ = proxy.send_event(bevy::winit::WinitUserEvent::WakeUp);
-                    }));
-                }
-                app.insert_resource(ApiHttpBridgeReceiver(rx))
-                    .init_resource::<ApiHttpResponsePending>()
-                    .add_observer(http_response_observer)
-                    .add_systems(Update, http_bridge_request_router);
-                bridge
-            };
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            #[allow(unused_mut)]
+            let mut bridge = HttpBridge::new(tx);
 
-            if let Some(config) = &self.config.http_config {
-                spawn_server(config.clone(), bridge);
+            // Hook the winit event loop so requests wake the app immediately
+            // instead of waiting for the next reactive tick. Native only —
+            // the wasm build runs a continuous requestAnimationFrame loop, so
+            // the router drains every frame regardless.
+            #[cfg(feature = "transport-http")]
+            if let Some(proxy) = app.world().get_resource::<bevy::winit::EventLoopProxyWrapper>() {
+                let proxy = (**proxy).clone();
+                bridge = bridge.with_waker(std::sync::Arc::new(move || {
+                    let _ = proxy.send_event(bevy::winit::WinitUserEvent::WakeUp);
+                }));
             }
+
+            app.insert_resource(ApiHttpBridgeReceiver(rx))
+                .init_resource::<ApiHttpResponsePending>()
+                .add_observer(http_response_observer)
+                .add_systems(Update, http_bridge_request_router);
+
+            // Native: spawn the blocking TcpListener HTTP server.
+            #[cfg(feature = "transport-http")]
+            if let Some(config) = &self.config.http_config {
+                transports::spawn_server(config.clone(), bridge.clone());
+            }
+
+            // Wasm: register the bridge behind the `window.lunco_api` JS export.
+            #[cfg(target_arch = "wasm32")]
+            transports::set_wasm_bridge(bridge.clone());
+
+            // Consumed by whichever transport is active above; the clones keep
+            // this block valid across every feature combination.
+            let _ = bridge;
         }
     }
 }
 
 // ── HTTP bridge (feature-gated) ───────────────────────────────────────────────
 
-/// Receives HTTP bridge requests and injects them as ApiRequestEvent.
-#[cfg(feature = "transport-http")]
+/// Receives bridge requests (HTTP or wasm) and injects them as ApiRequestEvent.
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 #[derive(Resource)]
 pub struct ApiHttpBridgeReceiver(
     tokio::sync::mpsc::UnboundedReceiver<transports::BridgeMessage>,
 );
 
-/// Pending HTTP response senders (correlation_id → oneshot).
-#[cfg(feature = "transport-http")]
+/// Pending response senders (correlation_id → oneshot).
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 #[derive(Resource, Default)]
 pub struct ApiHttpResponsePending(
     std::collections::HashMap<u64, tokio::sync::oneshot::Sender<schema::ApiResponse>>,
 );
 
-/// System that polls the HTTP bridge receiver and triggers API requests.
-#[cfg(feature = "transport-http")]
+/// System that polls the bridge receiver and triggers API requests.
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 pub fn http_bridge_request_router(
     mut receiver: ResMut<ApiHttpBridgeReceiver>,
     mut pending: ResMut<ApiHttpResponsePending>,
@@ -214,8 +228,8 @@ pub fn http_bridge_request_router(
     }
 }
 
-/// Observer that catches ApiResponseEvent and sends HTTP responses back.
-#[cfg(feature = "transport-http")]
+/// Observer that catches ApiResponseEvent and resolves the pending reply.
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 pub fn http_response_observer(
     trigger: On<executor::ApiResponseEvent>,
     mut pending: ResMut<ApiHttpResponsePending>,

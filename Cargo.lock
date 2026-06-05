@@ -6764,12 +6764,15 @@ name = "lunco-api"
 version = "0.1.0-dev"
 dependencies = [
  "axum",
+ "base64",
  "bevy",
  "image",
  "lunco-core",
  "serde",
  "serde_json",
  "tokio",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-time",
 ]
 
