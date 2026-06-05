@@ -80,11 +80,23 @@ fn client_cert_digest() -> String {
 
 /// Browser: the digest is supplied in the connect URL hash (`#<digest>`), which
 /// dodges the spike's baked-digest staleness (SPIKE_PH0 §dev-cert-gotchas #4).
+///
+/// Normalized to **bare lowercase hex**: lightyear hex-decodes this string, so
+/// the colon-separated form the host logs (`ba:ae:…`) must have its separators
+/// stripped or it panics ("Hex string does not have an even number of digits").
+/// An empty hash ⇒ empty digest ⇒ no `serverCertificateHashes` ⇒ the browser
+/// does normal CA validation (the production path with a real cert on a domain).
 #[cfg(target_family = "wasm")]
 fn client_cert_digest() -> String {
     web_sys::window()
         .and_then(|w| w.location().hash().ok())
-        .map(|h| h.trim_start_matches('#').to_string())
+        .map(|h| {
+            h.trim_start_matches('#')
+                .chars()
+                .filter(|c| c.is_ascii_hexdigit())
+                .flat_map(char::to_lowercase)
+                .collect()
+        })
         .unwrap_or_default()
 }
 

@@ -7127,15 +7127,19 @@ dependencies = [
  "avian3d 0.6.1",
  "bevy",
  "big_space",
+ "getrandom 0.2.17",
  "lightyear",
  "lunco-api",
  "lunco-avatar",
  "lunco-core",
  "lunco-mobility",
  "lunco-sandbox-edit",
+ "lunco-storage",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "web-sys",
+ "wtransport",
 ]
 
 [[package]]

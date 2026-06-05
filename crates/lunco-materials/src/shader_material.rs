@@ -96,8 +96,22 @@ impl Material for ShaderMaterial {
         _layout: &MeshVertexBufferLayoutRef,
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        if let Some(fragment) = descriptor.fragment.as_mut() {
-            fragment.shader = key.bind_group_data.shader.clone();
+        // `specialize` runs for *every* pass that uses this material, including
+        // the depth/normal **prepass**. Our per-instance `.wgsl` only defines a
+        // main-pass `@fragment` (it returns a colour); it has none of the
+        // prepass entry points/outputs. Overwriting the prepass fragment shader
+        // with it produces an invalid `prepass_pipeline` — tolerated by Vulkan,
+        // rejected by WebGPU's stricter validation (frames dropped in-browser).
+        // So only swap the fragment shader for non-prepass pipelines; let the
+        // prepass keep Bevy's default shader (it only needs depth/normals).
+        let is_prepass = descriptor
+            .label
+            .as_ref()
+            .is_some_and(|l| l.contains("prepass"));
+        if !is_prepass {
+            if let Some(fragment) = descriptor.fragment.as_mut() {
+                fragment.shader = key.bind_group_data.shader.clone();
+            }
         }
         Ok(())
     }
