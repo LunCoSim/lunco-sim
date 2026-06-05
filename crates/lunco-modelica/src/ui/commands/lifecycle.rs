@@ -112,6 +112,38 @@ impl PendingCloseAfterSave {
     }
 }
 
+/// A VS-Code-style multi-tab close request raised from the model-tab
+/// context menu. The anchor is the right-clicked tab; the scope picks
+/// which *other* tabs go with it. Resolved by
+/// [`resolve_tab_close_scopes`], which expands the scope into concrete
+/// instance ids (using dock order from [`lunco_workbench::WorkbenchLayout`])
+/// and feeds them through the existing [`lunco_workbench::PendingTabCloses`]
+/// pipeline — so each dirty tab still gets its Save / Don't-save prompt.
+#[derive(Clone, Copy, Debug)]
+pub enum TabCloseScope {
+    /// Close every model tab except the anchor.
+    Others,
+    /// Close model tabs sitting to the right of the anchor.
+    Right,
+    /// Close every model tab.
+    All,
+    /// Close model tabs with no unsaved changes (the anchor included
+    /// if it too is clean).
+    Saved,
+}
+
+#[derive(Resource, Default)]
+pub struct PendingTabCloseScopes {
+    requests: Vec<(u64, TabCloseScope)>,
+}
+
+impl PendingTabCloseScopes {
+    /// Queue a multi-close anchored on `instance`.
+    pub fn push(&mut self, instance: u64, scope: TabCloseScope) {
+        self.requests.push((instance, scope));
+    }
+}
+
 /// State for the Dymola-style app-close save flow. When the user
 /// requests exit (via API `Exit`, menu, window-X), [`request_app_close`]
 /// arms this and pushes every dirty doc's tab into the existing
@@ -1059,6 +1091,58 @@ pub fn finish_close_after_save(
             world.commands().trigger(CloseDocument { doc });
         }
     });
+}
+
+/// Expand queued [`PendingTabCloseScopes`] (Close Others / to the
+/// Right / All / Saved) into concrete tab ids and hand them to
+/// [`lunco_workbench::PendingTabCloses`]. Runs before
+/// [`drain_pending_tab_closes`] so the expanded tabs flow through the
+/// same dirty-check + Save-prompt pipeline a single × click uses.
+pub fn resolve_tab_close_scopes(
+    mut scopes: ResMut<PendingTabCloseScopes>,
+    layout: Res<lunco_workbench::WorkbenchLayout>,
+    registry: Res<ModelicaDocumentRegistry>,
+    model_tabs: Res<ModelTabs>,
+    mut pending: ResMut<lunco_workbench::PendingTabCloses>,
+) {
+    if scopes.requests.is_empty() {
+        return;
+    }
+    // Visual left-to-right order of the model tabs, needed for the
+    // "Others" / "to the Right" anchor maths.
+    let ordered = layout.instances_in_order(MODEL_VIEW_KIND);
+    let is_clean = |inst: u64| -> bool {
+        let Some(doc) = model_tabs.get(inst).map(|s| s.doc) else {
+            return true;
+        };
+        registry
+            .host(doc)
+            .map(|h| !h.document().is_dirty())
+            .unwrap_or(true)
+    };
+
+    for (anchor, scope) in scopes.requests.drain(..) {
+        let anchor_pos = ordered.iter().position(|&i| i == anchor);
+        let targets: Vec<u64> = match scope {
+            TabCloseScope::Others => {
+                ordered.iter().copied().filter(|&i| i != anchor).collect()
+            }
+            TabCloseScope::Right => match anchor_pos {
+                Some(p) => ordered[p + 1..].to_vec(),
+                None => Vec::new(),
+            },
+            TabCloseScope::All => ordered.clone(),
+            TabCloseScope::Saved => {
+                ordered.iter().copied().filter(|&i| is_clean(i)).collect()
+            }
+        };
+        for instance in targets {
+            pending.push(lunco_workbench::TabId::Instance {
+                kind: MODEL_VIEW_KIND,
+                instance,
+            });
+        }
+    }
 }
 
 pub fn drain_pending_tab_closes(

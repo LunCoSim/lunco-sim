@@ -873,6 +873,22 @@ impl WorkbenchLayout {
         }
     }
 
+    /// All instance ids of `kind` in left-to-right dock walk order.
+    /// Used by VS-Code-style "Close Others / to the Right / All" tab
+    /// menus, which need the visual tab sequence (a `HashMap`-backed
+    /// domain registry can't supply order).
+    pub fn instances_in_order(&self, kind: PanelId) -> Vec<u64> {
+        self.dock
+            .iter_all_tabs()
+            .filter_map(|(_, t)| match t {
+                TabId::Instance { kind: k, instance } if *k == kind => {
+                    Some(*instance)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Close a multi-instance tab if present. Idempotent.
     pub fn close_instance(&mut self, kind: PanelId, instance: u64) {
         let tab = TabId::Instance { kind, instance };

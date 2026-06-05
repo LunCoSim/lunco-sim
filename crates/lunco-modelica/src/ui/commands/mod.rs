@@ -26,7 +26,7 @@ pub use doc::{Undo, Redo, FormatDocument, SaveActiveDocument, SaveActiveDocument
 pub use lifecycle::{
     CreateNewScratchModel, DuplicateModelFromReadOnly, DuplicateActiveDoc, OpenClass,
     OpenExample, OpenInNewView, Open, ClassAction, CloseDialogState, PendingCloseAfterSave,
-    GetFile,
+    PendingTabCloseScopes, TabCloseScope, GetFile,
 };
 pub use nav::{
     AutoArrangeDiagram, FocusDocumentByName, SetViewMode, SetZoom, FitCanvas,
@@ -46,6 +46,7 @@ impl Plugin for ModelicaCommandsPlugin {
         app.add_plugins(compile::CompilePlugin)
             .init_resource::<CloseDialogState>()
             .init_resource::<PendingCloseAfterSave>()
+            .init_resource::<PendingTabCloseScopes>()
             .init_resource::<lifecycle::AppCloseFlow>()
             .add_observer(doc::on_undo_document)
             .add_observer(doc::on_redo_document)
@@ -66,7 +67,11 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_systems(
                 Update,
                 (
-                    lifecycle::drain_pending_tab_closes,
+                    (
+                        lifecycle::resolve_tab_close_scopes,
+                        lifecycle::drain_pending_tab_closes,
+                    )
+                        .chain(),
                     status::update_status_bar,
                     status::publish_unsaved_modelica_docs,
                     lifecycle::on_window_close_requested,

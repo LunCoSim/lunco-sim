@@ -142,6 +142,45 @@ impl InstancePanel for ModelViewPanel {
             world.commands().trigger(lunco_workbench::OpenTab { kind: MODEL_VIEW_KIND, instance: new_id });
             ui.close();
         }
+
+        ui.separator();
+
+        // VS-Code-style closes. Single "Close" reuses the per-tab
+        // pipeline directly; the multi-tab scopes queue an intent that
+        // `resolve_tab_close_scopes` expands in dock order. Both routes
+        // funnel through `PendingTabCloses`, so unsaved tabs still
+        // prompt to Save before they vanish.
+        use crate::ui::commands::TabCloseScope;
+        if ui.button("Close").clicked() {
+            world
+                .resource_mut::<lunco_workbench::PendingTabCloses>()
+                .push(lunco_workbench::TabId::Instance { kind: MODEL_VIEW_KIND, instance });
+            ui.close();
+        }
+        if ui.button("Close Others").clicked() {
+            world
+                .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
+                .push(instance, TabCloseScope::Others);
+            ui.close();
+        }
+        if ui.button("Close to the Right").clicked() {
+            world
+                .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
+                .push(instance, TabCloseScope::Right);
+            ui.close();
+        }
+        if ui.button("Close Saved").clicked() {
+            world
+                .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
+                .push(instance, TabCloseScope::Saved);
+            ui.close();
+        }
+        if ui.button("Close All").clicked() {
+            world
+                .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
+                .push(instance, TabCloseScope::All);
+            ui.close();
+        }
     }
 }
 
