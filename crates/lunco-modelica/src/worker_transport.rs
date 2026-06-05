@@ -49,7 +49,7 @@ use js_sys::Uint8Array;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{MessageEvent, Worker};
+use web_sys::{ErrorEvent, MessageEvent, Worker};
 
 use crate::worker::{ModelicaChannels, ModelicaCommand, ModelicaResult};
 
@@ -161,6 +161,14 @@ pub enum WireResult {
         run_id: lunco_experiments::ExperimentId,
         update: lunco_experiments::RunUpdate,
     },
+    /// The worker is reporting that its own wasm linear memory has grown past
+    /// the recycle watermark (`payload` = current size in MB). wasm linear
+    /// memory is GROW-ONLY — it never shrinks back, so a heavy run's footprint
+    /// persists and accumulates across runs until the next one OOM-traps. The
+    /// only way to reclaim it is to discard the whole worker instance, so the
+    /// main thread respawns this worker once it's idle (see `handle_worker_error`
+    /// / `respawn_worker`). Sent by the worker after a run completes.
+    RecycleRequest { mem_mb: u32 },
 }
 
 /// One JS `Worker`, each carrying its own second wasm instance running the
@@ -206,6 +214,38 @@ struct WorkerPool {
 const MAX_WORKERS: usize = 8;
 
 static POOL: OnceLock<Mutex<WorkerPool>> = OnceLock::new();
+
+/// The worker script URL, retained so a crashed worker can be respawned
+/// in place (see [`respawn_worker`]). Set once at [`install_worker`].
+static WORKER_URL: OnceLock<String> = OnceLock::new();
+
+/// The serialized `InstallParsedMsl` wire bytes, retained so a respawned
+/// worker can be re-seeded with the MSL index without re-fetching/parsing
+/// the bundle. Set once when [`install_msl_in_worker`] first runs.
+static MSL_WIRE: OnceLock<Vec<u8>> = OnceLock::new();
+
+/// Respawned workers awaiting MSL re-seed, with the instant they respawned.
+/// The MSL bundle (~165 MB) is deliberately NOT re-allocated on the crash
+/// stack: right after a worker OOM the renderer is memory-starved and the
+/// allocation throws `RangeError: Array buffer allocation failed`. We defer
+/// it here and let [`pump_worker_respawns`] post it once the dead worker's
+/// memory has been reclaimed (after a short settle delay).
+static PENDING_RESEED: OnceLock<Mutex<Vec<(usize, web_time::Instant)>>> = OnceLock::new();
+
+fn pending_reseed() -> &'static Mutex<Vec<(usize, web_time::Instant)>> {
+    PENDING_RESEED.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// True while worker `idx` has been respawned but not yet re-seeded with MSL.
+/// Such a worker can't compile (its MSL index is empty), so the Fast Run
+/// dispatcher skips it until `pump_worker_respawns` re-seeds it. A different
+/// mutex from `pool()`, so it's safe to call while holding the pool lock.
+fn is_reseed_pending(idx: usize) -> bool {
+    pending_reseed()
+        .lock()
+        .map(|q| q.iter().any(|(i, _)| *i == idx))
+        .unwrap_or(false)
+}
 
 fn pool() -> &'static Mutex<WorkerPool> {
     POOL.get_or_init(|| {
@@ -358,15 +398,6 @@ pub fn try_recv_parse_done() -> Option<ParseDoneEnvelope> {
     PARSE_DONE_RX.get()?.try_recv().ok()
 }
 
-thread_local! {
-    /// Holds every worker's `onmessage` closure for the lifetime of the page
-    /// so the callbacks aren't dropped when `install_worker` returns (one per
-    /// pooled worker). Storing in a `thread_local` keeps the borrow-checker
-    /// happy without a process-wide static (which would need `Send`).
-    static ONMESSAGE_CBS: RefCell<Vec<Closure<dyn FnMut(MessageEvent)>>> =
-        RefCell::new(Vec::new());
-}
-
 /// Stash the result-side sender so the JS `onmessage` callback can push
 /// decoded results into the same crossbeam channel that
 /// `worker::handle_modelica_responses` drains. Called by the
@@ -415,14 +446,10 @@ pub fn install_worker(worker_url: &str) -> Result<(), JsValue> {
     .clamp(1, MAX_WORKERS);
 
     let mut workers: Vec<WorkerHandle> = Vec::with_capacity(want);
-    let mut closures: Vec<Closure<dyn FnMut(MessageEvent)>> = Vec::with_capacity(want);
     let mut first_err: Option<JsValue> = None;
     for i in 0..want {
-        match make_worker(worker_url) {
-            Ok((worker, cb)) => {
-                workers.push(WorkerHandle(worker));
-                closures.push(cb);
-            }
+        match make_worker(i, worker_url) {
+            Ok(worker) => workers.push(WorkerHandle(worker)),
             // Worker 0 failing is fatal (caller falls back to the inline
             // path); a later one failing just caps the pool smaller.
             Err(e) if i == 0 => return Err(e),
@@ -443,9 +470,10 @@ pub fn install_worker(worker_url: &str) -> Result<(), JsValue> {
         p.running = vec![None; n];
         p.workers = workers;
     }
-    // Keep the closures alive for the page lifetime (dropping un-registers
-    // the JS handler).
-    ONMESSAGE_CBS.with(|slot| *slot.borrow_mut() = closures);
+    // Retain the script URL so a crashed worker can be respawned in place
+    // (the callbacks are `.forget()`-leaked inside `make_worker`, so there's
+    // no Rust-side closure storage to keep alive).
+    let _ = WORKER_URL.set(worker_url.to_string());
 
     if let Some(e) = first_err {
         bevy::log::warn!(
@@ -458,12 +486,19 @@ pub fn install_worker(worker_url: &str) -> Result<(), JsValue> {
     Ok(())
 }
 
-/// Construct one `Worker` and its `onmessage` closure. The closure routes
-/// every message kind through the process-global handlers, so all pooled
-/// workers are interchangeable; Fast Run updates demux by `run_id`.
-fn make_worker(
-    worker_url: &str,
-) -> Result<(Worker, Closure<dyn FnMut(MessageEvent)>), JsValue> {
+/// Construct one `Worker`, wired with both an `onmessage` (results) and an
+/// `onerror` (crash) handler. The message handler routes every message kind
+/// through the process-global handlers, so all pooled workers are
+/// interchangeable; Fast Run updates demux by `run_id`. The error handler
+/// (`idx`-tagged) turns a worker crash (wasm `unreachable`/OOM, panic) into a
+/// graceful run failure plus an in-place respawn — see [`handle_worker_error`].
+///
+/// Both closures are `.forget()`-leaked into the JS runtime rather than
+/// stored Rust-side. That's deliberate: the error handler can fire and
+/// respawn *this same* worker, and dropping a closure while it is executing
+/// is undefined behaviour. Leaking makes the callbacks permanent; respawns
+/// are crash-only and rare, so the few-KB-per-respawn leak is negligible.
+fn make_worker(idx: usize, worker_url: &str) -> Result<Worker, JsValue> {
     let mut opts = web_sys::WorkerOptions::new();
     opts.set_type(web_sys::WorkerType::Module);
     let worker = Worker::new_with_options(worker_url, &opts)?;
@@ -493,14 +528,135 @@ fn make_worker(
                 // that page-level DevTools can't see.
                 bevy::log::info!("[worker] {line}");
             }
+            Ok(WireResult::RecycleRequest { mem_mb }) => {
+                // The worker's grow-only wasm memory has climbed past the
+                // watermark. It's idle now (this arrives after the run's
+                // terminal update), so retire + respawn it to reset its linear
+                // memory — the only way to reclaim grow-only wasm memory and
+                // the fix for cross-run accumulation that otherwise OOMs after
+                // a few heavy runs. `respawn_worker` defers the MSL re-seed.
+                bevy::log::info!(
+                    "[worker_transport] worker {idx} requested recycle at {mem_mb} MB — respawning"
+                );
+                respawn_worker(idx);
+            }
             Err(e) => {
                 bevy::log::error!("[worker_transport] failed to decode result: {e}");
             }
         }
     }) as Box<dyn FnMut(MessageEvent)>);
-
     worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
-    Ok((worker, onmessage))
+    onmessage.forget();
+
+    let onerror = Closure::wrap(Box::new(move |e: ErrorEvent| {
+        bevy::log::error!(
+            "[worker_transport] worker {idx} crashed: {} ({}:{})",
+            e.message(),
+            e.filename(),
+            e.lineno()
+        );
+        handle_worker_error(idx);
+    }) as Box<dyn FnMut(ErrorEvent)>);
+    worker.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+    onerror.forget();
+
+    Ok(worker)
+}
+
+/// Recover from a worker crash without ever wedging the main thread. Called
+/// from the worker's `onerror` handler (so the calculation never affects main
+/// code beyond this controlled recovery):
+///   1. Fail the run that worker was executing — synthesize a terminal
+///      `RunUpdate::Failed`, which frees the run sender and the pool slot via
+///      the normal terminal path. Without this the run would hang "running"
+///      forever, since a dead worker never posts its own terminal update.
+///   2. Respawn a fresh worker in that slot and re-seed it with MSL, so pool
+///      capacity self-heals (critical for the wasm default single-worker pool).
+fn handle_worker_error(idx: usize) {
+    let crashed_run = {
+        let p = pool().lock().unwrap();
+        p.running.get(idx).copied().flatten()
+    };
+    if let Some(run_id) = crashed_run {
+        bevy::log::warn!(
+            "[worker_transport] failing run {run_id:?} after worker {idx} crash"
+        );
+        forward_run_update(
+            run_id,
+            lunco_experiments::RunUpdate::Failed {
+                error: "simulation worker crashed — likely out of memory or a solver \
+                        abort. The model is too heavy for the browser; try a shorter \
+                        StopTime or a looser Tolerance."
+                    .to_string(),
+                partial: None,
+            },
+        );
+    }
+    // `forward_run_update` already cleared `running[idx]`/`run_to_worker` for
+    // the failed run; the respawn below resets the slot regardless.
+    respawn_worker(idx);
+}
+
+/// Replace the (dead) worker at `idx` with a fresh one and re-install MSL into
+/// it. Best-effort: logs and leaves the slot empty if the URL/MSL aren't
+/// cached yet (can only happen before first MSL install, when no run exists).
+fn respawn_worker(idx: usize) {
+    let Some(url) = WORKER_URL.get() else {
+        bevy::log::error!("[worker_transport] cannot respawn worker {idx}: no URL cached");
+        return;
+    };
+    let worker = match make_worker(idx, url) {
+        Ok(w) => w,
+        Err(e) => {
+            bevy::log::error!("[worker_transport] respawn of worker {idx} failed: {e:?}");
+            return;
+        }
+    };
+    {
+        let mut p = pool().lock().unwrap();
+        if let Some(slot) = p.workers.get_mut(idx) {
+            *slot = WorkerHandle(worker);
+        }
+        if let Some(r) = p.running.get_mut(idx) {
+            *r = None;
+        }
+    }
+    // Defer the MSL re-seed. Re-allocating the ~165 MB bundle right now —
+    // on the crash stack, microseconds after a worker exhausted ~4 GB —
+    // throws `RangeError: Array buffer allocation failed` because the dead
+    // worker's linear memory hasn't been reclaimed yet. `pump_worker_respawns`
+    // posts it on a later frame, after a settle delay.
+    if let Ok(mut q) = pending_reseed().lock() {
+        q.push((idx, web_time::Instant::now()));
+    }
+    bevy::log::info!("[worker_transport] respawned worker {idx}; MSL re-seed deferred");
+}
+
+/// Re-seed MSL into respawned workers, deferred off the crash stack. Posts at
+/// most one worker's MSL per call, and only after a short settle delay so the
+/// crashed worker's ~4 GB linear memory has been reclaimed first — allocating
+/// the ~165 MB bundle too soon throws `RangeError: Array buffer allocation
+/// failed`. Bevy `Update` system (wasm only); a cheap no-op when nothing is
+/// pending (the overwhelmingly common case).
+pub fn pump_worker_respawns() {
+    let Some(bytes) = MSL_WIRE.get() else {
+        return;
+    };
+    const SETTLE: core::time::Duration = core::time::Duration::from_millis(1500);
+    let ready = {
+        let mut q = match pending_reseed().lock() {
+            Ok(q) => q,
+            Err(_) => return,
+        };
+        match q.iter().position(|(_, t)| t.elapsed() >= SETTLE) {
+            Some(pos) => Some(q.remove(pos).0),
+            None => None,
+        }
+    };
+    if let Some(idx) = ready {
+        post_bytes_to(idx, bytes, "respawn MSL reinstall (deferred)");
+        bevy::log::info!("[worker_transport] re-seeded MSL into respawned worker {idx}");
+    }
 }
 
 /// Drain `ModelicaChannels.rx_cmd` and ship each command to the JS worker.
@@ -594,9 +750,16 @@ fn assign_and_post_run_fast(run_id: lunco_experiments::ExperimentId, msg: &WireM
         return;
     }
     // Prefer a free worker that isn't the primary (1..n), else the primary.
-    let idx = (1..n)
-        .chain(std::iter::once(0))
-        .find(|&i| p.running[i].is_none())
+    // Skip workers awaiting an MSL re-seed after a recycle (their MSL index is
+    // empty so they'd fail the compile); fall back to any free worker, then to
+    // the primary, so a single-worker pool still makes progress.
+    let free_ready = |p: &WorkerPool| {
+        (1..n)
+            .chain(std::iter::once(0))
+            .find(|&i| p.running[i].is_none() && !is_reseed_pending(i))
+    };
+    let idx = free_ready(&p)
+        .or_else(|| (1..n).chain(std::iter::once(0)).find(|&i| p.running[i].is_none()))
         .unwrap_or(0);
     if p.running[idx].is_none() {
         p.running[idx] = Some(run_id);
@@ -877,6 +1040,13 @@ pub fn install_msl_in_worker(
         }
     };
     let len = bytes.len();
+    // Retain a copy so a respawned worker can be re-seeded with MSL without
+    // re-fetching/parsing the bundle. Set-once; the bundle is identical for
+    // every worker. (Cloned before the single-worker transfer path below
+    // detaches its `ArrayBuffer`.)
+    if MSL_WIRE.get().is_none() {
+        let _ = MSL_WIRE.set(bytes.clone());
+    }
 
     let n = {
         let p = pool().lock().unwrap();

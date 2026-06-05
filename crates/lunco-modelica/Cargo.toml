@@ -216,6 +216,10 @@ web-sys = { version = "0.3", features = [
     "WorkerOptions",
     "DedicatedWorkerGlobalScope",
     "MessageEvent",
+    # `ErrorEvent` for the worker `onerror` crash handler — lets a worker
+    # OOM/panic surface as a graceful run failure + respawn instead of
+    # hanging the main thread (see `worker_transport::handle_worker_error`).
+    "ErrorEvent",
     # Clipboard wiring for the wasm code editor.
     # `Navigator` + `Clipboard` for the menu's async paste fallback;
     # `ClipboardEvent` + `DataTransfer` for the synchronous paste-event

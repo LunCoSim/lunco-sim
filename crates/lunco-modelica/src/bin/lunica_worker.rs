@@ -41,6 +41,13 @@ fn main() {
     panic!("lunica_worker is wasm32-only — built into a Web Worker bundle by scripts/build_web.sh.");
 }
 
+// NOTE: an experiment swapping the global allocator to `talc` (low-frag) made
+// memory use STRICTLY WORSE here — runs that complete under the default wasm
+// `dlmalloc` (e.g. Rover 1e-3 / t_end=1e5) OOM'd under talc, and even took the
+// whole renderer down. So `dlmalloc` (the default) is kept. The 4 GiB OOM on
+// the heavy stiff run is allocator-sensitive but talc is not the answer; see
+// memory `project_wasm_4gb_worker_isolation`.
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
 use std::cell::RefCell;
@@ -269,9 +276,11 @@ fn run_fast_in_worker(
         return;
     }
 
-    let mut stepper_opts = rumoca_sim::SimOptions::default();
-    stepper_opts.atol = bounds.tolerance.unwrap_or(1e-6);
-    stepper_opts.rtol = bounds.tolerance.unwrap_or(1e-6);
+    // Solver options — shared with native via `stepper_options_from_bounds`
+    // (TR-BDF2 + 1e-4 tol defaults), not the old bare `atol=rtol=1e-6` that
+    // silently ran BDF here while native ran TR-BDF2.
+    let stepper_opts =
+        lunco_modelica::experiments_runner::stepper_options_from_bounds(bounds);
 
     let mut stepper = match rumoca_sim::SimStepper::new(&dae.dae, stepper_opts) {
         Ok(s) => s,
@@ -288,123 +297,83 @@ fn run_fast_in_worker(
         }
     };
 
-    let t_end = bounds.t_end;
-    let step_dt = bounds.dt.unwrap_or(0.01);
-    let mut last_progress_emit = web_time::Instant::now();
-
-    // Get variable names from the initial state.
-    let names: Vec<String> = stepper.state().values.keys()
-        .filter(|n| *n != "time")
-        .cloned()
-        .collect();
-
-    let mut all_times: Vec<f64> = Vec::new();
-    let mut all_series: Vec<Vec<f64>> = vec![Vec::new(); names.len()];
-    let mut last_emit_idx = 0;
-
-    // Simulation loop. v1: blocks the worker thread entirely (no
-    // yielding), so `is_cancelled` won't update until we return.
-    // Progress messages ARE posted and reached the main thread.
-    let mut error = None;
-    while stepper.time() < t_end {
-        if is_cancelled(run_id) {
-            clear_cancel();
-            post_run_update(scope, run_id, lunco_experiments::RunUpdate::Cancelled);
-            return;
-        }
-
-        if let Err(e) = stepper.step(step_dt) {
-            error = Some(format!("simulate failed: {e:?}"));
-            break;
-        }
-
-        let t = stepper.time();
-        all_times.push(t);
-        let current_values = stepper.state().values;
-        for (i, name) in names.iter().enumerate() {
-            let val = current_values.get(name).copied().unwrap_or(0.0);
-            all_series[i].push(val);
-        }
-
-        if last_progress_emit.elapsed().as_millis() > 200 {
-            let delta_times = all_times[last_emit_idx..].to_vec();
-            let mut delta_series = std::collections::BTreeMap::new();
-            for (i, name) in names.iter().enumerate() {
-                delta_series.insert(name.clone(), all_series[i][last_emit_idx..].to_vec());
-            }
-
-            let delta = lunco_experiments::RunResult {
-                times: delta_times,
-                series: delta_series,
-                meta: lunco_experiments::RunMeta {
-                    wall_time_ms: started.elapsed().as_millis() as u64,
-                    sample_count: all_times.len() - last_emit_idx,
-                    notes: None,
-                },
-            };
-
-            post_run_update(
-                scope,
-                run_id,
-                lunco_experiments::RunUpdate::Progress {
-                    t_current: t,
-                    delta: Some(delta),
-                },
-            );
-            last_progress_emit = web_time::Instant::now();
-            last_emit_idx = all_times.len();
-        }
-    }
-
-    if let Some(e) = error {
-        let mut series = std::collections::BTreeMap::new();
-        for (i, name) in names.iter().enumerate() {
-            series.insert(name.clone(), all_series[i].clone());
-        }
-        let partial = lunco_experiments::RunResult {
-            times: all_times.clone(),
-            series,
-            meta: lunco_experiments::RunMeta {
-                wall_time_ms: started.elapsed().as_millis() as u64,
-                sample_count: all_times.len(),
-                notes: Some(e.clone()),
-            },
-        };
-        post_run_update(
-            scope,
-            run_id,
-            lunco_experiments::RunUpdate::Failed {
-                error: e,
-                partial: Some(partial),
-            },
-        );
-        return;
-    }
-
-    let mut final_series = std::collections::BTreeMap::new();
-    for (i, name) in names.iter().enumerate() {
-        final_series.insert(name.clone(), all_series[i].clone());
-    }
-
-    let n_samples = all_times.len();
-    let result = lunco_experiments::RunResult {
-        times: all_times,
-        series: final_series,
-        meta: lunco_experiments::RunMeta {
-            wall_time_ms: started.elapsed().as_millis() as u64,
-            sample_count: n_samples,
-            notes: None,
-        },
-    };
-    post_run_update(
-        scope,
-        run_id,
-        lunco_experiments::RunUpdate::Completed(result),
+    // Drive the run through the SHARED stepping loop — the exact same code
+    // native uses. `WorkerSink` is the only worker-specific part (postMessage
+    // + the cancel registry); the sampling/cap/streaming logic lives once in
+    // `run_stepping_loop`, so the worker can't drift from native again (which
+    // is how the old `bounds.dt.unwrap_or(0.01)` here OOM-trapped the browser
+    // on long horizons long after native was fixed).
+    let mut sink = WorkerSink { scope, run_id };
+    lunco_modelica::experiments_runner::run_stepping_loop(
+        &mut stepper,
+        bounds,
+        started,
+        &mut sink,
     );
     post_log(
         scope,
         format!("run_fast: done in {:.2}s", started.elapsed().as_secs_f64()),
     );
+
+    // Report this worker's wasm linear-memory size so the main thread can
+    // recycle it if it's bloated. wasm linear memory is GROW-ONLY — a heavy
+    // run's footprint never shrinks back and accumulates across runs until the
+    // next one OOM-traps (observed: runs 1–3 complete, 4–5 OOM). Discarding the
+    // whole worker instance is the only way to reclaim it, so when we're over
+    // the watermark we ask the main thread to respawn us (it does so now that
+    // we're idle — this message is sent after the run's terminal update).
+    let mem_mb = (core::arch::wasm32::memory_size(0) * 64 / 1024) as u32;
+    const RECYCLE_WATERMARK_MB: u32 = 1024;
+    if mem_mb > RECYCLE_WATERMARK_MB {
+        post_wire(scope, &WireResult::RecycleRequest { mem_mb });
+    }
+}
+
+/// Worker-side [`RunSink`](lunco_modelica::experiments_runner::RunSink):
+/// streams run updates over `postMessage` and reads the worker's cancel
+/// registry. The ONLY platform-specific half of the run loop — the loop
+/// itself is shared with the native runner.
+struct WorkerSink<'a> {
+    scope: &'a DedicatedWorkerGlobalScope,
+    run_id: lunco_experiments::ExperimentId,
+}
+
+impl lunco_modelica::experiments_runner::RunSink for WorkerSink<'_> {
+    fn is_cancelled(&mut self) -> bool {
+        if is_cancelled(self.run_id) {
+            clear_cancel();
+            true
+        } else {
+            false
+        }
+    }
+    fn emit(&mut self, update: lunco_experiments::RunUpdate) {
+        // DIAGNOSTIC: on each streamed Progress, log the worker's wasm linear
+        // memory size. Native runs this exact solve flat at ~905 MB; this
+        // surfaces whether the in-browser worker's memory climbs unbounded
+        // (allocator fragmentation) toward the 4 GiB trap.
+        if let lunco_experiments::RunUpdate::Progress { t_current, .. } = &update {
+            let pages = core::arch::wasm32::memory_size(0);
+            post_log(
+                self.scope,
+                format!(
+                    "[mem] sim_t={:.0} wasm_linear={}MB",
+                    t_current,
+                    pages * 64 / 1024
+                ),
+            );
+        }
+        post_run_update(self.scope, self.run_id, update);
+    }
+    fn wall_budget(&self) -> Option<core::time::Duration> {
+        // Generous backstop: a Fast Run that hasn't finished in this long is
+        // almost certainly pathological (e.g. a stiff model over a huge
+        // horizon at a too-tight tolerance). Fail it gracefully so the worker
+        // is freed for the next run instead of grinding indefinitely. A
+        // single runaway solver `step()` that blows the heap before this
+        // fires is caught instead by worker-crash recovery on the main thread.
+        Some(core::time::Duration::from_secs(120))
+    }
 }
 
 #[wasm_bindgen(start)]

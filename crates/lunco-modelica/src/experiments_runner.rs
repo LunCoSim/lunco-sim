@@ -736,36 +736,10 @@ fn run_inner(
         return;
     }
 
-    // Build sim options from bounds.
-    //
-    // Defaults chosen to match what our solver stack can actually
-    // deliver (FD Jacobian + scalar atol can't honor OMC's 1e-6
-    // convention without burning retry budgets on noise) and what
-    // works across stiff multi-day horizons:
-    //   * tolerance default = 1e-4 (was 1e-6; OMC honors 1e-6 because
-    //     it has analytical Jacobian + vector atol — we don't yet)
-    //   * solver default = TR-BDF2 (was BDF via Default trait; BDF
-    //     dies at the second sunrise louver crossing for stiff
-    //     thermal models — TR-BDF2 handles events robustly across
-    //     multi-month horizons).
-    // Background: docs/numeric-experiments/2026-05-28-lunar-thermal.md
-    let mut stepper_opts = rumoca_sim::SimOptions::default();
-    stepper_opts.atol = bounds.tolerance.unwrap_or(1e-4);
-    stepper_opts.rtol = bounds.tolerance.unwrap_or(1e-4);
-    let solver_name = bounds.solver.as_deref().unwrap_or("tr_bdf2");
-    // Map the bounds string to (family, tableau). `parse_request` selects the
-    // solver *family* (Auto / implicit-BDF / explicit-RK); `DiffsolMethod`
-    // selects the implicit tableau (ESDIRK34 / TR-BDF2) on the BDF-family path.
-    // Implicit tableau names like "tr_bdf2" now resolve to `SimSolverMode::Bdf`
-    // + the matching `DiffsolMethod`. Unknown strings fall back to BDF (matches
-    // OMC's default).
-    let (mode, _label) =
-        rumoca_sim::SimSolverMode::parse_request(Some(solver_name));
-    stepper_opts.solver_mode = mode;
-    stepper_opts.diffsol_method =
-        rumoca_sim::DiffsolMethod::from_external_name(solver_name).unwrap_or_default();
-    // `SimOptions.dt` is the solver's initial step (h0) on the diffsol path.
-    stepper_opts.dt = bounds.h0;
+    // Solver options (tolerance / family / initial step) — derived by the
+    // shared `stepper_options_from_bounds`, which the wasm worker also calls,
+    // so the two can't drift (see that fn for the rationale on the defaults).
+    let stepper_opts = stepper_options_from_bounds(&bounds);
 
     let mut stepper = match rumoca_sim::SimStepper::new(&run_dae, stepper_opts) {
         Ok(s) => s,
@@ -785,41 +759,115 @@ fn run_inner(
         bounds.dt
     );
 
-    let t_end = bounds.t_end;
-    // Output sample spacing (`Interval` in the Modelica `experiment`
-    // annotation). The Modelica spec defaults `Interval` to 0, which is a
-    // sentinel for "unspecified" — tools then derive it from a default
-    // `numberOfIntervals` of 500 over [StartTime, StopTime]. So:
-    //   * dt missing OR <= 0 (the spec's 0 sentinel)  → span / 500.
-    //   * an explicit positive Interval               → honoured as given.
-    // The old `unwrap_or(0.01)` ignored the spec entirely and pinned 10 ms
-    // regardless of horizon, so a 1-year run (t_end=3.15e7) tried to emit
-    // ~3.15 BILLION samples and appeared to hang forever.
-    //
-    // SAMPLE_CAP is a non-spec safety backstop: even an explicit (or
-    // derived) interval never emits more than this many points — clamp dt
-    // up and warn. Guards against a pathological hand-authored `Interval`
-    // that would exhaust memory; well-formed models never hit it.
-    const NUM_INTERVALS: f64 = 500.0;
-    const SAMPLE_CAP: f64 = 200_000.0;
-    let span = (t_end - bounds.t_start).max(0.0);
-    let mut step_dt = match bounds.dt {
-        Some(dt) if dt > 0.0 => dt,
-        _ if span > 0.0 => span / NUM_INTERVALS,
-        _ => 0.01, // degenerate zero-length span; emit a couple of points
-    };
-    if span > 0.0 && step_dt > 0.0 && span / step_dt > SAMPLE_CAP {
-        let capped = span / SAMPLE_CAP;
-        bevy::log::warn!(
-            "[runner] Interval={step_dt}s over span={span}s would emit {:.0} \
-             samples (>{SAMPLE_CAP:.0}); clamping to Interval={capped}s",
-            span / step_dt
-        );
-        step_dt = capped;
-    }
-    let mut last_progress_emit = web_time::Instant::now();
+    // Drive the run through the shared stepping loop. The native sink is a
+    // crossbeam channel + atomic cancel flag; the wasm worker provides its
+    // own `RunSink` over the same loop, so neither sampling nor streaming
+    // logic is duplicated (and can't drift) across platforms.
+    let mut sink = ChannelSink { tx, cancel };
+    run_stepping_loop(&mut stepper, &bounds, t_wall, &mut sink);
+}
 
-    // Get variable names from the initial state.
+/// Cancellation + update sink for a stepping run. This is the ONE seam
+/// between the native runner and the wasm worker: both share
+/// [`run_stepping_loop`] and differ only in these two methods (native =
+/// crossbeam channel + `AtomicBool`; worker = `postMessage` + cancel
+/// registry). Keeping the loop itself platform-agnostic is what stops the
+/// two from drifting — the divergence that let a stale `unwrap_or(0.01)`
+/// OOM-trap the browser while native was already fixed.
+pub trait RunSink {
+    /// True if the run was cancelled; the loop emits `Cancelled` and stops.
+    fn is_cancelled(&mut self) -> bool;
+    /// Deliver a run update (`Progress` / `Completed` / `Failed` / `Cancelled`).
+    fn emit(&mut self, update: RunUpdate);
+    /// Optional wall-clock backstop. When `Some(d)`, a run still stepping
+    /// after `d` of wall time is aborted with a graceful `Failed` instead of
+    /// being allowed to run unbounded. Returns `None` by default (native
+    /// runs are unbounded); the wasm worker overrides it so a pathological
+    /// in-browser run can't hog its (off-thread) worker forever. Note this
+    /// fires only *between* solver steps — it can't interrupt a single
+    /// runaway `step()`; that case is contained by worker-crash recovery on
+    /// the main thread (`worker_transport`).
+    fn wall_budget(&self) -> Option<core::time::Duration> {
+        None
+    }
+}
+
+/// Native [`RunSink`]: crossbeam channel + shared atomic cancel flag.
+struct ChannelSink {
+    tx: Sender<RunUpdate>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl RunSink for ChannelSink {
+    fn is_cancelled(&mut self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+    fn emit(&mut self, update: RunUpdate) {
+        let _ = self.tx.send(update);
+    }
+}
+
+/// Build the solver [`SimOptions`](rumoca_sim::SimOptions) from [`RunBounds`].
+/// The SINGLE source of the tolerance / solver-family / initial-step defaults,
+/// shared by native and the wasm worker so they can't drift.
+///
+/// Defaults are chosen to match what our solver stack can actually deliver
+/// (FD Jacobian + scalar atol can't honor OMC's 1e-6 convention without
+/// burning retry budgets on noise) and what works across stiff multi-day
+/// horizons:
+///   * tolerance default = 1e-4 (not 1e-6; OMC honors 1e-6 because it has an
+///     analytical Jacobian + vector atol — we don't yet).
+///   * solver default = TR-BDF2 (not BDF; BDF dies at the second sunrise
+///     louver crossing for stiff thermal models — TR-BDF2 handles events
+///     robustly across multi-month horizons).
+/// Background: docs/numeric-experiments/2026-05-28-lunar-thermal.md
+///
+/// The worker previously hardcoded `atol = rtol = 1e-6` with *no* solver
+/// selection, silently running BDF where native runs TR-BDF2 — a second
+/// divergence this fn collapses.
+pub fn stepper_options_from_bounds(bounds: &RunBounds) -> rumoca_sim::SimOptions {
+    let mut opts = rumoca_sim::SimOptions::default();
+    opts.atol = bounds.tolerance.unwrap_or(1e-4);
+    opts.rtol = bounds.tolerance.unwrap_or(1e-4);
+    let solver_name = bounds.solver.as_deref().unwrap_or("tr_bdf2");
+    // `parse_request` selects the solver *family* (Auto / implicit-BDF /
+    // explicit-RK); `DiffsolMethod` selects the implicit tableau (ESDIRK34 /
+    // TR-BDF2) on the BDF-family path. Unknown strings fall back to BDF.
+    let (mode, _label) = rumoca_sim::SimSolverMode::parse_request(Some(solver_name));
+    opts.solver_mode = mode;
+    opts.diffsol_method =
+        rumoca_sim::DiffsolMethod::from_external_name(solver_name).unwrap_or_default();
+    // `SimOptions.dt` is the solver's initial step (h0) on the diffsol path.
+    opts.dt = bounds.h0;
+    opts
+}
+
+/// Drive a built [`SimStepper`](rumoca_sim::SimStepper) to `bounds.t_end`,
+/// accumulating output samples at the spacing
+/// [`sim_target::resolve_step_dt`](crate::sim_target::resolve_step_dt)
+/// derives, streaming throttled `Progress` deltas, and emitting the terminal
+/// `Completed` / `Failed` / `Cancelled` through `sink`.
+///
+/// This is the SINGLE stepping loop shared by every platform — native and the
+/// wasm worker each implement only [`RunSink`], never the loop. `started` is
+/// the run's wall-clock origin (used for `RunMeta::wall_time_ms`).
+pub fn run_stepping_loop(
+    stepper: &mut rumoca_sim::SimStepper,
+    bounds: &RunBounds,
+    started: web_time::Instant,
+    sink: &mut impl RunSink,
+) {
+    let t_end = bounds.t_end;
+    let step_dt = crate::sim_target::resolve_step_dt(bounds.t_start, t_end, bounds.dt);
+
+    bevy::log::info!(
+        "[sim] simulate begin: t={}..{} step_dt={}",
+        bounds.t_start,
+        t_end,
+        step_dt
+    );
+
+    // Variable names from the initial state.
     let names: Vec<String> = stepper.state().values.keys()
         .filter(|n| *n != "time")
         .cloned()
@@ -828,33 +876,84 @@ fn run_inner(
     let mut all_times: Vec<f64> = Vec::new();
     let mut all_series: Vec<Vec<f64>> = vec![Vec::new(); names.len()];
     let mut last_emit_idx = 0;
+    let mut last_progress_emit = web_time::Instant::now();
 
-    // Simulation loop.
+    // On wasm, cap the OUTPUT sample interval so the solver is sampled
+    // frequently. The in-browser worker's wasm linear memory climbs between
+    // output samples and only stays bounded when they're frequent. Measured
+    // on the full stiff Rover run (5.1e6 s, tol 1e-6): step_dt≈25 s completes
+    // (~9 s wall), step_dt=50 s OOM-traps, the default span/500≈10205 s traps
+    // immediately — while native is flat at ~905 MB for ANY interval (so this
+    // is wasm-only; native keeps `resolve_step_dt` untouched). The lower bound
+    // keeps the sample count within `SAMPLE_CAP`; for the full Rover that floor
+    // is ~25.5 s, the proven-good value.
+    #[cfg(target_arch = "wasm32")]
+    let step_dt = {
+        let span = (t_end - bounds.t_start).max(0.0);
+        step_dt.min(25.0).max(span / crate::sim_target::SAMPLE_CAP)
+    };
+
     while stepper.time() < t_end {
-        if cancel.load(Ordering::SeqCst) {
-            let _ = tx.send(RunUpdate::Cancelled);
+        if sink.is_cancelled() {
+            sink.emit(RunUpdate::Cancelled);
             return;
         }
 
+        // Wall-clock backstop (worker-only by default). Fail gracefully
+        // rather than letting a too-heavy run monopolise its worker.
+        if let Some(budget) = sink.wall_budget() {
+            if started.elapsed() > budget {
+                let mut series = BTreeMap::new();
+                for (i, name) in names.iter().enumerate() {
+                    series.insert(name.clone(), all_series[i].clone());
+                }
+                bevy::log::warn!(
+                    "[sim] wall-time budget {:.0}s exceeded at t={:.3}/{} — aborting run",
+                    budget.as_secs_f64(),
+                    stepper.time(),
+                    t_end
+                );
+                sink.emit(RunUpdate::Failed {
+                    error: format!(
+                        "run exceeded the {:.0}s wall-time budget at sim t={:.1}/{:.1} \
+                         — model too heavy for this environment; try a shorter StopTime \
+                         or a looser Tolerance",
+                        budget.as_secs_f64(),
+                        stepper.time(),
+                        t_end
+                    ),
+                    partial: Some(RunResult {
+                        times: all_times.clone(),
+                        series,
+                        meta: RunMeta {
+                            wall_time_ms: started.elapsed().as_millis() as u64,
+                            sample_count: all_times.len(),
+                            notes: Some("aborted: wall-time budget exceeded".to_string()),
+                        },
+                    }),
+                });
+                return;
+            }
+        }
+
         if let Err(e) = stepper.step(step_dt) {
-            bevy::log::warn!("[runner] simulate err: {e:?}");
-            // Pack whatever we have so far into partial result.
+            bevy::log::warn!("[sim] simulate err: {e:?}");
+            // Pack whatever we have so far into a partial result.
             let mut series = BTreeMap::new();
             for (i, name) in names.iter().enumerate() {
                 series.insert(name.clone(), all_series[i].clone());
             }
-            let partial = RunResult {
-                times: all_times.clone(),
-                series,
-                meta: RunMeta {
-                    wall_time_ms: t_wall.elapsed().as_millis() as u64,
-                    sample_count: all_times.len(),
-                    notes: Some(format!("failed during step: {e:?}")),
-                },
-            };
-            let _ = tx.send(RunUpdate::Failed {
+            sink.emit(RunUpdate::Failed {
                 error: format!("simulate failed: {e:?}"),
-                partial: Some(partial),
+                partial: Some(RunResult {
+                    times: all_times.clone(),
+                    series,
+                    meta: RunMeta {
+                        wall_time_ms: started.elapsed().as_millis() as u64,
+                        sample_count: all_times.len(),
+                        notes: Some(format!("failed during step: {e:?}")),
+                    },
+                }),
             });
             return;
         }
@@ -867,28 +966,25 @@ fn run_inner(
             all_series[i].push(val);
         }
 
-        // Throttle progress updates to ~10 Hz to avoid flooding the
-        // main thread and incurring excessive serialization overhead.
+        // Throttle progress to ~10 Hz to avoid flooding the consumer and
+        // incurring excessive serialization overhead.
         if last_progress_emit.elapsed().as_millis() > 100 {
             let delta_times = all_times[last_emit_idx..].to_vec();
             let mut delta_series = BTreeMap::new();
             for (i, name) in names.iter().enumerate() {
                 delta_series.insert(name.clone(), all_series[i][last_emit_idx..].to_vec());
             }
-
-            let delta = RunResult {
-                times: delta_times,
-                series: delta_series,
-                meta: RunMeta {
-                    wall_time_ms: t_wall.elapsed().as_millis() as u64,
-                    sample_count: all_times.len() - last_emit_idx,
-                    notes: None,
-                },
-            };
-
-            let _ = tx.send(RunUpdate::Progress {
+            sink.emit(RunUpdate::Progress {
                 t_current: t,
-                delta: Some(delta),
+                delta: Some(RunResult {
+                    times: delta_times,
+                    series: delta_series,
+                    meta: RunMeta {
+                        wall_time_ms: started.elapsed().as_millis() as u64,
+                        sample_count: all_times.len() - last_emit_idx,
+                        notes: None,
+                    },
+                }),
             });
             last_progress_emit = web_time::Instant::now();
             last_emit_idx = all_times.len();
@@ -896,28 +992,26 @@ fn run_inner(
     }
 
     bevy::log::info!(
-        "[runner] simulate ok: {} samples, {} vars, {:.2}s wall",
+        "[sim] simulate ok: {} samples, {} vars, {:.2}s wall",
         all_times.len(),
         names.len(),
-        t_wall.elapsed().as_secs_f64(),
+        started.elapsed().as_secs_f64(),
     );
 
     let mut final_series = BTreeMap::new();
     for (i, name) in names.iter().enumerate() {
         final_series.insert(name.clone(), all_series[i].clone());
     }
-
     let n_samples = all_times.len();
-    let result = RunResult {
+    sink.emit(RunUpdate::Completed(RunResult {
         times: all_times,
         series: final_series,
         meta: RunMeta {
-            wall_time_ms: t_wall.elapsed().as_millis() as u64,
+            wall_time_ms: started.elapsed().as_millis() as u64,
             sample_count: n_samples,
             notes: None,
         },
-    };
-    let _ = tx.send(RunUpdate::Completed(result));
+    }));
 }
 
 /// One detected top-level `parameter` declaration. Used by the
@@ -1565,6 +1659,136 @@ pub fn drain_pending_handles(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Native memory probe (ignored — run explicitly):
+    /// ```text
+    /// cargo test -p lunco-modelica mem_probe_rover -- --ignored --nocapture
+    /// ```
+    /// Compiles `RoverThermalModular` and steps `RoverThermalSystem` at its
+    /// full `Tolerance=1e-6 / StopTime=5.1e6 s` annotation, sampling peak RSS
+    /// (`/proc/self/status`). This isolates the *solver's* native memory (no
+    /// Bevy/render/MSL-in-worker) so we can compare it against the wasm 4 GiB
+    /// linear-memory ceiling that traps the same run in-browser. A background
+    /// sampler hard-exits after a wall cap so a never-returning giant
+    /// `step()` can't hang the test; `VmHWM` (kernel peak RSS) is the headline
+    /// number.
+    #[test]
+    #[ignore]
+    fn mem_probe_rover_full() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        fn read_kb(key: &str) -> u64 {
+            std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with(key))
+                        .and_then(|l| l.split_whitespace().nth(1))
+                        .and_then(|n| n.parse::<u64>().ok())
+                })
+                .unwrap_or(0)
+        }
+        let mb = |kb: u64| kb as f64 / 1024.0;
+
+        if lunco_assets::msl_source_root_path().is_none() {
+            eprintln!("[memprobe] SKIP: MSL source root not available locally");
+            return;
+        }
+        let path = "/home/rod/Documents/models/RoverThermalModular.mo";
+        let src = std::fs::read_to_string(path).expect("read model source");
+        let t0 = Instant::now();
+        // Eagerly install the FULL pre-parsed MSL bundle (the worker's path),
+        // so connector types like `HeatPort_a`/`RealOutput` resolve as real
+        // connectors — the lazy on-demand hook returns stubs that `connect()`
+        // rejects for this connector-heavy model.
+        let mut compiler = crate::ModelicaCompiler::new();
+        let report = compiler.load_source_root("Modelica", &lunco_assets::msl_dir());
+        println!(
+            "[memprobe] MSL installed: {} docs from {}",
+            report.inserted_file_count, report.source_root_path
+        );
+        // `name` is the CLASS to instantiate (the file is a `package
+        // LunarRover` holding it).
+        let compiled = compiler
+            .compile_str_multi(
+                "LunarRover.RoverThermalSystem",
+                &src,
+                "RoverThermalModular.mo",
+                &[],
+            )
+            .expect("compile LunarRover.RoverThermalSystem");
+        println!(
+            "[memprobe] compiled in {:.1}s; VmRSS={:.0}MB VmHWM={:.0}MB",
+            t0.elapsed().as_secs_f64(),
+            mb(read_kb("VmRSS:")),
+            mb(read_kb("VmHWM:"))
+        );
+
+        let bounds = RunBounds {
+            t_start: 0.0,
+            t_end: 5_102_784.0,
+            dt: None,
+            tolerance: Some(1e-6),
+            solver: None,
+            h0: None,
+        };
+        let opts = stepper_options_from_bounds(&bounds);
+        let mut stepper =
+            rumoca_sim::SimStepper::new(&compiled.dae, opts).expect("build stepper");
+        let step_dt = crate::sim_target::resolve_step_dt(0.0, bounds.t_end, bounds.dt);
+        println!(
+            "[memprobe] stepper ready; step_dt={step_dt:.1}s; VmRSS={:.0}MB",
+            mb(read_kb("VmRSS:"))
+        );
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let s2 = stop.clone();
+        let start = Instant::now();
+        let sampler = std::thread::spawn(move || {
+            let cap = Duration::from_secs(90);
+            loop {
+                std::thread::sleep(Duration::from_millis(1000));
+                println!(
+                    "[memprobe] t_wall={:4.0}s VmRSS={:6.0}MB VmHWM(peak)={:6.0}MB",
+                    start.elapsed().as_secs_f64(),
+                    mb(read_kb("VmRSS:")),
+                    mb(read_kb("VmHWM:"))
+                );
+                if s2.load(Ordering::SeqCst) || start.elapsed() > cap {
+                    println!(
+                        "[memprobe] === PEAK VmHWM={:.0}MB (stop={} cap_hit={}) ===",
+                        mb(read_kb("VmHWM:")),
+                        s2.load(Ordering::SeqCst),
+                        start.elapsed() > cap
+                    );
+                    std::process::exit(0);
+                }
+            }
+        });
+
+        while stepper.time() < bounds.t_end {
+            if let Err(e) = stepper.step(step_dt) {
+                println!("[memprobe] step err at sim_t={:.0}: {e:?}", stepper.time());
+                break;
+            }
+            println!(
+                "[memprobe] sim_t={:.0}/{:.0} VmRSS={:.0}MB",
+                stepper.time(),
+                bounds.t_end,
+                mb(read_kb("VmRSS:"))
+            );
+        }
+        stop.store(true, Ordering::SeqCst);
+        println!(
+            "[memprobe] FINAL sim_t={:.0} VmRSS={:.0}MB VmHWM(peak)={:.0}MB",
+            stepper.time(),
+            mb(read_kb("VmRSS:")),
+            mb(read_kb("VmHWM:"))
+        );
+        let _ = sampler.join();
+    }
 
     #[test]
     fn override_real_literal() {

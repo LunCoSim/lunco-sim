@@ -36,6 +36,49 @@ pub fn interval_to_dt(interval: Option<f64>) -> Option<f64> {
     interval.filter(|&i| i > 0.0)
 }
 
+/// Default `numberOfIntervals` when the `experiment` annotation supplies no
+/// positive `Interval` — the Modelica spec's output-sampling default.
+pub const NUM_INTERVALS: f64 = 500.0;
+
+/// Non-spec safety backstop: a run never emits more than this many output
+/// samples, regardless of the (derived or explicit) interval. On wasm the
+/// heap is ~4 GB, so unbounded `Vec<f64>` sample accumulation OOM-traps the
+/// worker — this clamps `dt` up so that can't happen. Well-formed models
+/// never reach it.
+pub const SAMPLE_CAP: f64 = 200_000.0;
+
+/// Resolve the output sample spacing (`step_dt`) a stepping loop advances by,
+/// from the resolved horizon and `Interval`. This is the SINGLE source of
+/// truth shared by every run loop — native (`experiments_runner`) and the
+/// wasm worker (`lunica_worker`) — so the spec rule and the memory backstop
+/// can't drift between platforms. (They did: the worker kept a pathological
+/// `unwrap_or(0.01)` long after native was fixed, which emitted ~10M samples
+/// over a multi-day horizon and OOM-trapped the browser.)
+///
+///   * explicit positive `dt` (the `Interval` annotation) → honoured as given
+///   * `dt` missing or `<= 0` (the spec's 0 sentinel)      → `span / NUM_INTERVALS`
+///   * degenerate zero-length span                         → `0.01`
+///
+/// then clamped up so `span / step_dt <= SAMPLE_CAP`.
+pub fn resolve_step_dt(t_start: f64, t_end: f64, dt: Option<f64>) -> f64 {
+    let span = (t_end - t_start).max(0.0);
+    let mut step_dt = match dt {
+        Some(dt) if dt > 0.0 => dt,
+        _ if span > 0.0 => span / NUM_INTERVALS,
+        _ => 0.01, // degenerate zero-length span; emit a couple of points
+    };
+    if span > 0.0 && step_dt > 0.0 && span / step_dt > SAMPLE_CAP {
+        let capped = span / SAMPLE_CAP;
+        bevy::log::warn!(
+            "[sim] Interval={step_dt}s over span={span}s would emit {:.0} \
+             samples (>{SAMPLE_CAP:.0}); clamping to Interval={capped}s",
+            span / step_dt
+        );
+        step_dt = capped;
+    }
+    step_dt
+}
+
 /// The bounds used when no source supplies any: `[0, DEFAULT_STOP_TIME]`,
 /// adaptive solver, no fixed output interval.
 pub fn default_bounds() -> RunBounds {

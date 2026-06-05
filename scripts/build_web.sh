@@ -127,12 +127,22 @@ check_prerequisites() {
 # worker build (re-running `build_web.sh` on a clean tree shouldn't
 # re-link 54 MB of wasm twice).
 #
-# Heuristic: rebuild iff any `.rs` or `Cargo.toml` under any local
-# crate is newer than the existing `lunica_worker.wasm` cargo output.
+# Heuristic: rebuild iff any `.rs` or `Cargo.toml` under any watched
+# source root is newer than the existing `lunica_worker.wasm` cargo output.
 # `find -newer` is cheap (one stat per file). False positive on a
 # changed third-party crate version is fine — that's a real rebuild.
 # False negative on a manual `cargo clean` is mitigated by the
 # `[ ! -f "$worker_wasm" ]` short-circuit below.
+#
+# Watched roots = this repo's `crates/` PLUS every local path-dependency
+# checkout referenced by a `[patch]` in the root Cargo.toml. The patch roots
+# are LOAD-BEARING: rumoca is consumed via `[patch] path = "../rumoca/..."`
+# and its sources compile straight into the worker. A fix there (a solver /
+# flatten change) lives OUTSIDE `crates/`, so scanning only `crates/` would
+# silently skip the worker rebuild and leave it running stale rumoca — which
+# is exactly how a fixed `rover.radiator.sigma` lowering "came back" in the
+# browser while the main bundle had the fix. Each root's `target/` is pruned
+# so the scan stays a cheap source-only stat sweep.
 #
 # Set `WORKER_REBUILD=force` to override (e.g. switching profiles).
 should_rebuild_worker() {
@@ -143,12 +153,26 @@ should_rebuild_worker() {
     if [ ! -f "$worker_wasm" ]; then
         return 0
     fi
-    # First file newer than the worker wasm = needs rebuild.
-    local newer
-    newer=$(find "$PROJECT_DIR/crates" \
-        \( -name '*.rs' -o -name 'Cargo.toml' \) \
-        -newer "$worker_wasm" -print -quit 2>/dev/null)
-    [ -n "$newer" ]
+
+    # Collect watch roots: crates/ + each [patch] checkout root (collapse
+    # `.../crates/<crate>` path entries to their checkout, dedupe).
+    local -a roots=("$PROJECT_DIR/crates")
+    local rel root
+    while IFS= read -r rel; do
+        root=$(cd "$PROJECT_DIR" && realpath "${rel%%/crates/*}" 2>/dev/null) || continue
+        [ -d "$root" ] && roots+=("$root")
+    done < <(grep -oE 'path = "[^"]+"' "$PROJECT_DIR/Cargo.toml" 2>/dev/null \
+                 | sed -E 's/.*path = "([^"]+)".*/\1/' | sort -u)
+
+    # First source file (target/ pruned) newer than the worker wasm wins.
+    local r newer
+    for r in $(printf '%s\n' "${roots[@]}" | sort -u); do
+        [ -d "$r" ] || continue
+        newer=$(find "$r" -type d -name target -prune -o \
+            \( -name '*.rs' -o -name 'Cargo.toml' \) -newer "$worker_wasm" -print -quit 2>/dev/null)
+        [ -n "$newer" ] && return 0
+    done
+    return 1
 }
 
 # Wrap cargo with sccache when it's installed.

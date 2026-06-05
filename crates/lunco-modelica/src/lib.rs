@@ -1069,6 +1069,12 @@ fn build_modelica_core(app: &mut App) {
         // `rx_cmd` first; inline_worker_process then sees an empty queue
         // and no-ops.
         app.add_systems(Update, worker_transport::pump_commands_to_worker);
+        // Re-seed MSL into workers respawned after a crash, deferred so the
+        // ~165 MB bundle isn't re-allocated on the (memory-starved) crash
+        // stack. Cheap no-op when nothing is pending.
+        app.add_systems(Update, |_world: &mut World| {
+            worker_transport::pump_worker_respawns();
+        });
         app.add_systems(Update, worker::inline_worker_process);
         app.add_systems(Update, ui::update_file_load_result);
         // Drain Web-Worker RunUpdate streams into the runner's
