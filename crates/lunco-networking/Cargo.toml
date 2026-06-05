@@ -18,7 +18,10 @@ networking = ["dep:lightyear", "dep:serde", "dep:serde_json"]
 [dependencies]
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-api = { path = "../lunco-api" }
+# `default-features = false`: we only use the registry/executor types + plugin,
+# never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).
+# Native builds still get transport-http via lunco-client's own default features.
+lunco-api = { path = "../lunco-api", default-features = false }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-avatar = { path = "../lunco-avatar" }
 lunco-sandbox-edit = { path = "../lunco-sandbox-edit" }
@@ -40,6 +43,12 @@ lightyear = { version = "0.26.4", default-features = false, optional = true, fea
   "webtransport_self_signed",
   "webtransport_dangerous_configuration",
 ] }
+# Host TLS identity loading (production certbot cert via env paths). File reads
+# route through lunco-storage (raw `std::fs` is clippy-banned workspace-wide);
+# rustls-pemfile turns the PEM into DER for wtransport's sync `Identity::new`.
+lunco-storage = { path = "../lunco-storage" }
+wtransport = "0.6.1"
+rustls-pemfile = "2"
 
 # Browser (wasm): client-only WebTransport. Cert digest comes from the URL hash.
 [target.'cfg(target_family = "wasm")'.dependencies]
@@ -49,7 +58,14 @@ lightyear = { version = "0.26.4", default-features = false, optional = true, fea
   "webtransport",
   "webtransport_self_signed",
 ] }
-web-sys = { version = "0.3", optional = true, features = ["Window", "Location"] }
+# Non-optional: `NetworkMode::from_url` (query parse + `performance.now()` for a
+# per-tab client id) and the client adapter's cert-digest read both need it, and
+# the crate is only ever compiled when the `networking` feature pulls it in.
+web-sys = { version = "0.3", features = ["Window", "Location", "Performance"] }
+# lightyear's netcode pulls getrandom 0.2 transitively; on wasm it needs the JS
+# backend (`crypto.getRandomValues`) or it `compile_error!`s. We don't use it
+# directly — this entry exists only to turn the feature on via unification.
+getrandom = { version = "0.2", features = ["js"] }
 
 [lints]
 workspace = true

@@ -200,8 +200,15 @@ build_wasm() {
     # mandatory, not optional.
     local cargo_bin
     cargo_bin=$(get_cargo_bin_name "$binary")
+    # sandbox carries the optional multiplayer wire (lightyear WebTransport,
+    # client-only on wasm); lunica does not. Browser join is URL-driven
+    # (`?connect=host#<digest>`), see `NetworkMode::from_url`.
+    local wasm_features="lunco-api"
+    if [ "$binary" = "sandbox" ]; then
+        wasm_features="lunco-api,networking"
+    fi
     RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis" \
-        cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$cargo_bin" -p "$crate" --no-default-features --features lunco-api
+        cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$cargo_bin" -p "$crate" --no-default-features --features "$wasm_features"
 
     # Off-thread Modelica worker bundle. wasm32 has no real threads, so
     # without this every rumoca compile (a few seconds for non-trivial

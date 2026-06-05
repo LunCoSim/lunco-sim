@@ -19,19 +19,103 @@ use lunco_core::{
 use crate::protocol::{CmdChannel, Frame, SnapChannel};
 use crate::shared::{deserialize_env, peer_to_session, serialize_env, PRIVATE_KEY, PROTOCOL_ID};
 
-/// Spawn the server entity (self-signed WebTransport cert), trigger `Start`,
-/// and register the lifecycle observers + ferry systems.
-pub(crate) fn setup_host(app: &mut App, port: u16) {
-    // ECDSA-P256 self-signed cert. Print + persist the digest so browser
-    // clients can pass it in the connect URL (`#<digest>`).
+use lunco_storage::{FileStorage, Storage, StorageHandle};
+use std::path::PathBuf;
+use wtransport::tls::{Certificate, CertificateChain, PrivateKey};
+
+/// Env vars naming a CA-signed cert + key (PEM). When both are set the host
+/// serves that identity and browsers validate via the normal chain — no digest.
+/// Typical production values point at certbot's output, e.g.
+/// `/etc/letsencrypt/live/sandbox.lunco.space/{fullchain,privkey}.pem`.
+const ENV_TLS_CERT: &str = "LUNCO_TLS_CERT";
+const ENV_TLS_KEY: &str = "LUNCO_TLS_KEY";
+
+/// Resolve the host's WebTransport TLS identity.
+///
+/// - **Production** (`LUNCO_TLS_CERT` + `LUNCO_TLS_KEY` set): load that CA-signed
+///   cert (e.g. certbot `fullchain.pem` + `privkey.pem`). Browsers validate via
+///   the normal chain, so clients connect with **no** `#digest` in the URL.
+/// - **Dev** (env unset): ECDSA-P256 self-signed for `localhost`/`127.0.0.1`;
+///   print + persist the cert digest so a browser can pin it via the connect
+///   URL `#<digest>` (there's no CA to vouch for a self-signed cert).
+///
+/// A failed PEM load falls back to the dev self-signed path (logged), so a
+/// misconfigured env can't take the host down.
+fn resolve_identity() -> Identity {
+    if let (Ok(cert_path), Ok(key_path)) = (std::env::var(ENV_TLS_CERT), std::env::var(ENV_TLS_KEY))
+    {
+        match load_pem_identity(&cert_path, &key_path) {
+            Ok(identity) => {
+                info!(
+                    "🔐 WebTransport using CA cert from {cert_path} \
+                     (browser validates via chain — connect with no #digest)"
+                );
+                return identity;
+            }
+            Err(e) => error!(
+                "🔐 failed to load {ENV_TLS_CERT}/{ENV_TLS_KEY} ({e}); \
+                 falling back to self-signed dev cert"
+            ),
+        }
+    }
+
+    // ECDSA-P256 self-signed cert. Print + persist the digest so browser clients
+    // can pin it in the connect URL (`#<digest>`).
     let identity = Identity::self_signed(vec!["localhost".to_string(), "127.0.0.1".to_string()])
         .expect("self-signed certificate");
     let digest = format!("{}", identity.certificate_chain().as_slice()[0].hash());
     info!("🔐 WebTransport cert digest: {digest}");
     let digest_path = std::env::temp_dir().join("lunco_cert_digest.txt");
-    if std::fs::write(&digest_path, &digest).is_ok() {
+    // lunco-storage, not std::fs (clippy-banned workspace-wide for wasm parity).
+    if FileStorage::new()
+        .write_sync(&StorageHandle::File(digest_path.clone()), digest.as_bytes())
+        .is_ok()
+    {
         info!("🔐 digest written to {}", digest_path.display());
     }
+    identity
+}
+
+/// Build an [`Identity`] from PEM cert-chain + private-key files. Reads route
+/// through [`lunco_storage`] (raw `std::fs` is clippy-banned); parsing is sync
+/// (`rustls_pemfile` → DER → wtransport's sync constructors).
+fn load_pem_identity(cert_path: &str, key_path: &str) -> Result<Identity, String> {
+    let storage = FileStorage::new();
+    let cert_bytes = storage
+        .read_sync(&StorageHandle::File(PathBuf::from(cert_path)))
+        .map_err(|e| format!("read cert {cert_path}: {e:?}"))?;
+    let key_bytes = storage
+        .read_sync(&StorageHandle::File(PathBuf::from(key_path)))
+        .map_err(|e| format!("read key {key_path}: {e:?}"))?;
+
+    let mut cert_rd: &[u8] = &cert_bytes;
+    let certs = rustls_pemfile::certs(&mut cert_rd)
+        .map(|r| {
+            r.map_err(|e| format!("parse cert PEM: {e}"))
+                .and_then(|der| {
+                    Certificate::from_der(der.as_ref().to_vec())
+                        .map_err(|e| format!("invalid certificate: {e:?}"))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if certs.is_empty() {
+        return Err(format!("no CERTIFICATE blocks in {cert_path}"));
+    }
+
+    let mut key_rd: &[u8] = &key_bytes;
+    let key_der = rustls_pemfile::private_key(&mut key_rd)
+        .map_err(|e| format!("parse key PEM: {e}"))?
+        .ok_or_else(|| format!("no PRIVATE KEY block in {key_path}"))?;
+    // certbot writes PKCS#8 (`BEGIN PRIVATE KEY`); wtransport wraps the DER as such.
+    let private_key = PrivateKey::from_der_pkcs8(key_der.secret_der().to_vec());
+
+    Ok(Identity::new(CertificateChain::new(certs), private_key))
+}
+
+/// Spawn the server entity (WebTransport cert via [`resolve_identity`]), trigger
+/// `Start`, and register the lifecycle observers + ferry systems.
+pub(crate) fn setup_host(app: &mut App, port: u16) {
+    let identity = resolve_identity();
 
     let server_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
     let server = app

@@ -76,6 +76,54 @@ impl NetworkMode {
         }
         None
     }
+
+    /// Resolve the mode for the current target: CLI argv on native, the page
+    /// URL on wasm. Single entry point so `sandbox.rs` doesn't need a target
+    /// `cfg`. Returns `None` for single-player.
+    pub fn resolve() -> Option<Self> {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            Self::from_args()
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            Self::from_url()
+        }
+    }
+
+    /// Browser entry point: parse `?connect=host[:port]` from the page query
+    /// string (defaulting the port to `5888`). The WebTransport cert digest is
+    /// read separately from the URL `#hash` by the client adapter, so a full
+    /// browser join URL looks like `…/?connect=127.0.0.1:5888#<digest>`.
+    /// Only `Connect` is reachable on wasm — hosting is native-only.
+    #[cfg(target_family = "wasm")]
+    pub fn from_url() -> Option<Self> {
+        let window = web_sys::window()?;
+        let search = window.location().search().ok()?;
+        let raw = search
+            .trim_start_matches('?')
+            .split('&')
+            .find_map(|pair| {
+                let mut it = pair.splitn(2, '=');
+                match (it.next(), it.next()) {
+                    (Some("connect"), Some(v)) if !v.is_empty() => Some(v.to_string()),
+                    _ => None,
+                }
+            })?;
+        let with_port = if raw.contains(':') {
+            raw
+        } else {
+            format!("{raw}:5888")
+        };
+        let server: SocketAddr = with_port.parse().ok()?;
+        // Distinct per tab so concurrent browser clients get distinct sessions:
+        // `performance.now()` is sub-millisecond and differs per page load.
+        let client_id = window
+            .performance()
+            .map(|p| p.now().to_bits())
+            .unwrap_or(1);
+        Some(NetworkMode::Connect { server, client_id })
+    }
 }
 
 /// Plugin that wires the lightyear WebTransport adapter for the chosen
