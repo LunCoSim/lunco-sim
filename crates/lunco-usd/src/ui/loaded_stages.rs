@@ -362,19 +362,31 @@ fn render_prim(
             row(ui, clicked);
         });
     } else {
-        egui::collapsing_header::CollapsingState::load_with_default_open(
-            ui.ctx(),
+        // Clicking the label both focuses the prim in the viewport
+        // *and* folds/unfolds the row — same as clicking the triangle.
+        // The click flag goes through a local so the header closure
+        // doesn't fight the body closure over `clicked`.
+        let mut row_clicked = false;
+        lunco_ui::helpers::collapsing_row(
+            ui,
             header_id,
             false,
-        )
-        .show_header(ui, |ui| {
-            row(ui, clicked);
-        })
-        .body(|ui| {
-            for child in children {
-                render_prim(ui, reader, &child, salt, pending_ops, clicked);
-            }
-        });
+            |ui| {
+                let resp = ui
+                    .add(egui::Label::new(&label).sense(egui::Sense::click()))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                row_clicked = resp.clicked();
+                row_clicked
+            },
+            |ui| {
+                for child in children {
+                    render_prim(ui, reader, &child, salt, pending_ops, clicked);
+                }
+            },
+        );
+        if row_clicked {
+            *clicked = true;
+        }
     }
 
     let _ = pending_ops;

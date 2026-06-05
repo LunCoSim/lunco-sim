@@ -55,13 +55,13 @@ resolver = "2"
 # To develop against a local rumoca checkout, uncomment the [patch] block
 # and point it at `../rumoca`.
 #
-# [patch."https://github.com/LunCoSim/rumoca"]
-# rumoca-ir-ast      = { path = "../rumoca/crates/rumoca-ir-ast" }
-# rumoca-phase-parse = { path = "../rumoca/crates/rumoca-phase-parse" }
-# rumoca-compile     = { path = "../rumoca/crates/rumoca-compile" }
-# rumoca-sim         = { path = "../rumoca/crates/rumoca-sim" }
-# rumoca-tool-fmt    = { path = "../rumoca/crates/rumoca-tool-fmt" }
-# rumoca-tool-lint   = { path = "../rumoca/crates/rumoca-tool-lint" }
+[patch."https://github.com/LunCoSim/rumoca"]
+rumoca-ir-ast      = { path = "../rumoca/crates/rumoca-ir-ast" }
+rumoca-phase-parse = { path = "../rumoca/crates/rumoca-phase-parse" }
+rumoca-compile     = { path = "../rumoca/crates/rumoca-compile" }
+rumoca-sim         = { path = "../rumoca/crates/rumoca-sim" }
+rumoca-tool-fmt    = { path = "../rumoca/crates/rumoca-tool-fmt" }
+rumoca-tool-lint   = { path = "../rumoca/crates/rumoca-tool-lint" }
 
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"

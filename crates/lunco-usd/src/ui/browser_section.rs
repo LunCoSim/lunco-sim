@@ -79,28 +79,29 @@ impl BrowserSection for UsdSceneSection {
             let title = entry.name(ctx);
             let writable_badge = if entry.writable() { "" } else { "  🔒" };
             let viewport_doc = entry.doc_id_for_viewport();
-            egui::collapsing_header::CollapsingState::load_with_default_open(
-                ui.ctx(),
+            let default_open = entry.default_open();
+            // Clicking the label both shows the stage in the viewport
+            // *and* folds/unfolds the row — same as the triangle.
+            lunco_ui::helpers::collapsing_row(
+                ui,
                 header_id,
-                entry.default_open(),
-            )
-            .show_header(ui, |ui| {
-                let label = format!("{}{}", title, writable_badge);
-                if let Some(doc) = viewport_doc {
+                default_open,
+                |ui| {
+                    let label = format!("{}{}", title, writable_badge);
+                    let Some(doc) = viewport_doc else {
+                        ui.label(label);
+                        return false;
+                    };
                     let resp = ui
-                        .add(
-                            egui::Label::new(label)
-                                .sense(egui::Sense::click()),
-                        )
+                        .add(egui::Label::new(label).sense(egui::Sense::click()))
                         .on_hover_text("Click to show in 3D viewport");
                     if resp.clicked() {
                         focus_doc = Some(doc);
                     }
-                } else {
-                    ui.label(label);
-                }
-            })
-            .body(|ui| entry.render_children(ui, ctx));
+                    resp.clicked()
+                },
+                |ui| entry.render_children(ui, ctx),
+            );
         }
 
         ctx.world.insert_resource(loaded);

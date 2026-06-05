@@ -256,14 +256,8 @@ fn render_workspace_doc_row(
             "twin.modelica.workspace_doc",
             doc_id.raw(),
         ));
-        let state =
-            egui::collapsing_header::CollapsingState::load_with_default_open(
-                ui.ctx(),
-                id,
-                true,
-            );
         // Icon prefix: 📝 untitled draft, 📄 saved on disk. Read
-        // the origin once before show_header so we don't re-borrow
+        // the origin once before the header so we don't re-borrow
         // the registry inside the closure.
         let icon: &'static str = ctx
             .world
@@ -277,40 +271,49 @@ fn render_workspace_doc_row(
                 }
             })
             .unwrap_or("📄");
-        let header = state.show_header(ui, |ui| {
-            let resp = ui
-                .add(
-                    egui::Label::new(format!("{icon}  {doc_name}"))
-                        .sense(egui::Sense::click()),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(
-                    "Double-click (or F2 while focused) to rename. \
-                     Untitled drafts → renames the top-level class. \
-                     Saved files → renames the file on disk.",
-                );
-            if resp.double_clicked() {
-                start_rename = Some(doc_name.to_string());
-            }
-            // F2 while the label has keyboard focus also starts a
-            // rename — mirrors the VS Code / OMEdit shortcut.
-            if resp.has_focus()
-                && resp.ctx.input(|i| i.key_pressed(egui::Key::F2))
-            {
-                start_rename = Some(doc_name.to_string());
-            }
-            resp.context_menu(|ui| {
-                if ui.button("✏ Rename").clicked() {
+        lunco_ui::helpers::collapsing_row(
+            ui,
+            id,
+            true,
+            |ui| {
+                let resp = ui
+                    .add(
+                        egui::Label::new(format!("{icon}  {doc_name}"))
+                            .sense(egui::Sense::click()),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(
+                        "Click to expand/collapse. \
+                         Double-click (or F2 while focused) to rename. \
+                         Untitled drafts → renames the top-level class. \
+                         Saved files → renames the file on disk.",
+                    );
+                if resp.double_clicked() {
                     start_rename = Some(doc_name.to_string());
-                    ui.close();
                 }
-                if ui.button("✕ Close").clicked() {
-                    close_doc = true;
-                    ui.close();
+                // F2 while the label has keyboard focus also starts a
+                // rename — mirrors the VS Code / OMEdit shortcut.
+                if resp.has_focus()
+                    && resp.ctx.input(|i| i.key_pressed(egui::Key::F2))
+                {
+                    start_rename = Some(doc_name.to_string());
                 }
-            });
-        });
-        header.body(|ui| render_workspace_doc(ui, ctx, doc_id));
+                resp.context_menu(|ui| {
+                    if ui.button("✏ Rename").clicked() {
+                        start_rename = Some(doc_name.to_string());
+                        ui.close();
+                    }
+                    if ui.button("✕ Close").clicked() {
+                        close_doc = true;
+                        ui.close();
+                    }
+                });
+                // Single click on the label folds/unfolds the row;
+                // double-click is reserved for rename.
+                resp.clicked() && !resp.double_clicked()
+            },
+            |ui| render_workspace_doc(ui, ctx, doc_id),
+        );
     }
 
     // Close the document — drops its tabs and (for an autosaved

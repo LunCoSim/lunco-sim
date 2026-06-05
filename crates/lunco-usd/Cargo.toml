@@ -14,6 +14,7 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-theme = { path = "../lunco-theme" }
+lunco-ui = { path = "../lunco-ui" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-usd-composer = { path = "../lunco-usd-composer" }
