@@ -49,7 +49,12 @@ impl Plugin for LunCoMobilityPlugin {
                apply_wheel_drive,
                apply_wheel_steering,
                update_wheel_spin,
-           ).chain().run_if(
+           ).chain()
+           // Read `PhysicalPort` AFTER the DAC has propagated this tick's
+           // `DigitalPort` command into it (same fixed tick), so actuation isn't
+           // delayed an extra tick. See `lunco_core::ControlDacSet`.
+           .after(lunco_core::ControlDacSet)
+           .run_if(
                // Run wherever physics is live. On a pure client this used to be
                // skipped entirely (replicated rovers are server-authoritative
                // proxies); predict-own now lets the client locally simulate the

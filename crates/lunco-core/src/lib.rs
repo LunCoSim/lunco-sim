@@ -345,6 +345,22 @@ impl Default for IsServer {
     }
 }
 
+/// Control-signal propagation set (the DAC step): `DigitalPort` → `PhysicalPort`
+/// via [`Wire`]. Runs on the **fixed** clock so the actuation path is
+/// frame-rate-independent and identical on every peer.
+///
+/// This is load-bearing for client-prediction determinism. The DAC used to run
+/// in `Update` (render rate) while its producer (flight-software command
+/// observers) and consumers (wheel/hardware actuators) run in `FixedUpdate`. The
+/// latency between "input applied" and "force applied" was therefore coupled to
+/// frame rate, so the same input `seq` landed on the wheels a *different* number
+/// of physics ticks apart on host vs client (which render at independent rates),
+/// and the client's prediction never matched the host — every snapshot ack
+/// corrected, showing up as steering jitter. Keeping the DAC on the sim clock
+/// removes that coupling. Actuators that read `PhysicalPort` order `.after` this.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ControlDacSet;
+
 impl Plugin for LunCoCorePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(LunCoLogPlugin);
@@ -375,7 +391,9 @@ impl Plugin for LunCoCorePlugin {
         // heavier LunCoCorePlugin (log + big-space). See its doc comment for
         // the invariant this enforces.
         register_core_resources(app);
-        app.add_systems(Update, wire_system)
+        // DAC (DigitalPort → PhysicalPort) on the FIXED clock — see `ControlDacSet`
+        // for why this must not run in `Update` (prediction determinism).
+        app.add_systems(FixedUpdate, wire_system.in_set(ControlDacSet))
            .add_systems(FixedUpdate, advance_sim_tick)
            .add_systems(PostUpdate, assign_global_entity_ids);
     }

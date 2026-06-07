@@ -22,7 +22,7 @@
 //!   HZ; clients apply them in `drain_wire_inbox`. [`broadcast_new_spawns`]
 //!   replicates runtime spawns with the host-allocated id.
 
-use avian3d::prelude::{AngularVelocity, LinearVelocity, Position};
+use avian3d::prelude::{AngularVelocity, LinearVelocity, PhysicsSystems, Position};
 use big_space::prelude::CellCoord;
 use bevy::ecs::reflect::ReflectEvent;
 use bevy::prelude::*;
@@ -601,6 +601,12 @@ impl Plugin for WirePlugin {
             // several queued snapshots in one throttled frame — a burst — but each
             // carries its host `SimTick`, so the client interpolates them in tick-space
             // and motion stays smooth (see `interpolate_proxies`).
-            .add_systems(FixedUpdate, gather_snapshot);
+            // `.after(Writeback)`: sample the pose AFTER avian has integrated this
+            // tick and synced `Position`/`Rotation` → `Transform`, so the snapshot's
+            // pose and its `last_input_seq` ack are a consistent post-step pair —
+            // matching how the client records its predicted pose (`record_predicted_state`,
+            // also after writeback). Otherwise the host could ship last-tick's pose
+            // stamped with this-tick's ack (a 1-tick mispair the client reconciles away).
+            .add_systems(FixedUpdate, gather_snapshot.after(PhysicsSystems::Writeback));
     }
 }
