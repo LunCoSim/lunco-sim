@@ -942,6 +942,151 @@ mod oracle {
         assert!(sb > 3.0 * sf, "cliff spikes the impact ({sb} N) far past the bounded force ({sf} N)");
         assert!(sb > 20_000.0, "cliff lets a >20 kN landing transient through");
     }
+
+    // ── Longitudinal 1-DOF: m·v̇ = F_long(v) — friction + drive validation ──────
+    //
+    // A block / chassis on flat ground. Friction (`contact_friction`) opposes its
+    // velocity; drive (`drive_force_mag`) pushes it. The continuous reference and
+    // the production law share the SAME force law, so the gap is integration only —
+    // except for the dead-band contrast, which is the old stiction bug.
+    use bevy::math::DVec3;
+
+    const N_NORMAL: f64 = M * G; // contact normal force = weight (2452.5 N)
+
+    /// RK4 fine-step reference for `m·v̇ = net(v)` → ground-truth velocity trace.
+    fn long_reference<F: Fn(f64) -> f64>(net: F, v0: f64, secs: f64) -> Vec<f64> {
+        let n = (secs / DT_FINE) as usize;
+        let d = |v: f64| net(v) / M;
+        let mut v = v0;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            let (k1, k2, k3, k4);
+            k1 = d(v);
+            k2 = d(v + 0.5 * DT_FINE * k1);
+            k3 = d(v + 0.5 * DT_FINE * k2);
+            k4 = d(v + DT_FINE * k3);
+            v += DT_FINE / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
+            out.push(v);
+        }
+        out
+    }
+
+    /// Production scheme: explicit velocity step at dt = 1/60 (how the chassis
+    /// velocity advances under the per-tick contact force).
+    fn long_step<F: Fn(f64) -> f64>(net: F, v0: f64, secs: f64) -> Vec<f64> {
+        let n = (secs / DT_SIM) as usize;
+        let mut v = v0;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            v += DT_SIM * net(v) / M;
+            out.push(v);
+        }
+        out
+    }
+
+    fn sign_flips(s: &[f64]) -> usize {
+        s.windows(2).filter(|w| w[0] * w[1] < 0.0).count()
+    }
+
+    /// Longitudinal component of the production contact friction at speed `v`.
+    fn fric_x(k: f64, mu_n: f64, braking: bool) -> impl Fn(f64) -> f64 {
+        move |v| contact_friction(DVec3::new(v, 0.0, 0.0), k, mu_n, braking).x
+    }
+    /// The OLD dead-band friction: a constant Coulomb force outside a slip
+    /// dead-band, nothing inside it — the stiction limit-cycle (steering jitter).
+    fn fric_deadband(mu_n: f64) -> impl Fn(f64) -> f64 {
+        move |v| if v.abs() > 1e-3 { -mu_n * v.signum() } else { 0.0 }
+    }
+    /// Drive minus contact friction — the longitudinal net force under throttle.
+    fn drive_minus_friction(throttle: f64, k: f64, mu_n: f64) -> impl Fn(f64) -> f64 {
+        move |v| drive_force_mag(throttle, N_NORMAL) + contact_friction(DVec3::new(v, 0.0, 0.0), k, mu_n, false).x
+    }
+
+    #[test]
+    fn friction_brings_a_sliding_block_to_rest_without_chatter() {
+        // Knee μN/k ≈ 4 m/s, so v0 = 15 starts in the Coulomb (saturated) regime,
+        // decelerates linearly, crosses into the viscous knee, then asymptotes to 0.
+        let (k, mu_n) = (600.0, N_NORMAL);
+        let rust = long_step(fric_x(k, mu_n, false), 15.0, 4.0);
+        let reference = long_reference(fric_x(k, mu_n, false), 15.0, 4.0);
+        let dev = max_abs_dev(&rust, &reference);
+        println!("[oracle] friction: max|v−v_ref| = {dev:.4} m/s, v_end = {:.4}", rust.last().unwrap());
+        assert!(dev < 0.05, "regularized friction diverges from the continuous reference: {dev}");
+        assert!(rust.last().unwrap().abs() < 0.05, "block must come to rest");
+        // REGRESSION: continuous-through-zero friction approaches rest asymptotically,
+        // never overshooting through zero → no stiction chatter.
+        assert_eq!(sign_flips(&rust), 0, "regularized friction must not chatter through zero");
+    }
+
+    #[test]
+    fn deadband_friction_chatters_the_regression_the_fix_removed() {
+        // REGRESSION (the steering jitter): a slip dead-band let sub-threshold motion
+        // overshoot through zero → a stiction limit-cycle. The continuous law settles;
+        // the dead-band law sign-flips forever near rest. The oracle catches exactly this.
+        let mu_n = N_NORMAL;
+        let smooth = long_step(fric_x(600.0, mu_n, false), 15.0, 4.0);
+        let deadband = long_step(fric_deadband(mu_n), 15.0, 4.0);
+        let (fs, fd) = (sign_flips(&smooth), sign_flips(&deadband));
+        println!("[oracle] chatter: regularized {fs} sign-flips, dead-band {fd}");
+        assert_eq!(fs, 0, "regularized law settles");
+        assert!(fd >= 5, "dead-band law limit-cycles near zero (got {fd} flips)");
+    }
+
+    #[test]
+    fn braking_stops_the_block_sooner_than_coasting() {
+        // Dynamic form of the unit test: with weak grip, coasting friction is linear
+        // and slow; full-cone braking decelerates hard, so the block stops far sooner.
+        let (k, mu_n) = (50.0, N_NORMAL);
+        let coast = long_step(fric_x(k, mu_n, false), 10.0, 3.0);
+        let brake = long_step(fric_x(k, mu_n, true), 10.0, 3.0);
+        println!("[oracle] brake: coast v_end {:.3}, brake v_end {:.3}", coast.last().unwrap(), brake.last().unwrap());
+        assert!(brake.last().unwrap().abs() < 0.3, "braking grips the full cone → quick stop");
+        assert!(coast.last().unwrap().abs() > 3.0, "weak coasting grip is still rolling");
+    }
+
+    #[test]
+    fn drive_accelerates_to_a_balanced_terminal_velocity() {
+        // Moderate throttle: drive < μN, so contact grip balances it at v_term = drive/k
+        // (viscous regime). Validates drive magnitude (throttle·N·2) and the
+        // drive/friction balance against the continuous reference.
+        let (throttle, k, mu_n) = (0.2, 50.0, N_NORMAL);
+        let drive = drive_force_mag(throttle, N_NORMAL);
+        let v_term = drive / k;
+        assert!(drive < mu_n, "scenario must stay in the sub-cone (balanced) regime");
+        let rust = long_step(drive_minus_friction(throttle, k, mu_n), 0.0, 30.0);
+        let reference = long_reference(drive_minus_friction(throttle, k, mu_n), 0.0, 30.0);
+        let dev = max_abs_dev(&rust, &reference);
+        println!("[oracle] drive: v_term {:.3} (expected {v_term:.3}), max dev {dev:.4}", rust.last().unwrap());
+        assert!(dev < 0.05, "drive+friction diverges from the continuous reference: {dev}");
+        assert!((rust.last().unwrap() - v_term).abs() < 0.3, "must settle at drive/k");
+    }
+
+    #[test]
+    fn reverse_throttle_mirrors_forward() {
+        // REGRESSION: reverse used to be clamped away (`clamp(0.0, 1.0)`). Negative
+        // throttle must produce the mirror-image terminal velocity.
+        let (k, mu_n) = (50.0, N_NORMAL);
+        let fwd = long_step(drive_minus_friction(0.2, k, mu_n), 0.0, 30.0);
+        let rev = long_step(drive_minus_friction(-0.2, k, mu_n), 0.0, 30.0);
+        println!("[oracle] reverse: fwd v {:.3}, rev v {:.3}", fwd.last().unwrap(), rev.last().unwrap());
+        assert!((fwd.last().unwrap() + rev.last().unwrap()).abs() < 1e-6, "reverse mirrors forward");
+    }
+
+    #[test]
+    fn excess_throttle_breaks_traction_past_the_friction_cone() {
+        // High throttle: drive > μN, so contact grip can NEVER balance it — the chassis
+        // accelerates past the cone knee (wheelspin), net accel → (drive−μN)/m.
+        let (throttle, k, mu_n) = (0.8, 50.0, N_NORMAL);
+        let drive = drive_force_mag(throttle, N_NORMAL);
+        assert!(drive > mu_n, "this scenario must exceed the cone");
+        let rust = long_step(drive_minus_friction(throttle, k, mu_n), 0.0, 10.0);
+        let n = rust.len();
+        let late_accel = (rust[n - 1] - rust[n - 2]) / DT_SIM;
+        let expect = (drive - mu_n) / M;
+        println!("[oracle] wheelspin: v {:.1} m/s climbing, late accel {late_accel:.3} (≈ (drive−μN)/m = {expect:.3})", rust.last().unwrap());
+        assert!(*rust.last().unwrap() > 50.0, "breaks traction and keeps accelerating");
+        assert!((late_accel - expect).abs() < 0.2, "saturated: net accel = (drive−μN)/m");
+    }
 }
 
 
