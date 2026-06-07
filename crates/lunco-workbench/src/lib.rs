@@ -2685,18 +2685,11 @@ fn render_status_bar_inner(
             egui::Popup::toggle_id(ui.ctx(), popup_id);
         }
 
-        // Pinned MSL chip — always visible while loading or failed,
-        // collapses to a tiny "MSL N" tag once Ready. Reads
-        // `MslLoadState` from the world by name (the resource lives in
-        // the `lunco_assets::msl` crate) via a stringly-typed
-        // `World::iter_resources` lookup so we don't take a dep on
-        // lunco-modelica from here. The mirror in `MslRemotePlugin`
-        // also pushes events into the bus, so click-history works.
-        render_msl_chip(ui, world, theme);
+        ui.separator();
 
         // Pinned networking chip — host/client role, endpoint + ports, and a
-        // live peer / connection readout. Silent in single-player. Sits next to
-        // the MSL chip; reads `lunco_core::NetStatus` (no lightyear dep here).
+        // live peer / connection readout. Silent in single-player. Reads
+        // `lunco_core::NetStatus` (no lightyear dep here).
         render_net_chip(ui, world, theme);
 
         // Right-aligned perf segment. Hidden when the HUD is off so
@@ -2780,71 +2773,8 @@ fn render_status_bar_inner(
     });
 }
 
-/// Render the always-visible MSL chip in the status bar. Pinned on
-/// the left side of the perf segment so the user can tell at a glance
-/// whether the Modelica Standard Library is ready, mid-download, or
-/// failed — without having to open the status popup.
-///
-/// Reads `lunco_assets::msl::MslLoadState`. The chip is silent (zero
-/// pixels) if MSL is `NotStarted` (e.g. apps that don't load Modelica).
-fn render_msl_chip(
-    ui: &mut egui::Ui,
-    world: &mut World,
-    theme: &lunco_theme::Theme,
-) {
-    use lunco_assets::msl::{MslLoadPhase, MslLoadState};
-    let Some(state) = world.get_resource::<MslLoadState>().cloned() else {
-        return;
-    };
-    let (dot, label, progress) = match &state {
-        MslLoadState::NotStarted => return,
-        MslLoadState::Loading {
-            phase,
-            bytes_done,
-            bytes_total,
-        } => {
-            let phase_label = match phase {
-                MslLoadPhase::FetchingManifest => "MSL · fetching manifest",
-                MslLoadPhase::FetchingBundle => "MSL · downloading",
-                MslLoadPhase::Decompressing => "MSL · extracting",
-                MslLoadPhase::Parsing => "MSL · loading",
-            };
-            let pct = if *bytes_total > 0 {
-                Some(*bytes_done as f32 / *bytes_total as f32)
-            } else {
-                None
-            };
-            (theme.tokens.warning, phase_label.to_string(), pct)
-        }
-        MslLoadState::Ready { .. } => {
-            // Ready state is already announced by the StatusBus mirror
-            // ("MSL ready — N files") on the left of the status bar.
-            // Hiding the chip avoids the duplicate label the user sees
-            // once MSL finishes loading. The chip stays visible during
-            // Loading (progress bar) and Failed (error hover).
-            return;
-        }
-        MslLoadState::Failed(_) => (theme.tokens.error, "MSL · failed".to_string(), None),
-    };
-    let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-    ui.painter().circle_filled(rect.center(), 4.0, dot);
-    let resp = ui.label(egui::RichText::new(label).small());
-    if let MslLoadState::Failed(msg) = &state {
-        resp.on_hover_text(msg);
-    }
-    if let Some(p) = progress {
-        ui.add(
-            egui::ProgressBar::new(p)
-                .desired_width(80.0)
-                .desired_height(6.0),
-        );
-    }
-    ui.separator();
-}
-
-/// Render the always-visible networking chip in the status bar, mirroring the
-/// MSL chip. Reads `lunco_core::NetStatus` (always present; populated by the
+/// Render the always-visible networking chip in the status bar.
+/// Reads `lunco_core::NetStatus` (always present; populated by the
 /// optional `lunco-networking` adapter when it's wired). Silent (zero pixels)
 /// in single-player (`Standalone`), so non-networked apps show nothing.
 ///
