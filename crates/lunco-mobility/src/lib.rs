@@ -79,6 +79,51 @@ const DEFAULT_DRIVE_FORCE_PER_NORMAL: f64 = 2.0;
 /// author `lunco:contactGripStiffness`.
 const DEFAULT_CONTACT_GRIP_STIFFNESS: f64 = 50.0;
 
+// ── Pure force laws (unit-tested; the numerically-sensitive bits live here) ─────
+
+/// Per-wheel drive force magnitude from a normalized throttle, clamped to
+/// `[-1, 1]`. NEGATIVE throttle drives in **reverse** — the old `clamp(0.0, 1.0)`
+/// silently dropped reverse even though the differential mix carried the sign.
+fn drive_force_mag(throttle: f64, normal_force: f64) -> f64 {
+    throttle.clamp(-1.0, 1.0) * normal_force * DEFAULT_DRIVE_FORCE_PER_NORMAL
+}
+
+/// Contact friction opposing the slip *velocity vector*. Continuous through zero
+/// (no dead-band) so a near-stationary wheel is still damped — a slip dead-band
+/// left sub-threshold motion undamped and produced a stiction limit-cycle (the
+/// steering jitter). Linear `-k·slip` below the Coulomb cone, saturating at it.
+/// While `braking`, a locked wheel grips at the FULL cone (opposing all sliding)
+/// so it actually decelerates the chassis.
+fn contact_friction(
+    slip_vec: DVec3,
+    grip_stiffness: f64,
+    max_friction: f64,
+    braking: bool,
+) -> DVec3 {
+    let slip_speed = slip_vec.length();
+    if braking && slip_speed > 1e-6 {
+        -slip_vec * (max_friction / slip_speed)
+    } else if slip_speed * grip_stiffness <= max_friction {
+        // Linear grip; `-k·slip` → 0 continuously as slip → 0 (no division).
+        -slip_vec * grip_stiffness
+    } else {
+        // Saturated at the cone; slip_speed > 0 here.
+        -slip_vec * (max_friction / slip_speed)
+    }
+}
+
+/// Suspension normal-force magnitude: spring `k·x` plus damping `c·v`, with the
+/// DAMPING bounded to ±spring so the total stays in `[0, 2·spring]` without a
+/// `.max(0)` cliff. The cliff (clamping the *total* to ≥0) dropped damping on the
+/// rebound half-cycle → an undamped suspension limit-cycle (the forward+turn
+/// jitter); unbounded `c·v` also spiked the force on hard hits. Bounding the
+/// damping term fixes both.
+fn suspension_force_mag(compression: f64, spring_k: f64, relative_vel: f64, damping_c: f64) -> f64 {
+    let spring = compression * spring_k;
+    let damping = (relative_vel * damping_c).clamp(-spring, spring);
+    spring + damping
+}
+
 /// A high-performance wheel model using emulated suspension rays.
 ///
 /// **Theory**: Instead of a physical collider, this component projects a ray
@@ -255,31 +300,21 @@ fn apply_wheel_suspension(
                 if distance < wheel.rest_length {
                     // Suspension is compressed: apply spring-damper force.
                     let compression = wheel.rest_length - distance;
-                    let spring_force_mag = compression * wheel.spring_k;
-
                     // Damping calculation based on relative normal velocity.
                     // Positive relative_vel = wheel moving toward ground (compressing).
                     // Negative relative_vel = wheel moving away from ground (extending).
-                    // Damping always opposes motion.
                     let ray_dir_world = forces.rotation().0 * Vec3::NEG_Y.as_dvec3();
                     let lin_vel = forces.linear_velocity();
                     let ang_vel = forces.angular_velocity();
                     let velocity_at_wheel = lin_vel + ang_vel.cross(world_pos - forces.position().0);
                     let relative_vel = velocity_at_wheel.dot(ray_dir_world);
 
-                    // Damping resists normal motion, but bounded to ±spring so the
-                    // contact force stays in [0, 2·spring] WITHOUT a hard `.max(0)`
-                    // cliff. The old `(spring + c·v).max(0)` was one-sided: on fast
-                    // rebound `c·v` went strongly negative, the total clamped to 0,
-                    // and the rebound half-cycle got ZERO damping → an undamped
-                    // suspension limit-cycle (tick-period normal-force bounce that
-                    // coupled into chassis yaw as the residual jitter). Unbounded `c·v`
-                    // also spiked the normal force on hard hits (huge transients).
-                    // Clamping the damping term fixes both: damping acts on both
-                    // half-cycles, and the force can't blow up.
-                    let damping_force_mag =
-                        (relative_vel * wheel.damping_c).clamp(-spring_force_mag, spring_force_mag);
-                    let total_force_mag = spring_force_mag + damping_force_mag;
+                    let total_force_mag = suspension_force_mag(
+                        compression,
+                        wheel.spring_k,
+                        relative_vel,
+                        wheel.damping_c,
+                    );
 
                     let force_vec = hit.normal * total_force_mag;
                     forces.apply_force_at_point(force_vec, world_pos);
@@ -364,56 +399,26 @@ fn apply_wheel_drive(
                     let right: DVec3 = wheel_world_rot * DVec3::X;
 
                     // --- Drive force ---
-                    // Physical port value is already scaled by the wire gain.
-                    // Treated as a normalized throttle in [-1, 1]: positive drives
-                    // forward, NEGATIVE drives in reverse (the differential mix on
-                    // `DigitalPort` already carries the sign; clamping to 0 here was
-                    // what blocked reverse).
-                    let throttle = (port.value as f64).clamp(-1.0, 1.0);
-                    let drive_force_mag = throttle * normal_force * DEFAULT_DRIVE_FORCE_PER_NORMAL;
-                    let drive_force_vec = forward * drive_force_mag;
+                    // `port.value` is the wire-scaled throttle; `drive_force_mag`
+                    // clamps it to [-1, 1] (negative = reverse).
+                    let drive_force_vec =
+                        forward * drive_force_mag(port.value as f64, normal_force);
                     forces.apply_force_at_point(drive_force_vec, hub_pos_world);
 
                     // --- Friction (longitudinal + lateral) ---
-                    // Coulomb friction cone: total friction force magnitude <= mu * N.
-                    // `friction_mu` is the tyre/ground grip (USD-authored, per wheel).
                     let max_friction = wheel.friction_mu * normal_force;
-
                     let chassis_vel = forces.linear_velocity();
                     let chassis_ang_vel = forces.angular_velocity();
                     let hub_vel = chassis_vel + chassis_ang_vel.cross(hub_pos_world - forces.position().0);
-
-                    // Longitudinal slip velocity (how fast the wheel is spinning vs rolling)
-                    let long_vel = hub_vel.dot(forward);
-                    // Lateral slip velocity (sideways sliding)
-                    let lat_vel = hub_vel.dot(right);
-
-                    // Combined slip speed and direction
-                    // Friction opposes the slip *velocity vector*. Expressing it on
-                    // the vector (not a normalized direction × magnitude behind a
-                    // slip dead-band) keeps it a continuous damper through zero slip:
-                    // `-k·slip` in the linear regime, saturating at the Coulomb cone
-                    // `μ·N`. The old `if slip_speed > MIN_SLIP_SPEED` gate left
-                    // sub-threshold motion UNDAMPED, so a resting/gently-turning
-                    // chassis drifted free until it crossed the threshold, got snapped
-                    // back, and drifted again — a stiction limit-cycle that showed up
-                    // as a tick-period yaw chatter (the steering jitter). Smooth to
-                    // zero removes it; at this mass `-k·slip` is well overdamped so it
-                    // cannot overshoot.
+                    let long_vel = hub_vel.dot(forward); // longitudinal slip
+                    let lat_vel = hub_vel.dot(right); // lateral slip
                     let slip_vec = long_vel * forward + lat_vel * right;
-                    let slip_speed = slip_vec.length();
-                    let friction_force = if braking && slip_speed > 1e-6 {
-                        // Braking: a locked wheel grips at the full Coulomb cone,
-                        // opposing all sliding — this is what actually stops the rover.
-                        -slip_vec * (max_friction / slip_speed)
-                    } else if slip_speed * wheel.contact_grip_stiffness <= max_friction {
-                        // Linear grip — `-k·slip`, → 0 continuously as slip → 0
-                        // (no division, safe at exactly zero slip).
-                        -slip_vec * wheel.contact_grip_stiffness
-                    } else {
-                        // Saturated at the cone; slip_speed > 0 here.
-                        -slip_vec * (max_friction / slip_speed)
-                    };
+                    let friction_force = contact_friction(
+                        slip_vec,
+                        wheel.contact_grip_stiffness,
+                        max_friction,
+                        braking,
+                    );
                     forces.apply_force_at_point(friction_force, hub_pos_world);
                 }
             }
