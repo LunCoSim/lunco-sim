@@ -6786,6 +6786,7 @@ dependencies = [
  "dirs",
  "flate2",
  "image",
+ "js-sys",
  "resvg",
  "rumoca-ir-ast",
  "rumoca-phase-parse",
@@ -6798,6 +6799,9 @@ dependencies = [
  "toml",
  "ureq",
  "usvg",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "which",
  "zstd",
 ]
@@ -7345,7 +7349,6 @@ dependencies = [
  "big_space",
  "lunco-assets",
  "lunco-core",
- "lunco-storage",
  "lunco-usd-composer",
  "openusd",
 ]

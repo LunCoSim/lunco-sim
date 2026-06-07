@@ -54,6 +54,7 @@ impl Plugin for UsdBevyPlugin {
             .register_asset_loader(UsdLoader)
             .register_type::<UsdPrimPath>()
             .init_resource::<DiagnosticLabelFont>()
+            .init_resource::<DiagnosticLabelConfig>()
             .add_systems(Startup, load_diagnostic_label_font)
             .add_observer(on_usd_prim_added)
             // `sync_usd_visuals` runs only on frames where a stage's
@@ -64,7 +65,9 @@ impl Plugin for UsdBevyPlugin {
                 (
                     sync_usd_visuals.run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<UsdStageAsset>>),
                     hide_glb_placeholder_meshes,
+                    poll_diagnostic_label_font,
                     reveal_placeholder_on_failure,
+                    bake_pending_labels,
                 ),
             );
     }
@@ -902,36 +905,116 @@ pub struct DiagnosticStub;
 #[derive(Component)]
 pub struct DiagnosticStubLabel;
 
-/// Caches the DejaVu Sans face used to bake filename labels into textures, so
-/// the `.ttf` is read from storage at most once (not per failed asset).
-/// `None` until the font is loaded (or if loading failed — then labels are
-/// silently skipped and only the red box shows).
-#[derive(Resource, Default)]
-pub struct DiagnosticLabelFont(pub Option<std::sync::Arc<ab_glyph::FontVec>>);
+/// Attached to a freshly-spawned [`DiagnosticStub`] that still needs its
+/// filename baked onto its faces. A separate pass ([`bake_pending_labels`])
+/// does the baking once [`DiagnosticLabelFont`] is available — this decouples
+/// *when the asset fails* from *when the font is ready*, which matters on web
+/// where the font arrives asynchronously over HTTP.
+#[derive(Component)]
+pub struct PendingDiagnosticLabel {
+    /// Full label text (prefix + file name).
+    pub text: String,
+    /// World size of the diagnostic box, for fitting the label per face.
+    pub box_size: Vec3,
+}
 
-/// Reads the DejaVu Sans `.ttf` once via `lunco-storage` (works on wasm) and
-/// stashes it in [`DiagnosticLabelFont`]. Runs at startup; a miss is
-/// non-fatal.
-fn load_diagnostic_label_font(mut font: ResMut<DiagnosticLabelFont>) {
-    use lunco_storage::Storage;
-    match lunco_storage::FileStorage::new()
-        .read_sync(&lunco_storage::StorageHandle::File(lunco_assets::dejavu_sans_path()))
-    {
-        Ok(bytes) => match ab_glyph::FontVec::try_from_vec(bytes) {
-            Ok(f) => font.0 = Some(std::sync::Arc::new(f)),
-            Err(e) => warn!("[usd-bevy] diagnostic label font parse failed: {e}"),
-        },
-        Err(e) => warn!(
-            "[usd-bevy] diagnostic label font unavailable ({e}); failed-asset \
-             stubs will show the red box without a filename"
-        ),
+/// Tunable appearance of the failed-asset diagnostic stub. Insert your own
+/// before [`UsdBevyPlugin`] builds (or mutate the resource at runtime) to
+/// override any field — nothing here is a hard-coded magic constant.
+#[derive(Resource, Clone, Debug)]
+pub struct DiagnosticLabelConfig {
+    /// Glyph height used when rasterising the label, in texture pixels
+    /// (higher = crisper text, larger texture).
+    pub font_px: f32,
+    /// Transparent border around the text, in texture pixels.
+    pub padding_px: f32,
+    /// Text colour, RGB 0-255.
+    pub text_color: [u8; 3],
+    /// Backdrop colour painted behind the text, RGBA 0-255.
+    pub bg_color: [u8; 4],
+    /// Fraction (0..1) of each box face the label may cover.
+    pub face_coverage: f32,
+    /// Colour of the semi-transparent diagnostic box itself.
+    pub box_color: Color,
+    /// String prepended to the file name (e.g. `"Missing: "`).
+    pub prefix: String,
+    /// `true` → label on all six faces; `false` → only the +Z front face.
+    pub all_faces: bool,
+    /// Seconds a placeholder may wait for its glTF scene before the stub is
+    /// shown. Covers web, where a 404 may never report a clean `is_failed()`.
+    pub grace_secs: f32,
+}
+
+impl Default for DiagnosticLabelConfig {
+    fn default() -> Self {
+        Self {
+            font_px: 64.0,
+            padding_px: 24.0,
+            text_color: [255, 255, 255],
+            bg_color: [20, 0, 0, 140],
+            face_coverage: 0.85,
+            box_color: Color::srgba(1.0, 0.0, 0.0, 0.7),
+            prefix: "Missing: ".to_string(),
+            all_faces: true,
+            grace_secs: 8.0,
+        }
     }
 }
 
-/// CPU-rasterises `text` into an RGBA [`Image`]: white glyphs on a
-/// semi-transparent dark backdrop. Baked once per failed asset — no camera,
-/// no render pass, no per-frame work. Returns `None` if the text is empty.
-fn rasterize_label(text: &str, font: &ab_glyph::FontVec) -> Option<Image> {
+/// Caches the DejaVu Sans face used to bake filename labels into textures, so
+/// the `.ttf` is loaded at most once (not per failed asset). `None` until the
+/// font is loaded (native: read from storage at startup; web: fetched over
+/// HTTP). If it never loads, stubs still show the red box, just without text.
+#[derive(Resource, Default)]
+pub struct DiagnosticLabelFont(pub Option<std::sync::Arc<ab_glyph::FontVec>>);
+
+/// Holds the receiver from [`lunco_assets::font::load_dejavu_sans_bytes`]
+/// until the bytes land. The same channel mechanism works on native (bytes
+/// ready immediately) and web (bytes fetched async), so the plugin has no
+/// platform branches. Removed once the font installs.
+#[derive(Resource)]
+struct DiagnosticFontLoad(std::sync::Mutex<std::sync::mpsc::Receiver<Vec<u8>>>);
+
+/// Parses raw `.ttf` bytes into [`DiagnosticLabelFont`].
+fn install_diagnostic_font(font: &mut DiagnosticLabelFont, bytes: Vec<u8>) {
+    match ab_glyph::FontVec::try_from_vec(bytes) {
+        Ok(f) => font.0 = Some(std::sync::Arc::new(f)),
+        Err(e) => warn!("[usd-bevy] diagnostic label font parse failed: {e}"),
+    }
+}
+
+/// Startup: kick off the DejaVu Sans load via `lunco-assets` (which owns the
+/// native-read / web-fetch procedure) and stash the receiver for
+/// [`poll_diagnostic_label_font`] to drain.
+fn load_diagnostic_label_font(mut commands: Commands) {
+    let rx = lunco_assets::font::load_dejavu_sans_bytes();
+    commands.insert_resource(DiagnosticFontLoad(std::sync::Mutex::new(rx)));
+}
+
+/// Drains the font-load channel and installs the face once the bytes arrive
+/// (frame 1 on native, whenever the fetch lands on web). Uniform across
+/// platforms; removes the loader resource when done.
+fn poll_diagnostic_label_font(
+    load: Option<Res<DiagnosticFontLoad>>,
+    mut font: ResMut<DiagnosticLabelFont>,
+    mut commands: Commands,
+) {
+    if font.0.is_some() {
+        return;
+    }
+    let Some(load) = load else { return };
+    let received = load.0.lock().ok().and_then(|rx| rx.try_recv().ok());
+    if let Some(bytes) = received {
+        info!("[usd-bevy] diagnostic label font loaded ({} bytes)", bytes.len());
+        install_diagnostic_font(&mut font, bytes);
+        commands.remove_resource::<DiagnosticFontLoad>();
+    }
+}
+
+/// CPU-rasterises `text` into an RGBA [`Image`] per [`DiagnosticLabelConfig`]:
+/// coloured glyphs on a configurable backdrop. Baked once per failed asset —
+/// no camera, no render pass, no per-frame work. `None` if `text` is empty.
+fn rasterize_label(text: &str, font: &ab_glyph::FontVec, cfg: &DiagnosticLabelConfig) -> Option<Image> {
     use ab_glyph::{Font, ScaleFont, point, PxScale};
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     use bevy::asset::RenderAssetUsages;
@@ -939,9 +1022,9 @@ fn rasterize_label(text: &str, font: &ab_glyph::FontVec) -> Option<Image> {
     if text.is_empty() {
         return None;
     }
-    let px = 64.0_f32;
+    let px = cfg.font_px.max(1.0);
+    let pad = cfg.padding_px.max(0.0);
     let scaled = font.as_scaled(PxScale::from(px));
-    let pad = 24.0_f32;
 
     // Measure advance width (with kerning) for the whole string.
     let mut width = 0.0_f32;
@@ -959,17 +1042,15 @@ fn rasterize_label(text: &str, font: &ab_glyph::FontVec) -> Option<Image> {
     let img_w = (width + pad * 2.0).ceil().max(1.0) as usize;
     let img_h = (ascent - descent + pad * 2.0).ceil().max(1.0) as usize;
 
-    // Semi-transparent near-black backdrop so white text reads over the
-    // bright-red box behind the quad.
+    // Configurable backdrop so the text reads over the box behind the quad.
     let mut buf = vec![0u8; img_w * img_h * 4];
     for px4 in buf.chunks_mut(4) {
-        px4[0] = 20;
-        px4[1] = 0;
-        px4[2] = 0;
-        px4[3] = 140;
+        px4.copy_from_slice(&cfg.bg_color);
     }
 
-    // Draw each glyph in white, coverage-blended over the backdrop.
+    // Draw each glyph in the configured text colour, coverage-blended.
+    let [tr, tg, tb] = cfg.text_color;
+    let tc = [tr as u16, tg as u16, tb as u16];
     let mut caret = point(pad, pad + ascent);
     let mut prev: Option<ab_glyph::GlyphId> = None;
     for c in text.chars() {
@@ -990,7 +1071,7 @@ fn rasterize_label(text: &str, font: &ab_glyph::FontVec) -> Option<Image> {
                 let a = (cov * 255.0) as u16;
                 for k in 0..3 {
                     let bg = buf[idx + k] as u16;
-                    buf[idx + k] = ((255 * a + bg * (255 - a)) / 255) as u8;
+                    buf[idx + k] = ((tc[k] * a + bg * (255 - a)) / 255) as u8;
                 }
                 buf[idx + 3] = buf[idx + 3].max((cov * 255.0) as u8);
             });
@@ -1012,13 +1093,75 @@ fn rasterize_label(text: &str, font: &ab_glyph::FontVec) -> Option<Image> {
     ))
 }
 
-/// Seconds a [`GlbPlaceholder`] may wait for its glTF scene before we assume
-/// the load is broken and reveal the red diagnostic stub. On native a missing
-/// asset reports `is_failed()` promptly; on **web** the wasm fetch reader can
-/// leave the load wedged in `NotLoaded`/`Loading` (e.g. the `lunco-lib://`
-/// source 404s without surfacing a clean failure), so the timeout is what
-/// actually makes the stub appear in the browser.
-const PLACEHOLDER_GRACE_SECS: f32 = 8.0;
+/// Bakes the filename texture onto every (or just the front) face of each
+/// pending diagnostic stub, once the label font is available. Runs each frame
+/// but only touches stubs that still carry [`PendingDiagnosticLabel`].
+fn bake_pending_labels(
+    mut commands: Commands,
+    cfg: Res<DiagnosticLabelConfig>,
+    font: Res<DiagnosticLabelFont>,
+    pending: Query<(Entity, &PendingDiagnosticLabel)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let Some(font) = font.0.as_ref() else { return };
+    for (stub, pending) in pending.iter() {
+        let Some(image) = rasterize_label(&pending.text, font, &cfg) else {
+            commands.entity(stub).remove::<PendingDiagnosticLabel>();
+            continue;
+        };
+        let aspect = (image.width() as f32 / image.height().max(1) as f32).max(0.01);
+        let tex = images.add(image);
+        // One material shared across all faces.
+        let label_mat = materials.add(StandardMaterial {
+            base_color_texture: Some(tex),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            cull_mode: None, // readable from either side
+            ..default()
+        });
+        let s = pending.box_size;
+        let (hx, hy, hz) = (s.x / 2.0, s.y / 2.0, s.z / 2.0);
+        let eps = 0.01;
+        use std::f32::consts::{FRAC_PI_2, PI};
+        // Each face: outward offset + a rotation that turns the default
+        // +Z-facing `Rectangle` to face outward, plus the face's
+        // (horizontal, vertical) extent for sizing.
+        let faces: &[(Vec3, Quat, f32, f32)] = if cfg.all_faces {
+            &[
+                (Vec3::new(0.0, 0.0, hz + eps), Quat::IDENTITY, s.x, s.y),                 // +Z
+                (Vec3::new(0.0, 0.0, -hz - eps), Quat::from_rotation_y(PI), s.x, s.y),     // -Z
+                (Vec3::new(hx + eps, 0.0, 0.0), Quat::from_rotation_y(FRAC_PI_2), s.z, s.y), // +X
+                (Vec3::new(-hx - eps, 0.0, 0.0), Quat::from_rotation_y(-FRAC_PI_2), s.z, s.y), // -X
+                (Vec3::new(0.0, hy + eps, 0.0), Quat::from_rotation_x(-FRAC_PI_2), s.x, s.z), // +Y
+                (Vec3::new(0.0, -hy - eps, 0.0), Quat::from_rotation_x(FRAC_PI_2), s.x, s.z), // -Y
+            ]
+        } else {
+            &[(Vec3::new(0.0, 0.0, hz + eps), Quat::IDENTITY, s.x, s.y)]
+        };
+        let cover = cfg.face_coverage.clamp(0.05, 1.0);
+        commands.entity(stub).with_children(|p| {
+            for &(offset, rot, fw, fh) in faces {
+                // Fit the label inside the face, keeping the texture aspect.
+                let mut qw = (fw * cover).max(0.1);
+                let mut qh = qw / aspect;
+                if qh > fh * cover {
+                    qh = (fh * cover).max(0.05);
+                    qw = qh * aspect;
+                }
+                p.spawn((
+                    Name::new("DiagnosticStubLabel"),
+                    DiagnosticStubLabel,
+                    Mesh3d(meshes.add(Rectangle::new(qw, qh))),
+                    MeshMaterial3d(label_mat.clone()),
+                    Transform::from_translation(offset).with_rotation(rot),
+                ));
+            }
+        });
+        commands.entity(stub).remove::<PendingDiagnosticLabel>();
+    }
+}
 
 /// Removes the primitive Cube/Sphere/Cylinder fallback mesh once its
 /// sibling [`SceneRoot`] reports its glTF [`Scene`] asset fully loaded.
@@ -1060,20 +1203,20 @@ fn hide_glb_placeholder_meshes(
     }
 }
 
-/// Reveals a red, semi-transparent diagnostic stub (box + floating filename
-/// label) when a [`GlbPlaceholder`]'s glTF scene fails to load or never loads
-/// within [`PLACEHOLDER_GRACE_SECS`] (the web case, where a 404 may not surface
-/// a clean `is_failed()`).
+/// Reveals a red, semi-transparent diagnostic box when a [`GlbPlaceholder`]'s
+/// glTF scene fails to load or never loads within
+/// [`DiagnosticLabelConfig::grace_secs`] (the web case, where a 404 may not
+/// surface a clean `is_failed()`). The filename label is baked on separately by
+/// [`bake_pending_labels`] once the font is ready, via [`PendingDiagnosticLabel`].
 pub fn reveal_placeholder_on_failure(
     mut commands: Commands,
     time: Res<Time>,
     asset_server: Res<AssetServer>,
     stages: Res<Assets<UsdStageAsset>>,
+    cfg: Res<DiagnosticLabelConfig>,
     scene_roots: Query<(Entity, &SceneRoot, &GlobalTransform, &PlaceholderAssetUri, &UsdPrimPath), (With<GlbPlaceholder>, Without<DiagnosticStub>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut images: ResMut<Assets<Image>>,
-    label_font: Res<DiagnosticLabelFont>,
     // Per-placeholder time spent waiting on its glTF scene. Used to trip the
     // grace timeout on web, where a broken load may never report `is_failed()`.
     mut waited: Local<std::collections::HashMap<Entity, f32>>,
@@ -1088,7 +1231,7 @@ pub fn reveal_placeholder_on_failure(
         }
         let elapsed = waited.entry(e).or_insert(0.0);
         *elapsed += time.delta_secs();
-        let timed_out = *elapsed >= PLACEHOLDER_GRACE_SECS;
+        let timed_out = *elapsed >= cfg.grace_secs;
         if state.is_failed() || timed_out {
             waited.remove(&e);
             info!(
@@ -1107,11 +1250,11 @@ pub fn reveal_placeholder_on_failure(
             // Attempt to resolve dimensions from USD prim attributes
             if let Some(stage) = stages.get(&prim_path.stage_handle) {
                 let reader = &*stage.reader;
-                
+
                 // Navigate up from the current prim to its parent to find the sibling "Placeholder"
                 let parent_path = prim_path.path.rsplitn(2, '/').nth(1).unwrap_or("");
                 let sibling_placeholder_path = format!("{}/Placeholder", parent_path);
-                
+
                 // Helper to check attributes
                 let check_path = |path: &str| -> Option<Vec3> {
                     if let Ok(sdf_path) = SdfPath::new(path) {
@@ -1137,29 +1280,11 @@ pub fn reveal_placeholder_on_failure(
                     info!("[usd-bevy] No scale or size found on paths: {:?} or {:?}", sibling_placeholder_path, prim_path.path);
                 }
             }
-            
+
             info!("[usd-bevy] Computed stub scale: {:?}", scale);
 
-            let stub = commands.spawn((
-                Name::new("DiagnosticStub"),
-                Mesh3d(meshes.add(Cuboid::from_size(scale))),
-                MeshMaterial3d(materials.add(StandardMaterial {
-                    base_color: Color::srgba(1.0, 0.0, 0.0, 0.7), // Semi-transparent red
-                    emissive: LinearRgba::from(Color::srgb(1.0, 0.0, 0.0)),
-                    alpha_mode: AlphaMode::Blend, // Support transparency
-                    unlit: true, // readable even with no scene lighting
-                    ..default()
-                })),
-                transform,
-                Visibility::Visible,
-                DiagnosticStub,
-            )).id();
-
-            // Bake the failed file name into a texture and show it on a flat
-            // quad pinned to the box's front face. Just the filename — strip
-            // the `lunco-lib://…/` path prefix and the `#Scene0` glTF
-            // sub-label. No camera / no per-frame work: the texture is
-            // rasterised once here.
+            // Just the filename — strip the `lunco-lib://…/` path prefix and
+            // the `#Scene0` glTF sub-label.
             let file_name = uri
                 .0
                 .rsplit('/')
@@ -1168,54 +1293,27 @@ pub fn reveal_placeholder_on_failure(
                 .split('#')
                 .next()
                 .unwrap_or(&uri.0);
-            if let Some(font) = label_font.0.as_ref() {
-                if let Some(image) = rasterize_label(&format!("Missing: {file_name}"), font) {
-                    let aspect = (image.width() as f32 / image.height().max(1) as f32).max(0.01);
-                    let tex = images.add(image);
-                    // One material shared across all faces (texture handle cloned
-                    // implicitly via the shared `StandardMaterial`).
-                    let label_mat = materials.add(StandardMaterial {
-                        base_color_texture: Some(tex),
-                        alpha_mode: AlphaMode::Blend,
-                        unlit: true,
-                        cull_mode: None, // readable from either side
-                        ..default()
-                    });
-                    let (hx, hy, hz) = (scale.x / 2.0, scale.y / 2.0, scale.z / 2.0);
-                    let eps = 0.01;
-                    use std::f32::consts::FRAC_PI_2;
-                    // Each face: outward offset + a rotation that turns the
-                    // default +Z-facing `Rectangle` to face outward, plus the
-                    // face's (horizontal, vertical) extent for sizing.
-                    let faces: [(Vec3, Quat, f32, f32); 6] = [
-                        (Vec3::new(0.0, 0.0, hz + eps), Quat::IDENTITY, scale.x, scale.y),                       // +Z
-                        (Vec3::new(0.0, 0.0, -hz - eps), Quat::from_rotation_y(std::f32::consts::PI), scale.x, scale.y), // -Z
-                        (Vec3::new(hx + eps, 0.0, 0.0), Quat::from_rotation_y(FRAC_PI_2), scale.z, scale.y),     // +X
-                        (Vec3::new(-hx - eps, 0.0, 0.0), Quat::from_rotation_y(-FRAC_PI_2), scale.z, scale.y),   // -X
-                        (Vec3::new(0.0, hy + eps, 0.0), Quat::from_rotation_x(-FRAC_PI_2), scale.x, scale.z),    // +Y (top)
-                        (Vec3::new(0.0, -hy - eps, 0.0), Quat::from_rotation_x(FRAC_PI_2), scale.x, scale.z),    // -Y (bottom)
-                    ];
-                    commands.entity(stub).with_children(|p| {
-                        for (offset, rot, fw, fh) in faces {
-                            // Fit the label inside the face (85% margin), keeping
-                            // the texture aspect ratio.
-                            let mut qw = (fw * 0.85).max(0.1);
-                            let mut qh = qw / aspect;
-                            if qh > fh * 0.85 {
-                                qh = (fh * 0.85).max(0.05);
-                                qw = qh * aspect;
-                            }
-                            p.spawn((
-                                Name::new("DiagnosticStubLabel"),
-                                DiagnosticStubLabel,
-                                Mesh3d(meshes.add(Rectangle::new(qw, qh))),
-                                MeshMaterial3d(label_mat.clone()),
-                                Transform::from_translation(offset).with_rotation(rot),
-                            ));
-                        }
-                    });
-                }
-            }
+
+            commands.spawn((
+                Name::new("DiagnosticStub"),
+                Mesh3d(meshes.add(Cuboid::from_size(scale))),
+                MeshMaterial3d(materials.add(StandardMaterial {
+                    base_color: cfg.box_color,
+                    emissive: LinearRgba::from(cfg.box_color),
+                    alpha_mode: AlphaMode::Blend, // Support transparency
+                    unlit: true, // readable even with no scene lighting
+                    ..default()
+                })),
+                transform,
+                Visibility::Visible,
+                DiagnosticStub,
+                // The label is baked on once the font is ready (frame 1 on
+                // native, whenever the fetch lands on web).
+                PendingDiagnosticLabel {
+                    text: format!("{}{file_name}", cfg.prefix),
+                    box_size: scale,
+                },
+            ));
 
             // Mark the original prim as having a diagnostic stub
             commands.entity(e).insert(DiagnosticStub);
