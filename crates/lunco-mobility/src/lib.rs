@@ -791,4 +791,157 @@ mod force_law_tests {
     }
 }
 
+/// Step-2 **oracle**: validate the production suspension force law against a
+/// continuous, proper-solver reference — a quarter-car (one sprung mass on one
+/// spring-damper strut over ground). The continuous physics is stated
+/// declaratively in `assets/models/QuarterCar.mo`; an adaptive Modelica solver
+/// integrates it as ground truth. Here we integrate the *same* equations with a
+/// fine RK4 step (≈ the Modelica answer to many digits for this non-stiff system)
+/// and compare against the real `suspension_force_mag`, stepped with the
+/// production scheme (semi-implicit Euler at dt = 1/60). See
+/// `docs/architecture/28-modelica-realtime-physics.md` §8 (Step 2).
+///
+/// What it establishes:
+/// 1. **Physics + integration agree** in the gentle regime (the clamp inactive) —
+///    the Rust law tracks the continuous reference to sub-cm.
+/// 2. **The fixed law settles** — no sustained limit-cycle (the dead-band / `.max(0)`
+///    bugs would ring forever).
+/// 3. **The bound is the fix** — on a hard landing the production law caps the
+///    force at `2·k·χ`, while the old `.max(0)` cliff lets it spike (the 27 kN-class
+///    transient the jitter work removed). The oracle is sensitive to that exact
+///    regression.
+#[cfg(test)]
+mod oracle {
+    use super::*;
+
+    // Quarter-car: m·χ̈ = m·g − F(χ, χ̇). χ = compression (m), χ̇ = compression rate.
+    const M: f64 = 250.0; // sprung mass per wheel — quarter of a 1000 kg chassis
+    const G: f64 = 9.81;
+    const DT_SIM: f64 = 1.0 / 60.0; // the real FixedUpdate step
+    const DT_FINE: f64 = 1.0e-4; // RK4 reference step (≈ the adaptive-solver answer)
+
+    /// The continuous physics the Rust law approximates (QuarterCar.mo): ideal
+    /// linear spring-damper, no clamp. Zero force when out of contact (χ ≤ 0).
+    fn reference_force(chi: f64, chi_dot: f64, k: f64, c: f64) -> f64 {
+        if chi > 0.0 { k * chi + c * chi_dot } else { 0.0 }
+    }
+
+    /// Integrate the reference with RK4 at a fine step → ground truth trajectory of
+    /// compression χ. State = (χ, v=χ̇); χ′ = v, v′ = g − F/m.
+    fn reference_chi(k: f64, c: f64, chi0: f64, v0: f64, secs: f64) -> Vec<f64> {
+        let n = (secs / DT_FINE) as usize;
+        let d = |chi: f64, v: f64| (v, G - reference_force(chi, v, k, c) / M);
+        let (mut chi, mut v) = (chi0, v0);
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            let (a1, b1) = d(chi, v);
+            let (a2, b2) = d(chi + 0.5 * DT_FINE * a1, v + 0.5 * DT_FINE * b1);
+            let (a3, b3) = d(chi + 0.5 * DT_FINE * a2, v + 0.5 * DT_FINE * b2);
+            let (a4, b4) = d(chi + DT_FINE * a3, v + DT_FINE * b3);
+            chi += DT_FINE / 6.0 * (a1 + 2.0 * a2 + 2.0 * a3 + a4);
+            v += DT_FINE / 6.0 * (b1 + 2.0 * b2 + 2.0 * b3 + b4);
+            out.push(chi);
+        }
+        out
+    }
+
+    /// Integrate a force law with the PRODUCTION scheme — semi-implicit Euler at
+    /// dt = 1/60, exactly as `apply_wheel_suspension` runs. Returns the per-step
+    /// compression and the applied force, so callers can probe both trajectory and
+    /// force transients.
+    fn step_law<F: Fn(f64, f64) -> f64>(
+        force: F,
+        chi0: f64,
+        v0: f64,
+        secs: f64,
+    ) -> (Vec<f64>, Vec<f64>) {
+        let n = (secs / DT_SIM) as usize;
+        let (mut chi, mut v) = (chi0, v0);
+        let (mut chis, mut forces) = (Vec::with_capacity(n), Vec::with_capacity(n));
+        for _ in 0..n {
+            let f = if chi > 0.0 { force(chi, v) } else { 0.0 };
+            v += DT_SIM * (G - f / M); // semi-implicit: velocity first…
+            chi += DT_SIM * v; //          …then position with the new velocity
+            chis.push(chi);
+            forces.push(f);
+        }
+        (chis, forces)
+    }
+
+    // The production law and the OLD buggy `.max(0)` cliff it replaced.
+    fn fixed(k: f64, c: f64) -> impl Fn(f64, f64) -> f64 {
+        move |chi, v| suspension_force_mag(chi, k, v, c)
+    }
+    fn buggy(k: f64, c: f64) -> impl Fn(f64, f64) -> f64 {
+        move |chi, v| (chi * k + v * c).max(0.0) // clamps the TOTAL, not the damping term
+    }
+
+    fn max_abs_dev(a: &[f64], b_fine: &[f64]) -> f64 {
+        // a is sampled at DT_SIM, b_fine at DT_FINE; compare at matching times.
+        let ratio = (DT_SIM / DT_FINE).round() as usize;
+        a.iter()
+            .enumerate()
+            .map(|(i, &x)| {
+                let j = ((i + 1) * ratio - 1).min(b_fine.len() - 1);
+                (x - b_fine[j]).abs()
+            })
+            .fold(0.0_f64, f64::max)
+    }
+
+    #[test]
+    fn fixed_law_tracks_the_continuous_reference_in_the_gentle_regime() {
+        // Production params, a soft settle from below equilibrium (χ_eq = 0.3066 m).
+        // The clamp never engages, so the Rust law IS the continuous physics and the
+        // only gap is fixed-step integration error — must stay sub-cm.
+        let (k, c) = (8000.0, 2800.0);
+        let (rust, _f) = step_law(fixed(k, c), 0.20, 0.0, 3.0);
+        let reference = reference_chi(k, c, 0.20, 0.0, 3.0);
+        let dev = max_abs_dev(&rust, &reference);
+        let chi_eq = M * G / k;
+        println!("[oracle] gentle: max|χ_rust−χ_ref| = {dev:.5} m, χ_end = {:.4} (eq {chi_eq:.4})",
+            rust.last().unwrap());
+        assert!(dev < 8.0e-3, "fixed law diverges from continuous reference: {dev} m");
+        assert!((rust.last().unwrap() - chi_eq).abs() < 2.0e-3, "must settle at m·g/k");
+    }
+
+    #[test]
+    fn fixed_law_settles_no_limit_cycle() {
+        // Under-damped config (c small → clear ringing) must still DECAY. The
+        // dead-band / `.max(0)` bugs produced a sustained tick-period limit-cycle;
+        // assert the late window is quiet relative to the early one.
+        let (k, c) = (8000.0, 400.0);
+        let (rust, _f) = step_law(fixed(k, c), 0.15, 0.0, 5.0);
+        let win = rust.len() / 5;
+        let p2p = |s: &[f64]| s.iter().cloned().fold(f64::MIN, f64::max)
+            - s.iter().cloned().fold(f64::MAX, f64::min);
+        let early = p2p(&rust[..win]);
+        let late = p2p(&rust[rust.len() - win..]);
+        println!("[oracle] settle: early p2p {early:.4} m, late p2p {late:.5} m");
+        assert!(late < 0.15 * early, "ringing must decay (limit-cycle guard): {late} vs {early}");
+    }
+
+    #[test]
+    fn bounded_law_caps_the_landing_spike_the_cliff_let_through() {
+        // Hard landing: χ starts at 0 with a fast downward (compressing) velocity.
+        // The continuous force AND the old `.max(0)` law spike to ≈ c·v at impact
+        // (the 27 kN-class transient); the production law bounds it to 2·k·χ. This
+        // is the design trade — fidelity for fixed-step stability — and the property
+        // the oracle guards.
+        let (k, c) = (8000.0, 2800.0);
+        let v_impact = 12.0;
+        let (chi_fixed, f_fixed) = step_law(fixed(k, c), 0.0, v_impact, 0.5);
+        let (_chi_buggy, f_buggy) = step_law(buggy(k, c), 0.0, v_impact, 0.5);
+        // The impact tick: step 0 applies zero force for both laws (χ starts at 0),
+        // so by step 1 both see the SAME state (χ = chi_fixed[0], same fast v). The
+        // force difference there is purely the law — the cleanest contrast.
+        let (chi_at_impact, sf, sb) = (chi_fixed[0], f_fixed[1], f_buggy[1]);
+        let bound = 2.0 * k * chi_at_impact;
+        println!("[oracle] impact tick (χ = {chi_at_impact:.3} m): fixed {sf:.0} N (≤ 2·k·χ = {bound:.0}), cliff {sb:.0} N");
+        // The production law obeys its bound; the cliff passes the full c·v spike.
+        assert!(sf <= bound + 1.0, "fixed law must stay within 2·k·χ");
+        assert!(sb > 3.0 * sf, "cliff spikes the impact ({sb} N) far past the bounded force ({sf} N)");
+        assert!(sb > 20_000.0, "cliff lets a >20 kN landing transient through");
+    }
+}
+
 

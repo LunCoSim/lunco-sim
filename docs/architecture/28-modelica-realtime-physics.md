@@ -112,6 +112,42 @@ its state?"* — is answered by the tier, not decided per-model ad hoc. This is 
 key payoff of the classification: it turns "what do we replicate?" from a
 case-by-case judgement into a lookup.
 
+### The tier is **declared in USD**, never inferred
+
+The tier must not be guessed from a heuristic (component name, "does it have a
+RigidBody", etc.) — it is **authored on the prim**, the same way mass, friction,
+and the cosim model already are:
+
+```usda
+def Xform "RoverBattery" (prepend apiSchemas = ["LuncoReplicationAPI"])
+{
+    token  lunco:replication = "authoritative"   # local | authoritative | predicted  (Tier C | B | A)
+    string lunco:modelicaModel = "models/RoverBattery.mo"
+    string lunco:simWires      = "load_w:..."
+}
+```
+
+`lunco:replication` ∈ `{local, authoritative, predicted}` = Tier C / B / A. The USD
+translator (`lunco-usd-sim`) reads it at spawn and sets the **always-on
+`Replication` metadata** for that entity — the registry the networking layer
+consults (PH2 `declare_replication::<C>(Replication)`). This is the same move that
+already removed field-name heuristics from the id/authz codec: schema-driven
+`WireLocal` / `AuthzTarget` reflect markers instead of guessing by field name
+([[project_typed_id_codec]]). The wire layer reads a **declared** tier; it never
+infers one.
+
+Practicalities:
+
+- **Defaults by prim type / applied schema** so authors don't repeat themselves: a
+  `LuncoReplicationAPI` applied schema (or a per-type default) supplies the tier;
+  it inherits down namespace like any USD attribute. **Unspecified ⇒ `local`** (the
+  safe default — a model is never silently replicated).
+- **Declared intent is still validated, not trusted blindly.** A prim tagged
+  `predicted` (Tier A) whose model/solver isn't fixed-step deterministic is a
+  *conflict* — rejected loudly at load (ties to the Realtime-profile compiler gate,
+  §7), never silently downgraded. USD removes the heuristic; the loader still
+  type-checks tier ↔ solver/caps consistency.
+
 - **Tier B** — server runs the authoritative stepper; output ports replicate to
   clients as wires over the existing networking channel (D7: gated behind the
   `networking` feature; in solo the wire is local and there is no replication —
@@ -312,6 +348,10 @@ BackendRegistry formalisation.
    nothing — §5), turning "what do we replicate?" into a lookup.
 2. **Adaptive solvers are for Tier B only.** They are non-deterministic across
    peers and must never enter the client-prediction loop (Tier A).
+2a. **The tier is declared in USD (`lunco:replication`), never inferred** — it sets
+   the always-on `Replication` metadata at spawn, killing the heuristic (same as the
+   schema-driven id/authz codec). Default `local`; declared Tier-A intent is still
+   validated against the model's solver/caps and rejected on conflict.
 3. **Tier A Modelica = a Realtime profile (§7): a special fixed-step deterministic
    solver + compiler-enforced model limitations**, authored in plain Modelica. Not
    "make the adaptive solver deterministic" — constrain the models instead. Robots
