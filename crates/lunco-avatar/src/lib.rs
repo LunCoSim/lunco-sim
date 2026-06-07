@@ -476,7 +476,7 @@ fn spring_arm_system(
     defaults: Res<CameraDefaults>,
 
     mut scroll_res: ResMut<CameraScroll>,
-    _sens: Res<CameraScrollSensitivity>,
+    sens: Res<CameraScrollSensitivity>,
     keys: Res<ButtonInput<KeyCode>>,
     spatial_query: Option<avian3d::prelude::SpatialQuery>,
 ) {
@@ -497,10 +497,13 @@ fn spring_arm_system(
         // Target position in grid-local coordinates.
         let target_pos = grid.grid_position_double(&t_cell, t_tf);
 
-        // Scroll zoom: fixed multiplier (matches old working code).
+        // Multiplicative zoom using exponential scaling — same formula as
+        // ChaseCamera/OrbitCamera so raw pixel scroll deltas stay well-scaled.
+        // Scroll up (delta > 0) -> zoom in. Scroll down (delta < 0) -> zoom out.
         let min_dist = 5.0;
         if scroll_res.delta != 0.0 {
-            arm.distance = (arm.distance - scroll_res.delta as f64 * 5.0).clamp(min_dist, 200.0);
+            let zoom_factor = (-scroll_res.delta as f64 * sens.value as f64 * 0.01).exp();
+            arm.distance = (arm.distance * zoom_factor).clamp(min_dist, 200.0);
             scroll_res.delta = 0.0;
         }
 
