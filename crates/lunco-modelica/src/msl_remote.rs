@@ -831,7 +831,7 @@ mod web {
             },
         );
 
-        let manifest_bytes = fetch_bytes("msl/manifest.json").await?;
+        let manifest_bytes = fetch_bytes_cached("msl/manifest.json").await?;
         let manifest: MslManifest = serde_json::from_slice(&manifest_bytes)
             .map_err(|e| format!("manifest.json parse: {e}"))?;
         if manifest.schema_version != 1 {
@@ -858,7 +858,7 @@ mod web {
                         .unwrap_or(0),
             },
         );
-        let sources_bytes = fetch_bytes(&bundle_path).await?;
+        let sources_bytes = fetch_bytes_cached(&bundle_path).await?;
         if sources_bytes.len() as u64 != manifest.sources.compressed_bytes {
             return Err(format!(
                 "sources bundle size {} != manifest {}",
@@ -883,7 +883,7 @@ mod web {
                         + parsed_meta.compressed_bytes,
                 },
             );
-            let bytes = fetch_bytes(&parsed_path).await?;
+            let bytes = fetch_bytes_cached(&parsed_path).await?;
             if bytes.len() as u64 != parsed_meta.compressed_bytes {
                 return Err(format!(
                     "parsed bundle size {} != manifest {}",
@@ -986,8 +986,37 @@ mod web {
         Ok(out)
     }
 
-    async fn fetch_bytes(path: &str) -> Result<Vec<u8>, String> {
+    const CACHE_NAME: &str = "lunco-msl-v1";
+
+    async fn fetch_bytes_cached(path: &str) -> Result<Vec<u8>, String> {
         let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
+        let caches = window.caches().map_err(|e| format!("window.caches: {e:?}"))?;
+        let cache: web_sys::Cache = JsFuture::from(caches.open(CACHE_NAME))
+            .await
+            .map_err(|e| format!("caches.open: {e:?}"))?
+            .dyn_into()
+            .map_err(|_| "caches.open result not a Cache".to_string())?;
+
+        // 1. Check cache first.
+        let match_value = JsFuture::from(cache.match_with_str(path))
+            .await
+            .map_err(|e| format!("cache.match {path}: {e:?}"))?;
+
+        if !match_value.is_null() && !match_value.is_undefined() {
+            let response: Response = match_value
+                .dyn_into()
+                .map_err(|_| "cache match not a Response".to_string())?;
+            let array_buffer = JsFuture::from(
+                response
+                    .array_buffer()
+                    .map_err(|e| format!("array_buffer cached {path}: {e:?}"))?,
+            )
+            .await
+            .map_err(|e| format!("array_buffer await cached {path}: {e:?}"))?;
+            return Ok(js_sys::Uint8Array::new(&array_buffer).to_vec());
+        }
+
+        // 2. Cache miss -> fetch from network.
         let opts = RequestInit::new();
         opts.set_method("GET");
         opts.set_mode(RequestMode::SameOrigin);
@@ -1007,6 +1036,13 @@ mod web {
                 response.status_text()
             ));
         }
+
+        // Clone the response to put it in the cache while we read the body.
+        let response_to_cache = response
+            .clone()
+            .map_err(|e| format!("response.clone: {e:?}"))?;
+        let _ = JsFuture::from(cache.put_with_str(path, &response_to_cache)).await;
+
         let array_buffer = JsFuture::from(
             response
                 .array_buffer()
