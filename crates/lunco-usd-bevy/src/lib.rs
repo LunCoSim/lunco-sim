@@ -1015,8 +1015,6 @@ pub fn reveal_placeholder_on_failure(
                     TextColor(Color::WHITE),
                     // Position text above the stub
                     Transform::from_xyz(0.0, scale.y / 2.0 + 1.0, 0.0),
-                    Visibility::Visible,
-                    InheritedVisibility::VISIBLE,
                 ));
             });
             
