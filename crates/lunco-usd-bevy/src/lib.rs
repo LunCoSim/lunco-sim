@@ -53,6 +53,8 @@ impl Plugin for UsdBevyPlugin {
         app.init_asset::<UsdStageAsset>()
             .register_asset_loader(UsdLoader)
             .register_type::<UsdPrimPath>()
+            .init_resource::<DiagnosticLabelFont>()
+            .add_systems(Startup, load_diagnostic_label_font)
             .add_observer(on_usd_prim_added)
             // `sync_usd_visuals` runs only on frames where a stage's
             // `LoadedWithDependencies` event was emitted. Idle frames
@@ -896,6 +898,128 @@ pub struct PlaceholderAssetUri(pub String);
 #[derive(Component)]
 pub struct DiagnosticStub;
 
+/// Marker for the textured quad that displays the failed asset's filename.
+#[derive(Component)]
+pub struct DiagnosticStubLabel;
+
+/// Caches the DejaVu Sans face used to bake filename labels into textures, so
+/// the `.ttf` is read from storage at most once (not per failed asset).
+/// `None` until the font is loaded (or if loading failed — then labels are
+/// silently skipped and only the red box shows).
+#[derive(Resource, Default)]
+pub struct DiagnosticLabelFont(pub Option<std::sync::Arc<ab_glyph::FontVec>>);
+
+/// Reads the DejaVu Sans `.ttf` once via `lunco-storage` (works on wasm) and
+/// stashes it in [`DiagnosticLabelFont`]. Runs at startup; a miss is
+/// non-fatal.
+fn load_diagnostic_label_font(mut font: ResMut<DiagnosticLabelFont>) {
+    use lunco_storage::Storage;
+    match lunco_storage::FileStorage::new()
+        .read_sync(&lunco_storage::StorageHandle::File(lunco_assets::dejavu_sans_path()))
+    {
+        Ok(bytes) => match ab_glyph::FontVec::try_from_vec(bytes) {
+            Ok(f) => font.0 = Some(std::sync::Arc::new(f)),
+            Err(e) => warn!("[usd-bevy] diagnostic label font parse failed: {e}"),
+        },
+        Err(e) => warn!(
+            "[usd-bevy] diagnostic label font unavailable ({e}); failed-asset \
+             stubs will show the red box without a filename"
+        ),
+    }
+}
+
+/// CPU-rasterises `text` into an RGBA [`Image`]: white glyphs on a
+/// semi-transparent dark backdrop. Baked once per failed asset — no camera,
+/// no render pass, no per-frame work. Returns `None` if the text is empty.
+fn rasterize_label(text: &str, font: &ab_glyph::FontVec) -> Option<Image> {
+    use ab_glyph::{Font, ScaleFont, point, PxScale};
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    use bevy::asset::RenderAssetUsages;
+
+    if text.is_empty() {
+        return None;
+    }
+    let px = 64.0_f32;
+    let scaled = font.as_scaled(PxScale::from(px));
+    let pad = 24.0_f32;
+
+    // Measure advance width (with kerning) for the whole string.
+    let mut width = 0.0_f32;
+    let mut prev: Option<ab_glyph::GlyphId> = None;
+    for c in text.chars() {
+        let gid = font.glyph_id(c);
+        if let Some(p) = prev {
+            width += scaled.kern(p, gid);
+        }
+        width += scaled.h_advance(gid);
+        prev = Some(gid);
+    }
+    let ascent = scaled.ascent();
+    let descent = scaled.descent();
+    let img_w = (width + pad * 2.0).ceil().max(1.0) as usize;
+    let img_h = (ascent - descent + pad * 2.0).ceil().max(1.0) as usize;
+
+    // Semi-transparent near-black backdrop so white text reads over the
+    // bright-red box behind the quad.
+    let mut buf = vec![0u8; img_w * img_h * 4];
+    for px4 in buf.chunks_mut(4) {
+        px4[0] = 20;
+        px4[1] = 0;
+        px4[2] = 0;
+        px4[3] = 140;
+    }
+
+    // Draw each glyph in white, coverage-blended over the backdrop.
+    let mut caret = point(pad, pad + ascent);
+    let mut prev: Option<ab_glyph::GlyphId> = None;
+    for c in text.chars() {
+        let gid = font.glyph_id(c);
+        if let Some(p) = prev {
+            caret.x += scaled.kern(p, gid);
+        }
+        let glyph = gid.with_scale_and_position(PxScale::from(px), caret);
+        if let Some(outline) = font.outline_glyph(glyph) {
+            let bb = outline.px_bounds();
+            outline.draw(|gx, gy, cov| {
+                let x = bb.min.x as i32 + gx as i32;
+                let y = bb.min.y as i32 + gy as i32;
+                if x < 0 || y < 0 || x as usize >= img_w || y as usize >= img_h {
+                    return;
+                }
+                let idx = (y as usize * img_w + x as usize) * 4;
+                let a = (cov * 255.0) as u16;
+                for k in 0..3 {
+                    let bg = buf[idx + k] as u16;
+                    buf[idx + k] = ((255 * a + bg * (255 - a)) / 255) as u8;
+                }
+                buf[idx + 3] = buf[idx + 3].max((cov * 255.0) as u8);
+            });
+        }
+        caret.x += scaled.h_advance(gid);
+        prev = Some(gid);
+    }
+
+    Some(Image::new(
+        Extent3d {
+            width: img_w as u32,
+            height: img_h as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        buf,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    ))
+}
+
+/// Seconds a [`GlbPlaceholder`] may wait for its glTF scene before we assume
+/// the load is broken and reveal the red diagnostic stub. On native a missing
+/// asset reports `is_failed()` promptly; on **web** the wasm fetch reader can
+/// leave the load wedged in `NotLoaded`/`Loading` (e.g. the `lunco-lib://`
+/// source 404s without surfacing a clean failure), so the timeout is what
+/// actually makes the stub appear in the browser.
+const PLACEHOLDER_GRACE_SECS: f32 = 8.0;
+
 /// Removes the primitive Cube/Sphere/Cylinder fallback mesh once its
 /// sibling [`SceneRoot`] reports its glTF [`Scene`] asset fully loaded.
 fn hide_glb_placeholder_meshes(
@@ -936,21 +1060,44 @@ fn hide_glb_placeholder_meshes(
     }
 }
 
-/// System to reveal and style placeholder stubs when asset loading fails.
-/// System to reveal and style placeholder stubs when asset loading fails.
+/// Reveals a red, semi-transparent diagnostic stub (box + floating filename
+/// label) when a [`GlbPlaceholder`]'s glTF scene fails to load or never loads
+/// within [`PLACEHOLDER_GRACE_SECS`] (the web case, where a 404 may not surface
+/// a clean `is_failed()`).
 pub fn reveal_placeholder_on_failure(
     mut commands: Commands,
+    time: Res<Time>,
     asset_server: Res<AssetServer>,
     stages: Res<Assets<UsdStageAsset>>,
     scene_roots: Query<(Entity, &SceneRoot, &GlobalTransform, &PlaceholderAssetUri, &UsdPrimPath), (With<GlbPlaceholder>, Without<DiagnosticStub>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut visibility: Query<&mut Visibility>,
+    mut images: ResMut<Assets<Image>>,
+    label_font: Res<DiagnosticLabelFont>,
+    // Per-placeholder time spent waiting on its glTF scene. Used to trip the
+    // grace timeout on web, where a broken load may never report `is_failed()`.
+    mut waited: Local<std::collections::HashMap<Entity, f32>>,
 ) {
     for (e, root, global_transform, uri, prim_path) in scene_roots.iter() {
-        if asset_server.load_state(root.0.id()).is_failed() {
-            info!("[usd-bevy] asset load FAILED for {:?}, spawning dynamic diagnostic stub", root.0.id());
-            
+        let state = asset_server.load_state(root.0.id());
+        // The asset arrived — stop tracking; `hide_glb_placeholder_meshes`
+        // drops the marker on the next `LoadedWithDependencies` event.
+        if state.is_loaded() {
+            waited.remove(&e);
+            continue;
+        }
+        let elapsed = waited.entry(e).or_insert(0.0);
+        *elapsed += time.delta_secs();
+        let timed_out = *elapsed >= PLACEHOLDER_GRACE_SECS;
+        if state.is_failed() || timed_out {
+            waited.remove(&e);
+            info!(
+                "[usd-bevy] asset {} for {:?} ({}), spawning diagnostic stub",
+                if timed_out { "did not load in time" } else { "load FAILED" },
+                root.0.id(),
+                uri.0,
+            );
+
             // Spawn a new independent diagnostic entity in world space
             let transform = global_transform.compute_transform();
 
@@ -993,33 +1140,83 @@ pub fn reveal_placeholder_on_failure(
             
             info!("[usd-bevy] Computed stub scale: {:?}", scale);
 
-            commands.spawn((
+            let stub = commands.spawn((
                 Name::new("DiagnosticStub"),
                 Mesh3d(meshes.add(Cuboid::from_size(scale))),
                 MeshMaterial3d(materials.add(StandardMaterial {
                     base_color: Color::srgba(1.0, 0.0, 0.0, 0.7), // Semi-transparent red
                     emissive: LinearRgba::from(Color::srgb(1.0, 0.0, 0.0)),
                     alpha_mode: AlphaMode::Blend, // Support transparency
+                    unlit: true, // readable even with no scene lighting
                     ..default()
                 })),
                 transform,
                 Visibility::Visible,
                 DiagnosticStub,
-            )).with_children(|parent| {
-                parent.spawn((
-                    Text2d::new(format!("Missing: {}", uri.0)),
-                    TextFont {
-                        font_size: 60.0,
+            )).id();
+
+            // Bake the failed file name into a texture and show it on a flat
+            // quad pinned to the box's front face. Just the filename — strip
+            // the `lunco-lib://…/` path prefix and the `#Scene0` glTF
+            // sub-label. No camera / no per-frame work: the texture is
+            // rasterised once here.
+            let file_name = uri
+                .0
+                .rsplit('/')
+                .next()
+                .unwrap_or(&uri.0)
+                .split('#')
+                .next()
+                .unwrap_or(&uri.0);
+            if let Some(font) = label_font.0.as_ref() {
+                if let Some(image) = rasterize_label(&format!("Missing: {file_name}"), font) {
+                    let aspect = (image.width() as f32 / image.height().max(1) as f32).max(0.01);
+                    let tex = images.add(image);
+                    // One material shared across all faces (texture handle cloned
+                    // implicitly via the shared `StandardMaterial`).
+                    let label_mat = materials.add(StandardMaterial {
+                        base_color_texture: Some(tex),
+                        alpha_mode: AlphaMode::Blend,
+                        unlit: true,
+                        cull_mode: None, // readable from either side
                         ..default()
-                    },
-                    TextColor(Color::WHITE),
-                    // Position text above the stub
-                    Transform::from_xyz(0.0, scale.y / 2.0 + 1.0, 0.0),
-                    Visibility::Visible,
-                    InheritedVisibility::VISIBLE,
-                ));
-            });
-            
+                    });
+                    let (hx, hy, hz) = (scale.x / 2.0, scale.y / 2.0, scale.z / 2.0);
+                    let eps = 0.01;
+                    use std::f32::consts::FRAC_PI_2;
+                    // Each face: outward offset + a rotation that turns the
+                    // default +Z-facing `Rectangle` to face outward, plus the
+                    // face's (horizontal, vertical) extent for sizing.
+                    let faces: [(Vec3, Quat, f32, f32); 6] = [
+                        (Vec3::new(0.0, 0.0, hz + eps), Quat::IDENTITY, scale.x, scale.y),                       // +Z
+                        (Vec3::new(0.0, 0.0, -hz - eps), Quat::from_rotation_y(std::f32::consts::PI), scale.x, scale.y), // -Z
+                        (Vec3::new(hx + eps, 0.0, 0.0), Quat::from_rotation_y(FRAC_PI_2), scale.z, scale.y),     // +X
+                        (Vec3::new(-hx - eps, 0.0, 0.0), Quat::from_rotation_y(-FRAC_PI_2), scale.z, scale.y),   // -X
+                        (Vec3::new(0.0, hy + eps, 0.0), Quat::from_rotation_x(-FRAC_PI_2), scale.x, scale.z),    // +Y (top)
+                        (Vec3::new(0.0, -hy - eps, 0.0), Quat::from_rotation_x(FRAC_PI_2), scale.x, scale.z),    // -Y (bottom)
+                    ];
+                    commands.entity(stub).with_children(|p| {
+                        for (offset, rot, fw, fh) in faces {
+                            // Fit the label inside the face (85% margin), keeping
+                            // the texture aspect ratio.
+                            let mut qw = (fw * 0.85).max(0.1);
+                            let mut qh = qw / aspect;
+                            if qh > fh * 0.85 {
+                                qh = (fh * 0.85).max(0.05);
+                                qw = qh * aspect;
+                            }
+                            p.spawn((
+                                Name::new("DiagnosticStubLabel"),
+                                DiagnosticStubLabel,
+                                Mesh3d(meshes.add(Rectangle::new(qw, qh))),
+                                MeshMaterial3d(label_mat.clone()),
+                                Transform::from_translation(offset).with_rotation(rot),
+                            ));
+                        }
+                    });
+                }
+            }
+
             // Mark the original prim as having a diagnostic stub
             commands.entity(e).insert(DiagnosticStub);
         }

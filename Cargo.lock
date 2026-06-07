@@ -7339,10 +7339,13 @@ dependencies = [
 name = "lunco-usd-bevy"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "anyhow",
  "bevy",
  "big_space",
+ "lunco-assets",
  "lunco-core",
+ "lunco-storage",
  "lunco-usd-composer",
  "openusd",
 ]

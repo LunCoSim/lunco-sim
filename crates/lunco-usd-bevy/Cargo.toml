@@ -16,6 +16,13 @@ lunco-usd-composer = { path = "../lunco-usd-composer" }
 lunco-core = { path = "../lunco-core" }
 big_space = { workspace = true }
 anyhow = { workspace = true }
+# CPU glyph rasterisation for the failed-asset diagnostic label: the
+# filename is baked once into an `Image` (no second camera, no per-frame
+# projection) and used as a material texture. `ab_glyph` is already in the
+# tree via bevy_text.
+ab_glyph = "0.2"
+lunco-assets = { workspace = true }
+lunco-storage = { path = "../lunco-storage" }
 
 
 [lints]
