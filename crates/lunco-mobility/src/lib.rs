@@ -71,6 +71,14 @@ impl Plugin for LunCoMobilityPlugin {
     }
 }
 
+/// Max per-wheel drive force as a multiple of that wheel's normal force
+/// (`throttle · N · this`). Caps traction to a fraction of the contact's
+/// grip — i.e. how much the tyre can push before the friction cone limits it.
+const DEFAULT_DRIVE_FORCE_PER_NORMAL: f64 = 2.0;
+/// Default for [`WheelRaycast::contact_grip_stiffness`] (N·s/m) when USD does not
+/// author `lunco:contactGripStiffness`.
+const DEFAULT_CONTACT_GRIP_STIFFNESS: f64 = 50.0;
+
 /// A high-performance wheel model using emulated suspension rays.
 ///
 /// **Theory**: Instead of a physical collider, this component projects a ray
@@ -125,6 +133,12 @@ pub struct WheelRaycast {
     /// Longitudinal slip stiffness in N per m/s of contact slip. Governs how
     /// hard the tire grips toward `v/r` before saturating at the friction limit.
     pub slip_stiffness: f64,
+    /// Chassis-contact grip stiffness in N·s/m: the slope of the contact
+    /// friction force vs slip velocity in `apply_wheel_drive`, before it
+    /// saturates at the Coulomb cone `μ·N`. Distinct from `slip_stiffness`
+    /// (which is the *axle* spin model in `update_wheel_spin`). USD:
+    /// `lunco:contactGripStiffness`.
+    pub contact_grip_stiffness: f64,
     /// Peak brake torque about the axle in N·m. When it exceeds the available
     /// traction torque the wheel locks and skids.
     pub brake_torque_max: f64,
@@ -151,6 +165,7 @@ impl Default for WheelRaycast {
             bearing_damping: 2.5,
             friction_mu: 1.0,
             slip_stiffness: 8000.0,
+            contact_grip_stiffness: DEFAULT_CONTACT_GRIP_STIFFNESS,
             brake_torque_max: 600.0,
         }
     }
@@ -338,14 +353,14 @@ fn apply_wheel_drive(
                     // We treat it as a normalized 0-1 throttle and scale to a
                     // reasonable per-wheel drive force based on vehicle weight.
                     let throttle = (port.value as f64).clamp(0.0, 1.0);
-                    let drive_force_mag = throttle * normal_force * 2.0; // 2x weight as max drive
+                    let drive_force_mag = throttle * normal_force * DEFAULT_DRIVE_FORCE_PER_NORMAL;
                     let drive_force_vec = forward * drive_force_mag;
                     forces.apply_force_at_point(drive_force_vec, hub_pos_world);
 
                     // --- Friction (longitudinal + lateral) ---
-                    // Coulomb friction cone: total friction force magnitude <= mu * N
-                    let friction_mu = 1.0;
-                    let max_friction = friction_mu * normal_force;
+                    // Coulomb friction cone: total friction force magnitude <= mu * N.
+                    // `friction_mu` is the tyre/ground grip (USD-authored, per wheel).
+                    let max_friction = wheel.friction_mu * normal_force;
 
                     let chassis_vel = forces.linear_velocity();
                     let chassis_ang_vel = forces.angular_velocity();
@@ -357,14 +372,28 @@ fn apply_wheel_drive(
                     let lat_vel = hub_vel.dot(right);
 
                     // Combined slip speed and direction
-                    let slip_speed = (long_vel * long_vel + lat_vel * lat_vel).sqrt();
-                    if slip_speed > 0.001 {
-                        let slip_dir = (long_vel * forward + lat_vel * right) / slip_speed;
-                        // Friction opposes slip, clamped to the friction cone
-                        let friction_mag = max_friction.min(slip_speed * 50.0); // High stiffness for low slip
-                        let friction_force = -slip_dir * friction_mag;
-                        forces.apply_force_at_point(friction_force, hub_pos_world);
-                    }
+                    // Friction opposes the slip *velocity vector*. Expressing it on
+                    // the vector (not a normalized direction × magnitude behind a
+                    // slip dead-band) keeps it a continuous damper through zero slip:
+                    // `-k·slip` in the linear regime, saturating at the Coulomb cone
+                    // `μ·N`. The old `if slip_speed > MIN_SLIP_SPEED` gate left
+                    // sub-threshold motion UNDAMPED, so a resting/gently-turning
+                    // chassis drifted free until it crossed the threshold, got snapped
+                    // back, and drifted again — a stiction limit-cycle that showed up
+                    // as a tick-period yaw chatter (the steering jitter). Smooth to
+                    // zero removes it; at this mass `-k·slip` is well overdamped so it
+                    // cannot overshoot.
+                    let slip_vec = long_vel * forward + lat_vel * right;
+                    let slip_speed = slip_vec.length();
+                    let friction_force = if slip_speed * wheel.contact_grip_stiffness <= max_friction {
+                        // Linear grip — `-k·slip`, → 0 continuously as slip → 0
+                        // (no division, safe at exactly zero slip).
+                        -slip_vec * wheel.contact_grip_stiffness
+                    } else {
+                        // Saturated at the cone; slip_speed > 0 here.
+                        -slip_vec * (max_friction / slip_speed)
+                    };
+                    forces.apply_force_at_point(friction_force, hub_pos_world);
                 }
             }
         }

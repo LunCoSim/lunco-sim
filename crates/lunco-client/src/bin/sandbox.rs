@@ -171,7 +171,12 @@ fn main() {
             AssetSourceBuilder::platform_default(&cache_dir().to_string_lossy(), None),
         )
         .insert_resource(Time::<Fixed>::from_hz(lunco_core::FIXED_HZ))
-        .insert_resource(lunco_core::TimeWarpState { physics_enabled: true, ..default() })
+        // `speed: 1.0` is load-bearing: `..default()` leaves it 0.0, which keeps
+        // physics running (wheels gate on `physics_enabled` only) but FREEZES
+        // `SimTick` — `advance_sim_tick` needs `speed > 0.0`. A frozen tick breaks
+        // every tick-keyed netcode path (snapshot interpolation timebase, input
+        // stamping). Match the rover examples: both flags set explicitly.
+        .insert_resource(lunco_core::TimeWarpState { physics_enabled: true, speed: 1.0 })
         .insert_resource(avian3d::prelude::Gravity::ZERO)
         .insert_resource(lunco_celestial::Gravity::flat(9.81, bevy::math::DVec3::NEG_Y))
         .add_plugins(DefaultPlugins

@@ -526,10 +526,14 @@ fn process_usd_sim_prims(
             // Wheel brake torque caps the lock-up authority.
             let brake_torque_max = read_f("physxVehicleWheel:maxBrakeTorque")
                 .unwrap_or(drive_torque_max * 3.0);
-            // Coulomb μ matches the drive-traction model (apply_wheel_drive); the
+            // Coulomb μ for the drive-traction model (apply_wheel_drive). The
             // PhysX tire friction table is ground-material dependent and not a
-            // single wheel scalar, so we keep the unit-friction default here.
-            let friction_mu = 1.0;
+            // single wheel scalar, so we read our own `lunco:frictionCoefficient`
+            // (unit-friction default when unauthored).
+            let friction_mu = read_f("lunco:frictionCoefficient").unwrap_or(1.0);
+            // Chassis-contact grip stiffness (slope of contact friction vs slip
+            // before the Coulomb cone). USD: `lunco:contactGripStiffness`.
+            let contact_grip_stiffness = read_f("lunco:contactGripStiffness").unwrap_or(50.0);
 
             // Standard-USD discriminator: an authored `PhysicsRevoluteJoint`
             // pointing at this wheel via `physics:body1` ⇒ joint-based.
@@ -555,6 +559,7 @@ fn process_usd_sim_prims(
                         bearing_damping,
                         friction_mu,
                         slip_stiffness,
+                        contact_grip_stiffness,
                         brake_torque_max,
                     },
                 );
@@ -575,6 +580,7 @@ struct WheelSpinParams {
     bearing_damping: f64,
     friction_mu: f64,
     slip_stiffness: f64,
+    contact_grip_stiffness: f64,
     brake_torque_max: f64,
 }
 
@@ -617,6 +623,7 @@ fn setup_raycast_wheel(
         bearing_damping: spin.bearing_damping,
         friction_mu: spin.friction_mu,
         slip_stiffness: spin.slip_stiffness,
+        contact_grip_stiffness: spin.contact_grip_stiffness,
         brake_torque_max: spin.brake_torque_max,
         ..default()
     };
