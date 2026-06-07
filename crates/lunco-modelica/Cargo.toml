@@ -159,10 +159,6 @@ crossbeam-channel = { workspace = true }
 lunco-api = { path = "../lunco-api", optional = true, default-features = false }
 log = "0.4"
 uuid = { workspace = true }
-# Native file-picker dialogs for Open Folder + Save-As. Uses the
-# OS-native picker (GTK3 on Linux, COM on Windows, Cocoa on macOS)
-# via rfd's default feature set.
-rfd = { workspace = true }
 
 # Tracy profiler is wired via the `tracy` feature above
 # (`tracy = ["bevy/trace_tracy"]`). Off by default because tracy-client-sys

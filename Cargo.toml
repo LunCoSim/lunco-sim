@@ -45,6 +45,15 @@ members = [
     "crates/lunco-settings",
     "crates/lunco-experiments"
 ]
+# Bare `cargo build`/`check`/`test` (no `-p`/`--workspace`) operates on just the
+# two app crates and their dependency closure. This skips workspace members that
+# no binary reaches — lunco-attributes, lunco-cache, lunco-obc, lunco-telemetry,
+# and the feature-gated lunco-networking — so default builds don't compile dead
+# weight. Use `--workspace` to include everything (e.g. CI lint/test sweeps).
+default-members = [
+    "crates/lunco-client",
+    "crates/lunco-modelica",
+]
 resolver = "2"
 
 [patch.crates-io]
