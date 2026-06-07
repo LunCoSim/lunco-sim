@@ -94,7 +94,23 @@ checkpointed, and **replicated** by the same machinery as everything else — an
 multiplayer-safe in Tier B without one line of new netcode (the wire layer
 already replicates).
 
-## 5. Multiplayer mapping, per tier
+## 5. Tiers select the replication mechanism
+
+The tier is not just a solver choice — it **decides how a model is duplicated
+across peers**. There is one axis: *what do we duplicate — the computation, the
+result, or nothing?* The tier answers it, and that answer picks one of the
+networking sync mechanisms (M1–M7 in [[project_networking_plan]]).
+
+| Tier | What is duplicated | What crosses the wire | Sync mechanism |
+|------|--------------------|------------------------|----------------|
+| **A — predicted** | the **computation** — the deterministic stepper runs on **both** peers | **inputs** (op-log / commands) + periodic **authoritative state correction** for reconciliation | client-prediction + state-correction (the rover path today) |
+| **B — server-authoritative** | only the **result** — stepper runs on the **server alone**, client does **not** integrate | **output state** (the model's ports / state component) | state replication (the gravity Shape A wire) |
+| **C — local** | **nothing** | nothing | none |
+
+So the duplication question — *"run this model on the client too, or just stream
+its state?"* — is answered by the tier, not decided per-model ad hoc. This is the
+key payoff of the classification: it turns "what do we replicate?" from a
+case-by-case judgement into a lookup.
 
 - **Tier B** — server runs the authoritative stepper; output ports replicate to
   clients as wires over the existing networking channel (D7: gated behind the
@@ -102,30 +118,119 @@ already replicates).
   the architecture degrades to single-player *by construction*, matching
   [[project_predict_own_reconciliation]]'s "solo reconcile is a structural no-op").
   Clients render received state; they never integrate it. No determinism needed.
-- **Tier A** — requires (1) a rumoca **fixed-step deterministic codegen** path
-  and (2) a determinism contract (same fold/step order on every peer, integer
-  `SimTick` clock, no `Date::now`/`Math::random` — mirrors the
-  [[project_networking_plan]] identity rules). Until both exist, Tier-A physics
-  stays in deterministic Rust (avian + the mobility force laws), with Modelica
-  used only as an **offline oracle** (§6, Step 2).
+- **Tier A** — both peers run the **same** stepper, so it requires (1) a
+  fixed-step **deterministic** solver and (2) a determinism contract (same
+  fold/step order on every peer, integer `SimTick` clock, no `Date::now`/`Math::random`
+  — mirrors the [[project_networking_plan]] identity rules). Until both exist,
+  Tier-A physics stays in deterministic Rust (avian + the mobility force laws),
+  with Modelica used only as an **offline oracle** (§8, Step 2).
 
-## 6. Hot-changeable behaviour
+## 6. Robotics-ready: custom solvers per model
+
+Robots break the "one global solver" assumption: a manipulator's articulated-body
+dynamics, a contact-rich gait, and a real-time control loop each want a *different*
+integrator (fixed-step semi-implicit for stable contact, RK4 for smooth dynamics,
+or an external real-time loop for a controller). The architecture must let **each
+model bring its own solver** — and it already can, because the cosim master loop
+only ever calls `participant.step(dt)` ([`14-simulation-layers.md`](14-simulation-layers.md)
+`Participant` trait). The solver lives *inside* the participant; the master loop
+is solver-agnostic.
+
+Making this first-class:
+
+- **Solver is a per-participant property**, selectable at authoring time (a USD
+  attribute / model annotation, e.g. `lunco:solver = "rk4-fixed"`), not a global
+  setting. The `BackendCaps.native_solver` flag already distinguishes models that
+  carry their own integrator from those needing an external one (FMU-ME style).
+- **Robotics fast dynamics + control is Tier A** — deterministic, fixed-step,
+  often at a control rate distinct from render (the multi-clock hook). So robotics
+  is the **forcing function** for Step 3: the fixed-step deterministic solver path
+  Tier A needs is exactly what a robot's controller/dynamics loop needs. A robot
+  is not a special case bolted on — it is the canonical Tier-A custom-solver
+  citizen.
+- **External / HIL solvers** (a ROS 2 node, a Copper rate-group, real hardware in
+  the loop) plug in as a **Backend** whose `step()` advances an external loop and
+  whose ports bridge ROS topics ↔ `SimConnection` wires. This is the
+  ROS2/Copper-as-bridge path already in [[project_networking_plan]] — a robot
+  controller running its own solver is just another participant on the wire.
+- **Custom solvers stay inside the tier contract**: a Tier-A custom solver must be
+  fixed-step + deterministic (or it isn't predictable); a Tier-B custom solver may
+  be anything (it only streams state). The tier still selects the replication
+  mechanism regardless of which solver the participant carries.
+
+## 7. Hot-changeable behaviour (incl. vehicle physics at runtime)
 
 Two distinct flavours, different cost:
 
 - **Parameter change** (coefficients, setpoints): cheap. Compile-once + runtime
   parameters (the roadmap item in [[project_parallel_experiments]] §2b) → feed as
   input wires / `ControlStream` live inputs ([`22-domain-cosim.md`](22-domain-cosim.md)
-  control-vs-data plane). No recompile. Works mid-run in every tier.
+  control-vs-data plane). No recompile.
 - **Structural change** (swap equations / whole model): needs recompile, then
-  **hot-swap the compiled stepper**. Clean in Tier B (replace the server-side
-  integrator; replication continues uninterrupted — `BackendCaps.supports_live_swap`
-  already reserves this). In Tier A it changes the determinism contract, so only
-  at a quiesced tick boundary, never mid-rollback.
+  **hot-swap the compiled stepper** (`BackendCaps.supports_live_swap` reserves this).
 
-## 7. Staged roadmap
+How runtime control plays out **depends on the tier** — and vehicle physics is
+Tier A, the hard one:
 
-1. **Step 1 — Tier B, ECS-native, server-authoritative (this doc, §8).** One slow
+- **Tier B (server-authoritative):** either flavour is loose — mutate on the
+  server, replication carries the new behaviour to clients. No coordination.
+- **Tier A (vehicle / predicted):** a runtime change must be applied **identically
+  on every peer at the same tick**, or prediction desyncs. So it rides the
+  **deterministic command/op-log channel** (not a local ad-hoc mutation) and lands
+  at a tick boundary — then every peer's stepper is reconfigured in lockstep and
+  reconciliation stays quiet.
+
+**Vehicle physics is already nearly there at the parameter level.** The mobility
+force laws were just refactored so every knob is explicit and USD-authored —
+`DEFAULT_DRIVE_FORCE_PER_NORMAL`, per-wheel `friction_mu`, `contact_grip_stiffness`,
+suspension `spring_k`/`damping_c`, motor `peak_torque`. Exposing those as runtime
+parameters routed through the deterministic command channel gives **live tuning of
+vehicle handling, multiplayer-safe**, with no Modelica and no Step 3 — the integration
+stays fixed-step deterministic Rust; only the coefficients change, in lockstep.
+That is the practical "control vehicle physics at runtime" path available now.
+
+**Structural** vehicle change (swap the whole friction/suspension *model*, e.g. to
+a Modelica-described one) is the Tier-A hot-swap: only once Step 3's fixed-step
+deterministic Modelica lands, and only at a quiesced tick boundary applied across
+all peers — never mid-rollback.
+
+## 7. The realtime Modelica profile (the Tier-A path)
+
+The way to make Tier-A physics describable in Modelica is **not** to make rumoca's
+general adaptive solver deterministic. It is to define a **restricted profile** —
+a special fixed-step deterministic solver **plus limitations on the model**, with
+the model still authored in plain Modelica code. The compiler is the gate: a model
+either type-checks into the *Realtime profile* (and is then predictable +
+multiplayer-safe by construction) or it is rejected with a clear reason. This is
+how every realtime/HIL Modelica toolchain works (inline integration, fixed-step
+code-gen subsets).
+
+**The special solver:** fixed-step, fixed work per step — semi-implicit (symplectic)
+Euler for the common non-stiff case (the same class as the gold-standard
+`wheel_spin.rs`), or a fixed-step **linearly-implicit** method (Rosenbrock-1 /
+implicit Euler with a *fixed* iteration count) for mild stiffness. Determinism comes
+from: fixed step count, fixed iteration count, fixed evaluation order, integer
+`SimTick` clock, no wall-clock / RNG, identical IEEE float ops on every peer.
+
+**The property limitations** (compiler-enforced — the profile's "type system"):
+
+- **Fixed structure** — no variable-structure systems, constant state count.
+- **Fixed-step-stable dynamics** — reject systems whose stiffness needs adaptive
+  steps to stay stable at the chosen `dt` (or require the linearly-implicit solver).
+- **Bounded state** — guards against runaway (the [[feedback_app_must_never_stall]]
+  invariant); a model that can diverge in finite ticks is rejected.
+- **Tick-quantized events** — zero-crossings/events resolve **at tick boundaries**,
+  not via intra-step root-finding (root-finding makes step timing data-dependent →
+  non-deterministic across peers).
+- **Deterministic evaluation order** — fixed fold order, no wall-clock/random.
+
+This is the same profile **robots** want (§6): a controller / articulated-body
+loop is exactly a fixed-step, bounded, deterministic Tier-A model. Robots and
+vehicles are the two canonical Realtime-profile citizens.
+
+## 8. Staged roadmap
+
+1. **Step 1 — Tier B, ECS-native, server-authoritative (this doc, §9).** One slow
    domain modelled in Modelica, stepped as an ECS system, output replicated as a
    wire. Proves *all* the asks (declarative physics + realtime + multiplayer +
    hot-param + ECS-native) inside the safe tier, reusing cosim + networking that
@@ -136,12 +241,14 @@ Two distinct flavours, different cost:
    testable functions in `lunco-mobility`). Modelica as **ground truth, out of the
    loop** — would have caught the explicit-Euler limit-cycles immediately. Validates
    Tier-A Rust physics without committing to runtime Modelica.
-3. **Step 3 — Tier A in the loop (the hard ask).** Only if fast dynamics must be
-   *computed* by Modelica under prediction: invest in rumoca fixed-step
-   deterministic codegen + the determinism contract. Highest risk; do last, once
-   1–2 have shown value.
+3. **Step 3 — Tier A in the loop (the hard ask): the Realtime profile (§7).** Build
+   the special fixed-step deterministic solver + the compiler-enforced property
+   limitations, so a vehicle/robot model authored in (restricted) Modelica can run
+   *inside* the prediction loop. Highest risk; do last, once 1–2 have shown value.
+   Tier-A *parameter* tuning (§7) is available well before this — Step 3 is only
+   needed to replace the force-law *structure* with Modelica.
 
-## 8. Step 1 scope — ECS-native Tier-B Modelica stepper
+## 9. Step 1 scope — ECS-native Tier-B Modelica stepper
 
 **Demonstrator:** rover **battery State-of-Charge** (alternative: a thermal node).
 Chosen because it (a) is genuinely slow/server-authoritative, (b) couples
@@ -197,14 +304,19 @@ end RoverBattery;
 codegen, the offline oracle (Step 2), structural hot-swap, the full Twin /
 BackendRegistry formalisation.
 
-## 9. Decision log
+## 10. Decision log
 
 1. **Classify physics by networking role, not uniformly "Modelica everywhere."**
-   Tier A (predicted) ≠ Tier B (replicated) ≠ Tier C (local).
+   Tier A (predicted) ≠ Tier B (replicated) ≠ Tier C (local). The tier also
+   **selects the replication mechanism** (duplicate computation / duplicate state /
+   nothing — §5), turning "what do we replicate?" into a lookup.
 2. **Adaptive solvers are for Tier B only.** They are non-deterministic across
    peers and must never enter the client-prediction loop (Tier A).
-3. **Tier A needs fixed-step deterministic codegen** before any Modelica model
-   can be predicted. Until then Tier-A physics stays in deterministic Rust;
+3. **Tier A Modelica = a Realtime profile (§7): a special fixed-step deterministic
+   solver + compiler-enforced model limitations**, authored in plain Modelica. Not
+   "make the adaptive solver deterministic" — constrain the models instead. Robots
+   and vehicles are the canonical citizens. Until it exists, Tier-A physics stays in
+   deterministic Rust;
    Modelica serves Tier A only as an offline oracle.
 4. **The Modelica stepper is an ECS citizen**: instance = entity, ports =
    components, state = component, step = system, coupling = `SimConnection` wire,
@@ -213,9 +325,17 @@ BackendRegistry formalisation.
    degrades to local with no reconciliation by construction.
 6. **Realtime safety = bounded compute**: off-thread stepping, sub-rate,
    step-budget-with-degrade. Never silently stall; a runaway model fails its run.
-7. **Hot-param is cheap (runtime params), hot-structure is a stepper hot-swap**
+7. **Solver is a per-participant property, not global** (the `step(dt)` contract +
+   `native_solver` cap). This is what makes the system **robotics-ready**: each
+   robot/model brings its own solver; external/HIL solvers (ROS 2 / Copper) plug in
+   as Backends bridging topics ↔ wires.
+8. **Hot-param is cheap (runtime params), hot-structure is a stepper hot-swap**
    (Tier B any time; Tier A only at quiesced tick boundaries).
-8. **Step 1 reuses existing cosim + networking**, adds only state-as-component +
+9. **Vehicle (Tier-A) physics is runtime-controllable now at the parameter level**:
+   the extracted USD-authored knobs, routed through the **deterministic command
+   channel** and applied at a tick boundary, give multiplayer-safe live handling
+   tuning without Modelica. Structural change waits for the Realtime profile.
+10. **Step 1 reuses existing cosim + networking**, adds only state-as-component +
    one replicated output — no Twin/BackendRegistry refactor as a prerequisite.
 
 ## See also
