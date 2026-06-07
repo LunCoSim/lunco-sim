@@ -646,6 +646,17 @@ mod ph1_identity_tests {
     }
 
     #[test]
+    fn is_running_requires_both_enabled_and_speed() {
+        // The one predicate every physics gate uses. A "paused" world that left
+        // `physics_enabled: true, speed: 0.0` (the SimTick-freeze bug) is NOT
+        // running — and neither is a disabled one with speed.
+        assert!(TimeWarpState { speed: 1.0, physics_enabled: true }.is_running());
+        assert!(!TimeWarpState { speed: 0.0, physics_enabled: true }.is_running());
+        assert!(!TimeWarpState { speed: 1.0, physics_enabled: false }.is_running());
+        assert!(!TimeWarpState::default().is_running());
+    }
+
+    #[test]
     fn sim_tick_advances_under_run_paused_does_not() {
         let mut app = ph1_app(true);
 

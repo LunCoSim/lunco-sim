@@ -703,4 +703,92 @@ register_commands!(
     on_brake_rover,
 );
 
+#[cfg(test)]
+mod force_law_tests {
+    //! Regression guards for the numerically-sensitive wheel force laws. Each
+    //! test pins a property whose violation previously caused a jitter or a
+    //! broken control (the comments name the bug).
+    use super::*;
+    use bevy::math::DVec3;
+
+    // ── drive_force_mag: reverse must work ──────────────────────────────────
+    #[test]
+    fn drive_supports_forward_and_reverse() {
+        let n = 1000.0;
+        assert!(drive_force_mag(0.5, n) > 0.0, "forward drives forward");
+        // REGRESSION: reverse used to be clamped to 0 (`clamp(0.0, 1.0)`).
+        assert!(drive_force_mag(-0.5, n) < 0.0, "negative throttle = reverse");
+        assert!((drive_force_mag(0.5, n) + drive_force_mag(-0.5, n)).abs() < 1e-9);
+        // throttle clamps to [-1, 1]
+        assert_eq!(drive_force_mag(5.0, n), drive_force_mag(1.0, n));
+        assert_eq!(drive_force_mag(-5.0, n), drive_force_mag(-1.0, n));
+        assert_eq!(drive_force_mag(0.0, n), 0.0);
+    }
+
+    // ── contact_friction: continuous through zero, saturating, brake grips ───
+    #[test]
+    fn friction_zero_at_rest_and_continuous_through_zero() {
+        // REGRESSION: a slip dead-band left sub-threshold motion undamped → a
+        // stiction limit-cycle (the steering jitter). Friction must be exactly
+        // zero at zero slip AND shrink smoothly toward it (no cliff).
+        let (k, max) = (50.0, 1e9); // huge cone → always linear
+        assert_eq!(contact_friction(DVec3::ZERO, k, max, false), DVec3::ZERO);
+        let big = contact_friction(DVec3::new(1e-3, 0.0, 0.0), k, max, false);
+        let small = contact_friction(DVec3::new(1e-4, 0.0, 0.0), k, max, false);
+        assert!((big - DVec3::new(1e-3, 0.0, 0.0) * -k).length() < 1e-12);
+        assert!(small.length() < big.length(), "shrinks continuously toward 0");
+    }
+
+    #[test]
+    fn friction_opposes_slip_saturates_and_is_continuous_at_boundary() {
+        let (k, max) = (50.0, 100.0);
+        let slip = DVec3::new(10.0, 0.0, 0.0); // k*slip = 500 > 100 → saturated
+        let f = contact_friction(slip, k, max, false);
+        assert!((f.length() - max).abs() < 1e-9, "saturates at the cone");
+        assert!(f.dot(slip) < 0.0, "opposes slip");
+        // both branches agree exactly at the linear/saturation boundary
+        let boundary = DVec3::new(max / k, 0.0, 0.0);
+        let fb = contact_friction(boundary, k, max, false);
+        assert!((fb - boundary * -k).length() < 1e-9);
+        assert!((fb.length() - max).abs() < 1e-9);
+    }
+
+    #[test]
+    fn braking_grips_at_full_cone() {
+        // REGRESSION: braking only zeroed the drive ports; the chassis coasted.
+        // A locked wheel must grip at the full cone even when normal grip is weak.
+        let (k, max) = (50.0, 100.0);
+        let slip = DVec3::new(0.1, 0.0, 0.0); // k*slip = 5 ≪ 100 → linear when coasting
+        let coast = contact_friction(slip, k, max, false);
+        let brake = contact_friction(slip, k, max, true);
+        assert!(brake.length() > coast.length(), "brake grips harder");
+        assert!((brake.length() - max).abs() < 1e-9, "full cone");
+    }
+
+    // ── suspension_force_mag: bounded, never negative, damps both ways ───────
+    #[test]
+    fn suspension_force_is_nonnegative_and_bounded() {
+        let (k, c) = (8000.0, 2800.0);
+        let x = 0.05;
+        let spring = x * k;
+        assert!(suspension_force_mag(x, k, -1000.0, c) >= 0.0, "ground can't pull");
+        assert!(suspension_force_mag(x, k, 1000.0, c) <= 2.0 * spring + 1e-9, "bounded");
+        assert!((suspension_force_mag(x, k, 0.0, c) - spring).abs() < 1e-9, "at rest = spring");
+    }
+
+    #[test]
+    fn suspension_damps_the_rebound_half_cycle() {
+        // REGRESSION: `(spring + c·v).max(0)` dropped ALL damping on fast rebound
+        // → an undamped suspension limit-cycle (the forward+turn jitter). A
+        // moderate rebound must still be damped (force below spring), not clamped.
+        let (k, c) = (8000.0, 2800.0);
+        let x = 0.1;
+        let spring = x * k; // 800
+        let f = suspension_force_mag(x, k, -0.1, c); // c·v = -280, within ±spring
+        assert!(f < spring, "rebound is damped");
+        assert!(f > 0.0, "not clamped to zero");
+        assert!((f - (spring - 280.0)).abs() < 1e-9);
+    }
+}
+
 
