@@ -988,6 +988,18 @@ mod web {
 
     const CACHE_NAME: &str = "lunco-msl-v1";
 
+    /// Fetch bytes from the network and store them in the browser's Cache Storage.
+    ///
+    /// TODO: This implementation uses a "Cache-First" strategy for everything, including
+    /// `manifest.json`. This means that if a new version of MSL is released on the server,
+    /// clients who already have a cached manifest will never see the update until they
+    /// manually clear their browser cache.
+    ///
+    /// Immutable, content-hashed bundles (sources-*.tar.zst, parsed-*.bin.zst) are
+    /// safe to cache forever. However, the proper solution for `manifest.json` would be
+    /// a "Stale-While-Revalidate" strategy: use the cache immediately for 
+    /// startup speed, but fetch from network in the background and update the cache 
+    /// for the next reload.
     async fn fetch_bytes_cached(path: &str) -> Result<Vec<u8>, String> {
         let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
         let caches = window.caches().map_err(|e| format!("window.caches: {e:?}"))?;
