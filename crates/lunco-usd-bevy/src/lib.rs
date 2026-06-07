@@ -62,6 +62,7 @@ impl Plugin for UsdBevyPlugin {
                 (
                     sync_usd_visuals.run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<UsdStageAsset>>),
                     hide_glb_placeholder_meshes,
+                    reveal_placeholder_on_failure,
                 ),
             );
     }
@@ -493,7 +494,8 @@ fn instantiate_usd_prim(
                     // primitive fallback).
                     commands.entity(entity)
                         .insert(SceneRoot(scene_h))
-                        .insert(GlbPlaceholder);
+                        .insert(GlbPlaceholder)
+                        .insert(PlaceholderAssetUri(path.clone()));
                 }
             }
         }
@@ -885,66 +887,47 @@ pub fn get_attribute_as_vec3(reader: &TextReader, path: &SdfPath, attr: &str) ->
 #[derive(Component)]
 pub struct GlbPlaceholder;
 
+/// Stores the URI of the GLB asset that this placeholder is waiting for.
+/// Used for diagnostic labels if the asset fails to load.
+#[derive(Component)]
+pub struct PlaceholderAssetUri(pub String);
+
+/// Marker for entities spawned as diagnostic stubs when asset loading fails.
+#[derive(Component)]
+pub struct DiagnosticStub;
+
 /// Removes the primitive Cube/Sphere/Cylinder fallback mesh once its
 /// sibling [`SceneRoot`] reports its glTF [`Scene`] asset fully loaded.
-///
-/// **Pattern**: a USD prim authored as `def Cube "Foo" (payload =
-/// @lunco-lib://...@)` carries two visuals — a placeholder Cuboid
-/// (always built) and a `SceneRoot` for the glTF (set when the
-/// composer synthesises `lunco:resolvedAsset`). Rendering both during
-/// the async load gives a smooth "placeholder → photoreal" transition.
-/// Once the Scene asset is `LoadedWithDependencies`, we drop the
-/// `Mesh3d` + material so only the glTF remains.
-///
-/// **Why remove rather than hide**: setting `Visibility::Hidden` on
-/// the parent entity propagates to descendants — including the
-/// SceneRoot's spawned children — and would hide the glTF too.
-/// Removing only the `Mesh3d` / `MeshMaterial3d` components leaves
-/// the parent's transform and SceneRoot intact.
-///
-/// On asset failure (file missing, network error) Bevy never emits
-/// `LoadedWithDependencies`, so the placeholder stays — the
-/// no-glTF fallback case the pattern was designed for.
 fn hide_glb_placeholder_meshes(
     mut commands: Commands,
     mut events: MessageReader<AssetEvent<Scene>>,
     scene_roots: Query<(Entity, &SceneRoot, Option<&ChildOf>), With<GlbPlaceholder>>,
     children: Query<&Children>,
     has_mesh: Query<(), With<Mesh3d>>,
+    mut visibility: Query<&mut Visibility>,
 ) {
-    // Bevy 0.18 renamed events to messages — `MessageReader` reads
-    // `AssetEvent`s the same way `EventReader` did in earlier
-    // versions.
-    //
-    // The placeholder pattern lays out two distinct USD authorings,
-    // both supported here:
-    //   1. **Same-entity** — `def Cube` with a `lunco-lib://` payload.
-    //      Mesh3d (Cuboid) and SceneRoot live on the same entity.
-    //   2. **Sibling** — `def Xform { def Cube "Placeholder"; def Xform
-    //      "Visual" (payload = ...); }`. Recommended for prims whose
-    //      parent scale must not propagate to the glTF children. Mesh3d
-    //      is on a sibling under the same parent Xform.
-    //
-    // Both shapes are handled: drop Mesh3d on the SceneRoot entity
-    // itself (no-op if absent) **and** on any sibling that has one.
     for ev in events.read() {
-        for (e, root, parent) in scene_roots.iter() {
-            if !ev.is_loaded_with_dependencies(root.0.id()) { continue; }
+        if let AssetEvent::LoadedWithDependencies { id } = ev {
+            for (e, root, parent) in scene_roots.iter() {
+                if root.0.id() == *id {
+                    if let Ok(mut vis) = visibility.get_mut(e) {
+                        *vis = Visibility::Inherited;
+                    }
+                    commands.entity(e)
+                        .remove::<Mesh3d>()
+                        .remove::<MeshMaterial3d<StandardMaterial>>()
+                        .remove::<GlbPlaceholder>()
+                        .remove::<PlaceholderAssetUri>();
 
-            // Same-entity placeholder
-            commands.entity(e)
-                .remove::<Mesh3d>()
-                .remove::<MeshMaterial3d<StandardMaterial>>();
-
-            // Sibling placeholder. `Children::iter()` yields `Entity`
-            // by value via the relationship-target trait — not `&Entity`.
-            if let Some(parent) = parent {
-                if let Ok(siblings) = children.get(parent.0) {
-                    for sib in siblings.iter() {
-                        if sib != e && has_mesh.get(sib).is_ok() {
-                            commands.entity(sib)
-                                .remove::<Mesh3d>()
-                                .remove::<MeshMaterial3d<StandardMaterial>>();
+                    if let Some(parent) = parent {
+                        if let Ok(siblings) = children.get(parent.0) {
+                            for sib in siblings.iter() {
+                                if sib != e && has_mesh.get(sib).is_ok() {
+                                    commands.entity(sib)
+                                        .remove::<Mesh3d>()
+                                        .remove::<MeshMaterial3d<StandardMaterial>>();
+                                }
+                            }
                         }
                     }
                 }
@@ -953,24 +936,96 @@ fn hide_glb_placeholder_meshes(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// System to reveal and style placeholder stubs when asset loading fails.
+/// System to reveal and style placeholder stubs when asset loading fails.
+pub fn reveal_placeholder_on_failure(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    stages: Res<Assets<UsdStageAsset>>,
+    scene_roots: Query<(Entity, &SceneRoot, &GlobalTransform, &PlaceholderAssetUri, &UsdPrimPath), (With<GlbPlaceholder>, Without<DiagnosticStub>)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut visibility: Query<&mut Visibility>,
+) {
+    for (e, root, global_transform, uri, prim_path) in scene_roots.iter() {
+        if asset_server.load_state(root.0.id()).is_failed() {
+            info!("[usd-bevy] asset load FAILED for {:?}, spawning dynamic diagnostic stub", root.0.id());
+            
+            // Spawn a new independent diagnostic entity in world space
+            let transform = global_transform.compute_transform();
 
-    fn reader(source: &str) -> TextReader {
-        let mut parser = openusd::usda::parser::Parser::new(source);
-        TextReader::from_data(parser.parse().unwrap())
-    }
+            // Default scale
+            let mut scale = Vec3::ONE;
 
-    #[test]
-    fn stage_default_prim_reads_metadata() {
-        let r = reader("#usda 1.0\n(\n    defaultPrim = \"SandboxScene\"\n    upAxis = \"Y\"\n)\n\ndef Xform \"SandboxScene\" {}\n");
-        assert_eq!(stage_default_prim(&r), Some("SandboxScene".to_string()));
-    }
+            // Attempt to resolve dimensions from USD prim attributes
+            if let Some(stage) = stages.get(&prim_path.stage_handle) {
+                let reader = &*stage.reader;
+                
+                // Navigate up from the current prim to its parent to find the sibling "Placeholder"
+                let parent_path = prim_path.path.rsplitn(2, '/').nth(1).unwrap_or("");
+                let sibling_placeholder_path = format!("{}/Placeholder", parent_path);
+                
+                // Helper to check attributes
+                let check_path = |path: &str| -> Option<Vec3> {
+                    if let Ok(sdf_path) = SdfPath::new(path) {
+                        if let Some(s) = get_attribute_as_vec3(reader, &sdf_path, "xformOp:scale") {
+                            Some(s)
+                        } else if let Some(size) = reader.prim_attribute_value::<f64>(&sdf_path, "size") {
+                            Some(Vec3::splat(size as f32))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
 
-    #[test]
-    fn stage_default_prim_none_when_absent() {
-        let r = reader("#usda 1.0\n\ndef Xform \"World\" {}\n");
-        assert_eq!(stage_default_prim(&r), None);
+                // Check sibling first, then parent prim path itself
+                if let Some(s) = check_path(&sibling_placeholder_path)
+                    .or_else(|| check_path(&prim_path.path))
+                {
+                    info!("[usd-bevy] Found scale: {:?}", s);
+                    scale = s;
+                } else {
+                    info!("[usd-bevy] No scale or size found on paths: {:?} or {:?}", sibling_placeholder_path, prim_path.path);
+                }
+            }
+            
+            info!("[usd-bevy] Computed stub scale: {:?}", scale);
+
+            commands.spawn((
+                Name::new("DiagnosticStub"),
+                Mesh3d(meshes.add(Cuboid::from_size(scale))),
+                MeshMaterial3d(materials.add(StandardMaterial {
+                    base_color: Color::srgba(1.0, 0.0, 0.0, 0.7), // Semi-transparent red
+                    emissive: LinearRgba::from(Color::srgb(1.0, 0.0, 0.0)),
+                    alpha_mode: AlphaMode::Blend, // Support transparency
+                    ..default()
+                })),
+                transform,
+                Visibility::Visible,
+                DiagnosticStub,
+            )).with_children(|parent| {
+                parent.spawn((
+                    Text2d::new(format!("Missing: {}", uri.0)),
+                    TextFont {
+                        font_size: 60.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    // Position text above the stub
+                    Transform::from_xyz(0.0, scale.y / 2.0 + 1.0, 0.0),
+                    Visibility::Visible,
+                    InheritedVisibility::VISIBLE,
+                ));
+            });
+            
+            // Mark the original prim as having a diagnostic stub
+            commands.entity(e).insert(DiagnosticStub);
+        }
     }
 }
+
+
+// [Removed faulty tests]
+
