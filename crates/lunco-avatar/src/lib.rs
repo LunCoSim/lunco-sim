@@ -110,6 +110,15 @@ pub struct SpringArmCamera {
     pub pitch: f32,
     pub damping: Option<f32>,
     pub vertical_offset: f32,
+    /// Whether to derive camera heading from the target's body orientation.
+    ///
+    /// `true` for steerable vehicles (rovers) whose chassis has a meaningful
+    /// "forward". `false` for freely-rolling rigid bodies (a ball, a balloon)
+    /// whose body frame tumbles arbitrarily — reading their rotation would
+    /// whip the camera around as the body spins. When `false`, heading is
+    /// driven solely by the user's yaw (`yaw`); position still follows the
+    /// target.
+    pub track_heading: bool,
 }
 
 /// Survey camera: orbits a target fixed to the stars.
@@ -516,10 +525,18 @@ fn spring_arm_system(
         // time because alpha = 1 - exp(-rate*dt) makes the per-frame catch-up
         // step proportional to dt, so the camera's lag wobbles around its
         // mean as frame timing fluctuates.
-        let target_fwd_d = t_tf.rotation.mul_vec3(Vec3::Z).as_dvec3();
-        let target_heading_d = if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
-            target_fwd_d.x.atan2(target_fwd_d.z)
-        } else { 0.0 };
+        // Only steerable vehicles have a meaningful body heading. A freely-
+        // rolling rigid body (ball, balloon) tumbles its body frame, so its
+        // forward vector flips around as it rolls — deriving heading from it
+        // swings the camera wildly. For those, heading is user-only (yaw).
+        let target_heading_d = if arm.track_heading {
+            let target_fwd_d = t_tf.rotation.mul_vec3(Vec3::Z).as_dvec3();
+            if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
+                target_fwd_d.x.atan2(target_fwd_d.z)
+            } else { 0.0 }
+        } else {
+            0.0
+        };
 
         let final_yaw = (target_heading_d + arm.yaw as f64) as f32;
 
@@ -1333,6 +1350,7 @@ fn on_possess_command(
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_sc: Query<&Spacecraft>,
+    q_vessel: Query<&Vessel>,
     q_vessel_gravity: Query<&GravityBody>,
     _q_orbit: Query<&OrbitCamera>,
     _q_spring: Query<&SpringArmCamera>,
@@ -1461,6 +1479,9 @@ fn on_possess_command(
                 pitch: end_pitch,
                 damping: Some(0.05),
                 vertical_offset: end_vert_off,
+                // Only steerable vessels (rovers) have a meaningful heading;
+                // a possessed ball/prop tumbles, so track user yaw only.
+                track_heading: q_vessel.contains(cmd.target),
             },
             // Camera updates in FixedPostUpdate; ease its Transform between
             // fixed samples so the rendered camera doesn't staircase at 60Hz.
@@ -1497,6 +1518,7 @@ fn on_follow_command(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_vessel: Query<&Vessel>,
     q_vessel_gravity: Query<&GravityBody>,
 ) {
     let cmd = trigger.event();
@@ -1564,6 +1586,8 @@ fn on_follow_command(
                 pitch: end_pitch,
                 damping: Some(0.05),
                 vertical_offset: end_vert_off,
+                // Followed props (balloons, balls) tumble — heading is user-only.
+                track_heading: q_vessel.contains(cmd.target),
             },
             avian3d::prelude::TranslationInterpolation,
             avian3d::prelude::RotationInterpolation,

@@ -362,6 +362,8 @@ fn process_usd_sim_prims(
                             pitch,
                             damping: None,
                             vertical_offset: 2.0,
+                            // Authored chase cams target steerable vehicles.
+                            track_heading: true,
                         },
                         avian3d::prelude::TranslationInterpolation,
                         avian3d::prelude::RotationInterpolation,
