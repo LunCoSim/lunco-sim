@@ -250,6 +250,24 @@ pub struct TimeWarpState {
     pub physics_enabled: bool,
 }
 
+impl TimeWarpState {
+    /// The single predicate for "physics is actually advancing": enabled AND
+    /// time is flowing (`speed > 0`). Gate every physics-stepping system AND the
+    /// [`SimTick`] advance on THIS so they can never disagree.
+    ///
+    /// The `SimTick`-frozen-while-driving bug was exactly such a disagreement:
+    /// the wheels gated on `physics_enabled` alone while `advance_sim_tick`
+    /// required `physics_enabled && speed > 0`, so a `speed: 0.0` (e.g. the
+    /// sandbox's `..default()`, or a paused celestial clock which sets
+    /// `physics_enabled: true, speed: 0.0`) ran physics with a frozen tick — and
+    /// would have run the wheels through a "pause". One predicate removes the
+    /// whole class.
+    #[inline]
+    pub fn is_running(&self) -> bool {
+        self.physics_enabled && self.speed > 0.0
+    }
+}
+
 /// Marker resource indicating that entity dragging is active.
 ///
 /// Used by sandbox editing systems to signal other systems (like avatar possession)
@@ -436,7 +454,7 @@ pub(crate) fn register_core_resources(app: &mut App) {
 /// stay comparable). `TimeWarpState` is read optionally: if a binary hasn't
 /// inserted it, we treat the world as running and advance.
 fn advance_sim_tick(mut tick: ResMut<SimTick>, warp: Option<Res<TimeWarpState>>) {
-    let running = warp.map_or(true, |w| w.physics_enabled && w.speed > 0.0);
+    let running = warp.map_or(true, |w| w.is_running());
     if running {
         tick.0 = tick.0.wrapping_add(1);
     }

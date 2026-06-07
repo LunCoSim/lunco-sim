@@ -21,7 +21,7 @@ impl Plugin for LunCoHardwarePlugin {
                motor_actuator_system,
                brake_actuator_system,
                sensor_velocity_system,
-           ).chain().run_if(|tw: Res<lunco_core::TimeWarpState>| tw.physics_enabled));
+           ).chain().run_if(|tw: Res<lunco_core::TimeWarpState>| tw.is_running()));
     }
 }
 
