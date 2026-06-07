@@ -107,6 +107,10 @@ pub fn setup_big_space_hierarchy(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut blueprint_materials: ResMut<Assets<BlueprintMaterial>>,
     asset_server: Res<AssetServer>,
+    // The single world-shell root (WorldShellPlugin) to nest under, and any prior
+    // FloatingOrigin holder (the shell's OriginAnchor) the Observer Camera claims.
+    q_world_root: Query<Entity, With<lunco_core::WorldRoot>>,
+    q_prior_origins: Query<Entity, With<FloatingOrigin>>,
     #[cfg(target_arch = "wasm32")] embedded_earth: Option<Res<crate::embedded_assets::EmbeddedEarthTexture>>,
     #[cfg(target_arch = "wasm32")] embedded_moon: Option<Res<crate::embedded_assets::EmbeddedMoonTexture>>,
 ) {
@@ -122,9 +126,14 @@ pub fn setup_big_space_hierarchy(
     #[cfg(target_arch = "wasm32")]
     let moon_texture = embedded_moon.as_ref().and_then(|e| e.0.clone()).unwrap_or_default();
 
-    // 1. Minimalist BigSpace Root (No Name, No standard spatial components)
-    // IMPORTANT: In big_space 0.12+, BigSpace component must be on a top-level entity.
-    let big_space_root = commands.spawn(BigSpace::default()).id();
+    // 1. Reuse the single world-shell BigSpace root if present; otherwise
+    //    (standalone celestial, no WorldShellPlugin) spawn our own. This is the
+    //    "collapse to one root" fix — in the full client the solar grids nest
+    //    under the shell root instead of creating a second, origin-less BigSpace.
+    let big_space_root = q_world_root
+        .iter()
+        .next()
+        .unwrap_or_else(|| commands.spawn(BigSpace::default()).id());
 
     // ── Solar System Grid (inertial anchor) ────────────────────────────────
     let solar_grid = commands.spawn((
@@ -417,6 +426,14 @@ pub fn setup_big_space_hierarchy(
     let earth_radius_m = 6_371_000.0;
     let earth_orbit_distance = earth_radius_m * 3.0;
     let cam_pos = Vec3::new(0.0, earth_orbit_distance * 0.4, earth_orbit_distance);
+
+    // The Observer Camera is the intended view, so it holds the single
+    // FloatingOrigin. Claim it from any prior holder (the shell's OriginAnchor)
+    // so big_space never sees two origins (the "multiple floating origins →
+    // resetting this big space" error — a known multi-crate hazard).
+    for prior in q_prior_origins.iter() {
+        commands.entity(prior).remove::<FloatingOrigin>();
+    }
 
     commands.spawn((
         Camera::default(),

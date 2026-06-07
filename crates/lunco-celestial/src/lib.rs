@@ -110,7 +110,15 @@ impl Plugin for CelestialPlugin {
 
         app.add_plugins(GravityPlugin);
 
-        app.add_systems(Startup, big_space_setup::setup_big_space_hierarchy);
+        // After the world shell so the solar grids nest under its single root
+        // (and the Observer Camera claims the shell's seeded FloatingOrigin).
+        // `.after` a possibly-absent set is a no-op, so standalone celestial (no
+        // WorldShellPlugin) still works — it then spawns its own root via the
+        // fallback in `setup_big_space_hierarchy`.
+        app.add_systems(
+            Startup,
+            big_space_setup::setup_big_space_hierarchy.after(lunco_core::WorldShellSet),
+        );
 
         // --- LEAD-PHASE SYNCHRONIZATION ---
         // Core celestial updates in PreUpdate for Coordinate Stability

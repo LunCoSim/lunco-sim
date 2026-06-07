@@ -15,6 +15,9 @@ pub mod markers;
 pub mod attach;
 /// Debug-build invariant checks for the big_space hierarchy.
 pub mod invariants;
+/// The persistent big_space world shell (single root + `WorldGrid` + one
+/// `FloatingOrigin`) that every scene mounts into.
+pub mod world;
 /// Unified diagram data model — pure Rust, no Bevy dependency.
 pub mod diagram;
 /// Shared 53-bit time-sorted id generator backing `GlobalEntityId`
@@ -48,6 +51,10 @@ pub use commands::{
 };
 pub use markers::{GridAnchor, SoiMigrant};
 pub use invariants::BigSpaceInvariantsPlugin;
+pub use world::{
+    ensure_world_root, OriginAnchor, WorldGrid, WorldGridConfig, WorldRoot, WorldShellPlugin,
+    WorldShellSet,
+};
 pub use identity::Provenance;
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use session::{

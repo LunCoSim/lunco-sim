@@ -244,6 +244,9 @@ fn main() {
         .add_plugins(CoSimPlugin)
         .add_plugins(lunco_workbench::WorkbenchPlugin)
         .add_plugins(lunco_core::LunCoCorePlugin)
+        // Persistent world shell: one BigSpace root + `WorldGrid` + one
+        // `FloatingOrigin`. Scenes mount into it via `ensure_world_root`.
+        .add_plugins(lunco_core::WorldShellPlugin)
         .add_plugins(GravityPlugin)
         .add_plugins(EnvironmentPlugin)
         .add_plugins(TerrainPlugin)
@@ -555,24 +558,17 @@ fn auto_tag_workbench_3d_cameras(
 // and a `DirectionalLight` → Grid — neither is a rigid body / GridAnchor, so
 // that hazard doesn't apply, and this is a native-only bin. Locally allowed.
 #[allow(clippy::disallowed_methods)]
-fn setup_sandbox(
-    mut commands: Commands,
-    scene_path: Res<ScenePath>,
-) {
-    let scene_path: String = scene_path.0.clone();
-    let big_space_root = commands.spawn(BigSpace::default()).id();
-    let grid = commands.spawn((
-        Grid::new(2000.0, 1.0e10),
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::default(),
-        InheritedVisibility::default(),
-        Name::new("Sandbox_Grid"),
-    )).set_parent_in_place(big_space_root).id();
+fn setup_sandbox(world: &mut World) {
+    let scene_path: String = world.resource::<ScenePath>().0.clone();
 
-    // --- Sun (directional light) ---
-    commands.spawn((
+    // The persistent world shell (BigSpace root + `WorldGrid` + the single
+    // `FloatingOrigin`) is owned by `WorldShellPlugin`. `ensure_world_root` is
+    // create-or-get, so the Sun hangs off the canonical grid regardless of which
+    // Startup system ran first — no eager root spawn here, no "first Grid" guess.
+    let grid = lunco_core::ensure_world_root(world);
+
+    // --- Sun (directional light) on the world grid ---
+    world.spawn((
         DirectionalLight {
             illuminance: 10000.0,
             shadows_enabled: true,
@@ -582,15 +578,16 @@ fn setup_sandbox(
         GlobalTransform::default(),
         CellCoord::default(),
         Name::new("Sun"),
-    )).set_parent_in_place(grid);
+        ChildOf(grid),
+    ));
 
     // --- Load scene from USD ---
     // Routed through the typed-command bus so startup and runtime
     // (API/MCP `LoadScene`, future File→Open) share one code path.
     // Empty `root_prim` auto-derives `/PascalCaseFromFilename`.
     info!("Loading sandbox scene `{}` via LoadScene", scene_path);
-    commands.trigger(LoadScene {
-        path: scene_path.clone(),
+    world.trigger(LoadScene {
+        path: scene_path,
         root_prim: String::new(),
     });
 }

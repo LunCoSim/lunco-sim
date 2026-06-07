@@ -26,7 +26,7 @@
 //! is the authoritative path for USD-defined cosim entities.
 
 use bevy::prelude::*;
-use big_space::prelude::{CellCoord, Grid};
+use big_space::prelude::CellCoord;
 use lunco_assets::assets_dir;
 use lunco_core::{Command, on_command, register_commands};
 use lunco_cosim::{SimComponent, SimConnection, SimStatus};
@@ -703,14 +703,12 @@ pub fn spawn_scene_root_world(
         }
     }
 
-    let grid = {
-        let mut q = world.query_filtered::<Entity, With<Grid>>();
-        q.iter(world).next()
-    };
-    let Some(grid) = grid else {
-        warn!("[scene] no `Grid` entity — `{}` won't be parented", asset_path);
-        return None;
-    };
+    // Mount under the canonical world grid. `ensure_world_root` is create-or-get:
+    // it builds the persistent shell (root + WorldGrid + single FloatingOrigin) on
+    // the first scene load and returns the same grid on every reload — so the root
+    // is never duplicated and never absent. Replaces the old "first `Grid` found"
+    // heuristic, which was ambiguous once celestial / preview grids also existed.
+    let grid = lunco_core::ensure_world_root(world);
 
     // Scene-root entity is itself the Grid-direct `GridAnchor`. Its
     // children — top-level USD prims (rovers, balls, terrain) — stay
