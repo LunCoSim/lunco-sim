@@ -97,9 +97,22 @@ pub fn ensure_world_root(world: &mut World) -> Entity {
         .copied()
         .unwrap_or_default();
 
-    // BigSpace root — bare, exactly as the prior call sites spawned it, plus the
-    // `WorldRoot` marker so subsystems can attach under it.
-    let root = world.spawn((BigSpace::default(), WorldRoot, Name::new("WorldRoot"))).id();
+    // BigSpace root + the `WorldRoot` marker (so subsystems attach under it). It
+    // carries the full spatial/visibility bundle so its `WorldGrid` child doesn't
+    // trip Bevy's B0004 "parent without GlobalTransform/InheritedVisibility" warning
+    // — the root is the identity base of big_space propagation.
+    let root = world
+        .spawn((
+            BigSpace::default(),
+            WorldRoot,
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
+            Name::new("WorldRoot"),
+        ))
+        .id();
 
     // The canonical grid scenes mount under.
     let grid = world

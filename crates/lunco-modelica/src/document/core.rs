@@ -235,6 +235,11 @@ impl ModelicaDocument {
         path: &Path,
         qualified: &str,
     ) -> Result<Self, String> {
+        // On wasm the MSL source tree is untarred lazily (boot no longer unpacks
+        // it, to avoid a startup freeze). Materialise it before reading source.
+        #[cfg(target_arch = "wasm32")]
+        crate::msl_remote::ensure_msl_source_unpacked();
+
         let full_source = if let Some(bytes) = lunco_assets::msl::global_msl_source()
             .and_then(|s| s.read(path))
         {
@@ -307,6 +312,10 @@ impl ModelicaDocument {
         id: DocumentId,
         path: &Path,
     ) -> Result<Self, String> {
+        // Lazily untar the MSL source tree on first drill-in (see load_msl_class).
+        #[cfg(target_arch = "wasm32")]
+        crate::msl_remote::ensure_msl_source_unpacked();
+
         let source = if let Some(bytes) = lunco_assets::msl::global_msl_source()
             .and_then(|s| s.read(path))
         {

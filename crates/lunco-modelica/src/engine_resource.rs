@@ -750,19 +750,29 @@ fn drive_msl_bootstrap(
     // `GLOBAL_PARSED_MSL`; we just hand the AST half over.
     let parsed = crate::msl_remote::global_parsed_msl();
     if let Some(docs) = parsed {
+        let t_clone = web_time::Instant::now();
         let defs: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)> =
             docs.iter().map(|(u, d)| (u.clone(), d.clone())).collect();
+        let clone_ms = t_clone.elapsed().as_secs_f64() * 1000.0;
         let count = defs.len();
+        let t_lock = web_time::Instant::now();
         let mut engine = handle.lock();
+        let lock_ms = t_lock.elapsed().as_secs_f64() * 1000.0;
+        let t_replace = web_time::Instant::now();
         engine.session_mut().replace_parsed_source_set(
             "msl",
             rumoca_compile::compile::SourceRootKind::DurableExternal,
             defs,
             None,
         );
+        let replace_ms = t_replace.elapsed().as_secs_f64() * 1000.0;
         bevy::log::info!(
-            "[EngineBootstrap] installed MSL into workspace engine: {} pre-parsed docs",
-            count
+            "[EngineBootstrap] installed MSL into workspace engine: {} pre-parsed docs \
+             [TIMING clone={:.0}ms lock={:.0}ms replace_parsed_source_set={:.0}ms]",
+            count,
+            clone_ms,
+            lock_ms,
+            replace_ms
         );
         *bootstrap = MslBootstrapState::Done;
         return;

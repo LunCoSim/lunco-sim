@@ -58,6 +58,234 @@ fn install_global_parsed_msl(parsed: Vec<(String, rumoca_compile::parsing::Store
     let _ = GLOBAL_PARSED_MSL.set(Arc::new(parsed));
 }
 
+/// Decompress + bincode-decode a `parsed-*.bin.zst` blob into the
+/// `Vec<(uri, StoredDefinition)>` bundle. zstd-wrapped bincode produced by
+/// `build_msl_assets` (legacy `bincode::serialize`). One-shot — used by the
+/// **worker** (off the main thread); the main thread uses the chunked decoder
+/// below instead so it never blocks.
+#[cfg(target_arch = "wasm32")]
+pub fn decode_parsed_bundle(
+    compressed: &[u8],
+) -> Result<Vec<(String, rumoca_compile::parsing::StoredDefinition)>, String> {
+    let decoder = ruzstd::StreamingDecoder::new(compressed)
+        .map_err(|e| format!("zstd decoder: {e}"))?;
+    bincode::deserialize_from(decoder).map_err(|e| format!("bincode deserialize: {e}"))
+}
+
+// ─── Chunked main-thread MSL decode ────────────────────────────────
+//
+// On wasm the main-thread rumoca session needs the MSL ASTs in *its own*
+// linear memory for reference resolution / autocomplete — the worker's copy
+// lives in a separate memory and can't be shared. So the main thread must
+// spend the CPU to materialise ~173 MB of `StoredDefinition`s. Doing it in one
+// `bincode::deserialize_from` call froze the page for seconds; instead we
+// time-slice it across frames (chunked decompress, then chunked deserialize)
+// so the UI stays responsive while MSL becomes ready a second or two in.
+//
+// State lives in a `thread_local` (wasm is single-threaded) rather than a Bevy
+// resource so it can hold a `Box<dyn Read>` (not `Send`) without `NonSend`
+// plumbing. `drive_msl_main_decode` ticks it each `Update`.
+
+#[cfg(target_arch = "wasm32")]
+struct MainDecodeState {
+    /// `Some` during the decompress phase; `None` once the full bincode byte
+    /// stream has been inflated into `out`.
+    decoder: Option<Box<dyn std::io::Read>>,
+    /// Decompressed bincode bytes (the `Vec<(uri, StoredDefinition)>` blob).
+    out: Vec<u8>,
+    /// Cursor position into `out` for the deserialize phase.
+    pos: u64,
+    /// Elements left to deserialize.
+    remaining: u64,
+    /// Total element count (read from the bincode seq header).
+    total: u64,
+    header_read: bool,
+    acc: Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static MAIN_DECODE: std::cell::RefCell<Option<MainDecodeState>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Kick off the chunked main-thread decode of the compressed parsed bundle.
+#[cfg(target_arch = "wasm32")]
+fn start_main_msl_decode(compressed: Vec<u8>) {
+    match ruzstd::StreamingDecoder::new(std::io::Cursor::new(compressed)) {
+        Ok(decoder) => {
+            MAIN_DECODE.with(|cell| {
+                *cell.borrow_mut() = Some(MainDecodeState {
+                    decoder: Some(Box::new(decoder)),
+                    out: Vec::new(),
+                    pos: 0,
+                    remaining: 0,
+                    total: 0,
+                    header_read: false,
+                    acc: Vec::new(),
+                });
+            });
+            info!("[MSL] started chunked main-thread decode (resolution/autocomplete)");
+        }
+        Err(e) => error!("[MSL] could not start main decode: {e}"),
+    }
+}
+
+/// Per-frame driver for the chunked main-thread MSL decode. No-op once the
+/// `MAIN_DECODE` slot is empty (the common case after boot). On completion it
+/// installs `GLOBAL_PARSED_MSL` and flips `MslLoadState` to `Ready`, after
+/// which `drive_msl_bootstrap` seeds the workspace engine session exactly as
+/// before — so resolution/autocomplete are unaffected, just non-blocking.
+#[cfg(target_arch = "wasm32")]
+fn drive_msl_main_decode(mut state: ResMut<MslLoadState>) {
+    use bincode::Options;
+    use serde::Deserialize;
+    // Tuned so each frame's slice stays a few ms. Decompress is cheap per byte;
+    // deserialize allocates deep ASTs, so its chunk is in documents.
+    const DECOMPRESS_CHUNK: usize = 8 * 1024 * 1024;
+    const DESER_CHUNK: usize = 96;
+
+    MAIN_DECODE.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        let Some(d) = guard.as_mut() else {
+            return;
+        };
+
+        // ── Phase 1: inflate the zstd stream, bounded bytes per frame.
+        if let Some(reader) = d.decoder.as_mut() {
+            let mut buf = vec![0u8; 256 * 1024];
+            let mut got = 0usize;
+            while got < DECOMPRESS_CHUNK {
+                match reader.read(&mut buf) {
+                    Ok(0) => {
+                        d.decoder = None;
+                        break;
+                    }
+                    Ok(n) => {
+                        d.out.extend_from_slice(&buf[..n]);
+                        got += n;
+                    }
+                    Err(e) => {
+                        warn!("[MSL] main decode decompress error: {e}");
+                        *guard = None;
+                        return;
+                    }
+                }
+            }
+            *state = MslLoadState::Loading {
+                phase: MslLoadPhase::Decompressing,
+                bytes_done: d.out.len() as u64,
+                bytes_total: 0,
+            };
+            return;
+        }
+
+        // ── Phase 2: bincode-deserialize, bounded docs per frame. The blob is
+        // legacy `bincode::serialize` output (fixint, little-endian); match it.
+        if !d.header_read {
+            if d.out.len() < 8 {
+                warn!("[MSL] main decode: decoded blob too small ({}B)", d.out.len());
+                *guard = None;
+                return;
+            }
+            let mut hdr = [0u8; 8];
+            hdr.copy_from_slice(&d.out[0..8]);
+            d.total = u64::from_le_bytes(hdr);
+            d.remaining = d.total;
+            d.pos = 8;
+            d.header_read = true;
+            d.acc.reserve(d.total as usize);
+        }
+
+        let opts = bincode::config::DefaultOptions::new()
+            .with_fixint_encoding()
+            .allow_trailing_bytes();
+        {
+            let mut cur = std::io::Cursor::new(d.out.as_slice());
+            cur.set_position(d.pos);
+            let mut de = bincode::Deserializer::with_reader(&mut cur, opts);
+            for _ in 0..DESER_CHUNK {
+                if d.remaining == 0 {
+                    break;
+                }
+                match <(String, rumoca_compile::parsing::StoredDefinition)>::deserialize(&mut de) {
+                    Ok(item) => {
+                        d.acc.push(item);
+                        d.remaining -= 1;
+                    }
+                    Err(e) => {
+                        warn!("[MSL] main decode deserialize error: {e}");
+                        d.remaining = 0;
+                        break;
+                    }
+                }
+            }
+            drop(de);
+            d.pos = cur.position();
+        }
+
+        if d.remaining == 0 {
+            let docs = std::mem::take(&mut d.acc);
+            let count = docs.len();
+            let uncompressed = d.out.len() as u64;
+            install_global_parsed_msl(docs);
+            *guard = None; // frees `out`
+            *state = MslLoadState::Ready {
+                file_count: count,
+                compressed_bytes: 0,
+                uncompressed_bytes: uncompressed,
+            };
+            info!("[MSL] main-thread decode complete: {count} docs — resolution/autocomplete ready");
+        } else {
+            *state = MslLoadState::Loading {
+                phase: MslLoadPhase::Parsing,
+                bytes_done: d.total - d.remaining,
+                bytes_total: d.total,
+            };
+        }
+    });
+}
+
+// ─── Lazy source-bundle unpack ─────────────────────────────────────
+//
+// The 37 MB source tree is only needed when the user drills into an MSL file
+// in the editor — so we keep it compressed and untar it on first demand
+// (`ensure_msl_source_unpacked`) instead of on the boot future, where it was a
+// second freeze. Image/icon loading is disabled on wasm, so nothing else needs
+// it at boot.
+#[cfg(target_arch = "wasm32")]
+static MSL_SOURCE_COMPRESSED: OnceLock<(Vec<u8>, lunco_assets::msl::MslBundleEntry)> =
+    OnceLock::new();
+
+#[cfg(target_arch = "wasm32")]
+fn stash_compressed_source(bytes: Vec<u8>, meta: lunco_assets::msl::MslBundleEntry) {
+    let _ = MSL_SOURCE_COMPRESSED.set((bytes, meta));
+}
+
+/// Untar the MSL source bundle into the process-wide `MslAssetSource` on first
+/// use (idempotent). Called by the drill-in paths (`Document::load_msl_class` /
+/// `load_msl_file`) before they read MSL source text. No-op if already
+/// unpacked or if no compressed source was stashed.
+#[cfg(target_arch = "wasm32")]
+pub fn ensure_msl_source_unpacked() {
+    if lunco_assets::msl::global_msl_source().is_some() {
+        return;
+    }
+    let Some((bytes, meta)) = MSL_SOURCE_COMPRESSED.get() else {
+        return;
+    };
+    match web::unpack(bytes, meta) {
+        Ok(files) => {
+            let n = files.len();
+            lunco_assets::msl::install_global_msl_source(MslAssetSource::InMemory(Arc::new(
+                lunco_assets::msl::MslInMemory { files },
+            )));
+            info!("[MSL] source bundle unpacked lazily ({n} files) for drill-in");
+        }
+        Err(e) => warn!("[MSL] lazy source unpack failed: {e}"),
+    }
+}
+
 /// `pub` re-export of `install_global_parsed_msl` so the off-thread
 /// worker bin (`bin/lunica_worker.rs`) can install the MSL bundle it
 /// receives over postMessage.
@@ -176,7 +404,7 @@ impl Plugin for MslRemotePlugin {
                 app.insert_resource(MslLoadSlot(slot.clone()));
                 app.add_systems(
                     Update,
-                    (drain_msl_load_slot, drive_msl_parse).chain(),
+                    (drain_msl_load_slot, drive_msl_parse, drive_msl_main_decode).chain(),
                 );
                 wasm_bindgen_futures::spawn_local(web::run_fetcher(slot));
             }
@@ -487,7 +715,16 @@ struct SlotInner {
     /// Pre-parsed `Vec<(uri, StoredDefinition)>` if the manifest had a
     /// `parsed` entry. When `Some`, the drain skips the chunked-source
     /// parse path and installs directly into `GLOBAL_PARSED_MSL`.
+    /// (Legacy fallback field — the boot path now uses the compressed fields
+    /// below; this stays `None` unless a non-parsed bundle is loaded.)
     pending_parsed: Option<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>,
+    /// Raw **compressed** `parsed-*.bin.zst` bytes. Decompressed/decoded off
+    /// the boot future: shipped to the worker + chunk-decoded on main. This is
+    /// the fast path when the manifest advertises a pre-parsed bundle.
+    pending_parsed_compressed: Option<Vec<u8>>,
+    /// Raw **compressed** `sources-*.tar.zst` bytes + their manifest entry,
+    /// stashed for lazy unpack on first editor drill-in.
+    pending_source_compressed: Option<(Vec<u8>, lunco_assets::msl::MslBundleEntry)>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -514,6 +751,19 @@ fn drain_msl_load_slot(
             _ => log_state_transition(&new_state),
         }
         *state = new_state;
+    }
+    // Fast boot path: a compressed parsed bundle is waiting. Ship it to the
+    // worker (off-thread decode for compiles) and start the chunked
+    // main-thread decode (for resolution/autocomplete). Stash the compressed
+    // source for lazy drill-in unpack. `MslLoadState` stays `Loading{Parsing}`
+    // until `drive_msl_main_decode` finishes — neither thread blocks the UI.
+    if let Some(pbytes) = inner.pending_parsed_compressed.take() {
+        crate::worker_transport::install_msl_compressed_in_worker(&pbytes);
+        start_main_msl_decode(pbytes);
+        if let Some((sbytes, smeta)) = inner.pending_source_compressed.take() {
+            stash_compressed_source(sbytes, smeta);
+        }
+        return;
     }
     if let Some(source) = inner.pending_source.take() {
         // Install the process-wide handle that `ModelicaCompiler::new`
@@ -896,8 +1146,38 @@ mod web {
             None
         };
 
-        // ── Decompress the source bundle (always needed — keep around
-        // ── for editor / image loader / fallback parse path).
+        // Hand the COMPRESSED blobs off WITHOUT decoding them here — this runs
+        // on the main-thread event loop, so decompress/untar/decode would
+        // freeze the page (the original bug). Two paths:
+        //   • fast path (manifest advertises a pre-parsed bundle): stash both
+        //     compressed blobs. The drain ships the parsed one to the worker
+        //     (off-thread decode) and starts the chunked main-thread decode;
+        //     the source bundle is untarred lazily on first drill-in.
+        //   • fallback (no pre-parsed bundle): no worker decode possible, so
+        //     untar the source here and let the per-frame chunked *parser*
+        //     build the AST (slow legacy path; our bundles always ship parsed).
+        if parsed_bytes.is_some() {
+            set_state(
+                slot,
+                MslLoadState::Loading {
+                    phase: MslLoadPhase::Parsing,
+                    bytes_done: 0,
+                    bytes_total: manifest
+                        .parsed
+                        .as_ref()
+                        .map(|p| p.file_count as u64)
+                        .unwrap_or(0),
+                },
+            );
+            if let Ok(mut s) = slot.lock() {
+                s.pending_parsed_compressed = parsed_bytes;
+                s.pending_source_compressed = Some((sources_bytes, manifest.sources.clone()));
+            }
+            return Ok(());
+        }
+
+        // ── Fallback: decompress the source bundle and let the chunked
+        // ── per-file parser build the AST over many frames.
         set_state(
             slot,
             MslLoadState::Loading {
@@ -916,26 +1196,8 @@ mod web {
         let in_memory = MslInMemory { files };
         let source_file_count = in_memory.file_count();
         let source_uncompressed = in_memory.total_bytes();
-
-        // ── Decode the parsed bundle if we got one.
-        let parsed_docs = if let Some(bytes) = parsed_bytes {
-            match decode_parsed(&bytes) {
-                Ok(docs) => Some(docs),
-                Err(e) => {
-                    bevy::log::warn!(
-                        "[MSL] parsed bundle present but decode failed: {e}; \
-                         falling back to chunked source parse"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         if let Ok(mut s) = slot.lock() {
             s.pending_source = Some(MslAssetSource::InMemory(Arc::new(in_memory)));
-            s.pending_parsed = parsed_docs;
             s.pending_state = Some(MslLoadState::Ready {
                 file_count: source_file_count,
                 compressed_bytes: manifest.sources.compressed_bytes,
@@ -946,21 +1208,8 @@ mod web {
         Ok(())
     }
 
-    /// Decode the bincode-serialised `Vec<(uri, StoredDefinition)>`
-    /// shipped as the `parsed` blob.
-    fn decode_parsed(
-        compressed: &[u8],
-    ) -> Result<Vec<(String, rumoca_compile::parsing::StoredDefinition)>, String> {
-        let decoder = ruzstd::StreamingDecoder::new(compressed)
-            .map_err(|e| format!("zstd decoder: {e}"))?;
-        let docs: Vec<(String, rumoca_compile::parsing::StoredDefinition)> =
-            bincode::deserialize_from(decoder)
-                .map_err(|e| format!("bincode deserialize: {e}"))?;
-        Ok(docs)
-    }
-
     /// Unpack a `tar.zst` byte slice into `(rel_path → contents)`.
-    fn unpack(
+    pub(super) fn unpack(
         bundle: &[u8],
         entry_meta: &MslBundleEntry,
     ) -> Result<HashMap<PathBuf, Vec<u8>>, String> {

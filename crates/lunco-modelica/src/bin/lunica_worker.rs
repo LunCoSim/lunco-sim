@@ -493,6 +493,7 @@ pub fn run() -> Result<(), JsValue> {
                 let count = parsed.len();
                 let started = web_time::Instant::now();
                 lunco_modelica::msl_remote::install_global_parsed_msl_pub(parsed);
+                post_wire(&scope_for_cb, &WireResult::MslReady { docs: count });
                 post_log(
                     &scope_for_cb,
                     format!(
@@ -500,6 +501,30 @@ pub fn run() -> Result<(), JsValue> {
                         started.elapsed().as_secs_f64()
                     ),
                 );
+            }
+            WireMessage::InstallParsedMslCompressed(bytes) => {
+                // Decompress + bincode-decode the bundle here in the worker —
+                // off the main thread — then install into the worker's own
+                // process-wide `GLOBAL_PARSED_MSL` and report readiness so the
+                // main thread opens the compile gate.
+                let started = web_time::Instant::now();
+                match lunco_modelica::msl_remote::decode_parsed_bundle(&bytes) {
+                    Ok(parsed) => {
+                        let count = parsed.len();
+                        lunco_modelica::msl_remote::install_global_parsed_msl_pub(parsed);
+                        post_wire(&scope_for_cb, &WireResult::MslReady { docs: count });
+                        post_log(
+                            &scope_for_cb,
+                            format!(
+                                "decoded compressed MSL: {count} docs in {:.2}s",
+                                started.elapsed().as_secs_f64()
+                            ),
+                        );
+                    }
+                    Err(e) => {
+                        post_log(&scope_for_cb, format!("MSL decode failed: {e}"));
+                    }
+                }
             }
             WireMessage::Ping(tag) => {
                 post_log(

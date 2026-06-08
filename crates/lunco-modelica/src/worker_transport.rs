@@ -76,6 +76,17 @@ pub enum WireMessage {
     /// own MSL install lands. Worker uses this to seed
     /// `ModelicaCompiler::new`'s session before the first Compile.
     InstallParsedMsl(Vec<(String, rumoca_compile::parsing::StoredDefinition)>),
+    /// Install the MSL bundle as the raw **compressed** `parsed-*.bin.zst`
+    /// bytes (zstd-wrapped bincode of `Vec<(uri, StoredDefinition)>`). The
+    /// worker decompresses + bincode-decodes off the main thread, then signals
+    /// readiness with [`WireResult::MslReady`].
+    ///
+    /// This is the boot path: shipping the ~19 MB compressed blob (vs the
+    /// ~173 MB decoded `InstallParsedMsl`) avoids decoding on the main thread
+    /// *and* the previous double-decode (main decoded, re-encoded, worker
+    /// decoded again). The main thread decodes its *own* copy incrementally in
+    /// parallel (see `msl_remote::drive_msl_main_decode`).
+    InstallParsedMslCompressed(Vec<u8>),
     /// Diagnostic round-trip — worker echoes back as a `WireResult::Log`.
     /// Used by the test bridge (`window.__lc_test_worker_ping`) to confirm
     /// the worker is alive and responding without sending an actual
@@ -130,6 +141,12 @@ pub enum WireMessage {
 pub enum WireResult {
     /// A normal `ModelicaResult` produced by `process_inline_command`.
     Result(ModelicaResult),
+    /// The worker finished decoding the compressed MSL bundle (from
+    /// [`WireMessage::InstallParsedMslCompressed`]) into its own
+    /// `GLOBAL_PARSED_MSL`, and is ready to resolve `Modelica.*` references.
+    /// The main thread opens the compile gate (drains queued compiles/parses/
+    /// Fast Runs) on receipt. `docs` is the decoded class count, for logging.
+    MslReady { docs: usize },
     /// Free-form diagnostic line — surfaced as `bevy::log::info!` on main.
     /// Used by the worker to expose its progress (which command arrived,
     /// how long it took, panic/recover) since the worker's own console is
@@ -514,6 +531,19 @@ fn make_worker(idx: usize, worker_url: &str) -> Result<Worker, JsValue> {
                 if let Some(tx) = RESULT_TX.get() {
                     let _ = tx.send(result);
                 }
+            }
+            Ok(WireResult::MslReady { docs }) => {
+                // The worker decoded the compressed bundle off-thread and now
+                // has MSL in its own session. Open the compile gate and drain
+                // everything that queued behind it. (Idempotent — a respawned
+                // worker re-seeded via the deferred reinstall posts this again.)
+                bevy::log::info!(
+                    "[worker_transport] worker {idx} reports MSL ready: {docs} docs"
+                );
+                MSL_INSTALLED.with(|c| c.set(true));
+                flush_pending_parses();
+                flush_pending_commands();
+                flush_pending_run_fast();
             }
             Ok(WireResult::ParseDocumentDone { doc_id, gen, ast, errors }) => {
                 let tx = ensure_parse_done_channel();
@@ -1090,4 +1120,61 @@ pub fn install_msl_in_worker(
         flush_pending_commands();
         flush_pending_run_fast();
     }
+}
+
+/// Ship the MSL bundle to the worker(s) as the raw **compressed**
+/// `parsed-*.bin.zst` bytes. The worker decompresses + bincode-decodes off the
+/// main thread and replies with [`WireResult::MslReady`], which opens the
+/// compile gate (see the `onmessage` handler in [`make_worker`]).
+///
+/// This is the boot install path. Unlike [`install_msl_in_worker`] it does NOT
+/// open the gate here — the worker hasn't decoded yet, so compiles must keep
+/// queuing until `MslReady` arrives. The retained `MSL_WIRE` bytes (used to
+/// re-seed a respawned worker) are now the ~19 MB compressed envelope rather
+/// than the ~165 MB decoded one, so the post-OOM re-seed is far lighter too.
+pub fn install_msl_compressed_in_worker(compressed: &[u8]) {
+    let envelope = WireMessage::InstallParsedMslCompressed(compressed.to_vec());
+    let bytes = match bincode::serialize(&envelope) {
+        Ok(b) => b,
+        Err(e) => {
+            bevy::log::error!("[worker_transport] encode compressed MSL install failed: {e}");
+            return;
+        }
+    };
+    let len = bytes.len();
+    // Retain for respawn re-seed (set-once; identical for every worker).
+    if MSL_WIRE.get().is_none() {
+        let _ = MSL_WIRE.set(bytes.clone());
+    }
+
+    let n = {
+        let p = pool().lock().unwrap();
+        let n = p.workers.len();
+        if n == 0 {
+            return;
+        }
+        let single = n == 1;
+        for (i, WorkerHandle(worker)) in p.workers.iter().enumerate() {
+            let array = Uint8Array::new_with_length(len as u32);
+            array.copy_from(&bytes);
+            let res = if single {
+                let transfer = js_sys::Array::new();
+                transfer.push(&array.buffer());
+                worker.post_message_with_transfer(&array, &transfer)
+            } else {
+                worker.post_message(&array)
+            };
+            if let Err(e) = res {
+                bevy::log::error!(
+                    "[worker_transport] compressed MSL install to worker {i} failed: {e:?}"
+                );
+            }
+        }
+        n
+    };
+
+    bevy::log::info!(
+        "[worker_transport] shipped compressed MSL to {n} worker(s): {len} bytes — \
+         awaiting off-thread decode (gate opens on MslReady)"
+    );
 }
