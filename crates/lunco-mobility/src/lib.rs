@@ -616,6 +616,29 @@ pub struct BrakeRover {
 
 // ── Command Observers ───────────────────────────────────────────────────────────
 
+/// Mix a `forward`/`steer` command (each −1..=1) into left/right drive port
+/// values (i16, ±32767) for a skid/differential rover.
+///
+/// Two properties the old per-side clamp lacked:
+///   1. **Steer-priority**: hard steering bleeds off forward authority so the
+///      inner side can counter-rotate. Without this, at full throttle the outer
+///      side saturates and steering becomes a lazy arc — "can't steer while
+///      driving forward". At full steer, forward is cut in half so the rover
+///      can pivot even while W is held.
+///   2. **Proportional saturation**: when the mix exceeds ±1 it scales *both*
+///      sides by the larger magnitude, preserving the commanded L/R ratio,
+///      instead of clamping each side independently (which discards half the
+///      differential the moment forward saturates).
+fn skid_mix(forward: f64, steer: f64) -> (i16, i16) {
+    let steer = steer.clamp(-1.0, 1.0);
+    let drive = forward.clamp(-1.0, 1.0) * (1.0 - 0.5 * steer.abs());
+    let l = drive + steer;
+    let r = drive - steer;
+    let m = l.abs().max(r.abs()).max(1.0);
+    let to_i16 = |v: f64| (v / m * 32767.0).round().clamp(-32767.0, 32767.0) as i16;
+    (to_i16(l), to_i16(r))
+}
+
 /// Observer for DriveRover commands.
 #[on_command(DriveRover)]
 fn on_drive_rover(
@@ -637,8 +660,7 @@ fn on_drive_rover(
     }
 
     if let Ok(diff) = q_diff.get(cmd.target) {
-        let left_mix = ((cmd.forward + cmd.steer) * 32767.0).clamp(-32767.0, 32767.0) as i16;
-        let right_mix = ((cmd.forward - cmd.steer) * 32767.0).clamp(-32767.0, 32767.0) as i16;
+        let (left_mix, right_mix) = skid_mix(cmd.forward, cmd.steer);
         if let Some(&port_l) = fsw.port_map.get(&diff.left_port) {
             if let Ok(mut p) = q_digital_ports.get_mut(port_l) { p.raw_value = left_mix; }
         }
@@ -662,8 +684,7 @@ fn on_drive_rover(
         // are authored. With the full mix the rover yaws under steer
         // input by spinning the L/R wheel groups in opposite
         // directions — visually identical to skid steer.
-        let left_mix = ((cmd.forward + cmd.steer) * 32767.0).clamp(-32767.0, 32767.0) as i16;
-        let right_mix = ((cmd.forward - cmd.steer) * 32767.0).clamp(-32767.0, 32767.0) as i16;
+        let (left_mix, right_mix) = skid_mix(cmd.forward, cmd.steer);
         let steer_val = (cmd.steer * 32767.0).clamp(-32767.0, 32767.0) as i16;
         if let Some(&port_l) = fsw.port_map.get(&ack.drive_left_port) {
             if let Ok(mut p) = q_digital_ports.get_mut(port_l) { p.raw_value = left_mix; }

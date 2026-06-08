@@ -25,22 +25,38 @@ impl Plugin for LunCoHardwarePlugin {
     }
 }
 
-/// A motor that applies torque to a rigid body.
+/// A wheel-hub motor that drives a rover via a **contact force**, not a torque
+/// couple.
 ///
-/// It samples a [PhysicalPort] for the torque magnitude and applies it 
-/// along a specified local axis.
+/// The naive approach — `apply_torque` about the axle — works for a free wheel,
+/// but on a rigid-axle joint rover the revolute transmits the motor's reaction
+/// couple straight into the chassis as a nose-up pitch. At speed that compounds
+/// into a wheelie/launch (see `project_physical_rover_suspension`). Instead we
+/// apply a forward force at the wheel's ground-contact point: its moment about
+/// the (free) axle spins the wheel, and the linear part propels the chassis,
+/// leaving only the *real* traction pitch — no reaction couple. This mirrors the
+/// raycast wheel (`lunco_mobility::apply_wheel_drive`) and was validated in the
+/// headless `rover_jitter --drivemode=force` probe (5+ m/s with no launch).
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct MotorActuator {
-    /// Entity of the [PhysicalPort] providing the torque command.
+    /// Entity of the [PhysicalPort] providing the throttle command (−1..=1).
     pub port_entity: Entity,
-    /// Local axis of rotation to apply torque along.
+    /// Wheel spin axis (the axle). Retained for reference/diagnostics; the drive
+    /// direction is derived from the chassis heading, not this axis.
     pub axis: DVec3,
-    /// Peak torque in N·m delivered when the input port reads ±1.0
-    /// (after the wire's normalization). Mirrors PhysX Vehicle's
-    /// `physxVehicleEngine:peakTorque`. For wheel-hub motors,
-    /// `peak_torque ≈ motor_power · efficiency / max_omega`.
+    /// Peak drive authority, authored as `physxVehicleEngine:peakTorque` (N·m).
+    /// Converted to an equivalent traction force `F = peak_torque / radius`
+    /// delivered when the port reads ±1.0.
     pub peak_torque: f64,
+    /// Wheel radius (m) — converts the authored peak torque into a traction
+    /// force and sets the contact point below the hub.
+    pub radius: f64,
+    /// Wheel mount offset in the **chassis** local frame. The drive force is
+    /// applied to the chassis at this hub (reconstructed from the chassis pose),
+    /// not to the wheel body — a force on the `ChildOf` wheel is fought by Bevy
+    /// transform propagation re-slaving the child each frame.
+    pub mount_local: DVec3,
 }
 
 impl Default for MotorActuator {
@@ -49,22 +65,49 @@ impl Default for MotorActuator {
             port_entity: Entity::PLACEHOLDER,
             axis: DVec3::Y,
             peak_torque: 1.0,
+            radius: 0.4,
+            mount_local: DVec3::ZERO,
         }
     }
 }
 
-/// System that applies torques from [MotorActuator] components.
+/// Drives rovers from [MotorActuator] wheels via a contact force applied to the
+/// **chassis** (the wheel's `ChildOf` parent). Mirrors
+/// `lunco_mobility::apply_wheel_drive`: forward force at the wheel hub, derived
+/// from the chassis heading, so the motor reaction couple never loads the
+/// chassis as pitch (no wheelie). `q_motors` reads the wheels; `q_chassis`
+/// applies to their parents (disjoint via `Without<MotorActuator>`).
 fn motor_actuator_system(
     q_ports: Query<&PhysicalPort>,
-    mut q_motors: Query<(&MotorActuator, Forces)>,
+    q_motors: Query<(&MotorActuator, &ChildOf)>,
+    mut q_chassis: Query<Forces, Without<MotorActuator>>,
 ) {
-    for (motor, mut forces) in q_motors.iter_mut() {
-        if let Ok(port) = q_ports.get(motor.port_entity) {
-            // `port.value` is normalized -1..+1 (see wire_system); scale
-            // by `peak_torque` so the input acts as a throttle.
-            let torque_mag = port.value as f64 * motor.peak_torque;
-            forces.apply_local_torque(motor.axis * torque_mag);
+    for (motor, child_of) in q_motors.iter() {
+        if motor.radius <= 0.0 {
+            continue;
         }
+        let Ok(port) = q_ports.get(motor.port_entity) else { continue };
+        let Ok(mut forces) = q_chassis.get_mut(child_of.parent()) else { continue };
+        // Reconstruct the hub in avian's frame from the chassis Position/Rotation
+        // + the wheel's chassis-local offset (NOT GlobalTransform, which would mix
+        // in the big_space floating-origin rebasing — see apply_wheel_drive).
+        let chassis_rot = forces.rotation().0;
+        let hub_world = forces.position().0 + chassis_rot * motor.mount_local;
+        // Rover forward = chassis heading projected onto the horizontal plane, so
+        // a pitched chassis can't feed the drive force back into more pitch.
+        let mut forward = chassis_rot * DVec3::NEG_Z;
+        forward.y = 0.0;
+        let forward = forward.normalize_or_zero();
+        // `port.value` is the normalized throttle; F = throttle · peak_torque / r.
+        let force_mag = port.value as f64 * motor.peak_torque / motor.radius;
+        // Apply at the HUB (axle height), not the ground contact: the contact is
+        // the lowest point, so it has the longest lever to the chassis CG and
+        // maximises the nose-up traction pitch ("front goes up"). The hub is ~2×
+        // closer to the CG → roughly half the pitch, while still propelling the
+        // chassis forward. Left/right hubs differ, so a steering differential in
+        // the port values yaws the rover. (Mirrors apply_wheel_drive, which also
+        // applies at the hub, not the contact.)
+        forces.apply_force_at_point(forward * force_mag, hub_world);
     }
 }
 
