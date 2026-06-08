@@ -241,6 +241,13 @@ fn main() {
         // multi-line summary every second — so gate it on `--log-diag`.
         .add_plugins(bevy::diagnostic::EntityCountDiagnosticsPlugin::default())
         .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
+        // 12 solver substeps (avian default is 6). The joint-based rovers buzz
+        // the chassis under drive torque at 6 substeps — the rigid wheel↔chassis
+        // revolute can't resolve the wheel-contact + drive impulse coupling and
+        // it leaks into the chassis as "jitter when riding". At 12 substeps the
+        // jitter vanishes while drops still settle perfectly. Quantified in the
+        // headless `rover_jitter` probe. See `project_physical_rover_suspension`.
+        .insert_resource(avian3d::prelude::SubstepCount(12))
         .add_plugins(CoSimPlugin)
         .add_plugins(lunco_workbench::WorkbenchPlugin)
         .add_plugins(lunco_core::LunCoCorePlugin)

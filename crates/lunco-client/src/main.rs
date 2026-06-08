@@ -101,6 +101,11 @@ fn main() {
 
     app.add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
         .add_plugins(PhysicsPlugins::default())
+        // 12 solver substeps (avian default 6): the rigid joint-rover wheel
+        // hinge leaks wheel-contact + drive impulses into the chassis as
+        // "jitter when riding" at 6 substeps; 12 resolves it (drops still
+        // settle perfectly). See `project_physical_rover_suspension`.
+        .insert_resource(avian3d::prelude::SubstepCount(12))
         .add_plugins(LuncoUiPlugin)
         .add_plugins(lunco_avatar::ui::AvatarUiPlugin)
         .add_plugins(lunco_fsw::LunCoFswPlugin)

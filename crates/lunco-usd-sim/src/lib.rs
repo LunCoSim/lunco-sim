@@ -55,7 +55,6 @@ use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
 use lunco_usd_bevy::{has_api_schema, read_rel_target};
 use openusd::sdf::{Path as SdfPath, AbstractData, Value};
-use openusd::usda::TextReader;
 use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
 use lunco_fsw::FlightSoftware;
 use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
@@ -490,13 +489,20 @@ fn process_usd_sim_prims(
             // Mark for wiring — the try_wire_wheel system will connect ports once FSW exists
             commands.entity(entity).insert(PendingWheelWiring { index, p_drive, p_steer });
 
-            // Read common wheel parameters (used by raycast path only).
-            let rest_length = reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleSuspension:restLength")
-                .unwrap_or(0.7) as f64;
-            let spring_k = reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleSuspension:springStiffness")
-                .unwrap_or(15000.0) as f64;
-            let damping_c = reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleSuspension:springDamping")
-                .unwrap_or(3000.0) as f64;
+            // Suspension parameters — read ONCE here (the single
+            // `physxVehicleSuspension:*` reading path) and handed to whichever
+            // wheel implementation we build below. The raycast wheel emulates
+            // this spring analytically (`suspension_force_mag`); the joint
+            // wheel realises it as a real prismatic spring-damper. Same
+            // authored data, two constructions.
+            let suspension = SuspensionParams {
+                rest_length: reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleSuspension:restLength")
+                    .unwrap_or(0.7) as f64,
+                spring_k: reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleSuspension:springStiffness")
+                    .unwrap_or(15000.0) as f64,
+                damping_c: reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleSuspension:springDamping")
+                    .unwrap_or(3000.0) as f64,
+            };
 
             // Tire spin dynamics — read from the standard Omniverse PhysX
             // vehicle schema (`PhysxVehicleWheelAPI` / `PhysxVehicleEngineAPI` /
@@ -538,19 +544,18 @@ fn process_usd_sim_prims(
             // Standard-USD discriminator: an authored `PhysicsRevoluteJoint`
             // pointing at this wheel via `physics:body1` ⇒ joint-based.
             let key = (prim_path.stage_handle.clone(), prim_path.path.clone());
-            if let Some(joint_path_str) = joint_targets.get(&key).cloned() {
-                let joint_sdf = SdfPath::new(&joint_path_str).ok();
+            if joint_targets.contains_key(&key) {
                 setup_physical_wheel(
                     &mut commands, entity, prim_path, &existing_tf,
                     maybe_mesh, maybe_mat, maybe_shader_mat, maybe_child_of,
                     radius, p_drive,
-                    reader, joint_sdf.as_ref(),
+                    drive_torque_max,
                 );
             } else {
                 setup_raycast_wheel(
                     &mut commands, entity, prim_path, &existing_tf,
                     maybe_mesh, maybe_mat, maybe_shader_mat, maybe_child_of,
-                    radius, index, rest_length, spring_k, damping_c,
+                    radius, index, &suspension,
                     p_drive, p_steer,
                     WheelSpinParams {
                         mass: wheel_mass,
@@ -568,6 +573,19 @@ fn process_usd_sim_prims(
 
         commands.entity(entity).insert(UsdSimProcessed);
     }
+}
+
+/// Authored `physxVehicleSuspension:*` parameters, read once and shared by
+/// both wheel implementations. The raycast wheel emulates this spring
+/// analytically; the joint wheel realises it as a real prismatic spring.
+#[derive(Clone, Copy)]
+struct SuspensionParams {
+    /// Natural standoff of the wheel below its mount (raycast resting length).
+    rest_length: f64,
+    /// Spring stiffness, N/m.
+    spring_k: f64,
+    /// Spring damping, N·s/m.
+    damping_c: f64,
 }
 
 /// USD-derived tire spin dynamics, forwarded onto the `WheelRaycast` so the
@@ -600,9 +618,7 @@ fn setup_raycast_wheel(
     maybe_child_of: Option<&ChildOf>,
     radius: f32,
     _index: i32,
-    rest_length: f64,
-    spring_k: f64,
-    damping_c: f64,
+    susp: &SuspensionParams,
     p_drive: Entity,
     p_steer: Entity,
     spin: WheelSpinParams,
@@ -614,9 +630,9 @@ fn setup_raycast_wheel(
         visual_entity: Some(entity),
         drive_port: p_drive,
         steer_port: p_steer,
-        rest_length,
-        spring_k,
-        damping_c,
+        rest_length: susp.rest_length,
+        spring_k: susp.spring_k,
+        damping_c: susp.damping_c,
         mass: spin.mass,
         moment_of_inertia: spin.moment_of_inertia,
         drive_torque_max: spin.drive_torque_max,
@@ -704,8 +720,8 @@ fn setup_raycast_wheel(
 /// joint, mirroring the standard `PhysicsRevoluteJoint` authored in USD.
 ///
 /// The joint is spawned **synchronously** from the authored USD attributes
-/// (`physics:axis`, `physics:localPos0/1`, `drive:angular:physics:maxForce`)
-/// alongside the wheel's rigid-body init. Doing it lazily — letting
+/// (`physics:axis`, `physics:localPos0/1`) alongside the wheel's rigid-body
+/// init; drive authority comes from the engine `peakTorque`. Doing it lazily — letting
 /// `lunco-usd-avian::build_usd_physics_joints` do it on a later frame —
 /// raced narrow-phase contacts: the wheel's collider would meet the chassis
 /// at the joint anchor before `JointCollisionDisabled` was in place,
@@ -723,20 +739,18 @@ fn setup_physical_wheel(
     maybe_child_of: Option<&ChildOf>,
     radius: f32,
     p_drive: Entity,
-    reader: &TextReader,
-    joint_sdf: Option<&SdfPath>,
+    peak_torque: f64,
 ) {
     info!("Setting up PHYSICAL wheel {}", prim_path.path);
 
-    // Motor stall torque, in N·m. Read from `UsdPhysicsDriveAPI:angular`
-    // applied to the joint prim — the OpenUSD-standard way to author an
-    // angular drive on a revolute joint. `drive:angular:physics:maxForce`
-    // is the maximum torque the drive can deliver; we treat it as the
-    // motor's stall torque (port reads ±1.0 → ±maxForce N·m).
-    let peak_torque = joint_sdf.and_then(|j| {
-        reader.prim_attribute_value::<f64>(j, "drive:angular:physics:maxForce")
-            .or_else(|| reader.prim_attribute_value::<f32>(j, "drive:angular:physics:maxForce").map(|v| v as f64))
-    }).unwrap_or(360.0);
+    // `peak_torque` (N·m at full throttle) is the engine's `peakTorque`, the
+    // SAME drive authority the raycast wheel uses — NOT the joint's
+    // `drive:angular:physics:maxForce`. That joint attribute is a PhysX
+    // joint-drive *saturation* limit (authored at 12000 in the demo scenes);
+    // feeding it straight into the motor made the rover apply ~30× its lunar
+    // weight in traction at full throttle and wheelie/launch on every forward
+    // input. Using the engine peakTorque keeps joint and raycast rovers
+    // consistent. See `project_physical_rover_suspension`.
 
     // The wheel body keeps **identity rotation**. The cylinder's
     // visible axis (from `UsdGeomCylinder.axis`) lives on a visual
@@ -804,6 +818,8 @@ fn setup_physical_wheel(
             port_entity: p_drive,
             axis: motor_axis,
             peak_torque,
+            radius: radius as f64,
+            mount_local: existing_tf.translation.as_dvec3(),
         },
         RigidBody::Dynamic,
         collider,
@@ -813,9 +829,16 @@ fn setup_physical_wheel(
         // 1000 kg chassis the previous 40:1 mass ratio amplified
         // lateral float-precision noise into rolling drift.
         Mass(100.0),
-        Friction::new(1.2),
-        LinearDamping(2.0),
-        AngularDamping(4.0),
+        // The drive is a contact FORCE on the chassis (see MotorActuator), so the
+        // wheels are dragged + roll passively. The old LinearDamping(2.0)/
+        // AngularDamping(2.0) then act as a brake on the whole rover: at full
+        // throttle it crawled at 0.19 m/s because the damping ate ~95% of the
+        // drive force (verified by API drive probe). Low values let the wheels
+        // roll nearly free so sane torque (peakTorque=800) drives efficiently.
+        // Friction 0.9 keeps grip for skid-steer yaw + braking.
+        Friction::new(0.9),
+        LinearDamping(0.1),
+        AngularDamping(0.3),
         wheel_tf,
     ));
 
@@ -833,15 +856,34 @@ fn setup_physical_wheel(
         return;
     };
     let chassis = child_of.parent();
-    let anchor_chassis = existing_tf.translation.as_dvec3();
-    let chassis_axis = (existing_tf.rotation * Vec3::Y).as_dvec3();
-    // `JointCollisionDisabled` stops residual contact impulses between
-    // wheel and chassis colliders that would otherwise drift the rover.
+    // Wheel mount point in the chassis local frame (the wheel is a child of
+    // the chassis, so its Transform translation is already chassis-local).
+    let mount_local = existing_tf.translation.as_dvec3();
+    // Axle direction — the same line the drive torque acts about. Chassis-local
+    // (the wheel/hub frames are aligned to the chassis), so it is also the
+    // hub→wheel revolute axis.
+    let axle = (existing_tf.rotation * Vec3::Y).as_dvec3();
+
+    // Rigid hinge: pin the wheel to the chassis at its authored offset.
+    //
+    // An articulated chassis→prismatic(spring)→hub→revolute→wheel suspension
+    // was prototyped and rejected: avian's joint SpringDamper is fragile here —
+    // it rings the chassis pitch/roll mode down for 15-20 s after the scene's
+    // 5 m spawn drop, can't be damped harder (high damping_ratio diverges), and
+    // its effective tuning shifts with substep count. The headless `rover_jitter`
+    // probe showed the "jitter when riding" is actually a SOLVER-RESOLUTION
+    // problem, not a missing-suspension problem: a rigid revolute at the default
+    // 6 substeps buzzes the chassis under drive torque (|ω|max≈0.15), but at 12
+    // substeps it vanishes (|ω|max≈0.0001) while still settling drops perfectly.
+    // The fix is therefore the rigid joint here + `SubstepCount(12)` at the app
+    // (see `sandbox.rs` / `main.rs`), NOT an articulated spring. Joint rovers
+    // are rigid-axle; use raycast wheels when vertical suspension travel is
+    // wanted. See `project_physical_rover_suspension` memory for the data.
     commands.spawn((
         RevoluteJoint::new(chassis, entity)
-            .with_local_anchor1(anchor_chassis)
+            .with_local_anchor1(mount_local)
             .with_local_anchor2(DVec3::ZERO)
-            .with_hinge_axis(chassis_axis),
+            .with_hinge_axis(axle),
         JointCollisionDisabled,
         Name::new(format!("PhysicalWheelJoint_{}", prim_path.path)),
     ));
