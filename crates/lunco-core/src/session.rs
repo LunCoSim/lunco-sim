@@ -211,6 +211,27 @@ pub struct SkipContentStamp;
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct NetReplicate;
 
+/// **Delivered chassis motion for client-side animation.** A replicated proxy
+/// rover is pinned `Kinematic` with its avian velocity zeroed every frame
+/// (`force_kinematic_proxies`), so the local wheel-spin model would see a
+/// standstill and never roll. The host's authoritative chassis velocity already
+/// rides every snapshot (`SnapshotEntry::lv`/`av`); the client's
+/// `interpolate_proxies` stamps it here so the *animation* systems (wheel spin)
+/// can read the real ground speed without that velocity ever driving avian
+/// integration (which would make the kinematic body glide between snapshots).
+///
+/// This is the "sync the motion, derive the animation" boundary: chassis pose +
+/// velocity are synced; wheel rotation/suspension are recomputed locally from
+/// them. Present only on client proxies; absent on host/standalone/owned bodies
+/// (which read their live avian velocity instead).
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ReplicatedChassisMotion {
+    /// Authoritative chassis linear velocity (world m/s), from the latest snapshot.
+    pub lin: bevy::math::DVec3,
+    /// Authoritative chassis angular velocity (world rad/s), from the latest snapshot.
+    pub ang: bevy::math::DVec3,
+}
+
 /// **Client-side predict-own marker:** this session owns *and locally predicts*
 /// this replicated body (its possessed rover). Maintained only on a client, by
 /// `maintain_owned_locally`, from the authoritative [`SessionRegistry`] +

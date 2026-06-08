@@ -6,6 +6,7 @@
 //! matches the physics the rover is actually experiencing.
 
 use bevy::prelude::*;
+use bevy::math::DVec3;
 use avian3d::prelude::*;
 use lunco_core::RoverVessel;
 use lunco_fsw::FlightSoftware;
@@ -48,7 +49,16 @@ fn w_stop_torque(w: f64, i: f64, dt: f64) -> f64 {
 pub(crate) fn update_wheel_spin(
     mut q_wheels: Query<(&mut WheelRaycast, &Transform, &GlobalTransform, &RayHits, &ChildOf)>,
     q_ports: Query<&lunco_core::architecture::PhysicalPort>,
-    q_chassis: Query<(&LinearVelocity, &AngularVelocity, &Position, Option<&FlightSoftware>), With<RoverVessel>>,
+    q_chassis: Query<(
+        &LinearVelocity,
+        &AngularVelocity,
+        &Position,
+        Option<&FlightSoftware>,
+        &RigidBody,
+        // Client proxies are Kinematic with avian velocity zeroed; their real
+        // ground speed arrives via this delivered hint (set by `interpolate_proxies`).
+        Option<&lunco_core::ReplicatedChassisMotion>,
+    ), With<RoverVessel>>,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
     time: Res<Time>,
 ) {
@@ -78,10 +88,23 @@ pub(crate) fn update_wheel_spin(
         // wheel's forward axis. Pulled from the parent chassis rigid body.
         let mut v_long = 0.0;
         let mut braking = false;
-        if let Ok((lin, ang, pos, fsw)) = q_chassis.get(parent.parent()) {
+        if let Ok((lin, ang, pos, fsw, body, motion)) = q_chassis.get(parent.parent()) {
             braking = fsw.map(|f| f.brake_active).unwrap_or(false);
+            // Source the chassis velocity from wherever this peer's chassis
+            // actually gets its motion: live avian velocity on a Dynamic body
+            // (host / the owned rover), or the delivered snapshot hint on a
+            // Kinematic proxy (whose avian velocity is force-zeroed). Without the
+            // hint branch a replicated rover rolls visibly across the ground with
+            // dead, non-spinning wheels.
+            let (vlin, vang) = if matches!(body, RigidBody::Kinematic) {
+                motion
+                    .map(|m| (m.lin, m.ang))
+                    .unwrap_or((DVec3::ZERO, DVec3::ZERO))
+            } else {
+                (lin.0, ang.0)
+            };
             let hub_world = global_tf.translation().as_dvec3();
-            let hub_vel = lin.0 + ang.0.cross(hub_world - pos.0);
+            let hub_vel = vlin + vang.cross(hub_world - pos.0);
             let forward = global_tf.rotation().mul_vec3(Vec3::NEG_Z).as_dvec3();
             v_long = hub_vel.dot(forward);
         }

@@ -84,8 +84,8 @@ pub mod workspace_state;
 
 pub use window_command::{merged_titlebar_window, MaximizeWindow, MinimizeWindow, CloseWindow, WindowMaximized};
 pub use window_persistence::{
-    load_window_geometry, restored_window, WindowGeometry, WindowPersistencePlugin,
-    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
+    load_window_geometry, restored_window, SkipWindowGeometrySave, WindowGeometry,
+    WindowPersistencePlugin, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
 };
 pub use workspace_state::{
     workspace_state_path, AppDocumentSessionExt, DocumentSessionCodec, DocumentSessionRegistry,

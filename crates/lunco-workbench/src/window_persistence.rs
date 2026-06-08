@@ -47,6 +47,11 @@ impl Plugin for WindowPersistencePlugin {
         #[cfg(not(target_arch = "wasm32"))]
         {
             app.register_settings_section::<WindowGeometry>();
+            // `init_resource` won't clobber a binary's `insert_resource` — a
+            // launcher that forces a window placement (e.g. `--window-pos`)
+            // sets this to `true` *before* the plugin runs to keep that
+            // throwaway geometry out of the persisted defaults.
+            app.init_resource::<SkipWindowGeometrySave>();
             app.add_systems(Startup, restore_maximized_on_startup);
             app.add_systems(Update, save_window_geometry);
         }
@@ -54,6 +59,15 @@ impl Plugin for WindowPersistencePlugin {
         let _ = app;
     }
 }
+
+/// When `true`, [`save_window_geometry`] stops mirroring live window
+/// moves/resizes into the persisted [`WindowGeometry`]. Set by binaries
+/// that force a transient window placement (e.g. the `--window-pos`
+/// side-by-side host/client layout) so two instances dragging themselves
+/// into half-screen rectangles don't fight over `settings.json` or leave
+/// the next normal launch opening half-width. Defaults to `false`.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub struct SkipWindowGeometrySave(pub bool);
 
 /// Persisted primary-window geometry. Stored under the `"window"` key
 /// of `settings.json`. `Default` (all-zero / `None`) means "never saved
@@ -182,8 +196,12 @@ pub(crate) fn restore_maximized_on_startup(world: &mut World) {
 pub(crate) fn save_window_geometry(
     win: Query<&Window, (With<PrimaryWindow>, Changed<Window>)>,
     maximized: Res<WindowMaximized>,
+    skip: Res<SkipWindowGeometrySave>,
     mut geom: ResMut<WindowGeometry>,
 ) {
+    if skip.0 {
+        return;
+    }
     let Ok(w) = win.single() else { return };
     let (x, y) = match w.position {
         WindowPosition::At(p) => (Some(p.x), Some(p.y)),

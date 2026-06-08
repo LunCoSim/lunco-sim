@@ -288,11 +288,14 @@ fn apply_wheel_suspension(
     for (mut wheel, hits, wheel_tf, parent) in q_wheels.iter_mut() {
         let parent_entity = parent.parent();
         if let Ok((mut forces, body)) = q_chassis.get_mut(parent_entity) {
-            // Skip forces if body is kinematic (e.g. during gizmo drag)
-            if matches!(body, RigidBody::Kinematic) {
-                wheel.last_normal_force = 0.0;
-                continue;
-            }
+            // A Kinematic chassis (a client's replicated proxy rover, or a body
+            // mid gizmo-drag) must NOT receive the suspension spring force — its
+            // pose is authoritative (snapshot-driven) and a local force would fight
+            // it. But the wheel GROUND PLACEMENT + normal force below are pure
+            // animation derived from the downward raycast, so they STILL run: that's
+            // what lets a proxy's wheels rest on the terrain and report `on_ground`
+            // to the spin model instead of floating at their authored rest offset.
+            let apply_force = !matches!(body, RigidBody::Kinematic);
             let world_pos = forces.position().0 + forces.rotation().0 * wheel_tf.translation.as_dvec3();
 
             if let Some(hit) = hits.iter_sorted().next() {
@@ -317,7 +320,9 @@ fn apply_wheel_suspension(
                     );
 
                     let force_vec = hit.normal * total_force_mag;
-                    forces.apply_force_at_point(force_vec, world_pos);
+                    if apply_force {
+                        forces.apply_force_at_point(force_vec, world_pos);
+                    }
                     wheel.last_normal_force = total_force_mag;
 
                     // Position the wheel visual on the ground.

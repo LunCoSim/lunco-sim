@@ -60,8 +60,8 @@ pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use session::{
     authorize, AppliedInputSeq, IncomingSnapshots, InputFrame, LocalSession, NetReplicate, NetSpawn,
     NetStatus, NetworkRole, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns, PossessionPolicy,
-    ReplicatedSpawn, SessionRegistry, SkipContentStamp, SnapshotSample, VesselInputLog,
-    WireApplyGuard,
+    ReplicatedChassisMotion, ReplicatedSpawn, SessionRegistry, SkipContentStamp, SnapshotSample,
+    VesselInputLog, WireApplyGuard,
 };
 
 // ── Typed Command Macros ──────────────────────────────────────────────────────

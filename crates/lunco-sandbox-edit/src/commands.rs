@@ -310,7 +310,18 @@ pub fn interpolate_proxies(
     // (`correct_owned_prediction`), so it must NOT be dragged back to the
     // `INTERP_DELAY`-old interpolated pose here.
     q_owned: Query<(), With<lunco_core::OwnedLocally>>,
-    mut q: Query<(&mut Transform, Option<&mut Position>, Option<&mut Rotation>)>,
+    mut q: Query<(
+        &mut Transform,
+        Option<&mut Position>,
+        Option<&mut Rotation>,
+        // Animation motion hint: the proxy's local avian velocity is zeroed by
+        // `force_kinematic_proxies`, so stamp the snapshot's authoritative chassis
+        // velocity here for the wheel-spin model to read (see
+        // [`lunco_core::ReplicatedChassisMotion`]).
+        Option<&mut lunco_core::ReplicatedChassisMotion>,
+    )>,
+    // Insert the motion hint on first sight of a proxy that lacks it.
+    mut commands: Commands,
     // Playback clock in the host-tick timebase: advances at real time and is eased
     // toward `newest_gen − INTERP_DELAY` so it tracks the host's tick stream without
     // stepping. This is what makes interpolation robust to bursty delivery — the
@@ -354,7 +365,7 @@ pub fn interpolate_proxies(
         if q_owned.contains(e) {
             continue; // predict-own: my vessel is driven locally, not interpolated
         }
-        let Ok((mut tf, pos, rot)) = q.get_mut(e) else {
+        let Ok((mut tf, pos, rot, motion)) = q.get_mut(e) else {
             continue;
         };
 
@@ -422,6 +433,25 @@ pub fn interpolate_proxies(
         // that's turning). Position already sticks because we write `Position` above.
         if let Some(mut r) = rot {
             r.0 = out_rot.as_dquat();
+        }
+
+        // Deliver the authoritative chassis velocity for LOCAL wheel animation.
+        // This is the "sync the motion, derive the animation" boundary: we stamp
+        // the host's replicated velocity onto a read-only hint that the wheel-spin
+        // model reads — we do NOT write avian `LinearVelocity`, because a velocity
+        // on a kinematic body would make it glide between snapshots (the very drift
+        // `force_kinematic_proxies` zeros away). The nearest bracketing sample's
+        // velocity is plenty for animation (it changes at the 20 Hz snapshot rate).
+        let (lv, av) = match (a, b) {
+            (Some(s), _) | (None, Some(s)) => (s.lv.as_dvec3(), s.av.as_dvec3()),
+            (None, None) => (DVec3::ZERO, DVec3::ZERO),
+        };
+        let hint = lunco_core::ReplicatedChassisMotion { lin: lv, ang: av };
+        match motion {
+            Some(mut m) => *m = hint,
+            None => {
+                commands.entity(e).insert(hint);
+            }
         }
     }
 }
