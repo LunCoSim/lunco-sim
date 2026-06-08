@@ -207,8 +207,18 @@ fn build_collider_from_usd(reader: &TextReader, sdf_path: &SdfPath) -> Option<Co
             ) {
                 Some(Collider::cuboid(width, height, depth))
             } else {
+                // Base (unscaled) extent ONLY — do NOT pre-multiply by
+                // `xformOp:scale`. Avian's `update_collider_scale` already
+                // multiplies every collider by its entity's `Transform.scale`,
+                // which `lunco-usd-bevy` sets from `xformOp:scale`. Baking the
+                // scale in here too DOUBLE-scales the shape (scale²): the collider
+                // grows past its visual mesh, its top surface ends up above the
+                // rendered ground, and rovers rest/float ~1 m above sloped terrain
+                // (and sink into the thin 0.2-scale ground slab). Author a unit
+                // cuboid and let the Transform scale do the work — then collider
+                // and visual mesh coincide exactly.
                 let size = reader.prim_attribute_value::<f64>(sdf_path, "size").unwrap_or(2.0);
-                Some(Collider::cuboid(size * scale.0, size * scale.1, size * scale.2))
+                Some(Collider::cuboid(size, size, size))
             }
         }
         "Sphere" => {
