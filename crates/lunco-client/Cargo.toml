@@ -40,7 +40,6 @@ lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-theme = { path = "../lunco-theme" }
-lunco-viz = { path = "../lunco-viz" }
 lunco-usd = { path = "../lunco-usd" }
 lunco-sandbox-edit = { path = "../lunco-sandbox-edit" }
 lunco-ui = { path = "../lunco-ui" }

@@ -46,8 +46,6 @@ path = "src/bin/msl_indexer.rs"
 [dependencies]
 bevy.workspace = true
 bevy_egui.workspace = true
-# Phase-0 vello spike — see workspace dep for rationale.
-bevy_vello.workspace = true
 lunco-assets = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-theme = { path = "../lunco-theme" }
@@ -161,10 +159,6 @@ crossbeam-channel = { workspace = true }
 lunco-api = { path = "../lunco-api", optional = true, default-features = false }
 log = "0.4"
 uuid = { workspace = true }
-# Native file-picker dialogs for Open Folder + Save-As. Uses the
-# OS-native picker (GTK3 on Linux, COM on Windows, Cocoa on macOS)
-# via rfd's default feature set.
-rfd = { workspace = true }
 
 # Tracy profiler is wired via the `tracy` feature above
 # (`tracy = ["bevy/trace_tracy"]`). Off by default because tracy-client-sys
