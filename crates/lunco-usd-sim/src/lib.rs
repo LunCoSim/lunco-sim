@@ -943,7 +943,7 @@ fn setup_physical_wheel(
         joint_cmd.insert(SteeringActuator {
             port_entity: steer_port,
             max_steer_angle,
-            current_angle: 0.0,
+            current_ref: 0.0,
             // Chassis-local geometry for the Ackermann correction. `mount_local`
             // is the wheel's offset from the chassis origin: X = lateral (+left),
             // Z = longitudinal. Wheelbase = front-to-rear axle distance = 2·|z|

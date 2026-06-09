@@ -95,11 +95,14 @@ pub struct SteeringActuator {
     /// Steering lock (rad) at the centreline (bicycle-model reference angle)
     /// reached at full steering input.
     pub max_steer_angle: f64,
-    /// Current steered angle (rad), ramped toward the commanded target so the
-    /// wheel slews smoothly instead of snapping — a hard jump in `frame1.basis`
-    /// makes the rigid alignment constraint fire a large impulse and the rover
-    /// hops. Internal state; not authored.
-    pub current_angle: f64,
+    /// Current **centreline reference** steer angle (rad), ramped toward the
+    /// commanded target. Both front wheels ramp this same reference at the same
+    /// rate and derive their Ackermann angle from it each tick, so they slew in
+    /// lockstep and reach their (different) target angles at the *same time*.
+    /// Ramping smoothly also avoids a hard `frame1.basis` jump, which would make
+    /// the rigid alignment constraint fire a large impulse and hop the rover.
+    /// Internal state; not authored.
+    pub current_ref: f64,
     /// This wheel's lateral offset from the rover centreline (chassis-local X, m;
     /// +left). Used for the Ackermann correction so the inner wheel turns more
     /// than the outer.
@@ -114,7 +117,7 @@ impl Default for SteeringActuator {
         Self {
             port_entity: Entity::PLACEHOLDER,
             max_steer_angle: 0.5,
-            current_angle: 0.0,
+            current_ref: 0.0,
             lateral: 0.0,
             wheelbase: 2.0,
         }
@@ -125,13 +128,13 @@ impl Default for SteeringActuator {
 /// but smooth enough that the alignment constraint doesn't impulse-jump the rover.
 const STEER_SLEW_RATE: f64 = 1.25;
 
-/// Ramps each steered front wheel joint's body1 (chassis) frame rotation toward
-/// its **Ackermann** target angle: both front wheels point at one shared turn
-/// centre, so the inner wheel turns more than the outer. The centreline
-/// reference angle `δ = steer · max_steer_angle` gives turn radius `R = L/tan δ`;
-/// a wheel at lateral offset `y` then steers `atan(L / (R − y))`. `current_angle`
-/// is slewed toward that target at `STEER_SLEW_RATE` (servo behaviour). Only the
-/// basis (orientation) is written; the anchor (pivot point) is left untouched.
+/// Slews each steered front wheel into its **Ackermann** angle. The shared
+/// *centreline reference* angle `δ` is rate-limited toward `steer ·
+/// max_steer_angle` at `STEER_SLEW_RATE`; both front wheels ramp the same δ at
+/// the same rate, so although they end at different angles (inner > outer) they
+/// arrive together. From the ramped δ the turn radius is `R = L/tan δ` and a
+/// wheel at lateral offset `y` steers `atan(L / (R − y))`. Only the basis
+/// (orientation) is written; the anchor (pivot point) is left untouched.
 fn steering_actuator_system(
     time: Res<Time>,
     q_ports: Query<&PhysicalPort>,
@@ -141,17 +144,19 @@ fn steering_actuator_system(
     let max_step = STEER_SLEW_RATE * dt;
     for (mut steer, mut joint) in q_joints.iter_mut() {
         let Ok(port) = q_ports.get(steer.port_entity) else { continue };
-        let d_ref = (port.value as f64).clamp(-1.0, 1.0) * steer.max_steer_angle;
-        // Per-wheel Ackermann angle. Near-zero steer → straight (avoid 1/tan blowup).
-        let target = if d_ref.abs() < 1e-4 {
+        // Rate-limit the SHARED centreline reference (keeps both wheels in sync).
+        let target_ref = (port.value as f64).clamp(-1.0, 1.0) * steer.max_steer_angle;
+        let delta = (target_ref - steer.current_ref).clamp(-max_step, max_step);
+        steer.current_ref += delta;
+        // Per-wheel Ackermann angle from the ramped reference. Near-zero → straight
+        // (avoid the 1/tan blow-up).
+        let wheel_angle = if steer.current_ref.abs() < 1e-4 {
             0.0
         } else {
-            let r = steer.wheelbase / d_ref.tan(); // signed turn radius (lateral dist to centre)
+            let r = steer.wheelbase / steer.current_ref.tan(); // signed turn radius
             (steer.wheelbase / (r - steer.lateral)).atan()
         };
-        let delta = (target - steer.current_angle).clamp(-max_step, max_step);
-        steer.current_angle += delta;
-        joint.frame1.basis = JointBasis::Local(DQuat::from_rotation_y(steer.current_angle).into());
+        joint.frame1.basis = JointBasis::Local(DQuat::from_rotation_y(wheel_angle).into());
     }
 }
 
