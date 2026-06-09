@@ -5,7 +5,7 @@
 //! the [avian3d] physics engine.
 
 use bevy::prelude::*;
-use bevy::math::DVec3;
+use bevy::math::{DVec3, DQuat};
 use avian3d::prelude::*;
 use lunco_core::architecture::PhysicalPort;
 
@@ -16,8 +16,10 @@ impl Plugin for LunCoHardwarePlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<MotorActuator>()
            .register_type::<BrakeActuator>()
+           .register_type::<SteeringActuator>()
            .register_type::<AngularVelocitySensor>()
            .add_systems(FixedUpdate, (
+               steering_actuator_system,
                motor_actuator_system,
                brake_actuator_system,
                sensor_velocity_system,
@@ -25,89 +27,154 @@ impl Plugin for LunCoHardwarePlugin {
     }
 }
 
-/// A wheel-hub motor that drives a rover via a **contact force**, not a torque
-/// couple.
+/// A wheel-hub motor that drives a rover the **physically correct** way: it
+/// commands the wheel's axle [RevoluteJoint] toward a target **spin velocity**
+/// (a velocity-controlled motor, capped at `max_torque`), and the wheel↔ground
+/// friction propels the rover. Nothing is pushed on the chassis — the engine
+/// moves the body entirely through the contact, exactly like a real vehicle.
 ///
-/// The naive approach — `apply_torque` about the axle — works for a free wheel,
-/// but on a rigid-axle joint rover the revolute transmits the motor's reaction
-/// couple straight into the chassis as a nose-up pitch. At speed that compounds
-/// into a wheelie/launch (see `project_physical_rover_suspension`). Instead we
-/// apply a forward force at the wheel's ground-contact point: its moment about
-/// the (free) axle spins the wheel, and the linear part propels the chassis,
-/// leaving only the *real* traction pitch — no reaction couple. This mirrors the
-/// raycast wheel (`lunco_mobility::apply_wheel_drive`) and was validated in the
-/// headless `rover_jitter --drivemode=force` probe (5+ m/s with no launch).
+/// Why velocity control, not raw axle torque: a constant axle torque sits in
+/// avian's low-slip friction dead-zone at small magnitudes (the wheel barely
+/// grips and the rover hardly moves) and breaks traction wildly at large ones.
+/// A velocity motor commands the spin rate; the joint applies up to `max_torque`
+/// to reach it, the tyre friction does the rest, and the top speed self-limits
+/// at traction. This component lives on the **joint** entity (not the wheel),
+/// alongside the [RevoluteJoint] it drives.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct MotorActuator {
     /// Entity of the [PhysicalPort] providing the throttle command (−1..=1).
+    /// For a skid rover this already carries the per-side differential.
     pub port_entity: Entity,
-    /// Wheel spin axis (the axle). Retained for reference/diagnostics; the drive
-    /// direction is derived from the chassis heading, not this axis.
-    pub axis: DVec3,
-    /// Peak drive authority, authored as `physxVehicleEngine:peakTorque` (N·m).
-    /// Converted to an equivalent traction force `F = peak_torque / radius`
-    /// delivered when the port reads ±1.0.
-    pub peak_torque: f64,
-    /// Wheel radius (m) — converts the authored peak torque into a traction
-    /// force and sets the contact point below the hub.
-    pub radius: f64,
-    /// Wheel mount offset in the **chassis** local frame. The drive force is
-    /// applied to the chassis at this hub (reconstructed from the chassis pose),
-    /// not to the wheel body — a force on the `ChildOf` wheel is fought by Bevy
-    /// transform propagation re-slaving the child each frame.
-    pub mount_local: DVec3,
+    /// Wheel spin (rad/s) commanded at full throttle. With wheel radius `r` the
+    /// free-rolling top speed is ≈ `max_omega · r`.
+    pub max_omega: f64,
+    /// Sign mapping throttle→spin so a positive (forward) command rolls the rover
+    /// along its chassis −Z. Depends on the joint's `hinge_axis` orientation;
+    /// `-1` for the canonical `axle = rotation·Y` hinge.
+    pub drive_sign: f64,
 }
 
 impl Default for MotorActuator {
     fn default() -> Self {
         Self {
             port_entity: Entity::PLACEHOLDER,
-            axis: DVec3::Y,
-            peak_torque: 1.0,
-            radius: 0.4,
-            mount_local: DVec3::ZERO,
+            max_omega: 0.0,
+            drive_sign: -1.0,
         }
     }
 }
 
-/// Drives rovers from [MotorActuator] wheels via a contact force applied to the
-/// **chassis** (the wheel's `ChildOf` parent). Mirrors
-/// `lunco_mobility::apply_wheel_drive`: forward force at the wheel hub, derived
-/// from the chassis heading, so the motor reaction couple never loads the
-/// chassis as pitch (no wheelie). `q_motors` reads the wheels; `q_chassis`
-/// applies to their parents (disjoint via `Without<MotorActuator>`).
+/// Drives each wheel by writing its axle joint's velocity-motor target from the
+/// throttle port. The joint applies up to its `max_torque` to reach the spin;
+/// the tyre↔ground friction moves the rover — pure physics-engine propulsion,
+/// and a steered front wheel is driven about its steered axle for free (the
+/// hinge axis yaws with the wheel).
 fn motor_actuator_system(
     q_ports: Query<&PhysicalPort>,
-    q_motors: Query<(&MotorActuator, &ChildOf)>,
-    mut q_chassis: Query<Forces, Without<MotorActuator>>,
+    mut q_joints: Query<(&MotorActuator, &mut RevoluteJoint)>,
 ) {
-    for (motor, child_of) in q_motors.iter() {
-        if motor.radius <= 0.0 {
-            continue;
-        }
+    for (motor, mut joint) in q_joints.iter_mut() {
         let Ok(port) = q_ports.get(motor.port_entity) else { continue };
-        let Ok(mut forces) = q_chassis.get_mut(child_of.parent()) else { continue };
-        // Reconstruct the hub in avian's frame from the chassis Position/Rotation
-        // + the wheel's chassis-local offset (NOT GlobalTransform, which would mix
-        // in the big_space floating-origin rebasing — see apply_wheel_drive).
-        let chassis_rot = forces.rotation().0;
-        let hub_world = forces.position().0 + chassis_rot * motor.mount_local;
-        // Rover forward = chassis heading projected onto the horizontal plane, so
-        // a pitched chassis can't feed the drive force back into more pitch.
-        let mut forward = chassis_rot * DVec3::NEG_Z;
-        forward.y = 0.0;
-        let forward = forward.normalize_or_zero();
-        // `port.value` is the normalized throttle; F = throttle · peak_torque / r.
-        let force_mag = port.value as f64 * motor.peak_torque / motor.radius;
-        // Apply at the HUB (axle height), not the ground contact: the contact is
-        // the lowest point, so it has the longest lever to the chassis CG and
-        // maximises the nose-up traction pitch ("front goes up"). The hub is ~2×
-        // closer to the CG → roughly half the pitch, while still propelling the
-        // chassis forward. Left/right hubs differ, so a steering differential in
-        // the port values yaws the rover. (Mirrors apply_wheel_drive, which also
-        // applies at the hub, not the contact.)
-        forces.apply_force_at_point(forward * force_mag, hub_world);
+        joint.motor.target_velocity = motor.drive_sign * port.value as f64 * motor.max_omega;
+    }
+}
+
+/// Steers an Ackermann front wheel by rotating its axle [RevoluteJoint]'s
+/// chassis-side reference **frame** about the vertical (Y) axis. The revolute's
+/// alignment constraint then yaws the wheel to match, so the front wheel
+/// physically points into the steered heading and its rolling + lateral grip
+/// redirect the rover into an arc — real geometric Ackermann through one stable
+/// constraint (no floating knuckle body, which diverges in avian 0.6.1).
+/// Lives on the same joint entity as the wheel's [MotorActuator].
+#[derive(Component, Debug, Clone, Reflect)]
+#[reflect(Component, Default)]
+pub struct SteeringActuator {
+    /// Entity of the [PhysicalPort] providing the steering command (−1..=1).
+    pub port_entity: Entity,
+    /// Steering lock (rad) at the centreline (bicycle-model reference angle)
+    /// reached at full steering input.
+    pub max_steer_angle: f64,
+    /// Current **centreline reference** steer angle (rad), ramped toward the
+    /// commanded target. Both front wheels ramp this same reference at the same
+    /// rate and derive their Ackermann angle from it each tick, so they slew in
+    /// lockstep and reach their (different) target angles at the *same time*.
+    /// Ramping smoothly also avoids a hard `frame1.basis` jump, which would make
+    /// the rigid alignment constraint fire a large impulse and hop the rover.
+    /// Internal state; not authored.
+    pub current_ref: f64,
+    /// This wheel's lateral offset from the rover centreline (chassis-local X, m;
+    /// +left). Used for the Ackermann correction so the inner wheel turns more
+    /// than the outer.
+    pub lateral: f64,
+    /// Wheelbase (m): longitudinal distance from this (front) axle to the rear
+    /// axle. Sets the turn geometry for the Ackermann correction.
+    pub wheelbase: f64,
+    /// The computed steer angle (rad) for THIS wheel, written every tick by
+    /// [steering_actuator_system]. This is the single shared output consumed by
+    /// both wheel kinds — the physical joint applies it to its frame basis, and
+    /// the raycast wheel (`lunco_mobility::apply_wheel_steering`) applies it to
+    /// its visual transform — so the steering model lives in exactly one place.
+    pub output_angle: f64,
+}
+
+impl Default for SteeringActuator {
+    fn default() -> Self {
+        Self {
+            port_entity: Entity::PLACEHOLDER,
+            max_steer_angle: 0.5,
+            current_ref: 0.0,
+            lateral: 0.0,
+            wheelbase: 2.0,
+            output_angle: 0.0,
+        }
+    }
+}
+
+/// Steering slew rate (rad/s). Full lock (~0.5 rad) is reached in ~0.4 s — quick
+/// but smooth enough that the alignment constraint doesn't impulse-jump the rover.
+const STEER_SLEW_RATE: f64 = 1.25;
+
+/// THE single steering model, shared by physical and raycast wheels. For every
+/// [SteeringActuator] it slews the *centreline reference* angle `δ` toward
+/// `steer · max_steer_angle` at `STEER_SLEW_RATE` (so both front wheels ramp the
+/// same δ at the same rate and reach their different final angles together),
+/// then computes this wheel's **Ackermann** angle — turn radius `R = L/tan δ`, a
+/// wheel at lateral offset `y` steers `atan(L / (R − y))` so the inner wheel
+/// turns more than the outer — and stores it in `output_angle`.
+///
+/// If the actuator's entity also carries a [RevoluteJoint] (the physical wheel),
+/// the angle is applied here to the joint's body1 frame basis (the alignment
+/// constraint yaws the wheel). The raycast wheel has no joint; it reads
+/// `output_angle` in `lunco_mobility::apply_wheel_steering` and rotates its
+/// transform. Either way the steering math exists only here — DRY.
+fn steering_actuator_system(
+    time: Res<Time>,
+    q_ports: Query<&PhysicalPort>,
+    mut q: Query<(&mut SteeringActuator, Option<&mut RevoluteJoint>)>,
+) {
+    let dt = time.delta_secs_f64();
+    let max_step = STEER_SLEW_RATE * dt;
+    for (mut steer, joint) in q.iter_mut() {
+        let Ok(port) = q_ports.get(steer.port_entity) else { continue };
+        // Rate-limit the SHARED centreline reference (keeps both wheels in sync).
+        let target_ref = (port.value as f64).clamp(-1.0, 1.0) * steer.max_steer_angle;
+        let delta = (target_ref - steer.current_ref).clamp(-max_step, max_step);
+        steer.current_ref += delta;
+        // Per-wheel Ackermann angle from the ramped reference. Near-zero → straight
+        // (avoid the 1/tan blow-up).
+        let angle = if steer.current_ref.abs() < 1e-4 {
+            0.0
+        } else {
+            let r = steer.wheelbase / steer.current_ref.tan(); // signed turn radius
+            (steer.wheelbase / (r - steer.lateral)).atan()
+        };
+        steer.output_angle = angle;
+        // Physical wheel: apply to the joint frame here. (Raycast wheel: no joint,
+        // its transform is rotated by apply_wheel_steering from output_angle.)
+        if let Some(mut joint) = joint {
+            joint.frame1.basis = JointBasis::Local(DQuat::from_rotation_y(angle).into());
+        }
     }
 }
 

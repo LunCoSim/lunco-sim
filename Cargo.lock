@@ -6943,6 +6943,7 @@ dependencies = [
  "bevy",
  "lunco-core",
  "lunco-fsw",
+ "lunco-hardware",
 ]
 
 [[package]]

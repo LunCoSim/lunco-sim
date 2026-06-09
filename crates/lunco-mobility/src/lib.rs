@@ -431,40 +431,27 @@ fn apply_wheel_drive(
     }
 }
 
-/// Updates steering angle based on physical port state.
-///
-/// The steering port value (normalized -1 to 1) is mapped to a yaw rotation
-/// around the local Y axis. For front wheels on Ackermann rovers, this
-/// produces the steer angle. For non-steering wheels, the port is
-/// `Entity::PLACEHOLDER` and this system skips them.
+/// Applies the steered angle to a raycast front wheel's transform. The angle
+/// itself (rate-limited servo slew + Ackermann inner/outer geometry) is computed
+/// by the SHARED [`lunco_hardware::SteeringActuator`] system — the exact same
+/// model the physical joint wheel uses — so steering is identical across wheel
+/// kinds and the logic lives in one place (DRY). This system only reads the
+/// computed `output_angle` and rotates the wheel about local Y; the visual mesh
+/// rotation (steer + roll spin) is composed in `update_wheel_spin`.
 fn apply_wheel_steering(
-    mut q_wheels: Query<(&WheelRaycast, &mut Transform, &ChildOf)>,
-    q_ports: Query<&lunco_core::architecture::PhysicalPort>,
+    mut q_wheels: Query<(&mut Transform, &ChildOf, &lunco_hardware::SteeringActuator), With<WheelRaycast>>,
     q_chassis: Query<&RigidBody, With<RoverVessel>>,
-    mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
 ) {
-    for (wheel, mut transform, parent) in q_wheels.iter_mut() {
-        // Predict-own: this chain now runs on a client too (the `!Client` gate
-        // was dropped so the owned rover steers locally). Unlike the suspension
-        // and drive systems this one writes wheel rotation directly with no
-        // physics guard — so gate it on the chassis the same way: skip wheels of
-        // a `Kinematic` chassis (every replicated rover this peer does NOT own),
-        // whose local steer ports are stale and would point the wheels wrong.
+    for (mut transform, parent, steer) in q_wheels.iter_mut() {
+        // Predict-own: this chain runs on a client too. Skip wheels of a
+        // `Kinematic` chassis (replicated rovers this peer does NOT own), whose
+        // local steer ports are stale and would point the wheels wrong.
         if let Ok(body) = q_chassis.get(parent.parent()) {
             if matches!(body, RigidBody::Kinematic) {
                 continue;
             }
         }
-        if wheel.steer_port == Entity::PLACEHOLDER {
-            continue;
-        }
-        if let Ok(port) = q_ports.get(wheel.steer_port) {
-            // Port value is -1.0 to 1.0; map to +/- 0.5 rad (~30 degrees)
-            let target_angle = (port.value as f32).clamp(-1.0, 1.0) * 0.5;
-            // Steer rotation is around local Y (up) axis. The visual mesh
-            // rotation (steer + roll spin) is composed in `update_wheel_spin`.
-            transform.rotation = Quat::from_rotation_y(target_angle);
-        }
+        transform.rotation = Quat::from_rotation_y(steer.output_angle as f32);
     }
 }
 
@@ -668,29 +655,22 @@ fn on_drive_rover(
             if let Ok(mut p) = q_digital_ports.get_mut(port_r) { p.raw_value = right_mix; }
         }
     } else if let Ok(ack) = q_ack.get(cmd.target) {
-        // Ackermann normally yaws the front wheels via a steering joint
-        // — a `PhysicsRevoluteJoint` about Y between chassis and a
-        // steering knuckle. We don't author those today, so the steer
-        // port has no physical consumer on joint-based rovers. Until
-        // those steering joints land, mix the steer command into the
-        // left/right drive torques as a soft differential so the rover
-        // can still turn under a `steer` command. The dedicated steer
-        // port is still set for any consumer that implements true
-        // Ackermann (raycast wheels render a visible steer angle from
-        // it).
-        // Skid-style mix at full magnitude until proper steering
-        // knuckle joints (RevoluteJoint about Y between chassis and a
-        // knuckle, with the wheel's X-axis hinge below the knuckle)
-        // are authored. With the full mix the rover yaws under steer
-        // input by spinning the L/R wheel groups in opposite
-        // directions — visually identical to skid steer.
-        let (left_mix, right_mix) = skid_mix(cmd.forward, cmd.steer);
-        let steer_val = (cmd.steer * 32767.0).clamp(-32767.0, 32767.0) as i16;
+        // True Ackermann. Drive is **non-differential** — both sides get the same
+        // forward throttle, exactly like an engine pushing a car. Turning comes
+        // from the STEERING port: the front wheels physically castor on their
+        // steering-knuckle joints (`SteeringActuator`, joint rovers) or render a
+        // steer angle (`apply_wheel_steering`, raycast rovers), and the steered
+        // front tires' grip redirects the rover into an arc. Because the turn
+        // needs forward motion for the tires to bite, an Ackermann rover cannot
+        // pivot in place — the defining difference from the skid branch above.
+        let to_i16 = |v: f64| (v.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        let drive = to_i16(cmd.forward);
+        let steer_val = to_i16(cmd.steer);
         if let Some(&port_l) = fsw.port_map.get(&ack.drive_left_port) {
-            if let Ok(mut p) = q_digital_ports.get_mut(port_l) { p.raw_value = left_mix; }
+            if let Ok(mut p) = q_digital_ports.get_mut(port_l) { p.raw_value = drive; }
         }
         if let Some(&port_r) = fsw.port_map.get(&ack.drive_right_port) {
-            if let Ok(mut p) = q_digital_ports.get_mut(port_r) { p.raw_value = right_mix; }
+            if let Ok(mut p) = q_digital_ports.get_mut(port_r) { p.raw_value = drive; }
         }
         if let Some(&port_s) = fsw.port_map.get(&ack.steer_port) {
             if let Ok(mut p) = q_digital_ports.get_mut(port_s) { p.raw_value = steer_val; }
