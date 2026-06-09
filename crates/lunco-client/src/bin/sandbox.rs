@@ -78,6 +78,14 @@ fn main() {
         port
     };
     let no_vsync = args.iter().any(|a| a == "--no-vsync");
+    // `--no-throttle` forces the window to keep updating at full rate even when
+    // unfocused, disabling the `reactive_low_power` background throttle (~1 FPS).
+    // Single-player windows normally throttle when unfocused to keep fans quiet;
+    // that masks render-loop behaviour during headless/automated tests (an
+    // unfocused test window drops to 1 FPS, so motion can't be observed). This
+    // flag keeps it Continuous regardless of focus. Networking already forces
+    // Continuous (keepalive requirement), so this is a no-op there.
+    let no_throttle = args.iter().any(|a| a == "--no-throttle");
     // `--scene <path>` overrides the default sandbox_scene.usda load.
     // Path is relative to the asset source root (`assets/`). Used by
     // automated joint/physics tests that need an isolated minimal
@@ -139,7 +147,7 @@ fn main() {
             focused_mode: UpdateMode::Continuous,
             // Networked: stay Continuous unfocused so keepalives keep flowing.
             // Single-player: low-power when backgrounded to keep fans quiet.
-            unfocused_mode: if networked {
+            unfocused_mode: if networked || no_throttle {
                 UpdateMode::Continuous
             } else {
                 UpdateMode::reactive_low_power(std::time::Duration::from_secs(1))

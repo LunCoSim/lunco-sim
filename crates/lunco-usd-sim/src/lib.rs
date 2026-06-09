@@ -98,6 +98,12 @@ impl Plugin for UsdSimPlugin {
         app.register_type::<WheelOf>()
            .register_type::<RoverWheels>()
            .register_type::<ArticulationRoot>()
+           .register_type::<PhysicalWheel>()
+           // Client-only: re-derive joint-wheel roll on replicated proxies from
+           // the chassis motion (the joint motor is held at 0 there). Same fixed
+           // domain + `tw.is_running()` gate as the raycast `update_wheel_spin`.
+           .add_systems(FixedUpdate, animate_proxy_physical_wheels
+               .run_if(|tw: Res<lunco_core::TimeWarpState>| tw.is_running()))
            .add_observer(on_add_usd_sim_prim)
            // `try_wire_wheel` runs in PreUpdate so that Wire entities exist
            // before `wire_system` (Update) propagates values through them.
@@ -168,13 +174,33 @@ pub struct RoverWheels(pub Vec<Entity>);
 #[reflect(Component)]
 pub struct ArticulationRoot;
 
-/// Marker for physical wheels awaiting full physical setup.
+/// A joint-based wheel: a full rigid body that interacts with terrain through
+/// collision, not raycast suspension. It gets `RigidBody`, `Collider`, and a
+/// `MotorActuator` (on its joint) instead of `WheelRaycast` + `RayCaster`.
 ///
-/// Physical wheels are full rigid bodies that interact with terrain through
-/// collision, not raycast suspension. They get `RigidBody`, `Collider`, and
-/// `MotorActuator` instead of `WheelRaycast` + `RayCaster`.
-#[derive(Component)]
-pub struct PhysicalWheel;
+/// On the host (and the rover this client owns) the visible spin comes from the
+/// avian joint motor rotating the wheel **body**; the visual mesh is a child and
+/// inherits that rotation. On a networked **client proxy** the chassis is
+/// kinematic and the joint motor is held at zero, so the body never spins — the
+/// fields below let [`animate_proxy_physical_wheels`] re-derive the roll from the
+/// replicated chassis motion and author the visual child directly, mirroring how
+/// raycast wheels are animated on the client.
+#[derive(Component, Debug, Clone, Reflect)]
+#[reflect(Component)]
+pub struct PhysicalWheel {
+    /// The visual mesh child (the entity whose local rotation we author on a
+    /// client proxy). `None` if the wheel prim carried no mesh.
+    pub visual_entity: Option<Entity>,
+    /// Rolling radius (m); the proxy roll rate is `ω = v_long / r`.
+    pub wheel_radius: f32,
+    /// Visual base orientation (the USD cylinder `axis`). The roll axle is
+    /// `axis_rot · Y` and the visual base composes as `roll · axis_rot`, exactly
+    /// reconstructing the host's `body_spin · axis_rot`.
+    pub axis_rot: Quat,
+    /// Integrated roll angle (rad), wrapped to `[0, 2π)`. Client display state;
+    /// unused on the host (the body carries the real rotation there).
+    pub spin_angle: f32,
+}
 
 /// Marker for wheels waiting for their FSW root to be spawned to complete wiring.
 #[derive(Component)]
@@ -811,6 +837,9 @@ fn setup_physical_wheel(
             cyl,
         )])
     };
+    // Visual mesh child id, captured so the client-proxy animator
+    // (`animate_proxy_physical_wheels`) can author its rotation directly.
+    let mut visual_id: Option<Entity> = None;
     if let Some(mesh) = maybe_mesh.cloned() {
         let mut visual = commands.spawn((
             Name::new(format!(
@@ -824,6 +853,7 @@ fn setup_physical_wheel(
             mesh,
             ChildOf(entity),
         ));
+        visual_id = Some(visual.id());
         // Move whichever material the prim received onto the visual child. A USD
         // `materialType="shader"` prim gets a `ShaderMaterial` (applied by the
         // material observer before this split runs) — prefer it over the default
@@ -843,7 +873,12 @@ fn setup_physical_wheel(
         .remove::<RayHits>();
 
     commands.entity(entity).insert((
-        PhysicalWheel,
+        PhysicalWheel {
+            visual_entity: visual_id,
+            wheel_radius: radius,
+            axis_rot: wheel_axis_rot,
+            spin_angle: 0.0,
+        },
         RigidBody::Dynamic,
         collider,
         // Heavier wheels (100 kg vs the previous 25) damp the
@@ -984,6 +1019,73 @@ fn setup_physical_wheel(
     });
 }
 
+/// Client-only: spin a joint-wheel's **visual** on a replicated proxy.
+///
+/// On the host (and the rover this client owns) the wheel body is spun by the
+/// avian joint motor and the visual child inherits it. On a client proxy the
+/// chassis is kinematic and the motor is held at zero, so the body never turns —
+/// here we re-derive the rolling angle from the chassis's [`ReplicatedChassisMotion`]
+/// (the same delivered hint the raycast `update_wheel_spin` reads) and author the
+/// visual child directly, exactly reconstructing the host's `body_spin · axis_rot`.
+///
+/// Guarded to a **kinematic** chassis so it is a no-op on the host/owned rover and
+/// never fights the joint-driven body there.
+fn animate_proxy_physical_wheels(
+    // `WheelOf`, not `ChildOf`: joint wheels on an `ArticulationRoot` rover are
+    // reparented out of the chassis's Bevy hierarchy (the logical link survives).
+    mut q_wheels: Query<(&mut PhysicalWheel, &GlobalTransform, &WheelOf)>,
+    q_chassis: Query<
+        (&RigidBody, &Position, Option<&lunco_core::ReplicatedChassisMotion>),
+        With<RoverVessel>,
+    >,
+    mut q_visual: Query<&mut Transform, Without<PhysicalWheel>>,
+    time: Res<Time>,
+) {
+    use std::f64::consts::TAU;
+    // Sign mapping rolling speed → roll about the axle so the contact patch
+    // tracks the ground (matches the host's motor-driven body spin). Mirrors the
+    // `drive_sign = -1` axle convention used by `MotorActuator`.
+    const ROLL_SIGN: f64 = -1.0;
+
+    let dt = time.delta_secs_f64();
+    if dt <= 0.0 {
+        return;
+    }
+
+    for (mut wheel, gtf, wheel_of) in q_wheels.iter_mut() {
+        let Ok((body, pos, motion)) = q_chassis.get(wheel_of.0) else { continue };
+        // Display proxies only; the host/owned rover spins the body via the joint.
+        if !matches!(body, RigidBody::Kinematic) {
+            continue;
+        }
+        // Chassis velocity arrives via the delivered hint (the proxy's avian
+        // velocity is force-zeroed). Ground speed of the hub along the wheel's
+        // forward axis → rolling rate ω = v_long / r.
+        let (vlin, vang) = motion
+            .map(|m| (m.lin, m.ang))
+            .unwrap_or((DVec3::ZERO, DVec3::ZERO));
+        let hub_world = gtf.translation().as_dvec3();
+        let hub_vel = vlin + vang.cross(hub_world - pos.0);
+        let forward = gtf.rotation().mul_vec3(Vec3::NEG_Z).as_dvec3();
+        let v_long = hub_vel.dot(forward);
+        let r = (wheel.wheel_radius as f64).max(1e-3);
+        let w = v_long / r;
+
+        let angle = (wheel.spin_angle as f64 + ROLL_SIGN * w * dt).rem_euclid(TAU);
+        wheel.spin_angle = angle as f32;
+
+        if let Some(visual_entity) = wheel.visual_entity {
+            if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
+                // Roll about the wheel's axle (`axis_rot · Y`), composed over the
+                // cylinder base — reconstructs the host's `body_spin · axis_rot`.
+                let axle = (wheel.axis_rot * Vec3::Y).normalize();
+                visual_tf.rotation =
+                    (Quat::from_axis_angle(axle, wheel.spin_angle) * wheel.axis_rot).normalize();
+            }
+        }
+    }
+}
+
 /// Marker to indicate a prim has been processed by the sim system.
 #[derive(Component)]
 struct UsdSimProcessed;
@@ -1076,6 +1178,83 @@ fn try_wire_wheel(
         } else {
             debug!("Wheel {} FSW not found yet, retrying next frame", prim_path.path);
         }
+    }
+}
+
+#[cfg(test)]
+mod proxy_wheel_tests {
+    use super::*;
+    use bevy::time::Time;
+    use std::time::Duration;
+
+    /// Run `animate_proxy_physical_wheels` one tick against a chassis of the given
+    /// body type moving along world −Z, returning the wheel's resulting
+    /// `spin_angle` and the visual child's rotation.
+    fn run_once(chassis_body: RigidBody) -> (f32, Quat) {
+        let mut app = App::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_secs_f64(0.1));
+        app.insert_resource(time);
+
+        let chassis = app
+            .world_mut()
+            .spawn((
+                chassis_body,
+                Position(DVec3::ZERO),
+                lunco_core::ReplicatedChassisMotion {
+                    lin: DVec3::new(0.0, 0.0, -2.0), // 2 m/s along chassis forward (−Z)
+                    ang: DVec3::ZERO,
+                },
+                RoverVessel,
+            ))
+            .id();
+        let visual = app.world_mut().spawn(Transform::default()).id();
+        app.world_mut().spawn((
+            PhysicalWheel {
+                visual_entity: Some(visual),
+                wheel_radius: 0.5,
+                axis_rot: Quat::IDENTITY,
+                spin_angle: 0.0,
+            },
+            GlobalTransform::IDENTITY,
+            WheelOf(chassis),
+        ));
+
+        app.add_systems(Update, animate_proxy_physical_wheels);
+        app.update();
+
+        let spin = app
+            .world_mut()
+            .query::<&PhysicalWheel>()
+            .iter(app.world())
+            .next()
+            .unwrap()
+            .spin_angle;
+        let rot = app.world().entity(visual).get::<Transform>().unwrap().rotation;
+        (spin, rot)
+    }
+
+    #[test]
+    fn kinematic_proxy_spins_and_rotates_visual() {
+        // v_long = 2 m/s, r = 0.5 → ω = 4 rad/s; one 0.1 s tick ⇒ |Δθ| = 0.4.
+        let (spin, rot) = run_once(RigidBody::Kinematic);
+        // spin_angle is wrapped to [0, TAU); measure the minimal circular distance.
+        let wrapped = spin.rem_euclid(std::f32::consts::TAU);
+        let circ = wrapped.min(std::f32::consts::TAU - wrapped);
+        assert!((circ - 0.4).abs() < 1e-3, "expected |spin|≈0.4, got {spin} (circ {circ})");
+        assert!(
+            rot.angle_between(Quat::IDENTITY) > 1e-3,
+            "visual child should be rotated, got {rot:?}"
+        );
+    }
+
+    #[test]
+    fn host_dynamic_chassis_is_noop() {
+        // On the host the joint motor spins the body; this system must not touch
+        // the wheel (else the visual double-rotates).
+        let (spin, rot) = run_once(RigidBody::Dynamic);
+        assert_eq!(spin, 0.0, "host chassis must be a no-op, got spin {spin}");
+        assert_eq!(rot, Quat::IDENTITY, "host visual must be untouched");
     }
 }
 

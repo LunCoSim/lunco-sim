@@ -331,6 +331,15 @@ pub struct VesselInputLog {
     pub next_seq: u32,
     /// Unacked input frames, oldest first (the reconcile drops `seq <= acked`).
     pub frames: VecDeque<InputFrame>,
+    /// Client-only: the most recent `SimTick` at which THIS peer supplied
+    /// **nonzero** control input to this vessel. Prediction membership keys off it
+    /// (computability, not ownership — see `PREDICTION_MEMBERSHIP.md` Phase A): a
+    /// vessel you possess but are *not actively driving* is dominated by external
+    /// forces you can't reproduce locally, so it must fall back to the interpolated
+    /// proxy path instead of free-running a local prediction with no correction.
+    /// Stamped regardless of `OwnedLocally` so the first nonzero frame can
+    /// *bootstrap* prediction. `0` = never driven by this peer.
+    pub last_active_tick: u64,
 }
 
 /// Client-side unacked input logs keyed by [`crate::GlobalEntityId`] raw `u64`.

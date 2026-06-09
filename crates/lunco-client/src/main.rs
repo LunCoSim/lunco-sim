@@ -61,7 +61,7 @@ fn main() {
         // Authors pair `payload = @lunco-lib://...@` with a `def Cube`
         // placeholder so third-party USD tools (Blender, usdview)
         // render the Cube while our pipeline loads the actual glTF
-        // through this AssetSource. See `docs/USD_SYSTEM.md`.
+        // through this AssetSource. See `docs/architecture/21-domain-usd.md`.
         //
         // Reserved scheme `lunco://` is *not* registered here — it's
         // earmarked for the future multi-user / Nucleus-like protocol.

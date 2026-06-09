@@ -54,7 +54,10 @@ fn record_drive_input(
         // stamped into snapshots so the owning client can drop acked inputs.
         let slot = applied.0.entry(g).or_insert(0);
         *slot = (*slot).max(cmd.seq);
-    } else if owned && cmd.seq != 0 {
+        return;
+    }
+    // --- Client ---
+    if owned && cmd.seq != 0 {
         // Client predict (moved out of `emit_vessel_input`): buffer the frame keyed
         // by seq so `record_predicted_state` keys its pose and reconcile can prune.
         let entry = owned_log.0.entry(g).or_default();
@@ -73,6 +76,13 @@ fn record_drive_input(
             }
         }
     }
+    // Prediction-membership signal (Phase A): record activity on ANY nonzero
+    // setpoint, independent of `owned`/`seq`, so the first real input can bootstrap
+    // prediction even while the body is still an interpolated proxy.
+    // `maintain_owned_locally` predicts the body only while this tick is recent.
+    if cmd.forward.abs() > INPUT_EPS || cmd.steer.abs() > INPUT_EPS {
+        owned_log.0.entry(g).or_default().last_active_tick = cmd.tick;
+    }
 }
 
 /// Sibling of [`record_drive_input`] for [`BrakeRover`], so a brake-only input
@@ -81,15 +91,22 @@ fn record_brake_input(
     trigger: On<BrakeRover>,
     role: Res<lunco_core::NetworkRole>,
     mut applied: ResMut<lunco_core::AppliedInputSeq>,
+    mut owned_log: ResMut<lunco_core::OwnedInputLog>,
     q: Query<&lunco_core::GlobalEntityId>,
 ) {
-    if !role.is_host() {
-        return;
-    }
     let cmd = trigger.event();
     let Ok(gid) = q.get(cmd.target) else { return };
-    let slot = applied.0.entry(gid.get()).or_insert(0);
-    *slot = (*slot).max(cmd.seq);
+    let g = gid.get();
+    if role.is_host() {
+        let slot = applied.0.entry(g).or_insert(0);
+        *slot = (*slot).max(cmd.seq);
+        return;
+    }
+    // Client: holding the brake (e.g. on a slope) is active control — keep the
+    // vessel in the predicted set so it stays crisp (see `record_drive_input`).
+    if cmd.intensity.abs() > INPUT_EPS {
+        owned_log.0.entry(g).or_default().last_active_tick = cmd.tick;
+    }
 }
 
 /// Abstract intents specifically for controlling a vessel's movement.
@@ -220,6 +237,12 @@ fn compute_vessel_input(
 /// it to the acked `seq` each snapshot; this only bounds a stalled/disconnected
 /// client so the buffer can't grow without limit.
 const MAX_INPUT_FRAMES: usize = 128;
+
+/// Magnitude below which a control setpoint counts as "no input" for the
+/// prediction-membership signal (`VesselInputLog::last_active_tick`). The
+/// controller emits a `DriveRover` every fixed tick even when idle (`forward = 0`),
+/// so presence of frames is NOT an activity signal — the *value* is.
+const INPUT_EPS: f64 = 1e-3;
 
 /// Fixed-tick input emission for prediction. Emits exactly one [`DriveRover`] +
 /// [`BrakeRover`] per fixed tick from each controller's latest [`VesselInput`]

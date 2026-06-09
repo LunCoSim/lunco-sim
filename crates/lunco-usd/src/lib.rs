@@ -14,7 +14,7 @@
 //! All three use deferred processing systems that run in the `Update` schedule **after**
 //! `sync_usd_visuals`, ensuring assets are fully loaded before any component mapping.
 //!
-//! See [docs/USD_SYSTEM.md](../../docs/USD_SYSTEM.md) for detailed architecture documentation.
+//! See [docs/architecture/21-domain-usd.md](../../docs/architecture/21-domain-usd.md) for detailed architecture documentation.
 
 use bevy::prelude::*;
 

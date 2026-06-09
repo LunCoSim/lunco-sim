@@ -689,7 +689,7 @@ impl JournalSink for BevyJournalSink {
 /// journal.
 ///
 /// **Note:** the previous lifecycle-summary `TwinJournal` Resource was
-/// removed in the foundation consolidation — see `crates_index.md`.
+/// removed in the foundation consolidation — see `crates-index.md`.
 /// The `JournalResource` is now the single source of truth; consumers
 /// read lifecycle events via `journal.entries_for_doc(doc)` filtered on
 /// `EntryKind::Lifecycle`.

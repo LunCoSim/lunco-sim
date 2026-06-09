@@ -471,6 +471,14 @@ pub fn maintain_owned_locally(
     role: Res<lunco_core::NetworkRole>,
     local: Res<lunco_core::LocalSession>,
     reg: Res<lunco_core::SessionRegistry>,
+    // Prediction membership is **computability**, not ownership (Phase A,
+    // `PREDICTION_MEMBERSHIP.md`): predict the owned rover only while THIS peer is
+    // actively driving it. A possessed-but-idle rover is dominated by external
+    // forces (another rover pushing it, cosim) the client can't reproduce, so it
+    // must interpolate as a normal proxy — else it free-runs local physics with no
+    // working correction ("pushed without contact").
+    tick: Res<lunco_core::SimTick>,
+    input_log: Res<lunco_core::OwnedInputLog>,
     mut commands: Commands,
     q: Query<
         (Entity, &lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>),
@@ -481,7 +489,13 @@ pub fn maintain_owned_locally(
         return;
     }
     for (e, gid, has_marker) in q.iter() {
-        let mine = reg.owns(local.0, gid.get());
+        // Owned AND actively driven within the grace window. Grace gives
+        // hysteresis so a brief gap between key taps doesn't flip the body
+        // Kinematic↔Dynamic; when it does lapse the body cleanly returns to
+        // interpolation (`force_kinematic_proxies` re-pins it).
+        let owns = reg.owns(local.0, gid.get());
+        let last_active = input_log.0.get(&gid.get()).map_or(0, |l| l.last_active_tick);
+        let mine = predicts_locally(owns, last_active, tick.0, PREDICT_GRACE_TICKS);
         match (mine, has_marker) {
             (true, false) => {
                 // Gaining ownership: mark it AND restore `Dynamic`. The marker
@@ -507,6 +521,21 @@ pub fn maintain_owned_locally(
 /// Cap on the predicted-state history ring (~2 s at 60 Hz). Only the recent tail
 /// (the unacked window) is ever compared.
 const MAX_PREDICTED_HISTORY: usize = 128;
+
+/// How many ticks after the last nonzero local input a vessel stays in the
+/// predicted set (`maintain_owned_locally`). ~0.5 s at 60 Hz — long enough to
+/// bridge gaps between key taps (hysteresis on the Dynamic↔Kinematic flip),
+/// short enough that an idle/parked owned rover promptly falls back to
+/// interpolation so an external push renders correctly.
+const PREDICT_GRACE_TICKS: u64 = 30;
+
+/// Pure prediction-membership predicate (Phase A): a client predicts a body
+/// locally iff it **owns** it AND it **drove it** within the grace window.
+/// Extracted so the ownership × input-recency × tick logic is unit-tested without
+/// an avian/render build. `last_active=0` = never driven → never predicted.
+fn predicts_locally(owns: bool, last_active: u64, now: u64, grace: u64) -> bool {
+    owns && last_active != 0 && now.saturating_sub(last_active) <= grace
+}
 // The reconciliation thresholds (eps_pos / eps_rot / snap_pos / blend) and the
 // decision geometry live in `lunco_core::reconcile_decision` /
 // `ReconcileParams::default()` — the single source of truth shared by this live
@@ -1239,6 +1268,8 @@ impl Plugin for SpawnCommandPlugin {
 
 #[cfg(test)]
 mod tests {
+    use super::{predicts_locally, PREDICT_GRACE_TICKS};
+
     #[test]
     fn test_spawn_entity_struct_exists() {
         // Verify the struct can be constructed
@@ -1248,6 +1279,42 @@ mod tests {
             position: bevy::math::Vec3::ZERO,
         };
         assert_eq!(cmd.entry_id, "test");
+    }
+
+    // Phase A: prediction membership = ownership ∧ recent local input.
+    #[test]
+    fn not_owned_never_predicts() {
+        // Even with fresh input, a body this peer does not own is never predicted.
+        assert!(!predicts_locally(false, 100, 100, PREDICT_GRACE_TICKS));
+    }
+
+    #[test]
+    fn owned_but_never_driven_interpolates() {
+        // The bug case: possessed (owned) but `last_active=0` (never driven by us,
+        // e.g. it's being pushed by another rover) → NOT predicted → interpolated.
+        assert!(!predicts_locally(true, 0, 1_000, PREDICT_GRACE_TICKS));
+    }
+
+    #[test]
+    fn owned_and_actively_driving_predicts() {
+        // Driven this very tick, and anywhere inside the grace window.
+        assert!(predicts_locally(true, 1_000, 1_000, PREDICT_GRACE_TICKS));
+        assert!(predicts_locally(true, 1_000, 1_000 + PREDICT_GRACE_TICKS, PREDICT_GRACE_TICKS));
+    }
+
+    #[test]
+    fn owned_idle_past_grace_falls_back_to_interpolation() {
+        // One tick past the grace window → demote to proxy/interpolation.
+        assert!(!predicts_locally(true, 1_000, 1_001 + PREDICT_GRACE_TICKS, PREDICT_GRACE_TICKS));
+    }
+
+    #[test]
+    fn tick_reset_does_not_falsely_predict() {
+        // `saturating_sub` guards a client SimTick that jumped backwards (clock
+        // discontinuity): now < last_active must not underflow into a huge value
+        // that reads as "recent". It clamps to 0 → treated as just-driven, which
+        // is the safe/benign direction (predict, then the next real input resets).
+        assert!(predicts_locally(true, 1_000, 5, PREDICT_GRACE_TICKS));
     }
 }
 
