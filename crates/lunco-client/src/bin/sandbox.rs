@@ -99,27 +99,9 @@ fn main() {
     let log_diag = args.iter().any(|a| a == "--log-diag");
     // `--window-pos <spec>` snaps the OS window to a screen region so a
     // host and a client instance can sit side by side without manual
-    // dragging. Specs: `left` / `right` (half the screen) or
-    // `top-left` / `top-right` / `bottom-left` / `bottom-right` (a
-    // quarter). Native only — wasm has no OS window to place. Applied a
-    // frame or two after launch, once winit has enumerated the monitors.
-    #[cfg(not(target_arch = "wasm32"))]
-    let window_placement: Option<WindowPlacement> = {
-        let mut p = None;
-        for i in 0..args.len() {
-            if args[i] == "--window-pos" && i + 1 < args.len() {
-                p = WindowPlacement::parse(&args[i + 1]);
-                if p.is_none() {
-                    eprintln!(
-                        "[window] unrecognized --window-pos '{}' (use left|right|top-left|top-right|bottom-left|bottom-right)",
-                        args[i + 1]
-                    );
-                }
-                break;
-            }
-        }
-        p
-    };
+    // dragging. Parsed + wired by `lunco_workbench::wire_window_placement`
+    // below, after the plugins are added.
+    //
     // Networking present? (`--host`/`--connect`). When networked, the window
     // must keep ticking even when unfocused: lightyear's netcode link sends
     // keepalives on the update loop, and the default unfocused throttle
@@ -426,106 +408,13 @@ fn main() {
         app.add_plugins(bevy::diagnostic::LogDiagnosticsPlugin::default());
     }
 
-    // Forced window placement (`--window-pos`). Insert the spec as a
-    // resource and run the one-shot placer; also suppress geometry
-    // persistence so this throwaway side-by-side layout doesn't overwrite
-    // the user's saved window bounds (two instances would thrash them).
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(placement) = window_placement {
-        app.insert_resource(placement);
-        app.insert_resource(lunco_workbench::SkipWindowGeometrySave(true));
-        app.add_systems(bevy::prelude::Update, apply_window_placement);
-    }
+    // Forced window placement (`--window-pos`). Parses the flag and (when
+    // present) inserts the resource, suppresses geometry persistence, and
+    // registers the placer system — all in `lunco-workbench` so any binary
+    // gets the same behaviour.
+    lunco_workbench::wire_window_placement(&mut app, &args);
 
     app.run();
-}
-
-/// Where on the screen `--window-pos` parks the OS window. Halves
-/// (`LeftHalf`/`RightHalf`) span the full monitor height; quarters take
-/// one corner. Fractions are resolved against the primary monitor's
-/// physical bounds in [`apply_window_placement`].
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(bevy::prelude::Resource, Clone, Copy, Debug)]
-enum WindowPlacement {
-    LeftHalf,
-    RightHalf,
-    TopLeft,
-    TopRight,
-    BottomLeft,
-    BottomRight,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl WindowPlacement {
-    fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().replace('_', "-").as_str() {
-            "left" | "l" => Some(Self::LeftHalf),
-            "right" | "r" => Some(Self::RightHalf),
-            "top-left" | "tl" => Some(Self::TopLeft),
-            "top-right" | "tr" => Some(Self::TopRight),
-            "bottom-left" | "bl" => Some(Self::BottomLeft),
-            "bottom-right" | "br" => Some(Self::BottomRight),
-            _ => None,
-        }
-    }
-
-    /// `(x_frac, y_frac, w_frac, h_frac)` of the monitor occupied by this
-    /// placement, with the origin at the monitor's top-left.
-    fn rect(self) -> (f64, f64, f64, f64) {
-        match self {
-            Self::LeftHalf => (0.0, 0.0, 0.5, 1.0),
-            Self::RightHalf => (0.5, 0.0, 0.5, 1.0),
-            Self::TopLeft => (0.0, 0.0, 0.5, 0.5),
-            Self::TopRight => (0.5, 0.0, 0.5, 0.5),
-            Self::BottomLeft => (0.0, 0.5, 0.5, 0.5),
-            Self::BottomRight => (0.5, 0.5, 0.5, 0.5),
-        }
-    }
-}
-
-/// One-shot `Update` system that resizes + repositions the primary window
-/// to its [`WindowPlacement`] once winit has reported a monitor. Monitors
-/// aren't enumerated on the first frame, so this retries (via the
-/// `Single`/empty-query early-returns) until one appears, then disables
-/// itself. Wayland may ignore the explicit position (compositor policy);
-/// the size still applies, and X11 honours both.
-#[cfg(not(target_arch = "wasm32"))]
-fn apply_window_placement(
-    placement: bevy::prelude::Res<WindowPlacement>,
-    primary_mon: bevy::prelude::Query<&bevy::window::Monitor, bevy::prelude::With<bevy::window::PrimaryMonitor>>,
-    any_mon: bevy::prelude::Query<&bevy::window::Monitor>,
-    mut window: bevy::prelude::Query<&mut bevy::prelude::Window, bevy::prelude::With<bevy::window::PrimaryWindow>>,
-    mut done: bevy::prelude::Local<bool>,
-) {
-    use bevy::window::WindowPosition;
-    if *done {
-        return;
-    }
-    // Prefer the flagged primary monitor; fall back to whatever winit
-    // reported first (some platforms don't tag a primary).
-    let Some(mon) = primary_mon.iter().next().or_else(|| any_mon.iter().next()) else {
-        return; // monitors not enumerated yet — retry next frame
-    };
-    let Ok(mut win) = window.single_mut() else {
-        return;
-    };
-    let sf = mon.scale_factor.max(0.1);
-    let (fx, fy, fw, fh) = placement.rect();
-    let (mw, mh) = (mon.physical_width as f64, mon.physical_height as f64);
-    let (ox, oy) = (mon.physical_position.x as f64, mon.physical_position.y as f64);
-    let phys_x = (ox + fx * mw).round() as i32;
-    let phys_y = (oy + fy * mh).round() as i32;
-    // `WindowResolution` is in logical points; convert from physical via
-    // the monitor scale factor. Position stays in physical pixels.
-    let log_w = ((fw * mw) / sf).round() as f32;
-    let log_h = ((fh * mh) / sf).round() as f32;
-    win.resolution.set(log_w, log_h);
-    win.position = WindowPosition::At(bevy::prelude::IVec2::new(phys_x, phys_y));
-    bevy::prelude::info!(
-        "[window] placement {:?} -> pos ({phys_x},{phys_y}) size {log_w}x{log_h} logical (monitor {mw}x{mh}, sf {sf:.2})",
-        *placement
-    );
-    *done = true;
 }
 
 /// State machine for [`sandbox_boot_from_url`].

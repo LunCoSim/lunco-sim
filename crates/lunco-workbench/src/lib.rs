@@ -80,9 +80,13 @@ pub mod twin_browser;
 pub mod uri;
 pub mod window_command;
 pub mod window_persistence;
+pub mod window_placement;
 pub mod workspace_state;
 
 pub use window_command::{merged_titlebar_window, MaximizeWindow, MinimizeWindow, CloseWindow, WindowMaximized};
+#[cfg(not(target_arch = "wasm32"))]
+pub use window_placement::WindowPlacement;
+pub use window_placement::wire_window_placement;
 pub use window_persistence::{
     load_window_geometry, restored_window, SkipWindowGeometrySave, WindowGeometry,
     WindowPersistencePlugin, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
