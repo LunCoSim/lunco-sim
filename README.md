@@ -1,50 +1,50 @@
-# LunCoSim: Collaborative Space Engineering for Everyone
+# LunCoSim: The Collaborative Digital Twin for Space Systems
 
-LunCoSim is an open-source, collaborative digital twin of the solar system. Built for high-fidelity space mission planning, engineering, and training, it enables multiple participants to design and operate complex systems in a shared 3D environment.
+[![Discord](https://img.shields.io/discord/1078754516390158416?color=7289da&label=Discord&logo=discord&logoColor=fff)](https://discord.gg/A6U3GdvQum)
+[![Twitter](https://img.shields.io/twitter/follow/LunCoSim?style=social)](https://twitter.com/LunCoSim)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-stable-brightgreen.svg)](https://www.rust-lang.org/)
 
-[**Join our Discord**](https://discord.gg/A6U3GdvQum) | [**Follow us on Twitter**](https://twitter.com/LunCoSim) | [**Website**](https://lunco.space/)
+**LunCoSim** is an open-source, high-fidelity **robotics co-simulation platform** designed to bridge the gap between systems engineering, behavioral modeling, and 3D operations. While its foundation is a universal robotics hub, its mission is focused on the unique challenges of the **Space Frontier**—planetary exploration, lunar infrastructure, and orbital assembly.
 
----
-
-## 🚀 The 5 Pillars of Our Digital Twin
-
-Empowering everyone to architect the future of space, LunCoSim delivers professional-grade simulation fidelity at every scale—from individual rovers to entire lunar cities—through five core technological pillars:
-
-### 1. 🤝 Shared 3D Workspaces
-Real-time collaborative engineering where multiple participants interact in the same high-fidelity environment. Whether you are driving a rover, monitoring telemetry, or managing orbital maneuvers, the simulation remains synchronized and authoritative.
-
-### 2. 🧱 Modular Digital Twins (USD)
-We leverage **Universal Scene Description (USD)** for 3D world composition. This ensures industrial-grade interoperability with Pixar USD and NVIDIA Isaac Sim, allowing you to author once and simulate everywhere.
-
-### 3. 📐 Mathematics & Engineering Physics Rigor (Modelica)
-Native integration of **Modelica** provides high-fidelity 2D and 3D realistic engineering physics simulation for critical subsystems. Compute the power draw, thermal rejection, and life support levels with professional-grade, rigorous and interpretable mathematical models.
-
-### 4. 🔗 Structural Truth (SysML v2)
-We use the next-generation **SysML v2** standard as our structural blueprint. Every entity and its state is defined by an engineering model, serving as the ultimate "Source of Truth" for the simulation.
-
-### 5. 📡 Standardized Mission Control (XTCE)
-Monitor your missions using the **XML Telemetry and Command Exchange (XTCE)** standard. Compatible with professional tools like YAMCS and NASA OpenMCT, LunCoSim provides real-time, standardized hardware telemetry.
+[**Website**](https://lunco.space/) | [**Documentation Hub**](docs/README.md) | [**Join Discord**](https://discord.gg/A6U3GdvQum)
 
 ---
 
-## 🛠 Features & Capabilities
+## 🛰 The Challenge: Siloed Space Robotics
 
-- **Desktop & Browser Support**: High-performance native execution on Linux/Windows and accessible via web browsers (links coming soon).
-- **Headless-First Architecture**: Core simulation logic is decoupled from rendering, enabling high-speed automated validation and massive parallel Monte Carlo analysis.
-- **Planetary Precision (f64)**: All spatial math and physics use double-precision floating point (f64) for absolute stability across the scales of a lunar base or the entire solar system.
-- **Hotswappable Plugins**: A highly dynamic architecture where every feature — from flight software to physics integrators — is a modular plugin that can be swapped without a restart.
-- **In-Scene Editing**: Spawn rovers, props, and terrain directly in the running simulation. Transform and inspect objects with gizmo tools.
+Modern space missions are stalled by fragmented workflows. Systems engineers work in SysML, control engineers in Modelica, robotics software teams in ROS, and 3D artists in USD. Round-tripping between these domains is lossy, manual, and expensive. There is no "Shared Source of Truth" for complex robotic agents.
+
+## 🚀 The Solution: The Unified Co-Simulation Stack
+
+LunCoSim unifies these industry standards into a single, real-time environment. We don't just "show" a rover; we orchestrate a **multi-engine co-simulation** of its **mathematical truth** (Modelica), its **structural requirement** (SysML v2), its **software stack** (ROS/FSW), and its **physical presence** (OpenUSD) in a collaborative workspace.
+
+### Core Strategic Pillars
+
+| Pillar | Industry Standard | The Value Proposition |
+|---|---|---|
+| **Structural Truth** | **SysML v2** | Definitive architectural blueprints that serve as the authoritative "Source of Truth" for every entity. |
+| **Behavioral Rigor** | **Modelica** | Interpretable mathematical models for power, thermal, and life support—guaranteeing physics integrity. |
+| **Visual Interop** | **OpenUSD** | Industrial-grade 3D composition compatible with NVIDIA Omniverse, Blender, and Pixar tools. |
+| **Collaborative Ops** | **WebTransport** | Low-latency, multi-user engineering where teams design, test, and operate in the same authoritative scene. |
+| **Standardized Telemetry** | **XTCE / MAVLink** | Mission-ready data streams compatible with NASA OpenMCT, YAMCS, and professional ground stations. |
 
 ---
 
-## 🚦 Getting Started
+## 🛠 Key Capabilities
 
-### Prerequisites
-- [Rust Toolchain](https://rustup.rs/) (Stable)
-- Git
+- **Mathematical Integrity**: Native integration of the Modelica language via our `rumoca` engine—simulate complex subsystems with DAE-solver precision.
+- **Planetary Scale Precision**: Built on a specialized **f64 (double precision)** spatial math foundation, ensuring absolute stability from millimetre-scale rover parts to the vastness of the lunar surface.
+- **Autonomous & AI-Ready**: A **headless-first architecture** with a comprehensive HTTP/JSON API. Scalable for massive parallel Monte Carlo analysis, AI agent training, and automated verification.
+- **Cross-Platform Delivery**: High-performance native execution for engineering workstations and WebGPU-powered browser builds for stakeholders.
+- **Hotswappable Architecture**: A hotswappable plugin system allowing the swap of flight software, physics integrators, or environment models without a simulation restart.
 
-### Fast Track
-Clone the repository and run the simulation sandbox:
+---
+
+## 🏁 Fast Track to Simulation
+
+### 1. Run the Physics Sandbox
+Validate rover chassis, suspension, and environment interactions in our USD-based sandbox.
 
 ```bash
 git clone https://github.com/LunCoSim/lunco-sim.git
@@ -52,126 +52,30 @@ cd lunco-sim
 cargo run --release -p lunco-client --bin sandbox
 ```
 
-The USD-based sandbox loads the entire scene — rovers, terrain, and camera — from declarative `.usda` files. It includes an in-scene editing toolkit.
-
-### Lunica — the Modelica workbench
-
-**Lunica** is a Modelica-only subset of LunCoSim packaged as its own
-app. Same Modelica/Rumoca core as the full client (code editor,
-schematic diagram, package browser, simulator, plots), without the
-celestial / terrain / rover physics layers — small enough to ship as
-both a desktop binary and a wasm32 web build from one source tree.
+### 2. Launch Lunica (Engineering Workbench)
+Focus entirely on Modelica modeling, schematic diagramming, and subsystem analysis.
 
 ```bash
-# Desktop
 cargo run --bin lunica
-cargo run --bin lunica -- --api 3000     # also exposes the typed-command HTTP API
-
-# Web (wasm32)
-./scripts/build_web.sh all lunica    # builds and serves on http://localhost:8080
 ```
 
-Full guide — what Lunica includes, MSL cache bootstrap, and the
-`msl_indexer` step: [`docs/apps/lunica/README.md`](docs/apps/lunica/README.md).
+---
 
-### Headless Modelica simulation
+## 🏗 Ecosystem & Governance
 
-For automated runs, regression sweeps, and CI: `modelica_run` compiles a
-Modelica model and steps it from the command line, optionally dumping
-per-step telemetry to CSV. Same compile path as the workbench.
+LunCoSim is more than an application; it is a modular multi-crate ecosystem designed for long-term architectural continuity.
 
-```bash
-# (one-time) warm rumoca's compile cache for bundled models + common MSL examples
-LUNCOSIM_WARM_DIRS="$(pwd)/crates/lunco-modelica/assets/models" \
-  cargo run --release --bin msl_indexer -- --warm
-
-# Run AnnotatedRocketStage for 10 s with the throttle valve open, record CSV
-cargo run --release --bin modelica_run -- \
-    crates/lunco-modelica/assets/models/AnnotatedRocketStage.mo \
-    AnnotatedRocketStage.RocketStage \
-    --duration 10 --input valve.opening=1.0 --output /tmp/rocket.csv
-```
-
-Full flag reference: [`crates/lunco-modelica/README.md`](crates/lunco-modelica/README.md#cli-workflow--warm-cache-then-run-headless).
-
-**Editing Tools:**
-- **Spawn Palette** — Click or drag rovers, balls, ramps, and walls into the scene
-- **Transform Gizmo** — Select objects and use **G** (translate) / **R** (rotate) to manipulate them
-- **Inspector Panel** — View entity parameters (position, mass, physics)
-- **Undo** — **Ctrl+Z** to revert spawns and moves
-- **Escape** — Cancel current operation
-
-See [USD System Documentation](docs/architecture/21-domain-usd.md) for rover definitions, scene composition, wheel types, and the full editing tools architecture.
+- **[Documentation Hub](docs/README.md)** — Authoritative guides on architecture, documents, and simulation layers.
+- **[Crates Index](docs/crates-index.md)** — A map of our 30+ specialized crates (Core, Celestial, Mobility, FSW, USD).
+- **[Principles](docs/principles.md)** — Our non-negotiable mandates: TDD-First, Headless-First, and Tunability.
+- **[Technical Specifications](specs/)** — Granular implementation plans for the roadmap ahead.
 
 ---
 
-## 🏗 Project Architecture
+## 🤝 Community & Vision
 
-LunCoSim is built as a modular multi-crate workspace:
+LunCoSim is built by a global community of engineers, researchers, and space enthusiasts. We are dedicated to making professional-grade space engineering tools accessible to everyone.
 
-- **`lunco-core`**: Headless simulation core, CommandMessage architecture, and base traits.
-- **`lunco-celestial`**: Planetary mechanics, SOI handling, and environments.
-- **`lunco-mobility`**: Rover locomotion — differential drive, Ackermann steering, raycast suspension.
-- **`lunco-fsw`**: Flight software — digital ports, wires, and subsystem logic.
-- **`lunco-avatar`**: User presence, camera modes (freeflight, orbit, spring arm), and possession.
-- **`lunco-controller`**: Input translation — keyboard/intent to CommandMessage.
-- **`lunco-sandbox-edit`**: In-scene editing — spawn palette, transform gizmo, inspector, undo.
-- **`lunco-usd`**: USD integration — 3-plugin pipeline for visual, physics, and simulation mapping.
-- **`lunco-client`**: Visual desktop client — combines all subsystems into the sandbox binary.
-- **`lunco-modelica`**: Modelica simulation — AST-based parsing, component diagrams, workbench UI.
-- **`lunco-ui`**: Reusable UI mechanisms — WidgetSystem, node graphs, 3D world-space UI.
-- **`lunco-attributes`**: Reflection-based attribute system for SysML v2 alignment.
+- [**Discord**](https://discord.gg/A6U3GdvQum) | [**Twitter**](https://twitter.com/LunCoSim) | [**LinkedIn**](https://www.linkedin.com/company/luncosim/) | [**YouTube**](https://www.youtube.com/@LunCoSim)
 
----
-
-## 🎨 UI Architecture
-
-All UI panels are **entity viewers** — they watch a selected entity and render its data. The same panel works in a standalone workbench, a 3D overlay, or a mission dashboard.
-
-```
-                    Entity (ModelicaModel, FswConfig, etc.)
-                              │
-           ┌──────────────────┼──────────────────┐
-           ▼                  ▼                  ▼
-     DiagramPanel      CodeEditorPanel    TelemetryPanel
-     (lunco-canvas)    (text editor)      (params/inputs)
-```
-
-`WorkbenchState.selected_entity` is the **selection bridge** — any context (library browser, 3D viewport click, colony tree) can set it to open the editor for any entity.
-
-### Panel Layout
-
-Panels are dockable, tabbable, resizable, and persist across sessions:
-
-| Panel | Position | Purpose |
-|-------|----------|---------|
-| Library Browser | Left dock | File navigation, drag `.mo` files |
-| Code Editor | Center tab | Source code editing, compile & run |
-| Diagram | Center tab | Component block diagram (`lunco-canvas`) |
-| Telemetry | Right dock | Parameters, inputs, variable toggles |
-| Graphs | Bottom dock | Time-series plots |
-
-See [UI/UX Architecture Research](docs/research-ui-ux-architecture.md) for the full analysis of professional tools and our design decisions.
-
----
-
-## 🗺️ Roadmap & Detailed Specifications
-
-For those interested in the deep technical details, future architecture, and granular implementation plans, we maintain a comprehensive set of specifications in the [**specs/**](specs/) directory.
-
----
-
-
-## 📜 Legacy Support
-The original Godot 4 implementation of LunCoSim is still available on the [**main-godot4**](https://github.com/LunCoSim/lunco-sim/tree/main-godot4) branch.
-
----
-
-## 🌐 Community & Links
-
--   [Discord Server](https://discord.gg/A6U3GdvQum)
--   [Twitter](https://twitter.com/LunCoSim)
--   [LinkedIn](https://www.linkedin.com/company/luncosim/)
--   [YouTube Channel](https://www.youtube.com/@LunCoSim)
-
-**Want to contribute?** We follow a strict TDD and Documentation mandate. [Apply here](https://tally.so/r/3jX6aE) to join our team! Check our [Principles](docs/principles.md) and [Detailed Specifications](specs/) to understand our core principles and roadmap.
+**Want to join the mission?** We follow a strict TDD and Documentation mandate to ensure simulation reliability. [**Apply to the core team**](https://tally.so/r/3jX6aE).
