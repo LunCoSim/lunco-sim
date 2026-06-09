@@ -179,79 +179,102 @@ fn collect_child_colliders_from_usd(
 
 /// Builds a Collider from a USD prim's geometry type and dimensions.
 ///
-/// Spec-compliant shape attributes (UsdGeomCube/Sphere/Cylinder):
-/// - **Cube**: `double size` (default 2.0). Non-uniform extents come
-///   from `xformOp:scale` and are multiplied in here.
-/// - **Sphere**: `double radius` (default 1.0). Honoured uniformly
-///   from the largest `xformOp:scale` component (Avian's `sphere`
-///   collider is uniform).
-/// - **Cylinder**: `double radius`, `double height` (defaults 1, 2).
-///   Scale: X/Z components apply to radius (max), Y to height.
+/// Builds an Avian collider from a USD shape prim.
 ///
-/// **Legacy fallback for `Cube`**: `width`/`height`/`depth` still
-/// accepted so unmigrated `.usda` files keep working.
+/// **Scaling is NOT done here — Avian owns it.** `update_collider_scale`
+/// sets `collider.scale = world Transform.scale` every frame for *every*
+/// collider (measured: the ground collider's `scale` becomes (4000,0.2,4000)
+/// from its `xformOp:scale`). So each shape branch returns the **intrinsic,
+/// unscaled** shape at its authored size, and the single [`apply_collider_scale`]
+/// tail pre-applies the prim's `xformOp:scale` once, uniformly.
+///
+/// Why pre-apply at all, if Avian re-applies it anyway: Avian's pass is
+/// DEFERRED, so for the first frames an un-pre-scaled collider is its tiny
+/// intrinsic size and rovers fall straight through terrain (the fast-fall /
+/// "crazy" on commit c6246202). Pre-setting it to the value Avian will
+/// compute makes the collider correct from frame 0; Avian's
+/// `scale != collider.scale()` guard then skips the redundant pass — no
+/// double-scale, no startup race. Baking `size*scale` into the shape instead
+/// (the original bug) double-scales it (`size*scale × scale`) → oversized
+/// terrain → rovers float.
+///
+/// Spec-compliant shape attributes (UsdGeomCube/Sphere/Cylinder):
+/// - **Cube**: `double size` (default 2.0).
+/// - **Sphere**: `double radius` (default 1.0).
+/// - **Cylinder**: `double radius`, `double height` (defaults 1, 2). Avian's
+///   cylinder is Y-axial; the `UsdGeomCylinder.axis` token is honoured by the
+///   entity's Transform rotation (composed in `lunco-usd-bevy`; compound
+///   children get the axis rotation added in `collect_child_colliders_from_usd`).
+///
+/// **Legacy fallback for `Cube`**: `width`/`height`/`depth` still accepted so
+/// unmigrated `.usda` files keep working (those author full dims at scale=1).
 fn build_collider_from_usd(reader: &TextReader, sdf_path: &SdfPath) -> Option<Collider> {
     let Ok(val) = reader.get(sdf_path, "typeName") else { return None; };
     let Value::Token(ty) = &*val else { return None; };
 
-    let scale = read_vec3_attribute(reader, sdf_path, "xformOp:scale")
-        .map(|v| (v.x, v.y, v.z))
-        .unwrap_or((1.0, 1.0, 1.0));
-
-    match ty.as_str() {
+    // Build the INTRINSIC (unscaled) shape; the scale tail below owns scaling.
+    let collider = match ty.as_str() {
         "Cube" => {
             if let (Some(width), Some(height), Some(depth)) = (
                 reader.prim_attribute_value::<f64>(sdf_path, "width"),
                 reader.prim_attribute_value::<f64>(sdf_path, "height"),
                 reader.prim_attribute_value::<f64>(sdf_path, "depth"),
             ) {
-                Some(Collider::cuboid(width, height, depth))
+                Collider::cuboid(width, height, depth)
             } else {
-                // Author a UNIT `cuboid(size)` and pre-apply the prim's
-                // `xformOp:scale` to the collider here. Why both:
-                //  - Avian re-scales colliders to the entity's world `Transform.scale`
-                //    every frame (measured: `collider.scale` becomes (4000,0.2,4000)
-                //    for the ground), via a `set_scale` (ABSOLUTE, not multiply). So a
-                //    shape that already bakes `size*scale` ends up DOUBLE-scaled
-                //    (`size*scale × scale`) — the terrain grows ~scale× past its visual
-                //    and rovers float on the oversized slab. The intrinsic shape must
-                //    therefore be the UNSCALED `size`.
-                //  - But avian applies that scale in a DEFERRED pass; until it runs the
-                //    collider is a tiny `size³` dot, and rovers fall straight through
-                //    the terrain in those first frames (the "crazy"/fast-fall on commit
-                //    c6246202, which used a bare unit cuboid). Pre-setting the scale to
-                //    the value avian will compute makes the collider correct from frame
-                //    0; avian's `scale != collider.scale()` guard then skips the
-                //    redundant pass, so there's no double-scale and no startup race.
                 let size = reader.prim_attribute_value::<f64>(sdf_path, "size").unwrap_or(2.0);
-                let mut collider = Collider::cuboid(size, size, size);
-                collider.set_scale(bevy::math::DVec3::new(scale.0, scale.1, scale.2), 10);
-                Some(collider)
+                Collider::cuboid(size, size, size)
             }
         }
         "Sphere" => {
             let radius = reader.prim_attribute_value::<f64>(sdf_path, "radius").unwrap_or(1.0);
-            // Avian's sphere is uniform — pick the max axis scale so a
-            // user-authored bigger scale doesn't shrink the collider.
-            let s = scale.0.max(scale.1).max(scale.2);
-            Some(Collider::sphere(radius * s))
+            Collider::sphere(radius)
         }
         "Cylinder" => {
             let radius = reader.prim_attribute_value::<f64>(sdf_path, "radius").unwrap_or(1.0);
             let height = reader.prim_attribute_value::<f64>(sdf_path, "height").unwrap_or(2.0);
-            // Avian's `Collider::cylinder` is Y-axis natively. The
-            // UsdGeomCylinder.axis token is honoured by the entity's
-            // Transform rotation (composed in `lunco-usd-bevy`) — for
-            // standalone cylinder bodies that's enough, and for
-            // compound children `collect_child_colliders_from_usd`
-            // adds the axis rotation onto the child's local rotation.
-            // Scale interpretation always treats Y as axial here; the
-            // entity rotation will swing it to whichever world axis.
-            let radial = scale.0.max(scale.2);
-            Some(Collider::cylinder(radius * radial, height * scale.1))
+            Collider::cylinder(radius, height)
         }
-        _ => None,
-    }
+        _ => return None,
+    };
+
+    Some(apply_collider_scale(collider, reader, sdf_path))
+}
+
+/// Pre-applies a prim's `xformOp:scale` to a freshly-built intrinsic collider so
+/// it is correct from frame 0, matching what Avian's `update_collider_scale` will
+/// compute. See [`build_collider_from_usd`] for why this is the *only* place
+/// scale touches a collider.
+///
+/// Note Avian's scale pass is **change-driven, not per-frame**: it's gated by
+/// `Or<(Changed<Transform>, Changed<C>)>` plus an inner `scale != collider.scale()`
+/// guard, so for static terrain it runs once at frame 0 and never again — and
+/// because our pre-apply makes that first pass a no-op, the value we set here is
+/// what survives.
+///
+/// The `10` is the **subdivision count**: facets used when a NON-UNIFORM scale
+/// forces a round collider (sphere/cylinder/cone/capsule) to be re-tessellated
+/// into a convex hull. Cuboids ignore it (a box stays exact under any scale), so
+/// it's a no-op for terrain and only matters for scaled round shapes. We hardcode
+/// `10` to match Avian's own hardcoded value (backend.rs `update_collider_scale`,
+/// which carries a literal `// TODO: Support configurable subdivision count`) —
+/// matching it means our pre-applied collider has the same fidelity Avian would
+/// produce, so they never disagree.
+///
+/// TODO(realtime subdivisions): make this authorable + live-tunable per prim once
+/// Avian exposes a configurable subdivision count (its TODO above). The proper
+/// shape is a USD `int physics:collider:scaleSubdivisions` attr → a `Reflect`
+/// `ColliderScaleSubdivisions(u32)` component → a `Changed<{component,Transform}>`-
+/// gated system, ordered `.after` Avian's `update_collider_scale`, that re-applies
+/// `set_scale` with the authored count (overriding Avian's `10` only for scaled
+/// round shapes). Blocked on Avian: while it hardcodes `10`, any runtime scale
+/// edit re-clobbers our value, so a clean realtime story needs Avian's knob first.
+fn apply_collider_scale(mut collider: Collider, reader: &TextReader, sdf_path: &SdfPath) -> Collider {
+    let scale = read_vec3_attribute(reader, sdf_path, "xformOp:scale")
+        .map(|v| (v.x, v.y, v.z))
+        .unwrap_or((1.0, 1.0, 1.0));
+    collider.set_scale(bevy::math::DVec3::new(scale.0, scale.1, scale.2), 10);
+    collider
 }
 
 /// Reads the local transform from a USD prim.
