@@ -133,7 +133,7 @@ fn host_spawn_rovers(mut commands: Commands) {
     // The host claims its own rover (G1) through the real possession observer.
     // `guard` is None here → the claim is attributed to the host's `LocalSession`
     // (`SessionId::LOCAL`). The client must NOT be able to take it.
-    commands.trigger(lunco_avatar::PossessVessel { avatar: g1, target: g1 });
+    commands.trigger(lunco_avatar::PossessVessel { avatar: Some(g1), target: g1 });
     info!("[test] host rovers spawned g1(self)={G1_GID:#x} g2(free)={G2_GID:#x}");
 }
 
@@ -233,9 +233,9 @@ fn client_act(
     };
     if !*acted {
         // Claim the free rover…
-        commands.trigger(lunco_avatar::PossessVessel { avatar: rovers.g2, target: rovers.g2 });
+        commands.trigger(lunco_avatar::PossessVessel { avatar: Some(rovers.g2), target: rovers.g2 });
         // …and attempt to steal the host's rover (must be refused).
-        commands.trigger(lunco_avatar::PossessVessel { avatar: rovers.g1, target: rovers.g1 });
+        commands.trigger(lunco_avatar::PossessVessel { avatar: Some(rovers.g1), target: rovers.g1 });
         *acted = true;
         info!("[test] client requested possession of G2 (free) and G1 (host-owned)");
     }

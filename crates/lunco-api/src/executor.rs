@@ -136,6 +136,23 @@ pub fn api_command_dispatcher(
                 // Re-deserialize inside the world queue where we have access to everything
                 let reflect_deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
                 if let Ok(reflected) = reflect_deserializer.deserialize(resolved_params) {
+                    // Guard against a panic in `ReflectEvent::trigger`: it builds
+                    // the concrete type via `FromReflect`, falling back to
+                    // `Default`/`FromWorld` and PANICKING when none apply (e.g. a
+                    // struct still missing a no-`Default` field). Verify the value
+                    // is fully constructible first so a malformed command logs and
+                    // is dropped instead of killing the process. (Types without a
+                    // registered `ReflectFromReflect` keep the legacy path.)
+                    let constructible = registration
+                        .data::<bevy::reflect::ReflectFromReflect>()
+                        .map(|fr| fr.from_reflect(reflected.as_ref()).is_some())
+                        .unwrap_or(true);
+                    if !constructible {
+                        warn!(
+                            "[lunco-api] command '{cmd_name}' not constructible from params (missing/invalid fields); dropped"
+                        );
+                        return;
+                    }
                     // Scope the active request id around the trigger so a
                     // result-reporting `#[on_command]` wrapper records its
                     // outcome under this id. Observers run synchronously
@@ -325,7 +342,11 @@ fn convert_node(
                 }
                 VariantInfo::Tuple(tv) if tv.field_len() == 1 => {
                     if let Some(f) = tv.field_at(0) {
-                        convert_node(payload, f.type_id(), reg, dir, entities, false);
+                        // Propagate `wire_local` into the single-field payload so
+                        // an `Option<Entity>` (the `Some` variant) tagged
+                        // `#[wire_local]` — e.g. `PossessVessel::avatar` — still
+                        // nulls its inner local bits on the wire.
+                        convert_node(payload, f.type_id(), reg, dir, entities, wire_local);
                     }
                 }
                 VariantInfo::Tuple(tv) => {
@@ -756,6 +777,13 @@ mod id_codec_tests {
         #[reflect(@lunco_core::AuthzTarget)]
         target: Entity,
     }
+    #[derive(Reflect)]
+    struct TPossessOpt {
+        #[reflect(@lunco_core::WireLocal)]
+        avatar: Option<Entity>,
+        #[reflect(@lunco_core::AuthzTarget)]
+        target: Entity,
+    }
 
     fn setup() -> (TypeRegistry, ApiEntityRegistry, Entity, GlobalEntityId) {
         // A real Entity (valid index+generation bits) we control the mapping of.
@@ -772,6 +800,7 @@ mod id_codec_tests {
         reg.register::<TColl>();
         reg.register::<TInner>();
         reg.register::<TPossess>();
+        reg.register::<TPossessOpt>();
         reg.register::<Entity>();
         reg.register::<Vec<Entity>>();
         reg.register::<Option<Entity>>();
@@ -834,6 +863,18 @@ mod id_codec_tests {
         assert_eq!(v["target"], json!(gid.get())); // local bits → gid
         // wire_local field never carries real local bits onto the wire.
         assert_eq!(v["avatar"], json!(Entity::PLACEHOLDER.to_bits()));
+    }
+
+    #[test]
+    fn globalize_strips_wire_local_inside_option() {
+        // `PossessVessel::avatar` is `Option<Entity>` + `#[wire_local]`. The
+        // strip must reach the inner `Entity` of the `Some` payload, not just a
+        // bare-`Entity` field — otherwise a possessing client leaks its local
+        // camera bits onto the wire.
+        let (reg, ent, e, _gid) = setup();
+        let mut v = json!({ "avatar": { "Some": e.to_bits() }, "target": e.to_bits() });
+        globalize_command_ids(&mut v, TypeId::of::<TPossessOpt>(), &reg, &ent);
+        assert_eq!(v["avatar"], json!({ "Some": Entity::PLACEHOLDER.to_bits() }));
     }
 
     #[test]

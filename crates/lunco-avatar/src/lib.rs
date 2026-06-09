@@ -1275,14 +1275,14 @@ pub fn avatar_raycast_possession(
     }
 
     if let Some(target) = body_hit {
-        commands.trigger(FocusTarget { avatar: avatar_entity, target });
+        commands.trigger(FocusTarget { avatar: Some(avatar_entity), target });
     } else if let Some(target) = spacecraft_hit {
-        commands.trigger(PossessVessel { avatar: avatar_entity, target });
+        commands.trigger(PossessVessel { avatar: Some(avatar_entity), target });
     } else if let Some(target) = nearest_clickable {
         if q_vessel.get(target).is_ok() {
-            commands.trigger(PossessVessel { avatar: avatar_entity, target });
+            commands.trigger(PossessVessel { avatar: Some(avatar_entity), target });
         } else {
-            commands.trigger(FollowTarget { avatar: avatar_entity, target });
+            commands.trigger(FollowTarget { avatar: Some(avatar_entity), target });
         }
     }
 }
@@ -1441,12 +1441,14 @@ fn on_possess_command(
             return;
         }
     }
-    let (avatar_ent, cam_tf, cam_cell, _child_of, existing_link) = if let Ok(data) = q_avatar.get(cmd.avatar) {
-        data
-    } else {
-        let Some(first) = q_avatar.iter().next() else { return; };
-        first
-    };
+    // Resolve the avatar to bind the camera to: the command's avatar if it
+    // names a live one, else any local avatar. With no avatar at all (headless /
+    // direct control) there is nothing to bind — the authority claim already
+    // ran in `record_possession_authority`, so just skip the camera work.
+    let resolved = cmd.avatar
+        .and_then(|a| q_avatar.get(a).ok())
+        .or_else(|| q_avatar.iter().next());
+    let Some((avatar_ent, cam_tf, cam_cell, _child_of, existing_link)) = resolved else { return; };
 
     // Idempotent: already controlling this exact target — no-op.
     if let Some(link) = existing_link {
@@ -1580,8 +1582,10 @@ fn on_follow_command(
     q_vessel_gravity: Query<&GravityBody>,
 ) {
     let cmd = trigger.event();
-    let Ok((avatar_ent, cam_tf, cam_cell, _child_of, existing_spring)) = q_avatar.get(cmd.avatar)
-        .or_else(|_| q_avatar.iter().next().ok_or(())) else { return; };
+    let resolved = cmd.avatar
+        .and_then(|a| q_avatar.get(a).ok())
+        .or_else(|| q_avatar.iter().next());
+    let Some((avatar_ent, cam_tf, cam_cell, _child_of, existing_spring)) = resolved else { return; };
 
     // Idempotent: already following this target — no-op.
     if let Some(arm) = existing_spring {
@@ -1676,12 +1680,10 @@ fn on_focus_command(
     _q_chase: Query<&ChaseCamera>,
 ) {
     let cmd = trigger.event();
-    let (avatar_ent, cam_tf, cam_cell, _child_of) = if let Ok(data) = q_avatar.get(cmd.avatar) {
-        data
-    } else {
-        let Some(first) = q_avatar.iter().next() else { return; };
-        first
-    };
+    let resolved = cmd.avatar
+        .and_then(|a| q_avatar.get(a).ok())
+        .or_else(|| q_avatar.iter().next());
+    let Some((avatar_ent, cam_tf, cam_cell, _child_of)) = resolved else { return; };
 
     // Compute camera absolute position in root frame.
     let _cam_abs = lunco_core::coords::world_position_seeded(

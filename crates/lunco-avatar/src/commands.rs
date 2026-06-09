@@ -9,9 +9,14 @@ use lunco_core::Command;
 /// `ControllerLink` so that input events are forwarded to the vessel.
 #[Command]
 pub struct PossessVessel {
-    /// The avatar entity that is taking possession.
+    /// The avatar entity taking possession — a user's *local* representation in
+    /// the world, used only to bind the chase camera. `None` for headless or
+    /// direct API control with no avatar: the host-side authority claim keys on
+    /// `target`, so possession works fully without one.
     #[wire_local]
-    pub avatar: Entity,
+    #[serde(default)]
+    #[reflect(default)]
+    pub avatar: Option<Entity>,
     /// The entity to possess (becomes the controlled vessel).
     pub target: Entity,
 }
@@ -31,9 +36,12 @@ pub struct ReleaseVessel {
 /// Switches the avatar to `OrbitCamera` mode centered on the target.
 #[Command]
 pub struct FocusTarget {
-    /// The avatar entity that is focusing.
+    /// The avatar entity that is focusing (local camera representation). `None`
+    /// for headless/direct control with no avatar.
     #[wire_local]
-    pub avatar: Entity,
+    #[serde(default)]
+    #[reflect(default)]
+    pub avatar: Option<Entity>,
     /// The entity to focus on.
     pub target: Entity,
 }
@@ -48,9 +56,12 @@ pub struct FocusTarget {
 /// controller binding.
 #[Command]
 pub struct FollowTarget {
-    /// The avatar entity that will follow.
+    /// The avatar entity that will follow (local camera representation). `None`
+    /// for headless/direct control with no avatar.
     #[wire_local]
-    pub avatar: Entity,
+    #[serde(default)]
+    #[reflect(default)]
+    pub avatar: Option<Entity>,
     /// The entity to follow.
     pub target: Entity,
 }

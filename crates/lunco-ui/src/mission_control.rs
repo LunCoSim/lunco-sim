@@ -80,7 +80,7 @@ impl MissionControl {
                     ui.label(format!("{} ({})", name, radius));
                     if ui.small_button("Focus").clicked() {
                         if let Some(av) = avatar_ent {
-                            world.commands().trigger(FocusTarget { avatar: av, target: *entity });
+                            world.commands().trigger(FocusTarget { avatar: Some(av), target: *entity });
                         }
                     }
                     if ui.small_button("🌕 Surface").clicked() {
@@ -107,7 +107,7 @@ impl MissionControl {
                     ui.label(name);
                     if ui.small_button("Focus").clicked() {
                         if let Some(av) = avatar_ent {
-                            world.commands().trigger(FocusTarget { avatar: av, target: *entity });
+                            world.commands().trigger(FocusTarget { avatar: Some(av), target: *entity });
                         }
                     }
                 });
@@ -194,7 +194,7 @@ impl MissionControl {
                     ui.label(name);
                     if ui.small_button("Focus").clicked() {
                         if let Some(av) = avatar_ent {
-                            world.commands().trigger(FocusTarget { avatar: av, target: *entity });
+                            world.commands().trigger(FocusTarget { avatar: Some(av), target: *entity });
                         }
                     }
                     if mine {
@@ -216,7 +216,7 @@ impl MissionControl {
                             );
                         } else if resp.clicked() {
                             if let Some(av) = avatar_ent {
-                                world.commands().trigger(PossessVessel { avatar: av, target: *entity });
+                                world.commands().trigger(PossessVessel { avatar: Some(av), target: *entity });
                             }
                         }
                     }
