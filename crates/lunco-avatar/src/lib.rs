@@ -80,6 +80,12 @@ impl Default for CameraScrollSensitivity {
 #[derive(Resource)]
 pub struct CameraDefaults {
     pub damping: f32,
+    /// Base responsiveness (Hz) of rotation follow, before per-camera `damping`
+    /// scales it. Used as `alpha = 1 - exp(-rotation_rate * (1 - damping) * dt)`.
+    pub rotation_rate: f32,
+    /// Base responsiveness (Hz) of position follow, before per-camera `damping`
+    /// scales it. Same exp-decay form as `rotation_rate`.
+    pub position_rate: f32,
     pub transition_duration: f32,
     pub default_distance: f64,
 }
@@ -88,6 +94,8 @@ impl Default for CameraDefaults {
     fn default() -> Self {
         Self {
             damping: 0.1,
+            rotation_rate: 60.0,
+            position_rate: 30.0,
             transition_duration: 1.0,
             default_distance: 10.0,
         }
@@ -587,7 +595,7 @@ fn spring_arm_system(
         // Rotation: exponential decay for snappy but smooth heading follow.
         // Frequency 60.0 — snappy without transmitting physics jitter.
         let damping = arm.damping.unwrap_or(defaults.damping);
-        let rot_alpha = 1.0 - (-60.0 * (1.0 - damping) * dt).exp();
+        let rot_alpha = 1.0 - (-defaults.rotation_rate * (1.0 - damping) * dt).exp();
         tf.rotation = tf.rotation.slerp(desired_rot, rot_alpha);
 
         // Desired camera position: behind target along smoothed rotation.
@@ -623,11 +631,28 @@ fn spring_arm_system(
             None
         };
 
-        let final_pos = if let Some(hit_data) = hit {
-            ray_origin + ray_dir * (hit_data.distance - 0.5)
-        } else {
-            desired_pos
+        // Collision response: only the arm LENGTH is smoothed, and only when an
+        // obstacle forces it shorter than the user asked for. The arm DIRECTION
+        // (ray_dir) already tracks the user's rotation instantly, so orbiting in
+        // open space is 1:1 with the mouse — there the target length equals the
+        // desired length equals the current length, and the lerp is a no-op.
+        // Smoothing kicks in only when a hit pulls the camera in (and eases back
+        // out when the obstacle clears), never on human rotation.
+        let desired_len = ray_len;
+        let target_len = match hit {
+            Some(hit_data) => ((hit_data.distance - 0.5).min(desired_len)).max(0.0),
+            None => desired_len,
         };
+        let current_pos = grid.grid_position_double(&cell, &tf);
+        let current_len = current_pos.distance(target_pos);
+        // First frame (camera still at grid origin) or already at target: snap.
+        let final_len = if current_len < 1e-3 {
+            target_len
+        } else {
+            let alpha = (1.0 - (-defaults.position_rate * (1.0 - damping) * dt).exp()) as f64;
+            current_len + (target_len - current_len) * alpha
+        };
+        let final_pos = target_pos + ray_dir * final_len;
 
         let (new_cell, new_tf) = grid.translation_to_grid(final_pos);
         *cell = new_cell;
@@ -685,7 +710,7 @@ fn chase_camera_system(
 
         // Position lerp: same formula as SpringArmCamera and old working code.
         let damping = chase.damping.unwrap_or(defaults.damping);
-        let lerp_factor = (dt * 30.0 * (1.0 - damping)).min(1.0) as f64;
+        let lerp_factor = (1.0 - (-defaults.position_rate * (1.0 - damping) * dt).exp()) as f64;
         let current_pos = grid.grid_position_double(&cell, &tf);
         let next_pos = current_pos.lerp(desired_pos, lerp_factor);
 
@@ -793,11 +818,22 @@ fn orbit_system(
         let offset = rotation.mul_vec3(Vec3::Z).as_dvec3() * orbit.distance;
         let desired_pos = target_pos + offset + Vec3::Y.as_dvec3() * orbit.vertical_offset as f64;
 
-        // Damped position lerp toward desired orbit slot.
+        // Orbit follows the user's rotation instantly: the camera direction
+        // tracks yaw/pitch 1:1, only the arm LENGTH is eased (so zoom glides
+        // instead of snapping). No collision here, so length only changes on
+        // zoom — rotation is never smoothed.
         let damping = orbit.damping.unwrap_or(defaults.damping);
-        let lerp_factor = (dt * 30.0 * (1.0 - damping)).min(1.0) as f64;
+        let dir = (desired_pos - target_pos).normalize_or(DVec3::Y);
+        let desired_len = desired_pos.distance(target_pos);
         let current_pos = grid_ref.grid_position_double(&cell, &tf);
-        let next_pos = current_pos.lerp(desired_pos, lerp_factor);
+        let current_len = current_pos.distance(target_pos);
+        let final_len = if current_len < 1e-3 {
+            desired_len
+        } else {
+            let alpha = (1.0 - (-defaults.position_rate * (1.0 - damping) * dt).exp()) as f64;
+            current_len + (desired_len - current_len) * alpha
+        };
+        let next_pos = target_pos + dir * final_len;
 
         let (new_cell, new_tf) = grid_ref.translation_to_grid(next_pos);
         *cell = new_cell;
