@@ -17,7 +17,6 @@ lunco-theme = { path = "../lunco-theme" }
 lunco-ui = { path = "../lunco-ui" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
-lunco-usd-composer = { path = "../lunco-usd-composer" }
 bevy_egui.workspace = true
 serde = { workspace = true }
 # `serde_json::Value` for the hot-exit `DocumentSnapshot.view_state`

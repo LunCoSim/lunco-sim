@@ -38,9 +38,12 @@ use bevy::prelude::*;
 use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 use openusd::usda::TextReader;
 use openusd::sdf::{AbstractData, Path as SdfPath, Value};
-use lunco_usd_composer::UsdComposer;
 use big_space::prelude::CellCoord;
 use std::sync::Arc;
+
+mod resolver;
+mod compose;
+pub use compose::compose_native_fs;
 
 /// Bevy plugin for USD visual synchronization.
 ///
@@ -97,86 +100,25 @@ impl AssetLoader for UsdLoader {
         _settings: &Self::Settings,
         load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        // Read raw bytes from the .usda file
+        // Read raw bytes from the .usda file.
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let data = String::from_utf8(bytes)?;
 
-        // Parse the USD text format
-        let mut parser = openusd::usda::parser::Parser::new(&data);
-        let data_map = parser.parse().map_err(|e| anyhow::anyhow!("USD Parse Error: {}", e))?;
-        let reader = TextReader::from_data(data_map);
+        // Asset-source-relative path of this layer (e.g.
+        // `scenes/sandbox/sandbox_scene.usda`) — the composition root and the
+        // pre-fetch BFS anchor.
+        let root_asset_path = load_context.path().path().to_string_lossy().into_owned();
 
-        // Resolve external references. Two conventions are supported:
-        //  * `/`-prefixed (legacy): composer walks up to the `assets/`
-        //    root and resolves the path against it.
-        //  * Layer-relative `@../../foo.usda@` (USD-spec / Pixar form,
-        //    portable to Blender / usdview / Houdini): resolved against
-        //    the `.usda`'s **own parent directory**.
-        //
-        // Both forms need `base_dir` to be the layer's parent directory
-        // — the composer's `flatten_recursive` joins relative paths
-        // against it. Earlier this passed just `assets/`, which made
-        // `../../vessels/...` resolve to `assets/../../vessels/...`
-        // (out of the workspace). Joining the load-context-relative
-        // parent onto `assets/` fixes it.
-        let reader = if let Some(parent) = load_context.path().path().parent() {
-            let asset_root = std::path::Path::new("assets");
-            // On native, base_dir lives under `assets/` so the composer's
-            // filesystem reads see real on-disk paths; on wasm (no fs)
-            // base_dir stays asset-source-relative and sublayers are
-            // pre-fetched through the AssetServer below.
-            let base_dir = if asset_root.exists() {
-                asset_root.join(parent)
-            } else {
-                parent.to_path_buf()
-            };
-
-            #[cfg(target_arch = "wasm32")]
-            {
-                // Pre-fetch every transitively-referenced .usda via the
-                // AssetServer (the only filesystem-like API available on
-                // wasm). The composer then runs synchronously off the
-                // in-memory map.
-                use lunco_usd_composer::{collect_sublayer_paths, normalize_path};
-                let mut fetched: std::collections::HashMap<std::path::PathBuf, openusd::usda::TextReader> = std::collections::HashMap::new();
-                let mut queue: Vec<(std::path::PathBuf, openusd::usda::TextReader)> = Vec::new();
-                queue.push((base_dir.clone(), reader.clone()));
-                while let Some((cur_dir, cur_reader)) = queue.pop() {
-                    for sub in collect_sublayer_paths(&cur_reader, &cur_dir) {
-                        let key = normalize_path(&sub);
-                        if fetched.contains_key(&key) { continue; }
-                        let bytes = load_context.read_asset_bytes(key.clone()).await
-                            .map_err(|e| anyhow::anyhow!("Failed to fetch sublayer {}: {}", key.display(), e))?;
-                        let text = String::from_utf8(bytes)
-                            .map_err(|e| anyhow::anyhow!("Sublayer {} is not UTF-8: {}", key.display(), e))?;
-                        let mut sub_parser = openusd::usda::parser::Parser::new(&text);
-                        let sub_data = sub_parser.parse().map_err(|e| anyhow::anyhow!("USD Parse Error in {}: {}", key.display(), e))?;
-                        let sub_reader = openusd::usda::TextReader::from_data(sub_data);
-                        let parent_dir = key.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
-                        fetched.insert(key.clone(), sub_reader.clone());
-                        queue.push((parent_dir, sub_reader));
-                    }
-                }
-                let mut fetcher = |p: &std::path::Path| -> anyhow::Result<openusd::usda::TextReader> {
-                    let key = normalize_path(p);
-                    fetched.get(&key)
-                        .cloned()
-                        .ok_or_else(|| anyhow::anyhow!("Sublayer not pre-fetched: {}", key.display()))
-                };
-                UsdComposer::flatten_with_fetcher(&reader, &base_dir, &mut fetcher)
-                    .map_err(|e| anyhow::anyhow!("USD Composition Error: {}", e))?
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                UsdComposer::flatten(&reader, &base_dir).map_err(|e| anyhow::anyhow!("USD Composition Error: {}", e))?
-            }
-        } else {
-            reader
-        };
+        // Compose with openusd 0.5.0's PCP engine — references, payloads,
+        // variant selection, and relationship-target translation — through our
+        // in-memory `LuncoUsdResolver` (filesystem-free, native + wasm), then
+        // flatten the composed stage back into a `TextReader` so the downstream
+        // visual / physics / cosim readers keep their existing flat interface.
+        let text_reader =
+            compose::compose_to_textreader(load_context, &root_asset_path, bytes).await?;
 
         Ok(UsdStageAsset {
-            reader: Arc::new(reader),
+            reader: Arc::new(text_reader),
         })
     }
 
@@ -332,7 +274,7 @@ fn instantiate_usd_prim(
         }
 
         // Skip inactive prims
-        if let Ok(val) = reader.get(&sdf_path, "active") {
+        if let Ok(Some(val)) = reader.try_get(&sdf_path, "active") {
             if let Value::Bool(active) = &*val {
                 if !*active {
                     commands.entity(entity).insert(UsdVisualSynced);
@@ -342,7 +284,7 @@ fn instantiate_usd_prim(
         }
 
         // Get prim type (Cube, Cylinder, Sphere, etc.)
-        let prim_type = if let Ok(val) = reader.get(&sdf_path, "typeName") {
+        let prim_type = if let Ok(Some(val)) = reader.try_get(&sdf_path, "typeName") {
             if let Value::Token(ty) = &*val {
                 Some(ty.clone())
             } else {
@@ -533,12 +475,12 @@ fn instantiate_usd_prim(
         // an explicit `xformOp:rotateXYZ` hack. Goes after rotateXYZ so
         // it applies on top of any user-authored rotation.
         if matches!(prim_type.as_deref(), Some("Cylinder")) {
-            let axis = match reader.get(&sdf_path, "axis") {
-                Ok(v) => match &*v {
+            let axis = match reader.try_get(&sdf_path, "axis") {
+                Ok(Some(v)) => match &*v {
                     Value::Token(t) | Value::String(t) => Some(t.clone()),
                     _ => None,
                 },
-                Err(_) => None,
+                _ => None,
             }
             .or_else(|| get_attribute_as_string(reader, &sdf_path, "axis"))
             .unwrap_or_else(|| "Z".to_string());
@@ -586,7 +528,7 @@ fn instantiate_usd_prim(
         // This is critical for wheel positions — they must be at the correct offsets from
         // the chassis center before the suspension system runs.
         for child_path in reader.prim_children(&sdf_path) {
-            if let Ok(val) = reader.get(&child_path, "active") {
+            if let Ok(Some(val)) = reader.try_get(&child_path, "active") {
                 if let Value::Bool(active) = &*val {
                     if !*active { continue; }
                 }
@@ -800,7 +742,7 @@ fn apply_standard_material(
 /// `defaultPrim`. The metadata lives on the pseudo-root spec at the
 /// absolute root path.
 pub fn stage_default_prim(reader: &TextReader) -> Option<String> {
-    let val = reader.get(&SdfPath::abs_root(), "defaultPrim").ok()?;
+    let val = reader.try_get(&SdfPath::abs_root(), "defaultPrim").ok().flatten()?;
     let name = String::try_from(val.into_owned()).ok()?;
     (!name.is_empty()).then_some(name)
 }
@@ -813,7 +755,7 @@ pub fn stage_default_prim(reader: &TextReader) -> Option<String> {
 /// Handles every form `apiSchemas` can take: a single `Token`/`String`,
 /// a `TokenVec`, or a `TokenListOp` (explicit/prepended/appended/added).
 pub fn has_api_schema(reader: &TextReader, path: &SdfPath, schema_name: &str) -> bool {
-    let Ok(val) = reader.get(path, "apiSchemas") else {
+    let Ok(Some(val)) = reader.try_get(path, "apiSchemas") else {
         return false;
     };
     match &*val {
@@ -839,7 +781,7 @@ pub fn read_rel_target(reader: &TextReader, prim_path: &SdfPath, rel_name: &str)
     let Ok(rel_sdf) = SdfPath::new(&rel_path_str) else {
         return None;
     };
-    if let Ok(val) = reader.get(&rel_sdf, "targetPaths") {
+    if let Ok(Some(val)) = reader.try_get(&rel_sdf, "targetPaths") {
         if let Value::PathListOp(op) = &*val {
             if let Some(target) = op
                 .explicit_items
@@ -857,9 +799,10 @@ pub fn read_rel_target(reader: &TextReader, prim_path: &SdfPath, rel_name: &str)
 
 fn get_attribute_as_string(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<String> {
     let attr_path = path.append_property(attr).ok()?;
-    let val = reader.get(&attr_path, "default").ok()?;
+    let val = reader.try_get(&attr_path, "default").ok().flatten()?;
     match &*val {
-        Value::String(s) | Value::Token(s) | Value::AssetPath(s) => Some(s.clone()),
+        Value::String(s) | Value::Token(s) => Some(s.clone()),
+        Value::AssetPath(a) => Some(a.as_str().to_string()),
         _ => None,
     }
 }
@@ -1167,12 +1110,17 @@ fn bake_pending_labels(
 /// sibling [`SceneRoot`] reports its glTF [`Scene`] asset fully loaded.
 fn hide_glb_placeholder_meshes(
     mut commands: Commands,
-    mut events: MessageReader<AssetEvent<Scene>>,
+    // `Option<...>` so the system no-ops (instead of panicking on param
+    // validation) in minimal apps that never `init_asset::<Scene>()` — e.g.
+    // headless tests that add `UsdBevyPlugin` without the full scene pipeline.
+    // Production always registers `Scene`, so behaviour there is unchanged.
+    events: Option<MessageReader<AssetEvent<Scene>>>,
     scene_roots: Query<(Entity, &SceneRoot, Option<&ChildOf>), With<GlbPlaceholder>>,
     children: Query<&Children>,
     has_mesh: Query<(), With<Mesh3d>>,
     mut visibility: Query<&mut Visibility>,
 ) {
+    let Some(mut events) = events else { return };
     for ev in events.read() {
         if let AssetEvent::LoadedWithDependencies { id } = ev {
             for (e, root, parent) in scene_roots.iter() {

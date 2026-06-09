@@ -11,22 +11,15 @@ use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
 use avian3d::prelude::*;
 use lunco_fsw::FlightSoftware;
 use lunco_core::{Vessel, RoverVessel};
-use lunco_usd_composer::UsdComposer;
-use openusd::usda::TextReader;
-use openusd::sdf::Path as SdfPath;
 use std::sync::Arc;
 use std::path::Path;
 
 fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
     let raw = std::fs::read_to_string(file_path)
         .unwrap_or_else(|e| panic!("Missing file: {}\n{}", file_path.display(), e));
-    let mut parser = openusd::usda::parser::Parser::new(&raw);
-    let data = parser.parse()
-        .unwrap_or_else(|e| panic!("Invalid USD: {}\n{}", file_path.display(), e));
-    let reader = TextReader::from_data(data);
-    let base = Path::new("../../assets/");
-    let composed = UsdComposer::flatten(&reader, base)
-        .unwrap_or_else(|e| panic!("Composition failed for {}:\n{}", file_path.display(), e));
+    let base = file_path.parent().unwrap_or(Path::new("."));
+    let composed = compose_native_fs(&raw, base)
+        .unwrap_or_else(|| panic!("Composition failed for {}", file_path.display()));
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);

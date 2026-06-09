@@ -7197,7 +7197,6 @@ dependencies = [
  "lunco-ui",
  "lunco-usd-avian",
  "lunco-usd-bevy",
- "lunco-usd-composer",
  "lunco-usd-sim",
  "lunco-workbench",
  "openusd",
@@ -7227,15 +7226,6 @@ dependencies = [
  "big_space",
  "lunco-assets",
  "lunco-core",
- "lunco-usd-composer",
- "openusd",
-]
-
-[[package]]
-name = "lunco-usd-composer"
-version = "0.1.0"
-dependencies = [
- "anyhow",
  "openusd",
 ]
 
@@ -8419,17 +8409,20 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "openusd"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "addea07a266d1a04d1cdd15109e080e6812cb619437a033f8aeedd73be6d3967"
+checksum = "1e1a1dbd1d410cf2842168311f6eff125481f3b98a0f37b1547e4926cbd01c2f"
 dependencies = [
  "anyhow",
+ "bitflags 2.11.1",
  "bytemuck",
+ "derive_more",
  "half",
  "logos",
  "lz4_flex",
  "num-traits",
  "strum",
+ "thiserror 2.0.18",
  "zip",
 ]
 

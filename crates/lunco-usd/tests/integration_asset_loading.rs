@@ -9,7 +9,6 @@ use lunco_usd_sim::*;
 use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
 use lunco_core::{Vessel, RoverVessel};
 use lunco_fsw::FlightSoftware;
-use lunco_usd_composer::UsdComposer;
 use openusd::usda::TextReader;
 use openusd::sdf::{AbstractData, Path as SdfPath};
 use avian3d::prelude::*;
@@ -24,14 +23,10 @@ use std::path::Path;
 fn compose_asset_from_file(file_path: &Path) -> TextReader {
     let raw = std::fs::read_to_string(file_path)
         .unwrap_or_else(|e| panic!("Missing file: {}\n{}", file_path.display(), e));
-    let mut parser = openusd::usda::parser::Parser::new(&raw);
-    let data = parser.parse()
-        .unwrap_or_else(|e| panic!("Invalid USD: {}\n{}", file_path.display(), e));
-    let reader = TextReader::from_data(data);
-    // Use the file's parent directory as base for resolving relative references
+    // Use the file's parent directory as base for resolving relative references.
     let base_dir = file_path.parent().unwrap_or(Path::new("."));
-    UsdComposer::flatten(&reader, base_dir)
-        .unwrap_or_else(|e| panic!("Composition failed for {}:\n{}", file_path.display(), e))
+    compose_native_fs(&raw, base_dir)
+        .unwrap_or_else(|| panic!("Composition failed for {}", file_path.display()))
 }
 
 // ============================================================
@@ -71,22 +66,19 @@ fn test_sandbox_scene_composes() {
     // Ground
     let ground = SdfPath::new("/SandboxScene/Ground").unwrap();
     assert!(reader.has_spec(&ground), "Ground must exist");
-    let w: f64 = reader.prim_attribute_value(&ground, "width").expect("Ground width");
-    let h: f64 = reader.prim_attribute_value(&ground, "height").expect("Ground height");
-    let d: f64 = reader.prim_attribute_value(&ground, "depth").expect("Ground depth");
-    assert!((w - 4000.0).abs() < 1.0, "Ground width ~4000, got {w}");
-    assert!((h - 0.2).abs() < 0.05, "Ground height ~0.2, got {h}");
-    assert!((d - 4000.0).abs() < 1.0, "Ground depth ~4000, got {d}");
+    // Ground/Ramp dimensions are authored as unit `size` + `xformOp:scale`.
+    let g: [f64; 3] = reader.prim_attribute_value(&ground, "xformOp:scale").expect("Ground scale");
+    assert!((g[0] - 4000.0).abs() < 1.0, "Ground width ~4000, got {}", g[0]);
+    assert!((g[1] - 0.2).abs() < 0.05, "Ground height ~0.2, got {}", g[1]);
+    assert!((g[2] - 4000.0).abs() < 1.0, "Ground depth ~4000, got {}", g[2]);
 
     // Ramp
     let ramp = SdfPath::new("/SandboxScene/Ramp").unwrap();
     assert!(reader.has_spec(&ramp), "Ramp must exist");
-    let rw: f64 = reader.prim_attribute_value(&ramp, "width").expect("Ramp width");
-    let rh: f64 = reader.prim_attribute_value(&ramp, "height").expect("Ramp height");
-    let rd: f64 = reader.prim_attribute_value(&ramp, "depth").expect("Ramp depth");
-    assert!((rw - 60.0).abs() < 1.0, "Ramp width ~60, got {rw}");
-    assert!((rh - 2.0).abs() < 0.05, "Ramp height ~2, got {rh}");
-    assert!((rd - 80.0).abs() < 1.0, "Ramp depth ~80, got {rd}");
+    let r: [f64; 3] = reader.prim_attribute_value(&ramp, "xformOp:scale").expect("Ramp scale");
+    assert!((r[0] - 60.0).abs() < 1.0, "Ramp width ~60, got {}", r[0]);
+    assert!((r[1] - 2.0).abs() < 0.05, "Ramp height ~2, got {}", r[1]);
+    assert!((r[2] - 80.0).abs() < 1.0, "Ramp depth ~80, got {}", r[2]);
 }
 
 // ============================================================
@@ -267,11 +259,8 @@ fn test_wheel_mesh_dimensions_after_composition() {
         let label = f;
 
         let raw = std::fs::read_to_string(&p).unwrap();
-        let mut parser = openusd::usda::parser::Parser::new(&raw);
-        let data = parser.parse().unwrap();
-        let reader = TextReader::from_data(data);
-        let composed = UsdComposer::flatten(&reader, Path::new("../../assets/"))
-            .unwrap_or_else(|e| panic!("{label} composition failed: {e}"));
+        let composed = compose_native_fs(&raw, p.parent().unwrap())
+            .unwrap_or_else(|| panic!("{label} composition failed"));
 
         for w_name in &["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
             let wp = SdfPath::new(&format!("/{}/{}", rover_name, w_name)).unwrap();
@@ -310,11 +299,8 @@ fn test_rover_sim_processing_after_async_load() {
         let label = f;
 
         let raw = std::fs::read_to_string(&p).unwrap();
-        let mut parser = openusd::usda::parser::Parser::new(&raw);
-        let data = parser.parse().unwrap();
-        let reader = TextReader::from_data(data);
-        let composed = UsdComposer::flatten(&reader, p.parent().unwrap())
-            .unwrap_or_else(|e| panic!("{label} composition failed: {e}"));
+        let composed = compose_native_fs(&raw, p.parent().unwrap())
+            .unwrap_or_else(|| panic!("{label} composition failed"));
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -385,12 +371,8 @@ fn test_rover_schema_detection_after_composition() {
         let label = f;
 
         let raw = std::fs::read_to_string(&p).unwrap();
-        let mut parser = openusd::usda::parser::Parser::new(&raw);
-        let data = parser.parse()
-            .unwrap_or_else(|e| panic!("{label}: Invalid USD: {e}"));
-        let reader = TextReader::from_data(data);
-        let composed = UsdComposer::flatten(&reader, Path::new("../../assets/"))
-            .unwrap_or_else(|e| panic!("{label} composition failed: {e}"));
+        let composed = compose_native_fs(&raw, p.parent().unwrap())
+            .unwrap_or_else(|| panic!("{label} composition failed"));
 
         let rover_path = SdfPath::new(&format!("/{}", rover_name)).unwrap();
         assert!(composed.has_spec(&rover_path), "{label}: /{} must exist", rover_name);
@@ -453,6 +435,10 @@ fn test_full_scene_loads_with_rovers() {
     app.init_asset::<Mesh>();
     app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
+    // The scene references the Perseverance glTF, which the loader hands to
+    // `AssetServer::load::<Scene>` — register the Scene asset so handle
+    // allocation doesn't panic in this minimal harness.
+    app.init_asset::<Scene>();
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
     // Spawn scene — rovers come from scene references
@@ -534,17 +520,15 @@ fn test_valentine_color_override() {
     let scene_path = Path::new("../../assets/scenes/sandbox/sandbox_scene.usda");
     let composed = compose_asset_from_file(scene_path);
 
-    // Verify Skid_Raycast_1 prim exists and has the override color
-    let rover_path = SdfPath::new("/SandboxScene/Skid_Raycast_1").unwrap();
-    assert!(composed.has_spec(&rover_path), "Skid_Raycast_1 prim must exist");
+    // The per-instance colour override is authored as `over "Chassis" {
+    // displayColor }` — i.e. on the Chassis CHILD, not the rover root.
+    let chassis = SdfPath::new("/SandboxScene/Skid_Raycast_1/Chassis").unwrap();
+    assert!(composed.has_spec(&chassis), "Skid_Raycast_1/Chassis prim must exist");
 
-    // The local prim should have the override color
-    if let Some(display_color) = composed.prim_attribute_value::<Vec<f32>>(&rover_path, "primvars:displayColor") {
-        assert_eq!(display_color.len(), 3, "Color must have 3 components");
-        assert!((display_color[0] - 0.8).abs() < 0.01, "Red should be 0.8, got {}", display_color[0]);
-        assert!((display_color[1] - 0.2).abs() < 0.01, "Green should be 0.2, got {}", display_color[1]);
-        assert!((display_color[2] - 0.2).abs() < 0.01, "Blue should be 0.2, got {}", display_color[2]);
-    } else {
-        panic!("Skid_Raycast_1 prim must have primvars:displayColor override");
-    }
+    let display_color = composed
+        .prim_attribute_value::<[f32; 3]>(&chassis, "primvars:displayColor")
+        .expect("Skid_Raycast_1/Chassis must have the composed displayColor override");
+    assert!((display_color[0] - 0.8).abs() < 0.01, "Red should be 0.8, got {}", display_color[0]);
+    assert!((display_color[1] - 0.2).abs() < 0.01, "Green should be 0.2, got {}", display_color[1]);
+    assert!((display_color[2] - 0.2).abs() < 0.01, "Blue should be 0.2, got {}", display_color[2]);
 }

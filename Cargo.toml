@@ -16,7 +16,6 @@ members = [
     "crates/lunco-modelica",
     "crates/lunco-usd-avian",
     "crates/lunco-usd-bevy",
-    "crates/lunco-usd-composer",
     "crates/lunco-usd-sim",
     "crates/lunco-usd",
     "crates/lunco-sandbox-edit",
@@ -130,7 +129,10 @@ tiny-skia = "0.11"
 usvg = { version = "0.45", default-features = false }
 image = { version = "0.25", features = ["tiff", "png", "jpeg"] }
 smallvec = "1.13"
-openusd = "0.2.0"
+# openusd 0.5.0: real PCP composition engine (variantSets + relationship target
+# translation) + typed usd::Stage API. Replaces our hand-rolled lunco-usd-composer.
+# Pinned exact — pre-1.0, API moves fast. See crates/lunco-usd-bevy/OPENUSD_0_5_MIGRATION.md.
+openusd = "=0.5.0"
 instant = "0.1"
 # Drop-in replacement for `std::time::Instant` / `SystemTime` that works on
 # wasm32-unknown-unknown (where the std types panic at runtime). Backed by

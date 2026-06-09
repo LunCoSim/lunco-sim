@@ -3,7 +3,6 @@
 //! Verifies that all visual, physics, and electrical parameters
 //! are correctly extracted from rover USD files after composition.
 
-use lunco_usd_composer::UsdComposer;
 use openusd::sdf::{AbstractData, Path as SdfPath};
 use openusd::usda::TextReader;
 use std::path::PathBuf;
@@ -13,14 +12,13 @@ fn load_rover() -> TextReader {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let asset_root = manifest_dir.parent().unwrap().parent().unwrap();
     let usd_path = asset_root.join("assets/vessels/rovers/rucheyok/rucheyok.usda");
-    
-    let reader = TextReader::read(&usd_path)
+
+    let raw = std::fs::read_to_string(&usd_path)
         .unwrap_or_else(|e| panic!("Failed to load {:?}: {}", usd_path, e));
-    
-    // Compose all references
-    let assets_dir = asset_root.join("assets");
-    UsdComposer::flatten(&reader, &assets_dir)
-        .unwrap_or_else(|e| panic!("Failed to compose rover: {}", e))
+
+    // Compose all references, anchored at the rover file's own directory.
+    let base_dir = usd_path.parent().expect("rover file has a parent dir");
+    lunco_usd_bevy::compose_native_fs(&raw, base_dir).expect("Failed to compose rover")
 }
 
 #[test]
@@ -30,41 +28,34 @@ fn test_chassis_dimensions() {
 
     assert!(reader.has_spec(&path), "Chassis prim should exist");
 
-    let width: f64 = reader
-        .prim_attribute_value(&path, "width")
-        .expect("Chassis should have 'width' attribute");
-    assert!((width - 15.0).abs() < 0.01, "Chassis width should be 15.0, got {width}");
-
-    let height: f64 = reader
-        .prim_attribute_value(&path, "height")
-        .expect("Chassis should have 'height' attribute");
-    assert!((height - 4.0).abs() < 0.01, "Chassis height should be 4.0, got {height}");
-
-    let depth: f64 = reader
-        .prim_attribute_value(&path, "depth")
-        .expect("Chassis should have 'depth' attribute");
-    assert!((depth - 20.0).abs() < 0.01, "Chassis depth should be 20.0, got {depth}");
+    // Dimensions are authored spec-compliantly as `size` (unit) + `xformOp:scale`;
+    // the scale components carry the full extents (width, height, depth).
+    let scale: [f64; 3] = reader
+        .prim_attribute_value(&path, "xformOp:scale")
+        .expect("Chassis should have 'xformOp:scale'");
+    assert!((scale[0] - 15.0).abs() < 0.01, "Chassis width (scale.x) should be 15.0, got {}", scale[0]);
+    assert!((scale[1] - 4.0).abs() < 0.01, "Chassis height (scale.y) should be 4.0, got {}", scale[1]);
+    assert!((scale[2] - 20.0).abs() < 0.01, "Chassis depth (scale.z) should be 20.0, got {}", scale[2]);
 }
 
 #[test]
 fn test_chassis_physics() {
     let reader = load_rover();
-    let path = SdfPath::new("/Rucheyok/Chassis").unwrap();
 
-    let rigid_body: bool = reader
-        .prim_attribute_value(&path, "physics:rigidBodyEnabled")
-        .expect("Chassis should have rigidBodyEnabled");
-    assert!(rigid_body, "Chassis should be rigid body enabled");
-
+    // Mass lives on the rigid-body root (Rucheyok), not the Chassis collider
+    // child. Authored as `float`, so read f32 and widen.
+    let root = SdfPath::new("/Rucheyok").unwrap();
     let mass: f64 = reader
-        .prim_attribute_value(&path, "physics:mass")
-        .unwrap_or_else(|| {
-            // Try as f32 then convert
-            let m: f32 = reader.prim_attribute_value(&path, "physics:mass")
-                .expect("Chassis should have mass as f32");
-            m as f64
-        });
-    assert!((mass - 800.0).abs() < 1.0, "Chassis mass should be 800.0, got {mass}");
+        .prim_attribute_value::<f64>(&root, "physics:mass")
+        .or_else(|| reader.prim_attribute_value::<f32>(&root, "physics:mass").map(|m| m as f64))
+        .expect("Rucheyok root should have physics:mass");
+    assert!((mass - 800.0).abs() < 1.0, "Rover mass should be 800.0, got {mass}");
+
+    // Chassis is the collider child.
+    assert!(
+        reader.has_spec(&SdfPath::new("/Rucheyok/Chassis").unwrap()),
+        "Chassis collider prim should exist"
+    );
 }
 
 #[test]
@@ -74,20 +65,13 @@ fn test_solar_panel_dimensions() {
 
     assert!(reader.has_spec(&path), "SolarPanel prim should exist");
 
-    let width: f64 = reader
-        .prim_attribute_value(&path, "width")
-        .expect("SolarPanel should have 'width'");
-    assert!((width - 12.0).abs() < 0.01, "SolarPanel width should be 12.0, got {width}");
-
-    let height: f64 = reader
-        .prim_attribute_value(&path, "height")
-        .expect("SolarPanel should have 'height'");
-    assert!((height - 0.2).abs() < 0.01, "SolarPanel height should be 0.2, got {height}");
-
-    let depth: f64 = reader
-        .prim_attribute_value(&path, "depth")
-        .expect("SolarPanel should have 'depth'");
-    assert!((depth - 6.0).abs() < 0.01, "SolarPanel depth should be 6.0, got {depth}");
+    // Dimensions via `xformOp:scale` (see test_chassis_dimensions).
+    let scale: [f64; 3] = reader
+        .prim_attribute_value(&path, "xformOp:scale")
+        .expect("SolarPanel should have 'xformOp:scale'");
+    assert!((scale[0] - 12.0).abs() < 0.01, "SolarPanel width should be 12.0, got {}", scale[0]);
+    assert!((scale[1] - 0.2).abs() < 0.01, "SolarPanel height should be 0.2, got {}", scale[1]);
+    assert!((scale[2] - 6.0).abs() < 0.01, "SolarPanel depth should be 6.0, got {}", scale[2]);
 }
 
 #[test]
@@ -111,20 +95,13 @@ fn test_battery_dimensions() {
 
     assert!(reader.has_spec(&path), "Battery prim should exist");
 
-    let width: f64 = reader
-        .prim_attribute_value(&path, "width")
-        .expect("Battery should have 'width'");
-    assert!((width - 4.0).abs() < 0.01, "Battery width should be 4.0, got {width}");
-
-    let height: f64 = reader
-        .prim_attribute_value(&path, "height")
-        .expect("Battery should have 'height'");
-    assert!((height - 0.8).abs() < 0.01, "Battery height should be 0.8, got {height}");
-
-    let depth: f64 = reader
-        .prim_attribute_value(&path, "depth")
-        .expect("Battery should have 'depth'");
-    assert!((depth - 6.0).abs() < 0.01, "Battery depth should be 6.0, got {depth}");
+    // Dimensions via `xformOp:scale` (see test_chassis_dimensions).
+    let scale: [f64; 3] = reader
+        .prim_attribute_value(&path, "xformOp:scale")
+        .expect("Battery should have 'xformOp:scale'");
+    assert!((scale[0] - 4.0).abs() < 0.01, "Battery width should be 4.0, got {}", scale[0]);
+    assert!((scale[1] - 0.8).abs() < 0.01, "Battery height should be 0.8, got {}", scale[1]);
+    assert!((scale[2] - 6.0).abs() < 0.01, "Battery depth should be 6.0, got {}", scale[2]);
 }
 
 #[test]
@@ -296,33 +273,18 @@ fn test_eps_relationships() {
 
 #[test]
 fn test_component_eps_fields() {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let asset_root = manifest_dir.parent().unwrap().parent().unwrap();
-
-    // Solar panel component should declare epsBus
-    let solar_path = asset_root.join("assets/components/power/solar_panel.usda");
-    let solar_reader = TextReader::read(&solar_path).expect("Solar panel component should load");
-    let solar_rel = SdfPath::new("/SolarPanel.lunco:epsBus").unwrap();
-    assert!(
-        solar_reader.has_spec(&solar_rel),
-        "Solar panel component should declare epsBus relationship field"
-    );
-
-    // Wheel component should declare epsBus
-    let wheel_path = asset_root.join("assets/components/mobility/wheel.usda");
-    let wheel_reader = TextReader::read(&wheel_path).expect("Wheel component should load");
-    let wheel_rel = SdfPath::new("/Wheel.lunco:epsBus").unwrap();
-    assert!(
-        wheel_reader.has_spec(&wheel_rel),
-        "Wheel component should declare epsBus relationship field"
-    );
-
-    // Battery component should declare epsBus
-    let battery_path = asset_root.join("assets/components/power/battery.usda");
-    let battery_reader = TextReader::read(&battery_path).expect("Battery component should load");
-    let battery_rel = SdfPath::new("/Battery.lunco:epsBus").unwrap();
-    assert!(
-        battery_reader.has_spec(&battery_rel),
-        "Battery component should declare epsBus relationship field"
-    );
+    // The rover instance wires its power components onto the EPS bus via
+    // `rel lunco:epsBus` (authored on the rover, not the reusable components),
+    // so the relationships must survive composition onto the instance prims.
+    let reader = load_rover();
+    for p in [
+        "/Rucheyok/SolarPanel.lunco:epsBus",
+        "/Rucheyok/Battery.lunco:epsBus",
+        "/Rucheyok/Wheel_FL.lunco:epsBus",
+    ] {
+        assert!(
+            reader.has_spec(&SdfPath::new(p).unwrap()),
+            "{p} relationship should exist after composition"
+        );
+    }
 }

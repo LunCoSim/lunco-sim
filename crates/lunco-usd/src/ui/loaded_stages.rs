@@ -399,7 +399,7 @@ fn prim_type_name(reader: &TextReader, path: &sdf::Path) -> Option<String> {
     use openusd::sdf::Value;
     for (p, spec) in reader.iter() {
         if p == path {
-            if let Some(Value::Token(t) | Value::String(t)) = spec.fields.get("typeName") {
+            if let Some(Value::Token(t) | Value::String(t)) = spec.get("typeName") {
                 return Some(t.clone());
             }
             return None;

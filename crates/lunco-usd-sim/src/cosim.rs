@@ -778,6 +778,15 @@ pub(crate) fn install(app: &mut App) {
     use lunco_cosim::systems::{apply_forces::CosimSet as ApplyForcesCosimSet, propagate::CosimSet as PropagateCosimSet};
     use lunco_modelica::ModelicaSet;
 
+    // Ensure the source asset types this module's systems read/allocate are
+    // registered. Idempotent — production registers these via the Modelica /
+    // scripting plugins; doing it here lets minimal apps (headless tests using
+    // `MinimalPlugins` without those plugins) run the cosim systems without
+    // panicking on a missing `Assets<…>` resource.
+    app.init_asset::<ModelicaSource>()
+        .init_asset::<PythonSource>()
+        .init_resource::<lunco_scripting::ScriptRegistry>();
+
     app.add_systems(
         Update,
         (

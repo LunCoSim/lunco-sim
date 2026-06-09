@@ -43,9 +43,14 @@ pub fn apply_usd_shader_materials(
     q: Query<(Entity, &UsdPrimPath), (With<UsdVisualSynced>, Without<UsdShaderResolved>)>,
     stages: Res<Assets<UsdStageAsset>>,
     asset_server: Res<AssetServer>,
-    mut materials: ResMut<Assets<ShaderMaterial>>,
+    // `Option<...>` so the system no-ops (instead of panicking on param
+    // validation) in minimal apps that never register the `ShaderMaterial`
+    // asset — e.g. headless tests using `MinimalPlugins` without the materials
+    // plugin. Production always registers it, so behaviour there is unchanged.
+    materials: Option<ResMut<Assets<ShaderMaterial>>>,
     mut commands: Commands,
 ) {
+    let Some(mut materials) = materials else { return };
     for (entity, prim_path) in q.iter() {
         // Stage not loaded yet → retry next frame (do NOT mark resolved).
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };

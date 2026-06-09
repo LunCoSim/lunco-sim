@@ -43,32 +43,30 @@ struct PowerBalance {
     surplus: f64,
 }
 
-/// Load rover and extract EPS components (no composition - checks raw USD structure)
+/// Load the rover, composed so referenced component parameters (e.g. the
+/// wheel's `lunco:motorPower` from wheel.usda) surface on the instance prims,
+/// and extract its EPS components.
 fn load_rover_eps() -> Vec<EPSComponent> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let asset_root = manifest_dir.parent().unwrap().parent().unwrap();
     let usd_path = asset_root.join("assets/vessels/rovers/rucheyok/rucheyok.usda");
 
-    let reader = TextReader::read(&usd_path)
-        .expect("Failed to load rover USD");
+    let raw = std::fs::read_to_string(&usd_path).expect("Failed to read rover USD");
+    let reader = lunco_usd_bevy::compose_native_fs(&raw, usd_path.parent().unwrap())
+        .expect("Failed to compose rover USD");
 
     let mut components = Vec::new();
-
     for (path, spec) in reader.iter() {
-        // Only process prim specs
         if spec.ty != SpecType::Prim {
             continue;
         }
-
-        // Check if this prim has epsBus relationship
+        // Only components wired onto the EPS bus.
         let eps_rel_str = format!("{}.lunco:epsBus", path.as_str());
         if let Ok(eps_rel) = SdfPath::new(&eps_rel_str) {
             if reader.has_spec(&eps_rel) {
-                let power = get_component_power(&reader, path, &asset_root);
-
                 components.push(EPSComponent {
                     path: path.as_str().to_string(),
-                    power_watts: power,
+                    power_watts: get_component_power(&reader, path),
                 });
             }
         }
@@ -77,40 +75,16 @@ fn load_rover_eps() -> Vec<EPSComponent> {
     components
 }
 
-/// Get power generation/consumption for a component
-/// Checks both the rover file and the referenced component file
-fn get_component_power(reader: &TextReader, path: &SdfPath, asset_root: &std::path::Path) -> f64 {
-    // First check if power attributes exist directly on the prim
+/// Power generation (+) / consumption (-) for a composed component prim.
+/// Generators author `lunco:nominalPower`; motorized loads author
+/// `lunco:motorPower` (composed in from their referenced component).
+fn get_component_power(reader: &TextReader, path: &SdfPath) -> f64 {
     if let Some(power) = reader.prim_attribute_value::<f64>(path, "lunco:nominalPower") {
         return power; // Positive = generation
     }
     if let Some(power) = reader.prim_attribute_value::<f64>(path, "lunco:motorPower") {
         return -power; // Negative = consumption
     }
-
-    // If not, check the referenced component file
-    // Check if this prim has references
-    if let Ok(val) = reader.get(path, "references") {
-        use openusd::sdf::Value;
-        if let Value::ReferenceListOp(list_op) = &*val {
-            for reference in &list_op.prepended_items {
-                let asset_path = reference.asset_path.strip_prefix('/').unwrap_or(&reference.asset_path);
-                let component_path = asset_root.join("assets").join(asset_path);
-                if component_path.exists() {
-                    if let Ok(comp_reader) = TextReader::read(&component_path) {
-                        let comp_path = reference.prim_path.clone();
-                        if let Some(power) = comp_reader.prim_attribute_value::<f64>(&comp_path, "lunco:nominalPower") {
-                            return power;
-                        }
-                        if let Some(power) = comp_reader.prim_attribute_value::<f64>(&comp_path, "lunco:motorPower") {
-                            return -power;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     0.0
 }
 
