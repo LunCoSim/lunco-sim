@@ -1,0 +1,36 @@
+#usda 1.0
+(
+    defaultPrim = "Drivetrain"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Shared RAYCAST drivetrain — referenced into the `raycast` (fallback) variant
+# of every rover so the ride-height wheel placement is authored ONCE.
+#
+# Visual-only wheels at ride height (y=-0.15); the PhysX-style raycaster drives
+# the body, so there are no joints here — just the wheel positions. See
+# `physical_drivetrain.usda` for the reference-arc translation contract.
+#
+# Position is authored here (per-variant) rather than on the base wheel so the
+# `physical` variant can supply its own drop without losing to a stronger local
+# opinion (USD LIVERPS strength: local > variant/reference).
+def Xform "Drivetrain"
+{
+    over "Wheel_FL"
+    {
+        double3 xformOp:translate = (-1.0, -0.15, 1.225)
+    }
+    over "Wheel_FR"
+    {
+        double3 xformOp:translate = (1.0, -0.15, 1.225)
+    }
+    over "Wheel_RL"
+    {
+        double3 xformOp:translate = (-1.0, -0.15, -1.225)
+    }
+    over "Wheel_RR"
+    {
+        double3 xformOp:translate = (1.0, -0.15, -1.225)
+    }
+}

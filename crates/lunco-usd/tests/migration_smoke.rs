@@ -138,6 +138,83 @@ fn standalone_rover_reader_is_complete() {
     );
 }
 
+/// Drivetrain variantSet — `physical` selection: the joints, motor, and
+/// articulation root now live in the ROVER ASSET's `physical` variant, not in
+/// the scene. Selecting `drivetrain="physical"` on the instance must bring the
+/// per-wheel `PhysicsRevoluteJoint`s in with their asset-local rel-targets
+/// path-translated into the instance namespace.
+#[test]
+fn drivetrain_physical_variant_brings_joints() {
+    let r = compose("scenes/sandbox/sandbox_scene.usda");
+    for (rover, _drive) in [
+        ("Skid_Physical_1", "PhysxVehicleDriveSkidAPI"),
+        ("Ackermann_Physical_1", "PhysxVehicleDrive4WAPI"),
+    ] {
+        for w in ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
+            let hinge = format!("/SandboxScene/{rover}/{w}_Hinge");
+            assert!(
+                r.has_spec(&SdfPath::new(&hinge).unwrap()),
+                "{hinge} must compose from the physical variant"
+            );
+            let target = first_rel_target(&r, &format!("{hinge}.physics:body1"))
+                .unwrap_or_else(|| panic!("{hinge} missing physics:body1 target"));
+            assert_eq!(
+                target,
+                format!("/SandboxScene/{rover}/{w}"),
+                "asset-local body1 must translate into the instance namespace"
+            );
+        }
+    }
+}
+
+/// `physical` variant drops the wheels below the chassis (y = -0.65), while a
+/// `raycast` instance keeps them at ride height (y = -0.15). Proves the variant
+/// `over` opinions compose (or don't) per selection.
+#[test]
+fn drivetrain_variant_sets_wheel_height() {
+    let r = compose("scenes/sandbox/sandbox_scene.usda");
+    let y = |path: &str| -> f64 {
+        r.prim_attribute_value::<[f64; 3]>(&SdfPath::new(path).unwrap(), "xformOp:translate")
+            .unwrap_or_else(|| panic!("{path} missing xformOp:translate"))[1]
+    };
+    assert!(
+        (y("/SandboxScene/Skid_Physical_1/Wheel_FL") - (-0.65)).abs() < 1e-6,
+        "physical variant must drop the wheel to y=-0.65"
+    );
+    assert!(
+        (y("/SandboxScene/Skid_Raycast_1/Wheel_FL") - (-0.15)).abs() < 1e-6,
+        "raycast (fallback) variant keeps the wheel at y=-0.15"
+    );
+}
+
+/// apiSchemas compose from TWO sources at once: the base rover's vehicle drive
+/// (via the reference) and the `physical` variant's `PhysicsArticulationRootAPI`
+/// — neither is re-listed on the scene instance anymore.
+#[test]
+fn drivetrain_physical_composes_articulation_and_drive() {
+    let r = compose("scenes/sandbox/sandbox_scene.usda");
+    let skid = SdfPath::new("/SandboxScene/Skid_Physical_1").unwrap();
+    assert!(
+        lunco_usd_bevy::has_api_schema(&r, &skid, "PhysicsArticulationRootAPI"),
+        "ArticulationRootAPI must compose from the physical variant"
+    );
+    assert!(
+        lunco_usd_bevy::has_api_schema(&r, &skid, "PhysxVehicleDriveSkidAPI"),
+        "DriveSkidAPI must compose from the base rover across the reference"
+    );
+}
+
+/// A `raycast` instance must NOT carry joints — the fallback variant is empty,
+/// so the joint prims authored only under `physical` are absent.
+#[test]
+fn drivetrain_raycast_has_no_joints() {
+    let r = compose("scenes/sandbox/sandbox_scene.usda");
+    assert!(
+        !r.has_spec(&SdfPath::new("/SandboxScene/Skid_Raycast_1/Wheel_FL_Hinge").unwrap()),
+        "raycast instance must not have joint prims"
+    );
+}
+
 /// Binary-asset shim: the Perseverance glTF payload surfaces as a
 /// `lunco:resolvedAsset` URI on its Visual prim.
 #[test]

@@ -98,12 +98,13 @@ def Xform "SandboxScene"
     # each instance overrides color, position, and optionally
     # wheel type.
     #
-    # Matrix: 2 steering types × 2 wheel types = 4 variants
+    # Matrix: 2 steering types × 2 drivetrains = 4 variants
     #   - skid_rover.usda       → PhysxVehicleDriveSkidAPI
     #   - ackermann_rover.usda  → PhysxVehicleDrive4WAPI
-    #   - Authoring `def PhysicsRevoluteJoint` siblings under a rover
-    #     instance switches its wheels from raycast to joint-based —
-    #     the standard OpenUSD discriminator, no custom token needed.
+    #   - `variants = { string drivetrain = "physical" }` selects the
+    #     joint-based drivetrain from the asset's `drivetrain` variantSet
+    #     (raycast | physical); omitting it falls back to `raycast`. The
+    #     joints + motors + dropped wheels live in the rover asset, not here.
 
     # Instances are `def Xform` (matching the base typeName after
     # the Xform-root refactor). Per-instance color overrides use
@@ -140,23 +141,18 @@ def Xform "SandboxScene"
 
     # === Skid-Steer, Physical Wheels ===
 
-    # Physical instance: each wheel is bound to the chassis with a
-    # standard `PhysicsRevoluteJoint` carrying a `UsdPhysicsDriveAPI:angular`
-    # for motor torque. Presence of these joints is what makes the wheels
-    # joint-based instead of raycast — see `lunco-usd-sim` dispatcher.
+    # Physical instance: selecting the rover asset's `drivetrain=physical`
+    # variant brings in the per-wheel `PhysicsRevoluteJoint`s (+ motor +
+    # articulation root) and drops the wheels below the chassis — all
+    # authored in `skid_rover.usda`. Presence of those joints is what makes
+    # the wheels joint-based instead of raycast — see `lunco-usd-sim`
+    # dispatcher. The joint rel-targets are asset-local in the variant and
+    # path-translate into this instance's namespace through the reference.
     def Xform "Skid_Physical_1" (
         prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
-        # Re-list the base's apiSchemas alongside the per-instance
-        # `PhysicsArticulationRootAPI` so the composed list is complete
-        # — openusd-rs's resolver returns this prim's local apiSchemas
-        # rather than the cross-layer composed set.
-        prepend apiSchemas = [
-            "PhysicsRigidBodyAPI",
-            "PhysicsMassAPI",
-            "PhysxVehicleContextAPI",
-            "PhysxVehicleDriveSkidAPI",
-            "PhysicsArticulationRootAPI"
-        ]
+        variants = {
+            string drivetrain = "physical"
+        }
     )
     {
         double3 xformOp:translate = (-15.0, 5.0, -10.0)
@@ -165,77 +161,6 @@ def Xform "SandboxScene"
         over "Chassis"
         {
             color3f primvars:displayColor = (0.2, 0.2, 0.8)
-        }
-
-        # PHYSICAL no-overlap model: drop the wheels fully BELOW the chassis
-        # collider. Chassis half-height 0.15 ⇒ bottom at y=-0.15; wheels at
-        # y=-0.65 (Ø0.8 → top at y=-0.25) clear it by 0.10 m. Track ±0.9 keeps
-        # them under the 2.0 m body. The wheel colliders never touch the body,
-        # so the joints stay stable without relying on collision-disable.
-        over "Wheel_FL"
-        {
-            double3 xformOp:translate = (-0.9, -0.65, 1.225)
-        }
-        over "Wheel_FR"
-        {
-            double3 xformOp:translate = (0.9, -0.65, 1.225)
-        }
-        over "Wheel_RL"
-        {
-            double3 xformOp:translate = (-0.9, -0.65, -1.225)
-        }
-        over "Wheel_RR"
-        {
-            double3 xformOp:translate = (0.9, -0.65, -1.225)
-        }
-
-        def PhysicsRevoluteJoint "Wheel_FL_Hinge" (
-            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        )
-        {
-            rel physics:body0 = </SandboxScene/Skid_Physical_1>
-            rel physics:body1 = </SandboxScene/Skid_Physical_1/Wheel_FL>
-            uniform token physics:axis = "X"
-            point3f physics:localPos0 = (-0.9, -0.65, 1.225)
-            point3f physics:localPos1 = (0, 0, 0)
-            float drive:angular:physics:maxForce = 12000.0
-            uniform token drive:angular:physics:type = "force"
-        }
-        def PhysicsRevoluteJoint "Wheel_FR_Hinge" (
-            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        )
-        {
-            rel physics:body0 = </SandboxScene/Skid_Physical_1>
-            rel physics:body1 = </SandboxScene/Skid_Physical_1/Wheel_FR>
-            uniform token physics:axis = "X"
-            point3f physics:localPos0 = (0.9, -0.65, 1.225)
-            point3f physics:localPos1 = (0, 0, 0)
-            float drive:angular:physics:maxForce = 12000.0
-            uniform token drive:angular:physics:type = "force"
-        }
-        def PhysicsRevoluteJoint "Wheel_RL_Hinge" (
-            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        )
-        {
-            rel physics:body0 = </SandboxScene/Skid_Physical_1>
-            rel physics:body1 = </SandboxScene/Skid_Physical_1/Wheel_RL>
-            uniform token physics:axis = "X"
-            point3f physics:localPos0 = (-0.9, -0.65, -1.225)
-            point3f physics:localPos1 = (0, 0, 0)
-            float drive:angular:physics:maxForce = 12000.0
-            uniform token drive:angular:physics:type = "force"
-        }
-        def PhysicsRevoluteJoint "Wheel_RR_Hinge" (
-            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        )
-        {
-            rel physics:body0 = </SandboxScene/Skid_Physical_1>
-            rel physics:body1 = </SandboxScene/Skid_Physical_1/Wheel_RR>
-            uniform token physics:axis = "X"
-            point3f physics:localPos0 = (0.9, -0.65, -1.225)
-            point3f physics:localPos1 = (0, 0, 0)
-            float drive:angular:physics:maxForce = 12000.0
-            uniform token drive:angular:physics:type = "force"
         }
     }
 
@@ -258,13 +183,9 @@ def Xform "SandboxScene"
 
     def Xform "Ackermann_Physical_1" (
         prepend references = @../../vessels/rovers/ackermann_rover.usda@</AckermannRover>
-        prepend apiSchemas = [
-            "PhysicsRigidBodyAPI",
-            "PhysicsMassAPI",
-            "PhysxVehicleContextAPI",
-            "PhysxVehicleDrive4WAPI",
-            "PhysicsArticulationRootAPI"
-        ]
+        variants = {
+            string drivetrain = "physical"
+        }
     )
     {
         double3 xformOp:translate = (-25.0, 5.0, 0.0)
@@ -273,75 +194,6 @@ def Xform "SandboxScene"
         over "Chassis"
         {
             color3f primvars:displayColor = (0.8, 0.5, 0.1)
-        }
-
-        # PHYSICAL no-overlap model (see Skid_Physical_1): wheels dropped below
-        # the chassis so the front steering knuckles can castor the wheels
-        # without the colliders ever intersecting the body.
-        over "Wheel_FL"
-        {
-            double3 xformOp:translate = (-0.9, -0.65, 1.225)
-        }
-        over "Wheel_FR"
-        {
-            double3 xformOp:translate = (0.9, -0.65, 1.225)
-        }
-        over "Wheel_RL"
-        {
-            double3 xformOp:translate = (-0.9, -0.65, -1.225)
-        }
-        over "Wheel_RR"
-        {
-            double3 xformOp:translate = (0.9, -0.65, -1.225)
-        }
-
-        def PhysicsRevoluteJoint "Wheel_FL_Hinge" (
-            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        )
-        {
-            rel physics:body0 = </SandboxScene/Ackermann_Physical_1>
-            rel physics:body1 = </SandboxScene/Ackermann_Physical_1/Wheel_FL>
-            uniform token physics:axis = "X"
-            point3f physics:localPos0 = (-0.9, -0.65, 1.225)
-            point3f physics:localPos1 = (0, 0, 0)
-            float drive:angular:physics:maxForce = 12000.0
-            uniform token drive:angular:physics:type = "force"
-        }
-        def PhysicsRevoluteJoint "Wheel_FR_Hinge" (
-            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        )
-        {
-            rel physics:body0 = </SandboxScene/Ackermann_Physical_1>
-            rel physics:body1 = </SandboxScene/Ackermann_Physical_1/Wheel_FR>
-            uniform token physics:axis = "X"
-            point3f physics:localPos0 = (0.9, -0.65, 1.225)
-            point3f physics:localPos1 = (0, 0, 0)
-            float drive:angular:physics:maxForce = 12000.0
-            uniform token drive:angular:physics:type = "force"
-        }
-        def PhysicsRevoluteJoint "Wheel_RL_Hinge" (
-            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        )
-        {
-            rel physics:body0 = </SandboxScene/Ackermann_Physical_1>
-            rel physics:body1 = </SandboxScene/Ackermann_Physical_1/Wheel_RL>
-            uniform token physics:axis = "X"
-            point3f physics:localPos0 = (-0.9, -0.65, -1.225)
-            point3f physics:localPos1 = (0, 0, 0)
-            float drive:angular:physics:maxForce = 12000.0
-            uniform token drive:angular:physics:type = "force"
-        }
-        def PhysicsRevoluteJoint "Wheel_RR_Hinge" (
-            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        )
-        {
-            rel physics:body0 = </SandboxScene/Ackermann_Physical_1>
-            rel physics:body1 = </SandboxScene/Ackermann_Physical_1/Wheel_RR>
-            uniform token physics:axis = "X"
-            point3f physics:localPos0 = (0.9, -0.65, -1.225)
-            point3f physics:localPos1 = (0, 0, 0)
-            float drive:angular:physics:maxForce = 12000.0
-            uniform token drive:angular:physics:type = "force"
         }
     }
 
