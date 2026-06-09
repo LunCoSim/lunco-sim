@@ -80,6 +80,13 @@ impl Default for CameraScrollSensitivity {
 #[derive(Resource)]
 pub struct CameraDefaults {
     pub damping: f32,
+    // TODO(camera-smoothing): the exp-decay math below is hand-rolled. Review
+    // existing crates and probably switch: bevy core's
+    // `bevy::math::StableInterpolate::smooth_nudge` is exactly this
+    // `1 - exp(-rate*dt)` form (drop-in for our manual lines); `bevy_easings`
+    // for named easing curves; `smooth-bevy-cameras` / `bevy_dolly` for full
+    // rigs (likely need adapting to our Grid/CellCoord floating origin). Also:
+    // make smoothing fn + time-constant per-camera properties. See ../TODO.md.
     /// Base responsiveness (Hz) of rotation follow, before per-camera `damping`
     /// scales it. Used as `alpha = 1 - exp(-rotation_rate * (1 - damping) * dt)`.
     pub rotation_rate: f32,
