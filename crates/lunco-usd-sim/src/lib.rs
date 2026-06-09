@@ -547,18 +547,18 @@ fn process_usd_sim_prims(
             // Standard-USD discriminator: an authored `PhysicsRevoluteJoint`
             // pointing at this wheel via `physics:body1` ⇒ joint-based.
             let key = (prim_path.stage_handle.clone(), prim_path.path.clone());
+            // Front wheels (index < 2) of an Ackermann rover steer. Gate on the
+            // rover's drive type — a skid rover keeps all wheels fixed (it steers
+            // by skidding), so only wire the steering port when the PARENT rover
+            // prim carries `PhysxVehicleDrive4WAPI` (Ackermann). Same for both
+            // wheel kinds: each attaches a shared `SteeringActuator` (joint or
+            // raycast), so the steering model is identical.
+            let parent_prim = &prim_path.path[..prim_path.path.rfind('/').unwrap_or(0)];
+            let is_ackermann = SdfPath::new(parent_prim)
+                .map(|p| has_api_schema(reader, &p, "PhysxVehicleDrive4WAPI"))
+                .unwrap_or(false);
+            let steer_for_wheel = if index < 2 && is_ackermann { Some(p_steer) } else { None };
             if joint_targets.contains_key(&key) {
-                // Front wheels (index < 2) of an Ackermann rover get a steering
-                // knuckle wired to the steering port. Rear/skid wheels keep the
-                // rigid axle. Gate on the rover's drive type — a skid rover must
-                // keep all wheels fixed (it steers by skidding), so only build the
-                // castoring knuckle when the PARENT rover prim carries
-                // `PhysxVehicleDrive4WAPI` (Ackermann).
-                let parent_prim = &prim_path.path[..prim_path.path.rfind('/').unwrap_or(0)];
-                let is_ackermann = SdfPath::new(parent_prim)
-                    .map(|p| has_api_schema(reader, &p, "PhysxVehicleDrive4WAPI"))
-                    .unwrap_or(false);
-                let steer_for_wheel = if index < 2 && is_ackermann { Some(p_steer) } else { None };
                 setup_physical_wheel(
                     &mut commands, entity, prim_path, &existing_tf,
                     maybe_mesh, maybe_mat, maybe_shader_mat, maybe_child_of,
@@ -571,7 +571,7 @@ fn process_usd_sim_prims(
                     &mut commands, entity, prim_path, &existing_tf,
                     maybe_mesh, maybe_mat, maybe_shader_mat, maybe_child_of,
                     radius, index, &suspension,
-                    p_drive, p_steer,
+                    p_drive, p_steer, steer_for_wheel, max_steer_angle,
                     WheelSpinParams {
                         mass: wheel_mass,
                         moment_of_inertia: wheel_moi,
@@ -636,6 +636,8 @@ fn setup_raycast_wheel(
     susp: &SuspensionParams,
     p_drive: Entity,
     p_steer: Entity,
+    steer: Option<Entity>,
+    max_steer_angle: f64,
     spin: WheelSpinParams,
 ) {
     info!("Setting up RAYCAST wheel {}", prim_path.path);
@@ -722,6 +724,22 @@ fn setup_raycast_wheel(
         RayHits::default(),
         wheel_tf,
     ));
+
+    // Front Ackermann wheel: attach the SHARED steering servo. The same
+    // `SteeringActuator` + system the physical joint uses computes this wheel's
+    // rate-limited Ackermann angle into `output_angle`; `apply_wheel_steering`
+    // rotates the raycast wheel to it — identical steering across wheel kinds.
+    if let Some(steer_port) = steer {
+        let mount = existing_tf.translation.as_dvec3();
+        commands.entity(entity).insert(SteeringActuator {
+            port_entity: steer_port,
+            max_steer_angle,
+            current_ref: 0.0,
+            lateral: mount.x,
+            wheelbase: 2.0 * mount.z.abs(),
+            output_angle: 0.0,
+        });
+    }
 
     // Remove any physics components added by the Avian plugin
     // (raycast wheels are not physical rigid bodies)
@@ -950,6 +968,7 @@ fn setup_physical_wheel(
             // for the symmetric layout.
             lateral: mount_local.x,
             wheelbase: 2.0 * mount_local.z.abs(),
+            output_angle: 0.0,
         });
     }
 

@@ -110,6 +110,12 @@ pub struct SteeringActuator {
     /// Wheelbase (m): longitudinal distance from this (front) axle to the rear
     /// axle. Sets the turn geometry for the Ackermann correction.
     pub wheelbase: f64,
+    /// The computed steer angle (rad) for THIS wheel, written every tick by
+    /// [steering_actuator_system]. This is the single shared output consumed by
+    /// both wheel kinds — the physical joint applies it to its frame basis, and
+    /// the raycast wheel (`lunco_mobility::apply_wheel_steering`) applies it to
+    /// its visual transform — so the steering model lives in exactly one place.
+    pub output_angle: f64,
 }
 
 impl Default for SteeringActuator {
@@ -120,6 +126,7 @@ impl Default for SteeringActuator {
             current_ref: 0.0,
             lateral: 0.0,
             wheelbase: 2.0,
+            output_angle: 0.0,
         }
     }
 }
@@ -128,21 +135,27 @@ impl Default for SteeringActuator {
 /// but smooth enough that the alignment constraint doesn't impulse-jump the rover.
 const STEER_SLEW_RATE: f64 = 1.25;
 
-/// Slews each steered front wheel into its **Ackermann** angle. The shared
-/// *centreline reference* angle `δ` is rate-limited toward `steer ·
-/// max_steer_angle` at `STEER_SLEW_RATE`; both front wheels ramp the same δ at
-/// the same rate, so although they end at different angles (inner > outer) they
-/// arrive together. From the ramped δ the turn radius is `R = L/tan δ` and a
-/// wheel at lateral offset `y` steers `atan(L / (R − y))`. Only the basis
-/// (orientation) is written; the anchor (pivot point) is left untouched.
+/// THE single steering model, shared by physical and raycast wheels. For every
+/// [SteeringActuator] it slews the *centreline reference* angle `δ` toward
+/// `steer · max_steer_angle` at `STEER_SLEW_RATE` (so both front wheels ramp the
+/// same δ at the same rate and reach their different final angles together),
+/// then computes this wheel's **Ackermann** angle — turn radius `R = L/tan δ`, a
+/// wheel at lateral offset `y` steers `atan(L / (R − y))` so the inner wheel
+/// turns more than the outer — and stores it in `output_angle`.
+///
+/// If the actuator's entity also carries a [RevoluteJoint] (the physical wheel),
+/// the angle is applied here to the joint's body1 frame basis (the alignment
+/// constraint yaws the wheel). The raycast wheel has no joint; it reads
+/// `output_angle` in `lunco_mobility::apply_wheel_steering` and rotates its
+/// transform. Either way the steering math exists only here — DRY.
 fn steering_actuator_system(
     time: Res<Time>,
     q_ports: Query<&PhysicalPort>,
-    mut q_joints: Query<(&mut SteeringActuator, &mut RevoluteJoint)>,
+    mut q: Query<(&mut SteeringActuator, Option<&mut RevoluteJoint>)>,
 ) {
     let dt = time.delta_secs_f64();
     let max_step = STEER_SLEW_RATE * dt;
-    for (mut steer, mut joint) in q_joints.iter_mut() {
+    for (mut steer, joint) in q.iter_mut() {
         let Ok(port) = q_ports.get(steer.port_entity) else { continue };
         // Rate-limit the SHARED centreline reference (keeps both wheels in sync).
         let target_ref = (port.value as f64).clamp(-1.0, 1.0) * steer.max_steer_angle;
@@ -150,13 +163,18 @@ fn steering_actuator_system(
         steer.current_ref += delta;
         // Per-wheel Ackermann angle from the ramped reference. Near-zero → straight
         // (avoid the 1/tan blow-up).
-        let wheel_angle = if steer.current_ref.abs() < 1e-4 {
+        let angle = if steer.current_ref.abs() < 1e-4 {
             0.0
         } else {
             let r = steer.wheelbase / steer.current_ref.tan(); // signed turn radius
             (steer.wheelbase / (r - steer.lateral)).atan()
         };
-        joint.frame1.basis = JointBasis::Local(DQuat::from_rotation_y(wheel_angle).into());
+        steer.output_angle = angle;
+        // Physical wheel: apply to the joint frame here. (Raycast wheel: no joint,
+        // its transform is rotated by apply_wheel_steering from output_angle.)
+        if let Some(mut joint) = joint {
+            joint.frame1.basis = JointBasis::Local(DQuat::from_rotation_y(angle).into());
+        }
     }
 }
 

@@ -8,6 +8,7 @@ bevy = { workspace = true }
 avian3d = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-fsw = { path = "../lunco-fsw" }
+lunco-hardware = { path = "../lunco-hardware" }
 
 [lints]
 workspace = true

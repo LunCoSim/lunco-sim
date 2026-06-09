@@ -426,40 +426,27 @@ fn apply_wheel_drive(
     }
 }
 
-/// Updates steering angle based on physical port state.
-///
-/// The steering port value (normalized -1 to 1) is mapped to a yaw rotation
-/// around the local Y axis. For front wheels on Ackermann rovers, this
-/// produces the steer angle. For non-steering wheels, the port is
-/// `Entity::PLACEHOLDER` and this system skips them.
+/// Applies the steered angle to a raycast front wheel's transform. The angle
+/// itself (rate-limited servo slew + Ackermann inner/outer geometry) is computed
+/// by the SHARED [`lunco_hardware::SteeringActuator`] system — the exact same
+/// model the physical joint wheel uses — so steering is identical across wheel
+/// kinds and the logic lives in one place (DRY). This system only reads the
+/// computed `output_angle` and rotates the wheel about local Y; the visual mesh
+/// rotation (steer + roll spin) is composed in `update_wheel_spin`.
 fn apply_wheel_steering(
-    mut q_wheels: Query<(&WheelRaycast, &mut Transform, &ChildOf)>,
-    q_ports: Query<&lunco_core::architecture::PhysicalPort>,
+    mut q_wheels: Query<(&mut Transform, &ChildOf, &lunco_hardware::SteeringActuator), With<WheelRaycast>>,
     q_chassis: Query<&RigidBody, With<RoverVessel>>,
-    mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
 ) {
-    for (wheel, mut transform, parent) in q_wheels.iter_mut() {
-        // Predict-own: this chain now runs on a client too (the `!Client` gate
-        // was dropped so the owned rover steers locally). Unlike the suspension
-        // and drive systems this one writes wheel rotation directly with no
-        // physics guard — so gate it on the chassis the same way: skip wheels of
-        // a `Kinematic` chassis (every replicated rover this peer does NOT own),
-        // whose local steer ports are stale and would point the wheels wrong.
+    for (mut transform, parent, steer) in q_wheels.iter_mut() {
+        // Predict-own: this chain runs on a client too. Skip wheels of a
+        // `Kinematic` chassis (replicated rovers this peer does NOT own), whose
+        // local steer ports are stale and would point the wheels wrong.
         if let Ok(body) = q_chassis.get(parent.parent()) {
             if matches!(body, RigidBody::Kinematic) {
                 continue;
             }
         }
-        if wheel.steer_port == Entity::PLACEHOLDER {
-            continue;
-        }
-        if let Ok(port) = q_ports.get(wheel.steer_port) {
-            // Port value is -1.0 to 1.0; map to +/- 0.5 rad (~30 degrees)
-            let target_angle = (port.value as f32).clamp(-1.0, 1.0) * 0.5;
-            // Steer rotation is around local Y (up) axis. The visual mesh
-            // rotation (steer + roll spin) is composed in `update_wheel_spin`.
-            transform.rotation = Quat::from_rotation_y(target_angle);
-        }
+        transform.rotation = Quat::from_rotation_y(steer.output_angle as f32);
     }
 }
 
