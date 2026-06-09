@@ -207,18 +207,26 @@ fn build_collider_from_usd(reader: &TextReader, sdf_path: &SdfPath) -> Option<Co
             ) {
                 Some(Collider::cuboid(width, height, depth))
             } else {
-                // Base (unscaled) extent ONLY — do NOT pre-multiply by
-                // `xformOp:scale`. Avian's `update_collider_scale` already
-                // multiplies every collider by its entity's `Transform.scale`,
-                // which `lunco-usd-bevy` sets from `xformOp:scale`. Baking the
-                // scale in here too DOUBLE-scales the shape (scale²): the collider
-                // grows past its visual mesh, its top surface ends up above the
-                // rendered ground, and rovers rest/float ~1 m above sloped terrain
-                // (and sink into the thin 0.2-scale ground slab). Author a unit
-                // cuboid and let the Transform scale do the work — then collider
-                // and visual mesh coincide exactly.
+                // Author a UNIT `cuboid(size)` and pre-apply the prim's
+                // `xformOp:scale` to the collider here. Why both:
+                //  - Avian re-scales colliders to the entity's world `Transform.scale`
+                //    every frame (measured: `collider.scale` becomes (4000,0.2,4000)
+                //    for the ground), via a `set_scale` (ABSOLUTE, not multiply). So a
+                //    shape that already bakes `size*scale` ends up DOUBLE-scaled
+                //    (`size*scale × scale`) — the terrain grows ~scale× past its visual
+                //    and rovers float on the oversized slab. The intrinsic shape must
+                //    therefore be the UNSCALED `size`.
+                //  - But avian applies that scale in a DEFERRED pass; until it runs the
+                //    collider is a tiny `size³` dot, and rovers fall straight through
+                //    the terrain in those first frames (the "crazy"/fast-fall on commit
+                //    c6246202, which used a bare unit cuboid). Pre-setting the scale to
+                //    the value avian will compute makes the collider correct from frame
+                //    0; avian's `scale != collider.scale()` guard then skips the
+                //    redundant pass, so there's no double-scale and no startup race.
                 let size = reader.prim_attribute_value::<f64>(sdf_path, "size").unwrap_or(2.0);
-                Some(Collider::cuboid(size, size, size))
+                let mut collider = Collider::cuboid(size, size, size);
+                collider.set_scale(bevy::math::DVec3::new(scale.0, scale.1, scale.2), 10);
+                Some(collider)
             }
         }
         "Sphere" => {
