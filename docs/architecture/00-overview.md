@@ -1,227 +1,100 @@
-# 00 — LunCoSim Architecture Overview
+# 00 — LunCo Architecture Overview
 
-> **Read this first.** Everything else in `docs/architecture/` elaborates on sections here.
+> **LunCo: virtual universe to design real space missions.**
+> This is the canonical starting point for all architectural decisions.
 
-## 1. What LunCoSim is
+## 1. What LunCo is: The CONOPS Platform
 
-A **3D-canvas systems-engineering tool** for designing, simulating, and operating
-lunar colonies and space missions.
+LunCo is not a game, nor is it a simple physics simulator. It is a **System-Level Robotics Co-Simulation Platform** designed for **Concept of Operations (CONOPS)** development.
 
-It is not a game. It is not a CAD program. It is not a Modelica IDE.
-It combines patterns from all three, plus operations-simulator patterns from
-STK / GMAT and collaborative-editing patterns from NVIDIA Omniverse.
+While traditional simulators focus on isolated physics (how a wheel turns), **LunCo focus on the System-of-Systems**:
+- **Behavioral Integrity**: How power, thermal, and software subsystems interact (Modelica/ROM).
+- **Structural Integrity**: How the mission adheres to the engineering blueprint (SysML v2).
+- **Visual & Scene Composition**: How complex environments are assembled from modular parts (OpenUSD).
+- **Operational Integrity**: How multiple human and robotic agents collaborate in real-time (WebTransport).
 
-The user experience spans multiple tasks:
+## 2. The Architectural Tiers
 
-| Task      | What the user does |
-|-----------|--------------------|
-| Build     | Places buildings, rovers, habitats; wires subsystems |
-| Simulate  | Runs physics + behavioral models; watches the colony live |
-| Observe   | Pilots, flies around, inspects subsystem telemetry |
-| Plan      | Schedules missions, events, maneuvers |
-| Debug     | Replays events, tweaks parameters, chases failures |
-| Share     | Exports models, collaborates with other users |
-
-Each task needs a different UI configuration — but all share the same underlying
-data and physics model.
-
-## 2. The architectural tiers
-
-LunCoSim is organized in three distinct tiers. Every contributor should
-understand which tier a piece of code belongs in.
+LunCo is organized in three distinct tiers, ensuring that the **blueprint** (Documents) always drives the **execution** (Runtime).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                     TIER 3: Views  (UI panels)                       │
+│                     TIER 3: Views  (Collaboration)                  │
 │  Scene tree · 3D viewport · Diagram editor · Code editor · Plots     │
-│  Parameter inspector · Mission timeline · Property editors · ...     │
+│  Mission timeline · Property editors · Telemetry Dashboards          │
 └────────────────────────────────┬─────────────────────────────────────┘
                                  │ observes + emits ops
                                  ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│            TIER 2: Runtime  (Bevy ECS projection)                    │
+│            TIER 2: Runtime  (CONOPS Projection)                      │
 │  Live entity world · Physics solver · Modelica stepper · USD stage   │
 │       Environment providers · Cosim propagation · Rendering          │
 └────────────────────────────────┬─────────────────────────────────────┘
                                  │ projected from
                                  ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│           TIER 1: Documents  (persistent, canonical)                 │
-│  USD scene · Modelica models · SysML structure · Mission events      │
+│           TIER 1: Documents  (Authority / Source of Truth)           │
+│  USD composition · Modelica models · SysML structure · Mission events│
 │         Connections · Environment configuration · Assets             │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Documents** (Tier 1) are the source of truth. They persist to disk,
-  version in git, export to external tools, and survive app restarts.
-- **ECS runtime** (Tier 2) is a live projection of the documents plus
-  derived simulation state. It's transient — a cold-started simulator
-  rebuilds it from documents every time.
-- **Views** (Tier 3) observe documents and runtime, render projections,
-  and emit user edits as typed operations back to documents.
+- **Tier 1: Documents** are the authoritative source of truth. They are the "Digital Twin" blueprints that exist independently of the simulation.
+- **Tier 2: Runtime** is a high-fidelity projection of those documents. It is the execution engine where co-simulation happens across multiple domains.
+- **Tier 3: Views** are the collaborative windows into the digital universe. Edits made here are synchronised across all participants and saved back to the authoritative Tier 1 documents.
 
-This pattern is standard in professional engineering SW:
+## 3. Native Collaboration
 
-| Tool             | Tier 1 (document)     | Tier 2 (runtime)        | Tier 3 (views)           |
-|------------------|-----------------------|-------------------------|--------------------------|
-| Dymola           | `.mo` files           | BDF solver              | Diagram, Code, Plots     |
-| Fusion 360       | `.f3d`                | Parametric kernel       | 3D view, Feature tree    |
-| Omniverse        | USD stage             | RTX renderer            | Maya, Blender, USDview   |
-| **LunCoSim**     | USD + Modelica + ...  | Bevy ECS                | lunco-workbench panels   |
+Collaboration is not an "add-on" feature; it is a **native architectural requirement**. 
+- **CRDT-based Edits**: Every modification to a document (Modelica code, USD scene, SysML structure) is an operation replicated across the network via CRDTs.
+- **State Synchronisation**: The Bevy ECS runtime is transparently replicated, allowing multiple users to see, drive, and inspect the same mission state simultaneously.
+- **Authority Management**: Roles (Observer, Operator, Admin) define who can possess vessels or mutate mission parameters.
 
-### Why this matters
+## 4. The Composition Layer (OpenUSD)
 
-LunCoSim is currently **ECS-first** — the Bevy world is treated as the source
-of truth. That works for a game where the world is spawned once and runs.
-For a simulator that users *edit, save, collaborate on, and export*, this is
-wrong. Documents must be the source of truth; ECS is derived.
+**OpenUSD is our composition format, not our simulation engine.** 
+We use USD to describe **what the world looks like** and how its hierarchy is structured. We then "hook" simulation behaviors into this hierarchy:
+- A USD Prim represents a component.
+- A `lunco:model` attribute on that Prim points to a Modelica behavioral model.
+- A `lunco:port` attribute defines where software or power connections attach.
 
-The **Document System** (see [10-document-system.md](10-document-system.md))
-is how we make this architectural shift. It's the single most important
-foundational design in the project.
+This separation allows for seamless interoperability with NVIDIA Omniverse and other industrial 3D tools while maintaining engineering rigor.
 
-## 3. The domains
-
-Each domain in LunCoSim is a document type with its own editing and
-simulation semantics:
-
-| Domain        | Document     | Crate(s)                          | Status  |
-|---------------|--------------|-----------------------------------|---------|
-| Scene / world | USD          | `lunco-usd`, `lunco-usd-*`        | active  |
-| Behavior      | Modelica     | `lunco-modelica`, `rumoca` (fork) | active  |
-| Co-simulation | Connections  | `lunco-cosim`                     | active  |
-| Environment   | Bodies/env   | `lunco-environment`, `lunco-celestial` | active  |
-| Structure     | SysML        | (future) `lunco-sysml`            | planned |
-| Missions      | Event graph  | (future) `lunco-mission`          | planned |
-| Collaboration | Op stream    | (future) `lunco-collab`           | horizon |
-
-Cross-document references are first-class: a Modelica model is attached to a
-USD prim; a SysML block specifies a Modelica realization; a mission event
-targets an entity in USD.
-
-## 4. Crate layering
+## 5. Crate Layering
 
 ```
-Apps
-  (sandbox, lunco_client, lunica, future ones)
+Apps (sandbox, lunica, lunco_client)
    │
-   ├── Panel crates (domain-specific UI)
-   │     lunco-modelica/ui    lunco-sandbox-edit/ui    lunco-mission/ui
-   │          │                     │                        │
-   │          ▼                     ▼                        ▼
-   ├── Domain crates (documents + simulation)
+   ├── Networking (lunco-networking, replication, auth) ← Native Layer 2b
+   │
+   ├── Domain crates (Documents + Co-Simulation)
    │     lunco-modelica   lunco-usd   lunco-cosim   lunco-celestial
    │     lunco-environment   lunco-avatar   lunco-controller   ...
    │          │                     │                        │
    │          ▼                     ▼                        ▼
    ├── Framework layer
-   │     lunco-workbench  ← app scaffold: layout, workspaces, palette, detach
-   │     lunco-ui         ← widget toolkit + Document/DocumentView traits
+   │     lunco-workbench  ← UI scaffold, docking, perspectives
+   │     lunco-ui         ← Widget toolkit + Document traits
+   │     lunco-doc        ← Authority, undo/redo, CRUD foundation
    │          │                     │
    │          ▼                     ▼
-   ├── lunco-core         ← pause, time warp, SelectableRoot, fundamentals
-   │
-   └── External
-         bevy · bevy_egui · egui_tiles · egui_plot · avian3d · rumoca
+   └── lunco-core         ← f64 math foundation, CommandMessage, fundamentals
 ```
 
-Layers go strictly downward. A crate only depends on crates in its own layer
-or below. This keeps the dep graph acyclic and the conceptual model clean.
+## 6. Strategic Roadmap Orientation
 
-**Never pull domain knowledge into framework crates.** `lunco-workbench` knows
-nothing about Modelica or USD. `lunco-ui` knows nothing about balloons or
-solar panels. Domain knowledge lives in domain crates.
+We are moving from a **Sandbox** (physics validation) toward a **Mission Stack**:
+1. **Core Co-Sim (Built)**: USD + Modelica + Physics integration.
+2. **Native Collab (Built/Active)**: WebTransport + Replication.
+3. **Mission Timeline (Planned)**: Scheduling, event graphs, and automated CONOPS rehearsal.
+4. **HIL/SIL (Planned)**: Hardware/Software-in-the-loop validation for physical flight controllers.
+5. **AI Integration (Planned)**: Agent-driven simulation for autonomous mission analysis.
 
-## 5. UI/UX design principles
+## 7. Reading order for newcomers
 
-Details live in [11-workbench.md](11-workbench.md). The high-level principles:
-
-1. **The 3D world is the document.** Viewport is always central, always visible.
-   Panels are scaffolding around it.
-2. **Workspaces, not just panels.** One click at the top reshapes the whole UI
-   for the current task (Build / Simulate / Analyze / Plan / Observe).
-3. **Panels are reusable entity viewers.** Same `DiagramPanel` works in the
-   workbench, as a 3D overlay, or in a mission dashboard.
-4. **Context-awareness.** Selecting an entity prioritizes panels relevant to
-   it. The Inspector is a live reflection of the current selection.
-5. **Edit anywhere, see everywhere.** A parameter change in a form updates
-   the diagram. A component drag in the diagram updates the source text.
-   A source edit updates all views. This is the Document System at work.
-6. **Progressive disclosure.** Default layout is minimal. Power users hide
-   chrome and drive from keyboard + command palette.
-7. **Detachable windows.** Any panel can pop out to its own OS window for
-   multi-monitor workflows. First-class feature, not a hack.
-
-## 6. Cross-cutting concerns
-
-### Simulation lifecycle (Twin → Scenario → Run → Model)
-
-The four-layer simulation architecture lives in
-[14-simulation-layers.md](14-simulation-layers.md). Twin is the runtime
-control surface (a Bevy `Resource`) that owns scenarios, runs, traces,
-input queues, and the BackendRegistry. Every control action (start,
-pause, reset, step, warp, switch-fidelity, set-input) is a
-`TwinCommand` dispatched through Twin — UI, HTTP, scripts, replay, and
-remote clients all use the same command queue.
-
-Multi-clock + adaptive fidelity (mission-scope vs physics-scope) is
-specified separately in [15-adaptive-fidelity.md](15-adaptive-fidelity.md).
-
-### Pause, time warp, paused entities
-
-Pause / Resume / Reset / Time-warp are TwinCommand variants, applied at
-tick boundaries. See [22-domain-cosim.md § Pause and time warp](22-domain-cosim.md)
-for the master-loop semantics.
-
-Documents are editable regardless of pause state.
-
-### Undo / redo
-
-Handled by the Document System. Every edit is a typed operation with a
-defined inverse. See [10-document-system.md](10-document-system.md).
-
-### Save / load
-
-Per-domain file formats: `.mo`, `.usda`, `.sysml`, etc. A "project" is a
-bundle of documents in a directory structure. No custom monolithic save format.
-This makes LunCoSim interoperable with existing tools (you can edit a `.mo`
-file in Dymola, edit a `.usda` file in USDView, etc.).
-
-### Collaboration (future)
-
-The Op-based edit model sets us up for Nucleus-tier network sync later.
-See [90-collab-roadmap.md](90-collab-roadmap.md) when it's written.
-
-## 7. Roadmap orientation
-
-At time of writing (April 2026):
-
-- ✅ Tier 2 (ECS runtime) is mature. Physics, cosim, Modelica, USD loading all work.
-- ✅ Tier 3 (views) has most panels, built on `bevy_workbench` (being retired).
-- ❌ Tier 1 (documents) not formalized — source of truth is ECS today.
-
-The arc (from bottom of the stack up):
-
-1. **`lunco-doc`** — Document trait, DocumentOp, DocumentHost, undo/redo. UI-free, headless-capable. Tier 1 foundation.
-2. **`lunco-twin`** — Twin struct, `twin.toml` manifest, DocumentRegistry, CacheRegistry (AST, DAE). Tier 1 container.
-3. **`lunco-workbench`** — app scaffold: root layout, Panel trait, Workspace enum, Welcome Screen. Tier 3 framework.
-4. **Panel migration** — sandbox, Modelica, UI panels move from `bevy_workbench::WorkbenchPanel` to `lunco-workbench::Panel`, domain by domain.
-5. **`bevy_workbench` retirement** — single cleanup commit once all panels have migrated.
-6. **Per-domain Document System adoption** — Modelica first (`ModelicaDocument` + `ModelicaInstance` split), then USD, then Mission, then SysML.
-7. **Collaboration layer** — years out; Op streams are already serializable.
-
-Migration is a **clean cutover, not a parallel coexistence.** No feature
-flags for old-vs-new UI; the workbench in `main` is always the only
-workbench. See [`11-workbench.md § 13`](11-workbench.md) for the detailed
-phase breakdown and [`13-twin-and-workflow.md § 12`](13-twin-and-workflow.md)
-for per-app composition.
-
-## 8. Where to look next
-
-- **Framework design:** [10-document-system.md](10-document-system.md), [11-workbench.md](11-workbench.md), [13-twin-and-workflow.md](13-twin-and-workflow.md), [14-simulation-layers.md](14-simulation-layers.md), [15-adaptive-fidelity.md](15-adaptive-fidelity.md)
-- **Per-domain design:** [20-domain-modelica.md](20-domain-modelica.md), [21-domain-usd.md](21-domain-usd.md), [22-domain-cosim.md](22-domain-cosim.md), [23-domain-environment.md](23-domain-environment.md), [24-domain-sysml.md](24-domain-sysml.md)
-- **Project principles:** [`../principles.md`](../principles.md)
-- **Terminology:** [01-ontology.md](01-ontology.md)
-- **Historical research:** [research/](research/) contains inspiration and rejected-path writeups
-- **Crate-level quick starts:** each crate has its own `README.md` focused on
-  "how do I use this crate right now," not architecture.
+1. **[`01-ontology.md`](01-ontology.md)** — vocabulary (Space System, Port, Connection, etc.)
+2. **[`10-document-system.md`](10-document-system.md)** — the data model foundation.
+3. **[`12-api.md`](12-api.md)** — how to drive the simulation externally.
+4. **[`14-simulation-layers.md`](14-simulation-layers.md)** — Twin/Scenario/Run/Model hierarchy.
+5. **[`17-view-and-intent.md`](17-view-and-intent.md)** — the 5-layer control model.
+6. **[`../../principles.md`](../principles.md)** — the project's non-negotiable rules.
