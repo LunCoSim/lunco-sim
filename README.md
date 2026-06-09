@@ -101,7 +101,7 @@ Full flag reference: [`crates/lunco-modelica/README.md`](crates/lunco-modelica/R
 - **Undo** — **Ctrl+Z** to revert spawns and moves
 - **Escape** — Cancel current operation
 
-See [USD System Documentation](docs/USD_SYSTEM.md) for rover definitions, scene composition, wheel types, and the full editing tools architecture.
+See [USD System Documentation](docs/usd-system.md) for rover definitions, scene composition, wheel types, and the full editing tools architecture.
 
 ---
 

@@ -3,10 +3,10 @@
 This document provides specific instructions and context for AI agents (Claude, Gemini, Antigravity, etc.) working on the LunCoSim codebase. Adherence to these guidelines is mandatory for maintaining simulation integrity and modularity.
 
 ## Repository Navigation
-AI agents should use [docs/crates_index.md](docs/crates_index.md) as the primary guide for understanding the workspace structure and crate responsibilities.
+AI agents should use [docs/crates-index.md](docs/crates-index.md) as the primary guide for understanding the workspace structure and crate responsibilities.
 
 ## Agent Mandates
-- **Crate Maintenance**: Whenever a new crate is added to the workspace, the agent MUST update `docs/crates_index.md` to include the new crate in the appropriate category with a concise responsibility summary.
+- **Crate Maintenance**: Whenever a new crate is added to the workspace, the agent MUST update `docs/crates-index.md` to include the new crate in the appropriate category with a concise responsibility summary.
 
 ## 1. Project Context
 LunCoSim is a digital twin of the solar system built with the Bevy engine. It follows a modular, hotswappable plugin architecture and mandates Test-Driven Development (TDD).

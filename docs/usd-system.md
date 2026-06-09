@@ -178,16 +178,17 @@ EGUI window showing selected entity's name, transform, and physics parameters.
 **Ctrl+Z** to revert spawns and transform changes.
 
 ### Command-Based Spawning
-All spawn operations go through `CommandMessage` (`SPAWN_ENTITY:<entry_id>`), enabling
-future CLI spawning:
-```rust
-commands.trigger(CommandMessage {
-    id: 0,
-    target: grid_entity,
-    name: "SPAWN_ENTITY:ball_dynamic".to_string(),
-    args: smallvec![x, y, z, 0.0],
-    source: Entity::PLACEHOLDER,
-});
+All spawn operations use the typed `#[Command]` system (see [AGENTS.md](../AGENTS.md) and [docs/api.md](api.md)). For example, to spawn an entity via the API or CLI:
+
+```json
+{
+  "command": "SpawnEntity",
+  "params": {
+    "target": "01ARZ7NDEKTSV4M9",
+    "entry_id": "ball_dynamic",
+    "position": { "x": 0.0, "y": 2.0, "z": 0.0 }
+  }
+}
 ```
 
 ## Reference Resolution

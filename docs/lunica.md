@@ -95,6 +95,8 @@ path.
   workbench frame, perspectives, panel registration.
 - [`docs/architecture/13-twin-and-workflow.md`](architecture/13-twin-and-workflow.md) —
   how Lunica fits alongside `sandbox` and `lunco_client`.
-- [`docs/WEB_BUILD.md`](WEB_BUILD.md) — wasm pipeline reference.
+- [`docs/web-build.md`](web-build.md) — wasm pipeline reference.
 - [`docs/api.md`](api.md) — typed-command HTTP API exposed by
   `lunica --api`.
+- [`docs/cli-reference.md`](cli-reference.md) — command-line tool reference
+  (flags, actions, usage).

@@ -48,13 +48,66 @@ curl http://127.0.0.1:3000/api/entities/<entity-ulid> | jq .
 |---|---|---|
 | `GET` | `/api/health` | Server health check |
 | `GET` | `/api/commands/schema` | Discover all available commands with field types |
-| `POST` | `/api/commands` | Execute a command |
+| `POST` | `/api/commands` | Execute a command or query |
 | `GET` | `/api/entities` | List all entities |
 | `GET` | `/api/entities/{id}` | Query entity details |
 
-## Command Execution
+## API Queries (Data Retrieval)
 
-Commands are typed — each domain crate defines its own command structs. The API discovers them automatically via reflection.
+Queries return structured data from the simulation. They use the same `POST /api/commands` endpoint but do not cause side effects.
+
+### Query Catalog
+
+| Query | Parameters | Description |
+|---|---|---|
+| `ListBundled` | `{}` | List embedded example models (`bundled://`). |
+| `ListOpenDocuments` | `{}` | List all documents currently open in the workspace. |
+| `ListRecentFiles` | `{}` | List recently opened files and Twins from `recents.json`. |
+| `ListTwin` | `{"offset": u64, "limit": u64}` | List files in the currently active Twin folder. |
+| `ListMsl` | `{"cursor": string, "limit": u64, "filter": {...}}` | Search and list the Modelica Standard Library (MSL). |
+| `ListCompileCandidates` | `{"doc": u64}` | List all non-package classes in a document that can be compiled. |
+| `QueryExperimentBounds` | `{"doc": u64, "class": string?}` | Resolve simulation bounds (start, end, dt) for a class. |
+| `CompileStatus` | `{"doc": u64}` | Get the current compilation and run state of a document. |
+| `RunStatus` | `{"experiment_id": string}` | Get the status of a specific simulation run. |
+| `ListRuns` | `{"doc": u64?}` | List all simulation runs, optionally filtered by document. |
+| `GetExperimentResult` | `{"experiment_id": string, "max_points": u64?}` | Retrieve trajectory data (timeseries) for a completed run. |
+| `GetDocumentSource` | `{"doc": u64}` | Get the raw source code of a document (Modelica only). |
+| `DescribeModel` | `{"doc": u64, "class": string?}` | Get structural info (components, pins, parameters) of a class. |
+| `SnapshotVariables` | `{"doc": u64, "names": string[]?}` | Get the current values of simulation variables/inputs. |
+| `FindModel` | `{"query": string, "limit": u64?}` | Fuzzy search across bundled, twin, MSL, and open docs. |
+| `SetModelInput` | `{"doc": u64, "name": string, "value": f64}` | Set a model input value (returns success/error payload). |
+| `CopyShareLink` | `{"doc": u64?}` | Generate a sharing URL for the document source. |
+| `CosimStatus` | `{}` | List all USD-driven cosim entities with live telemetry. |
+
+---
+
+## Command Execution (Side Effects)
+
+Commands are typed — each domain crate defines its own command structs. The API discovers them automatically via reflection. Use `GET /api/commands/schema` to see the full list of available commands and their parameters.
+
+### Common Commands
+
+| Domain | Command | Description |
+|---|---|---|
+| **Mobility** | `DriveRover` | Set forward/steer inputs for a rover. |
+| | `BrakeRover` | Apply brakes to a rover. |
+| **Avatar** | `PossessVessel` | Attach camera and control to a vessel. |
+| | `FollowTarget` | Chase-camera a target. |
+| | `FocusTarget` | Orbit-camera a target. |
+| | `CaptureScreenshot` | Trigger an in-sim screenshot. |
+| **USD** | `LoadScene` | Reload a USD stage from disk. |
+| | `ApplyUsdOp` | Mutate a USD document via an atomic Op. |
+| **Modelica** | `CompileModel` | Compile a specific class in a document. |
+| | `RunActiveModel` | Start/Resume simulation of the active model. |
+| | `PauseActiveModel` | Pause simulation. |
+| | `ResetActiveModel` | Reset simulation to `t=0`. |
+| **Workspace** | `OpenFile` | Open a file (USD, Modelica, etc.) into a new tab. |
+| | `SaveAll` | Save all dirty documents to disk. |
+| | `NewDocument` | Create a new untitled document. |
+| | `AddTwin` | Create a new Twin folder and manifest. |
+| **System** | `SetTheme` | Switch between Dark and Light modes. |
+| | `TogglePerfHud` | Show/hide the performance overlay. |
+| | `RunPython` | Execute a Python script snippet. |
 
 ### Example: Drive a Rover
 

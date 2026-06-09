@@ -6,7 +6,7 @@ Everything physics- or sim-related lives in `lunco-usd-avian` and
 `lunco-usd-sim` and runs `.after(sync_usd_visuals)`.
 
 Read alongside `crates/lunco-usd-bevy/src/lib.rs` (the only source file) and
-`docs/USD_SYSTEM.md` (the system-level overview).
+`docs/usd-system.md` (the system-level overview).
 
 ## Adding a new prim type
 

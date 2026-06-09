@@ -222,4 +222,4 @@ Each step is additive and independently verifiable.
 - [`14-simulation-layers.md`](14-simulation-layers.md) — Twin/Scenario/Run/Model + `participant_id`
 - [`00-overview.md`](00-overview.md) — three-tier architecture
 - `specs/030-usd-scene-integration` — detailed spec
-- Legacy to migrate: `docs/USD_SYSTEM.md`, `lunco-usd-*` per-crate READMEs
+- Legacy to migrate: `docs/usd-system.md`, `lunco-usd-*` per-crate READMEs
