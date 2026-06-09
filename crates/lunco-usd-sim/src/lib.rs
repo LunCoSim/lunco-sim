@@ -897,17 +897,28 @@ fn setup_physical_wheel(
     // axle + `SubstepCount(12)`. See `project_physical_rover_suspension`.)
 
     // Velocity-controlled axle drive: pure velocity control (stiffness 0),
-    // mass-auto-scaled, capped at the engine `peakTorque`. A raw constant axle
-    // torque sat in avian's low-slip friction dead-zone (barely moved) at small
-    // values and broke traction at large ones; commanding the spin rate instead
-    // is stable and self-limits the top speed at traction. Tunable via USD later.
+    // mass-auto-scaled. A raw constant axle torque sat in avian's low-slip
+    // friction dead-zone (barely moved) at small values and broke traction at
+    // large ones; commanding the spin rate instead is stable and self-limits the
+    // top speed at traction.
+    //
+    // `max_torque` is the motor's STALL torque — how hard it can drive the wheel
+    // toward the commanded spin. It must be well above the engine `peakTorque`
+    // (the steady traction figure): for a SKID turn the inner wheels are
+    // commanded to *reverse* while the body still carries forward momentum, and a
+    // low cap lets them just keep rolling forward with the rover → no speed
+    // differential → no yaw. A high stall torque lets the wheels actually enforce
+    // their left/right speed split and pivot the body. Velocity control self-caps
+    // the spin, so a high stall torque can't run away (unlike raw torque). Tunable
+    // via USD later.
     const MAX_DRIVE_OMEGA: f64 = 12.0; // rad/s at full throttle (≈ 4.8 m/s at r=0.4)
     const DRIVE_DAMP: f64 = 30.0; // velocity-tracking aggressiveness (1/s)
+    const STALL_TORQUE_GAIN: f64 = 6.0; // stall torque = peakTorque × this
     let drive_motor = AngularMotor::new(MotorModel::AccelerationBased {
         stiffness: 0.0,
         damping: DRIVE_DAMP,
     })
-    .with_max_torque(peak_torque);
+    .with_max_torque(peak_torque * STALL_TORQUE_GAIN);
 
     let mut joint_cmd = commands.spawn((
         RevoluteJoint::new(chassis, entity)
@@ -929,7 +940,17 @@ fn setup_physical_wheel(
     ));
     // Front wheels of an Ackermann rover also steer (frame rotation about Y).
     if let Some(steer_port) = steer {
-        joint_cmd.insert(SteeringActuator { port_entity: steer_port, max_steer_angle, current_angle: 0.0 });
+        joint_cmd.insert(SteeringActuator {
+            port_entity: steer_port,
+            max_steer_angle,
+            current_angle: 0.0,
+            // Chassis-local geometry for the Ackermann correction. `mount_local`
+            // is the wheel's offset from the chassis origin: X = lateral (+left),
+            // Z = longitudinal. Wheelbase = front-to-rear axle distance = 2·|z|
+            // for the symmetric layout.
+            lateral: mount_local.x,
+            wheelbase: 2.0 * mount_local.z.abs(),
+        });
     }
 
     // Logical wheel↔rover link, independent of Bevy hierarchy.
