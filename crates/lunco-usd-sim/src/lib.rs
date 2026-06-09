@@ -58,7 +58,7 @@ use openusd::sdf::{Path as SdfPath, AbstractData, Value};
 use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
 use lunco_fsw::FlightSoftware;
 use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
-use lunco_hardware::MotorActuator;
+use lunco_hardware::{MotorActuator, SteeringActuator};
 use lunco_core::RoverVessel;
 use lunco_avatar::{FreeFlightCamera, OrbitCamera, SpringArmCamera, AdaptiveNearPlane};
 use lunco_core::Avatar;
@@ -537,6 +537,9 @@ fn process_usd_sim_prims(
             // single wheel scalar, so we read our own `lunco:frictionCoefficient`
             // (unit-friction default when unauthored).
             let friction_mu = read_f("lunco:frictionCoefficient").unwrap_or(1.0);
+            // Ackermann steering lock at full input (rad); drives the front
+            // steering-knuckle motor. Skid/rear wheels ignore it.
+            let max_steer_angle = read_f("lunco:maxSteerAngle").unwrap_or(0.5);
             // Chassis-contact grip stiffness (slope of contact friction vs slip
             // before the Coulomb cone). USD: `lunco:contactGripStiffness`.
             let contact_grip_stiffness = read_f("lunco:contactGripStiffness").unwrap_or(50.0);
@@ -545,11 +548,23 @@ fn process_usd_sim_prims(
             // pointing at this wheel via `physics:body1` ⇒ joint-based.
             let key = (prim_path.stage_handle.clone(), prim_path.path.clone());
             if joint_targets.contains_key(&key) {
+                // Front wheels (index < 2) of an Ackermann rover get a steering
+                // knuckle wired to the steering port. Rear/skid wheels keep the
+                // rigid axle. Gate on the rover's drive type — a skid rover must
+                // keep all wheels fixed (it steers by skidding), so only build the
+                // castoring knuckle when the PARENT rover prim carries
+                // `PhysxVehicleDrive4WAPI` (Ackermann).
+                let parent_prim = &prim_path.path[..prim_path.path.rfind('/').unwrap_or(0)];
+                let is_ackermann = SdfPath::new(parent_prim)
+                    .map(|p| has_api_schema(reader, &p, "PhysxVehicleDrive4WAPI"))
+                    .unwrap_or(false);
+                let steer_for_wheel = if index < 2 && is_ackermann { Some(p_steer) } else { None };
                 setup_physical_wheel(
                     &mut commands, entity, prim_path, &existing_tf,
                     maybe_mesh, maybe_mat, maybe_shader_mat, maybe_child_of,
                     radius, p_drive,
                     drive_torque_max,
+                    steer_for_wheel, max_steer_angle,
                 );
             } else {
                 setup_raycast_wheel(
@@ -740,6 +755,8 @@ fn setup_physical_wheel(
     radius: f32,
     p_drive: Entity,
     peak_torque: f64,
+    steer: Option<Entity>,
+    max_steer_angle: f64,
 ) {
     info!("Setting up PHYSICAL wheel {}", prim_path.path);
 
@@ -774,13 +791,6 @@ fn setup_physical_wheel(
             cyl,
         )])
     };
-    // Sign chosen so a positive port value (W / DriveForward) rolls the
-    // rover along its chassis-local -Z (Bevy's forward). With wheel body
-    // identity-aligned to the chassis, axle = wheel_axis_rot * Y; torque
-    // about +axle spins the wheel such that the contact point moves +Z
-    // (i.e. rover moves -Z), so we negate to put forward command on -Z.
-    let motor_axis = -(wheel_axis_rot * Vec3::Y).as_dvec3();
-
     if let Some(mesh) = maybe_mesh.cloned() {
         let mut visual = commands.spawn((
             Name::new(format!(
@@ -814,13 +824,6 @@ fn setup_physical_wheel(
 
     commands.entity(entity).insert((
         PhysicalWheel,
-        MotorActuator {
-            port_entity: p_drive,
-            axis: motor_axis,
-            peak_torque,
-            radius: radius as f64,
-            mount_local: existing_tf.translation.as_dvec3(),
-        },
         RigidBody::Dynamic,
         collider,
         // Heavier wheels (100 kg vs the previous 25) damp the
@@ -829,13 +832,12 @@ fn setup_physical_wheel(
         // 1000 kg chassis the previous 40:1 mass ratio amplified
         // lateral float-precision noise into rolling drift.
         Mass(100.0),
-        // The drive is a contact FORCE on the chassis (see MotorActuator), so the
-        // wheels are dragged + roll passively. The old LinearDamping(2.0)/
-        // AngularDamping(2.0) then act as a brake on the whole rover: at full
-        // throttle it crawled at 0.19 m/s because the damping ate ~95% of the
-        // drive force (verified by API drive probe). Low values let the wheels
-        // roll nearly free so sane torque (peakTorque=800) drives efficiently.
-        // Friction 0.9 keeps grip for skid-steer yaw + braking.
+        // The drive is an axle TORQUE on the wheel (see MotorActuator); wheel↔ground
+        // friction propels the rover. μ is a COMPROMISE: high μ gives traction +
+        // Ackermann cornering grip, but also high LATERAL grip that resists a skid
+        // rover's sideways scrub (skid steering needs the wheels to slide). μ=0.9
+        // lets the skid differential actually yaw the body while still moving + (with
+        // AWD) cornering the Ackermann. `AngularDamping(0.3)` = wheel-bearing drag.
         Friction::new(0.9),
         LinearDamping(0.1),
         AngularDamping(0.3),
@@ -864,29 +866,71 @@ fn setup_physical_wheel(
     // hub→wheel revolute axis.
     let axle = (existing_tf.rotation * Vec3::Y).as_dvec3();
 
-    // Rigid hinge: pin the wheel to the chassis at its authored offset.
+    // Hinge the wheel to the chassis at its authored offset.
     //
-    // An articulated chassis→prismatic(spring)→hub→revolute→wheel suspension
-    // was prototyped and rejected: avian's joint SpringDamper is fragile here —
-    // it rings the chassis pitch/roll mode down for 15-20 s after the scene's
-    // 5 m spawn drop, can't be damped harder (high damping_ratio diverges), and
-    // its effective tuning shifts with substep count. The headless `rover_jitter`
-    // probe showed the "jitter when riding" is actually a SOLVER-RESOLUTION
-    // problem, not a missing-suspension problem: a rigid revolute at the default
-    // 6 substeps buzzes the chassis under drive torque (|ω|max≈0.15), but at 12
-    // substeps it vanishes (|ω|max≈0.0001) while still settling drops perfectly.
-    // The fix is therefore the rigid joint here + `SubstepCount(12)` at the app
-    // (see `sandbox.rs` / `main.rs`), NOT an articulated spring. Joint rovers
-    // are rigid-axle; use raycast wheels when vertical suspension travel is
-    // wanted. See `project_physical_rover_suspension` memory for the data.
-    commands.spawn((
+    // An articulated chassis→prismatic(spring)→hub→revolute→wheel *suspension*
+    // was prototyped and rejected: avian's joint SpringDamper is fragile bearing
+    // the chassis weight — it rings the pitch/roll mode down for 15-20 s after
+    // the scene's 5 m spawn drop, can't be damped harder (high damping_ratio
+    // diverges), and its effective tuning shifts with substep count. The fix for
+    // *vertical* travel is therefore the rigid axle below + `SubstepCount(12)` at
+    // the app; joint rovers are rigid-axle. See `project_physical_rover_suspension`.
+    //
+    // Steering is a yaw of the front wheel about the vertical. A physical
+    // steering KNUCKLE (an intermediate body on a second revolute) was tried and
+    // rejected: a knuckle heavy enough to hold the wheel makes the
+    // chassis→knuckle→wheel chain ill-conditioned and avian 0.6.1's solver
+    // INJECTS energy (the idle rover spins and drifts metres with zero throttle);
+    // a knuckle light enough to be stable can't hold the steer and the response
+    // is pure noise. Verified across mass, inertia, motor stiffness and drive
+    // mode with the headless `rover_turn` probe.
+    //
+    // Instead every wheel hangs off the chassis by a SINGLE revolute (stable,
+    // like the rigid rear axle). The drive is a velocity-controlled motor on that
+    // joint (see MotorActuator). Front wheels are STEERED by rotating the joint's
+    // chassis-side frame about Y (`SteeringActuator`): the alignment constraint
+    // yaws the wheel into the steered heading, so it physically turns and its grip
+    // carries the rover into an arc — geometric Ackermann through one constraint.
+    //
+    // (A spring suspension was also rejected — avian's joint SpringDamper is
+    // fragile bearing the chassis weight; the fix for vertical travel is the rigid
+    // axle + `SubstepCount(12)`. See `project_physical_rover_suspension`.)
+
+    // Velocity-controlled axle drive: pure velocity control (stiffness 0),
+    // mass-auto-scaled, capped at the engine `peakTorque`. A raw constant axle
+    // torque sat in avian's low-slip friction dead-zone (barely moved) at small
+    // values and broke traction at large ones; commanding the spin rate instead
+    // is stable and self-limits the top speed at traction. Tunable via USD later.
+    const MAX_DRIVE_OMEGA: f64 = 12.0; // rad/s at full throttle (≈ 4.8 m/s at r=0.4)
+    const DRIVE_DAMP: f64 = 30.0; // velocity-tracking aggressiveness (1/s)
+    let drive_motor = AngularMotor::new(MotorModel::AccelerationBased {
+        stiffness: 0.0,
+        damping: DRIVE_DAMP,
+    })
+    .with_max_torque(peak_torque);
+
+    let mut joint_cmd = commands.spawn((
         RevoluteJoint::new(chassis, entity)
             .with_local_anchor1(mount_local)
             .with_local_anchor2(DVec3::ZERO)
-            .with_hinge_axis(axle),
+            .with_hinge_axis(axle)
+            .with_motor(drive_motor),
         JointCollisionDisabled,
+        // All-wheel drive. The throttle port already carries the skid rover's
+        // per-side differential (drive_left/drive_right), so a single mapping here
+        // yaws the skid body; on the Ackermann rover all wheels share one throttle
+        // and the front frame-steer does the turning.
+        MotorActuator {
+            port_entity: p_drive,
+            max_omega: MAX_DRIVE_OMEGA,
+            drive_sign: -1.0,
+        },
         Name::new(format!("PhysicalWheelJoint_{}", prim_path.path)),
     ));
+    // Front wheels of an Ackermann rover also steer (frame rotation about Y).
+    if let Some(steer_port) = steer {
+        joint_cmd.insert(SteeringActuator { port_entity: steer_port, max_steer_angle, current_angle: 0.0 });
+    }
 
     // Logical wheel↔rover link, independent of Bevy hierarchy.
     // Reflects the OpenUSD `PhysicsArticulationRootAPI` graph.

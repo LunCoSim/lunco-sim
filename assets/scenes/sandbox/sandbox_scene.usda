@@ -167,6 +167,28 @@ def Xform "SandboxScene"
             color3f primvars:displayColor = (0.2, 0.2, 0.8)
         }
 
+        # PHYSICAL no-overlap model: drop the wheels fully BELOW the chassis
+        # collider. Chassis half-height 0.15 ⇒ bottom at y=-0.15; wheels at
+        # y=-0.65 (Ø0.8 → top at y=-0.25) clear it by 0.10 m. Track ±0.9 keeps
+        # them under the 2.0 m body. The wheel colliders never touch the body,
+        # so the joints stay stable without relying on collision-disable.
+        over "Wheel_FL"
+        {
+            double3 xformOp:translate = (-0.9, -0.65, 1.225)
+        }
+        over "Wheel_FR"
+        {
+            double3 xformOp:translate = (0.9, -0.65, 1.225)
+        }
+        over "Wheel_RL"
+        {
+            double3 xformOp:translate = (-0.9, -0.65, -1.225)
+        }
+        over "Wheel_RR"
+        {
+            double3 xformOp:translate = (0.9, -0.65, -1.225)
+        }
+
         def PhysicsRevoluteJoint "Wheel_FL_Hinge" (
             prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         )
@@ -174,7 +196,7 @@ def Xform "SandboxScene"
             rel physics:body0 = </SandboxScene/Skid_Physical_1>
             rel physics:body1 = </SandboxScene/Skid_Physical_1/Wheel_FL>
             uniform token physics:axis = "X"
-            point3f physics:localPos0 = (-1.0, -0.15, 1.225)
+            point3f physics:localPos0 = (-0.9, -0.65, 1.225)
             point3f physics:localPos1 = (0, 0, 0)
             float drive:angular:physics:maxForce = 12000.0
             uniform token drive:angular:physics:type = "force"
@@ -186,7 +208,7 @@ def Xform "SandboxScene"
             rel physics:body0 = </SandboxScene/Skid_Physical_1>
             rel physics:body1 = </SandboxScene/Skid_Physical_1/Wheel_FR>
             uniform token physics:axis = "X"
-            point3f physics:localPos0 = (1.0, -0.15, 1.225)
+            point3f physics:localPos0 = (0.9, -0.65, 1.225)
             point3f physics:localPos1 = (0, 0, 0)
             float drive:angular:physics:maxForce = 12000.0
             uniform token drive:angular:physics:type = "force"
@@ -198,7 +220,7 @@ def Xform "SandboxScene"
             rel physics:body0 = </SandboxScene/Skid_Physical_1>
             rel physics:body1 = </SandboxScene/Skid_Physical_1/Wheel_RL>
             uniform token physics:axis = "X"
-            point3f physics:localPos0 = (-1.0, -0.15, -1.225)
+            point3f physics:localPos0 = (-0.9, -0.65, -1.225)
             point3f physics:localPos1 = (0, 0, 0)
             float drive:angular:physics:maxForce = 12000.0
             uniform token drive:angular:physics:type = "force"
@@ -210,7 +232,7 @@ def Xform "SandboxScene"
             rel physics:body0 = </SandboxScene/Skid_Physical_1>
             rel physics:body1 = </SandboxScene/Skid_Physical_1/Wheel_RR>
             uniform token physics:axis = "X"
-            point3f physics:localPos0 = (1.0, -0.15, -1.225)
+            point3f physics:localPos0 = (0.9, -0.65, -1.225)
             point3f physics:localPos1 = (0, 0, 0)
             float drive:angular:physics:maxForce = 12000.0
             uniform token drive:angular:physics:type = "force"
@@ -253,6 +275,26 @@ def Xform "SandboxScene"
             color3f primvars:displayColor = (0.8, 0.5, 0.1)
         }
 
+        # PHYSICAL no-overlap model (see Skid_Physical_1): wheels dropped below
+        # the chassis so the front steering knuckles can castor the wheels
+        # without the colliders ever intersecting the body.
+        over "Wheel_FL"
+        {
+            double3 xformOp:translate = (-0.9, -0.65, 1.225)
+        }
+        over "Wheel_FR"
+        {
+            double3 xformOp:translate = (0.9, -0.65, 1.225)
+        }
+        over "Wheel_RL"
+        {
+            double3 xformOp:translate = (-0.9, -0.65, -1.225)
+        }
+        over "Wheel_RR"
+        {
+            double3 xformOp:translate = (0.9, -0.65, -1.225)
+        }
+
         def PhysicsRevoluteJoint "Wheel_FL_Hinge" (
             prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         )
@@ -260,7 +302,7 @@ def Xform "SandboxScene"
             rel physics:body0 = </SandboxScene/Ackermann_Physical_1>
             rel physics:body1 = </SandboxScene/Ackermann_Physical_1/Wheel_FL>
             uniform token physics:axis = "X"
-            point3f physics:localPos0 = (-1.0, -0.15, 1.225)
+            point3f physics:localPos0 = (-0.9, -0.65, 1.225)
             point3f physics:localPos1 = (0, 0, 0)
             float drive:angular:physics:maxForce = 12000.0
             uniform token drive:angular:physics:type = "force"
@@ -272,7 +314,7 @@ def Xform "SandboxScene"
             rel physics:body0 = </SandboxScene/Ackermann_Physical_1>
             rel physics:body1 = </SandboxScene/Ackermann_Physical_1/Wheel_FR>
             uniform token physics:axis = "X"
-            point3f physics:localPos0 = (1.0, -0.15, 1.225)
+            point3f physics:localPos0 = (0.9, -0.65, 1.225)
             point3f physics:localPos1 = (0, 0, 0)
             float drive:angular:physics:maxForce = 12000.0
             uniform token drive:angular:physics:type = "force"
@@ -284,7 +326,7 @@ def Xform "SandboxScene"
             rel physics:body0 = </SandboxScene/Ackermann_Physical_1>
             rel physics:body1 = </SandboxScene/Ackermann_Physical_1/Wheel_RL>
             uniform token physics:axis = "X"
-            point3f physics:localPos0 = (-1.0, -0.15, -1.225)
+            point3f physics:localPos0 = (-0.9, -0.65, -1.225)
             point3f physics:localPos1 = (0, 0, 0)
             float drive:angular:physics:maxForce = 12000.0
             uniform token drive:angular:physics:type = "force"
@@ -296,7 +338,7 @@ def Xform "SandboxScene"
             rel physics:body0 = </SandboxScene/Ackermann_Physical_1>
             rel physics:body1 = </SandboxScene/Ackermann_Physical_1/Wheel_RR>
             uniform token physics:axis = "X"
-            point3f physics:localPos0 = (1.0, -0.15, 1.225)
+            point3f physics:localPos0 = (0.9, -0.65, -1.225)
             point3f physics:localPos1 = (0, 0, 0)
             float drive:angular:physics:maxForce = 12000.0
             uniform token drive:angular:physics:type = "force"

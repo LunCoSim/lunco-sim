@@ -41,6 +41,9 @@ def Xform "SkidRover" (
 
 
     # Chassis collider + visual — 2.0 m × 0.3 m × 3.5 m.
+    # Base geometry for raycast instances; the joint-based PHYSICAL
+    # instances override the wheels to sit below the chassis (no
+    # overlap) — see `sandbox_scene.usda`.
     def Cube "Chassis" (
         kind = "subcomponent"
         prepend apiSchemas = ["PhysicsCollisionAPI"]

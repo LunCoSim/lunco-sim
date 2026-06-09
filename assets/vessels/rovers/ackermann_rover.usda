@@ -8,6 +8,12 @@
 # Base Ackermann-Steer Rover — same Xform-root + child-Chassis form
 # as `skid_rover.usda` (see that file's header comment for the
 # rationale). Chassis: 2.0 m × 0.3 m × 3.5 m. Mass: 1000 kg.
+#
+# This BASE geometry serves the raycast (visual-only-wheel) instances.
+# The joint-based PHYSICAL instances (`*_Physical_*` in the scene)
+# override the wheel transforms to drop the wheels fully BELOW the
+# chassis collider (a proper no-overlap model needed for the real
+# steering-knuckle joints) — see `sandbox_scene.usda`.
 
 def Xform "AckermannRover" (
     kind = "component"

@@ -66,7 +66,7 @@ def Cylinder "Wheel" (
     # with I = ½·m·r² (from physics:mass + physxVehicleWheel:radius). The motor
     # is a constant-torque source up to maxRotationSpeed; bearing drag is derived
     # so a free (airborne) wheel terminates at maxRotationSpeed.
-    float physxVehicleEngine:peakTorque = 2000.0          # N·m drive authority at full throttle → contact force F = peakTorque/radius (see MotorActuator). Applied at the hub (not contact) so the nose-up traction pitch stays low even at this authority. Paired with LOW wheel damping in setup_physical_wheel so the force drives efficiently instead of being eaten by wheel drag. Asset-tunable: raise for more speed, the hub-apply keeps pitch in check.
+    float physxVehicleEngine:peakTorque = 300.0           # N·m axle drive torque at full throttle. Joint rovers: applied to the wheel about its axle (see MotorActuator); the wheel↔ground friction propels the rover (real physics drive). Kept modest so (a) it doesn't exceed the tyre's friction-limited traction (μ·N·r ≈ 340 N·m on the Moon) and spin the wheels, and (b) its reaction couple can't wheelie the chassis. Raycast rovers reuse it as their traction force. Asset-tunable: raise with wheel friction for more speed.
     float physxVehicleEngine:maxRotationSpeed = 60.0      # rad/s free-spin (no-load) cap
     float physxVehicleWheel:maxBrakeTorque = 1500.0       # N·m brake authority (locks the wheel → skid)
     float physxVehicleTire:longitudinalStiffness = 8000.0 # N per (m/s) of contact slip
