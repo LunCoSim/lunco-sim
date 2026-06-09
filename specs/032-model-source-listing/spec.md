@@ -167,4 +167,4 @@ For tracking and review, implementation lands in six PR-sized phases:
 - **P3** — `list_twin` provider with pagination.
 - **P4** — `list_msl` provider + `msl_status` + `MslLoadFlag` AtomicBool.
 - **P5** — `OpenFile` `bundled://` scheme support + unified `Open(uri)` dispatcher.
-- **P6** — MCP typed tool wrappers in `mcp/src/index.js` + docs updates (`mcp/README.md`, `docs/api.md`, this spec's status → Implemented).
+- **P6** — MCP typed tool wrappers in `mcp/src/index.js` + docs updates (`mcp/README.md`, `docs/architecture/12-api.md`, this spec's status → Implemented).

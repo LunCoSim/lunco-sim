@@ -179,7 +179,7 @@ impl Plugin for ModelicaCommandsPlugin {
 }
 ```
 
-`register_commands!()` collapses a per-observer `__register_on_X(app)` boilerplate cascade into a single function call. Adding a new typed command is a three-line change: struct + observer + one entry in the list. (A future change to make commands self-register and drop the list entirely is tracked in `docs/api.md` → "TBD: grouped self-submitting command registration".)
+`register_commands!()` collapses a per-observer `__register_on_X(app)` boilerplate cascade into a single function call. Adding a new typed command is a three-line change: struct + observer + one entry in the list. (A future change to make commands self-register and drop the list entirely is tracked in `docs/architecture/12-api.md` → "TBD: grouped self-submitting command registration".)
 
 ### Field types
 

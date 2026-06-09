@@ -71,6 +71,6 @@ The simulation core (`lunco-celestial`, `lunco-core`) has NO dependency on `lunc
 
 ## Technical Reference
 
-- [**CLI Reference**](cli-reference.md) — Command-line tool reference (flags, actions, usage).
-- [**API Documentation**](api.md) — Detailed list of API endpoints, typed commands, and queries.
-- [**Crates Index**](crates-index.md) — Navigation guide for the workspace structure.
+- [**Application Guide**](../README.md#application-guide) — How to run the various binaries and tools.
+- [**API Documentation**](12-api.md) — Detailed list of API endpoints, typed commands, and queries.
+- [**Crates Index**](../crates-index.md) — Navigation guide for the workspace structure.

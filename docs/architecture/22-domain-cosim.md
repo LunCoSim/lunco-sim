@@ -61,7 +61,7 @@ the hot loop for no benefit. Commands gate the run; the loop then runs free
 ticks autonomously thereafter).
 
 The **control plane** is typed commands (see AGENTS.md § 4.2 and
-[`../api.md`](../api.md)). It owns discrete, occasional intents only:
+[`12-api.md`](12-api.md)). It owns discrete, occasional intents only:
 
 | Plane | Examples | Mechanism |
 |---|---|---|

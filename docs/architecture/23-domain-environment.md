@@ -80,4 +80,4 @@ input name. Not yet implemented.
 - [`22-domain-cosim.md`](22-domain-cosim.md) — where the injection happens
 - [`../../crates/lunco-celestial/`](../../crates/lunco-celestial/) — celestial bodies and their providers
 - `specs/018-astronomical-environment` — detailed environment spec
-- Legacy `../gravity-architecture.md` — older gravity architecture doc (to be retired)
+- Superseded: [`research/gravity-architecture.md`](research/gravity-architecture.md) — older gravity architecture doc (retired)

@@ -190,7 +190,7 @@ file in Dymola, edit a `.usda` file in USDView, etc.).
 ### Collaboration (future)
 
 The Op-based edit model sets us up for Nucleus-tier network sync later.
-See [30-collab-roadmap.md](30-collab-roadmap.md) when it's written.
+See [90-collab-roadmap.md](90-collab-roadmap.md) when it's written.
 
 ## 7. Roadmap orientation
 
