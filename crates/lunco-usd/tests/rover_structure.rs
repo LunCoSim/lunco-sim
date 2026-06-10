@@ -8,8 +8,36 @@ use lunco_usd_bevy::*;
 use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
+use lunco_materials::ShaderMaterial;
 use avian3d::prelude::*;
 use lunco_fsw::FlightSoftware;
+
+/// The rover root carries `PhysicsRigidBodyAPI`, so avian builds a
+/// `Collider::compound` from its child colliders (the Chassis cuboid) — a
+/// compound-of-one is NOT `as_cuboid()`. Extract the single cuboid's
+/// half-extents whether the collider is a plain cuboid or that compound.
+fn cuboid_half_extents(col: &Collider) -> [f32; 3] {
+    let shape = col.shape();
+    if let Some(c) = shape.as_cuboid() {
+        return [c.half_extents.x as f32, c.half_extents.y as f32, c.half_extents.z as f32];
+    }
+    if let Some(compound) = shape.as_compound() {
+        if let Some(c) = compound.shapes().first().and_then(|(_, s)| s.as_cuboid()) {
+            return [c.half_extents.x as f32, c.half_extents.y as f32, c.half_extents.z as f32];
+        }
+    }
+    panic!("collider is neither a cuboid nor a compound-of-cuboid: {:?}", shape.shape_type());
+}
+
+/// After the Xform-root refactor the visible body mesh lives on the Chassis
+/// CHILD, not the rover root (an `Xform`). Return that Chassis child entity.
+fn chassis_child(app: &App, rover: Entity, label: impl std::fmt::Display) -> Entity {
+    let kids = app.world().get::<Children>(rover)
+        .unwrap_or_else(|| panic!("{label}: rover missing Children"));
+    kids.iter()
+        .find(|&c| app.world().get::<Name>(c).map(|n| n.as_str().contains("Chassis")).unwrap_or(false))
+        .unwrap_or_else(|| panic!("{label}: rover has no Chassis child"))
+}
 use lunco_core::{Vessel, RoverVessel};
 use std::sync::Arc;
 use std::path::Path;
@@ -28,6 +56,8 @@ fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
     app.init_asset::<Mesh>();
     app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
+    app.init_asset::<ShaderMaterial>();
+    app.init_asset::<bevy::shader::Shader>();
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
     let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
@@ -79,17 +109,18 @@ fn test_all_rover_files_match_procedural() {
         let ad = app.world().get::<AngularDamping>(rover).expect(&format!("{label}: missing AngularDamping"));
         assert!((ad.0 - 2.0).abs() < 0.1, "{label}: AngularDamping ~2.0");
 
-        // Collider
+        // Collider (compound-of-one cuboid built from the Chassis child)
         let col = app.world().get::<Collider>(rover).expect(&format!("{label}: missing Collider"));
-        let c = col.shape().as_cuboid().expect(&format!("{label}: Collider must be cuboid"));
-        assert!((c.half_extents.x - 1.0).abs() < 0.1, "{label}: hx ~1.0");
-        assert!((c.half_extents.y - 0.15).abs() < 0.05, "{label}: hy ~0.15");
-        assert!((c.half_extents.z - 1.75).abs() < 0.1, "{label}: hz ~1.75");
+        let he = cuboid_half_extents(col);
+        assert!((he[0] - 1.0).abs() < 0.1, "{label}: hx ~1.0, got {}", he[0]);
+        assert!((he[1] - 0.15).abs() < 0.05, "{label}: hy ~0.15, got {}", he[1]);
+        assert!((he[2] - 1.75).abs() < 0.1, "{label}: hz ~1.75, got {}", he[2]);
 
-        // Visual
-        assert!(app.world().get::<Mesh3d>(rover).is_some(), "{label}: missing Mesh3d (body invisible!)");
-        assert!(app.world().get::<MeshMaterial3d<StandardMaterial>>(rover).is_some(),
-            "{label}: missing MeshMaterial3d (body invisible!)");
+        // Visual — body mesh + material live on the Chassis child.
+        let chassis = chassis_child(&app, rover, &label);
+        assert!(app.world().get::<Mesh3d>(chassis).is_some(), "{label}: Chassis missing Mesh3d (body invisible!)");
+        assert!(app.world().get::<MeshMaterial3d<StandardMaterial>>(chassis).is_some(),
+            "{label}: Chassis missing MeshMaterial3d (body invisible!)");
 
         // Steering: Skid has DifferentialDrive, Ackermann has AckermannSteer
         if file.contains("ackermann") {
@@ -123,7 +154,10 @@ fn test_all_rover_files_match_procedural() {
 
         assert_eq!(wheels.len(), 4, "{label}: must have 4 wheel children, got {}", wheels.len());
 
-        let expected_rot = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        // Wheels author `axis = "X"`, so the visual child carries the
+        // cylinder-axis rotation `from_rotation_arc(Y, X)` (= −90° about Z;
+        // the live log shows `Quat(0,0,-0.707,0.707)`).
+        let expected_rot = Quat::from_rotation_arc(Vec3::Y, Vec3::X);
         let expected_positions = [
             ("Wheel_FL", Vec3::new(-1.0, -0.15, 1.225)),
             ("Wheel_FR", Vec3::new(1.0, -0.15, 1.225)),

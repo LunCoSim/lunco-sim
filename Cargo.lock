@@ -7190,6 +7190,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-fsw",
+ "lunco-materials",
  "lunco-mobility",
  "lunco-storage",
  "lunco-theme",
