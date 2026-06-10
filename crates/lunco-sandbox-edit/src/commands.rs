@@ -1773,3 +1773,161 @@ mod pose_write_tests {
         );
     }
 }
+
+/// **Throwaway probe — PREDICT_AND_SMOOTH_TODO Step 1.1.** Confirms avian 0.6.1
+/// kinematic semantics before we commit to velocity-driven remote proxies
+/// (`drive_kinematic_proxies`). Two questions the whole Step-1 design rides on:
+///
+///  * **P1** — a `Kinematic` body with `LinearVelocity = v` advances `Position`
+///    by exactly `v·h` per fixed tick. If true we can steer a proxy purely by
+///    *setting velocity* each tick (`v = (target − pos)/h`) instead of teleporting
+///    its Transform, so its motion is a real velocity the solver knows about.
+///  * **P2** — that velocity **enters contact resolution**: a kinematic body
+///    moving into a `Dynamic` body *pushes* it. This is the payoff — a remote
+///    rover proxy driven by velocity will shove a locally-predicted prop (ball /
+///    crate) crisply in the same frame, instead of interpenetrating and being
+///    resolved by overlap-pushout alone (the source of the contact buzz).
+///
+/// Runs the real solver headlessly (no window) with `SubstepCount(12)` to match
+/// the app. Deterministic stepping via [`TimeUpdateStrategy::ManualDuration`] so
+/// each `app.update()` is exactly one fixed tick. **Delete this whole module once
+/// Step 1 lands** — it asserts platform behavior, not our code.
+#[cfg(test)]
+mod avian_kinematic_probe {
+    use super::*;
+    use avian3d::prelude::{Collider, Gravity, PhysicsPlugins, SubstepCount};
+    use bevy::asset::AssetApp;
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
+
+    const HZ: f64 = 64.0;
+    const H: f64 = 1.0 / HZ;
+
+    fn headless_physics_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::transform::TransformPlugin)
+            // avian's collider cache touches Mesh assets + `AssetEvent<Mesh>`;
+            // register them so its systems' message readers validate headless.
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<bevy::mesh::Mesh>()
+            // avian's `bevy_diagnostic`/`debug-plugin` features insert their
+            // diagnostics resources (e.g. `ColliderTreeDiagnostics`) only when
+            // bevy's `DiagnosticsPlugin` is present.
+            .add_plugins(bevy::diagnostic::DiagnosticsPlugin)
+            .add_plugins(PhysicsPlugins::default())
+            .insert_resource(SubstepCount(12))
+            // No gravity — isolate kinematic integration / contact push from fall.
+            .insert_resource(Gravity(avian3d::math::Vector::ZERO))
+            // Fixed step == H, and advance virtual time by exactly H per update:
+            // one — and only one — physics tick per `app.update()`, no wall clock.
+            .insert_resource(Time::<Fixed>::from_hz(HZ))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(H)));
+        // `app.run()` calls these; bare `app.update()` does not. avian inserts its
+        // diagnostics resources (`ColliderTreeDiagnostics`, …) in `finish`.
+        app.finish();
+        app.cleanup();
+        app
+    }
+
+    fn step(app: &mut App, ticks: usize) {
+        for _ in 0..ticks {
+            app.update();
+        }
+    }
+
+    /// P1: a kinematic body advances `Position` by exactly `v·h` **per fixed
+    /// tick**. Measured as the steady-state delta across a span of K ticks (after
+    /// a few warmup ticks) — this isolates the per-tick integration rate and
+    /// sidesteps the one-tick spawn/prepare lag (the first `update()` syncs
+    /// Transform→Position without integrating, so absolute Position == v·h·(N−1)).
+    /// The per-tick *rate* is the invariant `drive_kinematic_proxies` relies on.
+    #[test]
+    fn kinematic_advances_position_by_v_times_h() {
+        let mut app = headless_physics_app();
+        let v = avian3d::math::Vector::new(2.0, 0.0, 0.0); // 2 m/s +x
+        let e = app
+            .world_mut()
+            .spawn((
+                RigidBody::Kinematic,
+                Position::default(),
+                Rotation::default(),
+                LinearVelocity(v),
+                AngularVelocity::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+
+        step(&mut app, 4); // warmup past the spawn/prepare tick
+        let p0 = app.world().entity(e).get::<Position>().unwrap().0;
+        let k = 10;
+        step(&mut app, k);
+        let p1 = app.world().entity(e).get::<Position>().unwrap().0;
+
+        let expected = v * (H * k as f64);
+        // Tolerance ~1e-6 m: `SubstepCount(12)` splits h into integer-nanosecond
+        // substeps (15625000/12 truncates), losing ~4 ns/tick → ~8 nm/tick of
+        // integrated time. So the advance is v·h modulo that substep rounding —
+        // exact for our purposes (nanometres over a 60 Hz tick).
+        assert!(
+            ((p1 - p0) - expected).length() < 1e-6,
+            "P1: kinematic should advance v·h per tick; {k}-tick delta expected \
+             {expected:?}, got {:?}",
+            p1 - p0
+        );
+    }
+
+    /// P2: a kinematic pusher moving +x, starting *clear* of a dynamic target,
+    /// drives that target +x once it makes contact (and the target gains +x
+    /// velocity). Starting separated rules out penetration-recovery as the cause.
+    #[test]
+    fn kinematic_velocity_pushes_dynamic_body() {
+        let mut app = headless_physics_app();
+        // Two unit spheres (r=0.5 → contact at centre-distance 1.0). Pusher at x=0
+        // moving +x at 3 m/s; target at x=1.2 (0.2 m clear gap). Over 30 ticks the
+        // pusher travels ~1.4 m, so it reaches and shoves the target.
+        let _pusher = app
+            .world_mut()
+            .spawn((
+                RigidBody::Kinematic,
+                Collider::sphere(0.5),
+                Position(avian3d::math::Vector::new(0.0, 0.0, 0.0)),
+                Rotation::default(),
+                LinearVelocity(avian3d::math::Vector::new(3.0, 0.0, 0.0)),
+                AngularVelocity::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let target = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Collider::sphere(0.5),
+                Position(avian3d::math::Vector::new(1.2, 0.0, 0.0)),
+                Rotation::default(),
+                LinearVelocity::default(),
+                AngularVelocity::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+
+        let x0 = app.world().entity(target).get::<Position>().unwrap().0.x;
+        step(&mut app, 30);
+        let pos = app.world().entity(target).get::<Position>().unwrap().0;
+        let vel = app.world().entity(target).get::<LinearVelocity>().unwrap().0;
+
+        assert!(
+            pos.x > x0 + 0.1,
+            "P2: kinematic pusher should drive the dynamic target +x via contact; \
+             x0={x0}, now={}",
+            pos.x
+        );
+        assert!(
+            vel.x > 0.0,
+            "P2: dynamic target should gain +x velocity from the kinematic contact; got {vel:?}"
+        );
+    }
+}
