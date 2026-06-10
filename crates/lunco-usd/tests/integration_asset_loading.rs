@@ -7,9 +7,36 @@ use lunco_usd_bevy::*;
 use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
+use lunco_materials::ShaderMaterial;
 use lunco_core::{Vessel, RoverVessel};
 use lunco_fsw::FlightSoftware;
-use lunco_usd_composer::UsdComposer;
+
+/// The rover root carries `PhysicsRigidBodyAPI`, so avian builds a
+/// `Collider::compound` from its child colliders (the Chassis cuboid) — a
+/// compound-of-one is NOT `as_cuboid()`. Extract the single cuboid's
+/// half-extents whether the collider is a plain cuboid or that compound.
+fn cuboid_half_extents(col: &Collider) -> [f32; 3] {
+    let shape = col.shape();
+    if let Some(c) = shape.as_cuboid() {
+        return [c.half_extents.x as f32, c.half_extents.y as f32, c.half_extents.z as f32];
+    }
+    if let Some(compound) = shape.as_compound() {
+        if let Some(c) = compound.shapes().first().and_then(|(_, s)| s.as_cuboid()) {
+            return [c.half_extents.x as f32, c.half_extents.y as f32, c.half_extents.z as f32];
+        }
+    }
+    panic!("collider is neither a cuboid nor a compound-of-cuboid: {:?}", shape.shape_type());
+}
+
+/// After the Xform-root refactor the visible body mesh lives on the Chassis
+/// CHILD, not the rover root (an `Xform`). Return that Chassis child entity.
+fn chassis_child(app: &App, rover: Entity, label: impl std::fmt::Display) -> Entity {
+    let kids = app.world().get::<Children>(rover)
+        .unwrap_or_else(|| panic!("{label}: rover missing Children"));
+    kids.iter()
+        .find(|&c| app.world().get::<Name>(c).map(|n| n.as_str().contains("Chassis")).unwrap_or(false))
+        .unwrap_or_else(|| panic!("{label}: rover has no Chassis child"))
+}
 use openusd::usda::TextReader;
 use openusd::sdf::{AbstractData, Path as SdfPath};
 use avian3d::prelude::*;
@@ -24,14 +51,10 @@ use std::path::Path;
 fn compose_asset_from_file(file_path: &Path) -> TextReader {
     let raw = std::fs::read_to_string(file_path)
         .unwrap_or_else(|e| panic!("Missing file: {}\n{}", file_path.display(), e));
-    let mut parser = openusd::usda::parser::Parser::new(&raw);
-    let data = parser.parse()
-        .unwrap_or_else(|e| panic!("Invalid USD: {}\n{}", file_path.display(), e));
-    let reader = TextReader::from_data(data);
-    // Use the file's parent directory as base for resolving relative references
+    // Use the file's parent directory as base for resolving relative references.
     let base_dir = file_path.parent().unwrap_or(Path::new("."));
-    UsdComposer::flatten(&reader, base_dir)
-        .unwrap_or_else(|e| panic!("Composition failed for {}:\n{}", file_path.display(), e))
+    compose_native_fs(&raw, base_dir)
+        .unwrap_or_else(|| panic!("Composition failed for {}", file_path.display()))
 }
 
 // ============================================================
@@ -71,22 +94,19 @@ fn test_sandbox_scene_composes() {
     // Ground
     let ground = SdfPath::new("/SandboxScene/Ground").unwrap();
     assert!(reader.has_spec(&ground), "Ground must exist");
-    let w: f64 = reader.prim_attribute_value(&ground, "width").expect("Ground width");
-    let h: f64 = reader.prim_attribute_value(&ground, "height").expect("Ground height");
-    let d: f64 = reader.prim_attribute_value(&ground, "depth").expect("Ground depth");
-    assert!((w - 4000.0).abs() < 1.0, "Ground width ~4000, got {w}");
-    assert!((h - 0.2).abs() < 0.05, "Ground height ~0.2, got {h}");
-    assert!((d - 4000.0).abs() < 1.0, "Ground depth ~4000, got {d}");
+    // Ground/Ramp dimensions are authored as unit `size` + `xformOp:scale`.
+    let g: [f64; 3] = reader.prim_attribute_value(&ground, "xformOp:scale").expect("Ground scale");
+    assert!((g[0] - 4000.0).abs() < 1.0, "Ground width ~4000, got {}", g[0]);
+    assert!((g[1] - 0.2).abs() < 0.05, "Ground height ~0.2, got {}", g[1]);
+    assert!((g[2] - 4000.0).abs() < 1.0, "Ground depth ~4000, got {}", g[2]);
 
     // Ramp
     let ramp = SdfPath::new("/SandboxScene/Ramp").unwrap();
     assert!(reader.has_spec(&ramp), "Ramp must exist");
-    let rw: f64 = reader.prim_attribute_value(&ramp, "width").expect("Ramp width");
-    let rh: f64 = reader.prim_attribute_value(&ramp, "height").expect("Ramp height");
-    let rd: f64 = reader.prim_attribute_value(&ramp, "depth").expect("Ramp depth");
-    assert!((rw - 60.0).abs() < 1.0, "Ramp width ~60, got {rw}");
-    assert!((rh - 2.0).abs() < 0.05, "Ramp height ~2, got {rh}");
-    assert!((rd - 80.0).abs() < 1.0, "Ramp depth ~80, got {rd}");
+    let r: [f64; 3] = reader.prim_attribute_value(&ramp, "xformOp:scale").expect("Ramp scale");
+    assert!((r[0] - 60.0).abs() < 1.0, "Ramp width ~60, got {}", r[0]);
+    assert!((r[1] - 2.0).abs() < 0.05, "Ramp height ~2, got {}", r[1]);
+    assert!((r[2] - 80.0).abs() < 1.0, "Ramp depth ~80, got {}", r[2]);
 }
 
 // ============================================================
@@ -102,6 +122,8 @@ fn load_rover_through_bevy(file_path: &Path, prim_path: &str) -> App {
     app.init_asset::<Mesh>();
     app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
+    app.init_asset::<ShaderMaterial>();
+        app.init_asset::<bevy::shader::Shader>();
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
     let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
@@ -110,6 +132,14 @@ fn load_rover_through_bevy(file_path: &Path, prim_path: &str) -> App {
     app.world_mut().spawn((
         Name::new("TestRover"),
         UsdPrimPath { stage_handle: handle, path: prim_path.to_string() },
+        // Root needs a Transform + spatial/visibility bundle so the
+        // `instantiate_usd_prim` observer cascade spawns the wheel children
+        // (matches the runtime spawn + the passing `rover_structure` harness).
+        Transform::default(),
+        CellCoord::default(),
+        Visibility::Visible,
+        InheritedVisibility::default(),
+        ViewVisibility::default(),
     ));
 
     for _ in 0..10 { app.update(); }
@@ -155,24 +185,25 @@ fn test_rover_components_via_bevy_pipeline() {
             .unwrap_or_else(|| panic!("{label}: Missing AngularDamping"));
         assert!((ang_damp.0 - 2.0).abs() < 0.1, "{label}: AngularDamping must be ~2.0");
 
-        // Collider: USD stores FULL dimensions (2.0 x 0.3 x 3.5)
-        // Collider::cuboid(2.0, 0.3, 3.5) → half-extents: (1.0, 0.15, 1.75)
+        // Collider: USD chassis is 2.0 x 0.3 x 3.5 → half-extents (1.0, 0.15, 1.75).
+        // The rover root has PhysicsRigidBodyAPI, so avian wraps the chassis
+        // cuboid in a `Collider::compound`; `cuboid_half_extents` unwraps either.
         let col = app.world().get::<Collider>(rover_ent)
             .unwrap_or_else(|| panic!("{label}: Missing Collider"));
-        let cuboid = col.shape().as_cuboid()
-            .unwrap_or_else(|| panic!("{label}: Collider must be cuboid"));
-        assert!((cuboid.half_extents.x - 1.0).abs() < 0.1,
-            "{label}: Collider hx must be ~1.0 (width/2), got {}", cuboid.half_extents.x);
-        assert!((cuboid.half_extents.y - 0.15).abs() < 0.05,
-            "{label}: Collider hy must be ~0.15 (height/2), got {}", cuboid.half_extents.y);
-        assert!((cuboid.half_extents.z - 1.75).abs() < 0.1,
-            "{label}: Collider hz must be ~1.75 (depth/2), got {}", cuboid.half_extents.z);
+        let he = cuboid_half_extents(col);
+        assert!((he[0] - 1.0).abs() < 0.1,
+            "{label}: Collider hx must be ~1.0 (width/2), got {}", he[0]);
+        assert!((he[1] - 0.15).abs() < 0.05,
+            "{label}: Collider hy must be ~0.15 (height/2), got {}", he[1]);
+        assert!((he[2] - 1.75).abs() < 0.1,
+            "{label}: Collider hz must be ~1.75 (depth/2), got {}", he[2]);
 
-        // Visual (Mesh3d + material)
-        let mesh = app.world().get::<Mesh3d>(rover_ent)
-            .unwrap_or_else(|| panic!("{label}: Missing Mesh3d (body not visible!)"));
-        let _mat = app.world().get::<MeshMaterial3d<StandardMaterial>>(rover_ent)
-            .unwrap_or_else(|| panic!("{label}: Missing MeshMaterial3d (body not visible!)"));
+        // Visual (Mesh3d + material) — on the Chassis child, not the Xform root.
+        let chassis = chassis_child(&app, rover_ent, label);
+        let _mesh = app.world().get::<Mesh3d>(chassis)
+            .unwrap_or_else(|| panic!("{label}: Chassis Missing Mesh3d (body not visible!)"));
+        let _mat = app.world().get::<MeshMaterial3d<StandardMaterial>>(chassis)
+            .unwrap_or_else(|| panic!("{label}: Chassis Missing MeshMaterial3d (body not visible!)"));
 
         // Steering: Skid has DifferentialDrive, Ackermann has AckermannSteer
         if f.contains("ackermann") {
@@ -267,11 +298,8 @@ fn test_wheel_mesh_dimensions_after_composition() {
         let label = f;
 
         let raw = std::fs::read_to_string(&p).unwrap();
-        let mut parser = openusd::usda::parser::Parser::new(&raw);
-        let data = parser.parse().unwrap();
-        let reader = TextReader::from_data(data);
-        let composed = UsdComposer::flatten(&reader, Path::new("../../assets/"))
-            .unwrap_or_else(|e| panic!("{label} composition failed: {e}"));
+        let composed = compose_native_fs(&raw, p.parent().unwrap())
+            .unwrap_or_else(|| panic!("{label} composition failed"));
 
         for w_name in &["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
             let wp = SdfPath::new(&format!("/{}/{}", rover_name, w_name)).unwrap();
@@ -310,11 +338,8 @@ fn test_rover_sim_processing_after_async_load() {
         let label = f;
 
         let raw = std::fs::read_to_string(&p).unwrap();
-        let mut parser = openusd::usda::parser::Parser::new(&raw);
-        let data = parser.parse().unwrap();
-        let reader = TextReader::from_data(data);
-        let composed = UsdComposer::flatten(&reader, p.parent().unwrap())
-            .unwrap_or_else(|e| panic!("{label} composition failed: {e}"));
+        let composed = compose_native_fs(&raw, p.parent().unwrap())
+            .unwrap_or_else(|| panic!("{label} composition failed"));
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -323,6 +348,8 @@ fn test_rover_sim_processing_after_async_load() {
         app.init_asset::<Mesh>();
         app.init_asset::<StandardMaterial>();
         app.init_asset::<Image>();
+        app.init_asset::<ShaderMaterial>();
+        app.init_asset::<bevy::shader::Shader>();
         app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
         // Add stage asset directly (synchronously, like tests do)
@@ -332,6 +359,13 @@ fn test_rover_sim_processing_after_async_load() {
         app.world_mut().spawn((
             Name::new("TestRover"),
             UsdPrimPath { stage_handle: handle, path: rover_path.to_string() },
+            // Root needs Transform + spatial/visibility bundle so the wheel
+            // children spawn through the observer cascade (see runtime spawn).
+            Transform::default(),
+            CellCoord::default(),
+            Visibility::Visible,
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
         ));
 
         // Run update loop - sim processing happens in Update systems
@@ -385,12 +419,8 @@ fn test_rover_schema_detection_after_composition() {
         let label = f;
 
         let raw = std::fs::read_to_string(&p).unwrap();
-        let mut parser = openusd::usda::parser::Parser::new(&raw);
-        let data = parser.parse()
-            .unwrap_or_else(|e| panic!("{label}: Invalid USD: {e}"));
-        let reader = TextReader::from_data(data);
-        let composed = UsdComposer::flatten(&reader, Path::new("../../assets/"))
-            .unwrap_or_else(|e| panic!("{label} composition failed: {e}"));
+        let composed = compose_native_fs(&raw, p.parent().unwrap())
+            .unwrap_or_else(|| panic!("{label} composition failed"));
 
         let rover_path = SdfPath::new(&format!("/{}", rover_name)).unwrap();
         assert!(composed.has_spec(&rover_path), "{label}: /{} must exist", rover_name);
@@ -453,6 +483,16 @@ fn test_full_scene_loads_with_rovers() {
     app.init_asset::<Mesh>();
     app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
+    // The scene references the Perseverance glTF, which the loader hands to
+    // `AssetServer::load::<Scene>` — register the Scene asset so handle
+    // allocation doesn't panic in this minimal harness.
+    app.init_asset::<Scene>();
+    app.init_asset::<ShaderMaterial>();
+    app.init_asset::<bevy::shader::Shader>();
+    // Physical rovers create revolute joints whose `JointCollisionDisabled`
+    // hook reads avian's `JointGraph` resource — without the physics plugins
+    // it panics. (The single-rover tests use raycast wheels, so they don't.)
+    app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
     // Spawn scene — rovers come from scene references
@@ -462,6 +502,7 @@ fn test_full_scene_loads_with_rovers() {
         Name::new("TestScene"),
         UsdPrimPath { stage_handle: scene_handle.clone(), path: "/SandboxScene".to_string() },
         Transform::default(),
+        CellCoord::default(),
         Visibility::Visible,
         InheritedVisibility::default(),
         ViewVisibility::default(),
@@ -497,10 +538,14 @@ fn test_full_scene_loads_with_rovers() {
     let physical_count = q_physical.iter(app.world()).count();
     assert_eq!(physical_count, 8, "2 physical rovers x 4 wheels = 8, got {physical_count}");
 
-    // All rovers must have Mesh3d (visible body)
-    let mut q_mesh = app.world_mut().query_filtered::<Entity, (With<Vessel>, With<RoverVessel>, With<Mesh3d>)>();
-    let visible_count = q_mesh.iter(app.world()).count();
-    assert_eq!(visible_count, 5, "All 5 rovers must have Mesh3d (visible), got {visible_count}");
+    // All 5 rovers must show a visible body — the Chassis CHILD carries the
+    // Mesh3d (the rover root is an Xform after the Xform-root refactor).
+    let mut q_rovers2 = app.world_mut().query_filtered::<Entity, (With<Vessel>, With<RoverVessel>)>();
+    let rover_ents: Vec<Entity> = q_rovers2.iter(app.world()).collect();
+    let visible_count = rover_ents.iter()
+        .filter(|&&r| app.world().get::<Mesh3d>(chassis_child(&app, r, "scene")).is_some())
+        .count();
+    assert_eq!(visible_count, 5, "All 5 rovers' Chassis must have Mesh3d (visible), got {visible_count}");
 
     // Verify rovers have scene paths (from references) not standalone paths
     let rover_paths: Vec<_> = rover_info.iter().map(|(_, p)| p.as_str()).collect();
@@ -534,17 +579,15 @@ fn test_valentine_color_override() {
     let scene_path = Path::new("../../assets/scenes/sandbox/sandbox_scene.usda");
     let composed = compose_asset_from_file(scene_path);
 
-    // Verify Skid_Raycast_1 prim exists and has the override color
-    let rover_path = SdfPath::new("/SandboxScene/Skid_Raycast_1").unwrap();
-    assert!(composed.has_spec(&rover_path), "Skid_Raycast_1 prim must exist");
+    // The per-instance colour override is authored as `over "Chassis" {
+    // displayColor }` — i.e. on the Chassis CHILD, not the rover root.
+    let chassis = SdfPath::new("/SandboxScene/Skid_Raycast_1/Chassis").unwrap();
+    assert!(composed.has_spec(&chassis), "Skid_Raycast_1/Chassis prim must exist");
 
-    // The local prim should have the override color
-    if let Some(display_color) = composed.prim_attribute_value::<Vec<f32>>(&rover_path, "primvars:displayColor") {
-        assert_eq!(display_color.len(), 3, "Color must have 3 components");
-        assert!((display_color[0] - 0.8).abs() < 0.01, "Red should be 0.8, got {}", display_color[0]);
-        assert!((display_color[1] - 0.2).abs() < 0.01, "Green should be 0.2, got {}", display_color[1]);
-        assert!((display_color[2] - 0.2).abs() < 0.01, "Blue should be 0.2, got {}", display_color[2]);
-    } else {
-        panic!("Skid_Raycast_1 prim must have primvars:displayColor override");
-    }
+    let display_color = composed
+        .prim_attribute_value::<[f32; 3]>(&chassis, "primvars:displayColor")
+        .expect("Skid_Raycast_1/Chassis must have the composed displayColor override");
+    assert!((display_color[0] - 0.8).abs() < 0.01, "Red should be 0.8, got {}", display_color[0]);
+    assert!((display_color[1] - 0.2).abs() < 0.01, "Green should be 0.2, got {}", display_color[1]);
+    assert!((display_color[2] - 0.2).abs() < 0.01, "Blue should be 0.2, got {}", display_color[2]);
 }

@@ -1,0 +1,96 @@
+#usda 1.0
+(
+    defaultPrim = "Drivetrain"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Shared JOINT-BASED drivetrain — referenced into the `physical` variant of
+# every rover (skid + ackermann) so the joint rig is authored ONCE.
+#
+# `Drivetrain` is a neutral stand-in for the rover root: it owns no wheels of
+# its own — it carries only `over` opinions (wheel drops) + the revolute joints
+# + the articulation-root schema. When a rover's `physical` variant references
+# this prim, the arc path-translates `</Drivetrain/...>` onto the rover root
+# (`</SkidRover/...>`); referencing that rover into a scene translates a second
+# time (`</SandboxScene/Skid_Physical_1/...>`). The wheel prims the `over`s and
+# joint targets point at are supplied by the rover, not here.
+#
+# PHYSICAL no-overlap model: wheels drop fully BELOW the chassis collider.
+# Chassis half-height 0.15 ⇒ bottom at y=-0.15; wheels at y=-0.65 (Ø0.8 → top
+# at y=-0.25) clear it by 0.10 m. Track ±0.9 keeps them under the 2.0 m body.
+# The wheel colliders never touch the body, so the joints stay stable without
+# relying on collision-disable.
+def Xform "Drivetrain" (
+    prepend apiSchemas = ["PhysicsArticulationRootAPI"]
+)
+{
+    over "Wheel_FL"
+    {
+        double3 xformOp:translate = (-0.9, -0.65, 1.225)
+    }
+    over "Wheel_FR"
+    {
+        double3 xformOp:translate = (0.9, -0.65, 1.225)
+    }
+    over "Wheel_RL"
+    {
+        double3 xformOp:translate = (-0.9, -0.65, -1.225)
+    }
+    over "Wheel_RR"
+    {
+        double3 xformOp:translate = (0.9, -0.65, -1.225)
+    }
+
+    # Each wheel is bound to the rover root by a `PhysicsRevoluteJoint` with a
+    # `PhysicsDriveAPI:angular` motor. Targets are authored against this file's
+    # `Drivetrain` root and translate onto the referencing rover.
+    def PhysicsRevoluteJoint "Wheel_FL_Hinge" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    )
+    {
+        rel physics:body0 = </Drivetrain>
+        rel physics:body1 = </Drivetrain/Wheel_FL>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (-0.9, -0.65, 1.225)
+        point3f physics:localPos1 = (0, 0, 0)
+        float drive:angular:physics:maxForce = 12000.0
+        uniform token drive:angular:physics:type = "force"
+    }
+    def PhysicsRevoluteJoint "Wheel_FR_Hinge" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    )
+    {
+        rel physics:body0 = </Drivetrain>
+        rel physics:body1 = </Drivetrain/Wheel_FR>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (0.9, -0.65, 1.225)
+        point3f physics:localPos1 = (0, 0, 0)
+        float drive:angular:physics:maxForce = 12000.0
+        uniform token drive:angular:physics:type = "force"
+    }
+    def PhysicsRevoluteJoint "Wheel_RL_Hinge" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    )
+    {
+        rel physics:body0 = </Drivetrain>
+        rel physics:body1 = </Drivetrain/Wheel_RL>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (-0.9, -0.65, -1.225)
+        point3f physics:localPos1 = (0, 0, 0)
+        float drive:angular:physics:maxForce = 12000.0
+        uniform token drive:angular:physics:type = "force"
+    }
+    def PhysicsRevoluteJoint "Wheel_RR_Hinge" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    )
+    {
+        rel physics:body0 = </Drivetrain>
+        rel physics:body1 = </Drivetrain/Wheel_RR>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (0.9, -0.65, -1.225)
+        point3f physics:localPos1 = (0, 0, 0)
+        float drive:angular:physics:maxForce = 12000.0
+        uniform token drive:angular:physics:type = "force"
+    }
+}

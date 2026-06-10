@@ -62,12 +62,17 @@ def Xform "Rover" {
 
     // 3. Manually spawn children to simulate what UsdBevyPlugin would do
     // (We skip UsdBevyPlugin's sync_visuals system to avoid asset dependencies)
+    // This test skips `UsdBevyPlugin` (no `instantiate_usd_prim`), so it
+    // stands in for that step by spawning the prim entities directly +
+    // marking them `UsdVisualSynced` — the trigger `process_usd_avian_prims`
+    // / `process_usd_sim_prims` observe to read physics from USD.
     let chassis = app.world_mut().spawn((
         Name::new("Chassis"),
         UsdPrimPath {
             stage_handle: stage_handle.clone(),
             path: "/Rover/Chassis".to_string(),
         },
+        UsdVisualSynced,
     )).id();
 
     // Create mesh handle first
@@ -84,6 +89,7 @@ def Xform "Rover" {
         },
         // Mesh3d is required for wheel processing (matches real pipeline behavior)
         Mesh3d(wheel_mesh_handle),
+        UsdVisualSynced,
     )).id();
 
     // 4. Run systems to process mapping

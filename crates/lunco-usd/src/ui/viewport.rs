@@ -678,28 +678,24 @@ fn rebuild_active_asset(world: &mut World) {
 
 /// Parse a `.usda` source string into a `TextReader`. When `base_dir`
 /// is provided, composition arcs (sublayers, references, payloads)
-/// are flattened via [`lunco_usd_composer::UsdComposer::flatten`] so
+/// are flattened via [`lunco_usd_bevy::compose_native_fs`] so
 /// referenced stages (`artemis_2.usda → orion.usda`) actually
 /// surface their geometry in the preview. Without a base dir
-/// (Untitled drafts, in-memory mem://), flatten can't resolve paths
-/// so we fall back to the raw root layer.
+/// (Untitled drafts, in-memory mem://) — or on wasm — flatten can't
+/// resolve paths so we fall back to the raw root layer.
 fn parse_reader(source: &str, base_dir: Option<&std::path::Path>) -> Option<TextReader> {
+    if let Some(dir) = base_dir {
+        if let Some(flat) = lunco_usd_bevy::compose_native_fs(source, dir) {
+            return Some(flat);
+        }
+        bevy::log::warn!(
+            "[UsdViewport] compose failed for {:?} — falling back to raw layer",
+            dir
+        );
+    }
     let mut parser = openusd::usda::parser::Parser::new(source);
     let data = parser.parse().ok()?;
-    let raw = TextReader::from_data(data);
-    match base_dir {
-        Some(dir) => match lunco_usd_composer::UsdComposer::flatten(&raw, dir) {
-            Ok(flat) => Some(flat),
-            Err(e) => {
-                bevy::log::warn!(
-                    "[UsdViewport] flatten failed for {:?}: {e} — falling back to raw layer",
-                    dir
-                );
-                Some(raw)
-            }
-        },
-        None => Some(raw),
-    }
+    Some(TextReader::from_data(data))
 }
 
 /// Resolve the directory that composition arcs resolve relative to —

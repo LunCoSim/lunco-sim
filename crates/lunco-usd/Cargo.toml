@@ -17,7 +17,6 @@ lunco-theme = { path = "../lunco-theme" }
 lunco-ui = { path = "../lunco-ui" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
-lunco-usd-composer = { path = "../lunco-usd-composer" }
 bevy_egui.workspace = true
 serde = { workspace = true }
 # `serde_json::Value` for the hot-exit `DocumentSnapshot.view_state`
@@ -29,6 +28,10 @@ avian3d = { workspace = true }
 big_space = { workspace = true }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-fsw = { path = "../lunco-fsw" }
+# Wheels author `primvars:materialType = "shader"`, so the headless
+# entity-pipeline tests must register `Assets<ShaderMaterial>` or
+# `process_usd_sim_prims` defers every wheel forever (no WheelRaycast).
+lunco-materials = { path = "../lunco-materials" }
 
 [lints]
 workspace = true

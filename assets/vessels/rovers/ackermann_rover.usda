@@ -7,13 +7,15 @@
 
 # Base Ackermann-Steer Rover — same Xform-root + child-Chassis form
 # as `skid_rover.usda` (see that file's header comment for the
-# rationale). Chassis: 2.0 m × 0.3 m × 3.5 m. Mass: 1000 kg.
+# rationale + the `drivetrain` variantSet contract). Chassis:
+# 2.0 m × 0.3 m × 3.5 m. Mass: 1000 kg.
 #
-# This BASE geometry serves the raycast (visual-only-wheel) instances.
-# The joint-based PHYSICAL instances (`*_Physical_*` in the scene)
-# override the wheel transforms to drop the wheels fully BELOW the
-# chassis collider (a proper no-overlap model needed for the real
-# steering-knuckle joints) — see `sandbox_scene.usda`.
+# Carries the `drivetrain` variantSet (raycast | physical):
+#   * `raycast` (fallback)  — visual-only wheels at ride height.
+#   * `physical`            — wheels dropped below the chassis and bound
+#     by per-wheel `PhysicsRevoluteJoint`s; front knuckles can castor the
+#     wheels without the colliders ever intersecting the body. Joint
+#     rel-targets are asset-local and translate through the reference arc.
 
 def Xform "AckermannRover" (
     kind = "component"
@@ -23,6 +25,10 @@ def Xform "AckermannRover" (
         "PhysxVehicleContextAPI",
         "PhysxVehicleDrive4WAPI"
     ]
+    prepend variantSets = "drivetrain"
+    variants = {
+        string drivetrain = "raycast"
+    }
 )
 {
     float physics:mass = 1000.0
@@ -40,6 +46,7 @@ def Xform "AckermannRover" (
         color3f primvars:displayColor = (0.8, 0.8, 0.8)
     }
 
+    # --- Wheels (authored at RAYCAST ride height; physical variant drops them) ---
     def Cylinder "Wheel_FL" (
         kind = "subcomponent"
         prepend references = @../../components/mobility/wheel.usda@</Wheel>
@@ -48,7 +55,6 @@ def Xform "AckermannRover" (
         uniform token axis = "X"
         double radius = 0.4
         double height = 0.3
-        double3 xformOp:translate = (-1.0, -0.15, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (1.0, 0.0, 0.0)
 
@@ -67,7 +73,6 @@ def Xform "AckermannRover" (
         uniform token axis = "X"
         double radius = 0.4
         double height = 0.3
-        double3 xformOp:translate = (1.0, -0.15, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (1.0, 0.0, 0.0)
 
@@ -86,7 +91,6 @@ def Xform "AckermannRover" (
         uniform token axis = "X"
         double radius = 0.4
         double height = 0.3
-        double3 xformOp:translate = (-1.0, -0.15, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (0.0, 0.0, 1.0)
 
@@ -105,7 +109,6 @@ def Xform "AckermannRover" (
         uniform token axis = "X"
         double radius = 0.4
         double height = 0.3
-        double3 xformOp:translate = (1.0, -0.15, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (0.0, 0.0, 1.0)
 
@@ -114,5 +117,21 @@ def Xform "AckermannRover" (
         float physxVehicleSuspension:restLength = 0.7
         float physxVehicleSuspension:springStiffness = 15000.0
         float physxVehicleSuspension:springDamping = 3000.0
+    }
+
+    # --- Drivetrain variant set (see skid_rover.usda for the contract) ---
+    # Both drivetrains are authored ONCE in shared mobility components and
+    # pulled in by reference; the arc path-translates their `over`/joint
+    # targets onto THIS rover's wheels + root.
+    variantSet "drivetrain" = {
+        "raycast" (
+            prepend references = @../../components/mobility/raycast_drivetrain.usda@</Drivetrain>
+        ) {
+        }
+
+        "physical" (
+            prepend references = @../../components/mobility/physical_drivetrain.usda@</Drivetrain>
+        ) {
+        }
     }
 }

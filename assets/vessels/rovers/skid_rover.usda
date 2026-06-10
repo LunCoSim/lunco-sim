@@ -20,9 +20,21 @@
 # Putting the chassis scale on the **child** `Chassis` keeps the
 # wheels at unit scale relative to the Xform root.
 #
-# Instantiate in scenes via reference + overrides:
-#   - double3 xformOp:translate         → set position
-#   - over "Chassis" { color3f primvars:displayColor = (...) } → per-instance colour
+# **`drivetrain` variantSet (raycast | physical)** — the standard
+# OpenUSD way to ship two locomotion models in one asset:
+#   * `raycast` (fallback)  — wheels are visual-only at ride height;
+#     the PhysX-style raycaster drives the body. No joints.
+#   * `physical`            — wheels drop fully BELOW the chassis and
+#     each is bound to the body by a `PhysicsRevoluteJoint` with a
+#     `PhysicsDriveAPI:angular` motor; the root gains
+#     `PhysicsArticulationRootAPI`. Joint rel-targets are **asset-local**
+#     (`</SkidRover/Wheel_FL>`) and translate through the reference arc
+#     when instanced in a scene.
+#
+# Instantiate in scenes via reference + variant selection + overrides:
+#   - variants = { string drivetrain = "physical" } → joint drivetrain
+#   - double3 xformOp:translate                     → set position
+#   - over "Chassis" { color3f primvars:displayColor = (...) } → colour
 
 def Xform "SkidRover" (
     kind = "component"
@@ -32,6 +44,10 @@ def Xform "SkidRover" (
         "PhysxVehicleContextAPI",
         "PhysxVehicleDriveSkidAPI"
     ]
+    prepend variantSets = "drivetrain"
+    variants = {
+        string drivetrain = "raycast"
+    }
 )
 {
     # Mass & damping live on the rigid body root.
@@ -41,9 +57,6 @@ def Xform "SkidRover" (
 
 
     # Chassis collider + visual — 2.0 m × 0.3 m × 3.5 m.
-    # Base geometry for raycast instances; the joint-based PHYSICAL
-    # instances override the wheels to sit below the chassis (no
-    # overlap) — see `sandbox_scene.usda`.
     def Cube "Chassis" (
         kind = "subcomponent"
         prepend apiSchemas = ["PhysicsCollisionAPI"]
@@ -56,6 +69,8 @@ def Xform "SkidRover" (
     }
 
     # --- Wheels (reference the reusable mobility component) ---
+    # Authored at RAYCAST ride height (y=-0.15). The `physical`
+    # variant drops them to y=-0.65 via `over` opinions.
     def Cylinder "Wheel_FL" (
         kind = "subcomponent"
         prepend references = @../../components/mobility/wheel.usda@</Wheel>
@@ -64,7 +79,6 @@ def Xform "SkidRover" (
         uniform token axis = "X"
         double radius = 0.4
         double height = 0.3
-        double3 xformOp:translate = (-1.0, -0.15, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (1.0, 0.0, 0.0)
 
@@ -83,7 +97,6 @@ def Xform "SkidRover" (
         uniform token axis = "X"
         double radius = 0.4
         double height = 0.3
-        double3 xformOp:translate = (1.0, -0.15, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (1.0, 0.0, 0.0)
 
@@ -102,7 +115,6 @@ def Xform "SkidRover" (
         uniform token axis = "X"
         double radius = 0.4
         double height = 0.3
-        double3 xformOp:translate = (-1.0, -0.15, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (0.0, 0.0, 1.0)
 
@@ -121,7 +133,6 @@ def Xform "SkidRover" (
         uniform token axis = "X"
         double radius = 0.4
         double height = 0.3
-        double3 xformOp:translate = (1.0, -0.15, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (0.0, 0.0, 1.0)
 
@@ -130,5 +141,23 @@ def Xform "SkidRover" (
         float physxVehicleSuspension:restLength = 0.7
         float physxVehicleSuspension:springStiffness = 15000.0
         float physxVehicleSuspension:springDamping = 3000.0
+    }
+
+    # --- Drivetrain variant set ---------------------------------------
+    # Both drivetrains are authored ONCE in shared mobility components and
+    # pulled into the variant by reference; the arc path-translates their
+    # `over`/joint targets onto THIS rover's wheels + root. `raycast` is the
+    # fallback (declared on the root above); `physical` additionally brings
+    # the articulation root + per-wheel revolute joints.
+    variantSet "drivetrain" = {
+        "raycast" (
+            prepend references = @../../components/mobility/raycast_drivetrain.usda@</Drivetrain>
+        ) {
+        }
+
+        "physical" (
+            prepend references = @../../components/mobility/physical_drivetrain.usda@</Drivetrain>
+        ) {
+        }
     }
 }

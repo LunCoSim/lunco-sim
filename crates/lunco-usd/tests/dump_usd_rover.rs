@@ -9,8 +9,6 @@ use lunco_usd_sim::*;
 use avian3d::prelude::*;
 use lunco_mobility::WheelRaycast;
 use lunco_fsw::FlightSoftware;
-use lunco_usd_composer::UsdComposer;
-use openusd::usda::TextReader;
 use std::sync::Arc;
 use std::path::Path;
 use big_space::prelude::CellCoord;
@@ -21,10 +19,7 @@ fn test_dump_usd_rover_state() {
         .join("assets/vessels/rovers/skid_rover.usda");
 
     let raw = std::fs::read_to_string(&usd_path).unwrap();
-    let mut parser = openusd::usda::parser::Parser::new(&raw);
-    let data = parser.parse().unwrap();
-    let reader = TextReader::from_data(data);
-    let composed = UsdComposer::flatten(&reader, usd_path.parent().unwrap()).unwrap();
+    let composed = compose_native_fs(&raw, usd_path.parent().unwrap()).expect("compose skid_rover");
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);

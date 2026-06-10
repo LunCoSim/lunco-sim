@@ -12,7 +12,6 @@ edition = "2021"
 # ruzstd choice already used by lunco-modelica).
 bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking", "tonemapping_luts", "zstd_rust"] }
 openusd = { workspace = true }
-lunco-usd-composer = { path = "../lunco-usd-composer" }
 lunco-core = { path = "../lunco-core" }
 big_space = { workspace = true }
 anyhow = { workspace = true }
