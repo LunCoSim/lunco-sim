@@ -159,9 +159,12 @@ pub fn force_kinematic_proxies(
         // Predict-own: the rover this client possesses (`OwnedLocally`) is
         // excluded — it runs its own avian step as a `Dynamic` body instead of
         // being pinned `Kinematic`, so its velocities are NOT zeroed here.
+        // Phase B: a free predicted prop (`PredictedDynamic`, e.g. a ball you
+        // bump) is likewise excluded — it runs local physics + state-reconcile.
         (
             With<lunco_core::NetReplicate>,
             Without<lunco_core::OwnedLocally>,
+            Without<lunco_core::PredictedDynamic>,
         ),
     >,
 ) {
@@ -307,9 +310,11 @@ pub fn interpolate_proxies(
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     buffers: Res<InterpBuffers>,
     // Predict-own: the possessed rover is locally simulated + smooth-corrected
-    // (`correct_owned_prediction`), so it must NOT be dragged back to the
-    // `INTERP_DELAY`-old interpolated pose here.
-    q_owned: Query<(), With<lunco_core::OwnedLocally>>,
+    // (`reconcile_owned_prediction`), so it must NOT be dragged back to the
+    // `INTERP_DELAY`-old interpolated pose here. Phase B: a free predicted prop
+    // (`PredictedDynamic`) is likewise locally simulated + state-reconciled, so it
+    // is excluded too.
+    q_local_sim: Query<(), Or<(With<lunco_core::OwnedLocally>, With<lunco_core::PredictedDynamic>)>>,
     mut q: Query<(
         &mut Transform,
         Option<&mut Position>,
@@ -362,8 +367,8 @@ pub fn interpolate_proxies(
         let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(*gid)) else {
             continue;
         };
-        if q_owned.contains(e) {
-            continue; // predict-own: my vessel is driven locally, not interpolated
+        if q_local_sim.contains(e) {
+            continue; // locally simulated (owned rover or predicted prop), not interpolated
         }
         let Ok((mut tf, pos, rot, motion)) = q.get_mut(e) else {
             continue;
@@ -712,6 +717,140 @@ pub fn reconcile_owned_prediction(
         }
         if let Some(mut a) = ang {
             a.0 = DVec3::new(auth_av.x as f64, auth_av.y as f64, auth_av.z as f64);
+        }
+    }
+}
+
+/// Client Phase B (`PREDICTION_MEMBERSHIP.md`): designate **runtime-spawned free
+/// dynamic props** (a ball / crate you bump with a rover) as
+/// [`lunco_core::PredictedDynamic`], so they run local physics + state-reconcile
+/// instead of being kinematic-pinned + interpolated — giving a crisp local
+/// rover↔prop collision in the same frame.
+///
+/// Restricting to [`lunco_core::SkipContentStamp`] (runtime spawns, D4
+/// `Authoritative`) is the **cosim guard**: balloons / `CosimTarget` are scene
+/// CONTENT (never `SkipContentStamp`), so they can't be caught here — and they
+/// must NOT be predicted, their motion is server-only (Gap C). Rovers
+/// (`RoverVessel`) and the possessed rover (`OwnedLocally`) are excluded too — they
+/// have their own paths. Flips the body to `Dynamic` (a freshly-spawned prop may
+/// already have been pinned `Kinematic` by `force_kinematic_proxies` the prior
+/// frame); a `Static` prop is left alone. Client-only.
+pub fn maintain_predicted_dynamic(
+    role: Res<lunco_core::NetworkRole>,
+    mut commands: Commands,
+    q_add: Query<
+        (Entity, &RigidBody),
+        (
+            With<lunco_core::NetReplicate>,
+            With<lunco_core::SkipContentStamp>,
+            Without<lunco_core::RoverVessel>,
+            Without<lunco_core::OwnedLocally>,
+            Without<lunco_core::PredictedDynamic>,
+            // §6 opaque guard: a cosim-driven body (server-only forces) is never
+            // locally computable, so it must never be predicted even if it somehow
+            // arrived as a runtime spawn. Belt-and-suspenders with the structural
+            // `SkipContentStamp` guard above (cosim props are scene content).
+            Without<lunco_core::NotPredictable>,
+        ),
+    >,
+    // If this peer later POSSESSES the prop, the owned (input-replay) path takes
+    // over — drop the free-body marker so the two reconcilers don't both act on it.
+    q_demote: Query<
+        Entity,
+        (
+            With<lunco_core::PredictedDynamic>,
+            With<lunco_core::OwnedLocally>,
+        ),
+    >,
+) {
+    if !matches!(*role, lunco_core::NetworkRole::Client) {
+        return;
+    }
+    for (e, rb) in q_add.iter() {
+        if matches!(*rb, RigidBody::Static) {
+            continue; // a static prop has no dynamics worth predicting
+        }
+        commands
+            .entity(e)
+            .insert((lunco_core::PredictedDynamic, RigidBody::Dynamic));
+    }
+    for e in q_demote.iter() {
+        commands.entity(e).remove::<lunco_core::PredictedDynamic>();
+    }
+}
+
+/// Client Phase B: **state-based** reconciliation for [`lunco_core::PredictedDynamic`]
+/// free props. Unlike the owned rover there is NO input `seq` to replay, so we
+/// compare the body's CURRENT pose directly against the latest authoritative
+/// snapshot — `predicted == current` in [`lunco_core::reconcile_decision`], which
+/// reduces the decision to "how far is the body from authority right now":
+/// `InSync` → leave the local physics alone (crisp contact); a small divergence
+/// eases in; a gross one snaps; velocity is seated to authoritative so it stops
+/// re-diverging.
+///
+/// Fires at most ONCE per new snapshot (tracked by host gen-time per gid), NOT
+/// every frame: between snapshots the prop runs free local physics. Nudging it
+/// every frame would collapse it onto the authoritative pose and destroy the very
+/// local-prediction crispness this exists to provide. `FixedPostUpdate` after
+/// avian writeback; no-op on host/standalone (no `PredictedDynamic`).
+pub fn reconcile_predicted_dynamic(
+    buffers: Res<InterpBuffers>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    q_pred: Query<&lunco_core::GlobalEntityId, With<lunco_core::PredictedDynamic>>,
+    mut q: Query<(
+        &mut Transform,
+        Option<&mut Position>,
+        Option<&mut Rotation>,
+        Option<&mut LinearVelocity>,
+        Option<&mut AngularVelocity>,
+    )>,
+    // Last host gen-time reconciled per gid, so we act once per fresh snapshot.
+    mut last_handled: Local<HashMap<u64, f64>>,
+) {
+    for gid in q_pred.iter() {
+        let g = gid.get();
+        let Some(sample) = buffers.0.get(&g).and_then(|b| b.back()).copied() else {
+            continue;
+        };
+        if last_handled.get(&g).is_some_and(|&t| t >= sample.gen_t) {
+            continue; // no fresh snapshot since last reconcile — let local physics run
+        }
+        last_handled.insert(g, sample.gen_t);
+        let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(g)) else {
+            continue;
+        };
+        let Ok((mut tf, pos, rot, lin, ang)) = q.get_mut(e) else {
+            continue;
+        };
+        let (new_pos, new_rot) = match lunco_core::reconcile_decision(
+            tf.translation,
+            tf.rotation,
+            tf.translation,
+            tf.rotation,
+            sample.pos,
+            sample.rot,
+            lunco_core::ReconcileParams::default(),
+        ) {
+            lunco_core::Reconciliation::InSync => continue,
+            lunco_core::Reconciliation::Correct { pos, rot } => (pos, rot),
+            lunco_core::Reconciliation::Snap { pos, rot } => (pos, rot),
+        };
+        tf.translation = new_pos;
+        tf.rotation = new_rot;
+        if let Some(mut p) = pos {
+            p.0 = DVec3::new(new_pos.x as f64, new_pos.y as f64, new_pos.z as f64);
+        }
+        // Write avian's f64 `Rotation` too, else writeback re-derives Transform from
+        // the stale `Rotation` next tick and clobbers the correction.
+        if let Some(mut r) = rot {
+            r.0 = new_rot.as_dquat();
+        }
+        // Seat velocity to authoritative so the prop stops re-diverging next tick.
+        if let Some(mut l) = lin {
+            l.0 = DVec3::new(sample.lv.x as f64, sample.lv.y as f64, sample.lv.z as f64);
+        }
+        if let Some(mut a) = ang {
+            a.0 = DVec3::new(sample.av.x as f64, sample.av.y as f64, sample.av.z as f64);
         }
     }
 }
@@ -1244,6 +1383,9 @@ impl Plugin for SpawnCommandPlugin {
             (
                 apply_replicated_spawns,
                 maintain_owned_locally,
+                // Phase B: classify free predicted props BEFORE the interpolate /
+                // kinematic-pin systems read the `PredictedDynamic` marker.
+                maintain_predicted_dynamic,
                 ingest_snapshots,
                 interpolate_proxies,
                 force_kinematic_proxies,
@@ -1262,6 +1404,13 @@ impl Plugin for SpawnCommandPlugin {
             (reconcile_owned_prediction, record_predicted_state)
                 .chain()
                 .after(PhysicsSystems::Writeback),
+        );
+        // Phase B: state-based reconcile for free predicted props (no input seq),
+        // likewise after avian writeback. Independent of the owned-rover chain
+        // above (acts on a disjoint set of bodies).
+        app.add_systems(
+            FixedPostUpdate,
+            reconcile_predicted_dynamic.after(PhysicsSystems::Writeback),
         );
     }
 }
@@ -1528,6 +1677,99 @@ mod pose_write_tests {
         assert!(
             (x - 32.0).abs() < 0.1,
             "expected mid-bracket lerp x≈32 (proof of tick-space interpolation), got {x}"
+        );
+    }
+
+    /// Phase B: a `PredictedDynamic` prop that has grossly diverged from authority
+    /// is hard-snapped to the authoritative pose AND has its velocity seated, so it
+    /// stops re-diverging.
+    #[test]
+    fn predicted_dynamic_snaps_far_body_and_seats_velocity() {
+        let mut world = World::new();
+        world.init_resource::<InterpBuffers>();
+
+        let gid = 0x00BB_0001u64;
+        let e = world
+            .spawn((
+                Transform::default(), // at origin
+                Position::default(),
+                Rotation::default(),
+                LinearVelocity::default(),
+                AngularVelocity::default(),
+                lunco_core::GlobalEntityId::from_raw(gid),
+                lunco_core::PredictedDynamic,
+            ))
+            .id();
+        registry_with(&mut world, e, gid);
+
+        world
+            .resource_mut::<InterpBuffers>()
+            .0
+            .entry(gid)
+            .or_default()
+            .push_back(InterpSample {
+                gen_t: 0.5,
+                pos: Vec3::new(50.0, 0.0, 0.0), // ≫ snap_pos (6.0) from origin
+                rot: Quat::IDENTITY,
+                pos_world: DVec3::new(50.0, 0.0, 0.0),
+                lv: Vec3::new(2.0, 0.0, 0.0),
+                av: Vec3::ZERO,
+                last_input_seq: 0,
+            });
+
+        world.run_system_once(reconcile_predicted_dynamic).unwrap();
+
+        let p = world.entity(e).get::<Transform>().unwrap().translation;
+        let v = world.entity(e).get::<LinearVelocity>().unwrap().0;
+        assert!((p.x - 50.0).abs() < 1e-4, "should snap to authority, got {p:?}");
+        assert!((v.x - 2.0).abs() < 1e-4, "velocity must be seated to authority, got {v:?}");
+    }
+
+    /// Phase B: when a `PredictedDynamic` prop is already at authority (InSync), the
+    /// reconcile leaves it COMPLETELY alone — no pose change and, crucially, NO
+    /// velocity seating — so its local physics keeps running crisply between
+    /// snapshots instead of being clamped to the authoritative velocity each frame.
+    #[test]
+    fn predicted_dynamic_in_sync_is_left_untouched() {
+        let mut world = World::new();
+        world.init_resource::<InterpBuffers>();
+
+        let gid = 0x00BB_0002u64;
+        let local_vel = DVec3::new(5.0, 0.0, 0.0); // the prop's own local velocity
+        let e = world
+            .spawn((
+                Transform::default(), // at origin
+                Position::default(),
+                Rotation::default(),
+                LinearVelocity(local_vel),
+                AngularVelocity::default(),
+                lunco_core::GlobalEntityId::from_raw(gid),
+                lunco_core::PredictedDynamic,
+            ))
+            .id();
+        registry_with(&mut world, e, gid);
+
+        world
+            .resource_mut::<InterpBuffers>()
+            .0
+            .entry(gid)
+            .or_default()
+            .push_back(InterpSample {
+                gen_t: 0.5,
+                pos: Vec3::new(0.05, 0.0, 0.0), // within eps_pos (0.25) of the body
+                rot: Quat::IDENTITY,
+                pos_world: DVec3::new(0.05, 0.0, 0.0),
+                lv: Vec3::ZERO, // authority says 0 — must NOT overwrite local 5.0
+                av: Vec3::ZERO,
+                last_input_seq: 0,
+            });
+
+        world.run_system_once(reconcile_predicted_dynamic).unwrap();
+
+        let v = world.entity(e).get::<LinearVelocity>().unwrap().0;
+        assert!(
+            (v.x - 5.0).abs() < 1e-9,
+            "InSync must NOT seat velocity — local physics keeps running; got {v:?}"
         );
     }
 }

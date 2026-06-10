@@ -59,8 +59,10 @@ pub use identity::Provenance;
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use session::{
     authorize, AppliedInputSeq, IncomingSnapshots, InputFrame, LocalSession, NetReplicate, NetSpawn,
-    NetStatus, NetworkRole, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns, PossessionPolicy,
-    ReplicatedChassisMotion, ReplicatedSpawn, SessionRegistry, SkipContentStamp, SnapshotSample,
+    NetStatus, NetworkRole, NotPredictable, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns,
+    PossessionPolicy,
+    PredictedDynamic, ReplicatedChassisMotion, ReplicatedSpawn, SessionRegistry, SkipContentStamp,
+    SnapshotSample,
     VesselInputLog, WireApplyGuard,
 };
 

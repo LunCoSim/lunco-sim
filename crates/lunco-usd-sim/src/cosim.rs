@@ -769,6 +769,34 @@ pub fn resolve_root_prim(_asset_path: &str, override_in: &str) -> String {
 /// Plugin install hook — registers translator systems, per-tick sync
 /// systems, and the API query provider. Called from `UsdSimPlugin::build`.
 ///
+/// Opaque-body guard (`PREDICTION_MEMBERSHIP.md` §6): stamp
+/// [`lunco_core::NotPredictable`] on every cosim-driven physics body — one with a
+/// [`SimComponent`] (its motion comes from Modelica/script forces the client does
+/// not run) AND a [`RigidBody`]. This is the cosim **takeover** site: the same
+/// `SimComponent`-attachment that makes a body server-driven also marks it
+/// unpredictable, so the client's prediction systems (`maintain_predicted_dynamic`,
+/// and any future contact-island promotion) refuse to ever predict it and keep it
+/// on the interpolated proxy path. Rovers (`RoverVessel`) are excluded — a rover's
+/// chassis is locally driven/computable even when it carries cosim subsystems.
+/// Runs on both peers (cheap, idempotent — `Without<NotPredictable>` makes it a
+/// one-shot per body); harmless where prediction never runs.
+fn tag_cosim_opaque(
+    mut commands: Commands,
+    q: Query<
+        Entity,
+        (
+            With<SimComponent>,
+            With<avian3d::prelude::RigidBody>,
+            Without<lunco_core::RoverVessel>,
+            Without<lunco_core::NotPredictable>,
+        ),
+    >,
+) {
+    for e in q.iter() {
+        commands.entity(e).insert(lunco_core::NotPredictable);
+    }
+}
+
 /// Per-tick ordering inside `FixedUpdate` matches the cosim master
 /// algorithm:
 ///   `ModelicaSet::HandleResponses → sync_*_outputs →
@@ -806,6 +834,9 @@ pub(crate) fn install(app: &mut App) {
             // path → entity index built each call).
             process_usd_cosim_wires.run_if(any_unprocessed_usd_cosim_wires),
             wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
+            // §6 opaque guard: once a body is cosim-driven, mark it unpredictable
+            // (after the SimComponent wrap above, so it sees freshly-wrapped bodies).
+            tag_cosim_opaque,
         ).chain().after(lunco_usd_bevy::sync_usd_visuals),
     );
 

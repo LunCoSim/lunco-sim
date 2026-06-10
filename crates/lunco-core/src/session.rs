@@ -247,6 +247,39 @@ pub struct ReplicatedChassisMotion {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct OwnedLocally;
 
+/// Client-side marker: predict this replicated body's **physics locally** even
+/// though this peer supplies it **no input** — a free dynamic prop (a ball /
+/// crate) you bump with your rover (`PREDICTION_MEMBERSHIP.md` Phase B). Like
+/// [`OwnedLocally`] it is excluded from kinematic-pinning and snapshot
+/// interpolation and runs its own avian step, so a local rover↔prop collision
+/// resolves crisply in the same frame. UNLIKE `OwnedLocally` it has no input seq
+/// to replay, so it is reconciled by **state** (`reconcile_predicted_dynamic`):
+/// each snapshot snaps it to authority if it has grossly diverged, else eases the
+/// small error in and seats velocity to authoritative. **Never on host/standalone**
+/// (they simulate authoritatively). Cosim-driven bodies (server-only forces) must
+/// NEVER get this — they are excluded by the runtime-spawn designation
+/// (`maintain_predicted_dynamic`), since cosim props are scene content, not
+/// `SkipContentStamp` runtime spawns.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct PredictedDynamic;
+
+/// **Opaque-body guard** (`PREDICTION_MEMBERSHIP.md` §6): this body's motion is
+/// **not locally computable** — it is driven by forces the client does not run
+/// (primarily **cosim / Modelica** bodies: a balloon's buoyancy, a thruster, any
+/// `SimComponent`-forced prop). Such a body must be excluded from *every*
+/// predicted set even if it is owned or in contact with something predicted, and
+/// always falls back to the interpolated proxy path. The discriminator is
+/// computability, not ownership (Gap C): predicting a cosim body would replay
+/// physics the client can't reproduce, so it would diverge and rubber-band every
+/// snapshot. Stamped at the cosim takeover site (where a `SimComponent` is
+/// attached to a physics body, in `lunco-usd-sim`'s cosim install) and respected
+/// by `maintain_predicted_dynamic` (Phase B). It is the hard backstop that keeps
+/// Phase B's structural `SkipContentStamp` guard from being the *only* thing
+/// standing between a cosim body and the predictor. Always-on substrate; harmless
+/// on host/standalone (nothing predicts there).
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct NotPredictable;
+
 /// Server-side record of a runtime spawn the host must replicate to clients,
 /// carrying the catalog id + spawn position so peers can reconstruct the
 /// geometry locally (M1) pinned to the host-allocated id. Added to the spawn
