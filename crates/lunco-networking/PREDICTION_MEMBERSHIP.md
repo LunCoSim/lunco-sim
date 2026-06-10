@@ -1,8 +1,31 @@
 # Prediction membership — computability, not ownership (A + B + C)
 
-Status: PLAN (2026-06-09). Extends [`PREDICTION_RECONCILIATION.md`](./PREDICTION_RECONCILIATION.md)
+Status: **A SHIPPED · B SHIPPED · C SUPERSEDED · §6 guard SHIPPED** (2026-06-11).
+Extends [`PREDICTION_RECONCILIATION.md`](./PREDICTION_RECONCILIATION.md)
 (D2, the *how* of correcting a predicted body) with the missing *which bodies do we
 predict at all* decision. Closes [`DESIGN_GAPS.md`](./DESIGN_GAPS.md) **Gap C**.
+
+> **UPDATE 2026-06-11 (user decision: full mutual push):** Phase C (§5, contact-island
+> promotion) is **superseded by predict-all-vehicles** — every non-opaque remote
+> `RoverVessel` stays locally Dynamic at all times, driven by **held-input** replicated
+> in snapshots, state-reconciled via the Phase B path, with corrections smoothed by a
+> decaying render offset. Islands concentrated their seams (promotion timing,
+> time-base jump, hysteresis) exactly at the approach/contact instant; at 2–4 rovers
+> the CPU they save doesn't justify that. Islands remain the documented **CPU
+> fallback** — if ever built, trigger by *proximity* (not first contact) and seed by
+> *extrapolate-to-now*. Full plan + best-practice rationale:
+> [`PREDICT_AND_SMOOTH_PLAN.md`](./PREDICT_AND_SMOOTH_PLAN.md). The computability
+> principle (§0) and the §6 opaque guard are unchanged and load-bearing.
+
+> **Decision 2026-06-10 (user):** Phase A (correctness) and Phase B (crisp single
+> bumped prop) are enough for MVP. **Phase C (contact-island auto-membership) is
+> PARKED** as a documented follow-up — it is the only phase that enters the
+> explicitly-deferred two-predicted-bodies-in-contact territory
+> (`DECISIONS.md:65-66`), costs a per-tick contact-graph BFS + promote/demote
+> churn, and needs a 2-client stress test to validate, for a convenience (transitive
+> auto-promotion) rather than a correctness gain. The §6 opaque guard — the one
+> genuinely-useful piece underneath C — **was implemented** independently as a
+> cheap, always-safe backstop.
 
 ---
 
@@ -182,7 +205,14 @@ with; everything else stays interpolated. Cosim-opaque bodies are **never**
 **Touch:** `lunco-core/session.rs` (marker + reuse `reconcile.rs`),
 `lunco-sandbox-edit/commands.rs` (new system + the two exclusion queries).
 
-### Phase C — contact-island membership  *(promotes/demotes automatically)*
+### Phase C — contact-island membership  *(promotes/demotes automatically)*  — **PARKED 2026-06-10**
+
+> **Not built.** Documented follow-up only. A+B cover MVP; C is convenience +
+> deferred-territory (see decision note at top). The §6 guard below — its only
+> load-bearing prerequisite — *was* shipped, so picking C up later is unblocked on
+> that front. Before building, **re-verify the avian 0.6.1 contact API** (the
+> `Collisions` system-param / contact-pair iteration); the signature is not yet
+> confirmed in code.
 
 **Goal:** the predicted set grows to whatever your predicted bodies are *touching*
 and shrinks when they separate — so car↔ball and your-car↔pushed-object feel
@@ -208,7 +238,14 @@ symmetric rover-rover prediction is out of scope.
 
 ---
 
-## 6. The hard guard — never predict an opaque body
+## 6. The hard guard — never predict an opaque body  — **SHIPPED 2026-06-10**
+
+> **Implemented.** `lunco_core::NotPredictable` marker (always-on substrate,
+> `session.rs`), stamped at the cosim takeover site by `tag_cosim_opaque` in
+> `lunco-usd-sim`'s `cosim::install` (any body with a `SimComponent` + `RigidBody`
+> that is not a `RoverVessel`), and respected by Phase B's
+> `maintain_predicted_dynamic` (`Without<NotPredictable>`). When C is unparked, its
+> island BFS must also refuse to cross/promote a `NotPredictable` body.
 
 Independent of A/B/C: a body whose motion is **not locally computable** must be
 excluded from every predicted set, even if owned or in contact. These are Gap C's

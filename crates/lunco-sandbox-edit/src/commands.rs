@@ -150,17 +150,12 @@ pub fn force_kinematic_proxies(
     role: Res<lunco_core::NetworkRole>,
     mut commands: Commands,
     mut q: Query<
-        (
-            Entity,
-            &RigidBody,
-            Option<&mut LinearVelocity>,
-            Option<&mut AngularVelocity>,
-        ),
+        (Entity, &RigidBody),
         // Predict-own: the rover this client possesses (`OwnedLocally`) is
         // excluded — it runs its own avian step as a `Dynamic` body instead of
-        // being pinned `Kinematic`, so its velocities are NOT zeroed here.
-        // Phase B: a free predicted prop (`PredictedDynamic`, e.g. a ball you
-        // bump) is likewise excluded — it runs local physics + state-reconcile.
+        // being pinned `Kinematic`. Phase B: a free predicted prop
+        // (`PredictedDynamic`, e.g. a ball you bump) is likewise excluded — it
+        // runs local physics + state-reconcile.
         (
             With<lunco_core::NetReplicate>,
             Without<lunco_core::OwnedLocally>,
@@ -171,22 +166,16 @@ pub fn force_kinematic_proxies(
     if !matches!(*role, lunco_core::NetworkRole::Client) {
         return;
     }
-    for (e, rb, lin, ang) in q.iter_mut() {
+    for (e, rb) in q.iter_mut() {
         // `RigidBody` is an immutable Avian component — replace it via `insert`.
         if !matches!(*rb, RigidBody::Kinematic) {
             commands.entity(e).insert(RigidBody::Kinematic);
         }
-        // A kinematic body keeps gliding at whatever velocity it carried when it
-        // turned kinematic (a settled rover micro-jitters → glides → the next
-        // snapshot snaps it back → *blinking*; a balloon glides smoothly →
-        // drifts off). Zero it every frame so the proxy HOLDS the last snapshot
-        // between updates instead of running its own physics.
-        if let Some(mut l) = lin {
-            l.0 = DVec3::ZERO;
-        }
-        if let Some(mut a) = ang {
-            a.0 = DVec3::ZERO;
-        }
+        // NOTE (Step 1): velocity is NO LONGER zeroed here. The proxy's velocity is
+        // now *driven* every fixed tick toward the snapshot curve by
+        // `drive_kinematic_proxies` (closed loop — a resting body's curve is flat so
+        // it commands v≈0 anyway), which is what lets the proxy's motion enter
+        // contact resolution. Zeroing it here would fight that driver.
     }
 }
 
@@ -245,6 +234,152 @@ const CLOCK_EASE: f64 = 0.1;
 /// If the playback clock is more than this far from its target (seconds), snap
 /// instead of easing — e.g. first sample, a long stall, or a tick discontinuity.
 const CLOCK_SNAP: f64 = 1.0;
+
+/// Shared interpolation playback clock, in the host-tick timebase (anchored to the
+/// snapshot stream, NOT wall time). Was a pair of `Local`s private to
+/// [`interpolate_proxies`]; promoted to a resource so the upcoming
+/// `drive_kinematic_proxies` (FixedUpdate) and `interpolate_proxies` (render) read
+/// **one** render instant — otherwise the physics-driven `RigidBody` proxies and
+/// the Transform-written `RigidBody`-less proxies would sample two slightly
+/// different clocks and drift apart.
+///
+/// `t` is the current render instant (seconds, host-tick timebase); `init` guards
+/// the first-sample snap. Advanced once per fixed tick by
+/// [`advance_playback_clock`].
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct ProxyPlaybackClock {
+    pub t: f64,
+    pub init: bool,
+}
+
+/// Advance the shared playback clock toward `newest_gen − INTERP_DELAY` by `dt`
+/// seconds (snap on first sample / large desync, else ease). Returns
+/// `(render_instant, snapped)` — `snapped == true` on the first sample or a large
+/// desync, which the FixedUpdate driver turns into a teleport instead of a
+/// velocity command. `None` if there are no samples yet. Pure given its args so it
+/// is unit-testable. `newest_gen` is the freshest host generation time across all
+/// buffered bodies (the busiest body anchors the clock — a resting body stops
+/// emitting). Advanced once per fixed tick by `drive_kinematic_proxies`.
+fn advance_playback_clock(
+    clock: &mut ProxyPlaybackClock,
+    newest_gen: f64,
+    dt: f64,
+) -> Option<(f64, bool)> {
+    if !newest_gen.is_finite() {
+        return None; // no samples yet
+    }
+    let target = newest_gen - INTERP_DELAY;
+    let snapped = !clock.init || (target - clock.t).abs() > CLOCK_SNAP;
+    if snapped {
+        // First run, or a large desync (long stall / tick discontinuity): snap.
+        clock.t = target;
+        clock.init = true;
+    } else {
+        clock.t += dt;
+        clock.t += (target - clock.t) * CLOCK_EASE;
+        // Never render past the freshest sample we hold.
+        if clock.t > newest_gen {
+            clock.t = newest_gen;
+        }
+    }
+    Some((clock.t, snapped))
+}
+
+/// If a kinematic proxy's `Position` is further than this (metres) from where its
+/// curve says it should be *right now*, teleport it instead of trying to close the
+/// gap with one tick of velocity (which would be a huge, contact-disrupting kick).
+/// Covers first sight, a long stall, and authoritative discontinuities.
+const PROXY_SNAP_DIST: f64 = 2.0;
+
+/// Angular velocity (rad/s, world axis-angle) that rotates `from` onto `to` in one
+/// step of `h` seconds: `ω = axis · θ / h` where `q_err = to · from⁻¹`. Takes the
+/// **shortest arc** (negate `q_err` if `w < 0`, since `q` and `−q` are the same
+/// orientation but the naive angle would be the long way round). Returns zero for a
+/// negligible rotation. Used by `drive_kinematic_proxies` to drive a kinematic
+/// proxy's `AngularVelocity` so its orientation tracks the snapshot curve through
+/// the solver (and its spin enters contact resolution) instead of being teleported.
+fn ang_vel_to_track(from: Quat, to: Quat, h: f64) -> DVec3 {
+    let mut q_err = to * from.inverse();
+    if q_err.w < 0.0 {
+        q_err = Quat::from_xyzw(-q_err.x, -q_err.y, -q_err.z, -q_err.w);
+    }
+    let w = q_err.w.clamp(-1.0, 1.0);
+    let sin_half = (1.0 - w * w).sqrt();
+    if sin_half < 1e-6 {
+        return DVec3::ZERO; // no meaningful rotation this step
+    }
+    let angle = 2.0 * (w.acos() as f64); // total rotation, radians
+    let axis = Vec3::new(q_err.x, q_err.y, q_err.z) / sin_half;
+    axis.as_dvec3() * (angle / h)
+}
+
+/// Sample the interpolation curve for one body's buffer at host-tick time `t`.
+/// Shared by the render path ([`interpolate_proxies`]) and the FixedUpdate
+/// velocity driver (`drive_kinematic_proxies`, Step 1.4) so both read the **same**
+/// target pose. Returns `(pos_world, rot, lv, av)` or `None` when the buffer holds
+/// nothing usable (empty / all-future-and-no-bracket collapses to None).
+///
+/// Position uses **cubic Hermite** through the bracketing samples' positions *and
+/// velocities* `(a.pos, a.lv) → (b.pos, b.lv)` — so a body that is turning/accel-
+/// erating follows a smooth curve that honours the sampled velocity at each end,
+/// instead of the straight chord a plain lerp draws (which under-shoots arcs and
+/// kinks at every sample). Rotation stays slerp (orientation is scale-free; a
+/// cubic quaternion spline isn't worth the cost at 20 Hz). `lv`/`av` are the
+/// bracketing-start sample's velocities (animation hint + driver feed-forward).
+///
+/// Starvation (render_t past the newest sample) keeps the existing linear glide
+/// along `a.lv`, capped by [`INTERP_MAX_EXTRAPOLATION`] (time) and
+/// [`INTERP_MAX_EXTRAP_DIST`] (distance) — a single sample has no second point for
+/// a cubic, and an unbounded cubic extrapolation would fly off.
+fn sample_curve(buf: &VecDeque<InterpSample>, t: f64) -> Option<(DVec3, Quat, DVec3, DVec3)> {
+    // Samples are time-ordered: `a` = latest at/just before t, `b` = first after.
+    let mut a: Option<&InterpSample> = None;
+    let mut b: Option<&InterpSample> = None;
+    for s in buf.iter() {
+        if s.gen_t <= t {
+            a = Some(s);
+        } else {
+            b = Some(s);
+            break;
+        }
+    }
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            let span = (b.gen_t - a.gen_t).max(1e-5);
+            let s = (((t - a.gen_t) / span).clamp(0.0, 1.0)) as f64;
+            // Cubic Hermite. Tangents are velocity·span (curve param is s∈[0,1],
+            // ds = dt/span, so dp/ds = v·span). lv is units/sec.
+            let p0 = a.pos_world;
+            let p1 = b.pos_world;
+            let m0 = a.lv.as_dvec3() * span;
+            let m1 = b.lv.as_dvec3() * span;
+            let s2 = s * s;
+            let s3 = s2 * s;
+            let h00 = 2.0 * s3 - 3.0 * s2 + 1.0;
+            let h10 = s3 - 2.0 * s2 + s;
+            let h01 = -2.0 * s3 + 3.0 * s2;
+            let h11 = s3 - s2;
+            let pos = p0 * h00 + m0 * h10 + p1 * h01 + m1 * h11;
+            let rot = a.rot.slerp(b.rot, s as f32);
+            Some((pos, rot, a.lv.as_dvec3(), a.av.as_dvec3()))
+        }
+        // t before the oldest sample → snap to oldest.
+        (None, Some(b)) => Some((b.pos_world, b.rot, b.lv.as_dvec3(), b.av.as_dvec3())),
+        // Starved (t past the newest sample). Glide linearly along the sample's
+        // velocity so a mover keeps going instead of freezing then snapping;
+        // capped in time and distance so a stalled/diverging body can't fly off.
+        (Some(a), None) => {
+            let dt = (t - a.gen_t).clamp(0.0, INTERP_MAX_EXTRAPOLATION);
+            let mut delta = a.lv.as_dvec3() * dt;
+            let len = delta.length();
+            if len > INTERP_MAX_EXTRAP_DIST {
+                delta *= INTERP_MAX_EXTRAP_DIST / len;
+            }
+            Some((a.pos_world + delta, a.rot, a.lv.as_dvec3(), a.av.as_dvec3()))
+        }
+        (None, None) => None,
+    }
+}
 /// Cap per-body history (seconds of buffer at 20 Hz; only the recent tail is read).
 const INTERP_MAX_SAMPLES: usize = 16;
 /// When the buffer starves (`render_t` past the newest sample — common at 20 Hz
@@ -291,24 +426,26 @@ pub fn ingest_snapshots(
     }
 }
 
-/// Client: drive each replicated proxy from its interpolation buffer, rendering
-/// [`INTERP_DELAY`] in the past and lerp/slerping between the two bracketing
-/// samples — turning 20 Hz snapshots into smooth per-frame motion. Writes both
-/// `Transform` and avian `Position` (so the physics transform-sync doesn't
-/// overwrite it). A body with no fresh samples holds its last pose, so a rover
-/// at rest sits still instead of snapping.
+/// Client: render replicated proxies that have **no `RigidBody`** by writing their
+/// `Transform` straight from the interpolation curve, [`INTERP_DELAY`] in the past
+/// — turning 20 Hz snapshots into smooth per-frame motion for non-physics bodies
+/// (markers, visual-only props). A body with no fresh samples holds its last pose.
 ///
-/// (Currently interpolates *every* replicated body, including the one this
-/// client possesses — that one is smooth but ~`INTERP_DELAY` behind your input.
-/// Client-side prediction for the possessed rover is the follow-up that makes
-/// your own vessel crisp; everyone else's stays interpolated.)
+/// Bodies **with** a `RigidBody` are skipped here: as of Step 1 they are driven
+/// through the solver by [`drive_kinematic_proxies`] (velocity toward the same
+/// shared curve) and rendered from avian's `Position → Transform` writeback, so
+/// their contact velocity is real and they push locally-predicted bodies crisply.
+/// This system is **read-only** on [`ProxyPlaybackClock`]; the driver advances the
+/// clock once per fixed tick so both paths sample one render instant.
+///
+/// (The body this client possesses, and free predicted props, are excluded via
+/// `q_local_sim` — they're locally simulated + reconciled, not interpolated.)
 pub fn interpolate_proxies(
-    // REAL (wall-clock) time advances the playback clock BETWEEN snapshots so a
-    // paused client still renders smooth motion. The clock itself lives in the
-    // host-tick timebase (anchored to the snapshot stream), not wall time directly.
-    time: Res<Time<bevy::time::Real>>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     buffers: Res<InterpBuffers>,
+    // Shared playback clock, advanced in FixedUpdate by `drive_kinematic_proxies`.
+    // Read-only here — this is the render projection of the same instant.
+    clock: Res<ProxyPlaybackClock>,
     // Predict-own: the possessed rover is locally simulated + smooth-corrected
     // (`reconcile_owned_prediction`), so it must NOT be dragged back to the
     // `INTERP_DELAY`-old interpolated pose here. Phase B: a free predicted prop
@@ -319,47 +456,20 @@ pub fn interpolate_proxies(
         &mut Transform,
         Option<&mut Position>,
         Option<&mut Rotation>,
-        // Animation motion hint: the proxy's local avian velocity is zeroed by
-        // `force_kinematic_proxies`, so stamp the snapshot's authoritative chassis
+        // Animation motion hint: stamp the snapshot's authoritative chassis
         // velocity here for the wheel-spin model to read (see
         // [`lunco_core::ReplicatedChassisMotion`]).
         Option<&mut lunco_core::ReplicatedChassisMotion>,
+        // Skip physics bodies — they're solver-driven by `drive_kinematic_proxies`.
+        Has<RigidBody>,
     )>,
     // Insert the motion hint on first sight of a proxy that lacks it.
     mut commands: Commands,
-    // Playback clock in the host-tick timebase: advances at real time and is eased
-    // toward `newest_gen − INTERP_DELAY` so it tracks the host's tick stream without
-    // stepping. This is what makes interpolation robust to bursty delivery — the
-    // render instant is decoupled from when packets happen to arrive.
-    mut playback: Local<f64>,
-    mut clock_init: Local<bool>,
 ) {
-    // Newest host generation time across ALL bodies drives the shared clock: the
-    // busiest body anchors it (a resting body stops emitting, so keying the clock
-    // off its own buffer would stall playback).
-    let newest_gen = buffers
-        .0
-        .values()
-        .filter_map(|b| b.back())
-        .map(|s| s.gen_t)
-        .fold(f64::NEG_INFINITY, f64::max);
-    if !newest_gen.is_finite() {
-        return; // no samples yet
+    if !clock.init {
+        return; // clock not started (no samples ingested yet)
     }
-    let target = newest_gen - INTERP_DELAY;
-    if !*clock_init || (target - *playback).abs() > CLOCK_SNAP {
-        // First run, or a large desync (long stall / tick discontinuity): snap.
-        *playback = target;
-        *clock_init = true;
-    } else {
-        *playback += time.delta_secs() as f64;
-        *playback += (target - *playback) * CLOCK_EASE;
-        // Never render past the freshest sample we hold.
-        if *playback > newest_gen {
-            *playback = newest_gen;
-        }
-    }
-    let render_t = *playback;
+    let render_t = clock.t;
     for (gid, buf) in buffers.0.iter() {
         if buf.is_empty() {
             continue;
@@ -370,57 +480,18 @@ pub fn interpolate_proxies(
         if q_local_sim.contains(e) {
             continue; // locally simulated (owned rover or predicted prop), not interpolated
         }
-        let Ok((mut tf, pos, rot, motion)) = q.get_mut(e) else {
+        let Ok((mut tf, pos, rot, motion, has_rb)) = q.get_mut(e) else {
             continue;
         };
-
-        // Samples are time-ordered: `a` = latest at/just before render_t,
-        // `b` = first after it.
-        let mut a: Option<&InterpSample> = None;
-        let mut b: Option<&InterpSample> = None;
-        for s in buf.iter() {
-            if s.gen_t <= render_t {
-                a = Some(s);
-            } else {
-                b = Some(s);
-                break;
-            }
+        if has_rb {
+            continue; // physics-driven by `drive_kinematic_proxies`; rendered via writeback
         }
 
-        // Interpolate the absolute position in f64 (gap A) so far-from-origin
-        // bodies don't lose precision; rotation lerps in f32 (orientation is
-        // scale-free).
-        let (out_world, out_rot) = match (a, b) {
-            (Some(a), Some(b)) => {
-                let span = (b.gen_t - a.gen_t).max(1e-5);
-                let alpha = ((render_t - a.gen_t) / span).clamp(0.0, 1.0);
-                (
-                    a.pos_world.lerp(b.pos_world, alpha),
-                    a.rot.slerp(b.rot, alpha as f32),
-                )
-            }
-            // render_t before the oldest sample → snap to oldest.
-            (None, Some(b)) => (b.pos_world, b.rot),
-            // Starved (render_t past the newest sample). Holding the pose here is
-            // what made a moving body freeze then snap ~0.6 m when the next
-            // snapshot landed. Extrapolate along the sample's velocity instead, so
-            // it keeps gliding; a body genuinely at rest has lv≈0 → this is still a
-            // hold. Capped at INTERP_MAX_EXTRAPOLATION so a stalled body doesn't
-            // drift away.
-            (Some(a), None) => {
-                let dt = (render_t - a.gen_t).clamp(0.0, INTERP_MAX_EXTRAPOLATION);
-                let mut delta = a.lv.as_dvec3() * dt;
-                // Hard distance clamp: a body whose authoritative physics is
-                // diverging (or whose velocity sample is stale) must not be flung
-                // metres away by extrapolation. Bound the glide so the worst case
-                // is a small offset, not a teleport.
-                let len = delta.length();
-                if len > INTERP_MAX_EXTRAP_DIST {
-                    delta *= INTERP_MAX_EXTRAP_DIST / len;
-                }
-                (a.pos_world + delta, a.rot)
-            }
-            (None, None) => continue,
+        // Shared curve evaluator (cubic-Hermite position + slerp rotation +
+        // starvation glide). Returns the bracketing-start velocities for the
+        // animation hint below.
+        let Some((out_world, out_rot, lv, av)) = sample_curve(buf, render_t) else {
+            continue;
         };
 
         // Seat the precise f64 physics `Position`; the f32 render `Transform` is
@@ -445,12 +516,115 @@ pub fn interpolate_proxies(
         // the host's replicated velocity onto a read-only hint that the wheel-spin
         // model reads — we do NOT write avian `LinearVelocity`, because a velocity
         // on a kinematic body would make it glide between snapshots (the very drift
-        // `force_kinematic_proxies` zeros away). The nearest bracketing sample's
-        // velocity is plenty for animation (it changes at the 20 Hz snapshot rate).
-        let (lv, av) = match (a, b) {
-            (Some(s), _) | (None, Some(s)) => (s.lv.as_dvec3(), s.av.as_dvec3()),
-            (None, None) => (DVec3::ZERO, DVec3::ZERO),
+        // `force_kinematic_proxies` zeros away). `lv`/`av` are the bracketing-start
+        // sample's velocities from `sample_curve` (changes at the 20 Hz snapshot
+        // rate — plenty for animation).
+        let hint = lunco_core::ReplicatedChassisMotion { lin: lv, ang: av };
+        match motion {
+            Some(mut m) => *m = hint,
+            None => {
+                commands.entity(e).insert(hint);
+            }
+        }
+    }
+}
+
+/// Client (FixedUpdate): drive each kinematic replicated proxy that has a
+/// `RigidBody` **through the solver** by setting its `LinearVelocity` /
+/// `AngularVelocity` toward the shared interpolation curve, instead of teleporting
+/// its `Transform` each frame. This is the core of Step 1 (`PREDICT_AND_SMOOTH`):
+///
+/// * The proxy stays `RigidBody::Kinematic` (pinned by `force_kinematic_proxies`),
+///   so the host stays authoritative — but now it carries a *real velocity* the
+///   solver knows about. A locally-predicted body (your owned rover, a
+///   `PredictedDynamic` prop) that rams it gets pushed crisply in the same step,
+///   instead of interpenetrating and being shoved out by overlap-recovery alone
+///   (the source of the contact buzz). Confirmed by the Step 1.1 avian probe.
+/// * Each tick the velocity is recomputed toward the curve (closed loop), so error
+///   cannot accumulate beyond one step — no balloon drift, and a resting body's
+///   curve is flat ⇒ `v ≈ 0` ⇒ it sits still (no settled-rover blink).
+///
+/// Advances the shared [`ProxyPlaybackClock`] once here (its single advance site);
+/// `interpolate_proxies` reads the same instant. Target pose is sampled one tick
+/// **ahead** (`render_t + SECS_PER_TICK`) so that `v = (target − pos)/h` lands the
+/// body on the curve after avian integrates this tick. Teleports instead of
+/// commanding velocity when the clock snapped (first sample / large desync) or the
+/// body is more than [`PROXY_SNAP_DIST`] off its current curve point — a one-tick
+/// velocity to close a big gap would be a contact-disrupting kick.
+pub fn drive_kinematic_proxies(
+    role: Res<lunco_core::NetworkRole>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    buffers: Res<InterpBuffers>,
+    mut clock: ResMut<ProxyPlaybackClock>,
+    // Excluded: locally-simulated bodies (owned rover, predicted props) run their
+    // own Dynamic step + reconcile, not curve-following.
+    q_local_sim: Query<(), Or<(With<lunco_core::OwnedLocally>, With<lunco_core::PredictedDynamic>)>>,
+    mut q: Query<
+        (
+            &mut Position,
+            &mut Rotation,
+            &mut LinearVelocity,
+            &mut AngularVelocity,
+            Option<&mut lunco_core::ReplicatedChassisMotion>,
+        ),
+        With<RigidBody>,
+    >,
+    mut commands: Commands,
+) {
+    if !matches!(*role, lunco_core::NetworkRole::Client) {
+        return;
+    }
+    // Advance the shared clock once per fixed tick (its only advance site).
+    let newest_gen = buffers
+        .0
+        .values()
+        .filter_map(|b| b.back())
+        .map(|s| s.gen_t)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let Some((render_t, snapped)) = advance_playback_clock(&mut clock, newest_gen, SECS_PER_TICK)
+    else {
+        return; // no samples yet
+    };
+    let h = SECS_PER_TICK;
+    for (gid, buf) in buffers.0.iter() {
+        if buf.is_empty() {
+            continue;
+        }
+        let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(*gid)) else {
+            continue;
         };
+        if q_local_sim.contains(e) {
+            continue;
+        }
+        let Ok((mut pos, mut rot, mut lin, mut ang, motion)) = q.get_mut(e) else {
+            continue; // not a RigidBody proxy (e.g. visual-only — handled by interpolate)
+        };
+        // Where the curve says this body is now (for the snap test) and where it
+        // should be after this tick integrates (the velocity target).
+        let Some((here, here_rot, lv, av)) = sample_curve(buf, render_t) else {
+            continue;
+        };
+        let Some((target, target_rot, _, _)) = sample_curve(buf, render_t + h) else {
+            continue;
+        };
+
+        let off = (pos.0 - here).length();
+        if snapped || off > PROXY_SNAP_DIST {
+            // Teleport: seat pose, kill velocity. Covers first sight / long stall /
+            // authoritative discontinuity — closing this gap with one tick of
+            // velocity would be a violent kick into anything in contact.
+            pos.0 = here;
+            rot.0 = here_rot.as_dquat();
+            lin.0 = DVec3::ZERO;
+            ang.0 = DVec3::ZERO;
+        } else {
+            // Command the velocity that carries the body onto the curve this tick.
+            lin.0 = (target - pos.0) / h;
+            ang.0 = ang_vel_to_track(rot.0.as_quat(), target_rot, h);
+        }
+
+        // Animation hint = authoritative chassis velocity (moved here from
+        // `interpolate_proxies`, which no longer touches RigidBody proxies).
         let hint = lunco_core::ReplicatedChassisMotion { lin: lv, ang: av };
         match motion {
             Some(mut m) => *m = hint,
@@ -1363,6 +1537,7 @@ impl Plugin for SpawnCommandPlugin {
         app.add_systems(FixedPostUpdate, clear_kinematic_pulse_velocity);
         app.init_resource::<InterpBuffers>();
         app.init_resource::<PredictedStateLog>();
+        app.init_resource::<ProxyPlaybackClock>();
         // Networking: instantiate host-replicated spawns, buffer + interpolate
         // proxies from snapshots, and keep proxies kinematic. All no-op in
         // single-player. Order matters:
@@ -1393,6 +1568,14 @@ impl Plugin for SpawnCommandPlugin {
             )
                 .chain(),
         );
+        // Step 1: velocity-drive kinematic RigidBody proxies toward the snapshot
+        // curve in `FixedUpdate`, so it runs BEFORE avian's solver step
+        // (`FixedPostUpdate`) and the commanded velocity enters this tick's contact
+        // resolution. Reads `InterpBuffers` (filled by `ingest_snapshots` in the
+        // prior frame's `Update` — one-frame latency, absorbed by `INTERP_DELAY`)
+        // and is the sole advance site for `ProxyPlaybackClock`. No-op on
+        // host/standalone (guards on `NetworkRole::Client`).
+        app.add_systems(FixedUpdate, drive_kinematic_proxies);
         // Input-replay reconciliation (D2), in LOCKSTEP with physics —
         // `FixedPostUpdate` AFTER avian's writeback. `reconcile_owned_prediction` folds
         // in the authoritative ack (no-op in the common case → no rubber-band),
@@ -1560,7 +1743,10 @@ mod pose_write_tests {
     fn interpolate_proxy_writes_avian_rotation() {
         let mut world = World::new();
         world.init_resource::<InterpBuffers>();
-        world.insert_resource(Time::<bevy::time::Real>::default());
+        // Clock is now an external resource (advanced in FixedUpdate by
+        // `drive_kinematic_proxies`); seat it at the render instant directly. For
+        // the single sample at gen_t 0, render_t = −INTERP_DELAY ⇒ snap-to-oldest.
+        world.insert_resource(ProxyPlaybackClock { t: -INTERP_DELAY, init: true });
 
         let gid = 0x00AB_0002u64;
         let target = Quat::from_rotation_y(0.8);
@@ -1622,7 +1808,10 @@ mod pose_write_tests {
         let mut world = World::new();
         world.init_resource::<InterpBuffers>();
         world.init_resource::<IncomingSnapshots>();
-        world.insert_resource(Time::<bevy::time::Real>::default());
+        // newest_gen 0.50 − INTERP_DELAY 0.18 = 0.32 render instant (the clock is
+        // external now; seat it where the old self-advancing clock would have eased
+        // to on first sight).
+        world.insert_resource(ProxyPlaybackClock { t: 0.32, init: true });
 
         let gid = 0x00AB_0003u64;
         let e = world
@@ -1929,5 +2118,109 @@ mod avian_kinematic_probe {
             vel.x > 0.0,
             "P2: dynamic target should gain +x velocity from the kinematic contact; got {vel:?}"
         );
+    }
+}
+
+/// Step 1.8 — pure-function tests for the curve evaluator and the angular-velocity
+/// helper that `drive_kinematic_proxies` relies on. No solver, no app.
+#[cfg(test)]
+mod step1_curve_tests {
+    use super::*;
+
+    fn sample(gen_t: f64, pos: DVec3, lv: Vec3, rot: Quat) -> InterpSample {
+        InterpSample {
+            gen_t,
+            pos: pos.as_vec3(),
+            rot,
+            pos_world: pos,
+            lv,
+            av: Vec3::ZERO,
+            last_input_seq: 0,
+        }
+    }
+
+    /// Hermite hits the sample positions exactly at the bracket endpoints.
+    #[test]
+    fn hermite_matches_endpoints() {
+        let mut buf = VecDeque::new();
+        buf.push_back(sample(0.0, DVec3::new(0.0, 0.0, 0.0), Vec3::X, Quat::IDENTITY));
+        buf.push_back(sample(1.0, DVec3::new(5.0, 0.0, 0.0), Vec3::X, Quat::IDENTITY));
+
+        let (p0, _, _, _) = sample_curve(&buf, 0.0).unwrap();
+        let (p1, _, _, _) = sample_curve(&buf, 1.0).unwrap();
+        assert!((p0 - DVec3::new(0.0, 0.0, 0.0)).length() < 1e-9, "start: {p0:?}");
+        assert!((p1 - DVec3::new(5.0, 0.0, 0.0)).length() < 1e-9, "end: {p1:?}");
+    }
+
+    /// Constant velocity (`p1 = p0 + v·span`, equal end tangents) ⇒ Hermite is
+    /// exactly the straight line: the midpoint is the geometric midpoint.
+    #[test]
+    fn hermite_constant_velocity_is_linear() {
+        let v = Vec3::new(2.0, 0.0, 0.0);
+        let mut buf = VecDeque::new();
+        buf.push_back(sample(0.0, DVec3::ZERO, v, Quat::IDENTITY));
+        buf.push_back(sample(1.0, DVec3::new(2.0, 0.0, 0.0), v, Quat::IDENTITY)); // p0 + v·1
+
+        let (mid, _, _, _) = sample_curve(&buf, 0.5).unwrap();
+        assert!(
+            (mid - DVec3::new(1.0, 0.0, 0.0)).length() < 1e-9,
+            "constant-v midpoint should be linear; got {mid:?}"
+        );
+    }
+
+    /// Starved (t past newest sample) glides along velocity, distance-capped.
+    #[test]
+    fn starved_extrapolates_then_caps() {
+        let mut buf = VecDeque::new();
+        buf.push_back(sample(0.0, DVec3::ZERO, Vec3::new(1.0, 0.0, 0.0), Quat::IDENTITY));
+
+        // Small overshoot within both caps: linear glide = v·dt.
+        let (p, _, _, _) = sample_curve(&buf, 0.1).unwrap();
+        assert!((p - DVec3::new(0.1, 0.0, 0.0)).length() < 1e-9, "glide: {p:?}");
+
+        // Far past: time cap (0.25) then distance cap (8.0) bound it — here time
+        // cap binds first (1 m/s × 0.25 s = 0.25 m).
+        let (far, _, _, _) = sample_curve(&buf, 100.0).unwrap();
+        assert!(far.x <= INTERP_MAX_EXTRAP_DIST + 1e-9, "distance cap: {far:?}");
+        assert!((far.x - 0.25).abs() < 1e-9, "time cap should bind: {far:?}");
+    }
+
+    /// Empty buffer ⇒ nothing to sample.
+    #[test]
+    fn empty_buffer_is_none() {
+        let buf: VecDeque<InterpSample> = VecDeque::new();
+        assert!(sample_curve(&buf, 0.0).is_none());
+    }
+
+    /// ω = 0 when orientation already matches.
+    #[test]
+    fn ang_vel_identity_is_zero() {
+        let q = Quat::from_rotation_y(0.7);
+        let w = ang_vel_to_track(q, q, 1.0 / 64.0);
+        assert!(w.length() < 1e-9, "no rotation ⇒ ω≈0; got {w:?}");
+    }
+
+    /// 90° about +Y over h ⇒ ω ≈ (0, (π/2)/h, 0).
+    #[test]
+    fn ang_vel_quarter_turn_about_y() {
+        let h = 1.0 / 64.0;
+        let w = ang_vel_to_track(Quat::IDENTITY, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), h);
+        let expected = (std::f64::consts::FRAC_PI_2) / h;
+        assert!(w.x.abs() < 1e-6 && w.z.abs() < 1e-6, "axis should be +Y; got {w:?}");
+        assert!((w.y - expected).abs() < 1e-4, "ω.y expected {expected}; got {}", w.y);
+    }
+
+    /// `w < 0` branch: a quaternion equal to `−q` is the same orientation; the
+    /// helper must take the SHORT arc (90°, +Y), not the long way (270°, −Y).
+    #[test]
+    fn ang_vel_takes_shortest_arc() {
+        let h = 1.0 / 64.0;
+        // −(90° about +Y): same orientation, but raw w = −cos(45°) < 0.
+        let s = std::f32::consts::FRAC_PI_2 / 2.0; // 45°
+        let neg = Quat::from_xyzw(0.0, -s.sin(), 0.0, -s.cos());
+        let w = ang_vel_to_track(Quat::IDENTITY, neg, h);
+        let expected = (std::f64::consts::FRAC_PI_2) / h; // short arc magnitude
+        assert!(w.y > 0.0, "short arc should be +Y; got {w:?}");
+        assert!((w.y - expected).abs() < 1e-4, "ω.y short-arc expected {expected}; got {}", w.y);
     }
 }
