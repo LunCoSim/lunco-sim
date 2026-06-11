@@ -1,62 +1,143 @@
 # Predict-and-Smooth — detailed implementation plan (REVISED 2026-06-11)
 
-Status: **PLAN, agreed with user 2026-06-11.** Supersedes the fix sketch in
-[`CONTACT_JITTER_HANDOVER.md`](./CONTACT_JITTER_HANDOVER.md) §5 (two corrections to it,
-see §0) and **supersedes `PREDICTION_MEMBERSHIP.md` §5 Phase C** (contact-island →
-predict-all-vehicles, see §6). Cross-checked against networked-physics best practice:
-Fiedler *Networked Physics* (error smoothing, quantization, Hermite), Rocket League
-GDC 2018 (predict-all + held-input extrapolation), Overwatch GDC 2017 (redundant
-unreliable inputs + de-jitter buffer).
+Status: **SHIPPED & VERIFIED 2026-06-11 — client feel confirmed good by user.**
+Steps 1, 4, and a re-architected 2 landed; step 3 (input hardening) remains future
+work. Cross-checked against networked-physics best practice: Fiedler *Networked
+Physics* (error smoothing, quantization, Hermite), Rocket League GDC 2018
+(predict-all + held-input extrapolation), Overwatch GDC 2017 (redundant unreliable
+inputs + de-jitter buffer).
 
 ---
 
-## 0. What changed vs the handover (critical review outcomes)
+## ★ OUTCOME — what actually fixed it (read this first)
 
-1. **Part 1 goes further: proxies are *velocity-driven*, not teleport+velocity-hint.**
-   A teleported kinematic body can still create penetration-from-nowhere regardless of
-   the velocity we claim. The standard moving-platform technique: each fixed step set
-   `v = (target_pose − current_pose)/h` and let avian integrate the kinematic body.
-   Position teleports become the *exception* (first sample / big gap / snap), not the
-   mechanism. Bonus: friction works (things resting on a proxy get dragged correctly).
-2. **Part 2 as written in the handover was wrong.** "Never seat the physics body" lets
-   prediction error compound forever (offset decays back to a wrong body → drift until
-   the 6 m Snap). The correct model (Fiedler's error smoothing, what
-   `PREDICTION_RECONCILIATION.md` step 5 meant): **corrections DO seat the body,
-   immediately**; the *visual discontinuity* of each correction is pushed into a
-   decaying render offset, so the eye sees a ~150 ms ease instead of a pop.
-3. **Phase C is no longer contact-islands; it is predict-all-vehicles** (Rocket League
-   model). Islands concentrate their seams (promotion timing, time-base jump,
-   hysteresis) exactly at the moment of approach/contact — the most fragile instant —
-   to save CPU we probably don't need to save at 2–4 rovers. Islands remain the
-   documented fallback if the CPU gate fails (§6.5).
-4. **Input hardening is promoted from "optional" (Gap G) into this plan.** Inputs on a
-   reliable-ordered channel head-of-line-block under loss → ack stalls → the unacked
-   window grows → the next correction is large. Best practice: unreliable channel,
-   each packet redundantly carries the last ~10 input frames, host keeps a small
-   de-jitter buffer. Plus: replicate each vessel's *current applied input* in the
-   snapshot (held-input extrapolation — the cheap middle path between "ballistic
-   extrapolation" and "full input fan-out").
+The visible client jitter had **two independent causes**, found in order. The
+second was the real one and took an architecture change, not a constant.
 
-**Current tree state (2026-06-11):** stash@{0} popped (Phase B `PredictedDynamic` +
-§6 `NotPredictable` restored — they are load-bearing for this plan), diagnostic
-`return;` stripped from `reconcile_owned_prediction`. Uncommitted, on `main`,
-baseline `248d0de8`.
+### The root cause: never write `Transform` from game code when interpolation is on
+
+`crates/lunco-client/src/bin/sandbox.rs` enables
+`PhysicsPlugins::default().set(PhysicsInterpolationPlugin::interpolate_all())`.
+That makes avian's `bevy_transform_interpolation` the **sole owner of every body's
+`Transform`** at render rate: it eases `Transform` between the 64 Hz physics poses,
+and `reset_easing_states_on_transform_change` **treats ANY external `Transform`
+write as a teleport and drops that body's easing for the frame**.
+
+Every netcode path that wrote `Transform` therefore silently *disabled* render
+interpolation for the corrected body:
+- the reconcilers wrote `tf.translation/rotation` directly;
+- the first Step-2 attempt (a decaying `RenderErrorOffset` applied to `Transform`
+  in `PostUpdate` + stripped in `FixedFirst`) wrote `Transform` **every frame** an
+  offset was live (~1 s after each correction).
+
+Result: the owned rover rendered at raw 64 Hz steps against the render clock →
+persistent jitter **while merely holding the throttle, contact or not**. The host
+never reconciles, so it never entered this state — which is exactly why *only the
+client* jittered, *even on one machine with zero latency*.
+
+### The fix: physics-space error reduction (Rocket League model)
+
+Game code now **never touches `Transform`**. Corrections are reduced in physics
+space and rendered by the same interpolation as everything else:
+1. Reconcilers (`reconcile_owned_prediction`, `reconcile_predicted_dynamic`) no
+   longer pop the pose. A `Correct`-class divergence is **parked** as a
+   `PendingCorrection { pos, rot }` residual component.
+2. `drain_pending_corrections` (FixedUpdate, before the solve) bleeds that residual
+   into avian `Position`/`Rotation` at a hard cap of **≤2.5 cm / ≤0.9° per tick**
+   (exp time-const `CORRECTION_TAU = 0.12 s`). The nudge flows through solve →
+   writeback → interpolation, so it renders as a smooth sub-perceptible slide and
+   never disturbs a contact.
+3. Only a **gross desync** (`> snap_pos = 6 m`) still seats the pose directly —
+   there an easing reset (a real teleport) is correct.
+
+### What else mattered (necessary, but not the root cause)
+
+- **Velocity feed-forward, not deadbeat** (Step 1). `v = (target − pos)/h`
+  commanded ~50 m/s spikes (cubic-Hermite overshoot × 1-tick deadbeat) → tunnelled
+  contacts. Replaced with `v = curve_velocity + soft_correction/TAU`, capped at
+  `PROXY_MAX_SPEED = 50` so a diverging cosim body can't fling its proxy.
+- **Predict remote rovers** (Step 4). A kinematic proxy *pushes* but never
+  *yields*; driving into it bounced your rover off a wall that authoritatively
+  moved. Marking remote `RoverVessel` proxies `PredictedDynamic` (reusing Phase B)
+  makes them yield locally → crisp mutual push. **Guard:** never vehicle-predict a
+  rover *this* session owns (the Phase-A drive-grace lapse otherwise flapped it
+  OwnedLocally↔PredictedDynamic and the state-reconciler yanked it — a tap-steer
+  sawtooth).
+- **Reconcile dead-zone widened** `eps_pos 0.25→0.40 m`, `eps_rot 1.7°→5.7°`.
+  Measured free-driving divergence is ~13–27 cm / 2–6° per ack (host-vs-client
+  input-timing skew, inherent without rollback); the old thresholds corrected on
+  nearly every ack. Now ordinary skew reads InSync.
+- **Velocity half-blend, not full re-seat** in `reconcile_owned_prediction` — a
+  full seat to a snapshot-stale velocity hiccuped the speed each correction.
+- **Drive-grace `PREDICT_GRACE_TICKS` 30→240** so a rover released at speed isn't
+  handed to the proxy path mid-coast (a ~0.3 m render warp on every key release).
+
+### Red herrings ruled out by measurement (not theory)
+
+A throwaway census (`[DRIVE]`/`[RECON-*]`/`[JIT]` `eprintln`s) was decisive each
+time — guessing was wrong every time:
+- "teleporting every tick" — **no**, census showed 100% velocity branch.
+- "reconcile correcting constantly" — after the dead-zone widen, **zero**
+  corrections, yet the user still saw jitter → proved it was *render-layer*, which
+  pointed the audit at the interpolation plugin.
+- The `[JIT]` detector (per-frame backward-step on the *post-propagation*
+  `GlobalTransform`) is what localised the stutter to the render layer for certain.
+
+**Diagnostics are still in the tree** (search `DIAG`) — strip them before the final
+commit; they cost a couple of branches per tick and some log spam.
+
+### Still open (future, not blocking)
+
+Step 3 (tick-stamped inputs on an unreliable channel + host de-jitter buffer) is the
+*root* cure for the corrections themselves: it removes the host-vs-client input
+phase skew, so divergence — hence correction size — shrinks. With real latency the
+corrections grow; physics-space drain keeps them smooth, but Step 3 keeps them
+*small*. See §4.
+
+---
+
+## 0. Design rationale (the four review outcomes this plan was built on)
+
+> These were the corrections to the original fix sketch that shaped the plan.
+> Outcome **1, 3, 4 held**; **outcome 2 was itself later superseded** — see ★OUTCOME.
+
+1. **Proxies are *velocity-driven*, not teleport+velocity-hint.** ✅ held. A
+   teleported kinematic body creates penetration-from-nowhere regardless of the
+   velocity we claim. Each fixed step set `v = (target − current)/h` and let avian
+   integrate; teleports become the *exception* (first sample / big gap / snap).
+   (Shipped with a refinement: feed-forward `v`, not deadbeat — see ★OUTCOME.)
+2. ~~Corrections seat the body immediately; the visual discontinuity goes into a
+   decaying **render** offset.~~ **SUPERSEDED.** Seating the body was right;
+   smoothing on a *render `Transform` offset* was wrong — it fights
+   `bevy_transform_interpolation`. The shipped model reduces the error in **physics
+   space** (`PendingCorrection` drain), never touching `Transform`. See ★OUTCOME.
+3. **Predict-all-vehicles, not contact-islands.** ✅ held (shipped by reusing
+   `PredictedDynamic`). Islands concentrate their seams at the fragile
+   approach/contact instant to save CPU we don't need at 2–4 rovers; they remain the
+   documented fallback if the CPU gate (§5.5) ever fails.
+4. **Input hardening promoted from "optional" (Gap G) into the plan.** ✅ still
+   agreed — but **not yet built** (§4). Reliable-ordered inputs head-of-line-block
+   under loss → ack stalls → larger corrections; the cure is an unreliable channel
+   with redundant last-~10 frames + a host de-jitter buffer + applied-input in the
+   snapshot (held-input extrapolation).
 
 ---
 
 ## 1. Build order (each step independently verifiable)
 
-| Step | What | Verify gate |
+| Step | What | Status (2026-06-11) |
 |---|---|---|
-| 0 ✅ | Pop stash, strip diagnostic | tree compiles (Phase B tests existed green) |
-| 1 | Velocity-driven kinematic proxies (lin+ang) + Hermite | kick→clean bounce; settled rover doesn't blink; balloon doesn't drift |
-| 2 | Error-offset render smoothing + penetration guard | drive into rover: no buzz; open ground: unchanged feel |
-| 3 | Input hardening (redundant unreliable + jitter buffer + input-in-snapshot) | drive under simulated loss: no correction bursts |
-| 4 | Predict-all-vehicles (held-input + state reconcile + smoothing) | mutual push works; CPU gate (§6.5) passes |
+| 0 ✅ | Pop stash, strip diagnostic | done |
+| 1 ✅ | Velocity-driven kinematic proxies (lin+ang) + Hermite + **feed-forward** | shipped; deadbeat→feed-forward fix applied (see OUTCOME) |
+| 4 ✅ | Predict-all-vehicles (remote rovers `PredictedDynamic`, reuse Phase B) | shipped; own-rover guard added |
+| 2 ✅ | Correction smoothing — **re-architected to physics-space** (`PendingCorrection` drain), NOT a render-Transform offset | shipped; this was the root-cause fix |
+| 3 ⬜ | Input hardening (redundant unreliable + jitter buffer + input-in-snapshot) | **not started** — future; shrinks corrections at the source under real latency |
 
-Steps 1–2 fix the live jitter bug. Step 3 hardens. Step 4 delivers mutual push.
-**Do not reorder 2 and 4:** step 4's transitions and per-snapshot corrections rely on
-step 2's smoothing to be invisible.
+**Actual landing order was 1 → 4 → 2** (not 1 → 2), discovered empirically: step 4
+made the *physics* correct (mutual push), which exposed that the remaining jitter was
+purely a *render-layer* artifact (the interpolation-reset bug), fixed by the
+re-architected step 2. The original "don't reorder 2 and 4" caution was about
+smoothing hiding step-4 transitions — still true, and they did land together-ish.
 
 ---
 
@@ -127,6 +208,12 @@ the plugin), nothing else.
 ---
 
 ## 3. Step 2 — error-offset render smoothing ("smooth the pop, not the truth")
+
+> ⚠️ **SUPERSEDED — this whole section is the design that FAILED.** It was built,
+> shipped, and caused the hold-the-key jitter (it writes the render `Transform`,
+> which resets `bevy_transform_interpolation`'s easing). Kept for the record only.
+> **What actually shipped = physics-space `PendingCorrection` drain — see ★OUTCOME
+> at the top.** Do not implement what's below.
 
 ### Design
 - New always-on substrate component `RenderErrorOffset { pos: Vec3, rot: Quat }`
@@ -261,9 +348,44 @@ pops absorbed by the step-2 offset.
 | V7 | Two clients push each other's rovers (step 4) | mutual push, both feel contact, converge to host truth |
 | V8 | CPU gate: 3–4 predicted rovers | client holds 60 Hz fixed step |
 
-Run protocol: host+client from repo root per `CONTACT_JITTER_HANDOVER.md` §6
-(`--host --api 4001` / `--connect 127.0.0.1:5888 --api 4002`, `--no-throttle`,
-CWD = repo root, probe via ctx_execute fetch, ports 4001+).
+### Run protocol + operational gotchas (save the next person hours)
+
+Two terminals from the **repo root** (CWD matters — see asset gotcha):
+```bash
+cargo run -p lunco-client --bin sandbox --features networking -j2 -- --host --api 4001 --no-throttle
+cargo run -p lunco-client --bin sandbox --features networking -j2 -- --connect 127.0.0.1:5888 --api 4002 --no-throttle
+```
+- Networking is a **cargo feature** on `lunco-client`; flags `--host [port]` /
+  `--connect addr[:port]` (default transport port 5888/udp). Native client uses an
+  empty cert digest + `dangerous-configuration` → no mkcert/CA hassle on localhost.
+- `--no-throttle` keeps rendering when unfocused (else background tab → ~1 FPS).
+- API: `POST http://127.0.0.1:<port>/api/commands`, body `{"command":"Ping"}`. **curl
+  is hook-blocked here** → probe via a JS `fetch` (`ctx_execute`). Stop a run with
+  `{"type":"Exit"}`. `CaptureScreenshot{}` returns **raw PNG bytes**.
+- **Asset-CWD trap (a full empty-scene red herring):** `sandbox` roots assets at
+  `current_dir()/assets`. Launch from the wrong CWD (e.g. a shell that `cd`'d into
+  `target/...`) → `sandbox_scene.usda` not found → **empty black viewport** → the 2 s
+  fallback avatar spawns a *second* `FloatingOrigin` → `"multiple floating origins"`
+  flood. Always launch from repo root.
+- **Build/disk/RAM:** always `-j2` (this machine struggles; the networking build is
+  the repo's heaviest). `/home` runs near-full — the build hit `No space left` twice;
+  clear `target/debug/incremental` (26 GB once) to recover, never the sibling
+  `../*/target`. Two GUI windows + a linker OOM'd the machine; don't build while both
+  run. **If the client renders <1 FPS the "jitter" may be frame starvation — check
+  client `Ping` ≈ frame time FIRST.**
+- **avian 0.6.1 facts:** Kinematic↔Kinematic does NOT collide (two proxy rovers pass
+  through — the deferred caveat); Kinematic→Dynamic DOES push (enables proxy↔owned
+  interaction). `Collisions`/`entities_colliding_with` returns *collider* entities
+  (may differ from the rigid-body entity for child colliders). `SubstepCount = 12` on
+  rovers — any local re-stepping inherits it; don't hand-roll an integrator.
+- **Diagnostics (turn on when jitter returns):** build with the **`net-diag` cargo
+  feature** (`--features networking,net-diag`) — compiled out of normal builds.
+  `lunco-networking/src/diagnostics.rs` then reports (a) **render jitter**
+  (backward-steps on the *rendered* `GlobalTransform` — the keystone that found the
+  interpolation bug), (b) **velocity spikes** (the 50/200 m/s signatures), (c)
+  **correction pressure** (`PendingCorrection` residuals). Active once compiled;
+  mute a run with `LUNCO_NET_DIAG=0`. Method lesson: when the sim is right but it
+  *looks* wrong, measure the render layer, not the sim.
 
 ## 7. Risks / empirical unknowns (checked at the marked probes)
 

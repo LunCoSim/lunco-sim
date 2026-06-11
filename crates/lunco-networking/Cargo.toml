@@ -14,6 +14,11 @@ default = []
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
 networking = ["dep:lightyear", "dep:serde", "dep:serde_json"]
+# Client-prediction diagnostics (render-jitter / velocity / correction census in
+# `diagnostics.rs`). OFF by default → not compiled into normal/shipping builds.
+# Build with it when chasing netcode jitter; once compiled it's active unless
+# silenced with `LUNCO_NET_DIAG=0`. Implies `networking` (pointless without the wire).
+net-diag = ["networking"]
 
 [dependencies]
 bevy = { workspace = true }

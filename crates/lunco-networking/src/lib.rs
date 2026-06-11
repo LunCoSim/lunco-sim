@@ -30,6 +30,12 @@ pub mod wire;
 mod server;
 #[cfg(feature = "networking")]
 mod client;
+/// Client-prediction diagnostics (render-jitter / velocity / correction census).
+/// Compiled only under the `net-diag` feature (off by default — not in normal
+/// builds); silence a net-diag build at runtime with `LUNCO_NET_DIAG=0`. See
+/// `diagnostics.rs`.
+#[cfg(feature = "net-diag")]
+mod diagnostics;
 
 /// How this process participates in the session.
 #[derive(Clone, Debug)]

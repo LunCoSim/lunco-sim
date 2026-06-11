@@ -41,10 +41,6 @@ pub mod session;
 /// applies; unit-tested without the avian/render build.
 pub mod reconcile;
 
-/// Render-error smoothing (Step 2): decay reconcile pops on the render Transform
-/// while physics stays at truth. See [`smoothing::RenderErrorOffset`].
-pub mod smoothing;
-
 pub use architecture::*;
 pub use mocks::*;
 pub use telemetry::*;
@@ -61,7 +57,6 @@ pub use world::{
 };
 pub use identity::Provenance;
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
-pub use smoothing::RenderErrorOffset;
 pub use session::{
     authorize, AppliedInputSeq, IncomingSnapshots, InputFrame, LocalSession, NetReplicate, NetSpawn,
     NetStatus, NetworkRole, NotPredictable, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns,

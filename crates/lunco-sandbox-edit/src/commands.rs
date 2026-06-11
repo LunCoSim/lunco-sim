@@ -591,7 +591,6 @@ pub fn drive_kinematic_proxies(
         With<RigidBody>,
     >,
     mut commands: Commands,
-    mut dbg_tick: Local<u32>,
 ) {
     if !matches!(*role, lunco_core::NetworkRole::Client) {
         return;
@@ -607,20 +606,10 @@ pub fn drive_kinematic_proxies(
     else {
         return; // no samples yet
     };
-    // DIAG (Step 1 debugging): per-tick branch + magnitude census.
-    *dbg_tick = dbg_tick.wrapping_add(1);
-    let dbg = *dbg_tick % 60 == 0;
-    let mut n_total = 0u32;
-    let mut n_matched = 0u32;
-    let mut n_teleport = 0u32;
-    let mut n_velocity = 0u32;
-    let mut max_off = 0f64;
-    let mut max_lin = 0f64;
     for (gid, buf) in buffers.0.iter() {
         if buf.is_empty() {
             continue;
         }
-        n_total += 1;
         let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(*gid)) else {
             continue;
         };
@@ -630,7 +619,6 @@ pub fn drive_kinematic_proxies(
         let Ok((mut pos, mut rot, mut lin, mut ang, motion)) = q.get_mut(e) else {
             continue; // not a RigidBody proxy (e.g. visual-only — handled by interpolate)
         };
-        n_matched += 1;
         // Where the curve says this body is right now, plus its feed-forward
         // velocity (`lv`/`av` = the host's authoritative chassis velocity).
         let Some((here, here_rot, lv, av)) = sample_curve(buf, render_t) else {
@@ -638,7 +626,6 @@ pub fn drive_kinematic_proxies(
         };
 
         let off = (pos.0 - here).length();
-        max_off = max_off.max(off);
         if snapped || off > PROXY_SNAP_DIST {
             // Teleport: seat pose, kill velocity. Covers first sight / long stall /
             // authoritative discontinuity — closing this gap with one tick of
@@ -647,7 +634,6 @@ pub fn drive_kinematic_proxies(
             rot.0 = here_rot.as_dquat();
             lin.0 = DVec3::ZERO;
             ang.0 = DVec3::ZERO;
-            n_teleport += 1;
         } else {
             // Feed-forward curve velocity + soft position correction over TAU (NOT
             // deadbeat: the old `(target−pos)/h` commanded ~50 m/s → jitter +
@@ -665,8 +651,6 @@ pub fn drive_kinematic_proxies(
             }
             lin.0 = v;
             ang.0 = av + ang_vel_to_track(rot.0.as_quat(), here_rot, PROXY_CORRECT_TAU);
-            n_velocity += 1;
-            max_lin = max_lin.max(lin.0.length());
         }
 
         // Animation hint = authoritative chassis velocity (moved here from
@@ -676,69 +660,6 @@ pub fn drive_kinematic_proxies(
             Some(mut m) => *m = hint,
             None => {
                 commands.entity(e).insert(hint);
-            }
-        }
-    }
-    if dbg {
-        eprintln!(
-            "[DRIVE] bufs={n_total} matched={n_matched} tele={n_teleport} vel={n_velocity} \
-             snapped={snapped} max_off={max_off:.3} max_lin={max_lin:.2} render_t={render_t:.3}"
-        );
-    }
-}
-
-/// DIAG (temporary): catch render-level jitter at the source. Every render frame,
-/// compare each rover's rendered (post-propagation) translation against the last
-/// frame; smooth the per-frame delta to get the travel direction; report whenever
-/// a frame's delta steps BACKWARD against that direction by more than ~2 cm — the
-/// visible "jitter" signature — with which gid and how far. Tells us definitively
-/// WHICH body stutters and at what rate, instead of inferring from reconcile
-/// censuses (which are nearly silent while the user still sees jitter).
-pub fn detect_render_jitter(
-    role: Res<lunco_core::NetworkRole>,
-    q: Query<
-        (
-            Entity,
-            &GlobalTransform,
-            Option<&lunco_core::GlobalEntityId>,
-            Has<lunco_core::OwnedLocally>,
-            Has<lunco_core::PredictedDynamic>,
-            Has<RigidBody>,
-        ),
-        With<lunco_core::RoverVessel>,
-    >,
-    mut prev: Local<HashMap<Entity, (Vec3, Vec3)>>, // (last pos, smoothed delta)
-    mut n_report: Local<u32>,
-) {
-    if !matches!(*role, lunco_core::NetworkRole::Client) {
-        return;
-    }
-    for (e, gt, gid, owned, pred, _rb) in q.iter() {
-        let pos = gt.translation();
-        let entry = prev.entry(e).or_insert((pos, Vec3::ZERO));
-        let delta = pos - entry.0;
-        entry.0 = pos;
-        let dir = entry.1;
-        // Smooth the delta to estimate travel direction (per-frame EMA).
-        entry.1 = dir * 0.85 + delta * 0.15;
-        let speed = dir.length();
-        if speed < 0.005 {
-            continue; // effectively at rest — nothing to jitter against
-        }
-        let back = delta.dot(dir / speed);
-        if back < -0.02 {
-            *n_report = n_report.wrapping_add(1);
-            if *n_report % 5 == 1 {
-                eprintln!(
-                    "[JIT] #{:>4} gid={:x} owned={} pred={} back_step={:.3}m frame_delta={:.3}m dir_speed={:.3}m/f",
-                    *n_report,
-                    gid.map_or(0, |g| g.get()),
-                    owned,
-                    pred,
-                    -back,
-                    delta.length(),
-                    speed,
-                );
             }
         }
     }
@@ -924,7 +845,6 @@ pub fn reconcile_owned_prediction(
         Option<&mut PendingCorrection>,
     )>,
     mut commands: Commands,
-    mut dbg_own: Local<u32>,
 ) {
     for gid in q_owned.iter() {
         let g = gid.get();
@@ -985,21 +905,6 @@ pub fn reconcile_owned_prediction(
         // COMMON CASE: prediction matched authority → leave the body alone.
         if matches!(decision, lunco_core::Reconciliation::InSync) {
             continue;
-        }
-        // DIAG: how often / how hard does the owned rover correct while driving?
-        if let lunco_core::Reconciliation::Correct { pos: np, rot: nr }
-        | lunco_core::Reconciliation::Snap { pos: np, rot: nr } = decision
-        {
-            *dbg_own = dbg_own.wrapping_add(1);
-            if *dbg_own % 15 == 0 {
-                eprintln!(
-                    "[RECON-OWN] #{} corr_mag={:.4} rot_deg={:.3} snap={}",
-                    *dbg_own,
-                    (np - tf.translation).length(),
-                    nr.angle_between(tf.rotation).to_degrees(),
-                    matches!(decision, lunco_core::Reconciliation::Snap { .. }),
-                );
-            }
         }
         match decision {
             lunco_core::Reconciliation::InSync => unreachable!(),
@@ -1207,7 +1112,6 @@ pub fn reconcile_predicted_dynamic(
     mut commands: Commands,
     // Last host gen-time reconciled per gid, so we act once per fresh snapshot.
     mut last_handled: Local<HashMap<u64, f64>>,
-    mut dbg_n: Local<u32>,
 ) {
     for gid in q_pred.iter() {
         let g = gid.get();
@@ -1235,22 +1139,6 @@ pub fn reconcile_predicted_dynamic(
         );
         if matches!(decision, lunco_core::Reconciliation::InSync) {
             continue;
-        }
-        // DIAG: how often / how hard do predicted bodies (remote rovers, props)
-        // get state-corrected?
-        if let lunco_core::Reconciliation::Correct { pos: np, rot: nr }
-        | lunco_core::Reconciliation::Snap { pos: np, rot: nr } = decision
-        {
-            *dbg_n = dbg_n.wrapping_add(1);
-            if *dbg_n % 15 == 0 {
-                eprintln!(
-                    "[RECON-PRED] #{} gid={g:x} corr_mag={:.4} rot_deg={:.3} snap={}",
-                    *dbg_n,
-                    (np - tf.translation).length(),
-                    nr.angle_between(tf.rotation).to_degrees(),
-                    matches!(decision, lunco_core::Reconciliation::Snap { .. }),
-                );
-            }
         }
         match decision {
             lunco_core::Reconciliation::InSync => unreachable!(),
@@ -1957,9 +1845,6 @@ impl Plugin for SpawnCommandPlugin {
         // `Transform` (which resets `bevy_transform_interpolation`'s easing — the
         // cause of the hold-the-key client jitter).
         app.add_systems(FixedUpdate, drain_pending_corrections);
-        // DIAG (temporary): rendered-motion jitter detector, after propagation so
-        // it sees exactly what the camera sees.
-        app.add_systems(Last, detect_render_jitter);
     }
 }
 
@@ -2363,9 +2248,9 @@ mod pose_write_tests {
     }
 }
 
-/// **Throwaway probe — PREDICT_AND_SMOOTH_TODO Step 1.1.** Confirms avian 0.6.1
-/// kinematic semantics before we commit to velocity-driven remote proxies
-/// (`drive_kinematic_proxies`). Two questions the whole Step-1 design rides on:
+/// **Platform-semantics regression guard for `drive_kinematic_proxies`** (was the
+/// Step-1 probe; kept because the velocity-drive design *depends* on these avian
+/// 0.6.1 facts staying true across upgrades). Two questions the design rides on:
 ///
 ///  * **P1** — a `Kinematic` body with `LinearVelocity = v` advances `Position`
 ///    by exactly `v·h` per fixed tick. If true we can steer a proxy purely by
@@ -2379,8 +2264,8 @@ mod pose_write_tests {
 ///
 /// Runs the real solver headlessly (no window) with `SubstepCount(12)` to match
 /// the app. Deterministic stepping via [`TimeUpdateStrategy::ManualDuration`] so
-/// each `app.update()` is exactly one fixed tick. **Delete this whole module once
-/// Step 1 lands** — it asserts platform behavior, not our code.
+/// each `app.update()` is exactly one fixed tick. Asserts platform behavior, not
+/// our code — if it ever fails after an avian bump, the velocity-drive needs review.
 #[cfg(test)]
 mod avian_kinematic_probe {
     use super::*;

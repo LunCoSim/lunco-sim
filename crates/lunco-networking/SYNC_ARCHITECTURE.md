@@ -103,6 +103,46 @@ The render-step rebasing is where gap A lives: M2 carries `(CellCoord, Transform
 each client maps it into its *own* origin. Identity (M1) and coordinates (M2) are
 orthogonal, so a content entity keeps its derived id while its cell+offset stream.
 
+### 4.1 M2-Predicted — as-built client prediction (SHIPPED 2026-06-11)
+
+The abstract "reconcile predicted (smooth error-correct, not rollback)" above is
+realised on the client as **physics-space error reduction** (Fiedler / Rocket
+League model). Canonical write-up + the debugging story:
+[`PREDICT_AND_SMOOTH_PLAN.md`](./PREDICT_AND_SMOOTH_PLAN.md) §★OUTCOME; membership
+rules: [`PREDICTION_MEMBERSHIP.md`](./PREDICTION_MEMBERSHIP.md). Shape:
+
+- **Membership (which bodies predict locally).** Three disjoint sets, all client-only:
+  - *Owned, actively driven* (`OwnedLocally`, computability rule + drive-grace):
+    input-replay predicted, reconciled against the acked input seq.
+  - *Predicted props & all remote rovers* (`PredictedDynamic`): run local avian
+    `Dynamic`, **state**-reconciled per snapshot (no input seq). Remote rovers are
+    predicted so they **yield** to a local push (mutual push), not just push.
+  - *Everything else* (interpolated proxies): kinematic, **velocity-driven** toward
+    the snapshot curve each tick (not teleported), so their motion enters contact
+    resolution. Cosim-opaque bodies (`NotPredictable`) are never predicted (Gap C).
+- **Correction = physics-space, never render-space.** A reconciler that diverges
+  does **not** seat the pose or touch `Transform`. It parks the delta in a
+  `PendingCorrection` component; `drain_pending_corrections` (FixedUpdate, pre-solve)
+  bleeds it into avian `Position`/`Rotation` at a hard cap (≤2.5 cm / ≤0.9° per tick,
+  τ≈0.12 s). It flows through solve → writeback → render interpolation = a smooth,
+  contact-safe slide. Only a gross desync (>6 m) seats directly (real teleport).
+- **★ LOAD-BEARING CONSTRAINT — never write `Transform` from game code.** The client
+  enables avian `PhysicsInterpolationPlugin::interpolate_all()`, so
+  `bevy_transform_interpolation` owns every `Transform` at render rate and treats
+  any external `Transform` write as a teleport that **resets that body's easing**.
+  Writing `Transform` in netcode (reconcile, smoothing, snapshot-apply) silently
+  disables render interpolation for that body → raw fixed-rate stepping = jitter
+  visible *only on the client* (the host never reconciles). All M2 correction must
+  therefore go through `Position`/`Rotation`/velocity, never `Transform`. This cost
+  a multi-hour debug; it is the single most important client-side sync invariant.
+- **Velocity, not pose, drives proxies.** `drive_kinematic_proxies` sets
+  `LinearVelocity`/`AngularVelocity` = curve feed-forward + soft correction (capped),
+  never a deadbeat `(target−pos)/h` (that spiked ~50 m/s and tunnelled contacts).
+
+**Still open:** M4 input hardening (tick-stamped redundant inputs + host de-jitter
+buffer) is specced but unbuilt; it shrinks the corrections above at the source under
+real latency (today they only stay *smooth*, not *small*). See PLAN §4.
+
 ---
 
 ## 5. Why the whole thing converges (the correctness argument)

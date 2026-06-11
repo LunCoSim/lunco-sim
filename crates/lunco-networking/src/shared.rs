@@ -39,6 +39,12 @@ pub(crate) fn build_networking(app: &mut App, mode: &NetworkMode) {
     // ferry below drives. Both Host and Client need it.
     app.add_plugins(crate::wire::WirePlugin);
 
+    // Prediction diagnostics — compiled only under the `net-diag` feature (off in
+    // normal builds). Added on both peers so you can compare host (silent) vs client
+    // while chasing jitter. Silence a net-diag build at runtime with `LUNCO_NET_DIAG=0`.
+    #[cfg(feature = "net-diag")]
+    app.add_plugins(crate::diagnostics::NetDiagnosticsPlugin);
+
     let tick = Duration::from_secs_f64(lunco_core::SECS_PER_TICK);
     match mode {
         NetworkMode::Host { port } => {
