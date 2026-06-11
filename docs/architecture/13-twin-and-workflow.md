@@ -231,6 +231,13 @@ externals = [
 ]
 
 [usd]
+# The Twin's entry-point USD stage — the one that becomes the active stage
+# (projected into the Grid) when the Twin opens. Path is relative to the Twin
+# root. This is the declared "which scene opens" answer that core USD leaves to
+# convention; LunCoSim never *infers* a starting scene from a folder of many
+# `.usda` files. Other `.usda` files in the Twin are a
+# referenceable asset library, not auto-loaded. Full resolution rule (incl. the
+# no-manifest folder fallback) in 21-domain-usd.md § "Which stage opens".
 default_scene = "main_scene.usda"
 
 [environment]
