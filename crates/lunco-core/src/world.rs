@@ -27,7 +27,7 @@
 //! `FloatingOrigin`; only its holder changes.
 
 use bevy::prelude::*;
-use big_space::prelude::{BigSpace, CellCoord, FloatingOrigin, Grid};
+use big_space::prelude::{BigSpace, BigSpaceSystems, CellCoord, FloatingOrigin, Grid};
 
 /// Marks the one canonical `Grid` scenes mount under. Consumers query for this
 /// marker rather than picking "the first `Grid`" — there may be other grids
@@ -159,7 +159,18 @@ impl Plugin for WorldShellPlugin {
             .register_type::<OriginAnchor>()
             .register_type::<WorldGridConfig>()
             .init_resource::<WorldGridConfig>()
-            .add_systems(Startup, setup_world.in_set(WorldShellSet));
+            .add_systems(Startup, setup_world.in_set(WorldShellSet))
+            // Enforce the `OriginAnchor`'s documented role — the *default* holder
+            // of the origin — every frame, not just at startup. Runs in
+            // `PostUpdate` immediately before big_space's own origin finder
+            // (`RecenterLargeTransforms`) so the anchor reclaims the origin in
+            // the same frame a claiming camera is despawned: big_space never sees
+            // zero origins, so there is no error and no propagation gap.
+            .add_systems(
+                PostUpdate,
+                anchor_owns_origin_by_default
+                    .before(BigSpaceSystems::RecenterLargeTransforms),
+            );
     }
 }
 
@@ -168,4 +179,29 @@ impl Plugin for WorldShellPlugin {
 /// [`ensure_world_root`], which is create-or-get.
 fn setup_world(world: &mut World) {
     ensure_world_root(world);
+}
+
+/// Enforces the invariant the [`OriginAnchor`] doc promises: it is the *default*
+/// holder of the single `FloatingOrigin`, present even with no camera.
+///
+/// big_space mandates exactly one `FloatingOrigin` per `BigSpace` but provides no
+/// recovery — its [`BigSpace::find_floating_origin`] only logs an error on zero
+/// (and, by design, the origin "doesn't need to be a camera"). A camera (avatar,
+/// celestial observer, …) *claims* the origin from the anchor for precision while
+/// it lives; when that camera is despawned — e.g. `ClearScene` empties the
+/// viewport, leaving an intentionally camera-less world — the origin would
+/// vanish. This hands it back to the persistent anchor (exactly where a headless
+/// server keeps it), so the cleared scene correctly stays camera-less while the
+/// coordinate frame survives. No-op on every frame a camera holds the origin.
+fn anchor_owns_origin_by_default(
+    mut commands: Commands,
+    q_origins: Query<(), With<FloatingOrigin>>,
+    q_anchor: Query<Entity, With<OriginAnchor>>,
+) {
+    if !q_origins.is_empty() {
+        return;
+    }
+    if let Some(anchor) = q_anchor.iter().next() {
+        commands.entity(anchor).insert(FloatingOrigin);
+    }
 }

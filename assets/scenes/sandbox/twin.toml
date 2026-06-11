@@ -1,3 +1,9 @@
 name = "sandbox"
 version = "0.1.0"
 description = "Rover sandbox — ground mobility test rig with one USD stage and Modelica/Python balloon participants."
+
+[usd]
+# Entry-point scene loaded as the active stage when this Twin opens.
+# Other `.usda` files here (joint_test.usda) are a referenceable asset
+# library — not auto-loaded.
+default_scene = "sandbox_scene.usda"

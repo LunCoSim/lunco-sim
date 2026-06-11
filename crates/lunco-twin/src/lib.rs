@@ -72,7 +72,7 @@ pub use document_kind_registry::{DocumentKindId, DocumentKindMeta, DocumentKindR
 pub use document_kind_registry::DocumentKindRegistryPlugin;
 pub use error::TwinError;
 pub use file_kind::{DocumentKind, FileEntry, FileKind};
-pub use manifest::{TwinChildRef, TwinManifest, MANIFEST_FILENAME};
+pub use manifest::{TwinChildRef, TwinManifest, UsdManifest, MANIFEST_FILENAME};
 
 // Re-export lunco-doc and lunco-storage so downstream crates don't need
 // to depend on them separately just to use the types Twin hands back.
@@ -492,6 +492,7 @@ version = "0.1.0"
             version: "0.1.0".into(),
             default_perspective: None,
             children: vec![],
+            usd: None,
         };
         twin.promote_to_twin(manifest).unwrap();
         assert!(twin.has_manifest());

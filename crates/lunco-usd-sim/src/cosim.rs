@@ -615,7 +615,12 @@ fn on_load_scene(
     channels: Res<ModelicaChannels>,
     mut script_registry: ResMut<lunco_scripting::ScriptRegistry>,
 ) {
-    let path = cmd.path.clone();
+    // Accept an absolute path (Twin manifests join `default_scene` to
+    // the Twin root) or an already-relative asset path; bail if an
+    // absolute path lies outside the assets dir.
+    let Some(path) = normalize_scene_asset_path(&cmd.path) else {
+        return;
+    };
     let root_prim = resolve_root_prim(&path, &cmd.root_prim);
 
     // Blender-style no-op: same path + root prim already loaded.
@@ -627,6 +632,76 @@ fn on_load_scene(
 
     info!("[load-scene] reload path=`{}` root=`{}`", path, root_prim);
 
+    // Despawn the old scene + free worker-side state (shared with
+    // `ClearScene`).
+    clear_scene_entities(
+        &mut commands,
+        &q_usd,
+        &q_wires,
+        &q_modelica,
+        &q_scripted,
+        &channels,
+        &mut script_registry,
+    );
+
+    // Force fresh read from disk in case the user edited the file.
+    asset_server.reload(&path);
+
+    // Spawn via shared helper, deferred so despawns flush first.
+    commands.queue(move |world: &mut World| {
+        spawn_scene_root_world(world, &path, &root_prim);
+    });
+}
+
+/// Clear the active scene — despawn every USD prim entity + cosim wire
+/// and free the worker-side Modelica steppers / Python script docs they
+/// referenced, leaving an empty viewport.
+///
+/// Fired when a Twin / folder opens with nothing to show — no
+/// `[usd] default_scene`, or a plain folder with no USD content — so the
+/// viewport reflects the newly opened folder instead of keeping the
+/// previously loaded scene. (`LoadScene` does this same clear *before*
+/// loading its new scene.) Also useful standalone over the API / MCP as
+/// a "clear the world" verb.
+#[Command(default)]
+pub struct ClearScene {}
+
+#[on_command(ClearScene)]
+fn on_clear_scene(
+    _cmd: ClearScene,
+    mut commands: Commands,
+    q_usd: Query<(Entity, &UsdPrimPath)>,
+    q_wires: Query<Entity, With<SimConnection>>,
+    q_modelica: Query<Entity, With<ModelicaModel>>,
+    q_scripted: Query<&ScriptedModel>,
+    channels: Res<ModelicaChannels>,
+    mut script_registry: ResMut<lunco_scripting::ScriptRegistry>,
+) {
+    info!("[clear-scene] clearing viewport");
+    clear_scene_entities(
+        &mut commands,
+        &q_usd,
+        &q_wires,
+        &q_modelica,
+        &q_scripted,
+        &channels,
+        &mut script_registry,
+    );
+}
+
+/// Despawn the current scene's USD entities + cosim wires and free the
+/// worker-side Modelica steppers / Python script docs they referenced.
+/// Shared by [`LoadScene`] (clear-before-reload) and [`ClearScene`]
+/// (clear-to-empty). Despawns are deferred through `commands`.
+fn clear_scene_entities(
+    commands: &mut Commands,
+    q_usd: &Query<(Entity, &UsdPrimPath)>,
+    q_wires: &Query<Entity, With<SimConnection>>,
+    q_modelica: &Query<Entity, With<ModelicaModel>>,
+    q_scripted: &Query<&ScriptedModel>,
+    channels: &ModelicaChannels,
+    script_registry: &mut lunco_scripting::ScriptRegistry,
+) {
     // Worker-side cleanup before despawn. Send Despawn for every
     // Modelica-bearing entity so the worker's `steppers` /
     // `cached_models` / `sim_streams` hashmaps don't leak.
@@ -649,17 +724,29 @@ fn on_load_scene(
     for (e, _) in q_usd.iter() { commands.entity(e).try_despawn(); despawned += 1; }
     for e in q_wires.iter() { commands.entity(e).try_despawn(); despawned += 1; }
     info!(
-        "[load-scene] cleanup: {} entities despawned, {} Modelica steppers freed, {} Python docs freed",
+        "[scene] cleanup: {} entities despawned, {} Modelica steppers freed, {} Python docs freed",
         despawned, modelica_freed, scripts_freed,
     );
+}
 
-    // Force fresh read from disk in case the user edited the file.
-    asset_server.reload(&path);
-
-    // Spawn via shared helper, deferred so despawns flush first.
-    commands.queue(move |world: &mut World| {
-        spawn_scene_root_world(world, &path, &root_prim);
-    });
+/// Normalize a scene path to asset-server-relative form. Accepts an
+/// absolute path under the workspace `assets/` dir (Twin manifests store
+/// scenes as twin-root-relative; the caller joins them to an absolute
+/// path) or an already-relative asset path. Returns `None` (with a warn)
+/// if an absolute path lies outside the assets dir.
+fn normalize_scene_asset_path(path_in: &str) -> Option<String> {
+    let pb = std::path::PathBuf::from(path_in);
+    if pb.is_absolute() {
+        match pb.strip_prefix(assets_dir()) {
+            Ok(rel) => Some(rel.to_string_lossy().into_owned()),
+            Err(_) => {
+                warn!("[scene] `{}` is outside assets dir — cannot load", path_in);
+                None
+            }
+        }
+    } else {
+        Some(path_in.to_string())
+    }
 }
 
 /// Spawn a USD scene root under the first `Grid` entity.
@@ -676,18 +763,8 @@ pub fn spawn_scene_root_world(
     // Normalize to asset-server-relative. The asset server prepends
     // its configured `file_path` (the `assets/` root) to every load
     // string, so absolute paths must have that prefix stripped.
-    let pb = std::path::PathBuf::from(path_in);
-    let asset_path: String = if pb.is_absolute() {
-        let assets = assets_dir();
-        match pb.strip_prefix(&assets) {
-            Ok(rel) => rel.to_string_lossy().into_owned(),
-            Err(_) => {
-                warn!("[scene] `{}` is outside assets dir — cannot load", path_in);
-                return None;
-            }
-        }
-    } else {
-        path_in.to_string()
+    let Some(asset_path) = normalize_scene_asset_path(path_in) else {
+        return None;
     };
     let root_prim = resolve_root_prim(&asset_path, root_prim_in);
     let handle = world
@@ -829,7 +906,7 @@ pub(crate) fn install(app: &mut App) {
     register_all_commands(app);
 }
 
-register_commands!(on_load_scene,);
+register_commands!(on_load_scene, on_clear_scene,);
 
 #[cfg(test)]
 mod tests {

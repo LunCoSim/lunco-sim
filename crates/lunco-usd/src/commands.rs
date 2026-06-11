@@ -34,11 +34,13 @@ use lunco_core::{Command, on_command, register_commands};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened, SaveDocument};
-use lunco_twin::{DocumentKind, DocumentKindId, DocumentKindMeta, DocumentKindRegistry, FileKind};
+use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 use lunco_workbench::file_ops::{NewDocument, OpenFile};
-use lunco_workbench::{TwinAdded, WorkspaceResource};
+use lunco_workbench::{TwinAdded, ViewportPlaceholder, WorkspaceResource};
+use lunco_usd_bevy::UsdPrimPath;
 
 use crate::document::UsdOp;
+use lunco_usd_sim::cosim::{ClearScene, LoadScene};
 use crate::registry::UsdDocumentRegistry;
 
 /// Stable id for the USD document kind in
@@ -86,20 +88,32 @@ impl Plugin for UsdCommandsPlugin {
         app.add_systems(Update, drain_pending_usd_file_loads);
 
         app.add_systems(Update, drain_usd_pending_events);
+        app.add_systems(Update, update_viewport_placeholder);
         app.add_observer(open_usd_docs_on_twin_added);
         register_all_commands(app);
     }
 }
 
-/// On `TwinAdded`, eagerly fire [`OpenFile`] for every `.usd*` file
-/// the new Twin contains. Mirrors how a Modelica twin's `.mo` files
-/// surface in the browser — but for USD we go all the way to "open
-/// the document" so cosim can wire `lunco:modelicaModel` /
-/// `lunco:simWires` participants from prim attributes through
-/// [`UsdSimPlugin`](lunco_usd_sim::UsdSimPlugin).
+/// On `TwinAdded`, make the viewport **reflect the opened Twin/folder**
+/// — clear-and-replace, so a previously loaded scene never lingers:
 ///
-/// Skips USD files inside child Twins — those have their own
-/// `TwinAdded` event when the workspace eagerly opens them.
+/// - **Has `[usd] default_scene`** → [`LoadScene`] it (path relative to
+///   the Twin root). `LoadScene` clears the old scene, then mounts this
+///   one as the single active stage; cosim wires `lunco:modelicaModel`
+///   / `lunco:simWires` participants from its prim attributes through
+///   [`UsdSimPlugin`](lunco_usd_sim::UsdSimPlugin).
+/// - **No starting scene** (Twin without `default_scene`, or a plain
+///   folder with no manifest — including one with **no `.usda` at all**)
+///   → [`ClearScene`]: empty viewport. The folder's files are still
+///   indexed and shown in the browser; the user picks a scene from there.
+///
+/// The Twin's other `.usda` files are an **asset library** — indexed but
+/// not auto-loaded; composed into the active stage on demand via
+/// `AddReference`. Full resolution rule in
+/// `docs/architecture/21-domain-usd.md` § "Which stage opens".
+///
+/// Skips child Twins — they raise their own `TwinAdded` when the
+/// workspace eagerly opens them, each resolving its own starting scene.
 fn open_usd_docs_on_twin_added(
     trigger: On<TwinAdded>,
     workspace: Res<WorkspaceResource>,
@@ -109,13 +123,52 @@ fn open_usd_docs_on_twin_added(
     let Some(twin) = workspace.twin(twin_id) else {
         return;
     };
-    for file in twin.files() {
-        if matches!(file.kind, FileKind::Document(DocumentKind::Usd)) {
-            let abs = twin.root.join(&file.relative_path);
-            commands.trigger(OpenFile {
+    let default_scene = twin
+        .manifest
+        .as_ref()
+        .and_then(|m| m.usd.as_ref())
+        .and_then(|u| u.default_scene.as_deref());
+    match default_scene {
+        Some(scene) => {
+            let abs = twin.root.join(scene);
+            info!(
+                "[twin] loading starting scene `{}` (twin `{}`)",
+                scene,
+                twin.root.display()
+            );
+            commands.trigger(LoadScene {
                 path: abs.to_string_lossy().into_owned(),
+                root_prim: String::new(),
             });
         }
+        None => {
+            info!(
+                "[twin] `{}` declares no starting scene — clearing viewport",
+                twin.root.display()
+            );
+            commands.trigger(ClearScene {});
+        }
+    }
+}
+
+/// Keep the workbench's [`ViewportPlaceholder`] in sync with whether a
+/// USD scene is loaded. With **no** `UsdPrimPath` entities — an empty
+/// viewport, e.g. right after [`ClearScene`] from opening a scene-less
+/// folder — show an empty-state hint; otherwise clear it so the message
+/// vanishes the instant a scene mounts. No-op in headless binaries that
+/// don't add the workbench (the resource is absent).
+fn update_viewport_placeholder(
+    scene: Query<(), With<UsdPrimPath>>,
+    placeholder: Option<ResMut<ViewportPlaceholder>>,
+) {
+    let Some(mut placeholder) = placeholder else {
+        return;
+    };
+    let want = scene
+        .is_empty()
+        .then(|| "Nothing to show — open a scene or a Twin.".to_string());
+    if placeholder.message != want {
+        placeholder.message = want;
     }
 }
 
@@ -591,49 +644,49 @@ mod tests {
         assert_eq!(host.document().generation(), 4);
     }
 
-    #[test]
-    fn twin_added_auto_opens_usd_docs() {
-        // Build a temp folder with a `twin.toml`, two `.usda` files,
-        // and one `.mo` (must be ignored), then drive a TwinAdded
-        // event through the workbench. Our observer should fire
-        // OpenFile for each `.usda`, and the OpenFile observer
-        // (already verified) should allocate a UsdDocument per path.
+    /// What the twin-open observer decided to do with the viewport.
+    #[derive(Resource, Default)]
+    struct SceneCmds {
+        /// `LoadScene.path` values emitted (one per scene loaded).
+        loads: Vec<String>,
+        /// Count of `ClearScene` emitted.
+        clears: usize,
+    }
+
+    /// Build a temp Twin folder (two `.usda`, one `.mo`, given
+    /// `twin.toml`), drive a `TwinAdded`, and report which scene
+    /// command the observer emitted. `LoadScene`/`ClearScene` handlers
+    /// live in `UsdSimPlugin` (not added here); counting observers
+    /// capture the observer's decision directly.
+    #[cfg(test)]
+    fn scene_cmds_for_twin(toml_body: &str, dir_name: &str) -> SceneCmds {
         use lunco_twin::TwinMode;
         use lunco_workbench::WorkspaceResource;
 
-        let tmp = std::env::temp_dir().join("lunco_usd_twin_phase7_test");
+        let tmp = std::env::temp_dir().join(dir_name);
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
-        // Minimal `twin.toml` — keeps the folder a real Twin.
-        std::fs::write(
-            tmp.join("twin.toml"),
-            "name = \"phase7\"\nversion = \"0.1.0\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            tmp.join("scene_a.usda"),
-            "#usda 1.0\ndef Xform \"A\" {}\n",
-        )
-        .unwrap();
-        std::fs::write(
-            tmp.join("scene_b.usda"),
-            "#usda 1.0\ndef Xform \"B\" {}\n",
-        )
-        .unwrap();
-        std::fs::write(tmp.join("controller.mo"), "model Controller end Controller;\n")
-            .unwrap();
+        std::fs::write(tmp.join("twin.toml"), toml_body).unwrap();
+        std::fs::write(tmp.join("scene_a.usda"), "#usda 1.0\ndef Xform \"A\" {}\n").unwrap();
+        std::fs::write(tmp.join("scene_b.usda"), "#usda 1.0\ndef Xform \"B\" {}\n").unwrap();
+        std::fs::write(tmp.join("controller.mo"), "model Controller end Controller;\n").unwrap();
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<WorkspaceResource>();
         app.add_plugins(UsdCommandsPlugin);
+        app.init_resource::<SceneCmds>();
+        app.add_observer(|t: On<LoadScene>, mut c: ResMut<SceneCmds>| {
+            c.loads.push(t.event().path.clone());
+        });
+        app.add_observer(|_t: On<ClearScene>, mut c: ResMut<SceneCmds>| {
+            c.clears += 1;
+        });
         app.update();
 
-        // Open the Twin and fire TwinAdded ourselves — mirrors what
-        // the workbench's open-folder observer does.
         let twin = match TwinMode::open(&tmp).expect("twin opens") {
-            TwinMode::Twin(t) => t,
-            other => panic!("expected Twin variant, got {:?}", other),
+            TwinMode::Twin(t) | TwinMode::Folder(t) => t,
+            other => panic!("expected Twin/Folder variant, got {:?}", other),
         };
         let twin_id = app
             .world_mut()
@@ -641,20 +694,93 @@ mod tests {
             .add_twin(twin);
         app.world_mut()
             .trigger(lunco_workbench::TwinAdded { twin: twin_id });
-        // Several ticks to flush: TwinAdded → OpenFile triggers →
-        // queued world commands run → DocumentOpened drains.
         for _ in 0..4 {
             app.update();
         }
-
-        let reg = app.world().resource::<UsdDocumentRegistry>();
-        assert_eq!(
-            reg.ids().count(),
-            2,
-            "exactly two USD docs should auto-open from the twin"
-        );
-
+        let out = std::mem::take(app.world_mut().resource_mut::<SceneCmds>().as_mut());
         let _ = std::fs::remove_dir_all(&tmp);
+        out
+    }
+
+    /// Drive `TwinAdded` for a folder containing **no `.usda` files**
+    /// (and no `twin.toml`), returning the observer's decision.
+    #[cfg(test)]
+    fn scene_cmds_for_empty_folder(dir_name: &str) -> SceneCmds {
+        use lunco_twin::TwinMode;
+        use lunco_workbench::WorkspaceResource;
+
+        let tmp = std::env::temp_dir().join(dir_name);
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("notes.txt"), "no scenes here\n").unwrap();
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<WorkspaceResource>();
+        app.add_plugins(UsdCommandsPlugin);
+        app.init_resource::<SceneCmds>();
+        app.add_observer(|t: On<LoadScene>, mut c: ResMut<SceneCmds>| {
+            c.loads.push(t.event().path.clone());
+        });
+        app.add_observer(|_t: On<ClearScene>, mut c: ResMut<SceneCmds>| {
+            c.clears += 1;
+        });
+        app.update();
+
+        let twin = match TwinMode::open(&tmp).expect("folder opens") {
+            TwinMode::Twin(t) | TwinMode::Folder(t) => t,
+            other => panic!("expected Folder variant, got {:?}", other),
+        };
+        let twin_id = app
+            .world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .add_twin(twin);
+        app.world_mut()
+            .trigger(lunco_workbench::TwinAdded { twin: twin_id });
+        for _ in 0..4 {
+            app.update();
+        }
+        let out = std::mem::take(app.world_mut().resource_mut::<SceneCmds>().as_mut());
+        let _ = std::fs::remove_dir_all(&tmp);
+        out
+    }
+
+    #[test]
+    fn twin_added_loads_only_declared_starting_scene() {
+        // `[usd] default_scene` names the one scene to load (clear +
+        // replace). scene_b is an asset library — must NOT load.
+        let cmds = scene_cmds_for_twin(
+            "name = \"t\"\nversion = \"0.1.0\"\n\n[usd]\ndefault_scene = \"scene_a.usda\"\n",
+            "lunco_usd_twin_starting_scene_test",
+        );
+        assert_eq!(cmds.loads.len(), 1, "exactly one scene loaded");
+        assert!(
+            cmds.loads[0].ends_with("scene_a.usda"),
+            "the declared starting scene, got {:?}",
+            cmds.loads
+        );
+        assert_eq!(cmds.clears, 0, "LoadScene clears internally — no extra ClearScene");
+    }
+
+    #[test]
+    fn twin_added_without_default_scene_clears_viewport() {
+        // No `default_scene` (also covers a folder with no `.usda`):
+        // clear to an empty viewport, load nothing.
+        let cmds = scene_cmds_for_twin(
+            "name = \"t\"\nversion = \"0.1.0\"\n",
+            "lunco_usd_twin_no_scene_test",
+        );
+        assert!(cmds.loads.is_empty(), "no scene loaded, got {:?}", cmds.loads);
+        assert_eq!(cmds.clears, 1, "viewport cleared to empty");
+    }
+
+    #[test]
+    fn open_folder_with_no_usda_shows_nothing() {
+        // Folder with no `.usda` and no `twin.toml`: clear to empty,
+        // load nothing — the viewport must show nothing.
+        let cmds = scene_cmds_for_empty_folder("lunco_usd_empty_folder_test");
+        assert!(cmds.loads.is_empty(), "nothing to load, got {:?}", cmds.loads);
+        assert_eq!(cmds.clears, 1, "empty folder clears the viewport");
     }
 
     #[test]

@@ -57,6 +57,28 @@ pub struct TwinManifest {
     /// Sub-Twins composed into this Twin. Empty for leaf twins.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<TwinChildRef>,
+
+    /// USD domain settings (`[usd]` section). Holds the Twin's starting
+    /// scene; absent for Twins with no USD content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usd: Option<UsdManifest>,
+}
+
+/// The `[usd]` section of `twin.toml`.
+///
+/// Today carries only the entry-point scene. The Twin's other `.usda`
+/// files are a referenceable asset library — not auto-loaded. Full
+/// resolution rule in `docs/architecture/21-domain-usd.md`
+/// § "Which stage opens".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct UsdManifest {
+    /// Entry-point USD stage — the one loaded as the active stage when
+    /// the Twin opens. Path is **relative to the Twin root**. `None`
+    /// means "no starting scene declared" (the Twin opens like a plain
+    /// folder: files indexed, nothing auto-loaded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_scene: Option<String>,
 }
 
 /// Reference to a sub-Twin. Local for now; remote URLs reserved for
@@ -122,6 +144,7 @@ mod tests {
             version: "0.1.0".into(),
             default_perspective: None,
             children: vec![],
+            usd: None,
         };
         let text = toml::to_string_pretty(&manifest).unwrap();
         let parsed: TwinManifest = toml::from_str(&text).unwrap();
@@ -147,6 +170,9 @@ mod tests {
                     url: Some("https://twins.lunco.space/sensors".into()),
                 },
             ],
+            usd: Some(UsdManifest {
+                default_scene: Some("main_scene.usda".into()),
+            }),
         };
         let text = toml::to_string_pretty(&manifest).unwrap();
         let parsed: TwinManifest = toml::from_str(&text).unwrap();
@@ -162,6 +188,7 @@ mod tests {
             version: "0.1.0".into(),
             default_perspective: None,
             children: vec![],
+            usd: None,
         };
         let path = std::env::temp_dir().join(format!(
             "lunco_twin_manifest_{}.toml",
@@ -194,11 +221,29 @@ version = "0.1.0"
         assert_eq!(parsed.description, None);
         assert_eq!(parsed.default_perspective, None);
         assert!(parsed.children.is_empty());
+        assert_eq!(parsed.usd, None);
 
         // Re-serializing should not add the optional keys with null/empty values.
         let out = toml::to_string_pretty(&parsed).unwrap();
         assert!(!out.contains("description"));
         assert!(!out.contains("default_perspective"));
         assert!(!out.contains("children"));
+        assert!(!out.contains("usd"));
+    }
+
+    #[test]
+    fn usd_default_scene_parses() {
+        let text = r#"
+name = "rig"
+version = "0.1.0"
+
+[usd]
+default_scene = "scenes/main.usda"
+"#;
+        let parsed: TwinManifest = toml::from_str(text).unwrap();
+        assert_eq!(
+            parsed.usd.unwrap().default_scene.as_deref(),
+            Some("scenes/main.usda")
+        );
     }
 }

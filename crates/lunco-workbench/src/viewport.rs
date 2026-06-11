@@ -163,6 +163,23 @@ impl PanelRects {
     }
 }
 
+/// Empty-state text drawn centered over the 3D viewport region.
+///
+/// When `message` is `Some`, the workbench paints it centered over the
+/// viewport — in **both** the full-window "View" perspective (empty
+/// layout) and the docked "Build" perspective (where [`ViewportPanel`]
+/// holds the centre). When `None`, nothing is drawn.
+///
+/// The workbench owns the *rendering* (so it shows regardless of
+/// perspective) but is domain-agnostic about *when* to show it: a
+/// domain crate that knows what "empty" means — e.g. `lunco-usd`,
+/// "no USD scene loaded" — sets `message`. See `render_layout`.
+#[derive(Resource, Default)]
+pub struct ViewportPlaceholder {
+    /// Text to show, or `None` to draw nothing.
+    pub message: Option<String>,
+}
+
 /// Workbench-central panel that reserves a rect for the 3D viewport.
 ///
 /// The panel itself paints nothing — its only job is to record its
@@ -442,6 +459,7 @@ pub struct WorkbenchViewportPlugin;
 impl Plugin for WorkbenchViewportPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PanelRects>()
+            .init_resource::<ViewportPlaceholder>()
             .add_systems(Startup, ensure_egui_host)
             // (Intentionally no per-frame clear of PanelRects: with the
             // current Camera::viewport architecture, keeping the last
