@@ -22,7 +22,7 @@
 //!   HZ; clients apply them in `drain_wire_inbox`. [`broadcast_new_spawns`]
 //!   replicates runtime spawns with the host-allocated id.
 
-use avian3d::prelude::{AngularVelocity, LinearVelocity, PhysicsSystems, Position};
+use avian3d::prelude::{AngularVelocity, LinearVelocity, PhysicsSystems, Position, Rotation};
 use big_space::prelude::CellCoord;
 use bevy::ecs::reflect::ReflectEvent;
 use bevy::prelude::*;
@@ -43,11 +43,15 @@ use lunco_api::registry::ApiEntityRegistry;
 // ── Wire payloads ─────────────────────────────────────────────────────────────
 
 /// A command on the wire: its short type name (e.g. `"DriveRover"`) + the
-/// reflect-serialized params, with `Entity` refs expressed as `GlobalEntityId`s.
+/// reflect-serialized params as a **JSON string**, with `Entity` refs expressed as
+/// `GlobalEntityId`s. The payload is JSON *text* (not a `serde_json::Value`) so the
+/// envelope round-trips through the binary `bincode` codec — bincode is not
+/// self-describing and cannot deserialize a `Value` (`deserialize_any`). The id
+/// translation still operates on a parsed `Value`; this is just the wire form.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WireCommand {
     pub type_name: String,
-    pub data: serde_json::Value,
+    pub data: String,
 }
 
 /// One entity's replicated transform (+ velocity), keyed by [`GlobalEntityId`]
@@ -295,6 +299,8 @@ fn capture_command<C: Event + Reflect + TypePath>(
         );
     }
 
+    // Serialize the (id-translated) Value to compact JSON text for the wire.
+    let data = serde_json::to_string(&data).unwrap_or_else(|_| "null".to_string());
     let mut mutation = Mutation::local(WireCommand { type_name, data });
     mutation.origin = local.0;
     outbox.0.push((channel, WireEnvelope::Command(mutation)));
@@ -403,9 +409,13 @@ pub fn drain_wire_inbox(
                 // Host attributes to the connection-derived session (don't trust
                 // a client-claimed origin); a client trusts the host.
                 let origin = if role.is_host() { sender } else { m.origin };
+                // Wire form is JSON text (bincode-safe); parse back to a `Value`
+                // for the schema-driven id resolution + reflect deserialize.
+                let params =
+                    serde_json::from_str(&m.payload.data).unwrap_or(serde_json::Value::Null);
                 commands.trigger(WireCommandEvent {
                     type_name: m.payload.type_name,
-                    params: m.payload.data,
+                    params,
                     op_id: m.id,
                     origin,
                 });
@@ -480,6 +490,7 @@ pub fn gather_snapshot(
             Option<&LinearVelocity>,
             Option<&AngularVelocity>,
             Option<&Position>,
+            Option<&Rotation>,
             Option<&CellCoord>,
         ),
         With<NetReplicate>,
@@ -497,10 +508,19 @@ pub fn gather_snapshot(
     *acc = 0.0;
 
     let mut entries = Vec::new();
-    for (gid, tf, lin, ang, position, cell) in q.iter() {
+    for (gid, tf, lin, ang, position, rotation, cell) in q.iter() {
         let key = gid.get();
         let t = tf.translation.to_array();
-        let r = tf.rotation.to_array();
+        // Rotation on the wire is WORLD-space: prefer avian's world `Rotation`,
+        // fall back to `Transform.rotation` for bodies without a physics Rotation.
+        // For a top-level body the two are identical, so existing replicated
+        // bodies are unaffected; for a NESTED body (an articulated rover's wheel)
+        // `Transform.rotation` is parent-LOCAL while the client applies it to
+        // world `Rotation` — only the avian-world value reconstructs correctly.
+        // (`pos` below already prefers avian world `Position` for the same reason.)
+        let r = rotation
+            .map(|rot| rot.0.as_quat().to_array())
+            .unwrap_or_else(|| tf.rotation.to_array());
         // only_if_changed gates on POSE — velocity rides along when the pose
         // changes (at rest the body emits nothing and the client holds the last
         // sample, whose velocity is ~0 by then). Good enough for prediction.
@@ -608,5 +628,65 @@ impl Plugin for WirePlugin {
             // also after writeback). Otherwise the host could ship last-tick's pose
             // stamped with this-tick's ack (a 1-tick mispair the client reconciles away).
             .add_systems(FixedUpdate, gather_snapshot.after(PhysicsSystems::Writeback));
+    }
+}
+
+#[cfg(test)]
+mod codec_roundtrip {
+    use super::*;
+    use crate::shared::{deserialize_env, serialize_env};
+
+    #[test]
+    fn snapshot_envelope_roundtrips_through_bincode() {
+        let env = WireEnvelope::Snapshot(SnapshotMsg {
+            tick: 42,
+            entries: vec![SnapshotEntry {
+                gid: 7,
+                t: [1.0, 2.0, 3.0],
+                r: [0.0, 0.0, 0.0, 1.0],
+                lv: [0.1, 0.0, -0.2],
+                av: [0.0, 0.5, 0.0],
+                last_input_seq: 99,
+                pos: [1.0, 2.0, 3.0],
+                cell: [0, 0, 0],
+            }],
+        });
+        let bytes = serialize_env(&env).expect("serialize");
+        let back = deserialize_env(&bytes).expect("deserialize");
+        match back {
+            WireEnvelope::Snapshot(s) => {
+                assert_eq!(s.tick, 42);
+                assert_eq!(s.entries.len(), 1);
+                assert_eq!(s.entries[0].gid, 7);
+                assert_eq!(s.entries[0].last_input_seq, 99);
+                assert_eq!(s.entries[0].pos, [1.0, 2.0, 3.0]);
+            }
+            _ => panic!("wrong variant after round-trip"),
+        }
+    }
+
+    #[test]
+    fn command_envelope_with_string_payload_roundtrips() {
+        // Guards the bincode gotcha: `WireCommand.data` must be a JSON *String*, not a
+        // `serde_json::Value` — bincode is not self-describing and cannot deserialize a
+        // `Value` (`deserialize_any`), which would silently drop every command
+        // (possession/drive) over the wire while snapshots kept working.
+        let payload = r#"{"forward":1.0,"steer":-0.5}"#;
+        let env = WireEnvelope::Command(Mutation::local(WireCommand {
+            type_name: "DriveRover".to_string(),
+            data: payload.to_string(),
+        }));
+        let bytes = serialize_env(&env).expect("serialize");
+        let back = deserialize_env(&bytes).expect("deserialize");
+        match back {
+            WireEnvelope::Command(m) => {
+                assert_eq!(m.payload.type_name, "DriveRover");
+                assert_eq!(m.payload.data, payload);
+                // The apply path re-parses the text to a Value; confirm it still does.
+                let v: serde_json::Value = serde_json::from_str(&m.payload.data).unwrap();
+                assert_eq!(v["forward"], 1.0);
+            }
+            _ => panic!("wrong variant after round-trip"),
+        }
     }
 }

@@ -49,7 +49,7 @@
 //! 3. No duplicate processing or duplicate FSW ports
 
 use bevy::prelude::*;
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use avian3d::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
@@ -99,10 +99,12 @@ impl Plugin for UsdSimPlugin {
            .register_type::<RoverWheels>()
            .register_type::<ArticulationRoot>()
            .register_type::<PhysicalWheel>()
-           // Client-only: re-derive joint-wheel roll on replicated proxies from
-           // the chassis motion (the joint motor is held at 0 there). Same fixed
-           // domain + `tw.is_running()` gate as the raycast `update_wheel_spin`.
-           .add_systems(FixedUpdate, animate_proxy_physical_wheels
+           // Client-only: reconstruct a remote rover's wheels from its chassis
+           // (kinematic followers — wheels are no longer replicated), then re-derive
+           // the cosmetic visual roll. Chained so the visual spin layers on the
+           // freshly-placed body. Same `tw.is_running()` gate as raycast wheels.
+           .add_systems(FixedUpdate, (reconstruct_proxy_wheels, animate_proxy_physical_wheels)
+               .chain()
                .run_if(|tw: Res<lunco_core::TimeWarpState>| tw.is_running()))
            .add_observer(on_add_usd_sim_prim)
            // `try_wire_wheel` runs in PreUpdate so that Wire entities exist
@@ -200,6 +202,16 @@ pub struct PhysicalWheel {
     /// Integrated roll angle (rad), wrapped to `[0, 2π)`. Client display state;
     /// unused on the host (the body carries the real rotation there).
     pub spin_angle: f32,
+    /// Wheel mount offset in the **chassis** local frame (the authored wheel
+    /// translation). The client reconstructs a proxy wheel's world position as
+    /// `chassis_pos + chassis_rot · mount_local` instead of replicating it — the
+    /// axle is rigid, so this offset is constant. See `reconstruct_proxy_wheels`.
+    pub mount_local: Vec3,
+    /// Whether this wheel steers (front wheel of an Ackermann rover). The client
+    /// derives the steer angle from the chassis yaw-rate/speed for these.
+    pub steers: bool,
+    /// Front-to-rear axle distance (m), for the Ackermann steer reconstruction.
+    pub wheelbase: f64,
 }
 
 /// Marker for wheels waiting for their FSW root to be spawned to complete wiring.
@@ -255,6 +267,14 @@ fn process_usd_sim_prims(
     // setup can read `drive:angular:physics:maxForce` (the motor stall
     // torque, authored via `UsdPhysicsDriveAPI:angular`) from it.
     let mut joint_targets: HashMap<(Handle<UsdStageAsset>, String), String> = HashMap::new();
+    // Articulated ROOTS, derived from the SAME joint scan: a `PhysicsRevoluteJoint`'s
+    // `physics:body0` is the chassis the wheel hinges to. Keyed identically to
+    // `joint_targets` so a prim's own `(stage, path)` looks up in both. This (plus
+    // any `PhysicsArticulationRootAPI` prim) is the declarative source of truth for
+    // `ArticulatedVehicle`, replacing the old `setup_physical_wheel` side-effect +
+    // runtime `ChildOf` walk. See `crates/lunco-networking/USD_REPLICATION_POLICY.md`.
+    let mut articulation_roots: std::collections::HashSet<(Handle<UsdStageAsset>, String)> =
+        Default::default();
 
     // Scan the **stage data** rather than spawned entities. Joint and
     // wheel prims may be spawned on different frames; reading from the
@@ -283,6 +303,9 @@ fn process_usd_sim_prims(
                         path.as_str().to_string(),
                     );
                 }
+                if let Some(body0) = read_rel_target(reader, path, "physics:body0") {
+                    articulation_roots.insert((prim_path.stage_handle.clone(), body0));
+                }
             }
         }
     }
@@ -308,6 +331,34 @@ fn process_usd_sim_prims(
         // settles — see the pass-1 note above). All reads below are `&self`.
         let reader = &*stage.reader;
         let existing_tf = maybe_tf.cloned().unwrap_or_default();
+
+        // --- Network replication policy, derived from USD ---
+        // Structure from the joint graph (Pass 1) + `lunco:net:*` overrides. Stamps
+        // the structural markers (`ArticulatedVehicle`/`ArticulatedLink`) and any
+        // explicit opt-out / opacity override; the DEFAULT "replicate every non-static
+        // rigid body" is applied downstream by `apply_net_replication` (it needs the
+        // live avian `RigidBody`, which materialises later). Runs once per prim (this
+        // pass is gated `Without<UsdSimProcessed>`). Replaces the old runtime `ChildOf`
+        // walk + `setup_physical_wheel` side-effect. See USD_REPLICATION_POLICY.md.
+        let net_key = (prim_path.stage_handle.clone(), prim_path.path.clone());
+        if articulation_roots.contains(&net_key)
+            || has_api_schema(reader, &sdf_path, "PhysicsArticulationRootAPI")
+        {
+            commands.entity(entity).insert(lunco_core::ArticulatedVehicle);
+        }
+        if joint_targets.contains_key(&net_key) {
+            commands.entity(entity).insert(lunco_core::ArticulatedLink);
+        }
+        let net_replicate = reader.prim_attribute_value::<bool>(&sdf_path, "lunco:net:replicate");
+        let net_authority = reader.prim_attribute_value::<String>(&sdf_path, "lunco:net:authority");
+        let (net_excluded, net_opaque) =
+            net_override_markers(net_replicate, net_authority.as_deref());
+        if net_excluded {
+            commands.entity(entity).insert(lunco_core::NetExcluded);
+        }
+        if net_opaque {
+            commands.entity(entity).insert(lunco_core::NotPredictable);
+        }
 
         // 0. Detect Avatar prim
         if reader.prim_attribute_value::<String>(&sdf_path, "lunco:avatar").is_some() {
@@ -618,6 +669,23 @@ fn process_usd_sim_prims(
     }
 }
 
+/// Pure mapping of the `lunco:net:*` override attributes to replication markers,
+/// factored out so the policy vocabulary is unit-testable without a USD/avian build.
+///
+/// Returns `(excluded, opaque)`:
+/// - `excluded` ⇒ stamp [`lunco_core::NetExcluded`] (skip default replication):
+///   `lunco:net:replicate = false` OR `lunco:net:authority = "local"`.
+/// - `opaque` ⇒ stamp [`lunco_core::NotPredictable`] (never client-predicted):
+///   `lunco:net:authority = "opaque"`.
+///
+/// `server`/`predictable`/absent ⇒ the default (replicated, predictable). See
+/// `crates/lunco-networking/USD_REPLICATION_POLICY.md`.
+fn net_override_markers(replicate: Option<bool>, authority: Option<&str>) -> (bool, bool) {
+    let excluded = replicate == Some(false) || authority == Some("local");
+    let opaque = authority == Some("opaque");
+    (excluded, opaque)
+}
+
 /// Authored `physxVehicleSuspension:*` parameters, read once and shared by
 /// both wheel implementations. The raycast wheel emulates this spring
 /// analytically; the joint wheel realises it as a real prismatic spring.
@@ -878,6 +946,13 @@ fn setup_physical_wheel(
             wheel_radius: radius,
             axis_rot: wheel_axis_rot,
             spin_angle: 0.0,
+            // Authored wheel offset in the chassis frame (the wheel is a child of the
+            // chassis, so its local translation IS the mount). `steers`/`wheelbase`
+            // mirror the `SteeringActuator` geometry below — used by the client's
+            // `reconstruct_proxy_wheels` to place + steer the wheel without replicating it.
+            mount_local: existing_tf.translation,
+            steers: steer.is_some(),
+            wheelbase: 2.0 * existing_tf.translation.as_dvec3().z.abs(),
         },
         RigidBody::Dynamic,
         collider,
@@ -913,12 +988,11 @@ fn setup_physical_wheel(
         return;
     };
     let chassis = child_of.parent();
-    // Mark the chassis as an articulated root so a client never single-body
-    // predicts it (chassis-only Dynamic + per-snapshot reconcile vs. free jointed
-    // wheels = solver energy injection → flip). Idempotent across the 4 wheels.
-    commands
-        .entity(chassis)
-        .insert(lunco_core::ArticulatedVehicle);
+    // NOTE: `ArticulatedVehicle` (the articulated-root guard) is no longer stamped
+    // here. It is derived declaratively from the USD joint graph in
+    // `process_usd_sim_prims` (a prim that is a joint `physics:body0` target, or
+    // carries `PhysicsArticulationRootAPI`) — see USD_REPLICATION_POLICY.md. That
+    // removes this build-order side-effect (the membership pass used to depend on it).
     // Wheel mount point in the chassis local frame (the wheel is a child of
     // the chassis, so its Transform translation is already chassis-local).
     let mount_local = existing_tf.translation.as_dvec3();
@@ -1025,21 +1099,139 @@ fn setup_physical_wheel(
     });
 }
 
-/// Client-only: spin a joint-wheel's **visual** on a replicated proxy.
+/// Client-only: place a remote rover's wheels by **reconstructing** them from the
+/// chassis instead of replicating their poses over the wire.
 ///
-/// On the host (and the rover this client owns) the wheel body is spun by the
-/// avian joint motor and the visual child inherits it. On a client proxy the
-/// chassis is kinematic and the motor is held at zero, so the body never turns —
-/// here we re-derive the rolling angle from the chassis's [`ReplicatedChassisMotion`]
-/// (the same delivered hint the raycast `update_wheel_spin` reads) and author the
-/// visual child directly, exactly reconstructing the host's `body_spin · axis_rot`.
+/// The axle is rigid, so a wheel's offset from the chassis is constant (`mount_local`)
+/// and its only motion is cosmetic axle-spin (handled visually by
+/// `animate_proxy_physical_wheels`) + front-wheel steer (derived here from the chassis
+/// yaw-rate/speed). So a remote rover replicates **only its chassis**; each wheel is a
+/// kinematic follower whose world pose = `chassis ∘ steer` at `mount_local`. This puts
+/// the wheel collider in the right place for contact (the original "free wheel collider"
+/// bug) at ~zero wire cost — no per-wheel snapshot.
+///
+/// Runs only on a **client**, only for wheels whose chassis is a **kinematic proxy**
+/// (a remote rover); the host and the rover this client owns run real local wheel
+/// physics (Dynamic + joint + motor). A kinematic child body's world pose is not
+/// auto-derived from its parent, so it must be driven every tick or it freezes in world
+/// space as the chassis moves away.
+/// Ackermann steer angle (radians, about the chassis +Y axis) for a rigid-axle
+/// proxy wheel, derived from the replicated chassis motion: `tan δ = wheelbase ·
+/// yaw_rate / speed`. Rear wheels (`steers == false`) and a near-stationary
+/// chassis (ground speed ≤ 0.25 m/s, where the ratio is numerically meaningless)
+/// return 0. Cosmetic-grade; clamped to ±0.6 rad so a spike in the hint can't
+/// snap the wheel sideways.
+///
+/// Pure extract of the steer math in [`reconstruct_proxy_wheels`]; `lin`/`ang`
+/// are the chassis linear/angular velocity in world space and only the planar
+/// (x,z) speed and yaw rate (`ang.y`) are used.
+fn proxy_wheel_steer(steers: bool, wheelbase: f64, lin: DVec3, ang: DVec3) -> f64 {
+    if !steers {
+        return 0.0;
+    }
+    let speed = (lin.x * lin.x + lin.z * lin.z).sqrt();
+    if speed > 0.25 {
+        (wheelbase * ang.y / speed).atan().clamp(-0.6, 0.6)
+    } else {
+        0.0
+    }
+}
+
+/// World pose of a rigid-axle proxy wheel: the chassis pose composed with the
+/// authored mount offset and the (front-wheel) steer rotation. The axle is rigid,
+/// so the wheel rides at a constant `mount_local` offset in the chassis frame and
+/// only front wheels add a yaw about +Y. Returns `(position, rotation)`; the
+/// rotation is normalized.
+///
+/// Pure extract of the pose math in [`reconstruct_proxy_wheels`].
+fn proxy_wheel_pose(
+    chassis_pos: DVec3,
+    chassis_rot: DQuat,
+    mount_local: DVec3,
+    steer: f64,
+) -> (DVec3, DQuat) {
+    let pos = chassis_pos + chassis_rot * mount_local;
+    let rot = (chassis_rot * DQuat::from_rotation_y(steer)).normalize();
+    (pos, rot)
+}
+
+fn reconstruct_proxy_wheels(
+    role: Res<lunco_core::NetworkRole>,
+    q_chassis: Query<
+        (
+            &RigidBody,
+            &Position,
+            &Rotation,
+            Option<&lunco_core::ReplicatedChassisMotion>,
+        ),
+        (With<RoverVessel>, Without<PhysicalWheel>),
+    >,
+    mut q_wheels: Query<
+        (
+            Entity,
+            &PhysicalWheel,
+            &WheelOf,
+            &RigidBody,
+            &mut Position,
+            &mut Rotation,
+        ),
+        Without<lunco_core::OwnedLocally>,
+    >,
+    mut commands: Commands,
+) {
+    if !matches!(*role, lunco_core::NetworkRole::Client) {
+        return;
+    }
+    for (e, wheel, wheel_of, rb, mut pos, mut rot) in q_wheels.iter_mut() {
+        let Ok((c_rb, c_pos, c_rot, motion)) = q_chassis.get(wheel_of.0) else {
+            continue;
+        };
+        if !matches!(c_rb, RigidBody::Kinematic) {
+            continue; // host / owned rover — real local wheel physics
+        }
+        if !matches!(rb, RigidBody::Kinematic) {
+            commands.entity(e).insert(RigidBody::Kinematic);
+        }
+        // Front wheels: Ackermann steer from the chassis motion. Cosmetic-grade;
+        // rear wheels δ = 0.
+        let (lin, ang) = motion
+            .map(|m| (m.lin, m.ang))
+            .unwrap_or((DVec3::ZERO, DVec3::ZERO));
+        let steer = proxy_wheel_steer(wheel.steers, wheel.wheelbase, lin, ang);
+        // World pose = chassis ∘ steer, at the rigid mount offset. The cylinder
+        // collider (axis baked into its compound) lands correctly for contact; the
+        // visual child's spin is layered on by `animate_proxy_physical_wheels`.
+        let (p, q) = proxy_wheel_pose(c_pos.0, c_rot.0, wheel.mount_local.as_dvec3(), steer);
+        pos.0 = p;
+        rot.0 = q;
+    }
+}
+
+/// Client-only **fallback**: spin a joint-wheel's **visual** on a replicated proxy
+/// when the wheel body itself is NOT per-link replicated.
+///
+/// Superseded for replicated wheels: with full articulated per-link replication
+/// (wheels carry `NetReplicate`, applied by `apply_net_replication`) the wheel **body** carries
+/// the host's true world rotation and the visual child (`ChildOf(wheel)`) inherits
+/// it — so this system would *double-apply* spin. It therefore skips
+/// `With<NetReplicate>` wheels (`Without<NetReplicate>` below) and only animates any
+/// wheel that lacks per-link replication.
+///
+/// (Original behaviour, kept for the non-replicated case: on a client proxy the
+/// chassis is kinematic and the motor is held at zero, so the body never turns — it
+/// re-derives the rolling angle from the chassis's [`ReplicatedChassisMotion`] and
+/// authors the visual child directly, reconstructing the host's `body_spin · axis_rot`.)
 ///
 /// Guarded to a **kinematic** chassis so it is a no-op on the host/owned rover and
 /// never fights the joint-driven body there.
 fn animate_proxy_physical_wheels(
-    // `WheelOf`, not `ChildOf`: joint wheels on an `ArticulationRoot` rover are
-    // reparented out of the chassis's Bevy hierarchy (the logical link survives).
-    mut q_wheels: Query<(&mut PhysicalWheel, &GlobalTransform, &WheelOf)>,
+    // `WheelOf`, not `ChildOf`: the logical wheel→chassis link survives independent
+    // of Bevy hierarchy. `Without<NetReplicate>`: replicated wheels carry their own
+    // spin via the body's world rotation, so skip them (see docstring).
+    mut q_wheels: Query<
+        (&mut PhysicalWheel, &GlobalTransform, &WheelOf),
+        Without<lunco_core::NetReplicate>,
+    >,
     q_chassis: Query<
         (&RigidBody, &Position, Option<&lunco_core::ReplicatedChassisMotion>),
         With<RoverVessel>,
@@ -1221,6 +1413,9 @@ mod proxy_wheel_tests {
                 wheel_radius: 0.5,
                 axis_rot: Quat::IDENTITY,
                 spin_angle: 0.0,
+                mount_local: Vec3::ZERO,
+                steers: false,
+                wheelbase: 0.0,
             },
             GlobalTransform::IDENTITY,
             WheelOf(chassis),
@@ -1261,6 +1456,152 @@ mod proxy_wheel_tests {
         let (spin, rot) = run_once(RigidBody::Dynamic);
         assert_eq!(spin, 0.0, "host chassis must be a no-op, got spin {spin}");
         assert_eq!(rot, Quat::IDENTITY, "host visual must be untouched");
+    }
+
+    #[test]
+    fn replicated_wheel_is_noop() {
+        // With per-link replication the wheel BODY carries the host's true world
+        // rotation and the visual child inherits it; this fallback animator must
+        // skip a `NetReplicate` wheel (else the visual spin double-applies).
+        let mut app = App::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_secs_f64(0.1));
+        app.insert_resource(time);
+
+        let chassis = app
+            .world_mut()
+            .spawn((
+                RigidBody::Kinematic,
+                Position(DVec3::ZERO),
+                lunco_core::ReplicatedChassisMotion {
+                    lin: DVec3::new(0.0, 0.0, -2.0),
+                    ang: DVec3::ZERO,
+                },
+                RoverVessel,
+            ))
+            .id();
+        let visual = app.world_mut().spawn(Transform::default()).id();
+        app.world_mut().spawn((
+            PhysicalWheel {
+                visual_entity: Some(visual),
+                wheel_radius: 0.5,
+                axis_rot: Quat::IDENTITY,
+                spin_angle: 0.0,
+                mount_local: Vec3::ZERO,
+                steers: false,
+                wheelbase: 0.0,
+            },
+            GlobalTransform::IDENTITY,
+            WheelOf(chassis),
+            // The discriminator under test: a per-link-replicated wheel.
+            lunco_core::NetReplicate,
+        ));
+
+        app.add_systems(Update, animate_proxy_physical_wheels);
+        app.update();
+
+        let spin = app
+            .world_mut()
+            .query::<&PhysicalWheel>()
+            .iter(app.world())
+            .next()
+            .unwrap()
+            .spin_angle;
+        let rot = app.world().entity(visual).get::<Transform>().unwrap().rotation;
+        assert_eq!(spin, 0.0, "replicated wheel must be a no-op, got spin {spin}");
+        assert_eq!(rot, Quat::IDENTITY, "replicated wheel visual must be untouched");
+    }
+
+    #[test]
+    fn net_override_vocabulary() {
+        // Default / server / predictable: replicated, predictable (no override markers).
+        assert_eq!(super::net_override_markers(None, None), (false, false));
+        assert_eq!(super::net_override_markers(None, Some("server")), (false, false));
+        assert_eq!(super::net_override_markers(None, Some("predictable")), (false, false));
+        // Opt-out: excluded, not opaque.
+        assert_eq!(super::net_override_markers(Some(false), None), (true, false));
+        assert_eq!(super::net_override_markers(None, Some("local")), (true, false));
+        // Opaque: replicated but never predicted.
+        assert_eq!(super::net_override_markers(None, Some("opaque")), (false, true));
+        // Explicit include is not an exclusion.
+        assert_eq!(super::net_override_markers(Some(true), None), (false, false));
+    }
+
+    #[test]
+    fn rear_wheel_never_steers() {
+        // steers=false ⇒ δ=0 regardless of motion.
+        let s = super::proxy_wheel_steer(false, 2.0, DVec3::new(3.0, 0.0, 0.0), DVec3::Y);
+        assert_eq!(s, 0.0);
+    }
+
+    #[test]
+    fn front_wheel_below_speed_threshold_holds_straight() {
+        // Ground speed ≤ 0.25 m/s ⇒ yaw/speed ratio is meaningless ⇒ δ=0.
+        let s = super::proxy_wheel_steer(true, 2.0, DVec3::new(0.0, 0.0, -0.2), DVec3::Y);
+        assert_eq!(s, 0.0);
+    }
+
+    #[test]
+    fn front_wheel_ackermann_angle() {
+        // tan δ = wheelbase · yaw_rate / speed. wheelbase=2, yaw=0.5, speed=2 (along −Z)
+        // ⇒ δ = atan(2·0.5/2) = atan(0.5).
+        let wheelbase = 2.0;
+        let yaw = 0.5;
+        let s = super::proxy_wheel_steer(true, wheelbase, DVec3::new(0.0, 0.0, -2.0), DVec3::new(0.0, yaw, 0.0));
+        let expected = (wheelbase * yaw / 2.0_f64).atan();
+        assert!((s - expected).abs() < 1e-12, "δ={s}, expected {expected}");
+        // Vertical (y) velocity must not leak into the planar speed used for the ratio.
+        let s_with_vy = super::proxy_wheel_steer(true, wheelbase, DVec3::new(0.0, 9.0, -2.0), DVec3::new(0.0, yaw, 0.0));
+        assert!((s_with_vy - expected).abs() < 1e-12, "vy leaked: δ={s_with_vy}");
+    }
+
+    #[test]
+    fn front_wheel_steer_is_clamped() {
+        // A huge yaw/speed ratio saturates at ±0.6 rad, and sign tracks yaw.
+        let hi = super::proxy_wheel_steer(true, 100.0, DVec3::new(0.0, 0.0, -1.0), DVec3::new(0.0, 5.0, 0.0));
+        assert!((hi - 0.6).abs() < 1e-12, "δ={hi}");
+        let lo = super::proxy_wheel_steer(true, 100.0, DVec3::new(0.0, 0.0, -1.0), DVec3::new(0.0, -5.0, 0.0));
+        assert!((lo + 0.6).abs() < 1e-12, "δ={lo}");
+    }
+
+    #[test]
+    fn proxy_pose_at_identity_chassis_is_mount_offset() {
+        // Chassis at origin, no rotation, no steer ⇒ wheel sits exactly at mount_local.
+        let mount = DVec3::new(0.8, -0.3, 1.2);
+        let (p, q) = super::proxy_wheel_pose(DVec3::ZERO, DQuat::IDENTITY, mount, 0.0);
+        assert!((p - mount).length() < 1e-12, "p={p:?}");
+        assert!(q.angle_between(DQuat::IDENTITY) < 1e-12, "q={q:?}");
+    }
+
+    #[test]
+    fn proxy_pose_rotates_mount_into_world() {
+        // Chassis yawed 90° about +Y at a translated origin: the mount offset must
+        // be rotated into world space and added to the chassis position. A +90° yaw
+        // maps local +Z → world +X (right-handed, Y-up).
+        let chassis_pos = DVec3::new(10.0, 0.0, -5.0);
+        let chassis_rot = DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
+        let mount = DVec3::new(0.0, 0.0, 1.0); // 1 m forward in chassis frame
+        let (p, q) = super::proxy_wheel_pose(chassis_pos, chassis_rot, mount, 0.0);
+        let expected = chassis_pos + DVec3::new(1.0, 0.0, 0.0);
+        assert!((p - expected).length() < 1e-9, "p={p:?}, expected {expected:?}");
+        // No steer ⇒ wheel rotation equals the chassis rotation.
+        assert!(q.angle_between(chassis_rot) < 1e-9, "q={q:?}");
+    }
+
+    #[test]
+    fn proxy_pose_steer_composes_after_chassis() {
+        // The steer yaw is applied in the chassis frame (chassis ∘ steer), so the
+        // resulting wheel yaw is the sum of the two about a shared +Y axis, and the
+        // mount position is unaffected by steer.
+        let chassis_rot = DQuat::from_rotation_y(0.3);
+        let mount = DVec3::new(0.5, 0.0, 1.0);
+        let steer = 0.2;
+        let (p, q) = super::proxy_wheel_pose(DVec3::ZERO, chassis_rot, mount, steer);
+        let expected_rot = DQuat::from_rotation_y(0.3 + 0.2);
+        assert!(q.angle_between(expected_rot) < 1e-9, "q={q:?}");
+        // Position depends only on chassis pose + mount, not the steer angle.
+        let (p0, _) = super::proxy_wheel_pose(DVec3::ZERO, chassis_rot, mount, 0.0);
+        assert!((p - p0).length() < 1e-12, "steer moved the hub: {p:?} vs {p0:?}");
     }
 }
 

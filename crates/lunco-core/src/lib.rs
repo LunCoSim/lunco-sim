@@ -58,8 +58,9 @@ pub use world::{
 pub use identity::Provenance;
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use session::{
-    authorize, AppliedInputSeq, ArticulatedVehicle, IncomingSnapshots, InputFrame, LocalSession,
-    NetReplicate, NetSpawn,
+    authorize, AppliedInputSeq, ArticulatedLink, ArticulatedVehicle, IncomingSnapshots, InputFrame,
+    LocalSession,
+    NetExcluded, NetReplicate, NetSpawn,
     NetStatus, NetworkRole, NotPredictable, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns,
     PossessionPolicy,
     PredictedDynamic, ReplicatedChassisMotion, ReplicatedSpawn, SessionRegistry, SkipContentStamp,

@@ -282,20 +282,53 @@ pub struct NotPredictable;
 
 /// **Articulated-body guard:** this entity is the ROOT of a multi-body assembly
 /// whose child rigid bodies are joined to it by physics joints (a *Physical*
-/// rover: chassis + wheels on `RevoluteJoint`s) — and those children are NOT
-/// replicated (`tag_networked_physics` skips nested bodies; full per-link
-/// replication is a follow-up). Such a root must **never be single-body
-/// predicted** on a client: making only the chassis `Dynamic` and
+/// rover: chassis + wheels on `RevoluteJoint`s). Its child links ARE now
+/// per-link replicated ([`ArticulatedLink`] + [`NetReplicate`]), so a remote
+/// client renders the host's true articulation. The root must still **never be
+/// single-body predicted** on a client: making only the chassis `Dynamic` and
 /// state-reconciling its pose/velocity each snapshot — while the jointed wheels
-/// run free, uncorrected local physics — violates the joint constraints every
-/// snapshot, and the solver injects energy until the rover flips. A *kinematic
-/// proxy* chassis has its pose forced by snapshots and physically cannot flip,
-/// so articulated roots fall back to that path (`maintain_predicted_vehicles`
-/// excludes `With<ArticulatedVehicle>`). Stamped at the joint-creation site
-/// (`lunco-usd-sim`'s `setup_physical_wheel`) on both peers; only the client
-/// reads it. Single-body (raycast) rovers never carry it and predict normally.
+/// follow their own snapshot streams — violates the joint constraints every
+/// snapshot, and the solver injects energy until the rover flips. Instead a
+/// remote articulated rover is a fully pose-forced assembly: a *kinematic proxy*
+/// chassis AND kinematic-proxy wheels, each driven by its own snapshot stream
+/// (the inter-link joints are inert between two kinematic bodies), so it
+/// physically cannot flip (`maintain_predicted_vehicles` excludes
+/// `With<ArticulatedVehicle>`). Derived declaratively from the USD joint graph
+/// (a `PhysicsRevoluteJoint` `physics:body0` target / `PhysicsArticulationRootAPI`
+/// prim) by `lunco-usd-sim`'s `process_usd_sim_prims` on both peers; only the
+/// client reads it. Single-body (raycast) rovers never carry it and predict normally.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ArticulatedVehicle;
+
+/// **Articulated child link:** this entity is a *wheel* (or other jointed child
+/// body) of an [`ArticulatedVehicle`] root, and is itself per-link replicated.
+/// Derived from the USD joint graph (the prim is a `PhysicsRevoluteJoint`
+/// `physics:body1` target) by `lunco-usd-sim`'s `process_usd_sim_prims`; the
+/// default membership pass (`apply_net_replication`) then adds [`NetReplicate`].
+/// It exists to disambiguate a replicated wheel from the replicated chassis:
+/// - `maintain_owned_locally` skips it (a wheel is never owned in the registry —
+///   only the chassis gid is claimed — so without this it would strip the
+///   `OwnedLocally` that `propagate_owned_to_wheels` mirrors onto owned wheels,
+///   and the two systems would fight every frame);
+/// - `propagate_owned_to_wheels` selects exactly these links and mirrors the
+///   parent chassis's `OwnedLocally` onto them, so an owned rover's wheels run
+///   local predicted physics instead of becoming kinematic snapshot proxies.
+///
+/// Always-on substrate; only the client reads it. Stamped on both peers.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ArticulatedLink;
+
+/// **Replication opt-out:** the USD scene explicitly excludes this body from
+/// network replication (`lunco:net:replicate = false` or `lunco:net:authority =
+/// "local"`). The membership pass (`apply_net_replication`) skips a body carrying
+/// this marker, so it never gets [`NetReplicate`] and stays a purely local,
+/// client-side/standalone body. Stamped at USD load by the policy derivation in
+/// `lunco-usd-sim` (`derive_net_policy`); the declarative counterpart to the
+/// always-on default "every non-static rigid body replicates". Both peers stamp
+/// it deterministically from the same authored attribute. See
+/// `crates/lunco-networking/USD_REPLICATION_POLICY.md`.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct NetExcluded;
 
 /// Server-side record of a runtime spawn the host must replicate to clients,
 /// carrying the catalog id + spawn position so peers can reconstruct the

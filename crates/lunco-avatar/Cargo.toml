@@ -16,6 +16,20 @@ lunco-controller = { path = "../lunco-controller" }
 lunco-celestial = { path = "../lunco-celestial" }
 lunco-core = { path = "../lunco-core" }
 lunco-mobility = { path = "../lunco-mobility" }
+lunco-settings = { path = "../lunco-settings" }
+lunco-assets = { workspace = true }
+serde = { workspace = true }
+
+# Built-in screen recorder (EasyScreenRecordPlugin). Optional + opt-in via the
+# `recording` feature: the `screenrecording` feature links libx264, which is
+# native-only and unsupported on Windows. Pinned to match the workspace bevy.
+bevy_dev_tools = { version = "=0.18.1", default-features = false, features = ["screenrecording"], optional = true }
+
+[features]
+# Compile the video encoder. Native Linux/macOS only — needs system libx264.
+# Without it the recording settings/command/hotkey still exist but capture
+# nothing (they log a warning). Forwarded by `lunco-client`'s `recording` feature.
+recording = ["dep:bevy_dev_tools"]
 
 [lints]
 workspace = true

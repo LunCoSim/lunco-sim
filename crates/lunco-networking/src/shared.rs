@@ -13,12 +13,17 @@ use crate::NetworkMode;
 pub(crate) const PROTOCOL_ID: u64 = 0x004C_554E_434F_0001; // "LUNCO"
 pub(crate) const PRIVATE_KEY: [u8; 32] = [0u8; 32];
 
+// Wire envelope codec = **bincode** (binary, positional — no field names). This is
+// the hot 20 Hz snapshot path; JSON here roughly doubled the byte count. The inner
+// Reflect command payload (`WireCommand.data`) still uses serde_json — bincode just
+// frames the envelope around it. Host and client always build together, so the
+// schema-coupled (non-self-describing) binary format is safe.
 pub(crate) fn serialize_env(env: &WireEnvelope) -> Option<Vec<u8>> {
-    serde_json::to_vec(env).ok()
+    bincode::serialize(env).ok()
 }
 
 pub(crate) fn deserialize_env(bytes: &[u8]) -> Option<WireEnvelope> {
-    serde_json::from_slice(bytes).ok()
+    bincode::deserialize(bytes).ok()
 }
 
 /// Deterministic, collision-free `PeerId` → `SessionId`. Netcode peers carry a
