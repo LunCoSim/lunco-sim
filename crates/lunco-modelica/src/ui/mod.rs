@@ -858,7 +858,33 @@ impl Plugin for ModelicaUiPlugin {
             .register_instance_panel(panels::model_view::ModelViewPanel::default())
             .register_perspective(AnalyzePerspective {
                 seed_welcome: config.include_welcome_panel,
-            });
+            })
+            .register_perspective_help(
+                lunco_workbench::PerspectiveId("modelica_analyze"),
+                lunco_workbench::PerspectiveHelp {
+                    title: "📐 Design",
+                    description: "Modelica engineering workbench. Author models as \
+                                  text or wired diagrams, then compile and simulate.",
+                    shortcuts: vec![
+                        lunco_workbench::HelpShortcut { keys: "F5", description: "Compile & run the active model" },
+                        lunco_workbench::HelpShortcut { keys: "Ctrl+N", description: "New untitled model" },
+                        lunco_workbench::HelpShortcut { keys: "Ctrl+S", description: "Save the active model" },
+                        lunco_workbench::HelpShortcut { keys: "Ctrl+Z", description: "Undo" },
+                        lunco_workbench::HelpShortcut { keys: "Ctrl+Shift+Z", description: "Redo" },
+                        lunco_workbench::HelpShortcut { keys: "F2", description: "Rename selected item in browser" },
+                    ],
+                    mouse: vec![
+                        lunco_workbench::HelpMouse { interaction: "Drag", description: "Move components · drag a part onto the diagram" },
+                        lunco_workbench::HelpMouse { interaction: "Drag port → port", description: "Connect two component ports" },
+                        lunco_workbench::HelpMouse { interaction: "Scroll", description: "Zoom the diagram canvas" },
+                    ],
+                    // Only offer the tour where it actually exists: the
+                    // HelpOverlayPlugin (and its tour-request consumer) is
+                    // gated on this same flag. Embedded-as-secondary hosts
+                    // (sandbox's Design tab) set it false → no dead button.
+                    has_tour: config.include_help_overlay,
+                },
+            );
 
         // Contribute the Modelica section to the Twin Browser's
         // section registry. The workbench's WorkbenchPlugin already
