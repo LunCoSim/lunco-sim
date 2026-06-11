@@ -85,6 +85,72 @@ stage is the loose file's `UsdDocument` (already opened by `on_open_file` as
 and saveable (`SaveDocument` writes the `.usda`). **`SaveAsTwin`** promotes it
 to a real folder Twin.
 
+## Which stage opens — scene resolution
+
+A Twin may contain **many** `.usda` files. Exactly one is the **active stage**
+that projects into the Grid; the rest are an **asset library** — referenceable
+into the active stage, never auto-loaded. This section is the canonical rule
+for *which* stage opens.
+
+### Why a declared entry point
+
+Core USD has **no project-level entry point**. The organizing unit is a single
+**root layer** (`.usd` / `.usda` / `.usdc`): you open *one* file and
+**composition** (sublayers, references, payloads, variants) pulls in everything
+else, producing the **stage**. The only entry-point mechanisms USD itself
+provides are **within a file** (`defaultPrim` layer metadata) or **by naming
+convention** — neither resolves "which file in a folder is the scene."
+
+`twin.toml` fills that gap by **declaring** the entry point. The Twin layer
+earns its keep precisely by naming the starting scene — we never *infer* it
+from a folder of files.
+
+### Resolution rule
+
+The Twin adds exactly **one** thing over a plain folder: it **auto-loads the
+declared starting scene**. Nothing else is inferred.
+
+| Open entry point | Browser | Active stage on open |
+|---|---|---|
+| **Open Folder** (no manifest) | lists all files (USD, Modelica, …) | **none** — user double-clicks a `.usda` to load it |
+| **Open Twin** (`twin.toml`) | same folder browser | **auto-loads `[usd] default_scene`** |
+| **Twin** with no `default_scene` | same folder browser | none — behaves like a folder; warn "no starting scene declared" |
+| **Loose `.usda`** (orphan) | just that file | that file (ephemeral Twin, above) |
+
+Opening a Twin **is** opening its folder — same browser, same file list — with
+the single addition that `default_scene` is loaded automatically. A folder
+loads nothing until the user picks a file; the Twin's manifest *is* that pick,
+pre-declared.
+
+Whether loaded automatically (Twin) or by the user's double-click (folder), a
+scene loads as a **single root** (the `LoadScene` / `SetActiveStage` path —
+clear-and-replace, one `UsdPrimPath` root under the Grid). Loading another
+scene re-points that single active stage; it never stacks.
+
+> **This supersedes today's "import every scene" behavior.** On `TwinAdded`,
+> the current code (`open_usd_docs_on_twin_added`, `lunco-usd/src/commands.rs`)
+> loops *every* `.usda` in the Twin and fires `OpenFile` on each — and for a
+> USD path `OpenFile` not only registers the document, it **additively mounts**
+> it into the Grid (`spawn_scene_root_world`, Blender-style append). So opening
+> a Twin with three scenes stacks all three into one viewport. That fights
+> composition and is **not** the intended model.
+>
+> Intended behavior: on Twin open, resolve **one** active stage per the table
+> above and mount only that. The other `.usda` files are still *indexed* and
+> shown in the browser (so the user can see and open them), but are **not**
+> mounted — they are a referenceable asset library, composed into the active
+> stage on demand via `AddReference` (see Verbs). Switching scenes re-points
+> the single active stage; it never stacks.
+
+### `default_scene` is a path, the scene owns composition
+
+`[usd] default_scene` names a path **relative to the Twin root**. Keep the
+manifest thin: it points *at* a USD root; the USD root owns scene composition
+(sublayers/references/payloads). Don't grow the manifest into a scene
+description — that's USD's job. See
+[`13-twin-and-workflow.md`](13-twin-and-workflow.md) § 3 for the `[usd]`
+section.
+
 ## Verbs — they all reuse existing surfaces
 
 | User intent | Operation | Surface |

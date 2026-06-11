@@ -301,8 +301,8 @@ pub use session::{
     TwinClosed, UnregisterDocument, WorkspacePlugin, WorkspaceResource,
 };
 pub use viewport::{
-    PanelRect, PanelRects, ViewportPanel, WorkbenchEguiHost, WorkbenchSceneCamera,
-    WorkbenchViewportCamera, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
+    PanelRect, PanelRects, ViewportPanel, ViewportPlaceholder, WorkbenchEguiHost,
+    WorkbenchSceneCamera, WorkbenchViewportCamera, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
 };
 
 /// Get the backdrop colour from the active theme.
@@ -1871,8 +1871,20 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     // View and Build both keep Camera3d running full-window; egui
     // chrome opaquely overlays where panels are and the rest stays
     // transparent so 3D shows through (including dock-leaf gaps).
-    let needs_full_backdrop = !viewport::layout_is_empty(layout)
-        && !viewport::layout_contains_panel(layout, viewport::VIEWPORT_PANEL_ID);
+    // An active placeholder message means the scene is empty — and so the USD
+    // avatar `Camera3d` was despawned. View mode (empty layout) normally skips
+    // the backdrop because `Camera3d` paints the full window; with no camera
+    // that assumption breaks and the *last rendered frame* (stale rovers) would
+    // show through. Treat "empty viewport, no camera" like the Design-mode
+    // inactive-camera case and fill the framebuffer too. Painted here (before
+    // the menu/status panels) so it stays on the background layer *under* the
+    // chrome — painting it after the panels would overdraw them.
+    let viewport_empty = world
+        .get_resource::<viewport::ViewportPlaceholder>()
+        .is_some_and(|p| p.message.is_some());
+    let needs_full_backdrop = (!viewport::layout_is_empty(layout)
+        && !viewport::layout_contains_panel(layout, viewport::VIEWPORT_PANEL_ID))
+        || viewport_empty;
     if needs_full_backdrop {
         let painter = ctx.layer_painter(egui::LayerId::background());
         painter.rect_filled(ctx.content_rect(), 0.0, get_panel_backdrop(theme));
@@ -2596,6 +2608,35 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         // Central area: do NOT call CentralPanel — egui's bottom/side
         // panels reserve their space and the remaining region stays
         // free for the 3D scene that Bevy renders to the full window.
+    }
+
+    // ── Empty-viewport placeholder ──────────────────────────────────
+    // Drawn last so it sits on top of the (empty) 3D framebuffer. Only
+    // when a domain crate set a message (e.g. lunco-usd: "no scene
+    // loaded") AND the viewport is actually on screen — View (empty
+    // layout, full-window 3D) or Build (ViewportPanel in the centre).
+    // Never in Design mode, where Camera3d is inactive and the centre
+    // is chrome. Centered on the window, which is the viewport region
+    // in View mode and close enough in Build.
+    let placeholder = world
+        .get_resource::<viewport::ViewportPlaceholder>()
+        .and_then(|p| p.message.clone());
+    if let Some(msg) = placeholder {
+        let viewport_visible = viewport::layout_is_empty(layout)
+            || viewport::layout_contains_panel(layout, viewport::VIEWPORT_PANEL_ID);
+        if viewport_visible {
+            egui::Area::new(egui::Id::new("lunco_viewport_empty_placeholder"))
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(msg)
+                            .color(theme.tokens.text_subdued)
+                            .italics()
+                            .size(16.0),
+                    );
+                });
+        }
     }
 }
 
