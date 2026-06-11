@@ -13,7 +13,7 @@ required-features = ["networking"]
 default = []
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
-networking = ["dep:lightyear", "dep:serde", "dep:serde_json"]
+networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode"]
 # Client-prediction diagnostics (render-jitter / velocity / correction census in
 # `diagnostics.rs`). OFF by default → not compiled into normal/shipping builds.
 # Build with it when chasing netcode jitter; once compiled it's active unless
@@ -37,6 +37,9 @@ avian3d = { workspace = true }
 big_space = { workspace = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+# Binary wire codec for the snapshot/envelope hot path (replaces serde_json there —
+# ~2x smaller, no field names). serde_json stays for the Reflect command payload.
+bincode = { version = "1.3", optional = true }
 
 # Native (desktop / dedicated server): full client+server WebTransport.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]

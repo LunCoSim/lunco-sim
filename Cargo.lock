@@ -7014,6 +7014,7 @@ dependencies = [
  "avian3d 0.6.1",
  "bevy",
  "big_space",
+ "bincode 1.3.3",
  "getrandom 0.2.17",
  "lightyear",
  "lunco-api",

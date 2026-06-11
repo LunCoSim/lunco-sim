@@ -719,7 +719,10 @@ pub fn maintain_owned_locally(
     mut commands: Commands,
     q: Query<
         (Entity, &lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>),
-        With<lunco_core::NetReplicate>,
+        // Skip articulated wheels: they are never owned in the registry (only the
+        // chassis gid is claimed), so this system would strip the `OwnedLocally`
+        // that `propagate_owned_to_wheels` mirrors onto an owned rover's wheels.
+        (With<lunco_core::NetReplicate>, Without<lunco_core::ArticulatedLink>),
     >,
 ) {
     if !matches!(*role, lunco_core::NetworkRole::Client) {
@@ -748,6 +751,59 @@ pub fn maintain_owned_locally(
                     .insert((lunco_core::OwnedLocally, RigidBody::Dynamic));
             }
             (false, true) => {
+                commands.entity(e).remove::<lunco_core::OwnedLocally>();
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Client-only: mirror an [`lunco_core::ArticulatedVehicle`] chassis's
+/// [`lunco_core::OwnedLocally`] state onto its wheels ([`lunco_core::ArticulatedLink`]).
+///
+/// With per-link replication the wheels carry [`lunco_core::NetReplicate`], so by
+/// default a client would pin them `Kinematic` and snapshot-drive them
+/// (`force_kinematic_proxies` / `drive_kinematic_proxies`). That is correct for a
+/// *remote* rover (a fully pose-forced assembly), but WRONG for the rover this
+/// client possesses and drives: its chassis runs local predicted physics
+/// (`maintain_owned_locally`), and its wheels must run the **same** local physics
+/// (real joints + drive motors) — otherwise the wheels of the rover you are
+/// driving freeze while the chassis predicts.
+///
+/// `OwnedLocally` is the marker every proxy seam already keys off, so mirroring it
+/// onto the wheels excludes them from the kinematic-proxy path
+/// (`force_kinematic_proxies`' `Without<OwnedLocally>` + `drive_kinematic_proxies`'
+/// `q_local_sim`) exactly like the chassis. Runs right after
+/// `maintain_owned_locally`; one fixed/Update tick of latency on a possession flip
+/// is imperceptible and self-corrects. Wheel→chassis is read from `ChildOf` (the
+/// wheel keeps its chassis parent), so this needs no `lunco-usd-sim` types.
+pub fn propagate_owned_to_wheels(
+    role: Res<lunco_core::NetworkRole>,
+    q_owned_chassis: Query<
+        (),
+        (With<lunco_core::OwnedLocally>, With<lunco_core::ArticulatedVehicle>),
+    >,
+    q_wheels: Query<(Entity, &ChildOf, Has<lunco_core::OwnedLocally>), With<lunco_core::ArticulatedLink>>,
+    mut commands: Commands,
+) {
+    if !matches!(*role, lunco_core::NetworkRole::Client) {
+        return;
+    }
+    for (e, child_of, has_marker) in q_wheels.iter() {
+        let owned = q_owned_chassis.contains(child_of.parent());
+        match (owned, has_marker) {
+            (true, false) => {
+                // Chassis just became owned: claim the wheel for local physics.
+                // Restore `Dynamic` too — the wheel may have been pinned
+                // `Kinematic` for many frames as a proxy (mirrors the chassis
+                // restore in `maintain_owned_locally`).
+                commands
+                    .entity(e)
+                    .insert((lunco_core::OwnedLocally, RigidBody::Dynamic));
+            }
+            (false, true) => {
+                // Chassis released: hand the wheel back to the snapshot-driven
+                // proxy path (`force_kinematic_proxies` re-pins it `Kinematic`).
                 commands.entity(e).remove::<lunco_core::OwnedLocally>();
             }
             _ => {}
@@ -1313,33 +1369,46 @@ pub fn drain_pending_corrections(
 /// pins them kinematic and `apply_incoming_snapshots` drives them. Single-player
 /// (`Standalone`) tags them too but nothing serializes — harmless.
 ///
+/// The membership DECISION is declarative, derived from USD at load
+/// (`lunco-usd-sim`'s `process_usd_sim_prims` → `derive`/`net_override_markers`):
+/// structural markers (`ArticulatedVehicle`/`ArticulatedLink`) and any opt-out
+/// (`NetExcluded`) / opacity (`NotPredictable`) come from the USD joint graph +
+/// `lunco:net:*` attributes. This system only **applies the default**: every
+/// non-static rigid body replicates unless USD excluded it. See
+/// `crates/lunco-networking/USD_REPLICATION_POLICY.md`.
+///
+/// Why a re-asserting Update pass and not a one-shot at load: the avian `RigidBody`
+/// component materialises a frame or more AFTER the USD prim entity exists (the
+/// rover's cosim/flight-software re-inserts a `Dynamic` body after the asset loads —
+/// see the `force_kinematic_proxies` note). Keying on the live `RigidBody` here, each
+/// frame, catches it whenever it lands; `Without<NetReplicate>` makes the steady
+/// state a no-op.
+///
 /// Excludes:
 /// - **static** colliders (the ground) — never move;
 /// - **runtime spawns** (`SkipContentStamp`) — already tagged at spawn time;
-/// - **nested** bodies (parent is itself a rigid body, e.g. rover wheels) — a
-///   child-local snapshot would fight `apply_incoming_snapshots`' world-space
-///   avian `Position` write; only top-level bodies have local≈world. (Full
-///   articulated per-body pose replication is a follow-up.)
-pub fn tag_networked_physics(
+/// - **USD opt-outs** (`NetExcluded`) — `lunco:net:replicate = false` / `authority = "local"`;
+/// - **articulated links** (`ArticulatedLink`, i.e. rover wheels) — NOT replicated; the
+///   client reconstructs each wheel's pose from its chassis (rigid axle ⇒ fixed mount +
+///   derived steer + cosmetic spin), saving ~4 wheel poses/tick/rover. See
+///   `lunco-usd-sim::reconstruct_proxy_wheels` and USD_REPLICATION_POLICY.md. (Full
+///   per-link replication remains available as a future USD opt-in.)
+pub fn apply_net_replication(
     mut commands: Commands,
     q_candidates: Query<
-        (Entity, &RigidBody, Option<&ChildOf>),
+        (Entity, &RigidBody),
         (
             With<lunco_core::GlobalEntityId>,
             Without<lunco_core::NetReplicate>,
+            Without<lunco_core::NetExcluded>,
+            Without<lunco_core::ArticulatedLink>,
             Without<lunco_core::SkipContentStamp>,
         ),
     >,
-    q_bodies: Query<(), With<RigidBody>>,
 ) {
-    for (e, rb, parent) in q_candidates.iter() {
+    for (e, rb) in q_candidates.iter() {
         if matches!(*rb, RigidBody::Static) {
             continue;
-        }
-        if let Some(p) = parent {
-            if q_bodies.contains(p.parent()) {
-                continue; // nested body (e.g. rover wheel) — skip for now
-            }
         }
         commands.entity(e).insert(lunco_core::NetReplicate);
     }
@@ -1831,6 +1900,11 @@ impl Plugin for SpawnCommandPlugin {
             (
                 apply_replicated_spawns,
                 maintain_owned_locally,
+                // Mirror the chassis's `OwnedLocally` onto owned-rover wheels so
+                // the rover you drive runs local physics on all links (not frozen
+                // kinematic proxies). After `maintain_owned_locally` so it reads
+                // the freshly-set chassis marker; before the kinematic-pin systems.
+                propagate_owned_to_wheels,
                 // Phase B: classify free predicted props BEFORE the interpolate /
                 // kinematic-pin systems read the `PredictedDynamic` marker.
                 maintain_predicted_dynamic,
@@ -1842,7 +1916,7 @@ impl Plugin for SpawnCommandPlugin {
                 ingest_snapshots,
                 interpolate_proxies,
                 force_kinematic_proxies,
-                tag_networked_physics,
+                apply_net_replication,
             )
                 .chain(),
         );
