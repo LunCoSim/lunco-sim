@@ -65,6 +65,7 @@ use std::collections::HashMap;
 
 mod panel;
 mod perspective;
+mod perspective_help;
 mod render_robustness;
 mod session;
 mod viewport;
@@ -83,6 +84,10 @@ pub mod window_persistence;
 pub mod window_placement;
 pub mod workspace_state;
 
+pub use perspective_help::{
+    HelpMouse, HelpPopup, HelpShortcut, HelpTourRequest, PerspectiveHelp, PerspectiveHelpPlugin,
+    PerspectiveHelpRegistry,
+};
 pub use window_command::{merged_titlebar_window, MaximizeWindow, MinimizeWindow, CloseWindow, WindowMaximized};
 #[cfg(not(target_arch = "wasm32"))]
 pub use window_placement::WindowPlacement;
@@ -402,6 +407,9 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<file_ops::FileOpsPlugin>() {
             app.add_plugins(file_ops::FileOpsPlugin);
         }
+        if !app.is_plugin_added::<perspective_help::PerspectiveHelpPlugin>() {
+            app.add_plugins(perspective_help::PerspectiveHelpPlugin);
+        }
         app.init_resource::<WorkbenchLayout>()
             .init_resource::<HelpAnchors>()
             .init_resource::<DockSizes>()
@@ -490,7 +498,7 @@ pub struct WorkbenchLayout {
     /// so the Help drop-down can host tour / docs / about entries
     /// without each domain inventing its own help button.
     pub(crate) help_menu:
-        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World, &WorkbenchLayout) + Send + Sync>>,
 
     /// The live dock tree — what egui_dock actually renders. Stores
     /// [`TabId`]s so both singleton panels and multi-instance tabs
@@ -940,7 +948,7 @@ impl WorkbenchLayout {
     /// menu. Mirrors [`register_settings`](Self::register_settings).
     pub fn register_help_menu<F>(&mut self, callback: F)
     where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+        F: Fn(&mut bevy_egui::egui::Ui, &mut World, &WorkbenchLayout) + Send + Sync + 'static,
     {
         self.help_menu.push(Box::new(callback));
     }
@@ -1462,6 +1470,13 @@ pub trait WorkbenchAppExt {
     /// Register a perspective. The first perspective registered becomes
     /// active and its `apply` seeds the initial slot assignments.
     fn register_perspective<W: Perspective + 'static>(&mut self, perspective: W) -> &mut Self;
+
+    /// Register help content for a perspective.
+    fn register_perspective_help(
+        &mut self,
+        id: PerspectiveId,
+        help: PerspectiveHelp,
+    ) -> &mut Self;
 }
 
 impl WorkbenchAppExt for App {
@@ -1490,6 +1505,35 @@ impl WorkbenchAppExt for App {
         self.world_mut()
             .resource_mut::<WorkbenchLayout>()
             .register_perspective(perspective);
+        self
+    }
+
+    fn register_perspective_help(
+        &mut self,
+        id: PerspectiveId,
+        help: PerspectiveHelp,
+    ) -> &mut Self {
+        if !self.world().contains_resource::<PerspectiveHelpRegistry>() {
+            self.init_resource::<PerspectiveHelpRegistry>();
+        }
+        // First registration for this id also contributes the Help-menu
+        // item — so a subsystem gets both popup and menu entry from this
+        // single call, with no central list to maintain.
+        let is_new = self
+            .world()
+            .resource::<PerspectiveHelpRegistry>()
+            .get(id)
+            .is_none();
+        self.world_mut()
+            .resource_mut::<PerspectiveHelpRegistry>()
+            .register(id, help);
+        if is_new {
+            if !self.world().contains_resource::<WorkbenchLayout>() {
+                self.init_resource::<WorkbenchLayout>();
+            }
+            let mut layout = self.world_mut().resource_mut::<WorkbenchLayout>();
+            perspective_help::register_help_menu_item(&mut layout, id);
+        }
         self
     }
 }
@@ -2310,7 +2354,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 if !callbacks.is_empty() {
                     ui.separator();
                     for cb in &callbacks {
-                        cb(ui, world);
+                        cb(ui, world, layout);
                     }
                 }
                 layout.help_menu = callbacks;

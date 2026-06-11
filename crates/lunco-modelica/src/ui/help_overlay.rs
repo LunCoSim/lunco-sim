@@ -167,12 +167,30 @@ impl Plugin for HelpOverlayPlugin {
         app.add_systems(Startup, register_help_entry);
         app.add_systems(
             Update,
-            (auto_show_on_first_start, auto_focus_target_panel, manage_tutorial_doc),
+            (
+                auto_show_on_first_start,
+                auto_focus_target_panel,
+                manage_tutorial_doc,
+                consume_tour_request,
+            ),
         );
         app.add_systems(
             bevy_egui::EguiPrimaryContextPass,
             render_help_overlay.after(lunco_workbench::WorkbenchRenderSet),
         );
+    }
+}
+
+/// Opens the guided tour when the workbench-level help popup's
+/// "Show Tour" button publishes a request for the Design perspective.
+/// Drains the request so it fires exactly once.
+fn consume_tour_request(
+    mut req: ResMut<lunco_workbench::HelpTourRequest>,
+    mut state: ResMut<HelpOverlayState>,
+) {
+    if req.0 == Some(lunco_workbench::PerspectiveId("modelica_analyze")) {
+        req.0 = None;
+        open_tour(&mut state);
     }
 }
 
@@ -385,7 +403,7 @@ fn register_help_entry(world: &mut World) {
     else {
         return;
     };
-    layout.register_help_menu(|ui, world| {
+    layout.register_help_menu(|ui, world, _layout| {
         if ui.button("🎓 Show Tour").on_hover_text("Replay the guided interactive tour of the workbench").clicked() {
             let mut state = world.resource_mut::<HelpOverlayState>();
             open_tour(&mut state);
