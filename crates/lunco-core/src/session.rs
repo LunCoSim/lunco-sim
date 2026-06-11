@@ -280,6 +280,23 @@ pub struct PredictedDynamic;
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct NotPredictable;
 
+/// **Articulated-body guard:** this entity is the ROOT of a multi-body assembly
+/// whose child rigid bodies are joined to it by physics joints (a *Physical*
+/// rover: chassis + wheels on `RevoluteJoint`s) — and those children are NOT
+/// replicated (`tag_networked_physics` skips nested bodies; full per-link
+/// replication is a follow-up). Such a root must **never be single-body
+/// predicted** on a client: making only the chassis `Dynamic` and
+/// state-reconciling its pose/velocity each snapshot — while the jointed wheels
+/// run free, uncorrected local physics — violates the joint constraints every
+/// snapshot, and the solver injects energy until the rover flips. A *kinematic
+/// proxy* chassis has its pose forced by snapshots and physically cannot flip,
+/// so articulated roots fall back to that path (`maintain_predicted_vehicles`
+/// excludes `With<ArticulatedVehicle>`). Stamped at the joint-creation site
+/// (`lunco-usd-sim`'s `setup_physical_wheel`) on both peers; only the client
+/// reads it. Single-body (raycast) rovers never carry it and predict normally.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ArticulatedVehicle;
+
 /// Server-side record of a runtime spawn the host must replicate to clients,
 /// carrying the catalog id + spawn position so peers can reconstruct the
 /// geometry locally (M1) pinned to the host-allocated id. Added to the spawn

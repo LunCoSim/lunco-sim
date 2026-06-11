@@ -230,6 +230,14 @@ build_wasm() {
     local wasm_features="lunco-api"
     if [ "$binary" = "sandbox" ]; then
         wasm_features="lunco-api,networking"
+        # Opt the client-prediction diagnostics into the browser build with
+        # NET_DIAG=1 (off by default — same `net-diag` cargo feature as native).
+        # Output lands in the browser console as `[net-diag …]` lines; mute a
+        # given run with `LUNCO_NET_DIAG=0`. See lunco-networking/src/diagnostics.rs.
+        if [ "${NET_DIAG:-0}" != "0" ]; then
+            wasm_features="$wasm_features,net-diag"
+            info "net-diag ENABLED for this web build (jitter/velocity/correction census → browser console)"
+        fi
     fi
     RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis" \
         cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$cargo_bin" -p "$crate" --no-default-features --features "$wasm_features"

@@ -1056,6 +1056,13 @@ pub fn maintain_predicted_vehicles(
             Without<lunco_core::OwnedLocally>,
             Without<lunco_core::PredictedDynamic>,
             Without<lunco_core::NotPredictable>,
+            // Articulated (Physical/joint) rovers must NOT be single-body
+            // predicted: only the chassis is replicated, so making it Dynamic +
+            // reconciling its pose each snapshot while the jointed wheels run
+            // free injects joint energy → flip. They stay kinematic proxies
+            // (chassis pose forced by snapshots, cannot flip). Raycast rovers are
+            // single bodies and predict fine.
+            Without<lunco_core::ArticulatedVehicle>,
         ),
     >,
 ) {

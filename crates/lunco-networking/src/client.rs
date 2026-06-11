@@ -53,6 +53,9 @@ pub(crate) fn setup_client(app: &mut App, server_addr: SocketAddr, client_id: u6
     app.add_systems(Startup, move |mut commands: Commands| {
         commands.trigger(Connect { entity: client });
     });
+    // Host connection lost (server closed / netcode timeout): leave the
+    // "connected" state instead of silently dead-reckoning stale snapshots.
+    app.add_observer(on_client_disconnected);
     // MUST stay in `Update` — the lightyear ferry. FixedUpdate breaks the reliable
     // CmdChannel (see server.rs note).
     app.add_systems(
@@ -69,6 +72,24 @@ fn update_client_netstatus(local: Res<LocalSession>, mut status: ResMut<NetStatu
         status.connected = connected;
         status.peers = u32::from(connected);
     }
+}
+
+/// The client connection dropped (host closed, or netcode `client_timeout_secs`
+/// elapsed with no server). Lightyear adds [`Disconnected`] to our `Client`
+/// entity; mirror the server's `on_server_disconnected` and reset session +
+/// status so the UI leaves "connected" and the prediction/proxy systems (which
+/// key off [`LocalSession`]/role) stop acting on now-stale snapshots.
+/// `update_client_netstatus` then keeps `NetStatus` consistent with the cleared
+/// `LocalSession` on subsequent frames.
+fn on_client_disconnected(
+    _trigger: On<Add, Disconnected>,
+    mut local: ResMut<LocalSession>,
+    mut status: ResMut<NetStatus>,
+) {
+    local.0 = SessionId::LOCAL;
+    status.connected = false;
+    status.peers = 0;
+    warn!("[net] host connection lost — client disconnected");
 }
 
 /// Native: empty digest + the `dangerous-configuration` feature ⇒ no cert

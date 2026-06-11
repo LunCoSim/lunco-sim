@@ -913,6 +913,12 @@ fn setup_physical_wheel(
         return;
     };
     let chassis = child_of.parent();
+    // Mark the chassis as an articulated root so a client never single-body
+    // predicts it (chassis-only Dynamic + per-snapshot reconcile vs. free jointed
+    // wheels = solver energy injection → flip). Idempotent across the 4 wheels.
+    commands
+        .entity(chassis)
+        .insert(lunco_core::ArticulatedVehicle);
     // Wheel mount point in the chassis local frame (the wheel is a child of
     // the chassis, so its Transform translation is already chassis-local).
     let mount_local = existing_tf.translation.as_dvec3();
