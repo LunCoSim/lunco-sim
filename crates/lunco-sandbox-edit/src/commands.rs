@@ -291,6 +291,27 @@ fn advance_playback_clock(
 /// Covers first sight, a long stall, and authoritative discontinuities.
 const PROXY_SNAP_DIST: f64 = 2.0;
 
+/// Time constant (seconds) for easing a proxy's residual position/orientation error
+/// onto its curve. The proxy moves at the curve's **feed-forward velocity** (the
+/// host's authoritative chassis velocity) and this softly corrects the small
+/// leftover error over ~TAU — instead of a deadbeat `(target−pos)/h` that demanded
+/// the whole gap in one tick (~50 m/s, which jittered and tunneled through
+/// contacts). ~0.08 s ≈ 5 ticks at 60 Hz: snappy enough to track, soft enough not
+/// to spike.
+const PROXY_CORRECT_TAU: f64 = 0.08;
+
+/// Cap (m/s) on the soft-correction term so that a proxy near the snap threshold
+/// (error approaching `PROXY_SNAP_DIST`) still corrects gently rather than with a
+/// big velocity; gross errors are handled by the teleport branch, not this.
+const PROXY_CORRECT_MAX: f64 = 4.0;
+
+/// Absolute cap (m/s) on a proxy's commanded velocity. No rover moves this fast;
+/// the cap exists so a *diverging authoritative body* (e.g. a runaway cosim
+/// balloon whose host-side physics blew up — a separate, known bug) can't fling
+/// its proxy across the scene at hundreds of m/s. Past this the body is far enough
+/// off that the teleport branch reseats it instead.
+const PROXY_MAX_SPEED: f64 = 50.0;
+
 /// Angular velocity (rad/s, world axis-angle) that rotates `from` onto `to` in one
 /// step of `h` seconds: `ω = axis · θ / h` where `q_err = to · from⁻¹`. Takes the
 /// **shortest arc** (negate `q_err` if `w < 0`, since `q` and `−q` are the same
@@ -570,6 +591,7 @@ pub fn drive_kinematic_proxies(
         With<RigidBody>,
     >,
     mut commands: Commands,
+    mut dbg_tick: Local<u32>,
 ) {
     if !matches!(*role, lunco_core::NetworkRole::Client) {
         return;
@@ -585,11 +607,20 @@ pub fn drive_kinematic_proxies(
     else {
         return; // no samples yet
     };
-    let h = SECS_PER_TICK;
+    // DIAG (Step 1 debugging): per-tick branch + magnitude census.
+    *dbg_tick = dbg_tick.wrapping_add(1);
+    let dbg = *dbg_tick % 60 == 0;
+    let mut n_total = 0u32;
+    let mut n_matched = 0u32;
+    let mut n_teleport = 0u32;
+    let mut n_velocity = 0u32;
+    let mut max_off = 0f64;
+    let mut max_lin = 0f64;
     for (gid, buf) in buffers.0.iter() {
         if buf.is_empty() {
             continue;
         }
+        n_total += 1;
         let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(*gid)) else {
             continue;
         };
@@ -599,16 +630,15 @@ pub fn drive_kinematic_proxies(
         let Ok((mut pos, mut rot, mut lin, mut ang, motion)) = q.get_mut(e) else {
             continue; // not a RigidBody proxy (e.g. visual-only — handled by interpolate)
         };
-        // Where the curve says this body is now (for the snap test) and where it
-        // should be after this tick integrates (the velocity target).
+        n_matched += 1;
+        // Where the curve says this body is right now, plus its feed-forward
+        // velocity (`lv`/`av` = the host's authoritative chassis velocity).
         let Some((here, here_rot, lv, av)) = sample_curve(buf, render_t) else {
-            continue;
-        };
-        let Some((target, target_rot, _, _)) = sample_curve(buf, render_t + h) else {
             continue;
         };
 
         let off = (pos.0 - here).length();
+        max_off = max_off.max(off);
         if snapped || off > PROXY_SNAP_DIST {
             // Teleport: seat pose, kill velocity. Covers first sight / long stall /
             // authoritative discontinuity — closing this gap with one tick of
@@ -617,10 +647,26 @@ pub fn drive_kinematic_proxies(
             rot.0 = here_rot.as_dquat();
             lin.0 = DVec3::ZERO;
             ang.0 = DVec3::ZERO;
+            n_teleport += 1;
         } else {
-            // Command the velocity that carries the body onto the curve this tick.
-            lin.0 = (target - pos.0) / h;
-            ang.0 = ang_vel_to_track(rot.0.as_quat(), target_rot, h);
+            // Feed-forward curve velocity + soft position correction over TAU (NOT
+            // deadbeat: the old `(target−pos)/h` commanded ~50 m/s → jitter +
+            // contact tunnelling). The body moves at the host's real chassis speed
+            // and the small residual error eases in.
+            let mut corr = (here - pos.0) / PROXY_CORRECT_TAU;
+            let cl = corr.length();
+            if cl > PROXY_CORRECT_MAX {
+                corr *= PROXY_CORRECT_MAX / cl;
+            }
+            let mut v = lv + corr;
+            let vl = v.length();
+            if vl > PROXY_MAX_SPEED {
+                v *= PROXY_MAX_SPEED / vl; // backstop a diverging authoritative body
+            }
+            lin.0 = v;
+            ang.0 = av + ang_vel_to_track(rot.0.as_quat(), here_rot, PROXY_CORRECT_TAU);
+            n_velocity += 1;
+            max_lin = max_lin.max(lin.0.length());
         }
 
         // Animation hint = authoritative chassis velocity (moved here from
@@ -630,6 +676,69 @@ pub fn drive_kinematic_proxies(
             Some(mut m) => *m = hint,
             None => {
                 commands.entity(e).insert(hint);
+            }
+        }
+    }
+    if dbg {
+        eprintln!(
+            "[DRIVE] bufs={n_total} matched={n_matched} tele={n_teleport} vel={n_velocity} \
+             snapped={snapped} max_off={max_off:.3} max_lin={max_lin:.2} render_t={render_t:.3}"
+        );
+    }
+}
+
+/// DIAG (temporary): catch render-level jitter at the source. Every render frame,
+/// compare each rover's rendered (post-propagation) translation against the last
+/// frame; smooth the per-frame delta to get the travel direction; report whenever
+/// a frame's delta steps BACKWARD against that direction by more than ~2 cm — the
+/// visible "jitter" signature — with which gid and how far. Tells us definitively
+/// WHICH body stutters and at what rate, instead of inferring from reconcile
+/// censuses (which are nearly silent while the user still sees jitter).
+pub fn detect_render_jitter(
+    role: Res<lunco_core::NetworkRole>,
+    q: Query<
+        (
+            Entity,
+            &GlobalTransform,
+            Option<&lunco_core::GlobalEntityId>,
+            Has<lunco_core::OwnedLocally>,
+            Has<lunco_core::PredictedDynamic>,
+            Has<RigidBody>,
+        ),
+        With<lunco_core::RoverVessel>,
+    >,
+    mut prev: Local<HashMap<Entity, (Vec3, Vec3)>>, // (last pos, smoothed delta)
+    mut n_report: Local<u32>,
+) {
+    if !matches!(*role, lunco_core::NetworkRole::Client) {
+        return;
+    }
+    for (e, gt, gid, owned, pred, _rb) in q.iter() {
+        let pos = gt.translation();
+        let entry = prev.entry(e).or_insert((pos, Vec3::ZERO));
+        let delta = pos - entry.0;
+        entry.0 = pos;
+        let dir = entry.1;
+        // Smooth the delta to estimate travel direction (per-frame EMA).
+        entry.1 = dir * 0.85 + delta * 0.15;
+        let speed = dir.length();
+        if speed < 0.005 {
+            continue; // effectively at rest — nothing to jitter against
+        }
+        let back = delta.dot(dir / speed);
+        if back < -0.02 {
+            *n_report = n_report.wrapping_add(1);
+            if *n_report % 5 == 1 {
+                eprintln!(
+                    "[JIT] #{:>4} gid={:x} owned={} pred={} back_step={:.3}m frame_delta={:.3}m dir_speed={:.3}m/f",
+                    *n_report,
+                    gid.map_or(0, |g| g.get()),
+                    owned,
+                    pred,
+                    -back,
+                    delta.length(),
+                    speed,
+                );
             }
         }
     }
@@ -702,11 +811,15 @@ pub fn maintain_owned_locally(
 const MAX_PREDICTED_HISTORY: usize = 128;
 
 /// How many ticks after the last nonzero local input a vessel stays in the
-/// predicted set (`maintain_owned_locally`). ~0.5 s at 60 Hz — long enough to
-/// bridge gaps between key taps (hysteresis on the Dynamic↔Kinematic flip),
-/// short enough that an idle/parked owned rover promptly falls back to
-/// interpolation so an external push renders correctly.
-const PREDICT_GRACE_TICKS: u64 = 30;
+/// predicted set (`maintain_owned_locally`). Was 30 (~0.5 s), but a rover released
+/// at speed COASTS for seconds; lapsing mid-coast hands it to the kinematic-proxy
+/// path, which drags it back toward the `INTERP_DELAY`-stale curve (~0.3 m/frame
+/// backward steps caught by the render-jitter detector) — a visible warp on every
+/// key release. ~4 s covers a coast-to-stop; an external push on a *parked* owned
+/// rover still renders correctly after the longer lapse, and during the grace a
+/// push is locally computable anyway now that other vehicles are predicted
+/// (Step 4). Coasting itself is deterministic zero-input physics — predictable.
+const PREDICT_GRACE_TICKS: u64 = 240;
 
 /// Pure prediction-membership predicate (Phase A): a client predicts a body
 /// locally iff it **owns** it AND it **drove it** within the grace window.
@@ -808,7 +921,10 @@ pub fn reconcile_owned_prediction(
         Option<&mut Rotation>,
         Option<&mut LinearVelocity>,
         Option<&mut AngularVelocity>,
+        Option<&mut PendingCorrection>,
     )>,
+    mut commands: Commands,
+    mut dbg_own: Local<u32>,
 ) {
     for gid in q_owned.iter() {
         let g = gid.get();
@@ -850,14 +966,14 @@ pub fn reconcile_owned_prediction(
         let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(g)) else {
             continue;
         };
-        let Ok((mut tf, pos, rot, lin, ang)) = q.get_mut(e) else {
+        let Ok((mut tf, pos, rot, lin, ang, off)) = q.get_mut(e) else {
             continue;
         };
 
         // Compare prediction-at-the-acked-seq vs authority-at-that-seq — the
         // apples-to-apples test that cancels the latency lead, so a correct
         // prediction is left alone (no rubber-band). Only divergence corrects.
-        let (new_pos, new_rot) = match lunco_core::reconcile_decision(
+        let decision = lunco_core::reconcile_decision(
             hs.pos,
             hs.rot,
             tf.translation,
@@ -865,32 +981,80 @@ pub fn reconcile_owned_prediction(
             sample.pos,
             sample.rot,
             lunco_core::ReconcileParams::default(),
-        ) {
-            // COMMON CASE: prediction matched authority → leave the body alone.
-            lunco_core::Reconciliation::InSync => continue,
-            lunco_core::Reconciliation::Correct { pos, rot } => (pos, rot),
-            lunco_core::Reconciliation::Snap { pos, rot } => (pos, rot),
-        };
-        tf.translation = new_pos;
-        tf.rotation = new_rot;
-        if let Some(mut p) = pos {
-            p.0 = DVec3::new(new_pos.x as f64, new_pos.y as f64, new_pos.z as f64);
+        );
+        // COMMON CASE: prediction matched authority → leave the body alone.
+        if matches!(decision, lunco_core::Reconciliation::InSync) {
+            continue;
         }
-        // Write avian's f64 `Rotation` too — otherwise avian's writeback re-derives
-        // `Transform.rotation` from the stale f64 `Rotation` next frame and the
-        // correction is lost, so the owned rover's orientation fights the physics
-        // every frame (the "two systems fighting" jitter when steering).
-        if let Some(mut r) = rot {
-            r.0 = new_rot.as_dquat();
+        // DIAG: how often / how hard does the owned rover correct while driving?
+        if let lunco_core::Reconciliation::Correct { pos: np, rot: nr }
+        | lunco_core::Reconciliation::Snap { pos: np, rot: nr } = decision
+        {
+            *dbg_own = dbg_own.wrapping_add(1);
+            if *dbg_own % 15 == 0 {
+                eprintln!(
+                    "[RECON-OWN] #{} corr_mag={:.4} rot_deg={:.3} snap={}",
+                    *dbg_own,
+                    (np - tf.translation).length(),
+                    nr.angle_between(tf.rotation).to_degrees(),
+                    matches!(decision, lunco_core::Reconciliation::Snap { .. }),
+                );
+            }
         }
-        // Seat velocity to authoritative so the body stops re-diverging next tick.
+        match decision {
+            lunco_core::Reconciliation::InSync => unreachable!(),
+            // Park the correction as a residual; `drain_pending_corrections`
+            // applies it to physics `Position`/`Rotation` a few cm/degrees per
+            // fixed tick, which avian writeback + transform-interpolation render
+            // smoothly. Writing the pose (or `Transform`) here instead popped the
+            // body AND reset `bevy_transform_interpolation`'s easing — the
+            // hold-the-key jitter.
+            lunco_core::Reconciliation::Correct { pos: new_pos, rot: new_rot } => {
+                let dpos = new_pos - tf.translation;
+                let drot = (new_rot * tf.rotation.inverse()).normalize();
+                match off {
+                    Some(mut pc) => {
+                        pc.pos += dpos;
+                        pc.rot = (drot * pc.rot).normalize();
+                    }
+                    None => {
+                        commands
+                            .entity(e)
+                            .insert(PendingCorrection { pos: dpos, rot: drot });
+                    }
+                }
+            }
+            // Gross desync: teleport semantics — seat pose directly (Transform
+            // included; the interpolation easing-reset on a real teleport is
+            // exactly what we want) and drop any queued residual.
+            lunco_core::Reconciliation::Snap { pos: new_pos, rot: new_rot } => {
+                tf.translation = new_pos;
+                tf.rotation = new_rot;
+                if let Some(mut p) = pos {
+                    p.0 = DVec3::new(new_pos.x as f64, new_pos.y as f64, new_pos.z as f64);
+                }
+                if let Some(mut r) = rot {
+                    r.0 = new_rot.as_dquat();
+                }
+                if let Some(mut pc) = off {
+                    *pc = PendingCorrection::default();
+                }
+            }
+        }
+        // Blend velocity HALFWAY to authoritative (not a full seat): the sample's
+        // velocity is ~a snapshot-period stale, so fully seating it while
+        // accelerating yanks the rover's speed backward every correction — felt as
+        // a rhythmic hiccup while simply holding the throttle. Half-blending damps
+        // divergence just as effectively across a few acks without the kick.
         let auth_lv = sample.lv;
         let auth_av = sample.av;
         if let Some(mut l) = lin {
-            l.0 = DVec3::new(auth_lv.x as f64, auth_lv.y as f64, auth_lv.z as f64);
+            let auth = DVec3::new(auth_lv.x as f64, auth_lv.y as f64, auth_lv.z as f64);
+            l.0 = (l.0 + auth) * 0.5;
         }
         if let Some(mut a) = ang {
-            a.0 = DVec3::new(auth_av.x as f64, auth_av.y as f64, auth_av.z as f64);
+            let auth = DVec3::new(auth_av.x as f64, auth_av.y as f64, auth_av.z as f64);
+            a.0 = (a.0 + auth) * 0.5;
         }
     }
 }
@@ -953,6 +1117,67 @@ pub fn maintain_predicted_dynamic(
     }
 }
 
+/// Client Step 4 (`PREDICT_AND_SMOOTH` §5, predict-all-vehicles): designate every
+/// **remote rover** (`RoverVessel` you don't possess) as
+/// [`lunco_core::PredictedDynamic`] too — locally `Dynamic`, state-reconciled to
+/// authority each snapshot — reusing the Phase B machinery wholesale.
+///
+/// Why: with Step 1 a remote rover is a *kinematic* proxy. It can push your owned
+/// rover (its velocity enters contact), but it never **yields** to *being* pushed —
+/// so when YOU drive into it, your predicted rover bounces off an immovable wall
+/// while authority shows that rover yielding and moving away → reconcile fights the
+/// mismatch → the "client push" jitter. Making it locally `Dynamic` means it yields
+/// in the same step you push it, matching authority → crisp mutual push.
+///
+/// Reuses `PredictedDynamic` (not a separate marker): every predict-own seam
+/// already excludes it (kinematic pin / drive / interpolate), and
+/// [`maintain_predicted_dynamic`]'s possession-demote already removes the marker
+/// when you possess the rover (its input-replay path takes over). Cosim rovers are
+/// safe — `tag_cosim_opaque` only marks non-`RoverVessel` bodies `NotPredictable`,
+/// which we still exclude here. Between snapshots the rover dead-reckons on the
+/// authoritative velocity seated by `reconcile_predicted_dynamic`; held-input
+/// feed-forward (Step 3) would sharpen the actively-driven-remote case but is not
+/// needed for the push fix. Client-only.
+pub fn maintain_predicted_vehicles(
+    role: Res<lunco_core::NetworkRole>,
+    local: Res<lunco_core::LocalSession>,
+    reg: Res<lunco_core::SessionRegistry>,
+    mut commands: Commands,
+    q_add: Query<
+        (Entity, &lunco_core::GlobalEntityId, &RigidBody),
+        (
+            With<lunco_core::NetReplicate>,
+            With<lunco_core::RoverVessel>,
+            Without<lunco_core::OwnedLocally>,
+            Without<lunco_core::PredictedDynamic>,
+            Without<lunco_core::NotPredictable>,
+        ),
+    >,
+) {
+    if !matches!(*role, lunco_core::NetworkRole::Client) {
+        return;
+    }
+    for (e, gid, rb) in q_add.iter() {
+        if matches!(*rb, RigidBody::Static) {
+            continue;
+        }
+        // NEVER vehicle-predict a rover THIS session owns: its prediction
+        // membership belongs exclusively to Phase A (`maintain_owned_locally`,
+        // OwnedLocally + input-replay). Phase A's drive-grace lapses between key
+        // taps; without this guard the rover flapped OwnedLocally→PredictedDynamic
+        // on every lapse, and the state-reconciler yanked the still-moving rover
+        // back to a ~0.2 s-stale snapshot each time — a tap-driven sawtooth jitter
+        // with no contact at all. An owned-but-idle rover falls back to the
+        // kinematic proxy path (computability rule, Phase A), not to this marker.
+        if reg.owns(local.0, gid.get()) {
+            continue;
+        }
+        commands
+            .entity(e)
+            .insert((lunco_core::PredictedDynamic, RigidBody::Dynamic));
+    }
+}
+
 /// Client Phase B: **state-based** reconciliation for [`lunco_core::PredictedDynamic`]
 /// free props. Unlike the owned rover there is NO input `seq` to replay, so we
 /// compare the body's CURRENT pose directly against the latest authoritative
@@ -977,9 +1202,12 @@ pub fn reconcile_predicted_dynamic(
         Option<&mut Rotation>,
         Option<&mut LinearVelocity>,
         Option<&mut AngularVelocity>,
+        Option<&mut PendingCorrection>,
     )>,
+    mut commands: Commands,
     // Last host gen-time reconciled per gid, so we act once per fresh snapshot.
     mut last_handled: Local<HashMap<u64, f64>>,
+    mut dbg_n: Local<u32>,
 ) {
     for gid in q_pred.iter() {
         let g = gid.get();
@@ -993,10 +1221,10 @@ pub fn reconcile_predicted_dynamic(
         let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(g)) else {
             continue;
         };
-        let Ok((mut tf, pos, rot, lin, ang)) = q.get_mut(e) else {
+        let Ok((mut tf, pos, rot, lin, ang, off)) = q.get_mut(e) else {
             continue;
         };
-        let (new_pos, new_rot) = match lunco_core::reconcile_decision(
+        let decision = lunco_core::reconcile_decision(
             tf.translation,
             tf.rotation,
             tf.translation,
@@ -1004,20 +1232,62 @@ pub fn reconcile_predicted_dynamic(
             sample.pos,
             sample.rot,
             lunco_core::ReconcileParams::default(),
-        ) {
-            lunco_core::Reconciliation::InSync => continue,
-            lunco_core::Reconciliation::Correct { pos, rot } => (pos, rot),
-            lunco_core::Reconciliation::Snap { pos, rot } => (pos, rot),
-        };
-        tf.translation = new_pos;
-        tf.rotation = new_rot;
-        if let Some(mut p) = pos {
-            p.0 = DVec3::new(new_pos.x as f64, new_pos.y as f64, new_pos.z as f64);
+        );
+        if matches!(decision, lunco_core::Reconciliation::InSync) {
+            continue;
         }
-        // Write avian's f64 `Rotation` too, else writeback re-derives Transform from
-        // the stale `Rotation` next tick and clobbers the correction.
-        if let Some(mut r) = rot {
-            r.0 = new_rot.as_dquat();
+        // DIAG: how often / how hard do predicted bodies (remote rovers, props)
+        // get state-corrected?
+        if let lunco_core::Reconciliation::Correct { pos: np, rot: nr }
+        | lunco_core::Reconciliation::Snap { pos: np, rot: nr } = decision
+        {
+            *dbg_n = dbg_n.wrapping_add(1);
+            if *dbg_n % 15 == 0 {
+                eprintln!(
+                    "[RECON-PRED] #{} gid={g:x} corr_mag={:.4} rot_deg={:.3} snap={}",
+                    *dbg_n,
+                    (np - tf.translation).length(),
+                    nr.angle_between(tf.rotation).to_degrees(),
+                    matches!(decision, lunco_core::Reconciliation::Snap { .. }),
+                );
+            }
+        }
+        match decision {
+            lunco_core::Reconciliation::InSync => unreachable!(),
+            // Park the correction; `drain_pending_corrections` applies it to the
+            // physics pose a few cm/degrees per fixed tick (see PendingCorrection
+            // docs — direct pose/Transform writes here reset the transform
+            // interpolation and popped the body).
+            lunco_core::Reconciliation::Correct { pos: new_pos, rot: new_rot } => {
+                let dpos = new_pos - tf.translation;
+                let drot = (new_rot * tf.rotation.inverse()).normalize();
+                match off {
+                    Some(mut pc) => {
+                        pc.pos += dpos;
+                        pc.rot = (drot * pc.rot).normalize();
+                    }
+                    None => {
+                        commands
+                            .entity(e)
+                            .insert(PendingCorrection { pos: dpos, rot: drot });
+                    }
+                }
+            }
+            // Gross desync: teleport semantics — seat the pose directly and drop
+            // any queued residual.
+            lunco_core::Reconciliation::Snap { pos: new_pos, rot: new_rot } => {
+                tf.translation = new_pos;
+                tf.rotation = new_rot;
+                if let Some(mut p) = pos {
+                    p.0 = DVec3::new(new_pos.x as f64, new_pos.y as f64, new_pos.z as f64);
+                }
+                if let Some(mut r) = rot {
+                    r.0 = new_rot.as_dquat();
+                }
+                if let Some(mut pc) = off {
+                    *pc = PendingCorrection::default();
+                }
+            }
         }
         // Seat velocity to authoritative so the prop stops re-diverging next tick.
         if let Some(mut l) = lin {
@@ -1025,6 +1295,86 @@ pub fn reconcile_predicted_dynamic(
         }
         if let Some(mut a) = ang {
             a.0 = DVec3::new(sample.av.x as f64, sample.av.y as f64, sample.av.z as f64);
+        }
+    }
+}
+
+/// Step 2 (revised): residual reconcile correction, drained in **physics space**
+/// a tick at a time by [`drain_pending_corrections`].
+///
+/// The first Step-2 design (a decaying offset written onto the render `Transform`
+/// in `PostUpdate`) was architecturally wrong for this app: the sandbox enables
+/// `PhysicsInterpolationPlugin::interpolate_all()`, so `bevy_transform_interpolation`
+/// owns every body's `Transform` at render rate — and treats ANY external
+/// `Transform` write as a teleport, resetting its easing. Our offset writer
+/// therefore *disabled* interpolation for the corrected body (≈ continuously while
+/// driving, since corrections land every ~1–2 s and the offset decayed for ~1 s)
+/// → the rover rendered at raw 64 Hz steps = the persistent "jitters while just
+/// holding the key" the host never shows.
+///
+/// Correct composition: never touch `Transform` from game code. Park the
+/// correction here and let the drain system nudge `Position`/`Rotation` by a tiny
+/// bounded amount each FIXED tick; writeback + interpolation then render it
+/// perfectly smoothly with no second writer anywhere.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct PendingCorrection {
+    /// Remaining position delta to apply (world metres).
+    pub pos: Vec3,
+    /// Remaining orientation delta (applied as `rot * current`).
+    pub rot: Quat,
+}
+
+/// Time-constant (s) for draining a pending correction: ~63% applied per
+/// `CORRECTION_TAU`, ≈ fully in ~3×. Long enough to be invisible, short enough to
+/// converge well before the next ack lands.
+const CORRECTION_TAU: f64 = 0.12;
+
+/// Per-tick cap on the drained position nudge (m). 2.5 cm at 64 Hz = up to
+/// 1.6 m/s of correction capacity — far above the measured ~0.15 m/s divergence —
+/// while each individual nudge stays far too small to disturb a contact.
+const CORRECTION_MAX_POS_PER_TICK: f64 = 0.025;
+
+/// Per-tick cap on the drained rotation nudge (rad, ~0.9°/tick ≈ 57°/s capacity).
+const CORRECTION_MAX_ROT_PER_TICK: f64 = 0.016;
+
+impl PendingCorrection {
+    pub fn is_negligible(&self) -> bool {
+        self.pos.length_squared() < 1e-8 && self.rot.angle_between(Quat::IDENTITY) < 1e-4
+    }
+}
+
+/// Drain each body's [`PendingCorrection`] into its avian `Position`/`Rotation`
+/// in small per-tick steps (exp toward zero residual, hard per-tick caps).
+/// `FixedUpdate` — the nudge flows through this tick's solve + writeback, so
+/// `bevy_transform_interpolation` eases it at render rate like any other motion.
+pub fn drain_pending_corrections(
+    mut commands: Commands,
+    mut q: Query<(Entity, &mut Position, &mut Rotation, &mut PendingCorrection)>,
+) {
+    let frac = 1.0 - (-SECS_PER_TICK / CORRECTION_TAU).exp(); // per-tick drain fraction
+    for (e, mut pos, mut rot, mut pc) in q.iter_mut() {
+        if pc.is_negligible() {
+            commands.entity(e).remove::<PendingCorrection>();
+            continue;
+        }
+        // Position: take `frac` of the residual, capped.
+        let mut step = pc.pos.as_dvec3() * frac;
+        let len = step.length();
+        if len > CORRECTION_MAX_POS_PER_TICK {
+            step *= CORRECTION_MAX_POS_PER_TICK / len;
+        }
+        pos.0 += step;
+        pc.pos -= step.as_vec3();
+
+        // Rotation: slerp a capped fraction of the residual toward identity.
+        let angle = pc.rot.angle_between(Quat::IDENTITY) as f64;
+        if angle > 1e-5 {
+            let take = (frac * angle).min(CORRECTION_MAX_ROT_PER_TICK) / angle; // fraction of residual
+            let applied = Quat::IDENTITY.slerp(pc.rot, take as f32);
+            rot.0 = applied.as_dquat() * rot.0;
+            pc.rot = (applied.inverse() * pc.rot).normalize();
+        } else {
+            pc.rot = Quat::IDENTITY;
         }
     }
 }
@@ -1561,6 +1911,11 @@ impl Plugin for SpawnCommandPlugin {
                 // Phase B: classify free predicted props BEFORE the interpolate /
                 // kinematic-pin systems read the `PredictedDynamic` marker.
                 maintain_predicted_dynamic,
+                // Step 4: predict remote rovers too (reuses PredictedDynamic), so
+                // they yield to your push. Must run before the kinematic/interpolate
+                // systems read the marker; after maintain_predicted_dynamic so the
+                // possession-demote ordering is stable.
+                maintain_predicted_vehicles,
                 ingest_snapshots,
                 interpolate_proxies,
                 force_kinematic_proxies,
@@ -1595,6 +1950,16 @@ impl Plugin for SpawnCommandPlugin {
             FixedPostUpdate,
             reconcile_predicted_dynamic.after(PhysicsSystems::Writeback),
         );
+        // Step 2 (revised) correction smoothing: reconcilers PARK their correction
+        // in `PendingCorrection`; this drain applies it to the physics pose a few
+        // cm/deg per fixed tick, BEFORE the solve, so writeback + avian's
+        // transform-interpolation render it smoothly. Game code never writes
+        // `Transform` (which resets `bevy_transform_interpolation`'s easing — the
+        // cause of the hold-the-key client jitter).
+        app.add_systems(FixedUpdate, drain_pending_corrections);
+        // DIAG (temporary): rendered-motion jitter detector, after propagation so
+        // it sees exactly what the camera sees.
+        app.add_systems(Last, detect_render_jitter);
     }
 }
 
@@ -1672,7 +2037,13 @@ mod pose_write_tests {
         world.insert_resource(reg);
     }
 
-    /// Reconcile (owned rover) must write avian `Rotation`, not just `Transform`.
+    /// Reconcile (owned rover): a Correct-class divergence must NOT pop the pose —
+    /// it parks a [`PendingCorrection`] residual, and `drain_pending_corrections`
+    /// then moves avian `Rotation` (the physics truth — interpolation re-derives
+    /// `Transform` from it) toward authority in small per-tick steps. Direct
+    /// `Transform` writes are forbidden: `bevy_transform_interpolation`
+    /// (`interpolate_all()`) treats them as teleports and resets its easing,
+    /// which was the hold-the-key client jitter.
     #[test]
     fn reconcile_correction_writes_avian_rotation() {
         let mut world = World::new();
@@ -1724,17 +2095,46 @@ mod pose_write_tests {
 
         world.run_system_once(reconcile_owned_prediction).unwrap();
 
+        // The reconciler must NOT have popped the pose (no direct writes)…
         let tf_rot = world.entity(e).get::<Transform>().unwrap().rotation;
-        let avian_rot = world.entity(e).get::<Rotation>().unwrap().0.as_quat();
-        // The correction moved orientation off the (identity) prediction…
         assert!(
-            tf_rot.angle_between(predicted) > 1e-3,
-            "reconcile should have corrected rotation; got {tf_rot:?}"
+            tf_rot.angle_between(predicted) < 1e-6,
+            "Correct-class divergence must not pop Transform; got {tf_rot:?}"
         );
-        // …and avian's f64 Rotation matches Transform (the bug = divergence here).
+        // …instead it parked a rotation residual…
+        let pc = world
+            .entity(e)
+            .get::<PendingCorrection>()
+            .copied()
+            .expect("reconcile should park a PendingCorrection");
         assert!(
-            tf_rot.angle_between(avian_rot) < 1e-4,
-            "avian Rotation {avian_rot:?} must match Transform.rotation {tf_rot:?}"
+            pc.rot.angle_between(Quat::IDENTITY) > 1e-3,
+            "pending correction should carry the rotation error; got {pc:?}"
+        );
+        // …which the drain converges onto avian `Rotation` (physics truth) in
+        // small per-tick steps, never exceeding the per-tick cap.
+        let before = world.entity(e).get::<Rotation>().unwrap().0.as_quat();
+        world.run_system_once(drain_pending_corrections).unwrap();
+        let after = world.entity(e).get::<Rotation>().unwrap().0.as_quat();
+        let step = after.angle_between(before);
+        assert!(
+            step > 1e-4,
+            "drain should rotate avian Rotation toward authority; step={step}"
+        );
+        assert!(
+            step <= CORRECTION_MAX_ROT_PER_TICK as f32 + 1e-4,
+            "per-tick rotation nudge must respect the cap; step={step}"
+        );
+        // Draining repeatedly converges (residual shrinks monotonically).
+        for _ in 0..600 {
+            world.run_system_once(drain_pending_corrections).unwrap();
+        }
+        let settled = world.entity(e).get::<Rotation>().unwrap().0.as_quat();
+        let target = predicted.slerp(authoritative, 0.3); // blend=0.3 nudge target
+        assert!(
+            settled.angle_between(target) < 0.01,
+            "drained Rotation should reach the blended correction target; \
+             got {settled:?} vs {target:?}"
         );
     }
 

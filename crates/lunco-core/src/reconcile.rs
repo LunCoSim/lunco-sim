@@ -39,8 +39,15 @@ pub struct ReconcileParams {
 impl Default for ReconcileParams {
     fn default() -> Self {
         Self {
-            eps_pos: 0.25,
-            eps_rot: 0.03,
+            // Dead-zone: tolerate small prediction divergence instead of nudging
+            // every ack. Measured free-driving divergence is ~13–27 cm / 2–6° per
+            // 20 Hz ack — well-predicted, but the old 0.25 m / 1.7° thresholds fired
+            // a tiny correction on nearly EVERY ack, and at 20 Hz that out-paces the
+            // render smoothing → a continuous wobble even with nothing touching the
+            // rover. Widened so ordinary noise reads as InSync (no pull); genuine
+            // divergence past these still corrects, gross past `snap_pos` still snaps.
+            eps_pos: 0.40,
+            eps_rot: 0.10, // ≈5.7°
             snap_pos: 6.0,
             blend: 0.3,
         }
