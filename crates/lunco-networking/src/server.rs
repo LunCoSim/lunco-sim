@@ -46,10 +46,14 @@ fn resolve_identity() -> Identity {
     {
         match load_pem_identity(&cert_path, &key_path) {
             Ok(identity) => {
-                info!(
-                    "🔐 WebTransport using CA cert from {cert_path} \
-                     (browser validates via chain — connect with no #digest)"
-                );
+                info!("🔐 WebTransport using cert from {cert_path}");
+                // A real CA cert's digest is unused (browsers validate the chain),
+                // but a *self-signed* cert pinned via these env vars still needs the
+                // hash-pin — so publish the digest here too. This is the supported
+                // way to get a STABLE digest across host restarts: point the env
+                // vars at a persisted self-signed cert instead of minting a fresh
+                // one each launch. See announce_digest.
+                announce_digest(&identity);
                 return identity;
             }
             Err(e) => error!(
@@ -59,10 +63,20 @@ fn resolve_identity() -> Identity {
         }
     }
 
-    // ECDSA-P256 self-signed cert. Print + persist the digest so browser clients
-    // can pin it in the connect URL (`#<digest>`).
+    // ECDSA-P256 self-signed cert — fresh each launch (→ a new digest every
+    // restart) UNLESS you pin a persisted one via the env vars above. Publish the
+    // digest so browser clients can pin it in the connect URL (`#<digest>`).
     let identity = Identity::self_signed(vec!["localhost".to_string(), "127.0.0.1".to_string()])
         .expect("self-signed certificate");
+    announce_digest(&identity);
+    identity
+}
+
+/// Compute the cert's DER-SHA256 digest, log it, and write it to
+/// `lunco_cert_digest.txt` so browser clients can hash-pin it (`#<digest>`).
+/// Called on BOTH identity paths so a persisted self-signed cert (loaded via
+/// the env vars) yields a stable digest across restarts.
+fn announce_digest(identity: &Identity) {
     let digest = format!("{}", identity.certificate_chain().as_slice()[0].hash());
     info!("🔐 WebTransport cert digest: {digest}");
     let digest_path = std::env::temp_dir().join("lunco_cert_digest.txt");
@@ -73,7 +87,6 @@ fn resolve_identity() -> Identity {
     {
         info!("🔐 digest written to {}", digest_path.display());
     }
-    identity
 }
 
 /// Build an [`Identity`] from PEM cert-chain + private-key files. Reads route

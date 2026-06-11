@@ -148,9 +148,19 @@ pub fn apply_replicated_spawns(
 /// the steady state a no-op.
 pub fn force_kinematic_proxies(
     role: Res<lunco_core::NetworkRole>,
+    // Host-loss quiescence: when the client has no host, zero proxy velocities so
+    // nothing dead-reckons/glides off (the disconnected cosim ball otherwise
+    // launched to ~-195 km). The kinematic pin then holds them at their last
+    // replicated pose until reconnect; the driver is gated off in parallel.
+    status: Res<lunco_core::NetStatus>,
     mut commands: Commands,
     mut q: Query<
-        (Entity, &RigidBody),
+        (
+            Entity,
+            &RigidBody,
+            Option<&mut LinearVelocity>,
+            Option<&mut AngularVelocity>,
+        ),
         // Predict-own: the rover this client possesses (`OwnedLocally`) is
         // excluded — it runs its own avian step as a `Dynamic` body instead of
         // being pinned `Kinematic`. Phase B: a free predicted prop
@@ -166,12 +176,22 @@ pub fn force_kinematic_proxies(
     if !matches!(*role, lunco_core::NetworkRole::Client) {
         return;
     }
-    for (e, rb) in q.iter_mut() {
+    let frozen = !status.connected; // host lost → quiesce
+    for (e, rb, lin, ang) in q.iter_mut() {
         // `RigidBody` is an immutable Avian component — replace it via `insert`.
         if !matches!(*rb, RigidBody::Kinematic) {
             commands.entity(e).insert(RigidBody::Kinematic);
         }
-        // NOTE (Step 1): velocity is NO LONGER zeroed here. The proxy's velocity is
+        if frozen {
+            // No authority to follow — pin velocity to zero so the body holds.
+            if let Some(mut l) = lin {
+                l.0 = DVec3::ZERO;
+            }
+            if let Some(mut a) = ang {
+                a.0 = DVec3::ZERO;
+            }
+        }
+        // NOTE (Step 1): when connected, velocity is NOT zeroed here. The proxy's velocity is
         // now *driven* every fixed tick toward the snapshot curve by
         // `drive_kinematic_proxies` (closed loop — a resting body's curve is flat so
         // it commands v≈0 anyway), which is what lets the proxy's motion enter
@@ -574,6 +594,11 @@ pub fn interpolate_proxies(
 /// velocity to close a big gap would be a contact-disrupting kick.
 pub fn drive_kinematic_proxies(
     role: Res<lunco_core::NetworkRole>,
+    // Host-loss quiescence: with no authoritative snapshots arriving, driving
+    // proxies off the starved curve would dead-reckon them off into space (the
+    // disconnected cosim ball launched to ~-195 km). Stop driving when not
+    // connected; `force_kinematic_proxies` freezes them (kinematic + zero vel).
+    status: Res<lunco_core::NetStatus>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     buffers: Res<InterpBuffers>,
     mut clock: ResMut<ProxyPlaybackClock>,
@@ -594,6 +619,9 @@ pub fn drive_kinematic_proxies(
 ) {
     if !matches!(*role, lunco_core::NetworkRole::Client) {
         return;
+    }
+    if !status.connected {
+        return; // host lost — freeze (see `force_kinematic_proxies`), don't dead-reckon
     }
     // Advance the shared clock once per fixed tick (its only advance site).
     let newest_gen = buffers
