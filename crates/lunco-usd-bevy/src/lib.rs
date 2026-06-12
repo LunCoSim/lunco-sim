@@ -43,7 +43,9 @@ use std::sync::Arc;
 
 mod resolver;
 mod compose;
+mod light;
 pub use compose::compose_native_fs;
+pub use light::{FallbackSceneLight, UsdAuthoredLight};
 
 /// Bevy plugin for USD visual synchronization.
 ///
@@ -60,6 +62,7 @@ impl Plugin for UsdBevyPlugin {
             .init_resource::<DiagnosticLabelConfig>()
             .add_systems(Startup, load_diagnostic_label_font)
             .add_observer(on_usd_prim_added)
+            .add_observer(light::on_usd_light_added)
             // `sync_usd_visuals` runs only on frames where a stage's
             // `LoadedWithDependencies` event was emitted. Idle frames
             // skip it entirely (run-condition short-circuits).
@@ -305,6 +308,12 @@ fn instantiate_usd_prim(
         } else {
             None
         };
+
+        // UsdLux light prims (`DistantLight` sun / `DomeLight` ambient —
+        // see `light.rs`). A light produces no mesh; the shared transform
+        // path below still applies, which is how a DistantLight gets its
+        // orientation from `xformOp:rotateXYZ`.
+        light::instantiate_light_prim(reader, &sdf_path, prim_type.as_deref(), commands, entity);
 
         // Visibility — honour standard USD `token visibility`.
         // `invisible` suppresses mesh creation entirely (used for

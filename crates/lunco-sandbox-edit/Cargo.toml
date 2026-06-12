@@ -19,6 +19,7 @@ lunco-mobility = { path = "../lunco-mobility" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-modelica = { path = "../lunco-modelica", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-environment = { path = "../lunco-environment" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-avatar = { path = "../lunco-avatar" }
 

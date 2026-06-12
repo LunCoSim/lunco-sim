@@ -10,7 +10,7 @@
 
 use avian3d::prelude::{Forces, Mass, RigidBody, WriteRigidBodyForces};
 use bevy::prelude::*;
-use bevy::light::GlobalAmbientLight;
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, GlobalAmbientLight};
 use bevy::math::DVec3;
 use lunco_celestial::{Gravity, GravityBody, GravityProvider};
 use lunco_core::{Command, on_command, register_commands};
@@ -188,27 +188,78 @@ pub struct SetEnvironmentLight {
     /// Sun elevation in radians (`EulerRot::YXZ` pitch); negative tilts the
     /// light down. `None` keeps current.
     pub sun_pitch: Option<f32>,
+    /// Sun illuminance in lux. `None` keeps current.
+    pub illuminance: Option<f32>,
+    /// Sun color as linear RGB. `None` keeps current.
+    pub sun_color: Option<[f32; 3]>,
+    /// Whether the sun casts shadows. `None` keeps current.
+    pub shadows_enabled: Option<bool>,
+    /// Far bound of the first (sharpest) shadow cascade, metres.
+    /// `None` keeps current.
+    pub shadow_first_cascade_bound: Option<f32>,
+    /// Total shadow-casting range, metres. Smaller ⇒ denser shadow-map
+    /// texels ⇒ crisper shadows. `None` keeps current.
+    pub shadow_max_distance: Option<f32>,
     /// Global ambient brightness (cd/m²-scaled). `None` keeps current.
     pub ambient_brightness: Option<f32>,
 }
 
-/// Applies a [`SetEnvironmentLight`] command to the live `DirectionalLight`
-/// and `GlobalAmbientLight`. Resources/queries are tolerant of absence so the
-/// command is a no-op in headless contexts that have no lights.
+/// Applies a [`SetEnvironmentLight`] command to the live `DirectionalLight`,
+/// its `CascadeShadowConfig`, and `GlobalAmbientLight`. Resources/queries are
+/// tolerant of absence so the command is a no-op in headless contexts that
+/// have no lights.
+///
+/// This observer is the SINGLE mutation path for environment lighting —
+/// the HTTP/MCP API, the Inspector's Environment section, and any future
+/// script hooks all dispatch this same command. (The USD loader is the
+/// *creation* path: it spawns the light entity from `DistantLight` prims;
+/// every later change flows through here.)
 #[on_command(SetEnvironmentLight)]
 fn on_set_environment_light(
     _cmd: SetEnvironmentLight,
-    mut q_sun: Query<&mut Transform, With<DirectionalLight>>,
+    mut q_sun: Query<
+        (&mut Transform, &mut DirectionalLight, Option<&mut CascadeShadowConfig>),
+        With<DirectionalLight>,
+    >,
     ambient: Option<ResMut<GlobalAmbientLight>>,
 ) {
-    if cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some() {
-        for mut tf in &mut q_sun {
+    for (mut tf, mut light, cascades) in &mut q_sun {
+        if cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some() {
             // Preserve the unspecified axis by reading it back off the current
-            // rotation (same YXZ order the sandbox panel writes with).
+            // rotation (same YXZ order the Inspector writes with).
             let (cur_yaw, cur_pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
             let yaw = cmd.sun_yaw.unwrap_or(cur_yaw);
             let pitch = cmd.sun_pitch.unwrap_or(cur_pitch);
             tf.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+        }
+
+        if let Some(lux) = cmd.illuminance {
+            light.illuminance = lux;
+        }
+        if let Some([r, g, b]) = cmd.sun_color {
+            light.color = Color::linear_rgb(r, g, b);
+        }
+        if let Some(s) = cmd.shadows_enabled {
+            light.shadows_enabled = s;
+        }
+
+        if cmd.shadow_first_cascade_bound.is_some() || cmd.shadow_max_distance.is_some() {
+            if let Some(mut cfg) = cascades {
+                // Rebuild from the live config, overriding only the two
+                // range knobs (cascade count / overlap / near are kept).
+                let cur_first = cfg.bounds.first().copied().unwrap_or(40.0);
+                let cur_max = cfg.bounds.last().copied().unwrap_or(1500.0);
+                let first = cmd.shadow_first_cascade_bound.unwrap_or(cur_first);
+                let max = cmd.shadow_max_distance.unwrap_or(cur_max);
+                *cfg = CascadeShadowConfigBuilder {
+                    num_cascades: cfg.bounds.len().max(1),
+                    minimum_distance: cfg.minimum_distance,
+                    first_cascade_far_bound: first.max(1.0).min(max - 1.0),
+                    maximum_distance: max.max(first + 1.0),
+                    overlap_proportion: cfg.overlap_proportion,
+                }
+                .build();
+            }
         }
     }
 

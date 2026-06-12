@@ -27,7 +27,7 @@ pub mod ui;
 pub use commands::{ApplyUsdOp, UsdCommandsPlugin, USD_DOCUMENT_KIND};
 pub use document::{LayerId, UsdChange, UsdDocument, UsdOp};
 pub use registry::UsdDocumentRegistry;
-pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
+pub use lunco_usd_bevy::{FallbackSceneLight, UsdAuthoredLight, UsdPrimPath, UsdStageAsset};
 pub use lunco_usd_avian::UsdAvianPlugin;
 pub use lunco_usd_sim::UsdSimPlugin;
 pub use lunco_usd_sim::cosim::{ClearScene, LoadScene};
