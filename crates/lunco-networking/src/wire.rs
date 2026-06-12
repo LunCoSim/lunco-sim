@@ -55,13 +55,27 @@ pub struct WireCommand {
 }
 
 /// One entity's replicated transform (+ velocity), keyed by [`GlobalEntityId`]
-/// raw `u64`. `lv`/`av` are `#[serde(default)]` so the wire stays
-/// forward/backward-compatible (an old peer omits them → zero).
+/// raw `u64`. **Compact wire form (Phase 3):** the absolute world position is
+/// fixed-point quantized to **1 mm** in `i32` ([`POS_SCALE`]) and the world
+/// rotation is a 32-bit smallest-three packing — replacing the old f32 `t` +
+/// f32 quat + f64 `pos` + i64 `cell` (≈112 B → ≈52 B). Velocities stay f32 to
+/// protect owned-rover reconcile precision.
+///
+/// `pos_q` spans ±(2³¹−1)/`POS_SCALE` ≈ **±2 147 km** from the world origin —
+/// the whole lunar surface (radius 1 737 km) and the entire sandbox. Bodies
+/// farther than that saturate at the bound (see [`quantize_pos`]); covering a
+/// deep-orbital / cislunar-absolute frame needs big_space recentering, which is
+/// **deferred** (blocked on an avian↔big_space transform-writeback bridge — see
+/// `DESIGN_GAPS §A` and `crates/lunco-core/src/coords.rs` rebase tests).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SnapshotEntry {
     pub gid: u64,
-    pub t: [f32; 3],
-    pub r: [f32; 4],
+    /// Absolute world position (avian f64 `Position`), fixed-point at
+    /// [`POS_SCALE`]. Decode with [`dequantize_pos`].
+    pub pos_q: [i32; 3],
+    /// World-space rotation, smallest-three packed ([`encode_quat`] /
+    /// [`decode_quat`]).
+    pub rot_packed: u32,
     /// Authoritative linear velocity (avian `LinearVelocity`, f64→f32) — the
     /// owned-rover prediction seats the body with this for replay.
     #[serde(default)]
@@ -73,18 +87,80 @@ pub struct SnapshotEntry {
     /// reconcile ack for the owning client.
     #[serde(default)]
     pub last_input_seq: u32,
-    /// Authoritative **absolute** position as avian f64 `Position` (gap A). The
-    /// f32 `t` above is the render-space (cell-relative) offset and loses
-    /// precision far from origin; `pos` is the precise physics truth used to seat
-    /// replicated proxies at lunar/orbital scale. `#[serde(default)]` → an old
-    /// peer omits it and the apply path falls back to `t`.
-    #[serde(default)]
-    pub pos: [f64; 3],
-    /// big_space `CellCoord` of the body (i64 per axis). `[0,0,0]` in the current
-    /// single-cell config (`switching_threshold = 1e10`, bodies never recenter);
-    /// carried so replication stays correct once recentering is enabled.
-    #[serde(default)]
-    pub cell: [i64; 3],
+}
+
+/// Fixed-point scale for wire position quantization: units per metre. `1000` ⇒
+/// 1 mm resolution; `i32` then spans ±(2³¹−1)/1000 ≈ ±2 147 km from origin.
+pub const POS_SCALE: f64 = 1000.0;
+
+/// Quantize an absolute world position to fixed-point `i32` at [`POS_SCALE`].
+/// Rust's float→int `as` **saturates**, so a body beyond ±2 147 km clamps to the
+/// bound (a visible offset, never a wrapping teleport).
+pub fn quantize_pos(p: DVec3) -> [i32; 3] {
+    [
+        (p.x * POS_SCALE).round() as i32,
+        (p.y * POS_SCALE).round() as i32,
+        (p.z * POS_SCALE).round() as i32,
+    ]
+}
+
+/// Inverse of [`quantize_pos`].
+pub fn dequantize_pos(q: [i32; 3]) -> DVec3 {
+    DVec3::new(
+        q[0] as f64 / POS_SCALE,
+        q[1] as f64 / POS_SCALE,
+        q[2] as f64 / POS_SCALE,
+    )
+}
+
+/// Pack a unit quaternion into 32 bits (smallest-three): a 2-bit largest-component
+/// index + three 10-bit components over ±1/√2. `q` and `−q` encode identically
+/// (the dropped largest component is reconstructed non-negative). Max component
+/// error ≈ 1.4e-3 ⇒ well under the reconcile rotation tolerance.
+pub fn encode_quat(q: Quat) -> u32 {
+    const INV_SQRT2: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    let q = q.normalize();
+    let a = [q.x, q.y, q.z, q.w];
+    let mut m = 0usize;
+    for i in 1..4 {
+        if a[i].abs() > a[m].abs() {
+            m = i;
+        }
+    }
+    let sign = if a[m] < 0.0 { -1.0 } else { 1.0 };
+    let mut packed = (m as u32) << 30;
+    let mut shift = 20i32;
+    for (i, &c) in a.iter().enumerate() {
+        if i == m {
+            continue;
+        }
+        let cs = c * sign; // ∈ [-1/√2, 1/√2]
+        let u = ((cs / INV_SQRT2) * 0.5 + 0.5).clamp(0.0, 1.0);
+        packed |= ((u * 1023.0).round() as u32) << shift;
+        shift -= 10;
+    }
+    packed
+}
+
+/// Inverse of [`encode_quat`].
+pub fn decode_quat(packed: u32) -> Quat {
+    const INV_SQRT2: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    let m = ((packed >> 30) & 0x3) as usize;
+    let mut comps = [0.0f32; 4];
+    let mut shift = 20i32;
+    let mut sum_sq = 0.0f32;
+    for i in 0..4 {
+        if i == m {
+            continue;
+        }
+        let q10 = (packed >> shift) & 0x3FF;
+        let c = (q10 as f32 / 1023.0 * 2.0 - 1.0) * INV_SQRT2;
+        comps[i] = c;
+        sum_sq += c * c;
+        shift -= 10;
+    }
+    comps[m] = (1.0 - sum_sq).max(0.0).sqrt();
+    Quat::from_xyzw(comps[0], comps[1], comps[2], comps[3]).normalize()
 }
 
 /// A batch of changed transforms at a given sim tick (M2 state replication).
@@ -424,16 +500,20 @@ pub fn drain_wire_inbox(
                 // Queue for the avian-aware apply (sets `Position` so the
                 // physics transform-sync doesn't overwrite it).
                 for e in snap.entries {
+                    // Decode the compact wire form back to the absolute f64 the
+                    // apply path expects. Cells are not used (recentering deferred),
+                    // so render-space `t` == absolute and `cell` is zero.
+                    let pos = dequantize_pos(e.pos_q);
                     snapshots.0.push(SnapshotSample {
                         gid: e.gid,
                         tick: snap.tick,
-                        t: e.t,
-                        r: e.r,
+                        t: pos.as_vec3().to_array(),
+                        r: decode_quat(e.rot_packed).to_array(),
                         lv: e.lv,
                         av: e.av,
                         last_input_seq: e.last_input_seq,
-                        pos: e.pos,
-                        cell: e.cell,
+                        pos: [pos.x, pos.y, pos.z],
+                        cell: [0, 0, 0],
                     });
                 }
                 tick.0 = snap.tick;
@@ -481,7 +561,7 @@ pub fn gather_snapshot(
     time: Res<Time>,
     tick: Res<SimTick>,
     mut acc: Local<f32>,
-    mut last_sent: Local<HashMap<u64, ([f32; 3], [f32; 4])>>,
+    mut last_sent: Local<HashMap<u64, ([i32; 3], u32)>>,
     applied: Res<AppliedInputSeq>,
     q: Query<
         (
