@@ -104,10 +104,22 @@ impl AssetLoader for UsdLoader {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
 
-        // Asset-source-relative path of this layer (e.g.
-        // `scenes/sandbox/sandbox_scene.usda`) — the composition root and the
-        // pre-fetch BFS anchor.
-        let root_asset_path = load_context.path().path().to_string_lossy().into_owned();
+        // Source-qualified path of this layer — the composition root and the
+        // pre-fetch BFS anchor. `LoadContext::path()` drops the asset *source*
+        // (Bevy tracks it separately), so a layer loaded from a NAMED source
+        // (e.g. an external Twin scene under `abs://`) would lose its scheme and
+        // its relative refs (the co-located terrain glb) would wrongly resolve
+        // against the default `assets/` source. Re-attach `scheme://` so every
+        // relative arc stays under the layer's own source.
+        let lc_path = load_context.path();
+        let root_asset_path = match lc_path.source() {
+            bevy::asset::io::AssetSourceId::Name(name) => {
+                format!("{}://{}", name, lc_path.path().to_string_lossy())
+            }
+            bevy::asset::io::AssetSourceId::Default => {
+                lc_path.path().to_string_lossy().into_owned()
+            }
+        };
 
         // Compose with openusd 0.5.0's PCP engine — references, payloads,
         // variant selection, and relationship-target translation — through our

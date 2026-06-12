@@ -735,12 +735,22 @@ fn clear_scene_entities(
 /// path) or an already-relative asset path. Returns `None` (with a warn)
 /// if an absolute path lies outside the assets dir.
 fn normalize_scene_asset_path(path_in: &str) -> Option<String> {
+    // Already a scheme path (`abs://`, `lunco://`, …) — the AssetServer routes
+    // it to the named source as-is.
+    if path_in.contains("://") {
+        return Some(path_in.to_string());
+    }
     let pb = std::path::PathBuf::from(path_in);
     if pb.is_absolute() {
-        match pb.strip_prefix(assets_dir()) {
+        // Under the project `assets/` dir → asset-relative (default source).
+        let assets_abs = std::env::current_dir().unwrap_or_default().join(assets_dir());
+        match pb.strip_prefix(&assets_abs) {
             Ok(rel) => Some(rel.to_string_lossy().into_owned()),
             Err(_) => {
-                warn!("[scene] `{}` is outside assets dir — cannot load", path_in);
+                // Bare absolute paths outside `assets/` aren't loadable: an
+                // external Twin scene must arrive through a source scheme
+                // (`twin://…`, set by the Twin-open flow), handled above.
+                warn!("[scene] `{}` is outside assets dir — load it via the Twin (`twin://`) source", path_in);
                 None
             }
         }

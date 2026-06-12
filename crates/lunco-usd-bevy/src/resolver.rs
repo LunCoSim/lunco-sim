@@ -86,6 +86,13 @@ pub(crate) fn is_binary_asset(asset_path: &str) -> bool {
 ///   * `/…` (legacy absolute-from-assets-root) → strip the leading slash.
 ///   * relative → resolved against the anchor layer's directory.
 ///
+/// A relative ref inside a layer that itself lives under a `scheme://` source
+/// (e.g. a rover loaded from `lunco://vessels/rovers/skid_rover.usda` that
+/// references `../../components/mobility/wheel.usda`) must STAY under that
+/// source. `Path` normalization collapses `scheme://` → `scheme:/` (losing the
+/// source), so we split the scheme off the anchor, resolve the path part, and
+/// reattach the `scheme://` prefix.
+///
 /// MUST stay identical between the pre-fetch BFS and the resolver (R-canon).
 pub(crate) fn canonicalize(asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
     if asset_path.contains("://") {
@@ -94,13 +101,40 @@ pub(crate) fn canonicalize(asset_path: &str, anchor: Option<&ResolvedPath>) -> S
     if let Some(rest) = asset_path.strip_prefix('/') {
         return normalize(Path::new(rest)).to_string_lossy().into_owned();
     }
-    let base = anchor.and_then(|a| a.parent()).map(Path::to_path_buf).unwrap_or_default();
-    normalize(&base.join(asset_path)).to_string_lossy().into_owned()
+    // Split a `scheme://` prefix off the anchor before Path-based resolution.
+    let anchor_str = anchor.and_then(|a| a.to_str()).unwrap_or_default();
+    let (scheme, anchor_path) = match anchor_str.split_once("://") {
+        Some((s, rest)) => (Some(s), rest),
+        None => (None, anchor_str),
+    };
+    let base = Path::new(anchor_path)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let resolved = normalize(&base.join(asset_path)).to_string_lossy().into_owned();
+    match scheme {
+        Some(s) => format!("{s}://{resolved}"),
+        None => resolved,
+    }
 }
 
 /// Resolve a binary asset path to a URI the Bevy `AssetServer` can load
 /// (consumed via the synthesized `lunco:resolvedAsset`). `scheme://` passes
 /// through; everything else is treated as an asset-source-relative path.
+///
+// TODO(glb-composability): binary assets (`.glb`/`.gltf`/…) are currently a
+// side-channel — stubbed out of USD composition and surfaced via
+// `lunco:resolvedAsset` for Bevy's glTF loader. The *proper* USD way is a
+// glTF `SdfFileFormat` (dynamic file format) that composes the glb into the
+// stage as real `Mesh` geometry — no special-case, no `resolvedAsset`.
+//   * External tools (Blender/usdview): adopt Adobe's open-source
+//     `USD-Fileformat-plugins` (glTF/FBX/OBJ/STL/PLY SdfFileFormat plugins)
+//     via `PXR_PLUGINPATH` — config only, no engine code. See
+//     `docs/architecture/21-domain-usd.md` (interop note).
+//   * Our engine (pure-Rust `openusd`, no C++ plugin system): mirror it with a
+//     small glTF→USD-layer shim in `compose.rs` (points/indices/normals/uvs →
+//     `Mesh` specs) fed to the composer instead of `discover_arcs` stubbing.
+// Until then the binary side-channel is retained — it works native + web.
 pub(crate) fn resolve_binary_uri(asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
     if asset_path.contains("://") {
         return asset_path.to_string();

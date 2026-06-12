@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
-use bevy::asset::LoadContext;
+use bevy::asset::{AssetPath, LoadContext};
 use openusd::ar::ResolvedPath;
 use openusd::sdf::{Path as SdfPath, PathListOp, Spec, SpecType, Value};
 use openusd::usd::{PrimPredicate, Stage};
@@ -69,8 +69,14 @@ pub(crate) async fn compose_to_textreader(
             if bytes.contains_key(&child_id) {
                 continue;
             }
+            // Parse `child_id` as an `AssetPath` (NOT a `PathBuf`): only the
+            // string form parses a `source://` scheme into an asset source.
+            // `PathBuf::from("lunco://vessels/…")` keeps the whole string as a
+            // default-source relative path → `assets/lunco://vessels/…` →
+            // "Path not found". `AssetPath::parse` routes `lunco://…` to the
+            // registered `lunco` source; plain relative ids stay default-source.
             let fetched = load_context
-                .read_asset_bytes(PathBuf::from(&child_id))
+                .read_asset_bytes(AssetPath::parse(&child_id).into_owned())
                 .await
                 .map_err(|e| anyhow!("failed to fetch sublayer {child_id}: {e}"))?;
             bytes.insert(child_id.clone(), fetched);

@@ -15,13 +15,12 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use bevy::prelude::*;
-use bevy::asset::{AssetMetaCheck, AssetPlugin, io::AssetSourceBuilder};
+use bevy::asset::{AssetMetaCheck, AssetPlugin};
 // `bevy::camera::*` exists on both native and `--no-default-features`
 // wasm; `bevy::render::camera::*` only when `bevy_render` is enabled.
 use bevy::camera::RenderTarget;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use lunco_workbench::WorkbenchViewportCamera;
-use lunco_assets::cache_dir;
 use bevy::pbr::wireframe::WireframePlugin;
 use big_space::prelude::*;
 use avian3d::prelude::PhysicsPlugins;
@@ -165,6 +164,12 @@ fn main() {
     // compounded, breaking the jitter cascade.
     let mut virtual_time = Time::<Virtual>::default();
     virtual_time.set_max_delta(std::time::Duration::from_millis(33));
+    // Register every LunCo asset source (lunco://, lunco-lib://, twin://,
+    // cached_textures://) + the shared `TwinRoots` resource in ONE shared place
+    // (`lunco-assets`), so all binaries get identical schemes. Must run before
+    // `DefaultPlugins`/`AssetPlugin` snapshots the source registry.
+    lunco_assets::register_lunco_asset_sources(&mut app);
+
     app.insert_resource(ScenePath(scene_path))
         .insert_resource(virtual_time)
         // Match the workbench theme's backdrop so the window's first-
@@ -174,15 +179,6 @@ fn main() {
         // leave at panel boundaries — visible as a "left hairline"
         // against a dark theme. Same idea as the ClearColor in `lunica.rs`.
         .insert_resource(ClearColor(Color::srgb_u8(0x1a, 0x1a, 0x1a)))
-        // `lunco-lib://` shipped-fixture asset source — must be
-        // registered *before* `DefaultPlugins`/`AssetPlugin` builds the
-        // server. Mirrors the registration in `lunco-client`'s main
-        // binary; without it, `def Cube` placeholders with
-        // `payload = @lunco-lib://...@` only render their Cube fallback.
-        .register_asset_source(
-            "lunco-lib",
-            AssetSourceBuilder::platform_default(&cache_dir().to_string_lossy(), None),
-        )
         .insert_resource(Time::<Fixed>::from_hz(lunco_core::FIXED_HZ))
         // `speed: 1.0` is load-bearing: `..default()` leaves it 0.0, which keeps
         // physics running (wheels gate on `physics_enabled` only) but FREEZES
@@ -334,6 +330,10 @@ fn main() {
         // cameras (USD preview, vello diagrams) target an Image and
         // are skipped — they should *not* be confined to the panel.
         .add_systems(Update, auto_tag_workbench_3d_cameras)
+        // Force the sharpest shadow filter on every 3D camera as it arrives
+        // (USD/Avatar cameras spawn async over many frames). `Hardware2x2` gives
+        // the hard, airless-Moon shadow terminator instead of soft PCF.
+        .add_systems(Update, force_hard_shadow_filtering)
         // Mirror of `lunco-client/src/main.rs::collect_scroll_input`,
         // gated to "egui doesn't want the scroll" so scrolling inside a
         // dock panel (Twin browser, Console, etc.) goes to that
@@ -515,8 +515,13 @@ impl Default for SandboxSettings {
     fn default() -> Self {
         Self {
             sun_yaw: 0.5,
-            sun_pitch: -0.8,
-            ambient_brightness: 400.0,
+            // Low sun (~11° above horizon) for long, raking lunar shadows
+            // across the DEM. Runtime-adjustable via the `SetEnvironmentLight`
+            // command or the settings panel.
+            sun_pitch: -0.2,
+            // Drives `GlobalAmbientLight`; airless-Moon contrast wants a low
+            // fill so shadow cores stay dark.
+            ambient_brightness: 40.0,
             ambient_color: LinearRgba::WHITE,
             wireframe: false,
         }
@@ -594,12 +599,47 @@ fn setup_sandbox(world: &mut World) {
     let grid = lunco_core::ensure_world_root(world);
 
     // --- Sun (directional light) on the world grid ---
+    //
+    // Real lunar shadows: hard-edged, jet-black, and *long* — cast by both the
+    // terrain itself (crater rims, ridges) and rovers. Three things produce
+    // that look:
+    //   1. Terrain casts shadows again (no `NotShadowCaster` — see lunco-usd-avian).
+    //   2. A LONG cascade range (≤ ~1.5 km) so a low-sun shadow isn't clipped
+    //      mid-streak — at ~6° elevation a rover throws a shadow tens of metres
+    //      long and a ridge hundreds. The near cascade still sits tight (≈40 m)
+    //      so rover contact shadows stay razor-sharp; far cascades cover the
+    //      terrain self-shadows.
+    //   3. `ShadowFilteringMethod::Hardware2x2` on the camera (see
+    //      `force_hard_shadow_filtering`) — the sharpest filter, for the airless
+    //      hard terminator instead of soft PCF penumbrae.
+    // Cascades are camera-relative and big_space recenters the camera near the
+    // render origin every frame, so the large world Y (~2462 m) costs no
+    // shadow-map precision. 4096² is the max safe atlas (8192² × 4 cascades
+    // would be ~1 GB VRAM); the cascade split keeps the near field dense.
+    let cascades = bevy::light::CascadeShadowConfigBuilder {
+        num_cascades: 4,
+        minimum_distance: 0.1,
+        first_cascade_far_bound: 40.0,
+        maximum_distance: 1500.0,
+        // Low overlap → crisper cascade-to-cascade transitions (less cross-fade
+        // blur), which suits a hard-shadow look.
+        overlap_proportion: 0.1,
+    }
+    .build();
+    world.insert_resource(bevy::light::DirectionalLightShadowMap { size: 4096 });
     world.spawn((
         DirectionalLight {
             illuminance: 10000.0,
             shadows_enabled: true,
+            // Minimal biases for tight, grounded hard shadows. With Hardware2x2
+            // filtering the normal bias must stay small or it detaches/softens
+            // the contact edge; depth bias just enough to avoid acne over the
+            // long far cascades.
+            shadow_depth_bias: 0.02,
+            shadow_normal_bias: 0.8,
             ..default()
         },
+        cascades,
         Transform::from_xyz(10.0, 20.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
         GlobalTransform::default(),
         CellCoord::default(),
@@ -611,9 +651,34 @@ fn setup_sandbox(world: &mut World) {
     // Routed through the typed-command bus so startup and runtime
     // (API/MCP `LoadScene`, future File→Open) share one code path.
     // Empty `root_prim` auto-derives `/PascalCaseFromFilename`.
-    info!("Loading sandbox scene `{}` via LoadScene", scene_path);
+    //
+    // An ABSOLUTE `--scene` path names an external Twin scene: register its
+    // folder under the `twin://` source (keyed by the folder name) and load
+    // through that source — stable, cross-platform identity. Relative paths load
+    // from the default `assets/` source unchanged. This mirrors what the
+    // File → Open Folder / Twin-open flow does; the CLI is the headless entry to
+    // the same mechanism.
+    let load_path = {
+        let pb = std::path::PathBuf::from(&scene_path);
+        match (
+            pb.is_absolute(),
+            pb.parent(),
+            pb.parent().and_then(|p| p.file_name()),
+            pb.file_name(),
+        ) {
+            (true, Some(parent), Some(key), Some(file)) => {
+                let key = key.to_string_lossy().into_owned();
+                world
+                    .resource::<lunco_assets::twin_source::TwinRoots>()
+                    .register(&key, parent);
+                format!("twin://{}/{}", key, file.to_string_lossy())
+            }
+            _ => scene_path.clone(),
+        }
+    };
+    info!("Loading sandbox scene `{}` via LoadScene", load_path);
     world.trigger(LoadScene {
-        path: scene_path,
+        path: load_path,
         root_prim: String::new(),
     });
 }
@@ -673,16 +738,34 @@ fn spawn_fallback_avatar(
 }
 
 
+/// Inserts the sharpest shadow filter (`Hardware2x2`) on every 3D camera as it
+/// appears. USD- and Avatar-spawned cameras land async over many frames; the
+/// `Without<ShadowFilteringMethod>` filter catches each exactly once.
+fn force_hard_shadow_filtering(
+    mut commands: Commands,
+    q: Query<Entity, (With<Camera3d>, Without<bevy::light::ShadowFilteringMethod>)>,
+) {
+    for e in &q {
+        commands
+            .entity(e)
+            .insert(bevy::light::ShadowFilteringMethod::Hardware2x2);
+    }
+}
+
 fn apply_sandbox_settings(
     settings: Res<SandboxSettings>,
     mut q_sun: Query<&mut Transform, With<DirectionalLight>>,
-    mut q_ambient: Query<&mut AmbientLight>,
+    // `AmbientLight` is a per-camera *override* component; the scene-wide fill
+    // is the `GlobalAmbientLight` resource (always present under PBR). Writing
+    // the resource is what actually changes the look — the old
+    // `Query<&mut AmbientLight>` matched nothing and silently did nothing.
+    ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
 ) {
     if settings.is_changed() {
         for mut tf in q_sun.iter_mut() {
             tf.rotation = Quat::from_euler(EulerRot::YXZ, settings.sun_yaw, settings.sun_pitch, 0.0);
         }
-        for mut ambient in q_ambient.iter_mut() {
+        if let Some(mut ambient) = ambient {
             ambient.brightness = settings.ambient_brightness;
             ambient.color = Color::Srgba(settings.ambient_color.into());
         }

@@ -10,8 +10,10 @@
 
 use avian3d::prelude::{Forces, Mass, RigidBody, WriteRigidBodyForces};
 use bevy::prelude::*;
+use bevy::light::GlobalAmbientLight;
 use bevy::math::DVec3;
 use lunco_celestial::{Gravity, GravityBody, GravityProvider};
+use lunco_core::{Command, on_command, register_commands};
 
 /// System sets for environment computation and consumption.
 ///
@@ -157,6 +159,67 @@ pub fn inject_local_gravity_into_cosim(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SetEnvironmentLight — runtime sun direction + ambient brightness
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Sets scene environment lighting at runtime: the sun's direction and the
+/// global ambient level.
+///
+/// All three fields are optional — only the ones provided change, the rest
+/// keep their current value. So a curl that just lowers the sun looks like:
+///
+/// ```jsonc
+/// {"type":"SetEnvironmentLight","sun_pitch":-0.15}
+/// ```
+///
+/// - **`sun_yaw` / `sun_pitch`** — direction of the single `DirectionalLight`
+///   in radians, using the same `EulerRot::YXZ` (yaw-then-pitch) convention as
+///   the sandbox settings panel. A small negative `sun_pitch` (e.g. `-0.15`,
+///   ~8.5° above the horizon) gives long, raking lunar shadows; `-0.8` is a
+///   high ~46° sun with short shadows.
+/// - **`ambient_brightness`** — the [`GlobalAmbientLight`] level (the *real*
+///   scene-wide fill; the per-camera `AmbientLight` component is only an
+///   override). Lower it (~30–60) for deep, high-contrast lunar shadow cores;
+///   the airless Moon has near-black shadows.
+#[Command(default)]
+pub struct SetEnvironmentLight {
+    /// Sun azimuth in radians (`EulerRot::YXZ` yaw). `None` keeps current.
+    pub sun_yaw: Option<f32>,
+    /// Sun elevation in radians (`EulerRot::YXZ` pitch); negative tilts the
+    /// light down. `None` keeps current.
+    pub sun_pitch: Option<f32>,
+    /// Global ambient brightness (cd/m²-scaled). `None` keeps current.
+    pub ambient_brightness: Option<f32>,
+}
+
+/// Applies a [`SetEnvironmentLight`] command to the live `DirectionalLight`
+/// and `GlobalAmbientLight`. Resources/queries are tolerant of absence so the
+/// command is a no-op in headless contexts that have no lights.
+#[on_command(SetEnvironmentLight)]
+fn on_set_environment_light(
+    _cmd: SetEnvironmentLight,
+    mut q_sun: Query<&mut Transform, With<DirectionalLight>>,
+    ambient: Option<ResMut<GlobalAmbientLight>>,
+) {
+    if cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some() {
+        for mut tf in &mut q_sun {
+            // Preserve the unspecified axis by reading it back off the current
+            // rotation (same YXZ order the sandbox panel writes with).
+            let (cur_yaw, cur_pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+            let yaw = cmd.sun_yaw.unwrap_or(cur_yaw);
+            let pitch = cmd.sun_pitch.unwrap_or(cur_pitch);
+            tf.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+        }
+    }
+
+    if let (Some(b), Some(mut ambient)) = (cmd.ambient_brightness, ambient) {
+        ambient.brightness = b;
+    }
+}
+
+register_commands!(on_set_environment_light);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Plugin
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -170,6 +233,11 @@ pub struct EnvironmentPlugin;
 impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<LocalGravity>();
+
+        // Register environment commands (SetEnvironmentLight). The macro-built
+        // `register_all_commands` does `register_type` + `add_observer` so the
+        // HTTP/MCP API can dispatch it by reflected type name.
+        register_all_commands(app);
 
         app.configure_sets(
             FixedUpdate,

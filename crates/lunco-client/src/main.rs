@@ -14,13 +14,12 @@
 //! propagation and corrupting `GlobalTransform` on all entities, which was
 //! the root cause of camera roll in surface mode.
 
-use bevy::{prelude::*, asset::io::AssetSourceBuilder};
+use bevy::prelude::*;
 use avian3d::prelude::PhysicsPlugins;
 
 use lunco_materials::BlueprintMaterial;
 use lunco_ui::LuncoUiPlugin;
 use lunco_workbench::WorkbenchAppExt;
-use lunco_assets::{cache_dir, textures_dir};
 use bevy_egui::{EguiPrimaryContextPass, EguiContexts};
 
 /// Bridge egui scroll input into `lunco_avatar::CameraScroll` so the
@@ -47,28 +46,15 @@ fn collect_scroll_input(
 /// Main entry point for the simulation.
 fn main() {
     let mut app = App::new();
+    // Register every LunCo asset source (cached_textures://, lunco-lib://,
+    // lunco://, twin://) + the shared `TwinRoots` resource in ONE shared place
+    // (`lunco-assets`), identical across all binaries — no per-`main()` drift.
+    // Must run before `DefaultPlugins`/`AssetPlugin` snapshots the registry.
+    // (`lunco://` is the engine asset library; an external collaborative
+    // protocol, if added later, should take a distinct scheme like `lunco-net://`.)
+    lunco_assets::register_lunco_asset_sources(&mut app);
     app.insert_resource(Time::<Fixed>::from_hz(lunco_core::FIXED_HZ))
         .insert_resource(ClearColor(Color::BLACK))
-        .register_asset_source(
-            "cached_textures",
-            AssetSourceBuilder::platform_default(&textures_dir().to_string_lossy(), None),
-        )
-        // `lunco-lib://` — workspace-shipped fixture library (analog
-        // to Unreal's `/Engine/`, Blender's "Essentials"). Bound to
-        // the shared cache root populated by
-        // `cargo run -p lunco-assets -- download / process`.
-        //
-        // Authors pair `payload = @lunco-lib://...@` with a `def Cube`
-        // placeholder so third-party USD tools (Blender, usdview)
-        // render the Cube while our pipeline loads the actual glTF
-        // through this AssetSource. See `docs/architecture/21-domain-usd.md`.
-        //
-        // Reserved scheme `lunco://` is *not* registered here — it's
-        // earmarked for the future multi-user / Nucleus-like protocol.
-        .register_asset_source(
-            "lunco-lib",
-            AssetSourceBuilder::platform_default(&cache_dir().to_string_lossy(), None),
-        )
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(lunco_workbench::merged_titlebar_window("LunCo")),
             ..default()

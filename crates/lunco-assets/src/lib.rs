@@ -38,10 +38,14 @@
 
 use std::path::PathBuf;
 
+pub mod asset_sources;
 pub mod download;
 pub mod font;
 pub mod msl;
 pub mod process;
+pub mod twin_source;
+
+pub use asset_sources::register_lunco_asset_sources;
 
 // ============================================================================
 // User Config Directory Resolution

@@ -44,6 +44,7 @@
 use bevy::prelude::*;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::DVec3;
+use bevy::mesh::VertexAttributeValues;
 use avian3d::prelude::*;
 use avian3d::physics_transform::{Position, Rotation};
 use lunco_usd_bevy::{has_api_schema, read_rel_target, UsdVisualSynced};
@@ -72,7 +73,11 @@ impl Plugin for UsdAvianPlugin {
             .add_observer(process_usd_avian_prims)
             .add_systems(
                 Update,
-                build_usd_physics_joints.run_if(any_with_component::<PendingUsdJoint>),
+                (
+                    build_usd_physics_joints.run_if(any_with_component::<PendingUsdJoint>),
+                    build_terrain_mesh_colliders
+                        .run_if(any_with_component::<PendingTerrainCollider>),
+                ),
             );
     }
 }
@@ -310,6 +315,115 @@ fn add_collider_from_usd(
     }
 }
 
+/// Terrain prims whose collider is built from a loaded `Mesh3d` — a glTF DEM
+/// brought in via `lunco:assetMode = "mesh"` (e.g. the Shackleton ridge).
+///
+/// The collider can't be built in `process_usd_avian_prims` because the mesh
+/// asset is usually still async-loading there. This marker holds the entity
+/// until [`build_terrain_mesh_colliders`] sees the loaded mesh.
+#[derive(Component)]
+struct PendingTerrainCollider;
+
+/// Builds the static collider for a mesh-backed terrain once its `Mesh3d`
+/// asset is available. Prefers a [`heightfield`](heightfield_from_mesh) when
+/// the mesh is a regular DEM grid; otherwise falls back to a general trimesh.
+fn build_terrain_mesh_colliders(
+    q: Query<(Entity, &Mesh3d), With<PendingTerrainCollider>>,
+    meshes: Res<Assets<Mesh>>,
+    mut commands: Commands,
+) {
+    for (entity, mesh3d) in &q {
+        // Still loading — try again next frame.
+        let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
+
+        let collider = heightfield_from_mesh(mesh).or_else(|| {
+            warn!("[usd-avian] terrain mesh isn't a regular DEM grid; \
+                   building a (heavier) trimesh collider instead");
+            Collider::trimesh_from_mesh(mesh)
+        });
+
+        match collider {
+            Some(c) => {
+                info!("[usd-avian] terrain collider built ({} verts)", mesh.count_vertices());
+                commands.entity(entity).insert(c).remove::<PendingTerrainCollider>();
+            }
+            None => {
+                warn!("[usd-avian] terrain mesh has no usable geometry — no collider built");
+                commands.entity(entity).remove::<PendingTerrainCollider>();
+            }
+        }
+    }
+}
+
+/// Builds a parry **heightfield** `Collider` from a regular grid mesh (a DEM /
+/// heightmap, like the Shackleton ridge glTF). Returns `None` if the mesh
+/// isn't a square, axis-aligned, row-major XZ grid — the caller then falls
+/// back to a general trimesh.
+///
+/// Why a heightfield instead of a trimesh: a DEM *is* an N×N grid of height
+/// samples. A heightfield collider stores exactly that grid and resolves a
+/// contact by indexing the two cells under the query point — O(1), ~N²
+/// floats — whereas a trimesh stores 2·(N−1)² triangles in a BVH that must be
+/// built and traversed. For this 458×458 ridge that's a 209,764-cell grid vs
+/// a ~417,800-triangle BVH: dramatically cheaper to build (no offline pre-bake
+/// needed) and to query, with zero loss of fidelity — the grid is the source
+/// geometry.
+///
+/// avian's heightfield indexes **rows along X, columns along Z**, centred on
+/// the XZ plane and scaled per axis. Our mesh is row-major with each row a
+/// line of constant Z and each column a line of constant X (Blender's DEM
+/// export order), so vertex (row r = Z, col c = X) sits at index `r*side + c`
+/// and maps to `heights[x = c][z = r]`. The `scale` restores the metric
+/// footprint; height scale stays 1 because vertex Y is already in metres. The
+/// collider therefore coincides with the visual mesh (same source, same
+/// entity transform).
+fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
+    let Some(VertexAttributeValues::Float32x3(pos)) =
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        return None;
+    };
+
+    let n = pos.len();
+    let side = (n as f64).sqrt() as usize;
+    if side < 2 || side * side != n {
+        return None;
+    }
+
+    // Probe the expected layout (row = constant Z, column = constant X). If it
+    // doesn't hold, bail to trimesh rather than build a scrambled collider.
+    let eps = 1.0_f32;
+    let row_const_z = (pos[0][2] - pos[1][2]).abs() < eps
+        && (pos[0][2] - pos[side - 1][2]).abs() < eps;
+    let col_const_x = (pos[0][0] - pos[side][0]).abs() < eps;
+    if !row_const_z || !col_const_x {
+        return None;
+    }
+
+    let (mut min_x, mut max_x, mut min_z, mut max_z) =
+        (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+    for v in pos {
+        min_x = min_x.min(v[0]);
+        max_x = max_x.max(v[0]);
+        min_z = min_z.min(v[2]);
+        max_z = max_z.max(v[2]);
+    }
+    let scale_x = (max_x - min_x) as f64;
+    let scale_z = (max_z - min_z) as f64;
+    if scale_x <= 0.0 || scale_z <= 0.0 {
+        return None;
+    }
+
+    let mut heights = vec![vec![0.0_f64; side]; side];
+    for r in 0..side {
+        for c in 0..side {
+            heights[c][r] = pos[r * side + c][1] as f64;
+        }
+    }
+
+    Some(Collider::heightfield(heights, DVec3::new(scale_x, 1.0, scale_z)))
+}
+
 /// Deferred system that maps USD physics attributes to Avian3D components.
 ///
 /// This system runs in the `Update` schedule and processes all `UsdPrimPath` entities
@@ -372,7 +486,20 @@ fn process_usd_avian_prims(
                 RigidBody::Static,
                 lunco_terrain::TerrainTile,
             ));
-            add_collider_from_usd(&mut commands, entity, reader, &sdf_path);
+            // Primitive terrain (Cube/Sphere/Cylinder) → intrinsic collider.
+            // Mesh terrain (a glTF DEM loaded via `lunco:assetMode = "mesh"`,
+            // e.g. the Shackleton ridge) has no primitive shape, so its
+            // collider is built from the loaded `Mesh3d` — deferred via
+            // `PendingTerrainCollider` until the mesh asset finishes async-
+            // loading. `build_terrain_mesh_colliders` then prefers a cheap
+            // *heightfield* (the mesh is a regular DEM grid) and falls back
+            // to a trimesh for irregular meshes. Either way rovers rest and
+            // drive on the real surface instead of falling through.
+            if let Some(collider) = build_collider_from_usd(reader, &sdf_path) {
+                commands.entity(entity).insert(collider);
+            } else {
+                commands.entity(entity).insert(PendingTerrainCollider);
+            }
             commands.entity(entity).insert(UsdAvianProcessed);
             return;
         }

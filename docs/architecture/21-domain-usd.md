@@ -196,6 +196,28 @@ For glTFs that ship via `Assets.toml` (e.g. Perseverance), we pair a `lunco-lib:
 - Third-party tools (Blender, usdview) fall back to the Cube.
 - Our pipeline overlays the photoreal glTF and hides the Cube.
 
+#### Why a `.glb` payload isn't composable, and interop
+
+A `.glb`/`.gltf` is **not a USD layer** — USD composition only composes formats
+a registered `SdfFileFormat` plugin can parse (`.usda`/`.usdc`/`.usd`/`.usdz`).
+Core USD ships no glTF plugin, so a `payload = @terrain.glb@` resolves to an
+empty layer in stock USD. Our engine sidesteps this: it detects the binary
+extension, stubs the arc out of composition, and routes the file to Bevy's glTF
+loader via a synthesized `lunco:resolvedAsset` (so the terrain renders for us,
+native + web).
+
+**To make the glb compose in external tools (Blender/usdview):** install
+Adobe's open-source [`USD-Fileformat-plugins`](https://github.com/adobe/USD-Fileformat-plugins)
+(glTF/FBX/OBJ/STL/PLY `SdfFileFormat` plugins) and point `PXR_PLUGINPATH_NAME`
+at them. The `@terrain.glb@` payload then composes natively as `Mesh` geometry —
+config only, no conversion, no engine code. This is the proper interop path.
+
+**TODO (proper internal handling):** mirror that plugin inside our pure-Rust
+pipeline with a small glTF→USD-layer shim in `lunco-usd-bevy/compose.rs` (emit
+`Mesh` specs instead of stubbing), removing the `lunco:resolvedAsset`
+side-channel so terrain is ordinary composed USD everywhere. See the
+`TODO(glb-composability)` marker in `lunco-usd-bevy/src/resolver.rs`.
+
 ### Reference Resolution
 USD references (e.g., `@/components/mobility/wheel.usda@`) are resolved relative to the **USD asset root** (`assets/`). The `UsdComposer` resolves:
 - `/`-prefixed paths anchor at the asset root.
@@ -210,9 +232,21 @@ The `lunco-sandbox-edit` crate provides the interactive layer (palette, gizmo, i
 
 | Scheme | Purpose | Resolves to |
 |---|---|---|
-| (none) | In-tree authored content | `assets/...` |
-| `lunco-lib://` | Workspace-shipped library | `<cache>/...` |
-| `lunco://` | **Reserved** (future collaborative protocol) | — |
+| (none) | In-tree authored content / scene-relative | `assets/...` or the layer's source |
+| `lunco-lib://` | Workspace-shipped fixtures (downloaded models) | `<cache>/...` |
+| `lunco://` | **Engine asset library** (rovers, parts, vessels) — location-independent ref usable from external Twins | `assets/...` |
+| `twin://<name>/...` | **Internal, runtime-only.** The currently-open Twin's root, keyed by Twin name. Reads an external Twin scene + its co-located assets (fs on native, http on web). Never authored into a file. | the opened Twin folder |
+
+> `lunco://` was previously *reserved* for a future collaborative protocol; it's
+> now the engine library scheme. A collaborative/Nucleus-like protocol, if added,
+> should pick a distinct scheme (e.g. `lunco-net://`).
+>
+> **External Twins:** a scene living outside the project (its own repo) is opened
+> via File → Open Folder. The Twin-open flow registers the folder under
+> `twin://<name>` (name from `twin.toml`) and loads `twin://<name>/<default_scene>`.
+> The scene authors only **relative** paths (co-located terrain glb) and
+> `lunco://` library refs — so the `.usda` is portable and identity
+> (`Provenance`) is the stable `twin://<name>/<rel>`, not a machine path.
 
 ### Coordinate Systems
 

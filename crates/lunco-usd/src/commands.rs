@@ -117,6 +117,7 @@ impl Plugin for UsdCommandsPlugin {
 fn open_usd_docs_on_twin_added(
     trigger: On<TwinAdded>,
     workspace: Res<WorkspaceResource>,
+    twin_roots: Res<lunco_assets::twin_source::TwinRoots>,
     mut commands: Commands,
 ) {
     let twin_id = trigger.event().twin;
@@ -128,16 +129,31 @@ fn open_usd_docs_on_twin_added(
         .as_ref()
         .and_then(|m| m.usd.as_ref())
         .and_then(|u| u.default_scene.as_deref());
+    // Key the `twin://` source by the Twin's name (its `twin.toml` `name`),
+    // falling back to the root folder name. This yields a stable, per-Twin,
+    // machine-independent asset identity: `twin://<name>/<scene>`.
+    let twin_name = twin
+        .manifest
+        .as_ref()
+        .map(|m| m.name.clone())
+        .filter(|n| !n.is_empty())
+        .or_else(|| twin.root.file_name().map(|f| f.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "twin".to_string());
     match default_scene {
         Some(scene) => {
-            let abs = twin.root.join(scene);
+            // Point the `twin://` source at this Twin's root, then load the
+            // scene THROUGH that source — never as a bare absolute path. Works
+            // identically on native (fs) and web (http), and keeps the scene's
+            // co-located relative refs (terrain glb) resolving under `twin://`.
+            twin_roots.register(&twin_name, &twin.root);
             info!(
-                "[twin] loading starting scene `{}` (twin `{}`)",
+                "[twin] loading starting scene `twin://{}/{}` (twin `{}`)",
+                twin_name,
                 scene,
                 twin.root.display()
             );
             commands.trigger(LoadScene {
-                path: abs.to_string_lossy().into_owned(),
+                path: format!("twin://{}/{}", twin_name, scene),
                 root_prim: String::new(),
             });
         }

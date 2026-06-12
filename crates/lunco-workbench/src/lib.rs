@@ -2078,7 +2078,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     // available to recents/HTTP/scripts that want
                     // explicit Twin semantics, but isn't worth a
                     // separate menu entry.
-                    if ui.button("Open Folder…").clicked() {
+                    if ui.button("Open Folder/Twin…").clicked() {
                         world.trigger(file_ops::ShowOpenFolderPicker {});
                         ui.close();
                     }
