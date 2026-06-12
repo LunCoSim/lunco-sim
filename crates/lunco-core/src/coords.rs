@@ -188,3 +188,104 @@ pub fn world_position_seeded<F: QueryFilter>(
     }
     total_pos
 }
+
+#[cfg(test)]
+mod tests {
+    //! Round-trip proof for the cell↔absolute rebase that the networking apply
+    //! path (Phase 3) relies on. DESIGN_GAPS §A claimed a `rebase_*` /
+    //! `world_roundtrip_*` proto-test suite proved this; it never existed — this
+    //! module is that missing safety net. Locks the contract before the snapshot
+    //! apply path is made cell-aware.
+    use super::*;
+    use bevy::ecs::system::SystemState;
+
+    const EDGE: f32 = 2000.0;
+    // A recentering-ENABLED grid: `Grid::new` sets `maximum_distance_from_origin
+    // = cell_edge/2 + switching_threshold`, and `translation_to_grid` keeps a
+    // point in cell 0 until it exceeds that. With threshold 0 ⇒ max_dist =
+    // edge/2 = 1000 m, so cells actually bin (the live WorldGrid uses 1e10 ⇒
+    // never bins ⇒ cell always 0, which is exactly what S2 will change). The
+    // within-cell offset is therefore bounded by edge/2 here.
+    fn grid() -> Grid {
+        Grid::new(EDGE, 0.0)
+    }
+
+    /// `world_to_grid_local(p, ZERO, grid)` decomposes an absolute position into
+    /// `(cell, offset)` whose reassembly returns `p`, and the offset stays inside
+    /// one cell (so it is safe to fixed-point quantize in S3).
+    #[test]
+    fn world_to_grid_local_round_trips() {
+        let g = grid();
+        let cases = [
+            DVec3::ZERO,
+            DVec3::new(1500.0, -300.0, 800.0), // within cell 0
+            DVec3::new(2500.0, 0.0, 0.0),      // cell 1, offset 500
+            DVec3::new(-7000.3, 4100.0, 0.0),  // negative cells
+            DVec3::new(2500.0, -4100.0, 9999.9), // off-axis, multi-cell
+            DVec3::new(1.737e6, 0.0, 0.0),     // lunar-radius scale (the precision case)
+        ];
+        for p in cases {
+            let (cell, off) = world_to_grid_local(p, DVec3::ZERO, &g);
+            // translation_to_grid centres the cell, so |offset| <= edge/2.
+            assert!(
+                (off.abs().max_element() as f64) <= EDGE as f64 / 2.0 + 1e-3,
+                "offset {off:?} exceeds half-cell for {p:?}"
+            );
+            let back = g.grid_position_double(&cell, &Transform::from_translation(off));
+            assert!(
+                (back - p).length() < 1e-3,
+                "round-trip {p:?} -> ({cell:?},{off:?}) -> {back:?}"
+            );
+        }
+    }
+
+    /// The `target_grid_world` offset is honoured: decompose against a grid that
+    /// is itself displaced from the origin and the reassembly still lands on `p`.
+    #[test]
+    fn world_to_grid_local_honors_grid_world_offset() {
+        let g = grid();
+        let grid_world = DVec3::new(10_000.0, 0.0, -5_000.0);
+        let p = DVec3::new(12_500.0, 300.0, -5_000.0);
+        let (cell, off) = world_to_grid_local(p, grid_world, &g);
+        let back =
+            g.grid_position_double(&cell, &Transform::from_translation(off)) + grid_world;
+        assert!((back - p).length() < 1e-3, "p {p:?} -> {back:?}");
+    }
+
+    /// `world_position` (the hierarchical accumulator the apply path uses to find
+    /// a grid's world pose) agrees with a direct `grid_position_double`, and the
+    /// decompose of that absolute returns the original `(cell, offset)`.
+    #[test]
+    fn world_position_matches_decompose() {
+        let mut world = World::new();
+        let grid_e = world
+            .spawn((grid(), CellCoord::ZERO, Transform::default(), GlobalTransform::default()))
+            .id();
+        let child_off = Vec3::new(500.0, -123.0, 42.0);
+        let child = world
+            .spawn((
+                CellCoord::new(1, 0, 0),
+                Transform::from_translation(child_off),
+                GlobalTransform::default(),
+                ChildOf(grid_e),
+            ))
+            .id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = SystemState::new(&mut world);
+        let (q_parents, q_grids, q_spatial) = state.get(&world);
+
+        let abs = world_position(child, &q_parents, &q_grids, &q_spatial).unwrap();
+        let g = grid();
+        let expected =
+            g.grid_position_double(&CellCoord::new(1, 0, 0), &Transform::from_translation(child_off));
+        assert!((abs - expected).length() < 1e-6, "abs {abs:?} expected {expected:?}");
+
+        let (cell, off) = world_to_grid_local(abs, DVec3::ZERO, &g);
+        assert_eq!((cell.x, cell.y, cell.z), (1, 0, 0), "cell {cell:?}");
+        assert!((off - child_off).length() < 1e-3, "off {off:?} vs {child_off:?}");
+    }
+}
