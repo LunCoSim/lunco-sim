@@ -1535,7 +1535,14 @@ pub fn handle_modelica_responses(
                         t_end: result.experiment_stop_time,
                         tolerance: result.experiment_tolerance,
                         interval: result.experiment_interval,
-                        solver: result.experiment_solver.clone(),
+                        // Parse the annotation's solver string into the typed
+                        // choice once here; an unrecognized name falls to
+                        // `None` (= backend default) instead of being carried
+                        // as a free string. See `lunco_experiments::SolverChoice`.
+                        solver: result
+                            .experiment_solver
+                            .as_deref()
+                            .and_then(|s| s.parse().ok()),
                     },
                 );
             }

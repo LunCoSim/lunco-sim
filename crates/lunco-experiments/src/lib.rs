@@ -88,6 +88,98 @@ pub enum ParamValue {
     RealArray(Vec<f64>),
 }
 
+// ---------- Solver ----------
+
+/// The integration method, as a single typed choice — the ONE source of
+/// truth for solver vocabulary across the UI, the API boundary, and the run
+/// carriers below.
+///
+/// Replaces the former free-typed `solver: Option<String>`, which was parsed
+/// independently in two places (`SimSolverMode` family + `DiffsolMethod`
+/// tableau) and silently degraded unknown/typo strings to BDF with no warning.
+/// `None` (in the `Option<SolverChoice>` carriers) means "backend default"
+/// (currently TR-BDF2); these four are the explicit overrides.
+///
+/// Parse user/API text with [`FromStr`](std::str::FromStr) (normalizes
+/// case/`-`/`_`/space, rejects unknowns); serialize/display with the canonical
+/// snake_case name via [`Display`](std::fmt::Display) / serde.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SolverChoice {
+    /// Variable-order BDF (OMC's default). Robust on stiff DAEs; can struggle
+    /// at sharp `tanh`/relop transitions.
+    Bdf,
+    /// ESDIRK 3(4) — A/L-stable implicit tableau, good Newton convergence near
+    /// sharp transitions.
+    Esdirk34,
+    /// TR-BDF2 — two-stage A/L-stable implicit tableau, event-robust default.
+    TrBdf2,
+    /// Explicit Runge-Kutta family (rk45 / Tsit45) — non-stiff only.
+    RkLike,
+}
+
+impl SolverChoice {
+    /// All variants, in UI display order.
+    pub const ALL: [SolverChoice; 4] =
+        [Self::Bdf, Self::Esdirk34, Self::TrBdf2, Self::RkLike];
+
+    /// Canonical lowercase name (matches serde snake_case; round-trips through
+    /// [`FromStr`](std::str::FromStr)).
+    pub fn canonical(self) -> &'static str {
+        match self {
+            Self::Bdf => "bdf",
+            Self::Esdirk34 => "esdirk34",
+            Self::TrBdf2 => "tr_bdf2",
+            Self::RkLike => "rk_like",
+        }
+    }
+
+    /// Short label for combo boxes.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bdf => "BDF (stiff)",
+            Self::Esdirk34 => "ESDIRK34 (stiff, sharp transitions)",
+            Self::TrBdf2 => "TR-BDF2 (stiff + events)",
+            Self::RkLike => "RK / Tsit45 (non-stiff)",
+        }
+    }
+
+    /// Hover help for combo boxes.
+    pub fn hover(self) -> &'static str {
+        match self {
+            Self::Bdf => "Backward Differentiation Formula — variable-order implicit. OMC's default; can struggle at sharp tanh / relop transitions.",
+            Self::Esdirk34 => "Explicit Singly-Diagonally-Implicit RK 3(4). A/L-stable; better Newton convergence than BDF near sharp transitions.",
+            Self::TrBdf2 => "Trapezoidal + BDF2, two-stage implicit, A/L-stable. Event-robust default for stiff multi-day horizons.",
+            Self::RkLike => "Explicit Runge-Kutta (rk45 / Tsit45). Fast on smooth non-stiff problems; blows up on stiff DAEs.",
+        }
+    }
+}
+
+impl std::fmt::Display for SolverChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.canonical())
+    }
+}
+
+impl std::str::FromStr for SolverChoice {
+    type Err = String;
+    /// Lenient parse: case-insensitive, `-`/`_`/space-insensitive, with
+    /// backend aliases. `"auto"`/empty is NOT a variant (callers map it to
+    /// `None` = backend default); unknown strings are rejected so a typo
+    /// surfaces instead of silently becoming BDF.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let n = s.trim().to_ascii_lowercase().replace(['-', '_', ' '], "");
+        Ok(match n.as_str() {
+            "bdf" | "dassl" | "ida" => Self::Bdf,
+            "esdirk34" | "esdirk" | "rk4" => Self::Esdirk34,
+            "trbdf2" => Self::TrBdf2,
+            "rklike" | "rk45" | "tsit45" | "dopri" | "rungekutta" | "euler"
+            | "midpoint" => Self::RkLike,
+            _ => return Err(format!("unknown solver `{s}`")),
+        })
+    }
+}
+
 // ---------- Bounds ----------
 
 /// Run window + solver hints. Fields default from the model's
@@ -100,8 +192,8 @@ pub struct RunBounds {
     /// `None` means the solver chooses adaptively.
     pub dt: Option<f64>,
     pub tolerance: Option<f64>,
-    /// Backend-defined solver name. UI doesn't pick one in v1.
-    pub solver: Option<String>,
+    /// Integration method override. `None` = backend default (TR-BDF2).
+    pub solver: Option<SolverChoice>,
     /// Initial step size hint (seconds). `None` lets the backend pick
     /// (currently `span / 5_000_000`). Useful for long-horizon runs
     /// where the span-based default over-shoots a stiff transient.

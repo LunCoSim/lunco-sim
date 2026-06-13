@@ -71,7 +71,7 @@ pub struct ModelDefaults {
     pub t_end: Option<f64>,
     pub tolerance: Option<f64>,
     pub interval: Option<f64>,
-    pub solver: Option<String>,
+    pub solver: Option<lunco_experiments::SolverChoice>,
 }
 
 /// Platform default for the number of runs allowed to execute
@@ -825,18 +825,36 @@ impl RunSink for ChannelSink {
 /// The worker previously hardcoded `atol = rtol = 1e-6` with *no* solver
 /// selection, silently running BDF where native runs TR-BDF2 — a second
 /// divergence this fn collapses.
+/// The ONLY place a [`SolverChoice`](lunco_experiments::SolverChoice) is
+/// mapped to rumoca's two-axis selection: `SimSolverMode` (family) +
+/// `DiffsolMethod` (implicit tableau on the BDF-family path). Keeping this in
+/// one function is the point of the typed enum — there's no string to parse
+/// twice and no `unwrap_or_default()` that could silently pick BDF.
+fn solver_choice_to_rumoca(
+    c: lunco_experiments::SolverChoice,
+) -> (rumoca_sim::SimSolverMode, rumoca_sim::DiffsolMethod) {
+    use lunco_experiments::SolverChoice as C;
+    use rumoca_sim::{DiffsolMethod as D, SimSolverMode as M};
+    match c {
+        C::Bdf => (M::Bdf, D::Bdf),
+        C::Esdirk34 => (M::Bdf, D::Esdirk34),
+        C::TrBdf2 => (M::Bdf, D::TrBdf2),
+        C::RkLike => (M::RkLike, D::Bdf),
+    }
+}
+
 pub fn stepper_options_from_bounds(bounds: &RunBounds) -> rumoca_sim::SimOptions {
     let mut opts = rumoca_sim::SimOptions::default();
     opts.atol = bounds.tolerance.unwrap_or(1e-4);
     opts.rtol = bounds.tolerance.unwrap_or(1e-4);
-    let solver_name = bounds.solver.as_deref().unwrap_or("tr_bdf2");
-    // `parse_request` selects the solver *family* (Auto / implicit-BDF /
-    // explicit-RK); `DiffsolMethod` selects the implicit tableau (ESDIRK34 /
-    // TR-BDF2) on the BDF-family path. Unknown strings fall back to BDF.
-    let (mode, _label) = rumoca_sim::SimSolverMode::parse_request(Some(solver_name));
+    // Single typed source of truth: `SolverChoice` already resolved the
+    // vocabulary at the parse boundary, so here we just map it to rumoca's
+    // (family, tableau) pair once — no re-parsing of strings, no silent
+    // unknown→BDF degradation. `None` = backend default (TR-BDF2).
+    let (mode, method) =
+        solver_choice_to_rumoca(bounds.solver.unwrap_or(lunco_experiments::SolverChoice::TrBdf2));
     opts.solver_mode = mode;
-    opts.diffsol_method =
-        rumoca_sim::DiffsolMethod::from_external_name(solver_name).unwrap_or_default();
+    opts.diffsol_method = method;
     // `SimOptions.dt` is the solver's initial step (h0) on the diffsol path.
     opts.dt = bounds.h0;
     opts

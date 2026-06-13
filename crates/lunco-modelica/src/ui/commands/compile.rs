@@ -280,46 +280,31 @@ pub(crate) fn render_fast_run_setup(
                              (TR-BDF2 — event-robust, recommended for stiff \
                              multi-day horizons).",
                         );
-                    let current: String =
-                        entry.bounds.solver.clone().unwrap_or_else(|| "auto".to_string());
-                    let label = match current.as_str() {
-                        "auto" => "Auto (TR-BDF2)",
-                        "bdf" => "BDF (stiff)",
-                        "esdirk34" | "rk4" => "ESDIRK34 (stiff, sharp transitions)",
-                        "tr_bdf2" => "TR-BDF2 (stiff + events)",
-                        "tsit45" => "Tsit45 (non-stiff)",
-                        other => other,
-                    };
+                    // Vocabulary + labels come from the single source of truth
+                    // `SolverChoice`. `None` = "Auto" (backend default, TR-BDF2).
+                    let current = entry.bounds.solver;
+                    let sel_label = current.map_or("Auto (TR-BDF2)", |c| c.label());
                     egui::ComboBox::from_id_salt("fastrun_setup_solver")
-                        .selected_text(label)
+                        .selected_text(sel_label)
                         .width(240.0)
                         .show_ui(ui, |ui| {
-                            for (val, label, hover) in [
-                                ("auto", "Auto (TR-BDF2)",
-                                 "Let the backend pick. Currently TR-BDF2 — \
-                                  event-robust default for stiff horizons."),
-                                ("bdf", "BDF (stiff)",
-                                 "Backward Differentiation Formula — variable-order \
-                                  implicit. OMC's default; can struggle at sharp \
-                                  tanh / relop transitions."),
-                                ("esdirk34", "ESDIRK34 (stiff, sharp transitions)",
-                                 "Explicit Singly-Diagonally-Implicit RK 3(4). \
-                                  A/L-stable; better Newton convergence than BDF \
-                                  near sharp transitions."),
-                                ("tr_bdf2", "TR-BDF2 (stiff + events)",
-                                 "Trapezoidal + BDF2, two-stage implicit. Strong on \
-                                  moderately stiff event-driven dynamics."),
-                                ("tsit45", "Tsit45 (non-stiff)",
-                                 "Tsitouras 4(5) explicit RK. Fast on smooth \
-                                  non-stiff problems; blows up on stiff DAEs."),
-                            ] {
+                            if ui
+                                .selectable_label(current.is_none(), "Auto (TR-BDF2)")
+                                .on_hover_text(
+                                    "Let the backend pick. Currently TR-BDF2 — \
+                                     event-robust default for stiff horizons.",
+                                )
+                                .clicked()
+                            {
+                                entry.bounds.solver = None;
+                            }
+                            for c in lunco_experiments::SolverChoice::ALL {
                                 if ui
-                                    .selectable_label(current == val, label)
-                                    .on_hover_text(hover)
+                                    .selectable_label(current == Some(c), c.label())
+                                    .on_hover_text(c.hover())
                                     .clicked()
                                 {
-                                    entry.bounds.solver =
-                                        if val == "auto" { None } else { Some(val.to_string()) };
+                                    entry.bounds.solver = Some(c);
                                 }
                             }
                         });
@@ -1162,8 +1147,27 @@ struct BoundsOverride {
     t_end: Option<f64>,
     dt: Option<f64>,
     tolerance: Option<f64>,
-    solver: Option<String>,
+    solver: Option<lunco_experiments::SolverChoice>,
     h0: Option<f64>,
+}
+
+/// Parse an API solver string into a typed [`SolverChoice`](lunco_experiments::SolverChoice).
+/// `None`/empty/`"auto"` → `None` (= backend default, TR-BDF2). An unknown
+/// string is logged and treated as `None` rather than silently degrading to
+/// BDF deep in the solver layer.
+fn parse_solver_arg(s: Option<&str>) -> Option<lunco_experiments::SolverChoice> {
+    let raw = s?;
+    let t = raw.trim();
+    if t.is_empty() || t.eq_ignore_ascii_case("auto") {
+        return None;
+    }
+    match t.parse() {
+        Ok(c) => Some(c),
+        Err(e) => {
+            warn!("[FastRun] {e}; using backend default solver (TR-BDF2)");
+            None
+        }
+    }
 }
 
 /// Parse a textual override/input value into a typed `ParamValue`.
@@ -1515,7 +1519,7 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
         t_end: trigger.event().t_end,
         dt: trigger.event().dt,
         tolerance: trigger.event().tolerance,
-        solver: trigger.event().solver.clone(),
+        solver: parse_solver_arg(trigger.event().solver.as_deref()),
         h0: trigger.event().h0,
     };
     commands.queue(move |world: &mut World| {
@@ -1659,7 +1663,7 @@ pub fn on_run_experiment(trigger: On<RunExperiment>, mut commands: Commands) {
         t_end: ev.t_end,
         dt: ev.dt,
         tolerance: ev.tolerance,
-        solver: ev.solver.clone(),
+        solver: parse_solver_arg(ev.solver.as_deref()),
         h0: ev.h0,
     };
     commands.queue(move |world: &mut World| {
