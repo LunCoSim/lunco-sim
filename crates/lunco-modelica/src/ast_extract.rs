@@ -525,6 +525,54 @@ fn find_in_classes<'a>(
     None
 }
 
+/// Byte range of a class's FULL source text — from its leading prefix
+/// keyword(s) (`package`/`model`/`partial connector`/…) through the
+/// terminating `;`.
+///
+/// rumoca's `ClassDef.location` is misleading: despite its doc comment
+/// ("spanning from class keyword to end statement") it actually covers
+/// only the NAME token → the `end <Name>` token, omitting BOTH the prefix
+/// keyword(s) and the closing `;`. Slicing `source` by that bare range
+/// drops them and yields invalid Modelica (`FooCopy … end FooCopy` with no
+/// `package` and no `;`). Any code that extracts or duplicates a class's
+/// source text must use this span, never `location` directly.
+pub fn class_full_text_span(class: &ClassDef, source: &str) -> (usize, usize) {
+    let bytes = source.as_bytes();
+    // Rewind from the name over the space/tab-separated prefix keyword(s)
+    // (`model`/`package` plus qualifiers like `partial`/`final`/
+    // `encapsulated`/`replaceable`). Stops at a newline or non-alphabetic
+    // byte, so it can't cross into a previous declaration.
+    let mut start = (class.name.location.start as usize).min(bytes.len());
+    loop {
+        let mut i = start;
+        while i > 0 && matches!(bytes[i - 1], b' ' | b'\t') {
+            i -= 1;
+        }
+        let word_end = i;
+        while i > 0 && bytes[i - 1].is_ascii_alphabetic() {
+            i -= 1;
+        }
+        if i == word_end {
+            break;
+        }
+        start = i;
+    }
+    // Advance from the `end <Name>` token past the terminating `;`.
+    let mut end = class
+        .end_name_token
+        .as_ref()
+        .map(|t| t.location.end as usize)
+        .unwrap_or(class.location.end as usize)
+        .min(bytes.len());
+    while end < bytes.len() && matches!(bytes[end], b' ' | b'\t') {
+        end += 1;
+    }
+    if end < bytes.len() && bytes[end] == b';' {
+        end += 1;
+    }
+    (start, end)
+}
+
 /// Visit every type-name reference reachable from `class`, recursing
 /// into nested classes. Emits each `extends` base name and each
 /// component `type_name` raw — **no filtering**. Callers apply their

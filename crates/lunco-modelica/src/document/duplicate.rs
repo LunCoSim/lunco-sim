@@ -85,18 +85,18 @@ pub(crate) fn extract_class_spans_inline(
 
 pub(crate) fn spans_from_ast(
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
-    // Unused since `full_span_with_leading_comments` was dropped (see below);
-    // spans now come straight off the class location. Kept in the signature
-    // for call-site symmetry with the source-based extractors.
-    _source: &str,
+    source: &str,
     class_name: &str,
 ) -> Option<DuplicateExtract> {
     let class = crate::ast_extract::find_class_by_short_name(ast, class_name)?;
-    // `full_span_with_leading_comments` removed in rumoca main;
-    // fall back to the class location span.
-    let full_start = class.location.start as usize;
-    let full_end = class.location.end as usize;
     let end_tok = class.end_name_token.as_ref()?;
+    // rumoca's `ClassDef.location` spans only NAME → `end <Name>`, omitting
+    // the prefix keyword and the trailing `;`. `class_full_text_span` widens
+    // it to the real declaration bounds (the canonical helper, shared with
+    // `load_msl_class`). `rewrite_inject_in_one_pass` re-anchors these
+    // absolute spans by `full_start`, so the caller must pass the matching
+    // `source[full_start..full_end]` slice.
+    let (full_start, full_end) = crate::ast_extract::class_full_text_span(class, source);
     Some(DuplicateExtract {
         full_start,
         full_end,
@@ -328,4 +328,154 @@ pub(crate) fn rewrite_inject_in_one_pass(
     // Tail.
     out.push_str(&src[end_end..]);
     Some(out)
+}
+
+/// Build the source for a duplicated class — the whole transform, in one
+/// place. This is the domain logic that used to live inline in the UI
+/// command handlers (`ui/commands/lifecycle.rs`): rename the top-level
+/// class to `new_name`, inject in-scope `imports`, and prepend the
+/// `within` clause for the origin's enclosing package when there is one.
+///
+/// `spans` are the **absolute** spans of the origin class within
+/// `source` (from `extract_class_spans_inline` / `_via_path`). They are
+/// `Option` because span extraction can fail upstream; `None` ⇒ return
+/// the source unchanged (still wrapped with `within`).
+///
+/// Critical: `rewrite_inject_in_one_pass` re-anchors by subtracting
+/// `full_start`, so it must be handed the class-only slice
+/// `source[full_start..full_end]`, **not** the whole file. Passing the
+/// whole file only aligns when `full_start == 0`; any leading content
+/// (e.g. `AnnotatedRocketStage.mo`'s comment banner) pushes `full_start`
+/// past 0 and shifts every splice index into the preamble, producing
+/// unparseable source. Slicing here is what keeps every caller honest.
+pub(crate) fn build_duplicate_source(
+    source: &str,
+    spans: Option<&DuplicateExtract>,
+    new_name: &str,
+    origin_fqn: Option<&str>,
+    imports: &[String],
+) -> String {
+    let renamed = match spans {
+        Some(spans) => {
+            let slice = source
+                .get(spans.full_start..spans.full_end)
+                .unwrap_or(source);
+            rewrite_inject_in_one_pass(slice, new_name, imports, spans)
+                .unwrap_or_else(|| slice.to_string())
+        }
+        None => source.to_string(),
+    };
+    match origin_fqn {
+        Some(fqn) => {
+            let mut parts: Vec<&str> = fqn.split('.').collect();
+            parts.pop();
+            let origin_pkg = parts.join(".");
+            if origin_pkg.is_empty() {
+                renamed
+            } else {
+                format!("within {origin_pkg};\n{renamed}")
+            }
+        }
+        None => renamed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The exact oracle the engine uses to gate diagram projection: the
+    /// lenient parser's recovery error set. `parse_to_ast(..).is_ok()`
+    /// would lie — rumoca recovers from errors and still returns a tree.
+    fn parses_clean(src: &str) -> bool {
+        !rumoca_phase_parse::parse_to_syntax(src, "dup-test.mo").has_errors()
+    }
+
+    /// Mirror the read-only duplicate flow: extract spans from the full
+    /// source, then build the duplicate source.
+    fn duplicate(source: &str, origin_short: &str, new_name: &str, fqn: Option<&str>) -> String {
+        let spans = extract_class_spans_inline(source, origin_short);
+        build_duplicate_source(source, spans.as_ref(), new_name, fqn, &[])
+    }
+
+    #[test]
+    fn duplicate_package_with_leading_comment_header_parses() {
+        // Regression: a class preceded by a comment banner has
+        // full_start > 0, so the rename must splice against the
+        // class-only slice. The pre-fix path passed the whole file and
+        // spliced the rename into the comment block → unparseable.
+        let src = "\
+// banner line one
+// banner line two ──►│  (multibyte, lives before full_start)
+package Foo
+  model Bar
+    Real x;
+  equation
+    x = 1;
+  end Bar;
+end Foo;
+";
+        let out = duplicate(src, "Foo", "FooCopy", None);
+        assert!(parses_clean(&out), "renamed source must parse:\n{out}");
+        assert!(out.contains("package FooCopy"), "header renamed:\n{out}");
+        assert!(out.contains("end FooCopy;"), "end token renamed:\n{out}");
+        assert!(out.contains("model Bar"), "nested class preserved:\n{out}");
+    }
+
+    #[test]
+    fn duplicate_annotated_rocket_stage_parses() {
+        // The exact asset the user duplicated. Its 9-line ASCII-art
+        // comment header puts full_start well past 0 — the case that
+        // regressed when `full_span_with_leading_comments` was dropped.
+        // The drill target is the nested `RocketStage`, so the package
+        // FQN is passed, exercising the `within` prepend as well.
+        let src = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/models/AnnotatedRocketStage.mo"
+        ));
+        let out = duplicate(
+            src,
+            "AnnotatedRocketStage",
+            "AnnotatedRocketStageCopy",
+            Some("AnnotatedRocketStage.RocketStage"),
+        );
+        assert!(
+            parses_clean(&out),
+            "duplicated AnnotatedRocketStage (with within) must parse:\n{out}"
+        );
+        assert!(out.contains("package AnnotatedRocketStageCopy"));
+        assert!(out.contains("end AnnotatedRocketStageCopy;"));
+        assert!(out.contains("model RocketStage"), "nested models preserved");
+        assert!(out.contains("model Airframe"), "nested models preserved");
+        assert!(
+            out.starts_with("within AnnotatedRocketStage;"),
+            "within clause prepended"
+        );
+    }
+
+    #[test]
+    fn duplicate_flat_model_keeps_keyword_and_semicolon() {
+        // The core regression isolated: `ClassDef.location` omits the
+        // `model` keyword and the trailing `;`. Pre-fix this produced
+        // `BallCopy … end BallCopy` (no keyword, no semicolon).
+        let src = "model Ball\n  Real h;\nequation\n  h = 1;\nend Ball;\n";
+        let out = duplicate(src, "Ball", "BallCopy", None);
+        assert!(parses_clean(&out), "must parse:\n{out}");
+        assert!(out.contains("model BallCopy"), "keyword kept:\n{out}");
+        assert!(out.contains("end BallCopy;"), "semicolon kept:\n{out}");
+    }
+
+    #[test]
+    fn duplicate_partial_connector_keeps_qualifier() {
+        // `class_full_text_span` rewinds over the `partial` qualifier too,
+        // so the whole keyword chain survives the rename.
+        let src = "partial connector Pin\n  Real v;\n  flow Real i;\nend Pin;\n";
+        let out = duplicate(src, "Pin", "PinCopy", None);
+        assert!(parses_clean(&out), "must parse:\n{out}");
+        assert!(
+            out.contains("partial connector PinCopy"),
+            "qualifier + keyword kept:\n{out}"
+        );
+        assert!(out.contains("end PinCopy;"));
+    }
 }

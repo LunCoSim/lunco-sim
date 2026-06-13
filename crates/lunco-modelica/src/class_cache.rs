@@ -114,8 +114,12 @@ pub fn peek_or_load_msl_class_blocking(
         .or_else(|| locate_library_file(qualified))?;
     let uri = path.to_string_lossy().replace('\\', "/");
 
-    // Bundled MSL: AST is pre-parsed at build time, no rumoca work.
-    let cached_ast = crate::msl_remote::global_parsed_msl()
+    // Pre-parsed MSL bundle: AST is parsed by the indexer, no rumoca
+    // work here. `parsed_msl_bundle` lazily materialises it from
+    // `parsed-msl.bin` on native (and reuses the wasm-decoded slot),
+    // so a drill-in is an in-memory lookup on both targets instead of a
+    // per-file parse.
+    let cached_ast = crate::msl_remote::parsed_msl_bundle()
         .and_then(|b| b.iter().find(|(k, _)| k == &uri).map(|(_, ast)| ast.clone()));
 
     let parsed_ast: Option<rumoca_compile::parsing::ast::StoredDefinition> = match cached_ast {

@@ -280,46 +280,31 @@ pub(crate) fn render_fast_run_setup(
                              (TR-BDF2 — event-robust, recommended for stiff \
                              multi-day horizons).",
                         );
-                    let current: String =
-                        entry.bounds.solver.clone().unwrap_or_else(|| "auto".to_string());
-                    let label = match current.as_str() {
-                        "auto" => "Auto (TR-BDF2)",
-                        "bdf" => "BDF (stiff)",
-                        "esdirk34" | "rk4" => "ESDIRK34 (stiff, sharp transitions)",
-                        "tr_bdf2" => "TR-BDF2 (stiff + events)",
-                        "tsit45" => "Tsit45 (non-stiff)",
-                        other => other,
-                    };
+                    // Vocabulary + labels come from the single source of truth
+                    // `SolverChoice`. `None` = "Auto" (backend default, TR-BDF2).
+                    let current = entry.bounds.solver;
+                    let sel_label = current.map_or("Auto (TR-BDF2)", |c| c.label());
                     egui::ComboBox::from_id_salt("fastrun_setup_solver")
-                        .selected_text(label)
+                        .selected_text(sel_label)
                         .width(240.0)
                         .show_ui(ui, |ui| {
-                            for (val, label, hover) in [
-                                ("auto", "Auto (TR-BDF2)",
-                                 "Let the backend pick. Currently TR-BDF2 — \
-                                  event-robust default for stiff horizons."),
-                                ("bdf", "BDF (stiff)",
-                                 "Backward Differentiation Formula — variable-order \
-                                  implicit. OMC's default; can struggle at sharp \
-                                  tanh / relop transitions."),
-                                ("esdirk34", "ESDIRK34 (stiff, sharp transitions)",
-                                 "Explicit Singly-Diagonally-Implicit RK 3(4). \
-                                  A/L-stable; better Newton convergence than BDF \
-                                  near sharp transitions."),
-                                ("tr_bdf2", "TR-BDF2 (stiff + events)",
-                                 "Trapezoidal + BDF2, two-stage implicit. Strong on \
-                                  moderately stiff event-driven dynamics."),
-                                ("tsit45", "Tsit45 (non-stiff)",
-                                 "Tsitouras 4(5) explicit RK. Fast on smooth \
-                                  non-stiff problems; blows up on stiff DAEs."),
-                            ] {
+                            if ui
+                                .selectable_label(current.is_none(), "Auto (TR-BDF2)")
+                                .on_hover_text(
+                                    "Let the backend pick. Currently TR-BDF2 — \
+                                     event-robust default for stiff horizons.",
+                                )
+                                .clicked()
+                            {
+                                entry.bounds.solver = None;
+                            }
+                            for c in lunco_experiments::SolverChoice::ALL {
                                 if ui
-                                    .selectable_label(current == val, label)
-                                    .on_hover_text(hover)
+                                    .selectable_label(current == Some(c), c.label())
+                                    .on_hover_text(c.hover())
                                     .clicked()
                                 {
-                                    entry.bounds.solver =
-                                        if val == "auto" { None } else { Some(val.to_string()) };
+                                    entry.bounds.solver = Some(c);
                                 }
                             }
                         });
@@ -691,18 +676,17 @@ pub fn on_compile_model(
     // surfaces as a structured error in the diagnostics log instead
     // of silently picking the wrong thing.
     let chosen_via_explicit = if let Some(cls) = explicit_class.as_ref() {
-        let candidates = &candidate_classes;
-        // Match by short name OR full qualified name, so callers can pass
-        // either `"RocketStage"` or `"AnnotatedRocketStage.RocketStage"`.
-        let matched = candidates.iter().find(|c| {
-            c.as_str() == cls.as_str() || c.rsplit('.').next() == Some(cls.as_str())
-        });
-        match matched {
-            Some(qname) => Some(qname.clone()),
-            None => {
+        // Shared resolver (qualified OR bare leaf → canonical qualified),
+        // identical to the `FastRunActiveModel` / `RunExperiment` path so the
+        // surfaces can't drift. A bad/ambiguous name surfaces as a structured,
+        // candidate-listing diagnostic instead of silently picking the wrong
+        // class or failing opaquely at instantiate.
+        match crate::sim_target::resolve_requested_class(cls, &candidate_classes) {
+            Ok(qname) => Some(qname),
+            Err(e) => {
                 let msg = format!(
-                    "compile_model class `{cls}` not found. Candidates: [{}]",
-                    candidates.join(", ")
+                    "compile_model class `{cls}` {e}. Candidates: [{}]",
+                    candidate_classes.join(", ")
                 );
                 compile_states.set_error(doc, msg.clone());
                 console.error(format!("Compile failed: {msg}"));
@@ -1162,8 +1146,27 @@ struct BoundsOverride {
     t_end: Option<f64>,
     dt: Option<f64>,
     tolerance: Option<f64>,
-    solver: Option<String>,
+    solver: Option<lunco_experiments::SolverChoice>,
     h0: Option<f64>,
+}
+
+/// Parse an API solver string into a typed [`SolverChoice`](lunco_experiments::SolverChoice).
+/// `None`/empty/`"auto"` → `None` (= backend default, TR-BDF2). An unknown
+/// string is logged and treated as `None` rather than silently degrading to
+/// BDF deep in the solver layer.
+fn parse_solver_arg(s: Option<&str>) -> Option<lunco_experiments::SolverChoice> {
+    let raw = s?;
+    let t = raw.trim();
+    if t.is_empty() || t.eq_ignore_ascii_case("auto") {
+        return None;
+    }
+    match t.parse() {
+        Ok(c) => Some(c),
+        Err(e) => {
+            warn!("[FastRun] {e}; using backend default solver (TR-BDF2)");
+            None
+        }
+    }
 }
 
 /// Parse a textual override/input value into a typed `ParamValue`.
@@ -1240,10 +1243,15 @@ pub(crate) fn bounds_from_annotation(
 
 /// Single source of truth for the simulation bounds shown in BOTH the
 /// Fast Run popup and the Experiments-tab Setup form, so the two
-/// surfaces never disagree. Precedence: saved draft override → runner
-/// annotation cache (`default_bounds`) → AST `experiment(...)`
-/// annotation → `sim_target::DEFAULT_STOP_TIME` (1 s, the Modelica spec
-/// default) fallback.
+/// surfaces never disagree. Precedence: saved draft override → AST
+/// `experiment(...)` annotation → runner annotation cache
+/// (`default_bounds`) → `sim_target::DEFAULT_STOP_TIME` (1 s, the
+/// Modelica spec default) fallback.
+///
+/// The fresh AST annotation outranks the async runner cache deliberately:
+/// the cache is populated by a background worker callback, so letting it win
+/// would make a run's snapshotted bounds depend on dispatch timing (the
+/// flaky-terminator race). See [`crate::sim_target::resolve_bounds`].
 pub(crate) fn resolve_setup_bounds(
     world: &World,
     doc: DocumentId,
@@ -1256,11 +1264,11 @@ pub(crate) fn resolve_setup_bounds(
     let draft = world
         .get_resource::<crate::experiments_runner::ExperimentDrafts>()
         .and_then(|d| d.get(doc, model_ref).and_then(|dr| dr.bounds_override.clone()));
+    let annotation = bounds_from_annotation(world, doc, model_ref);
     let runner_cached = world
         .get_resource::<crate::ModelicaRunnerResource>()
         .and_then(|r| r.0.default_bounds(model_ref));
-    let annotation = bounds_from_annotation(world, doc, model_ref);
-    crate::sim_target::resolve_bounds(draft, runner_cached, annotation)
+    crate::sim_target::resolve_bounds(draft, annotation, runner_cached)
 }
 
 fn dispatch_experiment(
@@ -1333,7 +1341,21 @@ fn dispatch_experiment(
         //      simulation root (`default_simulation_class`), so this API
         //      path can't drift from the Fast Run popup / Setup form.
         let model_name = match explicit_class {
-            Some(c) => c,
+            // Resolve the caller-supplied name (qualified OR bare leaf) to the
+            // canonical qualified class via the shared resolver — so e.g.
+            // `RunExperiment{class:"RoverThermalSystem"}` reaches
+            // `LunarRover.RoverThermalSystem` instead of failing deep in the
+            // compiler with "model not found". Shared with `CompileModel`.
+            Some(req) => match crate::sim_target::resolve_requested_class(&req, &candidates) {
+                Ok(qualified) => qualified,
+                Err(e) => {
+                    bevy::log::warn!(
+                        "[dispatch_experiment] class `{req}` {e}. Candidates: [{}]",
+                        candidates.join(", ")
+                    );
+                    return None;
+                }
+            },
             None => {
                 let has_drill =
                     crate::ui::panels::model_view::drilled_class_for_doc(world, doc).is_some();
@@ -1515,7 +1537,7 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
         t_end: trigger.event().t_end,
         dt: trigger.event().dt,
         tolerance: trigger.event().tolerance,
-        solver: trigger.event().solver.clone(),
+        solver: parse_solver_arg(trigger.event().solver.as_deref()),
         h0: trigger.event().h0,
     };
     commands.queue(move |world: &mut World| {
@@ -1530,6 +1552,93 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
             cmd_bounds,
             None,
         );
+    });
+}
+
+/// Confirm (or dismiss) the "Which class should Compile/Fast Run …?" picker
+/// modal that appears when a package has more than one runnable model. This is
+/// the headless/API equivalent of clicking the dialog's button: it mirrors the
+/// confirm path in [`render_compile_class_picker`] exactly — pin the chosen
+/// class as the doc's drilled-in class (so resolution skips the picker), close
+/// the dialog, and re-dispatch the original Compile / Fast Run for the pick.
+///
+/// - `qualified` `None` → use the dialog's pre-selected candidate.
+/// - `qualified` set    → pick that class (must be one of the candidates).
+/// - `cancel` `true`    → just close the dialog without running.
+#[Command(default)]
+pub struct ConfirmClassPicker {
+    /// Class to pick. `None` = the dialog's pre-selected candidate.
+    pub qualified: Option<String>,
+    /// Dismiss the picker without running (same as the Cancel button).
+    pub cancel: bool,
+}
+
+#[on_command(ConfirmClassPicker)]
+pub fn on_confirm_class_picker(trigger: On<ConfirmClassPicker>, mut commands: Commands) {
+    let want = trigger.event().qualified.clone();
+    let cancel = trigger.event().cancel;
+    commands.queue(move |world: &mut World| {
+        // Take the pending picker entry (taking it closes the dialog).
+        let Some(entry) = world
+            .get_resource_mut::<CompileClassPickerState>()
+            .and_then(|mut p| p.0.take())
+        else {
+            warn!("[ConfirmClassPicker] no class picker is currently open");
+            return;
+        };
+        if cancel {
+            return; // entry consumed → dialog dismissed, nothing to run
+        }
+        // Resolve the chosen class: an explicit (valid) `qualified`, else the
+        // dialog's pre-selected candidate.
+        let chosen = match want {
+            Some(q) if entry.candidates.iter().any(|c| *c == q) => q,
+            Some(q) => {
+                warn!(
+                    "[ConfirmClassPicker] `{q}` is not a candidate ({:?}); using pre-selected",
+                    entry.candidates
+                );
+                match entry.candidates.get(entry.preselected).cloned() {
+                    Some(c) => c,
+                    None => return,
+                }
+            }
+            None => match entry.candidates.get(entry.preselected).cloned() {
+                Some(c) => c,
+                None => {
+                    warn!("[ConfirmClassPicker] picker has no candidates");
+                    return;
+                }
+            },
+        };
+        let doc = entry.doc;
+        // Pin the drilled class so the re-dispatch resolves directly (mirrors
+        // `render_compile_class_picker`'s confirm branch).
+        if let Some(mut tabs) =
+            world.get_resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+        {
+            for (_, state) in tabs.iter_mut_for_doc(doc) {
+                state.drilled_class = Some(chosen.clone());
+            }
+        }
+        match entry.purpose {
+            PickerPurpose::Compile => {
+                world
+                    .commands()
+                    .trigger(CompileModel { doc, class: None, force: false });
+            }
+            PickerPurpose::FastRun => {
+                world.commands().trigger(FastRunActiveModel {
+                    doc,
+                    class: None,
+                    t_end: None,
+                    dt: None,
+                    tolerance: None,
+                    solver: None,
+                    h0: None,
+                });
+            }
+        }
     });
 }
 
@@ -1572,7 +1681,7 @@ pub fn on_run_experiment(trigger: On<RunExperiment>, mut commands: Commands) {
         t_end: ev.t_end,
         dt: ev.dt,
         tolerance: ev.tolerance,
-        solver: ev.solver.clone(),
+        solver: parse_solver_arg(ev.solver.as_deref()),
         h0: ev.h0,
     };
     commands.queue(move |world: &mut World| {
@@ -1830,6 +1939,7 @@ register_commands!(
     on_run_active_model,
     on_restart_active_model,
     on_fast_run_active_model,
+    on_confirm_class_picker,
     on_run_experiment,
     on_cancel_experiment,
     on_delete_experiment,

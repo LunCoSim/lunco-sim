@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
-use rumoca_sim::{SimOptions, SimStepper};
+use rumoca_sim::SimStepper;
 use serde::{Serialize, Deserialize};
 
 use lunco_assets::modelica_dir;
@@ -20,36 +20,29 @@ use crate::ast_extract::strip_input_defaults;
 use crate::sim_stream::{SimSnapshot, SimStream};
 use crate::ModelicaCompiler;
 
-/// Default relative / absolute tolerances for the adaptive DAE stepper.
-///
-/// Split because the two knobs do different jobs: `rtol` bounds the *relative*
-/// (fractional) error and dominates for large-magnitude states (temperatures,
-/// positions); `atol` is the *absolute* floor that takes over near zero (small
-/// fluxes, rates) where a relative bound is meaningless. Forcing them equal —
-/// the previous `1e-1` for both — is wrong for models that mix wildly different
-/// magnitudes. These are the conventional SUNDIALS-style defaults.
-///
-/// TRADE-OFF: tighter than the old `1e-1` → more accurate, but the BDF
-/// integrator may take smaller steps on very stiff models (radiative thermal
-/// over lunar-day horizons, smooth-abs/max contact). If live sim stalls, loosen
-/// `DEFAULT_RTOL` first.
-const DEFAULT_RTOL: f64 = 1e-3;
-const DEFAULT_ATOL: f64 = 1e-6;
-
 /// Build a `SimStepper` from a freshly-compiled model.
 ///
 /// **Single source of truth** for stepper construction across the worker — every
 /// site routes through here instead of copy-pasting the `SimOptions` setup +
-/// `SimStepper::new` call (there were ~9 such copies). Centralises the solver
-/// tolerance policy: `rtol` honors the model's `experiment(Tolerance=…)`
-/// annotation when present (the conventional reading of Modelica `Tolerance`),
-/// else [`DEFAULT_RTOL`]; `atol` stays at [`DEFAULT_ATOL`].
+/// `SimStepper::new` call (there were ~9 such copies).
+///
+/// Tolerance + solver policy is delegated to
+/// [`crate::experiments_runner::stepper_options_from_bounds`] — the SAME
+/// function the batch-experiment and wasm-worker paths use — so the live
+/// interactive sim can't drift from batch runs on tolerance, the `atol`/`rtol`
+/// policy, or the solver family. We carry across only the model's
+/// `experiment(Tolerance=…)` annotation (the conventional reading of Modelica
+/// `Tolerance` → the solver tolerance); the rest of `RunBounds` doesn't affect
+/// `SimOptions` here (start/stop/interval drive the stepping loop, not the
+/// integrator), so it stays at its default.
 fn build_stepper(
     comp_res: &rumoca_compile::compile::DaeCompilationResult,
 ) -> Result<SimStepper, rumoca_sim::SimulationDiagnosticError> {
-    let mut opts = SimOptions::default();
-    opts.rtol = comp_res.experiment_tolerance.unwrap_or(DEFAULT_RTOL);
-    opts.atol = DEFAULT_ATOL;
+    let bounds = lunco_experiments::RunBounds {
+        tolerance: comp_res.experiment_tolerance,
+        ..Default::default()
+    };
+    let opts = crate::experiments_runner::stepper_options_from_bounds(&bounds);
     SimStepper::new(&comp_res.dae, opts)
 }
 
@@ -1535,7 +1528,14 @@ pub fn handle_modelica_responses(
                         t_end: result.experiment_stop_time,
                         tolerance: result.experiment_tolerance,
                         interval: result.experiment_interval,
-                        solver: result.experiment_solver.clone(),
+                        // Parse the annotation's solver string into the typed
+                        // choice once here; an unrecognized name falls to
+                        // `None` (= backend default) instead of being carried
+                        // as a free string. See `lunco_experiments::SolverChoice`.
+                        solver: result
+                            .experiment_solver
+                            .as_deref()
+                            .and_then(|s| s.parse().ok()),
                     },
                 );
             }

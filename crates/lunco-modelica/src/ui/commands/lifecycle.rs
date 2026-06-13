@@ -9,8 +9,7 @@ use lunco_core::{Command, on_command};
 use std::sync::Arc;
 
 use crate::document::duplicate::{
-    collect_parent_imports, extract_class_spans_inline,
-    rewrite_inject_in_one_pass,
+    build_duplicate_source, collect_parent_imports, extract_class_spans_inline,
 };
 use crate::ui::{
     CompileStates, ModelicaDocumentRegistry, WorkbenchState,
@@ -551,26 +550,14 @@ pub fn on_duplicate_model_from_read_only(
             .and_then(crate::library_fs::resolve_class_path_indexed)
             .map(|p| collect_parent_imports(&p))
             .unwrap_or_default();
-        let renamed = match extract_class_spans_inline(class_src, &origin_short_for_task) {
-            Some(spans) => {
-                rewrite_inject_in_one_pass(class_src, &name_for_task, &imports, &spans)
-                    .unwrap_or_else(|| class_src.to_string())
-            }
-            None => class_src.to_string(),
-        };
-        let copy_src = match origin_fqn_for_task.as_deref() {
-            Some(fqn) => {
-                let mut parts: Vec<&str> = fqn.split('.').collect();
-                parts.pop();
-                let origin_pkg = parts.join(".");
-                if origin_pkg.is_empty() {
-                    renamed
-                } else {
-                    format!("within {origin_pkg};\n{renamed}")
-                }
-            }
-            None => renamed,
-        };
+        let spans = extract_class_spans_inline(class_src, &origin_short_for_task);
+        let copy_src = build_duplicate_source(
+            class_src,
+            spans.as_ref(),
+            &name_for_task,
+            origin_fqn_for_task.as_deref(),
+            &imports,
+        );
         crate::document::ModelicaDocument::with_origin(
             doc_id,
             copy_src,
@@ -706,48 +693,25 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
             .and_then(|b| String::from_utf8(b).ok())
             .unwrap_or_default();
         
-        let spans_opt = crate::document::duplicate::extract_class_spans_via_path(
+        // Prefer the path-cached spans (cheap on repeat MSL duplications);
+        // fall back to an inline parse if resolution fails. Either way the
+        // spans are absolute in `source_full` and `build_duplicate_source`
+        // slices to the class span before rewriting.
+        let spans = crate::document::duplicate::extract_class_spans_via_path(
             &path,
             &source_full,
             &origin_short_for_task,
         )
-        .filter(|s| s.full_start < s.full_end && s.full_end <= source_full.len());
-        let class_src = match spans_opt.as_ref() {
-            Some(s) => source_full[s.full_start..s.full_end].to_string(),
-            None => source_full,
-        };
+        .filter(|s| s.full_start < s.full_end && s.full_end <= source_full.len())
+        .or_else(|| extract_class_spans_inline(&source_full, &origin_short_for_task));
         let imports = collect_parent_imports(&path);
-        let renamed = match spans_opt.as_ref() {
-            Some(spans) => rewrite_inject_in_one_pass(
-                &class_src,
-                &name_for_task,
-                &imports,
-                spans,
-            )
-            .unwrap_or_else(|| class_src.clone()),
-            None => {
-                extract_class_spans_inline(&class_src, &origin_short_for_task)
-                    .and_then(|spans| {
-                        rewrite_inject_in_one_pass(
-                            &class_src,
-                            &name_for_task,
-                            &imports,
-                            &spans,
-                        )
-                    })
-                    .unwrap_or_else(|| class_src.clone())
-            }
-        };
-        let origin_pkg: String = {
-            let mut parts: Vec<&str> = qualified_for_task.split('.').collect();
-            parts.pop();
-            parts.join(".")
-        };
-        let copy_src = if origin_pkg.is_empty() {
-            renamed
-        } else {
-            format!("within {origin_pkg};\n{renamed}")
-        };
+        let copy_src = build_duplicate_source(
+            &source_full,
+            spans.as_ref(),
+            &name_for_task,
+            Some(&qualified_for_task),
+            &imports,
+        );
         crate::document::ModelicaDocument::with_origin(
             doc_id,
             copy_src,

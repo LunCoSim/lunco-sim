@@ -104,7 +104,8 @@ them.
 | `MoveComponent` | `{class, name, x, y, width, height}` | Modelica-coord drag. `class` empty = active. `width=height=0` = preserve size. |
 | `Undo` / `Redo` | `{doc}` | Document op stack. |
 | `AutoArrangeDiagram` | `{doc}` | Re-layout. |
-| `FocusDocumentByName` | `{name}` | Switch active tab. |
+| `FocusDocumentByName` | `{pattern}` | Switch active tab (field is `pattern`, NOT `name`). |
+| `ConfirmClassPicker` | `{qualified?, cancel?}` | Confirm/dismiss the "Which class should Compile/Fast Run …?" picker that opens when a package has >1 model. `qualified` = pick that class (omit → dialog's pre-selected); `cancel:true` = dismiss without running. Headless equivalent of clicking the dialog. **Gotcha:** the picker only opens once the doc's AST has parsed AND there are >1 candidates — `FastRunActiveModel` on a just-opened package logs `no compilable top-level class` and opens NO picker if you fire it before parse completes. Wait for `async parse complete doc=N` in the log, THEN `FastRunActiveModel`, THEN `ConfirmClassPicker`. |
 
 ## Verification workflow
 

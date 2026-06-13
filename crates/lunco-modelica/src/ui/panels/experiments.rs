@@ -1044,76 +1044,41 @@ impl ExperimentsPanel {
                 bounds_changed = true;
             }
 
-            // Solver picker. rumoca exposes three modes via
-            // `SimSolverMode::from_external_name`: "auto" → Auto
-            // (heuristic chooser), names containing "rk"/"dopri"/
-            // "esdirk"/"trbdf2"/"euler"/"midpoint" → RkLike (explicit
-            // Runge-Kutta family for non-stiff systems), everything
-            // else → Bdf (implicit, default for stiff DAEs).
-            // Stored as `Option<String>`; `None` means "use the
-            // experiment(...) annotation, otherwise rumoca's default
-            // (BDF)". See rumoca-sim/src/with_diffsol/mod.rs:90.
+            // Solver picker. Vocabulary + labels are the single source of
+            // truth `lunco_experiments::SolverChoice`; `None` = "Auto" (backend
+            // default, TR-BDF2). The enum maps to rumoca's (family, tableau)
+            // pair in `experiments_runner::solver_choice_to_rumoca`.
             ui.separator();
             ui.label("solver:")
                 .on_hover_text(
                     "Integration method. Auto picks the stack's default \
-                     (TR-BDF2 — event-robust, recommended). BDF is \
-                     variable-order implicit (OMC's choice; can struggle \
-                     at sharp transitions). ESDIRK34 is single-step \
-                     implicit, good Newton convergence on sharp tanh \
-                     models. Tsit45 is explicit (only for non-stiff \
-                     problems with M=I).",
+                     (TR-BDF2 — event-robust, recommended). The explicit \
+                     options override it.",
                 );
-            let current: String = bounds.solver.clone().unwrap_or_else(|| "auto".to_string());
-            let current = current.as_str();
-            let label = match current {
-                "auto" => "Auto (TR-BDF2)",
-                "bdf" => "BDF (stiff)",
-                "esdirk34" => "ESDIRK34 (stiff, sharp transitions)",
-                "tr_bdf2" => "TR-BDF2 (stiff + events)",
-                "tsit45" => "Tsit45 (non-stiff)",
-                // Legacy alias: old saves used "rk4" — keep it readable.
-                "rk4" => "ESDIRK34 (stiff, sharp transitions)",
-                other => other,
-            };
+            let current = bounds.solver;
+            let sel_label = current.map_or("Auto (TR-BDF2)", |c| c.label());
             egui::ComboBox::from_id_salt("setup_solver")
-                .selected_text(label)
+                .selected_text(sel_label)
                 .width(220.0)
                 .show_ui(ui, |ui| {
-                    for (val, label, hover) in [
-                        ("auto", "Auto (TR-BDF2)",
-                         "Let the backend pick. Currently maps to TR-BDF2 \
-                          — event-robust default for stiff multi-day \
-                          horizons. Tolerance defaults to 1e-4 (FD \
-                          Jacobian noise floor; tighter tols burn retry \
-                          budgets on noise)."),
-                        ("bdf", "BDF (stiff)",
-                         "Backward Differentiation Formula — variable-order \
-                          implicit, robust on stiff DAEs (thermal, chemical, \
-                          electrical). OMC's default. Can struggle at startup \
-                          on models with sharp tanh / relop transitions."),
-                        ("esdirk34", "ESDIRK34 (stiff, sharp transitions)",
-                         "Explicit Singly-Diagonally-Implicit RK 3(4). A- and \
-                          L-stable. Better Newton convergence than BDF near \
-                          sharp transitions; often unblocks models BDF chokes on."),
-                        ("tr_bdf2", "TR-BDF2 (stiff + events)",
-                         "Trapezoidal Rule + BDF2, two-stage implicit. A- and \
-                          L-stable. Strong on moderately stiff problems with \
-                          event-driven dynamics — close in spirit to DASSL."),
-                        ("tsit45", "Tsit45 (non-stiff)",
-                         "Tsitouras 4(5) explicit RK — like Dormand-Prince. \
-                          Fast on smooth, non-stiff problems (rigid-body \
-                          mechanics, kinematics). Will blow up on stiff DAEs."),
-                    ] {
-                        let resp = ui
-                            .selectable_label(current == val, label)
-                            .on_hover_text(hover);
-                        if resp.clicked() {
-                            bounds.solver = if val == "auto" {
-                                None
-                            } else {
-                                Some(val.to_string())
-                            };
+                    if ui
+                        .selectable_label(current.is_none(), "Auto (TR-BDF2)")
+                        .on_hover_text(
+                            "Let the backend pick. Currently TR-BDF2 — \
+                             event-robust default for stiff multi-day horizons.",
+                        )
+                        .clicked()
+                    {
+                        bounds.solver = None;
+                        bounds_changed = true;
+                    }
+                    for c in lunco_experiments::SolverChoice::ALL {
+                        if ui
+                            .selectable_label(current == Some(c), c.label())
+                            .on_hover_text(c.hover())
+                            .clicked()
+                        {
+                            bounds.solver = Some(c);
                             bounds_changed = true;
                         }
                     }

@@ -298,7 +298,14 @@ fn main() {
                     .before(lunco_sandbox_edit::selection::handle_entity_selection),
             );
         })
-        .init_resource::<SandboxSettings>()
+        // Default scene-wide fill for scenes that author no lighting; a
+        // scene-authored UsdLux light takes ambient over (DomeLight
+        // intensity, or 0 when absent). Runtime control: Inspector →
+        // Environment, or the `SetEnvironmentLight` command.
+        .insert_resource(bevy::light::GlobalAmbientLight {
+            brightness: 40.0,
+            ..Default::default()
+        })
         .add_systems(Startup, setup_sandbox)
         // ModelicaPlugin's AnalyzePerspective is registered before SandboxEditUiPlugin's
         // workspaces, so without this nudge we'd boot into the Modelica layout.
@@ -307,7 +314,6 @@ fn main() {
         .add_systems(Startup, |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
             layout.activate_perspective(lunco_workbench::PerspectiveId("sandbox_view"));
         })
-        .add_systems(Update, apply_sandbox_settings)
         // Cosim pipeline ordering inside FixedUpdate:
         //   HandleResponses → Propagate → ApplyForces → SpawnRequests.
         // All USD-driven cosim wiring (compile dispatch, SimComponent
@@ -502,32 +508,6 @@ fn sandbox_boot_from_url(
     state.done = true;
 }
 
-#[derive(Resource, Reflect)]
-struct SandboxSettings {
-    sun_yaw: f32,
-    sun_pitch: f32,
-    ambient_brightness: f32,
-    ambient_color: LinearRgba,
-    wireframe: bool,
-}
-
-impl Default for SandboxSettings {
-    fn default() -> Self {
-        Self {
-            sun_yaw: 0.5,
-            // Low sun (~11° above horizon) for long, raking lunar shadows
-            // across the DEM. Runtime-adjustable via the `SetEnvironmentLight`
-            // command or the settings panel.
-            sun_pitch: -0.2,
-            // Drives `GlobalAmbientLight`; airless-Moon contrast wants a low
-            // fill so shadow cores stay dark.
-            ambient_brightness: 40.0,
-            ambient_color: LinearRgba::WHITE,
-            wireframe: false,
-        }
-    }
-}
-
 /// Resource that holds the asset-source-relative path of the scene
 /// to load on Startup. Initialised from the `--scene` CLI arg.
 #[derive(Resource)]
@@ -640,10 +620,18 @@ fn setup_sandbox(world: &mut World) {
             ..default()
         },
         cascades,
-        Transform::from_xyz(10.0, 20.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
+        // Low sun (~11° above horizon, yaw 0.5 rad) for long raking lunar
+        // shadows — same YXZ convention as `SetEnvironmentLight` and the
+        // Inspector → Environment controls.
+        Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 0.5, -0.2, 0.0)),
         GlobalTransform::default(),
         CellCoord::default(),
         Name::new("Sun"),
+        // Default sun for scenes that author no lighting. A scene that
+        // authors a UsdLux `DistantLight` (e.g. the moonbase Twin) replaces
+        // it: the loader despawns every `FallbackSceneLight` and takes over
+        // ambient too (no authored `DomeLight` ⇒ ambient 0).
+        lunco_usd::FallbackSceneLight,
         ChildOf(grid),
     ));
 
@@ -749,26 +737,6 @@ fn force_hard_shadow_filtering(
         commands
             .entity(e)
             .insert(bevy::light::ShadowFilteringMethod::Hardware2x2);
-    }
-}
-
-fn apply_sandbox_settings(
-    settings: Res<SandboxSettings>,
-    mut q_sun: Query<&mut Transform, With<DirectionalLight>>,
-    // `AmbientLight` is a per-camera *override* component; the scene-wide fill
-    // is the `GlobalAmbientLight` resource (always present under PBR). Writing
-    // the resource is what actually changes the look — the old
-    // `Query<&mut AmbientLight>` matched nothing and silently did nothing.
-    ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
-) {
-    if settings.is_changed() {
-        for mut tf in q_sun.iter_mut() {
-            tf.rotation = Quat::from_euler(EulerRot::YXZ, settings.sun_yaw, settings.sun_pitch, 0.0);
-        }
-        if let Some(mut ambient) = ambient {
-            ambient.brightness = settings.ambient_brightness;
-            ambient.color = Color::Srgba(settings.ambient_color.into());
-        }
     }
 }
 

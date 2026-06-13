@@ -49,6 +49,15 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
 
         ui.heading("Inspector");
 
+        // ── Environment (sun + ambient) ──────────────────────────────
+        // Always visible — a directional light has no clickable geometry,
+        // so click-selection can never reach it. Edits write the LIVE
+        // light components/resources directly; they are session-transient
+        // (persisting back into the scene layer is the save-scene
+        // workstream).
+        environment_section(ui, world);
+        ui.separator();
+
         // Get current selection
         let Some(entity) = world.get_resource::<SelectedEntity>().and_then(|s| s.entity) else {
             ui.label("No entity selected.");
@@ -201,6 +210,139 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
             }
         }
     }
+
+/// Live sun + ambient controls. Works on whatever directional light is
+/// currently in the world — the binary's fallback sun or a scene-authored
+/// UsdLux `DistantLight` — so it doubles as the runtime tuning surface for
+/// values that will later be written back into the `.usda`.
+///
+/// The widgets only READ component state; every edit dispatches a
+/// [`SetEnvironmentLight`] command, the same single mutation path the
+/// HTTP/MCP API uses. UI, API, and scripts therefore can't drift apart in
+/// behaviour — there is exactly one observer that writes lighting.
+fn environment_section(ui: &mut egui::Ui, world: &mut World) {
+    use bevy::light::{CascadeShadowConfig, DirectionalLight, GlobalAmbientLight};
+    use lunco_environment::SetEnvironmentLight;
+
+    let suns: Vec<Entity> = world
+        .query_filtered::<Entity, With<DirectionalLight>>()
+        .iter(world)
+        .collect();
+    if suns.is_empty() && world.get_resource::<GlobalAmbientLight>().is_none() {
+        return;
+    }
+
+    // Accumulate one command from whatever widgets changed this frame;
+    // `None` fields keep their current value in the observer.
+    let mut cmd = SetEnvironmentLight::default();
+    let mut any_change = false;
+
+    egui::CollapsingHeader::new("Environment")
+        .default_open(true)
+        .show(ui, |ui| {
+            // The command applies to every directional light; render the
+            // controls off the first sun's live state.
+            if let Some(&entity) = suns.first() {
+                if let Some(name) = world.get::<Name>(entity) {
+                    ui.label(egui::RichText::new(name.as_str().to_string()).strong());
+                }
+
+                if let Some(tf) = world.get::<Transform>(entity) {
+                    let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+                    let mut yaw_deg = yaw.to_degrees();
+                    let mut pitch_deg = pitch.to_degrees();
+                    let yaw_changed = ui
+                        .add(egui::Slider::new(&mut yaw_deg, -180.0..=180.0).text("Yaw (°)"))
+                        .changed();
+                    let pitch_changed = ui
+                        .add(egui::Slider::new(&mut pitch_deg, -90.0..=90.0).text("Pitch (°)"))
+                        .changed();
+                    if yaw_changed {
+                        cmd.sun_yaw = Some(yaw_deg.to_radians());
+                    }
+                    if pitch_changed {
+                        cmd.sun_pitch = Some(pitch_deg.to_radians());
+                    }
+                    any_change |= yaw_changed || pitch_changed;
+                }
+
+                if let Some(light) = world.get::<DirectionalLight>(entity) {
+                    let mut lux = light.illuminance;
+                    let mut shadows = light.shadows_enabled;
+                    let lin = light.color.to_linear();
+                    let mut rgb = [lin.red, lin.green, lin.blue];
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut lux, 100.0..=200_000.0)
+                                .text("Illuminance (lx)")
+                                .logarithmic(true),
+                        )
+                        .changed()
+                    {
+                        cmd.illuminance = Some(lux);
+                        any_change = true;
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.color_edit_button_rgb(&mut rgb).changed() {
+                            cmd.sun_color = Some(rgb);
+                            any_change = true;
+                        }
+                        ui.label("Color");
+                    });
+                    if ui.checkbox(&mut shadows, "Cast shadows").changed() {
+                        cmd.shadows_enabled = Some(shadows);
+                        any_change = true;
+                    }
+                }
+
+                // Shadow range. bounds[0] is the first cascade's far bound
+                // (near-field sharpness), bounds.last() the total shadow
+                // distance — smaller max ⇒ denser texels ⇒ crisper shadows.
+                if let Some(cfg) = world.get::<CascadeShadowConfig>(entity) {
+                    let mut first = cfg.bounds.first().copied().unwrap_or(40.0);
+                    let mut max = cfg.bounds.last().copied().unwrap_or(1500.0);
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut first, 5.0..=200.0)
+                                .text("Near shadow bound (m)")
+                                .logarithmic(true),
+                        )
+                        .changed()
+                    {
+                        cmd.shadow_first_cascade_bound = Some(first);
+                        any_change = true;
+                    }
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut max, 50.0..=5000.0)
+                                .text("Shadow max distance (m)")
+                                .logarithmic(true),
+                        )
+                        .changed()
+                    {
+                        cmd.shadow_max_distance = Some(max);
+                        any_change = true;
+                    }
+                }
+                ui.separator();
+            }
+
+            if let Some(ambient) = world.get_resource::<GlobalAmbientLight>() {
+                let mut b = ambient.brightness;
+                if ui
+                    .add(egui::Slider::new(&mut b, 0.0..=400.0).text("Ambient (cd/m²)"))
+                    .changed()
+                {
+                    cmd.ambient_brightness = Some(b);
+                    any_change = true;
+                }
+            }
+        });
+
+    if any_change {
+        world.trigger(cmd);
+    }
+}
 
 /// Render editable sliders for every tunable `parameter Real` in the
 /// entity's Modelica model. On any change, dispatch a
