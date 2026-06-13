@@ -311,35 +311,59 @@ fn render_unified_toolbar(
         } else {
             "A simulation is already running — stop it before compiling again"
         };
+        // 🔨 Compile — build-only. Hammer (not 🚀) so the icon reads as
+        // "build", not "launch"; the old rocket implied a run that never
+        // happened. Each hint names its siblings so a single hover teaches
+        // the three-way split: build vs live-run vs batch-run.
         let r_compile = ui
-            .add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("🚀"))
-            .on_hover_text("Compile — build the model (does not start a live sim); press ▶ Run to step it")
+            .add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("🔨"))
+            .on_hover_text("Compile — build & check the model only. It does NOT run.\n▶ Run = watch it live    ⏩ Fast Run = plots, no watching")
             .on_disabled_hover_text(compile_busy_hint);
         compile_clicked = r_compile.clicked();
-        // Fast Run is no longer blocked by an in-flight run — extra runs
-        // queue behind the concurrency cap (see the Experiments panel for
-        // the running/queued count). Only an in-progress *compile* disables
-        // it.
+
+        // ▶ Run (live) — now ALWAYS shown, even before a sim exists, so the
+        // live-run entry point is discoverable (previously it only appeared
+        // once a sim already existed, leaving first-timers with just 🚀/⏩).
+        // Pre-sim or paused → ▶ Run (RunActiveModel compiles-if-needed then
+        // steps); actively stepping → ⏸ Pause. Sits between Compile and Fast
+        // Run as the default verb.
+        let realtime_running = sim_state.map(|(p, _)| !p).unwrap_or(false);
+        let r_run = ui
+            .add_enabled(!matches!(compile_state, CompileState::Compiling), egui::Button::new(if realtime_running { "⏸" } else { "▶" }))
+            .on_hover_text(if realtime_running {
+                "Pause — freeze live stepping. State is kept; press ▶ to resume."
+            } else {
+                "Run live — compile if needed, then step in realtime so you can watch and drive it in the 3D view.\nWant plots without watching? Use ⏩ Fast Run."
+            })
+            .on_disabled_hover_text("Compiling — wait for the current build to finish");
+        run_pause_clicked = r_run.clicked();
+
+        // ⏩ Fast Run — batch to completion in the background → an Experiment
+        // with plots. Not blocked by an in-flight run (extra runs queue
+        // behind the concurrency cap; see the Experiments panel). Only an
+        // in-progress *compile* disables it.
         let r_fast = ui
             .add_enabled(!matches!(compile_state, CompileState::Compiling), egui::Button::new("⏩"))
-            .on_hover_text("Fast Run — compile and simulate to completion; queues behind any running experiments")
+            .on_hover_text("Fast Run — simulate to completion in the background and make an Experiment with plots.\nNo live 3D view — for that use ▶ Run.")
             .on_disabled_hover_text("Compiling — wait for the current build to finish");
         fast_run_clicked = r_fast.clicked();
-        // Publish a combined anchor over the two compilation-mode
-        // buttons (🚀 Interactive compile, ⏩ Fast Run) so the help
-        // tour can spotlight where compilation is launched.
+        // Publish a combined anchor over the three execution verbs
+        // (🔨 Compile, ▶ Run, ⏩ Fast Run) so the help tour can spotlight
+        // where simulation is launched.
         if let Some(mut a) = world.get_resource_mut::<lunco_workbench::HelpAnchors>() {
-            a.set("model_view.compile_buttons", r_compile.rect.union(r_fast.rect));
+            a.set("model_view.compile_buttons", r_compile.rect.union(r_run.rect).union(r_fast.rect));
         }
 
-        if let Some((paused, t_now)) = sim_state {
+        // Reset / Restart only make sense once a live sim exists. Distinct
+        // *monochrome* glyphs — ⏮ rewind-to-start vs ↻ replay — replace the
+        // old near-identical ⟲/⟳ pair (indistinguishable) and the colored
+        // 🔁 emoji (rendered orange, clashing with the monochrome ▶/⏸/⏩
+        // controls). Each hint names the other so the difference
+        // (rewind-only vs rewind-and-run) stays explicit.
+        if let Some((_paused, t_now)) = sim_state {
             ui.separator();
-            run_pause_clicked = ui
-                .button(if paused { "▶" } else { "⏸" })
-                .on_hover_text(if paused { "Run — compile if needed, then step the simulation live" } else { "Pause simulation" })
-                .clicked();
-            reset_clicked = ui.button("⟲").on_hover_text("Reset simulation to t=0").clicked();
-            restart_clicked = ui.button("⟳").on_hover_text("Restart — reset to t=0 and run again").clicked();
+            reset_clicked = ui.button("⏮").on_hover_text("Reset — stop and rewind to t=0 (stays paused).\nUse ↻ Restart to rewind AND run again.").clicked();
+            restart_clicked = ui.button("↻").on_hover_text("Restart — rewind to t=0 and run again immediately.\nUse ⏮ Reset to rewind without running.").clicked();
             ui.label(egui::RichText::new(format!("t={:.3}s", t_now)).monospace().weak());
         }
 
@@ -359,13 +383,14 @@ fn render_unified_toolbar(
     if redo_clicked { world.commands().trigger(lunco_doc_bevy::RedoDocument { doc }); }
     if duplicate_clicked { world.commands().trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc: doc }); }
     if run_pause_clicked {
-        let paused = sim_state.map(|(p, _)| p).unwrap_or(false);
         // Run = compile-if-stale then play (RunActiveModel); Pause just
-        // freezes stepping. Resume-without-compile is no longer a
-        // primary toolbar verb — RunActiveModel subsumes it (it unpauses
-        // directly when the model is already compiled & clean).
-        if paused { world.commands().trigger(crate::ui::commands::RunActiveModel { doc, class: None }); }
-        else { world.commands().trigger(crate::ui::commands::PauseActiveModel { doc }); }
+        // freezes stepping. The button is always visible now, so pre-sim
+        // (no state) and paused both map to Run — only active realtime
+        // stepping maps to Pause. RunActiveModel subsumes resume-without-
+        // compile (it unpauses directly when already compiled & clean).
+        let realtime_running = sim_state.map(|(p, _)| !p).unwrap_or(false);
+        if realtime_running { world.commands().trigger(crate::ui::commands::PauseActiveModel { doc }); }
+        else { world.commands().trigger(crate::ui::commands::RunActiveModel { doc, class: None }); }
     }
     if reset_clicked { world.commands().trigger(crate::ui::commands::ResetActiveModel { doc }); }
     if restart_clicked {
