@@ -822,9 +822,11 @@ impl RunSink for ChannelSink {
 ///     robustly across multi-month horizons).
 /// Background: docs/numeric-experiments/2026-05-28-lunar-thermal.md
 ///
-/// The worker previously hardcoded `atol = rtol = 1e-6` with *no* solver
-/// selection, silently running BDF where native runs TR-BDF2 — a second
-/// divergence this fn collapses.
+/// The worker's live interactive sim (`worker::build_stepper`) previously had
+/// its OWN defaults (`rtol = 1e-3`, `atol = 1e-6`) with *no* solver selection,
+/// silently running BDF where the batch path runs TR-BDF2. `build_stepper` now
+/// delegates here, collapsing that divergence: one tolerance default, one
+/// `atol`/`rtol` policy, one solver family across live + batch.
 /// The ONLY place a [`SolverChoice`](lunco_experiments::SolverChoice) is
 /// mapped to rumoca's two-axis selection: `SimSolverMode` (family) +
 /// `DiffsolMethod` (implicit tableau on the BDF-family path). Keeping this in
@@ -843,10 +845,20 @@ fn solver_choice_to_rumoca(
     }
 }
 
+/// Default solver tolerance when neither the run bounds nor the model's
+/// `experiment(Tolerance=…)` annotation supplies one. Applied to BOTH `atol`
+/// and `rtol` (scalar): our FD-Jacobian + scalar-`atol` stack can't honor
+/// OMC's 1e-6 convention without burning retry budget on noise (see the
+/// rationale above `solver_choice_to_rumoca`). This is the ONE source of the
+/// default — the live interactive sim (`worker::build_stepper`) reaches it by
+/// delegating to [`stepper_options_from_bounds`], so the two surfaces can't
+/// drift on tolerance, `atol`/`rtol` policy, or solver family.
+pub const DEFAULT_TOLERANCE: f64 = 1e-4;
+
 pub fn stepper_options_from_bounds(bounds: &RunBounds) -> rumoca_sim::SimOptions {
     let mut opts = rumoca_sim::SimOptions::default();
-    opts.atol = bounds.tolerance.unwrap_or(1e-4);
-    opts.rtol = bounds.tolerance.unwrap_or(1e-4);
+    opts.atol = bounds.tolerance.unwrap_or(DEFAULT_TOLERANCE);
+    opts.rtol = bounds.tolerance.unwrap_or(DEFAULT_TOLERANCE);
     // Single typed source of truth: `SolverChoice` already resolved the
     // vocabulary at the parse boundary, so here we just map it to rumoca's
     // (family, tableau) pair once — no re-parsing of strings, no silent
