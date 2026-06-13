@@ -289,10 +289,11 @@ impl ModelicaDocument {
 
         let class_def = crate::ast_extract::find_class_by_short_name(&ast, short_name)
             .ok_or_else(|| format!("class `{qualified}` not found in `{}`", path.display()))?;
-        // `full_span_with_leading_comments` removed in rumoca main;
-        // fall back to the class location span.
-        let full_start = class_def.location.start as usize;
-        let full_end = class_def.location.end as usize;
+        // `ClassDef.location` omits the prefix keyword and trailing `;` (see
+        // `class_full_text_span`); slicing by it alone drops both and yields
+        // invalid Modelica. Use the canonical full-declaration span.
+        let (full_start, full_end) =
+            crate::ast_extract::class_full_text_span(class_def, &full_source);
         let class_slice = &full_source[full_start..full_end];
 
         let source = if parent_pkg.is_empty() {
