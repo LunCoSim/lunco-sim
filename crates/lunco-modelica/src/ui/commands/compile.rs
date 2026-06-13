@@ -676,18 +676,17 @@ pub fn on_compile_model(
     // surfaces as a structured error in the diagnostics log instead
     // of silently picking the wrong thing.
     let chosen_via_explicit = if let Some(cls) = explicit_class.as_ref() {
-        let candidates = &candidate_classes;
-        // Match by short name OR full qualified name, so callers can pass
-        // either `"RocketStage"` or `"AnnotatedRocketStage.RocketStage"`.
-        let matched = candidates.iter().find(|c| {
-            c.as_str() == cls.as_str() || c.rsplit('.').next() == Some(cls.as_str())
-        });
-        match matched {
-            Some(qname) => Some(qname.clone()),
-            None => {
+        // Shared resolver (qualified OR bare leaf → canonical qualified),
+        // identical to the `FastRunActiveModel` / `RunExperiment` path so the
+        // surfaces can't drift. A bad/ambiguous name surfaces as a structured,
+        // candidate-listing diagnostic instead of silently picking the wrong
+        // class or failing opaquely at instantiate.
+        match crate::sim_target::resolve_requested_class(cls, &candidate_classes) {
+            Ok(qname) => Some(qname),
+            Err(e) => {
                 let msg = format!(
-                    "compile_model class `{cls}` not found. Candidates: [{}]",
-                    candidates.join(", ")
+                    "compile_model class `{cls}` {e}. Candidates: [{}]",
+                    candidate_classes.join(", ")
                 );
                 compile_states.set_error(doc, msg.clone());
                 console.error(format!("Compile failed: {msg}"));
@@ -1342,7 +1341,21 @@ fn dispatch_experiment(
         //      simulation root (`default_simulation_class`), so this API
         //      path can't drift from the Fast Run popup / Setup form.
         let model_name = match explicit_class {
-            Some(c) => c,
+            // Resolve the caller-supplied name (qualified OR bare leaf) to the
+            // canonical qualified class via the shared resolver — so e.g.
+            // `RunExperiment{class:"RoverThermalSystem"}` reaches
+            // `LunarRover.RoverThermalSystem` instead of failing deep in the
+            // compiler with "model not found". Shared with `CompileModel`.
+            Some(req) => match crate::sim_target::resolve_requested_class(&req, &candidates) {
+                Ok(qualified) => qualified,
+                Err(e) => {
+                    bevy::log::warn!(
+                        "[dispatch_experiment] class `{req}` {e}. Candidates: [{}]",
+                        candidates.join(", ")
+                    );
+                    return None;
+                }
+            },
             None => {
                 let has_drill =
                     crate::ui::panels::model_view::drilled_class_for_doc(world, doc).is_some();

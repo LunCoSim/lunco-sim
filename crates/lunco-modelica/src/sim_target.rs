@@ -110,6 +110,66 @@ pub fn default_class(drilled_in: Option<&str>, candidates: &[String]) -> Option<
         .or_else(|| candidates.first().cloned())
 }
 
+/// Why [`resolve_requested_class`] could not turn a caller-supplied name into
+/// a single canonical class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClassResolveError {
+    /// No candidate matches by qualified name or by leaf name.
+    Unknown,
+    /// The leaf name matches several candidates in different packages; the
+    /// caller must qualify (or disambiguate via the picker). Carries the
+    /// matches so the message / picker can list them.
+    Ambiguous(Vec<String>),
+}
+
+impl std::fmt::Display for ClassResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown => write!(f, "is not a simulatable class in this document"),
+            Self::Ambiguous(m) => write!(f, "is ambiguous — matches {}", m.join(", ")),
+        }
+    }
+}
+
+/// Resolve a caller-supplied simulation target — fully qualified OR a bare
+/// leaf name — to the canonical fully-qualified class, matched against the
+/// document's simulatable `candidates` (themselves always qualified, from
+/// [`simulation_candidates`](crate::index::ModelIndex::simulation_candidates)).
+///
+/// THE single source of class-name resolution shared by every "run this
+/// class" surface (`CompileModel`, `FastRunActiveModel`, `RunExperiment`), so
+/// they can't drift on how a name maps to a model. Precedence:
+///   1. exact match — the request is already a valid qualified name.
+///   2. unique leaf match — exactly one candidate whose last `.`-segment
+///      equals the request. This is what lets a caller pass
+///      `"RoverThermalSystem"` and reach `"LunarRover.RoverThermalSystem"`
+///      instead of handing the compiler a name it rejects with the opaque
+///      "model not found" at instantiate time.
+///   3. otherwise [`ClassResolveError`] (unknown / ambiguous), so the caller
+///      surfaces a clear, candidate-listing error rather than a deep compiler
+///      failure.
+pub fn resolve_requested_class(
+    requested: &str,
+    candidates: &[String],
+) -> Result<String, ClassResolveError> {
+    let req = requested.trim();
+    // 1. Exact (already-qualified, or a dot-free top-level name) match.
+    if let Some(hit) = candidates.iter().find(|c| c.as_str() == req) {
+        return Ok(hit.clone());
+    }
+    // 2. Leaf-name match on the last `.`-separated segment.
+    let leaf_hits: Vec<String> = candidates
+        .iter()
+        .filter(|c| c.rsplit('.').next() == Some(req))
+        .cloned()
+        .collect();
+    match leaf_hits.len() {
+        0 => Err(ClassResolveError::Unknown),
+        1 => Ok(leaf_hits.into_iter().next().unwrap()),
+        _ => Err(ClassResolveError::Ambiguous(leaf_hits)),
+    }
+}
+
 /// Map a model's `experiment(...)` annotation to [`RunBounds`]. `None` when
 /// the annotation has no `StopTime` — a `StopTime` is what makes the
 /// annotation usable as a run horizon.
@@ -181,6 +241,44 @@ mod tests {
         assert_eq!(resolve_bounds(None, None, Some(rb(3.0))).t_end, 3.0);
         assert_eq!(resolve_bounds(None, None, None).t_end, DEFAULT_STOP_TIME);
         assert_eq!(DEFAULT_STOP_TIME, 1.0); // Modelica spec default StopTime
+    }
+
+    #[test]
+    fn resolve_requested_class_handles_qualified_leaf_unknown_and_ambiguous() {
+        let cands = vec![
+            "LunarRover.RoverThermalSystem".to_string(),
+            "LunarRover.LunarEnvironment".to_string(),
+            "OtherPkg.RoverThermalSystem".to_string(), // same leaf, different pkg
+            "TopLevel".to_string(),                    // dot-free
+        ];
+        // Exact qualified passes through.
+        assert_eq!(
+            resolve_requested_class("LunarRover.LunarEnvironment", &cands).unwrap(),
+            "LunarRover.LunarEnvironment"
+        );
+        // Dot-free top-level matches exactly.
+        assert_eq!(resolve_requested_class("TopLevel", &cands).unwrap(), "TopLevel");
+        // Unique leaf resolves to its qualified form.
+        assert_eq!(
+            resolve_requested_class("LunarEnvironment", &cands).unwrap(),
+            "LunarRover.LunarEnvironment"
+        );
+        // Whitespace is trimmed.
+        assert_eq!(
+            resolve_requested_class("  LunarEnvironment ", &cands).unwrap(),
+            "LunarRover.LunarEnvironment"
+        );
+        // Unknown name → Unknown.
+        assert_eq!(resolve_requested_class("Nope", &cands), Err(ClassResolveError::Unknown));
+        // Leaf shared across packages → Ambiguous with both matches.
+        match resolve_requested_class("RoverThermalSystem", &cands) {
+            Err(ClassResolveError::Ambiguous(m)) => {
+                assert_eq!(m.len(), 2);
+                assert!(m.contains(&"LunarRover.RoverThermalSystem".to_string()));
+                assert!(m.contains(&"OtherPkg.RoverThermalSystem".to_string()));
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
     }
 
     #[test]
