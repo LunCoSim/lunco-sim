@@ -7,13 +7,9 @@
 //! terrain heightfield (see `horizon_march.wgsl` for the algorithm; the
 //! engine writes the heightfield + sun uniforms).
 //!
-//! Engine uniform contract (written by the horizon system, not authors):
-//!   engine  = (sun_local.xyz, tan(sun_angular_radius))
-//!   engine2 = (size_x, size_z, heightfield_resolution, csm_far_bound_m)
-//!
 //! Near/far split: within the sun's cascade range the terrain casts into the
 //! CSM (mesh-accurate self-shadow via `apply_pbr_lighting`), so the march
-//! only fades in beyond ~half that range (`engine2.w`; 0 ⇒ march everywhere)
+//! only fades in beyond ~half that range (`csm_far`; 0 ⇒ march everywhere)
 //! — its heightfield-texel-quantized edges never show up close, and near
 //! pixels skip the march loop entirely.
 
@@ -26,27 +22,33 @@
 }
 #import lunco::horizon::sun_visibility
 
-struct ShaderParams {
-    color_a: vec4<f32>,
-    color_b: vec4<f32>,
-    color_c: vec4<f32>,
-    params:  vec4<f32>,
-    params2: vec4<f32>,
-    engine:  vec4<f32>,
-    engine2: vec4<f32>,
+// Dynamic, self-describing parameters (reflected from this file). Only the
+// albedo is author-settable; the rest are engine-filled by the horizon system.
+//!@ui      albedo color "Albedo"
+//!@default albedo 0.5,0.5,0.5
+//!@engine  sun_dir
+//!@engine  sun_tan_radius
+//!@engine  hf_size
+//!@engine  hf_res
+//!@engine  csm_far
+struct Material {
+    albedo:         vec3<f32>,
+    sun_tan_radius: f32,
+    sun_dir:        vec3<f32>,
+    hf_size:        vec2<f32>,
+    hf_res:         f32,
+    csm_far:        f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
-var<uniform> mat: ShaderParams;
+var<uniform> mat: Material;
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(1)
 var height_map: texture_2d<f32>;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
-    var albedo = mat.color_a.rgb;
-    // Unset color_a (ShaderMaterial's prop-yellow default) → neutral grey.
-    if (distance(albedo, vec3(0.95, 0.85, 0.10)) < 1e-3) { albedo = vec3(0.5); }
+    let albedo = mat.albedo;
 
     var pbr_input = pbr_types::pbr_input_new();
     pbr_input.flags = mesh[in.instance_index].flags; // keep SHADOW_RECEIVER
@@ -65,7 +67,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var color = pbr_functions::apply_pbr_lighting(pbr_input);
 
 #ifdef VERTEX_UVS_A
-    let csm_far = mat.engine2.w;
+    let csm_far = mat.csm_far;
     var march_blend = 1.0;
     if (csm_far > 0.0) {
         let cam_d = distance(view.world_position, in.world_position.xyz);
@@ -73,7 +75,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     }
     if (march_blend > 0.0) {
         let vis = sun_visibility(
-            height_map, in.uv, mat.engine.xyz, mat.engine.w, mat.engine2.xy, mat.engine2.z);
+            height_map, in.uv, mat.sun_dir, mat.sun_tan_radius, mat.hf_size, mat.hf_res);
         color = vec4(color.rgb * mix(1.0, vis, march_blend), color.a);
     }
 #endif

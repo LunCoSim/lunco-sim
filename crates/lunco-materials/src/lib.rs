@@ -17,7 +17,9 @@
 //!   for anything that downstream systems read in the same frame.
 
 mod blueprint;
+pub mod dyn_params;
 mod shader_material;
 
 pub use blueprint::*;
+pub use dyn_params::{ParamField, ParamSchema, ParamType, ParamValue, UiKind};
 pub use shader_material::*;

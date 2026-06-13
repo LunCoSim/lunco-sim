@@ -51,18 +51,52 @@
 }
 #import lunco::horizon::sun_visibility
 
-struct ShaderParams {
-    color_a: vec4<f32>,
-    color_b: vec4<f32>,
-    color_c: vec4<f32>,
-    params:  vec4<f32>,
-    params2: vec4<f32>,
-    engine:  vec4<f32>,  // engine-written: (sun_local.xyz, tan sun radius)
-    engine2: vec4<f32>,  // engine-written: (size_x, size_z, heightfield res, csm far bound m)
+// Dynamic, self-describing parameters — the engine reflects this `Material`
+// struct (field names → offsets) and the `//!@` annotations (UI ranges,
+// defaults, engine-filled fields) straight out of this file. Edit live
+// (hot-reload) or via the Inspector / `SetObjectProperty`.
+//!@ui      albedo            color       "Albedo"
+//!@default albedo            0.17,0.17,0.17
+//!@ui      macro_clump_scale 1 20        "Macro clump scale (/m)"
+//!@default macro_clump_scale 8
+//!@ui      macro_bump        0 0.3       "Macro bump strength"
+//!@default macro_bump        0.06
+//!@ui      mid_scale         0.02 1      "Mid hummock scale (/m)"
+//!@default mid_scale         0.15
+//!@ui      mid_bump          0 1.5       "Mid hummock strength"
+//!@default mid_bump          0.6
+//!@ui      fine_scale        50 400      "Fine grain scale (/m)"
+//!@default fine_scale        180
+//!@ui      fine_bump         0 0.1       "Fine grain strength"
+//!@default fine_bump         0.025
+//!@ui      rough_mix         0 1         "Roughness mix"
+//!@default rough_mix         0.35
+//!@ui      mottle            0 0.6       "Albedo mottle"
+//!@default mottle            0.22
+//!@engine  sun_dir
+//!@engine  sun_tan_radius
+//!@engine  hf_size
+//!@engine  hf_res
+//!@engine  csm_far
+struct Material {
+    albedo:            vec3<f32>,
+    macro_clump_scale: f32,
+    macro_bump:        f32,
+    mid_scale:         f32,
+    mid_bump:          f32,
+    fine_scale:        f32,
+    fine_bump:         f32,
+    rough_mix:         f32,
+    mottle:            f32,
+    sun_tan_radius:    f32,  // engine-filled: tan(sun angular radius)
+    sun_dir:           vec3<f32>,  // engine-filled: terrain-local to-sun dir
+    hf_size:           vec2<f32>,  // engine-filled: heightfield extent (m)
+    hf_res:            f32,  // engine-filled: heightfield resolution
+    csm_far:           f32,  // engine-filled: CSM far bound (m); march fades in beyond
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
-var<uniform> mat: ShaderParams;
+var<uniform> mat: Material;
 
 // Terrain heightfield (R32Float, world-space heights) written by the
 // horizon-shadow system after its bake; sun shadows are ray-marched against
@@ -162,21 +196,16 @@ fn bump_layer(
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
-    // Authored params with Blender-graph defaults (0 → unset).
-    let macro_scale  = select(mat.params.x,  8.0,    mat.params.x  < 1e-4);
-    let fine_scale   = select(mat.params.y,  180.0,  mat.params.y  < 1e-4);
-    // Halved from the Blender graph's 0.12: under grazing lunar sun the
-    // full strength flips N·L per-clump → harsh black/white static.
-    let macro_bump   = select(mat.params.z,  0.06,   mat.params.z  < 1e-4);
-    let fine_bump    = select(mat.params.w,  0.025,  mat.params.w  < 1e-4);
-    let rough_mix    = select(mat.params2.x, 0.35,   mat.params2.x < 1e-4);
-    let mid_scale    = select(mat.params2.y, 0.15,   mat.params2.y < 1e-4);
-    let mid_bump     = select(mat.params2.z, 0.6,    mat.params2.z < 1e-4);
-    let mottle       = select(mat.params2.w, 0.22,   mat.params2.w < 1e-4);
-    var albedo = mat.color_a.rgb;
-    // ShaderMaterial's built-in default color_a is a prop yellow; if the prim
-    // didn't author colorA we want regolith gray, not that.
-    if (distance(albedo, vec3(0.95, 0.85, 0.10)) < 1e-3) { albedo = vec3(0.17); }
+    // Named params (defaults supplied by the schema, so no `select` fallbacks).
+    let macro_scale = mat.macro_clump_scale;
+    let fine_scale  = mat.fine_scale;
+    let macro_bump  = mat.macro_bump;
+    let fine_bump   = mat.fine_bump;
+    let rough_mix   = mat.rough_mix;
+    let mid_scale   = mat.mid_scale;
+    let mid_bump    = mat.mid_bump;
+    let mottle      = mat.mottle;
+    var albedo = mat.albedo;
 
     let p = in.world_position.xyz;
     let dist = distance(view.world_position, p);
@@ -244,14 +273,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // so the march fades in only beyond ~half that range — near pixels get
     // mesh-accurate CSM self-shadow and skip the march loop entirely.
 #ifdef VERTEX_UVS_A
-    let csm_far = mat.engine2.w;
+    let csm_far = mat.csm_far;
     var march_blend = 1.0;
     if (csm_far > 0.0) {
         march_blend = smoothstep(csm_far * 0.5, csm_far * 0.9, dist);
     }
     if (march_blend > 0.0) {
         let sun_vis = sun_visibility(
-            height_map, in.uv, mat.engine.xyz, mat.engine.w, mat.engine2.xy, mat.engine2.z);
+            height_map, in.uv, mat.sun_dir, mat.sun_tan_radius, mat.hf_size, mat.hf_res);
         color = vec4(color.rgb * mix(1.0, sun_vis, march_blend), color.a);
     }
 #endif

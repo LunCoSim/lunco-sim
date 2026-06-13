@@ -8,10 +8,13 @@ use lunco_materials::{ShaderMaterial, BlueprintExtension};
 #[test]
 fn test_shader_material_defaults() {
     let m = ShaderMaterial::default();
-    // Default colors are non-zero and params start cleared.
-    assert!(m.color_a.red > 0.0 || m.color_a.green > 0.0 || m.color_a.blue > 0.0);
-    assert_eq!(m.params, bevy::math::Vec4::ZERO);
-    assert_eq!(m.params2, bevy::math::Vec4::ZERO);
+    // Default colour (legacy `colorA`) is non-zero, and the opaque uniform
+    // block reflects it at lane 0 (colorA @ byte 0).
+    let c = m.get_color("colorA").expect("colorA default");
+    assert!(c[0] > 0.0 || c[1] > 0.0 || c[2] > 0.0);
+    assert_eq!(m.raw[0].x, c[0]);
+    // Engine.x (sun visibility) defaults lit so un-shaded props aren't black.
+    assert_eq!(m.raw[5].x, 1.0); // engine @ byte 80 → vec4 lane 5
 }
 
 /// Verifies BlueprintExtension has sensible default values

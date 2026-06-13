@@ -67,7 +67,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use lunco_core::{HorizonShadowTerrain, SunAngularDiameter};
-use lunco_materials::ShaderMaterial;
+use lunco_materials::{ParamValue, ShaderMaterial};
 
 /// Tan of the sun's angular radius for a diameter given in degrees.
 fn tan_sun_radius(diameter_deg: f32) -> f32 {
@@ -430,19 +430,33 @@ pub fn wire_terrain_materials(
             csm_far,
         );
 
+        // Named engine uniforms consumed by the terrain shaders (regolith /
+        // terrain_shadow declare these in their `Material` struct; the engine
+        // packs them at the reflected offsets).
+        let sun_dir = ParamValue::Vec3([engine.x, engine.y, engine.z]);
+        let hf_size = ParamValue::Vec2([engine2.x, engine2.y]);
+        let write_engine = |m: &mut ShaderMaterial| {
+            m.height_map = Some(map.image.clone());
+            m.set("sun_dir", sun_dir);
+            m.set_scalar("sun_tan_radius", tan_r);
+            m.set("hf_size", hf_size);
+            m.set_scalar("hf_res", engine2.z);
+            m.set_scalar("csm_far", csm_far);
+        };
+
         if let Some(handle) = shader_mat {
             // Compare before `get_mut` — a blind `get_mut` re-uploads the
-            // asset every frame.
+            // asset every frame. Sun direction + heightfield identity + csm
+            // bound cover everything that changes.
             let needs = shader_mats.get(&handle.0).is_some_and(|m| {
                 m.height_map.as_ref() != Some(&map.image)
-                    || (m.engine - engine).abs().max_element() > 1e-4
-                    || m.engine2 != engine2
+                    || m.get_vec4("sun_dir")
+                        .map_or(true, |v| (v.truncate() - Vec3::new(engine.x, engine.y, engine.z)).length() > 1e-4)
+                    || m.get_scalar("csm_far").map_or(true, |c| (c - csm_far).abs() > 1e-3)
             });
             if needs {
                 if let Some(m) = shader_mats.get_mut(&handle.0) {
-                    m.height_map = Some(map.image.clone());
-                    m.engine = engine;
-                    m.engine2 = engine2;
+                    write_engine(m);
                 }
             }
         } else {
@@ -452,14 +466,14 @@ pub fn wire_terrain_materials(
                 .and_then(|h| std_mats.get(&h.0))
                 .map(|m| m.base_color)
                 .unwrap_or(Color::srgb(0.5, 0.5, 0.5));
-            let material = ShaderMaterial {
-                color_a: albedo.to_linear(),
+            let a = albedo.to_linear();
+            let mut material = ShaderMaterial {
                 shader: asset_server.load("shaders/terrain_shadow.wgsl"),
                 height_map: Some(map.image.clone()),
-                engine,
-                engine2,
                 ..Default::default()
             };
+            material.set("albedo", ParamValue::Vec3([a.red, a.green, a.blue]));
+            write_engine(&mut material);
             let handle = shader_mats.add(material);
             info!("[horizon] applied terrain_shadow.wgsl to {entity:?}");
             commands
@@ -564,10 +578,12 @@ pub fn shade_dynamic_entities(
         // Prop ShaderMaterials (wheels, panels, balls): the engine channel
         // is multiplied into the shader's lit output.
         if let (Some(handle), Some(mats)) = (shader_mat, shader_mats.as_mut()) {
-            let needs = mats.get(&handle.0).is_some_and(|m| (m.engine.x - q).abs() > 1e-3);
+            let needs = mats
+                .get(&handle.0)
+                .is_some_and(|m| m.get_scalar("sun_vis").map_or(true, |s| (s - q).abs() > 1e-3));
             if needs {
                 if let Some(m) = mats.get_mut(&handle.0) {
-                    m.engine.x = q;
+                    m.set_scalar("sun_vis", q);
                 }
             }
         } else if let Some(handle) = std_mat {

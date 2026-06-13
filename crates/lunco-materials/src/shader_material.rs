@@ -46,42 +46,29 @@ use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::render::render_resource::{
     AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
 };
-use bevy::shader::Shader;
+use bevy::shader::{Shader, Source as ShaderSource};
+use std::collections::BTreeMap;
+use std::sync::{Arc, OnceLock};
 
-/// A general custom-shader material. Field order/types must match the
-/// `ShaderParams` struct in WGSL exactly (all `vec4` → no std140 padding).
+use crate::dyn_params::{self, ParamSchema, ParamType, ParamValue};
+
+/// A general custom-shader material whose parameters are **dynamic**: each
+/// `.wgsl` declares its own `Material` uniform struct (real field names), the
+/// engine reflects that layout from the shader source ([`ParamSchema`]),
+/// values are stored by name in [`values`](Self::values), and packed into a
+/// fixed 256-byte opaque block ([`raw`](Self::raw)) at the reflected offsets.
+/// No parameter names/ranges/defaults are hardcoded in Rust. Shaders that
+/// declare no `Material` struct fall back to the byte-compatible
+/// [`legacy_schema`](dyn_params::legacy_schema) and keep working unchanged.
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 #[bind_group_data(ShaderKey)]
 pub struct ShaderMaterial {
+    /// Opaque uniform block (256 bytes). Its field layout is the *shader's* —
+    /// each `.wgsl` reinterprets these bytes through its own `Material`
+    /// struct. Built from [`values`](Self::values) via
+    /// [`schema`](Self::schema); never edit directly, use `set*`.
     #[uniform(0)]
-    pub color_a: LinearRgba,
-    #[uniform(0)]
-    pub color_b: LinearRgba,
-    #[uniform(0)]
-    pub color_c: LinearRgba,
-    /// Generic scalars 0..3 (`param0`..`param3`).
-    #[uniform(0)]
-    pub params: Vec4,
-    /// Generic scalars 4..7 (`param4`..`param7`).
-    #[uniform(0)]
-    pub params2: Vec4,
-    /// Engine-written channel, **not** author-settable. Semantics depend on
-    /// what the shader is for (the horizon-shadow system writes the right
-    /// one per entity):
-    /// - prop shaders (wheel/balloon/panel): `x` = sun visibility 0..1 —
-    ///   multiply your output by `mat.engine.x`;
-    /// - terrain shaders (regolith/terrain_shadow): `xyz` = terrain-local
-    ///   to-sun direction, `w` = tan of the sun's angular radius, for the
-    ///   per-pixel heightfield shadow ray-march.
-    /// Declared after the authored fields so shaders written against the
-    /// 5-vec4 contract keep working (a shader-side struct may be a prefix
-    /// of the uniform buffer).
-    #[uniform(0)]
-    pub engine: Vec4,
-    /// Second engine channel (terrain shaders):
-    /// `(size_x, size_z, heightfield_resolution, 0)`.
-    #[uniform(0)]
-    pub engine2: Vec4,
+    pub raw: [Vec4; dyn_params::BLOCK_VEC4S],
     /// Terrain heightfield (R32Float world heights) for ray-marched sun
     /// shadows, written by `lunco-environment`'s horizon system. Sampled
     /// with `textureLoad` — R32Float is non-filterable in core WebGPU.
@@ -93,20 +80,91 @@ pub struct ShaderMaterial {
     /// pipeline specialization (see [`ShaderMaterial::specialize`]) and is kept
     /// as a strong handle so the asset stays loaded.
     pub shader: Handle<Shader>,
+    /// Reflected parameter layout for [`shader`](Self::shader). Defaults to the
+    /// legacy fixed layout; the reflect system upgrades it once the shader
+    /// source is available. Cheap shared `Arc`. Not a bind-group resource.
+    pub schema: Arc<ParamSchema>,
+    /// Authored/live parameter values by name; packed into `raw` on change.
+    /// Not a bind-group resource.
+    pub values: BTreeMap<String, ParamValue>,
+}
+
+/// The shared legacy schema (created once).
+fn legacy_schema_arc() -> Arc<ParamSchema> {
+    static LEGACY: OnceLock<Arc<ParamSchema>> = OnceLock::new();
+    LEGACY.get_or_init(|| Arc::new(dyn_params::legacy_schema())).clone()
 }
 
 impl Default for ShaderMaterial {
     fn default() -> Self {
-        Self {
-            color_a: LinearRgba::new(0.95, 0.85, 0.10, 1.0),
-            color_b: LinearRgba::new(0.10, 0.10, 0.12, 1.0),
-            color_c: LinearRgba::new(0.90, 0.15, 0.15, 1.0),
-            params: Vec4::ZERO,
-            params2: Vec4::ZERO,
-            engine: Vec4::ONE,
-            engine2: Vec4::ZERO,
+        let mut m = Self {
+            raw: [Vec4::ZERO; dyn_params::BLOCK_VEC4S],
             height_map: None,
             shader: Handle::default(),
+            schema: legacy_schema_arc(),
+            values: BTreeMap::new(),
+        };
+        // Historical prop colour defaults (by legacy name) + lit engine.x so
+        // un-shaded prop shaders aren't black until the horizon system writes.
+        m.values.insert("colorA".into(), ParamValue::Vec4([0.95, 0.85, 0.10, 1.0]));
+        m.values.insert("colorB".into(), ParamValue::Vec4([0.10, 0.10, 0.12, 1.0]));
+        m.values.insert("colorC".into(), ParamValue::Vec4([0.90, 0.15, 0.15, 1.0]));
+        m.values.insert("engine".into(), ParamValue::Vec4([1.0, 1.0, 1.0, 1.0]));
+        m.repack();
+        m
+    }
+}
+
+impl ShaderMaterial {
+    /// Rebuilds the GPU uniform block from `values` (+ schema defaults).
+    pub fn repack(&mut self) {
+        self.raw = self.schema.pack(&self.values);
+    }
+    /// Assigns a reflected schema (from the shader source) and repacks.
+    pub fn set_schema(&mut self, schema: Arc<ParamSchema>) {
+        self.schema = schema;
+        self.repack();
+    }
+    /// Sets a parameter by name and repacks.
+    pub fn set(&mut self, name: &str, v: ParamValue) {
+        self.values.insert(name.to_string(), v);
+        self.repack();
+    }
+    /// Current value for `name` (or its schema default).
+    pub fn get(&self, name: &str) -> Option<ParamValue> {
+        self.values
+            .get(name)
+            .copied()
+            .or_else(|| self.schema.field(name).and_then(|f| f.default))
+    }
+    pub fn set_scalar(&mut self, name: &str, v: f32) {
+        self.set(name, ParamValue::F32(v));
+    }
+    pub fn get_scalar(&self, name: &str) -> Option<f32> {
+        match self.get(name)? {
+            ParamValue::F32(v) => Some(v),
+            ParamValue::I32(v) => Some(v as f32),
+            ParamValue::U32(v) => Some(v as f32),
+            _ => None,
+        }
+    }
+    pub fn set_color(&mut self, name: &str, rgb: [f32; 3]) {
+        self.set(name, ParamValue::Vec4([rgb[0], rgb[1], rgb[2], 1.0]));
+    }
+    pub fn get_color(&self, name: &str) -> Option<[f32; 3]> {
+        match self.get(name)? {
+            ParamValue::Vec4(v) => Some([v[0], v[1], v[2]]),
+            ParamValue::Vec3(v) => Some(v),
+            _ => None,
+        }
+    }
+    pub fn set_vec4(&mut self, name: &str, v: Vec4) {
+        self.set(name, ParamValue::Vec4(v.to_array()));
+    }
+    pub fn get_vec4(&self, name: &str) -> Option<Vec4> {
+        match self.get(name)? {
+            ParamValue::Vec4(v) => Some(Vec4::from_array(v)),
+            _ => None,
         }
     }
 }
@@ -171,6 +229,9 @@ pub struct HorizonMarchModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 impl Plugin for ShaderMaterialPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<ShaderMaterial>::default());
+        app.init_resource::<ShaderSchemas>();
+        // Reflect each shader's `Material` struct → per-material `ParamSchema`.
+        app.add_systems(Update, reflect_shader_schemas);
         let module = app
             .world()
             .resource::<AssetServer>()
@@ -179,242 +240,143 @@ impl Plugin for ShaderMaterialPlugin {
     }
 }
 
-/// Builds a [`ShaderMaterial`] from a shader handle + a template of uniforms.
+/// Builds a [`ShaderMaterial`] from a shader handle + a template (preserves
+/// the template's named `values`/`schema` so swapping the `.wgsl` keeps tuned
+/// params). The reflect system re-derives the schema from the new shader.
 pub fn build_shader_material(shader: Handle<Shader>, mut material: ShaderMaterial) -> ShaderMaterial {
     material.shader = shader;
     material
 }
 
-/// Applies one named property to a material's generic uniforms. Returns `true`
-/// if `key` was recognised. Shared by the USD-authoring observer and the live
-/// `SetObjectProperty` command so both speak the same property vocabulary.
-///
-/// Recognised keys:
-/// - `colorA` / `color`, `colorB`, `colorC` → comma-separated `r,g,b`
-/// - `param0`..`param7` → single float (param4..7 spill into `params2`)
+/// Sets one named property from a string (the USD-authoring + `SetObjectProperty`
+/// text vocabulary). Resolves the field's type from the material's reflected
+/// schema, parses, and stores by name. `color` is an alias for `colorA`.
+/// Returns `true` if the name is a known parameter.
 pub fn apply_param(m: &mut ShaderMaterial, key: &str, value: &str) -> bool {
-    if let Some(slot) = scalar_slot(m, key) {
-        return match value.trim().parse::<f32>() {
-            Ok(v) => { *slot = v; true }
-            Err(_) => false,
-        };
-    }
-    if let Some(slot) = color_slot(m, key) {
-        let parts: Vec<f32> =
-            value.split(',').filter_map(|s| s.trim().parse::<f32>().ok()).collect();
-        if parts.len() >= 3 {
-            *slot = LinearRgba::new(parts[0], parts[1], parts[2], 1.0);
-            return true;
+    let key = if key == "color" { "colorA" } else { key };
+    // Type from the reflected schema if known; else infer from the value's
+    // arity (so values authored before the shader is reflected still store —
+    // packing applies them at the reflected offset once the schema lands).
+    let ty = m.schema.field(key).map(|f| f.ty).unwrap_or_else(|| {
+        match value.split(',').filter(|s| !s.trim().is_empty()).count() {
+            0 | 1 => ParamType::F32,
+            2 => ParamType::Vec2,
+            3 => ParamType::Vec3,
+            _ => ParamType::Vec4,
         }
+    });
+    match ty {
+        ParamType::Vec3 | ParamType::Vec4 => {
+            // Colours are authored as `r,g,b` (USD displayColor style).
+            let n: Vec<f32> = value.split(',').filter_map(|s| s.trim().parse::<f32>().ok()).collect();
+            if n.len() >= 3 {
+                m.set_color(key, [n[0], n[1], n[2]]);
+                true
+            } else {
+                false
+            }
+        }
+        _ => match ParamValue::parse(ty, value) {
+            Some(v) => {
+                m.set(key, v);
+                true
+            }
+            None => false,
+        },
     }
-    false
 }
 
-/// Mutable handle to the `f32` uniform a scalar `key` (`param0`..`param7`)
-/// addresses — the single place the name→slot mapping lives.
-fn scalar_slot<'a>(m: &'a mut ShaderMaterial, key: &str) -> Option<&'a mut f32> {
-    Some(match key {
-        "param0" => &mut m.params.x,
-        "param1" => &mut m.params.y,
-        "param2" => &mut m.params.z,
-        "param3" => &mut m.params.w,
-        "param4" => &mut m.params2.x,
-        "param5" => &mut m.params2.y,
-        "param6" => &mut m.params2.z,
-        "param7" => &mut m.params2.w,
-        _ => return None,
-    })
-}
-
-/// Mutable handle to the colour uniform a `key` (`colorA`/`colorB`/`colorC`)
-/// addresses.
-fn color_slot<'a>(m: &'a mut ShaderMaterial, key: &str) -> Option<&'a mut LinearRgba> {
-    Some(match key {
-        "colorA" | "color" => &mut m.color_a,
-        "colorB" => &mut m.color_b,
-        "colorC" => &mut m.color_c,
-        _ => return None,
-    })
-}
-
-/// Reads the current scalar uniform for `key`, or `None` if `key` isn't a
-/// scalar param. (Takes `&mut` only to reuse [`scalar_slot`]; doesn't mutate.)
+/// Reads the current scalar value for `key` (or its schema default), or
+/// `None` if `key` isn't a scalar param.
 pub fn get_scalar(m: &ShaderMaterial, key: &str) -> Option<f32> {
-    match key {
-        "param0" => Some(m.params.x),
-        "param1" => Some(m.params.y),
-        "param2" => Some(m.params.z),
-        "param3" => Some(m.params.w),
-        "param4" => Some(m.params2.x),
-        "param5" => Some(m.params2.y),
-        "param6" => Some(m.params2.z),
-        "param7" => Some(m.params2.w),
+    m.get_scalar(key)
+}
+
+/// Writes a scalar value by `key`. Returns `false` if `key` isn't in the schema.
+pub fn set_scalar_value(m: &mut ShaderMaterial, key: &str, v: f32) -> bool {
+    if m.schema.field(key).is_some() {
+        m.set_scalar(key, v);
+        true
+    } else {
+        false
+    }
+}
+
+/// Reads the current colour value for `key` as linear RGB.
+pub fn get_color(m: &ShaderMaterial, key: &str) -> Option<[f32; 3]> {
+    m.get_color(key)
+}
+
+/// Writes a colour value by `key` (linear RGB). Returns `false` if unknown.
+pub fn set_color_value(m: &mut ShaderMaterial, key: &str, rgb: [f32; 3]) -> bool {
+    if m.schema.field(key).is_some() {
+        m.set_color(key, rgb);
+        true
+    } else {
+        false
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Shader reflection — derive each material's parameter schema from its
+// shader source (no parameter metadata hardcoded in Rust).
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Cache of reflected schemas keyed by shader asset, so each `.wgsl` is parsed
+/// once and shared across all materials using it.
+#[derive(Resource, Default)]
+pub struct ShaderSchemas {
+    map: std::collections::HashMap<AssetId<Shader>, Arc<ParamSchema>>,
+}
+
+/// The WGSL source of a loaded shader, if it is WGSL.
+fn wgsl_source(shader: &Shader) -> Option<&str> {
+    match &shader.source {
+        ShaderSource::Wgsl(c) => Some(c.as_ref()),
         _ => None,
     }
 }
 
-/// Writes a scalar uniform by `key`. Returns `false` for unknown keys.
-pub fn set_scalar_value(m: &mut ShaderMaterial, key: &str, v: f32) -> bool {
-    match scalar_slot(m, key) {
-        Some(slot) => { *slot = v; true }
-        None => false,
+/// Reflects each (re)loaded shader's `Material` struct into a [`ParamSchema`]
+/// and assigns it to materials using that shader. Shaders without a `Material`
+/// struct keep the byte-compatible [`legacy_schema`] (the material's default).
+pub fn reflect_shader_schemas(
+    mut ev: MessageReader<AssetEvent<Shader>>,
+    shaders: Res<Assets<Shader>>,
+    mut cache: ResMut<ShaderSchemas>,
+    mut mats: ResMut<Assets<ShaderMaterial>>,
+) {
+    for e in ev.read() {
+        if let AssetEvent::Added { id } | AssetEvent::Modified { id } = e {
+            if let Some(src) = shaders.get(*id).and_then(wgsl_source) {
+                match ParamSchema::parse(src) {
+                    Some(s) => {
+                        cache.map.insert(*id, Arc::new(s));
+                    }
+                    None => {
+                        cache.map.remove(id);
+                    }
+                }
+            }
+        }
     }
-}
 
-/// Reads the current colour uniform for `key` as linear RGB.
-pub fn get_color(m: &ShaderMaterial, key: &str) -> Option<[f32; 3]> {
-    let c = match key {
-        "colorA" | "color" => m.color_a,
-        "colorB" => m.color_b,
-        "colorC" => m.color_c,
-        _ => return None,
-    };
-    Some([c.red, c.green, c.blue])
-}
-
-/// Writes a colour uniform by `key` (linear RGB). Returns `false` for unknown keys.
-pub fn set_color_value(m: &mut ShaderMaterial, key: &str, rgb: [f32; 3]) -> bool {
-    match color_slot(m, key) {
-        Some(slot) => { *slot = LinearRgba::new(rgb[0], rgb[1], rgb[2], 1.0); true }
-        None => false,
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Parameter manifest — names, ranges, and defaults for the generic uniforms.
-//
-// `param0`..`param7` and the three colours are *generic* slots; their meaning
-// is shader-specific (documented in each `.wgsl` header). This manifest is the
-// machine-readable mirror of those headers, so editors (the Inspector) and the
-// API can present named, range-bounded controls instead of raw `param3`
-// sliders. One source of truth, keyed by shader file name.
-// ─────────────────────────────────────────────────────────────────────────
-
-/// How one shader parameter should be presented and bounded.
-#[derive(Clone, Copy, Debug)]
-pub enum ShaderParamKind {
-    /// Continuous slider. `default` mirrors the shader's built-in fallback
-    /// (the `select(.., d, x < 1e-4)` idiom): a stored 0 means "unset", so
-    /// editors should display `default` until the user moves the control.
-    Scalar { min: f32, max: f32, default: f32, log: bool },
-    /// Integer-valued slider (counts: spokes, cells, …). Same 0-means-unset
-    /// rule as [`ShaderParamKind::Scalar`].
-    Int { min: i32, max: i32, default: i32 },
-    /// Linear-RGB colour. `default` is shown when the stored colour still
-    /// equals the [`ShaderMaterial`] prop-yellow sentinel (an unauthored
-    /// `colorA`), matching how shaders substitute their own default.
-    Color { default: [f32; 3] },
-    /// Unknown shader: a free numeric field with no fixed range.
-    Free,
-}
-
-/// One named, presentable shader parameter.
-#[derive(Clone, Copy, Debug)]
-pub struct ShaderParamDesc {
-    /// The generic key `apply_param`/`get_scalar`/`get_color` speak
-    /// (`param0`..`param7`, `colorA`/`colorB`/`colorC`).
-    pub key: &'static str,
-    /// Human label for the control.
-    pub label: &'static str,
-    pub kind: ShaderParamKind,
-}
-
-/// The prop-yellow `colorA` default that shaders treat as "unauthored".
-pub const PROP_YELLOW: [f32; 3] = [0.95, 0.85, 0.10];
-
-macro_rules! sc {
-    ($key:literal, $label:literal, $min:literal, $max:literal, $def:literal) => {
-        ShaderParamDesc { key: $key, label: $label,
-            kind: ShaderParamKind::Scalar { min: $min, max: $max, default: $def, log: false } }
-    };
-    ($key:literal, $label:literal, $min:literal, $max:literal, $def:literal, log) => {
-        ShaderParamDesc { key: $key, label: $label,
-            kind: ShaderParamKind::Scalar { min: $min, max: $max, default: $def, log: true } }
-    };
-}
-macro_rules! int {
-    ($key:literal, $label:literal, $min:literal, $max:literal, $def:literal) => {
-        ShaderParamDesc { key: $key, label: $label,
-            kind: ShaderParamKind::Int { min: $min, max: $max, default: $def } }
-    };
-}
-macro_rules! col {
-    ($key:literal, $label:literal, $r:literal, $g:literal, $b:literal) => {
-        ShaderParamDesc { key: $key, label: $label,
-            kind: ShaderParamKind::Color { default: [$r, $g, $b] } }
-    };
-}
-
-const REGOLITH: &[ShaderParamDesc] = &[
-    col!("colorA", "Albedo", 0.17, 0.17, 0.17),
-    sc!("param0", "Macro clump scale (/m)", 1.0, 20.0, 8.0),
-    sc!("param2", "Macro bump strength", 0.0, 0.3, 0.06),
-    sc!("param5", "Mid hummock scale (/m)", 0.02, 1.0, 0.15),
-    sc!("param6", "Mid hummock strength", 0.0, 1.5, 0.6),
-    sc!("param1", "Fine grain scale (/m)", 50.0, 400.0, 180.0),
-    sc!("param3", "Fine grain strength", 0.0, 0.1, 0.025),
-    sc!("param4", "Roughness mix", 0.0, 1.0, 0.35),
-    sc!("param7", "Albedo mottle", 0.0, 0.6, 0.22),
-];
-
-const WHEEL: &[ShaderParamDesc] = &[
-    int!("param0", "Spoke count", 1, 16, 6),
-    int!("param1", "Tread lugs", 4, 64, 24),
-    sc!("param2", "Spoke width", 0.0, 1.0, 0.35),
-    int!("param3", "Marker spokes", 0, 8, 1),
-    col!("colorA", "Spoke / rim", 0.7, 0.7, 0.75),
-    col!("colorB", "Tire", 0.1, 0.1, 0.12),
-    col!("colorC", "Marker / hub", 0.9, 0.15, 0.15),
-];
-
-const BALLOON: &[ShaderParamDesc] = &[
-    int!("param0", "Wedge count", 2, 24, 8),
-    int!("param1", "Band count", 2, 24, 6),
-    int!("param3", "Marker wedges", 0, 12, 0),
-    col!("colorA", "Cell A", 0.9, 0.9, 0.9),
-    col!("colorB", "Cell B", 0.1, 0.1, 0.12),
-    col!("colorC", "Marker / poles", 0.9, 0.15, 0.15),
-];
-
-const SOLAR_PANEL: &[ShaderParamDesc] = &[
-    int!("param0", "Cell rows", 1, 32, 12),
-    int!("param1", "Cell cols", 1, 32, 6),
-    sc!("param2", "Cell gap", 0.0, 0.1, 0.02),
-    sc!("param3", "Bus width", 0.0, 0.05, 0.004),
-    sc!("param4", "Frame border", 0.0, 0.2, 0.04),
-    col!("colorA", "Cell", 0.1, 0.12, 0.3),
-    col!("colorB", "Bus line", 0.7, 0.7, 0.75),
-    col!("colorC", "Frame", 0.2, 0.2, 0.22),
-];
-
-/// Generic fallback for an unrecognised shader: all eight scalars + three
-/// colours as free controls.
-const GENERIC: &[ShaderParamDesc] = &[
-    ShaderParamDesc { key: "param0", label: "param0", kind: ShaderParamKind::Free },
-    ShaderParamDesc { key: "param1", label: "param1", kind: ShaderParamKind::Free },
-    ShaderParamDesc { key: "param2", label: "param2", kind: ShaderParamKind::Free },
-    ShaderParamDesc { key: "param3", label: "param3", kind: ShaderParamKind::Free },
-    ShaderParamDesc { key: "param4", label: "param4", kind: ShaderParamKind::Free },
-    ShaderParamDesc { key: "param5", label: "param5", kind: ShaderParamKind::Free },
-    ShaderParamDesc { key: "param6", label: "param6", kind: ShaderParamKind::Free },
-    ShaderParamDesc { key: "param7", label: "param7", kind: ShaderParamKind::Free },
-    col!("colorA", "Color A", 0.95, 0.85, 0.10),
-    col!("colorB", "Color B", 0.10, 0.10, 0.12),
-    col!("colorC", "Color C", 0.90, 0.15, 0.15),
-];
-
-/// Named, range-bounded parameters for a shader, looked up by its asset path
-/// (matched on the file name, so `lunco://shaders/regolith.wgsl` and
-/// `shaders/regolith.wgsl` both resolve). Unknown or `None` paths fall back to
-/// the [`GENERIC`] manifest so every `ShaderMaterial` is at least raw-editable.
-pub fn shader_param_manifest(path: Option<&str>) -> &'static [ShaderParamDesc] {
-    let Some(path) = path else { return GENERIC };
-    let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    match file {
-        "regolith.wgsl" => REGOLITH,
-        "wheel.wgsl" => WHEEL,
-        "balloon.wgsl" => BALLOON,
-        "solar_panel.wgsl" => SOLAR_PANEL,
-        _ => GENERIC,
+    // Assign reflected schemas to materials that don't yet carry them. Find
+    // candidates via immutable `iter` (doesn't flag assets dirty), then
+    // `get_mut` only the ones that need it (one re-upload each).
+    let todo: Vec<(AssetId<ShaderMaterial>, Arc<ParamSchema>)> = mats
+        .iter()
+        .filter_map(|(id, m)| {
+            cache
+                .map
+                .get(&m.shader.id())
+                .filter(|s| !Arc::ptr_eq(s, &m.schema))
+                .map(|s| (id, s.clone()))
+        })
+        .collect();
+    for (id, schema) in todo {
+        if let Some(m) = mats.get_mut(id) {
+            m.set_schema(schema);
+        }
     }
 }
