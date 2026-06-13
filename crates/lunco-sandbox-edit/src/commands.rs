@@ -1567,18 +1567,19 @@ pub fn clear_kinematic_pulse_velocity(
 ///
 /// ```jsonc
 /// {"command":"SetObjectProperty",
-///  "params":{"entity_id":42,"property":"shader","value":"shaders/spin_reveal.wgsl"}}
+///  "params":{"entity_id":42,"property":"shader","value":"shaders/balloon.wgsl"}}
 /// {"command":"SetObjectProperty",
-///  "params":{"entity_id":42,"property":"param0","value":"12"}}   // wedge count
+///  "params":{"entity_id":42,"property":"wedge_count","value":"12"}}
 /// {"command":"SetObjectProperty",
-///  "params":{"entity_id":42,"property":"colorA","value":"0.1,0.8,0.2"}}
+///  "params":{"entity_id":42,"property":"cell_a","value":"0.1,0.8,0.2"}}
 /// ```
 ///
 /// Recognised `property` values:
-/// - `shader` → load that `.wgsl` (asset path) and bind it via `UsdShaderMaterial`.
-/// - `param0`..`param7`, `colorA`/`color`/`colorB`/`colorC` → update the object's
-///   shader uniforms in place (requires `shader` to have been set first, or a
-///   USD `usd_shader` material).
+/// - `shader` → load that `.wgsl` (asset path) and bind it as a `ShaderMaterial`.
+/// - any parameter named by the shader's `Material` struct (e.g. `albedo`,
+///   `wedge_count`, `cell_a`) → update that shader uniform in place by name
+///   (requires `shader` set first, or a USD shader material). The material's
+///   reflected schema resolves the type; colours are `r,g,b`.
 /// - `visible` → `true`/`false` toggles `Visibility`.
 /// - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
 ///   `drive_torque`, `brake_torque`, `slip_stiffness`, `bearing_damping`,

@@ -19,18 +19,18 @@
 //! 3. Override [`Material::specialize`] to overwrite `descriptor.fragment.shader`
 //!    with the per-instance handle.
 //!
-//! ## Uniform contract (every `.wgsl` sees this at `@binding(0)`)
+//! ## Uniform contract — each `.wgsl` declares its OWN params (`@binding(0)`)
+//! Every shader declares a `Material` struct with real field names; the engine
+//! reflects the layout (field names → std140 offsets) and the `//!@` annotation
+//! comments (UI ranges, defaults, engine-filled fields) straight out of the
+//! source (see [`crate::dyn_params`]). Values are stored by name and packed into
+//! the opaque [`raw`](ShaderMaterial::raw) block at the reflected offsets.
 //! ```wgsl
-//! struct ShaderParams {
-//!     color_a: vec4<f32>,
-//!     color_b: vec4<f32>,
-//!     color_c: vec4<f32>,
-//!     params:  vec4<f32>,  // generic scalars 0..3
-//!     params2: vec4<f32>,  // generic scalars 4..7
-//!     engine:  vec4<f32>,  // engine-written (see ShaderMaterial::engine; optional to declare)
-//!     engine2: vec4<f32>,  // engine-written, terrain shaders only
-//! }
-//! @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: ShaderParams;
+//! //!@ui      albedo  color "Albedo"
+//! //!@default albedo  0.5,0.5,0.5
+//! //!@engine  sun_vis              // Rust-filled each frame
+//! struct Material { albedo: vec3<f32>, sun_vis: f32 }
+//! @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
 //! ```
 //! Terrain shaders additionally declare the heightfield (non-filterable,
 //! fetched with `textureLoad`):
@@ -57,9 +57,9 @@ use crate::dyn_params::{self, ParamSchema, ParamType, ParamValue};
 /// engine reflects that layout from the shader source ([`ParamSchema`]),
 /// values are stored by name in [`values`](Self::values), and packed into a
 /// fixed 256-byte opaque block ([`raw`](Self::raw)) at the reflected offsets.
-/// No parameter names/ranges/defaults are hardcoded in Rust. Shaders that
-/// declare no `Material` struct fall back to the byte-compatible
-/// [`legacy_schema`](dyn_params::legacy_schema) and keep working unchanged.
+/// No parameter names/ranges/defaults are hardcoded in Rust. A fresh material
+/// has an empty schema (packs all-zero) until the reflect system derives one
+/// from its shader source.
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 #[bind_group_data(ShaderKey)]
 pub struct ShaderMaterial {
@@ -89,29 +89,27 @@ pub struct ShaderMaterial {
     pub values: BTreeMap<String, ParamValue>,
 }
 
-/// The shared legacy schema (created once).
-fn legacy_schema_arc() -> Arc<ParamSchema> {
-    static LEGACY: OnceLock<Arc<ParamSchema>> = OnceLock::new();
-    LEGACY.get_or_init(|| Arc::new(dyn_params::legacy_schema())).clone()
+/// The shared empty schema (created once). A fresh material carries this until
+/// the reflect system derives a real schema from its shader source.
+fn empty_schema_arc() -> Arc<ParamSchema> {
+    static EMPTY: OnceLock<Arc<ParamSchema>> = OnceLock::new();
+    EMPTY.get_or_init(|| Arc::new(ParamSchema { fields: Vec::new(), size: 0 })).clone()
 }
 
 impl Default for ShaderMaterial {
     fn default() -> Self {
-        let mut m = Self {
+        // Empty schema + no values: packs all-zero until the reflect system
+        // derives the real layout from the shader. The material doesn't render
+        // before its shader loads (the pipeline can't build), so there's no
+        // black flash; authored/engine values are stored by name and applied
+        // the moment the schema lands.
+        Self {
             raw: [Vec4::ZERO; dyn_params::BLOCK_VEC4S],
             height_map: None,
             shader: Handle::default(),
-            schema: legacy_schema_arc(),
+            schema: empty_schema_arc(),
             values: BTreeMap::new(),
-        };
-        // Historical prop colour defaults (by legacy name) + lit engine.x so
-        // un-shaded prop shaders aren't black until the horizon system writes.
-        m.values.insert("colorA".into(), ParamValue::Vec4([0.95, 0.85, 0.10, 1.0]));
-        m.values.insert("colorB".into(), ParamValue::Vec4([0.10, 0.10, 0.12, 1.0]));
-        m.values.insert("colorC".into(), ParamValue::Vec4([0.90, 0.15, 0.15, 1.0]));
-        m.values.insert("engine".into(), ParamValue::Vec4([1.0, 1.0, 1.0, 1.0]));
-        m.repack();
-        m
+        }
     }
 }
 
@@ -250,10 +248,8 @@ pub fn build_shader_material(shader: Handle<Shader>, mut material: ShaderMateria
 
 /// Sets one named property from a string (the USD-authoring + `SetObjectProperty`
 /// text vocabulary). Resolves the field's type from the material's reflected
-/// schema, parses, and stores by name. `color` is an alias for `colorA`.
-/// Returns `true` if the name is a known parameter.
+/// schema, parses, and stores by name. Returns `true` if the value parsed.
 pub fn apply_param(m: &mut ShaderMaterial, key: &str, value: &str) -> bool {
-    let key = if key == "color" { "colorA" } else { key };
     // Type from the reflected schema if known; else infer from the value's
     // arity (so values authored before the shader is reflected still store —
     // packing applies them at the reflected offset once the schema lands).
@@ -339,7 +335,7 @@ fn wgsl_source(shader: &Shader) -> Option<&str> {
 
 /// Reflects each (re)loaded shader's `Material` struct into a [`ParamSchema`]
 /// and assigns it to materials using that shader. Shaders without a `Material`
-/// struct keep the byte-compatible [`legacy_schema`] (the material's default).
+/// struct reflect to nothing (the material keeps its empty default schema).
 pub fn reflect_shader_schemas(
     mut ev: MessageReader<AssetEvent<Shader>>,
     shaders: Res<Assets<Shader>>,

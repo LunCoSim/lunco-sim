@@ -8,15 +8,9 @@
 //! is the albedo for full scene PBR lighting (real sun, shadow maps), so
 //! panels respond to the actual light environment.
 //!
-//! ## Params
-//!   param0 = cell_rows   (cells along U, default 12)
-//!   param1 = cell_cols   (cells along V, default 6)
-//!   param2 = cell_gap    (UV fraction, default 0.02)
-//!   param3 = bus_width   (UV fraction, default 0.004)
-//!   param4 = border      (frame border, UV fraction, default 0.04)
-//!   color_a = cell   color_b = bus line (metal)   color_c = frame border
-//!
-//! Edit live (hot-reload) or tweak via `SetObjectProperty { property:"param0".. }`.
+//! Dynamic, self-describing parameters: the engine reflects the `Material`
+//! struct (field names → offsets) and the `//!@` annotations straight out of
+//! this file. Edit live (hot-reload) or via the Inspector / `SetObjectProperty`.
 
 #import bevy_pbr::{
     forward_io::VertexOutput,
@@ -26,17 +20,38 @@
     mesh_view_bindings::view,
 }
 
-struct ShaderParams {
-    color_a: vec4<f32>,
-    color_b: vec4<f32>,
-    color_c: vec4<f32>,
-    params:  vec4<f32>,
-    params2: vec4<f32>,
-    engine:  vec4<f32>, // engine-written: x = horizon-shadow sun visibility
+//!@ui      cell_color  color "Cell colour"
+//!@default cell_color  0.05,0.05,0.35
+//!@ui      bus_color   color "Bus line colour"
+//!@default bus_color   0.85,0.85,0.90
+//!@ui      frame_color color "Frame border colour"
+//!@default frame_color 0.35,0.35,0.38
+//!@ui      cell_rows   1 32  "Cell rows (along U)"
+//!@default cell_rows   12
+//!@ui      cell_cols   1 32  "Cell cols (along V)"
+//!@default cell_cols   6
+//!@ui      cell_gap    0 0.1 "Cell gap (UV)"
+//!@default cell_gap    0.02
+//!@ui      bus_width   0 0.02 "Bus width (UV)"
+//!@default bus_width   0.004
+//!@ui      border      0 0.2 "Frame border (UV)"
+//!@default border      0.04
+//!@engine  sun_vis
+//!@default sun_vis     1
+struct Material {
+    cell_color:  vec3<f32>,
+    cell_rows:   f32,
+    bus_color:   vec3<f32>,
+    cell_cols:   f32,
+    frame_color: vec3<f32>,
+    cell_gap:    f32,
+    bus_width:   f32,
+    border:      f32,
+    sun_vis:     f32,  // engine-filled: horizon-shadow sun visibility
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
-var<uniform> mat: ShaderParams;
+var<uniform> mat: Material;
 
 /// True if `p` is within `half_w` of the nearest grid line at `spacing`.
 fn on_line(p: f32, spacing: f32, half_w: f32) -> bool {
@@ -47,25 +62,25 @@ fn on_line(p: f32, spacing: f32, half_w: f32) -> bool {
 @fragment
 fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     let uv = input.uv;
-    let rows   = max(select(mat.params.x, 12.0, mat.params.x < 0.5), 1.0);
-    let cols   = max(select(mat.params.y, 6.0,  mat.params.y < 0.5), 1.0);
-    let gap    = select(mat.params.z, 0.02,  mat.params.z < 0.0001);
-    let bus    = select(mat.params.w, 0.004, mat.params.w < 0.0001);
-    let border = select(mat.params2.x, 0.04, mat.params2.x < 0.0001);
+    let rows   = max(mat.cell_rows, 1.0);
+    let cols   = max(mat.cell_cols, 1.0);
+    let gap    = mat.cell_gap;
+    let bus    = mat.bus_width;
+    let border = mat.border;
 
     let sx = 1.0 / rows;
     let sy = 1.0 / cols;
 
-    var color = mat.color_a;  // silicon cell
+    var color = mat.cell_color;  // silicon cell
 
     if (on_line(uv.x, sx, gap * 0.5) || on_line(uv.y, sy, gap * 0.5)) {
-        color = vec4<f32>(0.02, 0.02, 0.02, 1.0);                 // dark cell gap
+        color = vec3<f32>(0.02, 0.02, 0.02);                     // dark cell gap
     } else if (on_line(uv.x, sx, bus * 0.5) || on_line(uv.y, sy, bus * 0.5)) {
-        color = mix(mat.color_a, mat.color_b, 0.9);              // metallic bus line
+        color = mix(mat.cell_color, mat.bus_color, 0.9);         // metallic bus line
     }
 
     if (uv.x < border || uv.x > 1.0 - border || uv.y < border || uv.y > 1.0 - border) {
-        color = mat.color_c;                                     // frame border
+        color = mat.frame_color;                                 // frame border
     }
 
     // Full scene lighting (real sun direction, shadow maps, ambient) over
@@ -80,7 +95,7 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     pbr_input.is_orthographic = view.clip_from_view[3].w == 1.0;
     pbr_input.N = pbr_input.world_normal;
     pbr_input.V = pbr_functions::calculate_view(input.world_position, pbr_input.is_orthographic);
-    pbr_input.material.base_color = vec4(color.rgb, color.a);
+    pbr_input.material.base_color = vec4(color, 1.0);
     // Glassy cell surface: low roughness so panels catch a sun glint.
     pbr_input.material.perceptual_roughness = 0.3;
     pbr_input.material.metallic = 0.0;
@@ -88,7 +103,7 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
 
     var out = pbr_functions::apply_pbr_lighting(pbr_input);
     // Smooth horizon-shadow terminator fade (engine-written visibility).
-    out = vec4(out.rgb * mat.engine.x, out.a);
+    out = vec4(out.rgb * mat.sun_vis, out.a);
     out = pbr_functions::main_pass_post_lighting_processing(pbr_input, out);
     return out;
 }

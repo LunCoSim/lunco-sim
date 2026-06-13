@@ -29,18 +29,13 @@
 //!   fine 5.5 mm grain (≲3 m) → macro 12.5 cm clumps (≲30 m) →
 //!   mid ~7 m hummocks (≲1 km) → hectometre albedo patches (orbital).
 //!
-//! ## Params (0 → default)
-//!   param0 = macro noise scale, periods/m (default 8)
-//!   param1 = fine  noise scale, periods/m (default 180)
-//!   param2 = macro bump strength          (default 0.12)
-//!   param3 = fine  bump strength          (default 0.025)
-//!   param4 = roughness mix toward 1.0     (default 0.35)
-//!   param5 = mid   noise scale, periods/m (default 0.15 — ~7 m hummocks)
-//!   param6 = mid   bump strength          (default 0.6)
-//!   param7 = albedo mottle amount         (default 0.22)
-//!   color_a = albedo (default 0.17 gray — measured lunar regolith is ~0.12)
-//!
-//! Edit live (hot-reload) or tweak via `SetObjectProperty { property:"param0".. }`.
+//! Dynamic, self-describing parameters: the engine reflects the `Material`
+//! struct (field names → offsets) and the `//!@` annotations (UI ranges,
+//! defaults, engine-filled fields) straight out of this file. The named
+//! params (`albedo`, `macro_clump_scale`, `mid_scale`, `fine_scale`, the
+//! matching bump strengths, `rough_mix`, `mottle`) are listed with their
+//! ranges/defaults in the annotation block below. Edit live (hot-reload) or
+//! via the Inspector / `SetObjectProperty`.
 
 #import bevy_pbr::{
     forward_io::VertexOutput,

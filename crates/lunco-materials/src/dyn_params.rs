@@ -29,11 +29,9 @@
 //! (`[Vec4; 16]`) at their reflected offsets — the shader reinterprets those
 //! bytes through its own struct. Nothing about the layout lives in Rust.
 //!
-//! Shaders that DON'T declare a `Material` struct fall back to
-//! [`legacy_schema`], whose field names (`colorA`..`colorC`, `param0`..
-//! `param7`, `engine`, `engine2`) and offsets reproduce the historical fixed
-//! `ShaderParams` layout byte-for-byte — so un-migrated shaders keep working
-//! unchanged.
+//! Shaders that DON'T declare a `Material` struct reflect to an empty schema
+//! ([`ParamSchema::parse`] returns `None`); their material packs all-zero
+//! until a real `Material` struct is present.
 
 use bevy::math::Vec4;
 use std::collections::BTreeMap;
@@ -206,7 +204,7 @@ impl ParamSchema {
     }
 
     /// Reflects a schema from WGSL source, or `None` if it declares no
-    /// `Material` uniform struct (→ caller uses [`legacy_schema`]).
+    /// `Material` uniform struct (→ caller keeps its empty default schema).
     pub fn parse(wgsl: &str) -> Option<ParamSchema> {
         let body = extract_struct_body(wgsl, "Material")?;
         let ann = parse_annotations(wgsl);
@@ -363,46 +361,9 @@ fn parse_annotations(wgsl: &str) -> BTreeMap<String, Annotation> {
     map
 }
 
-/// The historical fixed `ShaderParams` layout (`colorA`..`colorC`,
-/// `param0`..`param7`, `engine`, `engine2`), byte-for-byte. Shaders that
-/// declare no `Material` struct use this, so they keep working unchanged.
-/// `engine`/`engine2`/`sun_vis` are Rust-filled (hidden from editors).
-pub fn legacy_schema() -> ParamSchema {
-    let mut fields = vec![
-        ParamField { name: "colorA".into(), ty: ParamType::Vec4, offset: 0, label: "Color A".into(), ui: UiKind::Color, default: None },
-        ParamField { name: "colorB".into(), ty: ParamType::Vec4, offset: 16, label: "Color B".into(), ui: UiKind::Color, default: None },
-        ParamField { name: "colorC".into(), ty: ParamType::Vec4, offset: 32, label: "Color C".into(), ui: UiKind::Color, default: None },
-    ];
-    for i in 0..8 {
-        fields.push(ParamField {
-            name: format!("param{i}"),
-            ty: ParamType::F32,
-            offset: 48 + i * 4,
-            label: format!("param{i}"),
-            ui: UiKind::Free,
-            default: None,
-        });
-    }
-    fields.push(ParamField { name: "engine".into(), ty: ParamType::Vec4, offset: 80, label: "engine".into(), ui: UiKind::Engine, default: None });
-    fields.push(ParamField { name: "engine2".into(), ty: ParamType::Vec4, offset: 96, label: "engine2".into(), ui: UiKind::Engine, default: None });
-    // Scalar alias for engine.x — prop shaders' sun-visibility multiply.
-    fields.push(ParamField { name: "sun_vis".into(), ty: ParamType::F32, offset: 80, label: "sun_vis".into(), ui: UiKind::Engine, default: None });
-    ParamSchema { fields, size: 112 }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn legacy_offsets_match_historical_layout() {
-        let s = legacy_schema();
-        assert_eq!(s.field("colorA").unwrap().offset, 0);
-        assert_eq!(s.field("param0").unwrap().offset, 48);
-        assert_eq!(s.field("param4").unwrap().offset, 64);
-        assert_eq!(s.field("engine").unwrap().offset, 80);
-        assert_eq!(s.field("engine2").unwrap().offset, 96);
-    }
 
     #[test]
     fn parses_named_struct_with_std140_offsets() {

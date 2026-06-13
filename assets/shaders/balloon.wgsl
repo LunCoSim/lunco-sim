@@ -12,13 +12,9 @@
 //!   * it is still **mesh-fixed** (object space rotates with the geometry), so
 //!     the checker spins with the ball and reveals rotation.
 //!
-//! ## Params
-//!   param0 = wedge_count   (longitude cells, default 8)
-//!   param1 = band_count    (latitude cells, default 6)
-//!   param3 = marker_wedges (default 0 = none; >0 paints that many lead wedges)
-//!   color_a / color_b = alternating cells   color_c = marker wedge + poles
-//!
-//! Edit live (hot-reload) or tweak via `SetObjectProperty { property:"param0".. }`.
+//! Dynamic, self-describing parameters: the engine reflects the `Material`
+//! struct (field names → offsets) and the `//!@` annotations straight out of
+//! this file. Edit live (hot-reload) or via the Inspector / `SetObjectProperty`.
 
 #import bevy_pbr::{
     forward_io::VertexOutput,
@@ -32,17 +28,32 @@
 const TAU: f32 = 6.28318530718;
 const PI:  f32 = 3.14159265359;
 
-struct ShaderParams {
-    color_a: vec4<f32>,
-    color_b: vec4<f32>,
-    color_c: vec4<f32>,
-    params:  vec4<f32>,
-    params2: vec4<f32>,
-    engine:  vec4<f32>, // engine-written: x = horizon-shadow sun visibility
+//!@ui      cell_a        color "Cell colour A"
+//!@default cell_a        0.2,0.8,0.3
+//!@ui      cell_b        color "Cell colour B"
+//!@default cell_b        0.12,0.12,0.14
+//!@ui      marker_color  color "Marker wedge"
+//!@default marker_color  1.0,1.0,1.0
+//!@ui      wedge_count   2 24  "Longitude cells"
+//!@default wedge_count   8
+//!@ui      band_count    2 16  "Latitude cells"
+//!@default band_count    6
+//!@ui      marker_wedges 0 8   "Lead marker wedges"
+//!@default marker_wedges 0
+//!@engine  sun_vis
+//!@default sun_vis       1
+struct Material {
+    cell_a:        vec3<f32>,
+    wedge_count:   f32,
+    cell_b:        vec3<f32>,
+    band_count:    f32,
+    marker_color:  vec3<f32>,
+    marker_wedges: f32,
+    sun_vis:       f32,  // engine-filled: horizon-shadow sun visibility
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
-var<uniform> mat: ShaderParams;
+var<uniform> mat: Material;
 
 fn parity(i: f32) -> bool {
     return (i - 2.0 * floor(i * 0.5)) > 0.5;
@@ -64,18 +75,17 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     let u = lon / TAU + 0.5;                    // 0..1
     let v = lat / PI + 0.5;                     // 0..1
 
-    let wedge_count = select(mat.params.x, 8.0, mat.params.x < 0.5);
-    let band_count  = select(mat.params.y, 6.0, mat.params.y < 0.5);
-    let marker      = mat.params.w;            // 0 (unset) → no marker; checker covers all
+    let wedge_count = mat.wedge_count;
+    let band_count  = mat.band_count;
+    let marker      = mat.marker_wedges;
 
     let wi = floor(u * wedge_count);
     let bi = floor(v * band_count);
     let checker = parity(wi) != parity(bi);    // XOR → checkerboard
-    var color = select(mat.color_a, mat.color_b, checker);
+    var color = select(mat.cell_a, mat.cell_b, checker);
 
-    if (marker > 0.5 && wi < marker) { color = mat.color_c; }  // opt-in lead wedge
-    // (no pole caps — the checkerboard runs all the way to the poles; a coloured
-    //  cap read as a stray white dot on top.)
+    if (marker > 0.5 && wi < marker) { color = mat.marker_color; }  // opt-in lead wedge
+    // (no pole caps — the checkerboard runs all the way to the poles.)
 
     // Full scene lighting (real sun direction, shadow maps, ambient) over
     // the procedural checker — matches the other prop shaders.
@@ -88,14 +98,14 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     pbr_input.is_orthographic = view.clip_from_view[3].w == 1.0;
     pbr_input.N = pbr_input.world_normal;
     pbr_input.V = pbr_functions::calculate_view(input.world_position, pbr_input.is_orthographic);
-    pbr_input.material.base_color = vec4(color.rgb, color.a);
+    pbr_input.material.base_color = vec4(color, 1.0);
     pbr_input.material.perceptual_roughness = 0.6;
     pbr_input.material.metallic = 0.0;
     pbr_input.material.reflectance = vec3(0.5);
 
     var out = pbr_functions::apply_pbr_lighting(pbr_input);
     // Smooth horizon-shadow terminator fade (engine-written visibility).
-    out = vec4(out.rgb * mat.engine.x, out.a);
+    out = vec4(out.rgb * mat.sun_vis, out.a);
     out = pbr_functions::main_pass_post_lighting_processing(pbr_input, out);
     return out;
 }

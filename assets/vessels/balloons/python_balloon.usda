@@ -20,11 +20,11 @@ def Sphere "PythonBalloon" (
     # time (see assets/shaders/balloon.wgsl).
     string primvars:materialType = "shader"
     string primvars:shaderPath = "shaders/balloon.wgsl"
-    color3f primvars:colorA = (0.2, 0.8, 0.3)    # cell A (balloon identity)
-    color3f primvars:colorB = (0.12, 0.12, 0.14) # cell B (dark)
-    color3f primvars:colorC = (1.0, 1.0, 1.0)    # marker wedge + poles
-    float primvars:param0 = 8.0                  # longitude cells
-    float primvars:param1 = 6.0                  # latitude cells
+    color3f primvars:cell_a = (0.2, 0.8, 0.3)    # cell A (balloon identity)
+    color3f primvars:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
+    color3f primvars:marker_color = (1.0, 1.0, 1.0) # marker wedge + poles
+    float primvars:wedge_count = 8.0             # longitude cells
+    float primvars:band_count = 6.0              # latitude cells
 
     bool physics:rigidBodyEnabled = true
     bool physics:collisionEnabled = true
