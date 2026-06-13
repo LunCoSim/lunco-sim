@@ -417,6 +417,35 @@ impl ModelicaCompiler {
         self.compile_loaded(model_name)
     }
 
+    /// Recompute **structured, located** diagnostics for a model that
+    /// just failed [`Self::compile_str`].
+    ///
+    /// Where `compile_str`'s `Err(String)` is a flat human summary,
+    /// this returns one [`ParseDiag`](crate::document::ParseDiag) per
+    /// rumoca failure — each prefixed with the diagnostic code
+    /// (e.g. `[ED008]`) and, when the failure's primary span points
+    /// into the user's `model.mo`, carrying a 1-based (line, column)
+    /// so the Diagnostics panel can make the row click-to-source
+    /// (the same treatment parse + lint findings already get).
+    ///
+    /// Runs rumoca's report-returning strict compile
+    /// (`compile_model_strict_reachable_uncached_with_recovery`),
+    /// which reuses the session's already-resolved AST/source — so
+    /// this is a cheap second pass, taken only on the error path.
+    /// `user_uri` is the document URI the caller passed to
+    /// `compile_str` (`"model.mo"` for the workbench); only spans in
+    /// that file are made clickable.
+    pub fn compile_diagnostics(
+        &mut self,
+        model_name: &str,
+        user_uri: &str,
+    ) -> Vec<crate::document::ParseDiag> {
+        let report = self
+            .session
+            .compile_model_strict_reachable_uncached_with_recovery(model_name);
+        diagnostics_from_strict_report(&report, user_uri)
+    }
+
     /// Like `compile_str`, but seats additional `(filename, source)`
     /// pairs into the rumoca session before compiling so the resolver
     /// can satisfy cross-doc class references (e.g. a fresh untitled
@@ -633,6 +662,60 @@ impl ModelicaCompiler {
             diagnostics: Vec::new(),
         }
     }
+}
+
+/// Convert a rumoca [`StrictCompileReport`] into the Diagnostics
+/// panel's [`ParseDiag`](crate::document::ParseDiag) form.
+///
+/// A failure becomes *located* (click-to-source) only when its primary
+/// label points at `user_uri` — diagnostics rooted in MSL / sibling
+/// library files keep their message (suffixed with the originating
+/// file name) but no line/column, so clicking never jumps the editor
+/// to a file it isn't showing. Each message is prefixed with rumoca's
+/// diagnostic code when present (`ED008`, `EI001`, …) so the panel
+/// reads like a real compiler's output.
+///
+/// [`StrictCompileReport`]: rumoca_compile::compile::StrictCompileReport
+fn diagnostics_from_strict_report(
+    report: &rumoca_compile::compile::StrictCompileReport,
+    user_uri: &str,
+) -> Vec<crate::document::ParseDiag> {
+    use crate::document::ParseDiag;
+    report
+        .failures
+        .iter()
+        .map(|f| {
+            let message = match &f.error_code {
+                Some(code) if !code.is_empty() => format!("[{code}] {}", f.error),
+                _ => f.error.clone(),
+            };
+            // Resolve the primary span against the report's source map.
+            // `source_map` is `None` only on malformed reports; spans in
+            // dummy/compiler-generated sources resolve to `None` here.
+            let resolved = f.primary_label.as_ref().and_then(|label| {
+                let sm = report.source_map.as_ref()?;
+                let (name, content) = sm.get_source(label.span.source)?;
+                Some((name.to_string(), content.to_string(), label.span.start.0))
+            });
+            match resolved {
+                Some((name, content, start)) if name == user_uri => {
+                    let (line, column) =
+                        crate::document::core::byte_offset_to_line_col(&content, start);
+                    ParseDiag {
+                        message,
+                        line: Some(line),
+                        column: Some(column),
+                    }
+                }
+                // Diagnostic in another file — name it so the user knows
+                // where it came from, but leave it unlocated.
+                Some((name, _, _)) => {
+                    ParseDiag::message_only(format!("{message}  (in {name})"))
+                }
+                None => ParseDiag::message_only(message),
+            }
+        })
+        .collect()
 }
 
 

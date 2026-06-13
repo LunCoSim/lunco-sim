@@ -180,6 +180,12 @@ pub struct CompileStates {
     /// a singleton keyed to the active doc). Cleared on the next
     /// successful compile via [`mark_finished`].
     errors: HashMap<DocumentId, String>,
+    /// Structured, located compile diagnostics per document (rumoca
+    /// `StrictCompileReport` failures). Present only when the worker
+    /// shipped located findings — lets the Diagnostics panel render
+    /// click-to-source rows for compile errors instead of a single
+    /// opaque summary string. Kept in lockstep with `errors`.
+    located: HashMap<DocumentId, Vec<crate::document::ParseDiag>>,
 }
 
 impl CompileStates {
@@ -224,6 +230,7 @@ impl CompileStates {
         self.by_doc.remove(&doc);
         self.compile_started.remove(&doc);
         self.errors.remove(&doc);
+        self.located.remove(&doc);
     }
 
     /// Fetch the last compile error message for `doc`, or `None`
@@ -235,16 +242,46 @@ impl CompileStates {
     }
 
     /// Stamp an error message and transition to
-    /// [`CompileState::Error`].
+    /// [`CompileState::Error`]. Clears any stale structured
+    /// diagnostics — use [`set_error_located`](Self::set_error_located)
+    /// to attach them.
     pub fn set_error(&mut self, doc: DocumentId, msg: String) {
         self.errors.insert(doc, msg);
+        self.located.remove(&doc);
         self.by_doc.insert(doc, CompileState::Error);
+    }
+
+    /// Like [`set_error`](Self::set_error), but also stores structured,
+    /// located compile diagnostics so the Diagnostics panel can render
+    /// click-to-source rows. An empty `located` clears any prior
+    /// structured diagnostics (the flat `msg` still shows).
+    pub fn set_error_located(
+        &mut self,
+        doc: DocumentId,
+        msg: String,
+        located: Vec<crate::document::ParseDiag>,
+    ) {
+        self.errors.insert(doc, msg);
+        if located.is_empty() {
+            self.located.remove(&doc);
+        } else {
+            self.located.insert(doc, located);
+        }
+        self.by_doc.insert(doc, CompileState::Error);
+    }
+
+    /// Structured, located compile diagnostics for `doc` (rumoca
+    /// `StrictCompileReport` failures), or an empty slice when the
+    /// worker only shipped a flat summary string.
+    pub fn located_for(&self, doc: DocumentId) -> &[crate::document::ParseDiag] {
+        self.located.get(&doc).map(Vec::as_slice).unwrap_or(&[])
     }
 
     /// Clear any recorded error for `doc` (next successful compile,
     /// next dispatch, or any caller that wants to reset the slot).
     pub fn clear_error(&mut self, doc: DocumentId) {
         self.errors.remove(&doc);
+        self.located.remove(&doc);
     }
 }
 

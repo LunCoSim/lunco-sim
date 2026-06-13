@@ -64,9 +64,15 @@ pub fn parse_diag_from_error(e: &rumoca_phase_parse::ParseError, source: &str) -
                 column: Some(column),
             }
         }
-        // No span variants (NoAstProduced, IoError) — keep the debug
-        // text so nothing is lost, just not located.
-        other => ParseDiag::message_only(format!("{other:?}")),
+        // No-span variants — render a human description instead of the
+        // raw `{:?}` debug dump (part of the rumoca-diagnostics
+        // migration: "better description of errors").
+        ParseError::NoAstProduced => {
+            ParseDiag::message_only("parser produced no AST (empty or unrecoverable source)".to_string())
+        }
+        ParseError::IoError { path, message } => {
+            ParseDiag::message_only(format!("I/O error reading `{path}`: {message}"))
+        }
     }
 }
 
@@ -74,7 +80,7 @@ pub fn parse_diag_from_error(e: &rumoca_phase_parse::ParseError, source: &str) -
 /// **char** positions over `source`. Char-based (not byte / UTF-16) so
 /// the column lines up with the editor's char-indexed caret jump
 /// ([`crate::ui::panels::code_editor`]). Clamped to the buffer end.
-fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (u32, u32) {
+pub(crate) fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (u32, u32) {
     let clamped = byte_offset.min(source.len());
     let mut line = 1u32;
     let mut col = 1u32;

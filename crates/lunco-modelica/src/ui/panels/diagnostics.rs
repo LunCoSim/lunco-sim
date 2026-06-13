@@ -244,16 +244,34 @@ pub fn refresh_diagnostics(
     }
 
     // 2. Compile / run errors — the worker stores them per-doc on
-    // `CompileStates.errors[doc]` (B.3 phase 4). Without mirroring
-    // them here the Diagnostics panel stayed empty even when a red
-    // "Error" chip was visible in the toolbar.
-    if let Some(msg) = compile_states.error_for(doc_id) {
+    // `CompileStates` (B.3 phase 4). When the worker shipped structured
+    // rumoca diagnostics (compile failures, each with a code and a
+    // primary span in this doc), render one click-to-source row per
+    // finding; otherwise fall back to the flat summary string. Without
+    // mirroring them here the Diagnostics panel stayed empty even when a
+    // red "Error" chip was visible in the toolbar.
+    let located = compile_states.located_for(doc_id);
+    if !located.is_empty() {
+        for diag in located {
+            entries.push(LogEntry {
+                at: web_time::Instant::now(),
+                level: LogLevel::Error,
+                text: diag.message.clone(),
+                model: model_tag.clone(),
+                // Located when the failure's primary span sits in this
+                // doc — makes the row click-to-source like lint findings.
+                loc: diag.line.zip(diag.column).map(|(line, column)| {
+                    crate::ui::panels::log::SourceLoc { line, column }
+                }),
+            });
+        }
+    } else if let Some(msg) = compile_states.error_for(doc_id) {
         entries.push(LogEntry {
             at: web_time::Instant::now(),
             level: LogLevel::Error,
             text: msg.to_string(),
             model: model_tag.clone(),
-            // Worker error is a stringified message; no location.
+            // Worker error is a stringified summary; no location.
             loc: None,
         });
     }

@@ -235,6 +235,16 @@ pub struct ModelicaResult {
     /// Regular Compile / Step results leave it `None`.
     #[serde(default)]
     pub loaded_source_root_id: Option<String>,
+    /// Structured, located compile diagnostics produced alongside
+    /// `error` on a failed Compile (rumoca `StrictCompileReport`
+    /// failures, converted to [`ParseDiag`](crate::document::ParseDiag)).
+    /// Each entry may carry a 1-based (line, column) into the user
+    /// document so the Diagnostics panel can render click-to-source
+    /// rows for compile errors — the structured complement to the flat
+    /// `error` summary string. Empty on success and for non-compile
+    /// (solver / reset / parameter) results.
+    #[serde(default)]
+    pub compile_diagnostics: Vec<crate::document::ParseDiag>,
 }
 
 impl Default for ModelicaResult {
@@ -258,6 +268,7 @@ impl Default for ModelicaResult {
             experiment_solver: None,
             compiled_model_name: None,
             loaded_source_root_id: None,
+            compile_diagnostics: Vec::new(),
         }
     }
 }
@@ -594,6 +605,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             experiment_solver: exp_solver,
                                             compiled_model_name: Some(model_name.clone()),
                                             loaded_source_root_id: None,
+                                            compile_diagnostics: Vec::new(),
                                         });
                                     }
                                     Err(e) => {
@@ -611,7 +623,15 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             }
                             Err(e) => {
                                 let mut r = result_ok(entity, session_id);
-                                r.error = Some(format!("Compiler Error: {:?}", e));
+                                // `e` is already rumoca's formatted summary
+                                // string — render it directly ({:?} would
+                                // quote it and escape the newlines).
+                                r.error = Some(format!("Compiler Error: {e}"));
+                                // Structured, located diagnostics so the
+                                // Diagnostics panel can make compile errors
+                                // click-to-source (rumoca StrictCompileReport).
+                                r.compile_diagnostics =
+                                    compiler.compile_diagnostics(&model_name, "model.mo");
                                 r.is_new_model = true;
                                 let _ = tx_inner.send(r);
                             }
@@ -1114,6 +1134,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                                 experiment_solver: exp_solver,
                                 compiled_model_name: Some(model_name.clone()),
                                 loaded_source_root_id: None,
+                                compile_diagnostics: Vec::new(),
                             });
                         }
                         Err(e) => {
@@ -1129,12 +1150,16 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                     }
                 }
                 Err(e) => {
+                    // Structured, located diagnostics so the Diagnostics
+                    // panel can make compile errors click-to-source.
+                    let diags = compiler.compile_diagnostics(&model_name, "model.mo");
                     send(ModelicaResult {
                         entity, session_id, new_time: 0.0,
                         outputs: Vec::new(),
-                        detected_symbols: Vec::new(), error: Some(format!("Compile Error: {:?}", e)),
+                        detected_symbols: Vec::new(), error: Some(format!("Compile Error: {e}")),
                         log_message: None, is_new_model: true, is_parameter_update: false, is_reset: false,
                         detected_input_names: Vec::new(),
+                        compile_diagnostics: diags,
                         ..Default::default()
                     });
                 }
@@ -1635,7 +1660,15 @@ pub fn handle_modelica_responses(
 
             if let Some(err) = &result.error {
                 if let Some(cs) = compile_states.as_mut() {
-                    cs.set_error(model.document, err.clone());
+                    // Carry structured located diagnostics when the worker
+                    // shipped them (compile failures) so the panel can
+                    // render click-to-source rows; empty for solver/reset
+                    // errors falls back to the flat `err` string.
+                    cs.set_error_located(
+                        model.document,
+                        err.clone(),
+                        result.compile_diagnostics.clone(),
+                    );
                 }
                 warn!("[Modelica] {err}");
                 // Classify for the console: compile-time errors are
