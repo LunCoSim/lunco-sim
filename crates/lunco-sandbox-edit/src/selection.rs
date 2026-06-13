@@ -16,6 +16,29 @@ use crate::commands::SelectEntity;
 #[derive(Component)]
 pub struct Selected;
 
+/// Whether the window-space `cursor` (logical points) is over the live 3D
+/// viewport tab rather than a docked chrome panel.
+///
+/// The viewport is a tab inside egui_dock, which renders every leaf as an egui
+/// `Area` — so egui's pointer queries (`is_pointer_over_area`,
+/// `wants_pointer_input`) read true over the viewport too and can't separate it
+/// from the Inspector. The workbench records the viewport tab's screen rect in
+/// [`PanelRects`] (physical px); that's the only usable signal.
+///
+/// **Fails open**: with no viewport rect recorded yet (a chrome-less
+/// full-window perspective, or before the first paint) the whole window counts
+/// as the scene — clicks keep working, they just aren't gated.
+fn cursor_over_scene(
+    panel_rects: &lunco_workbench::PanelRects,
+    window: &Window,
+    cursor: Vec2,
+) -> bool {
+    if panel_rects.is_empty() {
+        return true;
+    }
+    panel_rects.any_contains(cursor * window.scale_factor())
+}
+
 /// Computes a world-space ray from the camera through the cursor position.
 fn cursor_ray(
     camera: &Camera,
@@ -27,18 +50,27 @@ fn cursor_ray(
 }
 
 /// Finds the most appropriate entity to select from a hit entity.
-/// Walks up the parent chain and returns the first entity that has
-/// the `SelectableRoot` marker component.
 ///
-/// This uses ECS markers instead of name string matching, which is more robust
-/// and compile-time safe.
+/// Walks up the parent chain (up to `MAX_DEPTH`, matching the avatar
+/// possession resolver) and returns the nearest ancestor carrying the
+/// `SelectableRoot` marker — so clicking a rover wheel selects the rover root,
+/// not the wheel mesh.
+///
+/// If no `SelectableRoot` exists in the chain, it falls back to the clicked
+/// entity itself. Only physics bodies, rovers and cosim entities are tagged
+/// `SelectableRoot`; plain USD visual props (decorative cubes, the
+/// Perseverance placeholder, ramps) never are, and used to be unselectable —
+/// clicking a second such object silently kept the previous selection, so the
+/// Inspector appeared "stuck" on the first object. The raycast already excludes
+/// ground, so any collider we actually hit is a real, selectable scene object.
 fn find_selectable(
-    mut entity: Entity,
+    hit: Entity,
     q_selectable: &Query<Entity, With<lunco_core::SelectableRoot>>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<Entity> {
+    const MAX_DEPTH: usize = 8;
+    let mut entity = hit;
     let mut depth = 0;
-    const MAX_DEPTH: usize = 5;
 
     loop {
         // Check if this entity is marked as selectable
@@ -72,12 +104,23 @@ fn find_selectable(
 ///   of the way until the gizmo is dismissed (Escape).
 /// - **Escape** clears the selection and gizmo.
 ///
+/// A click that hits nothing (empty sky, ground, or a docked panel) leaves
+/// the current selection intact — deselect is explicit (Escape / Explorer /
+/// picking another entity) so editing an entity in the Inspector isn't undone
+/// by a stray viewport click.
+///
 /// Hits walk up to the nearest `SelectableRoot`; ground/wheels/invisible
 /// colliders are ignored.
 pub fn handle_entity_selection(
     mut selected: ResMut<SelectedEntity>,
     spawn_state: Res<SpawnState>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    // Use the AVATAR camera specifically — the same one `avatar_raycast_possession`
+    // ray-casts from. The scene has >1 `Camera3d` (the avatar viewport camera plus
+    // RTT/preview cameras), so the looser `With<Camera3d>` + `.next()` could grab a
+    // different camera, producing a ray from the wrong viewpoint that misses what
+    // the user clicked (it hit the ground while possession hit the rover). Matching
+    // possession's `With<Avatar>` keeps the two in lockstep.
+    cameras: Query<(&Camera, &GlobalTransform), With<lunco_core::Avatar>>,
     windows: Query<&Window>,
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -88,6 +131,7 @@ pub fn handle_entity_selection(
     q_parents: Query<&ChildOf>,
     q_selected_old: Query<Entity, With<Selected>>,
     mut drag_mode: ResMut<lunco_core::DragModeActive>,
+    panel_rects: Res<lunco_workbench::PanelRects>,
     mut commands: Commands,
 ) {
     // Selection state (the `Selected` highlight + `SelectedEntity` resource) is
@@ -122,8 +166,12 @@ pub fn handle_entity_selection(
     // Skip if in spawn mode
     if !matches!(spawn_state.as_ref(), SpawnState::Idle) { return; }
 
-    // Escape deselects
-    if keys.just_pressed(KeyCode::Escape) {
+    // Escape / Backspace deselect (single canonical mutation path). When the
+    // user wants to deselect after a viewport click nothing is focused, so
+    // Bevy's `ButtonInput` sees the key; if an Inspector field is focused
+    // bevy_egui absorbs it (correct — Backspace edits the field, Escape
+    // defocuses first, a second Escape then reaches here).
+    if keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::Backspace) {
         select(&mut commands, &mut selected, &q_selected_old, None);
         drag_mode.active = false;
         return;
@@ -131,16 +179,6 @@ pub fn handle_entity_selection(
 
     if !mouse.just_pressed(MouseButton::Left) { return; }
     let alt_held = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
-
-    // While a gizmo is up (drag_mode.active), the user is interacting with
-    // the transform gizmo widget — its handles aren't physical colliders, so
-    // raycasts will miss. Without this gate, every click on a gizmo handle
-    // would fall through to the "miss → deselect" path below and tear down
-    // the gizmo before the gizmo library could process the input. Gate: if
-    // the gizmo is up, only re-process the click when it lands on a fresh
-    // `SelectableRoot` collider (i.e. the user is reselecting). Otherwise
-    // pass the click through to the gizmo by returning early.
-    let gizmo_up = drag_mode.active;
 
     let (camera, cam_tf) = match cameras.iter().next() {
         Some(c) => c,
@@ -151,6 +189,14 @@ pub fn handle_entity_selection(
         None => return,
     };
     let Some(cursor) = window.cursor_position() else { return };
+    // Only raycast the scene when the click is over the 3D viewport tab, not a
+    // docked panel (Inspector/Explorer) — else clicking a panel raycasts
+    // through the chrome and could hit-select an entity behind it. egui can't
+    // help distinguish them: egui_dock renders every dock leaf (the viewport
+    // included) as an egui `Area`, so `is_pointer_over_area`/`wants_pointer_input`
+    // are true over the viewport too. The workbench records the viewport tab's
+    // rect in `PanelRects` — the only signal that separates it from the chrome.
+    if !cursor_over_scene(&panel_rects, window, cursor) { return; }
     let Some((origin, direction)) = cursor_ray(camera, cam_tf, cursor) else { return };
 
     // Build exclusion filter: ground entities are excluded from raycast hits.
@@ -162,26 +208,21 @@ pub fn handle_entity_selection(
     let hit = raycaster.cast_ray(origin.into(), direction, 1000.0, false, &filter);
 
     let Some(hit_data) = hit else {
-        // While gizmo is up, a missed raycast almost certainly means the
-        // click was on a gizmo handle — leave selection alone and let the
-        // gizmo library handle the click.
-        if gizmo_up { return; }
-        // Otherwise truly missed everything → deselect.
-        select(&mut commands, &mut selected, &q_selected_old, None);
-        drag_mode.active = false;
+        // A viewport click that hits no geometry no longer clears the
+        // selection. Deselect-on-empty-click fought the select→edit
+        // workflow: every camera nudge or stray click in the viewport
+        // nuked the Inspector's target before the user could reach a
+        // slider/combobox, so editing "didn't work after clicking".
+        // Deselect is now explicit only — Escape, the Explorer, or
+        // selecting another entity. (Gizmo handles aren't colliders, so
+        // dragging one also lands here and is correctly left untouched.)
         return;
     };
 
-    // Find the best selectable entity from the hit (walks up parent chain)
-    let target = find_selectable(hit_data.entity, &q_selectable, &q_parents);
-
-    let Some(entity) = target else {
-        // Same logic as the no-hit case — preserve selection if a gizmo is up.
-        if gizmo_up { return; }
-        select(&mut commands, &mut selected, &q_selected_old, None);
-        drag_mode.active = false;
-        return;
-    };
+    // Find the best selectable entity from the hit (walks up parent chain).
+    // `None` (no `SelectableRoot` ancestor — e.g. a click that grazed the
+    // ground) leaves the current selection intact.
+    let Some(entity) = find_selectable(hit_data.entity, &q_selectable, &q_parents) else { return; };
 
     // Route selection through the command (clears old + Selected +
     // SelectedEntity). Alt-click additionally attaches the transform gizmo and

@@ -228,14 +228,116 @@ impl Plugin for ShaderMaterialPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<ShaderMaterial>::default());
         app.init_resource::<ShaderSchemas>();
+        app.init_resource::<ShaderCatalog>();
         // Reflect each shader's `Material` struct → per-material `ParamSchema`.
         app.add_systems(Update, reflect_shader_schemas);
+        // Native: augment the picker catalog by scanning the shader directory.
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(Startup, discover_shaders);
         let module = app
             .world()
             .resource::<AssetServer>()
             .load("shaders/horizon_march.wgsl");
         app.insert_resource(HorizonMarchModule(module));
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Shader discovery — the set of dynamic (`Material`-declaring) shaders the
+// Inspector's shader-picker can swap a prop to.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// One pickable shader: its asset path (`shaders/foo.wgsl`) and display label.
+#[derive(Clone, Debug)]
+pub struct ShaderEntry {
+    /// Asset path passed to `SetObjectProperty { property: "shader", .. }`.
+    pub path: String,
+    /// Title-cased label shown in the picker (`solar_panel` → `Solar Panel`).
+    pub label: String,
+}
+
+/// The shaders the Inspector's picker offers. Seeded with the curated prop
+/// shaders (so it is never empty and works on wasm, where there is no
+/// filesystem to scan), then augmented on native by [`discover_shaders`].
+#[derive(Resource, Clone, Debug)]
+pub struct ShaderCatalog {
+    pub entries: Vec<ShaderEntry>,
+}
+
+impl Default for ShaderCatalog {
+    fn default() -> Self {
+        // The prop-safe dynamic shaders that ship in `assets/shaders`. Terrain
+        // shaders (regolith/terrain_shadow) are excluded: they declare engine
+        // fields only the terrain entity's horizon system fills, so they would
+        // render black on a prop (see [`is_prop_pickable`]).
+        let entries = ["balloon", "solar_panel", "wheel"]
+            .iter()
+            .map(|n| ShaderEntry {
+                path: format!("shaders/{n}.wgsl"),
+                label: humanize_shader_name(n),
+            })
+            .collect();
+        Self { entries }
+    }
+}
+
+/// `solar_panel` → `Solar Panel`: filename stem → Title-Case display label.
+fn humanize_shader_name(stem: &str) -> String {
+    stem.split('_')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Whether a parsed schema is safe to apply to an arbitrary prop: a `Material`
+/// shader whose only engine-filled field (if any) is `sun_vis` — the
+/// horizon-shadow visibility every prop shader receives. Terrain shaders
+/// declare engine fields like `sun_dir`/`hf_size` that only the terrain
+/// entity's horizon system fills, so they would render black on a prop.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_prop_pickable(schema: &ParamSchema) -> bool {
+    schema
+        .fields
+        .iter()
+        .filter(|f| matches!(f.ui, dyn_params::UiKind::Engine))
+        .all(|f| f.name == "sun_vis")
+}
+
+/// Startup (native): augment [`ShaderCatalog`] by scanning `assets/shaders` for
+/// any `*.wgsl` that declares a prop-safe `Material` struct, deduped against
+/// the seeded entries by path. Silently no-ops if the directory can't be read
+/// (e.g. an unusual cwd) — the curated default still covers the shipped props.
+#[cfg(not(target_arch = "wasm32"))]
+fn discover_shaders(mut catalog: ResMut<ShaderCatalog>) {
+    let Ok(rd) = std::fs::read_dir("assets/shaders") else { return };
+    let mut found: Vec<ShaderEntry> = Vec::new();
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("wgsl") {
+            continue;
+        }
+        let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else { continue };
+        let asset_path = format!("shaders/{stem}.wgsl");
+        if catalog.entries.iter().any(|e| e.path == asset_path) {
+            continue;
+        }
+        let Ok(src) = std::fs::read_to_string(&p) else { continue };
+        match ParamSchema::parse(&src) {
+            Some(s) if is_prop_pickable(&s) => found.push(ShaderEntry {
+                path: asset_path,
+                label: humanize_shader_name(stem),
+            }),
+            _ => {}
+        }
+    }
+    found.sort_by(|a, b| a.label.cmp(&b.label));
+    catalog.entries.extend(found);
 }
 
 /// Builds a [`ShaderMaterial`] from a shader handle + a template (preserves

@@ -47,6 +47,10 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
             }
         }
 
+        // Esc / Backspace deselection lives in the Bevy `handle_entity_selection`
+        // system (the single mutation path), not here — mutating the World
+        // mid-egui-render fought the next frame's selection + shader swap.
+
         ui.heading("Inspector");
 
         // ── Environment (sun + ambient) ──────────────────────────────
@@ -199,7 +203,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
             egui::CollapsingHeader::new("Shader Parameters")
                 .default_open(true)
                 .show(ui, |ui| {
-                    shader_parameters_section(ui, world, entity);
+                    shader_parameters_section(ui, world, entity, true);
                 });
         }
 
@@ -391,7 +395,7 @@ fn terrain_shader_section(ui: &mut egui::Ui, world: &mut World) {
     egui::CollapsingHeader::new("Terrain Shader")
         .default_open(true)
         .show(ui, |ui| {
-            shader_parameters_section(ui, world, entity);
+            shader_parameters_section(ui, world, entity, false);
         });
     ui.separator();
 }
@@ -406,7 +410,7 @@ fn terrain_shader_section(ui: &mut egui::Ui, world: &mut World) {
 /// shader's own fallback) until the user moves it. Edits mutate the live
 /// material asset in place for immediate feedback, the same path the
 /// Transform/Physics sections use.
-fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entity) {
+fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entity, show_picker: bool) {
     use lunco_materials::{ParamType, ParamValue, ShaderMaterial, UiKind};
 
     let Ok(handle) = world
@@ -429,16 +433,19 @@ fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entit
         int: i32,
         color: [f32; 3],
     }
-    let (shader_file, rows): (Option<String>, Vec<Row>) = {
+    let (shader_file, current_path, rows): (Option<String>, Option<String>, Vec<Row>) = {
         let mats = world.resource::<Assets<ShaderMaterial>>();
         let Some(mat) = mats.get(&handle) else {
             ui.label("Material still loading…");
             return;
         };
-        let file = world.resource::<AssetServer>().get_path(mat.shader.id()).map(|p| {
-            let s = p.path().to_string_lossy().into_owned();
-            s.rsplit(['/', '\\']).next().unwrap_or(&s).to_string()
-        });
+        let full = world
+            .resource::<AssetServer>()
+            .get_path(mat.shader.id())
+            .map(|p| p.path().to_string_lossy().into_owned());
+        let file = full
+            .as_ref()
+            .map(|s| s.rsplit(['/', '\\']).next().unwrap_or(s).to_string());
         let rows = mat
             .schema
             .fields
@@ -461,9 +468,58 @@ fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entit
                 }
             })
             .collect();
-        (file, rows)
+        (file, full, rows)
     };
-    if let Some(f) = &shader_file {
+
+    // Shader picker — swap which `.wgsl` this prop renders with. Dispatches
+    // `SetObjectProperty { property: "shader" }`, the same uniform-preserving
+    // swap path USD authoring uses. Hidden for the terrain section (terrain is
+    // not a swappable prop and isn't in the API registry), which falls back to
+    // a plain "Shader: …" label.
+    let picked = if show_picker {
+        let api_id = world
+            .get_resource::<lunco_api::registry::ApiEntityRegistry>()
+            .and_then(|r| r.api_id_for(entity))
+            .map(|g| g.get());
+        let entries = world
+            .get_resource::<lunco_materials::ShaderCatalog>()
+            .map(|c| c.entries.clone())
+            .unwrap_or_default();
+        match (api_id, entries.is_empty()) {
+            (Some(id), false) => Some((id, entries)),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    if let Some((api_id, entries)) = picked {
+        let cur = current_path.clone().unwrap_or_default();
+        let cur_label = entries
+            .iter()
+            .find(|e| e.path == cur)
+            .map(|e| e.label.clone())
+            .or_else(|| shader_file.clone())
+            .unwrap_or_else(|| "—".into());
+        let mut chosen: Option<String> = None;
+        egui::ComboBox::from_label("Shader")
+            .selected_text(cur_label)
+            .show_ui(ui, |ui| {
+                for e in &entries {
+                    if ui.selectable_label(e.path == cur, &e.label).clicked() {
+                        chosen = Some(e.path.clone());
+                    }
+                }
+            });
+        if let Some(path) = chosen {
+            if path != cur {
+                world.trigger(crate::commands::SetObjectProperty {
+                    entity_id: api_id,
+                    property: "shader".into(),
+                    value: path,
+                });
+            }
+        }
+    } else if let Some(f) = &shader_file {
         ui.label(egui::RichText::new(format!("Shader: {f}")).weak());
     }
     if rows.is_empty() {

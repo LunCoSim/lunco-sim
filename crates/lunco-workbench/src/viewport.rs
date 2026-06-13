@@ -161,6 +161,28 @@ impl PanelRects {
     pub fn get(&self, panel: PanelId) -> Option<PanelRect> {
         self.rects.get(&panel).copied()
     }
+
+    /// True if `phys` (a point in window framebuffer pixels) lies inside any
+    /// recorded viewport-panel rect — i.e. the cursor is over the 3D scene
+    /// rather than over docked chrome. Viewport click handlers use this to
+    /// avoid raycasting (and so deselecting/possessing) when the user clicks a
+    /// panel that overlays the full-window 3D camera. Checks every recorded
+    /// rect, so it's correct whether the scene lives in the workbench
+    /// [`ViewportPanel`] or a domain panel (e.g. `UsdViewportPanel`).
+    pub fn any_contains(&self, phys: bevy::math::Vec2) -> bool {
+        self.rects.values().any(|r| {
+            let min = r.origin.as_vec2();
+            let max = min + r.size.as_vec2();
+            phys.x >= min.x && phys.y >= min.y && phys.x < max.x && phys.y < max.y
+        })
+    }
+
+    /// True if no viewport-panel rect has been recorded yet — a chrome-less
+    /// full-window perspective (or before the first paint). Callers then treat
+    /// the whole window as the scene (there's no panel to be outside of).
+    pub fn is_empty(&self) -> bool {
+        self.rects.is_empty()
+    }
 }
 
 /// Empty-state text drawn centered over the 3D viewport region.
