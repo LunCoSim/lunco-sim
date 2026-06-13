@@ -53,9 +53,63 @@ pub fn global_parsed_msl() -> Option<&'static Arc<Vec<(String, rumoca_compile::p
 /// the first install wins; subsequent calls are silently ignored
 /// (the `OnceLock` guarantees a stable handle for the lifetime of
 /// the page session).
-#[cfg(target_arch = "wasm32")]
 fn install_global_parsed_msl(parsed: Vec<(String, rumoca_compile::parsing::StoredDefinition)>) {
     let _ = GLOBAL_PARSED_MSL.set(Arc::new(parsed));
+}
+
+/// The pre-parsed MSL bundle, loading it on demand if not yet present.
+///
+/// This is the **unified** accessor that drill-in / class-lookup paths
+/// use on both targets:
+/// - If [`global_parsed_msl`] is already populated (wasm chunked decode,
+///   worker hand-off, or a prior native lazy-load), return it.
+/// - On **native**, lazily deserialize `parsed-msl.bin` (the bundle the
+///   `msl_indexer` writes) into the process-wide slot on first call —
+///   one ~1–3 s bincode decode, then every subsequent lookup is an
+///   in-memory hit. This replaces the old per-file `parse_files_parallel`
+///   path that paid a full rumoca parse (tens of seconds for big
+///   `package.mo` wrappers) on every drill-in.
+/// - On **wasm** there is no synchronous disk path, so a miss just
+///   returns `None` (the chunked decoder fills the slot a beat later).
+pub fn parsed_msl_bundle(
+) -> Option<&'static Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> {
+    if let Some(bundle) = GLOBAL_PARSED_MSL.get() {
+        return Some(bundle);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
+        match std::fs::read(&bundle_path) {
+            Ok(bytes) => match bincode::deserialize::<
+                Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
+            >(&bytes)
+            {
+                Ok(docs) => {
+                    info!(
+                        "[MSL] lazy-loaded pre-parsed bundle ({} docs) from `{}` \
+                         into process-wide slot",
+                        docs.len(),
+                        bundle_path.display()
+                    );
+                    install_global_parsed_msl(docs);
+                }
+                Err(e) => {
+                    // Stale/format-mismatched bundle (e.g. after a rumoca
+                    // bump) — caller falls back to a direct parse.
+                    warn!(
+                        "[MSL] parsed bundle at `{}` failed to decode ({e}); \
+                         drill-in will parse source directly",
+                        bundle_path.display()
+                    );
+                }
+            },
+            Err(_) => {
+                // No bundle on disk yet (indexer hasn't run) — caller
+                // falls back to a direct parse.
+            }
+        }
+    }
+    GLOBAL_PARSED_MSL.get()
 }
 
 /// Decompress + bincode-decode a `parsed-*.bin.zst` blob into the

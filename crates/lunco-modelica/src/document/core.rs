@@ -267,24 +267,24 @@ impl ModelicaDocument {
             parts.join(".")
         };
 
-        #[cfg(target_arch = "wasm32")]
-        let ast: StoredDefinition = {
-            let key = path.to_string_lossy().to_string();
-            crate::msl_remote::global_parsed_msl()
-                .and_then(|b| b.iter().find(|(k, _)| k == &key).map(|(_, a)| a.clone()))
-                .ok_or_else(|| format!(
-                    "load_msl_class: pre-parsed AST missing for `{key}`"
-                ))?
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        let ast: StoredDefinition = {
-            let mut parsed = rumoca_compile::parsing::parse_files_parallel(&[path.to_path_buf()])
-                .map_err(|e| format!("parse failed `{}`: {e}", path.display()))?;
-            let (_uri, ast) = parsed
-                .drain(..)
-                .next()
-                .ok_or_else(|| format!("rumoca returned no parse result for `{}`", path.display()))?;
-            ast
+        // Unified MSL-class AST source (native + wasm): prefer the
+        // pre-parsed bundle — `parsed_msl_bundle` lazily materialises it
+        // from `parsed-msl.bin` on native (one ~1–3 s decode, then every
+        // drill-in is an in-memory hit), and the chunked decoder fills it
+        // on wasm. Keyed by the file path exactly as the indexer wrote it
+        // (`indexer::ingest_file`). On a bundle miss, fall back to a
+        // direct parse of the source text we already read above — this
+        // works identically on both targets (no fs / rayon dependency,
+        // unlike the old native-only `parse_files_parallel`, which paid a
+        // full rumoca parse of the whole `package.mo` wrapper — tens of
+        // seconds for `Modelica/Blocks/package.mo`).
+        let key = path.to_string_lossy().to_string();
+        let ast: StoredDefinition = match crate::msl_remote::parsed_msl_bundle()
+            .and_then(|b| b.iter().find(|(k, _)| *k == key).map(|(_, a)| a.clone()))
+        {
+            Some(ast) => ast,
+            None => rumoca_phase_parse::parse_to_ast(&full_source, &key)
+                .map_err(|e| format!("parse failed `{}`: {e}", path.display()))?,
         };
 
         let class_def = crate::ast_extract::find_class_by_short_name(&ast, short_name)
