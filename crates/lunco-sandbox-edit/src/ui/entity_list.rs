@@ -41,31 +41,61 @@ fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut W
             .map(|(e, name)| (e, name.as_str().to_string()))
             .collect();
 
+        // The editable-shader subset (terrain + props carrying a custom
+        // `ShaderMaterial`). Pinned at the top so the terrain shader is one
+        // click from the Explorer instead of buried in the full list.
+        let shader_ents: Vec<(Entity, String)> = world
+            .query_filtered::<(Entity, &Name), With<MeshMaterial3d<lunco_materials::ShaderMaterial>>>()
+            .iter(world)
+            .map(|(e, name)| (e, name.as_str().to_string()))
+            .collect();
+
         // Sort by name
         let mut sorted: Vec<_> = entities.iter().collect();
         sorted.sort_by(|a, b| a.1.cmp(&b.1));
+        let mut shader_sorted: Vec<_> = shader_ents.iter().collect();
+        shader_sorted.sort_by(|a, b| a.1.cmp(&b.1));
 
         // Get current selection (separate borrow)
         let currently_selected = world
             .get_resource::<SelectedEntity>()
             .and_then(|s| s.entity);
 
+        // Collect a click across either section; apply once at the end to keep
+        // the world borrow simple.
+        let mut to_select: Option<Entity> = None;
+
+        // Renders one selectable row, recording a click into `to_select`.
+        let mut row = |ui: &mut egui::Ui, entity: Entity, name: &str, to_select: &mut Option<Entity>| {
+            let is_selected = currently_selected == Some(entity);
+            let button = egui::Button::new(name);
+            let button = if is_selected { button.fill(tokens.success_subdued) } else { button };
+            if ui.add(button).clicked() {
+                *to_select = Some(entity);
+            }
+        };
+
+        if !shader_sorted.is_empty() {
+            egui::CollapsingHeader::new("🎨 Shader materials")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("Edit params in the Inspector").weak());
+                    for (entity, name) in &shader_sorted {
+                        row(ui, *entity, name, &mut to_select);
+                    }
+                });
+            ui.separator();
+        }
+
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (entity, name) in &sorted {
-                let is_selected = currently_selected == Some(*entity);
-                let button = egui::Button::new(name);
-                let button = if is_selected {
-                    button.fill(tokens.success_subdued)
-                } else {
-                    button
-                };
-
-                if ui.add(button).clicked() {
-                    // Selection mutation (separate borrow)
-                    if let Some(mut selected) = world.get_resource_mut::<SelectedEntity>() {
-                        selected.entity = Some(*entity);
-                    }
-                }
+                row(ui, *entity, name, &mut to_select);
             }
         });
+
+        if let Some(entity) = to_select {
+            if let Some(mut selected) = world.get_resource_mut::<SelectedEntity>() {
+                selected.entity = Some(entity);
+            }
+        }
     }

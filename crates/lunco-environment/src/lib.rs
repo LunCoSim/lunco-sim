@@ -15,6 +15,11 @@ use bevy::math::DVec3;
 use lunco_celestial::{Gravity, GravityBody, GravityProvider};
 use lunco_core::{Command, on_command, register_commands};
 
+/// Baked horizon-map terrain self-shadowing (the long-range half of the
+/// two-system shadow design). See the module docs.
+pub mod horizon;
+pub use horizon::{HorizonMap, HorizonShadowPlugin};
+
 /// System sets for environment computation and consumption.
 ///
 /// Ordered chain in [`FixedUpdate`]:
@@ -200,6 +205,12 @@ pub struct SetEnvironmentLight {
     /// Total shadow-casting range, metres. Smaller ⇒ denser shadow-map
     /// texels ⇒ crisper shadows. `None` keeps current.
     pub shadow_max_distance: Option<f32>,
+    /// Shadow depth bias — raise to suppress self-shadow acne stripes
+    /// (cost: shadows detach slightly). `None` keeps current.
+    pub shadow_depth_bias: Option<f32>,
+    /// Shadow normal bias, in shadow-texel units — the main acne killer on
+    /// terrain under grazing light (Bevy default 1.8). `None` keeps current.
+    pub shadow_normal_bias: Option<f32>,
     /// Global ambient brightness (cd/m²-scaled). `None` keeps current.
     pub ambient_brightness: Option<f32>,
 }
@@ -241,6 +252,12 @@ fn on_set_environment_light(
         }
         if let Some(s) = cmd.shadows_enabled {
             light.shadows_enabled = s;
+        }
+        if let Some(b) = cmd.shadow_depth_bias {
+            light.shadow_depth_bias = b;
+        }
+        if let Some(b) = cmd.shadow_normal_bias {
+            light.shadow_normal_bias = b;
         }
 
         if cmd.shadow_first_cascade_bound.is_some() || cmd.shadow_max_distance.is_some() {
@@ -284,6 +301,10 @@ pub struct EnvironmentPlugin;
 impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<LocalGravity>();
+
+        // Horizon-map terrain self-shadowing. Inert until a terrain
+        // carries the `HorizonShadowTerrain` marker (USD-stamped).
+        app.add_plugins(HorizonShadowPlugin);
 
         // Register environment commands (SetEnvironmentLight). The macro-built
         // `register_all_commands` does `register_type` + `add_observer` so the

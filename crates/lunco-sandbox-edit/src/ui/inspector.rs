@@ -58,6 +58,14 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
         environment_section(ui, world);
         ui.separator();
 
+        // ── Terrain shader (always visible) ──────────────────────────
+        // Like the sun, the terrain is the "world": its regolith shader is
+        // the scene's dominant surface and the terrain is `Ground`
+        // (deliberately excluded from click-selection so ground clicks
+        // deselect / drive the camera). So expose its shader params here
+        // unconditionally — no selection needed.
+        terrain_shader_section(ui, world);
+
         // Get current selection
         let Some(entity) = world.get_resource::<SelectedEntity>().and_then(|s| s.entity) else {
             ui.label("No entity selected.");
@@ -178,6 +186,23 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
                 });
         }
 
+        // ── Shader material parameters ───────────────────────────────
+        // Named, range-bounded controls for the selected entity's
+        // `ShaderMaterial` (regolith/wheel/balloon/…), driven by the
+        // manifest in `lunco-materials`. Edits mutate the live material
+        // asset in place — same immediate-feedback path as Transform.
+        let has_shader_mat = world
+            .query::<&MeshMaterial3d<lunco_materials::ShaderMaterial>>()
+            .get(world, entity)
+            .is_ok();
+        if has_shader_mat {
+            egui::CollapsingHeader::new("Shader Parameters")
+                .default_open(true)
+                .show(ui, |ui| {
+                    shader_parameters_section(ui, world, entity);
+                });
+        }
+
         // ── Modelica parameters component ───────────────────────────
         // Tunable Real parameters from the entity's Modelica model.
         // Edits dispatch a `ModelicaOp::SetParameter` through the
@@ -224,8 +249,14 @@ fn environment_section(ui: &mut egui::Ui, world: &mut World) {
     use bevy::light::{CascadeShadowConfig, DirectionalLight, GlobalAmbientLight};
     use lunco_environment::SetEnvironmentLight;
 
+    // Skip render-layer-scoped lights (the USD preview viewport's sun) —
+    // same rule as the horizon system's pick_sun; otherwise the panel shows
+    // the preview light's state instead of the scene sun's.
     let suns: Vec<Entity> = world
-        .query_filtered::<Entity, With<DirectionalLight>>()
+        .query_filtered::<Entity, (
+            With<DirectionalLight>,
+            Without<bevy::camera::visibility::RenderLayers>,
+        )>()
         .iter(world)
         .collect();
     if suns.is_empty() && world.get_resource::<GlobalAmbientLight>().is_none() {
@@ -341,6 +372,163 @@ fn environment_section(ui: &mut egui::Ui, world: &mut World) {
 
     if any_change {
         world.trigger(cmd);
+    }
+}
+
+/// Always-visible terrain shader controls. Auto-finds the horizon terrain
+/// (the `HorizonShadowTerrain` carrying a [`ShaderMaterial`]) and renders its
+/// named params inline — the terrain is `Ground`, so click-selection can't
+/// reach it; this is its editing home, mirroring the always-on sun controls.
+fn terrain_shader_section(ui: &mut egui::Ui, world: &mut World) {
+    let terrain = world
+        .query_filtered::<Entity, (
+            With<lunco_core::HorizonShadowTerrain>,
+            With<MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+        )>()
+        .iter(world)
+        .next();
+    let Some(entity) = terrain else { return };
+    egui::CollapsingHeader::new("Terrain Shader")
+        .default_open(true)
+        .show(ui, |ui| {
+            shader_parameters_section(ui, world, entity);
+        });
+    ui.separator();
+}
+
+/// Render named, range-bounded controls for the selected entity's
+/// [`ShaderMaterial`](lunco_materials::ShaderMaterial) generic uniforms.
+///
+/// Labels, ranges, and defaults come from the manifest in `lunco-materials`
+/// (keyed by the shader's file name), so this stays in sync with each
+/// `.wgsl` header and needs no per-shader code here. A stored uniform of 0
+/// means "unset" — the control shows the manifest default (matching the
+/// shader's own fallback) until the user moves it. Edits mutate the live
+/// material asset in place for immediate feedback, the same path the
+/// Transform/Physics sections use.
+fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entity) {
+    use lunco_materials::{
+        get_color, get_scalar, set_color_value, set_scalar_value, shader_param_manifest,
+        ShaderMaterial, ShaderParamDesc, ShaderParamKind, PROP_YELLOW,
+    };
+
+    // Material handle.
+    let Ok(handle) = world
+        .query::<&MeshMaterial3d<ShaderMaterial>>()
+        .get(world, entity)
+        .map(|m| m.0.clone())
+    else {
+        return;
+    };
+
+    // Shader asset path → manifest. Also drives the header label.
+    let path = {
+        let mats = world.resource::<Assets<ShaderMaterial>>();
+        let Some(mat) = mats.get(&handle) else {
+            ui.label("Material still loading…");
+            return;
+        };
+        world
+            .resource::<AssetServer>()
+            .get_path(mat.shader.id())
+            .map(|p| p.path().to_string_lossy().into_owned())
+    };
+    let manifest = shader_param_manifest(path.as_deref());
+    if let Some(p) = &path {
+        let file = p.rsplit(['/', '\\']).next().unwrap_or(p);
+        ui.label(egui::RichText::new(format!("Shader: {file}")).weak());
+    }
+
+    // Snapshot current values (display the manifest default where the slot is
+    // still 0/unset, or the sentinel colour is unauthored).
+    #[derive(Clone, Copy)]
+    enum Val {
+        Scalar(f32),
+        Int(i32),
+        Color([f32; 3]),
+    }
+    let mut rows: Vec<(ShaderParamDesc, Val)> = Vec::with_capacity(manifest.len());
+    {
+        let mats = world.resource::<Assets<ShaderMaterial>>();
+        let Some(mat) = mats.get(&handle) else { return };
+        for desc in manifest {
+            let val = match desc.kind {
+                ShaderParamKind::Scalar { default, .. } => {
+                    let s = get_scalar(mat, desc.key).unwrap_or(0.0);
+                    Val::Scalar(if s.abs() < 1e-6 { default } else { s })
+                }
+                ShaderParamKind::Int { default, .. } => {
+                    let s = get_scalar(mat, desc.key).unwrap_or(0.0);
+                    Val::Int(if s.abs() < 1e-6 { default } else { s.round() as i32 })
+                }
+                ShaderParamKind::Free => Val::Scalar(get_scalar(mat, desc.key).unwrap_or(0.0)),
+                ShaderParamKind::Color { default } => {
+                    let c = get_color(mat, desc.key).unwrap_or([0.0; 3]);
+                    let is_sentinel = (0..3).all(|i| (c[i] - PROP_YELLOW[i]).abs() < 1e-3);
+                    Val::Color(if is_sentinel { default } else { c })
+                }
+            };
+            rows.push((*desc, val));
+        }
+    }
+
+    // Draw; collect edits (key + new value) without holding any world borrow.
+    enum Edit {
+        Scalar(&'static str, f32),
+        Color(&'static str, [f32; 3]),
+    }
+    let mut edits: Vec<Edit> = Vec::new();
+    for (desc, val) in &mut rows {
+        match (desc.kind, val) {
+            (ShaderParamKind::Scalar { min, max, log, .. }, Val::Scalar(v)) => {
+                if ui
+                    .add(egui::Slider::new(v, min..=max).text(desc.label).logarithmic(log))
+                    .changed()
+                {
+                    edits.push(Edit::Scalar(desc.key, *v));
+                }
+            }
+            (ShaderParamKind::Int { min, max, .. }, Val::Int(v)) => {
+                if ui.add(egui::Slider::new(v, min..=max).text(desc.label)).changed() {
+                    edits.push(Edit::Scalar(desc.key, *v as f32));
+                }
+            }
+            (ShaderParamKind::Free, Val::Scalar(v)) => {
+                ui.horizontal(|ui| {
+                    if ui.add(egui::DragValue::new(v).speed(0.01)).changed() {
+                        edits.push(Edit::Scalar(desc.key, *v));
+                    }
+                    ui.label(desc.label);
+                });
+            }
+            (ShaderParamKind::Color { .. }, Val::Color(rgb)) => {
+                ui.horizontal(|ui| {
+                    if ui.color_edit_button_rgb(rgb).changed() {
+                        edits.push(Edit::Color(desc.key, *rgb));
+                    }
+                    ui.label(desc.label);
+                });
+            }
+            _ => {}
+        }
+    }
+
+    // Apply to the live material asset.
+    if !edits.is_empty() {
+        if let Some(mut mats) = world.get_resource_mut::<Assets<ShaderMaterial>>() {
+            if let Some(mat) = mats.get_mut(&handle) {
+                for edit in edits {
+                    match edit {
+                        Edit::Scalar(key, v) => {
+                            set_scalar_value(mat, key, v);
+                        }
+                        Edit::Color(key, c) => {
+                            set_color_value(mat, key, c);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

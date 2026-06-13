@@ -1754,6 +1754,61 @@ pub fn on_focus_entity_by_id(
     info!("FOCUS_ENTITY: framed api_id={} at {:.1} m", cmd.entity_id, dist);
 }
 
+/// Select an entity by API id — the headless/scriptable equivalent of a
+/// Shift+Left-click in the viewport. Drives the same [`SelectedEntity`]
+/// resource and [`Selected`](crate::selection::Selected) highlight the mouse
+/// path uses, so the Inspector immediately shows that entity's components
+/// (Transform, Physics, Shader Parameters, …). Pass `entity_id == 0` to clear
+/// the selection.
+///
+/// This is the selection primitive the Explorer's entity rows and API clients
+/// (MCP tools, screenshot automation) share; without it, selection was
+/// reachable only by a mouse click into the 3D view.
+#[Command(default)]
+pub struct SelectEntity {
+    /// API id from `ListEntities` — `u64` "Pattern B", resolved in the
+    /// observer via `ApiEntityRegistry` (same as [`FocusEntityById`]). `0`
+    /// clears the selection.
+    pub entity_id: u64,
+}
+
+/// Observer for [`SelectEntity`]: clears the previous highlight and selects
+/// the requested entity (or clears selection on id 0).
+pub fn on_select_entity(
+    trigger: On<SelectEntity>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    mut selected: ResMut<crate::SelectedEntity>,
+    q_old: Query<Entity, With<crate::selection::Selected>>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+
+    // Clear any existing highlight + gizmo (mirrors the click path).
+    for old in q_old.iter() {
+        commands
+            .entity(old)
+            .remove::<crate::selection::Selected>()
+            .remove::<transform_gizmo_bevy::GizmoTarget>();
+    }
+
+    if cmd.entity_id == 0 {
+        selected.entity = None;
+        info!("SELECT_ENTITY: cleared selection");
+        return;
+    }
+
+    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
+    let Some(target) = registry.resolve(&global_id) else {
+        warn!("SELECT_ENTITY: no api_id={} in registry", cmd.entity_id);
+        selected.entity = None;
+        return;
+    };
+
+    commands.entity(target).insert(crate::selection::Selected);
+    selected.entity = Some(target);
+    info!("SELECT_ENTITY: selected api_id={} ({target:?})", cmd.entity_id);
+}
+
 /// Aim the free-flight avatar camera: place it at `eye` and look at `target`
 /// (both absolute world-space). The flexible primitive — the client computes the
 /// angle (e.g. approach a wheel from its outboard side) and distance. Sets the
@@ -1866,6 +1921,7 @@ impl Plugin for SpawnCommandPlugin {
         app.add_observer(on_move_entity_command);
         app.add_observer(on_set_object_property);
         app.add_observer(on_focus_entity_by_id);
+        app.add_observer(on_select_entity);
         app.add_observer(on_set_camera_look_at);
         app.add_observer(on_reload_shader);
         app.add_observer(on_set_shader_source);
@@ -1873,6 +1929,7 @@ impl Plugin for SpawnCommandPlugin {
         // (`get_with_short_type_path`) can construct it from `{"command":"SetObjectProperty",...}`.
         app.register_type::<SetObjectProperty>();
         app.register_type::<FocusEntityById>();
+        app.register_type::<SelectEntity>();
         app.register_type::<SetCameraLookAt>();
         app.register_type::<ReloadShader>();
         app.register_type::<SetShaderSource>();

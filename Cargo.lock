@@ -6958,6 +6958,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-core",
  "lunco-cosim",
+ "lunco-materials",
 ]
 
 [[package]]

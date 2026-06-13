@@ -24,8 +24,14 @@
 //!
 //! Edit live (hot-reload) or tweak via `SetObjectProperty { property:"param0".. }`.
 
-#import bevy_pbr::forward_io::VertexOutput
-#import bevy_pbr::mesh_functions
+#import bevy_pbr::{
+    forward_io::VertexOutput,
+    pbr_types,
+    pbr_functions,
+    mesh_bindings::mesh,
+    mesh_view_bindings::view,
+    mesh_functions,
+}
 
 const TAU: f32 = 6.28318530718;
 
@@ -35,13 +41,14 @@ struct ShaderParams {
     color_c: vec4<f32>,
     params:  vec4<f32>,
     params2: vec4<f32>,
+    engine:  vec4<f32>, // engine-written: x = horizon-shadow sun visibility
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> mat: ShaderParams;
 
 @fragment
-fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
+fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     let spoke_count = select(mat.params.x, 6.0,  mat.params.x < 0.5);
     let lug_count   = select(mat.params.y, 24.0, mat.params.y < 0.5);
     let spoke_w     = select(mat.params.z, 0.35, mat.params.z < 0.0001);
@@ -91,11 +98,27 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         color = select(rubber, tread, lug);
     }
 
-    // Mild normal-based shading so the form reads, without full PBR. High floor
-    // so the bright metal rim/spokes read white (not gray) across the wheel; the
-    // lit top reaches the full base colour.
-    let n = normalize(input.world_normal);
-    let light_dir = normalize(vec3<f32>(0.4, 1.0, 0.6));
-    let shade = 0.72 + 0.28 * clamp(dot(n, light_dir), 0.0, 1.0);
-    return vec4<f32>(color.rgb * shade, color.a);
+    // Full scene lighting (real sun direction, shadow maps, ambient) over
+    // the procedural albedo — so wheels go dark on the night side and when
+    // the horizon system pulls the entity out of the sun's render layer.
+    var pbr_input = pbr_types::pbr_input_new();
+    pbr_input.flags = mesh[input.instance_index].flags; // keep SHADOW_RECEIVER
+    pbr_input.frag_coord = input.position;
+    pbr_input.world_position = input.world_position;
+    pbr_input.world_normal = pbr_functions::prepare_world_normal(
+        normalize(input.world_normal), false, is_front);
+    pbr_input.is_orthographic = view.clip_from_view[3].w == 1.0;
+    pbr_input.N = pbr_input.world_normal;
+    pbr_input.V = pbr_functions::calculate_view(input.world_position, pbr_input.is_orthographic);
+    pbr_input.material.base_color = vec4(color.rgb, color.a);
+    pbr_input.material.perceptual_roughness = 0.7;
+    pbr_input.material.metallic = 0.0;
+    pbr_input.material.reflectance = vec3(0.5);
+
+    var out = pbr_functions::apply_pbr_lighting(pbr_input);
+    // Smooth horizon-shadow terminator fade (engine-written visibility);
+    // the layer swap that follows is binary, this eases the transition.
+    out = vec4(out.rgb * mat.engine.x, out.a);
+    out = pbr_functions::main_pass_post_lighting_processing(pbr_input, out);
+    return out;
 }

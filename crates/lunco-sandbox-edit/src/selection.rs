@@ -10,6 +10,7 @@ use avian3d::prelude::*;
 use avian3d::spatial_query::SpatialQueryFilter;
 
 use crate::{SpawnState, SelectedEntity};
+use crate::commands::SelectEntity;
 
 /// Component marking an entity as currently selected.
 #[derive(Component)]
@@ -81,6 +82,7 @@ pub fn handle_entity_selection(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     raycaster: SpatialQuery,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_ground: Query<Entity, With<lunco_core::Ground>>,
     q_parents: Query<&ChildOf>,
@@ -88,15 +90,41 @@ pub fn handle_entity_selection(
     mut drag_mode: ResMut<lunco_core::DragModeActive>,
     mut commands: Commands,
 ) {
+    // Selection state (the `Selected` highlight + `SelectedEntity` resource) is
+    // owned by the `SelectEntity` command/observer — the single mutation path
+    // the API and Explorer also use. This handler just turns a viewport click
+    // into that command (id 0 = deselect). It still owns the *gizmo* concern
+    // (alt-click attaches a `GizmoTarget`), which is layered on top of
+    // selection. Entities missing an API id (rare — most selectables are
+    // registry-registered) fall back to a direct mutation so they stay
+    // selectable.
+    let select = |commands: &mut Commands,
+                  selected: &mut SelectedEntity,
+                  old: &Query<Entity, With<Selected>>,
+                  entity: Option<Entity>| {
+        match entity.and_then(|e| registry.api_id_for(e).map(|id| (e, id))) {
+            Some((_, id)) => commands.trigger(SelectEntity { entity_id: id.get() }),
+            None => {
+                // Fallback: no API id — mutate directly (mirrors the observer).
+                for e in old.iter() {
+                    commands.entity(e).remove::<Selected>().remove::<GizmoTarget>();
+                }
+                match entity {
+                    Some(e) => {
+                        commands.entity(e).insert(Selected);
+                        selected.entity = Some(e);
+                    }
+                    None => selected.entity = None,
+                }
+            }
+        }
+    };
     // Skip if in spawn mode
     if !matches!(spawn_state.as_ref(), SpawnState::Idle) { return; }
 
     // Escape deselects
     if keys.just_pressed(KeyCode::Escape) {
-        for old in q_selected_old.iter() {
-            commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
-        }
-        selected.entity = None;
+        select(&mut commands, &mut selected, &q_selected_old, None);
         drag_mode.active = false;
         return;
     }
@@ -139,10 +167,7 @@ pub fn handle_entity_selection(
         // gizmo library handle the click.
         if gizmo_up { return; }
         // Otherwise truly missed everything → deselect.
-        for old in q_selected_old.iter() {
-            commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
-        }
-        selected.entity = None;
+        select(&mut commands, &mut selected, &q_selected_old, None);
         drag_mode.active = false;
         return;
     };
@@ -153,31 +178,22 @@ pub fn handle_entity_selection(
     let Some(entity) = target else {
         // Same logic as the no-hit case — preserve selection if a gizmo is up.
         if gizmo_up { return; }
-        for old in q_selected_old.iter() {
-            commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
-        }
-        selected.entity = None;
+        select(&mut commands, &mut selected, &q_selected_old, None);
         drag_mode.active = false;
         return;
     };
 
-    // Clear old selection
-    for old in q_selected_old.iter() {
-        commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
-    }
-
-    // Plain click → highlight only. Alt-click → also attach the transform
-    // gizmo and put the editor into drag mode (which blocks the camera
-    // click handler so dragging a gizmo handle doesn't flip possession).
-    let mut e = commands.entity(entity);
-    e.insert(Selected);
+    // Route selection through the command (clears old + Selected +
+    // SelectedEntity). Alt-click additionally attaches the transform gizmo and
+    // enters drag mode (which blocks the camera click handler so dragging a
+    // gizmo handle doesn't flip possession).
+    select(&mut commands, &mut selected, &q_selected_old, Some(entity));
     if alt_held {
-        e.insert(GizmoTarget::default());
+        commands.entity(entity).insert(GizmoTarget::default());
         drag_mode.active = true;
     } else {
         drag_mode.active = false;
     }
-    selected.entity = Some(entity);
 }
 
 #[cfg(test)]

@@ -20,8 +20,14 @@
 //!
 //! Edit live (hot-reload) or tweak via `SetObjectProperty { property:"param0".. }`.
 
-#import bevy_pbr::forward_io::VertexOutput
-#import bevy_pbr::mesh_functions
+#import bevy_pbr::{
+    forward_io::VertexOutput,
+    pbr_types,
+    pbr_functions,
+    mesh_bindings::mesh,
+    mesh_view_bindings::view,
+    mesh_functions,
+}
 
 const TAU: f32 = 6.28318530718;
 const PI:  f32 = 3.14159265359;
@@ -32,6 +38,7 @@ struct ShaderParams {
     color_c: vec4<f32>,
     params:  vec4<f32>,
     params2: vec4<f32>,
+    engine:  vec4<f32>, // engine-written: x = horizon-shadow sun visibility
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
@@ -42,7 +49,7 @@ fn parity(i: f32) -> bool {
 }
 
 @fragment
-fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
+fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     // Object-space surface direction. The model matrix' upper-3x3 columns are
     // the (possibly scaled) basis vectors; normalize them to get the pure
     // rotation R, then d = Rᵀ · n_world is the mesh-local normal. For a sphere
@@ -70,9 +77,25 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     // (no pole caps — the checkerboard runs all the way to the poles; a coloured
     //  cap read as a stray white dot on top.)
 
-    // Mild normal-based shading so the form reads, without full PBR.
-    let n = normalize(input.world_normal);
-    let light_dir = normalize(vec3<f32>(0.4, 1.0, 0.6));
-    let shade = 0.55 + 0.45 * clamp(dot(n, light_dir), 0.0, 1.0);
-    return vec4<f32>(color.rgb * shade, color.a);
+    // Full scene lighting (real sun direction, shadow maps, ambient) over
+    // the procedural checker — matches the other prop shaders.
+    var pbr_input = pbr_types::pbr_input_new();
+    pbr_input.flags = mesh[input.instance_index].flags; // keep SHADOW_RECEIVER
+    pbr_input.frag_coord = input.position;
+    pbr_input.world_position = input.world_position;
+    pbr_input.world_normal = pbr_functions::prepare_world_normal(
+        normalize(input.world_normal), false, is_front);
+    pbr_input.is_orthographic = view.clip_from_view[3].w == 1.0;
+    pbr_input.N = pbr_input.world_normal;
+    pbr_input.V = pbr_functions::calculate_view(input.world_position, pbr_input.is_orthographic);
+    pbr_input.material.base_color = vec4(color.rgb, color.a);
+    pbr_input.material.perceptual_roughness = 0.6;
+    pbr_input.material.metallic = 0.0;
+    pbr_input.material.reflectance = vec3(0.5);
+
+    var out = pbr_functions::apply_pbr_lighting(pbr_input);
+    // Smooth horizon-shadow terminator fade (engine-written visibility).
+    out = vec4(out.rgb * mat.engine.x, out.a);
+    out = pbr_functions::main_pass_post_lighting_processing(pbr_input, out);
+    return out;
 }
