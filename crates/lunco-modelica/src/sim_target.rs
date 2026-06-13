@@ -127,21 +127,29 @@ pub fn bounds_from_experiment(exp: &crate::annotations::Experiment) -> Option<Ru
 
 /// Resolve the run bounds from the four precedence tiers, highest first:
 ///   1. `draft_override` — a value the user edited in a Setup form.
-///   2. `runner_cached` — the runner's `default_bounds` annotation cache.
-///   3. `annotation_bounds` — bounds derived from the AST `experiment(...)`
-///      (see [`bounds_from_experiment`]).
+///   2. `annotation_bounds` — bounds derived from the AST `experiment(...)`
+///      (see [`bounds_from_experiment`]). This is the deterministic,
+///      always-fresh source and MUST outrank the async cache below.
+///   3. `runner_cached` — the runner's `default_bounds` annotation cache,
+///      populated *asynchronously* by the worker after a compile completes.
+///      A pure fallback for paths with no live AST (e.g. headless / no doc
+///      registry). It must never shadow a fresh annotation: the bounds a run
+///      is frozen with at creation would otherwise depend on whether the
+///      worker's `set_model_defaults` callback had landed yet — the source of
+///      the "flaky terminator" race (same experiment, different tolerance/dt
+///      depending only on wall-clock dispatch timing).
 ///   4. [`default_bounds`] — the `DEFAULT_STOP_TIME` fallback.
 ///
 /// The caller gathers tiers 1–3 from live state and passes them in; this
 /// function owns only the precedence and the fallback.
 pub fn resolve_bounds(
     draft_override: Option<RunBounds>,
-    runner_cached: Option<RunBounds>,
     annotation_bounds: Option<RunBounds>,
+    runner_cached: Option<RunBounds>,
 ) -> RunBounds {
     draft_override
-        .or(runner_cached)
         .or(annotation_bounds)
+        .or(runner_cached)
         .unwrap_or_else(default_bounds)
 }
 
@@ -162,9 +170,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_bounds_follows_precedence_and_falls_back_to_ten() {
+    fn resolve_bounds_prefers_draft_then_annotation_then_cache() {
+        // Args, highest precedence first: (draft, annotation, runner_cached).
+        // Draft wins over everything.
         assert_eq!(resolve_bounds(Some(rb(1.0)), Some(rb(2.0)), Some(rb(3.0))).t_end, 1.0);
+        // Race fix: the fresh AST annotation beats the async runner cache, so a
+        // run's frozen bounds don't depend on whether the worker callback landed.
         assert_eq!(resolve_bounds(None, Some(rb(2.0)), Some(rb(3.0))).t_end, 2.0);
+        // The cache is only a fallback when there is no annotation.
         assert_eq!(resolve_bounds(None, None, Some(rb(3.0))).t_end, 3.0);
         assert_eq!(resolve_bounds(None, None, None).t_end, DEFAULT_STOP_TIME);
         assert_eq!(DEFAULT_STOP_TIME, 1.0); // Modelica spec default StopTime

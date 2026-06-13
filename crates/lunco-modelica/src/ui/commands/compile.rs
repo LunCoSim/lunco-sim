@@ -1244,10 +1244,15 @@ pub(crate) fn bounds_from_annotation(
 
 /// Single source of truth for the simulation bounds shown in BOTH the
 /// Fast Run popup and the Experiments-tab Setup form, so the two
-/// surfaces never disagree. Precedence: saved draft override → runner
-/// annotation cache (`default_bounds`) → AST `experiment(...)`
-/// annotation → `sim_target::DEFAULT_STOP_TIME` (1 s, the Modelica spec
-/// default) fallback.
+/// surfaces never disagree. Precedence: saved draft override → AST
+/// `experiment(...)` annotation → runner annotation cache
+/// (`default_bounds`) → `sim_target::DEFAULT_STOP_TIME` (1 s, the
+/// Modelica spec default) fallback.
+///
+/// The fresh AST annotation outranks the async runner cache deliberately:
+/// the cache is populated by a background worker callback, so letting it win
+/// would make a run's snapshotted bounds depend on dispatch timing (the
+/// flaky-terminator race). See [`crate::sim_target::resolve_bounds`].
 pub(crate) fn resolve_setup_bounds(
     world: &World,
     doc: DocumentId,
@@ -1260,11 +1265,11 @@ pub(crate) fn resolve_setup_bounds(
     let draft = world
         .get_resource::<crate::experiments_runner::ExperimentDrafts>()
         .and_then(|d| d.get(doc, model_ref).and_then(|dr| dr.bounds_override.clone()));
+    let annotation = bounds_from_annotation(world, doc, model_ref);
     let runner_cached = world
         .get_resource::<crate::ModelicaRunnerResource>()
         .and_then(|r| r.0.default_bounds(model_ref));
-    let annotation = bounds_from_annotation(world, doc, model_ref);
-    crate::sim_target::resolve_bounds(draft, runner_cached, annotation)
+    crate::sim_target::resolve_bounds(draft, annotation, runner_cached)
 }
 
 fn dispatch_experiment(
