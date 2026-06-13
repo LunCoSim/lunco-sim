@@ -1533,6 +1533,93 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
     });
 }
 
+/// Confirm (or dismiss) the "Which class should Compile/Fast Run …?" picker
+/// modal that appears when a package has more than one runnable model. This is
+/// the headless/API equivalent of clicking the dialog's button: it mirrors the
+/// confirm path in [`render_compile_class_picker`] exactly — pin the chosen
+/// class as the doc's drilled-in class (so resolution skips the picker), close
+/// the dialog, and re-dispatch the original Compile / Fast Run for the pick.
+///
+/// - `qualified` `None` → use the dialog's pre-selected candidate.
+/// - `qualified` set    → pick that class (must be one of the candidates).
+/// - `cancel` `true`    → just close the dialog without running.
+#[Command(default)]
+pub struct ConfirmClassPicker {
+    /// Class to pick. `None` = the dialog's pre-selected candidate.
+    pub qualified: Option<String>,
+    /// Dismiss the picker without running (same as the Cancel button).
+    pub cancel: bool,
+}
+
+#[on_command(ConfirmClassPicker)]
+pub fn on_confirm_class_picker(trigger: On<ConfirmClassPicker>, mut commands: Commands) {
+    let want = trigger.event().qualified.clone();
+    let cancel = trigger.event().cancel;
+    commands.queue(move |world: &mut World| {
+        // Take the pending picker entry (taking it closes the dialog).
+        let Some(entry) = world
+            .get_resource_mut::<CompileClassPickerState>()
+            .and_then(|mut p| p.0.take())
+        else {
+            warn!("[ConfirmClassPicker] no class picker is currently open");
+            return;
+        };
+        if cancel {
+            return; // entry consumed → dialog dismissed, nothing to run
+        }
+        // Resolve the chosen class: an explicit (valid) `qualified`, else the
+        // dialog's pre-selected candidate.
+        let chosen = match want {
+            Some(q) if entry.candidates.iter().any(|c| *c == q) => q,
+            Some(q) => {
+                warn!(
+                    "[ConfirmClassPicker] `{q}` is not a candidate ({:?}); using pre-selected",
+                    entry.candidates
+                );
+                match entry.candidates.get(entry.preselected).cloned() {
+                    Some(c) => c,
+                    None => return,
+                }
+            }
+            None => match entry.candidates.get(entry.preselected).cloned() {
+                Some(c) => c,
+                None => {
+                    warn!("[ConfirmClassPicker] picker has no candidates");
+                    return;
+                }
+            },
+        };
+        let doc = entry.doc;
+        // Pin the drilled class so the re-dispatch resolves directly (mirrors
+        // `render_compile_class_picker`'s confirm branch).
+        if let Some(mut tabs) =
+            world.get_resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+        {
+            for (_, state) in tabs.iter_mut_for_doc(doc) {
+                state.drilled_class = Some(chosen.clone());
+            }
+        }
+        match entry.purpose {
+            PickerPurpose::Compile => {
+                world
+                    .commands()
+                    .trigger(CompileModel { doc, class: None, force: false });
+            }
+            PickerPurpose::FastRun => {
+                world.commands().trigger(FastRunActiveModel {
+                    doc,
+                    class: None,
+                    t_end: None,
+                    dt: None,
+                    tolerance: None,
+                    solver: None,
+                    h0: None,
+                });
+            }
+        }
+    });
+}
+
 /// Define + dispatch a batch experiment with explicit parameter overrides,
 /// inputs, and bounds — the programmatic counterpart to the Experiments
 /// panel. Unlike `FastRunActiveModel`, overrides come from the command (not
@@ -1830,6 +1917,7 @@ register_commands!(
     on_run_active_model,
     on_restart_active_model,
     on_fast_run_active_model,
+    on_confirm_class_picker,
     on_run_experiment,
     on_cancel_experiment,
     on_delete_experiment,
