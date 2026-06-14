@@ -59,17 +59,19 @@ resolver = "2"
 # scnr2 patch removed — rumoca main uses scnr2 0.3.3 and
 # parol_runtime 4.2 which resolve correctly without overrides.
 
-# Rumoca consumed from local checkout (`../rumoca`, main branch).
+# Rumoca consumed from the `main` branch of LunCoSim/rumoca (see
+# [workspace.dependencies]). The fixes are merged into that `main`, so we
+# consume the canonical git version rather than a local checkout.
 # To develop against a local rumoca checkout, uncomment the [patch] block
 # and point it at `../rumoca`.
 #
-[patch."https://github.com/LunCoSim/rumoca"]
-rumoca-ir-ast      = { path = "../rumoca/crates/rumoca-ir-ast" }
-rumoca-phase-parse = { path = "../rumoca/crates/rumoca-phase-parse" }
-rumoca-compile     = { path = "../rumoca/crates/rumoca-compile" }
-rumoca-sim         = { path = "../rumoca/crates/rumoca-sim" }
-rumoca-tool-fmt    = { path = "../rumoca/crates/rumoca-tool-fmt" }
-rumoca-tool-lint   = { path = "../rumoca/crates/rumoca-tool-lint" }
+# [patch."https://github.com/LunCoSim/rumoca"]
+# rumoca-ir-ast      = { path = "../rumoca/crates/rumoca-ir-ast" }
+# rumoca-phase-parse = { path = "../rumoca/crates/rumoca-phase-parse" }
+# rumoca-compile     = { path = "../rumoca/crates/rumoca-compile" }
+# rumoca-sim         = { path = "../rumoca/crates/rumoca-sim" }
+# rumoca-tool-fmt    = { path = "../rumoca/crates/rumoca-tool-fmt" }
+# rumoca-tool-lint   = { path = "../rumoca/crates/rumoca-tool-lint" }
 
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"
