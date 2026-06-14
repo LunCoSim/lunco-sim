@@ -1220,6 +1220,7 @@ pub fn avatar_raycast_possession(
     q_ground: Query<Entity, With<lunco_core::Ground>>,
     raycaster: avian3d::prelude::SpatialQuery,
     panel_rects: Res<lunco_workbench::PanelRects>,
+    mut egui_contexts: bevy_egui::EguiContexts,
 ) {
     if !mouse.just_pressed(MouseButton::Left) { return; }
     // Alt-click is reserved for gizmo selection in lunco-sandbox-edit.
@@ -1240,6 +1241,14 @@ pub fn avatar_raycast_possession(
     if !panel_rects.is_empty() {
         let phys = pos * window.scale_factor();
         if !panel_rects.any_contains(phys) {
+            return;
+        }
+    }
+    // An egui popup (colour picker, combo dropdown, menu) can float over the
+    // viewport rect; a click inside it passes the rect test but belongs to egui.
+    // Don't possess/follow through it (mirrors the selection handler's gate).
+    if let Ok(ctx) = egui_contexts.ctx_mut() {
+        if lunco_workbench::pointer_over_egui_popup(ctx, pos) {
             return;
         }
     }

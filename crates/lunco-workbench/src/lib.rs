@@ -306,8 +306,9 @@ pub use session::{
     TwinClosed, UnregisterDocument, WorkspacePlugin, WorkspaceResource,
 };
 pub use viewport::{
-    PanelRect, PanelRects, ViewportPanel, ViewportPlaceholder, WorkbenchEguiHost,
-    WorkbenchSceneCamera, WorkbenchViewportCamera, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
+    pointer_over_egui_popup, PanelRect, PanelRects, ViewportPanel, ViewportPlaceholder,
+    WorkbenchEguiHost, WorkbenchSceneCamera, WorkbenchViewportCamera, WorkbenchViewportPlugin,
+    VIEWPORT_PANEL_ID,
 };
 
 /// Get the backdrop colour from the active theme.

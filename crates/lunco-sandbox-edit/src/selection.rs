@@ -57,12 +57,13 @@ fn cursor_ray(
 /// not the wheel mesh.
 ///
 /// If no `SelectableRoot` exists in the chain, it falls back to the clicked
-/// entity itself. Only physics bodies, rovers and cosim entities are tagged
-/// `SelectableRoot`; plain USD visual props (decorative cubes, the
-/// Perseverance placeholder, ramps) never are, and used to be unselectable —
-/// clicking a second such object silently kept the previous selection, so the
-/// Inspector appeared "stuck" on the first object. The raycast already excludes
-/// ground, so any collider we actually hit is a real, selectable scene object.
+/// entity itself, so ground, terrain and plain USD visual props (decorative
+/// cubes, ramps, the Perseverance placeholder) are all selectable — clicking
+/// any one of them switches the Inspector to it. (Earlier this returned `None`
+/// for un-tagged hits, which made those objects unselectable and left the
+/// Inspector "stuck" on the previous selection. That fallback was safe to add
+/// only once selection ray-cast from the correct camera — see the camera note
+/// on `handle_entity_selection`.)
 fn find_selectable(
     hit: Entity,
     q_selectable: &Query<Entity, With<lunco_core::SelectableRoot>>,
@@ -73,7 +74,8 @@ fn find_selectable(
     let mut depth = 0;
 
     loop {
-        // Check if this entity is marked as selectable
+        // A `SelectableRoot` ancestor wins — clicking a rover wheel selects the
+        // rover root, not the wheel mesh.
         if q_selectable.get(entity).is_ok() {
             return Some(entity);
         }
@@ -91,7 +93,9 @@ fn find_selectable(
         }
     }
 
-    None
+    // No `SelectableRoot` in the chain (ground, terrain, a plain prop) — select
+    // the clicked entity itself so it's still editable.
+    Some(hit)
 }
 
 /// Handles entity selection on Left-click.
@@ -127,11 +131,11 @@ pub fn handle_entity_selection(
     raycaster: SpatialQuery,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
-    q_ground: Query<Entity, With<lunco_core::Ground>>,
     q_parents: Query<&ChildOf>,
     q_selected_old: Query<Entity, With<Selected>>,
     mut drag_mode: ResMut<lunco_core::DragModeActive>,
     panel_rects: Res<lunco_workbench::PanelRects>,
+    mut egui_contexts: bevy_egui::EguiContexts,
     mut commands: Commands,
 ) {
     // Selection state (the `Selected` highlight + `SelectedEntity` resource) is
@@ -197,31 +201,40 @@ pub fn handle_entity_selection(
     // are true over the viewport too. The workbench records the viewport tab's
     // rect in `PanelRects` — the only signal that separates it from the chrome.
     if !cursor_over_scene(&panel_rects, window, cursor) { return; }
+    // An egui popup (open colour picker, combo dropdown, menu) floats as a
+    // foreground `Area` that can extend OVER the viewport rect — a click inside
+    // it passes the rect test above, but egui owns that click. Don't raycast:
+    // otherwise picking a colour in the Inspector's colour-swatch popup falls
+    // through to the 3D scene behind it and re-selects the terrain. (This is the
+    // "click panel → terrain selected" bug.) See `pointer_over_egui_popup`.
+    if let Ok(ctx) = egui_contexts.ctx_mut() {
+        if lunco_workbench::pointer_over_egui_popup(ctx, cursor) {
+            return;
+        }
+    }
     let Some((origin, direction)) = cursor_ray(camera, cam_tf, cursor) else { return };
 
-    // Build exclusion filter: ground entities are excluded from raycast hits.
-    // All other selectable entities (ramps, rover bodies, solar panels, props) pass through.
-    let exclude: Vec<Entity> = q_ground.iter().collect();
-    let filter = SpatialQueryFilter::default().with_excluded_entities(exclude);
+    // No exclusions: ground/terrain are now selectable too (closest-hit means
+    // they're only picked on a real bare-ground click, since any prop/rover in
+    // front is hit first). Deselect is explicit — Escape / Explorer.
+    let filter = SpatialQueryFilter::default();
 
-    // Get the closest hit among selectable entities
+    // Get the closest hit along the ray.
     let hit = raycaster.cast_ray(origin.into(), direction, 1000.0, false, &filter);
 
     let Some(hit_data) = hit else {
-        // A viewport click that hits no geometry no longer clears the
-        // selection. Deselect-on-empty-click fought the select→edit
-        // workflow: every camera nudge or stray click in the viewport
-        // nuked the Inspector's target before the user could reach a
-        // slider/combobox, so editing "didn't work after clicking".
-        // Deselect is now explicit only — Escape, the Explorer, or
-        // selecting another entity. (Gizmo handles aren't colliders, so
-        // dragging one also lands here and is correctly left untouched.)
+        // A viewport click that hits empty sky no longer clears the selection.
+        // Deselect-on-empty-click fought the select→edit workflow: every camera
+        // nudge or stray click nuked the Inspector's target before the user
+        // could reach a slider/combobox. Deselect is explicit only — Escape,
+        // the Explorer, or selecting another entity. (Gizmo handles aren't
+        // colliders, so dragging one also lands here and is left untouched.)
         return;
     };
 
-    // Find the best selectable entity from the hit (walks up parent chain).
-    // `None` (no `SelectableRoot` ancestor — e.g. a click that grazed the
-    // ground) leaves the current selection intact.
+    // Resolve the hit to its selectable (nearest `SelectableRoot` ancestor, or
+    // the hit entity itself for ground/props). Always `Some`, but keep the
+    // Option shape so a future "ignore this hit" rule has a place to live.
     let Some(entity) = find_selectable(hit_data.entity, &q_selectable, &q_parents) else { return; };
 
     // Route selection through the command (clears old + Selected +

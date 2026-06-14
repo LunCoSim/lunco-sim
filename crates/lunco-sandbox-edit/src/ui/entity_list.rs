@@ -1,15 +1,20 @@
 //! Entity list panel — WorkbenchPanel implementation.
 //!
-//! Migrates the old standalone egui window to use bevy_workbench docking.
-//! Lists all named entities alphabetically; clicking one selects it.
+//! A hierarchy tree of scene objects: top-level objects (rovers, props,
+//! terrain, cosim blocks) with their sub-parts (wheels, body) nested beneath,
+//! so you can drill in and select a single wheel. Internal plumbing (cosim
+//! wires, ports, empty transform wrappers) is hidden — only entities that are
+//! selectable or mesh-bearing, plus their ancestors, appear. Clicking a node
+//! selects it.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
+use std::collections::{HashMap, HashSet};
 
 use crate::SelectedEntity;
 
-/// Entity list panel — selectable list of scene entities.
+/// Entity list panel — hierarchy tree of scene entities.
 pub struct EntityList;
 
 impl Panel for EntityList {
@@ -31,93 +36,209 @@ impl Panel for EntityList {
     }
 }
 
-fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut World, tokens: &lunco_theme::DesignTokens) {
+/// Last path segment of a USD prim name (`/SandboxScene/Rover/Wheel_FL` →
+/// `Wheel_FL`); plain names (`Dynamic Ball`) pass through unchanged.
+fn leaf(full: &str) -> String {
+    full.rsplit(['/', '\\']).next().unwrap_or(full).to_string()
+}
 
-        ui.label("Click to select an entity. Use gizmos to move it.");
-        ui.separator();
-
-        // Collect entity list (read-only, scoped borrow)
-        let entities: Vec<(Entity, String)> = world.query::<(Entity, &Name)>().iter(world)
-            .map(|(e, name)| (e, name.as_str().to_string()))
-            .collect();
-
-        // The editable-shader subset (terrain + props carrying a custom
-        // `ShaderMaterial`). Pinned at the top so the terrain shader is one
-        // click from the Explorer instead of buried in the full list.
-        let shader_ents: Vec<(Entity, String)> = world
-            .query_filtered::<(Entity, &Name), With<MeshMaterial3d<lunco_materials::ShaderMaterial>>>()
-            .iter(world)
-            .map(|(e, name)| (e, name.as_str().to_string()))
-            .collect();
-
-        // Sort by name
-        let mut sorted: Vec<_> = entities.iter().collect();
-        sorted.sort_by(|a, b| a.1.cmp(&b.1));
-        let mut shader_sorted: Vec<_> = shader_ents.iter().collect();
-        shader_sorted.sort_by(|a, b| a.1.cmp(&b.1));
-
-        // Get current selection (separate borrow)
-        let currently_selected = world
-            .get_resource::<SelectedEntity>()
-            .and_then(|s| s.entity);
-
-        // Collect a click across either section; apply once at the end to keep
-        // the world borrow simple.
-        let mut to_select: Option<Entity> = None;
-
-        // Renders one selectable row, recording a click into `to_select`.
-        // `salt` disambiguates the egui widget id: a shader-material entity is
-        // listed twice (pinned 🎨 section + full list), so without a per-section
-        // salt the two buttons share an id and egui drops one's clicks — the
-        // root of "clicking the second object doesn't switch the selection".
-        let mut row = |ui: &mut egui::Ui, salt: &str, entity: Entity, name: &str, to_select: &mut Option<Entity>| {
-            let is_selected = currently_selected == Some(entity);
-            ui.push_id((salt, entity), |ui| {
-                let button = egui::Button::new(name);
-                let button = if is_selected { button.fill(tokens.success_subdued) } else { button };
-                if ui.add(button).clicked() {
-                    *to_select = Some(entity);
-                }
-            });
-        };
-
-        if !shader_sorted.is_empty() {
-            egui::CollapsingHeader::new("🎨 Shader materials")
-                .default_open(true)
-                .show(ui, |ui| {
-                    ui.label(egui::RichText::new("Edit params in the Inspector").weak());
-                    for (entity, name) in &shader_sorted {
-                        row(ui, "shader", *entity, name, &mut to_select);
-                    }
-                });
-            ui.separator();
+/// `true` if `e` is shown (interesting itself, or an ancestor of something
+/// interesting). Memoized post-order walk; the pre-insert of `false` guards
+/// against malformed cycles in the parent graph.
+fn compute_shown(
+    e: Entity,
+    kids: &HashMap<Entity, Vec<Entity>>,
+    interesting: &dyn Fn(Entity) -> bool,
+    shown: &mut HashMap<Entity, bool>,
+) -> bool {
+    if let Some(&v) = shown.get(&e) {
+        return v;
+    }
+    shown.insert(e, false);
+    let mut vis = interesting(e);
+    if let Some(cs) = kids.get(&e) {
+        for &c in cs {
+            vis |= compute_shown(c, kids, interesting, shown);
         }
+    }
+    shown.insert(e, vis);
+    vis
+}
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for (entity, name) in &sorted {
-                row(ui, "all", *entity, name, &mut to_select);
+/// Render one tree node and its visible descendants. Leaf nodes are a
+/// selectable label; branch nodes get an expander (`CollapsingState`) whose
+/// header is itself selectable, so a click on the rover selects the rover and
+/// the triangle drills into its wheels.
+#[allow(clippy::too_many_arguments)]
+fn render_node(
+    ui: &mut egui::Ui,
+    entity: Entity,
+    kids: &HashMap<Entity, Vec<Entity>>,
+    names: &HashMap<Entity, String>,
+    shown: &HashMap<Entity, bool>,
+    selected: Option<Entity>,
+    to_select: &mut Option<Entity>,
+) {
+    let label = names
+        .get(&entity)
+        .map(|s| leaf(s))
+        .unwrap_or_else(|| format!("{entity:?}"));
+    let visible_kids: Vec<Entity> = kids
+        .get(&entity)
+        .map(|v| v.iter().copied().filter(|c| *shown.get(c).unwrap_or(&false)).collect())
+        .unwrap_or_default();
+
+    if visible_kids.is_empty() {
+        if ui.selectable_label(selected == Some(entity), label).clicked() {
+            *to_select = Some(entity);
+        }
+        return;
+    }
+
+    let id = ui.make_persistent_id(("entity_tree", entity));
+    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
+        .show_header(ui, |ui| {
+            if ui.selectable_label(selected == Some(entity), label).clicked() {
+                *to_select = Some(entity);
+            }
+        })
+        .body(|ui| {
+            for child in visible_kids {
+                render_node(ui, child, kids, names, shown, selected, to_select);
             }
         });
+}
 
-        // Route selection through the `SelectEntity` command — the single
-        // mutation path the viewport click and API also use. `world.trigger`
-        // runs the observer synchronously here, so it clears the previous
-        // `Selected`/`GizmoTarget`, marks the new entity, and updates
-        // `SelectedEntity` before the Inspector renders later this same egui
-        // pass. The old direct `selected.entity = …` write skipped that marker
-        // bookkeeping. Entities without an API id fall back to a direct write.
-        if let Some(entity) = to_select {
-            let api_id = world
-                .get_resource::<lunco_api::registry::ApiEntityRegistry>()
-                .and_then(|r| r.api_id_for(entity))
-                .map(|g| g.get());
-            match api_id {
-                Some(id) => world.trigger(crate::commands::SelectEntity { entity_id: id }),
-                None => {
-                    if let Some(mut selected) = world.get_resource_mut::<SelectedEntity>() {
-                        selected.entity = Some(entity);
+fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut World, tokens: &lunco_theme::DesignTokens) {
+    let _ = tokens;
+    ui.label("Click to select. Expand ▸ to reach sub-parts (wheels, body).");
+    ui.separator();
+
+    // ── Gather the scene graph (read-only; no world borrow held while drawing).
+    let named: Vec<(Entity, String)> = world
+        .query::<(Entity, &Name)>()
+        .iter(world)
+        .map(|(e, n)| (e, n.as_str().to_string()))
+        .collect();
+    let names: HashMap<Entity, String> = named.iter().cloned().collect();
+    let named_set: HashSet<Entity> = named.iter().map(|(e, _)| *e).collect();
+
+    // Parent of each entity (full graph, not just named) so unnamed grid/wrapper
+    // entities can be skipped over when finding an entity's display parent.
+    let child_of: HashMap<Entity, Entity> = world
+        .query::<(Entity, &ChildOf)>()
+        .iter(world)
+        .map(|(e, c)| (e, c.parent()))
+        .collect();
+
+    // "Interesting" = something a user would edit: a selectable object or any
+    // mesh-bearing part. Everything else (cosim wires, ports, empty transform
+    // wrappers) is plumbing — hidden unless it's an ancestor of an interesting
+    // entity. (Cosim model blocks ARE selectable, so they stay.)
+    let selectable: HashSet<Entity> = world
+        .query_filtered::<Entity, With<lunco_core::SelectableRoot>>()
+        .iter(world)
+        .collect();
+    let has_mesh: HashSet<Entity> = world
+        .query_filtered::<Entity, With<Mesh3d>>()
+        .iter(world)
+        .collect();
+
+    // Shader-editable subset (terrain + props with a custom ShaderMaterial),
+    // pinned at the top for quick access to the shader params.
+    let mut shader_sorted: Vec<(Entity, String)> = world
+        .query_filtered::<(Entity, &Name), With<MeshMaterial3d<lunco_materials::ShaderMaterial>>>()
+        .iter(world)
+        .map(|(e, n)| (e, n.as_str().to_string()))
+        .collect();
+    shader_sorted.sort_by(|a, b| a.1.cmp(&b.1));
+
+    let currently_selected = world.get_resource::<SelectedEntity>().and_then(|s| s.entity);
+
+    // Build the display tree: each named entity's parent is its nearest named
+    // ancestor (unnamed wrappers collapse away), giving rover→wheel nesting
+    // instead of a flat alphabetical dump.
+    let display_parent = |e: Entity| -> Option<Entity> {
+        let mut cur = e;
+        for _ in 0..64 {
+            let p = *child_of.get(&cur)?;
+            if named_set.contains(&p) {
+                return Some(p);
+            }
+            cur = p;
+        }
+        None
+    };
+    let mut kids: HashMap<Entity, Vec<Entity>> = HashMap::new();
+    let mut roots: Vec<Entity> = Vec::new();
+    for (e, _) in &named {
+        match display_parent(*e) {
+            Some(p) => kids.entry(p).or_default().push(*e),
+            None => roots.push(*e),
+        }
+    }
+
+    // Visibility: an entity shows if it or any descendant is interesting.
+    let interesting = |e: Entity| selectable.contains(&e) || has_mesh.contains(&e);
+    let mut shown: HashMap<Entity, bool> = HashMap::new();
+    for (e, _) in &named {
+        compute_shown(*e, &kids, &interesting, &mut shown);
+    }
+
+    // Stable alphabetical order by leaf label, at every level.
+    let by_leaf = |a: &Entity, b: &Entity| {
+        let la = names.get(a).map(|s| leaf(s)).unwrap_or_default();
+        let lb = names.get(b).map(|s| leaf(s)).unwrap_or_default();
+        la.cmp(&lb)
+    };
+    for v in kids.values_mut() {
+        v.sort_by(by_leaf);
+    }
+    roots.retain(|e| *shown.get(e).unwrap_or(&false));
+    roots.sort_by(by_leaf);
+
+    let mut to_select: Option<Entity> = None;
+
+    // Pinned shader-materials group.
+    if !shader_sorted.is_empty() {
+        egui::CollapsingHeader::new("🎨 Shader materials")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Edit params in the Inspector").weak());
+                for (e, name) in &shader_sorted {
+                    if ui.selectable_label(currently_selected == Some(*e), leaf(name)).clicked() {
+                        to_select = Some(*e);
                     }
+                }
+            });
+        ui.separator();
+    }
+
+    // The hierarchy.
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        for root in &roots {
+            render_node(ui, *root, &kids, &names, &shown, currently_selected, &mut to_select);
+        }
+    });
+
+    // Route selection through the single mutation path (the `SelectEntity`
+    // command the viewport click + API also use), so it clears the previous
+    // `Selected`/`GizmoTarget` and updates `SelectedEntity` before the Inspector
+    // renders later this same egui pass. Sub-parts (wheels) have no API id, so
+    // they fall back to a direct `SelectedEntity` write — enough for the
+    // Inspector to retarget, without the highlight/gizmo bookkeeping.
+    if let Some(entity) = to_select {
+        let api_id = world
+            .get_resource::<lunco_api::registry::ApiEntityRegistry>()
+            .and_then(|r| r.api_id_for(entity))
+            .map(|g| g.get());
+        match api_id {
+            Some(id) => world.trigger(crate::commands::SelectEntity { entity_id: id }),
+            None => {
+                if let Some(mut selected) = world.get_resource_mut::<SelectedEntity>() {
+                    selected.entity = Some(entity);
                 }
             }
         }
     }
+}

@@ -25,7 +25,14 @@ impl Panel for Inspector {
             .fill(theme.colors.mantle)
             .inner_margin(8.0)
             .corner_radius(4)
-            .show(ui, |ui| inspector_content(self, ui, world));
+            .show(ui, |ui| {
+                // The Inspector stacks many sections (Environment, Transform,
+                // Physics, Wheel, Shader, Material, Modelica) and easily exceeds
+                // the panel height — scroll so the lower sections stay reachable.
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| inspector_content(self, ui, world));
+            });
     }
 }
 
@@ -54,21 +61,22 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
         ui.heading("Inspector");
 
         // ── Environment (sun + ambient) ──────────────────────────────
-        // Always visible — a directional light has no clickable geometry,
-        // so click-selection can never reach it. Edits write the LIVE
-        // light components/resources directly; they are session-transient
-        // (persisting back into the scene layer is the save-scene
-        // workstream).
-        environment_section(ui, world);
+        // Always reachable — a directional light has no clickable geometry, so
+        // click-selection can never reach it. Collapsed by default so it doesn't
+        // crowd the top of the panel (and can't be mistaken for the selected
+        // object's controls). Edits write the LIVE light components/resources
+        // directly; they are session-transient (persisting back into the scene
+        // layer is the save-scene workstream).
+        egui::CollapsingHeader::new("Environment (Sun & Ambient)")
+            .default_open(false)
+            .show(ui, |ui| environment_section(ui, world));
         ui.separator();
 
-        // ── Terrain shader (always visible) ──────────────────────────
-        // Like the sun, the terrain is the "world": its regolith shader is
-        // the scene's dominant surface and the terrain is `Ground`
-        // (deliberately excluded from click-selection so ground clicks
-        // deselect / drive the camera). So expose its shader params here
-        // unconditionally — no selection needed.
-        terrain_shader_section(ui, world);
+        // The terrain shader is NO LONGER an always-on section: the ground is
+        // click-selectable, so its shader params appear (like any object's) only
+        // when it's the selected entity. This stops the old always-on terrain
+        // controls — which sat at the very top — from being edited by mistake
+        // while a different object was selected.
 
         // Get current selection
         let Some(entity) = world.get_resource::<SelectedEntity>().and_then(|s| s.entity) else {
@@ -190,21 +198,37 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
                 });
         }
 
-        // ── Shader material parameters ───────────────────────────────
-        // Named, range-bounded controls for the selected entity's
-        // `ShaderMaterial` (regolith/wheel/balloon/…), driven by the
-        // manifest in `lunco-materials`. Edits mutate the live material
-        // asset in place — same immediate-feedback path as Transform.
-        let has_shader_mat = world
-            .query::<&MeshMaterial3d<lunco_materials::ShaderMaterial>>()
-            .get(world, entity)
-            .is_ok();
-        if has_shader_mat {
+        // ── Materials ────────────────────────────────────────────────
+        // A material lives on the leaf MESH entities (wheel visual children,
+        // chassis, terrain mesh), but selection targets the logical ROOT — so
+        // resolve materials from the selected entity's whole subtree, not just
+        // the entity itself. Otherwise a rover root or the ground prim (neither
+        // carries a `MeshMaterial3d` of its own) shows no material at all.
+        //
+        // Show only the section that matches the object's material type — the
+        // custom-shader (`ShaderMaterial`) params for a shader object, otherwise
+        // the StandardMaterial (PBR) controls. Never both: it keeps the panel
+        // short and you can't mis-edit the surface you didn't mean to. (Drill
+        // into a specific sub-part via the Explorer tree for per-part precision.)
+        if let Some(holder) = first_shader_holder(world, entity) {
+            // Shader object: its self-describing `.wgsl` uniforms.
             egui::CollapsingHeader::new("Shader Parameters")
                 .default_open(true)
                 .show(ui, |ui| {
-                    shader_parameters_section(ui, world, entity, true);
+                    shader_parameters_section(ui, world, holder, true);
                 });
+        } else {
+            // Plain object: full StandardMaterial (PBR) control. Collects every
+            // distinct PBR material in the subtree and applies edits to all of
+            // them — so a slider recolors the whole rover, not one hidden mesh.
+            let std_handles = collect_std_handles(world, entity);
+            if !std_handles.is_empty() {
+                egui::CollapsingHeader::new("Material (PBR)")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        material_pbr_section(ui, world, &std_handles);
+                    });
+            }
         }
 
         // ── Modelica parameters component ───────────────────────────
@@ -379,25 +403,114 @@ fn environment_section(ui: &mut egui::Ui, world: &mut World) {
     }
 }
 
-/// Always-visible terrain shader controls. Auto-finds the horizon terrain
-/// (the `HorizonShadowTerrain` carrying a [`ShaderMaterial`]) and renders its
-/// named params inline — the terrain is `Ground`, so click-selection can't
-/// reach it; this is its editing home, mirroring the always-on sun controls.
-fn terrain_shader_section(ui: &mut egui::Ui, world: &mut World) {
-    let terrain = world
-        .query_filtered::<Entity, (
-            With<lunco_core::HorizonShadowTerrain>,
-            With<MeshMaterial3d<lunco_materials::ShaderMaterial>>,
-        )>()
-        .iter(world)
-        .next();
-    let Some(entity) = terrain else { return };
-    egui::CollapsingHeader::new("Terrain Shader")
-        .default_open(true)
-        .show(ui, |ui| {
-            shader_parameters_section(ui, world, entity, false);
-        });
-    ui.separator();
+/// The selected entity plus all of its descendants. Materials live on leaf mesh
+/// entities while selection targets the logical root, so the material sections
+/// search this whole set.
+fn subtree(world: &mut World, root: Entity) -> Vec<Entity> {
+    let mut q = world.query::<&Children>();
+    let mut out = vec![root];
+    let mut i = 0;
+    while i < out.len() {
+        let e = out[i];
+        i += 1;
+        if let Ok(children) = q.get(world, e) {
+            out.extend(children.iter());
+        }
+    }
+    out
+}
+
+/// Distinct `StandardMaterial` handles anywhere in `root`'s subtree (deduped by
+/// asset id), so editing recolors every part at once.
+fn collect_std_handles(world: &mut World, root: Entity) -> Vec<Handle<StandardMaterial>> {
+    let ents = subtree(world, root);
+    let mut q = world.query::<&MeshMaterial3d<StandardMaterial>>();
+    let mut handles: Vec<Handle<StandardMaterial>> = Vec::new();
+    for e in ents {
+        if let Ok(m) = q.get(world, e) {
+            if !handles.iter().any(|h| h.id() == m.0.id()) {
+                handles.push(m.0.clone());
+            }
+        }
+    }
+    handles
+}
+
+/// First entity in `root`'s subtree carrying a [`ShaderMaterial`], if any.
+fn first_shader_holder(world: &mut World, root: Entity) -> Option<Entity> {
+    let ents = subtree(world, root);
+    let mut q = world.query::<&MeshMaterial3d<lunco_materials::ShaderMaterial>>();
+    ents.into_iter().find(|e| q.get(world, *e).is_ok())
+}
+
+/// Editable PBR controls for the selected object's `StandardMaterial`s — the
+/// default bevy material props/rovers carry unless a custom `ShaderMaterial`
+/// was authored. Reads the first handle, applies edits to **all** of them
+/// (so one slider recolors the whole rover). Mutates the live assets in place
+/// for immediate feedback. Full photometric control: base color, alpha,
+/// emissive, metallic, roughness, reflectance, unlit, double-sided.
+fn material_pbr_section(ui: &mut egui::Ui, world: &mut World, handles: &[Handle<StandardMaterial>]) {
+    let Some(handle) = handles.first().cloned() else {
+        return;
+    };
+
+    // Snapshot current values — no world borrow held while drawing widgets.
+    let snap = {
+        let mats = world.resource::<Assets<StandardMaterial>>();
+        let Some(m) = mats.get(&handle) else {
+            ui.label("Material still loading…");
+            return;
+        };
+        let base = m.base_color.to_linear();
+        let e = m.emissive;
+        (
+            [base.red, base.green, base.blue], // base rgb
+            base.alpha,
+            [e.red, e.green, e.blue], // emissive rgb
+            m.metallic,
+            m.perceptual_roughness,
+            m.reflectance,
+            m.unlit,
+            m.double_sided,
+        )
+    };
+    let (mut base, mut alpha, mut emissive, mut metallic, mut roughness, mut reflectance, mut unlit, mut double_sided) = snap;
+
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        changed |= ui.color_edit_button_rgb(&mut base).changed();
+        ui.label("Base color");
+    });
+    changed |= ui.add(egui::Slider::new(&mut alpha, 0.0..=1.0).text("Alpha")).changed();
+    ui.horizontal(|ui| {
+        changed |= ui.color_edit_button_rgb(&mut emissive).changed();
+        ui.label("Emissive");
+    });
+    changed |= ui.add(egui::Slider::new(&mut metallic, 0.0..=1.0).text("Metallic")).changed();
+    changed |= ui.add(egui::Slider::new(&mut roughness, 0.0..=1.0).text("Roughness")).changed();
+    changed |= ui.add(egui::Slider::new(&mut reflectance, 0.0..=1.0).text("Reflectance")).changed();
+    changed |= ui.checkbox(&mut unlit, "Unlit").changed();
+    changed |= ui.checkbox(&mut double_sided, "Double-sided").changed();
+    if handles.len() > 1 {
+        ui.label(egui::RichText::new(format!("applies to {} parts", handles.len())).weak());
+    }
+
+    if changed {
+        if let Some(mut mats) = world.get_resource_mut::<Assets<StandardMaterial>>() {
+            for handle in handles {
+                let Some(m) = mats.get_mut(handle) else { continue };
+                m.base_color = Color::LinearRgba(LinearRgba::new(base[0], base[1], base[2], alpha));
+                m.emissive = LinearRgba::new(emissive[0], emissive[1], emissive[2], 1.0);
+                m.metallic = metallic;
+                m.perceptual_roughness = roughness;
+                m.reflectance = reflectance;
+                m.unlit = unlit;
+                m.double_sided = double_sided;
+                m.alpha_mode = if alpha >= 1.0 { AlphaMode::Opaque } else { AlphaMode::Blend };
+                m.cull_mode = if double_sided { None } else { Some(bevy::render::render_resource::Face::Back) };
+            }
+        }
+    }
 }
 
 /// Render named, range-bounded controls for the selected entity's

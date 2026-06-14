@@ -224,6 +224,13 @@ pub struct ShaderMaterialPlugin;
 #[derive(Resource)]
 pub struct HorizonMarchModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 
+/// Keeps the shared `lunco::pbr_lit` WGSL module (PBR-lit mode) loaded so
+/// `#import lunco::pbr_lit::lit` resolves in any per-instance shader — letting
+/// a self-describing shader opt into bevy's full lighting without hand-copying
+/// the PbrInput boilerplate.
+#[derive(Resource)]
+pub struct PbrLitModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
+
 impl Plugin for ShaderMaterialPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<ShaderMaterial>::default());
@@ -239,6 +246,11 @@ impl Plugin for ShaderMaterialPlugin {
             .resource::<AssetServer>()
             .load("shaders/horizon_march.wgsl");
         app.insert_resource(HorizonMarchModule(module));
+        let pbr_lit = app
+            .world()
+            .resource::<AssetServer>()
+            .load("shaders/pbr_lit.wgsl");
+        app.insert_resource(PbrLitModule(pbr_lit));
     }
 }
 
