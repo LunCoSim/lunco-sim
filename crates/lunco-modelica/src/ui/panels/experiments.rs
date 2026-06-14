@@ -785,7 +785,7 @@ impl Panel for ExperimentsPanel {
             {
                 world
                     .commands()
-                    .trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None, solver: None, h0: None });
+                    .trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
             }
         }
 
@@ -1197,7 +1197,7 @@ impl ExperimentsPanel {
             // target. Setup (bounds/inputs/overrides) is already in the draft.
             world
                 .commands()
-                .trigger(crate::ui::commands::FastRunActiveModel { doc, class: Some(model_name.clone()), t_end: None, dt: None, tolerance: None, solver: None, h0: None });
+                .trigger(crate::ui::commands::FastRunActiveModel { doc, class: Some(model_name.clone()), t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
         }
     }
 

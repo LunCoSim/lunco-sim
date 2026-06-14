@@ -762,13 +762,31 @@ fn run_inner(
         // here, where the interactive stepper — bounded by the output `dt`
         // — collapses unless `dt` is driven down to a few thousand seconds.
         lunco_experiments::RuntimeMode::Batch => {
-            bevy::log::info!(
-                "[runner] simulate begin (batch): t={}..{} dt={:?}",
+            // The batch solver reads its output grid from `opts.dt` (one column
+            // per `dt` step). The shared `stepper_options_from_bounds` leaves
+            // `opts.dt` as the *initial step* (`h0`) for the interactive path;
+            // for batch we instead resolve the requested output spacing — from
+            // either the `Interval` (`dt`) or the `NumberOfIntervals`
+            // (`n_intervals`) knob — so the run honours whichever the user
+            // chose. The solver free-steps regardless, so a coarse output grid
+            // doesn't constrain it.
+            let mut batch_opts = stepper_opts.clone();
+            let output_dt = crate::sim_target::resolve_step_dt(
                 bounds.t_start,
                 bounds.t_end,
-                bounds.dt
+                bounds.dt,
+                bounds.n_intervals,
             );
-            run_batch_sim(&run_dae, &stepper_opts, t_wall, &mut sink);
+            batch_opts.dt = Some(output_dt);
+            bevy::log::info!(
+                "[runner] simulate begin (batch): t={}..{} output_dt={} (dt={:?} n_intervals={:?})",
+                bounds.t_start,
+                bounds.t_end,
+                output_dt,
+                bounds.dt,
+                bounds.n_intervals
+            );
+            run_batch_sim(&run_dae, &batch_opts, t_wall, &mut sink);
         }
         // Opt-in: the live `SimStepper` loop, for streamable/steerable runs.
         lunco_experiments::RuntimeMode::Interactive => {
