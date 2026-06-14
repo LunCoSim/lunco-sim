@@ -276,6 +276,27 @@ pub struct ShaderCatalog {
     pub entries: Vec<ShaderEntry>,
 }
 
+impl ShaderCatalog {
+    /// Register a pickable shader by asset path (`shaders/foo.wgsl` or
+    /// `twin://name/shaders/foo.wgsl`), deduped by path. The display label is
+    /// derived from the file stem. Returns `true` if it was newly added.
+    pub fn add(&mut self, path: impl Into<String>) -> bool {
+        let path = path.into();
+        if self.entries.iter().any(|e| e.path == path) {
+            return false;
+        }
+        let stem = path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&path)
+            .strip_suffix(".wgsl")
+            .unwrap_or(&path);
+        let label = humanize_shader_name(stem);
+        self.entries.push(ShaderEntry { path, label });
+        true
+    }
+}
+
 impl Default for ShaderCatalog {
     fn default() -> Self {
         // The prop-safe dynamic shaders that ship in `assets/shaders`. Terrain
@@ -307,18 +328,107 @@ fn humanize_shader_name(stem: &str) -> String {
         .join(" ")
 }
 
-/// Whether a parsed schema is safe to apply to an arbitrary prop: a `Material`
-/// shader whose only engine-filled field (if any) is `sun_vis` — the
-/// horizon-shadow visibility every prop shader receives. Terrain shaders
-/// declare engine fields like `sun_dir`/`hf_size` that only the terrain
-/// entity's horizon system fills, so they would render black on a prop.
-#[cfg(not(target_arch = "wasm32"))]
-fn is_prop_pickable(schema: &ParamSchema) -> bool {
-    schema
-        .fields
-        .iter()
-        .filter(|f| matches!(f.ui, dyn_params::UiKind::Engine))
-        .all(|f| f.name == "sun_vis")
+/// Whether WGSL `src` is safe to offer as a pickable prop shader: it declares a
+/// `Material` struct (so the engine can reflect its params) and every
+/// engine-filled field (if any) is `sun_vis` — the horizon-shadow visibility
+/// every prop shader receives. Terrain shaders declare engine fields like
+/// `sun_dir`/`hf_size` that only the terrain entity's horizon system fills, so
+/// they would render black on a prop. Shaders with no `Material` struct can't be
+/// driven by the dynamic system at all, so they're rejected too.
+pub fn is_prop_pickable_source(src: &str) -> bool {
+    match ParamSchema::parse(src) {
+        Some(schema) => schema
+            .fields
+            .iter()
+            .filter(|f| matches!(f.ui, dyn_params::UiKind::Engine))
+            .all(|f| f.name == "sun_vis"),
+        None => false,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Shader templates — PBR-compatible starting points for live shader creation
+// (`CreateShader`). Each declares its own `Material` struct (so it is dynamic)
+// and shades through the shared `lunco::pbr_lit::lit` helper (full lighting,
+// shadows, ambient) so a generated shader looks correct under the sun.
+// `__NAME__` is replaced with the shader's stem for the header comment.
+// ─────────────────────────────────────────────────────────────────────────
+
+const SOLID_TEMPLATE: &str = r#"//! __NAME__ — solid PBR material (generated template). Edit freely; saves
+//! hot-reload, and the Inspector controls are reflected from the `//!@`
+//! annotations + `Material` struct below.
+
+#import bevy_pbr::forward_io::VertexOutput
+#import lunco::pbr_lit::lit
+
+//!@ui      base_color color "Base colour"
+//!@default base_color 0.8,0.8,0.8
+//!@ui      roughness  0 1  "Roughness"
+//!@default roughness  0.6
+//!@ui      metallic   0 1  "Metallic"
+//!@default metallic   0.0
+struct Material {
+    base_color: vec3<f32>,
+    roughness:  f32,
+    metallic:   f32,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    return lit(in, is_front, mat.base_color, mat.roughness, mat.metallic, vec3<f32>(0.0));
+}
+"#;
+
+const CHECKER_TEMPLATE: &str = r#"//! __NAME__ — procedural checker PBR material (generated template). The pattern
+//! is computed from the object-space surface direction (seam-free on any mesh)
+//! and shaded with full PBR lighting. Edit freely.
+
+#import bevy_pbr::{forward_io::VertexOutput, mesh_functions}
+#import lunco::pbr_lit::lit
+
+//!@ui      color_a   color "Colour A"
+//!@default color_a   0.85,0.2,0.2
+//!@ui      color_b   color "Colour B"
+//!@default color_b   0.1,0.1,0.12
+//!@ui      tiles     1 64 "Tiles"
+//!@default tiles     6
+//!@ui      roughness 0 1  "Roughness"
+//!@default roughness 0.6
+struct Material {
+    color_a:   vec3<f32>,
+    tiles:     f32,
+    color_b:   vec3<f32>,
+    roughness: f32,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    // Object-space surface direction → seam-free lat/long coords (see balloon.wgsl).
+    let m = mesh_functions::get_world_from_local(in.instance_index);
+    let R = mat3x3<f32>(normalize(m[0].xyz), normalize(m[1].xyz), normalize(m[2].xyz));
+    let d = normalize(transpose(R) * normalize(in.world_normal));
+    let u = atan2(d.z, d.x) * 0.15915494 + 0.5; // / (2*PI)
+    let v = asin(clamp(d.y, -1.0, 1.0)) * 0.31830989 + 0.5; // / PI
+    let t = mat.tiles;
+    let cell = floor(u * t) + floor(v * t);
+    let parity = cell - 2.0 * floor(cell * 0.5);
+    let albedo = select(mat.color_a, mat.color_b, parity > 0.5);
+    return lit(in, is_front, albedo, mat.roughness, 0.0, vec3<f32>(0.0));
+}
+"#;
+
+/// WGSL source for a built-in starting template, with `title` substituted into
+/// the header comment. `kind` selects the template: `"checker"` for the
+/// procedural checker, anything else (incl. `"solid"`/empty) for the flat solid
+/// material. Both are PBR-lit and prop-pickable.
+pub fn shader_template(kind: &str, title: &str) -> String {
+    let body = match kind.trim() {
+        "checker" => CHECKER_TEMPLATE,
+        _ => SOLID_TEMPLATE,
+    };
+    body.replace("__NAME__", title)
 }
 
 /// Startup (native): augment [`ShaderCatalog`] by scanning `assets/shaders` for
@@ -340,12 +450,11 @@ fn discover_shaders(mut catalog: ResMut<ShaderCatalog>) {
             continue;
         }
         let Ok(src) = std::fs::read_to_string(&p) else { continue };
-        match ParamSchema::parse(&src) {
-            Some(s) if is_prop_pickable(&s) => found.push(ShaderEntry {
+        if is_prop_pickable_source(&src) {
+            found.push(ShaderEntry {
                 path: asset_path,
                 label: humanize_shader_name(stem),
-            }),
-            _ => {}
+            });
         }
     }
     found.sort_by(|a, b| a.label.cmp(&b.label));

@@ -1978,9 +1978,344 @@ pub fn on_set_shader_source(
     );
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Live shader authoring — create from a template, import any `.wgsl` from the
+// computer into the open Twin, and discover shaders dropped in the Twin folder.
+// All persist into `<twin>/shaders/<name>.wgsl` (fallback `assets/shaders/`),
+// register into the picker [`ShaderCatalog`], and can apply to an entity — no
+// restart. The created/imported shaders are PBR-compatible self-describing
+// shaders (see [`lunco_materials::shader_template`]).
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Sanitise a free-text name into a safe lowercase file stem (`[a-z0-9_]`,
+/// trimmed of leading/trailing `_`). Empty input → `"shader"`.
+fn sanitize_stem(s: &str) -> String {
+    let out: String = s
+        .trim()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c.to_ascii_lowercase() } else { '_' })
+        .collect();
+    let out = out.trim_matches('_').to_string();
+    if out.is_empty() { "shader".to_string() } else { out }
+}
+
+/// Core of [`CreateShader`]/[`ImportShader`]: validate the WGSL is a
+/// prop-pickable dynamic shader, persist it into the open Twin (fallback
+/// `assets/shaders/`), insert it live into [`Assets<Shader>`] so it renders
+/// this frame, register it in the picker [`ShaderCatalog`], and optionally bind
+/// it to `target` (API id; 0 = none). Returns the asset path on success.
+#[allow(clippy::too_many_arguments)]
+fn install_shader(
+    stem: &str,
+    source: &str,
+    target: u64,
+    twin_roots: Option<&lunco_assets::twin_source::TwinRoots>,
+    asset_server: &AssetServer,
+    shaders: &mut Assets<bevy::shader::Shader>,
+    catalog: &mut lunco_materials::ShaderCatalog,
+    registry: &lunco_api::registry::ApiEntityRegistry,
+    materials: &mut Assets<lunco_materials::ShaderMaterial>,
+    q_mat: &Query<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    commands: &mut Commands,
+) -> Option<String> {
+    // Gate: must be a self-describing `Material` shader whose only engine field
+    // (if any) is `sun_vis`. Otherwise it would render black / can't be driven.
+    if !lunco_materials::is_prop_pickable_source(source) {
+        warn!(
+            "INSTALL_SHADER: '{stem}' is not a prop-pickable dynamic shader \
+             (needs a `Material` struct; engine fields limited to `sun_vis`) — skipped"
+        );
+        return None;
+    }
+
+    // Destination: the primary open Twin's `shaders/` dir (portable, persists
+    // with the Twin under a `twin://` asset path), else the engine library.
+    let (asset_path, disk_path): (String, std::path::PathBuf) =
+        match twin_roots.and_then(|t| t.primary()) {
+            Some((name, root)) => (
+                format!("twin://{name}/shaders/{stem}.wgsl"),
+                root.join("shaders").join(format!("{stem}.wgsl")),
+            ),
+            None => (
+                format!("shaders/{stem}.wgsl"),
+                std::path::PathBuf::from("assets/shaders").join(format!("{stem}.wgsl")),
+            ),
+        };
+
+    // Persist to disk (native). Non-fatal on failure — the in-memory insert
+    // below still makes it usable this session.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Some(parent) = disk_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::write(&disk_path, source) {
+            Ok(()) => info!("INSTALL_SHADER: wrote {}", disk_path.display()),
+            Err(e) => warn!("INSTALL_SHADER: write {} failed: {e}", disk_path.display()),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = &disk_path;
+
+    // Insert the compiled source live under the asset path, so any material
+    // bound to it renders immediately (no disk round-trip / watcher wait).
+    let shader_handle = asset_server.load::<bevy::shader::Shader>(asset_path.clone());
+    let shader = bevy::shader::Shader::from_wgsl(source.to_string(), asset_path.clone());
+    let _ = shaders.insert(shader_handle.id(), shader);
+
+    // Make it pickable.
+    catalog.add(asset_path.clone());
+
+    // Optionally apply to a target entity (preserve any existing shader params).
+    if target != 0 {
+        let gid = lunco_core::GlobalEntityId::from_raw(target);
+        match registry.resolve(&gid) {
+            Some(ent) => {
+                let template = q_mat
+                    .get(ent)
+                    .ok()
+                    .and_then(|m| materials.get(&m.0))
+                    .cloned()
+                    .unwrap_or_default();
+                let mat_handle =
+                    materials.add(lunco_materials::build_shader_material(shader_handle.clone(), template));
+                commands
+                    .entity(ent)
+                    .remove::<MeshMaterial3d<StandardMaterial>>()
+                    .insert(MeshMaterial3d(mat_handle));
+                info!("INSTALL_SHADER: applied {asset_path} to entity {target}");
+            }
+            None => warn!("INSTALL_SHADER: target id {target} not in registry"),
+        }
+    }
+
+    info!("INSTALL_SHADER: registered {asset_path}");
+    Some(asset_path)
+}
+
+/// Create a new dynamic shader from a built-in template (or supplied WGSL),
+/// persist it into the open Twin (`<twin>/shaders/<name>.wgsl`, or
+/// `assets/shaders/` when no Twin is open), register it in the picker, and
+/// optionally bind it to a target entity — all live, no restart.
+///
+/// ```json
+/// {"command":"CreateShader","params":{"name":"my_panel","template":"checker","target":42}}
+/// {"command":"CreateShader","params":{"name":"custom","source":"<wgsl...>"}}
+/// ```
+#[Command(default)]
+pub struct CreateShader {
+    /// Display name / file stem, e.g. `"my_panel"` (sanitised to `[a-z0-9_]`).
+    pub name: String,
+    /// Template id when `source` is empty: `"solid"` (default) or `"checker"`.
+    pub template: String,
+    /// Full WGSL source. Empty → generate from `template`.
+    pub source: String,
+    /// API id of an entity to apply the new shader to. `0` = create only.
+    pub target: u64,
+}
+
+/// Observer for [`CreateShader`].
+#[allow(clippy::too_many_arguments)]
+pub fn on_create_shader(
+    trigger: On<CreateShader>,
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    asset_server: Res<AssetServer>,
+    mut shaders: ResMut<Assets<bevy::shader::Shader>>,
+    mut catalog: ResMut<lunco_materials::ShaderCatalog>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    mut materials: ResMut<Assets<lunco_materials::ShaderMaterial>>,
+    q_mat: Query<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    mut commands: Commands,
+) {
+    let ev = trigger.event();
+    let stem = sanitize_stem(&ev.name);
+    let source = if ev.source.trim().is_empty() {
+        lunco_materials::shader_template(&ev.template, &stem)
+    } else {
+        ev.source.clone()
+    };
+    install_shader(
+        &stem,
+        &source,
+        ev.target,
+        twin_roots.as_deref(),
+        &asset_server,
+        &mut shaders,
+        &mut catalog,
+        &registry,
+        &mut materials,
+        &q_mat,
+        &mut commands,
+    );
+}
+
+/// Import an existing `.wgsl` file from anywhere on disk INTO the open Twin
+/// (copies it to `<twin>/shaders/<name>.wgsl`), registers it in the picker, and
+/// optionally binds it to a target entity. The file must be a prop-pickable
+/// dynamic shader (a `Material` struct; engine fields limited to `sun_vis`).
+///
+/// ```json
+/// {"command":"ImportShader","params":{"source_path":"/home/me/cool.wgsl","name":"cool","target":42}}
+/// ```
+#[Command(default)]
+pub struct ImportShader {
+    /// Filesystem path of the `.wgsl` to import (absolute or cwd-relative).
+    pub source_path: String,
+    /// Optional new stem; empty → keep the source file's own stem.
+    pub name: String,
+    /// API id of an entity to apply the imported shader to. `0` = import only.
+    pub target: u64,
+}
+
+/// Observer for [`ImportShader`].
+#[allow(clippy::too_many_arguments, unused_variables, unused_mut)]
+pub fn on_import_shader(
+    trigger: On<ImportShader>,
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    asset_server: Res<AssetServer>,
+    mut shaders: ResMut<Assets<bevy::shader::Shader>>,
+    mut catalog: ResMut<lunco_materials::ShaderCatalog>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    mut materials: ResMut<Assets<lunco_materials::ShaderMaterial>>,
+    q_mat: Query<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    mut commands: Commands,
+) {
+    let ev = trigger.event();
+    #[cfg(target_arch = "wasm32")]
+    {
+        warn!("IMPORT_SHADER: importing from a local file is native-only");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let src = match std::fs::read_to_string(&ev.source_path) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("IMPORT_SHADER: read '{}' failed: {e}", ev.source_path);
+                return;
+            }
+        };
+        let stem = if ev.name.trim().is_empty() {
+            std::path::Path::new(&ev.source_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(sanitize_stem)
+                .unwrap_or_else(|| "shader".to_string())
+        } else {
+            sanitize_stem(&ev.name)
+        };
+        install_shader(
+            &stem,
+            &src,
+            ev.target,
+            twin_roots.as_deref(),
+            &asset_server,
+            &mut shaders,
+            &mut catalog,
+            &registry,
+            &mut materials,
+            &q_mat,
+            &mut commands,
+        );
+    }
+}
+
+/// Rescan the open Twins' `shaders/` folders (and `assets/shaders`) and register
+/// any prop-pickable `.wgsl` into the picker [`ShaderCatalog`]. Lets you drop a
+/// shader file into a Twin and pick it up without restarting.
+#[Command(default)]
+pub struct RescanShaders {}
+
+/// Native: scan `dir` for `*.wgsl` prop-pickable shaders and register each under
+/// `<asset_prefix>/<stem>.wgsl` in `catalog`. Returns the count newly added.
+/// Silent no-op if the dir can't be read.
+#[cfg(not(target_arch = "wasm32"))]
+fn scan_dir_into_catalog(
+    dir: &std::path::Path,
+    asset_prefix: &str,
+    catalog: &mut lunco_materials::ShaderCatalog,
+) -> usize {
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    let mut n = 0;
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("wgsl") {
+            continue;
+        }
+        let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else { continue };
+        let Ok(src) = std::fs::read_to_string(&p) else { continue };
+        if lunco_materials::is_prop_pickable_source(&src) && catalog.add(format!("{asset_prefix}/{stem}.wgsl")) {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Observer for [`RescanShaders`].
+#[allow(unused_variables, unused_mut)]
+pub fn on_rescan_shaders(
+    _trigger: On<RescanShaders>,
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    mut catalog: ResMut<lunco_materials::ShaderCatalog>,
+) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut total = 0;
+        if let Some(roots) = twin_roots.as_deref() {
+            for name in roots.names() {
+                if let Some(root) = roots.root_of(&name) {
+                    total += scan_dir_into_catalog(
+                        &root.join("shaders"),
+                        &format!("twin://{name}/shaders"),
+                        &mut catalog,
+                    );
+                }
+            }
+        }
+        total += scan_dir_into_catalog(std::path::Path::new("assets/shaders"), "shaders", &mut catalog);
+        info!("RESCAN_SHADERS: +{total} new shader(s)");
+    }
+}
+
+/// Tracks which open Twins have had their `shaders/` folder scanned, so
+/// [`auto_scan_twin_shaders`] does the work once per Twin (not every frame).
+#[derive(Resource, Default)]
+pub struct ScannedTwinShaders(std::collections::HashSet<String>);
+
+/// Each frame, register shaders from any newly-opened Twin's `shaders/` folder
+/// into the picker (once per Twin). Makes "drop a shader in the Twin folder"
+/// work automatically on open, without a manual [`RescanShaders`].
+#[allow(unused_variables, unused_mut)]
+pub fn auto_scan_twin_shaders(
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    mut scanned: ResMut<ScannedTwinShaders>,
+    mut catalog: ResMut<lunco_materials::ShaderCatalog>,
+) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some(roots) = twin_roots.as_deref() else { return };
+        for name in roots.names() {
+            if scanned.0.contains(&name) {
+                continue;
+            }
+            if let Some(root) = roots.root_of(&name) {
+                let added = scan_dir_into_catalog(
+                    &root.join("shaders"),
+                    &format!("twin://{name}/shaders"),
+                    &mut catalog,
+                );
+                if added > 0 {
+                    info!("AUTO_SCAN: +{added} shader(s) from twin '{name}'");
+                }
+            }
+            scanned.0.insert(name);
+        }
+    }
+}
+
 /// Plugin that registers SPAWN_ENTITY / MOVE_ENTITY / SET_OBJECT_PROPERTY /
-/// FOCUS_ENTITY_BY_ID / SET_CAMERA_LOOK_AT / RELOAD_SHADER / SET_SHADER_SOURCE
-/// command observers and the kinematic-pulse cleanup system.
+/// FOCUS_ENTITY_BY_ID / SET_CAMERA_LOOK_AT / RELOAD_SHADER / SET_SHADER_SOURCE /
+/// CREATE_SHADER / IMPORT_SHADER / RESCAN_SHADERS command observers and the
+/// kinematic-pulse cleanup + twin shader auto-scan systems.
 pub struct SpawnCommandPlugin;
 
 impl Plugin for SpawnCommandPlugin {
@@ -1993,6 +2328,9 @@ impl Plugin for SpawnCommandPlugin {
         app.add_observer(on_set_camera_look_at);
         app.add_observer(on_reload_shader);
         app.add_observer(on_set_shader_source);
+        app.add_observer(on_create_shader);
+        app.add_observer(on_import_shader);
+        app.add_observer(on_rescan_shaders);
         // Register with AppTypeRegistry so the reflection-based HTTP executor
         // (`get_with_short_type_path`) can construct it from `{"command":"SetObjectProperty",...}`.
         app.register_type::<SetObjectProperty>();
@@ -2001,6 +2339,11 @@ impl Plugin for SpawnCommandPlugin {
         app.register_type::<SetCameraLookAt>();
         app.register_type::<ReloadShader>();
         app.register_type::<SetShaderSource>();
+        app.register_type::<CreateShader>();
+        app.register_type::<ImportShader>();
+        app.register_type::<RescanShaders>();
+        app.init_resource::<ScannedTwinShaders>();
+        app.add_systems(Update, auto_scan_twin_shaders);
         app.add_systems(FixedPostUpdate, clear_kinematic_pulse_velocity);
         app.init_resource::<InterpBuffers>();
         app.init_resource::<PredictedStateLog>();

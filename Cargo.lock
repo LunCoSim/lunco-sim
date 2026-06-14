@@ -7119,6 +7119,7 @@ dependencies = [
  "bevy_picking",
  "big_space",
  "lunco-api",
+ "lunco-assets",
  "lunco-avatar",
  "lunco-controller",
  "lunco-core",
