@@ -36,10 +36,11 @@ use bevy::prelude::*;
 use openusd::sdf::{AbstractData, Path as SdfPath, Value};
 use openusd::usda::TextReader;
 
-/// Tag for a binary's built-in default sun (or other default lights).
-/// Despawned as soon as the loaded scene authors its own light prim.
-#[derive(Component)]
-pub struct FallbackSceneLight;
+/// Tag for a binary's built-in default sun — defined in `lunco-core` (so
+/// non-USD crates can tag their lights too), re-exported here where the
+/// despawn policy lives. Despawned as soon as the loaded scene authors its
+/// own light prim.
+pub use lunco_core::FallbackSceneLight;
 
 /// Marker stamped on every entity instantiated from a UsdLux light prim.
 /// Its `Add` observer enforces the fallback policy (see module docs).
@@ -52,13 +53,28 @@ pub struct UsdAuthoredLight;
 pub(crate) struct UsdDomeAmbient(pub(crate) f32);
 
 /// Scalar attribute reader tolerant of `float`/`double`/`int` authoring.
-fn get_attribute_as_f32(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<f32> {
+pub(crate) fn get_attribute_as_f32(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<f32> {
     let attr_path = path.append_property(attr).ok()?;
     let val = reader.try_get(&attr_path, "default").ok().flatten()?;
     match &*val {
         Value::Float(f) => Some(*f),
         Value::Double(d) => Some(*d as f32),
         Value::Int(i) => Some(*i as f32),
+        _ => None,
+    }
+}
+
+/// Bool attribute reader (also accepts `int` 0/1 authoring).
+pub(crate) fn get_attribute_as_bool(
+    reader: &TextReader,
+    path: &SdfPath,
+    attr: &str,
+) -> Option<bool> {
+    let attr_path = path.append_property(attr).ok()?;
+    let val = reader.try_get(&attr_path, "default").ok().flatten()?;
+    match &*val {
+        Value::Bool(b) => Some(*b),
+        Value::Int(i) => Some(*i != 0),
         _ => None,
     }
 }
@@ -95,8 +111,15 @@ pub(crate) fn instantiate_light_prim(
             let first_bound =
                 get_attribute_as_f32(reader, sdf_path, "lunco:shadow:firstCascadeFarBound")
                     .unwrap_or(40.0);
+            // More cascades = the near/far split inside ONE light: tight
+            // near cascades keep object/contact shadows crisp while the
+            // extra far cascades carry mesh-accurate terrain self-shadow
+            // out to maxDistance (the heightfield march covers beyond).
+            let num_cascades = get_attribute_as_f32(reader, sdf_path, "lunco:shadow:numCascades")
+                .map(|n| (n as usize).clamp(1, 8))
+                .unwrap_or(4);
             let cascades = CascadeShadowConfigBuilder {
-                num_cascades: 4,
+                num_cascades,
                 minimum_distance: 0.1,
                 first_cascade_far_bound: first_bound,
                 maximum_distance: max_distance,
@@ -106,16 +129,30 @@ pub(crate) fn instantiate_light_prim(
             }
             .build();
 
+            // UsdLux `inputs:angle` = angular diameter in degrees; drives
+            // the physically-scaled penumbra of horizon shadows.
+            let angle =
+                get_attribute_as_f32(reader, sdf_path, "inputs:angle").unwrap_or(0.53);
+
+            // With the terrain casting into (and receiving) the cascades,
+            // grazing lunar sun angles make self-shadow acne the dominant
+            // artifact — these defaults favour acne-free terrain over the
+            // last few centimetres of contact tightness. Authorable per
+            // scene, and live-tunable via `SetEnvironmentLight`.
+            let depth_bias = get_attribute_as_f32(reader, sdf_path, "lunco:shadow:depthBias")
+                .unwrap_or(0.06);
+            let normal_bias = get_attribute_as_f32(reader, sdf_path, "lunco:shadow:normalBias")
+                .unwrap_or(2.5);
+
             commands.insert_resource(DirectionalLightShadowMap { size: 4096 });
             commands.entity(entity).insert((
+                lunco_core::SunAngularDiameter(angle),
                 DirectionalLight {
                     illuminance,
                     color,
                     shadows_enabled: true,
-                    // Minimal biases for tight, grounded hard shadows —
-                    // same policy as the sandbox fallback sun.
-                    shadow_depth_bias: 0.02,
-                    shadow_normal_bias: 0.8,
+                    shadow_depth_bias: depth_bias,
+                    shadow_normal_bias: normal_bias,
                     ..Default::default()
                 },
                 cascades,
@@ -152,6 +189,7 @@ pub(crate) fn on_usd_light_added(
     mut commands: Commands,
 ) {
     for e in &fallbacks {
+        info!("[usd-bevy] scene authored a light — despawning fallback light {e:?}");
         commands.entity(e).despawn();
     }
     if let Some(mut ambient) = ambient {

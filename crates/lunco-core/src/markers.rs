@@ -30,3 +30,60 @@ pub struct GridAnchor;
 #[derive(Component, Debug, Default, Clone, Copy, Reflect)]
 #[reflect(Component)]
 pub struct SoiMigrant;
+
+/// Tag for a binary's built-in default sun (or other default lights).
+/// The USD loader despawns every `FallbackSceneLight` the moment a scene
+/// authors its own light prim — scene lighting is the source of truth.
+/// Lives in `lunco-core` so every light-spawning crate (binaries,
+/// `lunco-celestial`'s solar-system bootstrap) can tag without depending
+/// on the USD stack.
+#[derive(Component, Debug, Default, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct FallbackSceneLight;
+
+/// Angular **diameter** of a sun (`DirectionalLight`) in degrees, from the
+/// UsdLux `inputs:angle` attribute (Sol from Earth/Moon ≈ 0.53°). Drives
+/// physically-scaled penumbra width in the horizon-shadow ray-march:
+/// shadows are razor-sharp next to the caster and soften with distance.
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct SunAngularDiameter(pub f32);
+
+impl Default for SunAngularDiameter {
+    fn default() -> Self {
+        Self(0.53)
+    }
+}
+
+/// Opt-in marker for static terrain that self-shadows via a baked
+/// multi-azimuth **horizon map** instead of the realtime cascade shadow
+/// map (which cannot resolve kilometre-scale terrain shadows).
+///
+/// Stamped by loaders (the USD loader reads
+/// `custom bool lunco:terrain:horizonShadows`); consumed by
+/// `lunco-environment`'s horizon-shadow system, which bakes horizon
+/// elevation angles from the terrain's `Mesh3d` for `azimuths` compass
+/// directions over a `resolution`² grid. Universal across bodies: the
+/// bake is sun-agnostic — any sun direction is evaluated against it at
+/// runtime, so it works wherever the terrain (and its star) is.
+///
+/// Lives in `lunco-core` so loader crates and the environment crate can
+/// share it without depending on each other (same pattern as
+/// [`Provenance`](crate::Provenance)).
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct HorizonShadowTerrain {
+    /// Side length of the square heightmap / visibility grid baked over
+    /// the terrain's local XZ bounding box. Default 512 — matched to
+    /// typical DEM vertex spacing; raise for finer source data.
+    pub resolution: u32,
+    /// Number of compass directions horizon angles are baked for.
+    /// Runtime sun azimuths interpolate between adjacent slices.
+    pub azimuths: u32,
+}
+
+impl Default for HorizonShadowTerrain {
+    fn default() -> Self {
+        Self { resolution: 512, azimuths: 16 }
+    }
+}

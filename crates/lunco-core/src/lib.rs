@@ -49,7 +49,9 @@ pub use commands::{
     Ack, ActiveCommandId, CommandOutcome, CommandResults, Mutation, OpId, Reject, SessionId,
     WireChannel,
 };
-pub use markers::{GridAnchor, SoiMigrant};
+pub use markers::{
+    FallbackSceneLight, GridAnchor, HorizonShadowTerrain, SoiMigrant, SunAngularDiameter,
+};
 pub use invariants::BigSpaceInvariantsPlugin;
 pub use world::{
     ensure_world_root, OriginAnchor, WorldGrid, WorldGridConfig, WorldRoot, WorldShellPlugin,

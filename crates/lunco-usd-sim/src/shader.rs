@@ -94,24 +94,33 @@ pub fn apply_usd_shader_materials(
     }
 }
 
-/// Reads `primvars:colorA/B/C` and `primvars:param0..7` into the material.
+/// Reads every authored `primvars:*` attribute (except the shader-routing
+/// `materialType`/`shaderPath`) into the material **by its real name** — so
+/// each prim authors exactly the parameters its shader's `Material` struct
+/// declares. Names the shader doesn't declare pack to nothing (harmless).
+/// Colours are read as `vec3`, everything else as a scalar; the material's
+/// reflected schema resolves the final type once the shader loads.
+///
+/// A prim's attributes are child specs at `<prim>.<attr>`, so we enumerate the
+/// reader's specs and keep the ones directly under this prim (split on the USD
+/// `.` property separator) — no hardcoded parameter names.
 fn read_authored_params(reader: &TextReader, sdf_path: &SdfPath, m: &mut ShaderMaterial) {
-    for (attr, key) in [
-        ("primvars:colorA", "colorA"),
-        ("primvars:colorB", "colorB"),
-        ("primvars:colorC", "colorC"),
-    ] {
-        if let Some(c) = get_attribute_as_vec3(reader, sdf_path, attr) {
-            apply_param(m, key, &format!("{},{},{}", c.x, c.y, c.z));
+    let prefix = format!("{}.", sdf_path.as_str());
+    let attr_names: Vec<String> = reader
+        .iter()
+        .filter_map(|(p, _)| p.as_str().strip_prefix(&prefix).map(str::to_string))
+        .collect();
+    for attr in attr_names {
+        let Some(name) = attr.strip_prefix("primvars:") else { continue };
+        if name == "materialType" || name == "shaderPath" {
+            continue;
         }
-    }
-    for i in 0..8 {
-        let attr = format!("primvars:param{i}");
-        let key = format!("param{i}");
-        if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, &attr) {
-            apply_param(m, &key, &v.to_string());
+        if let Some(c) = get_attribute_as_vec3(reader, sdf_path, &attr) {
+            apply_param(m, name, &format!("{},{},{}", c.x, c.y, c.z));
+        } else if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, &attr) {
+            apply_param(m, name, &v.to_string());
         } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, &attr) {
-            apply_param(m, &key, &(v as f32).to_string());
+            apply_param(m, name, &(v as f32).to_string());
         }
     }
 }

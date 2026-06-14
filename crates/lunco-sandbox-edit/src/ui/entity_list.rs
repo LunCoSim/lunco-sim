@@ -41,31 +41,83 @@ fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut W
             .map(|(e, name)| (e, name.as_str().to_string()))
             .collect();
 
+        // The editable-shader subset (terrain + props carrying a custom
+        // `ShaderMaterial`). Pinned at the top so the terrain shader is one
+        // click from the Explorer instead of buried in the full list.
+        let shader_ents: Vec<(Entity, String)> = world
+            .query_filtered::<(Entity, &Name), With<MeshMaterial3d<lunco_materials::ShaderMaterial>>>()
+            .iter(world)
+            .map(|(e, name)| (e, name.as_str().to_string()))
+            .collect();
+
         // Sort by name
         let mut sorted: Vec<_> = entities.iter().collect();
         sorted.sort_by(|a, b| a.1.cmp(&b.1));
+        let mut shader_sorted: Vec<_> = shader_ents.iter().collect();
+        shader_sorted.sort_by(|a, b| a.1.cmp(&b.1));
 
         // Get current selection (separate borrow)
         let currently_selected = world
             .get_resource::<SelectedEntity>()
             .and_then(|s| s.entity);
 
+        // Collect a click across either section; apply once at the end to keep
+        // the world borrow simple.
+        let mut to_select: Option<Entity> = None;
+
+        // Renders one selectable row, recording a click into `to_select`.
+        // `salt` disambiguates the egui widget id: a shader-material entity is
+        // listed twice (pinned 🎨 section + full list), so without a per-section
+        // salt the two buttons share an id and egui drops one's clicks — the
+        // root of "clicking the second object doesn't switch the selection".
+        let mut row = |ui: &mut egui::Ui, salt: &str, entity: Entity, name: &str, to_select: &mut Option<Entity>| {
+            let is_selected = currently_selected == Some(entity);
+            ui.push_id((salt, entity), |ui| {
+                let button = egui::Button::new(name);
+                let button = if is_selected { button.fill(tokens.success_subdued) } else { button };
+                if ui.add(button).clicked() {
+                    *to_select = Some(entity);
+                }
+            });
+        };
+
+        if !shader_sorted.is_empty() {
+            egui::CollapsingHeader::new("🎨 Shader materials")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("Edit params in the Inspector").weak());
+                    for (entity, name) in &shader_sorted {
+                        row(ui, "shader", *entity, name, &mut to_select);
+                    }
+                });
+            ui.separator();
+        }
+
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (entity, name) in &sorted {
-                let is_selected = currently_selected == Some(*entity);
-                let button = egui::Button::new(name);
-                let button = if is_selected {
-                    button.fill(tokens.success_subdued)
-                } else {
-                    button
-                };
+                row(ui, "all", *entity, name, &mut to_select);
+            }
+        });
 
-                if ui.add(button).clicked() {
-                    // Selection mutation (separate borrow)
+        // Route selection through the `SelectEntity` command — the single
+        // mutation path the viewport click and API also use. `world.trigger`
+        // runs the observer synchronously here, so it clears the previous
+        // `Selected`/`GizmoTarget`, marks the new entity, and updates
+        // `SelectedEntity` before the Inspector renders later this same egui
+        // pass. The old direct `selected.entity = …` write skipped that marker
+        // bookkeeping. Entities without an API id fall back to a direct write.
+        if let Some(entity) = to_select {
+            let api_id = world
+                .get_resource::<lunco_api::registry::ApiEntityRegistry>()
+                .and_then(|r| r.api_id_for(entity))
+                .map(|g| g.get());
+            match api_id {
+                Some(id) => world.trigger(crate::commands::SelectEntity { entity_id: id }),
+                None => {
                     if let Some(mut selected) = world.get_resource_mut::<SelectedEntity>() {
-                        selected.entity = Some(*entity);
+                        selected.entity = Some(entity);
                     }
                 }
             }
-        });
+        }
     }

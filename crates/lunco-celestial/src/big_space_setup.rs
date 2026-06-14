@@ -174,6 +174,10 @@ pub fn setup_big_space_hierarchy(
     )).set_parent_in_place(solar_grid).id();
 
     // ── Sun Light ──────────────────────────────────────────────────────────
+    // Tagged `FallbackSceneLight`: a scene that authors its own UsdLux
+    // light (e.g. the moonbase Twin's `DistantLight`) replaces this default
+    // sun — TWO simultaneous DirectionalLights double-light the scene and
+    // make "which sun?" ambiguous for shadow systems.
     commands.spawn((
         DirectionalLight {
             color: Color::WHITE,
@@ -185,6 +189,7 @@ pub fn setup_big_space_hierarchy(
         Transform::default(),
         GlobalTransform::default(),
         Name::new("Sun Light"),
+        lunco_core::FallbackSceneLight,
     )).set_parent_in_place(solar_grid);
 
     // ── EMB Grid (inertial anchor for Earth-Moon system) ───────────────────
