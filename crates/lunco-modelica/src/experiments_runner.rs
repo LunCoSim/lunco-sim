@@ -71,6 +71,8 @@ pub struct ModelDefaults {
     pub t_end: Option<f64>,
     pub tolerance: Option<f64>,
     pub interval: Option<f64>,
+    /// Modelica `NumberOfIntervals` — the count alternative to `interval`.
+    pub number_of_intervals: Option<f64>,
     pub solver: Option<lunco_experiments::SolverChoice>,
 }
 
@@ -350,6 +352,10 @@ impl ExperimentRunner for ModelicaRunner {
             // `Interval=0` sentinel handling shared with every other
             // annotation→bounds path (preserves this struct's own `solver`).
             dt: crate::sim_target::interval_to_dt(d.interval),
+            n_intervals: crate::sim_target::number_of_intervals_to_n(
+                d.number_of_intervals,
+                crate::sim_target::interval_to_dt(d.interval),
+            ),
             tolerance: d.tolerance,
             solver: d.solver.clone(),
             h0: None,
@@ -995,7 +1001,8 @@ pub fn run_stepping_loop(
     sink: &mut impl RunSink,
 ) {
     let t_end = bounds.t_end;
-    let step_dt = crate::sim_target::resolve_step_dt(bounds.t_start, t_end, bounds.dt);
+    let step_dt =
+        crate::sim_target::resolve_step_dt(bounds.t_start, t_end, bounds.dt, bounds.n_intervals);
 
     bevy::log::info!(
         "[sim] simulate begin: t={}..{} step_dt={}",
@@ -1867,6 +1874,7 @@ mod tests {
             t_start: 0.0,
             t_end: 5_102_784.0,
             dt: None,
+            n_intervals: None,
             tolerance: Some(1e-6),
             solver: None,
             h0: None,
@@ -1875,7 +1883,8 @@ mod tests {
         let opts = stepper_options_from_bounds(&bounds);
         let mut stepper =
             rumoca_sim::SimStepper::new(&compiled.dae, opts).expect("build stepper");
-        let step_dt = crate::sim_target::resolve_step_dt(0.0, bounds.t_end, bounds.dt);
+        let step_dt =
+            crate::sim_target::resolve_step_dt(0.0, bounds.t_end, bounds.dt, bounds.n_intervals);
         println!(
             "[memprobe] stepper ready; step_dt={step_dt:.1}s; VmRSS={:.0}MB",
             mb(read_kb("VmRSS:"))
