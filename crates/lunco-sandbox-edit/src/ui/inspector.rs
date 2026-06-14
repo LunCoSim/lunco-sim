@@ -27,10 +27,15 @@ impl Panel for Inspector {
             .corner_radius(4)
             .show(ui, |ui| {
                 // The Inspector stacks many sections (Environment, Transform,
-                // Physics, Wheel, Shader, Material, Modelica) and easily exceeds
-                // the panel height — scroll so the lower sections stay reachable.
+                // Physics, Wheel, Shader, Material, Modelica) and can exceed the
+                // panel height — scroll so the lower sections stay reachable.
+                // Shrink VERTICALLY to the content (`auto_shrink` y = true) so a
+                // short selection doesn't paint an opaque full-height band of
+                // unused panel; the area below then falls through to the
+                // transparent panel background (the 3D scene). Keep full WIDTH
+                // (x = false) so sliders/labels use the whole column.
                 egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
+                    .auto_shrink([false, true])
                     .show(ui, |ui| inspector_content(self, ui, world));
             });
     }
