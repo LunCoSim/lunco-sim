@@ -718,6 +718,45 @@ fn diagnostics_from_strict_report(
         .collect()
 }
 
+/// Convert a rumoca-sim runtime/lowering failure into located diagnostics for
+/// the Diagnostics panel — the runtime counterpart of
+/// [`diagnostics_from_strict_report`].
+///
+/// rumoca 0.9.1's [`rumoca_sim::SimulationDiagnosticError`] is structured: it
+/// carries a stable diagnostic code and (for the `SolveLowering` variant) a
+/// source span via `source_span()`. We surface the code-prefixed `Display`
+/// message and, when a span is present and lands inside the user's model
+/// source, a clickable `(line, column)`. `Solver` runtime blow-ups have no
+/// span and degrade to a single message-only row.
+///
+/// `source` must be the text those byte offsets index into — i.e. the source
+/// that was compiled to the DAE. The worker compiles the *stripped* source,
+/// but `strip_input_defaults` is currently a no-op (rumoca dropped
+/// `binding_range_with_equals`), so stripped == original and offsets map
+/// cleanly onto the editor buffer. Revisit if that splice is re-implemented.
+fn diagnostics_from_sim_error(
+    err: &rumoca_sim::SimulationDiagnosticError,
+    source: &str,
+) -> Vec<crate::document::ParseDiag> {
+    use crate::document::ParseDiag;
+    let message = format!("[{}] {err}", err.diagnostic_code());
+    match err.source_span() {
+        // `start.0` is a 0-based UTF-8 byte offset; only trust it when it
+        // lands inside the buffer we're resolving against (guards against a
+        // span rooted in a library/compiler-generated source).
+        Some(span) if span.start.0 <= source.len() => {
+            let (line, column) =
+                crate::document::core::byte_offset_to_line_col(source, span.start.0);
+            vec![ParseDiag {
+                message,
+                line: Some(line),
+                column: Some(column),
+            }]
+        }
+        _ => vec![ParseDiag::message_only(message)],
+    }
+}
+
 
 pub mod ui;
 

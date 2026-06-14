@@ -433,7 +433,12 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                         }
                                         Err(e) => {
                                             let mut r = result_ok(entity, session_id);
-                                            r.error = Some(format!("Stepper Init Error: {:?}", e));
+                                            r.error = Some(format!("Stepper Init Error: {e}"));
+                                            // rumoca-sim structured error → located
+                                            // diagnostics (click-to-source for solver
+                                            // lowering failures).
+                                            r.compile_diagnostics =
+                                                crate::diagnostics_from_sim_error(&e, &stripped_source);
                                             r.is_reset = true;
                                             let _ = tx_inner.send(r);
                                         }
@@ -441,7 +446,10 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 }
                                 Err(e) => {
                                     let mut r = result_ok(entity, session_id);
-                                    r.error = Some(format!("Reset compile error: {:?}", e));
+                                    // `e` is rumoca's formatted compile summary string.
+                                    r.error = Some(format!("Reset compile error: {e}"));
+                                    r.compile_diagnostics =
+                                        compiler.compile_diagnostics(&cached.model_name, "model.mo");
                                     r.is_reset = true;
                                     let _ = tx_inner.send(r);
                                 }
@@ -466,7 +474,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         let temp_path = temp_dir.join("model.mo");
                         if let Err(e) = std::fs::write(&temp_path, &source) {
                             let mut r = result_ok(entity, session_id);
-                            r.error = Some(format!("IO Error: {:?}", e));
+                            r.error = Some(format!("IO Error: {e}"));
                             let _ = tx_inner.send(r);
                             return;
                         }
@@ -499,7 +507,9 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     }
                                     Err(e) => {
                                         let mut r = result_ok(entity, session_id);
-                                        r.error = Some(format!("Stepper Init Error: {:?}", e));
+                                        r.error = Some(format!("Stepper Init Error: {e}"));
+                                        r.compile_diagnostics =
+                                            crate::diagnostics_from_sim_error(&e, &stripped_source);
                                         r.is_parameter_update = true;
                                         let _ = tx_inner.send(r);
                                     }
@@ -507,7 +517,9 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             }
                             Err(e) => {
                                 let mut r = result_ok(entity, session_id);
-                                r.error = Some(format!("Re-compile Error: {:?}", e));
+                                r.error = Some(format!("Re-compile Error: {e}"));
+                                r.compile_diagnostics =
+                                    compiler.compile_diagnostics(&model_name, "model.mo");
                                 r.is_parameter_update = true;
                                 let _ = tx_inner.send(r);
                             }
@@ -610,7 +622,13 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     }
                                     Err(e) => {
                                         let mut r = result_ok(entity, session_id);
-                                        r.error = Some(format!("Stepper Error: {:?}", e));
+                                        r.error = Some(format!("Stepper Error: {e}"));
+                                        // rumoca-sim structured error → located
+                                        // diagnostics so a solver-lowering failure
+                                        // (e.g. an un-lowerable equation) is
+                                        // click-to-source like a compile error.
+                                        r.compile_diagnostics =
+                                            crate::diagnostics_from_sim_error(&e, &stripped_source);
                                         // Stepper init failure during
                                         // Compile IS a compile-attempt
                                         // result — the UI classifies
@@ -684,7 +702,8 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     }
                                     Err(e) => {
                                         let mut r = result_ok(entity, session_id);
-                                        r.error = Some(format!("Initialization Failed: {:?}", e));
+                                        // `e` is rumoca's formatted compile summary.
+                                        r.error = Some(format!("Initialization Failed: {e}"));
                                         let _ = tx_inner.send(r);
                                         return;
                                     }
@@ -701,7 +720,10 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 if let Some(e) = step_err {
                                     let mut r = result_ok(entity, session_id);
                                     r.new_time = stepper.time();
-                                    r.error = Some(format!("Solver Error: {:?}", e));
+                                    // Runtime solver blow-up: `SimulationDiagnosticError`
+                                    // Display is human-readable (the `Solver` variant
+                                    // carries no source span, so it stays unlocated).
+                                    r.error = Some(format!("Solver Error: {e}"));
                                     let _ = tx_inner.send(r);
                                     steppers.remove(&entity);
                                 } else {
@@ -1046,7 +1068,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                         send(ModelicaResult {
                             entity, session_id, new_time: stepper.time(),
                             outputs: Vec::new(),
-                            detected_symbols: Vec::new(), error: Some(format!("Solver Error: {:?}", e)),
+                            detected_symbols: Vec::new(), error: Some(format!("Solver Error: {e}")),
                             log_message: None, is_new_model: false, is_parameter_update: false,
                             is_reset: false, detected_input_names: Vec::new(),
                             ..Default::default()
@@ -1141,9 +1163,10 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                             send(ModelicaResult {
                                 entity, session_id, new_time: 0.0,
                                 outputs: Vec::new(),
-                                detected_symbols: Vec::new(), error: Some(format!("Stepper Init Error: {:?}", e)),
+                                detected_symbols: Vec::new(), error: Some(format!("Stepper Init Error: {e}")),
                                 log_message: None, is_new_model: true, is_parameter_update: false, is_reset: false,
                                 detected_input_names: Vec::new(),
+                                compile_diagnostics: crate::diagnostics_from_sim_error(&e, &stripped_source),
                                 ..Default::default()
                             });
                         }
@@ -1203,9 +1226,10 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                                 send(ModelicaResult {
                                 entity, session_id, new_time: 0.0,
                                 outputs: Vec::new(),
-                                detected_symbols: Vec::new(), error: Some(format!("Reset compile error: {:?}", e)),
+                                detected_symbols: Vec::new(), error: Some(format!("Reset compile error: {e}")),
                                 log_message: None, is_new_model: false, is_parameter_update: false, is_reset: true,
                                 detected_input_names: Vec::new(),
+                                compile_diagnostics: compiler.compile_diagnostics(&cached.model_name, "model.mo"),
                                 ..Default::default()
                                 });
                                 }
@@ -1260,9 +1284,10 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                             send(ModelicaResult {
                                 entity, session_id, new_time: 0.0,
                                 outputs: Vec::new(),
-                                detected_symbols: Vec::new(), error: Some(format!("Stepper Init Error: {:?}", e)),
+                                detected_symbols: Vec::new(), error: Some(format!("Stepper Init Error: {e}")),
                                 log_message: None, is_new_model: false, is_parameter_update: true, is_reset: false,
                                 detected_input_names: Vec::new(),
+                                compile_diagnostics: crate::diagnostics_from_sim_error(&e, &stripped_source),
                                 ..Default::default()
                             });
                         }
@@ -1272,9 +1297,10 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                     send(ModelicaResult {
                         entity, session_id, new_time: 0.0,
                         outputs: Vec::new(),
-                        detected_symbols: Vec::new(), error: Some(format!("Re-compile Error: {:?}", e)),
+                        detected_symbols: Vec::new(), error: Some(format!("Re-compile Error: {e}")),
                         log_message: None, is_new_model: false, is_parameter_update: true, is_reset: false,
                         detected_input_names: Vec::new(),
+                        compile_diagnostics: compiler.compile_diagnostics(&model_name, "model.mo"),
                         ..Default::default()
                     });
                 }

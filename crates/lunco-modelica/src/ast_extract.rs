@@ -349,40 +349,87 @@ pub fn strip_input_defaults(source: &str) -> (String, HashMap<String, f64>) {
     let mut defaults = HashMap::new();
     collect_inputs_with_defaults_from_classes(&ast.classes, &mut defaults);
 
-    // Walk the AST for every input component with an explicit
-    // binding, collect the source byte range covering `= <expr>` via
-    // `Component::binding_range_with_equals`, then splice them out
-    // back-to-front so earlier offsets stay valid.
+    // Walk the AST for every `input` component with an explicit binding
+    // and collect the source byte range covering `= <expr>` (the
+    // declaration equation), derived from the binding `Expression`'s
+    // span (rumoca 0.9.1 `Expression::span()`).
     //
-    // TODO(rumoca-runtime-override): even AST-driven, this is still
-    // a *workaround* for rumoca compiling `input Real g = 9.81` as
-    // a constant rather than a runtime slot with that default.
-    // The right long-term fix is to either change rumoca's input
-    // semantics or expose `Session::set_runtime_overrides`. Until
-    // then, the splice keeps the source compilable as a runtime
-    // input and `set_input()` works. See REFACTOR_PLAN.md ask #7.
+    // WHY this exists: rumoca 0.9.1 *demotes* an `input` with a binding
+    // to an algebraic variable (rumoca-phase-dae, MLS §4.4.1), so
+    // `input Real g = 9.81` would NOT appear in `SimStepper::input_names()`
+    // and `set_input("g", …)` would fail. By neutralising the binding we
+    // keep it a true runtime slot; the original default is returned in
+    // `defaults` so the UI can seed it via `set_input`. No rumoca
+    // compile-time "runtime override" API exists to do this for us.
+    //
+    // CRUCIAL: we BLANK the range in place with spaces (newlines kept)
+    // rather than DELETING bytes. The worker compiles this stripped
+    // source and every compile/sim diagnostic's line/col is computed
+    // against it; length-preserving blanking keeps byte offsets — and
+    // thus click-to-source — identical to the editor's original buffer.
+    // Deleting would shift every downstream offset. (Was a no-op from
+    // the rumoca bump until 2026-06-14, silently breaking defaulted
+    // inputs — see [[project_rumoca_input_default_strip]].)
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     collect_input_binding_ranges(&ast.classes, source, &mut ranges);
-    // Sort + apply in reverse so the splice doesn't shift indices.
-    ranges.sort_by_key(|(s, _)| *s);
-    let mut modified = source.to_string();
-    for (start, end) in ranges.into_iter().rev() {
-        if end <= modified.len() && start <= end {
-            modified.replace_range(start..end, "");
+    let mut bytes = source.as_bytes().to_vec();
+    for (start, end) in ranges {
+        // Only blank ASCII ranges so we never split a multi-byte UTF-8
+        // char (a string default like `= "café"`); such a binding is
+        // left intact (degraded but safe — String isn't a numeric slot).
+        if end <= bytes.len() && start < end && source[start..end].is_ascii() {
+            for b in &mut bytes[start..end] {
+                if *b != b'\n' && *b != b'\r' {
+                    *b = b' ';
+                }
+            }
         }
     }
+    let modified = String::from_utf8(bytes).unwrap_or_else(|_| source.to_string());
 
     (modified, defaults)
 }
 
+/// Collect the byte range covering `= <binding>` for every `input`
+/// component that has an explicit declaration binding, so the binding can
+/// be neutralised (see [`strip_input_defaults`]).
+///
+/// The range runs from the introducing `=` through the end of the binding
+/// expression. We take the expression's end from `Expression::span()` and
+/// walk backwards over whitespace to the `=` (declaration bindings use `=`,
+/// never `:=`). If no literal `=` precedes the expression — e.g. a binding
+/// synthesised from a modification rather than a `name = expr` clause — the
+/// component is skipped (conservative: we only blank what we can see).
 fn collect_input_binding_ranges(
-    _classes: &AstIndexMap<String, ClassDef>,
-    _source: &str,
-    _out: &mut Vec<(usize, usize)>,
+    classes: &AstIndexMap<String, ClassDef>,
+    source: &str,
+    out: &mut Vec<(usize, usize)>,
 ) {
-    // `binding_range_with_equals` removed from Component in rumoca main.
-    // TODO: Implement source-range extraction using Component.binding +
-    // Component.has_explicit_binding when source-level ranges are needed.
+    let bytes = source.as_bytes();
+    for class in classes.values() {
+        for component in class.components.values() {
+            if !matches!(component.causality, Causality::Input(_)) {
+                continue;
+            }
+            let Some(binding) = component.binding.as_ref() else {
+                continue;
+            };
+            let span = binding.span();
+            let (expr_start, expr_end) = (span.start.0, span.end.0);
+            // Guard against dummy/synthesised spans not indexing `source`.
+            if expr_start >= expr_end || expr_end > source.len() {
+                continue;
+            }
+            let mut i = expr_start;
+            while i > 0 && matches!(bytes[i - 1], b' ' | b'\t' | b'\r' | b'\n') {
+                i -= 1;
+            }
+            if i > 0 && bytes[i - 1] == b'=' {
+                out.push((i - 1, expr_end));
+            }
+        }
+        collect_input_binding_ranges(&class.classes, source, out);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -836,6 +883,50 @@ pub fn hash_content(source: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- strip_input_defaults (rumoca 0.9.1 bound-input regression) ---
+
+    #[test]
+    fn strip_input_defaults_blanks_binding_length_preserving() {
+        // rumoca 0.9.1 demotes a bound `input` to an algebraic variable,
+        // so the `= 9.81` must be neutralised to keep `g` a runtime slot.
+        // The blanking MUST be length-preserving so diagnostic offsets
+        // computed against this stripped source still map onto the editor.
+        let source = "model M\n  input Real g = 9.81;\n  Real x;\nequation\n  x = g;\nend M;\n";
+        let (modified, defaults) = strip_input_defaults(source);
+
+        // Offset preservation: identical byte length and identical newlines.
+        assert_eq!(modified.len(), source.len(), "strip must preserve length");
+        assert_eq!(
+            modified.matches('\n').count(),
+            source.matches('\n').count(),
+            "strip must preserve newlines"
+        );
+
+        // Default captured for UI seeding.
+        assert_eq!(defaults.get("g"), Some(&9.81));
+
+        // The binding text is gone but the declaration head survives.
+        assert!(modified.contains("input Real g"));
+        assert!(!modified.contains("9.81"));
+        assert!(!modified.contains("= 9.81"));
+        // Other lines untouched (offset of `Real x;` line unchanged).
+        assert!(modified.contains("  Real x;\n"));
+        assert!(modified.contains("  x = g;\n"));
+        // Still parses after blanking.
+        assert!(parse(&modified).is_some(), "blanked source must still parse");
+    }
+
+    #[test]
+    fn strip_input_defaults_leaves_unbound_input_and_params_alone() {
+        // Unbound input has nothing to strip; a parameter must NOT be
+        // touched (only `input` causality is neutralised).
+        let source = "model M\n  input Real u;\n  parameter Real p = 2.0;\nend M;\n";
+        let (modified, defaults) = strip_input_defaults(source);
+        assert_eq!(modified, source, "no input binding → source unchanged");
+        // `p` is a parameter, not an input default.
+        assert!(defaults.is_empty());
+    }
 
     // --- extract_model_name ---
 
