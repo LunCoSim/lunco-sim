@@ -80,9 +80,8 @@ pub fn parsed_msl_bundle(
     {
         let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
         // The bundle is zstd-compressed bincode (~10× smaller on disk than the
-        // raw bincode it replaced). `read_parsed_bundle_file` sniffs the zstd
-        // frame magic, so an older *raw* bundle still loads (it gets rewritten
-        // compressed on the next indexer run / cold parse). Either way the
+        // raw bincode it replaced). A stale/foreign bundle that fails to decode
+        // returns `Err` below → the caller cold-parses and rewrites it. The
         // decode streams — it never holds the whole file as a `Vec<u8>`.
         match read_parsed_bundle_file(&bundle_path) {
             Ok(Some(docs)) => {
@@ -116,47 +115,29 @@ pub fn parsed_msl_bundle(
 #[cfg(not(target_arch = "wasm32"))]
 const PARSED_BUNDLE_ZSTD_LEVEL: i32 = 9;
 
-/// zstd frame magic (little-endian `0xFD2FB528`), used to tell a new
-/// compressed `parsed-msl.bin` from a legacy raw-bincode one.
-#[cfg(not(target_arch = "wasm32"))]
-const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
-
-/// Read the native `parsed-msl.bin` fast-path bundle, streaming the decode.
-///
-/// Auto-detects the on-disk format by the leading zstd frame magic:
-/// - **new**: zstd-compressed bincode → `zstd::Decoder` → `deserialize_from`.
-/// - **legacy**: raw bincode (pre-compression) → `deserialize_from` directly.
+/// Read the native `parsed-msl.bin` fast-path bundle (zstd-compressed
+/// bincode), streaming the decode so the whole file is never held as a
+/// `Vec<u8>`.
 ///
 /// `Ok(None)` = no/empty file (indexer hasn't run); `Err` = a present-but-
-/// undecodable bundle (rumoca-version-stale, truncated) so the caller can
-/// fall back to a cold source-root parse.
+/// undecodable bundle (rumoca-version-stale, truncated, or a pre-zstd raw
+/// bundle) so the caller cold-parses the source root and rewrites it.
 #[cfg(not(target_arch = "wasm32"))]
 fn read_parsed_bundle_file(
     path: &std::path::Path,
 ) -> Result<Option<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>, String> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut file = match std::fs::File::open(path) {
+    let file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return Ok(None),
     };
-    let mut magic = [0u8; 4];
-    if file.read_exact(&mut magic).is_err() {
-        return Ok(None); // empty / truncated-shorter-than-header
+    if file.metadata().map(|m| m.len() == 0).unwrap_or(false) {
+        return Ok(None); // empty / truncated
     }
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| format!("seek: {e}"))?;
-    let reader = std::io::BufReader::new(file);
-    if magic == ZSTD_MAGIC {
-        let decoder =
-            zstd::stream::read::Decoder::new(reader).map_err(|e| format!("zstd decoder: {e}"))?;
-        bincode::deserialize_from(decoder)
-            .map(Some)
-            .map_err(|e| format!("bincode: {e}"))
-    } else {
-        bincode::deserialize_from(reader)
-            .map(Some)
-            .map_err(|e| format!("bincode (legacy raw): {e}"))
-    }
+    let decoder = zstd::stream::read::Decoder::new(std::io::BufReader::new(file))
+        .map_err(|e| format!("zstd decoder: {e}"))?;
+    bincode::deserialize_from(decoder)
+        .map(Some)
+        .map_err(|e| format!("bincode: {e}"))
 }
 
 /// Write `docs` to `path` as zstd-compressed bincode (the native
@@ -1466,7 +1447,7 @@ mod web {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod parsed_bundle_tests {
-    use super::{read_parsed_bundle_file, write_parsed_bundle, ZSTD_MAGIC};
+    use super::{read_parsed_bundle_file, write_parsed_bundle};
 
     fn sample_docs() -> Vec<(String, rumoca_compile::parsing::StoredDefinition)> {
         let src = "model M Real x; equation der(x) = -x; end M;";
@@ -1474,8 +1455,8 @@ mod parsed_bundle_tests {
         vec![("M.mo".to_string(), def)]
     }
 
-    /// New format: `write_parsed_bundle` emits a zstd frame, and the
-    /// magic-sniffing reader decodes it back to the same docs.
+    /// `write_parsed_bundle` emits a zstd frame, and the reader decodes it
+    /// back to the same docs.
     #[test]
     fn zstd_bundle_roundtrips() {
         let dir = std::env::temp_dir().join("lunco_parsed_bundle_zstd");
@@ -1485,31 +1466,13 @@ mod parsed_bundle_tests {
 
         write_parsed_bundle(&path, &docs).expect("write compressed bundle");
 
-        // On disk it must be a real zstd frame, not raw bincode.
+        // On disk it must be a real zstd frame (magic 0x28 0xB5 0x2F 0xFD).
         let head = std::fs::read(&path).expect("read bundle bytes");
-        assert_eq!(&head[0..4], &ZSTD_MAGIC, "bundle must be zstd-compressed");
-
-        let back = read_parsed_bundle_file(&path)
-            .expect("decode ok")
-            .expect("bundle present");
-        assert_eq!(back.len(), docs.len());
-        assert_eq!(back[0].0, docs[0].0);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Backward compatibility: a legacy *raw* bincode bundle (no zstd
-    /// wrapper) still loads via the reader's fallback path.
-    #[test]
-    fn legacy_raw_bundle_still_reads() {
-        let dir = std::env::temp_dir().join("lunco_parsed_bundle_raw");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("parsed-msl.bin");
-        let docs = sample_docs();
-
-        let raw = bincode::serialize(&docs).expect("serialize raw");
-        assert_ne!(&raw[0..4], &ZSTD_MAGIC, "raw bincode must not look like zstd");
-        std::fs::write(&path, &raw).expect("write raw bundle");
+        assert_eq!(
+            &head[0..4],
+            &[0x28, 0xB5, 0x2F, 0xFD],
+            "bundle must be zstd-compressed"
+        );
 
         let back = read_parsed_bundle_file(&path)
             .expect("decode ok")
