@@ -145,5 +145,11 @@ pub struct Experiment {
     pub start_time: Option<f64>,
     pub stop_time: Option<f64>,
     pub tolerance: Option<f64>,
+    /// Output spacing in seconds (Modelica `Interval`). Mutually exclusive
+    /// with [`number_of_intervals`](Self::number_of_intervals) — `Interval`
+    /// wins when both are present, matching the Modelica convention.
     pub interval: Option<f64>,
+    /// Output point count as a number of intervals (Modelica
+    /// `NumberOfIntervals`); the run emits `n + 1` evenly-spaced samples.
+    pub number_of_intervals: Option<f64>,
 }

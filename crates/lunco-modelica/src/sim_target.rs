@@ -55,15 +55,25 @@ pub const SAMPLE_CAP: f64 = 200_000.0;
 /// `unwrap_or(0.01)` long after native was fixed, which emitted ~10M samples
 /// over a multi-day horizon and OOM-trapped the browser.)
 ///
+///   * explicit positive `n_intervals` (Modelica `NumberOfIntervals`, the
+///     "give me exactly N+1 points" option) → `span / n_intervals`. Wins over
+///     `dt` when both are set.
 ///   * explicit positive `dt` (the `Interval` annotation) → honoured as given
-///   * `dt` missing or `<= 0` (the spec's 0 sentinel)      → `span / NUM_INTERVALS`
+///   * both missing / `<= 0` (the spec's 0 sentinel)      → `span / NUM_INTERVALS`
 ///   * degenerate zero-length span                         → `0.01`
 ///
 /// then clamped up so `span / step_dt <= SAMPLE_CAP`.
-pub fn resolve_step_dt(t_start: f64, t_end: f64, dt: Option<f64>) -> f64 {
+pub fn resolve_step_dt(
+    t_start: f64,
+    t_end: f64,
+    dt: Option<f64>,
+    n_intervals: Option<u32>,
+) -> f64 {
     let span = (t_end - t_start).max(0.0);
-    let mut step_dt = match dt {
-        Some(dt) if dt > 0.0 => dt,
+    let mut step_dt = match (n_intervals.filter(|&n| n > 0), dt) {
+        // Count wins: N intervals over the span → N+1 evenly-spaced points.
+        (Some(n), _) if span > 0.0 => span / n as f64,
+        (_, Some(dt)) if dt > 0.0 => dt,
         _ if span > 0.0 => span / NUM_INTERVALS,
         _ => 0.01, // degenerate zero-length span; emit a couple of points
     };
@@ -86,6 +96,7 @@ pub fn default_bounds() -> RunBounds {
         t_start: 0.0,
         t_end: DEFAULT_STOP_TIME,
         dt: None,
+        n_intervals: None,
         tolerance: None,
         solver: None,
         h0: None,
@@ -176,15 +187,32 @@ pub fn resolve_requested_class(
 /// annotation usable as a run horizon.
 pub fn bounds_from_experiment(exp: &crate::annotations::Experiment) -> Option<RunBounds> {
     let t_end = exp.stop_time?;
+    let dt = interval_to_dt(exp.interval);
     Some(RunBounds {
         t_start: exp.start_time.unwrap_or(0.0),
         t_end,
-        dt: interval_to_dt(exp.interval),
+        dt,
+        // Modelica: `Interval` wins over `NumberOfIntervals` when both appear,
+        // so only carry the count when no explicit interval was given.
+        n_intervals: number_of_intervals_to_n(exp.number_of_intervals, dt),
         tolerance: exp.tolerance,
         solver: None,
         h0: None,
         runtime: lunco_experiments::RuntimeMode::Batch,
     })
+}
+
+/// Map a Modelica `NumberOfIntervals` value to the typed
+/// [`RunBounds::n_intervals`](lunco_experiments::RunBounds::n_intervals).
+/// Returns `None` when an explicit `Interval` (`dt`) is already present
+/// (Interval wins) or the count is absent / non-positive.
+pub fn number_of_intervals_to_n(number_of_intervals: Option<f64>, dt: Option<f64>) -> Option<u32> {
+    if dt.is_some() {
+        return None;
+    }
+    number_of_intervals
+        .filter(|&n| n >= 1.0 && n.is_finite())
+        .map(|n| n as u32)
 }
 
 /// Resolve the run bounds from the four precedence tiers, highest first:
@@ -220,7 +248,7 @@ mod tests {
     use super::*;
 
     fn rb(t_end: f64) -> RunBounds {
-        RunBounds { t_start: 0.0, t_end, dt: None, tolerance: None, solver: None, h0: None, runtime: lunco_experiments::RuntimeMode::Batch }
+        RunBounds { t_start: 0.0, t_end, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None, runtime: lunco_experiments::RuntimeMode::Batch }
     }
 
     #[test]

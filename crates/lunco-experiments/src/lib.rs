@@ -222,8 +222,17 @@ pub enum RuntimeMode {
 pub struct RunBounds {
     pub t_start: f64,
     pub t_end: f64,
-    /// `None` means the solver chooses adaptively.
+    /// Output sample spacing in seconds (Modelica `Interval`). `None` lets the
+    /// runtime choose. Mutually exclusive with
+    /// [`n_intervals`](Self::n_intervals): the two are the two ways to ask for
+    /// the same output grid — a step, or a count. When both are set,
+    /// `n_intervals` wins (it's the more explicit "give me exactly N points").
     pub dt: Option<f64>,
+    /// Output point count expressed as a number of intervals (Modelica
+    /// `NumberOfIntervals`): the run emits `n_intervals + 1` evenly-spaced
+    /// samples over `t_start..t_end`. `None` defers to [`dt`](Self::dt) / the
+    /// runtime default. The alternative to [`dt`](Self::dt).
+    pub n_intervals: Option<u32>,
     pub tolerance: Option<f64>,
     /// Integration method override. `None` = backend default (BDF).
     pub solver: Option<SolverChoice>,
@@ -243,6 +252,7 @@ impl Default for RunBounds {
             t_start: 0.0,
             t_end: 1.0,
             dt: None,
+            n_intervals: None,
             tolerance: None,
             solver: None,
             h0: None,

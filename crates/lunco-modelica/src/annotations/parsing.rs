@@ -109,6 +109,7 @@ pub fn extract_experiment(annotations: &[Expression]) -> Option<Experiment> {
         stop_time: named_arg(args, "StopTime").and_then(extract_number),
         tolerance: named_arg(args, "Tolerance").and_then(extract_number),
         interval: named_arg(args, "Interval").and_then(extract_number),
+        number_of_intervals: named_arg(args, "NumberOfIntervals").and_then(extract_number),
     })
 }
 
