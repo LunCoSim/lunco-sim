@@ -136,6 +136,7 @@ pub fn handle_entity_selection(
     mut drag_mode: ResMut<lunco_core::DragModeActive>,
     panel_rects: Res<lunco_workbench::PanelRects>,
     mut egui_contexts: bevy_egui::EguiContexts,
+    mut inspector_target: ResMut<crate::InspectorTarget>,
     mut commands: Commands,
 ) {
     // Selection state (the `Selected` highlight + `SelectedEntity` resource) is
@@ -167,6 +168,11 @@ pub fn handle_entity_selection(
             }
         }
     };
+    // Remember what was selected before this click, so a click on an already-
+    // selected component can DRILL into the specific sub-part under the cursor
+    // (set `InspectorTarget`) instead of re-selecting the whole component.
+    let prev_selected = selected.entity;
+
     // Skip if in spawn mode
     if !matches!(spawn_state.as_ref(), SpawnState::Idle) { return; }
 
@@ -177,6 +183,7 @@ pub fn handle_entity_selection(
     // defocuses first, a second Escape then reaches here).
     if keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::Backspace) {
         select(&mut commands, &mut selected, &q_selected_old, None);
+        inspector_target.part = None;
         drag_mode.active = false;
         return;
     }
@@ -237,11 +244,25 @@ pub fn handle_entity_selection(
     // Option shape so a future "ignore this hit" rule has a place to live.
     let Some(entity) = find_selectable(hit_data.entity, &q_selectable, &q_parents) else { return; };
 
-    // Route selection through the command (clears old + Selected +
-    // SelectedEntity). Alt-click additionally attaches the transform gizmo and
+    // DRILL: a plain click on the ALREADY-selected component, landing on one of
+    // its sub-parts (the raw collider hit ≠ the component root), aims the
+    // Inspector at that part instead of re-selecting the whole thing — so you
+    // can click a single wheel to edit it. The Inspector validates the part
+    // against the selection's subtree, so a non-material hit harmlessly resets
+    // to "whole object". Alt-click keeps its gizmo meaning (never drills).
+    if !alt_held && prev_selected == Some(entity) && hit_data.entity != entity {
+        inspector_target.part = Some(hit_data.entity);
+        drag_mode.active = false;
+        return;
+    }
+
+    // Fresh selection (or re-selecting the root): route through the command
+    // (clears old + Selected + SelectedEntity) and reset the sub-part target to
+    // "whole object". Alt-click additionally attaches the transform gizmo and
     // enters drag mode (which blocks the camera click handler so dragging a
     // gizmo handle doesn't flip possession).
     select(&mut commands, &mut selected, &q_selected_old, Some(entity));
+    inspector_target.part = None;
     if alt_held {
         commands.entity(entity).insert(GizmoTarget::default());
         drag_mode.active = true;

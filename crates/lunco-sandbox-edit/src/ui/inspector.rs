@@ -205,30 +205,40 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
 
         // ── Materials ────────────────────────────────────────────────
         // A material lives on the leaf MESH entities (wheel visual children,
-        // chassis, terrain mesh), but selection targets the logical ROOT — so
-        // resolve materials from the selected entity's whole subtree, not just
-        // the entity itself. Otherwise a rover root or the ground prim (neither
-        // carries a `MeshMaterial3d` of its own) shows no material at all.
-        //
-        // Show each material section that the subtree actually has — and only
-        // those (an empty one is hidden, so a shader-only balloon shows just the
-        // Shader section and a plain prop shows just PBR). A rover has BOTH:
-        // shader wheels AND a StandardMaterial body, so both appear. (Drill into
-        // a specific sub-part via the Explorer tree for per-part precision.)
+        // chassis, terrain mesh), but selection targets the logical ROOT. A
+        // component has many such parts (a rover = 4 shader wheels + a PBR
+        // body), so a "Parts" selector narrows editing to one of them; the
+        // viewport drill-click (clicking a part of the selected object) feeds
+        // the same target. "Whole object" (the default for multi-part objects)
+        // edits the first shader holder + all PBR materials in the subtree.
+        let parts = editable_parts(world, entity);
+        let target = match parts.len() {
+            0 => None,
+            1 => Some(parts[0].0),                  // single-part prop → that part
+            _ => parts_selector(ui, world, &parts), // multi-part → Parts dropdown
+        };
 
-        // Shader (`ShaderMaterial`) uniforms of the first shader holder, if any.
-        if let Some(holder) = first_shader_holder(world, entity) {
+        // Per-part shader picker — swap (or ADD, converting a PBR part) the
+        // `.wgsl` on this exact entity. Only shown for a single concrete part:
+        // "whole object" is ambiguous (which part's shader?). This is how you
+        // give a rover wheel a different shader or put a shader on the body.
+        if let Some(part) = target {
+            shader_picker_for_part(ui, world, part);
+        }
+
+        // Material sections operate on the targeted part, or the whole subtree
+        // when "Whole object" is selected (bulk edit). Each section is hidden
+        // when empty, so a shader-only wheel shows just Shader params and a PBR
+        // body shows just the PBR controls.
+        let material_root = target.unwrap_or(entity);
+        if let Some(holder) = first_shader_holder(world, material_root) {
             egui::CollapsingHeader::new("Shader Parameters")
                 .default_open(true)
                 .show(ui, |ui| {
-                    shader_parameters_section(ui, world, holder, true);
+                    shader_parameters_section(ui, world, holder);
                 });
         }
-
-        // Full StandardMaterial (PBR) control. Collects every distinct PBR
-        // material in the subtree and applies edits to all of them — so a slider
-        // recolors the whole body, not one hidden mesh.
-        let std_handles = collect_std_handles(world, entity);
+        let std_handles = collect_std_handles(world, material_root);
         if !std_handles.is_empty() {
             egui::CollapsingHeader::new("Material (PBR)")
                 .default_open(true)
@@ -449,6 +459,140 @@ fn first_shader_holder(world: &mut World, root: Entity) -> Option<Entity> {
     ents.into_iter().find(|e| q.get(world, *e).is_ok())
 }
 
+/// Material-bearing parts of `root`'s subtree — every entity carrying a
+/// `ShaderMaterial` or `StandardMaterial` — each labelled by its leaf name
+/// (`…/Wheel_FL` → `Wheel_FL`). The Inspector lists these in its *Parts*
+/// selector so editing can be aimed at one wheel/body rather than the whole
+/// component. Subtree (root-first) order; a single-mesh prop yields one entry.
+fn editable_parts(world: &mut World, root: Entity) -> Vec<(Entity, String)> {
+    let ents = subtree(world, root);
+    let mut shaderq = world.query::<&MeshMaterial3d<lunco_materials::ShaderMaterial>>();
+    let mut stdq = world.query::<&MeshMaterial3d<StandardMaterial>>();
+    let mut nameq = world.query::<&Name>();
+    let mut out = Vec::new();
+    for e in ents {
+        if shaderq.get(world, e).is_ok() || stdq.get(world, e).is_ok() {
+            let label = nameq
+                .get(world, e)
+                .ok()
+                .map(|n| n.as_str().rsplit(['/', '\\']).next().unwrap_or(n.as_str()).to_string())
+                .unwrap_or_else(|| format!("{e:?}"));
+            out.push((e, label));
+        }
+    }
+    out
+}
+
+/// *Parts* dropdown for a multi-part component. Lists "Whole object" + each
+/// [`editable_parts`] entry, writes the choice into [`InspectorTarget`], and
+/// returns the validated target (`None` = whole object). The stored target is
+/// filtered against the current `parts`, so a stale part from a prior selection
+/// (or after a drill-click into a different object) silently resets.
+fn parts_selector(ui: &mut egui::Ui, world: &mut World, parts: &[(Entity, String)]) -> Option<Entity> {
+    let cur = world
+        .resource::<crate::InspectorTarget>()
+        .part
+        .filter(|p| parts.iter().any(|(e, _)| e == p));
+    let cur_label = cur
+        .and_then(|c| parts.iter().find(|(e, _)| *e == c).map(|(_, l)| l.clone()))
+        .unwrap_or_else(|| "Whole object".to_string());
+
+    let mut chosen: Option<Option<Entity>> = None;
+    egui::ComboBox::from_label("Part")
+        .selected_text(cur_label)
+        .show_ui(ui, |ui| {
+            if ui.selectable_label(cur.is_none(), "Whole object").clicked() {
+                chosen = Some(None);
+            }
+            for (e, label) in parts {
+                if ui.selectable_label(cur == Some(*e), label).clicked() {
+                    chosen = Some(Some(*e));
+                }
+            }
+        });
+    if let Some(c) = chosen {
+        world.resource_mut::<crate::InspectorTarget>().part = c;
+        return c;
+    }
+    cur
+}
+
+/// Shader picker for a single part. Lists the [`ShaderCatalog`] entries and, on
+/// pick, swaps the `.wgsl` on `part` directly — works by `Entity` (sub-parts
+/// have no API id) and, on a plain `StandardMaterial` part, CONVERTS it to a
+/// `ShaderMaterial` (so you can put a shader on a rover body). Uniform-
+/// preserving when the part already has a `ShaderMaterial`.
+fn shader_picker_for_part(ui: &mut egui::Ui, world: &mut World, part: Entity) {
+    let entries = world
+        .get_resource::<lunco_materials::ShaderCatalog>()
+        .map(|c| c.entries.clone())
+        .unwrap_or_default();
+    if entries.is_empty() {
+        return;
+    }
+    // Current shader path of this part, if it already uses a ShaderMaterial.
+    let cur_path: Option<String> = world
+        .query::<&MeshMaterial3d<lunco_materials::ShaderMaterial>>()
+        .get(world, part)
+        .ok()
+        .map(|m| m.0.clone())
+        .and_then(|h| {
+            world
+                .resource::<Assets<lunco_materials::ShaderMaterial>>()
+                .get(&h)
+                .map(|m| m.shader.id())
+        })
+        .and_then(|id| world.resource::<AssetServer>().get_path(id))
+        .map(|p| p.path().to_string_lossy().into_owned());
+    let cur = cur_path.unwrap_or_default();
+    let cur_label = entries
+        .iter()
+        .find(|e| e.path == cur)
+        .map(|e| e.label.clone())
+        .unwrap_or_else(|| "— (none)".to_string());
+
+    let mut chosen: Option<String> = None;
+    egui::ComboBox::from_label("Shader")
+        .selected_text(cur_label)
+        .show_ui(ui, |ui| {
+            for e in &entries {
+                if ui.selectable_label(e.path == cur, &e.label).clicked() {
+                    chosen = Some(e.path.clone());
+                }
+            }
+        });
+    if let Some(path) = chosen {
+        if path != cur {
+            swap_shader_on_entity(world, part, &path);
+        }
+    }
+}
+
+/// Bind shader `path` to `part`, building a fresh [`ShaderMaterial`] (carrying
+/// over the previous one's uniforms if it had any) and removing the part's
+/// `StandardMaterial` — the same uniform-preserving swap the
+/// `SetObjectProperty { property: "shader" }` command performs, but addressed
+/// by `Entity` so it reaches sub-parts that have no API id.
+fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
+    use lunco_materials::ShaderMaterial;
+    let template = world
+        .query::<&MeshMaterial3d<ShaderMaterial>>()
+        .get(world, part)
+        .ok()
+        .map(|m| m.0.clone())
+        .and_then(|h| world.resource::<Assets<ShaderMaterial>>().get(&h).cloned())
+        .unwrap_or_default();
+    let shader = world.resource::<AssetServer>().load(path.to_string());
+    let handle = world
+        .resource_mut::<Assets<ShaderMaterial>>()
+        .add(lunco_materials::build_shader_material(shader, template));
+    world
+        .commands()
+        .entity(part)
+        .remove::<MeshMaterial3d<StandardMaterial>>()
+        .insert(MeshMaterial3d(handle));
+}
+
 /// Editable PBR controls for the selected object's `StandardMaterial`s — the
 /// default bevy material props/rovers carry unless a custom `ShaderMaterial`
 /// was authored. Reads the first handle, applies edits to **all** of them
@@ -529,7 +673,7 @@ fn material_pbr_section(ui: &mut egui::Ui, world: &mut World, handles: &[Handle<
 /// shader's own fallback) until the user moves it. Edits mutate the live
 /// material asset in place for immediate feedback, the same path the
 /// Transform/Physics sections use.
-fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entity, show_picker: bool) {
+fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entity) {
     use lunco_materials::{ParamType, ParamValue, ShaderMaterial, UiKind};
 
     let Ok(handle) = world
@@ -552,21 +696,13 @@ fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entit
         int: i32,
         color: [f32; 3],
     }
-    let (shader_file, current_path, rows): (Option<String>, Option<String>, Vec<Row>) = {
+    let rows: Vec<Row> = {
         let mats = world.resource::<Assets<ShaderMaterial>>();
         let Some(mat) = mats.get(&handle) else {
             ui.label("Material still loading…");
             return;
         };
-        let full = world
-            .resource::<AssetServer>()
-            .get_path(mat.shader.id())
-            .map(|p| p.path().to_string_lossy().into_owned());
-        let file = full
-            .as_ref()
-            .map(|s| s.rsplit(['/', '\\']).next().unwrap_or(s).to_string());
-        let rows = mat
-            .schema
+        mat.schema
             .fields
             .iter()
             .filter(|f| !matches!(f.ui, UiKind::Engine))
@@ -586,61 +722,12 @@ fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entit
                     ],
                 }
             })
-            .collect();
-        (file, full, rows)
+            .collect()
     };
 
-    // Shader picker — swap which `.wgsl` this prop renders with. Dispatches
-    // `SetObjectProperty { property: "shader" }`, the same uniform-preserving
-    // swap path USD authoring uses. Hidden for the terrain section (terrain is
-    // not a swappable prop and isn't in the API registry), which falls back to
-    // a plain "Shader: …" label.
-    let picked = if show_picker {
-        let api_id = world
-            .get_resource::<lunco_api::registry::ApiEntityRegistry>()
-            .and_then(|r| r.api_id_for(entity))
-            .map(|g| g.get());
-        let entries = world
-            .get_resource::<lunco_materials::ShaderCatalog>()
-            .map(|c| c.entries.clone())
-            .unwrap_or_default();
-        match (api_id, entries.is_empty()) {
-            (Some(id), false) => Some((id, entries)),
-            _ => None,
-        }
-    } else {
-        None
-    };
-    if let Some((api_id, entries)) = picked {
-        let cur = current_path.clone().unwrap_or_default();
-        let cur_label = entries
-            .iter()
-            .find(|e| e.path == cur)
-            .map(|e| e.label.clone())
-            .or_else(|| shader_file.clone())
-            .unwrap_or_else(|| "—".into());
-        let mut chosen: Option<String> = None;
-        egui::ComboBox::from_label("Shader")
-            .selected_text(cur_label)
-            .show_ui(ui, |ui| {
-                for e in &entries {
-                    if ui.selectable_label(e.path == cur, &e.label).clicked() {
-                        chosen = Some(e.path.clone());
-                    }
-                }
-            });
-        if let Some(path) = chosen {
-            if path != cur {
-                world.trigger(crate::commands::SetObjectProperty {
-                    entity_id: api_id,
-                    property: "shader".into(),
-                    value: path,
-                });
-            }
-        }
-    } else if let Some(f) = &shader_file {
-        ui.label(egui::RichText::new(format!("Shader: {f}")).weak());
-    }
+    // (The shader picker lives in `shader_picker_for_part`, rendered above this
+    // section so it works on any targeted part — including converting a PBR
+    // part — not just entities with an API id.)
     if rows.is_empty() {
         ui.label("No editable parameters.");
         return;
