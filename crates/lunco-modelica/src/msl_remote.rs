@@ -79,10 +79,15 @@ pub fn parsed_msl_bundle(
     #[cfg(not(target_arch = "wasm32"))]
     {
         let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
-        match std::fs::read(&bundle_path) {
-            Ok(bytes) => match bincode::deserialize::<
+        // Stream the decode straight off disk. `deserialize_from` over a
+        // `BufReader` never materialises the whole ~316 MB file as a
+        // `Vec<u8>` the way `fs::read` + `deserialize` would, so peak
+        // memory is ~1× the decoded ASTs instead of ~2× (raw bytes + ASTs).
+        match std::fs::File::open(&bundle_path) {
+            Ok(file) => match bincode::deserialize_from::<
+                _,
                 Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
-            >(&bytes)
+            >(std::io::BufReader::new(file))
             {
                 Ok(docs) => {
                     info!(

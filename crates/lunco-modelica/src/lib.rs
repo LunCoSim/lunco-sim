@@ -262,6 +262,13 @@ impl ModelicaCompiler {
     ///    let the caller see an empty session — the auto-retrigger on
     ///    parse-complete will rebuild the compiler properly.
     fn preload_from_global(session: &mut Session, t_total: web_time::Instant) -> bool {
+        // 1. Slot hit, shared by native and wasm: the pre-parsed bundle is
+        //    already in memory (wasm chunked-decoder output, or a prior
+        //    native load that populated the process-wide slot). Cheap
+        //    install, no disk. Kept slot-only on purpose so a non-MSL
+        //    caller (sandbox/Balloon, `SkipMslAutoLoad`) never eagerly
+        //    reads the on-disk bundle here — the native disk read lives in
+        //    branch 3, behind the `Filesystem`-source gate.
         if let Some(parsed) = msl_remote::global_parsed_msl() {
             let docs = (**parsed).clone();
             let pair_count = docs.len();
@@ -293,48 +300,27 @@ impl ModelicaCompiler {
         if let Some(lunco_assets::msl::MslAssetSource::Filesystem(root)) =
             lunco_assets::msl::global_msl_source()
         {
-            // Native fast-path: a single pre-parsed bundle on disk that
-            // mirrors the wasm runtime's `parsed-*.bin.zst` strategy.
-            // No per-file rumoca cache key — just bytes. Produced on
-            // the first successful cold parse below; consumed by every
-            // subsequent launch in ~1s.
-            //
-            // Bundle invalidation is implicit: if the rumoca version
-            // changes its `StoredDefinition` layout, `bincode::deserialize`
-            // fails and we fall through to the slow source-root parse,
-            // which then rewrites the bundle.
-            let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
-            if let Ok(bytes) = std::fs::read(&bundle_path) {
-                match bincode::deserialize::<
-                    Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
-                >(&bytes)
-                {
-                    Ok(docs) => {
-                        let pair_count = docs.len();
-                        let inserted = session.replace_parsed_source_set(
-                            "msl",
-                            rumoca_compile::compile::SourceRootKind::DurableExternal,
-                            docs,
-                            None,
-                        );
-                        log::info!(
-                            "[ModelicaCompiler] loaded pre-parsed MSL bundle from `{}` \
-                             in {:.2}s: {} inserted (of {} docs)",
-                            bundle_path.display(),
-                            t_total.elapsed().as_secs_f64(),
-                            inserted,
-                            pair_count,
-                        );
-                        return true;
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "[ModelicaCompiler] parsed bundle decode failed ({e}) — \
-                             falling back to source-root parse"
-                        );
-                    }
-                }
+            // Native: an MSL tree is present, so MSL is wanted. Try the
+            // pre-parsed on-disk bundle first via the shared, memoized
+            // `install_parsed_msl` path — it streams `parsed-msl.bin` and
+            // caches it process-wide, so the next `ModelicaCompiler` hits
+            // branch 1 above with no disk read. This is the exact same
+            // install `load_source_root` uses: one code path, native + wasm.
+            if let Some((total, inserted)) = Self::install_parsed_msl(session, "msl") {
+                log::info!(
+                    "[ModelicaCompiler] loaded pre-parsed MSL bundle in {:.2}s: \
+                     {} inserted (of {} docs)",
+                    t_total.elapsed().as_secs_f64(),
+                    inserted,
+                    total,
+                );
+                return true;
             }
+
+            // No usable bundle (missing, or rumoca-version-stale and failed
+            // to decode in `parsed_msl_bundle`). Re-derive the path so the
+            // cold parse below can (re)write the bundle for the next launch.
+            let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
 
             // Slow path: parse the source root from disk. Goes through
             // rumoca's per-file artifact cache, but that cache is
@@ -396,6 +382,35 @@ impl ModelicaCompiler {
             return true;
         }
         false
+    }
+
+    /// Install the process-wide pre-parsed MSL bundle into `session`
+    /// under source-set `id`, if a bundle is available.
+    ///
+    /// **Single shared path for native and wasm.** The bundle is acquired
+    /// through [`msl_remote::parsed_msl_bundle`], the one memoized
+    /// accessor: on native it streams `parsed-msl.bin` off disk on the
+    /// first call and caches it process-wide (so a second
+    /// `ModelicaCompiler`, or a later [`Self::load_source_root`], reuses
+    /// it with no extra read/decode); on wasm it returns the chunked
+    /// decoder's slot. Both [`Self::preload_from_global`] and
+    /// [`Self::load_source_root`] go through here, so a change to how MSL
+    /// is sourced or installed lands on both targets at once.
+    ///
+    /// Returns `Some((total_docs, inserted))`, or `None` when no bundle is
+    /// ready yet (wasm before the chunked parse finishes, or native before
+    /// the indexer has written `parsed-msl.bin`).
+    fn install_parsed_msl(session: &mut Session, id: &str) -> Option<(usize, usize)> {
+        let parsed = msl_remote::parsed_msl_bundle()?;
+        let docs = (**parsed).clone();
+        let total = docs.len();
+        let inserted = session.replace_parsed_source_set(
+            id,
+            rumoca_compile::compile::SourceRootKind::DurableExternal,
+            docs,
+            None,
+        );
+        Some((total, inserted))
     }
 
     /// Compile Modelica source string and return DAE result.
@@ -588,35 +603,29 @@ impl ModelicaCompiler {
         // (i.e. after the compiler was created empty for non-MSL
         // models like Balloon).
         if id == "Modelica" {
-            let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
-            if let Ok(bytes) = std::fs::read(&bundle_path) {
-                if let Ok(docs) = bincode::deserialize::<
-                    Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
-                >(&bytes)
-                {
-                    let pair_count = docs.len();
-                    let inserted = self.session.replace_parsed_source_set(
-                        id,
-                        rumoca_compile::compile::SourceRootKind::DurableExternal,
-                        docs,
-                        None,
-                    );
-                    log::info!(
-                        "[ModelicaCompiler] installed pre-parsed MSL bundle \
-                         ({} of {} docs)",
-                        inserted, pair_count,
-                    );
-                    return rumoca_compile::compile::SourceRootLoadReport {
-                        source_set_id: id.to_string(),
-                        source_root_path: bundle_path.display().to_string(),
-                        parsed_file_count: pair_count,
-                        inserted_file_count: inserted,
-                        cache_status: None,
-                        cache_key: None,
-                        cache_file: None,
-                        diagnostics: Vec::new(),
-                    };
-                }
+            // Shared fast path with `preload_from_global`: install the
+            // memoized pre-parsed bundle (native streams `parsed-msl.bin`
+            // once per process; wasm uses the decoder slot) rather than
+            // re-reading + re-deserialising the ~316 MB file here.
+            if let Some((total, inserted)) = Self::install_parsed_msl(&mut self.session, id) {
+                log::info!(
+                    "[ModelicaCompiler] installed pre-parsed MSL bundle \
+                     ({} of {} docs)",
+                    inserted, total,
+                );
+                return rumoca_compile::compile::SourceRootLoadReport {
+                    source_set_id: id.to_string(),
+                    source_root_path: lunco_assets::msl_dir()
+                        .join("parsed-msl.bin")
+                        .display()
+                        .to_string(),
+                    parsed_file_count: total,
+                    inserted_file_count: inserted,
+                    cache_status: None,
+                    cache_key: None,
+                    cache_file: None,
+                    diagnostics: Vec::new(),
+                };
             }
         }
         self.session.load_source_root_tolerant(
