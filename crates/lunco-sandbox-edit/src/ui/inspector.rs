@@ -210,30 +210,31 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
         // the entity itself. Otherwise a rover root or the ground prim (neither
         // carries a `MeshMaterial3d` of its own) shows no material at all.
         //
-        // Show only the section that matches the object's material type — the
-        // custom-shader (`ShaderMaterial`) params for a shader object, otherwise
-        // the StandardMaterial (PBR) controls. Never both: it keeps the panel
-        // short and you can't mis-edit the surface you didn't mean to. (Drill
-        // into a specific sub-part via the Explorer tree for per-part precision.)
+        // Show each material section that the subtree actually has — and only
+        // those (an empty one is hidden, so a shader-only balloon shows just the
+        // Shader section and a plain prop shows just PBR). A rover has BOTH:
+        // shader wheels AND a StandardMaterial body, so both appear. (Drill into
+        // a specific sub-part via the Explorer tree for per-part precision.)
+
+        // Shader (`ShaderMaterial`) uniforms of the first shader holder, if any.
         if let Some(holder) = first_shader_holder(world, entity) {
-            // Shader object: its self-describing `.wgsl` uniforms.
             egui::CollapsingHeader::new("Shader Parameters")
                 .default_open(true)
                 .show(ui, |ui| {
                     shader_parameters_section(ui, world, holder, true);
                 });
-        } else {
-            // Plain object: full StandardMaterial (PBR) control. Collects every
-            // distinct PBR material in the subtree and applies edits to all of
-            // them — so a slider recolors the whole rover, not one hidden mesh.
-            let std_handles = collect_std_handles(world, entity);
-            if !std_handles.is_empty() {
-                egui::CollapsingHeader::new("Material (PBR)")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        material_pbr_section(ui, world, &std_handles);
-                    });
-            }
+        }
+
+        // Full StandardMaterial (PBR) control. Collects every distinct PBR
+        // material in the subtree and applies edits to all of them — so a slider
+        // recolors the whole body, not one hidden mesh.
+        let std_handles = collect_std_handles(world, entity);
+        if !std_handles.is_empty() {
+            egui::CollapsingHeader::new("Material (PBR)")
+                .default_open(true)
+                .show(ui, |ui| {
+                    material_pbr_section(ui, world, &std_handles);
+                });
         }
 
         // ── Modelica parameters component ───────────────────────────
