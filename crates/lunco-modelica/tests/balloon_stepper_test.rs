@@ -10,7 +10,7 @@
 //! it without upstream changes. If it returns `Some`, the problem is upstream
 //! of the stepper (something else in lunco-modelica isn't calling `get`).
 
-use lunco_modelica::{ModelicaCompiler, ast_extract::extract_variable_names};
+use lunco_modelica::ModelicaCompiler;
 use rumoca_sim::{SimOptions, SimStepper};
 
 const BALLOON_MO: &str = include_str!("../../../assets/models/Balloon.mo");
@@ -30,12 +30,10 @@ fn balloon_stepper_variable_names_contain_states_only() {
     opts.rtol = 1e-3;
     let stepper = SimStepper::new(&dae_result.dae, opts).expect("stepper build");
 
+    // rumoca 0.9.1: variable_names() exposes states + algebraics + outputs
+    // (visible_expressions_for_dae), not solver-state only.
     let solver_names: Vec<String> = stepper.variable_names().to_vec();
     eprintln!("solver variable_names = {:?}", solver_names);
-
-    // Print what the AST walker sees as continuous non-input/non-parameter vars.
-    let ast_names = extract_variable_names(BALLOON_MO);
-    eprintln!("ast continuous vars = {:?}", ast_names);
 
     // Sanity: the state `volume` should always be present.
     assert!(
