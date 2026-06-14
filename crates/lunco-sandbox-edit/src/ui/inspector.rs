@@ -204,47 +204,57 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
         }
 
         // ── Materials ────────────────────────────────────────────────
-        // A material lives on the leaf MESH entities (wheel visual children,
-        // chassis, terrain mesh), but selection targets the logical ROOT. A
-        // component has many such parts (a rover = 4 shader wheels + a PBR
-        // body), so a "Parts" selector narrows editing to one of them; the
-        // viewport drill-click (clicking a part of the selected object) feeds
-        // the same target. "Whole object" (the default for multi-part objects)
-        // edits the first shader holder + all PBR materials in the subtree.
+        // A material lives on the leaf MESH entities (wheel visuals, body
+        // mesh), never on the logical ROOT a click selects — so the Inspector
+        // always edits ONE concrete part, chosen by the *Part* dropdown or a
+        // viewport drill-click (clicking a sub-part of the selected object).
+        // There is no "whole object" aggregate: showing a wheel's shader as if
+        // it were the rover's was misleading. The default part is the first one
+        // WITHOUT a shader (the PBR body) so a rover, which has no shader of its
+        // own, opens on its body with an "Add shader" picker front-and-centre.
         let parts = editable_parts(world, entity);
-        let target = match parts.len() {
-            0 => None,
-            1 => Some(parts[0].0),                  // single-part prop → that part
-            _ => parts_selector(ui, world, &parts), // multi-part → Parts dropdown
-        };
+        if !parts.is_empty() {
+            // Resolve the target part. A stale stored target (from a prior
+            // selection) is ignored; the default is persisted so it can't flip
+            // to another part after you, e.g., add a shader to the body.
+            let stored = world
+                .resource::<crate::InspectorTarget>()
+                .part
+                .filter(|p| parts.iter().any(|(e, _)| e == p));
+            let mut target = stored.or_else(|| default_part(world, &parts));
+            if stored.is_none() {
+                if let Some(t) = target {
+                    world.resource_mut::<crate::InspectorTarget>().part = Some(t);
+                }
+            }
+            // Multi-part object → a dropdown to switch parts (may retarget).
+            if parts.len() > 1 {
+                target = parts_selector(ui, world, &parts, target);
+            }
 
-        // Per-part shader picker — swap (or ADD, converting a PBR part) the
-        // `.wgsl` on this exact entity. Only shown for a single concrete part:
-        // "whole object" is ambiguous (which part's shader?). This is how you
-        // give a rover wheel a different shader or put a shader on the body.
-        if let Some(part) = target {
-            shader_picker_for_part(ui, world, part);
-        }
+            if let Some(part) = target {
+                // Shader picker — ADD a shader to this part (converting a PBR
+                // part) or swap an existing one. Always shown, so a part with no
+                // shader yet gets an "Add shader" affordance; after adding, the
+                // Shader Parameters below become editable.
+                shader_picker_for_part(ui, world, part);
 
-        // Material sections operate on the targeted part, or the whole subtree
-        // when "Whole object" is selected (bulk edit). Each section is hidden
-        // when empty, so a shader-only wheel shows just Shader params and a PBR
-        // body shows just the PBR controls.
-        let material_root = target.unwrap_or(entity);
-        if let Some(holder) = first_shader_holder(world, material_root) {
-            egui::CollapsingHeader::new("Shader Parameters")
-                .default_open(true)
-                .show(ui, |ui| {
-                    shader_parameters_section(ui, world, holder);
-                });
-        }
-        let std_handles = collect_std_handles(world, material_root);
-        if !std_handles.is_empty() {
-            egui::CollapsingHeader::new("Material (PBR)")
-                .default_open(true)
-                .show(ui, |ui| {
-                    material_pbr_section(ui, world, &std_handles);
-                });
+                if let Some(holder) = first_shader_holder(world, part) {
+                    egui::CollapsingHeader::new("Shader Parameters")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            shader_parameters_section(ui, world, holder);
+                        });
+                }
+                let std_handles = collect_std_handles(world, part);
+                if !std_handles.is_empty() {
+                    egui::CollapsingHeader::new("Material (PBR)")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            material_pbr_section(ui, world, &std_handles);
+                        });
+                }
+            }
         }
 
         // ── Modelica parameters component ───────────────────────────
@@ -483,38 +493,47 @@ fn editable_parts(world: &mut World, root: Entity) -> Vec<(Entity, String)> {
     out
 }
 
-/// *Parts* dropdown for a multi-part component. Lists "Whole object" + each
-/// [`editable_parts`] entry, writes the choice into [`InspectorTarget`], and
-/// returns the validated target (`None` = whole object). The stored target is
-/// filtered against the current `parts`, so a stale part from a prior selection
-/// (or after a drill-click into a different object) silently resets.
-fn parts_selector(ui: &mut egui::Ui, world: &mut World, parts: &[(Entity, String)]) -> Option<Entity> {
-    let cur = world
-        .resource::<crate::InspectorTarget>()
-        .part
-        .filter(|p| parts.iter().any(|(e, _)| e == p));
-    let cur_label = cur
-        .and_then(|c| parts.iter().find(|(e, _)| *e == c).map(|(_, l)| l.clone()))
-        .unwrap_or_else(|| "Whole object".to_string());
+/// Default part to edit when nothing is explicitly targeted: the first part
+/// WITHOUT a shader — i.e. the PBR body — so a rover opens on its body with an
+/// "Add shader" picker rather than surfacing a wheel's shader. Falls back to
+/// the first part when every part already has a shader.
+fn default_part(world: &mut World, parts: &[(Entity, String)]) -> Option<Entity> {
+    let mut shq = world.query::<&MeshMaterial3d<lunco_materials::ShaderMaterial>>();
+    parts
+        .iter()
+        .map(|(e, _)| *e)
+        .find(|e| shq.get(world, *e).is_err())
+        .or_else(|| parts.first().map(|(e, _)| *e))
+}
 
-    let mut chosen: Option<Option<Entity>> = None;
+/// *Part* dropdown for a multi-part component: lists each [`editable_parts`]
+/// entry (no aggregate), writes the choice into [`InspectorTarget`], and
+/// returns the new target. `current` is the part shown when nothing is clicked.
+fn parts_selector(
+    ui: &mut egui::Ui,
+    world: &mut World,
+    parts: &[(Entity, String)],
+    current: Option<Entity>,
+) -> Option<Entity> {
+    let cur_label = current
+        .and_then(|c| parts.iter().find(|(e, _)| *e == c).map(|(_, l)| l.clone()))
+        .unwrap_or_else(|| "—".to_string());
+
+    let mut chosen: Option<Entity> = None;
     egui::ComboBox::from_label("Part")
         .selected_text(cur_label)
         .show_ui(ui, |ui| {
-            if ui.selectable_label(cur.is_none(), "Whole object").clicked() {
-                chosen = Some(None);
-            }
             for (e, label) in parts {
-                if ui.selectable_label(cur == Some(*e), label).clicked() {
-                    chosen = Some(Some(*e));
+                if ui.selectable_label(current == Some(*e), label).clicked() {
+                    chosen = Some(*e);
                 }
             }
         });
     if let Some(c) = chosen {
-        world.resource_mut::<crate::InspectorTarget>().part = c;
-        return c;
+        world.resource_mut::<crate::InspectorTarget>().part = Some(c);
+        return Some(c);
     }
-    cur
+    current
 }
 
 /// Shader picker for a single part. Lists the [`ShaderCatalog`] entries and, on
