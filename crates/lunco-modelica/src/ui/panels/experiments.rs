@@ -295,9 +295,10 @@ impl Panel for ExperimentsPanel {
                         "{}→{}s · {}",
                         e.bounds.t_start,
                         e.bounds.t_end,
-                        match e.bounds.dt {
-                            Some(d) => format!("Δ{d}"),
-                            None => "auto".into(),
+                        match (e.bounds.n_intervals, e.bounds.dt) {
+                            (Some(n), _) => format!("N{n}"),
+                            (None, Some(d)) => format!("Δ{d}"),
+                            (None, None) => "auto".into(),
                         }
                     ),
                     overrides: format_overrides_summary(&e.overrides),
@@ -1019,29 +1020,80 @@ impl ExperimentsPanel {
             }
             ui.label("s");
             ui.separator();
-            let mut adaptive = bounds.dt.is_none();
-            let mut dt_v = bounds.dt.unwrap_or(0.01);
-            if ui.checkbox(&mut adaptive, "adaptive dt").changed() {
-                bounds.dt = if adaptive { None } else { Some(0.01) };
-                bounds_changed = true;
-            }
-            // No upper clamp BY DESIGN: dt is the output sample interval
-            // and has no meaningful maximum. A `..=10.0` range silently
-            // rewrote a legitimate value (e.g. Interval=3600 → 10) and
-            // then persisted the clamped 10 into the shared draft. Speed
-            // scales with magnitude so dragging stays usable at any scale.
-            let dt_speed = (dt_v.abs() * 0.01).max(1e-6);
-            if !adaptive
-                && ui
-                    .add(
-                        egui::DragValue::new(&mut dt_v)
-                            .speed(dt_speed)
-                            .range(1e-9..=f64::INFINITY),
-                    )
-                    .changed()
+            // Output sampling: Adaptive / Interval (s) / Number of intervals
+            // (Modelica's `Interval` vs `NumberOfIntervals`). Mutually exclusive.
             {
-                bounds.dt = Some(dt_v);
-                bounds_changed = true;
+                #[derive(PartialEq, Clone, Copy)]
+                enum OutMode {
+                    Adaptive,
+                    Interval,
+                    Count,
+                }
+                let mut mode = if bounds.n_intervals.is_some() {
+                    OutMode::Count
+                } else if bounds.dt.is_some() {
+                    OutMode::Interval
+                } else {
+                    OutMode::Adaptive
+                };
+                let span = (bounds.t_end - bounds.t_start).max(0.0);
+                let default_step = if span > 0.0 { span / 500.0 } else { 0.01 };
+                let prev = mode;
+                ui.selectable_value(&mut mode, OutMode::Adaptive, "auto");
+                ui.selectable_value(&mut mode, OutMode::Interval, "Δt");
+                ui.selectable_value(&mut mode, OutMode::Count, "N");
+                if mode != prev {
+                    match mode {
+                        OutMode::Adaptive => {
+                            bounds.dt = None;
+                            bounds.n_intervals = None;
+                        }
+                        OutMode::Interval => {
+                            bounds.n_intervals = None;
+                            bounds.dt = Some(default_step);
+                        }
+                        OutMode::Count => {
+                            bounds.dt = None;
+                            bounds.n_intervals = Some(500);
+                        }
+                    }
+                    bounds_changed = true;
+                }
+                match mode {
+                    OutMode::Adaptive => {}
+                    OutMode::Interval => {
+                        let mut v = bounds.dt.unwrap_or(default_step);
+                        // No upper clamp BY DESIGN: an output interval has no
+                        // meaningful maximum. Speed scales with magnitude.
+                        let speed = (v.abs() * 0.01).max(1e-6);
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut v)
+                                    .speed(speed)
+                                    .range(1e-9..=f64::INFINITY)
+                                    .suffix(" s"),
+                            )
+                            .changed()
+                        {
+                            bounds.dt = Some(v);
+                            bounds_changed = true;
+                        }
+                    }
+                    OutMode::Count => {
+                        let mut n = bounds.n_intervals.unwrap_or(500);
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut n)
+                                    .speed(1.0)
+                                    .range(1..=10_000_000),
+                            )
+                            .changed()
+                        {
+                            bounds.n_intervals = Some(n);
+                            bounds_changed = true;
+                        }
+                    }
+                }
             }
 
             // Solver picker. Vocabulary + labels are the single source of

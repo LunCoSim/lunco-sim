@@ -215,30 +215,86 @@ pub(crate) fn render_fast_run_setup(
                     );
                     ui.end_row();
 
-                    ui.label("dt");
-                    let mut adaptive = entry.bounds.dt.is_none();
-                    let mut dt_v = entry.bounds.dt.unwrap_or(0.01);
+                    ui.label("Output").on_hover_text(
+                        "Output sampling density. Adaptive = runtime picks. \
+                         The two explicit options are the Modelica pair: \
+                         Interval (seconds between samples) or Number of \
+                         intervals (N → N+1 evenly-spaced points). Only one is \
+                         active at a time.",
+                    );
                     ui.horizontal(|ui| {
-                        if ui.checkbox(&mut adaptive, "adaptive").changed() {
-                            entry.bounds.dt =
-                                if adaptive { None } else { Some(0.01) };
+                        #[derive(PartialEq, Clone, Copy)]
+                        enum OutMode {
+                            Adaptive,
+                            Interval,
+                            Count,
                         }
-                        // No upper clamp BY DESIGN: dt is the output sample
-                        // interval and has no meaningful maximum. A fixed
-                        // `..=10.0` range silently rewrote a legitimate value
-                        // (Interval=3600 → 10) and persisted the clamped 10
-                        // into the shared draft. Speed scales with magnitude.
-                        let dt_speed = (dt_v.abs() * 0.01).max(1e-6);
-                        if !adaptive
-                            && ui
-                                .add(
-                                    egui::DragValue::new(&mut dt_v)
-                                        .speed(dt_speed)
-                                        .range(1e-9..=f64::INFINITY),
-                                )
-                                .changed()
-                        {
-                            entry.bounds.dt = Some(dt_v);
+                        let mut mode = if entry.bounds.n_intervals.is_some() {
+                            OutMode::Count
+                        } else if entry.bounds.dt.is_some() {
+                            OutMode::Interval
+                        } else {
+                            OutMode::Adaptive
+                        };
+                        let span =
+                            (entry.bounds.t_end - entry.bounds.t_start).max(0.0);
+                        let default_step = if span > 0.0 { span / 500.0 } else { 0.01 };
+                        let prev = mode;
+                        ui.selectable_value(&mut mode, OutMode::Adaptive, "Adaptive");
+                        ui.selectable_value(&mut mode, OutMode::Interval, "Interval");
+                        ui.selectable_value(&mut mode, OutMode::Count, "N intervals");
+                        // Switching mode resets to that mode's value and clears
+                        // the other knob (the two are mutually exclusive).
+                        if mode != prev {
+                            match mode {
+                                OutMode::Adaptive => {
+                                    entry.bounds.dt = None;
+                                    entry.bounds.n_intervals = None;
+                                }
+                                OutMode::Interval => {
+                                    entry.bounds.n_intervals = None;
+                                    entry.bounds.dt = Some(default_step);
+                                }
+                                OutMode::Count => {
+                                    entry.bounds.dt = None;
+                                    entry.bounds.n_intervals = Some(500);
+                                }
+                            }
+                        }
+                        // Value field for the active mode.
+                        match mode {
+                            OutMode::Adaptive => {}
+                            OutMode::Interval => {
+                                let mut v = entry.bounds.dt.unwrap_or(default_step);
+                                // No upper clamp BY DESIGN: an output interval has
+                                // no meaningful maximum. Speed scales with magnitude.
+                                let speed = (v.abs() * 0.01).max(1e-6);
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut v)
+                                            .speed(speed)
+                                            .range(1e-9..=f64::INFINITY)
+                                            .suffix(" s"),
+                                    )
+                                    .changed()
+                                {
+                                    entry.bounds.dt = Some(v);
+                                }
+                            }
+                            OutMode::Count => {
+                                let mut n = entry.bounds.n_intervals.unwrap_or(500);
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut n)
+                                            .speed(1.0)
+                                            .range(1..=10_000_000),
+                                    )
+                                    .changed()
+                                {
+                                    entry.bounds.n_intervals = Some(n);
+                                }
+                                ui.weak(format!("→ {} pts", n.saturating_add(1)));
+                            }
                         }
                     });
                     ui.end_row();
