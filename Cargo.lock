@@ -6730,6 +6730,7 @@ dependencies = [
  "flate2",
  "image",
  "js-sys",
+ "rayon",
  "resvg",
  "rumoca-ir-ast",
  "rumoca-phase-parse",
@@ -7068,6 +7069,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
+ "zstd",
 ]
 
 [[package]]

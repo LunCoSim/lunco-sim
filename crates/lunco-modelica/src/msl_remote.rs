@@ -79,42 +79,103 @@ pub fn parsed_msl_bundle(
     #[cfg(not(target_arch = "wasm32"))]
     {
         let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
-        // Stream the decode straight off disk. `deserialize_from` over a
-        // `BufReader` never materialises the whole ~316 MB file as a
-        // `Vec<u8>` the way `fs::read` + `deserialize` would, so peak
-        // memory is ~1× the decoded ASTs instead of ~2× (raw bytes + ASTs).
-        match std::fs::File::open(&bundle_path) {
-            Ok(file) => match bincode::deserialize_from::<
-                _,
-                Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
-            >(std::io::BufReader::new(file))
-            {
-                Ok(docs) => {
-                    info!(
-                        "[MSL] lazy-loaded pre-parsed bundle ({} docs) from `{}` \
-                         into process-wide slot",
-                        docs.len(),
-                        bundle_path.display()
-                    );
-                    install_global_parsed_msl(docs);
-                }
-                Err(e) => {
-                    // Stale/format-mismatched bundle (e.g. after a rumoca
-                    // bump) — caller falls back to a direct parse.
-                    warn!(
-                        "[MSL] parsed bundle at `{}` failed to decode ({e}); \
-                         drill-in will parse source directly",
-                        bundle_path.display()
-                    );
-                }
-            },
-            Err(_) => {
-                // No bundle on disk yet (indexer hasn't run) — caller
-                // falls back to a direct parse.
+        // The bundle is zstd-compressed bincode (~10× smaller on disk than the
+        // raw bincode it replaced). `read_parsed_bundle_file` sniffs the zstd
+        // frame magic, so an older *raw* bundle still loads (it gets rewritten
+        // compressed on the next indexer run / cold parse). Either way the
+        // decode streams — it never holds the whole file as a `Vec<u8>`.
+        match read_parsed_bundle_file(&bundle_path) {
+            Ok(Some(docs)) => {
+                info!(
+                    "[MSL] lazy-loaded pre-parsed bundle ({} docs) from `{}` \
+                     into process-wide slot",
+                    docs.len(),
+                    bundle_path.display()
+                );
+                install_global_parsed_msl(docs);
+            }
+            // No bundle on disk yet (indexer hasn't run) — caller parses source.
+            Ok(None) => {}
+            Err(e) => {
+                // Stale/format-mismatched bundle (e.g. after a rumoca bump) —
+                // caller falls back to a direct parse.
+                warn!(
+                    "[MSL] parsed bundle at `{}` failed to decode ({e}); \
+                     drill-in will parse source directly",
+                    bundle_path.display()
+                );
             }
         }
     }
     GLOBAL_PARSED_MSL.get()
+}
+
+/// zstd level for the native `parsed-msl.bin` write. 9 is a good
+/// ratio/speed balance for a one-time (cold-parse / indexer) write — the
+/// disk win over raw bincode is ~10× either way; higher levels buy little.
+#[cfg(not(target_arch = "wasm32"))]
+const PARSED_BUNDLE_ZSTD_LEVEL: i32 = 9;
+
+/// zstd frame magic (little-endian `0xFD2FB528`), used to tell a new
+/// compressed `parsed-msl.bin` from a legacy raw-bincode one.
+#[cfg(not(target_arch = "wasm32"))]
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+
+/// Read the native `parsed-msl.bin` fast-path bundle, streaming the decode.
+///
+/// Auto-detects the on-disk format by the leading zstd frame magic:
+/// - **new**: zstd-compressed bincode → `zstd::Decoder` → `deserialize_from`.
+/// - **legacy**: raw bincode (pre-compression) → `deserialize_from` directly.
+///
+/// `Ok(None)` = no/empty file (indexer hasn't run); `Err` = a present-but-
+/// undecodable bundle (rumoca-version-stale, truncated) so the caller can
+/// fall back to a cold source-root parse.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_parsed_bundle_file(
+    path: &std::path::Path,
+) -> Result<Option<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Ok(None),
+    };
+    let mut magic = [0u8; 4];
+    if file.read_exact(&mut magic).is_err() {
+        return Ok(None); // empty / truncated-shorter-than-header
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| format!("seek: {e}"))?;
+    let reader = std::io::BufReader::new(file);
+    if magic == ZSTD_MAGIC {
+        let decoder =
+            zstd::stream::read::Decoder::new(reader).map_err(|e| format!("zstd decoder: {e}"))?;
+        bincode::deserialize_from(decoder)
+            .map(Some)
+            .map_err(|e| format!("bincode: {e}"))
+    } else {
+        bincode::deserialize_from(reader)
+            .map(Some)
+            .map_err(|e| format!("bincode (legacy raw): {e}"))
+    }
+}
+
+/// Write `docs` to `path` as zstd-compressed bincode (the native
+/// `parsed-msl.bin` fast-path bundle). Streams straight into the encoder, so
+/// the ~165 MB of uncompressed bincode is never held in memory, and the file
+/// lands ~10× smaller than the raw bincode it replaces. Shared by the
+/// `msl_indexer` build step and `ModelicaCompiler`'s cold-parse fallback.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn write_parsed_bundle(
+    path: &std::path::Path,
+    docs: &[(String, rumoca_compile::parsing::StoredDefinition)],
+) -> std::io::Result<()> {
+    let file = std::fs::File::create(path)?;
+    let mut encoder =
+        zstd::stream::write::Encoder::new(std::io::BufWriter::new(file), PARSED_BUNDLE_ZSTD_LEVEL)?;
+    bincode::serialize_into(&mut encoder, docs)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    encoder.finish()?;
+    Ok(())
 }
 
 /// Decompress + bincode-decode a `parsed-*.bin.zst` blob into the
@@ -1140,7 +1201,7 @@ mod web {
             },
         );
 
-        let manifest_bytes = fetch_bytes_cached("msl/manifest.json").await?;
+        let manifest_bytes = fetch_bytes_revalidated("msl/manifest.json").await?;
         let manifest: MslManifest = serde_json::from_slice(&manifest_bytes)
             .map_err(|e| format!("manifest.json parse: {e}"))?;
         if manifest.schema_version != 1 {
@@ -1296,47 +1357,41 @@ mod web {
 
     const CACHE_NAME: &str = "lunco-msl-v1";
 
-    /// Fetch bytes from the network and store them in the browser's Cache Storage.
-    ///
-    /// TODO: This implementation uses a "Cache-First" strategy for everything, including
-    /// `manifest.json`. This means that if a new version of MSL is released on the server,
-    /// clients who already have a cached manifest will never see the update until they
-    /// manually clear their browser cache.
-    ///
-    /// Immutable, content-hashed bundles (sources-*.tar.zst, parsed-*.bin.zst) are
-    /// safe to cache forever. However, the proper solution for `manifest.json` would be
-    /// a "Stale-While-Revalidate" strategy: use the cache immediately for 
-    /// startup speed, but fetch from network in the background and update the cache 
-    /// for the next reload.
-    async fn fetch_bytes_cached(path: &str) -> Result<Vec<u8>, String> {
+    /// Open the process's MSL bucket in the browser's Cache Storage.
+    async fn open_cache() -> Result<web_sys::Cache, String> {
         let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
         let caches = window.caches().map_err(|e| format!("window.caches: {e:?}"))?;
-        let cache: web_sys::Cache = JsFuture::from(caches.open(CACHE_NAME))
+        JsFuture::from(caches.open(CACHE_NAME))
             .await
             .map_err(|e| format!("caches.open: {e:?}"))?
             .dyn_into()
-            .map_err(|_| "caches.open result not a Cache".to_string())?;
+            .map_err(|_| "caches.open result not a Cache".to_string())
+    }
 
-        // 1. Check cache first.
+    /// Read `path` from `cache`, returning `None` on a miss.
+    async fn cache_lookup(cache: &web_sys::Cache, path: &str) -> Result<Option<Vec<u8>>, String> {
         let match_value = JsFuture::from(cache.match_with_str(path))
             .await
             .map_err(|e| format!("cache.match {path}: {e:?}"))?;
-
-        if !match_value.is_null() && !match_value.is_undefined() {
-            let response: Response = match_value
-                .dyn_into()
-                .map_err(|_| "cache match not a Response".to_string())?;
-            let array_buffer = JsFuture::from(
-                response
-                    .array_buffer()
-                    .map_err(|e| format!("array_buffer cached {path}: {e:?}"))?,
-            )
-            .await
-            .map_err(|e| format!("array_buffer await cached {path}: {e:?}"))?;
-            return Ok(js_sys::Uint8Array::new(&array_buffer).to_vec());
+        if match_value.is_null() || match_value.is_undefined() {
+            return Ok(None);
         }
+        let response: Response = match_value
+            .dyn_into()
+            .map_err(|_| "cache match not a Response".to_string())?;
+        let array_buffer = JsFuture::from(
+            response
+                .array_buffer()
+                .map_err(|e| format!("array_buffer cached {path}: {e:?}"))?,
+        )
+        .await
+        .map_err(|e| format!("array_buffer await cached {path}: {e:?}"))?;
+        Ok(Some(js_sys::Uint8Array::new(&array_buffer).to_vec()))
+    }
 
-        // 2. Cache miss -> fetch from network.
+    /// Fetch `path` from the network and write the response into `cache`.
+    async fn network_fetch_and_cache(cache: &web_sys::Cache, path: &str) -> Result<Vec<u8>, String> {
+        let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
         let opts = RequestInit::new();
         opts.set_method("GET");
         opts.set_mode(RequestMode::SameOrigin);
@@ -1370,7 +1425,98 @@ mod web {
         )
         .await
         .map_err(|e| format!("array_buffer await {path}: {e:?}"))?;
-        let bytes = js_sys::Uint8Array::new(&array_buffer).to_vec();
-        Ok(bytes)
+        Ok(js_sys::Uint8Array::new(&array_buffer).to_vec())
+    }
+
+    /// **Cache-first** fetch — for immutable, content-hashed bundles
+    /// (`sources-*.tar.zst`, `parsed-*.bin.zst`). Once cached they're served
+    /// from Cache Storage forever, with no network round-trip on reload.
+    async fn fetch_bytes_cached(path: &str) -> Result<Vec<u8>, String> {
+        let cache = open_cache().await?;
+        if let Some(bytes) = cache_lookup(&cache, path).await? {
+            return Ok(bytes);
+        }
+        network_fetch_and_cache(&cache, path).await
+    }
+
+    /// **Network-first, cache-fallback** fetch — for `manifest.json`, the one
+    /// *mutable* artifact. It names the current content-hashed bundles, so the
+    /// old cache-first-forever strategy pinned a client to whatever MSL
+    /// version it first loaded — a new server release was never picked up
+    /// until the user manually cleared browser storage. We now hit the
+    /// network first (so updates land) and fall back to the cached copy only
+    /// when offline. A successful fetch refreshes the cache.
+    async fn fetch_bytes_revalidated(path: &str) -> Result<Vec<u8>, String> {
+        let cache = open_cache().await?;
+        match network_fetch_and_cache(&cache, path).await {
+            Ok(bytes) => Ok(bytes),
+            Err(net_err) => match cache_lookup(&cache, path).await {
+                Ok(Some(bytes)) => {
+                    bevy::log::warn!(
+                        "[MSL] {path}: network fetch failed ({net_err}); using cached copy"
+                    );
+                    Ok(bytes)
+                }
+                _ => Err(net_err),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod parsed_bundle_tests {
+    use super::{read_parsed_bundle_file, write_parsed_bundle, ZSTD_MAGIC};
+
+    fn sample_docs() -> Vec<(String, rumoca_compile::parsing::StoredDefinition)> {
+        let src = "model M Real x; equation der(x) = -x; end M;";
+        let def = rumoca_phase_parse::parse_to_ast(src, "M.mo").expect("parse sample model");
+        vec![("M.mo".to_string(), def)]
+    }
+
+    /// New format: `write_parsed_bundle` emits a zstd frame, and the
+    /// magic-sniffing reader decodes it back to the same docs.
+    #[test]
+    fn zstd_bundle_roundtrips() {
+        let dir = std::env::temp_dir().join("lunco_parsed_bundle_zstd");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("parsed-msl.bin");
+        let docs = sample_docs();
+
+        write_parsed_bundle(&path, &docs).expect("write compressed bundle");
+
+        // On disk it must be a real zstd frame, not raw bincode.
+        let head = std::fs::read(&path).expect("read bundle bytes");
+        assert_eq!(&head[0..4], &ZSTD_MAGIC, "bundle must be zstd-compressed");
+
+        let back = read_parsed_bundle_file(&path)
+            .expect("decode ok")
+            .expect("bundle present");
+        assert_eq!(back.len(), docs.len());
+        assert_eq!(back[0].0, docs[0].0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Backward compatibility: a legacy *raw* bincode bundle (no zstd
+    /// wrapper) still loads via the reader's fallback path.
+    #[test]
+    fn legacy_raw_bundle_still_reads() {
+        let dir = std::env::temp_dir().join("lunco_parsed_bundle_raw");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("parsed-msl.bin");
+        let docs = sample_docs();
+
+        let raw = bincode::serialize(&docs).expect("serialize raw");
+        assert_ne!(&raw[0..4], &ZSTD_MAGIC, "raw bincode must not look like zstd");
+        std::fs::write(&path, &raw).expect("write raw bundle");
+
+        let back = read_parsed_bundle_file(&path)
+            .expect("decode ok")
+            .expect("bundle present");
+        assert_eq!(back.len(), docs.len());
+        assert_eq!(back[0].0, docs[0].0);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -25,6 +25,21 @@ The inefficiencies are in the **install/redundancy/caching** layer, not the desi
 
 ---
 
+## Implementation status (2026-06-14)
+
+| # | Finding | Status |
+|---|---------|--------|
+| 1 | Native triple-load → one memoized shared path | **DONE** — `install_parsed_msl` helper, native+wasm green |
+| 4 | `fs::read`+deserialize 2× peak → streaming | **DONE** — `deserialize_from(BufReader)` in `parsed_msl_bundle` |
+| — | Build-time parse sequential → rayon parallel | **DONE** — `build_msl_assets::pre_parse`, native green |
+| 3 | `manifest.json` cached-forever → network-first | **DONE** — `fetch_bytes_revalidated`, wasm green |
+| 5 | Compress native bundle (disk) | DEFERRED — needs native-gated zstd encoder + 3-file format migration; #1/#4 already removed the repeated-read cost |
+| 6 | Monolithic → lazy partial load | DEFERRED — bundle-format + resolver refactor |
+| 2w | Move web decode off main thread | DEFERRED — Web-Worker plumbing; decompress is cheap, only the worker-move helps |
+| 7 | Per-init deep clone | DEFERRED — `replace_parsed_source_set` takes an owned `Vec` (rumoca API) |
+| 8/9 | Resolver stat-storm / retry gate | DEFERRED — low severity, load-bearing resolver; not worth the regression risk |
+| — | id `"msl"` vs `"Modelica"` unify | DEFERRED — needs rumoca is-loaded API; #1 already made it a clone, not a re-read |
+
 ## Findings, ranked by impact
 
 ### 1. [HIGH, native] In-process triple-load of the 316 MB bundle; no shared memoization

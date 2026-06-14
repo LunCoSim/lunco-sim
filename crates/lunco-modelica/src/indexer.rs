@@ -1298,23 +1298,31 @@ pub fn run_with_cancel(
     // directly via `Session::replace_parsed_source_set`, bypassing
     // every per-file cache key concern.
     bail_if_cancelled!();
-    let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
-    let t_bundle = Instant::now();
-    match bincode::serialize(&indexer.parsed_bundle) {
-        Ok(bytes) => match fs::write(&bundle_path, &bytes) {
-            Ok(()) => println!(
-                "[indexer] wrote parsed bundle: {} docs, {:.1} MB in {:.1}s → {}",
-                indexer.parsed_bundle.len(),
-                bytes.len() as f64 / (1024.0 * 1024.0),
-                t_bundle.elapsed().as_secs_f64(),
-                bundle_path.display()
-            ),
+    // Native-only: the `msl_indexer` binary never compiles to wasm, but
+    // `mod indexer` does, and `write_parsed_bundle` (zstd encoder) is
+    // native-gated — so cfg the write block to keep the wasm build clean.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
+        let t_bundle = Instant::now();
+        match crate::msl_remote::write_parsed_bundle(&bundle_path, &indexer.parsed_bundle) {
+            Ok(()) => {
+                let mb = fs::metadata(&bundle_path)
+                    .map(|m| m.len() as f64 / (1024.0 * 1024.0))
+                    .unwrap_or(0.0);
+                println!(
+                    "[indexer] wrote parsed bundle (zstd): {} docs, {:.1} MB in {:.1}s → {}",
+                    indexer.parsed_bundle.len(),
+                    mb,
+                    t_bundle.elapsed().as_secs_f64(),
+                    bundle_path.display()
+                );
+            }
             Err(e) => eprintln!(
                 "[indexer] WARN: failed to write parsed bundle to {}: {e}",
                 bundle_path.display()
             ),
-        },
-        Err(e) => eprintln!("[indexer] WARN: failed to serialise parsed bundle: {e}"),
+        }
     }
 
     if opts.warm {

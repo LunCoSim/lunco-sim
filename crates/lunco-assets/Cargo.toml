@@ -44,6 +44,10 @@ zstd = "0.13"
 rumoca-phase-parse = { workspace = true }
 rumoca-ir-ast = { workspace = true }
 bincode = "1.3"
+# Parallelises the ~2670-file MSL pre-parse across all cores. Native-only
+# (this binary never compiles to wasm), so the unbounded default pool is
+# fine — unlike the runtime, which caps rayon to keep cores free for render.
+rayon = "1"
 resvg = { workspace = true }
 tiny-skia = { workspace = true }
 usvg = { workspace = true }

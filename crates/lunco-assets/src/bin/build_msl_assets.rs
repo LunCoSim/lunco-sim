@@ -194,7 +194,9 @@ fn pre_parse(
     msl_root: &Path,
     entries: &[PathBuf],
 ) -> Vec<(String, rumoca_ir_ast::StoredDefinition)> {
-    let mut out = Vec::with_capacity(entries.len());
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     // Only `.mo` files are Modelica source; the bundle may also carry
     // ancillary files (e.g. `msl_index.json` for the palette) that we
     // pack as bytes but don't try to parse here.
@@ -203,28 +205,43 @@ fn pre_parse(
         .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("mo"))
         .collect();
     let total = mo_entries.len();
-    let mut last_pct: usize = usize::MAX;
-    for (i, path) in mo_entries.iter().enumerate() {
-        let rel = path.strip_prefix(msl_root).expect("entry under msl root");
-        let uri = rel.to_string_lossy().replace('\\', "/");
-        let source = match fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("  skip {uri}: read failed: {e}");
-                continue;
+    eprintln!(
+        "  parsing {total} .mo files across {} threads…",
+        rayon::current_num_threads()
+    );
+
+    // Parse in parallel — each file is independent and `parse_to_ast` is
+    // pure. `.map(...).collect::<Vec<_>>()` over an *indexed* parallel
+    // iterator preserves input order exactly, so flattening the `Option`s
+    // yields a deterministic bundle (stable sha256 → the build's
+    // content-addressed `parsed-<sha>.bin.zst` skip logic keeps working).
+    let done = AtomicUsize::new(0);
+    let parsed: Vec<Option<(String, rumoca_ir_ast::StoredDefinition)>> = mo_entries
+        .par_iter()
+        .map(|path| {
+            let rel = path.strip_prefix(msl_root).expect("entry under msl root");
+            let uri = rel.to_string_lossy().replace('\\', "/");
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            if n % 500 == 0 || n == total {
+                eprintln!("  parsed {n} / {total}");
             }
-        };
-        match rumoca_phase_parse::parse_to_ast(&source, &uri) {
-            Ok(def) => out.push((uri, def)),
-            Err(e) => eprintln!("  skip {uri}: parse failed: {e}"),
-        }
-        let pct = (i + 1) * 20 / total; // 5% buckets
-        if pct != last_pct {
-            eprintln!("  parse: {} / {total} ({}%)", i + 1, pct * 5);
-            last_pct = pct;
-        }
-    }
-    out
+            let source = match fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("  skip {uri}: read failed: {e}");
+                    return None;
+                }
+            };
+            match rumoca_phase_parse::parse_to_ast(&source, &uri) {
+                Ok(def) => Some((uri, def)),
+                Err(e) => {
+                    eprintln!("  skip {uri}: parse failed: {e}");
+                    None
+                }
+            }
+        })
+        .collect();
+    parsed.into_iter().flatten().collect()
 }
 
 fn serialise_parsed(parsed: &[(String, rumoca_ir_ast::StoredDefinition)], dest: &Path) -> u64 {

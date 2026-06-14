@@ -317,11 +317,9 @@ impl ModelicaCompiler {
                 return true;
             }
 
-            // No usable bundle (missing, or rumoca-version-stale and failed
-            // to decode in `parsed_msl_bundle`). Re-derive the path so the
-            // cold parse below can (re)write the bundle for the next launch.
-            let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
-
+            // No usable bundle (missing, or rumoca-version-stale and failed to
+            // decode in `parsed_msl_bundle`).
+            //
             // Slow path: parse the source root from disk. Goes through
             // rumoca's per-file artifact cache, but that cache is
             // fingerprint-keyed and easily invalidates — we treat this
@@ -341,28 +339,26 @@ impl ModelicaCompiler {
                 }
             };
             let parsed_count = parsed.file_count;
-            // Serialise BEFORE moving documents into the session so we
-            // don't pay a clone of ~30 MB of StoredDefinitions.
-            match bincode::serialize(&parsed.documents) {
-                Ok(bytes) => {
-                    if let Some(parent) = bundle_path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    match std::fs::write(&bundle_path, &bytes) {
-                        Ok(()) => log::info!(
-                            "[ModelicaCompiler] wrote MSL bundle ({} MB) to `{}` — next launch will be ~1s",
-                            bytes.len() / (1024 * 1024),
-                            bundle_path.display()
-                        ),
-                        Err(e) => log::warn!(
-                            "[ModelicaCompiler] failed to write MSL bundle to `{}`: {e}",
-                            bundle_path.display()
-                        ),
-                    }
+            // Write the bundle (zstd-compressed) BEFORE moving the documents
+            // into the session so we don't clone ~165 MB of StoredDefinitions.
+            // Native-only: wasm has no disk and never reaches this branch.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
+                if let Some(parent) = bundle_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
                 }
-                Err(e) => log::warn!(
-                    "[ModelicaCompiler] failed to serialise MSL bundle: {e}"
-                ),
+                match msl_remote::write_parsed_bundle(&bundle_path, &parsed.documents) {
+                    Ok(()) => log::info!(
+                        "[ModelicaCompiler] wrote compressed MSL bundle ({} docs) to `{}` — next launch will be ~1s",
+                        parsed.documents.len(),
+                        bundle_path.display()
+                    ),
+                    Err(e) => log::warn!(
+                        "[ModelicaCompiler] failed to write MSL bundle to `{}`: {e}",
+                        bundle_path.display()
+                    ),
+                }
             }
             let inserted = session.replace_parsed_source_set(
                 "msl",

@@ -175,6 +175,13 @@ uuid = { workspace = true }
 # `manage_clipboard` feature — no new compile.
 arboard = "3"
 
+# zstd codec for the native pre-parsed MSL bundle (`.cache/msl/parsed-msl.bin`).
+# The bundle is now zstd-compressed bincode (~10× smaller on disk than the raw
+# bincode it replaced — matters because the cache is large and disk has filled
+# up before). C-backed, but native already links it via `build_msl_assets`, and
+# it's target-gated so wasm keeps using the pure-Rust `ruzstd` decoder below.
+zstd = "0.13"
+
 # Web-specific: wasm32-unknown-unknown needs JS interop for console output,
 # panic hooks, and RNG (std::time is unavailable).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
