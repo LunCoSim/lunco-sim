@@ -89,6 +89,7 @@ pub fn default_bounds() -> RunBounds {
         tolerance: None,
         solver: None,
         h0: None,
+        runtime: lunco_experiments::RuntimeMode::Batch,
     }
 }
 
@@ -182,6 +183,7 @@ pub fn bounds_from_experiment(exp: &crate::annotations::Experiment) -> Option<Ru
         tolerance: exp.tolerance,
         solver: None,
         h0: None,
+        runtime: lunco_experiments::RuntimeMode::Batch,
     })
 }
 
@@ -218,7 +220,7 @@ mod tests {
     use super::*;
 
     fn rb(t_end: f64) -> RunBounds {
-        RunBounds { t_start: 0.0, t_end, dt: None, tolerance: None, solver: None, h0: None }
+        RunBounds { t_start: 0.0, t_end, dt: None, tolerance: None, solver: None, h0: None, runtime: lunco_experiments::RuntimeMode::Batch }
     }
 
     #[test]
