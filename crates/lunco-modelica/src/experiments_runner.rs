@@ -353,6 +353,7 @@ impl ExperimentRunner for ModelicaRunner {
             tolerance: d.tolerance,
             solver: d.solver.clone(),
             h0: None,
+            runtime: lunco_experiments::RuntimeMode::Batch,
         })
     }
 }
@@ -741,30 +742,117 @@ fn run_inner(
     // so the two can't drift (see that fn for the rationale on the defaults).
     let stepper_opts = stepper_options_from_bounds(&bounds);
 
-    let mut stepper = match rumoca_sim::SimStepper::new(&run_dae, stepper_opts) {
-        Ok(s) => s,
+    // The native sink is a crossbeam channel + atomic cancel flag; the wasm
+    // worker provides its own `RunSink`, so neither path duplicates sampling
+    // or streaming logic.
+    let mut sink = ChannelSink { tx, cancel };
+
+    match bounds.runtime {
+        // Default: the non-interactive dense-output batch solve. The solver
+        // free-steps with its own adaptive step and output is produced by
+        // dense interpolation, so the solver step is decoupled from the
+        // output `dt`. This is why stiff long-horizon models (the lunar
+        // rover thermal system across multiple day/night cycles) complete
+        // here, where the interactive stepper — bounded by the output `dt`
+        // — collapses unless `dt` is driven down to a few thousand seconds.
+        lunco_experiments::RuntimeMode::Batch => {
+            bevy::log::info!(
+                "[runner] simulate begin (batch): t={}..{} dt={:?}",
+                bounds.t_start,
+                bounds.t_end,
+                bounds.dt
+            );
+            run_batch_sim(&run_dae, &stepper_opts, t_wall, &mut sink);
+        }
+        // Opt-in: the live `SimStepper` loop, for streamable/steerable runs.
+        lunco_experiments::RuntimeMode::Interactive => {
+            let mut stepper = match rumoca_sim::SimStepper::new(&run_dae, stepper_opts) {
+                Ok(s) => s,
+                Err(e) => {
+                    sink.emit(RunUpdate::Failed {
+                        error: format!("stepper init failed: {e:?}"),
+                        partial: None,
+                    });
+                    return;
+                }
+            };
+            bevy::log::info!(
+                "[runner] simulate begin (interactive): t={}..{} dt={:?}",
+                bounds.t_start,
+                bounds.t_end,
+                bounds.dt
+            );
+            run_stepping_loop(&mut stepper, &bounds, t_wall, &mut sink);
+        }
+    }
+}
+
+/// Drive a [`Dae`] to `t_end` through the non-interactive dense-output batch
+/// solver ([`rumoca_sim::simulate_with_diagnostics`]) and emit the trajectory
+/// as a single [`RunUpdate::Completed`]. Unlike [`run_stepping_loop`], the
+/// solver owns its own adaptive time loop and the output samples are taken by
+/// dense interpolation, so the solver step size is independent of the output
+/// spacing — the robust path for stiff long-horizon runs.
+///
+/// The whole solve is one blocking call, so cancellation is honoured at the
+/// boundaries (before the solve, and before emitting the result) rather than
+/// mid-step; for the streamable/pausable behaviour use
+/// [`RuntimeMode::Interactive`](lunco_experiments::RuntimeMode::Interactive).
+fn run_batch_sim(
+    dae: &Dae,
+    opts: &rumoca_sim::SimOptions,
+    started: web_time::Instant,
+    sink: &mut impl RunSink,
+) {
+    if sink.is_cancelled() {
+        sink.emit(RunUpdate::Cancelled);
+        return;
+    }
+
+    let result = match rumoca_sim::simulate_with_diagnostics(dae, opts) {
+        Ok(r) => r,
         Err(e) => {
-            let _ = tx.send(RunUpdate::Failed {
-                error: format!("stepper init failed: {e:?}"),
+            sink.emit(RunUpdate::Failed {
+                error: format!("simulate failed: {e}"),
                 partial: None,
             });
             return;
         }
     };
 
-    bevy::log::info!(
-        "[runner] simulate begin: t={}..{} dt={:?}",
-        bounds.t_start,
-        bounds.t_end,
-        bounds.dt
-    );
+    if sink.is_cancelled() {
+        sink.emit(RunUpdate::Cancelled);
+        return;
+    }
 
-    // Drive the run through the shared stepping loop. The native sink is a
-    // crossbeam channel + atomic cancel flag; the wasm worker provides its
-    // own `RunSink` over the same loop, so neither sampling nor streaming
-    // logic is duplicated (and can't drift) across platforms.
-    let mut sink = ChannelSink { tx, cancel };
-    run_stepping_loop(&mut stepper, &bounds, t_wall, &mut sink);
+    // SimResult stores one column per visible variable (`data[var][t]`),
+    // mirroring the `RunResult` series map keyed by variable name. Drop the
+    // synthetic `time` column — `times` carries it.
+    let mut series: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    for (i, name) in result.names.iter().enumerate() {
+        if name == "time" {
+            continue;
+        }
+        let column = result.data.get(i).cloned().unwrap_or_default();
+        series.insert(name.clone(), column);
+    }
+
+    let n_samples = result.times.len();
+    bevy::log::info!(
+        "[sim] simulate ok (batch): {} samples, {} vars, {:.2}s wall",
+        n_samples,
+        series.len(),
+        started.elapsed().as_secs_f64(),
+    );
+    sink.emit(RunUpdate::Completed(RunResult {
+        times: result.times,
+        series,
+        meta: RunMeta {
+            wall_time_ms: started.elapsed().as_millis() as u64,
+            sample_count: n_samples,
+            notes: None,
+        },
+    }));
 }
 
 /// Cancellation + update sink for a stepping run. This is the ONE seam
@@ -811,15 +899,18 @@ impl RunSink for ChannelSink {
 /// The SINGLE source of the tolerance / solver-family / initial-step defaults,
 /// shared by native and the wasm worker so they can't drift.
 ///
-/// Defaults are chosen to match what our solver stack can actually deliver
-/// (FD Jacobian + scalar atol can't honor OMC's 1e-6 convention without
-/// burning retry budgets on noise) and what works across stiff multi-day
-/// horizons:
-///   * tolerance default = 1e-4 (not 1e-6; OMC honors 1e-6 because it has an
-///     analytical Jacobian + vector atol — we don't yet).
-///   * solver default = TR-BDF2 (not BDF; BDF dies at the second sunrise
-///     louver crossing for stiff thermal models — TR-BDF2 handles events
-///     robustly across multi-month horizons).
+/// Defaults follow the Modelica convention, tuned for what works across the
+/// stiff multi-day horizons:
+///   * tolerance default = 1e-6 (the standard Modelica / OMC / Dymola default).
+///     The non-interactive batch runtime (the default) honours it on the stiff
+///     thermal models; per-run editable via the experiments Setup dialog.
+///   * solver default = BDF. (Earlier this was TR-BDF2, on the rationale that
+///     "BDF dies at the second sunrise louver crossing" — but that predates the
+///     rumoca solve-IR fix for connection flow-sum unknowns. With that fix BDF
+///     now completes the full multi-lunar-cycle horizon on the stiff thermal
+///     models, while the diffsol 0.13 SDIRK tableaus (TR-BDF2 / ESDIRK34) hit
+///     "nonlinear solver failures (50)" within the first lunar hour on the same
+///     models. BDF is the robust default again; the SDIRK tableaus stay opt-in.)
 /// Background: docs/numeric-experiments/2026-05-28-lunar-thermal.md
 ///
 /// The worker's live interactive sim (`worker::build_stepper`) previously had
@@ -847,24 +938,40 @@ fn solver_choice_to_rumoca(
 
 /// Default solver tolerance when neither the run bounds nor the model's
 /// `experiment(Tolerance=…)` annotation supplies one. Applied to BOTH `atol`
-/// and `rtol` (scalar): our FD-Jacobian + scalar-`atol` stack can't honor
-/// OMC's 1e-6 convention without burning retry budget on noise (see the
-/// rationale above `solver_choice_to_rumoca`). This is the ONE source of the
-/// default — the live interactive sim (`worker::build_stepper`) reaches it by
-/// delegating to [`stepper_options_from_bounds`], so the two surfaces can't
-/// drift on tolerance, `atol`/`rtol` policy, or solver family.
-pub const DEFAULT_TOLERANCE: f64 = 1e-4;
+/// and `rtol` (scalar). This is the standard Modelica default (`1e-6`, the same
+/// value OMC/Dymola assume): with the non-interactive batch runtime as the
+/// default ([`RuntimeMode::Batch`](lunco_experiments::RuntimeMode::Batch)) the
+/// dense-output solver honours it across the stiff multi-cycle horizons (the
+/// lunar rover thermal system completes its full two-lunar-day run at `1e-6`),
+/// so there's no reason to loosen below the Modelica convention. It stays
+/// per-run editable through the experiments Setup dialog (`bounds.tolerance`).
+/// This is the ONE source of the default — the live interactive sim
+/// (`worker::build_stepper`) reaches it by delegating to
+/// [`stepper_options_from_bounds`], so the two surfaces can't drift on
+/// tolerance, `atol`/`rtol` policy, or solver family.
+pub const DEFAULT_TOLERANCE: f64 = 1e-6;
 
 pub fn stepper_options_from_bounds(bounds: &RunBounds) -> rumoca_sim::SimOptions {
     let mut opts = rumoca_sim::SimOptions::default();
+    // The interactive `run_stepping_loop` drives the horizon from `bounds`
+    // directly, so it never read `opts.t_start/t_end`. The non-interactive
+    // batch solve (`simulate_with_diagnostics`) reads them from `opts` — if we
+    // leave them at the `SimOptions::default()` (`0.0..1.0`), a batch run stops
+    // at t=1 with a fine default output grid that pins the solver onto closely
+    // spaced stop-times and collapses ("step size too small") within the first
+    // second. Carry the real window through so both runtimes integrate the same
+    // span.
+    opts.t_start = bounds.t_start;
+    opts.t_end = bounds.t_end;
     opts.atol = bounds.tolerance.unwrap_or(DEFAULT_TOLERANCE);
     opts.rtol = bounds.tolerance.unwrap_or(DEFAULT_TOLERANCE);
     // Single typed source of truth: `SolverChoice` already resolved the
     // vocabulary at the parse boundary, so here we just map it to rumoca's
     // (family, tableau) pair once — no re-parsing of strings, no silent
-    // unknown→BDF degradation. `None` = backend default (TR-BDF2).
+    // unknown→BDF degradation. `None` = backend default (BDF; see the rationale
+    // on `stepper_options_from_bounds` for why this is no longer TR-BDF2).
     let (mode, method) =
-        solver_choice_to_rumoca(bounds.solver.unwrap_or(lunco_experiments::SolverChoice::TrBdf2));
+        solver_choice_to_rumoca(bounds.solver.unwrap_or(lunco_experiments::SolverChoice::Bdf));
     opts.solver_mode = mode;
     opts.diffsol_method = method;
     // `SimOptions.dt` is the solver's initial step (h0) on the diffsol path.
@@ -1763,6 +1870,7 @@ mod tests {
             tolerance: Some(1e-6),
             solver: None,
             h0: None,
+            runtime: lunco_experiments::RuntimeMode::Batch,
         };
         let opts = stepper_options_from_bounds(&bounds);
         let mut stepper =

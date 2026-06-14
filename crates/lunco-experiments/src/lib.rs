@@ -180,6 +180,39 @@ impl std::str::FromStr for SolverChoice {
     }
 }
 
+// ---------- Runtime ----------
+
+/// How a run drives the solver to `t_end`.
+///
+/// The two modes share the same DAE, solver family and tolerances; they
+/// differ only in *who* owns the time loop:
+///
+///  * [`Batch`](RuntimeMode::Batch) — the non-interactive dense-output
+///    path (`rumoca_sim::simulate`). The solver free-steps with its own
+///    adaptive step size and the output samples are produced by dense
+///    interpolation, so the solver step is fully decoupled from the
+///    output spacing. This is the robust default: stiff long-horizon
+///    models (e.g. the lunar rover thermal system across multiple
+///    day/night cycles) complete here regardless of the output `dt`.
+///  * [`Interactive`](RuntimeMode::Interactive) — the live `SimStepper`
+///    loop (`run_stepping_loop`). The solver is advanced one output
+///    `dt` at a time so the run can stream/pause/scrub in real time, but
+///    that couples the solver step to the output spacing: too coarse a
+///    `dt` makes a stiff solve collapse. Use for the live, playable sim.
+///
+/// Default is [`Batch`](RuntimeMode::Batch): correctness first; opt into
+/// `Interactive` when a run must be streamed/steered live.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeMode {
+    /// Non-interactive dense-output batch solve. Robust default.
+    #[default]
+    Batch,
+    /// Live stepper loop — streamable/steerable, but solver step is
+    /// bounded by the output `dt`.
+    Interactive,
+}
+
 // ---------- Bounds ----------
 
 /// Run window + solver hints. Fields default from the model's
@@ -192,12 +225,16 @@ pub struct RunBounds {
     /// `None` means the solver chooses adaptively.
     pub dt: Option<f64>,
     pub tolerance: Option<f64>,
-    /// Integration method override. `None` = backend default (TR-BDF2).
+    /// Integration method override. `None` = backend default (BDF).
     pub solver: Option<SolverChoice>,
     /// Initial step size hint (seconds). `None` lets the backend pick
     /// (currently `span / 5_000_000`). Useful for long-horizon runs
     /// where the span-based default over-shoots a stiff transient.
     pub h0: Option<f64>,
+    /// Time-loop ownership for the run. Default is the non-interactive
+    /// [`Batch`](RuntimeMode::Batch) dense-output solve; see [`RuntimeMode`].
+    #[serde(default)]
+    pub runtime: RuntimeMode,
 }
 
 impl Default for RunBounds {
@@ -209,6 +246,7 @@ impl Default for RunBounds {
             tolerance: None,
             solver: None,
             h0: None,
+            runtime: RuntimeMode::Batch,
         }
     }
 }
