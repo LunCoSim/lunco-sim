@@ -1528,6 +1528,10 @@ pub fn handle_modelica_responses(
                         t_end: result.experiment_stop_time,
                         tolerance: result.experiment_tolerance,
                         interval: result.experiment_interval,
+                        // The live worker path carries `Interval` only; the
+                        // `NumberOfIntervals` count flows through the batch
+                        // experiments path (compile.rs ModelDefaults builder).
+                        number_of_intervals: None,
                         // Parse the annotation's solver string into the typed
                         // choice once here; an unrecognized name falls to
                         // `None` (= backend default) instead of being carried

@@ -429,7 +429,7 @@ pub(crate) fn render_fast_run_setup(
         draft.inputs = new_inputs;
         // Pass the chosen class explicitly so dispatch skips the
         // disambiguation modal — the dropdown above already resolved it.
-        commands.trigger(FastRunActiveModel { doc: entry.doc, class: Some(entry.model_ref.0.clone()), t_end: None, dt: None, tolerance: None, solver: None, h0: None });
+        commands.trigger(FastRunActiveModel { doc: entry.doc, class: Some(entry.model_ref.0.clone()), t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
     } else if cancelled {
         setup.0 = None;
     }
@@ -532,7 +532,7 @@ pub(crate) fn render_compile_class_picker(
             PickerPurpose::FastRun => {
                 // Re-dispatch — second-time-around the drilled-class
                 // pin is set so resolution skips the picker.
-                commands.trigger(FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None, solver: None, h0: None });
+                commands.trigger(FastRunActiveModel { doc, class: None, t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
             }
         }
     } else if cancelled {
@@ -1129,8 +1129,13 @@ pub struct FastRunActiveModel {
     pub class: Option<String>,
     /// Override experiment StopTime (seconds). `None` = use annotation or fallback.
     pub t_end: Option<f64>,
-    /// Override output interval (seconds). `None` = use annotation or fallback.
+    /// Override output interval / step (seconds, Modelica `Interval`). `None`
+    /// = use annotation or fallback. Mutually exclusive with `n_intervals`.
     pub dt: Option<f64>,
+    /// Override output point count as a number of intervals (Modelica
+    /// `NumberOfIntervals`): emits `n + 1` evenly-spaced samples. The count
+    /// alternative to `dt`; when set it takes precedence and clears `dt`.
+    pub n_intervals: Option<u32>,
     /// Override solver tolerance. `None` = use annotation or fallback.
     pub tolerance: Option<f64>,
     /// Override solver family: "bdf", "dassl", "ida" → BDF;
@@ -1151,6 +1156,7 @@ struct BoundsOverride {
     t_start: Option<f64>,
     t_end: Option<f64>,
     dt: Option<f64>,
+    n_intervals: Option<u32>,
     tolerance: Option<f64>,
     solver: Option<lunco_experiments::SolverChoice>,
     h0: Option<f64>,
@@ -1435,6 +1441,7 @@ fn dispatch_experiment(
                     t_end: exp.stop_time,
                     tolerance: exp.tolerance,
                     interval: exp.interval,
+                    number_of_intervals: exp.number_of_intervals,
                     solver: None,
                 },
             );
@@ -1465,7 +1472,11 @@ fn dispatch_experiment(
         // Command bounds override (explicit API params, highest priority).
         if let Some(t) = cmd_bounds.t_start { bounds.t_start = t; }
         if let Some(t) = cmd_bounds.t_end { bounds.t_end = t; }
-        if let Some(d) = cmd_bounds.dt { bounds.dt = Some(d); }
+        // `dt` (Interval) and `n_intervals` (NumberOfIntervals) are the two
+        // mutually-exclusive ways to set the output grid; setting one clears
+        // the other so the request is unambiguous.
+        if let Some(d) = cmd_bounds.dt { bounds.dt = Some(d); bounds.n_intervals = None; }
+        if let Some(n) = cmd_bounds.n_intervals { bounds.n_intervals = Some(n); bounds.dt = None; }
         if let Some(t) = cmd_bounds.tolerance { bounds.tolerance = Some(t); }
         if let Some(s) = cmd_bounds.solver { bounds.solver = Some(s); }
         if let Some(h) = cmd_bounds.h0 { bounds.h0 = Some(h); }
@@ -1542,6 +1553,7 @@ pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: C
         t_start: None,
         t_end: trigger.event().t_end,
         dt: trigger.event().dt,
+        n_intervals: trigger.event().n_intervals,
         tolerance: trigger.event().tolerance,
         solver: parse_solver_arg(trigger.event().solver.as_deref()),
         h0: trigger.event().h0,
@@ -1639,6 +1651,7 @@ pub fn on_confirm_class_picker(trigger: On<ConfirmClassPicker>, mut commands: Co
                     class: None,
                     t_end: None,
                     dt: None,
+                    n_intervals: None,
                     tolerance: None,
                     solver: None,
                     h0: None,
@@ -1666,7 +1679,12 @@ pub struct RunExperiment {
     pub inputs: Vec<crate::api::ApiModification>,
     pub t_start: Option<f64>,
     pub t_end: Option<f64>,
+    /// Output step in seconds (Modelica `Interval`). Mutually exclusive with
+    /// `n_intervals`.
     pub dt: Option<f64>,
+    /// Output point count as a number of intervals (Modelica
+    /// `NumberOfIntervals`); takes precedence over `dt` when set.
+    pub n_intervals: Option<u32>,
     pub tolerance: Option<f64>,
     pub solver: Option<String>,
     pub h0: Option<f64>,
@@ -1686,6 +1704,7 @@ pub fn on_run_experiment(trigger: On<RunExperiment>, mut commands: Commands) {
         t_start: ev.t_start,
         t_end: ev.t_end,
         dt: ev.dt,
+        n_intervals: ev.n_intervals,
         tolerance: ev.tolerance,
         solver: parse_solver_arg(ev.solver.as_deref()),
         h0: ev.h0,

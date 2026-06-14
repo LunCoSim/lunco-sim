@@ -433,7 +433,7 @@ fn render_unified_toolbar(
                 setup.0 = Some(crate::ui::commands::FastRunSetupEntry { doc, model_ref, candidates, bounds, overrides_count, inputs });
             }
         } else {
-            world.commands().trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, tolerance: None, solver: None, h0: None });
+            world.commands().trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
         }
     }
     if compile_clicked {

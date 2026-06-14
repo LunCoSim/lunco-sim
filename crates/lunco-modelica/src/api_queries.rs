@@ -583,6 +583,7 @@ fn bounds_to_json(b: &lunco_experiments::RunBounds) -> serde_json::Value {
         "t_start": b.t_start,
         "t_end": b.t_end,
         "dt": b.dt,
+        "n_intervals": b.n_intervals,
         "tolerance": b.tolerance,
     })
 }
@@ -903,6 +904,7 @@ fn run_summary(
             "t_start": exp.bounds.t_start,
             "t_end": exp.bounds.t_end,
             "dt": exp.bounds.dt,
+            "n_intervals": exp.bounds.n_intervals,
             "tolerance": exp.bounds.tolerance,
             "solver": exp.bounds.solver,
         }),
