@@ -1,6 +1,7 @@
 //! Host (listen-server) adapter: WebTransport server + connection lifecycle +
 //! outbox→clients / clients→inbox ferry. Native only.
 
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use lightyear::netcode::server_plugin::NetcodeConfig;
 use lightyear::netcode::NetcodeServer;
@@ -8,12 +9,12 @@ use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
-use crate::wire::{
-    HandshakeMsg, OwnershipMsg, SnapshotEntry, SnapshotMsg, SpawnReplicationMsg, WireEnvelope,
-    WireInbox, WireOutbox,
+use crate::sync::{
+    encode_quat, quantize_pos, HandshakeMsg, OwnershipMsg, SnapshotEntry, SnapshotMsg,
+    SpawnReplicationMsg, SyncEnvelope, SyncInbox, SyncOutbox,
 };
 use lunco_core::{
-    GlobalEntityId, NetReplicate, NetSpawn, NetStatus, SessionRegistry, SimTick, WireChannel,
+    GlobalEntityId, NetReplicate, NetSpawn, NetStatus, SessionRegistry, SimTick, SyncChannel,
 };
 
 use crate::protocol::{CmdChannel, Frame, SnapChannel};
@@ -161,7 +162,7 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     // WITHOUT touching the ferry: snapshot GENERATION (`gather_snapshot`) runs in
     // `FixedUpdate` at a steady 20 Hz and tick-stamps each batch, and the client
     // interpolates in tick-space (`interpolate_proxies`), so bursty sends still
-    // render smoothly. See `crate::wire::WirePlugin`.
+    // render smoothly. See `crate::sync::SyncPlugin`.
     app.add_systems(
         Update,
         (
@@ -176,13 +177,13 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
 /// Broadcast the authoritative ownership table to all clients whenever it
 /// changes (a claim or release). Reliable channel so the who-owns-what view
 /// stays consistent. Host-only (registered in `setup_host`).
-fn broadcast_ownership(registry: Res<SessionRegistry>, mut outbox: ResMut<WireOutbox>) {
+fn broadcast_ownership(registry: Res<SessionRegistry>, mut outbox: ResMut<SyncOutbox>) {
     if !registry.is_changed() {
         return;
     }
     outbox.0.push((
-        WireChannel::CommandBus,
-        WireEnvelope::Ownership(OwnershipMsg {
+        SyncChannel::CommandBus,
+        SyncEnvelope::Ownership(OwnershipMsg {
             entries: registry.snapshot(),
         }),
     ));
@@ -200,20 +201,20 @@ fn update_host_netstatus(
 }
 
 /// Serialize + send one envelope to `target` on the channel matching its
-/// `WireChannel`.
+/// `SyncChannel`.
 fn server_send(
     sender: &mut ServerMultiMessageSender,
     server: &Server,
     target: &NetworkTarget,
-    channel: WireChannel,
-    env: &WireEnvelope,
+    channel: SyncChannel,
+    env: &SyncEnvelope,
 ) {
     let Some(bytes) = serialize_env(env) else {
         return;
     };
     let frame = Frame(bytes);
     let _ = match channel {
-        WireChannel::ControlStream => sender.send::<Frame, SnapChannel>(&frame, server, target),
+        SyncChannel::ControlStream => sender.send::<Frame, SnapChannel>(&frame, server, target),
         _ => sender.send::<Frame, CmdChannel>(&frame, server, target),
     };
 }
@@ -242,8 +243,8 @@ fn on_server_connected(
         &mut sender,
         server,
         &target,
-        WireChannel::CommandBus,
-        &WireEnvelope::Handshake(HandshakeMsg {
+        SyncChannel::CommandBus,
+        &SyncEnvelope::Handshake(HandshakeMsg {
             session: session.0,
             tick: tick.0,
         }),
@@ -253,8 +254,8 @@ fn on_server_connected(
             &mut sender,
             server,
             &target,
-            WireChannel::CommandBus,
-            &WireEnvelope::Spawn(SpawnReplicationMsg {
+            SyncChannel::CommandBus,
+            &SyncEnvelope::Spawn(SpawnReplicationMsg {
                 gid: gid.get(),
                 entry_id: spawn.entry_id.clone(),
                 position: spawn.position.to_array(),
@@ -269,20 +270,18 @@ fn on_server_connected(
         .iter()
         .map(|(gid, tf)| SnapshotEntry {
             gid: gid.get(),
-            t: tf.translation.to_array(),
-            r: tf.rotation.to_array(),
-            // Baseline is a one-shot placement at connect; velocity zero + the f32
-            // transform as the absolute `pos` + cell 0 is fine — the next 20 Hz
-            // snapshot carries real velocity + precise f64 `pos` within ~50 ms.
-            lv: [0.0; 3],
-            av: [0.0; 3],
-            last_input_seq: 0,
-            pos: [
+            // Baseline is a one-shot placement at connect; the f32 `Transform` as the
+            // absolute (quantized) position + velocity zero is fine — the next 20 Hz
+            // snapshot carries real velocity + the precise f64 pose within ~50 ms.
+            pos_q: quantize_pos(DVec3::new(
                 tf.translation.x as f64,
                 tf.translation.y as f64,
                 tf.translation.z as f64,
-            ],
-            cell: [0; 3],
+            )),
+            rot_packed: encode_quat(tf.rotation),
+            lv: [0.0; 3],
+            av: [0.0; 3],
+            last_input_seq: 0,
         })
         .collect();
     if !entries.is_empty() {
@@ -291,8 +290,8 @@ fn on_server_connected(
             &mut sender,
             server,
             &target,
-            WireChannel::ControlStream,
-            &WireEnvelope::Snapshot(SnapshotMsg {
+            SyncChannel::ControlStream,
+            &SyncEnvelope::Snapshot(SnapshotMsg {
                 tick: tick.0,
                 entries,
             }),
@@ -305,8 +304,8 @@ fn on_server_connected(
         &mut sender,
         server,
         &target,
-        WireChannel::CommandBus,
-        &WireEnvelope::Ownership(OwnershipMsg {
+        SyncChannel::CommandBus,
+        &SyncEnvelope::Ownership(OwnershipMsg {
             entries: registry.snapshot(),
         }),
     );
@@ -332,7 +331,7 @@ fn on_server_disconnected(
 
 /// Drain outgoing envelopes (snapshots, spawn replication) to all clients.
 fn host_send_outbox(
-    mut outbox: ResMut<WireOutbox>,
+    mut outbox: ResMut<SyncOutbox>,
     server: Single<&Server>,
     mut sender: ServerMultiMessageSender,
 ) {
@@ -349,7 +348,7 @@ fn host_send_outbox(
 /// connection-derived session (the trusted origin for authority).
 fn host_recv_inbox(
     mut q: Query<(&RemoteId, &mut MessageReceiver<Frame>), With<ClientOf>>,
-    mut inbox: ResMut<WireInbox>,
+    mut inbox: ResMut<SyncInbox>,
 ) {
     for (remote, mut receiver) in q.iter_mut() {
         let session = peer_to_session(remote.0);

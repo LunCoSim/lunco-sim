@@ -9,8 +9,8 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
-use crate::wire::{WireInbox, WireOutbox};
-use lunco_core::{LocalSession, NetStatus, SessionId, WireChannel};
+use crate::sync::{SyncInbox, SyncOutbox};
+use lunco_core::{LocalSession, NetStatus, SessionId, SyncChannel};
 
 use crate::protocol::{CmdChannel, Frame, SnapChannel};
 use crate::shared::{deserialize_env, serialize_env, PRIVATE_KEY, PROTOCOL_ID};
@@ -123,7 +123,7 @@ fn client_cert_digest() -> String {
 
 /// Drain outgoing commands to the server on their declared channel.
 fn client_send_outbox(
-    mut outbox: ResMut<WireOutbox>,
+    mut outbox: ResMut<SyncOutbox>,
     mut q: Query<&mut MessageSender<Frame>, With<Client>>,
 ) {
     if outbox.0.is_empty() {
@@ -138,7 +138,7 @@ fn client_send_outbox(
         };
         let frame = Frame(bytes);
         match channel {
-            WireChannel::ControlStream => sender.send::<SnapChannel>(frame),
+            SyncChannel::ControlStream => sender.send::<SnapChannel>(frame),
             _ => sender.send::<CmdChannel>(frame),
         }
     }
@@ -148,7 +148,7 @@ fn client_send_outbox(
 /// Sender session is irrelevant on a client (everything is host-attributed).
 fn client_recv_inbox(
     mut q: Query<&mut MessageReceiver<Frame>, With<Client>>,
-    mut inbox: ResMut<WireInbox>,
+    mut inbox: ResMut<SyncInbox>,
 ) {
     let Some(mut receiver) = q.iter_mut().next() else {
         return;

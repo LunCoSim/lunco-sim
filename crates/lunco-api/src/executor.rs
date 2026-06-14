@@ -192,7 +192,7 @@ pub fn resolve_command_ids(
 }
 
 /// Outgoing/capture: local `Entity::to_bits()` → wire `GlobalEntityId` u64. A
-/// field tagged `#[wire_local]` (the `WireLocal` reflect attribute) is replaced
+/// field tagged `#[sync_local]` (the `SyncLocal` reflect attribute) is replaced
 /// with `Entity::PLACEHOLDER` instead, so a peer's local-only references (camera
 /// avatar) never leak onto the wire.
 pub fn globalize_command_ids(
@@ -238,8 +238,8 @@ enum IdDir {
 }
 
 /// Recursively convert `Entity` leaves in `value`, using `type_id`'s reflect
-/// schema to find them. `wire_local` is set when the parent struct field
-/// carried the `WireLocal` attribute (only acted on for a direct `Entity` leaf
+/// schema to find them. `sync_local` is set when the parent struct field
+/// carried the `SyncLocal` attribute (only acted on for a direct `Entity` leaf
 /// on the `Globalize` path).
 fn convert_node(
     value: &mut serde_json::Value,
@@ -247,14 +247,14 @@ fn convert_node(
     reg: &bevy::reflect::TypeRegistry,
     dir: IdDir,
     entities: &ApiEntityRegistry,
-    wire_local: bool,
+    sync_local: bool,
 ) {
     use bevy::reflect::{TypeInfo, VariantInfo};
     use std::any::TypeId;
 
     // Leaf: the declared type IS Entity → convert the scalar.
     if type_id == TypeId::of::<Entity>() {
-        convert_leaf(value, dir, entities, wire_local);
+        convert_leaf(value, dir, entities, sync_local);
         return;
     }
 
@@ -269,7 +269,7 @@ fn convert_node(
             for i in 0..s.field_len() {
                 let Some(f) = s.field_at(i) else { continue };
                 if let Some(child) = map.get_mut(f.name()) {
-                    let wl = f.has_attribute::<lunco_core::WireLocal>();
+                    let wl = f.has_attribute::<lunco_core::SyncLocal>();
                     convert_node(child, f.type_id(), reg, dir, entities, wl);
                 }
             }
@@ -342,11 +342,11 @@ fn convert_node(
                 }
                 VariantInfo::Tuple(tv) if tv.field_len() == 1 => {
                     if let Some(f) = tv.field_at(0) {
-                        // Propagate `wire_local` into the single-field payload so
+                        // Propagate `sync_local` into the single-field payload so
                         // an `Option<Entity>` (the `Some` variant) tagged
-                        // `#[wire_local]` — e.g. `PossessVessel::avatar` — still
+                        // `#[sync_local]` — e.g. `PossessVessel::avatar` — still
                         // nulls its inner local bits on the wire.
-                        convert_node(payload, f.type_id(), reg, dir, entities, wire_local);
+                        convert_node(payload, f.type_id(), reg, dir, entities, sync_local);
                     }
                 }
                 VariantInfo::Tuple(tv) => {
@@ -369,7 +369,7 @@ fn convert_leaf(
     value: &mut serde_json::Value,
     dir: IdDir,
     entities: &ApiEntityRegistry,
-    wire_local: bool,
+    sync_local: bool,
 ) {
     use lunco_core::GlobalEntityId;
     match dir {
@@ -388,7 +388,7 @@ fn convert_leaf(
         }
         IdDir::Globalize => {
             // Local-only field (e.g. avatar): never put local bits on the wire.
-            if wire_local {
+            if sync_local {
                 *value = serde_json::json!(Entity::PLACEHOLDER.to_bits());
                 return;
             }
@@ -741,7 +741,7 @@ mod id_codec_tests {
     use std::any::TypeId;
 
     // Test command shapes. `#[reflect(@..)]` is exactly what the `#[Command]`
-    // macro emits for `#[wire_local]` / `#[authz_target]`, so this exercises
+    // macro emits for `#[sync_local]` / `#[authz_target]`, so this exercises
     // the same runtime read path without pulling the whole command machinery.
     #[derive(Reflect)]
     struct TDrive {
@@ -772,14 +772,14 @@ mod id_codec_tests {
     }
     #[derive(Reflect)]
     struct TPossess {
-        #[reflect(@lunco_core::WireLocal)]
+        #[reflect(@lunco_core::SyncLocal)]
         avatar: Entity,
         #[reflect(@lunco_core::AuthzTarget)]
         target: Entity,
     }
     #[derive(Reflect)]
     struct TPossessOpt {
-        #[reflect(@lunco_core::WireLocal)]
+        #[reflect(@lunco_core::SyncLocal)]
         avatar: Option<Entity>,
         #[reflect(@lunco_core::AuthzTarget)]
         target: Entity,
@@ -861,13 +861,13 @@ mod id_codec_tests {
         let mut v = json!({ "avatar": e.to_bits(), "target": e.to_bits() });
         globalize_command_ids(&mut v, TypeId::of::<TPossess>(), &reg, &ent);
         assert_eq!(v["target"], json!(gid.get())); // local bits → gid
-        // wire_local field never carries real local bits onto the wire.
+        // sync_local field never carries real local bits onto the wire.
         assert_eq!(v["avatar"], json!(Entity::PLACEHOLDER.to_bits()));
     }
 
     #[test]
     fn globalize_strips_wire_local_inside_option() {
-        // `PossessVessel::avatar` is `Option<Entity>` + `#[wire_local]`. The
+        // `PossessVessel::avatar` is `Option<Entity>` + `#[sync_local]`. The
         // strip must reach the inner `Entity` of the `Some` payload, not just a
         // bare-`Entity` field — otherwise a possessing client leaks its local
         // camera bits onto the wire.

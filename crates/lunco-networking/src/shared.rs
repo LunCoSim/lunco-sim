@@ -3,8 +3,8 @@
 use bevy::prelude::*;
 use core::time::Duration;
 use lightyear::prelude::*;
-use crate::wire::{DeclareChannelExt, WireEnvelope};
-use lunco_core::{IsServer, NetStatus, NetworkRole, SessionId, WireChannel};
+use crate::sync::{DeclareChannelExt, SyncEnvelope};
+use lunco_core::{IsServer, NetStatus, NetworkRole, SessionId, SyncChannel};
 
 use crate::NetworkMode;
 
@@ -15,14 +15,14 @@ pub(crate) const PRIVATE_KEY: [u8; 32] = [0u8; 32];
 
 // Wire envelope codec = **bincode** (binary, positional — no field names). This is
 // the hot 20 Hz snapshot path; JSON here roughly doubled the byte count. The inner
-// Reflect command payload (`WireCommand.data`) still uses serde_json — bincode just
+// Reflect command payload (`SyncCommand.data`) still uses serde_json — bincode just
 // frames the envelope around it. Host and client always build together, so the
 // schema-coupled (non-self-describing) binary format is safe.
-pub(crate) fn serialize_env(env: &WireEnvelope) -> Option<Vec<u8>> {
+pub(crate) fn serialize_env(env: &SyncEnvelope) -> Option<Vec<u8>> {
     bincode::serialize(env).ok()
 }
 
-pub(crate) fn deserialize_env(bytes: &[u8]) -> Option<WireEnvelope> {
+pub(crate) fn deserialize_env(bytes: &[u8]) -> Option<SyncEnvelope> {
     bincode::deserialize(bytes).ok()
 }
 
@@ -42,7 +42,7 @@ pub(crate) fn peer_to_session(peer: PeerId) -> SessionId {
 pub(crate) fn build_networking(app: &mut App, mode: &NetworkMode) {
     // The transport-agnostic wire (codec, capture/apply, snapshots) the lightyear
     // ferry below drives. Both Host and Client need it.
-    app.add_plugins(crate::wire::WirePlugin);
+    app.add_plugins(crate::sync::SyncPlugin);
 
     // Prediction diagnostics — compiled only under the `net-diag` feature (off in
     // normal builds). Added on both peers so you can compare host (silent) vs client
@@ -97,9 +97,9 @@ fn add_protocol(app: &mut App) {
     // Which wire channel each networked command rides (+ registers its capture
     // observer). Control inputs ride best-effort; structural commands ride the
     // reliable bus.
-    app.declare_channel::<lunco_mobility::DriveRover>(WireChannel::ControlStream);
-    app.declare_channel::<lunco_mobility::BrakeRover>(WireChannel::ControlStream);
-    app.declare_channel::<lunco_avatar::PossessVessel>(WireChannel::CommandBus);
-    app.declare_channel::<lunco_avatar::ReleaseVessel>(WireChannel::CommandBus);
-    app.declare_channel::<lunco_sandbox_edit::commands::SpawnEntity>(WireChannel::CommandBus);
+    app.declare_channel::<lunco_mobility::DriveRover>(SyncChannel::ControlStream);
+    app.declare_channel::<lunco_mobility::BrakeRover>(SyncChannel::ControlStream);
+    app.declare_channel::<lunco_avatar::PossessVessel>(SyncChannel::CommandBus);
+    app.declare_channel::<lunco_avatar::ReleaseVessel>(SyncChannel::CommandBus);
+    app.declare_channel::<lunco_sandbox_edit::commands::SpawnEntity>(SyncChannel::CommandBus);
 }

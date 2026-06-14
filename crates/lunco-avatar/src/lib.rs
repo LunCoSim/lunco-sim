@@ -274,7 +274,7 @@ pub struct LunCoAvatarPlugin;
 fn record_possession_authority(
     trigger: On<PossessVessel>,
     role: Res<lunco_core::NetworkRole>,
-    guard: Res<lunco_core::WireApplyGuard>,
+    guard: Res<lunco_core::SyncApplyGuard>,
     local: Res<lunco_core::LocalSession>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     mut registry: ResMut<lunco_core::SessionRegistry>,
@@ -302,7 +302,7 @@ fn record_possession_authority(
 fn release_possession_authority(
     trigger: On<ReleaseVessel>,
     role: Res<lunco_core::NetworkRole>,
-    guard: Res<lunco_core::WireApplyGuard>,
+    guard: Res<lunco_core::SyncApplyGuard>,
     local: Res<lunco_core::LocalSession>,
     mut registry: ResMut<lunco_core::SessionRegistry>,
 ) {
@@ -1330,12 +1330,12 @@ fn on_release_command(
     trigger: On<ReleaseVessel>,
     mut commands: Commands,
     q_avatar: Query<(&Transform, Option<&ControllerLink>, Option<&SurfaceRelativeMode>), With<Avatar>>,
-    guard: Res<lunco_core::WireApplyGuard>,
+    guard: Res<lunco_core::SyncApplyGuard>,
 ) {
     // A wire-applied release (a client telling the host it let go) carries that
     // client's avatar, which is meaningless here — the host frees ownership in
     // `release_possession_authority`, not by touching a local camera.
-    if guard.is_from_wire() {
+    if guard.is_from_sync() {
         return;
     }
     let cmd = trigger.event();
@@ -1432,7 +1432,7 @@ fn on_possess_command(
     _q_orbit: Query<&OrbitCamera>,
     _q_spring: Query<&SpringArmCamera>,
     _q_chase: Query<&ChaseCamera>,
-    guard: Res<lunco_core::WireApplyGuard>,
+    guard: Res<lunco_core::SyncApplyGuard>,
     registry: Res<lunco_core::SessionRegistry>,
     session: Res<lunco_core::LocalSession>,
     q_owned: Query<&lunco_core::GlobalEntityId>,
@@ -1442,7 +1442,7 @@ fn on_possess_command(
     // claim) must NOT bind a local camera — the host has no camera for that
     // player. Authority is recorded separately by `record_possession_authority`;
     // here we only do the local camera-bind for our own (non-wire) possessions.
-    if guard.is_from_wire() {
+    if guard.is_from_sync() {
         return;
     }
     // Possession arbitration (policy-driven): under the default `Exclusive`

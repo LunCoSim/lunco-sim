@@ -115,7 +115,7 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Rewrite field-role sugar into bevy reflect custom attributes, consumed
     // here (they never reach rustc as real attributes); everything else on the
     // field is forwarded untouched.
-    //   `#[wire_local]`   → local-only Entity: the wire codec substitutes
+    //   `#[sync_local]`   → local-only Entity: the wire codec substitutes
     //                       `Entity::PLACEHOLDER` instead of leaking local bits.
     //   `#[authz_target]` → the gid the host authorizes ownership against.
     // The codec/apply paths read these via `NamedField::has_attribute::<_>()`.
@@ -123,9 +123,9 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
         .iter()
         .cloned()
         .map(|mut f| {
-            if f.attrs.iter().any(|a| a.path().is_ident("wire_local")) {
-                f.attrs.retain(|a| !a.path().is_ident("wire_local"));
-                f.attrs.push(parse_quote!(#[reflect(@::lunco_core::WireLocal)]));
+            if f.attrs.iter().any(|a| a.path().is_ident("sync_local")) {
+                f.attrs.retain(|a| !a.path().is_ident("sync_local"));
+                f.attrs.push(parse_quote!(#[reflect(@::lunco_core::SyncLocal)]));
             }
             if f.attrs.iter().any(|a| a.path().is_ident("authz_target")) {
                 f.attrs.retain(|a| !a.path().is_ident("authz_target"));
