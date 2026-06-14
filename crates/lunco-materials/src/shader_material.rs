@@ -231,6 +231,12 @@ pub struct HorizonMarchModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 #[derive(Resource)]
 pub struct PbrLitModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 
+/// Keeps the shared `lunco::lunar` WGSL module (lunar regolith photometry —
+/// Lommel-Seeliger + opposition surge) loaded so `#import lunco::lunar` resolves
+/// in the terrain shaders.
+#[derive(Resource)]
+pub struct LunarBrdfModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
+
 impl Plugin for ShaderMaterialPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<ShaderMaterial>::default());
@@ -251,6 +257,11 @@ impl Plugin for ShaderMaterialPlugin {
             .resource::<AssetServer>()
             .load("shaders/pbr_lit.wgsl");
         app.insert_resource(PbrLitModule(pbr_lit));
+        let lunar = app
+            .world()
+            .resource::<AssetServer>()
+            .load("shaders/lunar_brdf.wgsl");
+        app.insert_resource(LunarBrdfModule(lunar));
     }
 }
 

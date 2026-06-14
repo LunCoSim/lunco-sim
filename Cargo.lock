@@ -6815,7 +6815,6 @@ dependencies = [
  "lunco-assets",
  "lunco-controller",
  "lunco-core",
- "lunco-materials",
  "lunco-storage",
  "lunco-terrain",
  "lunco-theme",

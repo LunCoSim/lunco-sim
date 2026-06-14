@@ -19,8 +19,10 @@
     pbr_functions,
     mesh_bindings::mesh,
     mesh_view_bindings::view,
+    mesh_view_bindings::lights,
 }
 #import lunco::horizon::sun_visibility
+#import lunco::lunar::regolith_factor
 
 // Dynamic, self-describing parameters (reflected from this file). Only the
 // albedo is author-settable; the rest are engine-filled by the horizon system.
@@ -59,7 +61,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.is_orthographic = view.clip_from_view[3].w == 1.0;
     pbr_input.N = pbr_input.world_normal;
     pbr_input.V = pbr_functions::calculate_view(in.world_position, pbr_input.is_orthographic);
-    pbr_input.material.base_color = vec4(albedo, 1.0);
+    // Lunar regolith photometry (Lommel-Seeliger + opposition surge); see
+    // lunar_brdf.wgsl. Pre-multiplies base_color so bevy's Lambert completes it.
+    var lunar_k = 1.0;
+    if (lights.n_directional_lights > 0u) {
+        let to_sun = normalize(lights.directional_lights[0].direction_to_light);
+        lunar_k = regolith_factor(pbr_input.N, to_sun, pbr_input.V);
+    }
+    pbr_input.material.base_color = vec4(albedo * lunar_k, 1.0);
     pbr_input.material.perceptual_roughness = 0.95;
     pbr_input.material.metallic = 0.0;
     pbr_input.material.reflectance = vec3(0.5);

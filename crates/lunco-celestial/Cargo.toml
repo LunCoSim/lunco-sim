@@ -33,7 +33,6 @@ futures-lite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
-lunco-materials = { path = "../lunco-materials" }
 lunco-terrain = { path = "../lunco-terrain" }
 image = { workspace = true, optional = true }
 

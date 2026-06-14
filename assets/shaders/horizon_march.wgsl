@@ -39,6 +39,10 @@ fn sun_visibility(
     res: f32,
 ) -> f32 {
     if (res < 2.0) { return 1.0; } // no heightfield bound
+    // Guard against an unauthored sun (angular size 0 → tan_sun_r 0): the
+    // occlusion divides by `t * tan_sun_r`, so 0 yields ±inf and an all-black
+    // (or garbage) march. Floor it at a hair below Sol's ~0.0046.
+    let tan_r = max(tan_sun_r, 1e-4);
     let horiz = vec2(sun_local.x, sun_local.z);
     let hl = length(horiz);
     if (sun_local.y <= 0.0) { return 0.0; }     // sun below horizontal
@@ -58,7 +62,7 @@ fn sun_visibility(
         let p = p0 + dir * t;
         if (p.x < 0.0 || p.y < 0.0 || p.x > size.x || p.y > size.y) { break; }
         let h = hf_height(tex, p * to_grid, ri);
-        let occ = (h0 + slope * t - h) / (t * tan_sun_r);
+        let occ = (h0 + slope * t - h) / (t * tan_r);
         vis = min(vis, occ);
         if (vis <= 0.0) { return 0.0; }
         t = t * 1.18 + texel * 0.5;

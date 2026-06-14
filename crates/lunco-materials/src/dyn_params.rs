@@ -186,9 +186,19 @@ impl ParamSchema {
     pub fn pack(&self, values: &BTreeMap<String, ParamValue>) -> [Vec4; BLOCK_VEC4S] {
         let mut flat = [0.0f32; BLOCK_F32S];
         for f in &self.fields {
+            // A `Material` struct reflecting past 256 bytes (parse only warns,
+            // it does not clip) would index `flat` out of bounds and panic —
+            // and this runs on the per-frame engine-field write path plus on
+            // hot-reload/discovery of arbitrary on-disk shaders. Skip any field
+            // that doesn't fully fit; a too-big struct then renders with its
+            // overflowing fields zeroed instead of crashing the renderer.
+            let i = f.offset / 4;
+            if i + f.ty.components() > BLOCK_F32S {
+                continue;
+            }
             let v = values.get(&f.name).copied().or(f.default);
             if let Some(v) = v {
-                v.write_flat(&mut flat, f.offset / 4);
+                v.write_flat(&mut flat, i);
             }
         }
         std::array::from_fn(|i| Vec4::from_array([flat[i * 4], flat[i * 4 + 1], flat[i * 4 + 2], flat[i * 4 + 3]]))

@@ -43,8 +43,10 @@
     pbr_functions,
     mesh_bindings::mesh,
     mesh_view_bindings::view,
+    mesh_view_bindings::lights,
 }
 #import lunco::horizon::sun_visibility
+#import lunco::lunar::regolith_factor
 
 // Dynamic, self-describing parameters — the engine reflects this `Material`
 // struct (field names → offsets) and the `//!@` annotations (UI ranges,
@@ -186,7 +188,14 @@ fn bump_layer(
     let hb = layer_height(p + b * eps, scale, octaves, gain, lo, hi);
     *out_h = h0;
     let grad = (ht - h0) * t + (hb - h0) * b;
-    return normalize(n - strength * grad / eps);
+    // Guard against a degenerate perturbation: a strong bump on a steep ramp
+    // can push the normal to ~zero length or below the surface → normalize()
+    // would NaN / flip. Keep the geometric normal in those cases.
+    let perturbed = n - strength * grad / eps;
+    if (length(perturbed) < 1e-3 || dot(perturbed, n) <= 0.0) {
+        return n;
+    }
+    return normalize(perturbed);
 }
 
 @fragment
@@ -255,7 +264,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.is_orthographic = view.clip_from_view[3].w == 1.0;
     pbr_input.N = n;
     pbr_input.V = pbr_functions::calculate_view(in.world_position, pbr_input.is_orthographic);
-    pbr_input.material.base_color = vec4(albedo, 1.0);
+    // Lunar regolith photometry: reshape the sun diffuse from Lambert to
+    // Lommel-Seeliger + opposition surge (retroreflective backscatter). The
+    // factor pre-multiplies base_color; bevy's built-in Lambert (·μ₀) then
+    // completes the response. Geometry comes from the brightest directional
+    // light (the sun), in world space.
+    var lunar_k = 1.0;
+    if (lights.n_directional_lights > 0u) {
+        let to_sun = normalize(lights.directional_lights[0].direction_to_light);
+        lunar_k = regolith_factor(pbr_input.N, to_sun, pbr_input.V);
+    }
+    pbr_input.material.base_color = vec4(albedo * lunar_k, 1.0);
     pbr_input.material.perceptual_roughness = roughness;
     pbr_input.material.metallic = 0.0;
     pbr_input.material.reflectance = vec3(0.5);

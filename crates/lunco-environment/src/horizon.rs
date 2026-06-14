@@ -378,7 +378,10 @@ fn pick_sun<'a>(
             } else {
                 0.0
             };
-            (gt, tan_sun_radius(ang.copied().unwrap_or_default().0), csm_far)
+            // A sun with no authored angular size must not yield tan(0)=0
+            // (→ div-by-zero in the march). Default to Sol's ~0.53° diameter.
+            let diameter_deg = ang.map(|a| a.0).filter(|d| *d > 0.0).unwrap_or(0.53);
+            (gt, tan_sun_radius(diameter_deg), csm_far)
         },
     )
 }
