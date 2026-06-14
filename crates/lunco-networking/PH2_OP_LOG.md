@@ -1,7 +1,7 @@
-# Phase 2 scope — M3 op-log over the wire
+# Phase 2 scope — M3 op-log over the sync layer
 
 **Goal (from IMPLEMENTATION_PLAN):** ship the existing typed `#[Command]` mutations
-over the network, reliable + ordered, routed by `WireChannel`. First phase that
+over the network, reliable + ordered, routed by `SyncChannel`. First phase that
 links lightyear behind the `networking` feature (D7). No smooth motion yet — that's
 M2/M4 (Ph3/Ph4).
 
@@ -21,14 +21,14 @@ Grounded in the current code (2026-05-29):
 
 | Plan assumed | Actual state | Ph2 must |
 |---|---|---|
-| `declare_channel` routes by `WireChannel` | `WireChannel` enum exists (`commands.rs`, renamed from `Replication`) but is **declared-only, never consulted**; no per-command metadata anywhere | **build** the channel-metadata registry |
+| `declare_channel` routes by `SyncChannel` | `SyncChannel` enum exists (`commands.rs`, renamed from `Replication`) but is **declared-only, never consulted**; no per-command metadata anywhere | **build** the channel-metadata registry |
 | commands carry `Mutation<P>` | commands fire **bare** via `commands.trigger(Event)` → `On<T>` observer; `Mutation<P>` envelope exists but wraps nothing today | **wrap** at the seam |
 | "serialize any command" | each `#[Command]` derives `Serialize+Deserialize+Reflect`, but there is **no unified codec** — only per-request reflect-deserialize in `api_command_dispatcher` | **build** a command codec (reuse Reflect + shared `TypeRegistry`) |
 | `lunco-networking` wired in | crate is a **no-op skeleton**, no lightyear dep, feature flags commented out, not added to any binary | **add** lightyear + plugin + wire one binary |
 
 Good news — the substrate is genuinely ready: `#[Command]` structs are already
 `Serialize/Deserialize/Reflect` (`lunco-command-macro` lines 147–159), `Mutation<P>`/
-`OpId`/`SessionId` are wire-shaped (`commands.rs`), `ApiEntityRegistry` resolves
+`OpId`/`SessionId` are sync-shaped (`commands.rs`), `ApiEntityRegistry` resolves
 **both** directions (`registry.rs:17–31`), and Ph1 gives us `GlobalEntityId`/
 `IsServer`. So Ph2 is plumbing, not new domain logic.
 
@@ -39,7 +39,7 @@ Good news — the substrate is genuinely ready: `#[Command]` structs are already
 `crates/lunco-api/src/executor.rs:92–137` — `api_command_dispatcher`:
 JSON → `ApiCommandEvent` → reflect-deserialize → `reflect_event.trigger(world, instance)` → `On<T>` observer.
 
-- **Incoming** (apply a wire mutation): we already have most of it — `api_command_dispatcher`
+- **Incoming** (apply a sync mutation): we already have most of it — `api_command_dispatcher`
   deserializes a `(short_type_name, params_json)` into a typed event and triggers it,
   and `resolve_ids_in_json` (`executor.rs:145–180`) maps `GlobalEntityId→Entity`. The
   network receiver feeds the same path.
@@ -51,10 +51,10 @@ JSON → `ApiCommandEvent` → reflect-deserialize → `reflect_event.trigger(wo
 
 ## Remote calls: our commands **are** RPC (and that's enough — with one gap)
 
-A `#[Command]` is a typed Bevy event + observer; add a wire envelope + reliable
+A `#[Command]` is a typed Bevy event + observer; add a sync envelope + reliable
 channel + server validation and you have, by definition, a remote procedure call.
 So Ph2 doesn't add a *separate* RPC system — it gives the command we already have a
-wire. The real question is whether the command/op-log covers all the *shapes* of
+sync layer. The real question is whether the command/op-log covers all the *shapes* of
 remote call we need.
 
 **Reference models.** Unreal has three RPC directions × reliable/unreliable +
@@ -66,7 +66,7 @@ properties*. Even movement is RPC-shaped (`ServerMove` input + `ClientAdjustPosi
 correction). lightyear has no such decorators: it offers **Messages/Triggers over
 reliable/unreliable Channels**, targeted at *send* time (to a peer, or broadcast),
 plus recent **networked events/triggers** (a Bevy observer fired on the remote — the
-same shape as our `#[Command]`). Our M3 maps onto a `Mutation<WireCommand>` message
+same shape as our `#[Command]`). Our M3 maps onto a `Mutation<SyncCommand>` message
 (or networked trigger) on one `OrderedReliable` channel.
 
 **Coverage — the call shapes, mapped:**
@@ -95,7 +95,7 @@ command* (same command type, unreliable channel, no `Ack`), still a channel choi
 new machinery. Don't build it preemptively.
 
 **Authority is orthogonal to the channel (the possession gate).** The static
-`WireChannel` tag picks the channel/reliability; whether *this* client may issue a
+`SyncChannel` tag picks the channel/reliability; whether *this* client may issue a
 command against *that* entity is **runtime, possession-driven** — Unreal drops un-owned
 `Server` RPCs, Mirror's `[Command]` `requiresAuthority`, Godot's `@rpc("authority")`.
 Ours: the client only emits a command for the entity it possesses, **and the server
@@ -103,9 +103,9 @@ validates against the possession map regardless** (defense-in-depth = Unreal
 `WithValidation`). `PossessVessel` is the command that *establishes* that authority —
 which is why it's Ph2's headline. The Predicted-vs-Interpolated role split (owner
 predicts, others interpolate) is downstream of the same possession, and lives in M2
-(Ph3), not in the `WireChannel` tag.
+(Ph3), not in the `SyncChannel` tag.
 
-## Possession over the wire — identity + authority, not a new verb
+## Possession over the sync layer — identity + authority, not a new verb
 
 The command already exists: **`PossessVessel { avatar: Entity, target: Entity }`**
 (`lunco-avatar/src/commands.rs:11`), handled by `on_possess_command`
@@ -113,7 +113,7 @@ The command already exists: **`PossessVessel { avatar: Entity, target: Entity }`
 
 ```
 client fires PossessVessel{avatar,target}
-  → Mutation<WireCommand> on CommandChannel
+  → Mutation<SyncCommand> on CommandChannel
   → SERVER runs on_possess_command (inserts ControllerLink{vessel_entity:target} on avatar)
   → ControllerLink replicates (M2, Ph3) → every client sees who controls what
 ```
@@ -148,7 +148,7 @@ over the same avatar.
 
 ### Gap 2 — "may this client possess this target?" (server validation)
 
-`PossessVessel` is unconditional today. Over the wire the **server must validate** in
+`PossessVessel` is unconditional today. Over the sync layer the **server must validate** in
 the P2.4 apply step before broadcasting:
 
 - reject if `target` is already possessed by a *different* session
@@ -183,14 +183,14 @@ note, it's the demo.
 
 D7 split: **facade + metadata always-on; transport/codec-send/receive behind `feature="networking"`.**
 
-### P2.1 — WireChannel metadata registry  *(always-on; `lunco-api` or `lunco-core`)*
-A resource mapping **command short-type-name → `WireChannel`**, plus a tiny extension
+### P2.1 — SyncChannel metadata registry  *(always-on; `lunco-api` or `lunco-core`)*
+A resource mapping **command short-type-name → `SyncChannel`**, plus a tiny extension
 domain crates call alongside their existing `register_commands!`:
 
 ```rust
-app.declare_channel::<DriveRover>(WireChannel::ControlStream);   // Ph4 channel
-app.declare_channel::<PossessVessel>(WireChannel::CommandBus);
-// unregistered ⇒ WireChannel::Local (safe default — never hits the wire)
+app.declare_channel::<DriveRover>(SyncChannel::ControlStream);   // Ph4 channel
+app.declare_channel::<PossessVessel>(SyncChannel::CommandBus);
+// unregistered ⇒ SyncChannel::Local (safe default — never hits the sync layer)
 ```
 
 - Always compiled; with the feature off it just fills a `HashMap` nobody reads (cheap,
@@ -205,10 +205,10 @@ Solve type-erasure by **reusing Reflect + the shared `TypeRegistry`** — *not* 
 hand-maintained `AnyCommand` enum (would centralize every domain command in one file,
 defeating the decentralized `#[Command]` design).
 
-Wire payload:
+Sync payload:
 ```rust
-struct WireCommand { type_name: String, data: serde_json::Value } // Reflect-serialized
-// shipped inside Mutation<WireCommand> { id: OpId, origin: SessionId, parent_gen, payload }
+struct SyncCommand { type_name: String, data: serde_json::Value } // Reflect-serialized
+// shipped inside Mutation<SyncCommand> { id: OpId, origin: SessionId, parent_gen, payload }
 ```
 - **Serialize:** `TypedReflectSerializer` on the triggered event → `data`; `type_name` =
   short path. (Mirror of the deserialize already in `api_command_dispatcher`.)
@@ -227,8 +227,8 @@ struct WireCommand { type_name: String, data: serde_json::Value } // Reflect-ser
   app.add_channel::<CommandChannel>(ChannelSettings { mode: OrderedReliable(..), .. })
      .add_direction(Bidirectional); // client→server requests, server→client broadcasts
   ```
-- Register `Mutation<WireCommand>` as a lightyear **message** on that channel.
-- `WireChannel::CommandBus` → `CommandChannel`. `ControlStream` → **deferred to Ph4**
+- Register `Mutation<SyncCommand>` as a lightyear **message** on that channel.
+- `SyncChannel::CommandBus` → `CommandChannel`. `ControlStream` → **deferred to Ph4**
   (INPUT channel, unreliable+redundant). `Local` → never sent.
 - Set Ph1's `IsServer` from the plugin (host/server = `true`, client = `false`).
 
@@ -253,7 +253,7 @@ can't generically "see all commands." Two options:
 
 - **(A) Global observer per replicated command** — `declare_channel::<C>` also adds
   an observer `On<C>` that serializes+enqueues. Clean, but fires for *every* trigger
-  incl. ones already arriving from the wire → needs an "originated-remotely" guard to
+  incl. ones already arriving from the sync layer → needs an "originated-remotely" guard to
   avoid echo loops (a `RemoteApply` marker/`SessionId != LOCAL` check).
 - **(B) Route locally-originated commands through an explicit `apply()` entry** that
   both triggers and enqueues — closer to the `Mutation` envelope's original intent, no
@@ -267,7 +267,7 @@ Validate the guard in a Tier-2 test (loopback must not re-broadcast).
 
 ## Commands to flow in Ph2 (pick the cheap, observable ones)
 
-| Command | Crate | WireChannel | Note |
+| Command | Crate | SyncChannel | Note |
 |---|---|---|---|
 | `PossessVessel` / `ReleaseVessel` | lunco-avatar | **CommandBus** | ownership change — the headline demo |
 | a `ParameterChanged`/`MoveEntity` | lunco-sandbox-edit | **CommandBus** | `parent_gen` validation exercised |
@@ -312,7 +312,7 @@ Per `NETWORKING_TEST_PLAN.md`:
 2. **server-broadcasts** — a second client sees the change.
 3. **dedupe** — same `OpId` twice ⇒ applied once (`Reject::Duplicate`).
 4. **id-resolves** — `Entity` field round-trips Entity→GlobalEntityId→Entity across the boundary.
-5. **no-echo** — a wire-applied command does **not** get re-broadcast (validates the capture guard).
+5. **no-echo** — a sync-applied command does **not** get re-broadcast (validates the capture guard).
 6. **stale-parent** — `parent_gen` mismatch ⇒ `Reject::StaleParent`, no apply.
 7. **two-clients-spawn (G2 guard)** — A and B each `SpawnEntity("skid_rover")`; assert the
    two roots get **distinct** `GlobalEntityId`s (the B.1 collision regression guard) and both
@@ -327,11 +327,11 @@ Per `NETWORKING_TEST_PLAN.md`:
   serialization both ways. If a command names an entity field something unlisted, it
   silently won't translate. Consider a typed newtype (`NetEntity`) or a `#[net_entity]`
   field attribute as a follow-up; for Ph2, extend the name list + add a debug assert
-  that no raw `Entity::to_bits` value escapes to the wire.
+  that no raw `Entity::to_bits` value escapes to the sync layer.
 - **Reflect-serialize fidelity** — confirm `TypedReflectSerializer`/`Deserializer`
   round-trips every Ph2 command (esp. `Entity`, `f64`, enums) before relying on it.
 - **Echo loop** — the capture guard is load-bearing; test #5 must pass before any broadcast.
-- **`declare_channel` placement** — `lunco-core` (next to `WireChannel`) vs `lunco-api`
+- **`declare_channel` placement** — `lunco-core` (next to `SyncChannel`) vs `lunco-api`
   (next to the dispatcher it feeds). Lean `lunco-api`: it already owns dispatch + the
   `TypeRegistry` view, and `lunco-core` shouldn't grow a command-routing concept.
 

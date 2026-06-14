@@ -3,7 +3,7 @@
 Goal: **one server, many transports at once**, so a desktop client (UDP) and a
 browser client (WebTransport) connect to the same world and see each other. We
 **pick one backend and stick with it** — no backend-swap abstraction. The only
-things that vary are the *wire* (UDP/WebTransport/WebSocket/memory) and the
+things that vary are the *sync layer* (UDP/WebTransport/WebSocket/memory) and the
 *role* (server/client/host).
 
 The guiding principle (already the PREP.md rule): **domain crates never import the
@@ -38,7 +38,7 @@ links → one replication room). Our facade just exposes that uniformly.
 We do **not** re-implement netcode. We select and configure what the backend opens.
 
 ```rust
-/// One wire protocol. Selection-level only.
+/// One sync protocol. Selection-level only.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TransportKind {
     Memory,        // in-process: listen-server host's own client, integration tests
@@ -120,12 +120,12 @@ domain code can always ask for `Unreliable` and get the best each peer supports.
 // In a domain crate's replication submodule (feature-gated, never imports a backend):
 app.replicate::<Transform>();                              // state sync
 app.replicate::<DifferentialDrive>();
-app.declare_channel::<DriveRover>(WireChannel::ControlStream);   // ties #[Command] + Mutation envelope to a channel
-app.declare_channel::<PossessVessel>(WireChannel::CommandBus);
+app.declare_channel::<DriveRover>(SyncChannel::ControlStream);   // ties #[Command] + Mutation envelope to a channel
+app.declare_channel::<PossessVessel>(SyncChannel::CommandBus);
 ```
 
 `declare_channel` is the bridge from the **existing** `#[Command]`/`Mutation<P>`
-layer to the wire: it picks the transport channel from the `WireChannel` tag
+layer to the sync layer: it picks the transport channel from the `SyncChannel` tag
 (`ControlStream`→INPUT, `CommandBus`→COMMANDS), serializes the envelope, and
 resolves `GlobalEntityId`↔`Entity` at the boundary via `ApiEntityRegistry`. No new
 command types — reuses what `lunco-api` already dispatches.

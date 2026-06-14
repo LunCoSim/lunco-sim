@@ -1,8 +1,8 @@
 # lunco-networking
 
-Networking layer for LunCoSim — the transparent bridge between simulation state and wire protocols.
+Networking layer for LunCoSim — the transparent bridge between simulation state and sync protocols.
 
-**Domain crates never import this crate.** They declare `app.replicate::<MyComponent>()` and the networking layer handles wire format, compression, and protocol translation silently.
+**Domain crates never import this crate.** They declare `app.replicate::<MyComponent>()` and the networking layer handles sync format, compression, and protocol translation silently.
 
 ---
 

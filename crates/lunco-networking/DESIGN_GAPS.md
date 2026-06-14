@@ -45,12 +45,12 @@ re-bases its floating origin independently** around its own camera. A raw
   gets *easier and cheaper* than the README's generic scheme (quantize a known
   small range; send the cell as ints).
 
-**PARTIALLY DONE (2026-05-31):** the snapshot wire now carries the **absolute f64
+**PARTIALLY DONE (2026-05-31):** the snapshot sync layer now carries the **absolute f64
 `pos`** (from avian's f64 `Position`) **and the `CellCoord`** (i64/axis) alongside
 the legacy f32 `t` (`SnapshotEntry`/`SnapshotSample`). `gather_snapshot` reads
 `Option<&Position>` + `Option<&CellCoord>`; the client interpolates `pos` in **f64**
 and seats avian `Position` precisely (`interpolate_proxies`), so lunar/orbital-scale
-bodies no longer collapse to f32 on the wire. **Why "partial":** the live app runs a
+bodies no longer collapse to f32 on the sync layer. **Why "partial":** the live app runs a
 single huge cell (`Grid::new(2000.0, 1.0e10)` ⇒ `maximum_distance_from_origin ≈ 1e10`,
 bodies never recenter ⇒ `CellCoord` is always `[0,0,0]`), so the cell is *carried but
 not yet consumed*. The TODO that remains is the **per-client cell→origin rebase**: once
@@ -156,7 +156,7 @@ tick keyed by the input `seq`; on a snapshot that acks a `seq`, it compares
 *prediction-at-that-seq* vs *authority-at-that-seq* (**apples-to-apples**, so the
 latency lead cancels) and, **only on genuine divergence**, eases the error into the
 present + seats velocity to authority. The pure decision lives in
-`lunco_core::reconcile_decision` (5 unit tests, no wire). Re-stepping our **f64 avian**
+`lunco_core::reconcile_decision` (5 unit tests, no sync layer). Re-stepping our **f64 avian**
 for the owned body (a 1-body island on a client — others are kinematic-pinned) reopened
 **D2**; full-world rollback stays ruled out by the global solver. See
 `PREDICTION_RECONCILIATION.md` + `DECISIONS.md` D2.

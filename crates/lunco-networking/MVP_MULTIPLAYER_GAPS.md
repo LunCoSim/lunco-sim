@@ -19,11 +19,11 @@ commits. Reconciled against the committed code, the picture today is:
 |---|---|---|
 | 1 Connect (transport) | spike only | ✅ **DONE** — lightyear WebTransport host+client wired in-app (`server.rs`/`client.rs`), `SessionId` allocation, `SessionRegistry`, late-join replay (`ad638410`) |
 | 2 Per-user identity | substrate only | ✅ session table + handshake (session+tick); **G3 server-owned avatar still client-local** |
-| 3 Create a rover | local only | ✅ **DONE** — `SpawnEntity` over wire + replicate (`apply_replicated_spawns`); **G2 collision FIXED** (`SkipContentStamp` → Authoritative id) |
-| 4 Possess | local only | ✅ **DONE** — over-wire `PossessVessel` + server ownership validation + `broadcast_ownership` (`f9976ed5`); **G4 drive-auth enforced** via `authorize()` |
+| 3 Create a rover | local only | ✅ **DONE** — `SpawnEntity` over the sync layer + replicate (`apply_replicated_spawns`); **G2 collision FIXED** (`SkipContentStamp` → Authoritative id) |
+| 4 Possess | local only | ✅ **DONE** — over the sync layer `PossessVessel` + server ownership validation + `broadcast_ownership` (`f9976ed5`); **G4 drive-auth enforced** via `authorize()` |
 | 5 Individually drive + predict | all missing | ✅ **CORE DONE** — 20 Hz snapshot replication, input-replay **prediction + reconciliation** (`717f8d66` + reconcile extraction); polish (tick-sync/jitter) remains |
 | G5 disconnect cleanup | unspecified | ✅ **DONE** — `on_server_disconnected` → `release_session` frees owned entities |
-| gap A big_space coords | missing | 🟡 **PARTIAL** — f64 `pos` + `cell` now on the wire; per-client cell→origin rebase still TODO (cells are 0 today). See DESIGN_GAPS §A. |
+| gap A big_space coords | missing | 🟡 **PARTIAL** — f64 `pos` + `cell` now on the sync layer; per-client cell→origin rebase still TODO (cells are 0 today). See DESIGN_GAPS §A. |
 
 **So the laggy-but-correct loop (stages 1–4 + drive) is essentially built and
 committed.** What still genuinely blocks the *full* experience: end-to-end
@@ -41,7 +41,7 @@ cosim-value replication (Ph5). The per-row "Missing" notes below are the origina
 | 1 | **Connect** — N clients join a host's world | transport | Ph2 (P2.3) — spike proved it (Ph0), not yet integrated into the app |
 | 2 | **Per-user identity** — each client = a distinct session with its own avatar | M1 + handshake | Ph1 substrate built; **session→avatar binding missing** |
 | 3 | **Create a rover** — client makes a new rover at runtime | M3 + M1 + M2 | `SpawnEntity` command exists; **identity + replication of the spawn missing** |
-| 4 | **Possess** — bind my avatar → my rover, server-validated | M3 | `PossessVessel` exists (local); **wire + authority missing** |
+| 4 | **Possess** — bind my avatar → my rover, server-validated | M3 | `PossessVessel` exists (local); **sync + authority missing** |
 | 5 | **Individually control** — drive only my rover; others see it move; I predict mine | M4 + M2 | **all missing** (input isolation, state replication, prediction) |
 
 **Honest verdict: the scenario spans Ph2 + Ph3 + Ph4, not Ph2 alone.** "Drive and others see it" is M2 state replication (Ph3); "drive *only mine*, smoothly" is M4 input + prediction + per-session authority (Ph4). Ph2 by itself gets you *possess + spawn appear* (reliable, no motion). See "Critical path" below.
@@ -55,10 +55,10 @@ cosim-value replication (Ph5). The per-row "Missing" notes below are the origina
 | Transport / backend | Ph0 spike only (throwaway clone) | TRANSPORT_ABSTRACTION, STACK_COMPARISON | real lightyear integration in-app (Ph2 P2.3) |
 | Identity (M1) | ✅ `Provenance`, `GlobalEntityId`, deterministic hash, USD stamping, 23 tests | IDENTITY, DECISIONS D3 | — |
 | Clock (M6) | ✅ `SimTick`, `advance_sim_tick`, `IsServer` | — | lightyear Tick binding (D6, Ph3/4) |
-| `WireChannel` tag | enum exists, **declared-only, never consulted** | PH2_OP_LOG P2.1 | the registry + `declare_channel` + routing |
+| `SyncChannel` tag | enum exists, **declared-only, never consulted** | PH2_OP_LOG P2.1 | the registry + `declare_channel` + routing |
 | `SessionId` | a bare `u64` type, **no allocation, no map** | TRANSPORT_ABSTRACTION (`Peer`) | allocation on connect + session table |
-| Create rover | ✅ `SpawnEntity` typed command + `SpawnCatalog` (skid_rover, ackermann_rover) | D4 | over-wire spawn, **identity on spawned entity**, replication |
-| Possess | ✅ `PossessVessel` → `ControllerLink` (local) | PH2_OP_LOG possession §, ontology AcquireStream | wire + server validation + replicate `ControllerLink` |
+| Create rover | ✅ `SpawnEntity` typed command + `SpawnCatalog` (skid_rover, ackermann_rover) | D4 | over the sync layer spawn, **identity on spawned entity**, replication |
+| Possess | ✅ `PossessVessel` → `ControllerLink` (local) | PH2_OP_LOG possession §, ontology AcquireStream | sync + server validation + replicate `ControllerLink` |
 | Drive | ✅ `DriveRover` → FlightSoftware ports → cosim | MECHANISM_SELECTION | per-session routing, **input isolation**, authority check |
 | State replication (M2) | ❌ | DESIGN_GAPS A/C, plan Ph3 | everything (Ph3) |
 | Prediction (M4) | ❌ | DESIGN_GAPS F/G, plan Ph4 | everything (Ph4) |
@@ -81,7 +81,7 @@ This bites two ways in MP and the plan addresses neither:
   other players' avatars. Gate `translate_intents_to_commands` to `With<LocalAvatar>` (or
   equivalent), not "any ControllerLink."
 - **On the server:** it must **not** run input→command mapping for remote clients at all
-  — their input arrives as `DriveRover`/ControlStream messages over the wire. The server
+  — their input arrives as `DriveRover`/ControlStream messages over the sync layer. The server
   consumes those; it doesn't re-derive them from a keyboard it doesn't have.
 
 **Fix:** raw-input→intent→command is a *local-avatar-only* concern. Add a `LocalAvatar`
@@ -145,9 +145,9 @@ Ph2  connect + identity + possess + spawn-appears (RELIABLE, NO MOTION)
      ├─ P2.3 lightyear in-app, one reliable channel, IsServer from plugin
      ├─ SessionId allocation on connect + session table          (fills the stub)
      ├─ handshake: server provisions Authoritative avatar/session → client LocalAvatar  (G3)
-     ├─ SpawnEntity over wire: server spawns, Authoritative root id in envelope,
+     ├─ SpawnEntity over the sync layer: server spawns, Authoritative root id in envelope,
      │    suppress loader Content-stamp for runtime subtree        (G2 — REQUIRED here)
-     ├─ PossessVessel over wire + server ownership validation      (G4)
+     ├─ PossessVessel over the sync layer + server ownership validation      (G4)
      └─ replicate ControllerLink so peers see who owns what        (needs minimal M2)
      ▶ DEMO: two clients connect, each spawns a rover (both appear on both), each
        possesses its own. Rovers do NOT move yet. Possession is enforced.
@@ -199,7 +199,7 @@ Ph4  individual control feels right (M4 input + prediction)
 
 The substrate (identity, clock, the command system, `SpawnEntity`, `PossessVessel`) is in
 place and is genuinely reusable — the scenario does **not** need new verbs. What's missing
-is (1) the wire itself (lightyear in-app, one reliable channel, `SessionId` allocation),
+is (1) the sync layer itself (lightyear in-app, one reliable channel, `SessionId` allocation),
 (2) a **session→avatar handshake** so each client knows which avatar is its own, (3)
 fixing runtime-spawn identity so two rovers from the same USD asset don't collide (the B.1
 gap, now on the critical path), (4) **input isolation** so each client drives only its own
