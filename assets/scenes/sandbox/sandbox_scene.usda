@@ -48,13 +48,18 @@ def Xform "SandboxScene"
         double3 xformOp:rotateXYZ = (0, 0, 17.1887)
         double3 xformOp:scale = (60.0, 2.0, 80.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        string primvars:materialType = "BlueprintGrid"
-        double primvars:gridMajorSpacing = 1.0
-        double primvars:gridMinorSpacing = 0.5
-        double primvars:gridMajorWidth = 1.0
-        double primvars:gridMinorWidth = 0.5
-        double primvars:gridMinorFade = 0.15
-        double3 primvars:gridSurfaceColor = (0.25, 0.22, 0.18)
+        # Dynamic PBR-lit grid shader (same as the Ground). Replaces the bespoke
+        # BlueprintGrid ExtendedMaterial; params map by name to the shader's
+        # `Material` struct (assets/shaders/blueprint_grid.wgsl).
+        string primvars:materialType = "shader"
+        string primvars:shaderPath = "shaders/blueprint_grid.wgsl"
+        double primvars:major_spacing = 1.0
+        double primvars:minor_spacing = 0.5
+        double primvars:major_width = 1.0
+        double primvars:minor_width = 0.5
+        double primvars:minor_fade = 0.15
+        double3 primvars:surface_color = (0.25, 0.22, 0.18)
+        double3 primvars:line_color = (0.2, 0.5, 0.9)
         color3f primvars:displayColor = (0.25, 0.22, 0.18)
         bool physics:rigidBodyEnabled = false
         bool physics:collisionEnabled = true
@@ -71,13 +76,16 @@ def Xform "SandboxScene"
         double3 xformOp:rotateXYZ = (0, 0, 17.1887)
         double3 xformOp:scale = (60.0, 2.0, 80.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        string primvars:materialType = "BlueprintGrid"
-        double primvars:gridMajorSpacing = 1.0
-        double primvars:gridMinorSpacing = 0.5
-        double primvars:gridMajorWidth = 1.0
-        double primvars:gridMinorWidth = 0.5
-        double primvars:gridMinorFade = 0.15
-        double3 primvars:gridSurfaceColor = (0.25, 0.52, 0.18)
+        # Dynamic PBR-lit grid shader (see Ramp / Ground).
+        string primvars:materialType = "shader"
+        string primvars:shaderPath = "shaders/blueprint_grid.wgsl"
+        double primvars:major_spacing = 1.0
+        double primvars:minor_spacing = 0.5
+        double primvars:major_width = 1.0
+        double primvars:minor_width = 0.5
+        double primvars:minor_fade = 0.15
+        double3 primvars:surface_color = (0.25, 0.52, 0.18)
+        double3 primvars:line_color = (0.2, 0.5, 0.9)
         color3f primvars:displayColor = (0.25, 0.22, 0.18)
         bool physics:rigidBodyEnabled = false
         bool physics:collisionEnabled = true

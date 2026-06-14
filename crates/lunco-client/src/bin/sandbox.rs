@@ -41,7 +41,7 @@ use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
 use lunco_modelica::{ModelicaWorkbenchPlugin, ModelicaSet, ModelicaUiConfig};
 use big_space::prelude::Grid;
-use lunco_materials::{BlueprintMaterialPlugin, ShaderMaterialPlugin};
+use lunco_materials::ShaderMaterialPlugin;
 
 #[path = "../code_panel.rs"]
 mod code_panel;
@@ -281,7 +281,6 @@ fn main() {
         .add_plugins(lunco_sandbox_edit::ui::SandboxEditUiPlugin)
         .add_plugins(LunCoControllerPlugin)
         .add_plugins(LunCoAvatarPlugin)
-        .add_plugins(BlueprintMaterialPlugin)
         .add_plugins(ShaderMaterialPlugin)
         .add_plugins(lunco_scripting::LunCoScriptingPlugin)
         // Rover-specific panels and the attach-a-model click flow.

@@ -9,9 +9,6 @@
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
-#[cfg(not(target_arch = "wasm32"))]
-use bevy::asset::load_internal_asset;
-use bevy_shader::Shader;
 
 mod clock;
 pub mod ephemeris;
@@ -47,8 +44,8 @@ pub use trajectories::*;
 pub use missions::*;
 pub use embedded_assets::*;
 
-// Re-export blueprint material types from lunco-materials (the canonical source).
-pub use lunco_materials::{BlueprintExtension, BlueprintMaterial, BlueprintMaterialPlugin, BLUEPRINT_SHADER_HANDLE};
+pub mod grid_material;
+pub use grid_material::*;
 
 #[derive(Event, Debug, Clone, Copy)]
 pub struct SurfaceClickEvent {
@@ -69,17 +66,13 @@ impl Plugin for CelestialPlugin {
         // EmbeddedAssetsPlugin embeds shaders/textures/missions on wasm32, no-op on desktop
         app.add_plugins(embedded_assets::EmbeddedAssetsPlugin);
 
-        // Register blueprint shader only on desktop (wasm32 handled by EmbeddedAssetsPlugin).
+        // Planet-tile grid overlay material (textured lat/long grid). Registers
+        // its render pipeline + (on wasm) embeds its shader source.
+        app.add_plugins(grid_material::CelestialGridMaterialPlugin);
+
+        // Trajectory shader is desktop-only here (wasm32 handled by EmbeddedAssetsPlugin).
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            load_internal_asset!(
-                app,
-                BLUEPRINT_SHADER_HANDLE,
-                "../../../assets/shaders/blueprint_extension.wgsl",
-                Shader::from_wgsl
-            );
-            app.add_plugins(trajectories::TrajectoryShaderPlugin);
-        }
+        app.add_plugins(trajectories::TrajectoryShaderPlugin);
 
         // Terrain is now in lunco-terrain crate — register it here
         app.add_plugins(lunco_terrain::TerrainPlugin);

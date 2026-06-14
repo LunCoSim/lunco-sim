@@ -8,7 +8,7 @@ use crate::ephemeris::EphemerisResource;
 use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
 use crate::coords::ecliptic_to_bevy;
 use crate::coords::world_position_seeded;
-use lunco_materials::BlueprintMaterial;
+use crate::grid_material::CelestialGridMaterial;
 
 /// Update body and frame positions based on ephemeris data.
 /// Optimized: Only re-computes if Epoch has changed significantly.
@@ -159,10 +159,10 @@ pub fn celestial_telemetry_system(
 }
 
 pub fn celestial_visuals_system(
-    mut materials: ResMut<Assets<BlueprintMaterial>>,
+    mut materials: ResMut<Assets<CelestialGridMaterial>>,
     q_camera: Query<(Entity, &CellCoord, &Transform), (With<Camera>, With<lunco_core::Avatar>)>,
     q_bodies: Query<(Entity, &CellCoord, &Transform, &CelestialBody)>,
-    q_tiles: Query<(&MeshMaterial3d<BlueprintMaterial>, &lunco_terrain::TileCoord), With<lunco_terrain::TerrainTile>>,
+    q_tiles: Query<(&MeshMaterial3d<CelestialGridMaterial>, &lunco_terrain::TileCoord), With<lunco_terrain::TerrainTile>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -189,17 +189,19 @@ pub fn celestial_visuals_system(
 
     let Some(nearest_body) = nearest_body_entity else { return };
 
-    // High (0.0 transition) at 100km, Blueprint (1.0 transition) at 10km
-    let start_transition_alt = 100_000.0;
-    let end_transition_alt = 10_000.0;
-    let transition = (((start_transition_alt - nearest_altitude) / (start_transition_alt - end_transition_alt)) as f64)
+    // The lat/long grid fades OUT as the camera descends, so the planet texture
+    // shows through up close: full grid (1.0) at/above 100 km, hidden (0.0)
+    // at/below 10 km.
+    let fade_start_alt = 10_000.0;
+    let fade_end_alt = 100_000.0;
+    let grid_fade = (((nearest_altitude - fade_start_alt) / (fade_end_alt - fade_start_alt)) as f64)
         .clamp(0.0, 1.0) as f32;
 
     // Update all tiles belonging to the nearest body
     for (mat_handle, coord) in q_tiles.iter() {
         if coord.body == nearest_body {
             if let Some(mat) = materials.get_mut(mat_handle) {
-                mat.extension.transition = transition;
+                mat.extension.grid_fade = grid_fade;
             }
         }
     }

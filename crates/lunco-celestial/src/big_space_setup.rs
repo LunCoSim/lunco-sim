@@ -64,7 +64,7 @@ use bevy::camera::visibility::NoFrustumCulling;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame, CelestialBody};
 use crate::gravity::{GravityProvider, PointMassGravity};
 use crate::soi::SOI;
-use lunco_materials::{BlueprintMaterial, BlueprintExtension};
+use crate::grid_material::{CelestialGridMaterial, CelestialGridExtension};
 
 /// Marker for the solar system root grid (inertial, no rotation).
 #[derive(Component)]
@@ -105,7 +105,7 @@ pub fn setup_big_space_hierarchy(
     registry: Res<CelestialBodyRegistry>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut blueprint_materials: ResMut<Assets<BlueprintMaterial>>,
+    mut grid_materials: ResMut<Assets<CelestialGridMaterial>>,
     asset_server: Res<AssetServer>,
     // The single world-shell root (WorldShellPlugin) to nest under, and any prior
     // FloatingOrigin holder (the shell's OriginAnchor) the Observer Camera claims.
@@ -279,30 +279,19 @@ pub fn setup_big_space_hierarchy(
                     Mesh3d(meshes.add(lunco_terrain::create_quadsphere_tile_mesh(
                         earth_body, face, 1, i, j, 6371.0e3, 32, DVec3::ZERO
                     ))),
-                    MeshMaterial3d(blueprint_materials.add(BlueprintMaterial {
+                    MeshMaterial3d(grid_materials.add(CelestialGridMaterial {
                         base: StandardMaterial {
                             base_color: Color::WHITE,
                             base_color_texture: Some(earth_texture.clone()),
                             unlit: false,
                             ..default()
                         },
-                        extension: BlueprintExtension {
-                            high_color: LinearRgba::WHITE,
-                            low_color: LinearRgba::WHITE,
-                            high_line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
-                            low_line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
+                        extension: CelestialGridExtension {
+                            line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
                             subdivisions: Vec2::new(36.0, 18.0),
                             fade_range: Vec2::new(0.2, 0.6),
-                            grid_scale: 1000.0,
                             line_width: 1.0,
-                            transition: 0.0,
-                            body_radius: 6371.0e3,
-                            major_grid_spacing: 1000.0,
-                            minor_grid_spacing: 500.0,
-                            major_line_width: 0.75,
-                            minor_line_width: 0.4,
-                            minor_line_fade: 0.3,
-                            surface_color: LinearRgba::new(0.3, 0.3, 0.3, 1.0),
+                            grid_fade: 1.0,
                         },
                     })),
                     tile_cell,
@@ -386,7 +375,7 @@ pub fn setup_big_space_hierarchy(
                     Mesh3d(meshes.add(lunco_terrain::create_quadsphere_tile_mesh(
                         moon_body, face, 1, i, j, 1737.0e3, 32, DVec3::ZERO
                     ))),
-                    MeshMaterial3d(blueprint_materials.add(BlueprintMaterial {
+                    MeshMaterial3d(grid_materials.add(CelestialGridMaterial {
                         base: StandardMaterial {
                             base_color: Color::srgb(0.5, 0.5, 0.5),
                             base_color_texture: Some(moon_texture.clone()),
@@ -394,23 +383,12 @@ pub fn setup_big_space_hierarchy(
                             perceptual_roughness: 0.9,
                             ..default()
                         },
-                        extension: BlueprintExtension {
-                            high_color: LinearRgba::WHITE,
-                            low_color: LinearRgba::WHITE,
-                            high_line_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0),
-                            low_line_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0),
+                        extension: CelestialGridExtension {
+                            line_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0),
                             subdivisions: Vec2::new(24.0, 12.0),
                             fade_range: Vec2::new(0.2, 0.6),
-                            grid_scale: 1000.0,
                             line_width: 2.0,
-                            transition: 0.0,
-                            body_radius: 1737_000.0,
-                            major_grid_spacing: 1000.0,
-                            minor_grid_spacing: 500.0,
-                            major_line_width: 0.75,
-                            minor_line_width: 0.4,
-                            minor_line_fade: 0.3,
-                            surface_color: LinearRgba::new(0.35, 0.35, 0.35, 1.0),
+                            grid_fade: 1.0,
                         },
                     })),
                     tile_cell,

@@ -238,6 +238,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
                 // shader yet gets an "Add shader" affordance; after adding, the
                 // Shader Parameters below become editable.
                 shader_picker_for_part(ui, world, part);
+                shader_tools_ui(ui, world, part);
 
                 if let Some(holder) = first_shader_holder(world, part) {
                     egui::CollapsingHeader::new("Shader Parameters")
@@ -562,7 +563,9 @@ fn shader_picker_for_part(ui: &mut egui::Ui, world: &mut World, part: Entity) {
                 .map(|m| m.shader.id())
         })
         .and_then(|id| world.resource::<AssetServer>().get_path(id))
-        .map(|p| p.path().to_string_lossy().into_owned());
+        // Full `AssetPath` string (incl. `twin://name/` source) so twin shaders
+        // match their catalog entry, not just the bare `path()`.
+        .map(|p| p.to_string());
     let cur = cur_path.unwrap_or_default();
     let cur_label = entries
         .iter()
@@ -610,6 +613,169 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
         .entity(part)
         .remove::<MeshMaterial3d<StandardMaterial>>()
         .insert(MeshMaterial3d(handle));
+}
+
+/// The full asset-path string of `part`'s current `ShaderMaterial` shader
+/// (incl. any `twin://` source), or `None` if it isn't using one.
+fn current_shader_path(world: &mut World, part: Entity) -> Option<String> {
+    let h = world
+        .query::<&MeshMaterial3d<lunco_materials::ShaderMaterial>>()
+        .get(world, part)
+        .ok()
+        .map(|m| m.0.clone())?;
+    let sid = world
+        .resource::<Assets<lunco_materials::ShaderMaterial>>()
+        .get(&h)
+        .map(|m| m.shader.id())?;
+    let p = world.resource::<AssetServer>().get_path(sid)?;
+    Some(p.to_string())
+}
+
+/// "Shader Tools" — GUI front-end for the live shader-authoring commands
+/// ([`crate::commands::CreateShader`] / `ImportShader` / `RescanShaders` /
+/// `DeleteShader`). Create and Import additionally apply the result to `part`
+/// **by `Entity`** (so it reaches sub-parts that have no API id). Commands are
+/// fired with `world.trigger`, which runs their observers synchronously, so the
+/// new catalog entry is visible the moment we go to apply it.
+fn shader_tools_ui(ui: &mut egui::Ui, world: &mut World, part: Entity) {
+    egui::CollapsingHeader::new("Shader Tools")
+        .default_open(false)
+        .show(ui, |ui| {
+            let id = ui.make_persistent_id("shader_tools_state");
+            #[derive(Clone, Default)]
+            struct St {
+                name: String,
+                template: String,
+                import: String,
+            }
+            let mut st: St = ui.memory_mut(|m| m.data.get_temp::<St>(id)).unwrap_or_default();
+            if st.template.is_empty() {
+                st.template = "solid".to_string();
+            }
+
+            // ── New from template ──
+            ui.label("New shader from template:");
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut st.name)
+                        .hint_text("name")
+                        .desired_width(110.0),
+                );
+                let cur_label = lunco_materials::shader_template_kinds()
+                    .iter()
+                    .find(|(k, _)| *k == st.template)
+                    .map(|(_, l)| *l)
+                    .unwrap_or("Solid");
+                egui::ComboBox::from_id_salt("shader_template")
+                    .selected_text(cur_label)
+                    .show_ui(ui, |ui| {
+                        for (k, l) in lunco_materials::shader_template_kinds() {
+                            if ui.selectable_label(st.template == *k, *l).clicked() {
+                                st.template = k.to_string();
+                            }
+                        }
+                    });
+            });
+            if ui
+                .add_enabled(
+                    !st.name.trim().is_empty(),
+                    egui::Button::new("Create & apply"),
+                )
+                .clicked()
+            {
+                create_and_apply(world, part, &st.name, &st.template);
+                st.name.clear();
+            }
+
+            ui.separator();
+            // ── Import from disk ──
+            ui.label("Import .wgsl from disk:");
+            ui.add(
+                egui::TextEdit::singleline(&mut st.import)
+                    .hint_text("/path/to/shader.wgsl")
+                    .desired_width(220.0),
+            );
+            if ui
+                .add_enabled(
+                    !st.import.trim().is_empty(),
+                    egui::Button::new("Import & apply"),
+                )
+                .clicked()
+            {
+                import_and_apply(world, part, st.import.trim());
+            }
+
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Rescan twin folder")
+                    .on_hover_text("Register any .wgsl dropped into the twin's shaders/ folder")
+                    .clicked()
+                {
+                    world.trigger(crate::commands::RescanShaders {});
+                }
+                if let Some(path) = current_shader_path(world, part) {
+                    if ui
+                        .button("Delete current")
+                        .on_hover_text(format!("Remove {path} (file + picker)"))
+                        .clicked()
+                    {
+                        world.trigger(crate::commands::DeleteShader { path });
+                    }
+                }
+            });
+
+            ui.memory_mut(|m| m.data.insert_temp(id, st));
+        });
+}
+
+/// Create a shader from `template` (registers it), then bind it to `part` by
+/// `Entity`. Only applies if the command actually produced the catalog entry
+/// (a rejected/invalid create leaves the part untouched).
+fn create_and_apply(world: &mut World, part: Entity, name: &str, template: &str) {
+    world.trigger(crate::commands::CreateShader {
+        name: name.to_string(),
+        template: template.to_string(),
+        source: String::new(),
+        target: 0,
+    });
+    let stem = crate::commands::sanitize_stem(name);
+    apply_if_registered(world, part, &stem);
+}
+
+/// Import an external `.wgsl` (registers it), then bind it to `part`. Skips the
+/// apply if the import was rejected (e.g. not a prop-pickable shader).
+fn import_and_apply(world: &mut World, part: Entity, src_path: &str) {
+    world.trigger(crate::commands::ImportShader {
+        source_path: src_path.to_string(),
+        name: String::new(),
+        target: 0,
+    });
+    let stem = std::path::Path::new(src_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(crate::commands::sanitize_stem)
+        .unwrap_or_default();
+    if !stem.is_empty() {
+        apply_if_registered(world, part, &stem);
+    }
+}
+
+/// If a shader for `stem` is now registered (its predicted asset path is in the
+/// catalog), swap `part` onto it.
+fn apply_if_registered(world: &mut World, part: Entity, stem: &str) {
+    let path = {
+        let tr = world.get_resource::<lunco_assets::twin_source::TwinRoots>();
+        crate::commands::shader_asset_path_for(tr, stem)
+    };
+    let registered = world
+        .resource::<lunco_materials::ShaderCatalog>()
+        .entries
+        .iter()
+        .any(|e| e.path == path);
+    if registered {
+        swap_shader_on_entity(world, part, &path);
+    }
 }
 
 /// Editable PBR controls for the selected object's `StandardMaterial`s — the

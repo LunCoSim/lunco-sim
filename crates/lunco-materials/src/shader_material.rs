@@ -295,6 +295,13 @@ impl ShaderCatalog {
         self.entries.push(ShaderEntry { path, label });
         true
     }
+
+    /// Unregister a shader by asset path. Returns `true` if it was present.
+    pub fn remove(&mut self, path: &str) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|e| e.path != path);
+        self.entries.len() != before
+    }
 }
 
 impl Default for ShaderCatalog {
@@ -419,13 +426,114 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 }
 "#;
 
+const GRADIENT_TEMPLATE: &str = r#"//! __NAME__ — vertical gradient PBR material (generated template). Blends two
+//! colours by surface normal (top vs bottom facing). Edit freely.
+
+#import bevy_pbr::forward_io::VertexOutput
+#import lunco::pbr_lit::lit
+
+//!@ui      top       color "Top colour"
+//!@default top       0.7,0.85,1.0
+//!@ui      bottom    color "Bottom colour"
+//!@default bottom    0.1,0.12,0.2
+//!@ui      roughness 0 1  "Roughness"
+//!@default roughness 0.5
+struct Material {
+    top:       vec3<f32>,
+    roughness: f32,
+    bottom:    vec3<f32>,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    let n = normalize(in.world_normal);
+    let t = clamp(n.y * 0.5 + 0.5, 0.0, 1.0);
+    let albedo = mix(mat.bottom, mat.top, t);
+    return lit(in, is_front, albedo, mat.roughness, 0.0, vec3<f32>(0.0));
+}
+"#;
+
+const GLOW_TEMPLATE: &str = r#"//! __NAME__ — emissive glow PBR material (generated template). A lit base plus
+//! a constant emissive term (×strength). Edit freely.
+
+#import bevy_pbr::forward_io::VertexOutput
+#import lunco::pbr_lit::lit
+
+//!@ui      base_color color "Base colour"
+//!@default base_color 0.1,0.1,0.12
+//!@ui      emissive   color "Glow colour"
+//!@default emissive   1.0,0.6,0.1
+//!@ui      strength   0 8  "Glow strength"
+//!@default strength   2.0
+//!@ui      roughness  0 1  "Roughness"
+//!@default roughness  0.5
+struct Material {
+    base_color: vec3<f32>,
+    strength:   f32,
+    emissive:   vec3<f32>,
+    roughness:  f32,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    return lit(in, is_front, mat.base_color, mat.roughness, 0.0, mat.emissive * mat.strength);
+}
+"#;
+
+const RIM_TEMPLATE: &str = r#"//! __NAME__ — rim / fresnel PBR material (generated template). A lit base with
+//! a view-dependent rim glow on grazing angles. Edit freely.
+
+#import bevy_pbr::{forward_io::VertexOutput, mesh_view_bindings::view}
+#import lunco::pbr_lit::lit
+
+//!@ui      base_color color "Base colour"
+//!@default base_color 0.15,0.18,0.22
+//!@ui      rim_color  color "Rim colour"
+//!@default rim_color  0.4,0.8,1.0
+//!@ui      rim_power  0.2 8 "Rim sharpness"
+//!@default rim_power  3.0
+//!@ui      roughness  0 1  "Roughness"
+//!@default roughness  0.4
+struct Material {
+    base_color: vec3<f32>,
+    rim_power:  f32,
+    rim_color:  vec3<f32>,
+    roughness:  f32,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    let n = normalize(in.world_normal);
+    let v = normalize(view.world_position.xyz - in.world_position.xyz);
+    let rim = pow(1.0 - clamp(dot(n, v), 0.0, 1.0), max(mat.rim_power, 0.001));
+    return lit(in, is_front, mat.base_color, mat.roughness, 0.0, mat.rim_color * rim);
+}
+"#;
+
+/// The built-in template ids + display labels, for a "New shader" UI dropdown.
+pub fn shader_template_kinds() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("solid", "Solid"),
+        ("checker", "Checker"),
+        ("gradient", "Gradient"),
+        ("glow", "Emissive Glow"),
+        ("rim", "Rim / Fresnel"),
+    ]
+}
+
 /// WGSL source for a built-in starting template, with `title` substituted into
-/// the header comment. `kind` selects the template: `"checker"` for the
-/// procedural checker, anything else (incl. `"solid"`/empty) for the flat solid
-/// material. Both are PBR-lit and prop-pickable.
+/// the header comment. `kind` selects the template (see [`shader_template_kinds`]);
+/// anything unknown (incl. empty) falls back to the flat solid material. All
+/// templates are PBR-lit (`lunco::pbr_lit::lit`) and prop-pickable.
 pub fn shader_template(kind: &str, title: &str) -> String {
     let body = match kind.trim() {
         "checker" => CHECKER_TEMPLATE,
+        "gradient" => GRADIENT_TEMPLATE,
+        "glow" => GLOW_TEMPLATE,
+        "rim" => RIM_TEMPLATE,
         _ => SOLID_TEMPLATE,
     };
     body.replace("__NAME__", title)

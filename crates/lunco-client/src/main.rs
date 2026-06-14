@@ -17,7 +17,6 @@
 use bevy::prelude::*;
 use avian3d::prelude::PhysicsPlugins;
 
-use lunco_materials::BlueprintMaterial;
 use lunco_ui::LuncoUiPlugin;
 use lunco_workbench::WorkbenchAppExt;
 use bevy_egui::{EguiPrimaryContextPass, EguiContexts};
@@ -85,8 +84,7 @@ fn main() {
         app.add_plugins(lunco_celestial_ephemeris::EphemerisPlugin);
     }
 
-    app.add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
-        .add_plugins(PhysicsPlugins::default())
+    app.add_plugins(PhysicsPlugins::default())
         // 12 solver substeps (avian default 6): the rigid joint-rover wheel
         // hinge leaks wheel-contact + drive impulses into the chassis as
         // "jitter when riding" at 6 substeps; 12 resolves it (drops still

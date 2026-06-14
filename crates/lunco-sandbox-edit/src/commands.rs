@@ -1987,9 +1987,23 @@ pub fn on_set_shader_source(
 // shaders (see [`lunco_materials::shader_template`]).
 // ─────────────────────────────────────────────────────────────────────────
 
+/// The asset path a shader named `stem` would be installed at: under the
+/// primary open Twin (`twin://<name>/shaders/<stem>.wgsl`) or the engine library
+/// (`shaders/<stem>.wgsl`) when no Twin is open. Mirrors [`install_shader`]'s
+/// destination logic so callers (e.g. the Inspector) can predict the path.
+pub fn shader_asset_path_for(
+    twin_roots: Option<&lunco_assets::twin_source::TwinRoots>,
+    stem: &str,
+) -> String {
+    match twin_roots.and_then(|t| t.primary()) {
+        Some((name, _)) => format!("twin://{name}/shaders/{stem}.wgsl"),
+        None => format!("shaders/{stem}.wgsl"),
+    }
+}
+
 /// Sanitise a free-text name into a safe lowercase file stem (`[a-z0-9_]`,
 /// trimmed of leading/trailing `_`). Empty input → `"shader"`.
-fn sanitize_stem(s: &str) -> String {
+pub fn sanitize_stem(s: &str) -> String {
     let out: String = s
         .trim()
         .chars()
@@ -2312,10 +2326,65 @@ pub fn auto_scan_twin_shaders(
     }
 }
 
+/// Resolve a shader **asset path** to its **disk path**: `twin://<name>/<rel>` →
+/// `<twin_root>/<rel>`; an engine path like `shaders/foo.wgsl` → `assets/<path>`.
+#[cfg(not(target_arch = "wasm32"))]
+fn asset_path_to_disk(
+    path: &str,
+    twin_roots: Option<&lunco_assets::twin_source::TwinRoots>,
+) -> Option<std::path::PathBuf> {
+    if let Some(rest) = path.strip_prefix("twin://") {
+        let mut it = rest.splitn(2, '/');
+        let name = it.next()?;
+        let rel = it.next()?;
+        Some(twin_roots?.root_of(name)?.join(rel))
+    } else {
+        Some(std::path::PathBuf::from("assets").join(path))
+    }
+}
+
+/// Delete a shader: unregister it from the picker [`ShaderCatalog`] and remove
+/// its `.wgsl` from disk (the twin's `shaders/` folder, or `assets/shaders`).
+/// Entities currently using it keep their in-memory material for the session.
+///
+/// ```json
+/// {"command":"DeleteShader","params":{"path":"twin://moonbase/shaders/old.wgsl"}}
+/// ```
+#[Command(default)]
+pub struct DeleteShader {
+    /// Asset path to remove (`twin://name/shaders/x.wgsl` or `shaders/x.wgsl`).
+    pub path: String,
+}
+
+/// Observer for [`DeleteShader`].
+#[allow(unused_variables)]
+pub fn on_delete_shader(
+    trigger: On<DeleteShader>,
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    mut catalog: ResMut<lunco_materials::ShaderCatalog>,
+) {
+    let path = trigger.event().path.trim().to_string();
+    if path.is_empty() {
+        warn!("DELETE_SHADER: empty path");
+        return;
+    }
+    let removed = catalog.remove(&path);
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(disk) = asset_path_to_disk(&path, twin_roots.as_deref()) {
+        match std::fs::remove_file(&disk) {
+            Ok(()) => info!("DELETE_SHADER: removed {path} ({})", disk.display()),
+            Err(e) => warn!("DELETE_SHADER: unregistered {path}, file remove failed: {e}"),
+        }
+    }
+    if !removed {
+        warn!("DELETE_SHADER: '{path}' was not in the catalog");
+    }
+}
+
 /// Plugin that registers SPAWN_ENTITY / MOVE_ENTITY / SET_OBJECT_PROPERTY /
 /// FOCUS_ENTITY_BY_ID / SET_CAMERA_LOOK_AT / RELOAD_SHADER / SET_SHADER_SOURCE /
-/// CREATE_SHADER / IMPORT_SHADER / RESCAN_SHADERS command observers and the
-/// kinematic-pulse cleanup + twin shader auto-scan systems.
+/// CREATE_SHADER / IMPORT_SHADER / RESCAN_SHADERS / DELETE_SHADER command
+/// observers and the kinematic-pulse cleanup + twin shader auto-scan systems.
 pub struct SpawnCommandPlugin;
 
 impl Plugin for SpawnCommandPlugin {
@@ -2331,6 +2400,7 @@ impl Plugin for SpawnCommandPlugin {
         app.add_observer(on_create_shader);
         app.add_observer(on_import_shader);
         app.add_observer(on_rescan_shaders);
+        app.add_observer(on_delete_shader);
         // Register with AppTypeRegistry so the reflection-based HTTP executor
         // (`get_with_short_type_path`) can construct it from `{"command":"SetObjectProperty",...}`.
         app.register_type::<SetObjectProperty>();
@@ -2342,6 +2412,7 @@ impl Plugin for SpawnCommandPlugin {
         app.register_type::<CreateShader>();
         app.register_type::<ImportShader>();
         app.register_type::<RescanShaders>();
+        app.register_type::<DeleteShader>();
         app.init_resource::<ScannedTwinShaders>();
         app.add_systems(Update, auto_scan_twin_shaders);
         app.add_systems(FixedPostUpdate, clear_kinematic_pulse_velocity);
