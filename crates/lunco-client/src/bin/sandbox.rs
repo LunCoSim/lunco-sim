@@ -697,6 +697,11 @@ fn spawn_fallback_avatar(
     info!("No USD camera after {FALLBACK_AVATAR_GRACE_SECS}s, spawning fallback FreeFlightCamera");
     commands.spawn((
         Camera3d::default(),
+        // SMAA (post-process) over the regolith speckle + terrain edges; MSAA
+        // off since it can't touch shader-internal aliasing and only costs us
+        // a 4x HDR target. SmaaPlugin auto-registers via DefaultPlugins.
+        Msaa::Off,
+        bevy::anti_alias::smaa::Smaa::default(),
         FreeFlightCamera {
             yaw: -2.245559,
             pitch: -0.303039,

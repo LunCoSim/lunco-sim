@@ -425,6 +425,10 @@ pub fn setup_big_space_hierarchy(
     commands.spawn((
         Camera::default(),
         Camera3d::default(),
+        // SMAA post-process AA; MSAA off (can't touch shader-internal speckle,
+        // and a 4x HDR target is wasteful under Bloom). Runs before Bloom in
+        // the pipeline so bloom doesn't amplify aliased edges.
+        (Msaa::Off, bevy::anti_alias::smaa::Smaa::default()),
         Projection::Perspective(PerspectiveProjection {
             near: 1.0,
             far: 1.0e15,
