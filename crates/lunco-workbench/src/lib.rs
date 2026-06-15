@@ -841,6 +841,12 @@ impl WorkbenchLayout {
         side_px: f32,
         right_px: f32,
     ) {
+        // Reject non-finite inputs up front: `f32::clamp` propagates NaN, so a
+        // NaN px width would be written straight into a split fraction and
+        // panic egui_dock's separator layout on the next frame.
+        if !window_w.is_finite() || !side_px.is_finite() || !right_px.is_finite() {
+            return;
+        }
         let total_w = window_w.max(100.0);
         let has_side = !self.side_browser.is_empty();
         let has_right = !self.right_inspector.is_empty();
@@ -1068,6 +1074,11 @@ impl WorkbenchLayout {
         if new_dock.iter_all_tabs().next().is_none() {
             return false; // nothing survived reconciliation — keep current
         }
+        // Heal any non-finite split fraction persisted to disk. egui_dock can
+        // serialize a NaN fraction (see `sanitize_dock_fractions`), and a NaN
+        // reloaded here would panic the dock layout on the very next frame —
+        // a permanent boot-crash loop until the workspace cache is wiped.
+        sanitize_dock_fractions(&mut new_dock);
         self.dock = new_dock;
         true
     }
@@ -1569,6 +1580,37 @@ fn maintain_dock_widths(
     };
     layout.enforce_widths(w, sizes.side_browser_px, sizes.right_inspector_px);
     *applied_once = true;
+}
+
+/// Clamp every split fraction in `dock` (across **all** surfaces) to a finite
+/// value in `(0, 1)`, replacing any non-finite fraction with `0.5`.
+///
+/// egui's layout asserts on NaN: a pane rect is `min + dim_size * fraction`,
+/// so a single non-finite `fraction` anywhere in the tree produces a NaN
+/// separator rect and aborts the process in `advance_cursor_after_rect`
+/// ("rect is nan", seen on Windows).
+///
+/// TODO(egui_dock 0.18 — remove the per-frame call in `render_layout` when
+/// this is fixed/updated upstream): egui_dock self-poisons the tree from
+/// inside `show()`. In `egui_dock-0.18.0/src/widgets/dock_area/show/mod.rs`
+/// the separator update runs *every* frame (not just on drag) and computes
+/// `split.fraction = (split.fraction + delta / range).clamp(min, max)`. When a
+/// pane is squeezed to zero width `range == 0`, so with no drag (`delta == 0`)
+/// `delta / range` is `0.0 / 0.0 = NaN`, and `f32::clamp` passes NaN straight
+/// through — writing NaN back into the tree. The fix belongs upstream
+/// (guard `range > 0`); until then we re-assert this invariant around every
+/// `show`. The load-time call in `set_dock_from_json` is independent and stays
+/// regardless — it heals a NaN already serialized to disk.
+fn sanitize_dock_fractions(dock: &mut DockState<TabId>) {
+    for (_surface, node) in dock.iter_all_nodes_mut() {
+        if let egui_dock::Node::Horizontal(s) | egui_dock::Node::Vertical(s) = node {
+            s.fraction = if s.fraction.is_finite() {
+                s.fraction.clamp(0.01, 0.99)
+            } else {
+                0.5
+            };
+        }
+    }
 }
 
 fn render_workbench(world: &mut World) {
@@ -2571,6 +2613,15 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         style.tab.active_with_kb_focus.text_color = palette.mauve;
         style.tab.focused_with_kb_focus.bg_fill = palette.surface0;
         style.tab.focused_with_kb_focus.text_color = palette.mauve;
+        // TODO(egui_dock 0.18 bug — remove when fixed/updated upstream):
+        // egui_dock writes a NaN split fraction into the tree from inside its
+        // own `show()` every frame a pane is squeezed to zero width — see
+        // `sanitize_dock_fractions` for the exact `0.0/0.0` site. So we must
+        // re-assert the invariant every frame, right before layout, or egui
+        // asserts ("rect is nan"). Drop this call once egui_dock guards its
+        // `delta / range`; the load-time sanitize stays regardless.
+        sanitize_dock_fractions(dock);
+
         // Guard against degenerate viewport rects. On Windows + Intel
         // Vulkan the swapchain can present a zero/non-finite size for
         // the first frames after the window is mapped; egui_dock 0.18
