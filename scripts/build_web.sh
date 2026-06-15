@@ -547,7 +547,11 @@ build_msl_bundle() {
     # Override with `MSL_REBUILD=force` if you've changed the
     # bundler binary itself (`build_msl_assets`) or its serialisation
     # format and want a guaranteed re-pack.
-    if [ "${MSL_REBUILD:-}" != "force" ] && [ -f "$msl_dir/manifest.json" ]; then
+    #
+    # The staleness check only tracks `.cache/msl`; when extra libraries are
+    # requested (`MSL_EXTRA_LIBS`) their sources aren't tracked here, so we
+    # never take the skip shortcut — always repack to pick them up.
+    if [ -z "${MSL_EXTRA_LIBS:-}" ] && [ "${MSL_REBUILD:-}" != "force" ] && [ -f "$msl_dir/manifest.json" ]; then
         local msl_src
         for candidate in \
             "$PROJECT_DIR/../.cache/msl" \
@@ -570,10 +574,30 @@ build_msl_bundle() {
     # which lives at <workspace>/.cache/msl/ in this repo. If MSL isn't
     # materialised, the binary will exit non-zero with a clear message and
     # we surface that as a build error so we never ship without MSL.
+    # Third-party libraries ship in the SAME bundle as MSL (one combined tar +
+    # parsed set; each root keeps its own top-level package namespace). Opt in
+    # via `MSL_EXTRA_LIBS`:
+    #   MSL_EXTRA_LIBS=discover        → bundle every lib found under cache_dir()
+    #   MSL_EXTRA_LIBS=/path/a:/path/b → bundle these explicit roots
+    # Default (unset) → MSL only, reproducible across machines.
+    local extra_args=()
+    if [ -n "${MSL_EXTRA_LIBS:-}" ]; then
+        if [ "$MSL_EXTRA_LIBS" = "discover" ]; then
+            extra_args+=(--discover-extras)
+            info "Bundling discovered third-party libraries from cache_dir()"
+        else
+            local IFS=':'
+            for root in $MSL_EXTRA_LIBS; do
+                [ -n "$root" ] && extra_args+=(--extra-root "$root")
+            done
+            info "Bundling extra library roots: $MSL_EXTRA_LIBS"
+        fi
+    fi
+
     rm -rf "$msl_dir"
     mkdir -p "$msl_dir"
     cargo run --release -q -p lunco-assets --bin build_msl_assets -- \
-        --out "$msl_dir"
+        --out "$msl_dir" "${extra_args[@]}"
 
     if [ $? -ne 0 ]; then
         error "MSL bundling failed"

@@ -24,6 +24,16 @@
 //!     --out dist/lunica/msl
 //! ```
 //!
+//! To ship third-party libraries alongside MSL in the same bundle (so they
+//! resolve on web exactly like native does from `cache_dir()`):
+//!
+//! ```bash
+//! cargo run -p lunco-assets --bin build_msl_assets -- \
+//!     --out dist/lunica/msl \
+//!     --extra-root ~/.cache/luncosim/thermofluidstream \
+//!     --discover-extras
+//! ```
+//!
 //! No CLI deps — uses bare `std::env::args` to keep this binary cheap to
 //! compile.
 //!
@@ -31,6 +41,12 @@
 //!
 //! - All `.mo` files under MSL root (recursive).
 //! - Top-level `.mo` files like `Complex.mo`, `ObsoleteModelica4.mo`.
+//! - All `.mo` files under each `--extra-root` (and, with `--discover-extras`,
+//!   every third-party library found in `cache_dir()`). Each root's files are
+//!   stored under their own top-level package dir (`Modelica/…`, `Buildings/…`),
+//!   so a single combined tar + parsed bundle yields one in-memory source whose
+//!   keys never collide. The web resolver iterates roots automatically — no
+//!   wasm-side change is needed.
 //! - Skipped: `Resources/` images and matrix data. Step 1b will add these
 //!   once we know the wasm runtime needs them — most compile paths don't.
 
@@ -57,6 +73,8 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut out_dir: Option<PathBuf> = None;
     let mut msl_root_override: Option<PathBuf> = None;
+    let mut extra_roots: Vec<PathBuf> = Vec::new();
+    let mut discover_extras = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -68,8 +86,18 @@ fn main() {
                 i += 1;
                 msl_root_override = Some(PathBuf::from(&args[i]));
             }
+            "--extra-root" => {
+                i += 1;
+                extra_roots.push(PathBuf::from(&args[i]));
+            }
+            "--discover-extras" => {
+                discover_extras = true;
+            }
             "-h" | "--help" => {
-                eprintln!("usage: build_msl_assets --out <dir> [--msl-root <dir>]");
+                eprintln!(
+                    "usage: build_msl_assets --out <dir> [--msl-root <dir>] \
+                     [--extra-root <dir>]... [--discover-extras]"
+                );
                 return;
             }
             other => {
@@ -96,17 +124,43 @@ fn main() {
     eprintln!("MSL root: {}", msl_root.display());
     eprintln!("Output:   {}", out_dir.display());
 
+    // The bundle's first root is always MSL; extras are appended in a stable
+    // order. Mirrors native's `sources_with_extras`: primary MSL root +
+    // third-party libs discovered under `cache_dir()`.
+    if discover_extras {
+        for root in discover_extra_roots() {
+            if !extra_roots.contains(&root) {
+                extra_roots.push(root);
+            }
+        }
+    }
+    let mut roots: Vec<PathBuf> = vec![msl_root.clone()];
+    for r in extra_roots {
+        eprintln!("extra root: {}", r.display());
+        roots.push(r);
+    }
+
     fs::create_dir_all(&out_dir).expect("create out dir");
 
-    let mut entries: Vec<PathBuf> = Vec::new();
-    collect_mo_files(&msl_root, &msl_root, &mut entries);
-    // Also pack the precomputed palette index if present. The web
-    // runtime reads it via `MslAssetSource::read("msl_index.json")` to
-    // populate `msl_component_library()` — without this the palette
-    // ships empty on wasm.
+    // Entries carry their OWN root so the tar/URI key is computed relative to
+    // it — each root contributes its own top-level package dir as a namespace
+    // (`Modelica/…`, `Buildings/…`). A single combined tar + parsed set holds
+    // them all; the web resolver iterates roots, so keys must not collide.
+    let mut entries: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for root in &roots {
+        let mut files: Vec<PathBuf> = Vec::new();
+        collect_mo_files(root, root, &mut files);
+        for f in files {
+            entries.push((root.clone(), f));
+        }
+    }
+    // Also pack the precomputed palette index if present (MSL root only). The
+    // web runtime reads it via `MslAssetSource::read("msl_index.json")` to
+    // populate `msl_component_library()` — without this the palette ships
+    // empty on wasm.
     let index_path = msl_root.join("msl_index.json");
     if index_path.is_file() {
-        entries.push(index_path);
+        entries.push((msl_root.clone(), index_path));
     } else {
         eprintln!(
             "warning: {} not present — palette will be empty on web. \
@@ -114,12 +168,32 @@ fn main() {
             index_path.display()
         );
     }
-    entries.sort(); // deterministic tar order → reproducible hash
-    eprintln!("found {} files to pack", entries.len());
+    // Deterministic tar order → reproducible hash. Sort by the root-relative
+    // key (NOT absolute path): extra roots live at machine-specific absolute
+    // paths, but their relative keys are stable.
+    entries.sort_by(|(ra, pa), (rb, pb)| rel_key(ra, pa).cmp(&rel_key(rb, pb)));
+    // Guard against two roots claiming the same relative key (e.g. an extra
+    // root that also ships a `Modelica/` tree) — last-writer-wins in the tar
+    // is silent corruption, so drop dups loudly.
+    let mut seen = std::collections::HashSet::new();
+    entries.retain(|(r, p)| {
+        let key = rel_key(r, p);
+        if seen.insert(key.clone()) {
+            true
+        } else {
+            eprintln!("warning: duplicate bundle key {key} — dropping later copy");
+            false
+        }
+    });
+    eprintln!(
+        "found {} files to pack across {} root(s)",
+        entries.len(),
+        roots.len()
+    );
 
     // Tar → zstd → write to a temp file, then rename to hashed final path.
     let tmp_path = out_dir.join("sources.tar.zst.tmp");
-    let total_uncompressed = pack(&msl_root, &entries, &tmp_path);
+    let total_uncompressed = pack(&entries, &tmp_path);
 
     let sha = file_sha256(&tmp_path);
     let short = &sha[..16];
@@ -134,7 +208,7 @@ fn main() {
     // rumoca via `Session::replace_parsed_source_set` — the alternative
     // (per-file parse on the page) is ~27 minutes for 2670 files.
     eprintln!("parsing {} files for the pre-parsed bundle…", entries.len());
-    let parsed = pre_parse(&msl_root, &entries);
+    let parsed = pre_parse(&entries);
     let parsed_count = parsed.len();
     eprintln!("parsed {parsed_count} / {} files", entries.len());
 
@@ -186,13 +260,14 @@ fn main() {
     eprintln!("wrote manifest.json");
 }
 
-/// Parse every MSL `.mo` file into `(uri, StoredDefinition)`. URIs use
-/// MSL-relative forward-slash paths so they match what the wasm runtime
+/// Parse every `.mo` file into `(uri, StoredDefinition)`. URIs use
+/// root-relative forward-slash paths so they match what the wasm runtime
 /// will reconstruct from the source bundle; rumoca treats these as
-/// stable identifiers (not real filesystem paths).
+/// stable identifiers (not real filesystem paths). Each entry is stripped
+/// against its own root, so files from different library roots keep their
+/// distinct top-level package namespace.
 fn pre_parse(
-    msl_root: &Path,
-    entries: &[PathBuf],
+    entries: &[(PathBuf, PathBuf)],
 ) -> Vec<(String, rumoca_ir_ast::StoredDefinition)> {
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -200,9 +275,9 @@ fn pre_parse(
     // Only `.mo` files are Modelica source; the bundle may also carry
     // ancillary files (e.g. `msl_index.json` for the palette) that we
     // pack as bytes but don't try to parse here.
-    let mo_entries: Vec<&PathBuf> = entries
+    let mo_entries: Vec<&(PathBuf, PathBuf)> = entries
         .iter()
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("mo"))
+        .filter(|(_, p)| p.extension().and_then(|s| s.to_str()) == Some("mo"))
         .collect();
     let total = mo_entries.len();
     eprintln!(
@@ -218,9 +293,8 @@ fn pre_parse(
     let done = AtomicUsize::new(0);
     let parsed: Vec<Option<(String, rumoca_ir_ast::StoredDefinition)>> = mo_entries
         .par_iter()
-        .map(|path| {
-            let rel = path.strip_prefix(msl_root).expect("entry under msl root");
-            let uri = rel.to_string_lossy().replace('\\', "/");
+        .map(|(root, path)| {
+            let uri = rel_key(root, path);
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n % 500 == 0 || n == total {
                 eprintln!("  parsed {n} / {total}");
@@ -273,7 +347,7 @@ fn collect_mo_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn pack(msl_root: &Path, entries: &[PathBuf], dest: &Path) -> u64 {
+fn pack(entries: &[(PathBuf, PathBuf)], dest: &Path) -> u64 {
     let file = File::create(dest).expect("create tmp tar");
     let buf = BufWriter::new(file);
     // Level 19 = strong compression; we're producing this once per build.
@@ -283,13 +357,13 @@ fn pack(msl_root: &Path, entries: &[PathBuf], dest: &Path) -> u64 {
     let mut tar_w = tar::Builder::new(zstd_w);
 
     let mut total: u64 = 0;
-    for path in entries {
+    for (root, path) in entries {
         let mut f = File::open(path).expect("open .mo");
         let mut bytes = Vec::new();
         f.read_to_end(&mut bytes).expect("read .mo");
         total += bytes.len() as u64;
 
-        let rel = path.strip_prefix(msl_root).expect("entry under msl root");
+        let rel = rel_key(root, path);
         let mut header = tar::Header::new_gnu();
         header.set_size(bytes.len() as u64);
         header.set_mode(0o644);
@@ -298,11 +372,53 @@ fn pack(msl_root: &Path, entries: &[PathBuf], dest: &Path) -> u64 {
         header.set_mtime(0);
         header.set_cksum();
         tar_w
-            .append_data(&mut header, rel, &bytes[..])
+            .append_data(&mut header, &rel, &bytes[..])
             .expect("tar append");
     }
     tar_w.finish().expect("tar finish");
     total
+}
+
+/// Bundle key for a file: its path relative to its own library root, with
+/// forward slashes. This is the tar entry name AND the rumoca URI, and is
+/// what the web resolver matches against (`MslInMemory.files` keys).
+fn rel_key(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .expect("entry under its root")
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+/// Discover third-party library roots under `cache_dir()`, mirroring native's
+/// `discover_third_party_libs`: each direct cache subdirectory that contains a
+/// `<Package>/package.mo` is a library root. Skips `msl` (the primary) and
+/// dot-dirs. Returns the root dirs (the parent of the package dir), sorted.
+fn discover_extra_roots() -> Vec<PathBuf> {
+    let cache = lunco_assets::cache_dir();
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let Ok(rd) = fs::read_dir(&cache) else {
+        return roots;
+    };
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if !p.is_dir() {
+            continue;
+        }
+        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if name == "msl" || name.starts_with('.') {
+            continue;
+        }
+        let Ok(inner) = fs::read_dir(&p) else { continue };
+        let has_pkg = inner.flatten().any(|sub| {
+            let sp = sub.path();
+            sp.is_dir() && sp.join("package.mo").is_file()
+        });
+        if has_pkg {
+            roots.push(p);
+        }
+    }
+    roots.sort();
+    roots
 }
 
 fn file_sha256(path: &Path) -> String {
