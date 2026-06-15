@@ -186,40 +186,34 @@ struct BakeResult {
 /// Kicks off an async heightfield bake for every opted-in terrain whose
 /// mesh has loaded. Steady-state cost: the query is empty once every
 /// terrain carries a `HorizonMap`.
+#[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut, unused_variables))]
 pub fn start_horizon_bakes(
     mut commands: Commands,
-    meshes: Res<Assets<Mesh>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
     q: Query<
         (Entity, &HorizonShadowTerrain, &Mesh3d),
         (Without<HorizonMap>, Without<HorizonBakeTask>),
     >,
 ) {
     for (entity, cfg, mesh3d) in &q {
-        #[cfg(target_arch = "wasm32")]
-        {
-            // AsyncComputeTaskPool is the main thread on wasm; skip rather
-            // than stall (and remove the marker so this doesn't retry).
-            warn!("[horizon] bake skipped on wasm for {entity:?} (would stall the main thread)");
+        let Some(mesh) = meshes.get(&mesh3d.0) else { continue }; // not loaded yet
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            warn!("[horizon] terrain {entity:?} mesh has no Float32x3 positions; skipping");
             commands.entity(entity).remove::<HorizonShadowTerrain>();
-            let _ = (cfg, mesh3d, &meshes);
             continue;
-        }
+        };
+        let positions = positions.clone();
+        let indices: Vec<u32> = match mesh.indices() {
+            Some(Indices::U32(v)) => v.clone(),
+            Some(Indices::U16(v)) => v.iter().map(|&i| i as u32).collect(),
+            None => (0..positions.len() as u32).collect(),
+        };
+
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let Some(mesh) = meshes.get(&mesh3d.0) else { continue }; // not loaded yet
-            let Some(VertexAttributeValues::Float32x3(positions)) =
-                mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-            else {
-                warn!("[horizon] terrain {entity:?} mesh has no Float32x3 positions; skipping");
-                commands.entity(entity).remove::<HorizonShadowTerrain>();
-                continue;
-            };
-            let positions = positions.clone();
-            let indices: Vec<u32> = match mesh.indices() {
-                Some(Indices::U32(v)) => v.clone(),
-                Some(Indices::U16(v)) => v.iter().map(|&i| i as u32).collect(),
-                None => (0..positions.len() as u32).collect(),
-            };
             let resolution = cfg.resolution;
             info!(
                 "[horizon] baking {resolution}² heightfield for {entity:?} ({} verts) \
@@ -229,6 +223,29 @@ pub fn start_horizon_bakes(
             let task = AsyncComputeTaskPool::get()
                 .spawn(async move { bake_heightfield(&positions, &indices, resolution) });
             commands.entity(entity).insert(HorizonBakeTask(task));
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // No worker threads on wasm (AsyncComputeTaskPool runs on the main
+            // thread), so bake INLINE at a reduced resolution: a one-time load
+            // cost — never a per-frame stall — so the web build still gets
+            // far-field terrain shadows instead of none.
+            let resolution = cfg.resolution.min(WASM_HORIZON_MAX_RES);
+            info!(
+                "[horizon] baking {resolution}² heightfield inline for {entity:?} \
+                 ({} verts) on wasm…",
+                positions.len()
+            );
+            let result = bake_heightfield(&positions, &indices, resolution);
+            install_horizon_map(
+                &mut commands,
+                &mut meshes,
+                &mut images,
+                entity,
+                mesh3d,
+                result.field,
+                result.millis,
+            );
         }
     }
 }
@@ -309,43 +326,69 @@ pub fn finish_horizon_bakes(
     use bevy::tasks::futures_lite::future;
     for (entity, mut task, mesh3d) in &mut q {
         let Some(result) = future::block_on(future::poll_once(&mut task.0)) else { continue };
-        let field = result.field;
-
-        if let Some(mesh) = meshes.get_mut(&mesh3d.0) {
-            if let Some(VertexAttributeValues::Float32x3(pos)) =
-                mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-            {
-                let uvs: Vec<[f32; 2]> = pos
-                    .iter()
-                    .map(|p| {
-                        let uv = (Vec2::new(p[0], p[2]) - field.min) / field.size;
-                        [uv.x, uv.y]
-                    })
-                    .collect();
-                mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-            }
-        }
-
-        let bytes: Vec<u8> = field.heights.iter().flat_map(|h| h.to_le_bytes()).collect();
-        let image = images.add(Image::new(
-            Extent3d {
-                width: field.resolution,
-                height: field.resolution,
-                depth_or_array_layers: 1,
-            },
-            TextureDimension::D2,
-            bytes,
-            TextureFormat::R32Float,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-        ));
-
-        info!(
-            "[horizon] heightfield baked for {entity:?}: {}² in {} ms — far-field \
-             ray-march shadows active (near field stays on CSM)",
-            field.resolution, result.millis
+        install_horizon_map(
+            &mut commands,
+            &mut meshes,
+            &mut images,
+            entity,
+            mesh3d,
+            result.field,
+            result.millis,
         );
-        commands.entity(entity).remove::<HorizonBakeTask>().insert(HorizonMap { field, image });
     }
+}
+
+/// Reduced heightfield resolution for the inline wasm bake (vs. the native
+/// async bake's full `cfg.resolution`): keeps the one-time synchronous bake
+/// short enough to be a load hitch, not a stall.
+#[cfg(target_arch = "wasm32")]
+const WASM_HORIZON_MAX_RES: u32 = 512;
+
+/// Installs a finished bake on the terrain entity: gives the mesh planar UVs
+/// (`(local.xz - field.min) / field.size`, the exact inverse of the shader's
+/// `uv * size` heightfield addressing — so `#ifdef VERTEX_UVS_A` lights up and
+/// the march samples the right texels), uploads the R32Float heightfield
+/// texture, and inserts the `HorizonMap`. Shared by the native async finish
+/// and the wasm inline bake so the two paths can never drift.
+fn install_horizon_map(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    images: &mut Assets<Image>,
+    entity: Entity,
+    mesh3d: &Mesh3d,
+    field: HeightField,
+    millis: u128,
+) {
+    if let Some(mesh) = meshes.get_mut(&mesh3d.0) {
+        if let Some(VertexAttributeValues::Float32x3(pos)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        {
+            let uvs: Vec<[f32; 2]> = pos
+                .iter()
+                .map(|p| {
+                    let uv = (Vec2::new(p[0], p[2]) - field.min) / field.size;
+                    [uv.x, uv.y]
+                })
+                .collect();
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+        }
+    }
+
+    let bytes: Vec<u8> = field.heights.iter().flat_map(|h| h.to_le_bytes()).collect();
+    let image = images.add(Image::new(
+        Extent3d { width: field.resolution, height: field.resolution, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        bytes,
+        TextureFormat::R32Float,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    ));
+
+    info!(
+        "[horizon] heightfield installed for {entity:?}: {}² in {} ms — far-field \
+         ray-march shadows active (near field stays on CSM)",
+        field.resolution, millis
+    );
+    commands.entity(entity).remove::<HorizonBakeTask>().insert(HorizonMap { field, image });
 }
 
 // ─────────────────────────────────────────────────────────────────────────
