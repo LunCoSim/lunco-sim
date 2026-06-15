@@ -1211,13 +1211,17 @@ pub fn run_with_cancel(
     // actual Modelica package root (the GitHub archive layout puts
     // the library one level down).
     //
-    // Adding a library here makes its classes visible in the
-    // workbench's package browser, drillable from the Twin tree, and
-    // resolvable as `Library.Class` from any open document.
-    let extra_libraries: &[(&str, &str)] = &[
-        ("thermofluidstream", "ThermofluidStream"),
-    ];
-    for (cache_subdir, package_dir) in extra_libraries {
+    // Adding a library makes its classes visible in the workbench's
+    // package browser, drillable from the Twin tree, and resolvable as
+    // `Library.Class` from any open document.
+    //
+    // Discovered (not hardcoded) so the indexed `components` cover exactly
+    // the same set of third-party libs that the runtime resolves natively
+    // (`sources_with_extras`) and that `build_msl_assets --discover-extras`
+    // ships into the web bundle. Returns (cache_subdir, top_level_package_dir).
+    let extra_libraries =
+        crate::ui::panels::package_browser::scanner::discover_third_party_libs();
+    for (cache_subdir, package_dir) in &extra_libraries {
         let cache_root = lunco_assets::cache_dir().join(cache_subdir);
         let lib_path = cache_root.join(package_dir);
         if lib_path.exists() {

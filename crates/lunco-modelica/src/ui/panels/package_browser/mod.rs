@@ -9,6 +9,7 @@ use std::path::{PathBuf};
 pub mod types;
 pub mod cache;
 pub mod scanner;
+pub mod library_tree;
 pub mod render;
 
 pub use types::{PackageNode, InMemoryEntry};
@@ -21,8 +22,31 @@ pub struct PackageBrowserPlugin;
 impl Plugin for PackageBrowserPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PackageTreeCache>()
-            .add_systems(Update, handle_package_loading_tasks);
+            .add_systems(
+                Update,
+                (handle_package_loading_tasks, reconcile_library_roots_on_ready),
+            );
     }
+}
+
+/// Fill in library roots that only become known after the MSL bundle loads
+/// (web: third-party libs carried in the parsed bundle). Native is already
+/// complete at `PackageTreeCache::new()`, so this flips the flag on first
+/// ready and does nothing further. Cheap no-op every frame until ready.
+pub fn reconcile_library_roots_on_ready(
+    mut cache: ResMut<PackageTreeCache>,
+    state: Option<Res<lunco_assets::msl::MslLoadState>>,
+) {
+    if cache.library_roots_synced {
+        return;
+    }
+    if !matches!(
+        state.as_deref(),
+        Some(lunco_assets::msl::MslLoadState::Ready { .. })
+    ) {
+        return;
+    }
+    cache.reconcile_library_roots();
 }
 
 pub fn handle_package_loading_tasks(
@@ -103,7 +127,7 @@ pub fn render_root_subtree(world: &mut World, ui: &mut egui::Ui, root_id: &str) 
             return;
         };
         if let PackageNode::Category {
-            id, package_path, fs_path, children, is_loading, ..
+            id, package_path, children, is_loading, ..
         } = root
         {
             ui.set_max_width(ui.available_width());
@@ -120,12 +144,11 @@ pub fn render_root_subtree(world: &mut World, ui: &mut egui::Ui, root_id: &str) 
                 *is_loading = true;
                 let pool = AsyncComputeTaskPool::get();
                 let parent_id = id.clone();
-                let scan_dir = fs_path.clone();
                 let pkg_path = package_path.clone();
                 let task = pool.spawn(async move {
-                    let children = crate::ui::panels::package_browser::scanner::scan_msl_dir(
-                        &scan_dir, pkg_path,
-                    );
+                    let children =
+                        crate::ui::panels::package_browser::library_tree::library_tree()
+                            .children(&pkg_path);
                     crate::ui::panels::package_browser::cache::ScanResult { parent_id, children }
                 });
                 cache.tasks.push(task);

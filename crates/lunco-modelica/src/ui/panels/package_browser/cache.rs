@@ -44,41 +44,27 @@ pub struct PackageTreeCache {
     pub twin_scan_task: Option<Task<TwinState>>,
     pub rename: RenameState,
     pub bundled_tree_indexed: bool,
+    /// Whether the library roots have been reconciled against the provider
+    /// after construction. Native is complete at `new()`; web gains its
+    /// bundle-derived extra roots once `MslLoadState::Ready`. See
+    /// [`Self::reconcile_library_roots`].
+    pub library_roots_synced: bool,
 }
 
 impl PackageTreeCache {
     pub fn new() -> Self {
-        let msl_root = lunco_assets::msl_dir();
-        let modelica_dir = msl_root.join("Modelica");
+        // Library roots come from the cfg-free provider: native discovers them
+        // on the filesystem at construction; web returns just "Modelica" here
+        // and the extras are filled in by `reconcile_library_roots` once the
+        // parsed bundle loads. `library_root_node` decorates "Modelica" with
+        // its display name / stable id.
+        let mut roots: Vec<PackageNode> = super::library_tree::library_tree()
+            .library_roots()
+            .iter()
+            .map(|lib| super::library_tree::library_root_node(lib))
+            .collect();
 
-        let mut roots = Vec::new();
-        roots.push(PackageNode::Category {
-            id: "msl_root".into(),
-            name: "📚 Modelica Standard Library".into(),
-            package_path: "Modelica".into(),
-            fs_path: modelica_dir,
-            children: None,
-            is_loading: false,
-        });
-
-        // Third-party Modelica libraries discovered in the
-        // `lunco-assets` cache. Each `Assets.toml` `dest = "<sub>"`
-        // entry unpacks to `<cache>/<sub>/<PackageName>/package.mo`;
-        // the discovery scan picks them up so adding a library is a
-        // pure data change (download + Assets.toml entry).
-        for (cache_subdir, package_dir) in super::scanner::discover_third_party_libs() {
-            let lib_dir = lunco_assets::cache_dir().join(&cache_subdir).join(&package_dir);
-            roots.push(PackageNode::Category {
-                id: format!("{cache_subdir}_root"),
-                name: package_dir.clone(),
-                package_path: package_dir,
-                fs_path: lib_dir,
-                children: None,
-                is_loading: false,
-            });
-        }
-
-        // Bundled models — pre-baked tree from `msl_indexer`.
+        // Bundled models — pre-baked tree from `msl_indexer`. Always last.
         roots.push(PackageNode::Category {
             id: "bundled_root".into(),
             name: "📦 LunCo Examples".into(),
@@ -98,7 +84,43 @@ impl PackageTreeCache {
             twin_scan_task: None,
             rename: RenameState::default(),
             bundled_tree_indexed,
+            library_roots_synced: false,
         }
+    }
+
+    /// Insert any library roots that became known after construction — on web,
+    /// the third-party libs carried by the parsed bundle, which isn't resident
+    /// when `new()` runs. Idempotent and flag-gated; native is already complete
+    /// at `new()` so this only flips the flag. Preserves existing nodes and
+    /// their expansion state, inserting extras just before the bundled-examples
+    /// root. Call only once the bundle is ready (see the reconcile system).
+    pub fn reconcile_library_roots(&mut self) {
+        if self.library_roots_synced {
+            return;
+        }
+        let existing: std::collections::HashSet<String> = self
+            .roots
+            .iter()
+            .filter_map(|n| match n {
+                PackageNode::Category { package_path, .. } => Some(package_path.clone()),
+                _ => None,
+            })
+            .collect();
+        let insert_at = self
+            .roots
+            .iter()
+            .position(|n| matches!(n, PackageNode::Category { id, .. } if id == "bundled_root"))
+            .unwrap_or(self.roots.len());
+        let mut offset = 0;
+        for lib in super::library_tree::library_tree().library_roots() {
+            if existing.contains(&lib) {
+                continue;
+            }
+            self.roots
+                .insert(insert_at + offset, super::library_tree::library_root_node(&lib));
+            offset += 1;
+        }
+        self.library_roots_synced = true;
     }
 }
 

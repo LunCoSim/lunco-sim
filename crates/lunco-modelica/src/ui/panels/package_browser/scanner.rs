@@ -74,20 +74,8 @@ fn should_skip(name: &str) -> bool {
 
 // ─── MSL Scanning ────────────────────────────────────────────────────────────
 
-pub fn scan_msl_dir(dir: &Path, package_path: String) -> Vec<PackageNode> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = dir;
-        scan_msl_inmem(&package_path)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        scan_msl_dir_native(dir, package_path)
-    }
-}
-
 #[cfg(target_arch = "wasm32")]
-fn scan_msl_inmem(package_path: &str) -> Vec<PackageNode> {
+pub(crate) fn scan_msl_inmem(package_path: &str) -> Vec<PackageNode> {
     if crate::msl_remote::global_parsed_msl().is_none() {
         return Vec::new();
     }
@@ -124,6 +112,43 @@ fn scan_msl_inmem(package_path: &str) -> Vec<PackageNode> {
     }
     out.sort_by_key(omedit_sort_key);
     out
+}
+
+/// Third-party library roots present in the in-memory parsed bundle, minus
+/// the MSL core and its required companions (those render under the dedicated
+/// "Modelica Standard Library" root). Whatever remains is an extra library
+/// shipped in the same bundle (`build_msl_assets --extra-root/--discover-extras`).
+///
+/// This is the web counterpart to [`discover_third_party_libs`]: on wasm there
+/// is no filesystem cache to scan, so the palette derives its extra-lib roots
+/// from the parsed AST that the bundle fetcher already installed.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn msl_inmem_top_level_libs() -> Vec<String> {
+    const MSL_OWNED: &[&str] = &[
+        "Modelica",
+        "ModelicaServices",
+        "Complex",
+        "ModelicaReference",
+        "ObsoleteModelica4",
+    ];
+    // Don't touch the `msl_inmem_index()` OnceLock before the parsed bundle is
+    // resident — it would cache an empty tree permanently (same guard as
+    // `scan_msl_inmem`).
+    if crate::msl_remote::global_parsed_msl().is_none() {
+        return Vec::new();
+    }
+    let tree = msl_inmem_index();
+    let Some(top) = tree.get("") else {
+        return Vec::new();
+    };
+    let mut libs: Vec<String> = top
+        .iter()
+        .map(|(short, _)| short.clone())
+        .filter(|s| !MSL_OWNED.contains(&s.as_str()))
+        .collect();
+    libs.sort();
+    libs.dedup();
+    libs
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -184,7 +209,7 @@ fn build_msl_inmem_index(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn scan_msl_dir_native(dir: &Path, package_path: String) -> Vec<PackageNode> {
+pub(crate) fn scan_msl_dir_native(dir: &Path, package_path: String) -> Vec<PackageNode> {
     let mut results = Vec::new();
 
     if let Ok(entries) = std::fs::read_dir(dir) {

@@ -7,7 +7,6 @@ use lunco_workbench::{Panel, PanelId, PanelSlot};
 use crate::ui::state::{ModelLibrary};
 use super::types::{PackageNode, TwinNode};
 use super::cache::{PackageTreeCache, ScanResult};
-use super::scanner::{scan_msl_dir};
 
 pub struct PackageBrowserPanel;
 
@@ -184,7 +183,7 @@ pub(crate) fn render_node_single(
     let mut action = None;
 
     match node {
-        PackageNode::Category { id, name, package_path, fs_path, children, is_loading } => {
+        PackageNode::Category { id, name, package_path, fs_path: _, children, is_loading } => {
             let header_resp = egui::CollapsingHeader::new(format!("📁 {}", name))
                 .id_salt(id.as_str())
                 .show(ui, |ui| {
@@ -198,10 +197,9 @@ pub(crate) fn render_node_single(
                         *is_loading = true;
                         let pool = bevy::tasks::AsyncComputeTaskPool::get();
                         let pid = id.clone();
-                        let dir = fs_path.clone();
                         let pp = package_path.clone();
                         tasks.push(pool.spawn(async move {
-                            let kids = scan_msl_dir(&dir, pp);
+                            let kids = super::library_tree::library_tree().children(&pp);
                             ScanResult { parent_id: pid, children: kids }
                         }));
                     }
