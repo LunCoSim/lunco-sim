@@ -430,12 +430,10 @@ fn try_load_msl_index() -> Option<MslIndex> {
     //    populated on native if we ever decide to load via the same
     //    pipeline). This wins so a host that has both still uses the
     //    deliberately-shipped index over whatever happens to be on disk.
-    if let Some(src) = lunco_assets::msl::global_msl_source() {
-        if let Some(bytes) = src.read(std::path::Path::new("msl_index.json")) {
-            if let Ok(text) = std::str::from_utf8(&bytes) {
-                if let Some(idx) = parse_msl_index(text) {
-                    return Some(idx);
-                }
+    if let Some(bytes) = lunco_assets::msl::msl_read(std::path::Path::new("msl_index.json")) {
+        if let Ok(text) = std::str::from_utf8(&bytes) {
+            if let Some(idx) = parse_msl_index(text) {
+                return Some(idx);
             }
         }
     }

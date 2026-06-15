@@ -478,13 +478,36 @@ fn stash_compressed_source(bytes: Vec<u8>, meta: lunco_assets::msl::MslBundleEnt
     let _ = MSL_SOURCE_COMPRESSED.set((bytes, meta));
 }
 
+/// Build the ordered library-root list to install from a primary
+/// source. On native, also registers any third-party Modelica libraries
+/// already unpacked in the cache (so palette / drill-in resolve them
+/// too); on web the bundle already carries every shipped library in the
+/// one in-memory root, so the primary stands alone.
+fn sources_with_extras(primary: MslAssetSource) -> Vec<MslAssetSource> {
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut sources = vec![primary];
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if matches!(sources[0], MslAssetSource::Filesystem(_)) {
+            for (subdir, _pkg) in
+                crate::ui::panels::package_browser::scanner::discover_third_party_libs()
+            {
+                sources.push(MslAssetSource::Filesystem(
+                    lunco_assets::cache_dir().join(subdir),
+                ));
+            }
+        }
+    }
+    sources
+}
+
 /// Untar the MSL source bundle into the process-wide `MslAssetSource` on first
 /// use (idempotent). Called by the drill-in paths (`Document::load_msl_class` /
 /// `load_msl_file`) before they read MSL source text. No-op if already
 /// unpacked or if no compressed source was stashed.
 #[cfg(target_arch = "wasm32")]
 pub fn ensure_msl_source_unpacked() {
-    if lunco_assets::msl::global_msl_source().is_some() {
+    if lunco_assets::msl::has_msl_source() {
         return;
     }
     let Some((bytes, meta)) = MSL_SOURCE_COMPRESSED.get() else {
@@ -493,9 +516,9 @@ pub fn ensure_msl_source_unpacked() {
     match web::unpack(bytes, meta) {
         Ok(files) => {
             let n = files.len();
-            lunco_assets::msl::install_global_msl_source(MslAssetSource::InMemory(Arc::new(
-                lunco_assets::msl::MslInMemory { files },
-            )));
+            lunco_assets::msl::install_global_msl_sources(sources_with_extras(
+                MslAssetSource::InMemory(Arc::new(lunco_assets::msl::MslInMemory { files })),
+            ));
             info!("[MSL] source bundle unpacked lazily ({n} files) for drill-in");
         }
         Err(e) => warn!("[MSL] lazy source unpack failed: {e}"),
@@ -572,9 +595,9 @@ impl Plugin for MslRemotePlugin {
             if let Some(root) = resolved_root {
                 let count = count_mo_files(&root);
                 info!("[MSL] using on-disk root {} ({count} .mo files)", root.display());
-                let source = MslAssetSource::Filesystem(root);
-                lunco_assets::msl::install_global_msl_source(source.clone());
-                app.insert_resource(source);
+                lunco_assets::msl::install_global_msl_sources(sources_with_extras(
+                    MslAssetSource::Filesystem(root),
+                ));
                 app.insert_resource(MslLoadState::Ready {
                     file_count: count,
                     compressed_bytes: 0,
@@ -849,7 +872,6 @@ pub fn reinstall_msl(world: &mut World) {
             bevy::log::warn!("[MSL] could not clear cache at {}: {e}", dir.display());
         }
     }
-    world.remove_resource::<MslAssetSource>();
     world.insert_resource(MslLoadState::Loading {
         phase: MslLoadPhase::FetchingBundle,
         bytes_done: 0,
@@ -875,7 +897,6 @@ fn drain_native_msl_install(
     slot: Res<NativeMslInstallSlot>,
     mut state: ResMut<MslLoadState>,
     mut settings: ResMut<crate::msl_settings::MslSettings>,
-    mut commands: Commands,
 ) {
     let Ok(mut inner) = slot.0.lock() else { return };
     if let Some(new_state) = inner.pending_state.take() {
@@ -889,8 +910,7 @@ fn drain_native_msl_install(
         *state = new_state;
     }
     if let Some(source) = inner.pending_source.take() {
-        lunco_assets::msl::install_global_msl_source(source.clone());
-        commands.insert_resource(source);
+        lunco_assets::msl::install_global_msl_sources(sources_with_extras(source));
     }
     if let Some(v) = inner.pending_version.take() {
         settings.last_fetched_version = Some(v);
@@ -996,9 +1016,9 @@ fn drain_msl_load_slot(
     }
     if let Some(source) = inner.pending_source.take() {
         // Install the process-wide handle that `ModelicaCompiler::new`
-        // consults; do this before inserting the resource so the next
-        // compile attempt picks it up regardless of system ordering.
-        lunco_assets::msl::install_global_msl_source(source.clone());
+        // consults so the next compile attempt picks it up regardless of
+        // system ordering.
+        lunco_assets::msl::install_global_msl_sources(sources_with_extras(source.clone()));
 
         // Fast path: pre-parsed bundle was shipped and decoded. Install
         // directly. The next time the user hits Compile, the inline
@@ -1017,7 +1037,6 @@ fn drain_msl_load_slot(
             // `Modelica.*` reference.
             crate::worker_transport::install_msl_in_worker(&parsed_docs);
             install_global_parsed_msl(parsed_docs);
-            commands.insert_resource(source);
             // Drop any previously-cached empty compiler so the next
             // user-initiated compile rebuilds with MSL.
             worker.reset_compiler();
@@ -1043,7 +1062,6 @@ fn drain_msl_load_slot(
                 last_log: now,
             });
         }
-        commands.insert_resource(source);
     }
 }
 

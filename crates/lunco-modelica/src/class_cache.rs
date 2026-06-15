@@ -74,8 +74,7 @@ impl MslLookupMode {
 /// `None` if the source hasn't been installed yet (web boot before
 /// fetch completes) or the path isn't present.
 fn read_msl_source_bytes(path: &std::path::Path) -> Option<String> {
-    let source = lunco_assets::msl::global_msl_source()?;
-    let bytes = source.read(path)?;
+    let bytes = lunco_assets::msl::msl_read(path)?;
     String::from_utf8(bytes).ok()
 }
 

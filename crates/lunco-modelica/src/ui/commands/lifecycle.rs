@@ -688,8 +688,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
                 DocumentOrigin::untitled(name_for_task),
             );
         };
-        let source_full = lunco_assets::msl::global_msl_source()
-            .and_then(|s| s.read(&path))
+        let source_full = lunco_assets::msl::msl_read(&path)
             .and_then(|b| String::from_utf8(b).ok())
             .unwrap_or_default();
         

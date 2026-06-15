@@ -287,19 +287,14 @@ impl ModelicaCompiler {
             );
             return true;
         }
-        if matches!(
-            lunco_assets::msl::global_msl_source(),
-            Some(lunco_assets::msl::MslAssetSource::InMemory(_))
-        ) {
+        if lunco_assets::msl::has_in_memory_source() {
             log::info!(
                 "[ModelicaCompiler] MSL bundle present but parse not yet complete — \
                  starting with empty session; compile will be retriggered when parse finishes"
             );
             return true;
         }
-        if let Some(lunco_assets::msl::MslAssetSource::Filesystem(root)) =
-            lunco_assets::msl::global_msl_source()
-        {
+        if let Some(root) = lunco_assets::msl::primary_filesystem_root() {
             // Native: an MSL tree is present, so MSL is wanted. Try the
             // pre-parsed on-disk bundle first via the shared, memoized
             // `install_parsed_msl` path — it streams `parsed-msl.bin` and

@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Construct one and insert it as a `Resource`; consumers read through
 /// the methods instead of branching on the variant.
-#[derive(Resource, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum MslAssetSource {
     /// MSL is materialised on the local filesystem at this root. The
     /// path is what would have been returned by
@@ -86,17 +86,52 @@ impl MslInMemory {
 /// `MslRemotePlugin` drain once the bundle has been fetched and
 /// decompressed; compiles dispatched before that point will see `None`
 /// and start with an empty session.
-static GLOBAL_MSL_SOURCE: OnceLock<MslAssetSource> = OnceLock::new();
+static GLOBAL_MSL_SOURCES: OnceLock<Vec<MslAssetSource>> = OnceLock::new();
 
-/// Install the process-wide MSL source. Call once during boot.
-/// Subsequent calls are silently ignored — the contract is set-once.
-pub fn install_global_msl_source(source: MslAssetSource) {
-    let _ = GLOBAL_MSL_SOURCE.set(source);
+/// Install the process-wide, ordered list of library roots. Call once
+/// during boot; subsequent calls are silently ignored (set-once).
+///
+/// Roots are searched in order — MSL first, then any extra libraries —
+/// so resolution and reads prefer earlier roots. Each root is a single
+/// backend: `Filesystem` on native, `InMemory` on web. The list may mix
+/// backends, though in practice a target is homogeneous.
+pub fn install_global_msl_sources(sources: Vec<MslAssetSource>) {
+    let _ = GLOBAL_MSL_SOURCES.set(sources);
 }
 
-/// Read the process-wide MSL source if any has been installed.
-pub fn global_msl_source() -> Option<&'static MslAssetSource> {
-    GLOBAL_MSL_SOURCE.get()
+/// The process-wide ordered library roots. Empty slice if none have
+/// been installed yet (e.g. web boot before the fetch completes).
+pub fn global_msl_sources() -> &'static [MslAssetSource] {
+    GLOBAL_MSL_SOURCES.get().map(Vec::as_slice).unwrap_or(&[])
+}
+
+/// `true` once at least one root is installed.
+pub fn has_msl_source() -> bool {
+    !global_msl_sources().is_empty()
+}
+
+/// Read a relative (or root-joined) path's bytes from the first root
+/// that has it.
+pub fn msl_read(rel: &std::path::Path) -> Option<Vec<u8>> {
+    global_msl_sources().iter().find_map(|s| s.read(rel))
+}
+
+/// `true` if any installed root is an in-memory bundle (web). The
+/// compiler-init gate uses this to avoid blocking the main thread on a
+/// synchronous parse.
+pub fn has_in_memory_source() -> bool {
+    global_msl_sources()
+        .iter()
+        .any(|s| matches!(s, MslAssetSource::InMemory(_)))
+}
+
+/// The first filesystem root's directory (the MSL tree), if any. The
+/// native engine-seed parse path needs the MSL dir specifically.
+pub fn primary_filesystem_root() -> Option<&'static std::path::Path> {
+    global_msl_sources().iter().find_map(|s| match s {
+        MslAssetSource::Filesystem(p) => Some(p.as_path()),
+        MslAssetSource::InMemory(_) => None,
+    })
 }
 
 impl MslAssetSource {
@@ -112,6 +147,108 @@ impl MslAssetSource {
             #[cfg(target_arch = "wasm32")]
             MslAssetSource::Filesystem(_) => None,
             MslAssetSource::InMemory(inner) => inner.files.get(rel).cloned(),
+        }
+    }
+
+    /// The base path candidate paths are joined onto for this root.
+    /// `Filesystem` → the on-disk root dir (candidates are absolute);
+    /// `InMemory` → empty (candidates are bundle-relative keys). The
+    /// `library_fs` resolver uses this to build §13 candidate paths
+    /// without knowing the backend.
+    pub fn base(&self) -> &std::path::Path {
+        match self {
+            MslAssetSource::Filesystem(root) => root.as_path(),
+            MslAssetSource::InMemory(_) => std::path::Path::new(""),
+        }
+    }
+
+    /// Does this root contain `candidate` (a path already joined onto
+    /// [`base`](Self::base))? In-memory → a map lookup; filesystem →
+    /// membership in a resident path-set built once by a single
+    /// sequential directory walk (see [`native_path_set`]), so the
+    /// resolver never `stat()`s per candidate. This keeps ALL native
+    /// filesystem traversal inside `lunco-assets`.
+    pub fn contains(&self, candidate: &std::path::Path) -> bool {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            MslAssetSource::Filesystem(_) => native_path_set().contains(candidate),
+            #[cfg(target_arch = "wasm32")]
+            MslAssetSource::Filesystem(_) => false,
+            MslAssetSource::InMemory(inner) => inner.files.contains_key(candidate),
+        }
+    }
+}
+
+/// Resident set of every `.mo` file's absolute path across all
+/// installed *filesystem* roots (MSL + extra libraries). Built once,
+/// lazily, by a single sequential walk; replaces per-candidate
+/// `stat()` (the "stat-storm") with O(1) membership.
+///
+/// Candidates are absolute and root-prefixed, so a single union set
+/// over all roots is unambiguous. An *empty* result (no filesystem
+/// root installed yet — early boot / not-yet-fetched background
+/// install) is returned WITHOUT memoising, so a later call retries
+/// once the roots land.
+#[cfg(not(target_arch = "wasm32"))]
+fn native_path_set() -> &'static std::collections::HashSet<PathBuf> {
+    static SET: OnceLock<std::collections::HashSet<PathBuf>> = OnceLock::new();
+    static EMPTY: OnceLock<std::collections::HashSet<PathBuf>> = OnceLock::new();
+
+    if let Some(set) = SET.get() {
+        return set;
+    }
+    let has_fs_root = global_msl_sources()
+        .iter()
+        .any(|s| matches!(s, MslAssetSource::Filesystem(_)));
+    if !has_fs_root {
+        return EMPTY.get_or_init(std::collections::HashSet::new);
+    }
+    SET.get_or_init(build_native_path_set)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn build_native_path_set() -> std::collections::HashSet<PathBuf> {
+    let start = std::time::Instant::now();
+    let mut files = std::collections::HashSet::new();
+    let mut n_roots = 0usize;
+    for source in global_msl_sources() {
+        if let MslAssetSource::Filesystem(dir) = source {
+            n_roots += 1;
+            collect_mo_files(dir, &mut files);
+        }
+    }
+    info!(
+        "[Msl] native path-set: {} .mo files across {} roots in {:?}",
+        files.len(),
+        n_roots,
+        start.elapsed()
+    );
+    files
+}
+
+/// Recursively insert the absolute path of every `*.mo` file under
+/// `dir` (including `package.mo`). Skips MSL's non-source dirs.
+#[cfg(not(target_arch = "wasm32"))]
+fn collect_mo_files(dir: &std::path::Path, files: &mut std::collections::HashSet<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let path = entry.path();
+        if file_type.is_dir() {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if matches!(name, "Resources" | "Images" | "test") {
+                    continue;
+                }
+            }
+            collect_mo_files(&path, files);
+        } else if file_type.is_file()
+            && path.extension().and_then(|e| e.to_str()) == Some("mo")
+        {
+            files.insert(path);
         }
     }
 }

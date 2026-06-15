@@ -345,7 +345,7 @@ fn is_builtin_root(root: &str) -> bool {
 ///
 /// Per-kind dispatch:
 /// - [`SourceRootKind::SystemLibrary`] with `cache_subdir == "msl"`
-///   → installs via [`lunco_assets::msl::install_global_msl_source`].
+///   → installs via [`lunco_assets::msl::install_global_msl_sources`].
 ///   The existing `MslRemotePlugin` plumbing handles the rest.
 /// - Other system libraries (third-party) and Bundled / WorkspaceFile
 ///   → not yet supported; logs a warning and marks `Failed`. Their
