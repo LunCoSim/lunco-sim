@@ -123,10 +123,37 @@ impl ShaderMaterial {
         self.schema = schema;
         self.repack();
     }
+    /// Inserts/updates a value WITHOUT repacking. Reuses the existing slot when
+    /// the key is already present, so the hot re-write path doesn't allocate a
+    /// `String` every call (MAT-2). Caller must `repack()` afterwards.
+    fn set_value(&mut self, name: &str, v: ParamValue) {
+        if let Some(slot) = self.values.get_mut(name) {
+            *slot = v;
+        } else {
+            self.values.insert(name.to_string(), v);
+        }
+    }
     /// Sets a parameter by name and repacks.
     pub fn set(&mut self, name: &str, v: ParamValue) {
-        self.values.insert(name.to_string(), v);
+        self.set_value(name, v);
         self.repack();
+    }
+    /// Applies several named writes and repacks ONCE at the end, rather than a
+    /// full 256-byte `repack()` per `set` (MAT-1). Use on multi-param write
+    /// paths such as the per-frame engine-field update in the horizon system.
+    pub fn set_many<I, S>(&mut self, entries: I)
+    where
+        I: IntoIterator<Item = (S, ParamValue)>,
+        S: AsRef<str>,
+    {
+        let mut wrote = false;
+        for (name, v) in entries {
+            self.set_value(name.as_ref(), v);
+            wrote = true;
+        }
+        if wrote {
+            self.repack();
+        }
     }
     /// Current value for `name` (or its schema default).
     pub fn get(&self, name: &str) -> Option<ParamValue> {
@@ -680,10 +707,12 @@ fn wgsl_source(shader: &Shader) -> Option<&str> {
 /// struct reflect to nothing (the material keeps its empty default schema).
 pub fn reflect_shader_schemas(
     mut ev: MessageReader<AssetEvent<Shader>>,
+    mut mat_ev: MessageReader<AssetEvent<ShaderMaterial>>,
     shaders: Res<Assets<Shader>>,
     mut cache: ResMut<ShaderSchemas>,
     mut mats: ResMut<Assets<ShaderMaterial>>,
 ) {
+    let mut cache_changed = false;
     for e in ev.read() {
         if let AssetEvent::Added { id } | AssetEvent::Modified { id } = e {
             if let Some(src) = shaders.get(*id).and_then(wgsl_source) {
@@ -695,8 +724,22 @@ pub fn reflect_shader_schemas(
                         cache.map.remove(id);
                     }
                 }
+                cache_changed = true;
             }
         }
+    }
+
+    // The material sweep below is only meaningful when something changed the
+    // (material ↔ schema) relationship this frame: a shader event updated the
+    // cache, OR a material was added/modified and may now need a schema. With
+    // neither, skip the per-frame `mats.iter()` scan entirely (MAT-6). (A
+    // freshly added material whose shader is still loading is re-checked when
+    // that shader's `Added` event arrives.)
+    let mat_changed = mat_ev
+        .read()
+        .any(|e| matches!(e, AssetEvent::Added { .. } | AssetEvent::Modified { .. }));
+    if !cache_changed && !mat_changed {
+        return;
     }
 
     // Assign reflected schemas to materials that don't yet carry them. Find

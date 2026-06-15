@@ -193,7 +193,10 @@ pub fn start_horizon_bakes(
     mut images: ResMut<Assets<Image>>,
     q: Query<
         (Entity, &HorizonShadowTerrain, &Mesh3d),
-        (Without<HorizonMap>, Without<HorizonBakeTask>),
+        // `Without<RenderLayers>` mirrors `pick_sun`: terrain spawned under the
+        // RTT preview `scene_root` carries a RenderLayers and must NOT bake into
+        // the main scene (ARC-1 — cross-scene contamination + wasted bake).
+        (Without<HorizonMap>, Without<HorizonBakeTask>, Without<RenderLayers>),
     >,
 ) {
     for (entity, cfg, mesh3d) in &q {
@@ -450,13 +453,17 @@ pub fn wire_terrain_materials(
     >,
     shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
     std_mats: Res<Assets<StandardMaterial>>,
-    terrains: Query<(
-        Entity,
-        &GlobalTransform,
-        &HorizonMap,
-        Option<&MeshMaterial3d<ShaderMaterial>>,
-        Option<&MeshMaterial3d<StandardMaterial>>,
-    )>,
+    terrains: Query<
+        (
+            Entity,
+            &GlobalTransform,
+            &HorizonMap,
+            Option<&MeshMaterial3d<ShaderMaterial>>,
+            Option<&MeshMaterial3d<StandardMaterial>>,
+        ),
+        // Skip preview-layer terrain (ARC-1) — mirrors `pick_sun`.
+        Without<RenderLayers>,
+    >,
 ) {
     let Some(mut shader_mats) = shader_mats else { return };
     let Some((sun_gt, tan_r, csm_far)) = pick_sun(&sun) else { return };
@@ -482,12 +489,18 @@ pub fn wire_terrain_materials(
         let sun_dir = ParamValue::Vec3([engine.x, engine.y, engine.z]);
         let hf_size = ParamValue::Vec2([engine2.x, engine2.y]);
         let write_engine = |m: &mut ShaderMaterial| {
-            m.height_map = Some(map.image.clone());
-            m.set("sun_dir", sun_dir);
-            m.set_scalar("sun_tan_radius", tan_r);
-            m.set("hf_size", hf_size);
-            m.set_scalar("hf_res", engine2.z);
-            m.set_scalar("csm_far", csm_far);
+            // Handle is a cheap Arc bump, but skip even that when unchanged (MAT-3).
+            if m.height_map.as_ref() != Some(&map.image) {
+                m.height_map = Some(map.image.clone());
+            }
+            // One repack for all five engine fields instead of five (MAT-1).
+            m.set_many([
+                ("sun_dir", sun_dir),
+                ("sun_tan_radius", ParamValue::F32(tan_r)),
+                ("hf_size", hf_size),
+                ("hf_res", ParamValue::F32(engine2.z)),
+                ("csm_far", ParamValue::F32(csm_far)),
+            ]);
         };
 
         if let Some(handle) = shader_mat {
@@ -552,6 +565,8 @@ fn scale_color(c: Color, q: f32) -> Color {
 pub fn shade_dynamic_entities(
     mut commands: Commands,
     mut last_sun: Local<Option<Vec3>>,
+    mut sweep_timer: Local<Option<Timer>>,
+    time: Res<Time>,
     sun: Query<
         (
             &GlobalTransform,
@@ -561,7 +576,7 @@ pub fn shade_dynamic_entities(
         ),
         Without<RenderLayers>,
     >,
-    terrains: Query<(&GlobalTransform, &HorizonMap)>,
+    terrains: Query<(&GlobalTransform, &HorizonMap), Without<RenderLayers>>,
     mut shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
     mut std_mats: ResMut<Assets<StandardMaterial>>,
     mut entities: Query<
@@ -584,18 +599,46 @@ pub fn shade_dynamic_entities(
     }
     let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else { return };
     let to_sun_world: Vec3 = sun_gt.back().into();
+
+    // Throttle the expensive full sweep — O(entities × terrains × ≤96-step
+    // CPU ray-march) — to ~30 Hz so it no longer fires at uncapped render FPS
+    // (120–175) every frame the sun animates (day cycle, `SetEnvironmentLight`
+    // slider drag). Moving entities still update every frame via the
+    // `gt.is_changed()` fast path below; only the sun-moved full pass is gated.
+    let timer = sweep_timer
+        .get_or_insert_with(|| Timer::from_seconds(1.0 / 30.0, TimerMode::Repeating));
+    timer.tick(time.delta());
+
     let sun_moved = match *last_sun {
         Some(prev) => prev.dot(to_sun_world) <= SUN_EPSILON_COS,
         None => true,
     };
-    if sun_moved {
+    // Commit to a full sweep only when the throttle fires (or on first run).
+    // Until then `last_sun` is NOT advanced, so a sun change arriving between
+    // ticks is still picked up at the next tick (≤33 ms later — imperceptible
+    // given the 1/32 visibility quantization).
+    let do_full = sun_moved && (timer.just_finished() || last_sun.is_none());
+    if do_full {
         *last_sun = Some(to_sun_world);
     }
+
+    // Per-terrain loop-invariants — the affine inverse and sun-in-terrain-local
+    // depend only on the terrain transform + sun, not the shaded entity — so
+    // compute them once here instead of N×M times inside the entity loop (CPU-2;
+    // `transform_point3(entity_pos)` stays inside since it is entity-dependent).
+    let terrain_cache: Vec<_> = terrains
+        .iter()
+        .map(|(terrain_gt, map)| {
+            let inv = terrain_gt.affine().inverse();
+            let sun_local = inv.transform_vector3(to_sun_world).normalize_or_zero();
+            (inv, sun_local, map)
+        })
+        .collect();
 
     for (entity, gt, has_layers, shadowed, has_nsc, shader_mat, std_mat, shade, name) in
         &mut entities
     {
-        if !sun_moved && !gt.is_changed() {
+        if !do_full && !gt.is_changed() {
             continue;
         }
         // Entities scoped to other render layers (preview viewports, viz
@@ -607,12 +650,10 @@ pub fn shade_dynamic_entities(
         // Min visibility across all horizon terrains containing the point —
         // the SAME march the terrain pixels run.
         let mut vis: f32 = 1.0;
-        for (terrain_gt, map) in &terrains {
-            let inv = terrain_gt.affine().inverse();
+        for (inv, sun_local, map) in &terrain_cache {
             let local = inv.transform_point3(gt.translation());
-            let sun_local = inv.transform_vector3(to_sun_world).normalize_or_zero();
             if let Some(v) =
-                map.field.sun_visibility(Vec2::new(local.x, local.z), sun_local, tan_r)
+                map.field.sun_visibility(Vec2::new(local.x, local.z), *sun_local, tan_r)
             {
                 vis = vis.min(v);
             }
