@@ -717,22 +717,30 @@ enum MslBootstrapState {
     Done,
 }
 
-/// Bevy system: when the MSL bundle becomes ready, install it as a
-/// `DurableExternal` source root in the workspace engine in one
-/// bulk operation. Runs once per session — flips
-/// [`MslBootstrapState`] to `Done` and idles thereafter.
+/// Bevy system: once the pre-parsed MSL bundle is **resident in memory**,
+/// bulk-install it into the workspace engine as a `DurableExternal` source root
+/// so main-thread hover/diagnostics/resolution see all of MSL at once. Runs at
+/// most once per session — flips [`MslBootstrapState`] to `Done` and idles.
 ///
-/// **Web fast path**: when `msl_remote::global_parsed_msl()` returns
-/// pre-parsed `Vec<(uri, StoredDefinition)>` from the asset bundle,
-/// we route through [`rumoca_compile::Session::replace_parsed_source_set`]
-/// — zero re-parsing, just register the parsed defs as a source root.
+/// **One predicate, both targets.** Eager install fires iff
+/// `msl_remote::global_parsed_msl()` is populated (the in-process slot holds the
+/// parsed `Vec<(uri, StoredDefinition)>`); install is a clone +
+/// [`rumoca_compile::Session::replace_parsed_source_set`], no re-parsing. The
+/// system itself is target-agnostic — the native/web difference is **upstream**,
+/// in *who fills that slot*:
 ///
-/// **Native path**: when the bundle is filesystem-resident
-/// (`MslAssetSource::Filesystem`), we leave the source root unbootstrapped
-/// here. The lazy fallback in `class_cache::peek_or_load_msl_class_blocking`
-/// reads individual files into the session via `add_document` on
-/// first miss. Tradeoff: native pays per-class parse cost amortised
-/// over the session, vs eager full-MSL parse at boot.
+/// - **Web:** the worker-decoded bundle is installed into the slot during boot,
+///   so this runs the bulk install → instant full-MSL resolution.
+/// - **Native:** the slot is filled **lazily** (first `parsed_msl_bundle()` disk
+///   read), so at boot it's empty and we deliberately fall through to the lazy
+///   path — `class_cache::peek_or_load_msl_class_blocking` installs classes into
+///   the session on demand (`add_parsed_batch`). This is intentional, not an
+///   oversight: native sets `MslLoadState::Ready` at boot whenever the MSL tree
+///   is on disk (even for users who never open a model), so eager-installing
+///   here would force a ~316 MB disk read + ~173 MB clone + ~600 ms
+///   `replace_parsed_source_set` onto *every* native launch. Lazy defers that
+///   cost to first actual use. (To make native eager too, populate the slot at
+///   boot — but gate it on an opt-in so non-Modelica launches don't pay it.)
 fn drive_msl_bootstrap(
     handle: Res<ModelicaEngineHandle>,
     msl_state: Option<Res<lunco_assets::msl::MslLoadState>>,
@@ -745,9 +753,11 @@ fn drive_msl_bootstrap(
     if !matches!(*state, lunco_assets::msl::MslLoadState::Ready { .. }) {
         return;
     }
-    // Pre-parsed bundle path (web): bulk-install via the parsed-set
-    // API. Both the source bytes and the strict AST live in
-    // `GLOBAL_PARSED_MSL`; we just hand the AST half over.
+    // Eager bulk install iff the bundle is already resident in memory — the
+    // single predicate for both targets (web: always, post worker-decode;
+    // native: only if the lazy disk read already ran, normally not at boot, so
+    // native falls through to the per-class lazy path below). See the doc
+    // comment for why native intentionally stays lazy.
     let parsed = crate::msl_remote::global_parsed_msl();
     if let Some(docs) = parsed {
         let t_clone = web_time::Instant::now();
@@ -777,14 +787,14 @@ fn drive_msl_bootstrap(
         *bootstrap = MslBootstrapState::Done;
         return;
     }
-    // Native filesystem path: leave eager bulk load deferred — the
-    // lazy fallback in `class_cache::peek_or_load_msl_class_blocking` covers
-    // it. Mark as `Done` so we don't re-check every tick; if a
-    // `MslAssetSource::Filesystem` user later wants eager preload,
-    // an explicit command can call `engine.load_library_files`
-    // against `lunco_assets::msl_dir()`.
+    // Bundle not resident in memory (native, before first use): leave the
+    // engine session unpopulated — `class_cache::peek_or_load_msl_class_blocking`
+    // installs classes on demand via `add_parsed_batch`. Mark `Done` so we don't
+    // re-check every tick; an explicit command can still call
+    // `engine.load_library_files` against `lunco_assets::msl_dir()` for eager
+    // preload.
     bevy::log::info!(
-        "[EngineBootstrap] MSL ready; native fs path stays lazy (workspace engine populated on demand)"
+        "[EngineBootstrap] MSL ready; bundle not yet resident — engine session populated lazily per-class"
     );
     *bootstrap = MslBootstrapState::Done;
 }

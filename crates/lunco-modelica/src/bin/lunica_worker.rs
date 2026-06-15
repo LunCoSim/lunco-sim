@@ -141,6 +141,24 @@ fn post_wire(scope: &DedicatedWorkerGlobalScope, msg: &WireResult) {
     }
 }
 
+/// Ship the decompressed MSL bincode bytes to the main thread as a *transferred*
+/// `ArrayBuffer` (zero-copy move, not a structured-clone copy). Posted as a bare
+/// `ArrayBuffer` — the only non-`Uint8Array` message in the protocol — which the
+/// main `onmessage` handler routes to `msl_remote::ingest_worker_decoded_msl`.
+/// Sending the raw bytes (rather than a bincode `WireResult`) avoids re-encoding
+/// ~165 MB and lets the transfer be zero-copy.
+fn post_decoded_msl_transfer(scope: &DedicatedWorkerGlobalScope, bytes: Vec<u8>) {
+    let array = Uint8Array::new_with_length(bytes.len() as u32);
+    array.copy_from(&bytes);
+    let buffer = array.buffer();
+    let transfer = js_sys::Array::of1(&buffer);
+    if let Err(e) = scope.post_message_with_transfer(&buffer, &transfer) {
+        web_sys::console::error_1(
+            &format!("[lunica_worker] post decoded MSL transfer failed: {e:?}").into(),
+        );
+    }
+}
+
 fn post_result(scope: &DedicatedWorkerGlobalScope, result: ModelicaResult) {
     post_wire(scope, &WireResult::Result(result));
 }
@@ -503,26 +521,41 @@ pub fn run() -> Result<(), JsValue> {
                 );
             }
             WireMessage::InstallParsedMslCompressed(bytes) => {
-                // Decompress + bincode-decode the bundle here in the worker —
-                // off the main thread — then install into the worker's own
-                // process-wide `GLOBAL_PARSED_MSL` and report readiness so the
-                // main thread opens the compile gate.
+                // Decompress the bundle here in the worker — off the main thread.
+                // We decompress ONCE to the raw bincode bytes, then both (a)
+                // deserialize our own ASTs (for compiles) and (b) transfer the
+                // same decoded bytes back to the main thread so it skips the
+                // ruzstd decompress and only deserializes into its own heap. This
+                // moves the decompress off the main thread entirely (it used to
+                // decode its own copy from the compressed blob in parallel).
                 let started = web_time::Instant::now();
-                match lunco_modelica::msl_remote::decode_parsed_bundle(&bytes) {
-                    Ok(parsed) => {
-                        let count = parsed.len();
-                        lunco_modelica::msl_remote::install_global_parsed_msl_pub(parsed);
-                        post_wire(&scope_for_cb, &WireResult::MslReady { docs: count });
-                        post_log(
-                            &scope_for_cb,
-                            format!(
-                                "decoded compressed MSL: {count} docs in {:.2}s",
-                                started.elapsed().as_secs_f64()
-                            ),
-                        );
+                match lunco_modelica::msl_remote::decompress_parsed_bundle(&bytes) {
+                    Ok(decoded) => {
+                        match lunco_modelica::msl_remote::deserialize_parsed_bundle(&decoded) {
+                            Ok(parsed) => {
+                                let count = parsed.len();
+                                lunco_modelica::msl_remote::install_global_parsed_msl_pub(parsed);
+                                // Ship the decoded bytes to main (transferred
+                                // ArrayBuffer, zero-copy) BEFORE MslReady so the
+                                // resolution/autocomplete heap fills as early as
+                                // possible. `decoded` is moved out here.
+                                post_decoded_msl_transfer(&scope_for_cb, decoded);
+                                post_wire(&scope_for_cb, &WireResult::MslReady { docs: count });
+                                post_log(
+                                    &scope_for_cb,
+                                    format!(
+                                        "decoded compressed MSL: {count} docs in {:.2}s",
+                                        started.elapsed().as_secs_f64()
+                                    ),
+                                );
+                            }
+                            Err(e) => {
+                                post_log(&scope_for_cb, format!("MSL deserialize failed: {e}"));
+                            }
+                        }
                     }
                     Err(e) => {
-                        post_log(&scope_for_cb, format!("MSL decode failed: {e}"));
+                        post_log(&scope_for_cb, format!("MSL decompress failed: {e}"));
                     }
                 }
             }

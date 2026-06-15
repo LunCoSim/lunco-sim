@@ -82,10 +82,11 @@ pub enum WireMessage {
     /// readiness with [`WireResult::MslReady`].
     ///
     /// This is the boot path: shipping the ~19 MB compressed blob (vs the
-    /// ~173 MB decoded `InstallParsedMsl`) avoids decoding on the main thread
-    /// *and* the previous double-decode (main decoded, re-encoded, worker
-    /// decoded again). The main thread decodes its *own* copy incrementally in
-    /// parallel (see `msl_remote::drive_msl_main_decode`).
+    /// ~173 MB decoded `InstallParsedMsl`) avoids decoding on the main thread.
+    /// The worker decompresses once, then ships the decoded bincode bytes back
+    /// to the main thread as a transferred `ArrayBuffer`, so the main thread's
+    /// resolution/autocomplete heap is filled by *deserialize only* — it never
+    /// runs the ruzstd decompress itself (see `msl_remote::ingest_worker_decoded_msl`).
     InstallParsedMslCompressed(Vec<u8>),
     /// Diagnostic round-trip — worker echoes back as a `WireResult::Log`.
     /// Used by the test bridge (`window.__lc_test_worker_ping`) to confirm
@@ -522,6 +523,18 @@ fn make_worker(idx: usize, worker_url: &str) -> Result<Worker, JsValue> {
 
     let onmessage = Closure::wrap(Box::new(move |event: MessageEvent| {
         let data = event.data();
+        // The only bare `ArrayBuffer` in the protocol is the worker shipping the
+        // decompressed MSL bincode bytes back (transferred zero-copy). Every
+        // other message is a `Uint8Array` of a bincode `WireResult`. Branch here
+        // so the main thread populates its own MSL heap by *deserializing only*
+        // — it never re-runs the ruzstd decompress (which the worker already
+        // did). See `msl_remote::ingest_worker_decoded_msl`.
+        if data.is_instance_of::<js_sys::ArrayBuffer>() {
+            let buf: js_sys::ArrayBuffer = data.unchecked_into();
+            let decoded = Uint8Array::new(&buf).to_vec();
+            crate::msl_remote::ingest_worker_decoded_msl(decoded);
+            return;
+        }
         let bytes: Vec<u8> = match Uint8Array::new(&data).to_vec() {
             v if !v.is_empty() => v,
             _ => return,
@@ -1132,13 +1145,17 @@ pub fn install_msl_in_worker(
 /// queuing until `MslReady` arrives. The retained `MSL_WIRE` bytes (used to
 /// re-seed a respawned worker) are now the ~19 MB compressed envelope rather
 /// than the ~165 MB decoded one, so the post-OOM re-seed is far lighter too.
-pub fn install_msl_compressed_in_worker(compressed: &[u8]) {
+///
+/// Returns the number of workers the bundle was shipped to (`0` when no pool is
+/// installed — the inline fallback path, in which case the caller must decode
+/// the bundle on the main thread itself).
+pub fn install_msl_compressed_in_worker(compressed: &[u8]) -> usize {
     let envelope = WireMessage::InstallParsedMslCompressed(compressed.to_vec());
     let bytes = match bincode::serialize(&envelope) {
         Ok(b) => b,
         Err(e) => {
             bevy::log::error!("[worker_transport] encode compressed MSL install failed: {e}");
-            return;
+            return 0;
         }
     };
     let len = bytes.len();
@@ -1151,7 +1168,7 @@ pub fn install_msl_compressed_in_worker(compressed: &[u8]) {
         let p = pool().lock().unwrap();
         let n = p.workers.len();
         if n == 0 {
-            return;
+            return 0;
         }
         let single = n == 1;
         for (i, WorkerHandle(worker)) in p.workers.iter().enumerate() {
@@ -1177,4 +1194,5 @@ pub fn install_msl_compressed_in_worker(compressed: &[u8]) {
         "[worker_transport] shipped compressed MSL to {n} worker(s): {len} bytes — \
          awaiting off-thread decode (gate opens on MslReady)"
     );
+    n
 }

@@ -173,6 +173,33 @@ pub fn decode_parsed_bundle(
     bincode::deserialize_from(decoder).map_err(|e| format!("bincode deserialize: {e}"))
 }
 
+/// Inflate a `parsed-*.bin.zst` blob to the raw bincode bytes, *without*
+/// deserializing. The worker uses this so it can both decode its own ASTs
+/// (`bincode::deserialize` the returned bytes) **and** ship the same decoded
+/// bytes to the main thread (transferred `ArrayBuffer`) — letting the main
+/// thread skip the ruzstd decompress and only deserialize. See
+/// [`ingest_worker_decoded_msl`].
+#[cfg(target_arch = "wasm32")]
+pub fn decompress_parsed_bundle(compressed: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    let mut decoder = ruzstd::StreamingDecoder::new(compressed)
+        .map_err(|e| format!("zstd decoder: {e}"))?;
+    let mut out = Vec::new();
+    decoder
+        .read_to_end(&mut out)
+        .map_err(|e| format!("zstd inflate: {e}"))?;
+    Ok(out)
+}
+
+/// bincode-deserialize the *decompressed* bundle bytes (output of
+/// [`decompress_parsed_bundle`]) into the `Vec<(uri, StoredDefinition)>`.
+#[cfg(target_arch = "wasm32")]
+pub fn deserialize_parsed_bundle(
+    decoded: &[u8],
+) -> Result<Vec<(String, rumoca_compile::parsing::StoredDefinition)>, String> {
+    bincode::deserialize(decoded).map_err(|e| format!("bincode deserialize: {e}"))
+}
+
 // ─── Chunked main-thread MSL decode ────────────────────────────────
 //
 // On wasm the main-thread rumoca session needs the MSL ASTs in *its own*
@@ -208,27 +235,96 @@ struct MainDecodeState {
 thread_local! {
     static MAIN_DECODE: std::cell::RefCell<Option<MainDecodeState>> =
         const { std::cell::RefCell::new(None) };
+
+    /// Compressed bundle retained as a *fallback* when the off-thread worker is
+    /// expected to deliver the decoded bytes (see [`ingest_worker_decoded_msl`])
+    /// but hasn't by the deadline — at which point the main thread decodes the
+    /// compressed bundle itself (`start_main_msl_decode`). Only ~19 MB, so cheap
+    /// to hold. `None` when no worker is involved (main decodes immediately).
+    static MAIN_DECODE_FALLBACK: std::cell::RefCell<Option<(Vec<u8>, web_time::Instant)>> =
+        const { std::cell::RefCell::new(None) };
 }
 
-/// Kick off the chunked main-thread decode of the compressed parsed bundle.
+/// How long the main thread waits for the worker to ship back the decoded MSL
+/// bytes before decoding the compressed bundle itself. Generous: the worker
+/// decode is normally a second or two, and a respawn re-seed re-delivers — this
+/// only fires if the worker is wedged.
+#[cfg(target_arch = "wasm32")]
+const WORKER_DECODE_DEADLINE_SECS: u64 = 10;
+
+/// Seed the chunked main-thread decoder, no-op if a decode is already underway
+/// or the bundle is already installed (dedupes against the fallback path and
+/// duplicate worker deliveries).
+#[cfg(target_arch = "wasm32")]
+fn seed_main_decode(state: MainDecodeState) -> bool {
+    if global_parsed_msl().is_some() {
+        return false;
+    }
+    MAIN_DECODE.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        if guard.is_some() {
+            return false;
+        }
+        *guard = Some(state);
+        true
+    })
+}
+
+/// Kick off the chunked main-thread decode of the **compressed** parsed bundle
+/// (decompress → deserialize). Used when no off-thread worker is available, or
+/// as the fallback when the worker fails to deliver decoded bytes in time.
 #[cfg(target_arch = "wasm32")]
 fn start_main_msl_decode(compressed: Vec<u8>) {
     match ruzstd::StreamingDecoder::new(std::io::Cursor::new(compressed)) {
         Ok(decoder) => {
-            MAIN_DECODE.with(|cell| {
-                *cell.borrow_mut() = Some(MainDecodeState {
-                    decoder: Some(Box::new(decoder)),
-                    out: Vec::new(),
-                    pos: 0,
-                    remaining: 0,
-                    total: 0,
-                    header_read: false,
-                    acc: Vec::new(),
-                });
+            let seeded = seed_main_decode(MainDecodeState {
+                decoder: Some(Box::new(decoder)),
+                out: Vec::new(),
+                pos: 0,
+                remaining: 0,
+                total: 0,
+                header_read: false,
+                acc: Vec::new(),
             });
-            info!("[MSL] started chunked main-thread decode (resolution/autocomplete)");
+            if seeded {
+                info!("[MSL] started chunked main-thread decode (decompress + deserialize)");
+            }
         }
         Err(e) => error!("[MSL] could not start main decode: {e}"),
+    }
+}
+
+/// Stash the compressed bundle as a deadline fallback while the off-thread
+/// worker decodes and ships back the decoded bytes. If the worker delivers
+/// first ([`ingest_worker_decoded_msl`]) this is dropped unused; otherwise
+/// `drive_msl_main_decode` picks it up once the deadline passes.
+#[cfg(target_arch = "wasm32")]
+fn stash_main_decode_fallback(compressed: Vec<u8>) {
+    let deadline =
+        web_time::Instant::now() + std::time::Duration::from_secs(WORKER_DECODE_DEADLINE_SECS);
+    MAIN_DECODE_FALLBACK.with(|f| *f.borrow_mut() = Some((compressed, deadline)));
+}
+
+/// Install the **already-decompressed** bincode bytes the off-thread worker
+/// shipped back (transferred `ArrayBuffer`). The main thread then only runs the
+/// chunked bincode *deserialize* into its own heap — it never pays the ruzstd
+/// decompress. No-op if a decode is already underway or finished.
+#[cfg(target_arch = "wasm32")]
+pub fn ingest_worker_decoded_msl(decoded: Vec<u8>) {
+    // Clear the fallback regardless — the worker delivered, so the deadline
+    // path must not also fire.
+    MAIN_DECODE_FALLBACK.with(|f| *f.borrow_mut() = None);
+    let seeded = seed_main_decode(MainDecodeState {
+        decoder: None, // already decompressed → skip Phase 1
+        out: decoded,
+        pos: 0,
+        remaining: 0,
+        total: 0,
+        header_read: false,
+        acc: Vec::new(),
+    });
+    if seeded {
+        info!("[MSL] received decoded MSL bytes from worker — deserialize only (no main decompress)");
     }
 }
 
@@ -245,6 +341,25 @@ fn drive_msl_main_decode(mut state: ResMut<MslLoadState>) {
     // deserialize allocates deep ASTs, so its chunk is in documents.
     const DECOMPRESS_CHUNK: usize = 8 * 1024 * 1024;
     const DESER_CHUNK: usize = 96;
+
+    // ── Fallback: the worker was expected to ship back decoded bytes but
+    // hasn't by the deadline → decode the compressed bundle here. Cheap check;
+    // skipped once a decode is underway (`MAIN_DECODE` set) or MSL is installed.
+    if global_parsed_msl().is_none() && MAIN_DECODE.with(|c| c.borrow().is_none()) {
+        let overdue = MAIN_DECODE_FALLBACK.with(|f| {
+            let mut g = f.borrow_mut();
+            match g.as_ref() {
+                Some((_, deadline)) if web_time::Instant::now() >= *deadline => {
+                    g.take().map(|(bytes, _)| bytes)
+                }
+                _ => None,
+            }
+        });
+        if let Some(bytes) = overdue {
+            warn!("[MSL] worker decode overdue — decoding bundle on the main thread instead");
+            start_main_msl_decode(bytes);
+        }
+    }
 
     MAIN_DECODE.with(|cell| {
         let mut guard = cell.borrow_mut();
@@ -859,8 +974,21 @@ fn drain_msl_load_slot(
     // source for lazy drill-in unpack. `MslLoadState` stays `Loading{Parsing}`
     // until `drive_msl_main_decode` finishes — neither thread blocks the UI.
     if let Some(pbytes) = inner.pending_parsed_compressed.take() {
-        crate::worker_transport::install_msl_compressed_in_worker(&pbytes);
-        start_main_msl_decode(pbytes);
+        // Ship the compressed bundle to the off-thread worker(s). The worker
+        // decompresses + deserializes for its own compiles, then transfers the
+        // decoded bincode bytes back so the main thread skips the ruzstd
+        // decompress and only deserializes into its own heap (resolution /
+        // autocomplete) — see `ingest_worker_decoded_msl`.
+        let shipped = crate::worker_transport::install_msl_compressed_in_worker(&pbytes);
+        if shipped == 0 {
+            // No worker (inline path) — the main thread must decompress +
+            // deserialize the bundle itself.
+            start_main_msl_decode(pbytes);
+        } else {
+            // Worker will deliver the decoded bytes; keep the compressed blob as
+            // a deadline fallback in case it never does (crash before delivery).
+            stash_main_decode_fallback(pbytes);
+        }
         if let Some((sbytes, smeta)) = inner.pending_source_compressed.take() {
             stash_compressed_source(sbytes, smeta);
         }
@@ -1247,6 +1375,12 @@ mod web {
             None
         };
 
+        // The current blobs are now (re)cached. Evict any superseded
+        // content-hashed bundles a previous MSL release left behind so the
+        // browser cache doesn't grow without bound. Best-effort — never fails
+        // the load.
+        prune_stale_cache(&manifest).await;
+
         // Hand the COMPRESSED blobs off WITHOUT decoding them here — this runs
         // on the main-thread event loop, so decompress/untar/decode would
         // freeze the page (the original bug). Two paths:
@@ -1440,6 +1574,68 @@ mod web {
                 }
                 _ => Err(net_err),
             },
+        }
+    }
+
+    /// Evict superseded MSL blobs from the `lunco-msl-v1` cache. The
+    /// content-hashed `*-<sha>.{bin,tar}.zst` bundles are immutable and cached
+    /// cache-first forever; when a new MSL release ships, the manifest points at
+    /// fresh hashes and the old blobs would otherwise linger in browser storage
+    /// indefinitely (unbounded growth across releases). After a successful
+    /// manifest load — once the *current* blobs are (re)cached — we delete every
+    /// cached entry the manifest no longer references. The cache is a dedicated
+    /// MSL bucket, so anything not in the keep-set is stale. Best-effort: logs
+    /// and returns on any error, never fails the load.
+    async fn prune_stale_cache(manifest: &MslManifest) {
+        let cache = match open_cache().await {
+            Ok(c) => c,
+            Err(e) => {
+                bevy::log::warn!("[MSL] cache prune skipped (open failed): {e}");
+                return;
+            }
+        };
+
+        // Filenames the current manifest references; everything else is stale.
+        let mut keep = std::collections::HashSet::new();
+        keep.insert("manifest.json".to_string());
+        keep.insert(manifest.sources.filename.clone());
+        if let Some(p) = manifest.parsed.as_ref() {
+            keep.insert(p.filename.clone());
+        }
+
+        let keys_val = match JsFuture::from(cache.keys()).await {
+            Ok(v) => v,
+            Err(e) => {
+                bevy::log::warn!("[MSL] cache prune skipped (keys() failed): {e:?}");
+                return;
+            }
+        };
+
+        let mut removed = 0u32;
+        for entry in js_sys::Array::from(&keys_val).iter() {
+            let req: Request = match entry.dyn_into() {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let url = req.url();
+            // Last path segment (sans any query) is the blob filename.
+            let filename = url
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .split('?')
+                .next()
+                .unwrap_or("");
+            if filename.is_empty() || keep.contains(filename) {
+                continue;
+            }
+            if JsFuture::from(cache.delete_with_str(&url)).await.is_ok() {
+                removed += 1;
+                bevy::log::info!("[MSL] cache prune: evicted superseded blob `{filename}`");
+            }
+        }
+        if removed > 0 {
+            bevy::log::info!("[MSL] cache prune: evicted {removed} superseded blob(s)");
         }
     }
 }
