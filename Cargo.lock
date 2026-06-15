@@ -6815,6 +6815,7 @@ dependencies = [
  "lunco-assets",
  "lunco-controller",
  "lunco-core",
+ "lunco-render",
  "lunco-storage",
  "lunco-terrain",
  "lunco-theme",
@@ -6866,6 +6867,7 @@ dependencies = [
  "lunco-mobility",
  "lunco-modelica",
  "lunco-networking",
+ "lunco-render",
  "lunco-robotics",
  "lunco-sandbox-edit",
  "lunco-scripting",
@@ -6958,6 +6960,7 @@ dependencies = [
  "lunco-core",
  "lunco-cosim",
  "lunco-materials",
+ "lunco-render",
 ]
 
 [[package]]
@@ -7095,6 +7098,14 @@ dependencies = [
 [[package]]
 name = "lunco-obc"
 version = "0.6.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-core",
+]
+
+[[package]]
+name = "lunco-render"
+version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-core",
@@ -7293,6 +7304,7 @@ dependencies = [
  "big_space",
  "lunco-assets",
  "lunco-core",
+ "lunco-render",
  "openusd",
 ]
 

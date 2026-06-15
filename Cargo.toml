@@ -42,7 +42,8 @@ members = [
     "crates/lunco-storage",
     "crates/lunco-workspace",
     "crates/lunco-settings",
-    "crates/lunco-experiments"
+    "crates/lunco-experiments",
+    "crates/lunco-render"
 ]
 # Bare `cargo build`/`check`/`test` (no `-p`/`--workspace`) operates on just the
 # two app crates and their dependency closure. This skips workspace members that

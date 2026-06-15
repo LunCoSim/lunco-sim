@@ -178,13 +178,17 @@ pub fn setup_big_space_hierarchy(
     // light (e.g. the moonbase Twin's `DistantLight`) replaces this default
     // sun — TWO simultaneous DirectionalLights double-light the scene and
     // make "which sun?" ambiguous for shadow systems.
+    // Canonical lunar-sun shadows (cascade split + biases + 4096² atlas) from
+    // the single source of truth — see `lunco_render::LunarSunShadow`. This
+    // spawn used to omit the cascade config entirely, so it rendered with
+    // Bevy's single-cascade default (wrong terrain self-shadow, clipped
+    // low-sun streaks). Now it matches the sandbox + USD paths by construction.
+    let sun = lunco_render::LunarSunShadow::default();
+    commands.insert_resource(sun.shadow_map());
     commands.spawn((
-        DirectionalLight {
-            color: Color::WHITE,
-            illuminance: 10_000.0,
-            shadows_enabled: true,
-            ..default()
-        },
+        sun.directional_light(Color::WHITE),
+        sun.cascade_config(),
+        sun.angular_diameter(),
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),

@@ -31,8 +31,9 @@
 //! crisp near-field shadows over a huge terrain authors a shorter
 //! `maxDistance` — texel density scales inversely with it.
 
-use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap, GlobalAmbientLight};
+use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
+use lunco_render::LunarSunShadow;
 use openusd::sdf::{AbstractData, Path as SdfPath, Value};
 use openusd::usda::TextReader;
 
@@ -100,67 +101,57 @@ pub(crate) fn instantiate_light_prim(
                 get_attribute_as_f32(reader, sdf_path, "inputs:intensity").unwrap_or(10_000.0);
             let exposure =
                 get_attribute_as_f32(reader, sdf_path, "inputs:exposure").unwrap_or(0.0);
-            let illuminance = intensity * exposure.exp2();
             let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
                 .map(|c| Color::linear_rgb(c.x, c.y, c.z))
                 .unwrap_or(Color::WHITE);
 
-            let max_distance =
-                get_attribute_as_f32(reader, sdf_path, "lunco:shadow:maxDistance")
-                    .unwrap_or(1500.0);
-            let first_bound =
-                get_attribute_as_f32(reader, sdf_path, "lunco:shadow:firstCascadeFarBound")
-                    .unwrap_or(40.0);
-            // More cascades = the near/far split inside ONE light: tight
-            // near cascades keep object/contact shadows crisp while the
-            // extra far cascades carry mesh-accurate terrain self-shadow
-            // out to maxDistance (the heightfield march covers beyond).
-            let num_cascades = get_attribute_as_f32(reader, sdf_path, "lunco:shadow:numCascades")
-                .map(|n| (n as usize).clamp(1, 8))
-                .unwrap_or(4);
-            let cascades = CascadeShadowConfigBuilder {
-                num_cascades,
-                minimum_distance: 0.1,
-                first_cascade_far_bound: first_bound,
-                maximum_distance: max_distance,
-                // Low overlap → crisper cascade-to-cascade transitions,
-                // suits the hard airless-body shadow look.
-                overlap_proportion: 0.1,
-            }
-            .build();
+            // Start from the canonical lunar sun (single source of truth) and
+            // override only the attributes the prim authors. An unauthored
+            // attribute therefore matches the engine's fallback suns by
+            // construction — no copy of the cascade split / bias / atlas values
+            // can drift here.
+            //
+            // `lunco:shadow:numCascades` is the near/far split inside ONE light:
+            // tight near cascades keep contact shadows crisp while the far
+            // cascades carry mesh-accurate terrain self-shadow out to
+            // `maxDistance` (the heightfield march covers beyond). The bias
+            // defaults favour acne-free terrain over the last centimetres of
+            // contact tightness; `inputs:angle` is the sun's angular diameter
+            // driving the horizon-shadow penumbra.
+            let d = LunarSunShadow::default();
+            let sun = LunarSunShadow {
+                illuminance: intensity * exposure.exp2(),
+                maximum_distance: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:maxDistance")
+                    .unwrap_or(d.maximum_distance),
+                first_cascade_far_bound: get_attribute_as_f32(
+                    reader, sdf_path, "lunco:shadow:firstCascadeFarBound",
+                )
+                .unwrap_or(d.first_cascade_far_bound),
+                num_cascades: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:numCascades")
+                    .map(|n| (n as usize).clamp(1, 8))
+                    .unwrap_or(d.num_cascades),
+                angular_diameter_deg: get_attribute_as_f32(reader, sdf_path, "inputs:angle")
+                    .unwrap_or(d.angular_diameter_deg),
+                depth_bias: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:depthBias")
+                    .unwrap_or(d.depth_bias),
+                normal_bias: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:normalBias")
+                    .unwrap_or(d.normal_bias),
+                ..d
+            };
 
-            // UsdLux `inputs:angle` = angular diameter in degrees; drives
-            // the physically-scaled penumbra of horizon shadows.
-            let angle =
-                get_attribute_as_f32(reader, sdf_path, "inputs:angle").unwrap_or(0.53);
-
-            // With the terrain casting into (and receiving) the cascades,
-            // grazing lunar sun angles make self-shadow acne the dominant
-            // artifact — these defaults favour acne-free terrain over the
-            // last few centimetres of contact tightness. Authorable per
-            // scene, and live-tunable via `SetEnvironmentLight`.
-            let depth_bias = get_attribute_as_f32(reader, sdf_path, "lunco:shadow:depthBias")
-                .unwrap_or(0.06);
-            let normal_bias = get_attribute_as_f32(reader, sdf_path, "lunco:shadow:normalBias")
-                .unwrap_or(2.5);
-
-            commands.insert_resource(DirectionalLightShadowMap { size: 4096 });
+            commands.insert_resource(sun.shadow_map());
             commands.entity(entity).insert((
-                lunco_core::SunAngularDiameter(angle),
-                DirectionalLight {
-                    illuminance,
-                    color,
-                    shadows_enabled: true,
-                    shadow_depth_bias: depth_bias,
-                    shadow_normal_bias: normal_bias,
-                    ..Default::default()
-                },
-                cascades,
+                sun.angular_diameter(),
+                sun.directional_light(color),
+                sun.cascade_config(),
                 UsdAuthoredLight,
             ));
             info!(
-                "[usd-bevy] {} DistantLight illuminance={illuminance} shadow range {first_bound}..{max_distance} m",
-                sdf_path.as_str()
+                "[usd-bevy] {} DistantLight illuminance={} shadow range {}..{} m",
+                sdf_path.as_str(),
+                sun.illuminance,
+                sun.first_cascade_far_bound,
+                sun.maximum_distance,
             );
             true
         }

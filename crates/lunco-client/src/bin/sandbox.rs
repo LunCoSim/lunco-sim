@@ -595,30 +595,22 @@ fn setup_sandbox(world: &mut World) {
     // render origin every frame, so the large world Y (~2462 m) costs no
     // shadow-map precision. 4096² is the max safe atlas (8192² × 4 cascades
     // would be ~1 GB VRAM); the cascade split keeps the near field dense.
-    let cascades = bevy::light::CascadeShadowConfigBuilder {
-        num_cascades: 4,
-        minimum_distance: 0.1,
-        first_cascade_far_bound: 40.0,
-        maximum_distance: 1500.0,
-        // Low overlap → crisper cascade-to-cascade transitions (less cross-fade
-        // blur), which suits a hard-shadow look.
-        overlap_proportion: 0.1,
-    }
-    .build();
-    world.insert_resource(bevy::light::DirectionalLightShadowMap { size: 4096 });
+    // Canonical lunar-sun cascade split + 4096² atlas from the single source of
+    // truth (`lunco_render::LunarSunShadow`), shared with the celestial and USD
+    // paths. The biases are overridden below for this binary's hard-shadow look:
+    // with `Hardware2x2` filtering (see `force_hard_shadow_filtering`) the normal
+    // bias must stay small or it detaches/softens the contact edge — unlike the
+    // terrain-acne-tuned default (0.06/2.5) used under PCF.
+    let sun = lunco_render::LunarSunShadow {
+        depth_bias: 0.02,
+        normal_bias: 0.8,
+        ..Default::default()
+    };
+    world.insert_resource(sun.shadow_map());
     world.spawn((
-        DirectionalLight {
-            illuminance: 10000.0,
-            shadows_enabled: true,
-            // Minimal biases for tight, grounded hard shadows. With Hardware2x2
-            // filtering the normal bias must stay small or it detaches/softens
-            // the contact edge; depth bias just enough to avoid acne over the
-            // long far cascades.
-            shadow_depth_bias: 0.02,
-            shadow_normal_bias: 0.8,
-            ..default()
-        },
-        cascades,
+        sun.directional_light(Color::WHITE),
+        sun.cascade_config(),
+        sun.angular_diameter(),
         // Low sun (~11° above horizon, yaw 0.5 rad) for long raking lunar
         // shadows — same YXZ convention as `SetEnvironmentLight` and the
         // Inspector → Environment controls.

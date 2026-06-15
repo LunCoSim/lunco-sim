@@ -264,8 +264,11 @@ fn on_set_environment_light(
             if let Some(mut cfg) = cascades {
                 // Rebuild from the live config, overriding only the two
                 // range knobs (cascade count / overlap / near are kept).
-                let cur_first = cfg.bounds.first().copied().unwrap_or(40.0);
-                let cur_max = cfg.bounds.last().copied().unwrap_or(1500.0);
+                // The empty-bounds fallbacks come from the canonical lunar sun
+                // (`lunco_render::LunarSunShadow`) so they track the spawn paths.
+                let d = lunco_render::LunarSunShadow::default();
+                let cur_first = cfg.bounds.first().copied().unwrap_or(d.first_cascade_far_bound);
+                let cur_max = cfg.bounds.last().copied().unwrap_or(d.maximum_distance);
                 let first = cmd.shadow_first_cascade_bound.unwrap_or(cur_first);
                 let max = cmd.shadow_max_distance.unwrap_or(cur_max);
                 *cfg = CascadeShadowConfigBuilder {

@@ -1,0 +1,15 @@
+[package]
+name = "lunco-render"
+version = "0.1.0"
+edition = "2021"
+description = "Shared render-look configuration for LunCoSim: the single source of truth for lunar sun shadows, and the future home for exposure/AA/sky look settings."
+
+[dependencies]
+# `bevy_light` supplies the directional-light + cascade-shadow component types.
+# It is data/components only — NOT the `bevy_pbr` render pipeline — so this crate
+# stays cheap and can sit below every 3D crate without dragging in rendering.
+bevy = { workspace = true, features = ["bevy_light"] }
+lunco-core = { path = "../lunco-core" }
+
+[lints]
+workspace = true

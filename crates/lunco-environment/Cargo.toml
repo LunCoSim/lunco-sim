@@ -10,6 +10,7 @@ avian3d = { workspace = true, features = ["default-collider"] }
 lunco-celestial = { path = "../lunco-celestial" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-core = { path = "../lunco-core" }
+lunco-render = { path = "../lunco-render" }
 lunco-materials = { path = "../lunco-materials" }
 
 [lints]
