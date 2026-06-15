@@ -45,6 +45,8 @@ use lunco_experiments::{
     RunProgress, RunResult, RunStatus, RunUpdate,
 };
 use rumoca_compile::compile::Dae;
+// Used only by the native-only DAE-override fast path (`apply_overrides_to_dae`).
+#[cfg(not(target_arch = "wasm32"))]
 use rumoca_compile::parsing::ir_core::{
     Expression as DaeExpression, Literal as DaeLiteral, Span as DaeSpan, VarName as DaeVarName,
 };
@@ -566,6 +568,7 @@ pub fn pump_wasm_forwarders() {
 /// Key for the compile-once DAE cache. Folds in model identity, extra sources,
 /// and the input-substituted source — but NOT overrides (those are applied to
 /// the cached DAE), so a sweep that varies only overrides hits one cache entry.
+#[cfg(not(target_arch = "wasm32"))]
 fn dae_cache_key(src: &ModelSource, after_inputs: &str) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     src.model_name.hash(&mut h);
@@ -585,6 +588,7 @@ fn dae_cache_key(src: &ModelSource, after_inputs: &str) -> u64 {
 /// (e.g. `massRatio`) at `SimStepper::new` via `build_params`. Returns `Err`
 /// (→ caller recompiles with string-injected source) when a target isn't a
 /// top-level DAE parameter or the value isn't a scalar literal.
+#[cfg(not(target_arch = "wasm32"))]
 fn apply_overrides_to_dae(
     dae: &mut Dae,
     overrides: &BTreeMap<ParamPath, ParamValue>,
@@ -608,6 +612,7 @@ fn apply_overrides_to_dae(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run_inner(
     state: Arc<Mutex<RunnerState>>,
     model_ref: ModelRef,
@@ -822,6 +827,7 @@ fn run_inner(
 /// boundaries (before the solve, and before emitting the result) rather than
 /// mid-step; for the streamable/pausable behaviour use
 /// [`RuntimeMode::Interactive`](lunco_experiments::RuntimeMode::Interactive).
+#[cfg(not(target_arch = "wasm32"))]
 fn run_batch_sim(
     dae: &Dae,
     opts: &rumoca_sim::SimOptions,
@@ -905,11 +911,13 @@ pub trait RunSink {
 }
 
 /// Native [`RunSink`]: crossbeam channel + shared atomic cancel flag.
+#[cfg(not(target_arch = "wasm32"))]
 struct ChannelSink {
     tx: Sender<RunUpdate>,
     cancel: Arc<AtomicBool>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl RunSink for ChannelSink {
     fn is_cancelled(&mut self) -> bool {
         self.cancel.load(Ordering::SeqCst)

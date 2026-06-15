@@ -83,11 +83,16 @@ pub enum WireMessage {
     ///
     /// This is the boot path: shipping the ~19 MB compressed blob (vs the
     /// ~173 MB decoded `InstallParsedMsl`) avoids decoding on the main thread.
-    /// The worker decompresses once, then ships the decoded bincode bytes back
-    /// to the main thread as a transferred `ArrayBuffer`, so the main thread's
-    /// resolution/autocomplete heap is filled by *deserialize only* — it never
-    /// runs the ruzstd decompress itself (see `msl_remote::ingest_worker_decoded_msl`).
-    InstallParsedMslCompressed(Vec<u8>),
+    /// The worker decompresses once, then — *if* `provide_to_main` — ships the
+    /// decoded bincode bytes back to the main thread as a transferred
+    /// `ArrayBuffer`, so the main thread's resolution/autocomplete heap is filled
+    /// by *deserialize only* (see `msl_remote::ingest_worker_decoded_msl`).
+    ///
+    /// With a worker pool, only the **primary** (worker 0) gets
+    /// `provide_to_main = true` — the main thread needs exactly one decoded copy,
+    /// so the other workers decode for their own compiles but skip the ~173 MB
+    /// transfer the main thread would just dedupe away.
+    InstallParsedMslCompressed { bytes: Vec<u8>, provide_to_main: bool },
     /// Diagnostic round-trip — worker echoes back as a `WireResult::Log`.
     /// Used by the test bridge (`window.__lc_test_worker_ping`) to confirm
     /// the worker is alive and responding without sending an actual
@@ -1150,20 +1155,32 @@ pub fn install_msl_in_worker(
 /// installed — the inline fallback path, in which case the caller must decode
 /// the bundle on the main thread itself).
 pub fn install_msl_compressed_in_worker(compressed: &[u8]) -> usize {
-    let envelope = WireMessage::InstallParsedMslCompressed(compressed.to_vec());
-    let bytes = match bincode::serialize(&envelope) {
-        Ok(b) => b,
-        Err(e) => {
-            bevy::log::error!("[worker_transport] encode compressed MSL install failed: {e}");
-            return 0;
+    // Serialize an envelope for one worker. Only the primary (worker 0) is asked
+    // to ship the decoded bytes back to main (`provide_to_main`); the rest decode
+    // for their own compiles and skip the transfer the main thread would dedupe.
+    let encode = |provide_to_main: bool| -> Option<Vec<u8>> {
+        match bincode::serialize(&WireMessage::InstallParsedMslCompressed {
+            bytes: compressed.to_vec(),
+            provide_to_main,
+        }) {
+            Ok(b) => Some(b),
+            Err(e) => {
+                bevy::log::error!("[worker_transport] encode compressed MSL install failed: {e}");
+                None
+            }
         }
     };
-    let len = bytes.len();
-    // Retain for respawn re-seed (set-once; identical for every worker).
+
+    // Retain a `provide_to_main = true` envelope for respawn re-seed: a respawned
+    // worker (even a non-primary one) reposting decoded bytes is benign — the
+    // main thread already has MSL and dedupes the duplicate. Respawns are rare.
     if MSL_WIRE.get().is_none() {
-        let _ = MSL_WIRE.set(bytes.clone());
+        if let Some(b) = encode(true) {
+            let _ = MSL_WIRE.set(b);
+        }
     }
 
+    let mut last_len = 0usize;
     let n = {
         let p = pool().lock().unwrap();
         let n = p.workers.len();
@@ -1172,7 +1189,9 @@ pub fn install_msl_compressed_in_worker(compressed: &[u8]) -> usize {
         }
         let single = n == 1;
         for (i, WorkerHandle(worker)) in p.workers.iter().enumerate() {
-            let array = Uint8Array::new_with_length(len as u32);
+            let Some(bytes) = encode(i == 0) else { continue };
+            last_len = bytes.len();
+            let array = Uint8Array::new_with_length(bytes.len() as u32);
             array.copy_from(&bytes);
             let res = if single {
                 let transfer = js_sys::Array::new();
@@ -1191,8 +1210,8 @@ pub fn install_msl_compressed_in_worker(compressed: &[u8]) -> usize {
     };
 
     bevy::log::info!(
-        "[worker_transport] shipped compressed MSL to {n} worker(s): {len} bytes — \
-         awaiting off-thread decode (gate opens on MslReady)"
+        "[worker_transport] shipped compressed MSL to {n} worker(s) (~{last_len} bytes each; \
+         worker 0 provides decoded MSL to main) — awaiting off-thread decode (gate opens on MslReady)"
     );
     n
 }

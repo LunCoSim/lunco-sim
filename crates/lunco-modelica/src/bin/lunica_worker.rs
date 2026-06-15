@@ -520,14 +520,15 @@ pub fn run() -> Result<(), JsValue> {
                     ),
                 );
             }
-            WireMessage::InstallParsedMslCompressed(bytes) => {
+            WireMessage::InstallParsedMslCompressed { bytes, provide_to_main } => {
                 // Decompress the bundle here in the worker — off the main thread.
-                // We decompress ONCE to the raw bincode bytes, then both (a)
-                // deserialize our own ASTs (for compiles) and (b) transfer the
-                // same decoded bytes back to the main thread so it skips the
-                // ruzstd decompress and only deserializes into its own heap. This
-                // moves the decompress off the main thread entirely (it used to
-                // decode its own copy from the compressed blob in parallel).
+                // We decompress ONCE to the raw bincode bytes, then deserialize
+                // our own ASTs (for compiles). If we're the designated provider
+                // (`provide_to_main`, set only for the primary worker), we also
+                // transfer the same decoded bytes back to the main thread so it
+                // skips the ruzstd decompress and only deserializes into its own
+                // heap. Non-primary pool workers skip that transfer — the main
+                // thread needs exactly one copy and would dedupe the rest.
                 let started = web_time::Instant::now();
                 match lunco_modelica::msl_remote::decompress_parsed_bundle(&bytes) {
                     Ok(decoded) => {
@@ -539,13 +540,16 @@ pub fn run() -> Result<(), JsValue> {
                                 // ArrayBuffer, zero-copy) BEFORE MslReady so the
                                 // resolution/autocomplete heap fills as early as
                                 // possible. `decoded` is moved out here.
-                                post_decoded_msl_transfer(&scope_for_cb, decoded);
+                                if provide_to_main {
+                                    post_decoded_msl_transfer(&scope_for_cb, decoded);
+                                }
                                 post_wire(&scope_for_cb, &WireResult::MslReady { docs: count });
                                 post_log(
                                     &scope_for_cb,
                                     format!(
-                                        "decoded compressed MSL: {count} docs in {:.2}s",
-                                        started.elapsed().as_secs_f64()
+                                        "decoded compressed MSL: {count} docs in {:.2}s{}",
+                                        started.elapsed().as_secs_f64(),
+                                        if provide_to_main { " (provided to main)" } else { "" }
                                     ),
                                 );
                             }
