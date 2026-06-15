@@ -858,15 +858,28 @@ fn resolve_type_in_scope(
     None
 }
 
-/// Generate candidate fully-qualified names for resolving a short-form
-/// reference, walking outward from the most-specific enclosing scope
-/// (per MLS §5.3 lookup). For raw `"Interfaces.SISO"` referenced from
+/// **The single canonical MLS §5.3 scope-chain resolver** for the
+/// workbench. Generates candidate fully-qualified names for a short-form
+/// reference, walking outward from the most-specific enclosing scope.
+/// For raw `"Interfaces.SISO"` referenced from
 /// `"Modelica.Blocks.Continuous.PID"`, yields:
 ///   1. `"Modelica.Blocks.Continuous.Interfaces.SISO"` (sibling scope)
 ///   2. `"Modelica.Blocks.Interfaces.SISO"` (parent scope) ← matches
 ///   3. `"Modelica.Interfaces.SISO"`
 ///   4. `"Interfaces.SISO"` (root)
-fn scope_chain_candidates(raw: &str, ctx: Option<&str>) -> Vec<String> {
+///
+/// Every §5.3-style short-name resolution in the crate routes through
+/// this — diagram type / `extends` / connector resolution, and port-icon
+/// resolution (`canvas_diagram::port`) — so the lookup rules can't drift
+/// between call sites.
+///
+/// This is a deliberate lunco-side implementation, NOT a rumoca bypass by
+/// neglect: rumoca's §5 resolution is whole-tree/eager and can't run on
+/// the off-thread canvas projection without forcing the MSL-load stall
+/// this work-stream avoids. So we generate candidates here and probe them
+/// against the lazily-loaded engine / MSL index. When rumoca grows a lazy
+/// single-reference resolve API, this function is the one place to swap.
+pub fn scope_chain_candidates(raw: &str, ctx: Option<&str>) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(ctx) = ctx {
         let parts: Vec<&str> = ctx.split('.').collect();

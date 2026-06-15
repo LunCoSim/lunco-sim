@@ -282,17 +282,20 @@ pub(super) fn resolve_port_icons(
             let candidates: Vec<String> = if path.contains('.') {
                 vec![path.clone()]
             } else if !path.is_empty() {
+                // Canonical MLS §5.3 scope chain (single source of truth in
+                // `diagram::scope_chain_candidates`), augmented with the
+                // connector convention that a port's connector class usually
+                // lives in an `Interfaces` subpackage of each enclosing
+                // package: for each scope candidate `<prefix>.<path>` also try
+                // `<prefix>.Interfaces.<path>`. Produces the same candidates,
+                // in the same order, as the previous inline walk.
                 let mut out = Vec::new();
-                let mut scope = parent_qualified.to_string();
-                while scope.contains('.') {
-                    let pkg = crate::ast_extract::parent_qualified(&scope).to_string();
-                    if !pkg.is_empty() {
-                        out.push(format!("{pkg}.Interfaces.{path}"));
-                        out.push(format!("{pkg}.{path}"));
+                for cand in crate::diagram::scope_chain_candidates(path, Some(parent_qualified)) {
+                    if let Some(prefix) = cand.strip_suffix(&format!(".{path}")) {
+                        out.push(format!("{prefix}.Interfaces.{path}"));
                     }
-                    scope = pkg;
+                    out.push(cand);
                 }
-                out.push(path.clone());
                 out
             } else {
                 return None;
