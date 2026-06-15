@@ -172,6 +172,12 @@ pub struct HorizonShadowed;
 pub struct HorizonShade {
     original: Color,
     last_vis: f32,
+    /// The authored shared `StandardMaterial` handle (held strongly here while
+    /// the entity is darkened). Restored when the entity returns to full
+    /// sunlight, at which point the entity's only strong handle to the unique
+    /// darkened clone drops and the clone is freed — so a shadowed prop never
+    /// keeps a permanent extra material (CPU-4).
+    shared: Handle<StandardMaterial>,
 }
 
 struct BakeResult {
@@ -687,13 +693,23 @@ pub fn shade_dynamic_entities(
                             debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-NEW (std)");
                             commands.entity(entity).insert((
                                 MeshMaterial3d(unique),
-                                HorizonShade { original, last_vis: q },
+                                HorizonShade { original, last_vis: q, shared: handle.0.clone() },
                             ));
                         }
                     }
                 }
                 Some(mut state) => {
-                    if (state.last_vis - q).abs() > 1e-3 {
+                    if q >= 0.999 {
+                        // Back in full sun: restore the shared authored material.
+                        // Overwriting `MeshMaterial3d` drops the entity's only
+                        // strong handle to the unique darkened clone, so the
+                        // clone is freed rather than kept forever (CPU-4).
+                        commands
+                            .entity(entity)
+                            .insert(MeshMaterial3d(state.shared.clone()))
+                            .remove::<HorizonShade>();
+                        debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-CLEAR (std)");
+                    } else if (state.last_vis - q).abs() > 1e-3 {
                         if let Some(m) = std_mats.get_mut(&handle.0) {
                             m.base_color = scale_color(state.original, q);
                         }
