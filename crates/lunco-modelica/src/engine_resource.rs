@@ -634,6 +634,10 @@ pub fn drive_engine_sync(
 /// Native: still registered but always sees an empty queue (worker
 /// never runs there), so the system is a per-tick HashMap miss —
 /// negligible.
+// `registry` is mutated only in the wasm worker-parse path below; on native
+// the queue is always empty and the cfg block is excluded, so the `mut` reads as
+// unused there. Allow it on native only — wasm genuinely needs it.
+#[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
 pub fn drain_worker_parse_results(
     handle: Res<ModelicaEngineHandle>,
     mut registry: ResMut<crate::ui::state::ModelicaDocumentRegistry>,
