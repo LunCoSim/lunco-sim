@@ -53,7 +53,7 @@
 // defaults, engine-filled fields) straight out of this file. Edit live
 // (hot-reload) or via the Inspector / `SetObjectProperty`.
 //!@ui      albedo            color       "Albedo"
-//!@default albedo            0.17,0.17,0.17
+//!@default albedo            0.13,0.13,0.13
 //!@ui      macro_clump_scale 1 20        "Macro clump scale (/m)"
 //!@default macro_clump_scale 8
 //!@ui      macro_bump        0 0.3       "Macro bump strength"
@@ -71,6 +71,7 @@
 //!@ui      mottle            0 0.6       "Albedo mottle"
 //!@default mottle            0.22
 //!@engine  sun_dir
+//!@engine  sun_dir_world
 //!@engine  sun_tan_radius
 //!@engine  hf_size
 //!@engine  hf_res
@@ -87,6 +88,7 @@ struct Material {
     mottle:            f32,
     sun_tan_radius:    f32,  // engine-filled: tan(sun angular radius)
     sun_dir:           vec3<f32>,  // engine-filled: terrain-local to-sun dir
+    sun_dir_world:     vec3<f32>,  // engine-filled: world-space to-sun (lunar BRDF)
     hf_size:           vec2<f32>,  // engine-filled: heightfield extent (m)
     hf_res:            f32,  // engine-filled: heightfield resolution
     csm_far:           f32,  // engine-filled: CSM far bound (m); march fades in beyond
@@ -267,12 +269,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Lunar regolith photometry: reshape the sun diffuse from Lambert to
     // Lommel-Seeliger + opposition surge (retroreflective backscatter). The
     // factor pre-multiplies base_color; bevy's built-in Lambert (·μ₀) then
-    // completes the response. Geometry comes from the brightest directional
-    // light (the sun), in world space.
+    // completes the response. World-space to-sun comes from the engine (the
+    // CPU-picked canonical sun), not directional_lights[0] — the earthshine
+    // fill light can shuffle that. Guarded against the zero (unfilled) default.
     var lunar_k = 1.0;
-    if (lights.n_directional_lights > 0u) {
-        let to_sun = normalize(lights.directional_lights[0].direction_to_light);
-        lunar_k = regolith_factor(pbr_input.N, to_sun, pbr_input.V);
+    let sw = mat.sun_dir_world;
+    if (dot(sw, sw) > 0.25) {
+        lunar_k = regolith_factor(pbr_input.N, normalize(sw), pbr_input.V);
     }
     pbr_input.material.base_color = vec4(albedo * lunar_k, 1.0);
     pbr_input.material.perceptual_roughness = roughness;

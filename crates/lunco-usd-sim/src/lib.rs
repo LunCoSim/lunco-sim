@@ -391,11 +391,27 @@ fn process_usd_sim_prims(
                 scale: existing_tf.scale,
             };
 
+            // Shared render-look for the avatar camera: SMAA post-process AA,
+            // MSAA off (can't touch shader-internal regolith speckle), and
+            // physical lunar exposure (ev100 15 ≈ SUNLIGHT) to pair with the
+            // ~128k lx sun. Same look as the sandbox fallback camera; without it
+            // a USD-authored Avatar camera renders at Blender-default ev9.7 and
+            // the lunar terrain blows out. Tune live via SetEnvironmentLight.
+            let ev100 = lunco_core::LunarSun::default().exposure_ev100;
+            let camera_look = move || {
+                (
+                    Msaa::Off,
+                    bevy::anti_alias::smaa::Smaa::default(),
+                    bevy::camera::Exposure { ev100 },
+                )
+            };
+
             // Build camera based on mode, then parent to Grid for FloatingOrigin
             match camera_mode.as_str() {
                 "freeflight" => {
                     commands.entity(entity).insert((
                         Camera3d::default(),
+                        camera_look(),
                         FreeFlightCamera { yaw, pitch, damping: None },
                         AdaptiveNearPlane,
                         avatar_tf,
@@ -410,6 +426,7 @@ fn process_usd_sim_prims(
                 "orbit" => {
                     commands.entity(entity).insert((
                         Camera3d::default(),
+                        camera_look(),
                         OrbitCamera {
                             target: Entity::PLACEHOLDER,
                             distance: 30.0,
@@ -431,6 +448,7 @@ fn process_usd_sim_prims(
                 "springarm" => {
                     commands.entity(entity).insert((
                         Camera3d::default(),
+                        camera_look(),
                         SpringArmCamera {
                             target: Entity::PLACEHOLDER,
                             distance: 15.0,
@@ -457,6 +475,7 @@ fn process_usd_sim_prims(
                     warn!("Unknown camera mode '{}' for avatar at {}, using freeflight", camera_mode, prim_path.path);
                     commands.entity(entity).insert((
                         Camera3d::default(),
+                        camera_look(),
                         FreeFlightCamera { yaw, pitch, damping: None },
                         AdaptiveNearPlane,
                         avatar_tf,

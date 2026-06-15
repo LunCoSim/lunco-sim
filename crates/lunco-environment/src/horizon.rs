@@ -493,15 +493,22 @@ pub fn wire_terrain_materials(
         // terrain_shadow declare these in their `Material` struct; the engine
         // packs them at the reflected offsets).
         let sun_dir = ParamValue::Vec3([engine.x, engine.y, engine.z]);
+        // World-space to-sun for the BRDF opposition term. The march uses the
+        // terrain-LOCAL `sun_dir` (heightfield space); the lunar BRDF runs in
+        // world space (world N/V), so it needs the world-space sun. Passing the
+        // CPU-picked canonical sun here means the shader never has to guess it
+        // from `directional_lights[0]` — robust to the earthshine fill light.
+        let sun_dir_world = ParamValue::Vec3([to_sun_world.x, to_sun_world.y, to_sun_world.z]);
         let hf_size = ParamValue::Vec2([engine2.x, engine2.y]);
         let write_engine = |m: &mut ShaderMaterial| {
             // Handle is a cheap Arc bump, but skip even that when unchanged (MAT-3).
             if m.height_map.as_ref() != Some(&map.image) {
                 m.height_map = Some(map.image.clone());
             }
-            // One repack for all five engine fields instead of five (MAT-1).
+            // One repack for all engine fields instead of one-per-field (MAT-1).
             m.set_many([
                 ("sun_dir", sun_dir),
+                ("sun_dir_world", sun_dir_world),
                 ("sun_tan_radius", ParamValue::F32(tan_r)),
                 ("hf_size", hf_size),
                 ("hf_res", ParamValue::F32(engine2.z)),

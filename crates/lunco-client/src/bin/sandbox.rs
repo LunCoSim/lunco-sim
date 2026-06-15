@@ -702,6 +702,9 @@ fn spawn_fallback_avatar(
         // a 4x HDR target. SmaaPlugin auto-registers via DefaultPlugins.
         Msaa::Off,
         bevy::anti_alias::smaa::Smaa::default(),
+        // Physical exposure paired with the canonical sun's illuminance (single
+        // source of truth — lunco_core::LunarSun). Tune live via SetEnvironmentLight.
+        bevy::camera::Exposure { ev100: lunco_core::LunarSun::default().exposure_ev100 },
         FreeFlightCamera {
             yaw: -2.245559,
             pitch: -0.303039,

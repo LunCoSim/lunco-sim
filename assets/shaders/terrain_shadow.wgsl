@@ -27,8 +27,9 @@
 // Dynamic, self-describing parameters (reflected from this file). Only the
 // albedo is author-settable; the rest are engine-filled by the horizon system.
 //!@ui      albedo color "Albedo"
-//!@default albedo 0.5,0.5,0.5
+//!@default albedo 0.13,0.13,0.13
 //!@engine  sun_dir
+//!@engine  sun_dir_world
 //!@engine  sun_tan_radius
 //!@engine  hf_size
 //!@engine  hf_res
@@ -36,7 +37,8 @@
 struct Material {
     albedo:         vec3<f32>,
     sun_tan_radius: f32,
-    sun_dir:        vec3<f32>,
+    sun_dir:        vec3<f32>,    // engine: terrain-local to-sun (heightfield march)
+    sun_dir_world:  vec3<f32>,    // engine: world-space to-sun (lunar BRDF)
     hf_size:        vec2<f32>,
     hf_res:         f32,
     csm_far:        f32,
@@ -63,10 +65,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.V = pbr_functions::calculate_view(in.world_position, pbr_input.is_orthographic);
     // Lunar regolith photometry (Lommel-Seeliger + opposition surge); see
     // lunar_brdf.wgsl. Pre-multiplies base_color so bevy's Lambert completes it.
+    // World-space to-sun comes from the engine (the CPU-picked canonical sun),
+    // not directional_lights[0] — the earthshine fill light can shuffle that.
+    // Guarded: zero until the engine fills it (unwired terrain / first frame).
     var lunar_k = 1.0;
-    if (lights.n_directional_lights > 0u) {
-        let to_sun = normalize(lights.directional_lights[0].direction_to_light);
-        lunar_k = regolith_factor(pbr_input.N, to_sun, pbr_input.V);
+    let sw = mat.sun_dir_world;
+    if (dot(sw, sw) > 0.25) {
+        lunar_k = regolith_factor(pbr_input.N, normalize(sw), pbr_input.V);
     }
     pbr_input.material.base_color = vec4(albedo * lunar_k, 1.0);
     pbr_input.material.perceptual_roughness = 0.95;

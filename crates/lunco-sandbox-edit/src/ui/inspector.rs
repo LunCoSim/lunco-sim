@@ -77,6 +77,15 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
             .show(ui, |ui| environment_section(ui, world));
         ui.separator();
 
+        // ── Camera (exposure + post-process) ─────────────────────────
+        // Physical exposure and bloom live on the camera, not the lights, so
+        // they get their own section. Same live, session-transient editing as
+        // Environment; dispatched through the same `SetEnvironmentLight` path.
+        egui::CollapsingHeader::new("Camera")
+            .default_open(false)
+            .show(ui, |ui| camera_section(ui, world));
+        ui.separator();
+
         // The terrain shader is NO LONGER an always-on section: the ground is
         // click-selectable, so its shader params appear (like any object's) only
         // when it's the selected entity. This stops the old always-on terrain
@@ -306,11 +315,14 @@ fn environment_section(ui: &mut egui::Ui, world: &mut World) {
 
     // Skip render-layer-scoped lights (the USD preview viewport's sun) —
     // same rule as the horizon system's pick_sun; otherwise the panel shows
-    // the preview light's state instead of the scene sun's.
+    // the preview light's state instead of the scene sun's. Also exclude the
+    // earthshine fill (`Without<Earthshine>`), or the panel would bind to it
+    // and the sun controls would edit the wrong light.
     let suns: Vec<Entity> = world
         .query_filtered::<Entity, (
             With<DirectionalLight>,
             Without<bevy::camera::visibility::RenderLayers>,
+            Without<lunco_environment::Earthshine>,
         )>()
         .iter(world)
         .collect();
@@ -423,7 +435,78 @@ fn environment_section(ui: &mut egui::Ui, world: &mut World) {
                     any_change = true;
                 }
             }
+
+            // Earthshine fill (the cool-blue shadowless light) — read off the
+            // single earthshine entity. It is a fill light, so it belongs with
+            // the environment lighting rather than the Camera section.
+            let es_lux = world
+                .query_filtered::<&DirectionalLight, With<lunco_environment::Earthshine>>()
+                .iter(world)
+                .next()
+                .map(|l| l.illuminance);
+            if let Some(mut lux) = es_lux {
+                if ui
+                    .add(egui::Slider::new(&mut lux, 0.0..=60.0).text("Earthshine (lx)"))
+                    .changed()
+                {
+                    cmd.earthshine_illuminance = Some(lux);
+                    any_change = true;
+                }
+            }
         });
+
+    if any_change {
+        world.trigger(cmd);
+    }
+}
+
+/// Camera section — physical exposure and bloom. These live on the camera, not
+/// the lights, so they are separated from [`environment_section`]. Mutates via
+/// the same [`SetEnvironmentLight`] command (its handler carries the camera
+/// arms), so all environment/camera edits share one mutation path.
+fn camera_section(ui: &mut egui::Ui, world: &mut World) {
+    use bevy::camera::Exposure;
+    use bevy::post_process::bloom::Bloom;
+    use lunco_environment::SetEnvironmentLight;
+
+    let mut cmd = SetEnvironmentLight::default();
+    let mut any_change = false;
+
+    // Exposure (EV100): the physical counterpart to sun illuminance. Lower EV
+    // ⇒ brighter image; ~15 = sunlit, 9.7 = Blender default. Read off the first
+    // camera that carries an Exposure component.
+    let cam_ev = world
+        .query::<&Exposure>()
+        .iter(world)
+        .next()
+        .map(|e| e.ev100);
+    if let Some(mut ev) = cam_ev {
+        if ui
+            .add(egui::Slider::new(&mut ev, 5.0..=18.0).text("Exposure (EV100)"))
+            .changed()
+        {
+            cmd.exposure_ev100 = Some(ev);
+            any_change = true;
+        }
+    } else {
+        ui.label("No camera Exposure component.");
+    }
+
+    // Bloom intensity (cameras with a Bloom component; airless ⇒ low).
+    let cam_bloom = world
+        .query::<&Bloom>()
+        .iter(world)
+        .next()
+        .map(|b| b.intensity);
+    if let Some(mut i) = cam_bloom {
+        if ui
+            .add(egui::Slider::new(&mut i, 0.0..=1.0).text("Bloom intensity"))
+            .changed()
+        {
+            cmd.bloom_intensity = Some(i);
+            any_change = true;
+        }
+    }
 
     if any_change {
         world.trigger(cmd);

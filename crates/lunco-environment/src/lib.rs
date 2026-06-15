@@ -11,6 +11,8 @@
 use avian3d::prelude::{Forces, Mass, RigidBody, WriteRigidBodyForces};
 use bevy::prelude::*;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, GlobalAmbientLight};
+use bevy::camera::Exposure;
+use bevy::post_process::bloom::Bloom;
 use bevy::math::DVec3;
 use lunco_celestial::{Gravity, GravityBody, GravityProvider};
 use lunco_core::{Command, on_command, register_commands};
@@ -213,7 +215,32 @@ pub struct SetEnvironmentLight {
     pub shadow_normal_bias: Option<f32>,
     /// Global ambient brightness (cd/m²-scaled). `None` keeps current.
     pub ambient_brightness: Option<f32>,
+    /// Camera physical exposure, EV100 (≈15 = sunlight, 9.7 = Blender default).
+    /// Moves with `illuminance`: brighter sun ⇒ higher EV. `None` keeps current.
+    pub exposure_ev100: Option<f32>,
+    /// [`Earthshine`] fill illuminance, lux (~10–15 typical). `None` keeps current.
+    pub earthshine_illuminance: Option<f32>,
+    /// [`Earthshine`] fill color, linear RGB (cool blue ≈ 0.6,0.75,1.0).
+    /// `None` keeps current.
+    pub earthshine_color: Option<[f32; 3]>,
+    /// Bloom intensity on cameras that carry a `Bloom` component
+    /// (airless ⇒ low, ~0.15). `None` keeps current.
+    pub bloom_intensity: Option<f32>,
 }
+
+/// Marks the **earthshine** fill light — a second, *shadowless*, cool-blue
+/// `DirectionalLight` standing in for Earth's reflected light. It is summed by
+/// Bevy's normal light loop (outside the sun's `sun_vis` heightfield gate), so
+/// it lifts sun-shadowed regolith into faint blue relief without washing the
+/// shadow cores grey the way a flat `GlobalAmbientLight` would.
+///
+/// Its own marker (not `FallbackSceneLight`) keeps it **persistent** — the real
+/// Moon always has earthshine, so it survives the USD light-import that
+/// despawns fallback suns. The `SetEnvironmentLight` sun loop excludes it via
+/// `Without<Earthshine>` so a sun tweak never overwrites the fill.
+#[derive(Component, Debug, Clone, Copy, Reflect, Default)]
+#[reflect(Component)]
+pub struct Earthshine;
 
 /// Applies a [`SetEnvironmentLight`] command to the live `DirectionalLight`,
 /// its `CascadeShadowConfig`, and `GlobalAmbientLight`. Resources/queries are
@@ -228,10 +255,15 @@ pub struct SetEnvironmentLight {
 #[on_command(SetEnvironmentLight)]
 fn on_set_environment_light(
     _cmd: SetEnvironmentLight,
+    // The sun(s): every directional light EXCEPT the earthshine fill, so an
+    // illuminance/color/direction tweak never clobbers the fill light.
     mut q_sun: Query<
         (&mut Transform, &mut DirectionalLight, Option<&mut CascadeShadowConfig>),
-        With<DirectionalLight>,
+        (With<DirectionalLight>, Without<Earthshine>),
     >,
+    mut q_earthshine: Query<&mut DirectionalLight, With<Earthshine>>,
+    mut q_exposure: Query<&mut Exposure>,
+    mut q_bloom: Query<&mut Bloom>,
     ambient: Option<ResMut<GlobalAmbientLight>>,
 ) {
     for (mut tf, mut light, cascades) in &mut q_sun {
@@ -286,6 +318,30 @@ fn on_set_environment_light(
     if let (Some(b), Some(mut ambient)) = (cmd.ambient_brightness, ambient) {
         ambient.brightness = b;
     }
+
+    // Camera exposure (all cameras that carry an Exposure component).
+    if let Some(ev) = cmd.exposure_ev100 {
+        for mut exposure in &mut q_exposure {
+            exposure.ev100 = ev;
+        }
+    }
+
+    // Earthshine fill light.
+    for mut fill in &mut q_earthshine {
+        if let Some(lux) = cmd.earthshine_illuminance {
+            fill.illuminance = lux;
+        }
+        if let Some([r, g, b]) = cmd.earthshine_color {
+            fill.color = Color::linear_rgb(r, g, b);
+        }
+    }
+
+    // Bloom intensity (cameras with a Bloom component).
+    if let Some(i) = cmd.bloom_intensity {
+        for mut bloom in &mut q_bloom {
+            bloom.intensity = i;
+        }
+    }
 }
 
 register_commands!(on_set_environment_light);
@@ -301,13 +357,41 @@ register_commands!(on_set_environment_light);
 /// 2. [`EnvironmentSet::Apply`] — applies gravity forces to Avian RigidBodies
 pub struct EnvironmentPlugin;
 
+/// Spawns the persistent [`Earthshine`] fill light once at startup (skipped if
+/// one already exists). Direction is roughly opposite the default sun azimuth,
+/// just above the horizon — fixed for v1 (ephemeris-correct Earth direction is
+/// a later refinement); live-tunable level/color via `SetEnvironmentLight`.
+fn spawn_earthshine(mut commands: Commands, existing: Query<(), With<Earthshine>>) {
+    if !existing.is_empty() {
+        return;
+    }
+    // Illuminance + colour from the canonical params (lunco_core::space_entities);
+    // direction is the render-side placeholder (roughly opposite the sun).
+    let es = lunco_core::EarthshineParams::default();
+    commands.spawn((
+        Earthshine,
+        DirectionalLight {
+            illuminance: es.illuminance_lux,
+            color: Color::linear_rgb(es.color[0], es.color[1], es.color[2]),
+            shadows_enabled: false,
+            ..default()
+        },
+        Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 3.6, -0.25, 0.0)),
+        Name::new("Earthshine"),
+    ));
+}
+
 impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<LocalGravity>();
+        app.register_type::<Earthshine>();
 
         // Horizon-map terrain self-shadowing. Inert until a terrain
         // carries the `HorizonShadowTerrain` marker (USD-stamped).
         app.add_plugins(HorizonShadowPlugin);
+
+        // The cool-blue earthshine fill (persistent, shadowless).
+        app.add_systems(Startup, spawn_earthshine);
 
         // Register environment commands (SetEnvironmentLight). The macro-built
         // `register_all_commands` does `register_type` + `add_observer` so the

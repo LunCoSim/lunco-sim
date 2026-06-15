@@ -120,7 +120,14 @@ pub(crate) fn instantiate_light_prim(
             // driving the horizon-shadow penumbra.
             let d = LunarSunShadow::default();
             let sun = LunarSunShadow {
-                illuminance: intensity * exposure.exp2(),
+                // Physical identity (illuminance + apparent size) lives in the
+                // core `LunarSun`; authored attrs override it, the rest defaults.
+                sun: lunco_core::LunarSun {
+                    illuminance_lux: intensity * exposure.exp2(),
+                    angular_diameter_deg: get_attribute_as_f32(reader, sdf_path, "inputs:angle")
+                        .unwrap_or(d.sun.angular_diameter_deg),
+                    ..d.sun
+                },
                 maximum_distance: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:maxDistance")
                     .unwrap_or(d.maximum_distance),
                 first_cascade_far_bound: get_attribute_as_f32(
@@ -130,8 +137,6 @@ pub(crate) fn instantiate_light_prim(
                 num_cascades: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:numCascades")
                     .map(|n| (n as usize).clamp(1, 8))
                     .unwrap_or(d.num_cascades),
-                angular_diameter_deg: get_attribute_as_f32(reader, sdf_path, "inputs:angle")
-                    .unwrap_or(d.angular_diameter_deg),
                 depth_bias: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:depthBias")
                     .unwrap_or(d.depth_bias),
                 normal_bias: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:normalBias")
@@ -149,7 +154,7 @@ pub(crate) fn instantiate_light_prim(
             info!(
                 "[usd-bevy] {} DistantLight illuminance={} shadow range {}..{} m",
                 sdf_path.as_str(),
-                sun.illuminance,
+                sun.sun.illuminance_lux,
                 sun.first_cascade_far_bound,
                 sun.maximum_distance,
             );

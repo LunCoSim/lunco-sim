@@ -428,14 +428,22 @@ pub fn setup_big_space_hierarchy(
         // SMAA post-process AA; MSAA off (can't touch shader-internal speckle,
         // and a 4x HDR target is wasteful under Bloom). Runs before Bloom in
         // the pipeline so bloom doesn't amplify aliased edges.
-        (Msaa::Off, bevy::anti_alias::smaa::Smaa::default()),
+        (
+            Msaa::Off,
+            bevy::anti_alias::smaa::Smaa::default(),
+            // Physical exposure paired with the canonical sun illuminance
+            // (single source of truth — lunco_core::LunarSun).
+            bevy::camera::Exposure { ev100: lunco_core::LunarSun::default().exposure_ev100 },
+        ),
         Projection::Perspective(PerspectiveProjection {
             near: 1.0,
             far: 1.0e15,
             ..default()
         }),
         bevy::post_process::bloom::Bloom {
-            intensity: 0.4,
+            // Airless world: no atmospheric glow — only genuine specular glints
+            // / the sun disc should bloom. The high prefilter threshold gates it.
+            intensity: 0.15,
             low_frequency_boost: 0.5,
             low_frequency_boost_curvature: 0.5,
             high_pass_frequency: 1.0,
