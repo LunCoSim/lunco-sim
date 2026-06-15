@@ -1811,15 +1811,28 @@ fn update_avatar_clip_planes_system(
         let Ok(grid) = q_grids.get(cam_child_of.0) else { continue; };
         let cam_pos = grid.grid_position_double(cam_cell, cam_tf);
         if let Projection::Perspective(ref mut perspective) = *projection {
-            perspective.far = 1.0e15;
-            let mut min_dist = 1.0e15;
+            // Adaptive near AND far, both derived from the bodies in frame.
+            // `near` tracks the nearest body surface (no near-clipping on
+            // approach); `far` tracks the FARTHEST body surface (+5% margin)
+            // instead of a static 1e15, so the depth dynamic range collapses to
+            // what the scene actually spans when no distant body is visible —
+            // e.g. ~Earth distance (4e8 m) on the lunar surface rather than 1e15
+            // (≈4 orders of magnitude of reverse-Z range recovered). The 1e7 m
+            // (10 000 km) floor keeps a sane frustum when no body is registered
+            // (e.g. the offscreen USD preview camera).
+            let mut min_dist = 1.0e15_f64;
+            let mut max_far = 0.0_f64;
             for (body, b_tf, b_cell, b_child_of) in q_bodies.iter() {
                 if let Ok(b_grid) = q_grids.get(b_child_of.0) {
-                    let d = cam_pos.distance(b_grid.grid_position_double(b_cell, b_tf)) - body.radius_m;
-                    if d < min_dist { min_dist = d; }
+                    let center_d = cam_pos.distance(b_grid.grid_position_double(b_cell, b_tf));
+                    let near_edge = center_d - body.radius_m;
+                    let far_edge = center_d + body.radius_m;
+                    if near_edge < min_dist { min_dist = near_edge; }
+                    if far_edge > max_far { max_far = far_edge; }
                 }
             }
             perspective.near = (min_dist as f32 * 0.01).clamp(0.1, 100.0);
+            perspective.far = ((max_far * 1.05).max(1.0e7)) as f32;
         }
     }
 }
