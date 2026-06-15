@@ -28,7 +28,7 @@ impl Plugin for LunCoControllerPlugin {
         // — keyboard, API, or wire-replayed — flows through these observers, so the
         // client prediction log and the host reconcile-ack no longer depend on how
         // the command was produced. (Was previously split between `emit_vessel_input`
-        // and `apply_wire_command`.)
+        // and `apply_sync_command`.)
         app.add_observer(record_drive_input);
         app.add_observer(record_brake_input);
     }
@@ -50,7 +50,7 @@ fn record_drive_input(
     let Ok((gid, owned)) = q.get(cmd.target) else { return };
     let g = gid.get();
     if role.is_host() {
-        // Host ack (moved out of `apply_wire_command`): highest applied seq per gid,
+        // Host ack (moved out of `apply_sync_command`): highest applied seq per gid,
         // stamped into snapshots so the owning client can drop acked inputs.
         let slot = applied.0.entry(g).or_insert(0);
         *slot = (*slot).max(cmd.seq);

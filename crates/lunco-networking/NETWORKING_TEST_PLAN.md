@@ -25,7 +25,7 @@ it is unit-tested **without** the heavy avian/render build (run:
 `cargo test -p lunco-core -j2 reconcile`). This pulls the planned Tier-2
 `mispredict_corrects_without_teleport` test *forward* into Tier-1 — the decision
 logic (the no-rubber-band guarantee, blend-not-teleport, gross-desync snap,
-shortest-arc rotation, convergence) needs no wire to verify:
+shortest-arc rotation, convergence) needs no sync layer to verify:
 
 | Requirement | Test | Status |
 |---|---|---|
@@ -89,10 +89,10 @@ assert!(client_has_replicated_entity(&client));
 | **M4** client input mutates server state | `input_mutates_server` | send `DriveRover`, step, assert server pos changed |
 | **M2-Predicted** owner entity has Predicted | `owner_is_predicted` | assert `Predicted` marker on client-owned |
 | **M2-Interpolated** remote entity interpolates | `remote_is_interpolated` | assert `Interpolated` + buffer fills |
-| **Reconciliation** decision (gap F) — ✅ DONE as Tier-1 pure-logic in `lunco-core` | `reconcile::tests::*` | inject divergence, assert bounded correction step — **no wire needed** |
+| **Reconciliation** decision (gap F) — ✅ DONE as Tier-1 pure-logic in `lunco-core` | `reconcile::tests::*` | inject divergence, assert bounded correction step — **no sync layer needed** |
 | **Reconciliation** end-to-end: real avian body re-anchors on ack | `avian_body_reconciles_e2e` | crossbeam, drive owned body, inject server divergence, assert it converges |
 | **M6** client tick runs ahead of server | `client_tick_leads_server` | assert tick offset ≈ RTT/2 |
-| **M3** `Mutation`/`#[Command]` over wire, OpId dedupe | `command_idempotent` | replay same OpId, assert applied once |
+| **M3** `Mutation`/`#[Command]` over the sync layer, OpId dedupe | `command_idempotent` | replay same OpId, assert applied once |
 | **Host-client** (listen-server) replicates to a joiner | `host_client_replicates` | host App + client App, assert joiner sees host entity |
 | Late-join baseline (M1 reload + M2 snapshot) | `late_joiner_converges` | join after N ticks, assert convergence |
 | Multi-transport: clients on different transports share world | `mixed_transport_one_world` | two clients, assert both see each other |
@@ -123,5 +123,5 @@ Can't meaningfully assert in code; verify by eye.
 - **Manual:** browser/WebTransport + latency feel (5 checks) — inherently visual.
 
 The Tier-1 suite already answers "do we have the hard, backend-agnostic pieces
-right?" — yes. Tier 2 answers "does the chosen backend deliver the wire mechanisms?"
+right?" — yes. Tier 2 answers "does the chosen backend deliver the sync mechanisms?"
 and is written the moment Ph0's decision gate picks lightyear.

@@ -38,7 +38,7 @@ socket, a backend, or a serializer.
 // In a domain crate's replication submodule. Backend types never imported.
 app.sync::<Transform>(SyncClass::Continuous);          // → M2 (role decided at runtime by ownership/computability)
 app.sync::<NetworkAuthority>(SyncClass::Discrete);     // → M2 replicated component / M3
-app.declare_channel::<DriveRover>(WireChannel::ControlStream);   // → M4/M3 (reuses existing #[Command])
+app.declare_channel::<DriveRover>(SyncChannel::ControlStream);   // → M4/M3 (reuses existing #[Command])
 ```
 
 **To add an entity from content:** stamp provenance (the loader does this) —
@@ -48,7 +48,7 @@ commands.spawn((MyBundle, Provenance::Content { namespace: "usd", source, path }
 ```
 
 **To keep something local:** do nothing. **Local is the default** — an undeclared
-component never crosses the wire. This is the fail-safe: you can't leak state by
+component never crosses the sync layer. This is the fail-safe: you can't leak state by
 forgetting, only by explicitly declaring.
 
 **What you never do:** open a connection, choose a channel, write a serializer,

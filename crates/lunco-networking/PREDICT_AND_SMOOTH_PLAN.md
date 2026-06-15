@@ -163,7 +163,7 @@ smoothing hiding step-4 transitions — still true, and they did land together-i
   velocity-driving next step.
 - **Hermite interpolation** (Fiedler): the curve evaluator upgrades from
   lerp(a,b) to cubic Hermite through `(a.pos, a.lv) → (b.pos, b.lv)` — velocities
-  are already on the wire per sample. Rotation stays slerp. Starved-buffer
+  are already on the sync layer per sample. Rotation stays slerp. Starved-buffer
   extrapolation keeps the existing velocity-glide + `INTERP_MAX_EXTRAP_DIST` cap.
 - `interpolate_proxies` (Update) **shrinks to render-only concerns**: bodies
   *without* a `RigidBody` keep the old per-frame Transform writes; bodies *with* one
@@ -274,16 +274,16 @@ two systems + schedule).
    input (`in_fwd, in_steer, in_brake` — f32 or quantized i8). Host stamps it in
    `gather_snapshot` from the same source `AppliedInputSeq`/mobility reads. Consumers:
    starved-proxy extrapolation (steer along the arc) and step 4's held-input
-   prediction. Wire cost ≈ 3 bytes/body.
+   prediction. Sync cost ≈ 3 bytes/body.
 
 Where the input currently flows must be mapped during implementation (today
 `DriveRover` rides the reliable CommandBus; the capture seam is
-`lunco-controller/src/lib.rs` `emit_vessel_input` → `lunco-networking/src/wire.rs`).
+`lunco-controller/src/lib.rs` `emit_vessel_input` → `lunco-networking/src/sync.rs`).
 Keep the *command* path reliable for everything else; only the per-tick drive input
 moves to the new channel.
 
 ### Touch
-`lunco-networking/src/{protocol,wire}.rs`, `lunco-controller/src/lib.rs`,
+`lunco-networking/src/{protocol,sync}.rs`, `lunco-controller/src/lib.rs`,
 `lunco-core/src/session.rs` (`SnapshotSample`), host apply path.
 
 ---

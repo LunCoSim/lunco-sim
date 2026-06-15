@@ -76,8 +76,8 @@ f64 manually.
 ### Secondary blockers (each independently disqualifying for "full native"), all from the maps:
 
 - **D2 conflict by construction.** lightyear prediction *is* re-running `FixedMain` (the physics) N ticks on `Confirmed<C>` mismatch — `lightyear_prediction-0.26.4/src/rollback.rs:826-843` loops `world.run_schedule(FixedMain)` per rolled-back tick. There is **no "correct-without-resim" mode**. The avian doc states the default outright: *"for Predicted entities, your `Position` is replicated as `Confirmed<Position>`. This triggers an immediate rollback"* (`lightyear_avian3d-0.26.4/src/plugin.rs:1-6`). That is exactly the full-avian-rollback D2 rules out because avian's solver is global + non-deterministic across wasm.
-- **Identity reversal (D3/D4).** lightyear's wire identity is the **raw bevy `Entity` + a per-connection, runtime-allocated `RemoteEntityMap`** (`lightyear_serde-0.26.4/src/entity_map.rs:92-97`); on spawn it `world.spawn(...)` a brand-new local entity and maps `remote→local` (`lightyear_replication-0.26.4/src/receive.rs:877,914`). Our `GlobalEntityId` is a stable u64 **derived identically on both peers with zero coordination** (`lunco-core/src/identity.rs:85-109`). These are opposite philosophies (detail in §3).
-- **Serde, not Reflect.** lightyear replication/prediction require `Serialize/Deserialize + Clone + PartialEq` on every networked component (`lightyear_replication-0.26.4/src/registry/registry.rs:162`; `SyncComponent`, `lightyear_prediction-0.26.4/src/lib.rs:49`). Our op-log codec is Reflect-based (`wire.rs:245,318`). The two codecs would coexist, not merge.
+- **Identity reversal (D3/D4).** lightyear's sync identity is the **raw bevy `Entity` + a per-connection, runtime-allocated `RemoteEntityMap`** (`lightyear_serde-0.26.4/src/entity_map.rs:92-97`); on spawn it `world.spawn(...)` a brand-new local entity and maps `remote→local` (`lightyear_replication-0.26.4/src/receive.rs:877,914`). Our `GlobalEntityId` is a stable u64 **derived identically on both peers with zero coordination** (`lunco-core/src/identity.rs:85-109`). These are opposite philosophies (detail in §3).
+- **Serde, not Reflect.** lightyear replication/prediction require `Serialize/Deserialize + Clone + PartialEq` on every networked component (`lightyear_replication-0.26.4/src/registry/registry.rs:162`; `SyncComponent`, `lightyear_prediction-0.26.4/src/lib.rs:49`). Our op-log codec is Reflect-based (`sync.rs:245,318`). The two codecs would coexist, not merge.
 
 ### The decisive recommendation
 
@@ -97,11 +97,11 @@ this as "what we forgo by not going native," so the trade is visible.
 
 | Lightyear piece | Problem it solves | Replaces (ours) | Usable for us as-is? |
 |---|---|---|---|
-| **`lightyear_replication` (`Replicate`, `PredictionTarget`, `Confirmed<C>`)** | Server→client component sync; per-entity opt-in tag (`lightyear_replication-0.26.4/src/send/components.rs:757-781`); auto-`Confirmed<C>` co-located on the predicted entity (`registry/replication.rs:282-318`) | Our hand-rolled `SnapshotMsg`/`gather_snapshot`/`ingest_snapshots` (M2). Our `SnapshotEntry{gid,t,r}` (`wire.rs:50-55`) → lightyear's per-component delta + `Diffable` | **Partly.** The *model* is what we want for M2-Interpolated remote bodies. But identity = raw `Entity`+map, codec = Serde, and it ships zero avian-f64 components. Net: not adoptable for the rover state path without the f64 wall removed. |
+| **`lightyear_replication` (`Replicate`, `PredictionTarget`, `Confirmed<C>`)** | Server→client component sync; per-entity opt-in tag (`lightyear_replication-0.26.4/src/send/components.rs:757-781`); auto-`Confirmed<C>` co-located on the predicted entity (`registry/replication.rs:282-318`) | Our hand-rolled `SnapshotMsg`/`gather_snapshot`/`ingest_snapshots` (M2). Our `SnapshotEntry{gid,t,r}` (`sync.rs:50-55`) → lightyear's per-component delta + `Diffable` | **Partly.** The *model* is what we want for M2-Interpolated remote bodies. But identity = raw `Entity`+map, codec = Serde, and it ships zero avian-f64 components. Net: not adoptable for the rover state path without the f64 wall removed. |
 | **`lightyear_prediction` (rollback engine, `PredictionHistory<C>`, `add_prediction`)** | Client-side predict + server reconcile via `Confirmed<C>` vs history mismatch → re-sim `FixedMain` (`rollback.rs:184+`, `:826-843`) | The would-be input-seq/replay loop from `PREDICTION_RECONCILIATION.md` (§4): compare-at-seq, snap, re-step avian | **No.** Its only reconcile mode is **re-run-FixedMain rollback** (D2 conflict) and it requires the avian-f64-incompatible state path. `RollbackMode::Disabled` exists (`manager.rs:43`) but then you keep none of what prediction buys — you're back to hand-rolled. |
 | **`lightyear_inputs` (native: `ActionState<A>`, `InputBuffer`, redundant unreliable send, server apply, replay)** | Per-tick *held-control state* buffered, redundantly sent, replayed deterministically every rollback tick (`lightyear_inputs_native-0.26.4`; buffer `lightyear_inputs-0.26.4/src/input_buffer.rs:30-40`; replay re-reads buffer `client.rs:331-356`) | The *input-seq + unacked `InputFrame` ring + per-tick emission* we'd otherwise hand-roll (`PREDICTION_RECONCILIATION.md` §4.4, the held-key carry-forward) | **Conceptually the cleanest single win, but coupled.** It hard-depends on `InputTimeline` reaching `IsSynced` (`lightyear_prediction-0.26.4/src/rollback.rs:258`, `manager.rs:95`) — i.e. it drags in the prediction/sync stack and lightyear's `Tick` ownership. You cannot take inputs+replay without prediction's timeline. So it's not separable from the rollback engine we can't use. |
 | **`lightyear_frame_interpolation`** | Smooth render between fixed ticks (display one tick behind, lerp by overstep) (`lightyear_frame_interpolation-0.26.4/src/lib.rs:1-12`) | Our `interpolate_proxies` / `INTERP_DELAY=0.12s` render smoothing (`commands.rs:251-310`) | **No.** It mandates disabling avian's `PhysicsInterpolationPlugin` + `PhysicsTransformPlugin` (`lightyear_avian3d-0.26.4/src/plugin.rs:19-31`) — same avian-0.5 surgery, same wall. Our render smoothing already works. |
-| **`lightyear_avian3d` (`Diffable` for Position/Rotation, lerp/slerp helpers, the plugin)** | Delta-compress avian pose; wire prediction into avian's schedule | The pose-packing in `SnapshotEntry` + our manual avian `Position` writeback (`wire.rs:365-376`) | **No — this is the wall itself** (avian ^0.5, f32-only; §1). |
+| **`lightyear_avian3d` (`Diffable` for Position/Rotation, lerp/slerp helpers, the plugin)** | Delta-compress avian pose; wire prediction into avian's schedule | The pose-packing in `SnapshotEntry` + our manual avian `Position` writeback (`sync.rs:365-376`) | **No — this is the wall itself** (avian ^0.5, f32-only; §1). |
 | **`lightyear_sync` / `Tick` / `LocalTimeline`** | Client tick estimate of server + slew/snap to `server+RTT/2` (`lightyear_sync-0.26.4/src/client.rs:50-64`, `timeline/sync.rs`) | Nothing yet — D6 is unbuilt | **Independent of the wall, and we already pull `Client/ServerPlugins` with our 60 Hz tick** (`shared.rs:38,51,70`). This is the one piece adoptable today, but per `PREDICTION_RECONCILIATION.md` §1.4 the hand-rolled design **does not need it** (seq-based reconcile, not tick-based). |
 
 **Bottom line of §2:** the genuine native candidates are M2 (replicated/predicted), M4
@@ -121,17 +121,17 @@ This is the decisive conflict, so it gets a decisive answer.
 
 **The two models are opposite:**
 - **Ours (D3):** `GlobalEntityId(u64)` is a *pure function of `Provenance`* — `derive_id` FNV-1a64 folded to 53 bits (`lunco-core/src/identity.rs:85-109`). Content/Derived ids are **computed identically and independently on every peer, zero bytes, zero coordination** (the "shared stable name" model — Unreal net-stable-names / content-GUID). It is **not a per-connection handle.**
-- **Lightyear's:** the wire identity *is the sender's raw bevy `Entity`* (index+generation), and the receiver `world.spawn`s a fresh local entity and records `remote→local` in a per-connection, runtime-allocated, **non-deterministic** `RemoteEntityMap` (`lightyear_serde-0.26.4/src/entity_map.rs:92-97`; spawn-and-map at `lightyear_replication-0.26.4/src/receive.rs:877,914`). Server `Entity(42v1)` → whatever local `Entity` the client's `World::spawn` happened to hand out.
+- **Lightyear's:** the sync identity *is the sender's raw bevy `Entity`* (index+generation), and the receiver `world.spawn`s a fresh local entity and records `remote→local` in a per-connection, runtime-allocated, **non-deterministic** `RemoteEntityMap` (`lightyear_serde-0.26.4/src/entity_map.rs:92-97`; spawn-and-map at `lightyear_replication-0.26.4/src/receive.rs:877,914`). Server `Entity(42v1)` → whatever local `Entity` the client's `World::spawn` happened to hand out.
 
 **Can they coexist?** Yes — and the firsthand map confirms the mechanism is *already there and benign*:
-- lightyear **assigns no ids of its own** and **never consults `GlobalEntityId`**. They are orthogonal. You replicate `GlobalEntityId` as **just another component** (it impls the needed traits) and resolve local↔global at the boundary yourself — exactly the seam our Ph2/wire already has (`resolve_ids_in_json` / `api_id_for`, used `wire.rs:255,303`).
+- lightyear **assigns no ids of its own** and **never consults `GlobalEntityId`**. They are orthogonal. You replicate `GlobalEntityId` as **just another component** (it impls the needed traits) and resolve local↔global at the boundary yourself — exactly the seam our Ph2/sync layer already has (`resolve_ids_in_json` / `api_id_for`, used `sync.rs:255,303`).
 - Cross-component entity references inside replicated components are mapped via `EntityMap`/`MapEntities`, and crucially **`EntityMap::get_mapped` leaves an unmapped entity unchanged** (`lightyear_serde-0.26.4/src/entity_map.rs:29-41`). So a replicated `GlobalEntityId` is left alone — correct.
 
 **The one place they collide is SPAWN.** Native lightyear replicates spawns and mints a fresh local entity (D4's "runtime = server spawns"), whereas D4 says *content entities are spawned locally on every peer under the derived id and NOT replicated*. lightyear's only hook to honor a pre-existing-entity is **`PreSpawned` hash-matching** (`receive.rs:821-832`; match by hash, `prespawn.rs:35-117`, with a documented "same hash → extra rollbacks" caveat). To make lightyear honor our identity for content entities you'd locally spawn each, attach `PreSpawned(hash == gid)`, and have the server replicate the same hash — i.e. **rebuild M1 on top of lightyear's prespawn matcher and inherit its collision-rollback caveat.**
 
 **RESOLUTION (decisive):**
 1. **`GlobalEntityId` stays the authoritative cross-peer identity. Lightyear never owns it.** This is non-negotiable; D3 is the core of M1 and has 23 green proto-tests behind it.
-2. For the **transport-only** posture we recommend (§1), this is a non-issue: we don't replicate spawns through lightyear at all — our wire ships `gid` raw (`wire.rs:51,67`) and the client pins via `from_raw`. Keep it.
+2. For the **transport-only** posture we recommend (§1), this is a non-issue: we don't replicate spawns through lightyear at all — our sync layer ships `gid` raw (`sync.rs:51,67`) and the client pins via `from_raw`. Keep it.
 3. **If** native is ever revisited, content entities go through `PreSpawned(hash==gid)` (accepting the collision caveat, which D3a's debug-time collision check already guards), and only `Authoritative` runtime entities use lightyear's spawn-and-map. That is the *only* coexistence shape — and it's strictly more machinery than we have now for no identity benefit.
 
 **One does NOT have to give for coexistence — but the clean native path WOULD collapse D4's content/runtime split into "everything is Authoritative." We reject that collapse.**
@@ -145,7 +145,7 @@ This is the decisive conflict, so it gets a decisive answer.
 
 **RESOLUTION:** Keep `SessionRegistry`/`authorize`/possession-as-command unchanged. If native were ever adopted, lightyear authority would be set *from* `SessionRegistry` (server stays `HasAuthority`; `PredictionTarget` driven by ownership) — a one-way derive, never a replacement.
 
-### 3.3 WIRE / COMMANDS (M3 op-log) — Resolution: **op-log STAYS CUSTOM; only the rover's held-control input is a candidate for `lightyear_inputs` — and even that we hand-roll for now.**
+### 3.3 SYNC / COMMANDS (M3 op-log) — Resolution: **op-log STAYS CUSTOM; only the rover's held-control input is a candidate for `lightyear_inputs` — and even that we hand-roll for now.**
 
 The maps draw the line cleanly. lightyear inputs are **per-tick state**, not commands; lightyear replication is **state**, not events. Our op-log carries discrete, reliable, identity-bearing, dedup'd, replay-once events that **neither models**.
 
@@ -160,7 +160,7 @@ The maps draw the line cleanly. lightyear inputs are **per-tick state**, not com
 1. **It can't be taken alone.** `lightyear_inputs` replay rides the prediction rollback loop (`lightyear_prediction-0.26.4/src/rollback.rs:826-843`) and hard-requires `InputTimeline` synced (`rollback.rs:258`, `manager.rs:95`). Taking inputs = taking the prediction/sync stack = the avian-f64 wall returns.
 2. **Channel + identity split.** Inputs ride lightyear's built-in `InputChannel` (Sequenced-Unreliable) addressed by the **mapped `Entity`** (`lightyear_inputs-0.26.4/src/input_message.rs:27-35,267-273`), not our `gid`/OrderedReliable. Adopting it adds a second client→server channel with different reliability + a second identity boundary.
 
-**RESOLUTION:** Op-log stays fully custom. The rover's held-control input becomes a dense per-vessel `seq`-stamped `DriveRover`/`BrakeRover` on our existing OrderedReliable wire **with input-replay reconciliation done by hand** (`PREDICTION_RECONCILIATION.md` §3.4, §4). This is the lightyear-inputs *shape* (per-tick state, replayed) without the prediction-stack coupling. The day a usable native path exists, this is the seam that migrates to `ActionState<A>` first — it's deliberately built to.
+**RESOLUTION:** Op-log stays fully custom. The rover's held-control input becomes a dense per-vessel `seq`-stamped `DriveRover`/`BrakeRover` on our existing OrderedReliable sync layer **with input-replay reconciliation done by hand** (`PREDICTION_RECONCILIATION.md` §3.4, §4). This is the lightyear-inputs *shape* (per-tick state, replayed) without the prediction-stack coupling. The day a usable native path exists, this is the seam that migrates to `ActionState<A>` first — it's deliberately built to.
 
 ### 3.4 TICK (D6) — Resolution: **adopting prediction WOULD invert D6 on clients; since we're not adopting prediction, D6 is moot for the rover and the hand-rolled design sidesteps it.**
 
@@ -168,7 +168,7 @@ The maps draw the line cleanly. lightyear inputs are **per-tick state**, not com
 - **On a predicting client, lightyear OWNS the clock**: the sync machinery slews/snaps `LocalTimeline` and dilates `Time<Virtual>`→`Time<Fixed>` to keep the client at `server+RTT/2` (`lightyear_sync-0.26.4/src/timeline/sync.rs:242-336`). So D6's "SimTick drives lightyear Tick" is **backwards for clients** if we predict — lightyear must drive `SimTick` there (`SimTick = base_u64 + dewrapped(LocalTimeline.tick)`), and every FixedUpdate side-effect (`advance_sim_tick`, op-log apply, ROS/Copper bridge) must be gated `run_if(not(is_in_rollback))` or it double-fires during the N-tick re-sim.
 - **On the server**, `LocalTimeline` is just its FixedUpdate count, so server `SimTick` and lightyear-tick advance in lockstep and `SimTick` can stay master — D6 holds server-side.
 
-**RESOLUTION:** Because we are **not** adopting prediction, lightyear never dilates our client `FixedUpdate`, and D6 stays as written (SimTick authoritative). The hand-rolled reconcile explicitly avoids this: it matches on a dense per-vessel `seq`, not lightyear's tick, and notes our client `SimTick` is already non-monotonic (clobbered to `snap.tick`, `wire.rs:375`) so it adds a never-clobbered `ClientPredictedTick` for the replay ring (`PREDICTION_RECONCILIATION.md` §6.5). No D6 reversal needed. **If native were ever adopted, D6 inverts on clients — flag this as a real future cost.**
+**RESOLUTION:** Because we are **not** adopting prediction, lightyear never dilates our client `FixedUpdate`, and D6 stays as written (SimTick authoritative). The hand-rolled reconcile explicitly avoids this: it matches on a dense per-vessel `seq`, not lightyear's tick, and notes our client `SimTick` is already non-monotonic (clobbered to `snap.tick`, `sync.rs:375`) so it adds a never-clobbered `ClientPredictedTick` for the replay ring (`PREDICTION_RECONCILIATION.md` §6.5). No D6 reversal needed. **If native were ever adopted, D6 inverts on clients — flag this as a real future cost.**
 
 ### 3.5 D7 FEATURE-GATING — Resolution: **transport-only adoption FITS D7 cleanly; native prediction would BLEED into always-on substrate and break "domain crates byte-identical."**
 
@@ -192,24 +192,24 @@ reconcile**, NOT lightyear-native prediction. This is the architecture we should
 
 ### What a replicated + predicted rover looks like (ours, not lightyear's)
 A single owned rover on a client:
-- **Identity:** carries `Provenance` + `GlobalEntityId` (always-on substrate). Wire ships raw `gid`.
+- **Identity:** carries `Provenance` + `GlobalEntityId` (always-on substrate). Sync layer ships raw `gid`.
 - **Markers (ours):** `OwnedLocally` (`session.rs:226-227`) — the single classifier. Owned ⇒ `RigidBody::Dynamic` (`maintain_owned_locally`, `commands.rs:323-358`), full avian f64 + wheel forces locally. All other rovers ⇒ `RigidBody::Kinematic` (`force_kinematic_proxies`, `commands.rs:149-188`), interpolated.
 - **Input type (ours, lightyear-inputs-shaped):** `DriveRover{ target, forward, steer, seq:u32, tick:u64 }` + `BrakeRover{ target, intensity, seq, tick }` (`mobility/lib.rs:430-442`), same `seq` per input frame, on OrderedReliable `ControlStream`.
-- **Replicated state (ours):** `SnapshotEntry{ gid, t, r, lv, av, last_input_seq }` (`wire.rs:50-55` + the 3 new fields), server→clients on `SnapChannel` (UnorderedUnreliable).
+- **Replicated state (ours):** `SnapshotEntry{ gid, t, r, lv, av, last_input_seq }` (`sync.rs:50-55` + the 3 new fields), server→clients on `SnapChannel` (UnorderedUnreliable).
 - **Predicted-state history ring (new, client):** `{seq, ClientPredictedTick, Position, Rotation, LinearVelocity, AngularVelocity}` recorded after avian writeback each fixed tick.
 - **Reconcile (new, client):** `reconcile_owned_rover` (replaces `correct_owned_prediction`, same slot `FixedPostUpdate` after `PhysicsSystems::Writeback`) — on a snapshot with new `last_input_seq` for an owned gid: compare-at-seq → snap the 4 integrator components → drop acked `InputFrame`s → re-step avian over the ~3–6 unacked → render-smooth the residual onto `Transform` only.
 
 ### What stays in our substrate (always-on, unchanged)
-`Provenance`/`derive_id` (M1), `GlobalEntityId`, `SimTick`/`IsServer`, `SessionRegistry`/`authorize`/possession-as-command (M3), `WireEnvelope`/`Mutation`/`OpId`/`WireDedup` op-log, the Reflect codec, `WireApplyGuard` echo-guard. None of this moves to lightyear.
+`Provenance`/`derive_id` (M1), `GlobalEntityId`, `SimTick`/`IsServer`, `SessionRegistry`/`authorize`/possession-as-command (M3), `SyncEnvelope`/`Mutation`/`OpId`/`SyncDedup` op-log, the Reflect codec, `SyncApplyGuard` echo-guard. None of this moves to lightyear.
 
 ### Data flow (new owned-rover path)
 
 ```
- CLIENT (predictor)                    WIRE (lightyear = dumb pipe)        HOST (authority)
+ CLIENT (predictor)                    SYNC (lightyear = dumb pipe)        HOST (authority)
  ┌──────────────────────────┐                                            ┌───────────────────────────┐
- │ FixedUpdate:             │  DriveRover{fwd,steer,seq,tick}            │ apply_wire_command:       │
+ │ FixedUpdate:             │  DriveRover{fwd,steer,seq,tick}            │ apply_sync_command:       │
  │  sample input            │ ───── OrderedReliable (CmdChannel) ─────▶  │  authorize(reg,origin,gid)│
- │  stamp seq+SimTick       │       (our Frame/WireEnvelope)            │  record AppliedInputSeq   │
+ │  stamp seq+SimTick       │       (our Frame/SyncEnvelope)            │  record AppliedInputSeq   │
  │  push InputFrame ring    │                                            │  → on_drive_rover → ports │
  │  → on_drive_rover ports  │                                            │ FixedUpdate: wheel forces │
  │  → wheel forces          │                                            │  → avian f64 solve        │
@@ -244,20 +244,20 @@ Note: **big_space / floating-origin rebasing (gap A) stays our problem either wa
 This is the `PREDICTION_RECONCILIATION.md` plan, framed as the migration off both old-D2
 smooth-correction and away-from any native ambition. Each phase is independently testable.
 
-**P1 — Velocity on the wire + dead-reckon (stepping stone; no seq yet).**
-Add `lv`/`av` `#[serde(default)]` to `SnapshotEntry` (`wire.rs:50-55`), `SnapshotSample` (`session.rs:258-263`), `InterpSample` (`commands.rs:192-197`); `gather_snapshot` query `+ &LinearVelocity, &AngularVelocity` (`wire.rs:421`). Owned rover predicts forward using *real* authoritative velocity instead of finite-difference. Kills the worst rubber-band before any seq machinery. **Green:** old corrector still runs, just fed better velocity.
+**P1 — Velocity on the sync layer + dead-reckon (stepping stone; no seq yet).**
+Add `lv`/`av` `#[serde(default)]` to `SnapshotEntry` (`sync.rs:50-55`), `SnapshotSample` (`session.rs:258-263`), `InterpSample` (`commands.rs:192-197`); `gather_snapshot` query `+ &LinearVelocity, &AngularVelocity` (`sync.rs:421`). Owned rover predicts forward using *real* authoritative velocity instead of finite-difference. Kills the worst rubber-band before any seq machinery. **Green:** old corrector still runs, just fed better velocity.
 
 **P2 — Per-tick input emission (the load-bearing fork).**
 Move `DriveRover`/`BrakeRover` emission from the `Update`/observer edge-gate (`controller/lib.rs:115-130`) to `FixedUpdate`, dropping `if prev != current` so **every fixed tick emits exactly one owned input** (Gambetta/Source style). This makes replay a trivial 1:1 loop and eliminates the held-key carry-forward hazard (`PREDICTION_RECONCILIATION.md` §4.4, §6.1). **This is the riskiest phase** (see below). **Green:** behavior identical for a held key; only emission cadence changes.
 
 **P3 — Seq + history ring + server ack (no reconcile yet).**
-Add `seq:u32`/`tick:u64` to `DriveRover`/`BrakeRover` (`mobility/lib.rs:430-442`; ride `capture_command` for free, §3.4). Add per-vessel seq counter + `InputFrame` unacked ring (client) + predicted-state history ring. Add `AppliedInputSeq(HashMap<u64,u32>)` (host) written post-`authorize` (`wire.rs:291-300`), read in `gather_snapshot` + connect baseline, stamped as `last_input_seq` per entry. Add `ClientPredictedTick` (never clobbered) for the ring index (§6.5). **Green:** fields flow, nothing consumes them yet.
+Add `seq:u32`/`tick:u64` to `DriveRover`/`BrakeRover` (`mobility/lib.rs:430-442`; ride `capture_command` for free, §3.4). Add per-vessel seq counter + `InputFrame` unacked ring (client) + predicted-state history ring. Add `AppliedInputSeq(HashMap<u64,u32>)` (host) written post-`authorize` (`sync.rs:291-300`), read in `gather_snapshot` + connect baseline, stamped as `last_input_seq` per entry. Add `ClientPredictedTick` (never clobbered) for the ring index (§6.5). **Green:** fields flow, nothing consumes them yet.
 
 **P4 — `reconcile_owned_rover` (the swap).**
 Replace `correct_owned_prediction` (`commands.rs:402-500`) with snapshot-triggered compare-at-seq → snap 4 integrator components → drop acked → re-step avian × N → render-smooth residual (§4). Re-run the **whole `FixedUpdate`+`FixedPostUpdate`** per replayed tick (NOT bare `PhysicsSchedule`) so wheel forces re-apply (§4.3). Cap N at `MAX_REPLAY_TICKS=12` (§6.8). **Green:** the one-system swap; the rest of the pipeline is steady.
 
 **P5 — Scheduling coherence (apply-vs-gather phase).**
-Move `gather_snapshot` (+ seq/velocity read) to run in/after `FixedPostUpdate` so `tick`, velocity, and ack-seq are sampled from the same post-step world (§6.4). **Green:** a schedule move, no wire change.
+Move `gather_snapshot` (+ seq/velocity read) to run in/after `FixedPostUpdate` so `tick`, velocity, and ack-seq are sampled from the same post-step world (§6.4). **Green:** a schedule move, no sync layer change.
 
 **Riskiest phase = P2** (per-tick emission). It changes `translate_intents_to_commands` semantics from *sparse latched setpoints* to *per-tick samples*, touching the shared controller path used by both networked and standalone play, and interacts with the latched-port FSW chain (`on_drive_rover` writes a persistent `DigitalPort.raw_value`, `mobility/lib.rs:467-503`). Get this wrong and replay under-applies a held throttle and rubber-bands *worse* than today (`PREDICTION_RECONCILIATION.md` §6.1). It is also the one phase whose correctness isn't local to the networking crate. Land it behind a thorough standalone-play regression before P3.
 
@@ -301,7 +301,7 @@ lightyear (native or not) has no `CellCoord` concept; our render-rebasing stays 
 | **D4** content=local-spawn, runtime=server-spawn | collapsed to all-Authoritative | **UNCHANGED** |
 | **D5** time-warp host-only | unaffected | **UNCHANGED** |
 | **D6** SimTick drives Tick | INVERTED on predicting clients | **UNCHANGED** (no prediction stack ⇒ no inversion) |
-| **D7** wire-only optional, substrate always-on | BLED into always-on (avian plugin disables substrate physics) | **UNCHANGED / preserved** |
+| **D7** sync-only optional, substrate always-on | BLED into always-on (avian plugin disables substrate physics) | **UNCHANGED / preserved** |
 
 The net of this review: **`D1` is the only decision "via lightyear" actually requires, and it's
 already met. Full native would reverse D2/D3/D4 and strain D6/D7 — to chase a crate that can't

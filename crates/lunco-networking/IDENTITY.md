@@ -52,7 +52,7 @@ pub enum Provenance {
     /// spawn IS replicated to clients.
     Authoritative,
 
-    /// Never crosses the wire — camera, gizmo, selection, preview. No global id.
+    /// Never crosses the sync layer — camera, gizmo, selection, preview. No global id.
     Local,
 }
 ```
@@ -62,7 +62,7 @@ pub enum Provenance {
   glTF, procedural, network-imported assets — all flow through the same `Content`
   arm with different namespaces.
 - `Derived` generalizes the wheels/ports problem: sub-entities get stable ids from
-  their parent + role, so the few cross-references that must survive the wire can
+  their parent + role, so the few cross-references that must survive the sync layer can
   be resolved, while the parent itself may be `Content` or `Authoritative`.
 
 ---
@@ -150,7 +150,7 @@ sources, closed to changes in the identity machinery.
 
 ## 6. How it wires into the rest
 
-- **Wire-channel policy** (`lunco-core::WireChannel`) is now *derivable* from
+- **Wync-channel policy** (`lunco-core::SyncChannel`) is now *derivable* from
   provenance kind: `Content`→state-replicated/local-spawn, `Authoritative`→
   spawn-replicated, `Derived`→follows parent, `Local`→never. One source of truth.
 - **`ApiEntityRegistry`** (GlobalEntityId↔Entity) is populated by the same hook —
@@ -176,7 +176,7 @@ sources, closed to changes in the identity machinery.
 ---
 
 ## 8. Open questions — **RESOLVED 2026-05-29 (see `DECISIONS.md`)**
-1. **Collision policy** in 53-bit space → **D3a**: keep 53-bit on the wire +
+1. **Collision policy** in 53-bit space → **D3a**: keep 53-bit on the sync layer +
    debug-time collision check at load. No 128-bit-internal machinery now (per-scene
    populations tiny); revisit only near ~10⁶ entities.
 2. **`SourceId` for a stage** → **D3b**: logical scene name for *identity*,

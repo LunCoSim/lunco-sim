@@ -13,7 +13,7 @@ pub struct PossessVessel {
     /// the world, used only to bind the chase camera. `None` for headless or
     /// direct API control with no avatar: the host-side authority claim keys on
     /// `target`, so possession works fully without one.
-    #[wire_local]
+    #[sync_local]
     #[serde(default)]
     #[reflect(default)]
     pub avatar: Option<Entity>,
@@ -38,7 +38,7 @@ pub struct ReleaseVessel {
 pub struct FocusTarget {
     /// The avatar entity that is focusing (local camera representation). `None`
     /// for headless/direct control with no avatar.
-    #[wire_local]
+    #[sync_local]
     #[serde(default)]
     #[reflect(default)]
     pub avatar: Option<Entity>,
@@ -58,7 +58,7 @@ pub struct FocusTarget {
 pub struct FollowTarget {
     /// The avatar entity that will follow (local camera representation). `None`
     /// for headless/direct control with no avatar.
-    #[wire_local]
+    #[sync_local]
     #[serde(default)]
     #[reflect(default)]
     pub avatar: Option<Entity>,

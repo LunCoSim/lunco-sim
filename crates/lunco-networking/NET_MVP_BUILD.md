@@ -17,11 +17,11 @@ is intricate. The user's machine struggles with broad builds. So:
   gather/apply — all compile in seconds and iterate cheaply.
 - **`lunco-networking` is a THIN lightyear adapter** behind the `networking` feature
   (D7). Its entire job: configure WebTransport, manage connections↔sessions, and **ferry
-  pre-serialized envelopes** between our `WireOutbox`/`WireInbox` and two tiny lightyear
+  pre-serialized envelopes** between our `SyncOutbox`/`SyncInbox` and two tiny lightyear
   messages (reliable + unreliable) on two channels. It contains no game logic.
 
 This isolates the slow/heavy/rarely-changing code from the fast/iterated code, and is the
-literal shape of D7 (substrate always-on; wire optional; facade no-ops when off).
+literal shape of D7 (substrate always-on; sync layer optional; facade no-ops when off).
 
 ## Identity model: snapshots-as-messages, not lightyear replication
 
@@ -46,7 +46,7 @@ our `GlobalEntityId`/`Provenance` identity (M1). Instead:
 - `NetworkRole { Standalone, Host, Client }` (resource) — Standalone default (single-player).
 - `LocalSession(SessionId)` — this peer's id; `SessionId::LOCAL` until a client handshake
   replaces it. Stamped as `origin` on outgoing mutations.
-- `WireApplyGuard(Option<SessionId>)` — `Some(origin)` while a wire command is being applied
+- `SyncApplyGuard(Option<SessionId>)` — `Some(origin)` while a sync command is being applied
   (so capture observers suppress the echo; possession skips camera-bind for remote origins).
   `None` = locally originated.
 - `SessionRegistry` — `owners: HashMap<u64 /*rover gid*/, SessionId>`; `claim/owns/release_
@@ -54,23 +54,23 @@ our `GlobalEntityId`/`Provenance` identity (M1). Instead:
   Single-player: `IsServer=true` + everything ungated/owned-by-LOCAL → passes trivially.
 
 ### lunco-api (always-on capture/apply/codec/snapshots)
-- `WireCommand { type_name: String, data: serde_json::Value /*GlobalEntityIds*/ }`.
-- `WireEnvelope` = `enum { Command(Mutation<WireCommand>), Snapshot(SnapshotMsg), Handshake(..), Ack(Ack) }`
-  with a `WireChannel` hint for reliable/unreliable routing.
-- `WireOutbox(Vec<(WireChannel, WireEnvelope)>)`, `WireInbox(Vec<(SessionId, WireEnvelope)>)`
+- `SyncCommand { type_name: String, data: serde_json::Value /*GlobalEntityIds*/ }`.
+- `SyncEnvelope` = `enum { Command(Mutation<SyncCommand>), Snapshot(SnapshotMsg), Handshake(..), Ack(Ack) }`
+  with a `SyncChannel` hint for reliable/unreliable routing.
+- `SyncOutbox(Vec<(SyncChannel, SyncEnvelope)>)`, `SyncInbox(Vec<(SessionId, SyncEnvelope)>)`
   — the only contract `lunco-networking` touches. No-op when nothing drains (feature off).
-- `declare_channel::<C>(WireChannel)` ext → registers `capture::<C>` global observer:
+- `declare_channel::<C>(SyncChannel)` ext → registers `capture::<C>` global observer:
   serialize `C` via `TypedReflectSerializer` (symmetric with the existing
   `TypedReflectDeserializer` apply path), `globalize_ids_in_json` (Entity.to_bits →
   `GlobalEntityId` via `ApiEntityRegistry::api_id_for`, inverse of `resolve_ids_in_json`),
-  wrap `Mutation::local`, push to `WireOutbox`. Skips when `WireApplyGuard` is set (echo) or
+  wrap `Mutation::local`, push to `SyncOutbox`. Skips when `SyncApplyGuard` is set (echo) or
   `NetworkRole::Standalone` (single-player no-ops).
-- `WireCommandEvent { type_name, params, op_id, origin }` + `apply_wire_command` observer:
-  dedupe by `OpId`; `authorize`; `resolve_ids_in_json`; set `WireApplyGuard(Some(origin))`;
+- `SyncCommandEvent { type_name, params, op_id, origin }` + `apply_sync_command` observer:
+  dedupe by `OpId`; `authorize`; `resolve_ids_in_json`; set `SyncApplyGuard(Some(origin))`;
   `ReflectEvent::trigger`; clear guard. (This is `api_command_dispatcher` + guard + authority.)
-- `drain_wire_inbox` system: `WireInbox` → `WireCommandEvent` / apply snapshot.
+- `drain_sync_inbox` system: `SyncInbox` → `SyncCommandEvent` / apply snapshot.
 - Snapshots: `gather_snapshot` (server, runs at `replication_hz`, `Changed<Transform>` when
-  `only_if_changed`) → `WireOutbox`; snapshot apply on clients by `GlobalEntityId`.
+  `only_if_changed`) → `SyncOutbox`; snapshot apply on clients by `GlobalEntityId`.
 
 ### Gameplay gates (the MVP_MULTIPLAYER_GAPS fixes)
 - **G1 input isolation** — `LocalAvatar` marker (lunco-avatar); gate
@@ -80,7 +80,7 @@ our `GlobalEntityId`/`Provenance` identity (M1). Instead:
   `Provenance::Local` (addressed locally via `port_map`, never collide). Single-instance
   startup-scene prims unchanged.
 - **G3 sessions** — client handshake → `LocalSession` + mark its avatar `LocalAvatar`.
-- **G4 ownership** — `PossessVessel` claims ownership (server, from `WireApplyGuard` origin);
+- **G4 ownership** — `PossessVessel` claims ownership (server, from `SyncApplyGuard` origin);
   `DriveRover` authorized against ownership; `authorize` rejects cross-rover commands.
 - `declare_channel`: `DriveRover`/`BrakeRover`→`ControlStream`; `PossessVessel`/`SpawnEntity`
   →`CommandBus`. Spawn broadcast carries server gid so peers converge (content-recon).
@@ -95,8 +95,8 @@ our `GlobalEntityId`/`Provenance` identity (M1). Instead:
   write `dist/cert_digest.txt`; native client digest `""`/pinned; wasm client reads URL-hash
   digest. `On<Add, LinkOf>`→ReplicationSender; `On<Add, Connected>`→allocate `SessionId`,
   `SessionRegistry`, send Handshake. `On<Add, Disconnected>`→`release_session`.
-- Ferry: drain `WireOutbox`→`MessageSender`/`ServerMultiMessageSender` (channel by
-  `WireChannel`); `MessageReceiver`→`WireInbox` (stamp sender `SessionId` on server).
+- Ferry: drain `SyncOutbox`→`MessageSender`/`ServerMultiMessageSender` (channel by
+  `SyncChannel`); `MessageReceiver`→`SyncInbox` (stamp sender `SessionId` on server).
 
 ### App wiring
 - `sandbox.rs`: parse `--host [port]` / `--connect <addr>`; set `NetworkRole`/`IsServer`;

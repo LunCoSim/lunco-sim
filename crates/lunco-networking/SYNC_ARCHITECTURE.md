@@ -9,7 +9,7 @@ consistent — derivably, not feature-by-feature?**
 > only **seven mechanisms**, and every syncable thing in the system maps to exactly
 > one. "Synced by architecture" = the classification is declared (often implied by
 > provenance), enforced by design, and the runtime routes accordingly. Nothing is
-> hand-wired, and nothing can leak onto — or fall off — the wire by accident.
+> hand-wired, and nothing can leak onto — or fall off — the sync layer by accident.
 
 ---
 
@@ -160,7 +160,7 @@ are layered, not entangled**:
 - **M5** → text/structured concurrent edits **commute** ⇒ convergence without locks.
 - **M4** → intentionally lossy; redundancy + jitter buffer absorb loss; nothing
   downstream trusts it as truth (server re-derives).
-- **M7** → excluded from the wire, so it *cannot* cause divergence.
+- **M7** → excluded from the sync layer, so it *cannot* cause divergence.
 
 Because M2 is LWW-from-authority and M3 is totally-ordered-from-authority, a missed
 M2 packet self-heals next snapshot and a missed M3 packet is retransmitted —
@@ -190,7 +190,7 @@ M2 packet self-heals next snapshot and a missed M3 packet is retransmitted —
 
 Sync class is **declared, never assumed**, and the default is safe:
 
-1. **Local is the default.** A component does *not* cross the wire unless it
+1. **Local is the default.** A component does *not* cross the sync layer unless it
    declares a `SyncClass`. Forgetting to declare = it stays local (M7) — fail-safe,
    never an accidental leak or accidental authority.
 2. **`SyncClass` is derivable from provenance + the four axes**, so most

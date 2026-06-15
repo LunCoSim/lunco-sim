@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// One serialized [`crate::wire::WireEnvelope`] on the wire.
+/// One serialized [`crate::sync::SyncEnvelope`] on the wire.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub(crate) struct Frame(pub Vec<u8>);
 

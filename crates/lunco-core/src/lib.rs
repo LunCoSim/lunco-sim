@@ -27,12 +27,12 @@ pub mod ids;
 /// ids are *derived*; the assignment system below is the only place they
 /// are *minted*.
 pub mod identity;
-/// Command envelope — `Mutation<P>`, `Ack`, `Reject`, `WireChannel`.
+/// Command envelope — `Mutation<P>`, `Ack`, `Reject`, `SyncChannel`.
 /// The shape every locally- or remotely-originated mutation flows
 /// through.
 pub mod commands;
 /// Always-on networking **authority** substrate (no wire dependency):
-/// `NetworkRole`, `LocalSession`, `WireApplyGuard`, `SessionRegistry` + the
+/// `NetworkRole`, `LocalSession`, `SyncApplyGuard`, `SessionRegistry` + the
 /// single `authorize` gate. The seam the optional `lunco-networking` layer
 /// drives; trivially inert in single-player.
 pub mod session;
@@ -47,7 +47,7 @@ pub use telemetry::*;
 pub use log::*;
 pub use commands::{
     Ack, ActiveCommandId, CommandOutcome, CommandResults, Mutation, OpId, Reject, SessionId,
-    WireChannel,
+    SyncChannel,
 };
 pub use markers::{
     FallbackSceneLight, GridAnchor, HorizonShadowTerrain, SoiMigrant, SunAngularDiameter,
@@ -67,7 +67,7 @@ pub use session::{
     PossessionPolicy,
     PredictedDynamic, ReplicatedChassisMotion, ReplicatedSpawn, SessionRegistry, SkipContentStamp,
     SnapshotSample,
-    VesselInputLog, WireApplyGuard,
+    VesselInputLog, SyncApplyGuard,
 };
 
 // ── Typed Command Macros ──────────────────────────────────────────────────────
@@ -152,12 +152,12 @@ impl std::fmt::Display for GlobalEntityId {
 /// **local-only** reference (e.g. a peer's camera avatar) that must never carry
 /// real local entity bits onto the wire — the codec substitutes
 /// `Entity::PLACEHOLDER` instead of globalizing it. Attach it on a `#[Command]`
-/// field via `#[wire_local]` (sugar that expands to
-/// `#[reflect(@::lunco_core::WireLocal)]`); the codec reads it back with
-/// `NamedField::has_attribute::<WireLocal>()`. Derives `Reflect` because
+/// field via `#[sync_local]` (sugar that expands to
+/// `#[reflect(@::lunco_core::SyncLocal)]`); the codec reads it back with
+/// `NamedField::has_attribute::<SyncLocal>()`. Derives `Reflect` because
 /// reflect custom-attribute values must be `Reflect + 'static`.
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct WireLocal;
+pub struct SyncLocal;
 
 /// Field marker for host authorization: the gid field a networked command is
 /// checked for ownership against (e.g. `DriveRover.target`). The wire apply
@@ -436,7 +436,7 @@ impl Plugin for LunCoCorePlugin {
 /// observer that is registered unconditionally (i.e. not behind the
 /// `networking` feature or some other optional plugin) MUST be initialized
 /// here — never only inside a feature-gated plugin like
-/// `lunco_networking::WirePlugin`. Otherwise builds without that feature
+/// `lunco_networking::SyncPlugin`. Otherwise builds without that feature
 /// panic at runtime with "Resource does not exist". `lunco-core` is a
 /// dependency of every crate, so initializing here guarantees presence
 /// everywhere. The `core_substrate_resources_present` test guards this.
@@ -445,7 +445,7 @@ pub(crate) fn register_core_resources(app: &mut App) {
         .init_resource::<IsServer>()
         .init_resource::<session::NetworkRole>()
         .init_resource::<session::LocalSession>()
-        .init_resource::<session::WireApplyGuard>()
+        .init_resource::<session::SyncApplyGuard>()
         .init_resource::<session::NetStatus>()
         .init_resource::<session::SessionRegistry>()
         .init_resource::<session::PendingReplicatedSpawns>()
@@ -583,7 +583,7 @@ mod ph1_identity_tests {
     /// 2026-06-03). Builds the resource set exactly as `LunCoCorePlugin`
     /// does — via `register_core_resources` — and asserts every always-on
     /// substrate resource exists. If an init is moved out into a
-    /// feature-gated plugin (e.g. `WirePlugin`), this fails in CI (default
+    /// feature-gated plugin (e.g. `SyncPlugin`), this fails in CI (default
     /// features = networking off) long before a real single-player run can
     /// panic.
     #[test]
@@ -595,7 +595,7 @@ mod ph1_identity_tests {
         assert!(w.get_resource::<IsServer>().is_some());
         assert!(w.get_resource::<session::NetworkRole>().is_some());
         assert!(w.get_resource::<session::LocalSession>().is_some());
-        assert!(w.get_resource::<session::WireApplyGuard>().is_some());
+        assert!(w.get_resource::<session::SyncApplyGuard>().is_some());
         assert!(w.get_resource::<session::NetStatus>().is_some());
         assert!(w.get_resource::<session::SessionRegistry>().is_some());
         assert!(w.get_resource::<session::PendingReplicatedSpawns>().is_some());

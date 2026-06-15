@@ -18,7 +18,7 @@ client treats them). It is distinct from command/op replication; see
   the client renders the true articulation (no flip, no faked spin).
 - A body driven by cosim/Modelica forces a client can't reproduce? **Nothing to do** —
   attaching a sim model marks it opaque automatically.
-- Want to *opt a body out* of the wire, or *force* a non-default authority? Author one
+- Want to *opt a body out* of the sync layer, or *force* a non-default authority? Author one
   `lunco:net:*` attribute (below).
 
 ## Default derivation (no authoring)
@@ -51,7 +51,7 @@ Namespace `lunco:net:*`, read at load by `process_usd_sim_prims` (mapping unit-t
 | `lunco:net:authority = "opaque"`   | `token` | Replicated but **never client-predicted** (`NotPredictable`). For bodies driven by forces a client can't reproduce. Cosim bodies get this automatically. |
 | `lunco:net:authority = "local"`    | `token` | Not replicated (`NetExcluded`). Same as `replicate = false`. |
 
-Example (exclude a purely cosmetic dynamic prop from the wire):
+Example (exclude a purely cosmetic dynamic prop from the sync layer):
 
 ```usda
 def Xform "DecorBanner" (apiSchemas = ["PhysicsRigidBodyAPI"])

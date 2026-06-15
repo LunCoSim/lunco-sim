@@ -122,7 +122,7 @@ impl fmt::Display for SessionId {
 /// locally, `IsServer = true`). The network layer (future) consults this
 /// to route correctly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum WireChannel {
+pub enum SyncChannel {
     /// In-process only; never serialized. Camera, view toggles, editor
     /// focus/selection, debug overlays. Not on any bus.
     Local,

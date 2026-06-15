@@ -17,7 +17,7 @@ in `README.md` (which predates the typed `#[Command]` system and the
 | Asset | Where | Relevance |
 |---|---|---|
 | `GlobalEntityId(u64)` on **every** entity, time-sorted | `lunco-core` | The cross-process key. README assumed it's added only on `Replicated`; reality is simpler — it's unconditional. |
-| `Mutation<P>` / `OpId` / `SessionId` / `WireChannel{Local,CommandBus,ControlStream}` | `lunco-core::commands` | The server-authority routing envelope, already typed. `ControlStream` = rover throttle; `CommandBus` = scene edits. |
+| `Mutation<P>` / `OpId` / `SessionId` / `SyncChannel{Local,CommandBus,ControlStream}` | `lunco-core::commands` | The server-authority routing envelope, already typed. `ControlStream` = rover throttle; `CommandBus` = scene edits. |
 | `#[Command]` → `Event + Reflect`, reflection dispatch, `ApiEntityRegistry` (GlobalEntityId↔Entity) | `lunco-api`, `lunco-command-macro` | The RPC layer. `DriveRover`, `BrakeRover`, `PossessVessel` already exist as typed commands. |
 | Input already decoupled from physics | `lunco-controller` | `ControllerLink → VesselIntent → DriveRover/BrakeRover`. Prediction-friendly: inputs are already discrete, replayable commands. |
 | avian3d 0.6 (f64), fixed 60 Hz, 33 ms clamp | `lunco-client` | Rover motion = avian forces from raycast-wheel suspension (`lunco-mobility`). |
@@ -98,7 +98,7 @@ envelope work carries over either way).
 
 ## 2.4 What "the backend" is (scope of this decision)
 
-The backend is the library that supplies the wire mechanisms we chose **not** to
+The backend is the library that supplies the sync mechanisms we chose **not** to
 hand-write: **M2** (state replication + Predicted/Interpolated roles), **M4** (input
 plumbing for prediction), **M6** (distributed clock/tick-sync — client runs ahead,
 RTT offset estimation), and transport/connection lifecycle. We build M1 (identity)

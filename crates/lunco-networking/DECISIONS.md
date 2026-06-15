@@ -75,9 +75,9 @@ Local → never networked. Unreal net-stable-names / content-GUID model. Logic i
 already implemented + green in `proto-tests/` (23 tests) and spec'd for `lunco-core`
 in `PH1_CORE_CHANGES.md`.
 
-### D3a — Collision policy: **53-bit on the wire + debug-time collision check**
+### D3a — Collision policy: **53-bit on the sync layer + debug-time collision check**
 Keep ids in the JS-safe 53-bit space (hard browser constraint). Add a debug-time
-collision check at content load. Do **not** build 128-bit-internal/narrow-on-wire
+collision check at content load. Do **not** build 128-bit-internal/narrow-on-the-sync-layer
 machinery now — per-scene populations are tiny (5000-prim sample: zero collisions);
 birthday-bound at 53 bits is comfortable for thousands of entities. Revisit only if
 a real scene approaches ~10⁶ entities.
@@ -112,9 +112,9 @@ The sim owns time; the netcode tick is *derived* from it (same idea as ROS
 detail — finalize the exact wiring once lightyear's `Tick` API is in hand, but the
 *direction of authority* is decided: SimTick is authoritative.
 
-## D7 — Networking is an **opt-in Cargo feature** (`networking`), gating the wire only
+## D7 — Networking is an **opt-in Cargo feature** (`networking`), gating the sync layer only
 Networking must not be linked into a default/local build. `lightyear` is an
-**`optional` dependency** behind `feature = "networking"`; the wire layer
+**`optional` dependency** behind `feature = "networking"`; the sync layer
 (replication/transport/prediction systems, `lunco-networking` guts that import
 lightyear) compiles only when the feature is on.
 
@@ -128,7 +128,7 @@ domain crates call it unconditionally and never `#[cfg]`-fork.
 
 Rationale: if the substrate were also gated, domain code would split into two
 compile paths and every networking toggle would force a full `lunco-core` rebuild.
-Gating only the wire means flipping `networking` rebuilds just the wire layer. This
+Gating only the sync layer means flipping `networking` rebuilds just the sync layer. This
 is the facade pattern the architecture already assumes ("domain crates never import a
 backend" — IMPLEMENTATION_PLAN invariants).
 - Supersedes the implicit "always-linked" assumption in earlier docs.

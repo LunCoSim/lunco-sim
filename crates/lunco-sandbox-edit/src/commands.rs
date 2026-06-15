@@ -1948,7 +1948,7 @@ impl Plugin for SpawnCommandPlugin {
         // - `correct_owned_prediction` AFTER `force_kinematic_proxies` so the
         //   smooth correction it writes to the owned (Dynamic) body isn't
         //   clobbered the same frame.
-        // Kept in `Update`: the snapshot ingest reads what `drain_wire_inbox`
+        // Kept in `Update`: the snapshot ingest reads what `drain_sync_inbox`
         // produces, which rides the lightyear ferry (also Update). Smoothness under
         // a render-throttled sender does NOT come from rescheduling these — it comes
         // from `gather_snapshot` generating tick-stamped snapshots at a steady 20 Hz

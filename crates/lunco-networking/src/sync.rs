@@ -9,22 +9,23 @@
 //!   a global `On<C>` observer for each declared command. On a *client* it
 //!   reflect-serializes the command (symmetric with the apply path), rewrites
 //!   local `Entity` refs → portable `GlobalEntityId` ([`globalize_ids_in_json`]),
-//!   wraps a [`Mutation`], and pushes onto [`WireOutbox`]. Suppressed for
+//!   wraps a [`Mutation`], and pushes onto [`SyncOutbox`]. Suppressed for
 //!   wire-applied commands (echo guard) and in single-player.
-//! - **apply** ([`apply_wire_command`]): an `On<WireCommandEvent>` observer that
+//! - **apply** ([`apply_sync_command`]): an `On<SyncCommandEvent>` observer that
 //!   dedupes by `OpId`, authorizes (host only), resolves ids, then triggers the
-//!   typed command via reflection with [`WireApplyGuard`] set so the capture
+//!   typed command via reflection with [`SyncApplyGuard`] set so the capture
 //!   observer doesn't echo it.
-//! - **ferry**: `lunco-networking` drains [`WireOutbox`] → lightyear messages and
-//!   fills [`WireInbox`] ← lightyear messages. [`drain_wire_inbox`] turns inbox
+//! - **ferry**: `lunco-networking` drains [`SyncOutbox`] → lightyear messages and
+//!   fills [`SyncInbox`] ← lightyear messages. [`drain_sync_inbox`] turns inbox
 //!   entries into command triggers / snapshot applies / handshakes.
 //! - **state**: [`gather_snapshot`] (host) emits changed transforms at a tunable
-//!   HZ; clients apply them in `drain_wire_inbox`. [`broadcast_new_spawns`]
+//!   HZ; clients apply them in `drain_sync_inbox`. [`broadcast_new_spawns`]
 //!   replicates runtime spawns with the host-allocated id.
 
 use avian3d::prelude::{AngularVelocity, LinearVelocity, PhysicsSystems, Position, Rotation};
 use big_space::prelude::CellCoord;
 use bevy::ecs::reflect::ReflectEvent;
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::reflect::serde::{TypedReflectDeserializer, TypedReflectSerializer};
 use bevy::reflect::TypePath;
@@ -34,7 +35,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use lunco_core::{
     authorize, AppliedInputSeq, GlobalEntityId, IncomingSnapshots, LocalSession, Mutation,
     NetReplicate, NetSpawn, NetworkRole, OpId, PendingReplicatedSpawns, ReplicatedSpawn, SessionId,
-    SessionRegistry, SimTick, SnapshotSample, WireApplyGuard, WireChannel,
+    SessionRegistry, SimTick, SnapshotSample, SyncApplyGuard, SyncChannel,
 };
 
 use lunco_api::executor::{authz_target_gid, globalize_command_ids, resolve_command_ids};
@@ -49,7 +50,7 @@ use lunco_api::registry::ApiEntityRegistry;
 /// self-describing and cannot deserialize a `Value` (`deserialize_any`). The id
 /// translation still operates on a parsed `Value`; this is just the wire form.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WireCommand {
+pub struct SyncCommand {
     pub type_name: String,
     pub data: String,
 }
@@ -198,10 +199,10 @@ pub struct OwnershipMsg {
 }
 
 /// Everything that crosses the wire, tagged for reliable/unreliable routing by
-/// the accompanying [`WireChannel`]. `lunco-networking` (de)serializes these.
+/// the accompanying [`SyncChannel`]. `lunco-networking` (de)serializes these.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum WireEnvelope {
-    Command(Mutation<WireCommand>),
+pub enum SyncEnvelope {
+    Command(Mutation<SyncCommand>),
     Snapshot(SnapshotMsg),
     Spawn(SpawnReplicationMsg),
     Handshake(HandshakeMsg),
@@ -214,12 +215,12 @@ pub enum WireEnvelope {
 /// Outgoing envelopes awaiting ferry to the wire. Drained by `lunco-networking`;
 /// stays empty when no adapter runs (single-player no-op).
 #[derive(Resource, Default)]
-pub struct WireOutbox(pub Vec<(WireChannel, WireEnvelope)>);
+pub struct SyncOutbox(pub Vec<(SyncChannel, SyncEnvelope)>);
 
 /// Incoming envelopes from the wire, each tagged with the sender's session
 /// (host uses this to attribute authority). Filled by `lunco-networking`.
 #[derive(Resource, Default)]
-pub struct WireInbox(pub Vec<(SessionId, WireEnvelope)>);
+pub struct SyncInbox(pub Vec<(SessionId, SyncEnvelope)>);
 
 /// Tunable replication knobs (the user's "HZ + only-if-changed" ask).
 #[derive(Resource, Clone, Debug)]
@@ -229,7 +230,7 @@ pub struct NetworkConfig {
     /// Only include entities whose transform changed since the last snapshot.
     pub only_if_changed: bool,
     /// Which channel snapshots ride (default best-effort `ControlStream`).
-    pub snapshot_channel: WireChannel,
+    pub snapshot_channel: SyncChannel,
 }
 
 impl Default for NetworkConfig {
@@ -237,24 +238,24 @@ impl Default for NetworkConfig {
         Self {
             replication_hz: 20.0,
             only_if_changed: true,
-            snapshot_channel: WireChannel::ControlStream,
+            snapshot_channel: SyncChannel::ControlStream,
         }
     }
 }
 
-/// short type name → its declared [`WireChannel`].
+/// short type name → its declared [`SyncChannel`].
 #[derive(Resource, Default)]
-pub struct WireChannelRegistry(pub HashMap<String, WireChannel>);
+pub struct SyncChannelRegistry(pub HashMap<String, SyncChannel>);
 
 /// Bounded set of recently-applied `OpId`s for idempotent replay rejection.
 #[derive(Resource)]
-pub struct WireDedup {
+pub struct SyncDedup {
     seen: HashSet<u64>,
     order: VecDeque<u64>,
     cap: usize,
 }
 
-impl Default for WireDedup {
+impl Default for SyncDedup {
     fn default() -> Self {
         Self {
             seen: HashSet::new(),
@@ -264,7 +265,7 @@ impl Default for WireDedup {
     }
 }
 
-impl WireDedup {
+impl SyncDedup {
     /// `true` if `op` is new (apply it); `false` if already seen (drop).
     pub fn check_and_insert(&mut self, op: OpId) -> bool {
         if !self.seen.insert(op.0) {
@@ -280,10 +281,10 @@ impl WireDedup {
     }
 }
 
-/// Fired by [`drain_wire_inbox`] for each inbound command; handled by
-/// [`apply_wire_command`].
+/// Fired by [`drain_sync_inbox`] for each inbound command; handled by
+/// [`apply_sync_command`].
 #[derive(Event, Debug, Clone)]
-pub struct WireCommandEvent {
+pub struct SyncCommandEvent {
     pub type_name: String,
     pub params: serde_json::Value,
     pub op_id: OpId,
@@ -292,25 +293,25 @@ pub struct WireCommandEvent {
 
 // ── Channel declaration + capture ─────────────────────────────────────────────
 
-/// Declare which [`WireChannel`] a command type rides, and (unless `Local`)
+/// Declare which [`SyncChannel`] a command type rides, and (unless `Local`)
 /// register its capture observer. Called by `lunco-networking` for each
 /// networked command (e.g. `DriveRover` → `ControlStream`, `PossessVessel` →
 /// `CommandBus`). No-op-on-the-wire commands need not be declared.
 pub trait DeclareChannelExt {
-    fn declare_channel<C: Event + Reflect + TypePath>(&mut self, channel: WireChannel) -> &mut Self;
+    fn declare_channel<C: Event + Reflect + TypePath>(&mut self, channel: SyncChannel) -> &mut Self;
 }
 
 impl DeclareChannelExt for App {
-    fn declare_channel<C: Event + Reflect + TypePath>(&mut self, channel: WireChannel) -> &mut Self {
+    fn declare_channel<C: Event + Reflect + TypePath>(&mut self, channel: SyncChannel) -> &mut Self {
         let name = C::short_type_path().to_string();
-        if !self.world().contains_resource::<WireChannelRegistry>() {
-            self.init_resource::<WireChannelRegistry>();
+        if !self.world().contains_resource::<SyncChannelRegistry>() {
+            self.init_resource::<SyncChannelRegistry>();
         }
         self.world_mut()
-            .resource_mut::<WireChannelRegistry>()
+            .resource_mut::<SyncChannelRegistry>()
             .0
             .insert(name, channel);
-        if channel != WireChannel::Local {
+        if channel != SyncChannel::Local {
             self.add_observer(capture_command::<C>);
         }
         self
@@ -324,19 +325,19 @@ impl DeclareChannelExt for App {
 fn capture_command<C: Event + Reflect + TypePath>(
     trigger: On<C>,
     role: Res<NetworkRole>,
-    guard: Res<WireApplyGuard>,
+    guard: Res<SyncApplyGuard>,
     local: Res<LocalSession>,
     type_registry: Res<AppTypeRegistry>,
     entity_registry: Res<ApiEntityRegistry>,
-    channels: Res<WireChannelRegistry>,
-    mut outbox: ResMut<WireOutbox>,
+    channels: Res<SyncChannelRegistry>,
+    mut outbox: ResMut<SyncOutbox>,
 ) {
     // Only a pure client emits commands onto the wire.
     if *role != NetworkRole::Client {
         return;
     }
     // Echo guard: this command arrived from the wire; don't re-send it.
-    if guard.is_from_wire() {
+    if guard.is_from_sync() {
         return;
     }
 
@@ -346,7 +347,7 @@ fn capture_command<C: Event + Reflect + TypePath>(
         .0
         .get(&type_name)
         .copied()
-        .unwrap_or(WireChannel::CommandBus);
+        .unwrap_or(SyncChannel::CommandBus);
 
     // Serialize through the SAME reflect path the apply side deserializes with.
     let mut data = {
@@ -361,7 +362,7 @@ fn capture_command<C: Event + Reflect + TypePath>(
         }
     };
     // Local Entity refs (to_bits) → portable GlobalEntityId, driven by `C`'s
-    // reflect schema. Fields tagged `#[wire_local]` (e.g. a possession's
+    // reflect schema. Fields tagged `#[sync_local]` (e.g. a possession's
     // `avatar`) are replaced with `Entity::PLACEHOLDER` inside the walker — a
     // local camera concern whose bits must never leak; wire control identity is
     // the session `origin`, not the avatar entity. No field-name special-casing.
@@ -377,22 +378,22 @@ fn capture_command<C: Event + Reflect + TypePath>(
 
     // Serialize the (id-translated) Value to compact JSON text for the wire.
     let data = serde_json::to_string(&data).unwrap_or_else(|_| "null".to_string());
-    let mut mutation = Mutation::local(WireCommand { type_name, data });
+    let mut mutation = Mutation::local(SyncCommand { type_name, data });
     mutation.origin = local.0;
-    outbox.0.push((channel, WireEnvelope::Command(mutation)));
+    outbox.0.push((channel, SyncEnvelope::Command(mutation)));
 }
 
 // ── Apply ─────────────────────────────────────────────────────────────────────
 
 /// Apply an inbound command through the *same* reflect-trigger path as a local /
 /// HTTP command, with dedupe + authority + an echo guard.
-pub fn apply_wire_command(
-    trigger: On<WireCommandEvent>,
+pub fn apply_sync_command(
+    trigger: On<SyncCommandEvent>,
     mut commands: Commands,
     type_registry: Res<AppTypeRegistry>,
     session_registry: Res<SessionRegistry>,
     role: Res<NetworkRole>,
-    mut dedup: ResMut<WireDedup>,
+    mut dedup: ResMut<SyncDedup>,
 ) {
     let ev = trigger.event();
     if !dedup.check_and_insert(ev.op_id) {
@@ -456,17 +457,17 @@ pub fn apply_wire_command(
         };
         // Guard set → the capture observer for this command suppresses the echo,
         // and possession skips local camera-bind for a remote origin.
-        world.resource_mut::<WireApplyGuard>().0 = Some(origin);
+        world.resource_mut::<SyncApplyGuard>().0 = Some(origin);
         reflect_event.trigger(world, reflected.as_ref(), &type_reg);
-        world.resource_mut::<WireApplyGuard>().0 = None;
+        world.resource_mut::<SyncApplyGuard>().0 = None;
     });
 }
 
 // ── Inbox drain (commands / snapshots / spawns / handshake) ───────────────────
 
 #[allow(clippy::too_many_arguments)]
-pub fn drain_wire_inbox(
-    mut inbox: ResMut<WireInbox>,
+pub fn drain_sync_inbox(
+    mut inbox: ResMut<SyncInbox>,
     mut commands: Commands,
     role: Res<NetworkRole>,
     mut local: ResMut<LocalSession>,
@@ -478,10 +479,10 @@ pub fn drain_wire_inbox(
     if inbox.0.is_empty() {
         return;
     }
-    let drained: Vec<(SessionId, WireEnvelope)> = std::mem::take(&mut inbox.0);
+    let drained: Vec<(SessionId, SyncEnvelope)> = std::mem::take(&mut inbox.0);
     for (sender, env) in drained {
         match env {
-            WireEnvelope::Command(m) => {
+            SyncEnvelope::Command(m) => {
                 // Host attributes to the connection-derived session (don't trust
                 // a client-claimed origin); a client trusts the host.
                 let origin = if role.is_host() { sender } else { m.origin };
@@ -489,14 +490,14 @@ pub fn drain_wire_inbox(
                 // for the schema-driven id resolution + reflect deserialize.
                 let params =
                     serde_json::from_str(&m.payload.data).unwrap_or(serde_json::Value::Null);
-                commands.trigger(WireCommandEvent {
+                commands.trigger(SyncCommandEvent {
                     type_name: m.payload.type_name,
                     params,
                     op_id: m.id,
                     origin,
                 });
             }
-            WireEnvelope::Snapshot(snap) => {
+            SyncEnvelope::Snapshot(snap) => {
                 // Queue for the avian-aware apply (sets `Position` so the
                 // physics transform-sync doesn't overwrite it).
                 for e in snap.entries {
@@ -518,41 +519,31 @@ pub fn drain_wire_inbox(
                 }
                 tick.0 = snap.tick;
             }
-            WireEnvelope::Spawn(s) => {
+            SyncEnvelope::Spawn(s) => {
                 pending_spawns.0.push(ReplicatedSpawn {
                     gid: s.gid,
                     entry_id: s.entry_id,
                     position: Vec3::from_array(s.position),
                 });
             }
-            WireEnvelope::Handshake(h) => {
+            SyncEnvelope::Handshake(h) => {
                 local.0 = SessionId(h.session);
                 tick.0 = h.tick;
                 info!("[wire] handshake: session={} tick={}", h.session, h.tick);
             }
-            WireEnvelope::Ownership(o) => {
+            SyncEnvelope::Ownership(o) => {
                 // Clients adopt the host's authoritative who-owns-what table.
                 // (The host never receives this — it *is* the authority.)
                 if !role.is_host() {
                     registry.replace_all(o.entries.into_iter().map(|(g, s)| (g, SessionId(s))));
                 }
             }
-            WireEnvelope::Ack(_) => { /* MVP is optimistic; acks unused */ }
+            SyncEnvelope::Ack(_) => { /* MVP is optimistic; acks unused */ }
         }
     }
 }
 
 // ── State replication (host → clients) ────────────────────────────────────────
-
-fn arr3_eq(a: &[f32; 3], b: &[f32; 3]) -> bool {
-    const E: f32 = 1e-4;
-    a.iter().zip(b).all(|(x, y)| (x - y).abs() < E)
-}
-
-fn arr4_eq(a: &[f32; 4], b: &[f32; 4]) -> bool {
-    const E: f32 = 1e-4;
-    a.iter().zip(b).all(|(x, y)| (x - y).abs() < E)
-}
 
 /// Host: at the configured HZ, emit a snapshot of changed networked transforms.
 pub fn gather_snapshot(
@@ -575,7 +566,7 @@ pub fn gather_snapshot(
         ),
         With<NetReplicate>,
     >,
-    mut outbox: ResMut<WireOutbox>,
+    mut outbox: ResMut<SyncOutbox>,
 ) {
     if !role.is_host() {
         return;
@@ -588,9 +579,8 @@ pub fn gather_snapshot(
     *acc = 0.0;
 
     let mut entries = Vec::new();
-    for (gid, tf, lin, ang, position, rotation, cell) in q.iter() {
+    for (gid, tf, lin, ang, position, rotation, _cell) in q.iter() {
         let key = gid.get();
-        let t = tf.translation.to_array();
         // Rotation on the wire is WORLD-space: prefer avian's world `Rotation`,
         // fall back to `Transform.rotation` for bodies without a physics Rotation.
         // For a top-level body the two are identical, so existing replicated
@@ -598,37 +588,42 @@ pub fn gather_snapshot(
         // `Transform.rotation` is parent-LOCAL while the client applies it to
         // world `Rotation` — only the avian-world value reconstructs correctly.
         // (`pos` below already prefers avian world `Position` for the same reason.)
-        let r = rotation
-            .map(|rot| rot.0.as_quat().to_array())
-            .unwrap_or_else(|| tf.rotation.to_array());
+        let rot = rotation.map(|r| r.0.as_quat()).unwrap_or(tf.rotation);
+        // Absolute world position: prefer the precise avian f64 `Position`; fall
+        // back to the f32 `Transform` (as f64) for bodies without a physics Position.
+        // Cells are not carried (recentering deferred — see `SnapshotEntry` doc), so
+        // `pos` is the full absolute world position.
+        let pos = position.map(|p| p.0).unwrap_or_else(|| {
+            DVec3::new(
+                tf.translation.x as f64,
+                tf.translation.y as f64,
+                tf.translation.z as f64,
+            )
+        });
+        // Quantize to the compact wire form once and change-detect on THAT form,
+        // so sub-quantum jitter never triggers a resend.
+        let pos_q = quantize_pos(pos);
+        let rot_packed = encode_quat(rot);
         // only_if_changed gates on POSE — velocity rides along when the pose
         // changes (at rest the body emits nothing and the client holds the last
         // sample, whose velocity is ~0 by then). Good enough for prediction.
         if config.only_if_changed {
-            if let Some((lt, lr)) = last_sent.get(&key) {
-                if arr3_eq(lt, &t) && arr4_eq(lr, &r) {
+            if let Some((lp, lr)) = last_sent.get(&key) {
+                if *lp == pos_q && *lr == rot_packed {
                     continue;
                 }
             }
         }
-        last_sent.insert(key, (t, r));
+        last_sent.insert(key, (pos_q, rot_packed));
         let lv = lin.map(|v| v.0.as_vec3().to_array()).unwrap_or([0.0; 3]);
         let av = ang.map(|v| v.0.as_vec3().to_array()).unwrap_or([0.0; 3]);
-        // Absolute position: prefer the precise avian f64 `Position`; fall back to
-        // the f32 `Transform` (as f64) for bodies without a physics Position.
-        let pos = position
-            .map(|p| [p.0.x, p.0.y, p.0.z])
-            .unwrap_or([t[0] as f64, t[1] as f64, t[2] as f64]);
-        let cell = cell.map(|c| [c.x as i64, c.y as i64, c.z as i64]).unwrap_or([0; 3]);
         entries.push(SnapshotEntry {
             gid: key,
-            t,
-            r,
+            pos_q,
+            rot_packed,
             lv,
             av,
             last_input_seq: applied.0.get(&key).copied().unwrap_or(0),
-            pos,
-            cell,
         });
     }
     if entries.is_empty() {
@@ -636,7 +631,7 @@ pub fn gather_snapshot(
     }
     outbox.0.push((
         config.snapshot_channel,
-        WireEnvelope::Snapshot(SnapshotMsg {
+        SyncEnvelope::Snapshot(SnapshotMsg {
             tick: tick.0,
             entries,
         }),
@@ -648,15 +643,15 @@ pub fn gather_snapshot(
 pub fn broadcast_new_spawns(
     role: Res<NetworkRole>,
     q: Query<(&GlobalEntityId, &NetSpawn), Added<GlobalEntityId>>,
-    mut outbox: ResMut<WireOutbox>,
+    mut outbox: ResMut<SyncOutbox>,
 ) {
     if !role.is_host() {
         return;
     }
     for (gid, spawn) in q.iter() {
         outbox.0.push((
-            WireChannel::CommandBus,
-            WireEnvelope::Spawn(SpawnReplicationMsg {
+            SyncChannel::CommandBus,
+            SyncEnvelope::Spawn(SpawnReplicationMsg {
                 gid: gid.get(),
                 entry_id: spawn.entry_id.clone(),
                 position: spawn.position.to_array(),
@@ -670,30 +665,30 @@ pub fn broadcast_new_spawns(
 /// Registers the wire substrate. Added unconditionally by `LunCoApiPlugin`; all
 /// its systems early-return under [`NetworkRole::Standalone`], so single-player
 /// pays nothing.
-pub struct WirePlugin;
+pub struct SyncPlugin;
 
-impl Plugin for WirePlugin {
+impl Plugin for SyncPlugin {
     fn build(&self, app: &mut App) {
-        // CONVENTION: WirePlugin initializes ONLY wire-only state (envelope
+        // CONVENTION: SyncPlugin initializes ONLY wire-only state (envelope
         // queues, dedup, transport/replication config). Always-on substrate
         // resources — anything read by systems that run even with networking
         // off (e.g. AppliedInputSeq / OwnedInputLog) — belong in
-        // LunCoCorePlugin (lunco-core), never here. WirePlugin is behind the
+        // LunCoCorePlugin (lunco-core), never here. SyncPlugin is behind the
         // `networking` feature, so initializing substrate here panics
         // single-player builds.
-        app.init_resource::<WireOutbox>()
-            .init_resource::<WireInbox>()
-            .init_resource::<WireDedup>()
+        app.init_resource::<SyncOutbox>()
+            .init_resource::<SyncInbox>()
+            .init_resource::<SyncDedup>()
             .init_resource::<NetworkConfig>()
-            .init_resource::<WireChannelRegistry>()
-            .add_observer(apply_wire_command)
-            // `drain_wire_inbox` + `broadcast_new_spawns` stay in `Update` alongside
+            .init_resource::<SyncChannelRegistry>()
+            .add_observer(apply_sync_command)
+            // `drain_sync_inbox` + `broadcast_new_spawns` stay in `Update` alongside
             // the lightyear ferry (see server.rs note: FixedUpdate breaks the reliable
             // CmdChannel — it does NOT touch lightyear, but it consumes what the ferry
             // produced this frame and feeds the ferry's send, so it shares the ferry's
             // schedule).
-            .add_systems(Update, (drain_wire_inbox, broadcast_new_spawns))
-            // `gather_snapshot` moves to `FixedUpdate`: it only writes our `WireOutbox`
+            .add_systems(Update, (drain_sync_inbox, broadcast_new_spawns))
+            // `gather_snapshot` moves to `FixedUpdate`: it only writes our `SyncOutbox`
             // (never calls lightyear), so it's safe to run on the sim clock. This
             // decouples snapshot GENERATION (now a steady 20 Hz, tick-stamped, even
             // when the window is unfocused and `Update` is render-throttled to ~5 Hz)
@@ -718,28 +713,29 @@ mod codec_roundtrip {
 
     #[test]
     fn snapshot_envelope_roundtrips_through_bincode() {
-        let env = WireEnvelope::Snapshot(SnapshotMsg {
+        let pos_q = quantize_pos(DVec3::new(1.0, 2.0, 3.0));
+        let rot_packed = encode_quat(Quat::IDENTITY);
+        let env = SyncEnvelope::Snapshot(SnapshotMsg {
             tick: 42,
             entries: vec![SnapshotEntry {
                 gid: 7,
-                t: [1.0, 2.0, 3.0],
-                r: [0.0, 0.0, 0.0, 1.0],
+                pos_q,
+                rot_packed,
                 lv: [0.1, 0.0, -0.2],
                 av: [0.0, 0.5, 0.0],
                 last_input_seq: 99,
-                pos: [1.0, 2.0, 3.0],
-                cell: [0, 0, 0],
             }],
         });
         let bytes = serialize_env(&env).expect("serialize");
         let back = deserialize_env(&bytes).expect("deserialize");
         match back {
-            WireEnvelope::Snapshot(s) => {
+            SyncEnvelope::Snapshot(s) => {
                 assert_eq!(s.tick, 42);
                 assert_eq!(s.entries.len(), 1);
                 assert_eq!(s.entries[0].gid, 7);
                 assert_eq!(s.entries[0].last_input_seq, 99);
-                assert_eq!(s.entries[0].pos, [1.0, 2.0, 3.0]);
+                assert_eq!(s.entries[0].pos_q, pos_q);
+                assert_eq!(s.entries[0].rot_packed, rot_packed);
             }
             _ => panic!("wrong variant after round-trip"),
         }
@@ -747,19 +743,19 @@ mod codec_roundtrip {
 
     #[test]
     fn command_envelope_with_string_payload_roundtrips() {
-        // Guards the bincode gotcha: `WireCommand.data` must be a JSON *String*, not a
+        // Guards the bincode gotcha: `SyncCommand.data` must be a JSON *String*, not a
         // `serde_json::Value` — bincode is not self-describing and cannot deserialize a
         // `Value` (`deserialize_any`), which would silently drop every command
         // (possession/drive) over the wire while snapshots kept working.
         let payload = r#"{"forward":1.0,"steer":-0.5}"#;
-        let env = WireEnvelope::Command(Mutation::local(WireCommand {
+        let env = SyncEnvelope::Command(Mutation::local(SyncCommand {
             type_name: "DriveRover".to_string(),
             data: payload.to_string(),
         }));
         let bytes = serialize_env(&env).expect("serialize");
         let back = deserialize_env(&bytes).expect("deserialize");
         match back {
-            WireEnvelope::Command(m) => {
+            SyncEnvelope::Command(m) => {
                 assert_eq!(m.payload.type_name, "DriveRover");
                 assert_eq!(m.payload.data, payload);
                 // The apply path re-parses the text to a Value; confirm it still does.

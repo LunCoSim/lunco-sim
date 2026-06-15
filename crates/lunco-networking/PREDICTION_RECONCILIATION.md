@@ -66,7 +66,7 @@ authoritative target (`commands.rs:438-490`, `CORRECTION_RATE=3.5`,
 
 - The authoritative target the client blends toward is **already old** by one full link
   latency + the 20 Hz snapshot quantum (`NetworkConfig::replication_hz=20`,
-  `wire.rs:129`). Snapshots are also `only_if_changed`-gated (`wire.rs:439-446`), so a
+  `sync.rs:129`). Snapshots are also `only_if_changed`-gated (`sync.rs:439-446`), so a
   rover that just stopped emits *nothing* and the blend extrapolates against the
   reconstructed finite-difference velocity (`commands.rs:447`).
 - Because the local body keeps integrating live avian forces while the blend pulls it
@@ -105,9 +105,9 @@ authoritative target (`commands.rs:438-490`, `CORRECTION_RATE=3.5`,
 Data flow for one owned rover (client = predictor, host = authority):
 
 ```
- CLIENT (Update/observer)            WIRE                  HOST (Update + FixedUpdate)
+ CLIENT (Update/observer)            SYNC                  HOST (Update + FixedUpdate)
  ┌───────────────────────┐                                ┌───────────────────────────┐
- │ (1) input seq+buffer  │  DriveRover{..,seq,tick} ───▶  │ apply_wire_command:        │
+ │ (1) input seq+buffer  │  DriveRover{..,seq,tick} ───▶  │ apply_sync_command:        │
  │ translate_intents_..  │   (ControlStream, OrderedRel)  │   authorize → record       │
  │  stamp seq+SimTick,    │                                │   last_applied_seq[gid]    │
  │  push InputFrame ring │                                │   → on_drive_rover ports   │
@@ -162,11 +162,11 @@ AngularVelocity}` so reconcile can look up "what I predicted at the seq the serv
 acked."
 
 **(3) Server ack.** Host records, per owned gid, the highest applied input seq, in
-`apply_wire_command` right after `authorize` succeeds (`crates/lunco-api/src/wire.rs:291-300`
+`apply_sync_command` right after `authorize` succeeds (`crates/lunco-api/src/sync.rs:291-300`
 — gid already in hand at `:292`) into a new always-on `AppliedInputSeq(HashMap<u64,u32>)`
-resource. `gather_snapshot` (`wire.rs:414-459`) and the connect baseline
+resource. `gather_snapshot` (`sync.rs:414-459`) and the connect baseline
 (`crates/lunco-networking/src/server.rs:162-181`) read it and stamp `last_input_seq` per
-`SnapshotEntry`. See §3 for wire shape and §6.4 for the apply/gather phase issue.
+`SnapshotEntry`. See §3 for sync shape and §6.4 for the apply/gather phase issue.
 
 **(4) Reconcile = compare-at-seq + snap + replay.** New system replacing
 `correct_owned_prediction`, same slot: `FixedPostUpdate`, after `PhysicsSystems::Writeback`
@@ -180,18 +180,18 @@ See §4.6.
 
 ---
 
-## 3. WIRE CHANGES (exact)
+## 3. SYNC CHANGES (exact)
 
-The wire is **unversioned JSON** (`serde_json::to_vec`/`from_slice` on `WireEnvelope`,
+The sync layer is **unversioned JSON** (`serde_json::to_vec`/`from_slice` on `SyncEnvelope`,
 `crates/lunco-networking/src/shared.rs:16-22`; no `deny_unknown_fields` anywhere). Therefore
 **all new fields are `#[serde(default)]`** → free forward/backward compatibility (old peer
-ignores unknown fields; new peer fills defaults). No `WireEnvelope` variant bump. Optionally
+ignores unknown fields; new peer fills defaults). No `SyncEnvelope` variant bump. Optionally
 bump `PROTOCOL_ID` (`shared.rs:13`) so mismatched builds *refuse to connect* rather than
 silently drop frames (`deserialize_env` swallows parse errors via `.ok()`).
 
 ### 3.1 `SnapshotEntry` — add velocity + per-entity ack
 
-`crates/lunco-api/src/wire.rs:50-55`:
+`crates/lunco-api/src/sync.rs:50-55`:
 
 ```rust
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -216,14 +216,14 @@ ignores the rest. For non-input bodies (balloons) `last_input_seq` stays `0`, ha
 
 ### 3.2 `SnapshotMsg` — unchanged shape
 
-`wire.rs:58-62`. Keeps `tick: u64` (server `SimTick` at gather time) + `entries`. The
+`sync.rs:58-62`. Keeps `tick: u64` (server `SimTick` at gather time) + `entries`. The
 per-entity ack lives in the entries (§3.1). `tick` is the *secondary* coordinate (server
 tick the state holds at); the ack match itself is **seq-based** (§4.1).
 
 ### 3.3 `SnapshotSample` (in-process mirror) — mirror the new fields
 
 `crates/lunco-core/src/session.rs:258-263` must gain `lv`, `av`, `last_input_seq` so
-`drain_wire_inbox` (`wire.rs:365-376`) can copy them through. `ingest_snapshots`
+`drain_sync_inbox` (`sync.rs:365-376`) can copy them through. `ingest_snapshots`
 (`commands.rs:216-238`) and `InterpSample` (`commands.rs:192-197`) only need the velocity/seq
 for the **owned** path; remote interpolation ignores them.
 
@@ -244,16 +244,16 @@ pub struct DriveRover {
 ```
 
 These fields ride through `capture_command` **for free**: it reflect-serializes by field
-name (`wire.rs:243-253`) and `extract_target_gid` only reads `params["target"]`
-(`wire.rs:272-273`). No codec change. The seq stamped on the *payload* reaches the host
-inside `WireCommand.data`; the host reads it in `apply_wire_command` (§6.4). We do **not**
+name (`sync.rs:243-253`) and `extract_target_gid` only reads `params["target"]`
+(`sync.rs:272-273`). No codec change. The seq stamped on the *payload* reaches the host
+inside `SyncCommand.data`; the host reads it in `apply_sync_command` (§6.4). We do **not**
 need to add seq to the `Mutation` envelope (`commands.rs:150`) — payload-level is simpler
 and `capture_command` stays untouched.
 
 **Why not reuse `OpId` as the seq?** `OpId` (`commands.rs:41-50`) is a time-sorted 53-bit
 *hash*, not a dense `++1` counter — you can compare "newer than" but you **cannot** do
 `last_seq + 1` arithmetic or index a ring with it, and it is global, not per-rover. Use it
-(it already travels + dedupes, `WireDedup` at `wire.rs:141-172`) as the idempotency token;
+(it already travels + dedupes, `SyncDedup` at `sync.rs:141-172`) as the idempotency token;
 use a **dense per-vessel `u32` `seq`** for ack/replay math.
 
 ---
@@ -266,7 +266,7 @@ Inputs are **not** 1:1 with ticks: `capture_command`/`translate_intents_to_comma
 the observer/`Update` timeline, `advance_sim_tick` runs in `FixedUpdate`
 (`crates/lunco-core/src/lib.rs:341,350-355`) — many inputs can land in one tick or zero
 across several. And on the client today `SimTick` is **non-monotonic**: it is hard-clobbered
-to the server's tick on every snapshot (`wire.rs:375`, `tick.0 = snap.tick`). So:
+to the server's tick on every snapshot (`sync.rs:375`, `tick.0 = snap.tick`). So:
 
 - **Ack match is by `seq`** (dense, monotonic per-vessel). `SnapshotEntry.last_input_seq`
   tells the client "I (server) have integrated everything up to seq N for this rover."
@@ -424,9 +424,9 @@ All in `crates/lunco-sandbox-edit/src/commands.rs` unless noted.
   avian writeback each fixed tick; indexed for compare-at-seq.
 - `lv`/`av`/`last_input_seq` on `SnapshotEntry`/`SnapshotSample`/`InterpSample` — §3.
 - Velocity read in `gather_snapshot` (query `+ &LinearVelocity, &AngularVelocity`,
-  `wire.rs:421`) and the connect baseline (`server.rs:121`).
-- `AppliedInputSeq(HashMap<u64,u32>)` resource (host) written in `apply_wire_command`
-  post-authorize (`wire.rs:291-300`), read in gather + baseline.
+  `sync.rs:421`) and the connect baseline (`server.rs:121`).
+- `AppliedInputSeq(HashMap<u64,u32>)` resource (host) written in `apply_sync_command`
+  post-authorize (`sync.rs:291-300`), read in gather + baseline.
 - `reconcile_owned_rover` system + render-smoothing offset.
 - `ClientPredictedTick` (or stop clobbering `SimTick` for the owned path) — §6.5.
 
@@ -461,20 +461,20 @@ but confirm no client-side cosim system writes the rover's ports outside the gat
 
 ### 6.4 SimTick sync / apply-vs-gather phase offset
 **Real risk flagged by the server map.** Commands apply in `Update`
-(`apply_wire_command`/`on_drive_rover`), but the body only *moves* on the **next**
+(`apply_sync_command`/`on_drive_rover`), but the body only *moves* on the **next**
 `FixedUpdate`; `gather_snapshot` runs in `Update` on a wall-clock 20 Hz accumulator
-(`wire.rs:419,427-432`), reading `Transform` (post-PhysicsSet writeback). So a seq stamped
+(`sync.rs:419,427-432`), reading `Transform` (post-PhysicsSet writeback). So a seq stamped
 `last_applied_seq` at apply-time does **not** yet correspond to integrated state when a
 snapshot is gathered in the same `Update` — it's off by the Update↔FixedUpdate phase + the
 HZ-accumulator jitter. **Mitigation:** record `last_applied_seq` at apply-time but only let
 `gather_snapshot` emit it as "applied as of this snapshot" **after** the `FixedUpdate` that
 consumed those ports. Cleanest fix = move `gather_snapshot` (and the seq read + velocity read)
 to run **in/after `FixedPostUpdate`** so `tick`, velocity, and ack-seq are sampled coherently
-from the same post-step world. This is a scheduling change (P3/P4), not a wire change.
+from the same post-step world. This is a scheduling change (P3/P4), not a sync change.
 
 ### 6.5 Client SimTick non-monotonicity
-Today `SimTick` on the client is hard-set to `snap.tick` every snapshot (`wire.rs:375`) and
-seeded once at handshake (`wire.rs:384-388`). That makes it **non-monotonic** → unusable as a
+Today `SimTick` on the client is hard-set to `snap.tick` every snapshot (`sync.rs:375`) and
+seeded once at handshake (`sync.rs:384-388`). That makes it **non-monotonic** → unusable as a
 local replay clock. **Mitigation:** the ack/compare key is `seq` (already monotonic, §4.1).
 For the history-ring index and replay loop, add a **never-clobbered `ClientPredictedTick`**
 (advanced in `FixedUpdate` alongside `advance_sim_tick`) OR stop letting the Snapshot arm
@@ -511,20 +511,20 @@ late-join transient, `DECISIONS.md:22`).
 
 Each phase is independently testable and leaves the build green.
 
-### P1 — Velocity on the wire + dead-reckon (stepping stone, no seq yet)
+### P1 — Velocity on the sync layer + dead-reckon (stepping stone, no seq yet)
 **Goal:** owned rover predicts forward using *real* authoritative velocity instead of a
 finite-difference reconstruction — kills the worst of the rubber-band before any seq/replay
 machinery exists.
-- Add `lv`/`av` `#[serde(default)]` to `SnapshotEntry` (`wire.rs:50-55`), `SnapshotSample`
+- Add `lv`/`av` `#[serde(default)]` to `SnapshotEntry` (`sync.rs:50-55`), `SnapshotSample`
   (`session.rs:258-263`), `InterpSample` (`commands.rs:192-197`).
-- `gather_snapshot` query `+ &LinearVelocity, &AngularVelocity` (`wire.rs:421`), populate
-  (`wire.rs:447`); same for connect baseline (`server.rs:121,164-168`); copy through
-  `drain_wire_inbox` (`wire.rs:368-373`).
+- `gather_snapshot` query `+ &LinearVelocity, &AngularVelocity` (`sync.rs:421`), populate
+  (`sync.rs:447`); same for connect baseline (`server.rs:121,164-168`); copy through
+  `drain_sync_inbox` (`sync.rs:368-373`).
 - `correct_owned_prediction` (`commands.rs:438-453`): use real `lv`/`av` instead of the
   `(last.pos-oldest.pos)/dts` reconstruction. **Still a blend, no replay** — just a better
   target. Test: drive in a straight line under 100 ms simulated latency, confirm reduced
   overshoot on stop.
-- Files: `wire.rs`, `session.rs`, `server.rs`, `commands.rs`.
+- Files: `sync.rs`, `session.rs`, `server.rs`, `commands.rs`.
 
 ### P2 — Input seq + per-tick emission + unacked buffer (client only)
 **Goal:** every owned input has a dense monotonic seq and lands in a replayable buffer.
@@ -539,15 +539,15 @@ machinery exists.
 ### P3 — Server ack: record + echo last-applied seq
 **Goal:** snapshots carry the authoritative ack.
 - Add `last_input_seq` `#[serde(default)]` to `SnapshotEntry`/`SnapshotSample`.
-- `AppliedInputSeq(HashMap<u64,u32>)` resource; write in `apply_wire_command` post-authorize
-  (`wire.rs:291-300`); read in `gather_snapshot` (`wire.rs:435-447`) + baseline (`server.rs`).
-- Read `seq` from `WireCommand.data` (already arrives via reflect, §3.4) — plumb into
-  `WireCommandEvent` if not already accessible at apply.
+- `AppliedInputSeq(HashMap<u64,u32>)` resource; write in `apply_sync_command` post-authorize
+  (`sync.rs:291-300`); read in `gather_snapshot` (`sync.rs:435-447`) + baseline (`server.rs`).
+- Read `seq` from `SyncCommand.data` (already arrives via reflect, §3.4) — plumb into
+  `SyncCommandEvent` if not already accessible at apply.
 - **Address the apply/gather phase offset (§6.4):** move `gather_snapshot` to in/after
   `FixedPostUpdate`.
 - Test: client logs `(owned gid, last_input_seq)` from snapshots; confirm it tracks the seq
   it sent, lagged by RTT.
-- Files: `wire.rs`, `server.rs`, optionally `commands.rs` (WireCommandEvent).
+- Files: `sync.rs`, `server.rs`, optionally `commands.rs` (SyncCommandEvent).
 
 ### P4 — Compare-at-seq + snap + replay (the core)
 **Goal:** replace continuous correction with snap+replay.
@@ -593,7 +593,7 @@ machinery exists.
    does it for us but mandates client-only disabling of avian's interpolation/transform plugins
    (`sandbox.rs:220`) and a divergent client plugin config. Hand-roll for MVP, evaluate the crate
    for v2 — confirm?
-6. **`PROTOCOL_ID` bump?** Additive `#[serde(default)]` fields are wire-compatible without it,
+6. **`PROTOCOL_ID` bump?** Additive `#[serde(default)]` fields are sync-compatible without it,
    but a bump makes mismatched host/client builds *refuse to connect* instead of silently
    dropping frames (`deserialize_env` `.ok()`). Bump on this schema change, or rely on
    build-together discipline?

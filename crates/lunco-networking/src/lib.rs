@@ -9,8 +9,8 @@
 //! - configure the lightyear WebTransport transport (native + wasm) and run it
 //!   as host or client;
 //! - allocate sessions on connect and send the handshake;
-//! - ferry pre-serialized [`wire::WireEnvelope`]s between
-//!   [`wire::WireOutbox`]/[`wire::WireInbox`] and two lightyear
+//! - ferry pre-serialized [`sync::SyncEnvelope`]s between
+//!   [`sync::SyncOutbox`]/[`sync::SyncInbox`] and two lightyear
 //!   messages (reliable `CmdChannel` + best-effort `SnapChannel`).
 //!
 //! With the feature off the plugin is a no-op and single-player is unaffected.
@@ -25,7 +25,7 @@ mod shared;
 /// Transport-agnostic networking wire: codec, command capture/apply, and state
 /// snapshots (no lightyear dep). Driven by this crate's lightyear adapter.
 #[cfg(feature = "networking")]
-pub mod wire;
+pub mod sync;
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
 mod server;
 #[cfg(feature = "networking")]

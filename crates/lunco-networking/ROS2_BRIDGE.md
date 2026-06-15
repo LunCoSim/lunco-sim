@@ -21,7 +21,7 @@ How rover sync works when ROS2 is in the loop. Short version:
                               │   SERVER (authority)│   physics + cosim + sim clock
                               │   ECS world         │
                               └───┬──────────────┬──┘
-              our wire (M2/M3/M6) │              │  lunco-ros bridge (server-only plugin)
+              our sync layer (M2/M3/M6) │              │  lunco-ros bridge (server-only plugin)
                                   │              │  reads/writes the SAME ECS state
                                   │         ┌────▼─────┐
                                   │         │  DDS      │  ◀── ROS2's own transport+discovery
@@ -36,7 +36,7 @@ How rover sync works when ROS2 is in the loop. Short version:
   ROS2; they see ROS-driven entities through plain **M2**, exactly like any other
   server-authoritative motion.
 - DDS does its own discovery and transport, so ROS2 nodes can be on other machines
-  on the LAN — we don't route them through our wire. The bridge is a ROS
+  on the LAN — we don't route them through our sync layer. The bridge is a ROS
   participant; our `TransportKind` set is untouched.
 
 ---

@@ -142,7 +142,7 @@ fn host_spawn_rovers(mut commands: Commands) {
 /// its drives are authorized (G4). Exclusivity is enforced by `claim`.
 fn host_on_possess(
     trigger: On<lunco_avatar::PossessVessel>,
-    guard: Res<lunco_core::WireApplyGuard>,
+    guard: Res<lunco_core::SyncApplyGuard>,
     local: Res<lunco_core::LocalSession>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     mut reg: ResMut<lunco_core::SessionRegistry>,
@@ -162,7 +162,7 @@ fn host_on_possess(
 }
 
 /// Applied (authorized) drive → set the rover's synthetic forward speed. An
-/// *unauthorized* drive never reaches here — `apply_wire_command` rejects it at
+/// *unauthorized* drive never reaches here — `apply_sync_command` rejects it at
 /// the authority gate before triggering the event.
 fn host_on_drive(trigger: On<lunco_mobility::DriveRover>, mut q: Query<&mut DriveVel>) {
     let cmd = trigger.event();

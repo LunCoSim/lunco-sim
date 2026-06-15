@@ -8,7 +8,7 @@
 >    byte `/`), NOT the draft's `(h ^ (h>>53))` / `\u{1f}` form. The 23 green tests
 >    are canonical; the draft paraphrase was wrong and would have desynced peers.
 > 2. **`from_raw` is `pub`, not `pub(crate)`** — `lunco-api::executor` and
->    `lunco-sandbox-edit` legitimately reconstruct a `GlobalEntityId` from a wire
+>    `lunco-sandbox-edit` legitimately reconstruct a `GlobalEntityId` from a sync-layer
 >    `u64`. That's reconstruction, not minting; locking it crate-private would
 >    break the API boundary. Minting is still closed (`new()`/`Default` removed).
 > 3. **`advance_sim_tick` reads `Option<Res<TimeWarpState>>`** — `TimeWarpState`
@@ -43,7 +43,7 @@ Grounded in the current code (2026-05-29):
 | `GlobalEntityId(pub u64)` + `new()`/`Default` | `lunco-core/src/lib.rs:64-93` |
 | `assign_global_entity_ids()` (PostUpdate auto-assign) | `lunco-core/src/lib.rs:250-258` |
 | `make_id_53()` (time+random, **non-deterministic**) | `lunco-core/src/ids.rs:23-50` |
-| `WireChannel{Local,CommandBus,ControlStream}` (renamed from `Replication`) | `lunco-core/src/commands.rs` |
+| `SyncChannel{Local,CommandBus,ControlStream}` (renamed from `Replication`) | `lunco-core/src/commands.rs` |
 | `Mutation<P>`,`OpId`,`SessionId` | `lunco-core/src/commands.rs` |
 | `TimeWarpState`, `CelestialClock` | `lunco-core/src/lib.rs:168-223` |
 | observer idiom `On<Add, T>` + `trigger.entity` | `lunco-cosim/src/lib.rs:77-142` |
@@ -178,14 +178,14 @@ directly within the crate.)
 pub struct GlobalEntityId(u64);          // field now PRIVATE
 
 impl GlobalEntityId {
-    /// Read the raw id (e.g. to put on the wire).
+    /// Read the raw id (e.g. to put on the sync layer).
     pub fn get(&self) -> u64 { self.0 }
 
     /// Server-only mint for Authoritative entities. Crate-internal: the
     /// assignment system is the sole caller. Wraps the existing make_id_53().
     pub(crate) fn allocate_authoritative() -> Self { Self(crate::ids::make_id_53()) }
 
-    /// Reconstruct from a wire/derived value. Crate-internal.
+    /// Reconstruct from a sync-layer/derived value. Crate-internal.
     pub(crate) fn from_raw(v: u64) -> Self { Self(v) }
 }
 // NOTE: no pub `new()`, no `Default`. Anything that did `GlobalEntityId::new()`

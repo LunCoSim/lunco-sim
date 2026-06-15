@@ -84,8 +84,8 @@ same prims (log/inspect); both report the same sim-tick. No motion yet.
 ## Phase 2 — M3 op-log + connect/identity/spawn/possess (stages 1–4 of the MVP scenario)
 **STATUS 2026-05-31: ✅ largely DONE + committed.** lightyear WebTransport host+client
 wired in-app (`server.rs`/`client.rs`); `SessionId` allocation + `SessionRegistry`;
-handshake (session+tick); `SpawnEntity` over wire + replicate with **G2 fixed**
-(`SkipContentStamp`→Authoritative id, no collision); over-wire `PossessVessel` with
+handshake (session+tick); `SpawnEntity` over the sync layer + replicate with **G2 fixed**
+(`SkipContentStamp`→Authoritative id, no collision); over the sync layer `PossessVessel` with
 **server ownership validation** (`authorize()`, G4) + `broadcast_ownership`; `ControllerLink`
 ownership replicated; **G5 disconnect cleanup** (`release_session`). Verified headless by
 `net_smoke` (possess→drive→snapshot + exclusivity). Remaining: **G3** server-provisioned
@@ -96,7 +96,7 @@ Lowest new code — the envelope and dispatch already exist. This phase delivers
 motion yet** (that's Ph3). Full rationale + the code audit behind these items:
 [`MVP_MULTIPLAYER_GAPS.md`](MVP_MULTIPLAYER_GAPS.md).
 
-- `declare_channel` routes by `WireChannel`: `CommandBus`→reliable-ordered
+- `declare_channel` routes by `SyncChannel`: `CommandBus`→reliable-ordered
   channel, `ControlStream`→best-effort INPUT channel (later, Phase 4).
 - Resolve `GlobalEntityId`↔`Entity` at the boundary via `ApiEntityRegistry`.
 - `OpId` dedupe for idempotent apply; server validates + broadcasts.
@@ -107,7 +107,7 @@ motion yet** (that's Ph3). Full rationale + the code audit behind these items:
   `GlobalEntityId`; client stores it as a `LocalAvatar` resource. (Other players' avatars need
   **not** replicate — you see rovers, not cameras.) Just `avatar-id + sim-tick + scene-id`;
   full snapshot/op-log-checkpoint baseline stays Ph6.
-- **`SpawnEntity` over the wire — now CORE, not stretch (it is stage 3 of the scenario):**
+- **`SpawnEntity` over the sync layer — now CORE, not stretch (it is stage 3 of the scenario):**
   server spawns, allocates the `Authoritative` root id, and broadcasts it in the mutation so
   peers converge. Geometry loads locally from the shared USD asset (no streaming).
 - **Runtime-spawn identity fix (G2 / DESIGN_GAPS §B.1 — REQUIRED here, no longer deferrable):**
@@ -130,7 +130,7 @@ a possess targeting someone else's rover is rejected. Rovers do **not** move yet
 
 ## Phase 3 — M2: state replication (the core; absorbs gaps A & C)
 **STATUS 2026-05-31: 🟡 PARTIAL.** 20 Hz snapshot replication is built (`gather_snapshot`
-host → `ingest_snapshots`/`interpolate_proxies` client), with velocity on the wire and a
+host → `ingest_snapshots`/`interpolate_proxies` client), with velocity on the sync layer and a
 client interpolation buffer (`INTERP_DELAY`, folded so a body at rest holds its pose).
 **Gap A advanced (2026-05-31):** the snapshot now carries the **absolute f64 `pos`**
 (avian `Position`) + the **`CellCoord`**, and the client interpolates `pos` in f64 + seats
@@ -238,9 +238,9 @@ leaves a working, better-synced app than the phase before.
   `lightyear` is `optional = true`. The **substrate** (Provenance / GlobalEntityId /
   SimTick / IsServer — Ph1) is **always compiled**, never gated. The
   `app.sync::<T>()` / `register_command` facade is always present and is a **no-op**
-  when the feature is off, so domain crates never `#[cfg]`-fork. Only the wire layer
+  when the feature is off, so domain crates never `#[cfg]`-fork. Only the sync layer
   (replication/transport/prediction, lightyear-importing code) lives behind the gate.
-- **Local is the default** — no accidental wire traffic.
+- **Local is the default** — no accidental sync traffic.
 - Everything stamped in M6 sim-ticks.
 - Identity is provenance-derived; ordering is `OpId`. Separate, always.
 - Backend choice is contained; swapping it touches only `lunco-networking` glue.

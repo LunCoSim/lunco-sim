@@ -76,10 +76,10 @@ impl Default for LocalSession {
 ///
 /// `None` ⇒ the command originated locally on this peer.
 #[derive(Resource, Clone, Copy, Debug, Default)]
-pub struct WireApplyGuard(pub Option<SessionId>);
+pub struct SyncApplyGuard(pub Option<SessionId>);
 
-impl WireApplyGuard {
-    pub fn is_from_wire(&self) -> bool {
+impl SyncApplyGuard {
+    pub fn is_from_sync(&self) -> bool {
         self.0.is_some()
     }
 }
@@ -106,7 +106,7 @@ pub enum PossessionPolicy {
 /// which entity (keyed by [`crate::GlobalEntityId`] raw `u64`). The home of the
 /// single [`authorize`] gate. On a pure client this stays empty (the client
 /// trusts the host); the client's optimistic local apply is gated by
-/// [`WireApplyGuard`] / [`NetworkRole`], not by ownership.
+/// [`SyncApplyGuard`] / [`NetworkRole`], not by ownership.
 #[derive(Resource, Default, Debug)]
 pub struct SessionRegistry {
     /// rover gid → owning session.
