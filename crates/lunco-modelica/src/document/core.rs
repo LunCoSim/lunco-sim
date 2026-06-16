@@ -283,6 +283,22 @@ impl ModelicaDocument {
         // full rumoca parse of the whole `package.mo` wrapper — tens of
         // seconds for `Modelica/Blocks/package.mo`).
         let key = path.to_string_lossy().to_string();
+        let bundle_hit = crate::msl_remote::parsed_msl_bundle()
+            .map(|b| b.iter().any(|(k, _)| *k == key))
+            .unwrap_or(false);
+        // A bundle MISS here means we fall back to fully parsing `full_source`
+        // — for a package wrapper like `Modelica/Blocks/package.mo` (~150 KB,
+        // the whole Blocks package inlined) that is the "tens of seconds" parse
+        // the fallback comment warns about, and on single-threaded wasm it can
+        // stall the drill-in task long enough to look like a hang. Worth a
+        // breadcrumb when it happens.
+        if !bundle_hit {
+            bevy::log::warn!(
+                "[load_msl_class] parsed-bundle MISS for `{key}` ({} bytes) — \
+                 full reparse (slow for large package.mo wrappers)",
+                full_source.len()
+            );
+        }
         let ast: StoredDefinition = match crate::msl_remote::parsed_msl_bundle()
             .and_then(|b| b.iter().find(|(k, _)| *k == key).map(|(_, a)| a.clone()))
         {
@@ -298,6 +314,27 @@ impl ModelicaDocument {
         // invalid Modelica. Use the canonical full-declaration span.
         let (full_start, full_end) =
             crate::ast_extract::class_full_text_span(class_def, &full_source);
+        // Defensive: the AST may come from the pre-parsed bundle while
+        // `full_source` was re-read separately (msl_read). If their byte
+        // offsets ever disagree (different line endings, a stale bundle, a
+        // wrong-file resolution), slicing would panic — and on wasm that
+        // panic happens inside the AsyncComputeTaskPool task, which dies
+        // SILENTLY (no install, no error log), leaving the drill-in tab
+        // stuck on "loading" forever. Validate the span and surface a real
+        // error instead so the failure is visible and recoverable.
+        if full_start > full_end
+            || full_end > full_source.len()
+            || !full_source.is_char_boundary(full_start)
+            || !full_source.is_char_boundary(full_end)
+        {
+            return Err(format!(
+                "class `{qualified}` span {full_start}..{full_end} invalid for \
+                 source of {} bytes in `{}` (bundle_hit={bundle_hit}) — likely a \
+                 stale/mismatched parsed bundle or wrong-file resolution",
+                full_source.len(),
+                path.display()
+            ));
+        }
         let class_slice = &full_source[full_start..full_end];
 
         let source = if parent_pkg.is_empty() {

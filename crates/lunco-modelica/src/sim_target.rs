@@ -169,17 +169,40 @@ pub fn resolve_requested_class(
     if let Some(hit) = candidates.iter().find(|c| c.as_str() == req) {
         return Ok(hit.clone());
     }
-    // 2. Leaf-name match on the last `.`-separated segment.
+    // 2. Leaf-name match: the bare request equals a candidate's last
+    //    `.`-segment (e.g. `"RoverThermalSystem"` → `"LunarRover.RoverThermalSystem"`).
     let leaf_hits: Vec<String> = candidates
         .iter()
         .filter(|c| c.rsplit('.').next() == Some(req))
         .cloned()
         .collect();
     match leaf_hits.len() {
-        0 => Err(ClassResolveError::Unknown),
-        1 => Ok(leaf_hits.into_iter().next().unwrap()),
-        _ => Err(ClassResolveError::Ambiguous(leaf_hits)),
+        1 => return Ok(leaf_hits.into_iter().next().unwrap()),
+        n if n > 1 => return Err(ClassResolveError::Ambiguous(leaf_hits)),
+        _ => {}
     }
+    // 3. Fully-qualified request that is a segment-aligned SUPERSET of an
+    //    under-qualified candidate — i.e. a candidate is a trailing dotted
+    //    suffix of the request. Return the request: it carries the full
+    //    prefix the compiler needs. This is the drilled-MSL-class case: the
+    //    pin is the true FQN `Modelica.Blocks.Examples.PID_Controller`, while
+    //    the in-doc candidate is the `within`-relative
+    //    `Blocks.Examples.PID_Controller` (the doc's `within Modelica.Blocks.
+    //    Examples;` prefix isn't folded into the index's qualified names).
+    //    Compiling the under-qualified candidate would fail "model not found".
+    if req.contains('.') {
+        let suffix_hits: Vec<&String> = candidates
+            .iter()
+            .filter(|c| {
+                c.rsplit('.').next() == req.rsplit('.').next()
+                    && req.ends_with(&format!(".{c}"))
+            })
+            .collect();
+        if suffix_hits.len() == 1 {
+            return Ok(req.to_string());
+        }
+    }
+    Err(ClassResolveError::Unknown)
 }
 
 /// Map a model's `experiment(...)` annotation to [`RunBounds`]. `None` when

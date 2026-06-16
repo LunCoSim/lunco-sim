@@ -603,6 +603,32 @@ pub(crate) fn render_compile_class_picker(
 /// that doesn't want the rest of the UI plugin) to opt in to the
 /// command path alone.
 
+/// The source text to overlay into the compiler session when compiling a
+/// document — and the crux of running MSL/library examples correctly.
+///
+/// A read-only library document (`DocumentOrigin::File { writable: false }`,
+/// what a drilled-in MSL class is) holds a class that is *already present in
+/// the loaded library session* (the MSL pre-parsed bundle, installed via
+/// `replace_parsed_source_set`). Overlaying its extracted source would
+/// register the same qualified class a SECOND time under `model.mo` and trip
+/// rumoca's "Duplicate class … with non-identical definition" resolver error.
+///
+/// So for library classes we overlay NOTHING and let the compiler resolve the
+/// requested (fully-qualified) class straight from the already-loaded library
+/// — i.e. run the loaded example in place, never a temp copy. User documents
+/// (Untitled scratch, writable files) and bundled examples are NOT in the
+/// session, so they overlay their full source as before.
+fn compile_overlay_source(document: &crate::document::ModelicaDocument) -> String {
+    if matches!(
+        document.origin(),
+        lunco_doc::DocumentOrigin::File { writable: false, .. }
+    ) {
+        String::new()
+    } else {
+        document.source().to_string()
+    }
+}
+
 // ─── on_compile_model ─────────────────────────────────────────────────────
 
 #[on_command(CompileModel)]
@@ -696,7 +722,7 @@ pub fn on_compile_model(
                     }
                 }
                 (
-                    doc_ref.source().to_string(),
+                    compile_overlay_source(doc_ref),
                     doc_generation,
                     ast,
                     candidates,
@@ -972,6 +998,12 @@ pub fn on_compile_model(
             .iter()
             .filter_map(|(other_doc, host)| {
                 if other_doc == doc {
+                    return None;
+                }
+                // A read-only library doc (a drilled-in MSL class) is already
+                // in the loaded session — overlaying it as a cross-doc source
+                // would re-register its class and duplicate-collide. Skip.
+                if host.document().origin().is_read_only() {
                     return None;
                 }
                 let names = class_names_of(other_doc);
@@ -1410,7 +1442,11 @@ fn dispatch_experiment(
                 }
             };
             let document = host.document();
-            let source = document.source().to_string();
+            // Library classes compile from the loaded session, not a temp
+            // overlay (see `compile_overlay_source`) — this is what makes a
+            // drilled MSL example (e.g. `Modelica.Blocks.Examples.PID_Controller`)
+            // run without a self-duplicate-class collision.
+            let source = compile_overlay_source(document);
             let filename = document.origin().display_name();
             let index = document.index();
             // Tier-ranked candidates (an `experiment(...)`-annotated class
