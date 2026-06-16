@@ -294,7 +294,7 @@ impl ModelicaCompiler {
             );
             return true;
         }
-        if let Some(root) = lunco_assets::msl::primary_filesystem_root() {
+        if lunco_assets::msl::primary_filesystem_root().is_some() {
             // Native: an MSL tree is present, so MSL is wanted. Try the
             // pre-parsed on-disk bundle first via the shared, memoized
             // `install_parsed_msl` path — it streams `parsed-msl.bin` and
@@ -312,41 +312,45 @@ impl ModelicaCompiler {
                 return true;
             }
 
-            // No usable bundle (missing, or rumoca-version-stale and failed to
-            // decode in `parsed_msl_bundle`).
+            // No usable bundle (missing, or rumoca-version-stale and failed
+            // to decode). Cold path: build the bundle the SAME way
+            // `msl_indexer` does — `indexer::parse_native_msl_bundle` walks
+            // every native root (MSL tree + companions + discovered extra
+            // libs) and parses ONE FILE AT A TIME.
             //
-            // Slow path: parse the source root from disk. Goes through
-            // rumoca's per-file artifact cache, but that cache is
-            // fingerprint-keyed and easily invalidates — we treat this
-            // as a one-time cost and write the bundle below so the
-            // next launch hits the fast path above.
-            let parsed = match rumoca_compile::source_roots::parse_source_root_with_cache_in(
-                root,
-                rumoca_compile::source_roots::resolve_source_root_cache_dir().as_deref(),
-            ) {
-                Ok(p) => p,
-                Err(e) => {
+            // We deliberately do NOT use rumoca's
+            // `parse_source_root_with_cache_in`: it fires a single
+            // all-files rayon batch, which spikes memory (up to `num_cpus`
+            // concurrent ASTs + a full-tree blake3 hash sweep) and bursts
+            // concurrent artifact-cache writes. Fine standalone, but here it
+            // runs on the worker thread *alongside the Bevy render loop*, so
+            // on weak (8 GB) machines the peak swaps and stalls the whole
+            // desktop. Per-file keeps the peak flat — `msl_indexer` has
+            // always parsed this way and finishes in minutes where the batch
+            // path took tens of minutes. DRY: one MSL source→bundle parser
+            // shared by the CLI and the workbench.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let docs = crate::indexer::parse_native_msl_bundle();
+                if docs.is_empty() {
                     log::warn!(
-                        "[ModelicaCompiler] failed to parse MSL source root `{}`: {e}",
-                        root.display()
+                        "[ModelicaCompiler] no MSL source files found under native \
+                         roots; session starts empty"
                     );
                     return false;
                 }
-            };
-            let parsed_count = parsed.file_count;
-            // Write the bundle (zstd-compressed) BEFORE moving the documents
-            // into the session so we don't clone ~165 MB of StoredDefinitions.
-            // Native-only: wasm has no disk and never reaches this branch.
-            #[cfg(not(target_arch = "wasm32"))]
-            {
+                let parsed_count = docs.len();
+                // Write the bundle (zstd-compressed) BEFORE moving the docs
+                // into the session so we don't clone ~165 MB of defs, and so
+                // the next launch hits the fast path above (~1s).
                 let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
                 if let Some(parent) = bundle_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                match msl_remote::write_parsed_bundle(&bundle_path, &parsed.documents) {
+                match msl_remote::write_parsed_bundle(&bundle_path, &docs) {
                     Ok(()) => log::info!(
                         "[ModelicaCompiler] wrote compressed MSL bundle ({} docs) to `{}` — next launch will be ~1s",
-                        parsed.documents.len(),
+                        docs.len(),
                         bundle_path.display()
                     ),
                     Err(e) => log::warn!(
@@ -354,23 +358,23 @@ impl ModelicaCompiler {
                         bundle_path.display()
                     ),
                 }
+                let inserted = session.replace_parsed_source_set(
+                    "msl",
+                    rumoca_compile::compile::SourceRootKind::DurableExternal,
+                    docs,
+                    None,
+                );
+                log::info!(
+                    "[ModelicaCompiler] preloaded MSL (cold, per-file) in {:.2}s: \
+                     {} parsed / {} inserted",
+                    t_total.elapsed().as_secs_f64(),
+                    parsed_count,
+                    inserted,
+                );
+                return true;
             }
-            let inserted = session.replace_parsed_source_set(
-                "msl",
-                rumoca_compile::compile::SourceRootKind::DurableExternal,
-                parsed.documents,
-                None,
-            );
-            log::info!(
-                "[ModelicaCompiler] preloaded MSL from `{}` in {:.2}s: \
-                 {} parsed / {} inserted (cache {:?})",
-                root.display(),
-                t_total.elapsed().as_secs_f64(),
-                parsed_count,
-                inserted,
-                parsed.cache_status,
-            );
-            return true;
+            #[cfg(target_arch = "wasm32")]
+            return false;
         }
         false
     }

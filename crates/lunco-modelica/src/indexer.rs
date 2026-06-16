@@ -1110,6 +1110,114 @@ impl MSLIndexer {
 ///
 /// Non-cancellable; the workbench should call [`run_with_cancel`]
 /// when it wants to be able to interrupt a long indexing pass.
+/// The native MSL source set as `(directory, package_prefix)` package
+/// roots plus standalone companion `.mo` files, gathered across the MSL
+/// tree, its companions, and every discovered third-party library.
+///
+/// Single source of truth for "which files make up native MSL", shared by
+/// the CLI indexer ([`run_with_cancel`]) and the workbench's cold-cache
+/// bundle builder ([`parse_native_msl_bundle`]) so both resolve exactly
+/// the same libraries. Roots come from `lunco-assets` (`msl_dir`/
+/// `cache_dir`) + `discover_third_party_libs`.
+pub(crate) fn native_msl_roots() -> (Vec<(std::path::PathBuf, String)>, Vec<std::path::PathBuf>) {
+    let msl_root = lunco_assets::msl_dir();
+    let mut dirs: Vec<(std::path::PathBuf, String)> = Vec::new();
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+
+    let modelica = msl_root.join("Modelica");
+    if modelica.exists() {
+        dirs.push((modelica, "Modelica".to_string()));
+    }
+    // Companion package shipped beside `Modelica/` — device animation,
+    // file IO and event-logger services several MSL examples extend.
+    for sibling_dir in ["ModelicaServices"] {
+        let p = msl_root.join(sibling_dir);
+        if p.exists() {
+            dirs.push((p, sibling_dir.to_string()));
+        }
+    }
+    // Companion flat file: `operator record Complex`, referenced by
+    // Modelica.Fluid media and Modelica.ComplexBlocks.
+    for sibling_file in ["Complex.mo"] {
+        let p = msl_root.join(sibling_file);
+        if p.exists() {
+            files.push(p);
+        }
+    }
+    // Discovered third-party libs — the same set the runtime resolves
+    // natively and `build_msl_assets --discover-extras` ships to web.
+    for (cache_subdir, package_dir) in
+        crate::ui::panels::package_browser::scanner::discover_third_party_libs()
+    {
+        let lib_path = lunco_assets::cache_dir().join(&cache_subdir).join(&package_dir);
+        if lib_path.exists() {
+            dirs.push((lib_path, package_dir));
+        }
+    }
+    (dirs, files)
+}
+
+/// Recursively collect every `.mo` file under `dir` into `out`.
+#[cfg(not(target_arch = "wasm32"))]
+fn collect_mo_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_mo_files(&path, out);
+            } else if path.extension().is_some_and(|e| e == "mo") {
+                out.push(path);
+            }
+        }
+    }
+}
+
+/// Parse every native MSL `.mo` file into `(uri, StoredDefinition)` pairs,
+/// **one file at a time**. The workbench's cold-cache bundle builder and
+/// the low-peak counterpart to rumoca's `parse_source_root_with_cache_in`
+/// (a single all-files rayon batch).
+///
+/// Why per-file: the batch parser spikes memory (up to `num_cpus`
+/// concurrent ASTs + a full-tree blake3 hash sweep) and bursts concurrent
+/// artifact-cache writes. Standalone that's fine, but the workbench runs
+/// this on its worker thread *alongside the Bevy render loop*, so on weak
+/// (8 GB) machines the peak swaps and stalls the whole desktop. Parsing
+/// one file at a time keeps the peak flat — proven by `msl_indexer`, which
+/// has always parsed this way and finishes in minutes where the batch
+/// path took tens of minutes.
+///
+/// Reuses `rumoca_compile::parsing::parse_files_parallel` (same per-file
+/// disk cache as everything else) and [`native_msl_roots`] (same root set
+/// as the CLI), so the emitted bundle is identical to the indexer's.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn parse_native_msl_bundle() -> Vec<(String, StoredDefinition)> {
+    let (root_dirs, companion_files) = native_msl_roots();
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    for (dir, _prefix) in &root_dirs {
+        collect_mo_files(dir, &mut paths);
+    }
+    paths.extend(companion_files);
+
+    let started = Instant::now();
+    let mut bundle: Vec<(String, StoredDefinition)> = Vec::with_capacity(paths.len());
+    for path in &paths {
+        match rumoca_compile::parsing::parse_files_parallel(std::slice::from_ref(path)) {
+            Ok(mut pairs) => {
+                if let Some((_, ast)) = pairs.pop() {
+                    bundle.push((path.to_string_lossy().to_string(), ast));
+                }
+            }
+            Err(e) => log::warn!("[msl-bundle] failed to parse `{}`: {e}", path.display()),
+        }
+    }
+    log::info!(
+        "[msl-bundle] parsed {} MSL files (per-file) in {:.1}s",
+        bundle.len(),
+        started.elapsed().as_secs_f64()
+    );
+    bundle
+}
+
 pub fn run(opts: Options) {
     run_with_cancel(opts, None);
 }
@@ -1162,76 +1270,27 @@ pub fn run_with_cancel(
 
     let mut indexer = MSLIndexer::new();
     indexer.verbose = opts.verbose;
-    indexer.scan_dir(&msl_path, "Modelica");
-    bail_if_cancelled!();
-    // Top-level companion libraries that ship alongside `Modelica/` and
-    // are required by it — `Complex.mo` is referenced by Modelica.Fluid
-    // (medium models) and Modelica.ComplexBlocks; `ModelicaServices/`
-    // carries device animation helpers that several MSL examples extend.
-    // Without them, every model touching `Modelica.Fluid.*` fails
-    // resolution with `base class not found: Complex does not exist`
-    // even though the file is on disk — the in-memory bundle simply
-    // never had it.
-    //
-    // Each entry is loaded independently (top-level package_prefix is
-    // empty, so the indexer keys flat files by their declared class
-    // name and folder packages by their package.mo `within ;` shape).
-    for sibling_dir in ["ModelicaServices"] {
-        let p = msl_root.join(sibling_dir);
-        if p.exists() {
-            indexer.scan_dir(&p, sibling_dir);
-        } else {
-            println!("[indexer] (skipping absent companion `{}`)", sibling_dir);
-        }
-    }
-    for sibling_file in ["Complex.mo"] {
-        let p = msl_root.join(sibling_file);
-        if p.exists() {
-            // scan_dir handles the file branch when called against its
-            // parent dir, but here we want a single file. The cleanest
-            // re-use is to scan the parent with an empty prefix — but
-            // that pulls in *every* root file. Inline the file branch
-            // instead.
-            if let Ok(source) = fs::read_to_string(&p) {
-                indexer.files_scanned += 1;
-                indexer.bytes_scanned += source.len();
-                indexer.ingest_root_file(&p, &source);
-            }
-        } else {
-            println!("[indexer] (skipping absent companion `{}`)", sibling_file);
-        }
-    }
 
-    // Additional Modelica libraries downloaded via lunco-assets and
-    // surfaced into the workbench alongside the MSL. Each entry is
-    // (cache_subdir, top_level_package_dir_inside_it). The cache
-    // subdir is what `lunco-assets` writes (e.g. `dest = "thermofluidstream"`
-    // in Assets.toml lands the unpacked archive at
-    // `<cache>/thermofluidstream/`), and the inner directory is the
-    // actual Modelica package root (the GitHub archive layout puts
-    // the library one level down).
-    //
-    // Adding a library makes its classes visible in the workbench's
-    // package browser, drillable from the Twin tree, and resolvable as
-    // `Library.Class` from any open document.
-    //
-    // Discovered (not hardcoded) so the indexed `components` cover exactly
-    // the same set of third-party libs that the runtime resolves natively
-    // (`sources_with_extras`) and that `build_msl_assets --discover-extras`
-    // ships into the web bundle. Returns (cache_subdir, top_level_package_dir).
-    let extra_libraries =
-        crate::ui::panels::package_browser::scanner::discover_third_party_libs();
-    for (cache_subdir, package_dir) in &extra_libraries {
-        let cache_root = lunco_assets::cache_dir().join(cache_subdir);
-        let lib_path = cache_root.join(package_dir);
-        if lib_path.exists() {
-            println!("[indexer] scanning `{}` at {:?}", package_dir, lib_path);
-            indexer.scan_dir(&lib_path, package_dir);
-        } else {
-            println!(
-                "[indexer] (skipping `{}` — run `cargo run -p lunco-assets --bin lunco-assets -- download` to fetch)",
-                package_dir
-            );
+    // Single source of truth for the native MSL source set (MSL tree +
+    // companions + discovered third-party libs), shared with the
+    // workbench's cold-cache bundle builder (`parse_native_msl_bundle`) so
+    // both scan exactly the same files. `native_msl_roots` returns folder
+    // packages as `(dir, prefix)` and standalone companion files (e.g.
+    // `Complex.mo`, referenced by Modelica.Fluid / ComplexBlocks)
+    // separately, since the indexer keys flat files by declared class name
+    // and folder packages by their `package.mo` `within` shape.
+    let (root_dirs, companion_files) = native_msl_roots();
+    for (dir, prefix) in &root_dirs {
+        bail_if_cancelled!();
+        println!("[indexer] scanning `{}` at {:?}", prefix, dir);
+        indexer.scan_dir(dir, prefix);
+    }
+    for file in &companion_files {
+        bail_if_cancelled!();
+        if let Ok(source) = fs::read_to_string(file) {
+            indexer.files_scanned += 1;
+            indexer.bytes_scanned += source.len();
+            indexer.ingest_root_file(file, &source);
         }
     }
 
