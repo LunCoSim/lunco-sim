@@ -51,6 +51,7 @@ impl Plugin for SandboxEditPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SpawnState>()
             .init_resource::<SelectedEntity>()
+            .init_resource::<InspectorTarget>()
             .init_resource::<UndoStack>()
             .init_resource::<catalog::SpawnCatalog>()
             .insert_resource(lunco_core::DragModeActive { active: false })
@@ -154,4 +155,19 @@ pub enum SpawnState {
 pub struct SelectedEntity {
     /// The selected entity, if any.
     pub entity: Option<Entity>,
+}
+
+/// Which sub-part of the [`SelectedEntity`] the Inspector edits.
+///
+/// Selection targets a logical component root (a rover), but a component has
+/// many material-bearing parts (4 wheels + body). This narrows editing to one
+/// of them. `None` = "whole object" (edit the first shader holder + all PBR
+/// materials in the subtree, the bulk default). Set by the Inspector's *Parts*
+/// selector or by a viewport drill-click (clicking a part of the already-
+/// selected object). The Inspector validates it against the current selection's
+/// subtree each frame, so a stale part from a previous selection is ignored.
+#[derive(Resource, Default)]
+pub struct InspectorTarget {
+    /// The targeted sub-part entity, or `None` for the whole object.
+    pub part: Option<Entity>,
 }

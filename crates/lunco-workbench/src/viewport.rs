@@ -185,6 +185,27 @@ impl PanelRects {
     }
 }
 
+/// True if an egui popup — a `Foreground`/`Tooltip` layer — sits at `pos`
+/// (window **logical** points, the space of [`bevy::window::Window::cursor_position`]).
+///
+/// Color-picker and combo-box popups, dropdown menus and tooltips float as
+/// foreground `Area`s that can extend OVER the viewport rect. A click inside
+/// one therefore passes [`PanelRects::any_contains`] (it *is* geometrically
+/// over the scene) yet must NOT raycast — egui owns that click. Viewport click
+/// handlers (selection, possession) AND-gate the rect test with `!this` so a
+/// click on, say, the Inspector's open colour picker doesn't fall through to
+/// the 3D scene behind it and re-select whatever is back there (the terrain).
+///
+/// Why not `wants_pointer_input`/`is_pointer_over_area`: egui_dock renders every
+/// dock leaf — the viewport included — as an egui `Area`, so those read `true`
+/// over the bare scene too and can't separate chrome from scene. Layer *order*
+/// can: only popups/menus/tooltips are `Foreground`/`Tooltip`; the viewport and
+/// docked panels are `Background`/`Middle`.
+pub fn pointer_over_egui_popup(ctx: &egui::Context, pos: bevy::math::Vec2) -> bool {
+    ctx.layer_id_at(egui::pos2(pos.x, pos.y))
+        .is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip))
+}
+
 /// Empty-state text drawn centered over the 3D viewport region.
 ///
 /// When `message` is `Some`, the workbench paints it centered over the

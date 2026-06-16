@@ -22,6 +22,7 @@ lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-avatar = { path = "../lunco-avatar" }
+lunco-assets = { path = "../lunco-assets" }
 
 [lints]
 workspace = true

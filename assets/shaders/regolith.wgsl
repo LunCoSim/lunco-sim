@@ -43,15 +43,17 @@
     pbr_functions,
     mesh_bindings::mesh,
     mesh_view_bindings::view,
+    mesh_view_bindings::lights,
 }
 #import lunco::horizon::sun_visibility
+#import lunco::lunar::regolith_factor
 
 // Dynamic, self-describing parameters — the engine reflects this `Material`
 // struct (field names → offsets) and the `//!@` annotations (UI ranges,
 // defaults, engine-filled fields) straight out of this file. Edit live
 // (hot-reload) or via the Inspector / `SetObjectProperty`.
 //!@ui      albedo            color       "Albedo"
-//!@default albedo            0.17,0.17,0.17
+//!@default albedo            0.13,0.13,0.13
 //!@ui      macro_clump_scale 1 20        "Macro clump scale (/m)"
 //!@default macro_clump_scale 8
 //!@ui      macro_bump        0 0.3       "Macro bump strength"
@@ -69,6 +71,7 @@
 //!@ui      mottle            0 0.6       "Albedo mottle"
 //!@default mottle            0.22
 //!@engine  sun_dir
+//!@engine  sun_dir_world
 //!@engine  sun_tan_radius
 //!@engine  hf_size
 //!@engine  hf_res
@@ -85,6 +88,7 @@ struct Material {
     mottle:            f32,
     sun_tan_radius:    f32,  // engine-filled: tan(sun angular radius)
     sun_dir:           vec3<f32>,  // engine-filled: terrain-local to-sun dir
+    sun_dir_world:     vec3<f32>,  // engine-filled: world-space to-sun (lunar BRDF)
     hf_size:           vec2<f32>,  // engine-filled: heightfield extent (m)
     hf_res:            f32,  // engine-filled: heightfield resolution
     csm_far:           f32,  // engine-filled: CSM far bound (m); march fades in beyond
@@ -186,7 +190,14 @@ fn bump_layer(
     let hb = layer_height(p + b * eps, scale, octaves, gain, lo, hi);
     *out_h = h0;
     let grad = (ht - h0) * t + (hb - h0) * b;
-    return normalize(n - strength * grad / eps);
+    // Guard against a degenerate perturbation: a strong bump on a steep ramp
+    // can push the normal to ~zero length or below the surface → normalize()
+    // would NaN / flip. Keep the geometric normal in those cases.
+    let perturbed = n - strength * grad / eps;
+    if (length(perturbed) < 1e-3 || dot(perturbed, n) <= 0.0) {
+        return n;
+    }
+    return normalize(perturbed);
 }
 
 @fragment
@@ -255,7 +266,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.is_orthographic = view.clip_from_view[3].w == 1.0;
     pbr_input.N = n;
     pbr_input.V = pbr_functions::calculate_view(in.world_position, pbr_input.is_orthographic);
-    pbr_input.material.base_color = vec4(albedo, 1.0);
+    // Lunar regolith photometry: reshape the sun diffuse from Lambert to
+    // Lommel-Seeliger + opposition surge (retroreflective backscatter). The
+    // factor pre-multiplies base_color; bevy's built-in Lambert (·μ₀) then
+    // completes the response. World-space to-sun comes from the engine (the
+    // CPU-picked canonical sun), not directional_lights[0] — the earthshine
+    // fill light can shuffle that. Guarded against the zero (unfilled) default.
+    var lunar_k = 1.0;
+    let sw = mat.sun_dir_world;
+    if (dot(sw, sw) > 0.25) {
+        lunar_k = regolith_factor(pbr_input.N, normalize(sw), pbr_input.V);
+    }
+    pbr_input.material.base_color = vec4(albedo * lunar_k, 1.0);
     pbr_input.material.perceptual_roughness = roughness;
     pbr_input.material.metallic = 0.0;
     pbr_input.material.reflectance = vec3(0.5);

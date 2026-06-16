@@ -62,7 +62,8 @@ use big_space::prelude::*;
 use avian3d::prelude::Collider;
 use bevy::camera::visibility::NoFrustumCulling;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame, CelestialBody};
-use crate::gravity::{GravityProvider, PointMassGravity};
+use crate::gravity::PointMassGravity;
+use lunco_environment::GravityProvider;
 use crate::soi::SOI;
 use lunco_materials::{BlueprintMaterial, BlueprintExtension};
 
@@ -178,13 +179,19 @@ pub fn setup_big_space_hierarchy(
     // light (e.g. the moonbase Twin's `DistantLight`) replaces this default
     // sun — TWO simultaneous DirectionalLights double-light the scene and
     // make "which sun?" ambiguous for shadow systems.
+    // Canonical lunar-sun shadows (cascade split + biases + 4096² atlas) from
+    // the single source of truth — see `lunco_render::LunarSunShadow`. This
+    // spawn used to omit the cascade config entirely, so it rendered with
+    // Bevy's single-cascade default (wrong terrain self-shadow, clipped
+    // low-sun streaks). Now it matches the sandbox + USD paths by construction.
+    let sun = lunco_render::LunarSunShadow::default();
+    // Physical sun identity (illuminance / angular size) is environmental state.
+    let ls = lunco_environment::LunarSun::default();
+    commands.insert_resource(sun.shadow_map());
     commands.spawn((
-        DirectionalLight {
-            color: Color::WHITE,
-            illuminance: 10_000.0,
-            shadows_enabled: true,
-            ..default()
-        },
+        sun.directional_light(Color::WHITE, ls.illuminance_lux),
+        sun.cascade_config(),
+        lunco_core::SunAngularDiameter(ls.angular_diameter_deg),
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
@@ -443,13 +450,20 @@ pub fn setup_big_space_hierarchy(
     commands.spawn((
         Camera::default(),
         Camera3d::default(),
+        // Physical exposure paired with the canonical sun illuminance
+        // (single source of truth — lunco_environment::LunarSun). SMAA was
+        // deliberately dropped here — it blanks egui-composited viewports
+        // (see the SMAA black-viewport fix on main).
+        bevy::camera::Exposure { ev100: lunco_environment::LunarSun::default().exposure_ev100 },
         Projection::Perspective(PerspectiveProjection {
             near: 1.0,
             far: 1.0e15,
             ..default()
         }),
         bevy::post_process::bloom::Bloom {
-            intensity: 0.4,
+            // Airless world: no atmospheric glow — only genuine specular glints
+            // / the sun disc should bloom. The high prefilter threshold gates it.
+            intensity: 0.15,
             low_frequency_boost: 0.5,
             low_frequency_boost_curvature: 0.5,
             high_pass_frequency: 1.0,

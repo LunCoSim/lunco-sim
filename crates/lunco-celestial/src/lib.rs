@@ -12,6 +12,9 @@ use bevy::math::DVec3;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy::asset::load_internal_asset;
 use bevy_shader::Shader;
+// Gravity *types* now live in lunco-environment; celestial owns only the
+// gravity systems + `PointMassGravity` model (see `gravity.rs`).
+use lunco_environment::{Gravity, GravityBody};
 
 mod clock;
 pub mod ephemeris;

@@ -6772,6 +6772,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
+ "lunco-environment",
  "lunco-mobility",
  "lunco-settings",
  "lunco-theme",
@@ -6816,7 +6817,9 @@ dependencies = [
  "lunco-assets",
  "lunco-controller",
  "lunco-core",
+ "lunco-environment",
  "lunco-materials",
+ "lunco-render",
  "lunco-storage",
  "lunco-terrain",
  "lunco-theme",
@@ -6868,6 +6871,7 @@ dependencies = [
  "lunco-mobility",
  "lunco-modelica",
  "lunco-networking",
+ "lunco-render",
  "lunco-robotics",
  "lunco-sandbox-edit",
  "lunco-scripting",
@@ -6956,7 +6960,6 @@ version = "0.1.0"
 dependencies = [
  "avian3d 0.6.1",
  "bevy",
- "lunco-celestial",
  "lunco-core",
  "lunco-cosim",
  "lunco-materials",
@@ -7104,6 +7107,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-render"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+]
+
+[[package]]
 name = "lunco-robotics"
 version = "0.6.0-dev"
 dependencies = [
@@ -7121,6 +7131,7 @@ dependencies = [
  "bevy_picking",
  "big_space",
  "lunco-api",
+ "lunco-assets",
  "lunco-avatar",
  "lunco-controller",
  "lunco-core",
@@ -7295,6 +7306,7 @@ dependencies = [
  "big_space",
  "lunco-assets",
  "lunco-core",
+ "lunco-render",
  "openusd",
 ]
 
@@ -7313,6 +7325,7 @@ dependencies = [
  "lunco-core",
  "lunco-cosim",
  "lunco-doc",
+ "lunco-environment",
  "lunco-fsw",
  "lunco-hardware",
  "lunco-materials",

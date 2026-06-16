@@ -172,6 +172,12 @@ pub struct HorizonShadowed;
 pub struct HorizonShade {
     original: Color,
     last_vis: f32,
+    /// The authored shared `StandardMaterial` handle (held strongly here while
+    /// the entity is darkened). Restored when the entity returns to full
+    /// sunlight, at which point the entity's only strong handle to the unique
+    /// darkened clone drops and the clone is freed — so a shadowed prop never
+    /// keeps a permanent extra material (CPU-4).
+    shared: Handle<StandardMaterial>,
 }
 
 struct BakeResult {
@@ -186,40 +192,37 @@ struct BakeResult {
 /// Kicks off an async heightfield bake for every opted-in terrain whose
 /// mesh has loaded. Steady-state cost: the query is empty once every
 /// terrain carries a `HorizonMap`.
+#[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut, unused_variables))]
 pub fn start_horizon_bakes(
     mut commands: Commands,
-    meshes: Res<Assets<Mesh>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
     q: Query<
         (Entity, &HorizonShadowTerrain, &Mesh3d),
-        (Without<HorizonMap>, Without<HorizonBakeTask>),
+        // `Without<RenderLayers>` mirrors `pick_sun`: terrain spawned under the
+        // RTT preview `scene_root` carries a RenderLayers and must NOT bake into
+        // the main scene (ARC-1 — cross-scene contamination + wasted bake).
+        (Without<HorizonMap>, Without<HorizonBakeTask>, Without<RenderLayers>),
     >,
 ) {
     for (entity, cfg, mesh3d) in &q {
-        #[cfg(target_arch = "wasm32")]
-        {
-            // AsyncComputeTaskPool is the main thread on wasm; skip rather
-            // than stall (and remove the marker so this doesn't retry).
-            warn!("[horizon] bake skipped on wasm for {entity:?} (would stall the main thread)");
+        let Some(mesh) = meshes.get(&mesh3d.0) else { continue }; // not loaded yet
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            warn!("[horizon] terrain {entity:?} mesh has no Float32x3 positions; skipping");
             commands.entity(entity).remove::<HorizonShadowTerrain>();
-            let _ = (cfg, mesh3d, &meshes);
             continue;
-        }
+        };
+        let positions = positions.clone();
+        let indices: Vec<u32> = match mesh.indices() {
+            Some(Indices::U32(v)) => v.clone(),
+            Some(Indices::U16(v)) => v.iter().map(|&i| i as u32).collect(),
+            None => (0..positions.len() as u32).collect(),
+        };
+
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let Some(mesh) = meshes.get(&mesh3d.0) else { continue }; // not loaded yet
-            let Some(VertexAttributeValues::Float32x3(positions)) =
-                mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-            else {
-                warn!("[horizon] terrain {entity:?} mesh has no Float32x3 positions; skipping");
-                commands.entity(entity).remove::<HorizonShadowTerrain>();
-                continue;
-            };
-            let positions = positions.clone();
-            let indices: Vec<u32> = match mesh.indices() {
-                Some(Indices::U32(v)) => v.clone(),
-                Some(Indices::U16(v)) => v.iter().map(|&i| i as u32).collect(),
-                None => (0..positions.len() as u32).collect(),
-            };
             let resolution = cfg.resolution;
             info!(
                 "[horizon] baking {resolution}² heightfield for {entity:?} ({} verts) \
@@ -229,6 +232,29 @@ pub fn start_horizon_bakes(
             let task = AsyncComputeTaskPool::get()
                 .spawn(async move { bake_heightfield(&positions, &indices, resolution) });
             commands.entity(entity).insert(HorizonBakeTask(task));
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // No worker threads on wasm (AsyncComputeTaskPool runs on the main
+            // thread), so bake INLINE at a reduced resolution: a one-time load
+            // cost — never a per-frame stall — so the web build still gets
+            // far-field terrain shadows instead of none.
+            let resolution = cfg.resolution.min(WASM_HORIZON_MAX_RES);
+            info!(
+                "[horizon] baking {resolution}² heightfield inline for {entity:?} \
+                 ({} verts) on wasm…",
+                positions.len()
+            );
+            let result = bake_heightfield(&positions, &indices, resolution);
+            install_horizon_map(
+                &mut commands,
+                &mut meshes,
+                &mut images,
+                entity,
+                mesh3d,
+                result.field,
+                result.millis,
+            );
         }
     }
 }
@@ -309,43 +335,69 @@ pub fn finish_horizon_bakes(
     use bevy::tasks::futures_lite::future;
     for (entity, mut task, mesh3d) in &mut q {
         let Some(result) = future::block_on(future::poll_once(&mut task.0)) else { continue };
-        let field = result.field;
-
-        if let Some(mesh) = meshes.get_mut(&mesh3d.0) {
-            if let Some(VertexAttributeValues::Float32x3(pos)) =
-                mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-            {
-                let uvs: Vec<[f32; 2]> = pos
-                    .iter()
-                    .map(|p| {
-                        let uv = (Vec2::new(p[0], p[2]) - field.min) / field.size;
-                        [uv.x, uv.y]
-                    })
-                    .collect();
-                mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-            }
-        }
-
-        let bytes: Vec<u8> = field.heights.iter().flat_map(|h| h.to_le_bytes()).collect();
-        let image = images.add(Image::new(
-            Extent3d {
-                width: field.resolution,
-                height: field.resolution,
-                depth_or_array_layers: 1,
-            },
-            TextureDimension::D2,
-            bytes,
-            TextureFormat::R32Float,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-        ));
-
-        info!(
-            "[horizon] heightfield baked for {entity:?}: {}² in {} ms — far-field \
-             ray-march shadows active (near field stays on CSM)",
-            field.resolution, result.millis
+        install_horizon_map(
+            &mut commands,
+            &mut meshes,
+            &mut images,
+            entity,
+            mesh3d,
+            result.field,
+            result.millis,
         );
-        commands.entity(entity).remove::<HorizonBakeTask>().insert(HorizonMap { field, image });
     }
+}
+
+/// Reduced heightfield resolution for the inline wasm bake (vs. the native
+/// async bake's full `cfg.resolution`): keeps the one-time synchronous bake
+/// short enough to be a load hitch, not a stall.
+#[cfg(target_arch = "wasm32")]
+const WASM_HORIZON_MAX_RES: u32 = 512;
+
+/// Installs a finished bake on the terrain entity: gives the mesh planar UVs
+/// (`(local.xz - field.min) / field.size`, the exact inverse of the shader's
+/// `uv * size` heightfield addressing — so `#ifdef VERTEX_UVS_A` lights up and
+/// the march samples the right texels), uploads the R32Float heightfield
+/// texture, and inserts the `HorizonMap`. Shared by the native async finish
+/// and the wasm inline bake so the two paths can never drift.
+fn install_horizon_map(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    images: &mut Assets<Image>,
+    entity: Entity,
+    mesh3d: &Mesh3d,
+    field: HeightField,
+    millis: u128,
+) {
+    if let Some(mesh) = meshes.get_mut(&mesh3d.0) {
+        if let Some(VertexAttributeValues::Float32x3(pos)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        {
+            let uvs: Vec<[f32; 2]> = pos
+                .iter()
+                .map(|p| {
+                    let uv = (Vec2::new(p[0], p[2]) - field.min) / field.size;
+                    [uv.x, uv.y]
+                })
+                .collect();
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+        }
+    }
+
+    let bytes: Vec<u8> = field.heights.iter().flat_map(|h| h.to_le_bytes()).collect();
+    let image = images.add(Image::new(
+        Extent3d { width: field.resolution, height: field.resolution, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        bytes,
+        TextureFormat::R32Float,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    ));
+
+    info!(
+        "[horizon] heightfield installed for {entity:?}: {}² in {} ms — far-field \
+         ray-march shadows active (near field stays on CSM)",
+        field.resolution, millis
+    );
+    commands.entity(entity).remove::<HorizonBakeTask>().insert(HorizonMap { field, image });
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -378,7 +430,10 @@ fn pick_sun<'a>(
             } else {
                 0.0
             };
-            (gt, tan_sun_radius(ang.copied().unwrap_or_default().0), csm_far)
+            // A sun with no authored angular size must not yield tan(0)=0
+            // (→ div-by-zero in the march). Default to Sol's ~0.53° diameter.
+            let diameter_deg = ang.map(|a| a.0).filter(|d| *d > 0.0).unwrap_or(0.53);
+            (gt, tan_sun_radius(diameter_deg), csm_far)
         },
     )
 }
@@ -404,13 +459,17 @@ pub fn wire_terrain_materials(
     >,
     shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
     std_mats: Res<Assets<StandardMaterial>>,
-    terrains: Query<(
-        Entity,
-        &GlobalTransform,
-        &HorizonMap,
-        Option<&MeshMaterial3d<ShaderMaterial>>,
-        Option<&MeshMaterial3d<StandardMaterial>>,
-    )>,
+    terrains: Query<
+        (
+            Entity,
+            &GlobalTransform,
+            &HorizonMap,
+            Option<&MeshMaterial3d<ShaderMaterial>>,
+            Option<&MeshMaterial3d<StandardMaterial>>,
+        ),
+        // Skip preview-layer terrain (ARC-1) — mirrors `pick_sun`.
+        Without<RenderLayers>,
+    >,
 ) {
     let Some(mut shader_mats) = shader_mats else { return };
     let Some((sun_gt, tan_r, csm_far)) = pick_sun(&sun) else { return };
@@ -434,14 +493,27 @@ pub fn wire_terrain_materials(
         // terrain_shadow declare these in their `Material` struct; the engine
         // packs them at the reflected offsets).
         let sun_dir = ParamValue::Vec3([engine.x, engine.y, engine.z]);
+        // World-space to-sun for the BRDF opposition term. The march uses the
+        // terrain-LOCAL `sun_dir` (heightfield space); the lunar BRDF runs in
+        // world space (world N/V), so it needs the world-space sun. Passing the
+        // CPU-picked canonical sun here means the shader never has to guess it
+        // from `directional_lights[0]` — robust to the earthshine fill light.
+        let sun_dir_world = ParamValue::Vec3([to_sun_world.x, to_sun_world.y, to_sun_world.z]);
         let hf_size = ParamValue::Vec2([engine2.x, engine2.y]);
         let write_engine = |m: &mut ShaderMaterial| {
-            m.height_map = Some(map.image.clone());
-            m.set("sun_dir", sun_dir);
-            m.set_scalar("sun_tan_radius", tan_r);
-            m.set("hf_size", hf_size);
-            m.set_scalar("hf_res", engine2.z);
-            m.set_scalar("csm_far", csm_far);
+            // Handle is a cheap Arc bump, but skip even that when unchanged (MAT-3).
+            if m.height_map.as_ref() != Some(&map.image) {
+                m.height_map = Some(map.image.clone());
+            }
+            // One repack for all engine fields instead of one-per-field (MAT-1).
+            m.set_many([
+                ("sun_dir", sun_dir),
+                ("sun_dir_world", sun_dir_world),
+                ("sun_tan_radius", ParamValue::F32(tan_r)),
+                ("hf_size", hf_size),
+                ("hf_res", ParamValue::F32(engine2.z)),
+                ("csm_far", ParamValue::F32(csm_far)),
+            ]);
         };
 
         if let Some(handle) = shader_mat {
@@ -506,6 +578,8 @@ fn scale_color(c: Color, q: f32) -> Color {
 pub fn shade_dynamic_entities(
     mut commands: Commands,
     mut last_sun: Local<Option<Vec3>>,
+    mut sweep_timer: Local<Option<Timer>>,
+    time: Res<Time>,
     sun: Query<
         (
             &GlobalTransform,
@@ -515,7 +589,7 @@ pub fn shade_dynamic_entities(
         ),
         Without<RenderLayers>,
     >,
-    terrains: Query<(&GlobalTransform, &HorizonMap)>,
+    terrains: Query<(&GlobalTransform, &HorizonMap), Without<RenderLayers>>,
     mut shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
     mut std_mats: ResMut<Assets<StandardMaterial>>,
     mut entities: Query<
@@ -538,18 +612,46 @@ pub fn shade_dynamic_entities(
     }
     let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else { return };
     let to_sun_world: Vec3 = sun_gt.back().into();
+
+    // Throttle the expensive full sweep — O(entities × terrains × ≤96-step
+    // CPU ray-march) — to ~30 Hz so it no longer fires at uncapped render FPS
+    // (120–175) every frame the sun animates (day cycle, `SetEnvironmentLight`
+    // slider drag). Moving entities still update every frame via the
+    // `gt.is_changed()` fast path below; only the sun-moved full pass is gated.
+    let timer = sweep_timer
+        .get_or_insert_with(|| Timer::from_seconds(1.0 / 30.0, TimerMode::Repeating));
+    timer.tick(time.delta());
+
     let sun_moved = match *last_sun {
         Some(prev) => prev.dot(to_sun_world) <= SUN_EPSILON_COS,
         None => true,
     };
-    if sun_moved {
+    // Commit to a full sweep only when the throttle fires (or on first run).
+    // Until then `last_sun` is NOT advanced, so a sun change arriving between
+    // ticks is still picked up at the next tick (≤33 ms later — imperceptible
+    // given the 1/32 visibility quantization).
+    let do_full = sun_moved && (timer.just_finished() || last_sun.is_none());
+    if do_full {
         *last_sun = Some(to_sun_world);
     }
+
+    // Per-terrain loop-invariants — the affine inverse and sun-in-terrain-local
+    // depend only on the terrain transform + sun, not the shaded entity — so
+    // compute them once here instead of N×M times inside the entity loop (CPU-2;
+    // `transform_point3(entity_pos)` stays inside since it is entity-dependent).
+    let terrain_cache: Vec<_> = terrains
+        .iter()
+        .map(|(terrain_gt, map)| {
+            let inv = terrain_gt.affine().inverse();
+            let sun_local = inv.transform_vector3(to_sun_world).normalize_or_zero();
+            (inv, sun_local, map)
+        })
+        .collect();
 
     for (entity, gt, has_layers, shadowed, has_nsc, shader_mat, std_mat, shade, name) in
         &mut entities
     {
-        if !sun_moved && !gt.is_changed() {
+        if !do_full && !gt.is_changed() {
             continue;
         }
         // Entities scoped to other render layers (preview viewports, viz
@@ -561,12 +663,10 @@ pub fn shade_dynamic_entities(
         // Min visibility across all horizon terrains containing the point —
         // the SAME march the terrain pixels run.
         let mut vis: f32 = 1.0;
-        for (terrain_gt, map) in &terrains {
-            let inv = terrain_gt.affine().inverse();
+        for (inv, sun_local, map) in &terrain_cache {
             let local = inv.transform_point3(gt.translation());
-            let sun_local = inv.transform_vector3(to_sun_world).normalize_or_zero();
             if let Some(v) =
-                map.field.sun_visibility(Vec2::new(local.x, local.z), sun_local, tan_r)
+                map.field.sun_visibility(Vec2::new(local.x, local.z), *sun_local, tan_r)
             {
                 vis = vis.min(v);
             }
@@ -600,13 +700,23 @@ pub fn shade_dynamic_entities(
                             debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-NEW (std)");
                             commands.entity(entity).insert((
                                 MeshMaterial3d(unique),
-                                HorizonShade { original, last_vis: q },
+                                HorizonShade { original, last_vis: q, shared: handle.0.clone() },
                             ));
                         }
                     }
                 }
                 Some(mut state) => {
-                    if (state.last_vis - q).abs() > 1e-3 {
+                    if q >= 0.999 {
+                        // Back in full sun: restore the shared authored material.
+                        // Overwriting `MeshMaterial3d` drops the entity's only
+                        // strong handle to the unique darkened clone, so the
+                        // clone is freed rather than kept forever (CPU-4).
+                        commands
+                            .entity(entity)
+                            .insert(MeshMaterial3d(state.shared.clone()))
+                            .remove::<HorizonShade>();
+                        debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-CLEAR (std)");
+                    } else if (state.last_vis - q).abs() > 1e-3 {
                         if let Some(m) = std_mats.get_mut(&handle.0) {
                             m.base_color = scale_color(state.original, q);
                         }

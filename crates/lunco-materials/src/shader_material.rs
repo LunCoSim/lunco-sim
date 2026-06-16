@@ -123,10 +123,37 @@ impl ShaderMaterial {
         self.schema = schema;
         self.repack();
     }
+    /// Inserts/updates a value WITHOUT repacking. Reuses the existing slot when
+    /// the key is already present, so the hot re-write path doesn't allocate a
+    /// `String` every call (MAT-2). Caller must `repack()` afterwards.
+    fn set_value(&mut self, name: &str, v: ParamValue) {
+        if let Some(slot) = self.values.get_mut(name) {
+            *slot = v;
+        } else {
+            self.values.insert(name.to_string(), v);
+        }
+    }
     /// Sets a parameter by name and repacks.
     pub fn set(&mut self, name: &str, v: ParamValue) {
-        self.values.insert(name.to_string(), v);
+        self.set_value(name, v);
         self.repack();
+    }
+    /// Applies several named writes and repacks ONCE at the end, rather than a
+    /// full 256-byte `repack()` per `set` (MAT-1). Use on multi-param write
+    /// paths such as the per-frame engine-field update in the horizon system.
+    pub fn set_many<I, S>(&mut self, entries: I)
+    where
+        I: IntoIterator<Item = (S, ParamValue)>,
+        S: AsRef<str>,
+    {
+        let mut wrote = false;
+        for (name, v) in entries {
+            self.set_value(name.as_ref(), v);
+            wrote = true;
+        }
+        if wrote {
+            self.repack();
+        }
     }
     /// Current value for `name` (or its schema default).
     pub fn get(&self, name: &str) -> Option<ParamValue> {
@@ -224,6 +251,19 @@ pub struct ShaderMaterialPlugin;
 #[derive(Resource)]
 pub struct HorizonMarchModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 
+/// Keeps the shared `lunco::pbr_lit` WGSL module (PBR-lit mode) loaded so
+/// `#import lunco::pbr_lit::lit` resolves in any per-instance shader — letting
+/// a self-describing shader opt into bevy's full lighting without hand-copying
+/// the PbrInput boilerplate.
+#[derive(Resource)]
+pub struct PbrLitModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
+
+/// Keeps the shared `lunco::lunar` WGSL module (lunar regolith photometry —
+/// Lommel-Seeliger + opposition surge) loaded so `#import lunco::lunar` resolves
+/// in the terrain shaders.
+#[derive(Resource)]
+pub struct LunarBrdfModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
+
 impl Plugin for ShaderMaterialPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<ShaderMaterial>::default());
@@ -239,6 +279,16 @@ impl Plugin for ShaderMaterialPlugin {
             .resource::<AssetServer>()
             .load("shaders/horizon_march.wgsl");
         app.insert_resource(HorizonMarchModule(module));
+        let pbr_lit = app
+            .world()
+            .resource::<AssetServer>()
+            .load("shaders/pbr_lit.wgsl");
+        app.insert_resource(PbrLitModule(pbr_lit));
+        let lunar = app
+            .world()
+            .resource::<AssetServer>()
+            .load("shaders/lunar_brdf.wgsl");
+        app.insert_resource(LunarBrdfModule(lunar));
     }
 }
 
@@ -262,6 +312,34 @@ pub struct ShaderEntry {
 #[derive(Resource, Clone, Debug)]
 pub struct ShaderCatalog {
     pub entries: Vec<ShaderEntry>,
+}
+
+impl ShaderCatalog {
+    /// Register a pickable shader by asset path (`shaders/foo.wgsl` or
+    /// `twin://name/shaders/foo.wgsl`), deduped by path. The display label is
+    /// derived from the file stem. Returns `true` if it was newly added.
+    pub fn add(&mut self, path: impl Into<String>) -> bool {
+        let path = path.into();
+        if self.entries.iter().any(|e| e.path == path) {
+            return false;
+        }
+        let stem = path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&path)
+            .strip_suffix(".wgsl")
+            .unwrap_or(&path);
+        let label = humanize_shader_name(stem);
+        self.entries.push(ShaderEntry { path, label });
+        true
+    }
+
+    /// Unregister a shader by asset path. Returns `true` if it was present.
+    pub fn remove(&mut self, path: &str) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|e| e.path != path);
+        self.entries.len() != before
+    }
 }
 
 impl Default for ShaderCatalog {
@@ -295,18 +373,208 @@ fn humanize_shader_name(stem: &str) -> String {
         .join(" ")
 }
 
-/// Whether a parsed schema is safe to apply to an arbitrary prop: a `Material`
-/// shader whose only engine-filled field (if any) is `sun_vis` — the
-/// horizon-shadow visibility every prop shader receives. Terrain shaders
-/// declare engine fields like `sun_dir`/`hf_size` that only the terrain
-/// entity's horizon system fills, so they would render black on a prop.
-#[cfg(not(target_arch = "wasm32"))]
-fn is_prop_pickable(schema: &ParamSchema) -> bool {
-    schema
-        .fields
-        .iter()
-        .filter(|f| matches!(f.ui, dyn_params::UiKind::Engine))
-        .all(|f| f.name == "sun_vis")
+/// Whether WGSL `src` is safe to offer as a pickable prop shader: it declares a
+/// `Material` struct (so the engine can reflect its params) and every
+/// engine-filled field (if any) is `sun_vis` — the horizon-shadow visibility
+/// every prop shader receives. Terrain shaders declare engine fields like
+/// `sun_dir`/`hf_size` that only the terrain entity's horizon system fills, so
+/// they would render black on a prop. Shaders with no `Material` struct can't be
+/// driven by the dynamic system at all, so they're rejected too.
+pub fn is_prop_pickable_source(src: &str) -> bool {
+    match ParamSchema::parse(src) {
+        Some(schema) => schema
+            .fields
+            .iter()
+            .filter(|f| matches!(f.ui, dyn_params::UiKind::Engine))
+            .all(|f| f.name == "sun_vis"),
+        None => false,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Shader templates — PBR-compatible starting points for live shader creation
+// (`CreateShader`). Each declares its own `Material` struct (so it is dynamic)
+// and shades through the shared `lunco::pbr_lit::lit` helper (full lighting,
+// shadows, ambient) so a generated shader looks correct under the sun.
+// `__NAME__` is replaced with the shader's stem for the header comment.
+// ─────────────────────────────────────────────────────────────────────────
+
+const SOLID_TEMPLATE: &str = r#"//! __NAME__ — solid PBR material (generated template). Edit freely; saves
+//! hot-reload, and the Inspector controls are reflected from the `//!@`
+//! annotations + `Material` struct below.
+
+#import bevy_pbr::forward_io::VertexOutput
+#import lunco::pbr_lit::lit
+
+//!@ui      base_color color "Base colour"
+//!@default base_color 0.8,0.8,0.8
+//!@ui      roughness  0 1  "Roughness"
+//!@default roughness  0.6
+//!@ui      metallic   0 1  "Metallic"
+//!@default metallic   0.0
+struct Material {
+    base_color: vec3<f32>,
+    roughness:  f32,
+    metallic:   f32,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    return lit(in, is_front, mat.base_color, mat.roughness, mat.metallic, vec3<f32>(0.0));
+}
+"#;
+
+const CHECKER_TEMPLATE: &str = r#"//! __NAME__ — procedural checker PBR material (generated template). The pattern
+//! is computed from the object-space surface direction (seam-free on any mesh)
+//! and shaded with full PBR lighting. Edit freely.
+
+#import bevy_pbr::{forward_io::VertexOutput, mesh_functions}
+#import lunco::pbr_lit::lit
+
+//!@ui      color_a   color "Colour A"
+//!@default color_a   0.85,0.2,0.2
+//!@ui      color_b   color "Colour B"
+//!@default color_b   0.1,0.1,0.12
+//!@ui      tiles     1 64 "Tiles"
+//!@default tiles     6
+//!@ui      roughness 0 1  "Roughness"
+//!@default roughness 0.6
+struct Material {
+    color_a:   vec3<f32>,
+    tiles:     f32,
+    color_b:   vec3<f32>,
+    roughness: f32,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    // Object-space surface direction → seam-free lat/long coords (see balloon.wgsl).
+    let m = mesh_functions::get_world_from_local(in.instance_index);
+    let R = mat3x3<f32>(normalize(m[0].xyz), normalize(m[1].xyz), normalize(m[2].xyz));
+    let d = normalize(transpose(R) * normalize(in.world_normal));
+    let u = atan2(d.z, d.x) * 0.15915494 + 0.5; // / (2*PI)
+    let v = asin(clamp(d.y, -1.0, 1.0)) * 0.31830989 + 0.5; // / PI
+    let t = mat.tiles;
+    let cell = floor(u * t) + floor(v * t);
+    let parity = cell - 2.0 * floor(cell * 0.5);
+    let albedo = select(mat.color_a, mat.color_b, parity > 0.5);
+    return lit(in, is_front, albedo, mat.roughness, 0.0, vec3<f32>(0.0));
+}
+"#;
+
+const GRADIENT_TEMPLATE: &str = r#"//! __NAME__ — vertical gradient PBR material (generated template). Blends two
+//! colours by surface normal (top vs bottom facing). Edit freely.
+
+#import bevy_pbr::forward_io::VertexOutput
+#import lunco::pbr_lit::lit
+
+//!@ui      top       color "Top colour"
+//!@default top       0.7,0.85,1.0
+//!@ui      bottom    color "Bottom colour"
+//!@default bottom    0.1,0.12,0.2
+//!@ui      roughness 0 1  "Roughness"
+//!@default roughness 0.5
+struct Material {
+    top:       vec3<f32>,
+    roughness: f32,
+    bottom:    vec3<f32>,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    let n = normalize(in.world_normal);
+    let t = clamp(n.y * 0.5 + 0.5, 0.0, 1.0);
+    let albedo = mix(mat.bottom, mat.top, t);
+    return lit(in, is_front, albedo, mat.roughness, 0.0, vec3<f32>(0.0));
+}
+"#;
+
+const GLOW_TEMPLATE: &str = r#"//! __NAME__ — emissive glow PBR material (generated template). A lit base plus
+//! a constant emissive term (×strength). Edit freely.
+
+#import bevy_pbr::forward_io::VertexOutput
+#import lunco::pbr_lit::lit
+
+//!@ui      base_color color "Base colour"
+//!@default base_color 0.1,0.1,0.12
+//!@ui      emissive   color "Glow colour"
+//!@default emissive   1.0,0.6,0.1
+//!@ui      strength   0 8  "Glow strength"
+//!@default strength   2.0
+//!@ui      roughness  0 1  "Roughness"
+//!@default roughness  0.5
+struct Material {
+    base_color: vec3<f32>,
+    strength:   f32,
+    emissive:   vec3<f32>,
+    roughness:  f32,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    return lit(in, is_front, mat.base_color, mat.roughness, 0.0, mat.emissive * mat.strength);
+}
+"#;
+
+const RIM_TEMPLATE: &str = r#"//! __NAME__ — rim / fresnel PBR material (generated template). A lit base with
+//! a view-dependent rim glow on grazing angles. Edit freely.
+
+#import bevy_pbr::{forward_io::VertexOutput, mesh_view_bindings::view}
+#import lunco::pbr_lit::lit
+
+//!@ui      base_color color "Base colour"
+//!@default base_color 0.15,0.18,0.22
+//!@ui      rim_color  color "Rim colour"
+//!@default rim_color  0.4,0.8,1.0
+//!@ui      rim_power  0.2 8 "Rim sharpness"
+//!@default rim_power  3.0
+//!@ui      roughness  0 1  "Roughness"
+//!@default roughness  0.4
+struct Material {
+    base_color: vec3<f32>,
+    rim_power:  f32,
+    rim_color:  vec3<f32>,
+    roughness:  f32,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
+
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    let n = normalize(in.world_normal);
+    let v = normalize(view.world_position.xyz - in.world_position.xyz);
+    let rim = pow(1.0 - clamp(dot(n, v), 0.0, 1.0), max(mat.rim_power, 0.001));
+    return lit(in, is_front, mat.base_color, mat.roughness, 0.0, mat.rim_color * rim);
+}
+"#;
+
+/// The built-in template ids + display labels, for a "New shader" UI dropdown.
+pub fn shader_template_kinds() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("solid", "Solid"),
+        ("checker", "Checker"),
+        ("gradient", "Gradient"),
+        ("glow", "Emissive Glow"),
+        ("rim", "Rim / Fresnel"),
+    ]
+}
+
+/// WGSL source for a built-in starting template, with `title` substituted into
+/// the header comment. `kind` selects the template (see [`shader_template_kinds`]);
+/// anything unknown (incl. empty) falls back to the flat solid material. All
+/// templates are PBR-lit (`lunco::pbr_lit::lit`) and prop-pickable.
+pub fn shader_template(kind: &str, title: &str) -> String {
+    let body = match kind.trim() {
+        "checker" => CHECKER_TEMPLATE,
+        "gradient" => GRADIENT_TEMPLATE,
+        "glow" => GLOW_TEMPLATE,
+        "rim" => RIM_TEMPLATE,
+        _ => SOLID_TEMPLATE,
+    };
+    body.replace("__NAME__", title)
 }
 
 /// Startup (native): augment [`ShaderCatalog`] by scanning `assets/shaders` for
@@ -328,12 +596,11 @@ fn discover_shaders(mut catalog: ResMut<ShaderCatalog>) {
             continue;
         }
         let Ok(src) = std::fs::read_to_string(&p) else { continue };
-        match ParamSchema::parse(&src) {
-            Some(s) if is_prop_pickable(&s) => found.push(ShaderEntry {
+        if is_prop_pickable_source(&src) {
+            found.push(ShaderEntry {
                 path: asset_path,
                 label: humanize_shader_name(stem),
-            }),
-            _ => {}
+            });
         }
     }
     found.sort_by(|a, b| a.label.cmp(&b.label));
@@ -440,10 +707,12 @@ fn wgsl_source(shader: &Shader) -> Option<&str> {
 /// struct reflect to nothing (the material keeps its empty default schema).
 pub fn reflect_shader_schemas(
     mut ev: MessageReader<AssetEvent<Shader>>,
+    mut mat_ev: MessageReader<AssetEvent<ShaderMaterial>>,
     shaders: Res<Assets<Shader>>,
     mut cache: ResMut<ShaderSchemas>,
     mut mats: ResMut<Assets<ShaderMaterial>>,
 ) {
+    let mut cache_changed = false;
     for e in ev.read() {
         if let AssetEvent::Added { id } | AssetEvent::Modified { id } = e {
             if let Some(src) = shaders.get(*id).and_then(wgsl_source) {
@@ -455,8 +724,22 @@ pub fn reflect_shader_schemas(
                         cache.map.remove(id);
                     }
                 }
+                cache_changed = true;
             }
         }
+    }
+
+    // The material sweep below is only meaningful when something changed the
+    // (material ↔ schema) relationship this frame: a shader event updated the
+    // cache, OR a material was added/modified and may now need a schema. With
+    // neither, skip the per-frame `mats.iter()` scan entirely (MAT-6). (A
+    // freshly added material whose shader is still loading is re-checked when
+    // that shader's `Added` event arrives.)
+    let mat_changed = mat_ev
+        .read()
+        .any(|e| matches!(e, AssetEvent::Added { .. } | AssetEvent::Modified { .. }));
+    if !cache_changed && !mat_changed {
+        return;
     }
 
     // Assign reflected schemas to materials that don't yet carry them. Find

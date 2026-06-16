@@ -12,7 +12,10 @@ default = []
 embed-assets = ["dep:image"]
 
 [dependencies]
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking"] }
+# `smaa_luts` is mandatory: `big_space_setup` spawns the observer camera with
+# `Smaa`, and without the LUT bevy binds a wrong-dimension placeholder → every
+# frame drops (black viewport). Feature-unification carries it to dependent bins.
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "smaa_luts", "mesh_picking"] }
 bevy_egui = { workspace = true }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-theme = { path = "../lunco-theme" }
@@ -23,6 +26,8 @@ big_space = { workspace = true }
 # `EphemerisProvider` trait and a no-op default; apps that need real
 # planetary positions add the ephemeris crate's plugin.
 lunco-core = { path = "../lunco-core" }
+lunco-render = { path = "../lunco-render" }
+lunco-environment = { path = "../lunco-environment" }
 lunco-assets = { workspace = true }
 lunco-storage = { path = "../lunco-storage" }
 avian3d = { workspace = true }

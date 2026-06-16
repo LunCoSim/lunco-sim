@@ -187,7 +187,19 @@ fn main() {
         // stamping). Match the rover examples: both flags set explicitly.
         .insert_resource(lunco_core::TimeWarpState { physics_enabled: true, speed: 1.0 })
         .insert_resource(avian3d::prelude::Gravity::ZERO)
-        .insert_resource(lunco_celestial::Gravity::flat(9.81, bevy::math::DVec3::NEG_Y))
+        .insert_resource(lunco_environment::Gravity::flat(9.81, bevy::math::DVec3::NEG_Y))
+        // Studio lighting for the sandbox — a generic editor scene, NOT a
+        // calibrated lunar surface. The canonical 128 klx + EV15 `LunarSun` is
+        // tuned for 0.13-albedo regolith; the sandbox's dark blueprint-grid
+        // ground crushes to near-black under it. Inserted BEFORE plugins so
+        // `EnvironmentPlugin`'s `init_resource` keeps these. The sun spawn AND
+        // every camera's exposure read this one resource, so lux and EV stay
+        // matched. Tunable live via `SetEnvironmentLight` / the Inspector.
+        .insert_resource(lunco_environment::LunarSun {
+            illuminance_lux: 10_000.0,
+            exposure_ev100: 9.7,
+            ..Default::default()
+        })
         .add_plugins(DefaultPlugins
             .set(AssetPlugin {
                 file_path: std::env::current_dir().unwrap_or_default().join("assets").to_string_lossy().to_string(),
@@ -517,20 +529,38 @@ struct ScenePath(String);
 /// avatar zoom systems (`SpringArm`, `Orbit`, `Chase`) react to mouse
 /// wheel events.
 ///
-/// Gated on `!ctx.wants_pointer_input()` — egui sets that to `true`
-/// when the cursor is over an interactive widget that consumes scroll
-/// (scrollarea, slider, combo box, …). When it's `false`, the cursor
-/// is over a passive region (the `ViewportPanel` placeholder, an empty
-/// dock area, the menu bar background) and the scroll naturally
-/// belongs to the 3D scene. This is the same idiom `lunco-client`'s
-/// non-sandbox binary uses, plus the hover gate so dock-panel
-/// scrolling no longer also zooms the camera.
+/// Gate scroll-zoom on the **viewport rect** (`PanelRects`), NOT on
+/// `ctx.wants_pointer_input()`.
+///
+/// `wants_pointer_input()` was wrong here: `egui_dock` renders the viewport
+/// leaf as an egui `Area`, so egui reports it "wants" the pointer over the bare
+/// 3D scene too — which swallowed wheel-zoom over the viewport entirely. That's
+/// the exact reason selection + possession were migrated to `PanelRects`
+/// (`selection.rs` documents it); this scroll gate was left on the broken
+/// signal. Now it matches: zoom is collected only when the cursor is over a
+/// recorded viewport rect (and not under a floating popup), and **fails open**
+/// when no viewport rect exists (chrome-less full-window "View" perspective).
+/// Over a docked panel's scrollarea the cursor is outside the viewport rect, so
+/// the wheel scrolls the panel instead of zooming — the behaviour the old
+/// `wants_pointer_input` hover gate was trying (and failing over the scene) to
+/// get.
 fn collect_scroll_input_gated(
     mut egui_contexts: EguiContexts,
     mut scroll_res: ResMut<lunco_avatar::CameraScroll>,
+    panel_rects: Res<lunco_workbench::PanelRects>,
+    windows: Query<&Window>,
 ) {
     let Ok(ctx) = egui_contexts.ctx_mut() else { return };
-    if ctx.wants_pointer_input() {
+    let Some(window) = windows.iter().next() else { return };
+    let Some(cursor) = window.cursor_position() else { return };
+    // Outside the viewport rect (over docked chrome) → let egui scroll the panel.
+    // Fails open when no viewport rect is recorded (full-window perspective).
+    if !panel_rects.is_empty() && !panel_rects.any_contains(cursor * window.scale_factor()) {
+        return;
+    }
+    // A foreground popup (combo/menu/colour-picker) floating over the viewport
+    // owns its own scroll — don't also zoom the camera underneath it.
+    if lunco_workbench::pointer_over_egui_popup(ctx, cursor) {
         return;
     }
     scroll_res.delta += ctx.input(|i: &bevy_egui::egui::InputState| i.raw_scroll_delta.y);
@@ -596,30 +626,26 @@ fn setup_sandbox(world: &mut World) {
     // render origin every frame, so the large world Y (~2462 m) costs no
     // shadow-map precision. 4096² is the max safe atlas (8192² × 4 cascades
     // would be ~1 GB VRAM); the cascade split keeps the near field dense.
-    let cascades = bevy::light::CascadeShadowConfigBuilder {
-        num_cascades: 4,
-        minimum_distance: 0.1,
-        first_cascade_far_bound: 40.0,
-        maximum_distance: 1500.0,
-        // Low overlap → crisper cascade-to-cascade transitions (less cross-fade
-        // blur), which suits a hard-shadow look.
-        overlap_proportion: 0.1,
-    }
-    .build();
-    world.insert_resource(bevy::light::DirectionalLightShadowMap { size: 4096 });
+    // Canonical lunar-sun cascade split + 4096² atlas from the single source of
+    // truth (`lunco_render::LunarSunShadow`), shared with the celestial and USD
+    // paths. The biases are overridden below for this binary's hard-shadow look:
+    // with `Hardware2x2` filtering (see `force_hard_shadow_filtering`) the normal
+    // bias must stay small or it detaches/softens the contact edge — unlike the
+    // terrain-acne-tuned default (0.06/2.5) used under PCF.
+    let sun = lunco_render::LunarSunShadow {
+        depth_bias: 0.02,
+        normal_bias: 0.8,
+        ..Default::default()
+    };
+    // Illuminance + angular size from the active-scene `LunarSun` resource (the
+    // sandbox inserts studio values in `main`; every camera's exposure reads the
+    // same resource, so sun lux and camera EV can't drift apart).
+    let ls = *world.resource::<lunco_environment::LunarSun>();
+    world.insert_resource(sun.shadow_map());
     world.spawn((
-        DirectionalLight {
-            illuminance: 10000.0,
-            shadows_enabled: true,
-            // Minimal biases for tight, grounded hard shadows. With Hardware2x2
-            // filtering the normal bias must stay small or it detaches/softens
-            // the contact edge; depth bias just enough to avoid acne over the
-            // long far cascades.
-            shadow_depth_bias: 0.02,
-            shadow_normal_bias: 0.8,
-            ..default()
-        },
-        cascades,
+        sun.directional_light(Color::WHITE, ls.illuminance_lux),
+        sun.cascade_config(),
+        lunco_core::SunAngularDiameter(ls.angular_diameter_deg),
         // Low sun (~11° above horizon, yaw 0.5 rad) for long raking lunar
         // shadows — same YXZ convention as `SetEnvironmentLight` and the
         // Inspector → Environment controls.
@@ -688,6 +714,7 @@ fn spawn_fallback_avatar(
     time: Res<Time>,
     q_cameras: Query<Entity, With<Camera3d>>,
     q_grids: Query<Entity, With<Grid>>,
+    active_sun: Res<lunco_environment::LunarSun>,
     mut commands: Commands,
     mut done: Local<bool>,
 ) {
@@ -706,6 +733,16 @@ fn spawn_fallback_avatar(
     info!("No USD camera after {FALLBACK_AVATAR_GRACE_SECS}s, spawning fallback FreeFlightCamera");
     commands.spawn((
         Camera3d::default(),
+        // NO SMAA on this (workbench) camera: SMAA's post-process resolve does
+        // not survive the full-window-3D + egui-overlay compositing, so it
+        // renders a blank/black viewport (and crashes outright without the
+        // `smaa_luts` feature). MSAA (the `Camera3d` default) covers geometry
+        // edges. See the matching note on the USD avatar camera in lunco-usd-sim.
+        //
+        // Exposure read from the active-scene `LunarSun` resource — the SAME
+        // source as the sun illuminance, so they stay matched. Tunable live via
+        // SetEnvironmentLight / the Inspector.
+        bevy::camera::Exposure { ev100: active_sun.exposure_ev100 },
         FreeFlightCamera {
             yaw: -2.245559,
             pitch: -0.303039,

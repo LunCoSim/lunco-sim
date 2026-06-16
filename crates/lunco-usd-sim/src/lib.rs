@@ -255,6 +255,11 @@ fn process_usd_sim_prims(
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
+    // The active-scene sun: the avatar camera's exposure is read from the SAME
+    // resource the sun illuminance comes from, so they can't drift (a dimmed
+    // sun under a bright-tuned camera blacked the viewport). `Option` so the
+    // loader still works in a stripped app without `EnvironmentPlugin`.
+    active_sun: Option<Res<lunco_environment::LunarSun>>,
 ) {
     // --- Pass 1: collect authored revolute joints by their `body1` target ---
     //
@@ -391,11 +396,39 @@ fn process_usd_sim_prims(
                 scale: existing_tf.scale,
             };
 
+            // Shared render-look for the avatar camera: SMAA post-process AA,
+            // MSAA off (can't touch shader-internal regolith speckle), and
+            // physical lunar exposure (ev100 15 ≈ SUNLIGHT) to pair with the
+            // ~128k lx sun. Same look as the sandbox fallback camera; without it
+            // a USD-authored Avatar camera renders at Blender-default ev9.7 and
+            // the lunar terrain blows out. Tune live via SetEnvironmentLight.
+            // Render-look for the avatar camera: physical exposure read from the
+            // active-scene `LunarSun` resource — the SAME source as the sun
+            // illuminance, so lux and EV move together (the point of bundling
+            // them). A dimmed sun can therefore never leave the camera mis-
+            // exposed (that mismatch blacked the viewport once).
+            //
+            // NB: NO SMAA here. SMAA is a per-camera post-process whose resolve
+            // does not survive the workbench's full-window-3D + egui-overlay
+            // compositing (egui paints over with `ClearColorConfig::None`), so a
+            // workbench camera with `Smaa` renders a blank/black viewport — and
+            // without the `smaa_luts` feature it additionally drops every frame
+            // on a wgpu bind-group validation error. Both failure modes look like
+            // a lighting/camera bug. Keep workbench cameras SMAA-free; MSAA (the
+            // `Camera3d` default) handles geometry-edge AA.
+            let ev100 = active_sun
+                .as_deref()
+                .copied()
+                .unwrap_or_default()
+                .exposure_ev100;
+            let camera_look = move || (bevy::camera::Exposure { ev100 },);
+
             // Build camera based on mode, then parent to Grid for FloatingOrigin
             match camera_mode.as_str() {
                 "freeflight" => {
                     commands.entity(entity).insert((
                         Camera3d::default(),
+                        camera_look(),
                         FreeFlightCamera { yaw, pitch, damping: None },
                         AdaptiveNearPlane,
                         avatar_tf,
@@ -410,6 +443,7 @@ fn process_usd_sim_prims(
                 "orbit" => {
                     commands.entity(entity).insert((
                         Camera3d::default(),
+                        camera_look(),
                         OrbitCamera {
                             target: Entity::PLACEHOLDER,
                             distance: 30.0,
@@ -431,6 +465,7 @@ fn process_usd_sim_prims(
                 "springarm" => {
                     commands.entity(entity).insert((
                         Camera3d::default(),
+                        camera_look(),
                         SpringArmCamera {
                             target: Entity::PLACEHOLDER,
                             distance: 15.0,
@@ -457,6 +492,7 @@ fn process_usd_sim_prims(
                     warn!("Unknown camera mode '{}' for avatar at {}, using freeflight", camera_mode, prim_path.path);
                     commands.entity(entity).insert((
                         Camera3d::default(),
+                        camera_look(),
                         FreeFlightCamera { yaw, pitch, damping: None },
                         AdaptiveNearPlane,
                         avatar_tf,

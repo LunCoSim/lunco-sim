@@ -10,6 +10,7 @@ lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-core = { path = "../lunco-core" }
+lunco-environment = { path = "../lunco-environment" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-hardware = { path = "../lunco-hardware" }
 lunco-avatar = { path = "../lunco-avatar" }

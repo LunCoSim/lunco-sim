@@ -73,6 +73,7 @@ mod viewport;
 pub mod file_ops;
 pub mod files_panel;
 pub mod perf_hud;
+pub mod perspective_command;
 pub mod picker;
 pub mod status_bus;
 pub mod theme_command;
@@ -306,8 +307,9 @@ pub use session::{
     TwinClosed, UnregisterDocument, WorkspacePlugin, WorkspaceResource,
 };
 pub use viewport::{
-    PanelRect, PanelRects, ViewportPanel, ViewportPlaceholder, WorkbenchEguiHost,
-    WorkbenchSceneCamera, WorkbenchViewportCamera, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
+    pointer_over_egui_popup, PanelRect, PanelRects, ViewportPanel, ViewportPlaceholder,
+    WorkbenchEguiHost, WorkbenchSceneCamera, WorkbenchViewportCamera, WorkbenchViewportPlugin,
+    VIEWPORT_PANEL_ID,
 };
 
 /// Get the backdrop colour from the active theme.
@@ -370,6 +372,9 @@ impl Plugin for WorkbenchPlugin {
         }
         if !app.is_plugin_added::<window_command::WindowCommandPlugin>() {
             app.add_plugins(window_command::WindowCommandPlugin);
+        }
+        if !app.is_plugin_added::<perspective_command::PerspectiveCommandPlugin>() {
+            app.add_plugins(perspective_command::PerspectiveCommandPlugin);
         }
         // Persist & restore primary-window geometry (size / position /
         // maximized) via `lunco-settings`. Native-only; no-op on wasm.
@@ -984,6 +989,21 @@ impl WorkbenchLayout {
     /// Which perspective is currently active, if any.
     pub fn active_perspective(&self) -> Option<PerspectiveId> {
         self.active_perspective
+    }
+
+    /// Reset the dock to a clean state by re-applying the active perspective's
+    /// slot preset from scratch (or the first-registered perspective if none is
+    /// active). Restores panels a stale persisted layout dropped — most
+    /// importantly the 3D `ViewportPanel`, whose absence leaves the centre blank
+    /// and the viewport camera inactive. Exposed as the `ResetWorkspaceLayout`
+    /// command and the View ▸ "Reset Layout" menu item.
+    pub fn reset_to_default_layout(&mut self) {
+        let id = self
+            .active_perspective
+            .or_else(|| self.perspectives.first().map(|p| p.id()));
+        if let Some(id) = id {
+            self.activate_perspective(id);
+        }
     }
 
     /// The `instance` discriminant of the currently *focused* tab, when
@@ -2282,6 +2302,14 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             });
             anchor_rects.push(("menu.edit", r_edit.response.rect));
             let r_view = ui.menu_button("View", |ui| {
+                if ui.button("🔄 Reset Layout").clicked() {
+                    // Recovery hatch: re-apply the active perspective's preset,
+                    // restoring panels (notably the 3D Viewport) a stale
+                    // persisted layout dropped.
+                    layout.reset_to_default_layout();
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("Toggle Activity Bar").clicked() {
                     layout.toggle_activity_bar();
                     ui.close();

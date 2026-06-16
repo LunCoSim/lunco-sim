@@ -54,6 +54,36 @@ impl TwinRoots {
     fn root_for(&self, name: &str) -> Option<PathBuf> {
         self.0.read().ok().and_then(|m| m.get(name).cloned())
     }
+
+    /// Names of all currently-open Twins, sorted (deterministic order — the
+    /// map's own iteration order isn't).
+    pub fn names(&self) -> Vec<String> {
+        self.0
+            .read()
+            .ok()
+            .map(|m| {
+                let mut v: Vec<String> = m.keys().cloned().collect();
+                v.sort();
+                v
+            })
+            .unwrap_or_default()
+    }
+
+    /// Absolute root folder for an open Twin by name.
+    pub fn root_of(&self, name: &str) -> Option<PathBuf> {
+        self.root_for(name)
+    }
+
+    /// The "primary" open Twin as `(name, root)` — the alphabetically-first
+    /// registered Twin, used as the default destination for newly created or
+    /// imported assets when the caller doesn't name a Twin. `None` if no Twin
+    /// is open.
+    pub fn primary(&self) -> Option<(String, PathBuf)> {
+        self.names()
+            .into_iter()
+            .next()
+            .and_then(|n| self.root_for(&n).map(|r| (n, r)))
+    }
 }
 
 /// Build the `twin://` [`AssetSourceBuilder`] over `roots`. Register in each
