@@ -28,6 +28,24 @@ pub struct SpawnEntity {
     pub position: Vec3,
 }
 
+/// Force a re-scan of project USD files into the spawn catalog. Picks up
+/// `*.usda` dropped into an already-open Twin mid-session (twin-open is
+/// auto-scanned; this covers new files after that). Idempotent.
+#[Command(default)]
+pub struct RescanSpawnCatalog {}
+
+/// Observer for [`RescanSpawnCatalog`].
+pub fn on_rescan_spawn_catalog(
+    _trigger: On<RescanSpawnCatalog>,
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    mut catalog: ResMut<crate::catalog::SpawnCatalog>,
+) {
+    if let Some(roots) = twin_roots.as_deref() {
+        let n = crate::catalog::scan_usd_into_catalog(roots, &mut catalog);
+        info!("RESCAN_SPAWN_CATALOG: +{n} USD asset(s)");
+    }
+}
+
 /// Observer that handles SpawnEntity commands.
 pub fn on_spawn_entity_command(
     trigger: On<SpawnEntity>,
@@ -2391,6 +2409,7 @@ impl Plugin for SpawnCommandPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_spawn_entity_command);
         app.add_observer(on_move_entity_command);
+        app.add_observer(on_rescan_spawn_catalog);
         app.add_observer(on_set_object_property);
         app.add_observer(on_focus_entity_by_id);
         app.add_observer(on_select_entity);
@@ -2403,6 +2422,17 @@ impl Plugin for SpawnCommandPlugin {
         app.add_observer(on_delete_shader);
         // Register with AppTypeRegistry so the reflection-based HTTP executor
         // (`get_with_short_type_path`) can construct it from `{"command":"SetObjectProperty",...}`.
+        // SpawnEntity/MoveEntity have observers above but were missing from the
+        // type registry, so the API couldn't construct them (absent from
+        // `discover_schema`). Register them so MCP/HTTP clients can spawn from the
+        // catalog and teleport entities exactly like the in-app palette/gizmo.
+        app.register_type::<SpawnEntity>();
+        app.register_type::<MoveEntity>();
+        app.register_type::<RescanSpawnCatalog>();
+        // Dynamic catalog: discover project USD files (engine lib + open Twins)
+        // so new `*.usda` become spawnable with no rebuild. Re-scans on twin
+        // set change; `RescanSpawnCatalog` forces a refresh mid-session.
+        app.add_systems(Update, crate::catalog::populate_dynamic_spawn_catalog);
         app.register_type::<SetObjectProperty>();
         app.register_type::<FocusEntityById>();
         app.register_type::<SelectEntity>();

@@ -28,78 +28,62 @@ impl Default for SpawnCatalog {
     fn default() -> Self {
         let mut catalog = Self { entries: Vec::new() };
 
-        // --- Rovers ---
+        // Built-in entries that aren't plain USD files (procedural factories)
+        // or that want a hand-tuned spawn lift live here. Everything authored
+        // as a `*.usda` (rovers, components, Twin structures) is discovered
+        // dynamically by `populate_dynamic_spawn_catalog` — dropping a file in
+        // an open Twin makes it spawnable with no rebuild. `add_unique` lets a
+        // hand-tuned entry below win over its discovered twin (same id).
+
+        // --- Rovers (USD; listed here only to pin a 1 m spawn lift) ---
         catalog.add(SpawnableEntry {
             id: "skid_rover".into(),
             display_name: "Skid Rover".into(),
-            category: SpawnCategory::Rover,
+            category: "Rovers".into(),
             source: SpawnSource::UsdFile("vessels/rovers/skid_rover.usda".into()),
+            spawn_lift: 1.0,
             default_transform: Transform::default(),
         });
         catalog.add(SpawnableEntry {
             id: "ackermann_rover".into(),
             display_name: "Ackermann Rover".into(),
-            category: SpawnCategory::Rover,
+            category: "Rovers".into(),
             source: SpawnSource::UsdFile("vessels/rovers/ackermann_rover.usda".into()),
+            spawn_lift: 1.0,
             default_transform: Transform::default(),
         });
 
-        // --- Components ---
-        catalog.add(SpawnableEntry {
-            id: "solar_panel".into(),
-            display_name: "Solar Panel".into(),
-            category: SpawnCategory::Component,
-            source: SpawnSource::UsdFile("components/power/solar_panel.usda".into()),
-            default_transform: Transform::from_xyz(0.0, 3.0, 0.0),  // 3m above ground
-        });
-
-        // --- Props ---
+        // --- Procedural props/terrain (no USD file to discover) ---
         catalog.add(SpawnableEntry {
             id: "ball_dynamic".into(),
             display_name: "Dynamic Ball".into(),
-            category: SpawnCategory::Prop,
+            category: "Props".into(),
             source: SpawnSource::Procedural(ProceduralId::BallDynamic),
+            spawn_lift: 0.0,
             default_transform: Transform::default(),
         });
         catalog.add(SpawnableEntry {
             id: "ball_static".into(),
             display_name: "Static Ball".into(),
-            category: SpawnCategory::Prop,
+            category: "Props".into(),
             source: SpawnSource::Procedural(ProceduralId::BallStatic),
+            spawn_lift: 0.0,
             default_transform: Transform::default(),
         });
-        // Balloons are USD-defined — same scene file the sandbox loads
-        // them from, picked up end-to-end by `lunco_usd_sim::cosim`.
-        // Snake-case id maps to the prim path inside the .usda
-        // (`modelica_balloon` → `/ModelicaBalloon`).
-        catalog.add(SpawnableEntry {
-            id: "modelica_balloon".into(),
-            display_name: "Weather Balloon (Red, Modelica)".into(),
-            category: SpawnCategory::Component,
-            source: SpawnSource::UsdFile("vessels/balloons/modelica_balloon.usda".into()),
-            default_transform: Transform::default(),
-        });
-        catalog.add(SpawnableEntry {
-            id: "python_balloon".into(),
-            display_name: "Weather Balloon (Green, Python)".into(),
-            category: SpawnCategory::Component,
-            source: SpawnSource::UsdFile("vessels/balloons/python_balloon.usda".into()),
-            default_transform: Transform::default(),
-        });
-
-        // --- Terrain ---
         catalog.add(SpawnableEntry {
             id: "ramp".into(),
             display_name: "Ramp".into(),
-            category: SpawnCategory::Terrain,
+            category: "Terrain".into(),
             source: SpawnSource::Procedural(ProceduralId::Ramp),
+            spawn_lift: 0.0,
             default_transform: Transform::default(),
         });
         catalog.add(SpawnableEntry {
             id: "wall".into(),
             display_name: "Wall".into(),
-            category: SpawnCategory::Terrain,
+            category: "Terrain".into(),
             source: SpawnSource::Procedural(ProceduralId::Wall),
+            spawn_lift: 0.0,
             default_transform: Transform::default(),
         });
 
@@ -112,14 +96,34 @@ impl SpawnCatalog {
         self.entries.push(entry);
     }
 
+    /// Add `entry` only if no entry with the same `id` exists yet. Returns
+    /// `true` if inserted. Used by dynamic discovery so re-scanning is
+    /// idempotent and never shadows a hand-tuned built-in entry.
+    pub fn add_unique(&mut self, entry: SpawnableEntry) -> bool {
+        if self.entries.iter().any(|e| e.id == entry.id) {
+            return false;
+        }
+        self.entries.push(entry);
+        true
+    }
+
     /// Get an entry by ID.
     pub fn get(&self, id: &str) -> Option<&SpawnableEntry> {
         self.entries.iter().find(|e| e.id == id)
     }
 
-    /// Get all entries in a category.
-    pub fn by_category(&self, cat: SpawnCategory) -> impl Iterator<Item = &SpawnableEntry> {
+    /// Get all entries in a category (matched by its dynamic string label).
+    pub fn by_category<'a>(&'a self, cat: &'a str) -> impl Iterator<Item = &'a SpawnableEntry> {
         self.entries.iter().filter(move |e| e.category == cat)
+    }
+
+    /// Distinct category labels present, sorted — drives dynamic UI grouping
+    /// so a new content folder yields a new group with no Rust change.
+    pub fn categories(&self) -> Vec<String> {
+        let mut cats: Vec<String> = self.entries.iter().map(|e| e.category.clone()).collect();
+        cats.sort();
+        cats.dedup();
+        cats
     }
 }
 
@@ -130,32 +134,18 @@ pub struct SpawnableEntry {
     pub id: String,
     /// Human-readable display name.
     pub display_name: String,
-    /// Category for UI grouping.
-    pub category: SpawnCategory,
+    /// Dynamic category label for UI grouping (e.g. "Rovers", "Structures").
+    /// Derived from content location, never a hardcoded Rust taxonomy.
+    pub category: String,
     /// How this entry is spawned.
     pub source: SpawnSource,
+    /// Metres to lift the spawn point above the click/terrain hit. Data, not a
+    /// category rule: dynamic props that must drop onto terrain set a positive
+    /// value; structures authored with origin at the ground use `0.0`. Sourced
+    /// from the USD `float lunco:spawnLift` attribute for discovered assets.
+    pub spawn_lift: f32,
     /// Default transform applied at spawn (overridden by click position).
     pub default_transform: Transform,
-}
-
-/// Category for organizing the spawn palette UI.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SpawnCategory {
-    Rover,
-    Component,
-    Prop,
-    Terrain,
-}
-
-impl std::fmt::Display for SpawnCategory {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SpawnCategory::Rover => write!(f, "Rovers"),
-            SpawnCategory::Component => write!(f, "Components"),
-            SpawnCategory::Prop => write!(f, "Props"),
-            SpawnCategory::Terrain => write!(f, "Terrain"),
-        }
-    }
 }
 
 /// How a spawnable entry is created.
@@ -328,20 +318,151 @@ pub fn spawn_usd_entry(
     panic!("spawn_usd_entry called with non-USD source");
 }
 
+/// Derive a dynamic category label from a discovered asset's path — the name
+/// of its immediate parent folder, Title-cased (`structures/habitat.usda` →
+/// "Structures", `vessels/rovers/x.usda` → "Rovers"). No hardcoded taxonomy:
+/// a new content folder simply becomes a new palette group.
+fn categorize(rel: &str) -> String {
+    rel.rsplit_once('/')
+        .map(|(dir, _)| dir.rsplit('/').next().unwrap_or(dir))
+        .map(title_case)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Other".to_string())
+}
+
+/// Read the optional `float lunco:spawnLift` attribute from a USD file by a
+/// cheap line scan (no full parse). Returns `0.0` if absent/unreadable — the
+/// right default for structures authored with origin at the ground plane.
+/// This is the "spawn height described in USD, dynamic" path.
+fn read_spawn_lift(path: &std::path::Path) -> f32 {
+    let Ok(src) = std::fs::read_to_string(path) else { return 0.0 };
+    for line in src.lines() {
+        if let Some(rest) = line.split_once("lunco:spawnLift") {
+            // `float lunco:spawnLift = 2.0`
+            if let Some(v) = rest.1.split('=').nth(1) {
+                if let Ok(f) = v.trim().parse::<f32>() {
+                    return f;
+                }
+            }
+        }
+    }
+    0.0
+}
+
+/// `habitat_fsh` → `Habitat Fsh`. Cheap presentable name from a file stem.
+fn title_case(stem: &str) -> String {
+    stem.split(['_', '-'])
+        .filter(|s| !s.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().chain(c).collect(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Populate the catalog with USD assets discovered project-wide
+/// (`lunco_assets::discovery::list_usd_assets` — the DRY single source of
+/// truth, scanning the engine library + every open Twin). Idempotent via
+/// `add_unique`, so hand-tuned built-ins win and re-runs add only new files.
+/// Re-runs whenever the set of open Twins changes (so dropping a `.usda` into
+/// a freshly-opened Twin makes it spawnable with no rebuild). On wasm the
+/// discovery list is empty (no filesystem), so this is a cheap no-op there.
+pub fn populate_dynamic_spawn_catalog(
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    mut catalog: ResMut<SpawnCatalog>,
+    mut last_twins: Local<Vec<String>>,
+    mut did_engine_scan: Local<bool>,
+) {
+    let Some(roots) = twin_roots.as_deref() else { return };
+    let names = roots.names();
+    // Engine library is static — scan it once; a changed twin set re-scans.
+    if *did_engine_scan && names == *last_twins {
+        return;
+    }
+    *did_engine_scan = true;
+    *last_twins = names;
+
+    let added = scan_usd_into_catalog(roots, &mut catalog);
+    if added > 0 {
+        info!("SPAWN_CATALOG: +{added} USD asset(s) discovered");
+    }
+}
+
+/// Add every project USD asset (engine library + open Twins) to `catalog`,
+/// skipping scenes/missions. Idempotent (`add_unique`). Returns the count
+/// newly added. Shared by the auto-scan system and the manual rescan command.
+pub fn scan_usd_into_catalog(
+    roots: &lunco_assets::twin_source::TwinRoots,
+    catalog: &mut SpawnCatalog,
+) -> usize {
+    let mut added = 0;
+    for a in lunco_assets::discovery::list_usd_assets(roots) {
+        // Scenes/missions are whole worlds, not spawnable parts.
+        if a.rel.contains("scenes/") || a.rel.contains("missions/") {
+            continue;
+        }
+        if catalog.add_unique(SpawnableEntry {
+            id: a.stem.clone(),
+            display_name: title_case(&a.stem),
+            category: categorize(&a.rel),
+            source: SpawnSource::UsdFile(a.asset_path.clone()),
+            spawn_lift: read_spawn_lift(&a.abs_path),
+            default_transform: Transform::default(),
+        }) {
+            added += 1;
+        }
+    }
+    added
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_catalog_has_entries() {
-        let catalog = SpawnCatalog::default();
-        assert!(!catalog.entries.is_empty());
+    fn test_title_case() {
+        assert_eq!(title_case("habitat_fsh"), "Habitat Fsh");
+        assert_eq!(title_case("solar_tower"), "Solar Tower");
+    }
 
-        // Verify categories exist
-        assert!(catalog.by_category(SpawnCategory::Rover).count() >= 2);
-        assert!(catalog.by_category(SpawnCategory::Component).count() >= 1);
-        assert!(catalog.by_category(SpawnCategory::Prop).count() >= 2);
-        assert!(catalog.by_category(SpawnCategory::Terrain).count() >= 2);
+    #[test]
+    fn test_categorize_from_folder() {
+        assert_eq!(categorize("structures/habitat_fsh.usda"), "Structures");
+        assert_eq!(categorize("vessels/rovers/skid_rover.usda"), "Rovers");
+        assert_eq!(categorize("components/power/solar_panel.usda"), "Power");
+        assert_eq!(categorize("bare.usda"), "Other");
+    }
+
+    #[test]
+    fn test_add_unique_dedups() {
+        let mut c = SpawnCatalog { entries: Vec::new() };
+        let mk = |id: &str| SpawnableEntry {
+            id: id.into(),
+            display_name: id.into(),
+            category: "Structures".into(),
+            source: SpawnSource::UsdFile("x.usda".into()),
+            spawn_lift: 0.0,
+            default_transform: Transform::default(),
+        };
+        assert!(c.add_unique(mk("a")));
+        assert!(!c.add_unique(mk("a")));
+        assert_eq!(c.entries.len(), 1);
+    }
+
+    #[test]
+    fn test_catalog_has_builtin_entries() {
+        // Only procedural + spawn-lift-pinned entries are hardcoded now;
+        // USD-file entries (components, structures) arrive via dynamic scan.
+        let catalog = SpawnCatalog::default();
+        assert!(catalog.by_category("Rovers").count() >= 2);
+        assert!(catalog.by_category("Props").count() >= 2);
+        assert!(catalog.by_category("Terrain").count() >= 2);
+        // Distinct, sorted category labels for dynamic UI grouping.
+        assert!(catalog.categories().contains(&"Rovers".to_string()));
     }
 
     #[test]
@@ -349,18 +470,11 @@ mod tests {
         let catalog = SpawnCatalog::default();
         assert!(catalog.get("skid_rover").is_some());
         assert!(catalog.get("ackermann_rover").is_some());
-        assert!(catalog.get("solar_panel").is_some());
         assert!(catalog.get("ball_dynamic").is_some());
         assert!(catalog.get("ramp").is_some());
         assert!(catalog.get("wall").is_some());
         assert!(catalog.get("nonexistent").is_none());
-    }
-
-    #[test]
-    fn test_spawn_category_display() {
-        assert_eq!(format!("{}", SpawnCategory::Rover), "Rovers");
-        assert_eq!(format!("{}", SpawnCategory::Component), "Components");
-        assert_eq!(format!("{}", SpawnCategory::Prop), "Props");
-        assert_eq!(format!("{}", SpawnCategory::Terrain), "Terrain");
+        // Spawn lift is per-entry data, not a category rule.
+        assert_eq!(catalog.get("skid_rover").unwrap().spawn_lift, 1.0);
     }
 }

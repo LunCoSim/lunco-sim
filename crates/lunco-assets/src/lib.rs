@@ -39,6 +39,7 @@
 use std::path::PathBuf;
 
 pub mod asset_sources;
+pub mod discovery;
 pub mod download;
 pub mod font;
 pub mod msl;
