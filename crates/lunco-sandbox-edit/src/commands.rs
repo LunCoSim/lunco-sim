@@ -15,7 +15,7 @@ use avian3d::physics_transform::{Position, Rotation};
 use big_space::prelude::Grid;
 use lunco_core::Command;
 use std::collections::{HashMap, VecDeque};
-use crate::catalog::{SpawnCatalog, spawn_procedural, spawn_usd_entry};
+use crate::catalog::{SpawnCatalog, spawn_usd_entry};
 
 /// Spawn an entity from the catalog at a given world position.
 #[Command]
@@ -51,8 +51,6 @@ pub fn on_spawn_entity_command(
     trigger: On<SpawnEntity>,
     mut commands: Commands,
     catalog: Res<SpawnCatalog>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
     q_grids: Query<Entity, With<Grid>>,
     role: Res<lunco_core::NetworkRole>,
@@ -87,14 +85,7 @@ pub fn on_spawn_entity_command(
 
     info!("SPAWN_ENTITY: {} at {:?}", cmd.entry_id, cmd.position);
 
-    let result = match entry.source {
-        crate::catalog::SpawnSource::Procedural(_) => {
-            spawn_procedural(&mut commands, &mut meshes, &mut materials, entry, cmd.position, grid)
-        }
-        crate::catalog::SpawnSource::UsdFile(_) => {
-            spawn_usd_entry(&mut commands, &asset_server, entry, cmd.position, grid)
-        }
-    };
+    let result = spawn_usd_entry(&mut commands, &asset_server, entry, cmd.position, grid);
 
     // Networked identity (gap G2): a runtime instance gets a server-allocated
     // unique id (SkipContentStamp → assign_global_entity_ids mints
@@ -118,8 +109,6 @@ pub fn apply_replicated_spawns(
     mut pending: ResMut<lunco_core::PendingReplicatedSpawns>,
     mut commands: Commands,
     catalog: Res<SpawnCatalog>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
     q_grids: Query<Entity, With<Grid>>,
 ) {
@@ -136,14 +125,7 @@ pub fn apply_replicated_spawns(
             continue;
         };
         let pos = job.position;
-        let result = match entry.source {
-            crate::catalog::SpawnSource::Procedural(_) => {
-                spawn_procedural(&mut commands, &mut meshes, &mut materials, entry, pos, grid)
-            }
-            crate::catalog::SpawnSource::UsdFile(_) => {
-                spawn_usd_entry(&mut commands, &asset_server, entry, pos, grid)
-            }
-        };
+        let result = spawn_usd_entry(&mut commands, &asset_server, entry, pos, grid);
         // Pin the host id; mark runtime instance + replication target. Forced
         // Kinematic by `force_kinematic_proxies` so snapshots drive it.
         commands.entity(result.root_entity).insert((

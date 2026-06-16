@@ -1,0 +1,21 @@
+#usda 1.0
+(
+    defaultPrim = "Wall"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Wall — static cuboid barrier.
+def Xform "Wall"
+{
+    def Cube "Body" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:scale = (8.0, 4.0, 1.0)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
+        color3f primvars:displayColor = (0.6, 0.6, 0.6)
+        bool physics:collisionEnabled = true
+    }
+}

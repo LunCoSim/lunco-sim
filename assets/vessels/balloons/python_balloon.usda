@@ -29,6 +29,7 @@ def Sphere "PythonBalloon" (
     bool physics:rigidBodyEnabled = true
     bool physics:collisionEnabled = true
     float physics:mass = 4.5
+    float lunco:spawnLift = 2.0
 
     string lunco:pythonModel = "models/GreenBalloon.py"
     string lunco:simWires = "netForce:force_y,height:height,velocity_y:velocity"

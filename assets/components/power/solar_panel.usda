@@ -13,6 +13,7 @@ def Xform "SolarPanel" (
 )
 {
     float physics:mass = 15.0
+    float lunco:spawnLift = 2.0
 
     # Panel Frame — structural aluminum
     def Cube "PanelFrame" (

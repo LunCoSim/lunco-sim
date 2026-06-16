@@ -26,76 +26,18 @@ pub struct SpawnCatalog {
 
 impl Default for SpawnCatalog {
     fn default() -> Self {
-        let mut catalog = Self { entries: Vec::new() };
-
-        // Built-in entries that aren't plain USD files (procedural factories)
-        // or that want a hand-tuned spawn lift live here. Everything authored
-        // as a `*.usda` (rovers, components, Twin structures) is discovered
-        // dynamically by `populate_dynamic_spawn_catalog` — dropping a file in
-        // an open Twin makes it spawnable with no rebuild. `add_unique` lets a
-        // hand-tuned entry below win over its discovered twin (same id).
-
-        // --- Rovers (USD; listed here only to pin a 1 m spawn lift) ---
-        catalog.add(SpawnableEntry {
-            id: "skid_rover".into(),
-            display_name: "Skid Rover".into(),
-            category: "Rovers".into(),
-            source: SpawnSource::UsdFile("vessels/rovers/skid_rover.usda".into()),
-            spawn_lift: 1.0,
-            default_transform: Transform::default(),
-        });
-        catalog.add(SpawnableEntry {
-            id: "ackermann_rover".into(),
-            display_name: "Ackermann Rover".into(),
-            category: "Rovers".into(),
-            source: SpawnSource::UsdFile("vessels/rovers/ackermann_rover.usda".into()),
-            spawn_lift: 1.0,
-            default_transform: Transform::default(),
-        });
-
-        // --- Procedural props/terrain (no USD file to discover) ---
-        catalog.add(SpawnableEntry {
-            id: "ball_dynamic".into(),
-            display_name: "Dynamic Ball".into(),
-            category: "Props".into(),
-            source: SpawnSource::Procedural(ProceduralId::BallDynamic),
-            spawn_lift: 0.0,
-            default_transform: Transform::default(),
-        });
-        catalog.add(SpawnableEntry {
-            id: "ball_static".into(),
-            display_name: "Static Ball".into(),
-            category: "Props".into(),
-            source: SpawnSource::Procedural(ProceduralId::BallStatic),
-            spawn_lift: 0.0,
-            default_transform: Transform::default(),
-        });
-        catalog.add(SpawnableEntry {
-            id: "ramp".into(),
-            display_name: "Ramp".into(),
-            category: "Terrain".into(),
-            source: SpawnSource::Procedural(ProceduralId::Ramp),
-            spawn_lift: 0.0,
-            default_transform: Transform::default(),
-        });
-        catalog.add(SpawnableEntry {
-            id: "wall".into(),
-            display_name: "Wall".into(),
-            category: "Terrain".into(),
-            source: SpawnSource::Procedural(ProceduralId::Wall),
-            spawn_lift: 0.0,
-            default_transform: Transform::default(),
-        });
-
-        catalog
+        // No hardcoded entries. Everything spawnable is a `*.usda` file
+        // (rovers, components, props, Twin structures) discovered at runtime by
+        // `populate_dynamic_spawn_catalog` from the project's USD — drop a file
+        // in `assets/` or an open Twin and it's spawnable with no rebuild.
+        // Per-asset data (category from its folder, `spawn_lift` from a
+        // `float lunco:spawnLift` attribute) is read from the USD, so no Rust
+        // code is aware of any specific content type.
+        Self { entries: Vec::new() }
     }
 }
 
 impl SpawnCatalog {
-    fn add(&mut self, entry: SpawnableEntry) {
-        self.entries.push(entry);
-    }
-
     /// Add `entry` only if no entry with the same `id` exists yet. Returns
     /// `true` if inserted. Used by dynamic discovery so re-scanning is
     /// idempotent and never shadows a hand-tuned built-in entry.
@@ -151,120 +93,16 @@ pub struct SpawnableEntry {
 /// How a spawnable entry is created.
 #[derive(Clone, Debug)]
 pub enum SpawnSource {
-    /// Load from a USD file via the asset server.
+    /// Load from a USD file via the asset server. The only spawn source —
+    /// every spawnable, including props once built procedurally in Rust, is
+    /// now authored as USD and constructed by the USD→Bevy loader.
     UsdFile(String),
-    /// Spawned procedurally by a factory function.
-    Procedural(ProceduralId),
-}
-
-/// Identifier for procedural spawn types.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ProceduralId {
-    /// Dynamic sphere (RigidBody + Collider + Mesh).
-    BallDynamic,
-    /// Static sphere (Collider + Mesh, no RigidBody).
-    BallStatic,
-    /// Angled cuboid ramp (static RigidBody).
-    Ramp,
-    /// Tall cuboid wall (static RigidBody).
-    Wall,
 }
 
 /// Result of spawning an entry. Contains the root entity/entities created.
 pub struct SpawnResult {
     /// The root entity of the spawned object.
     pub root_entity: Entity,
-}
-
-/// Spawns a procedural entry at the given world position.
-pub fn spawn_procedural(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    entry: &SpawnableEntry,
-    world_pos: Vec3,
-    grid: Entity,
-) -> SpawnResult {
-    let root = match entry.source {
-        SpawnSource::Procedural(ProceduralId::BallDynamic) => {
-            let radius = 0.5_f32;
-            let mesh = meshes.add(Sphere::new(radius).mesh().ico(16).unwrap());
-            let mat = materials.add(StandardMaterial {
-                base_color: Color::srgb(0.9, 0.3, 0.3),
-                ..default()
-            });
-            commands.spawn((
-                Name::new("Dynamic Ball"),
-                lunco_core::SelectableRoot,
-                Transform::from_translation(world_pos),
-                avian3d::prelude::RigidBody::Dynamic,
-                avian3d::prelude::Collider::sphere(radius as f64),
-                avian3d::prelude::Mass(5.0),
-                avian3d::prelude::Friction::new(0.5),
-                Mesh3d(mesh),
-                MeshMaterial3d(mat),
-                ChildOf(grid),
-            )).id()
-        }
-        SpawnSource::Procedural(ProceduralId::BallStatic) => {
-            let radius = 0.5_f32;
-            let mesh = meshes.add(Sphere::new(radius).mesh().ico(16).unwrap());
-            let mat = materials.add(StandardMaterial {
-                base_color: Color::srgb(0.3, 0.3, 0.9),
-                ..default()
-            });
-            commands.spawn((
-                Name::new("Static Ball"),
-                lunco_core::SelectableRoot,
-                Transform::from_translation(world_pos),
-                avian3d::prelude::Collider::sphere(radius as f64),
-                Mesh3d(mesh),
-                MeshMaterial3d(mat),
-                ChildOf(grid),
-            )).id()
-        }
-        SpawnSource::Procedural(ProceduralId::Ramp) => {
-            let (w, h, d) = (6.0_f64, 2.0_f64, 8.0_f64);
-            let mesh = meshes.add(Cuboid::new(w as f32, h as f32, d as f32));
-            let mat = materials.add(StandardMaterial {
-                base_color: Color::srgb(0.5, 0.5, 0.5),
-                ..default()
-            });
-            commands.spawn((
-                Name::new("Ramp"),
-                lunco_core::SelectableRoot,
-                Transform::from_translation(world_pos)
-                    .with_rotation(Quat::from_rotation_z(17.1887_f32.to_radians())),
-                avian3d::prelude::RigidBody::Static,
-                avian3d::prelude::Collider::cuboid(w, h, d),
-                avian3d::prelude::Friction::new(1.0),
-                Mesh3d(mesh),
-                MeshMaterial3d(mat),
-                ChildOf(grid),
-            )).id()
-        }
-        SpawnSource::Procedural(ProceduralId::Wall) => {
-            let (w, h, d) = (8.0_f64, 4.0_f64, 1.0_f64);
-            let mesh = meshes.add(Cuboid::new(w as f32, h as f32, d as f32));
-            let mat = materials.add(StandardMaterial {
-                base_color: Color::srgb(0.6, 0.6, 0.6),
-                ..default()
-            });
-            commands.spawn((
-                Name::new("Wall"),
-                lunco_core::SelectableRoot,
-                Transform::from_translation(world_pos),
-                avian3d::prelude::RigidBody::Static,
-                avian3d::prelude::Collider::cuboid(w, h, d),
-                Mesh3d(mesh),
-                MeshMaterial3d(mat),
-                ChildOf(grid),
-            )).id()
-        }
-        _ => panic!("Unknown procedural spawn: {:?}", entry.source),
-    };
-
-    SpawnResult { root_entity: root }
 }
 
 /// Spawns a USD-based entry at the given world position.
@@ -281,41 +119,39 @@ pub fn spawn_usd_entry(
     world_pos: Vec3,
     grid: Entity,
 ) -> SpawnResult {
-    if let SpawnSource::UsdFile(ref path) = entry.source {
-        let handle = asset_server.load(path.clone());
+    let SpawnSource::UsdFile(path) = &entry.source;
+    let handle = asset_server.load(path.clone());
 
-        // Derive USD prim path from entry id: "solar_panel" → "/SolarPanel"
-        let prim_path = entry.id.split('_')
-            .map(|part| {
-                let mut chars = part.chars();
-                match chars.next() {
-                    None => String::new(),
-                    Some(c) => c.to_uppercase().chain(chars).collect(),
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("");
-        let prim_path = format!("/{}", prim_path);
+    // Derive USD prim path from entry id: "solar_panel" → "/SolarPanel"
+    let prim_path = entry.id.split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().chain(chars).collect(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let prim_path = format!("/{}", prim_path);
 
-        let root = commands.spawn((
-            Name::new(entry.display_name.clone()),
-            lunco_core::SelectableRoot,
-            lunco_core::GridAnchor,
-            UsdPrimPath {
-                stage_handle: handle,
-                path: prim_path,
-            },
-            Transform::from_translation(world_pos),
-            big_space::prelude::CellCoord::default(),
-            ChildOf(grid),
-            Visibility::Visible,
-            InheritedVisibility::VISIBLE,
-            ViewVisibility::default(),
-        )).id();
+    let root = commands.spawn((
+        Name::new(entry.display_name.clone()),
+        lunco_core::SelectableRoot,
+        lunco_core::GridAnchor,
+        UsdPrimPath {
+            stage_handle: handle,
+            path: prim_path,
+        },
+        Transform::from_translation(world_pos),
+        big_space::prelude::CellCoord::default(),
+        ChildOf(grid),
+        Visibility::Visible,
+        InheritedVisibility::VISIBLE,
+        ViewVisibility::default(),
+    )).id();
 
-        return SpawnResult { root_entity: root };
-    }
-    panic!("spawn_usd_entry called with non-USD source");
+    SpawnResult { root_entity: root }
 }
 
 /// Derive a dynamic category label from a discovered asset's path — the name
@@ -401,8 +237,13 @@ pub fn scan_usd_into_catalog(
 ) -> usize {
     let mut added = 0;
     for a in lunco_assets::discovery::list_usd_assets(roots) {
-        // Scenes/missions are whole worlds, not spawnable parts.
-        if a.rel.contains("scenes/") || a.rel.contains("missions/") {
+        // Scenes/missions are whole worlds, not spawnable parts. Catch both a
+        // `scenes/`/`missions/` folder and a root-level `*_scene.usda`
+        // (e.g. the Twin's `moonbase_scene.usda`).
+        if a.rel.contains("scenes/")
+            || a.rel.contains("missions/")
+            || a.stem.ends_with("_scene")
+        {
             continue;
         }
         if catalog.add_unique(SpawnableEntry {
@@ -454,27 +295,26 @@ mod tests {
     }
 
     #[test]
-    fn test_catalog_has_builtin_entries() {
-        // Only procedural + spawn-lift-pinned entries are hardcoded now;
-        // USD-file entries (components, structures) arrive via dynamic scan.
-        let catalog = SpawnCatalog::default();
-        assert!(catalog.by_category("Rovers").count() >= 2);
-        assert!(catalog.by_category("Props").count() >= 2);
-        assert!(catalog.by_category("Terrain").count() >= 2);
-        // Distinct, sorted category labels for dynamic UI grouping.
-        assert!(catalog.categories().contains(&"Rovers".to_string()));
+    fn test_default_catalog_is_empty() {
+        // Nothing hardcoded — every spawnable is discovered from project USD.
+        assert!(SpawnCatalog::default().entries.is_empty());
     }
 
     #[test]
-    fn test_catalog_get_by_id() {
-        let catalog = SpawnCatalog::default();
-        assert!(catalog.get("skid_rover").is_some());
-        assert!(catalog.get("ackermann_rover").is_some());
-        assert!(catalog.get("ball_dynamic").is_some());
-        assert!(catalog.get("ramp").is_some());
-        assert!(catalog.get("wall").is_some());
-        assert!(catalog.get("nonexistent").is_none());
-        // Spawn lift is per-entry data, not a category rule.
-        assert_eq!(catalog.get("skid_rover").unwrap().spawn_lift, 1.0);
+    fn test_categories_distinct_sorted() {
+        let mut c = SpawnCatalog { entries: Vec::new() };
+        let mk = |id: &str, cat: &str| SpawnableEntry {
+            id: id.into(),
+            display_name: id.into(),
+            category: cat.into(),
+            source: SpawnSource::UsdFile("x.usda".into()),
+            spawn_lift: 0.0,
+            default_transform: Transform::default(),
+        };
+        c.add_unique(mk("a", "Rovers"));
+        c.add_unique(mk("b", "Structures"));
+        c.add_unique(mk("c", "Rovers"));
+        assert_eq!(c.categories(), vec!["Rovers".to_string(), "Structures".to_string()]);
+        assert_eq!(c.by_category("Rovers").count(), 2);
     }
 }

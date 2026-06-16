@@ -1,0 +1,19 @@
+#usda 1.0
+(
+    defaultPrim = "BallStatic"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Static ball — collider + mesh, no rigid body (stays put).
+def Xform "BallStatic"
+{
+    def Sphere "Body" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double radius = 0.5
+        color3f primvars:displayColor = (0.3, 0.3, 0.9)
+        bool physics:collisionEnabled = true
+    }
+}
