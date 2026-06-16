@@ -2256,8 +2256,11 @@ fn scan_dir_into_catalog(
             continue;
         }
         let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else { continue };
-        let Ok(src) = std::fs::read_to_string(&p) else { continue };
-        if lunco_materials::is_prop_pickable_source(&src) && catalog.add(format!("{asset_prefix}/{stem}.wgsl")) {
+        // List EVERY shader (no prop-pickable filter) — the picker shows all and
+        // flags any whose required `@engine` inputs a part can't provide (e.g.
+        // `regolith` needs terrain heightfield/CSM data). Hiding them meant the
+        // lunar surface shader couldn't be reselected on the terrain.
+        if catalog.add(format!("{asset_prefix}/{stem}.wgsl")) {
             n += 1;
         }
     }
