@@ -168,21 +168,34 @@ fn categorize(rel: &str) -> String {
 
 /// Read the optional `float lunco:spawnLift` attribute from a USD file by a
 /// cheap line scan (no full parse). Returns `0.0` if absent/unreadable — the
-/// right default for structures authored with origin at the ground plane.
-/// This is the "spawn height described in USD, dynamic" path.
-fn read_spawn_lift(path: &std::path::Path) -> f32 {
-    let Ok(src) = std::fs::read_to_string(path) else { return 0.0 };
+/// Spawn-related metadata read from a USD file by a cheap line scan (no full
+/// parse). Both fields are authored on the default prim:
+/// - `float lunco:spawnLift` — metres to lift the spawn point (default `0.0`).
+/// - `bool  lunco:spawnable` — whether this file is a spawnable part at all
+///   (default `true`); scenes set it `false` so they're not offered as
+///   instances. Data-driven, so no Rust code special-cases "scenes".
+struct SpawnMeta {
+    lift: f32,
+    spawnable: bool,
+}
+
+fn read_spawn_meta(path: &std::path::Path) -> SpawnMeta {
+    let mut meta = SpawnMeta { lift: 0.0, spawnable: true };
+    let Ok(src) = std::fs::read_to_string(path) else { return meta };
     for line in src.lines() {
-        if let Some(rest) = line.split_once("lunco:spawnLift") {
-            // `float lunco:spawnLift = 2.0`
-            if let Some(v) = rest.1.split('=').nth(1) {
+        if let Some((_, rhs)) = line.split_once("lunco:spawnLift") {
+            if let Some(v) = rhs.split('=').nth(1) {
                 if let Ok(f) = v.trim().parse::<f32>() {
-                    return f;
+                    meta.lift = f;
                 }
+            }
+        } else if let Some((_, rhs)) = line.split_once("lunco:spawnable") {
+            if let Some(v) = rhs.split('=').nth(1) {
+                meta.spawnable = v.trim().starts_with("true") || v.trim().starts_with('1');
             }
         }
     }
-    0.0
+    meta
 }
 
 /// `habitat_fsh` → `Habitat Fsh`. Cheap presentable name from a file stem.
@@ -200,50 +213,20 @@ fn title_case(stem: &str) -> String {
         .join(" ")
 }
 
-/// Populate the catalog with USD assets discovered project-wide
-/// (`lunco_assets::discovery::list_usd_assets` — the DRY single source of
-/// truth, scanning the engine library + every open Twin). Idempotent via
-/// `add_unique`, so hand-tuned built-ins win and re-runs add only new files.
-/// Re-runs whenever the set of open Twins changes (so dropping a `.usda` into
-/// a freshly-opened Twin makes it spawnable with no rebuild). On wasm the
-/// discovery list is empty (no filesystem), so this is a cheap no-op there.
-pub fn populate_dynamic_spawn_catalog(
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-    mut catalog: ResMut<SpawnCatalog>,
-    mut last_twins: Local<Vec<String>>,
-    mut did_engine_scan: Local<bool>,
-) {
-    let Some(roots) = twin_roots.as_deref() else { return };
-    let names = roots.names();
-    // Engine library is static — scan it once; a changed twin set re-scans.
-    if *did_engine_scan && names == *last_twins {
-        return;
-    }
-    *did_engine_scan = true;
-    *last_twins = names;
-
-    let added = scan_usd_into_catalog(roots, &mut catalog);
-    if added > 0 {
-        info!("SPAWN_CATALOG: +{added} USD asset(s) discovered");
-    }
-}
-
 /// Add every project USD asset (engine library + open Twins) to `catalog`,
-/// skipping scenes/missions. Idempotent (`add_unique`). Returns the count
-/// newly added. Shared by the auto-scan system and the manual rescan command.
+/// reading each file's `lunco:spawnable`/`lunco:spawnLift` metadata. A file
+/// with `lunco:spawnable = false` (scenes/missions opt out) is skipped — the
+/// decision is USD data, not a Rust filename rule. Idempotent (`add_unique`),
+/// so re-runs add only new files. Returns the count newly added. Called at
+/// Startup and on Twin-open (see `commands.rs`) — never per frame.
 pub fn scan_usd_into_catalog(
     roots: &lunco_assets::twin_source::TwinRoots,
     catalog: &mut SpawnCatalog,
 ) -> usize {
     let mut added = 0;
     for a in lunco_assets::discovery::list_usd_assets(roots) {
-        // Scenes/missions are whole worlds, not spawnable parts. Catch both a
-        // `scenes/`/`missions/` folder and a root-level `*_scene.usda`
-        // (e.g. the Twin's `moonbase_scene.usda`).
-        if a.rel.contains("scenes/")
-            || a.rel.contains("missions/")
-            || a.stem.ends_with("_scene")
-        {
+        let meta = read_spawn_meta(&a.abs_path);
+        if !meta.spawnable {
             continue;
         }
         if catalog.add_unique(SpawnableEntry {
@@ -251,7 +234,7 @@ pub fn scan_usd_into_catalog(
             display_name: title_case(&a.stem),
             category: categorize(&a.rel),
             source: SpawnSource::UsdFile(a.asset_path.clone()),
-            spawn_lift: read_spawn_lift(&a.abs_path),
+            spawn_lift: meta.lift,
             default_transform: Transform::default(),
         }) {
             added += 1;

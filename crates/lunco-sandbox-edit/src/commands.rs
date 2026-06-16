@@ -2239,93 +2239,71 @@ pub fn on_import_shader(
 #[Command(default)]
 pub struct RescanShaders {}
 
-/// Native: scan `dir` for `*.wgsl` prop-pickable shaders and register each under
-/// `<asset_prefix>/<stem>.wgsl` in `catalog`. Returns the count newly added.
-/// Silent no-op if the dir can't be read.
-#[cfg(not(target_arch = "wasm32"))]
-fn scan_dir_into_catalog(
-    dir: &std::path::Path,
-    asset_prefix: &str,
+/// THE shader scanner: register every project `*.wgsl` (engine library + open
+/// Twins) into the picker catalog via the shared `lunco_assets::discovery`
+/// walk — the same single scanner the spawn catalog uses for `*.usda`. No
+/// filter: the picker lists all shaders and flags any whose `@engine` inputs a
+/// part can't provide. Idempotent (`add` dedups). Returns the count added.
+pub fn scan_wgsl_into_catalog(
+    roots: &lunco_assets::twin_source::TwinRoots,
     catalog: &mut lunco_materials::ShaderCatalog,
 ) -> usize {
-    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
     let mut n = 0;
-    for entry in rd.flatten() {
-        let p = entry.path();
-        if p.extension().and_then(|e| e.to_str()) != Some("wgsl") {
-            continue;
-        }
-        let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else { continue };
-        // List EVERY shader (no prop-pickable filter) — the picker shows all and
-        // flags any whose required `@engine` inputs a part can't provide (e.g.
-        // `regolith` needs terrain heightfield/CSM data). Hiding them meant the
-        // lunar surface shader couldn't be reselected on the terrain.
-        if catalog.add(format!("{asset_prefix}/{stem}.wgsl")) {
+    for a in lunco_assets::discovery::list_assets(roots, "wgsl") {
+        if catalog.add(a.asset_path) {
             n += 1;
         }
     }
     n
 }
 
-/// Observer for [`RescanShaders`].
-#[allow(unused_variables, unused_mut)]
+/// Populate BOTH catalogs (USD → spawn, WGSL → shaders) from the project. The
+/// single scan entry point, driven by [`maintain_catalogs`] (Startup + on
+/// Twin-set change) and the manual rescan commands — never a per-frame walk.
+pub fn scan_all_catalogs(
+    roots: &lunco_assets::twin_source::TwinRoots,
+    spawn: &mut crate::catalog::SpawnCatalog,
+    shaders: &mut lunco_materials::ShaderCatalog,
+) {
+    let s = crate::catalog::scan_usd_into_catalog(roots, spawn);
+    let w = scan_wgsl_into_catalog(roots, shaders);
+    if s > 0 || w > 0 {
+        info!("CATALOG_SCAN: +{s} USD, +{w} shader(s)");
+    }
+}
+
+/// The ONE catalog-population system. Scans the engine library once, then
+/// re-scans whenever the set of open Twins changes (so a freshly-opened Twin's
+/// files appear) — twin-open is async, so a guarded `Update` check is more
+/// robust than racing the `TwinAdded` observer that registers the twin root.
+/// It only *walks the disk* on first run and on change; every other frame it
+/// early-returns after a cheap name-set comparison (no per-frame rescan).
+pub fn maintain_catalogs(
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    mut spawn: ResMut<crate::catalog::SpawnCatalog>,
+    mut shaders: ResMut<lunco_materials::ShaderCatalog>,
+    mut last_twins: Local<Vec<String>>,
+    mut did_first_scan: Local<bool>,
+) {
+    let Some(roots) = twin_roots.as_deref() else { return };
+    let names = roots.names();
+    if *did_first_scan && names == *last_twins {
+        return;
+    }
+    *did_first_scan = true;
+    *last_twins = names;
+    scan_all_catalogs(roots, &mut spawn, &mut shaders);
+}
+
+/// Observer for [`RescanShaders`] — manual full re-scan of the shader catalog.
 pub fn on_rescan_shaders(
     _trigger: On<RescanShaders>,
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
 ) {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let mut total = 0;
-        if let Some(roots) = twin_roots.as_deref() {
-            for name in roots.names() {
-                if let Some(root) = roots.root_of(&name) {
-                    total += scan_dir_into_catalog(
-                        &root.join("shaders"),
-                        &format!("twin://{name}/shaders"),
-                        &mut catalog,
-                    );
-                }
-            }
-        }
-        total += scan_dir_into_catalog(std::path::Path::new("assets/shaders"), "shaders", &mut catalog);
-        info!("RESCAN_SHADERS: +{total} new shader(s)");
-    }
-}
-
-/// Tracks which open Twins have had their `shaders/` folder scanned, so
-/// [`auto_scan_twin_shaders`] does the work once per Twin (not every frame).
-#[derive(Resource, Default)]
-pub struct ScannedTwinShaders(std::collections::HashSet<String>);
-
-/// Each frame, register shaders from any newly-opened Twin's `shaders/` folder
-/// into the picker (once per Twin). Makes "drop a shader in the Twin folder"
-/// work automatically on open, without a manual [`RescanShaders`].
-#[allow(unused_variables, unused_mut)]
-pub fn auto_scan_twin_shaders(
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-    mut scanned: ResMut<ScannedTwinShaders>,
-    mut catalog: ResMut<lunco_materials::ShaderCatalog>,
-) {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let Some(roots) = twin_roots.as_deref() else { return };
-        for name in roots.names() {
-            if scanned.0.contains(&name) {
-                continue;
-            }
-            if let Some(root) = roots.root_of(&name) {
-                let added = scan_dir_into_catalog(
-                    &root.join("shaders"),
-                    &format!("twin://{name}/shaders"),
-                    &mut catalog,
-                );
-                if added > 0 {
-                    info!("AUTO_SCAN: +{added} shader(s) from twin '{name}'");
-                }
-            }
-            scanned.0.insert(name);
-        }
+    if let Some(roots) = twin_roots.as_deref() {
+        let n = scan_wgsl_into_catalog(roots, &mut catalog);
+        info!("RESCAN_SHADERS: +{n} shader(s)");
     }
 }
 
@@ -2414,10 +2392,6 @@ impl Plugin for SpawnCommandPlugin {
         app.register_type::<SpawnEntity>();
         app.register_type::<MoveEntity>();
         app.register_type::<RescanSpawnCatalog>();
-        // Dynamic catalog: discover project USD files (engine lib + open Twins)
-        // so new `*.usda` become spawnable with no rebuild. Re-scans on twin
-        // set change; `RescanSpawnCatalog` forces a refresh mid-session.
-        app.add_systems(Update, crate::catalog::populate_dynamic_spawn_catalog);
         app.register_type::<SetObjectProperty>();
         app.register_type::<FocusEntityById>();
         app.register_type::<SelectEntity>();
@@ -2428,8 +2402,13 @@ impl Plugin for SpawnCommandPlugin {
         app.register_type::<ImportShader>();
         app.register_type::<RescanShaders>();
         app.register_type::<DeleteShader>();
-        app.init_resource::<ScannedTwinShaders>();
-        app.add_systems(Update, auto_scan_twin_shaders);
+        // THE single catalog-population system: scans project USD → spawn
+        // catalog and WGSL → shader catalog via the shared `lunco_assets`
+        // discovery walk, once at first run and again only when the open-Twin
+        // set changes (guarded — no per-frame disk walk). Replaces the old
+        // per-catalog scanners (`populate_dynamic_spawn_catalog`,
+        // `auto_scan_twin_shaders`, `discover_shaders`).
+        app.add_systems(Update, maintain_catalogs);
         app.add_systems(FixedPostUpdate, clear_kinematic_pulse_velocity);
         app.init_resource::<InterpBuffers>();
         app.init_resource::<PredictedStateLog>();

@@ -7,6 +7,9 @@
 
 def Xform "SandboxScene"
 {
+    # A whole scene, not a spawnable part — excluded from the spawn catalog.
+    custom bool lunco:spawnable = false
+
     # --- Ground plane (static terrain surface) ---
     # Spec-compliant Cube: `double size = 1` + `xformOp:scale` for
     # non-uniform extents. The ground is a 4 km × 0.2 m × 4 km slab.

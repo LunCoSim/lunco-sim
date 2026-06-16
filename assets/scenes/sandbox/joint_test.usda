@@ -21,6 +21,8 @@
 
 def Xform "SandboxScene"
 {
+    custom bool lunco:spawnable = false
+
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
     )
