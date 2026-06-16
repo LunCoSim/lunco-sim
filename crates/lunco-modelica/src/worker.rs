@@ -1455,6 +1455,10 @@ pub fn spawn_modelica_requests(
                         Some(model.model_name.clone())
                     },
                     force: false,
+                    // Compile-on-first-step: preserve whatever resume
+                    // intent the model already carries (this path never
+                    // arms a new one).
+                    resume_after_compile: false,
                 });
             }
             // Don't ship a Step this frame either way — let the

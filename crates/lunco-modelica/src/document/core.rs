@@ -639,8 +639,15 @@ impl ModelicaDocument {
         if !self.ast_is_stale() && !self.syntax_is_stale() {
             return;
         }
-        let Some(handle) = crate::engine_resource::global_engine_handle() else { return };
-        
+        // The global engine is only needed for cross-file resolution
+        // (it learns about this doc's AST so other docs can `extends` it).
+        // A standalone / headless doc — and unit tests — can still refresh
+        // their OWN AST + index without it, so the handle is best-effort
+        // rather than a hard precondition. (Previously a missing handle
+        // returned early, leaving the doc permanently stale in any context
+        // that hadn't installed the global engine.)
+        let handle = crate::engine_resource::global_engine_handle();
+
         let bundle_ast: Option<Arc<StoredDefinition>> = match &self.origin {
             DocumentOrigin::File { path, .. } => {
                 let key = path.to_string_lossy().to_string();
@@ -654,9 +661,10 @@ impl ModelicaDocument {
         };
 
         let arc_ast: Option<Arc<StoredDefinition>> = {
-            let mut engine = handle.lock();
             if let Some(ast) = bundle_ast.as_ref() {
-                engine.upsert_document_with_ast(self.id, (**ast).clone());
+                if let Some(h) = handle.as_ref() {
+                    h.lock().upsert_document_with_ast(self.id, (**ast).clone());
+                }
                 Some(Arc::clone(ast))
             } else {
                 #[cfg(target_arch = "wasm32")]
@@ -665,7 +673,9 @@ impl ModelicaDocument {
                 {
                     match rumoca_phase_parse::parse_to_ast(&self.source, "model.mo") {
                         Ok(parsed) => {
-                            engine.upsert_document_with_ast(self.id, parsed.clone());
+                            if let Some(h) = handle.as_ref() {
+                                h.lock().upsert_document_with_ast(self.id, parsed.clone());
+                            }
                             Some(Arc::new(parsed))
                         }
                         Err(_) => None,

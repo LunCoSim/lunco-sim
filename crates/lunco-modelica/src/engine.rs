@@ -67,6 +67,29 @@ pub enum InheritedCausality {
     Internal,
 }
 
+fn map_variability_inherited(
+    v: &rumoca_compile::parsing::Variability,
+) -> InheritedVariability {
+    use rumoca_compile::parsing::Variability as V;
+    match v {
+        V::Empty | V::Continuous(_) => InheritedVariability::Continuous,
+        V::Constant(_) => InheritedVariability::Constant,
+        V::Discrete(_) => InheritedVariability::Discrete,
+        V::Parameter(_) => InheritedVariability::Parameter,
+    }
+}
+
+fn map_causality_inherited(
+    c: &rumoca_compile::parsing::Causality,
+) -> InheritedCausality {
+    use rumoca_compile::parsing::Causality as C;
+    match c {
+        C::Empty => InheritedCausality::Internal,
+        C::Input(_) => InheritedCausality::Input,
+        C::Output(_) => InheritedCausality::Output,
+    }
+}
+
 /// Workspace-wide rumoca state for one Twin's Modelica content.
 ///
 /// Plain Rust — **not** a Bevy `Resource`. Bevy users wrap this in
@@ -317,18 +340,91 @@ impl ModelicaEngine {
     /// `Self::inherited_components` but consumers don't have to
     /// re-walk the AST to bucket parameters / inputs / outputs.
     ///
-    /// Backed by `class_component_members_query` (untyped in rumoca main).
-    /// The typed variant was removed; we synthesize InheritedMember with
-    /// default variability/causality since that info is no longer returned.
+    /// rumoca main dropped the typed `class_component_members_typed_query`,
+    /// so we take the authoritative (scope-resolved) membership list from
+    /// `class_component_members_query` and enrich each member with the
+    /// variability / causality / binding we read directly off the
+    /// `ClassDef` of the class (and its `extends` bases). Extraction
+    /// mirrors `index::insert_class_recursive`, the canonical path the
+    /// inspector already trusts.
     pub fn inherited_members_typed(&mut self, qualified: &str) -> Vec<InheritedMember> {
-        self.session.class_component_members_query(qualified)
+        // Authoritative, scope-resolved membership (name, type) — handles
+        // the full `extends` walk including MSL bases.
+        let members = self.session.class_component_members_query(qualified);
+
+        // For each member resolve the class that actually *declares* it
+        // (`class_component_member_info_query` returns
+        // `(declaring_class, member_type)`), so we can read the typed
+        // `ast::Component` from that class's own declarations. We avoid
+        // `class_def`/`class_lookup_query` here: in rumoca main those
+        // return the bare class name, not a `parsed_file_query` URI, so
+        // the AST never comes back. `class_components_in_class_query`
+        // routes through the working `lookup_query_class_target`.
+        let resolved: Vec<(String, String, String)> = members
             .into_iter()
-            .map(|(name, type_name)| InheritedMember {
-                name,
-                type_name,
-                variability: InheritedVariability::Continuous,
-                causality: InheritedCausality::Internal,
-                default_value: None,
+            .map(|(name, type_name)| {
+                let declaring = self
+                    .session
+                    .class_component_member_info_query(qualified, &name)
+                    .map(|(declaring, _ty)| declaring)
+                    .unwrap_or_else(|| qualified.to_string());
+                (name, type_name, declaring)
+            })
+            .collect();
+
+        // Pre-fetch typed components per unique declaring class (one
+        // query each), then build — keeps the `&mut self.session`
+        // borrows out of the build closure.
+        let mut comps_cache: HashMap<String, Vec<rumoca_compile::parsing::ast::Component>> =
+            HashMap::new();
+        let unique: HashSet<String> =
+            resolved.iter().map(|(_, _, d)| d.clone()).collect();
+        for declaring in unique {
+            let comps = self
+                .session
+                .class_components_in_class_query(&declaring)
+                .unwrap_or_default();
+            comps_cache.insert(declaring, comps);
+        }
+
+        resolved
+            .into_iter()
+            .map(|(name, type_name, declaring)| {
+                let comp = comps_cache
+                    .get(&declaring)
+                    .and_then(|cs| cs.iter().find(|c| c.name == name));
+                let (variability, causality, default_value) = match comp {
+                    Some(c) => (
+                        map_variability_inherited(&c.variability),
+                        map_causality_inherited(&c.causality),
+                        // `parameter Real R = 100;` — the `= 100` lands in
+                        // `binding`; `start` holds the type's default
+                        // (0.0) unless a `start=` modifier set it. Prefer
+                        // the binding, fall back to a start *modification*.
+                        c.binding
+                            .as_ref()
+                            .map(|e| format!("{e}"))
+                            .or_else(|| {
+                                if c.start_is_modification {
+                                    Some(format!("{}", c.start))
+                                } else {
+                                    None
+                                }
+                            }),
+                    ),
+                    None => (
+                        InheritedVariability::Continuous,
+                        InheritedCausality::Internal,
+                        None,
+                    ),
+                };
+                InheritedMember {
+                    name,
+                    type_name,
+                    variability,
+                    causality,
+                    default_value,
+                }
             })
             .collect()
     }

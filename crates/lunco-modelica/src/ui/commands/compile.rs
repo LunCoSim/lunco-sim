@@ -47,6 +47,13 @@ pub struct CompileModel {
     /// clean (same document generation). Defaults to `false` so a
     /// Compile on an up-to-date model is an idempotent no-op.
     pub force: bool,
+    /// When `true`, the post-compile success handler unpauses the model
+    /// so it starts live-stepping the instant the stepper is installed.
+    /// Set by `RunActiveModel` ("Run live") so a single click compiles
+    /// *and* plays — crucially including the first-ever compile, where
+    /// no model entity yet exists to carry the resume intent. Defaults
+    /// to `false`: a plain Compile leaves the model paused/ready.
+    pub resume_after_compile: bool,
 }
 
 /// Run the Auto-Arrange layout: assign each component of the active
@@ -583,7 +590,7 @@ pub(crate) fn render_compile_class_picker(
         picker.0 = None;
         match purpose {
             PickerPurpose::Compile => {
-                commands.trigger(CompileModel { doc, class: None, force: false });
+                commands.trigger(CompileModel { doc, class: None, force: false, resume_after_compile: false });
             }
             PickerPurpose::FastRun => {
                 // Re-dispatch — second-time-around the drilled-class
@@ -651,6 +658,7 @@ pub fn on_compile_model(
     let doc = trigger.event().doc;
     let explicit_class = trigger.event().class.clone();
     let force = trigger.event().force;
+    let resume_after_compile = trigger.event().resume_after_compile;
 
     // Ownership check. Read-only docs are fair game to compile —
     // the Save button is what's gated on writability, not compile.
@@ -894,6 +902,12 @@ pub fn on_compile_model(
             model.paused = true;
             model.current_time = 0.0;
             model.last_step_time = 0.0;
+            // …unless this compile was kicked off by a "Run live" that
+            // wants to play as soon as the stepper lands. Don't clobber a
+            // resume intent an earlier RunActiveModel already set.
+            if resume_after_compile {
+                model.resume_after_compile = true;
+            }
         }
         entity
     } else {
@@ -927,7 +941,11 @@ pub fn on_compile_model(
                     is_compiled: false,
                     compiled_generation: 0,
                     pending_generation: doc_generation,
-                    resume_after_compile: false,
+                    // First-ever compile of this doc: carry the "Run live"
+                    // intent straight into the spawn so the post-compile
+                    // handler unpauses — this is the fix for the old
+                    // two-click first run (no entity existed to flip).
+                    resume_after_compile,
                 },
             ))
             .id();
@@ -1179,14 +1197,14 @@ pub fn on_run_active_model(trigger: On<RunActiveModel>, mut commands: Commands) 
             return;
         };
         let Some(entity) = entity_for_doc(world, doc) else {
-            // No entity yet — never compiled. The compile handler spawns
-            // the entity (deferred) with `resume_after_compile: false`,
-            // so we can't flip the resume flag before it exists. Just
-            // compile; the model lands paused/ready and the user presses
-            // Run again to step it. (A first Run can't both spawn and
-            // pre-arm resume in one pass without a dedicated spawn-time
-            // flag, which isn't worth the surface area here.)
-            world.commands().trigger(CompileModel { doc, class, force: false });
+            // No entity yet — never compiled. We pass the resume intent
+            // through the compile itself; the spawn carries it into the
+            // new model so the post-compile handler unpauses and play
+            // begins immediately. (Previously this needed a second click:
+            // there was no entity to pre-arm before the deferred spawn.)
+            world
+                .commands()
+                .trigger(CompileModel { doc, class, force: false, resume_after_compile: true });
             return;
         };
         // Document generation for the staleness check.
@@ -1214,7 +1232,9 @@ pub fn on_run_active_model(trigger: On<RunActiveModel>, mut commands: Commands) 
         if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
             model.resume_after_compile = true;
         }
-        world.commands().trigger(CompileModel { doc, class, force: false });
+        world
+            .commands()
+            .trigger(CompileModel { doc, class, force: false, resume_after_compile: true });
     });
 }
 
@@ -1765,7 +1785,7 @@ pub fn on_confirm_class_picker(trigger: On<ConfirmClassPicker>, mut commands: Co
             PickerPurpose::Compile => {
                 world
                     .commands()
-                    .trigger(CompileModel { doc, class: None, force: false });
+                    .trigger(CompileModel { doc, class: None, force: false, resume_after_compile: false });
             }
             PickerPurpose::FastRun => {
                 world.commands().trigger(FastRunActiveModel {
@@ -2053,7 +2073,7 @@ pub fn on_compile_active_model(trigger: On<CompileActiveModel>, mut commands: Co
             return;
         };
         let target_class = if class.is_empty() { None } else { Some(class) };
-        world.commands().trigger(CompileModel { doc, class: target_class, force: false });
+        world.commands().trigger(CompileModel { doc, class: target_class, force: false, resume_after_compile: false });
     });
 }
 

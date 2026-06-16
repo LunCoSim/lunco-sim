@@ -1127,12 +1127,18 @@ fn stroke_for(
     if matches!(pattern, LinePattern::None) {
         return egui::Stroke::NONE;
     }
+    // No line color → Modelica draws no border at all. Without this a
+    // colorless declaration would fall through to the BLACK default and
+    // paint a spurious outline.
+    let Some(color) = color else {
+        return egui::Stroke::NONE;
+    };
     // Modelica thickness is in mm at the diagram's coordinate scale;
     // multiplying by the icon's px-per-unit scale gives an on-screen
     // pixel width that visually matches what Dymola renders, then
     // floor at 0.75 px so hairlines stay visible at small icon sizes.
     let width = ((thickness_mm as f32) * scale_px_per_unit).max(0.75);
-    egui::Stroke::new(width, color_or_default(color, egui::Color32::BLACK))
+    egui::Stroke::new(width, color_or_default(Some(color), egui::Color32::BLACK))
 }
 
 fn pattern_metrics(pattern: LinePattern, stroke_w: f32) -> (f32, f32) {

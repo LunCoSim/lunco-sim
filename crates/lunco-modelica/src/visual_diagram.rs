@@ -599,15 +599,38 @@ pub fn generate_modelica_source(diagram: &VisualDiagram, model_name: &str) -> St
 mod tests {
     use super::*;
 
+    /// Build a minimal `ClassEntry` fixture for source-generation
+    /// tests. Self-contained on purpose: the generated `msl_index.json`
+    /// (what `msl_class_library()` reads) carries the *real* MSL
+    /// defaults (`Resistor.R = 1`, plus `useHeatPort`/`T`/…), which are
+    /// both the wrong values for this assertion and order-unstable
+    /// through `parameter_values`' `HashMap`. Keep one param per
+    /// fixture so the single-entry render is deterministic.
+    fn fixture_class(name: &str, params: &[(&str, &str)]) -> crate::index::ClassEntry {
+        let parameters: Vec<_> = params
+            .iter()
+            .map(|(n, d)| {
+                serde_json::json!({
+                    "name": n, "param_type": "Real", "default": d, "unit": null
+                })
+            })
+            .collect();
+        serde_json::from_value(serde_json::json!({
+            "name": name,
+            "kind": "model",
+            "parameters": parameters,
+        }))
+        .expect("fixture ClassEntry deserialises")
+    }
+
     #[test]
     fn test_generate_rc_circuit() {
         let mut diagram = VisualDiagram::default();
 
-        let lib = msl_class_library();
-        let v1_def = lib.iter().find(|c| c.short_name() == "ConstantVoltage").unwrap().clone();
-        let r1_def = lib.iter().find(|c| c.short_name() == "Resistor").unwrap().clone();
-        let c1_def = lib.iter().find(|c| c.short_name() == "Capacitor").unwrap().clone();
-        let gnd_def = lib.iter().find(|c| c.short_name() == "Ground").unwrap().clone();
+        let v1_def = fixture_class("Modelica.Electrical.Analog.Sources.ConstantVoltage", &[("V", "1")]);
+        let r1_def = fixture_class("Modelica.Electrical.Analog.Basic.Resistor", &[("R", "100")]);
+        let c1_def = fixture_class("Modelica.Electrical.Analog.Basic.Capacitor", &[("C", "0.001")]);
+        let gnd_def = fixture_class("Modelica.Electrical.Analog.Basic.Ground", &[]);
 
         let v1 = diagram.add_node(v1_def, Pos2::new(0.0, 0.0));
         let r1 = diagram.add_node(r1_def, Pos2::new(200.0, 0.0));
