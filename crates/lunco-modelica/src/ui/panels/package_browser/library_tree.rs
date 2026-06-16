@@ -40,9 +40,9 @@ pub trait LibraryTree {
 
 /// MSL core + its required companions. These render under the single
 /// "Modelica Standard Library" root, never as their own top-level libraries.
-/// (Native-only: the web backend has its own copy in `scanner`.)
-#[cfg(not(target_arch = "wasm32"))]
-const MSL_OWNED: &[&str] = &[
+/// Shared by the native (`fs_root_for`) and web
+/// (`scanner::msl_inmem_top_level_libs`) backends.
+pub(crate) const MSL_OWNED: &[&str] = &[
     "Modelica",
     "ModelicaServices",
     "Complex",

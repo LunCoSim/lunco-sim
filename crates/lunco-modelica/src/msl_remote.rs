@@ -109,6 +109,33 @@ pub fn parsed_msl_bundle(
     GLOBAL_PARSED_MSL.get()
 }
 
+/// Kick the native `parsed-msl.bin` lazy decode onto a background thread so the
+/// first palette drill-in / class lookup is an in-memory hit instead of paying
+/// the ~1–3 s bincode decode inline. No-op if the slot is already populated or
+/// the bundle isn't on disk (indexer hasn't run). Detached: nothing awaits it —
+/// it just races to fill `GLOBAL_PARSED_MSL` before the user needs it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn warm_parsed_msl_in_background() {
+    if GLOBAL_PARSED_MSL.get().is_some() {
+        return;
+    }
+    bevy::tasks::AsyncComputeTaskPool::get()
+        .spawn(async {
+            let _ = parsed_msl_bundle();
+        })
+        .detach();
+}
+
+/// Startup system: warm the native parsed bundle unless the binary opted out of
+/// MSL autoload (e.g. sandbox with [`SkipMslAutoLoad`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn warm_parsed_msl_on_startup(skip: Option<Res<SkipMslAutoLoad>>) {
+    if skip.is_some() {
+        return;
+    }
+    warm_parsed_msl_in_background();
+}
+
 /// zstd level for the native `parsed-msl.bin` write. 9 is a good
 /// ratio/speed balance for a one-time (cold-parse / indexer) write — the
 /// disk win over raw bincode is ~10× either way; higher levels buy little.
@@ -623,6 +650,12 @@ impl Plugin for MslRemotePlugin {
                 app.add_systems(Update, drain_native_msl_install);
                 spawn_native_install(slot, cancel.0);
             }
+
+            // Warm the pre-parsed bundle off-thread so the first drill-in /
+            // class lookup is instant instead of paying the bincode decode
+            // inline. No-op when the bundle isn't on disk yet (download path:
+            // the indexer writes it later) or autoload is suppressed.
+            app.add_systems(Startup, warm_parsed_msl_on_startup);
         }
 
         // Web: kick off the async fetcher and have a system promote the
@@ -1364,10 +1397,25 @@ mod web {
             ));
         }
 
-        // ── Pre-parsed bundle (when the manifest advertises one). This
-        // ── is the fast path: bincode-decode → install directly into
-        // ── rumoca, no per-file parse.
-        let parsed_bytes = if let Some(parsed_meta) = manifest.parsed.as_ref() {
+        // ── Pre-parsed bundle (when the manifest advertises one AND it was
+        // ── produced by a rumoca whose `StoredDefinition` layout matches
+        // ── ours). This is the fast path: bincode-decode → install directly
+        // ── into rumoca, no per-file parse. A tag mismatch means the bundle
+        // ── would deserialize into garbage/error, so we skip it and let the
+        // ── source fallback (below) parse from `.mo` instead.
+        let tag_ok = manifest.rumoca_artifact_tag.as_deref()
+            == Some(lunco_assets::msl::EXPECTED_RUMOCA_ARTIFACT_TAG);
+        if manifest.parsed.is_some() && !tag_ok {
+            bevy::log::warn!(
+                "[MSL] parsed bundle tag {:?} != expected `{}`; ignoring fast path, \
+                 parsing source instead (rebuild the bundle with the current rumoca)",
+                manifest.rumoca_artifact_tag,
+                lunco_assets::msl::EXPECTED_RUMOCA_ARTIFACT_TAG,
+            );
+        }
+        let parsed_bytes = if let Some(parsed_meta) =
+            manifest.parsed.as_ref().filter(|_| tag_ok)
+        {
             let parsed_path = format!("msl/{}", parsed_meta.filename);
             // Update progress to reflect that we've finished sources
             // and are now downloading the parsed bundle on top.
@@ -1572,15 +1620,35 @@ mod web {
         network_fetch_and_cache(&cache, path).await
     }
 
-    /// **Network-first, cache-fallback** fetch — for `manifest.json`, the one
+    /// **Stale-while-revalidate** fetch — for `manifest.json`, the one
     /// *mutable* artifact. It names the current content-hashed bundles, so the
-    /// old cache-first-forever strategy pinned a client to whatever MSL
-    /// version it first loaded — a new server release was never picked up
-    /// until the user manually cleared browser storage. We now hit the
-    /// network first (so updates land) and fall back to the cached copy only
-    /// when offline. A successful fetch refreshes the cache.
+    /// old cache-first-forever strategy pinned a client to whatever MSL version
+    /// it first loaded; a network-first strategy fixed updates but paid a
+    /// network round-trip on every boot.
+    ///
+    /// SWR gets both: if a cached manifest exists, return it **immediately**
+    /// (instant boot from the warm cache) and revalidate in the background so
+    /// the *next* load picks up any new release. The referenced bundles are
+    /// content-hashed + cached-first-forever, so serving last session's
+    /// manifest just serves last session's (already-cached) bundles — exactly
+    /// the SWR trade. Cold (no cached copy): fall back to the network, then to
+    /// cache on a race.
     async fn fetch_bytes_revalidated(path: &str) -> Result<Vec<u8>, String> {
         let cache = open_cache().await?;
+        if let Ok(Some(bytes)) = cache_lookup(&cache, path).await {
+            // Serve stale now; refresh for next time off the critical path.
+            let p = path.to_string();
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(c) = open_cache().await {
+                    if let Err(e) = network_fetch_and_cache(&c, &p).await {
+                        bevy::log::debug!("[MSL] {p}: background revalidate failed: {e}");
+                    }
+                }
+            });
+            return Ok(bytes);
+        }
+        // Cold cache — must hit the network. Fall back to a cached copy only if
+        // a concurrent fetch landed one in the meantime.
         match network_fetch_and_cache(&cache, path).await {
             Ok(bytes) => Ok(bytes),
             Err(net_err) => match cache_lookup(&cache, path).await {

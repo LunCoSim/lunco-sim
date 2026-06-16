@@ -305,6 +305,18 @@ impl MslLoadPhase {
     }
 }
 
+/// The rumoca-artifact tag the *current* build understands. `build_msl_assets`
+/// stamps it into `manifest.rumoca_artifact_tag`; the web runtime compares
+/// against it and declines a mismatched `parsed` bundle (falling back to a
+/// source parse) because the bincode'd `StoredDefinition` layout is
+/// rumoca-version-sensitive — a stale bundle would deserialize into garbage or
+/// error mid-load.
+///
+/// BUMP THIS whenever the pinned rumoca changes its AST / `StoredDefinition`
+/// shape. Producer (`build_msl_assets`) and consumer (`msl_remote`) share this
+/// one source of truth, so they can never drift apart.
+pub const EXPECTED_RUMOCA_ARTIFACT_TAG: &str = "rumoca-main-2026-06-15";
+
 /// Schema of `manifest.json` written by `build_msl_assets`. Kept here
 /// (not in the build binary) so both producer and consumer share the type.
 #[derive(Debug, Clone, Serialize, Deserialize)]

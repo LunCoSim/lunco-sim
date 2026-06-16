@@ -6,6 +6,21 @@ use crate::ui::state::ModelLibrary;
 use super::types::{PackageNode, TwinNode};
 use super::cache::TwinState;
 
+/// Canonical tree-node id for an MSL / third-party class, keyed by its dotted
+/// qualified name (`Modelica.Blocks.Examples.PID_Controller`).
+///
+/// SINGLE SOURCE OF TRUTH — every scanner site (native fs walk + web in-memory
+/// walk) mints ids through here, and it MUST stay in sync with
+/// [`crate::class_ref::ClassRef::parse_tree_id`] (the `msl_path:` scheme it
+/// reverses on click). The id is built straight from the dotted name; we never
+/// substitute `.`→`_`. The legacy `msl_<dots→underscores>` form was lossy
+/// (`PID_Controller` ⇄ `PID.Controller`) AND unparseable, so it silently
+/// no-op'd web clicks ("unparseable tree id"). Routing both backends through
+/// one helper is what keeps them from diverging again.
+pub(crate) fn msl_tree_id(qualified: &str) -> String {
+    format!("msl_path:{qualified}")
+}
+
 // ─── Twin / Workspace Scanning ───────────────────────────────────────────────
 
 pub fn scan_twin_folder(root: PathBuf) -> TwinState {
@@ -91,7 +106,7 @@ pub(crate) fn scan_msl_inmem(package_path: &str) -> Vec<PackageNode> {
             format!("{package_path}.{short}")
         };
         let has_children = tree.get(&qname).map(|v| !v.is_empty()).unwrap_or(false);
-        let id = format!("msl_{}", qname.replace('.', "_"));
+        let id = msl_tree_id(&qname);
         if has_children {
             out.push(PackageNode::Category {
                 id,
@@ -124,13 +139,7 @@ pub(crate) fn scan_msl_inmem(package_path: &str) -> Vec<PackageNode> {
 /// from the parsed AST that the bundle fetcher already installed.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn msl_inmem_top_level_libs() -> Vec<String> {
-    const MSL_OWNED: &[&str] = &[
-        "Modelica",
-        "ModelicaServices",
-        "Complex",
-        "ModelicaReference",
-        "ObsoleteModelica4",
-    ];
+    use super::library_tree::MSL_OWNED;
     // Don't touch the `msl_inmem_index()` OnceLock before the parsed bundle is
     // resident — it would cache an empty tree permanently (same guard as
     // `scan_msl_inmem`).
@@ -220,7 +229,7 @@ pub(crate) fn scan_msl_dir_native(dir: &Path, package_path: String) -> Vec<Packa
             if path.is_dir() {
                 if name.starts_with('.') || name == "__MACOSX" { continue; }
                 let sub_path = format!("{}.{}", package_path, name);
-                let id = format!("msl_{}", sub_path.replace('.', "_").replace('/', "_"));
+                let id = msl_tree_id(&sub_path);
                 results.push(PackageNode::Category {
                     id,
                     name,
@@ -321,7 +330,7 @@ impl LeafKind {
 /// MSL `Modelica.Blocks.Continuous` case).
 fn node_from_modelica_file(path: &Path, qualified: &str, display_name: &str) -> PackageNode {
     let leaf_unknown = || PackageNode::Model {
-        id: format!("msl_path:{}", qualified),
+        id: msl_tree_id(qualified),
         name: display_name.to_string(),
         library: ModelLibrary::MSL,
         class_kind: None,
@@ -356,7 +365,7 @@ fn class_def_to_node(
             .collect();
         children.sort_by_key(omedit_sort_key);
         PackageNode::Category {
-            id: format!("msl_path:{}", qualified),
+            id: msl_tree_id(qualified),
             name: short_name.to_string(),
             package_path: qualified.to_string(),
             fs_path: path.to_path_buf(),
@@ -365,7 +374,7 @@ fn class_def_to_node(
         }
     } else {
         PackageNode::Model {
-            id: format!("msl_path:{}", qualified),
+            id: msl_tree_id(qualified),
             name: short_name.to_string(),
             library: ModelLibrary::MSL,
             class_kind: Some(crate::index::map_class_type(&def.class_type)),
@@ -373,7 +382,18 @@ fn class_def_to_node(
     }
 }
 
+/// Third-party Modelica libraries in the `lunco-assets` cache, as
+/// `(cache_subdir, top_level_package_dir)`. Memoized: the cache layout is fixed
+/// for the process lifetime (the palette is built once at startup), so the
+/// `read_dir` scan runs once and every later call (e.g. per extra-lib expand
+/// via `fs_root_for`) is a cheap clone of the cached result.
 pub fn discover_third_party_libs() -> Vec<(String, String)> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<Vec<(String, String)>> = OnceLock::new();
+    CACHE.get_or_init(scan_third_party_libs).clone()
+}
+
+fn scan_third_party_libs() -> Vec<(String, String)> {
     let cache = lunco_assets::cache_dir();
     let Ok(entries) = std::fs::read_dir(&cache) else { return Vec::new(); };
     let mut out = Vec::new();

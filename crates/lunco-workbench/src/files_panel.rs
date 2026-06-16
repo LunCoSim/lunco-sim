@@ -80,28 +80,40 @@ impl Panel for FilesPanel {
                     .italics(),
             );
         } else {
-            for &i in &visible {
-                let section = registry.section_mut(i);
-                let header = egui::CollapsingHeader::new(section.title())
-                    .id_salt(("files_panel_section", section.id()))
-                    .default_open(section.default_open());
-                header.show(ui, |ui| {
-                    let twin_ref = workspace
-                        .as_ref()
-                        .and_then(|ws| ws.active_twin.and_then(|id| ws.twin(id)));
-                    let all_twins: Vec<&lunco_twin::Twin> = workspace
-                        .as_ref()
-                        .map(|ws| ws.twins().map(|(_, t)| t).collect())
-                        .unwrap_or_default();
-                    let mut ctx = BrowserCtx {
-                        twin: twin_ref,
-                        twins: all_twins,
-                        actions: &mut actions,
-                        world,
-                    };
-                    section.render(ui, &mut ctx);
+            // Wrap every section in ONE panel-level ScrollArea — same as the
+            // inline Twin browser (`twin_browser/mod.rs`). Without it a long
+            // file list (or a fully-expanded folder tree) overflows the panel
+            // rect with no way to scroll = "tons of files but can't see them".
+            // Sections render their lists DIRECTLY (no nested vertical
+            // ScrollArea) so this outer one owns all scrolling; nesting two
+            // vertical scroll areas squishes the inner to a few rows.
+            egui::ScrollArea::vertical()
+                .id_salt("files_panel_scroll")
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    for &i in &visible {
+                        let section = registry.section_mut(i);
+                        let header = egui::CollapsingHeader::new(section.title())
+                            .id_salt(("files_panel_section", section.id()))
+                            .default_open(section.default_open());
+                        header.show(ui, |ui| {
+                            let twin_ref = workspace
+                                .as_ref()
+                                .and_then(|ws| ws.active_twin.and_then(|id| ws.twin(id)));
+                            let all_twins: Vec<&lunco_twin::Twin> = workspace
+                                .as_ref()
+                                .map(|ws| ws.twins().map(|(_, t)| t).collect())
+                                .unwrap_or_default();
+                            let mut ctx = BrowserCtx {
+                                twin: twin_ref,
+                                twins: all_twins,
+                                actions: &mut actions,
+                                world,
+                            };
+                            section.render(ui, &mut ctx);
+                        });
+                    }
                 });
-            }
         }
 
         if let Some(w) = workspace {

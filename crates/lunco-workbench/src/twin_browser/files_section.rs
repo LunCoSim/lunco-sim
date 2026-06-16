@@ -390,35 +390,29 @@ impl BrowserSection for FilesSection {
                         );
                         return;
                     }
-                    egui::ScrollArea::vertical()
-                        .id_salt(("twin_browser_files_scroll", salt.clone()))
-                        // Don't shrink horizontally (rows stay full
-                        // width) but DO shrink vertically — without
-                        // this the inner area fills the whole panel
-                        // height even for small file lists, and the
-                        // CollapsingHeader's indent guide stretches
-                        // all the way to the bottom of the browser.
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            // Build a real directory tree from the flat
-                            // file list and render it recursively.
-                            // Closed CollapsingHeaders skip their
-                            // contents, so render time scales with
-                            // *expanded* entries, not total files.
-                            let tree = build_tree(files);
-                            render_dir(
-                                &tree,
-                                std::path::Path::new(""),
-                                &twin_root,
-                                active_rename_abs.as_deref(),
-                                &mut self.rename,
-                                &mut clicks,
-                                &mut begin_rename,
-                                &mut submit_rename,
-                                &mut cancel_rename,
-                                ui,
-                            );
-                        });
+                    // Render the directory tree DIRECTLY — no inner
+                    // ScrollArea. The panel-level `twin_panel_scroll`
+                    // (twin_browser/mod.rs) already scrolls everything.
+                    // A vertical ScrollArea nested inside that outer one
+                    // gets squished: deep in the outer viewport its
+                    // available height is mostly consumed, so a long
+                    // file list collapsed to a few rows behind its own
+                    // scrollbar — "tons of files but can't see them".
+                    // Closed CollapsingHeaders still skip their contents,
+                    // so render cost scales with *expanded* entries.
+                    let tree = build_tree(files);
+                    render_dir(
+                        &tree,
+                        std::path::Path::new(""),
+                        &twin_root,
+                        active_rename_abs.as_deref(),
+                        &mut self.rename,
+                        &mut clicks,
+                        &mut begin_rename,
+                        &mut submit_rename,
+                        &mut cancel_rename,
+                        ui,
+                    );
                 });
             resp.header_response
                 .on_hover_cursor(egui::CursorIcon::PointingHand)

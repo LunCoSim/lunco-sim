@@ -62,12 +62,12 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-/// Tag stamped into the manifest's `rumoca_artifact_tag` field. The
-/// wasm runtime refuses to deserialise a parsed bundle whose tag
-/// doesn't match its compiled-in expectation — the bincode'd
-/// `StoredDefinition` layout is rumoca-version sensitive. Bump this
-/// whenever the rumoca version we point at changes its AST shape.
-const RUMOCA_ARTIFACT_TAG: &str = "rumoca-0.8.12-wasm-asset-loader";
+/// Tag stamped into the manifest's `rumoca_artifact_tag` field. Shared with the
+/// runtime via [`lunco_assets::msl::EXPECTED_RUMOCA_ARTIFACT_TAG`] so producer
+/// and consumer can't drift; the runtime refuses a parsed bundle whose tag
+/// doesn't match (the bincode'd `StoredDefinition` layout is rumoca-version
+/// sensitive). Bump the shared const when the rumoca AST shape changes.
+use lunco_assets::msl::EXPECTED_RUMOCA_ARTIFACT_TAG as RUMOCA_ARTIFACT_TAG;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

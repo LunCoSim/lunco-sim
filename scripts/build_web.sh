@@ -154,6 +154,19 @@ should_rebuild_worker() {
         return 0
     fi
 
+    # Cargo.lock newer than the worker wasm = some dependency moved (a git-dep
+    # rev bump, a version pin, a new transitive crate). The path-root scan below
+    # only sees `crates/` + `[patch] path=` checkouts, so it CANNOT see a rumoca
+    # bump consumed as a git dependency (`branch=main#<rev>`, living in
+    # ~/.cargo/git). That's how the worker silently shipped stale rumoca: its
+    # `StoredDefinition`/`WireMessage` bincode layout diverged from the freshly
+    # rebuilt main bundle, so every postMessage mis-decoded (`UUID expected 16
+    # found 9`, MSL "33 docs" instead of 2670). Gating on Cargo.lock catches the
+    # whole class of dep bumps the source-mtime scan can't.
+    if [ -f "$PROJECT_DIR/Cargo.lock" ] && [ "$PROJECT_DIR/Cargo.lock" -nt "$worker_wasm" ]; then
+        return 0
+    fi
+
     # Collect watch roots: crates/ + each [patch] checkout root (collapse
     # `.../crates/<crate>` path entries to their checkout, dedupe).
     local -a roots=("$PROJECT_DIR/crates")
@@ -467,18 +480,40 @@ Run: cargo run -p lunco-assets -- download"
         local worker_bindgen_dir="$base_target_dir/web/$worker_bin"
         local worker_dist_dir="$dist_dir/worker"
         local worker_wasm_src="$cargo_out_dir/${worker_bin}.wasm"
-        local worker_wasm_dist="$worker_dist_dir/${worker_bin}_bg.wasm"
+        # The dist worker wasm is content-hashed (`${worker_bin}_bg-<sha>.wasm`),
+        # so discover it by glob rather than a fixed name.
+        local worker_wasm_dist
+        worker_wasm_dist=$(ls "$worker_dist_dir/${worker_bin}_bg"*.wasm 2>/dev/null | head -1)
         # Skip the bindgen + wasm-opt + copy work entirely if the
         # cargo output didn't move since the last dist build. Pairs
         # with the `should_rebuild_worker` cargo-build skip in
         # `build_wasm`. Set `WORKER_REBUILD=force` to override.
+        #
+        # The mtime test alone is NOT enough: `hash_worker_wasm` rewrites
+        # the dist wasm (new mtime) on EVERY build, including this skip
+        # path, so the dist file is routinely newer than the cargo output
+        # even after a real recompile — the comparison then lies and the
+        # stale hashed wasm survives. A git-dep rev bump (rumoca) recompiles
+        # the worker but the bindgen-skip would keep shipping the OLD bundle
+        # to dist → main/worker rumoca layout skew → bincode decode errors,
+        # "33 docs" truncation. So ALSO refuse to skip when Cargo.lock moved
+        # since the dist worker was built — same gate as should_rebuild_worker.
+        local lock_moved=0
+        if [ -f "$PROJECT_DIR/Cargo.lock" ] && [ -n "$worker_wasm_dist" ] \
+            && [ "$PROJECT_DIR/Cargo.lock" -nt "$worker_wasm_dist" ]; then
+            lock_moved=1
+        fi
         if [ "${WORKER_REBUILD:-}" != "force" ] \
+            && [ "$lock_moved" != "1" ] \
             && [ -f "$worker_wasm_src" ] \
-            && [ -f "$worker_wasm_dist" ] \
+            && [ -n "$worker_wasm_dist" ] \
             && [ ! "$worker_wasm_src" -nt "$worker_wasm_dist" ]; then
             local worker_size
             worker_size=$(du -h "$worker_wasm_dist" | cut -f1)
             info "Worker bundle up-to-date ($worker_size) — bindgen skipped"
+            # Still ensure the dist wasm is content-hashed (idempotent) — a
+            # bare-named worker left by an older build would otherwise persist.
+            hash_worker_wasm "$worker_dist_dir" "$worker_bin"
             return 0
         fi
         info "Generating bindings for worker bundle: $worker_bin"
@@ -505,6 +540,12 @@ Run: cargo run -p lunco-assets -- download"
         rm -rf "$worker_dist_dir"
         mkdir -p "$worker_dist_dir"
         cp "$worker_bindgen_dir"/* "$worker_dist_dir/"
+        # Content-hash the multi-MB `_bg.wasm` (the aggressively-cached artifact)
+        # and repoint the generated loader. The `.js` shims keep stable names so
+        # the Rust `install_worker("./worker/worker_bootstrap.js")` URL is
+        # unaffected, and their content changes per build so a conditional GET
+        # refreshes them.
+        hash_worker_wasm "$worker_dist_dir" "$worker_bin"
         # Web Worker entry shim. wasm-bindgen --target web exports `init`
         # but doesn't run it; this tiny module imports + calls it so the
         # `#[wasm_bindgen(start)]` worker entry actually fires.
@@ -518,7 +559,7 @@ Run: cargo run -p lunco-assets -- download"
             warn "No worker_bootstrap.js at $worker_bootstrap — worker won't init"
         fi
         local worker_size
-        worker_size=$(du -h "$worker_dist_dir/${worker_bin}_bg.wasm" | cut -f1)
+        worker_size=$(du -h "$worker_dist_dir/${worker_bin}_bg"*.wasm 2>/dev/null | cut -f1 | head -1)
         info "Worker bundle: $worker_size at $worker_dist_dir"
     fi
 }
@@ -529,12 +570,67 @@ Run: cargo run -p lunco-assets -- download"
 # the workbench *is* the MSL editor, sandbox because its Design
 # workspace embeds the same Modelica panels and they'd be empty without
 # the standard library.
+# Content-hash the worker wasm in dist so a rebuilt worker is never served
+# stale from the browser cache. Idempotent: hashes a bare `${bin}_bg.wasm`
+# (rename + repoint the generated loader) and no-ops once already hashed. Runs
+# on BOTH the rebuild and up-to-date paths so the dist is always hashed.
+hash_worker_wasm() {
+    local dir="$1" bin="$2"
+    local bare="$dir/${bin}_bg.wasm"
+    # Already hashed (or no wasm) → nothing to do.
+    [ -f "$bare" ] || return 0
+    local js="$dir/${bin}.js"
+    if [ ! -f "$js" ]; then
+        warn "Worker hash skipped (no loader $js)"
+        return 0
+    fi
+    local wsha hashed
+    wsha=$(sha256sum "$bare" | cut -c1-16)
+    hashed="${bin}_bg-${wsha}.wasm"
+    mv "$bare" "$dir/$hashed"
+    # wasm-bindgen --target web references the wasm by this literal filename
+    # inside the loader; repoint every occurrence.
+    sed -i "s/${bin}_bg\\.wasm/${bin}_bg-${wsha}.wasm/g" "$js"
+    # Drop stale bare-named precompressed siblings; they'd never match the
+    # hashed request and would otherwise linger.
+    rm -f "$dir/${bin}_bg.wasm.br" "$dir/${bin}_bg.wasm.gz"
+    info "Worker wasm content-hashed → $hashed"
+}
+
+# Regenerate `msl_index.json` (the palette's component metadata: icons, ports,
+# params) so it covers the third-party libs we're about to bundle. The indexer
+# auto-discovers extras under `cache_dir()` and writes the index next to the MSL
+# source tree, where `build_msl_assets` then packs it.
+#
+# Slow (~30 s: it full-parses MSL + extras), so it only runs when extras are
+# actually requested (`MSL_EXTRA_LIBS`) or explicitly forced (`MSL_REINDEX=force`).
+# Default builds skip it and pack whatever index is already on disk.
+build_msl_index() {
+    local binary="$1"
+    case "$binary" in
+        lunica|sandbox) ;;
+        *) return 0 ;;
+    esac
+    if [ -z "${MSL_EXTRA_LIBS:-}" ] && [ "${MSL_REINDEX:-}" != "force" ]; then
+        return 0
+    fi
+    info "Reindexing MSL + extras → msl_index.json (set MSL_REINDEX=force to always run)..."
+    cargo run --release -q -p lunco-modelica --bin msl_indexer -- -v
+    if [ $? -ne 0 ]; then
+        error "MSL indexing failed"
+        exit 1
+    fi
+    success "MSL index regenerated (covers discovered third-party libs)"
+}
+
 build_msl_bundle() {
     local binary="$1"
     case "$binary" in
         lunica|sandbox) ;;
         *) return 0 ;;
     esac
+    # Refresh the palette index first so bundled extras carry icons/ports.
+    build_msl_index "$binary"
     local dist_dir="$PROJECT_DIR/dist/$binary"
     local msl_dir="$dist_dir/msl"
 
