@@ -322,6 +322,16 @@ pub fn drive_drill_in_loads(
 /// completes. This matches what users expect: the tab opens, a
 /// spinner says "loading", content lands when it's ready.
 pub fn drill_into_class(world: &mut World, qualified: &str) {
+    // On web the MSL *source* tar is unpacked lazily: the fast-path bundle
+    // install registers only the parsed AST (`GLOBAL_PARSED_MSL`), leaving
+    // the source files stashed compressed. The path resolvers below query
+    // `global_msl_sources()`, which is empty for source files until that
+    // unpack runs — so without this, clicking any MSL class in the library
+    // tree (or a canvas drill-in) silently no-ops on web. Unpack now;
+    // it's idempotent and one-time. Native already has the sources on disk.
+    #[cfg(target_arch = "wasm32")]
+    crate::msl_remote::ensure_msl_source_unpacked();
+
     // Try MSL paths first (resolves Modelica.* and any other MSL-rooted
     // qualified path). Fallback: scan the open document registry for a
     // doc whose AST contains the requested class — handles non-MSL

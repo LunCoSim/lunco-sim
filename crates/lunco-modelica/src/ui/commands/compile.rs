@@ -947,15 +947,45 @@ pub fn on_compile_model(
         // hand them to the worker so rumoca's resolver can satisfy
         // cross-doc class references (e.g. an untitled `RocketStage`
         // referencing `AnnotatedRocketStage.Tank` from a sibling
-        // untitled package). Filenames are derived from each doc's
-        // origin; rumoca dedups by filename so the worker overlaying
-        // the primary source as `model.mo` later is harmless.
+        // untitled package).
+        //
+        // IMPORTANT: rumoca dedups overlaid sources by FILENAME, not by
+        // class name. So a sibling doc that defines a top-level class with
+        // the SAME name as the primary (or as an already-overlaid sibling)
+        // would land in the session under a second filename and trip
+        // rumoca's "Duplicate class 'X' found … with non-identical
+        // definition" resolver error — exactly what happens when the same
+        // model is open in two tabs, or a restored workspace doc shadows a
+        // freshly-seeded one. So we only overlay a sibling whose top-level
+        // class names are DISJOINT from everything already claimed; the
+        // primary doc always wins.
+        let class_names_of = |d: lunco_doc::DocumentId| -> Vec<String> {
+            registry
+                .host(d)
+                .and_then(|h| h.document().strict_ast())
+                .map(|ast| ast.classes.iter().map(|(n, _)| n.clone()).collect())
+                .unwrap_or_default()
+        };
+        let mut claimed: std::collections::HashSet<String> =
+            class_names_of(doc).into_iter().collect();
         let extra_sources: Vec<(String, String)> = registry
             .iter()
             .filter_map(|(other_doc, host)| {
                 if other_doc == doc {
                     return None;
                 }
+                let names = class_names_of(other_doc);
+                if names.iter().any(|n| claimed.contains(n)) {
+                    bevy::log::warn!(
+                        "[compile] skipping doc {} as cross-doc source: its \
+                         top-level class(es) {:?} collide with already-loaded \
+                         classes (would be a duplicate-class compile error)",
+                        other_doc.raw(),
+                        names,
+                    );
+                    return None;
+                }
+                claimed.extend(names);
                 let document = host.document();
                 let filename = format!("doc_{}.mo", other_doc.raw());
                 Some((filename, document.source().to_string()))
