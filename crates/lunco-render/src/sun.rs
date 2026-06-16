@@ -19,18 +19,20 @@ use bevy::light::{
     CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLight, DirectionalLightShadowMap,
 };
 use bevy::prelude::Color;
-use lunco_core::{LunarSun, SunAngularDiameter};
 
 /// How to **render** a lunar sun's shadows — the cascade split, biases and
-/// atlas size — paired with the sun's physical identity ([`LunarSun`], which
-/// owns the illuminance / angular size / exposure and lives in `lunco-core`).
+/// atlas size. This is render-side *presentation* config only; the sun's
+/// physical identity (illuminance, angular size, matched camera exposure) lives
+/// in `lunco_environment::LunarSun` (environmental state), and is passed *in* to
+/// the builders here so render stays a low presentation crate with no dependency
+/// on environment.
 ///
-/// This is the render-side adapter: construct with [`LunarSunShadow::default`]
-/// for the standard look, override individual fields for an authored scene (the
-/// USD loader does this from `lunco:shadow:*` attributes), then build the Bevy
-/// components with [`cascade_config`](Self::cascade_config),
-/// [`directional_light`](Self::directional_light) and [`shadow_map`](Self::shadow_map).
-/// The physical numbers come from `self.sun` so they have exactly one home.
+/// Construct with [`LunarSunShadow::default`] for the standard look, override
+/// individual fields for an authored scene (the USD loader does this from
+/// `lunco:shadow:*` attributes), then build the Bevy components with
+/// [`cascade_config`](Self::cascade_config),
+/// [`directional_light`](Self::directional_light) (which takes the illuminance)
+/// and [`shadow_map`](Self::shadow_map).
 ///
 /// The defaults are tuned for the airless hard-shadow terminator with the
 /// near-cascade / far-march split (see `terrain_shadow.wgsl`): a tight first
@@ -39,9 +41,6 @@ use lunco_core::{LunarSun, SunAngularDiameter};
 /// the heightfield ray-march takes over.
 #[derive(Debug, Clone, Copy)]
 pub struct LunarSunShadow {
-    /// The sun's physical identity (illuminance, angular size, matched exposure).
-    /// The single source of truth — see [`lunco_core::space_entities`].
-    pub sun: LunarSun,
     /// Number of shadow cascades (near→far split inside one light).
     pub num_cascades: usize,
     /// Nearest shadow-casting distance, metres.
@@ -65,7 +64,6 @@ pub struct LunarSunShadow {
 impl Default for LunarSunShadow {
     fn default() -> Self {
         Self {
-            sun: LunarSun::default(),
             num_cascades: 4,
             minimum_distance: 0.1,
             first_cascade_far_bound: 40.0,
@@ -94,13 +92,14 @@ impl LunarSunShadow {
         .build()
     }
 
-    /// Build the shadow-casting [`DirectionalLight`] with the given color.
-    /// Illuminance comes from the physical [`sun`](Self::sun); biases are render
-    /// config.
-    pub fn directional_light(&self, color: Color) -> DirectionalLight {
+    /// Build the shadow-casting [`DirectionalLight`] with the given color and
+    /// illuminance (lux). Illuminance is *physical* state — the caller passes it
+    /// from `lunco_environment::LunarSun` (or an authored USD value); biases are
+    /// this struct's render config.
+    pub fn directional_light(&self, color: Color, illuminance_lux: f32) -> DirectionalLight {
         DirectionalLight {
             color,
-            illuminance: self.sun.illuminance_lux,
+            illuminance: illuminance_lux,
             shadows_enabled: true,
             shadow_depth_bias: self.depth_bias,
             shadow_normal_bias: self.normal_bias,
@@ -114,10 +113,5 @@ impl LunarSunShadow {
         DirectionalLightShadowMap {
             size: self.shadow_map_size as usize,
         }
-    }
-
-    /// The [`SunAngularDiameter`] component, from the physical [`sun`](Self::sun).
-    pub fn angular_diameter(&self) -> SunAngularDiameter {
-        SunAngularDiameter(self.sun.angular_diameter_deg)
     }
 }

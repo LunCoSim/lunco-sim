@@ -14,6 +14,7 @@ leafwing-input-manager = { workspace = true }
 transform-gizmo-bevy = "0.9.0"
 lunco-controller = { path = "../lunco-controller" }
 lunco-celestial = { path = "../lunco-celestial" }
+lunco-environment = { path = "../lunco-environment" }
 lunco-core = { path = "../lunco-core" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-settings = { path = "../lunco-settings" }

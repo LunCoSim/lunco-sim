@@ -9,6 +9,9 @@
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
+// Gravity *types* now live in lunco-environment; celestial owns only the
+// gravity systems + `PointMassGravity` model (see `gravity.rs`).
+use lunco_environment::{Gravity, GravityBody};
 
 mod clock;
 pub mod ephemeris;

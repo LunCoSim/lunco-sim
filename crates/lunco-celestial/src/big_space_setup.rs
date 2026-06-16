@@ -62,7 +62,8 @@ use big_space::prelude::*;
 use avian3d::prelude::Collider;
 use bevy::camera::visibility::NoFrustumCulling;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame, CelestialBody};
-use crate::gravity::{GravityProvider, PointMassGravity};
+use crate::gravity::PointMassGravity;
+use lunco_environment::GravityProvider;
 use crate::soi::SOI;
 use crate::grid_material::{CelestialGridMaterial, CelestialGridExtension};
 
@@ -184,11 +185,13 @@ pub fn setup_big_space_hierarchy(
     // Bevy's single-cascade default (wrong terrain self-shadow, clipped
     // low-sun streaks). Now it matches the sandbox + USD paths by construction.
     let sun = lunco_render::LunarSunShadow::default();
+    // Physical sun identity (illuminance / angular size) is environmental state.
+    let ls = lunco_environment::LunarSun::default();
     commands.insert_resource(sun.shadow_map());
     commands.spawn((
-        sun.directional_light(Color::WHITE),
+        sun.directional_light(Color::WHITE, ls.illuminance_lux),
         sun.cascade_config(),
-        sun.angular_diameter(),
+        lunco_core::SunAngularDiameter(ls.angular_diameter_deg),
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
@@ -432,8 +435,8 @@ pub fn setup_big_space_hierarchy(
             Msaa::Off,
             bevy::anti_alias::smaa::Smaa::default(),
             // Physical exposure paired with the canonical sun illuminance
-            // (single source of truth — lunco_core::LunarSun).
-            bevy::camera::Exposure { ev100: lunco_core::LunarSun::default().exposure_ev100 },
+            // (single source of truth — lunco_environment::LunarSun).
+            bevy::camera::Exposure { ev100: lunco_environment::LunarSun::default().exposure_ev100 },
         ),
         Projection::Perspective(PerspectiveProjection {
             near: 1.0,

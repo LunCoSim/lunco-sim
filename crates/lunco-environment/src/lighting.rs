@@ -1,4 +1,4 @@
-//! # Space entities — the sky's light sources, as physical parameters
+//! # Lighting — the sky's light sources, as physical parameters
 //!
 //! The single, documented source of truth for **what the bodies in the lunar
 //! sky *are*** as far as lighting and rendering are concerned: how bright they
@@ -6,14 +6,16 @@
 //! ([angular diameter](LunarSun::angular_diameter_deg)), and the camera
 //! exposure that pairs with the key light.
 //!
-//! Why this lives in `lunco-core` (and not `lunco-celestial`, which models the
-//! bodies' *gravity* and orbital placement): these parameters are consumed by
-//! the **lowest** crates — the USD `DistantLight` loader (`lunco-usd-bevy`),
-//! the shadow-render builders (`lunco-render`), and every camera spawn. Core is
-//! the one crate they all already depend on, so putting the canonical values
-//! here gives a single home without any dependency cycle. The data is pure
-//! (plain `f32`s, no Bevy/render types); `lunco-render` turns it into the actual
-//! `DirectionalLight` / `CascadeShadowConfig` / `Exposure` components.
+//! This lives in `lunco-environment` because **lighting is environmental
+//! state** — the lighting analog of gravity. Every consumer that reads these
+//! values (the camera spawns in `lunco-celestial` / `lunco-client` /
+//! `lunco-usd-sim`, and the runtime `SetEnvironmentLight` tuner here) already
+//! sits at or above this crate. The lone exception is the `lunco-usd-bevy`
+//! `DistantLight` loader, which sits *below* environment and therefore cannot
+//! read these — but it never needs to: it builds its light from *authored* USD
+//! attributes (`intensity`/`exposure`/`inputs:angle`), with its own local
+//! fallbacks. The render-side `lunco_render::LunarSunShadow` (cascade/bias/atlas)
+//! is the separate shadow-config home.
 //!
 //! ## Two real light sources
 //! The airless Moon's surface is lit by exactly two things: the **Sun** (the
@@ -28,8 +30,18 @@
 //! that lands, the constants here become the **fallback/default** and the live
 //! values flow from that entity.
 
+use bevy::prelude::*;
+
 /// The Sun as seen from the lunar surface (Sol) — the hard key light.
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// Also the one active-scene **`Resource`**: the sun spawn and every camera's
+/// [`Exposure`](bevy::camera::Exposure) read it, so illuminance (lux) and
+/// exposure (EV100) always move together. A scene that dims the sun therefore
+/// cannot leave a camera over-/under-exposed — that exact mismatch produced a
+/// black viewport (a 10 klx sandbox sun under a 128 klx-tuned EV15 camera).
+/// [`Default`] is the canonical lunar calibration; a non-lunar scene (the
+/// sandbox) `insert_resource`s its own studio values before plugins are added.
+#[derive(Debug, Clone, Copy, PartialEq, Resource)]
 pub struct LunarSun {
     /// Direct solar illuminance on a surface facing the Sun, **lux**.
     /// ~128 000 lx on the airless Moon (vs ~100 000 lx through Earth's
@@ -61,16 +73,20 @@ impl Default for LunarSun {
 /// Earthshine — Earth's reflected sunlight, the Moon's only other natural light.
 /// A faint, cool-blue, **shadowless** fill that lifts sun-shadowed regolith into
 /// readable relief without washing the shadow cores grey (which a flat ambient
-/// would). The runtime light is spawned by `lunco-environment` from these values.
+/// would). The runtime fill light is spawned from these values by
+/// [`spawn_earthshine`](crate::spawn_earthshine).
+///
+/// Named `EarthshineParams` (not `Earthshine`) to stay distinct from the
+/// [`Earthshine`](crate::Earthshine) *marker component* on the spawned light.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Earthshine {
+pub struct EarthshineParams {
     /// Fill illuminance, **lux** (~10–15 lx, ≈ 1/10 000 of the Sun).
     pub illuminance_lux: f32,
     /// Fill colour, **linear RGB** — cool blue (Earth's albedo skews blue).
     pub color: [f32; 3],
 }
 
-impl Default for Earthshine {
+impl Default for EarthshineParams {
     fn default() -> Self {
         Self {
             illuminance_lux: 12.0,

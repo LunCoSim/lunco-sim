@@ -65,7 +65,25 @@ fn set_error_handler(device: Res<RenderDevice>) {
             // buffer is rejected and we continue. The Windows resize
             // depth/color mismatch lands here; dropping the frame is correct.
             wgpu::Error::Validation { description, .. } => {
-                warn!("wgpu validation error (frame dropped, continuing): {description}");
+                // SMAA without the `smaa_luts` cargo feature binds the area/search
+                // LUT as the wrong texture dimension (D3 where D2 is expected),
+                // so the "SMAA blending weight" bind group fails validation and
+                // EVERY frame is dropped → permanently black viewport. That looked
+                // for hours like a lighting/camera-activation bug. Promote it to a
+                // loud, actionable error so it can never masquerade as black again.
+                if description.contains("SMAA")
+                    || (description.contains("dimension = D2")
+                        && description.contains("D3"))
+                {
+                    error!(
+                        "wgpu validation error in the SMAA pass — this binary spawns a \
+                         camera with `Smaa` but is missing the bevy `smaa_luts` feature, \
+                         so every frame is dropped (black viewport). Add `smaa_luts` to \
+                         this binary's bevy features. Details: {description}"
+                    );
+                } else {
+                    warn!("wgpu validation error (frame dropped, continuing): {description}");
+                }
             }
             other => error!("wgpu error: {other}"),
         }));

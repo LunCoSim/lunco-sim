@@ -119,15 +119,17 @@ pub(crate) fn instantiate_light_prim(
             // contact tightness; `inputs:angle` is the sun's angular diameter
             // driving the horizon-shadow penumbra.
             let d = LunarSunShadow::default();
+            // Physical identity (illuminance + apparent size) is *authored* on
+            // this prim: illuminance from `intensity`×2^`exposure`, angular size
+            // from `inputs:angle`. The canonical default for an unauthored angle
+            // lives in `lunco_environment::LunarSun` — but this loader sits below
+            // environment (materials → usd-bevy forbids the edge), so it carries
+            // its own fallback const. Keep it in sync with `LunarSun::default`.
+            const DEFAULT_SUN_ANGULAR_DIAMETER_DEG: f32 = 0.53;
+            let illuminance_lux = intensity * exposure.exp2();
+            let angular_diameter_deg = get_attribute_as_f32(reader, sdf_path, "inputs:angle")
+                .unwrap_or(DEFAULT_SUN_ANGULAR_DIAMETER_DEG);
             let sun = LunarSunShadow {
-                // Physical identity (illuminance + apparent size) lives in the
-                // core `LunarSun`; authored attrs override it, the rest defaults.
-                sun: lunco_core::LunarSun {
-                    illuminance_lux: intensity * exposure.exp2(),
-                    angular_diameter_deg: get_attribute_as_f32(reader, sdf_path, "inputs:angle")
-                        .unwrap_or(d.sun.angular_diameter_deg),
-                    ..d.sun
-                },
                 maximum_distance: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:maxDistance")
                     .unwrap_or(d.maximum_distance),
                 first_cascade_far_bound: get_attribute_as_f32(
@@ -146,15 +148,15 @@ pub(crate) fn instantiate_light_prim(
 
             commands.insert_resource(sun.shadow_map());
             commands.entity(entity).insert((
-                sun.angular_diameter(),
-                sun.directional_light(color),
+                lunco_core::SunAngularDiameter(angular_diameter_deg),
+                sun.directional_light(color, illuminance_lux),
                 sun.cascade_config(),
                 UsdAuthoredLight,
             ));
             info!(
                 "[usd-bevy] {} DistantLight illuminance={} shadow range {}..{} m",
                 sdf_path.as_str(),
-                sun.sun.illuminance_lux,
+                illuminance_lux,
                 sun.first_cascade_far_bound,
                 sun.maximum_distance,
             );

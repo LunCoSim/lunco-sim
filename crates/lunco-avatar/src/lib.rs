@@ -24,7 +24,8 @@ use transform_gizmo_bevy::GizmoTarget;
 use lunco_controller::ControllerLink;
 use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands};
 use lunco_core::attach::migrate_to_grid;
-use lunco_celestial::{CelestialClock, GravityBody, LocalGravityField, TeleportToSurface, LeaveSurface};
+use lunco_celestial::{CelestialClock, LocalGravityField, TeleportToSurface, LeaveSurface};
+use lunco_environment::{GravityBody, GravityProvider};
 
 pub mod commands;
 pub use commands::*;
@@ -1831,8 +1832,19 @@ fn update_avatar_clip_planes_system(
                     if far_edge > max_far { max_far = far_edge; }
                 }
             }
-            perspective.near = (min_dist as f32 * 0.01).clamp(0.1, 100.0);
-            perspective.far = ((max_far * 1.05).max(1.0e7)) as f32;
+            if max_far <= 0.0 {
+                // No `CelestialBody` contributed (flat sandbox scene, or the
+                // offscreen USD preview camera). The body-derived `min_dist` is
+                // still its 1e15 sentinel here — feeding it to the clamp below
+                // pins `near` to the 100 m ceiling, which clips away the ENTIRE
+                // nearby scene (rovers, ground) and renders black. Use a small
+                // near + the 10 000 km far floor so a body-less scene renders.
+                perspective.near = 0.1;
+                perspective.far = 1.0e7;
+            } else {
+                perspective.near = (min_dist as f32 * 0.01).clamp(0.1, 100.0);
+                perspective.far = ((max_far * 1.05).max(1.0e7)) as f32;
+            }
         }
     }
 }
@@ -1853,7 +1865,7 @@ fn on_surface_teleport_command(
     q_parents: Query<&ChildOf>,
     _q_spatial_abs: Query<(Option<&CellCoord>, &Transform)>,
     q_bodies: Query<(Entity, &CelestialBody)>,
-    q_gravity_providers: Query<&lunco_celestial::GravityProvider>,
+    q_gravity_providers: Query<&GravityProvider>,
     mut field: ResMut<LocalGravityField>,
 ) {
     let cmd = trigger.event();

@@ -6771,6 +6771,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
+ "lunco-environment",
  "lunco-mobility",
  "lunco-settings",
  "lunco-theme",
@@ -6815,6 +6816,7 @@ dependencies = [
  "lunco-assets",
  "lunco-controller",
  "lunco-core",
+ "lunco-environment",
  "lunco-render",
  "lunco-storage",
  "lunco-terrain",
@@ -6956,11 +6958,9 @@ version = "0.1.0"
 dependencies = [
  "avian3d 0.6.1",
  "bevy",
- "lunco-celestial",
  "lunco-core",
  "lunco-cosim",
  "lunco-materials",
- "lunco-render",
 ]
 
 [[package]]
@@ -7108,7 +7108,6 @@ name = "lunco-render"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "lunco-core",
 ]
 
 [[package]]
@@ -7323,6 +7322,7 @@ dependencies = [
  "lunco-core",
  "lunco-cosim",
  "lunco-doc",
+ "lunco-environment",
  "lunco-fsw",
  "lunco-hardware",
  "lunco-materials",

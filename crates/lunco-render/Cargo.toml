@@ -9,7 +9,6 @@ description = "Shared render-look configuration for LunCoSim: the single source 
 # It is data/components only — NOT the `bevy_pbr` render pipeline — so this crate
 # stays cheap and can sit below every 3D crate without dragging in rendering.
 bevy = { workspace = true, features = ["bevy_light"] }
-lunco-core = { path = "../lunco-core" }
 
 [lints]
 workspace = true

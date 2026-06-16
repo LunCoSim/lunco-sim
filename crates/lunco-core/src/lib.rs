@@ -11,9 +11,6 @@ pub mod coords;
 pub mod log;
 /// Architectural marker components for the big_space integration.
 pub mod markers;
-/// Canonical physical parameters of the sky's light sources (Sun, earthshine)
-/// — the single, documented home for "what the bodies in the lunar sky are".
-pub mod space_entities;
 /// Atomic re-parenting helpers for SOI/Grid migration.
 pub mod attach;
 /// Debug-build invariant checks for the big_space hierarchy.
@@ -55,7 +52,6 @@ pub use commands::{
 pub use markers::{
     FallbackSceneLight, GridAnchor, HorizonShadowTerrain, SoiMigrant, SunAngularDiameter,
 };
-pub use space_entities::{Earthshine as EarthshineParams, LunarSun};
 pub use invariants::BigSpaceInvariantsPlugin;
 pub use world::{
     ensure_world_root, OriginAnchor, WorldGrid, WorldGridConfig, WorldRoot, WorldShellPlugin,

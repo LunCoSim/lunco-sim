@@ -14,8 +14,27 @@ use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, GlobalAmbient
 use bevy::camera::Exposure;
 use bevy::post_process::bloom::Bloom;
 use bevy::math::DVec3;
-use lunco_celestial::{Gravity, GravityBody, GravityProvider};
 use lunco_core::{Command, on_command, register_commands};
+
+/// Gravity configuration types (`Gravity`, `GravityBody`, `GravityProvider`,
+/// `GravityModel`) — environmental-state vocabulary owned here. The gravity
+/// *systems* in `lunco_celestial` import these.
+pub mod gravity_types;
+pub use gravity_types::{Gravity, GravityBody, GravityModel, GravityProvider};
+
+/// Physical lighting parameters of the lunar sky (`LunarSun`, `EarthshineParams`)
+/// — environmental state, the lighting analog of gravity. See the module docs.
+pub mod lighting;
+pub use lighting::{EarthshineParams, LunarSun};
+
+// Empty-bounds fallbacks for `SetEnvironmentLight`'s cascade rebuild. These
+// mirror `lunco_render::LunarSunShadow`'s defaults but are kept locally so this
+// crate need not depend on `lunco-render` (lighting → render would invert the
+// layering: render is presentation, below environment). Keep in sync by hand if
+// the render defaults change — they rarely do, and a drift only affects the
+// runtime tuner's fallback when no live cascade bounds exist.
+const FALLBACK_FIRST_CASCADE_FAR_BOUND: f32 = 40.0;
+const FALLBACK_MAX_SHADOW_DISTANCE: f32 = 1500.0;
 
 /// Baked horizon-map terrain self-shadowing (the long-range half of the
 /// two-system shadow design). See the module docs.
@@ -296,11 +315,10 @@ fn on_set_environment_light(
             if let Some(mut cfg) = cascades {
                 // Rebuild from the live config, overriding only the two
                 // range knobs (cascade count / overlap / near are kept).
-                // The empty-bounds fallbacks come from the canonical lunar sun
-                // (`lunco_render::LunarSunShadow`) so they track the spawn paths.
-                let d = lunco_render::LunarSunShadow::default();
-                let cur_first = cfg.bounds.first().copied().unwrap_or(d.first_cascade_far_bound);
-                let cur_max = cfg.bounds.last().copied().unwrap_or(d.maximum_distance);
+                // The empty-bounds fallbacks are local consts mirroring the
+                // canonical lunar-sun cascade defaults (see their declaration).
+                let cur_first = cfg.bounds.first().copied().unwrap_or(FALLBACK_FIRST_CASCADE_FAR_BOUND);
+                let cur_max = cfg.bounds.last().copied().unwrap_or(FALLBACK_MAX_SHADOW_DISTANCE);
                 let first = cmd.shadow_first_cascade_bound.unwrap_or(cur_first);
                 let max = cmd.shadow_max_distance.unwrap_or(cur_max);
                 *cfg = CascadeShadowConfigBuilder {
@@ -365,9 +383,9 @@ fn spawn_earthshine(mut commands: Commands, existing: Query<(), With<Earthshine>
     if !existing.is_empty() {
         return;
     }
-    // Illuminance + colour from the canonical params (lunco_core::space_entities);
+    // Illuminance + colour from the canonical params (see `lighting` module);
     // direction is the render-side placeholder (roughly opposite the sun).
-    let es = lunco_core::EarthshineParams::default();
+    let es = EarthshineParams::default();
     commands.spawn((
         Earthshine,
         DirectionalLight {
@@ -385,6 +403,12 @@ impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<LocalGravity>();
         app.register_type::<Earthshine>();
+
+        // The one active-scene sun (lux + matched camera EV). Canonical lunar
+        // default unless a scene `insert_resource`d its own studio values first
+        // (`init_resource` is a no-op when already present). Sun spawns and
+        // camera `Exposure`s read this so the two never drift apart.
+        app.init_resource::<LunarSun>();
 
         // Horizon-map terrain self-shadowing. Inert until a terrain
         // carries the `HorizonShadowTerrain` marker (USD-stamped).

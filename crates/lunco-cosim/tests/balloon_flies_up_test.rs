@@ -230,8 +230,8 @@ fn balloon_flies_up_under_buoyancy() {
 /// recovers.
 #[test]
 fn balloon_flies_up_with_flat_gravity() {
-    use lunco_celestial::{Gravity as CelestialGravity, GravityPlugin};
-    use lunco_environment::EnvironmentPlugin;
+    use lunco_celestial::GravityPlugin;
+    use lunco_environment::{EnvironmentPlugin, Gravity as CelestialGravity};
 
     let mut app = App::new();
 
