@@ -187,6 +187,16 @@ struct RunnerState {
     /// DAE. A parameter sweep reuses one rumoca compile and applies overrides
     /// at the DAE level. Cleared when a model's source actually changes.
     dae_cache: HashMap<u64, Arc<Dae>>,
+    /// Persistent compiler reused across runs, so MSL installs **once** for
+    /// the runner (lazily, demand-driven via `ModelicaCompiler`) instead of
+    /// rebuilding a fresh session per run. Behind its **own** lock, not the
+    /// `state` mutex: a compile can take seconds, and holding `state` across
+    /// it would stall the scheduler and every parallel run (which only need
+    /// `state` briefly for cache lookups). Native only — the web build
+    /// compiles on the worker, so the runner never constructs one. See
+    /// [`run_inner`].
+    #[cfg(not(target_arch = "wasm32"))]
+    compiler: Arc<Mutex<crate::ModelicaCompiler>>,
 }
 
 impl Default for RunnerState {
@@ -198,6 +208,10 @@ impl Default for RunnerState {
             in_flight: HashSet::new(),
             pending: VecDeque::new(),
             dae_cache: HashMap::new(),
+            // Cheap: `new()` builds an empty session and installs no MSL
+            // (Layer A). MSL lands on the first run that actually needs it.
+            #[cfg(not(target_arch = "wasm32"))]
+            compiler: Arc::new(Mutex::new(crate::ModelicaCompiler::new())),
         }
     }
 }
@@ -662,6 +676,21 @@ fn run_inner(
         return;
     }
 
+    // Persistent runner compiler: clone the handle out of `state` (brief
+    // lock), then compile under the compiler's OWN lock so the multi-second
+    // compile never holds `state` and stall the scheduler / parallel runs.
+    // MSL installs once into this session (lazily) instead of per run.
+    let compiler_handle = match state.lock() {
+        Ok(s) => s.compiler.clone(),
+        Err(_) => {
+            let _ = tx.send(RunUpdate::Failed {
+                error: "runner state poisoned".to_string(),
+                partial: None,
+            });
+            return;
+        }
+    };
+
     // Compile-once: compile the input-substituted source (NO overrides baked
     // in) a single time and cache the resulting DAE keyed by source hash. A
     // parameter sweep recompiles zero times after the first run.
@@ -670,13 +699,16 @@ fn run_inner(
     let base_dae: Arc<Dae> = match cached {
         Some(d) => d,
         None => {
-            let mut compiler = crate::ModelicaCompiler::new();
-            match compiler.compile_str_multi(
-                &source.model_name,
-                &after_inputs,
-                &source.filename,
-                &source.extras,
-            ) {
+            let compiled = {
+                let mut compiler = compiler_handle.lock().unwrap_or_else(|e| e.into_inner());
+                compiler.compile_str_multi(
+                    &source.model_name,
+                    &after_inputs,
+                    &source.filename,
+                    &source.extras,
+                )
+            };
+            match compiled {
                 Ok(d) => {
                     let dae = d.dae.clone();
                     if let Ok(mut s) = state.lock() {
@@ -723,13 +755,16 @@ fn run_inner(
                         return;
                     }
                 };
-                let mut compiler = crate::ModelicaCompiler::new();
-                match compiler.compile_str_multi(
-                    &source.model_name,
-                    &injected,
-                    &source.filename,
-                    &source.extras,
-                ) {
+                let compiled = {
+                    let mut compiler = compiler_handle.lock().unwrap_or_else(|e| e.into_inner());
+                    compiler.compile_str_multi(
+                        &source.model_name,
+                        &injected,
+                        &source.filename,
+                        &source.extras,
+                    )
+                };
+                match compiled {
                     Ok(d) => d.dae,
                     Err(e) => {
                         let _ = tx.send(RunUpdate::Failed {

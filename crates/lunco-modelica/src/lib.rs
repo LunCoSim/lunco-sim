@@ -184,6 +184,11 @@ fn msl_is_available() -> bool {
     msl_remote::global_parsed_msl().is_some()
         || lunco_assets::msl::primary_filesystem_root().is_some()
         || lunco_assets::msl::has_in_memory_source()
+        // On-disk tree even if not registered as a global source. The app
+        // registers MSL at startup (so `primary_filesystem_root` is set), but
+        // headless contexts (unit tests, the indexer, a fresh embedder) only
+        // have the files on disk — demand-driven load must still find them.
+        || lunco_assets::msl_source_root_path().is_some()
 }
 
 pub struct ModelicaCompiler {
@@ -315,9 +320,15 @@ impl ModelicaCompiler {
             );
             return false;
         }
-        if lunco_assets::msl::primary_filesystem_root().is_some() {
-            // Native: an MSL tree is present, so MSL is wanted. Try the
-            // pre-parsed on-disk bundle first via the shared, memoized
+        if lunco_assets::msl::primary_filesystem_root().is_some()
+            || lunco_assets::msl_source_root_path().is_some()
+        {
+            // Native: an MSL tree is present (registered as a global source,
+            // OR just materialised on disk — headless tests/indexer/embedders
+            // don't register one). The install paths below read the on-disk
+            // bundle / source tree via `msl_dir()` directly, so disk presence
+            // alone is enough. Try the pre-parsed on-disk bundle first via the
+            // shared, memoized
             // `install_parsed_msl` path — it streams `parsed-msl.bin` and
             // caches it process-wide, so the next `ModelicaCompiler` hits
             // branch 1 above with no disk read. This is the exact same
@@ -637,10 +648,16 @@ impl ModelicaCompiler {
         let report = self
             .session
             .compile_model_strict_reachable_uncached_with_recovery(model_name);
+        // ER002 = undefined reference (a type/component use rumoca can't
+        // resolve); ER003 = base class not found (an `extends Modelica.…`
+        // whose base is missing). Both mean "a symbol a library could
+        // provide is absent" — exactly the demand-driven load trigger. A
+        // model that `extends` an MSL class hits ER003, not ER002, so the
+        // gate must accept both or `extends`-only models never load MSL.
         report
             .failures
             .iter()
-            .any(|f| f.error_code.as_deref() == Some("ER002"))
+            .any(|f| matches!(f.error_code.as_deref(), Some("ER002") | Some("ER003")))
     }
 
     /// Access the underlying `rumoca_compile::Session` — used by a
