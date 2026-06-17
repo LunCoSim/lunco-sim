@@ -174,8 +174,28 @@ pub mod source_roots;
 /// cache, MSL loads in ~2–5 s. Cold cache (first run after a rumoca
 /// version bump) is proportional to parser throughput; `msl_indexer`
 /// can pre-warm offline.
+/// Cheap, side-effect-free check for whether a library set is installable
+/// on this target — used to gate the demand-driven MSL install so we never
+/// run a redundant strict pass / install attempt when there's nothing to
+/// install. Does NOT decode the bundle (that's the expensive part): it only
+/// looks for an already-decoded process-wide slot, a native MSL filesystem
+/// root, or a web in-memory source.
+fn msl_is_available() -> bool {
+    msl_remote::global_parsed_msl().is_some()
+        || lunco_assets::msl::primary_filesystem_root().is_some()
+        || lunco_assets::msl::has_in_memory_source()
+}
+
 pub struct ModelicaCompiler {
     session: Session,
+    /// Whether the library set (MSL + companions + discovered extra libs)
+    /// has been installed into this session yet. Layer-A demand-driven gate:
+    /// MSL is installed lazily by [`Self::compile_loaded`] on the first
+    /// compile whose failure rumoca attributes to an unresolved reference
+    /// (`ER002`) — never at construction. A library-free model never sets
+    /// this and never pays the MSL cost. Latches `true` after one install
+    /// so subsequent compiles skip the gate entirely.
+    msl_installed: bool,
 }
 
 impl ModelicaCompiler {
@@ -194,54 +214,50 @@ impl ModelicaCompiler {
     /// diagnostics until MSL lands. Callers that want to gate compiles
     /// on MSL readiness should consult `MslLoadState`.
     pub fn new() -> Self {
-        let t_total = web_time::Instant::now();
-        let mut session = Session::new(SessionConfig::default());
-        if Self::preload_from_global(&mut session, t_total) {
-            return Self { session };
-        }
-        // MSL preload is opt-in via `LUNCO_MODELICA_PRELOAD_MSL=1`.
-        // Default-skip because the rumoca bincode cache invalidates on
-        // every parse-schema bump, making cold preload cost minutes
-        // for callers (sandbox balloon, standalone models) that import
-        // nothing from MSL anyway. Models that *do* reference MSL
-        // currently require the env until rumoca grows a lazy
-        // resolve-on-first-symbol hook.
-        let want_msl = std::env::var("LUNCO_MODELICA_PRELOAD_MSL")
+        // Layer A: build an EMPTY session — MSL is no longer installed
+        // eagerly here. A library-free model (Balloon, standalone) then
+        // compiles against the empty session in a fraction of the time and
+        // never pays the ~1.5s MSL decode+install nor the cost of resolving
+        // against 2670 resident classes. MSL is installed on demand by
+        // `compile_loaded` only when rumoca reports an unresolved reference
+        // (`ER002`) that a library could satisfy — the decision comes from
+        // rumoca's own structured diagnostics, not a source-text guess.
+        let mut compiler = Self {
+            session: Session::new(SessionConfig::default()),
+            msl_installed: false,
+        };
+        // Escape hatch: `LUNCO_MODELICA_PRELOAD_MSL=1` forces the old eager
+        // behaviour, e.g. to pre-pay the install before a latency-sensitive
+        // interactive run. Default off — the demand-driven path covers it.
+        let eager = std::env::var("LUNCO_MODELICA_PRELOAD_MSL")
             .map(|v| v != "0" && !v.is_empty())
             .unwrap_or(false);
-        if want_msl {
-            if let Some(msl_root) = lunco_assets::msl_source_root_path() {
-                // Durable-external — MSL rarely changes and is
-                // library-grade; rumoca uses this classification to
-                // enable bincode persistence for parsed artifacts.
-                let report = session.load_source_root_tolerant(
-                    "msl",
-                    rumoca_compile::compile::SourceRootKind::DurableExternal,
-                    &msl_root,
-                    None,
-                );
-                log::info!(
-                    "[ModelicaCompiler] preloaded MSL from `{}` in {:.2}s: \
-                     {} parsed / {} inserted (cache {:?}); diagnostics: {}",
-                    msl_root.display(),
-                    t_total.elapsed().as_secs_f64(),
-                    report.parsed_file_count,
-                    report.inserted_file_count,
-                    report.cache_status,
-                    if report.diagnostics.is_empty() {
-                        "none".to_string()
-                    } else {
-                        format!("{} lines", report.diagnostics.len())
-                    },
-                );
-            } else {
-                log::info!(
-                    "[ModelicaCompiler] no MSL source root available on this target; \
-                     session starts empty",
-                );
-            }
+        if eager {
+            compiler.ensure_msl_installed();
         }
-        Self { session }
+        compiler
+    }
+
+    /// Install the library set (MSL + companions + discovered extra libs)
+    /// into this session, once. Returns `true` if classes are now resident
+    /// (just installed, or already were). Idempotent and cheap on repeat.
+    ///
+    /// This is the demand-driven install hook. It reuses the same
+    /// [`Self::preload_from_global`] machinery the old eager path used
+    /// (process-wide decoded bundle → on-disk `parsed-msl.bin` → cold
+    /// parse), so there is exactly one install code path. Callers that
+    /// *know* they need the full library up front (the `msl_indexer --warm`
+    /// pass) call this explicitly; `compile_loaded` calls it lazily on an
+    /// unresolved-reference failure.
+    pub fn ensure_msl_installed(&mut self) -> bool {
+        if self.msl_installed {
+            return true;
+        }
+        let t = web_time::Instant::now();
+        if Self::preload_from_global(&mut self.session, t) {
+            self.msl_installed = true;
+        }
+        self.msl_installed
     }
 
     /// If a process-wide MSL has been installed, preload it into the
@@ -288,11 +304,16 @@ impl ModelicaCompiler {
             return true;
         }
         if lunco_assets::msl::has_in_memory_source() {
+            // wasm: the source bytes are resident but the chunked parser
+            // hasn't produced `StoredDefinition`s yet. Report `false`
+            // (nothing installed) so `ensure_msl_installed` does NOT latch —
+            // a later compile retries once the chunked decode lands and
+            // `global_parsed_msl()` fills (branch 1 above).
             log::info!(
                 "[ModelicaCompiler] MSL bundle present but parse not yet complete — \
-                 starting with empty session; compile will be retriggered when parse finishes"
+                 session stays empty; install retried when parse finishes"
             );
-            return true;
+            return false;
         }
         if lunco_assets::msl::primary_filesystem_root().is_some() {
             // Native: an MSL tree is present, so MSL is wanted. Try the
@@ -563,9 +584,33 @@ impl ModelicaCompiler {
             });
         }
 
-        let result = self
+        let mut result = self
             .session
             .compile_model_dae_strict_reachable_uncached_with_recovery(model_name);
+
+        // Demand-driven MSL (Layer A). If the compile failed and we have not
+        // installed the library set yet, ask rumoca *why*: only if the
+        // failure carries an unresolved-reference code (`ER002`) — i.e. a
+        // class/component a library could supply — do we install MSL and
+        // retry once. A library-free model (Balloon) succeeds on the first
+        // pass and never reaches here; a genuinely broken model (syntax
+        // error, real typo) fails with a different code and is returned
+        // as-is without paying the install. The gate short-circuits once
+        // `msl_installed` latches, so this runs at most once per compiler.
+        if result.is_err()
+            && !self.msl_installed
+            && msl_is_available()
+            && self.target_has_unresolved_refs(model_name)
+            && self.ensure_msl_installed()
+        {
+            log::info!(
+                "[ModelicaCompiler] `{}` had unresolved refs — installed MSL on demand, retrying",
+                model_name
+            );
+            result = self
+                .session
+                .compile_model_dae_strict_reachable_uncached_with_recovery(model_name);
+        }
 
         still_compiling.store(false, Ordering::Relaxed);
         // No `join` — see spawn comment above. The thread is detached
@@ -578,6 +623,24 @@ impl ModelicaCompiler {
             if result.is_ok() { "OK" } else { "ERR" },
         );
         result
+    }
+
+    /// Does compiling `model_name` against the *current* session fail with
+    /// an unresolved type/component reference (rumoca diagnostic code
+    /// `ER002`)? This is the demand-driven gate's oracle: it distinguishes
+    /// "needs a library" from "genuinely broken" using rumoca's **structured
+    /// error code**, not message-string matching. Runs the report-returning
+    /// strict pass, which reuses the session's already-resolved state — the
+    /// cheap second pass rumoca documents — and is only ever taken on the
+    /// compile error path before MSL has been installed.
+    fn target_has_unresolved_refs(&mut self, model_name: &str) -> bool {
+        let report = self
+            .session
+            .compile_model_strict_reachable_uncached_with_recovery(model_name);
+        report
+            .failures
+            .iter()
+            .any(|f| f.error_code.as_deref() == Some("ER002"))
     }
 
     /// Access the underlying `rumoca_compile::Session` — used by a
