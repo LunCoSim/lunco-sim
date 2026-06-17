@@ -93,8 +93,9 @@ pub fn handle_spawn_placement(
     mut tool_active: ResMut<lunco_core::SpawnToolActive>,
     catalog: Res<SpawnCatalog>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
-    windows: Query<&Window>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    // Single gated scene-pointer source — placement only fires for clicks that
+    // land on the 3D scene, never on a panel/popup. See `ScenePointer`.
+    scene: Res<lunco_workbench::ScenePointer>,
     keys: Res<ButtonInput<KeyCode>>,
     q_grids: Query<Entity, With<Grid>>,
     q_ghost: Query<(Entity, &Transform), With<SpawnGhost>>,
@@ -111,9 +112,10 @@ pub fn handle_spawn_placement(
         }
     };
 
-    // Left click to place
-    if !mouse.just_pressed(MouseButton::Left) {
-        // Escape cancels spawn mode
+    // Left click over the 3D scene to place; `None` for any chrome click (the
+    // gate lives in `ScenePointer`, so clicking a panel never places).
+    let Some(cursor) = scene.left_click() else {
+        // Escape cancels spawn mode (keyboard, independent of the scene gate).
         if keys.just_pressed(KeyCode::Escape) {
             for (ghost, _) in q_ghost.iter() {
                 commands.entity(ghost).despawn();
@@ -121,17 +123,12 @@ pub fn handle_spawn_placement(
             *spawn_state = SpawnState::Idle;
         }
         return;
-    }
+    };
 
     let (camera, cam_tf) = match cameras.iter().next() {
         Some(c) => c,
         None => return,
     };
-    let window = match windows.iter().next() {
-        Some(w) => w,
-        None => return,
-    };
-    let Some(cursor) = window.cursor_position() else { return };
     let Some((origin, direction)) = cursor_ray(camera, cam_tf, cursor) else { return };
 
     let hit = raycaster.cast_ray(origin, direction, 1000.0, false, &avian3d::prelude::SpatialQueryFilter::default());

@@ -16,29 +16,6 @@ use crate::commands::SelectEntity;
 #[derive(Component)]
 pub struct Selected;
 
-/// Whether the window-space `cursor` (logical points) is over the live 3D
-/// viewport tab rather than a docked chrome panel.
-///
-/// The viewport is a tab inside egui_dock, which renders every leaf as an egui
-/// `Area` — so egui's pointer queries (`is_pointer_over_area`,
-/// `wants_pointer_input`) read true over the viewport too and can't separate it
-/// from the Inspector. The workbench records the viewport tab's screen rect in
-/// [`PanelRects`] (physical px); that's the only usable signal.
-///
-/// **Fails open**: with no viewport rect recorded yet (a chrome-less
-/// full-window perspective, or before the first paint) the whole window counts
-/// as the scene — clicks keep working, they just aren't gated.
-fn cursor_over_scene(
-    panel_rects: &lunco_workbench::PanelRects,
-    window: &Window,
-    cursor: Vec2,
-) -> bool {
-    if panel_rects.is_empty() {
-        return true;
-    }
-    panel_rects.any_contains(cursor * window.scale_factor())
-}
-
 /// Computes a world-space ray from the camera through the cursor position.
 fn cursor_ray(
     camera: &Camera,
@@ -125,8 +102,9 @@ pub fn handle_entity_selection(
     // the user clicked (it hit the ground while possession hit the rover). Matching
     // possession's `With<Avatar>` keeps the two in lockstep.
     cameras: Query<(&Camera, &GlobalTransform), With<lunco_core::Avatar>>,
-    windows: Query<&Window>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    // Single gated scene-pointer source — replaces this system's own
+    // `ButtonInput<MouseButton>` read + viewport gate. See `ScenePointer`.
+    scene: Res<lunco_workbench::ScenePointer>,
     keys: Res<ButtonInput<KeyCode>>,
     raycaster: SpatialQuery,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
@@ -134,8 +112,6 @@ pub fn handle_entity_selection(
     q_parents: Query<&ChildOf>,
     q_selected_old: Query<Entity, With<Selected>>,
     mut drag_mode: ResMut<lunco_core::DragModeActive>,
-    panel_rects: Res<lunco_workbench::PanelRects>,
-    mut egui_contexts: bevy_egui::EguiContexts,
     mut inspector_target: ResMut<crate::InspectorTarget>,
     mut commands: Commands,
 ) {
@@ -188,37 +164,17 @@ pub fn handle_entity_selection(
         return;
     }
 
-    if !mouse.just_pressed(MouseButton::Left) { return; }
+    // A fresh left-click over the live 3D scene (window-space cursor), or `None`
+    // for any chrome click — the scene/chrome gate lives entirely in
+    // `ScenePointer`, so this system never raycasts through a panel/popup. Alt is
+    // a keyboard modifier, read separately.
+    let Some(cursor) = scene.left_click() else { return };
     let alt_held = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
 
     let (camera, cam_tf) = match cameras.iter().next() {
         Some(c) => c,
         None => return,
     };
-    let window = match windows.iter().next() {
-        Some(w) => w,
-        None => return,
-    };
-    let Some(cursor) = window.cursor_position() else { return };
-    // Only raycast the scene when the click is over the 3D viewport tab, not a
-    // docked panel (Inspector/Explorer) — else clicking a panel raycasts
-    // through the chrome and could hit-select an entity behind it. egui can't
-    // help distinguish them: egui_dock renders every dock leaf (the viewport
-    // included) as an egui `Area`, so `is_pointer_over_area`/`wants_pointer_input`
-    // are true over the viewport too. The workbench records the viewport tab's
-    // rect in `PanelRects` — the only signal that separates it from the chrome.
-    if !cursor_over_scene(&panel_rects, window, cursor) { return; }
-    // An egui popup (open colour picker, combo dropdown, menu) floats as a
-    // foreground `Area` that can extend OVER the viewport rect — a click inside
-    // it passes the rect test above, but egui owns that click. Don't raycast:
-    // otherwise picking a colour in the Inspector's colour-swatch popup falls
-    // through to the 3D scene behind it and re-selects the terrain. (This is the
-    // "click panel → terrain selected" bug.) See `pointer_over_egui_popup`.
-    if let Ok(ctx) = egui_contexts.ctx_mut() {
-        if lunco_workbench::pointer_over_egui_popup(ctx, cursor) {
-            return;
-        }
-    }
     let Some((origin, direction)) = cursor_ray(camera, cam_tf, cursor) else { return };
 
     // No exclusions: ground/terrain are now selectable too (closest-hit means

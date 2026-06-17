@@ -150,10 +150,11 @@ fn models_palette_content(ui: &mut egui::Ui, world: &mut World, tokens: &lunco_t
 /// to an attach consumes the frame's input.
 pub(crate) fn handle_attach_click(
     mut state: ResMut<AttachState>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    // Single gated scene-pointer source — attach only fires for clicks on the
+    // 3D scene, never on a panel/popup. See `ScenePointer`.
+    scene: Res<lunco_workbench::ScenePointer>,
     keys: Res<ButtonInput<KeyCode>>,
     cameras: Query<(&Camera, &GlobalTransform)>,
-    windows: Query<&Window>,
     raycaster: avian3d::prelude::SpatialQuery,
     q_ground: Query<Entity, With<lunco_core::Ground>>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
@@ -167,13 +168,12 @@ pub(crate) fn handle_attach_click(
         return;
     }
 
-    // Plain left-click (no shift) in the 3D area attaches.
-    if !mouse.just_pressed(MouseButton::Left) { return }
+    // Plain left-click (no shift) over the 3D scene attaches; `None` for any
+    // chrome click (gate lives in `ScenePointer`).
     if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) { return }
+    let Some(cursor) = scene.left_click() else { return };
 
     let Ok((camera, cam_tf)) = cameras.single() else { return };
-    let Ok(window) = windows.single() else { return };
-    let Some(cursor) = window.cursor_position() else { return };
     let Some((origin, direction)) = cursor_ray(camera, cam_tf, cursor) else { return };
 
     let exclude: Vec<Entity> = q_ground.iter().collect();

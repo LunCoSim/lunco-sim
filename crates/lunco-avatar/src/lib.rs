@@ -1206,9 +1206,10 @@ fn find_clickable_from_hit(
 /// `DragModeActive` blocks clicks while a transform gizmo is up so the user
 /// can drag a handle without flipping the camera.
 pub fn avatar_raycast_possession(
-    mouse: Res<ButtonInput<MouseButton>>,
+    // Single gated scene-pointer source — possess/follow only fires for clicks
+    // on the 3D scene, never on a panel/popup. See `ScenePointer`.
+    scene: Res<lunco_workbench::ScenePointer>,
     keys: Res<ButtonInput<KeyCode>>,
-    windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform, Entity), With<Avatar>>,
     drag_mode_active: Res<lunco_core::DragModeActive>,
     spawn_tool_active: Res<lunco_core::SpawnToolActive>,
@@ -1220,9 +1221,7 @@ pub fn avatar_raycast_possession(
     q_parents: Query<&ChildOf>,
     q_ground: Query<Entity, With<lunco_core::Ground>>,
     raycaster: avian3d::prelude::SpatialQuery,
-    panel_rects: Res<lunco_workbench::PanelRects>,
 ) {
-    if !mouse.just_pressed(MouseButton::Left) { return; }
     // Alt-click is reserved for gizmo selection in lunco-sandbox-edit.
     if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) { return; }
     // Mid-drag on a transform gizmo: don't flip the camera under the user.
@@ -1230,20 +1229,11 @@ pub fn avatar_raycast_possession(
     // Spawn placement tool armed: clicks place objects, don't possess.
     if spawn_tool_active.0 { return; }
 
-    let Some(window) = windows.iter().next() else { return; };
-    let Some(pos) = window.cursor_position() else { return; };
+    // A fresh left-click over the live 3D scene, or `None` for any chrome click
+    // (the scene/chrome gate lives in `ScenePointer`, so a click on a panel
+    // behind which a vessel sits never possesses it).
+    let Some(pos) = scene.left_click() else { return; };
     let Some((camera, cam_gtf, avatar_entity)) = camera_q.iter().next() else { return; };
-    // Possess/follow only when the click is over the 3D viewport tab, not a
-    // docked panel behind which a vessel sits. egui can't tell them apart —
-    // egui_dock renders every leaf (the viewport included) as an egui `Area` —
-    // so the workbench's recorded viewport rect in `PanelRects` is the only
-    // signal. Fails open: no recorded rect → whole window is the scene.
-    if !panel_rects.is_empty() {
-        let phys = pos * window.scale_factor();
-        if !panel_rects.any_contains(phys) {
-            return;
-        }
-    }
     let Ok(ray) = camera.viewport_to_world(cam_gtf, pos) else { return; };
 
     let filter = avian3d::prelude::SpatialQueryFilter::default();

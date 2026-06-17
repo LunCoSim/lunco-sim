@@ -689,6 +689,166 @@ pub fn apply_cosim_actuators(
     }
 }
 
+// ── Uniform port commands (ListPorts / GetPort / SetPort) ───────────────────
+//
+// The single API surface over the cosim **port table** (`lunco_cosim::ports`).
+// Every exposed value — Modelica var, Avian force/state, joint angle, env
+// signal — is read/written/listed here uniformly, regardless of which backend
+// owns it. These are the canonical port verbs; they are not aliases of
+// `CosimStatus` (which stays as richer per-entity cosim introspection).
+
+/// Map a [`lunco_cosim::PortDirection`] to a stable wire string.
+fn port_dir_str(d: lunco_cosim::PortDirection) -> &'static str {
+    match d {
+        lunco_cosim::PortDirection::In => "in",
+        lunco_cosim::PortDirection::Out => "out",
+        lunco_cosim::PortDirection::InOut => "inout",
+    }
+}
+
+/// Map a [`lunco_cosim::PortType`] to a stable wire string.
+fn port_kind_str(t: lunco_cosim::PortType) -> &'static str {
+    match t {
+        lunco_cosim::PortType::Force => "force",
+        lunco_cosim::PortType::Kinematic => "kinematic",
+        lunco_cosim::PortType::Electrical => "electrical",
+        lunco_cosim::PortType::Thermal => "thermal",
+        lunco_cosim::PortType::Signal => "signal",
+    }
+}
+
+fn port_to_json(p: &lunco_cosim::PortRef) -> serde_json::Value {
+    serde_json::json!({
+        "name": p.name,
+        "direction": port_dir_str(p.direction),
+        "kind": port_kind_str(p.port_type),
+        "value": p.value,
+    })
+}
+
+/// Resolve the optional `api_id` / `entity` field of a params object to an ECS
+/// `Entity` via the `ApiEntityRegistry`. Returns `None` when absent (the
+/// caller lists all) or when the id doesn't resolve.
+fn resolve_param_entity(world: &mut World, params: &serde_json::Value) -> Option<Entity> {
+    let raw = params
+        .get("api_id")
+        .or_else(|| params.get("entity"))
+        .and_then(|v| v.as_u64())?;
+    let reg = world.get_resource::<lunco_api::ApiEntityRegistry>()?;
+    reg.resolve(&lunco_core::GlobalEntityId::from_raw(raw))
+}
+
+/// `ListPorts` — enumerate exposed ports. With `{"api_id": N}`, lists that
+/// entity's ports; without, lists every registered entity that has any port.
+///
+/// `curl … {"command":"ListPorts","params":{"api_id":12345}}`
+pub struct ListPortsProvider;
+
+impl lunco_api::ApiQueryProvider for ListPortsProvider {
+    fn name(&self) -> &'static str { "ListPorts" }
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
+        // Single-entity form.
+        if let Some(e) = resolve_param_entity(world, params) {
+            let ports: Vec<_> = lunco_cosim::entity_ports(world, e)
+                .iter()
+                .map(port_to_json)
+                .collect();
+            return lunco_api::ApiResponse::ok(serde_json::json!({ "ports": ports }));
+        }
+        // All-entities form: snapshot the registry list first (owned), then
+        // read ports — avoids holding the resource borrow across `entity_ports`.
+        let Some(reg) = world.get_resource::<lunco_api::ApiEntityRegistry>() else {
+            return lunco_api::ApiResponse::ok(serde_json::json!({ "entities": [] }));
+        };
+        let entries = reg.entities();
+        let mut rows = Vec::new();
+        for (api_id, e) in entries {
+            let ports = lunco_cosim::entity_ports(world, e);
+            if ports.is_empty() {
+                continue;
+            }
+            rows.push(serde_json::json!({
+                "api_id": api_id.get(),
+                "name": world.get::<Name>(e).map(|n| n.as_str().to_string()).unwrap_or_default(),
+                "ports": ports.iter().map(port_to_json).collect::<Vec<_>>(),
+            }));
+        }
+        lunco_api::ApiResponse::ok(serde_json::json!({ "entities": rows }))
+    }
+}
+
+/// `GetPort` — read one port value.
+///
+/// `curl … {"command":"GetPort","params":{"api_id":N,"name":"yaw"}}`
+pub struct GetPortProvider;
+
+impl lunco_api::ApiQueryProvider for GetPortProvider {
+    fn name(&self) -> &'static str { "GetPort" }
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
+        let Some(e) = resolve_param_entity(world, params) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::EntityNotFound,
+                "GetPort requires a resolvable `api_id`",
+            );
+        };
+        let Some(name) = params.get("name").and_then(|v| v.as_str()) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::DeserializationError,
+                "GetPort requires a `name`",
+            );
+        };
+        match lunco_cosim::read_port(world, e, name) {
+            Some(value) => lunco_api::ApiResponse::ok(serde_json::json!({ "name": name, "value": value })),
+            None => lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::DeserializationError,
+                format!("no port `{}` on entity", name),
+            ),
+        }
+    }
+}
+
+/// `SetPort` — write a setpoint to one input port.
+///
+/// `curl … {"command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2}}`
+///
+/// TODO(ports): this writes the input slot once via [`lunco_cosim::write_port`];
+/// per decision 2 it must become a ControlStream **hold** (latest-wins,
+/// `hold_last(timeout)`, overriding a live wire until released). See
+/// `lunco-cosim/src/ports.rs::write_port`.
+pub struct SetPortProvider;
+
+impl lunco_api::ApiQueryProvider for SetPortProvider {
+    fn name(&self) -> &'static str { "SetPort" }
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
+        let Some(e) = resolve_param_entity(world, params) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::EntityNotFound,
+                "SetPort requires a resolvable `api_id`",
+            );
+        };
+        let Some(name) = params.get("name").and_then(|v| v.as_str()) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::DeserializationError,
+                "SetPort requires a `name`",
+            );
+        };
+        let Some(value) = params.get("value").and_then(|v| v.as_f64()) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::DeserializationError,
+                "SetPort requires a numeric `value`",
+            );
+        };
+        if lunco_cosim::write_port(world, e, name, value) {
+            lunco_api::ApiResponse::ok(serde_json::json!({ "name": name, "value": value }))
+        } else {
+            lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::DeserializationError,
+                format!("no writable input port `{}` on entity", name),
+            )
+        }
+    }
+}
+
 /// API query provider: `curl … {"command":"CosimStatus","params":{}}`
 /// returns one row per USD-driven cosim entity with position, model
 /// state, and propagated cosim values. Lets you probe the running
@@ -1120,6 +1280,11 @@ pub(crate) fn install(app: &mut App) {
 
     app.add_systems(Startup, |reg: Option<ResMut<lunco_api::ApiQueryRegistry>>| {
         if let Some(mut reg) = reg {
+            // Canonical uniform port verbs (over `lunco_cosim::ports`).
+            reg.register(ListPortsProvider);
+            reg.register(GetPortProvider);
+            reg.register(SetPortProvider);
+            // Richer per-entity cosim introspection (not an alias of the above).
             reg.register(CosimStatusProvider);
         }
     });

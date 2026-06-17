@@ -44,12 +44,14 @@ use avian3d::prelude::PhysicsSystems;
 
 pub mod avian;
 pub mod component;
+pub mod ports;
 pub mod suggestion;
 pub mod systems;
 pub mod connection;
 
 pub use avian::*;
 pub use component::*;
+pub use ports::*;
 pub use suggestion::*;
 pub use connection::*;
 
