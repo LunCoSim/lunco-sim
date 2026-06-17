@@ -44,6 +44,17 @@ use lunco_assets::msl::{MslAssetSource, MslLoadPhase, MslLoadState};
 static GLOBAL_PARSED_MSL: OnceLock<Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> =
     OnceLock::new();
 
+/// Serializes the native lazy decode of `parsed-msl.bin`. `GLOBAL_PARSED_MSL`
+/// (a `OnceLock`) dedupes the stored *value* but not the *work*: two callers
+/// that both miss `get()` will each run the full ~1.2 s zstd+bincode decode,
+/// and the loser's `set()` is silently dropped. In the sandbox that race is
+/// real — the worker's `ModelicaCompiler` session and the main-thread
+/// `ModelicaEngine` session both reach for MSL on the first compile. This lock
+/// makes the second caller block on the first decode and reuse it. Native-only;
+/// wasm is single-threaded so no race exists there.
+#[cfg(not(target_arch = "wasm32"))]
+static MSL_DECODE_LOCK: Mutex<()> = Mutex::new(());
+
 /// Read the pre-parsed MSL bundle if any has been installed.
 pub fn global_parsed_msl() -> Option<&'static Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> {
     GLOBAL_PARSED_MSL.get()
@@ -78,6 +89,13 @@ pub fn parsed_msl_bundle(
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // Hold the decode lock for the whole miss path, then re-check: a
+        // peer may have filled the slot while we waited on the lock, in
+        // which case we skip the redundant decode entirely.
+        let _guard = MSL_DECODE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(bundle) = GLOBAL_PARSED_MSL.get() {
+            return Some(bundle);
+        }
         let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
         // The bundle is zstd-compressed bincode (~10× smaller on disk than the
         // raw bincode it replaced). A stale/foreign bundle that fails to decode
