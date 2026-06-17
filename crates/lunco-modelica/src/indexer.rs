@@ -1174,23 +1174,30 @@ fn collect_mo_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 
 /// Parse every native MSL `.mo` file into `(uri, StoredDefinition)` pairs,
 /// **one file at a time**. The workbench's cold-cache bundle builder and
-/// the low-peak counterpart to rumoca's `parse_source_root_with_cache_in`
-/// (a single all-files rayon batch).
+/// the in-app MSL bundle builder.
 ///
-/// Why per-file: the batch parser spikes memory (up to `num_cpus`
-/// concurrent ASTs + a full-tree blake3 hash sweep) and bursts concurrent
-/// artifact-cache writes. Standalone that's fine, but the workbench runs
-/// this on its worker thread *alongside the Bevy render loop*, so on weak
-/// (8 GB) machines the peak swaps and stalls the whole desktop. Parsing
-/// one file at a time keeps the peak flat — proven by `msl_indexer`, which
-/// has always parsed this way and finishes in minutes where the batch
-/// path took tens of minutes.
+/// **Why not `rumoca_compile::parsing::parse_files_parallel`?** That routes
+/// every file through rumoca_compile's *global* in-memory artifact-cache
+/// mutex (+ per-file disk-cache writes) on the *shared global* rayon pool.
+/// Run on the workbench worker thread *alongside the Bevy main thread*
+/// (which drives that same pool + locks every frame: drill-in, engine
+/// async parse, icon/§5 lookups), it self-destructs: per-file dispatch →
+/// futex convoy (~282% CPU, 99 threads in `futex_do_wait`); one batch
+/// dispatch → mutex spin-storm (~2600% CPU, no progress). Either way an
+/// 8 s standalone parse becomes *minutes* in-app. The cost is contention,
+/// not parse work.
 ///
-/// Reuses `rumoca_compile::parsing::parse_files_parallel` (same per-file
-/// disk cache as everything else) and [`native_msl_roots`] (same root set
-/// as the CLI), so the emitted bundle is identical to the indexer's.
+/// So we bypass the cache layer entirely: parse each file with the **raw,
+/// lock-free** `rumoca_phase_parse::parse_to_ast` (exactly what
+/// `parse_files_parallel` calls internally — identical AST) on a
+/// **dedicated, bounded** rayon pool. No shared global pool, no global
+/// mutex → no contention with the render loop; capped threads leave cores
+/// for rendering and bound the memory peak; and we skip rumoca's in-memory
+/// cache duplicate (we persist our own `parsed-msl.bin`, the real cache).
+/// Uses [`native_msl_roots`] (same root set as the CLI) → identical bundle.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn parse_native_msl_bundle() -> Vec<(String, StoredDefinition)> {
+    use rayon::prelude::*;
     let (root_dirs, companion_files) = native_msl_roots();
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
     for (dir, _prefix) in &root_dirs {
@@ -1198,24 +1205,51 @@ pub fn parse_native_msl_bundle() -> Vec<(String, StoredDefinition)> {
     }
     paths.extend(companion_files);
 
+    // Leave a couple of cores for the render loop; 16 MB stacks for deep
+    // nested-class recursion (matches rumoca's own pool sizing).
+    // `LUNCO_MSL_PARSE_THREADS` overrides the count (tuning / weak machines).
+    let threads = std::env::var("LUNCO_MSL_PARSE_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get().saturating_sub(2).max(1))
+                .unwrap_or(2)
+        });
     let started = Instant::now();
-    let mut bundle: Vec<(String, StoredDefinition)> = Vec::with_capacity(paths.len());
-    for path in &paths {
-        match rumoca_compile::parsing::parse_files_parallel(std::slice::from_ref(path)) {
-            Ok(mut pairs) => {
-                if let Some((_, ast)) = pairs.pop() {
-                    bundle.push((path.to_string_lossy().to_string(), ast));
-                }
-            }
-            Err(e) => log::warn!("[msl-bundle] failed to parse `{}`: {e}", path.display()),
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .stack_size(16 * 1024 * 1024)
+        .build();
+    let bundle: Vec<(String, StoredDefinition)> = match pool {
+        Ok(pool) => pool.install(|| paths.par_iter().filter_map(|p| parse_one_mo(p)).collect()),
+        Err(e) => {
+            log::warn!("[msl-bundle] dedicated pool build failed ({e}); parsing sequentially");
+            paths.iter().filter_map(|p| parse_one_mo(p)).collect()
         }
-    }
+    };
     log::info!(
-        "[msl-bundle] parsed {} MSL files (per-file) in {:.1}s",
+        "[msl-bundle] parsed {} MSL files (raw parser, {} threads) in {:.1}s",
         bundle.len(),
+        threads,
         started.elapsed().as_secs_f64()
     );
     bundle
+}
+
+/// Read + parse one `.mo` with the raw, lock-free parser. `None` on read or
+/// parse error (logged). The bundle uri is the file path (matches the CLI).
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_one_mo(path: &std::path::Path) -> Option<(String, StoredDefinition)> {
+    let src = std::fs::read_to_string(path).ok()?;
+    match rumoca_phase_parse::parse_to_ast(&src, &path.to_string_lossy()) {
+        Ok(ast) => Some((path.to_string_lossy().to_string(), ast)),
+        Err(e) => {
+            log::warn!("[msl-bundle] parse failed for `{}`: {e}", path.display());
+            None
+        }
+    }
 }
 
 pub fn run(opts: Options) {

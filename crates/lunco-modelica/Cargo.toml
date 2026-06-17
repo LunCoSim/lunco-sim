@@ -157,7 +157,34 @@ crossbeam-channel = { workspace = true }
 # `default-features = false`: the `lunco-api` (native) and `web` features pick
 # the transport — `transport-http` vs. `transport-wasm`.
 lunco-api = { path = "../lunco-api", optional = true, default-features = false }
-log = "0.4"
+# PERF-CRITICAL: compile-time static max level for the `log` facade.
+#
+# Why: parol_runtime (rumoca's parser engine) calls `log::trace!` in its
+# hottest loops — e.g. it Display-formats the WHOLE token stream on every
+# lookahead and every parse-tree push. Those calls are ~free when nobody
+# enables trace, BUT the app installs Bevy's `LogPlugin`, whose tracing-log
+# bridge forces the `log` facade's max level to TRACE (so all log records
+# reach `tracing` for filtering). That makes every `log::trace!` CONSTRUCT
+# and format its record before tracing drops it at info-level — the cost is
+# paid millions of times. Measured: a cold MSL parse went from <2 s
+# (standalone, no logger) to 5+ minutes in-app. Same parser, same machine —
+# the only difference was the installed logger. (Repro: set log max level to
+# TRACE in a standalone bin → identical blow-up.) Per-target filtering can't
+# help: the record is built before any per-crate filter runs.
+#
+# These features bake `log`'s STATIC_MAX_LEVEL at COMPILE time, so the
+# affected macros become no-ops with zero runtime cost regardless of what
+# the logger sets at runtime. Features are additive and unify across the
+# whole dependency graph, so this also neutralises parol_runtime's trace.
+#
+# What this drops:  `log::trace!` (dev + release), `log::debug!` (release only).
+# What this KEEPS:  `log::info!/warn!/error!` everywhere, `log::debug!` in dev,
+#                   and ALL `tracing`/`bevy::log` macros (separate crate,
+#                   unaffected) at every level. So normal logging is intact;
+#                   only the trace flood (≈ exclusively parol's) is removed.
+# To keep `log::debug!` in release too, swap `release_max_level_info` →
+# `release_max_level_debug` (still kills the trace flood).
+log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
 uuid = { workspace = true }
 
 # Tracy profiler is wired via the `tracy` feature above
