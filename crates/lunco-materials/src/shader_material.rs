@@ -271,9 +271,10 @@ impl Plugin for ShaderMaterialPlugin {
         app.init_resource::<ShaderCatalog>();
         // Reflect each shader's `Material` struct → per-material `ParamSchema`.
         app.add_systems(Update, reflect_shader_schemas);
-        // Native: augment the picker catalog by scanning the shader directory.
-        #[cfg(not(target_arch = "wasm32"))]
-        app.add_systems(Startup, discover_shaders);
+        // Catalog discovery lives in ONE place — `lunco-sandbox-edit`'s
+        // `maintain_catalogs`, which scans engine + Twin shaders via the shared
+        // `lunco_assets::discovery` walk. This crate only seeds the wasm-safe
+        // defaults in `ShaderCatalog::default`.
         let module = app
             .world()
             .resource::<AssetServer>()
@@ -308,7 +309,8 @@ pub struct ShaderEntry {
 
 /// The shaders the Inspector's picker offers. Seeded with the curated prop
 /// shaders (so it is never empty and works on wasm, where there is no
-/// filesystem to scan), then augmented on native by [`discover_shaders`].
+/// filesystem to scan), then augmented on native by `lunco-sandbox-edit`'s
+/// `maintain_catalogs` (via the shared `lunco_assets::discovery` walk).
 #[derive(Resource, Clone, Debug)]
 pub struct ShaderCatalog {
     pub entries: Vec<ShaderEntry>,
@@ -575,36 +577,6 @@ pub fn shader_template(kind: &str, title: &str) -> String {
         _ => SOLID_TEMPLATE,
     };
     body.replace("__NAME__", title)
-}
-
-/// Startup (native): augment [`ShaderCatalog`] by scanning `assets/shaders` for
-/// any `*.wgsl` that declares a prop-safe `Material` struct, deduped against
-/// the seeded entries by path. Silently no-ops if the directory can't be read
-/// (e.g. an unusual cwd) — the curated default still covers the shipped props.
-#[cfg(not(target_arch = "wasm32"))]
-fn discover_shaders(mut catalog: ResMut<ShaderCatalog>) {
-    let Ok(rd) = std::fs::read_dir("assets/shaders") else { return };
-    let mut found: Vec<ShaderEntry> = Vec::new();
-    for entry in rd.flatten() {
-        let p = entry.path();
-        if p.extension().and_then(|e| e.to_str()) != Some("wgsl") {
-            continue;
-        }
-        let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else { continue };
-        let asset_path = format!("shaders/{stem}.wgsl");
-        if catalog.entries.iter().any(|e| e.path == asset_path) {
-            continue;
-        }
-        let Ok(src) = std::fs::read_to_string(&p) else { continue };
-        if is_prop_pickable_source(&src) {
-            found.push(ShaderEntry {
-                path: asset_path,
-                label: humanize_shader_name(stem),
-            });
-        }
-    }
-    found.sort_by(|a, b| a.label.cmp(&b.label));
-    catalog.entries.extend(found);
 }
 
 /// Builds a [`ShaderMaterial`] from a shader handle + a template (preserves

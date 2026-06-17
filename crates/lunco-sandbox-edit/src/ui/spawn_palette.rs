@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 
-use crate::catalog::{SpawnCatalog, SpawnCategory};
+use crate::catalog::SpawnCatalog;
 use crate::SpawnState;
 
 /// Spawn palette panel — lists spawnable objects by category.
@@ -67,16 +67,16 @@ fn spawn_palette_content(
             }
         }
 
-        // Read catalog
+        // Read catalog — group by whatever dynamic category labels exist
+        // (derived from content folders), so new content needs no UI change.
         let Some(catalog) = world.get_resource::<SpawnCatalog>() else { return };
-        let categories: Vec<_> = [
-            SpawnCategory::Rover, SpawnCategory::Component,
-            SpawnCategory::Prop, SpawnCategory::Terrain,
-        ].into_iter()
-            .filter_map(|cat| {
-                let entries: Vec<_> = catalog.by_category(cat).cloned().collect();
-                if entries.is_empty() { None } else { Some((cat, entries)) }
+        let categories: Vec<(String, Vec<_>)> = catalog.categories()
+            .into_iter()
+            .map(|cat| {
+                let entries: Vec<_> = catalog.by_category(&cat).cloned().collect();
+                (cat, entries)
             })
+            .filter(|(_, entries)| !entries.is_empty())
             .collect();
 
         for (category, entries) in categories {

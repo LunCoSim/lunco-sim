@@ -32,6 +32,7 @@ def Xform "AckermannRover" (
 )
 {
     float physics:mass = 1000.0
+    float lunco:spawnLift = 1.0
     float physics:linearDamping = 0.5
     float physics:angularDamping = 2.0
 

@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 use lunco_mobility::WheelRaycast;
+use lunco_usd_sim::{CosimActuator, RotAxis};
 
 use crate::{SelectedEntity, UndoStack, UndoAction};
 
@@ -285,6 +286,20 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
                 });
         }
 
+        // ── Joint control ───────────────────────────────────────────
+        // If this entity (or a child — the actuated body is usually a
+        // child prim, e.g. /SolarTower/YawHead) carries a `CosimActuator`,
+        // expose the joint: Auto (driven by its Modelica model) or Manual
+        // (hand-set the angle). This is the "control the used model,
+        // particularly the joint" surface.
+        if let Some(holder) = joint_holder(world, entity) {
+            egui::CollapsingHeader::new("Joint")
+                .default_open(true)
+                .show(ui, |ui| {
+                    joint_control_section(ui, world, holder);
+                });
+        }
+
         // Delete button
         ui.separator();
         if ui.button("🗑 Delete Entity (Del)").clicked() {
@@ -528,6 +543,77 @@ fn subtree(world: &mut World, root: Entity) -> Vec<Entity> {
         }
     }
     out
+}
+
+/// First entity in `root`'s subtree carrying a [`CosimActuator`] (the
+/// joint-actuated body). Selection targets the logical root, but the
+/// actuated body is typically a child prim (e.g. `/SolarTower/YawHead`).
+fn joint_holder(world: &mut World, root: Entity) -> Option<Entity> {
+    let nodes = subtree(world, root);
+    let mut q = world.query_filtered::<Entity, With<CosimActuator>>();
+    let set: std::collections::HashSet<Entity> = q.iter(world).collect();
+    nodes.into_iter().find(|e| set.contains(e))
+}
+
+/// Rotation (rad) of `q` about a single local axis, read back from the
+/// body's transform — this is the joint's current angle (the actuator
+/// writes it, whether Auto or Manual).
+fn angle_about(q: Quat, axis: RotAxis) -> f32 {
+    let (y, x, z) = q.to_euler(EulerRot::YXZ);
+    match axis {
+        RotAxis::X => x,
+        RotAxis::Y => y,
+        RotAxis::Z => z,
+    }
+}
+
+/// Joint control: Auto (the entity's Modelica model drives the angle) or
+/// Manual (hand-set it with a slider). Manual writes `CosimActuator.manual`
+/// = `Some(angle)`; Auto clears it back to `None`. The current angle is
+/// read from the body transform so Auto mode shows the live tracker value.
+fn joint_control_section(ui: &mut egui::Ui, world: &mut World, holder: Entity) {
+    let (axis, mut manual, var) = match world.get::<CosimActuator>(holder) {
+        Some(a) => (a.axis, a.manual, a.var.clone()),
+        None => return,
+    };
+    let cur = world
+        .get::<Transform>(holder)
+        .map(|t| angle_about(t.rotation, axis))
+        .unwrap_or(0.0);
+
+    let mut is_manual = manual.is_some();
+    ui.horizontal(|ui| {
+        ui.label("Mode:");
+        if ui.selectable_label(!is_manual, "Auto").on_hover_text(format!("driven by model output `{var}`")).clicked() {
+            is_manual = false;
+        }
+        if ui.selectable_label(is_manual, "Manual").on_hover_text("hand-set the joint angle").clicked() {
+            is_manual = true;
+        }
+    });
+
+    // Apply mode transitions (seed Manual from the current angle; clearing
+    // Manual hands the joint back to the model).
+    if is_manual && manual.is_none() {
+        manual = Some(cur as f64);
+        if let Some(mut a) = world.get_mut::<CosimActuator>(holder) { a.manual = manual; }
+    } else if !is_manual && manual.is_some() {
+        manual = None;
+        if let Some(mut a) = world.get_mut::<CosimActuator>(holder) { a.manual = None; }
+    }
+
+    if let Some(mut val) = manual {
+        let r = ui.add(
+            egui::Slider::new(&mut val, -std::f64::consts::PI..=std::f64::consts::PI)
+                .text("angle (rad)"),
+        );
+        ui.label(format!("{:.1}°", val.to_degrees()));
+        if r.changed() {
+            if let Some(mut a) = world.get_mut::<CosimActuator>(holder) { a.manual = Some(val); }
+        }
+    } else {
+        ui.label(format!("tracking: {:.3} rad  ({:.1}°)", cur, cur.to_degrees()));
+    }
 }
 
 /// Distinct `StandardMaterial` handles anywhere in `root`'s subtree (deduped by

@@ -15,7 +15,7 @@ use avian3d::physics_transform::{Position, Rotation};
 use big_space::prelude::Grid;
 use lunco_core::Command;
 use std::collections::{HashMap, VecDeque};
-use crate::catalog::{SpawnCatalog, spawn_procedural, spawn_usd_entry};
+use crate::catalog::{SpawnCatalog, spawn_usd_entry};
 
 /// Spawn an entity from the catalog at a given world position.
 #[Command]
@@ -28,13 +28,29 @@ pub struct SpawnEntity {
     pub position: Vec3,
 }
 
+/// Force a re-scan of project USD files into the spawn catalog. Picks up
+/// `*.usda` dropped into an already-open Twin mid-session (twin-open is
+/// auto-scanned; this covers new files after that). Idempotent.
+#[Command(default)]
+pub struct RescanSpawnCatalog {}
+
+/// Observer for [`RescanSpawnCatalog`].
+pub fn on_rescan_spawn_catalog(
+    _trigger: On<RescanSpawnCatalog>,
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    mut catalog: ResMut<crate::catalog::SpawnCatalog>,
+) {
+    if let Some(roots) = twin_roots.as_deref() {
+        let n = crate::catalog::scan_usd_into_catalog(roots, &mut catalog);
+        info!("RESCAN_SPAWN_CATALOG: +{n} USD asset(s)");
+    }
+}
+
 /// Observer that handles SpawnEntity commands.
 pub fn on_spawn_entity_command(
     trigger: On<SpawnEntity>,
     mut commands: Commands,
     catalog: Res<SpawnCatalog>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
     q_grids: Query<Entity, With<Grid>>,
     role: Res<lunco_core::NetworkRole>,
@@ -69,14 +85,7 @@ pub fn on_spawn_entity_command(
 
     info!("SPAWN_ENTITY: {} at {:?}", cmd.entry_id, cmd.position);
 
-    let result = match entry.source {
-        crate::catalog::SpawnSource::Procedural(_) => {
-            spawn_procedural(&mut commands, &mut meshes, &mut materials, entry, cmd.position, grid)
-        }
-        crate::catalog::SpawnSource::UsdFile(_) => {
-            spawn_usd_entry(&mut commands, &asset_server, entry, cmd.position, grid)
-        }
-    };
+    let result = spawn_usd_entry(&mut commands, &asset_server, entry, cmd.position, grid);
 
     // Networked identity (gap G2): a runtime instance gets a server-allocated
     // unique id (SkipContentStamp → assign_global_entity_ids mints
@@ -100,8 +109,6 @@ pub fn apply_replicated_spawns(
     mut pending: ResMut<lunco_core::PendingReplicatedSpawns>,
     mut commands: Commands,
     catalog: Res<SpawnCatalog>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
     q_grids: Query<Entity, With<Grid>>,
 ) {
@@ -118,14 +125,7 @@ pub fn apply_replicated_spawns(
             continue;
         };
         let pos = job.position;
-        let result = match entry.source {
-            crate::catalog::SpawnSource::Procedural(_) => {
-                spawn_procedural(&mut commands, &mut meshes, &mut materials, entry, pos, grid)
-            }
-            crate::catalog::SpawnSource::UsdFile(_) => {
-                spawn_usd_entry(&mut commands, &asset_server, entry, pos, grid)
-            }
-        };
+        let result = spawn_usd_entry(&mut commands, &asset_server, entry, pos, grid);
         // Pin the host id; mark runtime instance + replication target. Forced
         // Kinematic by `force_kinematic_proxies` so snapshots drive it.
         commands.entity(result.root_entity).insert((
@@ -2239,90 +2239,71 @@ pub fn on_import_shader(
 #[Command(default)]
 pub struct RescanShaders {}
 
-/// Native: scan `dir` for `*.wgsl` prop-pickable shaders and register each under
-/// `<asset_prefix>/<stem>.wgsl` in `catalog`. Returns the count newly added.
-/// Silent no-op if the dir can't be read.
-#[cfg(not(target_arch = "wasm32"))]
-fn scan_dir_into_catalog(
-    dir: &std::path::Path,
-    asset_prefix: &str,
+/// THE shader scanner: register every project `*.wgsl` (engine library + open
+/// Twins) into the picker catalog via the shared `lunco_assets::discovery`
+/// walk — the same single scanner the spawn catalog uses for `*.usda`. No
+/// filter: the picker lists all shaders and flags any whose `@engine` inputs a
+/// part can't provide. Idempotent (`add` dedups). Returns the count added.
+pub fn scan_wgsl_into_catalog(
+    roots: &lunco_assets::twin_source::TwinRoots,
     catalog: &mut lunco_materials::ShaderCatalog,
 ) -> usize {
-    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
     let mut n = 0;
-    for entry in rd.flatten() {
-        let p = entry.path();
-        if p.extension().and_then(|e| e.to_str()) != Some("wgsl") {
-            continue;
-        }
-        let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else { continue };
-        let Ok(src) = std::fs::read_to_string(&p) else { continue };
-        if lunco_materials::is_prop_pickable_source(&src) && catalog.add(format!("{asset_prefix}/{stem}.wgsl")) {
+    for a in lunco_assets::discovery::list_assets(roots, "wgsl") {
+        if catalog.add(a.asset_path) {
             n += 1;
         }
     }
     n
 }
 
-/// Observer for [`RescanShaders`].
-#[allow(unused_variables, unused_mut)]
+/// Populate BOTH catalogs (USD → spawn, WGSL → shaders) from the project. The
+/// single scan entry point, driven by [`maintain_catalogs`] (Startup + on
+/// Twin-set change) and the manual rescan commands — never a per-frame walk.
+pub fn scan_all_catalogs(
+    roots: &lunco_assets::twin_source::TwinRoots,
+    spawn: &mut crate::catalog::SpawnCatalog,
+    shaders: &mut lunco_materials::ShaderCatalog,
+) {
+    let s = crate::catalog::scan_usd_into_catalog(roots, spawn);
+    let w = scan_wgsl_into_catalog(roots, shaders);
+    if s > 0 || w > 0 {
+        info!("CATALOG_SCAN: +{s} USD, +{w} shader(s)");
+    }
+}
+
+/// The ONE catalog-population system. Scans the engine library once, then
+/// re-scans whenever the set of open Twins changes (so a freshly-opened Twin's
+/// files appear) — twin-open is async, so a guarded `Update` check is more
+/// robust than racing the `TwinAdded` observer that registers the twin root.
+/// It only *walks the disk* on first run and on change; every other frame it
+/// early-returns after a cheap name-set comparison (no per-frame rescan).
+pub fn maintain_catalogs(
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    mut spawn: ResMut<crate::catalog::SpawnCatalog>,
+    mut shaders: ResMut<lunco_materials::ShaderCatalog>,
+    mut last_twins: Local<Vec<String>>,
+    mut did_first_scan: Local<bool>,
+) {
+    let Some(roots) = twin_roots.as_deref() else { return };
+    let names = roots.names();
+    if *did_first_scan && names == *last_twins {
+        return;
+    }
+    *did_first_scan = true;
+    *last_twins = names;
+    scan_all_catalogs(roots, &mut spawn, &mut shaders);
+}
+
+/// Observer for [`RescanShaders`] — manual full re-scan of the shader catalog.
 pub fn on_rescan_shaders(
     _trigger: On<RescanShaders>,
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
 ) {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let mut total = 0;
-        if let Some(roots) = twin_roots.as_deref() {
-            for name in roots.names() {
-                if let Some(root) = roots.root_of(&name) {
-                    total += scan_dir_into_catalog(
-                        &root.join("shaders"),
-                        &format!("twin://{name}/shaders"),
-                        &mut catalog,
-                    );
-                }
-            }
-        }
-        total += scan_dir_into_catalog(std::path::Path::new("assets/shaders"), "shaders", &mut catalog);
-        info!("RESCAN_SHADERS: +{total} new shader(s)");
-    }
-}
-
-/// Tracks which open Twins have had their `shaders/` folder scanned, so
-/// [`auto_scan_twin_shaders`] does the work once per Twin (not every frame).
-#[derive(Resource, Default)]
-pub struct ScannedTwinShaders(std::collections::HashSet<String>);
-
-/// Each frame, register shaders from any newly-opened Twin's `shaders/` folder
-/// into the picker (once per Twin). Makes "drop a shader in the Twin folder"
-/// work automatically on open, without a manual [`RescanShaders`].
-#[allow(unused_variables, unused_mut)]
-pub fn auto_scan_twin_shaders(
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-    mut scanned: ResMut<ScannedTwinShaders>,
-    mut catalog: ResMut<lunco_materials::ShaderCatalog>,
-) {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let Some(roots) = twin_roots.as_deref() else { return };
-        for name in roots.names() {
-            if scanned.0.contains(&name) {
-                continue;
-            }
-            if let Some(root) = roots.root_of(&name) {
-                let added = scan_dir_into_catalog(
-                    &root.join("shaders"),
-                    &format!("twin://{name}/shaders"),
-                    &mut catalog,
-                );
-                if added > 0 {
-                    info!("AUTO_SCAN: +{added} shader(s) from twin '{name}'");
-                }
-            }
-            scanned.0.insert(name);
-        }
+    if let Some(roots) = twin_roots.as_deref() {
+        let n = scan_wgsl_into_catalog(roots, &mut catalog);
+        info!("RESCAN_SHADERS: +{n} shader(s)");
     }
 }
 
@@ -2391,6 +2372,7 @@ impl Plugin for SpawnCommandPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_spawn_entity_command);
         app.add_observer(on_move_entity_command);
+        app.add_observer(on_rescan_spawn_catalog);
         app.add_observer(on_set_object_property);
         app.add_observer(on_focus_entity_by_id);
         app.add_observer(on_select_entity);
@@ -2403,6 +2385,13 @@ impl Plugin for SpawnCommandPlugin {
         app.add_observer(on_delete_shader);
         // Register with AppTypeRegistry so the reflection-based HTTP executor
         // (`get_with_short_type_path`) can construct it from `{"command":"SetObjectProperty",...}`.
+        // SpawnEntity/MoveEntity have observers above but were missing from the
+        // type registry, so the API couldn't construct them (absent from
+        // `discover_schema`). Register them so MCP/HTTP clients can spawn from the
+        // catalog and teleport entities exactly like the in-app palette/gizmo.
+        app.register_type::<SpawnEntity>();
+        app.register_type::<MoveEntity>();
+        app.register_type::<RescanSpawnCatalog>();
         app.register_type::<SetObjectProperty>();
         app.register_type::<FocusEntityById>();
         app.register_type::<SelectEntity>();
@@ -2413,8 +2402,13 @@ impl Plugin for SpawnCommandPlugin {
         app.register_type::<ImportShader>();
         app.register_type::<RescanShaders>();
         app.register_type::<DeleteShader>();
-        app.init_resource::<ScannedTwinShaders>();
-        app.add_systems(Update, auto_scan_twin_shaders);
+        // THE single catalog-population system: scans project USD → spawn
+        // catalog and WGSL → shader catalog via the shared `lunco_assets`
+        // discovery walk, once at first run and again only when the open-Twin
+        // set changes (guarded — no per-frame disk walk). Replaces the old
+        // per-catalog scanners (`populate_dynamic_spawn_catalog`,
+        // `auto_scan_twin_shaders`, `discover_shaders`).
+        app.add_systems(Update, maintain_catalogs);
         app.add_systems(FixedPostUpdate, clear_kinematic_pulse_velocity);
         app.init_resource::<InterpBuffers>();
         app.init_resource::<PredictedStateLog>();

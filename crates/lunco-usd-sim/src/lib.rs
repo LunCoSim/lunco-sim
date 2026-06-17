@@ -133,7 +133,7 @@ impl Plugin for UsdSimPlugin {
 }
 
 pub mod cosim;
-pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
+pub use cosim::{CosimActuator, CosimStatusProvider, RotAxis, UsdSourcedCosim};
 
 /// USD → [`ShaderMaterial`](lunco_materials::ShaderMaterial) authoring,
 /// deterministically ordered so it can never race a downstream consumer.

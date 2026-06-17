@@ -7141,6 +7141,7 @@ dependencies = [
  "lunco-modelica",
  "lunco-theme",
  "lunco-usd-bevy",
+ "lunco-usd-sim",
  "lunco-workbench",
  "transform-gizmo-bevy",
 ]

@@ -78,6 +78,7 @@ fn render_node(
     shown: &HashMap<Entity, bool>,
     selected: Option<Entity>,
     to_select: &mut Option<Entity>,
+    to_focus: &mut Option<Entity>,
 ) {
     let label = names
         .get(&entity)
@@ -89,24 +90,43 @@ fn render_node(
         .unwrap_or_default();
 
     if visible_kids.is_empty() {
-        if ui.selectable_label(selected == Some(entity), label).clicked() {
-            *to_select = Some(entity);
-        }
+        select_label(ui, entity, &label, selected, to_select, to_focus);
         return;
     }
 
     let id = ui.make_persistent_id(("entity_tree", entity));
     egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
         .show_header(ui, |ui| {
-            if ui.selectable_label(selected == Some(entity), label).clicked() {
-                *to_select = Some(entity);
-            }
+            select_label(ui, entity, &label, selected, to_select, to_focus);
         })
         .body(|ui| {
             for child in visible_kids {
-                render_node(ui, child, kids, names, shown, selected, to_select);
+                render_node(ui, child, kids, names, shown, selected, to_select, to_focus);
             }
         });
+}
+
+/// A selectable entity label: single click selects, double click also flags it
+/// for camera focus. Shared by the tree nodes and the flat shader group so the
+/// click/double-click behaviour stays identical everywhere.
+fn select_label(
+    ui: &mut egui::Ui,
+    entity: Entity,
+    label: &str,
+    selected: Option<Entity>,
+    to_select: &mut Option<Entity>,
+    to_focus: &mut Option<Entity>,
+) {
+    let resp = ui
+        .selectable_label(selected == Some(entity), label)
+        .on_hover_text("Click to select · double-click to focus camera");
+    if resp.clicked() {
+        *to_select = Some(entity);
+    }
+    if resp.double_clicked() {
+        *to_select = Some(entity);
+        *to_focus = Some(entity);
+    }
 }
 
 fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut World, tokens: &lunco_theme::DesignTokens) {
@@ -198,6 +218,7 @@ fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut W
     roots.sort_by(by_leaf);
 
     let mut to_select: Option<Entity> = None;
+    let mut to_focus: Option<Entity> = None;
 
     // Pinned shader-materials group.
     if !shader_sorted.is_empty() {
@@ -206,9 +227,7 @@ fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut W
             .show(ui, |ui| {
                 ui.label(egui::RichText::new("Edit params in the Inspector").weak());
                 for (e, name) in &shader_sorted {
-                    if ui.selectable_label(currently_selected == Some(*e), leaf(name)).clicked() {
-                        to_select = Some(*e);
-                    }
+                    select_label(ui, *e, &leaf(name), currently_selected, &mut to_select, &mut to_focus);
                 }
             });
         ui.separator();
@@ -217,7 +236,7 @@ fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut W
     // The hierarchy.
     egui::ScrollArea::vertical().show(ui, |ui| {
         for root in &roots {
-            render_node(ui, *root, &kids, &names, &shown, currently_selected, &mut to_select);
+            render_node(ui, *root, &kids, &names, &shown, currently_selected, &mut to_select, &mut to_focus);
         }
     });
 
@@ -228,17 +247,39 @@ fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut W
     // they fall back to a direct `SelectedEntity` write — enough for the
     // Inspector to retarget, without the highlight/gizmo bookkeeping.
     if let Some(entity) = to_select {
-        let api_id = world
+        // Select the bevy `Entity` DIRECTLY — do not round-trip through
+        // `api_id` (entity → api_id → SelectEntity → resolve → entity).
+        // Multiple instances of one USD asset can share an api_id (the
+        // provenance/instancing collision), so resolving an id back to an
+        // entity returned the FIRST instance — clicking the 2nd SolarPanel
+        // selected the 1st. The list already holds the unique entity, so we
+        // do the same bookkeeping `on_select_entity` does, keyed by entity.
+        let old: Vec<Entity> = world
+            .query_filtered::<Entity, With<crate::selection::Selected>>()
+            .iter(world)
+            .collect();
+        for o in old {
+            world
+                .entity_mut(o)
+                .remove::<crate::selection::Selected>()
+                .remove::<transform_gizmo_bevy::GizmoTarget>();
+        }
+        world.entity_mut(entity).insert(crate::selection::Selected);
+        if let Some(mut selected) = world.get_resource_mut::<SelectedEntity>() {
+            selected.entity = Some(entity);
+        }
+    }
+
+    // Double-click flies the camera to the entity via the same `FocusEntityById`
+    // command the API exposes. Works for anything with an API id — no collider
+    // required (this is list-driven, not a viewport raycast).
+    if let Some(entity) = to_focus {
+        if let Some(id) = world
             .get_resource::<lunco_api::registry::ApiEntityRegistry>()
             .and_then(|r| r.api_id_for(entity))
-            .map(|g| g.get());
-        match api_id {
-            Some(id) => world.trigger(crate::commands::SelectEntity { entity_id: id }),
-            None => {
-                if let Some(mut selected) = world.get_resource_mut::<SelectedEntity>() {
-                    selected.entity = Some(entity);
-                }
-            }
+            .map(|g| g.get())
+        {
+            world.trigger(crate::commands::FocusEntityById { entity_id: id, distance: 0.0 });
         }
     }
 }

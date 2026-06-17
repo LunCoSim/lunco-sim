@@ -7,6 +7,8 @@
 
 def Xform "Artemis2"
 {
+    custom bool lunco:spawnable = false
+
     def Xform "Orion" (
         prepend references = @../vessels/spacecrafts/orion/orion.usda@
     )
