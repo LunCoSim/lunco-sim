@@ -26,6 +26,7 @@
 //! is the authoritative path for USD-defined cosim entities.
 
 use bevy::prelude::*;
+use bevy::camera::visibility::RenderLayers;
 use big_space::prelude::CellCoord;
 use lunco_assets::assets_dir;
 use lunco_core::{Command, on_command, register_commands};
@@ -54,6 +55,40 @@ use crate::UsdSimProcessed;
 /// the same entity on subsequent ticks.
 #[derive(Component, Default)]
 pub struct UsdSourcedCosim;
+
+/// Local rotation axis an actuator drives.
+#[derive(Reflect, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RotAxis {
+    X,
+    Y,
+    Z,
+}
+
+/// Position-controls the body's revolute DOF about a USD-authored joint axis.
+///
+/// Authored in USD as `string lunco:simActuator = "<outputVar>:<channel>"`
+/// where `<channel>` is `rotateX|rotateY|rotateZ`. The prim is a
+/// **kinematic** body that also carries a standard `PhysicsRevoluteJoint`
+/// (which declares the DOF — axis/anchors/bodies — in the asset). Each
+/// `FixedUpdate`, [`apply_cosim_actuators`] sets the body's local rotation
+/// about `axis` to the commanded angle: kinematic position control, so it
+/// is reliable, never sleeps, and can be hand-driven.
+///
+/// The commanded angle is [`manual`](Self::manual) when set (UI / API
+/// override), otherwise `SimComponent.outputs[var]` (the Modelica
+/// controller — e.g. `SunTracker.mo`'s `yaw`). This is what lets the
+/// Inspector both watch the sun-tracker and grab the joint by hand.
+#[derive(Component, Reflect, Clone, Debug)]
+#[reflect(Component)]
+pub struct CosimActuator {
+    /// Output port name to read from `SimComponent.outputs` in Auto mode.
+    pub var: String,
+    /// Joint axis the value rotates about.
+    pub axis: RotAxis,
+    /// Manual override angle (rad). `Some` → the UI/API drives the joint and
+    /// the Modelica output is ignored; `None` → Auto (Modelica drives).
+    pub manual: Option<f64>,
+}
 
 /// Marker for cross-entity wire prims that have been resolved into a
 /// `SimConnection`. Wire prims are typeless USD nodes carrying the
@@ -135,19 +170,25 @@ pub fn process_usd_cosim_prims(
         // `&self`.
         let reader = &*stage.reader;
 
-        // Gate on `lunco:simWires` presence — that's the attribute that
-        // distinguishes a *wired* cosim entity (balloons, future devices)
-        // from prims that merely declare a Modelica reference for
-        // documentation (wheels, motors, batteries — `lunco:modelicaModel`
-        // alone is a forward-looking schema, no translator behaviour).
-        let Some(wires_csv) = reader.prim_attribute_value::<String>(&sdf_path, "lunco:simWires") else { continue; };
+        // Gate on `lunco:simWires` OR `lunco:simActuator` presence — those
+        // are the attributes that distinguish an *active* cosim entity
+        // (balloons fanning ports into Avian; a solar array whose Modelica
+        // output drives its rotation) from prims that merely declare a
+        // Modelica reference for documentation (wheels, motors, batteries —
+        // `lunco:modelicaModel` alone is a forward-looking schema, no
+        // translator behaviour).
+        let wires_csv = reader.prim_attribute_value::<String>(&sdf_path, "lunco:simWires");
+        let actuator_csv = reader.prim_attribute_value::<String>(&sdf_path, "lunco:simActuator");
+        if wires_csv.is_none() && actuator_csv.is_none() {
+            continue;
+        }
 
         let modelica_path = reader.prim_attribute_value::<String>(&sdf_path, "lunco:modelicaModel");
         let python_path = reader.prim_attribute_value::<String>(&sdf_path, "lunco:pythonModel");
 
         if modelica_path.is_none() && python_path.is_none() {
             warn!(
-                "[usd-cosim] {} declares lunco:simWires but neither lunco:modelicaModel nor lunco:pythonModel — skipping",
+                "[usd-cosim] {} declares lunco:simWires/simActuator but neither lunco:modelicaModel nor lunco:pythonModel — skipping",
                 prim_path.path
             );
             continue;
@@ -181,19 +222,31 @@ pub fn process_usd_cosim_prims(
             });
         }
 
-        for raw in wires_csv.split(',') {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() { continue; }
-            if let Some((from_port, to_port, scale)) = parse_wire(trimmed) {
-                commands.spawn(SimConnection {
-                    start_element: entity,
-                    start_connector: from_port,
-                    end_element: entity,
-                    end_connector: to_port,
-                    scale,
-                });
-            } else {
-                warn!("[usd-cosim] {} — could not parse wire entry '{}'", prim_path.path, trimmed);
+        if let Some(wires_csv) = &wires_csv {
+            for raw in wires_csv.split(',') {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() { continue; }
+                if let Some((from_port, to_port, scale)) = parse_wire(trimmed) {
+                    commands.spawn(SimConnection {
+                        start_element: entity,
+                        start_connector: from_port,
+                        end_element: entity,
+                        end_connector: to_port,
+                        scale,
+                    });
+                } else {
+                    warn!("[usd-cosim] {} — could not parse wire entry '{}'", prim_path.path, trimmed);
+                }
+            }
+        }
+
+        if let Some(actuator_csv) = &actuator_csv {
+            match parse_actuator(actuator_csv) {
+                Some(act) => { commands.entity(entity).insert(act); }
+                None => warn!(
+                    "[usd-cosim] {} — could not parse lunco:simActuator '{}' (expected `var:rotateX|rotateY|rotateZ`)",
+                    prim_path.path, actuator_csv
+                ),
             }
         }
 
@@ -255,6 +308,13 @@ pub fn dispatch_loaded_modelica_sources(
             model_name: model_name.clone(),
             parameters,
             inputs,
+            // USD-cosim models are part of the live scene (balloon
+            // buoyancy, the solar tracker) — they should simulate as soon
+            // as they compile, not land paused. The doc/UI Run path doesn't
+            // reach them (they have no DocumentId), so without this they
+            // would stay frozen forever. The worker's compile-success
+            // handler sets `paused = !resume_after_compile`.
+            resume_after_compile: true,
             ..default()
         });
 
@@ -531,6 +591,104 @@ fn parse_wire(raw: &str) -> Option<(String, String, f64)> {
     Some((from.to_string(), to.to_string(), scale))
 }
 
+/// Parses a `"var:rotateX|rotateY|rotateZ"` actuator binding. The
+/// rotation channel is case-insensitive (`rotateY` == `rotatey`).
+fn parse_actuator(raw: &str) -> Option<CosimActuator> {
+    let mut parts = raw.split(':');
+    let var = parts.next()?.trim();
+    let channel = parts.next()?.trim().to_ascii_lowercase();
+    if var.is_empty() {
+        return None;
+    }
+    let axis = match channel.as_str() {
+        "rotatex" => RotAxis::X,
+        "rotatey" => RotAxis::Y,
+        "rotatez" => RotAxis::Z,
+        _ => return None,
+    };
+    Some(CosimActuator { var: var.to_string(), axis, manual: None })
+}
+
+/// Per-tick: feed live engine signals into Modelica/script inputs by name.
+///
+/// Recognised input ports (radians, world frame): `sun_azimuth`,
+/// `sun_elevation`. A model opts in simply by declaring an `input Real
+/// sun_azimuth` — the engine fills it from the current Sun direction each
+/// step. This is the *sensor* dual of the actuator below: where the
+/// actuator pushes a model output into the scene, this pulls a scene
+/// signal into a model input.
+///
+/// Runs after `propagate_connections` (which zeroes all inputs) and
+/// before `sync_modelica_inputs` (which hands inputs to the worker), so
+/// the injected value reaches the next solver step intact.
+///
+/// The Sun is the brightest non-preview `DirectionalLight`
+/// (`Without<RenderLayers>` excludes RTT/preview suns; max-illuminance
+/// skips the dim earthshine fill light).
+pub fn inject_sun_signals(
+    q_sun: Query<(&GlobalTransform, &DirectionalLight), Without<RenderLayers>>,
+    mut q_comp: Query<&mut SimComponent, With<UsdSourcedCosim>>,
+) {
+    // Nothing to drive — skip the sun lookup entirely.
+    if q_comp.is_empty() {
+        return;
+    }
+    let Some((sun_gt, _)) = q_sun.iter().max_by(|a, b| {
+        a.1.illuminance
+            .partial_cmp(&b.1.illuminance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) else {
+        return;
+    };
+
+    // `back()` is the direction the light points *from* → toward the sun.
+    let d: Vec3 = *sun_gt.back();
+    if !d.is_finite() || d.length_squared() < 1e-12 {
+        return;
+    }
+    let elevation = d.y.clamp(-1.0, 1.0).asin() as f64;
+    let azimuth = d.x.atan2(d.z) as f64;
+
+    for mut comp in &mut q_comp {
+        if let Some(slot) = comp.inputs.get_mut("sun_azimuth") {
+            *slot = azimuth;
+        }
+        if let Some(slot) = comp.inputs.get_mut("sun_elevation") {
+            *slot = elevation;
+        }
+    }
+}
+
+/// Per-tick: position-control each [`CosimActuator`] body's revolute DOF.
+/// The commanded angle is the manual override if set (UI/API grabbed the
+/// joint), else the Modelica output `SimComponent.outputs[var]`. The body
+/// is kinematic, so writing its local rotation about the bound axis is the
+/// reliable way to set the joint angle — no solver fight, no sleeping, and
+/// hand-driving works. Translation/scale are preserved (only rotation is
+/// set). Runs after `sync_modelica_outputs` so the Auto angle is fresh.
+pub fn apply_cosim_actuators(
+    mut q: Query<(&CosimActuator, &SimComponent, &mut Transform)>,
+) {
+    for (act, comp, mut tf) in &mut q {
+        let angle = match act.manual {
+            Some(a) => a,
+            None => match comp.outputs.get(&act.var) {
+                Some(&v) => v,
+                None => continue,
+            },
+        };
+        if !angle.is_finite() {
+            continue;
+        }
+        let a = angle as f32;
+        tf.rotation = match act.axis {
+            RotAxis::X => Quat::from_rotation_x(a),
+            RotAxis::Y => Quat::from_rotation_y(a),
+            RotAxis::Z => Quat::from_rotation_z(a),
+        };
+    }
+}
+
 /// API query provider: `curl … {"command":"CosimStatus","params":{}}`
 /// returns one row per USD-driven cosim entity with position, model
 /// state, and propagated cosim values. Lets you probe the running
@@ -553,17 +711,28 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
         ), With<UsdSourcedCosim>>();
 
         let entities: Vec<serde_json::Value> = q.iter(world).map(|(name, tf, comp, model, lv)| {
+            // Full input/output maps so any cosim signal is readable
+            // (the solar tracker's `yaw`/`tracking_error`, the balloon's
+            // `buoyancy`, …) — not just a hardcoded set. This is the
+            // general "read cosim world state" surface.
+            let outputs = comp.map(|c| {
+                c.outputs.iter().map(|(k, v)| (k.clone(), serde_json::json!(v))).collect::<serde_json::Map<_, _>>()
+            }).unwrap_or_default();
+            let inputs = comp.map(|c| {
+                c.inputs.iter().map(|(k, v)| (k.clone(), serde_json::json!(v))).collect::<serde_json::Map<_, _>>()
+            }).unwrap_or_default();
             serde_json::json!({
                 "name": name.as_str(),
                 "y": tf.translation.y,
+                "yaw": tf.rotation.to_euler(EulerRot::YXZ).0,
                 "vy": lv.map(|v| v.0.y).unwrap_or(0.0),
                 "has_simcomponent": comp.is_some(),
+                "model": comp.map(|c| c.model_name.clone()).unwrap_or_default(),
                 "modelica_var_count": model.map(|m| m.variables.len()).unwrap_or(0),
                 "modelica_paused": model.map(|m| m.paused).unwrap_or(false),
                 "modelica_current_time": model.map(|m| m.current_time).unwrap_or(0.0),
-                "netForce": comp.and_then(|c| c.outputs.get("netForce").copied()),
-                "force_y_input": comp.and_then(|c| c.inputs.get("force_y").copied()),
-                "buoyancy": comp.and_then(|c| c.outputs.get("buoyancy").copied()),
+                "outputs": outputs,
+                "inputs": inputs,
             })
         }).collect();
         lunco_api::ApiResponse::ok(serde_json::json!({ "entities": entities }))
@@ -900,7 +1069,9 @@ pub(crate) fn install(app: &mut App) {
     // panicking on a missing `Assets<…>` resource.
     app.init_asset::<ModelicaSource>()
         .init_asset::<PythonSource>()
-        .init_resource::<lunco_scripting::ScriptRegistry>();
+        .init_resource::<lunco_scripting::ScriptRegistry>()
+        .register_type::<CosimActuator>()
+        .register_type::<RotAxis>();
 
     app.add_systems(
         Update,
@@ -932,6 +1103,16 @@ pub(crate) fn install(app: &mut App) {
         (
             sync_modelica_outputs.after(ModelicaSet::HandleResponses).before(PropagateCosimSet::Propagate),
             sync_script_outputs.after(ModelicaSet::HandleResponses).before(PropagateCosimSet::Propagate),
+            // Drive USD revolute joints from fresh Modelica outputs (the
+            // solar-array sun tracker). After outputs sync, before the
+            // physics solve (FixedPostUpdate) reads the joint frames.
+            apply_cosim_actuators.after(sync_modelica_outputs),
+            // Inject live engine signals (sun azimuth/elevation) into model
+            // inputs AFTER propagate has zeroed them and BEFORE they're
+            // handed to the worker.
+            inject_sun_signals
+                .after(ApplyForcesCosimSet::ApplyForces)
+                .before(sync_modelica_inputs),
             sync_modelica_inputs.after(ApplyForcesCosimSet::ApplyForces).before(ModelicaSet::SpawnRequests),
             sync_script_inputs.after(ApplyForcesCosimSet::ApplyForces).before(ModelicaSet::SpawnRequests),
         ),

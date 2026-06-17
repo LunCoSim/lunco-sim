@@ -247,17 +247,26 @@ fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut W
     // they fall back to a direct `SelectedEntity` write — enough for the
     // Inspector to retarget, without the highlight/gizmo bookkeeping.
     if let Some(entity) = to_select {
-        let api_id = world
-            .get_resource::<lunco_api::registry::ApiEntityRegistry>()
-            .and_then(|r| r.api_id_for(entity))
-            .map(|g| g.get());
-        match api_id {
-            Some(id) => world.trigger(crate::commands::SelectEntity { entity_id: id }),
-            None => {
-                if let Some(mut selected) = world.get_resource_mut::<SelectedEntity>() {
-                    selected.entity = Some(entity);
-                }
-            }
+        // Select the bevy `Entity` DIRECTLY — do not round-trip through
+        // `api_id` (entity → api_id → SelectEntity → resolve → entity).
+        // Multiple instances of one USD asset can share an api_id (the
+        // provenance/instancing collision), so resolving an id back to an
+        // entity returned the FIRST instance — clicking the 2nd SolarPanel
+        // selected the 1st. The list already holds the unique entity, so we
+        // do the same bookkeeping `on_select_entity` does, keyed by entity.
+        let old: Vec<Entity> = world
+            .query_filtered::<Entity, With<crate::selection::Selected>>()
+            .iter(world)
+            .collect();
+        for o in old {
+            world
+                .entity_mut(o)
+                .remove::<crate::selection::Selected>()
+                .remove::<transform_gizmo_bevy::GizmoTarget>();
+        }
+        world.entity_mut(entity).insert(crate::selection::Selected);
+        if let Some(mut selected) = world.get_resource_mut::<SelectedEntity>() {
+            selected.entity = Some(entity);
         }
     }
 

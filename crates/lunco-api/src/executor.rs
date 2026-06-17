@@ -535,19 +535,26 @@ fn execute_request(
                 Some(e) => {
                     let (name, rover, body) = q_meta.get(e).unwrap_or((None, None, None));
                     let kind = if rover.is_some() { "rover" } else if body.is_some() { "planet" } else { "unknown" };
-                    // World-space translation from GlobalTransform.
-                    // Mirrors Avian's `Position` after physics writeback.
-                    // Used by joint/physics test scripts to compute
-                    // distances between linked bodies — the user's
-                    // request was "distance between centers as test".
-                    let pos = q_transforms.get(e).ok()
-                        .map(|gt| gt.translation())
-                        .unwrap_or(Vec3::ZERO);
+                    // World-space pose from GlobalTransform. Translation
+                    // mirrors Avian's `Position` after physics writeback;
+                    // rotation/scale let callers read orientation too
+                    // (e.g. the solar tracker's yaw, a steered wheel) —
+                    // a revolute-driven body keeps its position but spins,
+                    // so position alone can't observe it.
+                    let (scale, rot, pos) = q_transforms.get(e).ok()
+                        .map(|gt| gt.to_scale_rotation_translation())
+                        .unwrap_or((Vec3::ONE, Quat::IDENTITY, Vec3::ZERO));
+                    // Euler YXZ (yaw, pitch, roll) — matches the sun /
+                    // steering authoring convention, handier than a quat.
+                    let (yaw, pitch, roll) = rot.to_euler(EulerRot::YXZ);
                     ApiResponse::ok(serde_json::json!({
                         "api_id": id,
                         "name": name.map(|n| n.as_str()).unwrap_or(""),
                         "type": kind,
                         "position": [pos.x, pos.y, pos.z],
+                        "rotation": [rot.x, rot.y, rot.z, rot.w],
+                        "euler": [yaw, pitch, roll],
+                        "scale": [scale.x, scale.y, scale.z],
                     }))
                 },
                 None => ApiResponse::error(ApiErrorCode::EntityNotFound, format!("Entity {} not found", id)),
