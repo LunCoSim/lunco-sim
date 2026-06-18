@@ -1296,6 +1296,7 @@ fn msl_phase_label(p: MslLoadPhase) -> &'static str {
     match p {
         MslLoadPhase::FetchingManifest => "fetching manifest",
         MslLoadPhase::FetchingBundle   => "downloading",
+        MslLoadPhase::LoadingCache     => "loading from cache",
         MslLoadPhase::Decompressing    => "decompressing",
         MslLoadPhase::Parsing          => "loading",
     }
@@ -1396,7 +1397,7 @@ mod web {
         set_state(
             slot,
             MslLoadState::Loading {
-                phase: MslLoadPhase::FetchingBundle,
+                phase: bundle_fetch_phase(&bundle_path).await,
                 bytes_done: 0,
                 bytes_total: manifest.sources.compressed_bytes
                     + manifest
@@ -1440,7 +1441,7 @@ mod web {
             set_state(
                 slot,
                 MslLoadState::Loading {
-                    phase: MslLoadPhase::FetchingBundle,
+                    phase: bundle_fetch_phase(&parsed_path).await,
                     bytes_done: manifest.sources.compressed_bytes,
                     bytes_total: manifest.sources.compressed_bytes
                         + parsed_meta.compressed_bytes,
@@ -1565,6 +1566,30 @@ mod web {
             .map_err(|e| format!("caches.open: {e:?}"))?
             .dyn_into()
             .map_err(|_| "caches.open result not a Cache".to_string())
+    }
+
+    /// Cheap existence check — does `path` live in Cache Storage? Unlike
+    /// [`cache_lookup`] it does NOT read the (up to ~18 MB) body, so it's safe
+    /// to call just to pick the right progress label (download vs cache).
+    async fn cache_has(path: &str) -> bool {
+        let Ok(cache) = open_cache().await else {
+            return false;
+        };
+        match JsFuture::from(cache.match_with_str(path)).await {
+            Ok(v) => !v.is_null() && !v.is_undefined(),
+            Err(_) => false,
+        }
+    }
+
+    /// The progress phase to show while fetching `path`: a cache hit loads
+    /// locally (no network), so report [`LoadingCache`](MslLoadPhase::LoadingCache)
+    /// instead of [`FetchingBundle`](MslLoadPhase::FetchingBundle) ("downloading").
+    async fn bundle_fetch_phase(path: &str) -> MslLoadPhase {
+        if cache_has(path).await {
+            MslLoadPhase::LoadingCache
+        } else {
+            MslLoadPhase::FetchingBundle
+        }
     }
 
     /// Read `path` from `cache`, returning `None` on a miss.

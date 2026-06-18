@@ -43,6 +43,15 @@ const KEY_PREFIX: &str = "lunco_modelica/untitled/";
 #[cfg(target_arch = "wasm32")]
 const KEY_PREFIX_FILE: &str = "lunco_modelica/file/";
 
+/// Single key holding the open-tab session: a JSON map of
+/// `storage_key → drilled_class` for every open model-view tab whose document
+/// is persistable (Untitled / writable File). Lets a reload bring back the
+/// *set of tabs* the user had open (and which class each was drilled into),
+/// not just the documents. Deliberately NOT under [`KEY_PREFIX`] /
+/// [`KEY_PREFIX_FILE`] so the document-restore scan ignores it.
+#[cfg(target_arch = "wasm32")]
+const SESSION_TABS_KEY: &str = "lunco_modelica/session/tabs";
+
 /// Bevy plugin that wires the three lifecycle observers + the
 /// startup restore system. Add this **after** `ModelicaPlugin` so
 /// the document registry it observes is already initialised.
@@ -70,6 +79,7 @@ impl Plugin for WasmAutosavePlugin {
         {
             app.init_resource::<AutosaveKeys>()
                 .add_systems(bevy::prelude::Startup, restore_from_localstorage)
+                .add_systems(bevy::prelude::Update, persist_open_tabs)
                 .add_observer(autosave_on_changed)
                 .add_observer(forget_on_closed);
         }
@@ -173,6 +183,15 @@ fn restore_from_localstorage(world: &mut World) {
     // Sort so the restore order is deterministic across reloads —
     // localStorage iteration order is implementation-defined.
     entries.sort_by(|a, b| a.2.cmp(&b.2));
+    // Open-tab session: storage_key → drilled class. Drives which restored docs
+    // are re-opened as tabs (and to which drilled class) so the reload brings
+    // back the user's tab layout, not just the documents.
+    let session_tabs: std::collections::BTreeMap<String, Option<String>> = storage
+        .get_item(SESSION_TABS_KEY)
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
     for (full_key, is_file, ident, source) in entries {
         // Display name: the filename stem for an uploaded file, the stored
         // name for an Untitled doc.
@@ -212,6 +231,9 @@ fn restore_from_localstorage(world: &mut World) {
         } else {
             lunco_doc::DocumentOrigin::untitled(display_name.clone())
         };
+        // Was this doc an open tab last session, and into which class was it
+        // drilled? Looked up before `full_key` is moved into `AutosaveKeys`.
+        let tab_drilled = session_tabs.get(&full_key).cloned();
         let mut registry = world.resource_mut::<crate::ui::state::ModelicaDocumentRegistry>();
         let doc_id = registry.allocate_with_origin(source, origin);
         // Remember the full key so a later close can clear localStorage
@@ -235,14 +257,15 @@ fn restore_from_localstorage(world: &mut World) {
                     doc: doc_id,
                 });
         }
-        // Re-open uploaded files as a tab so a reload brings the user's model
-        // back *open*, not merely listed in the browser — otherwise a restored
-        // file looks "gone" (the canvas shows the Welcome tab). Scratch
-        // (Untitled) docs stay listed-only to avoid reopening throwaway drafts.
-        if is_file {
+        // Re-open the tab so a reload brings the user's model back *open* (and
+        // drilled into the same class), not merely listed — a restored doc with
+        // no tab looks "gone" (canvas shows Welcome). Reopen when the doc was an
+        // open tab last session (`tab_drilled` present); also always reopen
+        // uploaded files as a sensible fallback when there's no session record.
+        if let Some(drilled) = tab_drilled.or(if is_file { Some(None) } else { None }) {
             let tab_id = world
                 .resource_mut::<crate::ui::panels::model_view::ModelTabs>()
-                .ensure_for(doc_id, None);
+                .ensure_for(doc_id, drilled);
             if let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() {
                 layout.open_instance(
                     crate::ui::panels::model_view::MODEL_VIEW_KIND,
@@ -353,6 +376,51 @@ fn autosave_on_changed(
     // Capture the full key while the doc still exists — `forget_on_closed`
     // can't reach the origin once the registry host is removed.
     keys.by_doc.insert(doc, key);
+}
+
+/// Persist the set of open model-view tabs (and the class each is drilled
+/// into) so a reload restores the user's tab layout, not just the documents.
+/// Keyed by each doc's `localStorage` storage key → drilled class; only tabs
+/// on persistable docs (Untitled / writable File) are recorded — read-only
+/// library/bundled tabs are re-openable from the browser and aren't persisted
+/// as docs anyway. Writes only when the serialized set changes (cheap idle).
+#[cfg(target_arch = "wasm32")]
+fn persist_open_tabs(
+    tabs: bevy::prelude::Res<crate::ui::panels::model_view::ModelTabs>,
+    registry: bevy::prelude::Res<crate::ui::state::ModelicaDocumentRegistry>,
+    mut last: bevy::prelude::Local<String>,
+) {
+    let Some(storage) = local_storage() else { return };
+    // BTreeMap → deterministic JSON so the change-detection compare is stable.
+    let mut map: std::collections::BTreeMap<String, Option<String>> =
+        std::collections::BTreeMap::new();
+    for (_id, st) in tabs.iter() {
+        let Some(host) = registry.host(st.doc) else { continue };
+        let origin = host.document().origin();
+        let key = if origin.is_untitled() {
+            storage_key(&origin.display_name())
+        } else if origin.is_writable() {
+            match origin {
+                lunco_doc::DocumentOrigin::File { path, .. } => {
+                    file_storage_key(&path.to_string_lossy())
+                }
+                _ => continue,
+            }
+        } else {
+            continue;
+        };
+        // A doc can have several tabs (top-level + drilled); prefer recording a
+        // drilled class so the reopened tab lands where the user was working.
+        let entry = map.entry(key).or_insert(None);
+        if st.drilled_class.is_some() {
+            *entry = st.drilled_class.clone();
+        }
+    }
+    let json = serde_json::to_string(&map).unwrap_or_default();
+    if *last != json {
+        let _ = storage.set_item(SESSION_TABS_KEY, &json);
+        *last = json;
+    }
 }
 
 /// Drop the autosaved entry when the user closes the tab — the
