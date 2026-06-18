@@ -715,7 +715,7 @@ impl Plugin for ModelicaEnginePlugin {
 /// workspace engine. Once `Done`, `drive_msl_bootstrap` becomes a
 /// no-op for the rest of the session.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
-enum MslBootstrapState {
+pub enum MslBootstrapState {
     #[default]
     Pending,
     Done,

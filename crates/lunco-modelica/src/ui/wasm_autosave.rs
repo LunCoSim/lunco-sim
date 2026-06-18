@@ -235,6 +235,21 @@ fn restore_from_localstorage(world: &mut World) {
                     doc: doc_id,
                 });
         }
+        // Re-open uploaded files as a tab so a reload brings the user's model
+        // back *open*, not merely listed in the browser — otherwise a restored
+        // file looks "gone" (the canvas shows the Welcome tab). Scratch
+        // (Untitled) docs stay listed-only to avoid reopening throwaway drafts.
+        if is_file {
+            let tab_id = world
+                .resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+                .ensure_for(doc_id, None);
+            if let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() {
+                layout.open_instance(
+                    crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                    tab_id,
+                );
+            }
+        }
     }
 }
 
@@ -326,7 +341,15 @@ fn autosave_on_changed(
     } else {
         return;
     };
-    let _ = storage.set_item(&key, document.source());
+    let source = document.source();
+    // Never overwrite a good autosave with an empty buffer: a transient
+    // `DocumentChanged` can fire before the source is installed (observed as
+    // `len=0` localStorage entries that then "restore" as blank models). An
+    // empty doc isn't worth persisting anyway.
+    if source.is_empty() {
+        return;
+    }
+    let _ = storage.set_item(&key, source);
     // Capture the full key while the doc still exists — `forget_on_closed`
     // can't reach the origin once the registry host is removed.
     keys.by_doc.insert(doc, key);
