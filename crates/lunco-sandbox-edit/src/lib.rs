@@ -63,8 +63,14 @@ impl Plugin for SandboxEditPlugin {
 
         // Non-UI systems
         app.add_systems(Update, spawn::update_spawn_ghost);
-        app.add_systems(Update, spawn::handle_spawn_placement);
-        // Selection system is registered in the binary with proper ordering (before avatar possession)
+        app.add_systems(Update, spawn::spawn_tool_state_system);
+        app.add_systems(Update, selection::handle_deselect_keys);
+
+        // Scene picking is bevy_picking-driven (egui occlusion handled by the
+        // framework's egui picking backend) — no hand-rolled gate, no manual
+        // ray-casts. Selection and placement observe the same `Pointer<Click>`.
+        app.add_observer(selection::on_scene_click_select);
+        app.add_observer(spawn::on_scene_click_spawn);
 
         // Gizmo systems run in Last schedule (after transform-gizmo-bevy's update_gizmos):
         // 1. capture_gizmo_start - makes body kinematic when drag starts

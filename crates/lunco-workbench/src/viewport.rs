@@ -104,20 +104,6 @@ pub struct WorkbenchEguiHost;
 #[derive(Resource, Default, Debug)]
 pub struct PanelRects {
     rects: HashMap<PanelId, PanelRect>,
-    /// True when the mouse pointer is over the live 3D viewport rather than
-    /// over any docked panel, floating window, or popup.
-    ///
-    /// Computed by [`ViewportPanel::render`] from egui's own occlusion-aware
-    /// hit-test (`Response::contains_pointer`) on the *live* viewport rect — the
-    /// authoritative scene-vs-chrome signal. The old geometric test (cursor in
-    /// recorded rect) couldn't get this right: the rect is intentionally never
-    /// cleared (the camera needs the last value — see [`PanelRects::clear`]), so
-    /// a stale full-window rect left over from a perspective/tab switch made
-    /// chrome clicks pass; and a rect can't see a panel/window sitting *over* the
-    /// viewport. Reset to `true` each egui pass by [`reset_scene_pointer`] before
-    /// panels render, so a chrome-less full-window perspective (no
-    /// [`ViewportPanel`]) fails open.
-    over_scene: bool,
 }
 
 /// One panel's footprint inside the window, in *physical* pixels.
@@ -197,135 +183,6 @@ impl PanelRects {
     pub fn is_empty(&self) -> bool {
         self.rects.is_empty()
     }
-
-    /// Record whether the pointer is over the bare viewport this frame.
-    /// Called by [`ViewportPanel::render`] with egui's occlusion-aware
-    /// `Response::contains_pointer` for the live viewport rect. See
-    /// [`PanelRects::over_scene`].
-    pub fn set_over_scene(&mut self, over: bool) {
-        self.over_scene = over;
-    }
-
-    /// True when the pointer is over the live 3D viewport, not over chrome.
-    ///
-    /// The single gate viewport click handlers (selection, possession) use to
-    /// decide whether to raycast the scene. Unlike the raw rect test it is
-    /// occlusion-aware and never stale: a panel, floating window, or popup
-    /// sitting over the viewport reads `false`, and a stale rect from a previous
-    /// perspective can't leak (the value is recomputed live each egui pass, and
-    /// reset to `true` for chrome-less full-window perspectives — see
-    /// [`reset_scene_pointer`]).
-    pub fn pointer_over_scene(&self) -> bool {
-        self.over_scene
-    }
-}
-
-/// Reset [`PanelRects::over_scene`] to `true` at the start of each egui pass,
-/// before any panel renders. [`ViewportPanel::render`] then overwrites it with
-/// egui's authoritative hit-test for the live viewport rect. In a chrome-less
-/// full-window perspective `ViewportPanel` never renders, so the flag stays
-/// `true` and the whole window counts as scene (fail-open). Registered
-/// `.before(WorkbenchRenderSet)`.
-pub fn reset_scene_pointer(mut rects: ResMut<PanelRects>) {
-    rects.over_scene = true;
-}
-
-/// The single, gated source of 3D-scene pointer input.
-///
-/// Every system that turns a pointer click into a *scene* action — entity
-/// selection, avatar possession, spawn placement, model attach — reads THIS
-/// instead of `ButtonInput<MouseButton>` + its own viewport gate. Producing it
-/// in exactly one place ([`produce_scene_pointer`]) puts the scene/chrome gate
-/// in exactly one place too: a click that lands on a docked panel, a floating
-/// window, or a popup never appears here, so it can never reach a scene
-/// consumer. (Before this, four systems each re-derived the gate from the raw
-/// mouse — two forgot, and panel clicks leaked through chrome into the scene.)
-///
-/// It is also the natural injection point for non-local input: a replay, the
-/// HTTP command API, or a network peer can drive scene interaction by writing
-/// this resource (later, by feeding `bevy_picking::pointer::PointerInput`), so
-/// the same downstream path serves local and remote "click" streams.
-///
-/// Raw `ButtonInput<MouseButton>` stays available for input that is NOT
-/// scene-picking (camera orbit, global shortcuts); this resource governs only
-/// the "click something in the 3D world" path.
-#[derive(Resource, Default, Debug)]
-pub struct ScenePointer {
-    /// Pointer is over the live 3D viewport, not over chrome. Mirrors
-    /// [`PanelRects::pointer_over_scene`].
-    pub over_scene: bool,
-    /// Cursor position in window logical points — `Some` only while
-    /// `over_scene`, so a consumer can't build a ray from a chrome-space cursor.
-    pub cursor: Option<Vec2>,
-    /// Mouse-button state, reported ONLY for activity over the scene. Over
-    /// chrome every field is `false` — that's what makes a panel click invisible
-    /// to scene consumers.
-    pub buttons: SceneButtons,
-}
-
-/// Mouse-button snapshot carried by [`ScenePointer`]. Mirrors the subset of
-/// `ButtonInput<MouseButton>` scene consumers need, gated to over-scene only.
-#[derive(Default, Debug, Clone, Copy)]
-pub struct SceneButtons {
-    /// Left button pressed this frame.
-    pub left_just_pressed: bool,
-    /// Right button pressed this frame.
-    pub right_just_pressed: bool,
-    /// Middle button pressed this frame.
-    pub middle_just_pressed: bool,
-    /// Left button currently held.
-    pub left_pressed: bool,
-    /// Right button currently held.
-    pub right_pressed: bool,
-    /// Left button released this frame.
-    pub left_just_released: bool,
-}
-
-impl ScenePointer {
-    /// Window-space cursor of a fresh left-press that landed on the scene, or
-    /// `None`. The canonical "the user just left-clicked in the 3D world" check:
-    /// it returns the position to ray-cast through, and is `None` for every
-    /// chrome click. Replaces the old `mouse.just_pressed(Left)` + viewport-rect
-    /// gate that each consumer used to hand-roll.
-    pub fn left_click(&self) -> Option<Vec2> {
-        if self.over_scene && self.buttons.left_just_pressed {
-            self.cursor
-        } else {
-            None
-        }
-    }
-}
-
-// `ScenePointer` is finalised in `render_workbench` (the egui pass), NOT in a
-// PreUpdate system. Sampling `over_scene`, the cursor, and the button edges all
-// from the *same* egui frame is what makes the gate consistent: a press only
-// counts as a scene-click if the pointer is over the scene in that same frame.
-// A PreUpdate producer read `over_scene` (computed in the previous egui pass)
-// against the current cursor — so moving from the scene onto an Inspector
-// widget and pressing within one frame let the stale `over_scene=true` pair
-// with the new chrome cursor and raycast through the panel into the scene
-// behind it (the "drag a slider → selects the ground behind the Inspector"
-// bug). See `finalize_scene_pointer` usage in `crate::render`-side wiring.
-
-/// True if an egui popup — a `Foreground`/`Tooltip` layer — sits at `pos`
-/// (window **logical** points, the space of [`bevy::window::Window::cursor_position`]).
-///
-/// Color-picker and combo-box popups, dropdown menus and tooltips float as
-/// foreground `Area`s that can extend OVER the viewport rect. A click inside
-/// one therefore passes [`PanelRects::any_contains`] (it *is* geometrically
-/// over the scene) yet must NOT raycast — egui owns that click. Viewport click
-/// handlers (selection, possession) AND-gate the rect test with `!this` so a
-/// click on, say, the Inspector's open colour picker doesn't fall through to
-/// the 3D scene behind it and re-select whatever is back there (the terrain).
-///
-/// Why not `wants_pointer_input`/`is_pointer_over_area`: egui_dock renders every
-/// dock leaf — the viewport included — as an egui `Area`, so those read `true`
-/// over the bare scene too and can't separate chrome from scene. Layer *order*
-/// can: only popups/menus/tooltips are `Foreground`/`Tooltip`; the viewport and
-/// docked panels are `Background`/`Middle`.
-pub fn pointer_over_egui_popup(ctx: &egui::Context, pos: bevy::math::Vec2) -> bool {
-    ctx.layer_id_at(egui::pos2(pos.x, pos.y))
-        .is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip))
 }
 
 /// Empty-state text drawn centered over the 3D viewport region.
@@ -397,19 +254,12 @@ impl Panel for ViewportPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        // Ask egui — not a cached rect — whether the pointer is over the bare
-        // viewport. `interact` hit-tests the panel's full rect WITHOUT consuming
-        // layout space (so `record_from_ui` below still reads the full rect), and
-        // `contains_pointer` is occlusion-aware: a panel, floating window, or
-        // open popup sitting over the viewport reads `false`. This is the live,
-        // never-stale scene-vs-chrome signal that drives selection/possession
-        // gating — see `PanelRects::pointer_over_scene`.
-        let over_scene = ui
-            .interact(ui.max_rect(), ui.id().with("viewport_scene"), egui::Sense::hover())
-            .contains_pointer();
+        // Record the live viewport rect so `apply_workbench_viewport` can confine
+        // the 3D camera to it in DockArea mode. Scene-vs-chrome picking is handled
+        // by bevy_picking (egui occlusion via bevy_egui's picking backend), so
+        // there's no pointer gate to compute here anymore.
         if let Some(mut rects) = world.get_resource_mut::<PanelRects>() {
             rects.record_from_ui(VIEWPORT_PANEL_ID, ui);
-            rects.set_over_scene(over_scene);
         }
         // Reserve the panel's space so egui_dock's layout accounts for
         // it; no widgets are drawn — the 3D camera paints here.
@@ -627,6 +477,84 @@ pub fn check_host_invariant_once(
     }
 }
 
+/// Turn OFF bevy_egui's built-in pointer-capture backend on the primary egui
+/// context. Its `capture_pointer_input_system` emits a top-priority
+/// `bevy_picking` hit over the WHOLE egui context viewport whenever egui
+/// `wants_pointer_input()` — and in egui-dock "Build" mode the central
+/// `ViewportPanel` leaf makes egui want the pointer over the 3D region, so that
+/// blanket capture suppressed every scene pick (clicks never reached the 3D).
+/// We replace it with [`egui_viewport_aware_picking`], which captures only over
+/// real chrome and never over the live viewport rect. Idempotent; the change
+/// guard keeps it from dirtying the component every frame.
+pub fn disable_egui_pointer_capture(
+    mut q: Query<&mut bevy_egui::EguiContextSettings, With<PrimaryEguiContext>>,
+) {
+    for mut s in q.iter_mut() {
+        if s.capture_pointer_input {
+            s.capture_pointer_input = false;
+        }
+    }
+}
+
+/// Viewport-rect-aware egui picking backend — the replacement for bevy_egui's
+/// blanket capture (disabled by [`disable_egui_pointer_capture`]).
+///
+/// Emits a high-order `bevy_picking` hit for the egui context entity ONLY when
+/// the pointer is over egui chrome AND NOT over the live 3D viewport rect
+/// (`PanelRects`, recorded by [`ViewportPanel::render`]). So:
+///   • over a side/dock panel → egui hit wins → the 3D pick is suppressed;
+///   • over the bare viewport (full-window View mode, or the dock ViewportPanel
+///     leaf in Build mode) → no egui hit → bevy_picking's mesh hit reaches the
+///     scene observers.
+/// Mirrors bevy_egui's own `capture_pointer_input_system` (PostUpdate, hit with
+/// no world position so consumers can tell chrome from a real mesh pick), adding
+/// the viewport-rect exclusion. In View mode `PanelRects` is empty, so the
+/// exclusion is a no-op and this behaves exactly like the stock capture.
+pub fn egui_viewport_aware_picking(
+    pointers: Query<(
+        &bevy::picking::pointer::PointerId,
+        &bevy::picking::pointer::PointerLocation,
+    )>,
+    mut egui_q: Query<(Entity, &mut bevy_egui::EguiContext, &Camera), With<PrimaryEguiContext>>,
+    panel_rects: Res<PanelRects>,
+    picking_order: Option<Res<bevy_egui::EguiPickingOrder>>,
+    mut out: MessageWriter<bevy::picking::backend::PointerHits>,
+) {
+    use bevy::camera::NormalizedRenderTarget;
+    use bevy::picking::backend::{HitData, PointerHits};
+
+    let extra = picking_order.map(|o| o.0).unwrap_or(0.6);
+    for (id, loc) in pointers
+        .iter()
+        .filter_map(|(i, p)| p.location.as_ref().map(|l| (i, l)))
+    {
+        let NormalizedRenderTarget::Window(_) = loc.target else {
+            continue;
+        };
+        for (entity, mut ctx, camera) in egui_q.iter_mut() {
+            // Pointer must be inside the egui camera's viewport (full window).
+            let Some(vp) = camera.physical_viewport_rect() else {
+                continue;
+            };
+            if !vp.as_rect().contains(loc.position) {
+                continue;
+            }
+            // Over the live 3D viewport rect → let the mesh pick win (no capture).
+            if !panel_rects.is_empty() && panel_rects.any_contains(loc.position) {
+                continue;
+            }
+            // Over real chrome that egui wants → emit a high-order capture hit.
+            if ctx.get_mut().wants_pointer_input() {
+                out.write(PointerHits::new(
+                    *id,
+                    vec![(entity, HitData::new(entity, 0.0, None, None))],
+                    camera.order as f32 + extra,
+                ));
+            }
+        }
+    }
+}
+
 /// Sub-plugin auto-added by `WorkbenchPlugin`. Wires the egui host,
 /// the panel-rect tracking, the `Camera::viewport` sync, and the
 /// invariant sentinels.
@@ -647,6 +575,18 @@ impl Plugin for WorkbenchViewportPlugin {
             // a full-window 3D bleed through every panel gap. The
             // permanent fix is RTT — see follow-up design note.)
             .add_systems(Update, (check_camera_invariants, check_host_invariant_once))
+            // Keep bevy_egui's blanket pointer-capture OFF; we provide our own
+            // viewport-aware backend instead (so the egui-dock ViewportPanel leaf
+            // doesn't suppress 3D picking over the scene).
+            .add_systems(Update, disable_egui_pointer_capture)
+            // Custom egui picking backend. PostUpdate after the egui pass so
+            // `wants_pointer_input()` and the viewport rect are this-frame fresh
+            // (mirrors bevy_egui's own capture system's schedule).
+            .add_systems(
+                PostUpdate,
+                egui_viewport_aware_picking
+                    .after(bevy_egui::EguiPostUpdateSet::ProcessOutput),
+            )
             .add_systems(
                 PostUpdate,
                 apply_workbench_viewport

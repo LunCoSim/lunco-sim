@@ -1786,7 +1786,10 @@ pub fn on_focus_entity_by_id(
     trigger: On<FocusEntityById>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     q_target: Query<&GlobalTransform>,
-    mut q_avatar: Query<(&mut Transform, &mut lunco_avatar::FreeFlightCamera), With<lunco_core::Avatar>>,
+    mut q_avatar: Query<
+        (&mut Transform, Option<&mut lunco_avatar::FreeFlightCamera>),
+        With<lunco_core::Avatar>,
+    >,
 ) {
     let cmd = trigger.event();
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
@@ -1798,8 +1801,14 @@ pub fn on_focus_entity_by_id(
         warn!("FOCUS_ENTITY: target {:?} has no GlobalTransform", target);
         return;
     };
-    let Ok((mut tf, mut ff)) = q_avatar.single_mut() else {
-        warn!("FOCUS_ENTITY: no Avatar with FreeFlightCamera in the scene");
+    // Tolerate 0/≥1 avatars robustly. `single_mut()` errored when the avatar was
+    // momentarily in a non-freeflight camera mode (FreeFlightCamera removed by
+    // possess/follow/orbit) OR when more than one Avatar existed (USD avatar +
+    // fallback) — both surfaced as "no Avatar" and killed double-click focus.
+    // Take the first avatar; the FreeFlightCamera is now optional.
+    let avatar_count = q_avatar.iter().count();
+    let Some((mut tf, ff_opt)) = q_avatar.iter_mut().next() else {
+        warn!("FOCUS_ENTITY: no Avatar entity in the scene (count={avatar_count})");
         return;
     };
     // In big_space, `GlobalTransform` is expressed relative to the floating
@@ -1814,12 +1823,25 @@ pub fn on_focus_entity_by_id(
     let offset = Vec3::new(1.0, 0.4, 0.25).normalize() * dist;
     // Set the avatar to target + offset (absolute, like MoveEntity).
     tf.translation = target_pos + offset;
-    // Camera forward = (camera → target) = -offset. The freeflight system rebuilds
-    // rotation from yaw/pitch every frame (YXZ euler), so we must set those.
     let d = (-offset).normalize();
-    ff.yaw = (-d.x).atan2(-d.z);
-    ff.pitch = d.y.clamp(-1.0, 1.0).asin();
-    info!("FOCUS_ENTITY: framed api_id={} at {:.1} m", cmd.entity_id, dist);
+    match ff_opt {
+        // Free-flight rebuilds rotation from yaw/pitch every frame (YXZ euler), so
+        // when it's present we must set those rather than the Transform rotation.
+        Some(mut ff) => {
+            ff.yaw = (-d.x).atan2(-d.z);
+            ff.pitch = d.y.clamp(-1.0, 1.0).asin();
+        }
+        // Non-freeflight camera mode (orbit/spring/possessed): set the look
+        // rotation directly. Best-effort — a mode that re-derives rotation from
+        // its own target may override it, but the avatar still flies to the frame.
+        None => {
+            tf.look_at(target_pos, Vec3::Y);
+        }
+    }
+    info!(
+        "FOCUS_ENTITY: framed api_id={} at {:.1} m (avatars={avatar_count})",
+        cmd.entity_id, dist
+    );
 }
 
 /// Select an entity by API id — the headless/scriptable equivalent of a

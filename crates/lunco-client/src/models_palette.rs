@@ -141,52 +141,39 @@ fn models_palette_content(ui: &mut egui::Ui, world: &mut World, tokens: &lunco_t
 // Input system — applies the pending attachment on 3D click
 // ─────────────────────────────────────────────────────────────────────
 
-/// When `AttachState::Pending`, left-click in the 3D scene raycasts for
-/// a selectable entity and inserts the matching marker. Existing setup
-/// systems (`Added<BalloonModelMarker>` / `Added<PythonBalloonMarker>`)
-/// then compile and wire the model. Escape cancels.
+/// When `AttachState::Pending`, a left-click on a scene entity inserts the
+/// matching marker. Existing setup systems (`Added<BalloonModelMarker>` /
+/// `Added<PythonBalloonMarker>`) then compile and wire the model.
 ///
-/// Ordered **before** `handle_entity_selection` so a click that resolves
-/// to an attach consumes the frame's input.
-pub(crate) fn handle_attach_click(
+/// Driven by **bevy_picking** (`On<Pointer<Click>>`): egui occlusion is handled
+/// by the framework, and the chrome guard is `hit.position.is_none()`. Ground is
+/// skipped so attach lands only on props (balls), matching the old ray-cast that
+/// excluded ground colliders. Escape-cancel lives in [`attach_escape_system`].
+pub(crate) fn on_scene_click_attach(
+    mut click: On<bevy::picking::events::Pointer<bevy::picking::events::Click>>,
     mut state: ResMut<AttachState>,
-    // Single gated scene-pointer source — attach only fires for clicks on the
-    // 3D scene, never on a panel/popup. See `ScenePointer`.
-    scene: Res<lunco_workbench::ScenePointer>,
     keys: Res<ButtonInput<KeyCode>>,
-    cameras: Query<(&Camera, &GlobalTransform)>,
-    raycaster: avian3d::prelude::SpatialQuery,
     q_ground: Query<Entity, With<lunco_core::Ground>>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_parents: Query<&ChildOf>,
     mut commands: Commands,
 ) {
+    use bevy::picking::pointer::PointerButton;
     let AttachState::Pending(pending) = *state else { return };
+    // Stop the click bubbling to ancestors (global observer re-fires up the tree).
+    click.propagate(false);
+    if click.button != PointerButton::Primary { return; }
+    // Chrome guard — egui's pick has no world position.
+    if click.hit.position.is_none() { return; }
+    // Shift is reserved (no attach on shift-click).
+    if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) { return; }
 
-    if keys.just_pressed(KeyCode::Escape) {
-        *state = AttachState::Idle;
-        return;
-    }
-
-    // Plain left-click (no shift) over the 3D scene attaches; `None` for any
-    // chrome click (gate lives in `ScenePointer`).
-    if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) { return }
-    let Some(cursor) = scene.left_click() else { return };
-
-    let Ok((camera, cam_tf)) = cameras.single() else { return };
-    let Some((origin, direction)) = cursor_ray(camera, cam_tf, cursor) else { return };
-
-    let exclude: Vec<Entity> = q_ground.iter().collect();
-    let filter = avian3d::prelude::SpatialQueryFilter::default().with_excluded_entities(exclude);
-    let Ok(dir) = Dir3::new(direction) else { return };
-    let Some(hit) = raycaster.cast_ray(origin.into(), dir, 1000.0, false, &filter) else {
-        return;
-    };
-
-    // Walk up to the nearest SelectableRoot so attach lands on the
-    // user-facing entity (the ball root), not an internal mesh child.
-    let target = find_selectable(hit.entity, &q_selectable, &q_parents)
-        .unwrap_or(hit.entity);
+    // Walk up to the nearest SelectableRoot so attach lands on the user-facing
+    // entity (the ball root), not an internal mesh child.
+    let target = find_selectable(click.entity, &q_selectable, &q_parents)
+        .unwrap_or(click.entity);
+    // Don't attach to terrain/ground (old ray-cast excluded ground entities).
+    if q_ground.get(target).is_ok() { return; }
 
     match pending {
         PendingAttachment::ModelicaBalloon => {
@@ -206,13 +193,14 @@ pub(crate) fn handle_attach_click(
     *state = AttachState::Idle;
 }
 
-fn cursor_ray(
-    camera: &Camera,
-    cam_tf: &GlobalTransform,
-    cursor: Vec2,
-) -> Option<(Vec3, Vec3)> {
-    let ray = camera.viewport_to_world(cam_tf, cursor).ok()?;
-    Some((ray.origin, ray.direction.as_vec3()))
+/// Escape cancels a pending attachment (keyboard, not a pointer pick).
+pub(crate) fn attach_escape_system(
+    mut state: ResMut<AttachState>,
+    keys: Res<ButtonInput<KeyCode>>,
+) {
+    if matches!(*state, AttachState::Pending(_)) && keys.just_pressed(KeyCode::Escape) {
+        *state = AttachState::Idle;
+    }
 }
 
 fn find_selectable(

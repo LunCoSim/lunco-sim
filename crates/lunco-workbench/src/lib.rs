@@ -307,9 +307,8 @@ pub use session::{
     TwinClosed, UnregisterDocument, WorkspacePlugin, WorkspaceResource,
 };
 pub use viewport::{
-    pointer_over_egui_popup, PanelRect, PanelRects, SceneButtons, ScenePointer, ViewportPanel,
-    ViewportPlaceholder, WorkbenchEguiHost, WorkbenchSceneCamera, WorkbenchViewportCamera,
-    WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
+    PanelRect, PanelRects, ViewportPanel, ViewportPlaceholder, WorkbenchEguiHost,
+    WorkbenchSceneCamera, WorkbenchViewportCamera, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
 };
 
 /// Get the backdrop colour from the active theme.
@@ -437,21 +436,10 @@ impl Plugin for WorkbenchPlugin {
         app
             .add_systems(
                 EguiPrimaryContextPass,
-                (
-                    // Fail-open default each pass; ViewportPanel::render overwrites
-                    // it with egui's live hit-test. Must run before panels render.
-                    crate::viewport::reset_scene_pointer.before(WorkbenchRenderSet),
-                    render_workbench.in_set(WorkbenchRenderSet),
-                ),
+                render_workbench.in_set(WorkbenchRenderSet),
             )
-            // Single gated source of scene-pointer input. FINALISED inside
-            // `render_workbench` (the egui pass) — see that fn — so over_scene,
-            // cursor and button edges are all sampled from the same egui frame
-            // (no cross-schedule staleness). Update consumers
-            // (selection/possession/spawn/attach) read it next frame; over chrome
-            // it reports no click, so a panel click can never reach a scene
-            // raycaster. See `ScenePointer`.
-            .init_resource::<crate::viewport::ScenePointer>()
+            // Scene picking is handled by bevy_picking (egui occlusion via
+            // bevy_egui's picking backend) — no scene-pointer resource, no gate.
             .add_systems(bevy::prelude::Update, maintain_dock_widths);
 
         // Built-in Files section ships with the workbench so apps get
@@ -1684,54 +1672,8 @@ fn render_workbench(world: &mut World) {
     render_layout(&ctx, &mut layout, world, &theme);
 
     world.insert_resource(layout);
-
-    // Finalise the scene-pointer gate from THIS egui frame's input. `render_layout`
-    // has just set `PanelRects::over_scene` for the current pointer position
-    // (DockArea: via `ViewportPanel`; full-window: via `available_rect`); pair it
-    // with egui's own pointer position and button edges, read here from the same
-    // frame. Sampling all three together is the fix for the cross-schedule
-    // staleness: a press only becomes a scene-click when the pointer is over the
-    // scene in the very frame it was pressed, so moving from the scene onto an
-    // Inspector slider and pressing can no longer raycast through the panel into
-    // the ground behind it. Consumers read `ScenePointer` next frame's Update.
-    let over_scene = world
-        .get_resource::<PanelRects>()
-        .map(|r| r.pointer_over_scene())
-        .unwrap_or(true);
-    let (pos, l_press, r_press, m_press, l_down, r_down, l_release) = ctx.input(|i| {
-        (
-            i.pointer.latest_pos(),
-            i.pointer.button_pressed(egui::PointerButton::Primary),
-            i.pointer.button_pressed(egui::PointerButton::Secondary),
-            i.pointer.button_pressed(egui::PointerButton::Middle),
-            i.pointer.button_down(egui::PointerButton::Primary),
-            i.pointer.button_down(egui::PointerButton::Secondary),
-            i.pointer.button_released(egui::PointerButton::Primary),
-        )
-    });
-    if let Some(mut scene) = world.get_resource_mut::<ScenePointer>() {
-        let cursor = pos.map(|p| bevy::math::Vec2::new(p.x, p.y));
-        let on = over_scene && cursor.is_some();
-        scene.over_scene = on;
-        scene.cursor = if on { cursor } else { None };
-        scene.buttons = if on {
-            SceneButtons {
-                left_just_pressed: l_press,
-                right_just_pressed: r_press,
-                middle_just_pressed: m_press,
-                left_pressed: l_down,
-                right_pressed: r_down,
-                left_just_released: l_release,
-            }
-        } else {
-            SceneButtons::default()
-        };
-        // Diagnostic: one line per left-press to verify the gate from the log.
-        // Remove once the click-through fix is confirmed.
-        if l_press {
-            bevy::log::info!("[ScenePointer] left-press over_scene={on} cursor={cursor:?}");
-        }
-    }
+    // No scene-pointer gate is computed here: scene picking is bevy_picking-driven
+    // and egui occlusion is handled by bevy_egui's picking backend.
 }
 
 /// First leaf node (in walk order) in a `Surface`'s tree, if any.
@@ -2795,28 +2737,9 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         // Central area: do NOT call CentralPanel — egui's bottom/side
         // panels reserve their space and the remaining region stays
         // free for the 3D scene that Bevy renders to the full window.
-        //
-        // That remaining region IS the scene, so it's also the scene/chrome
-        // gate for this full-window mode. `ctx.available_rect()` is what egui
-        // left after every side/top/bottom panel reserved its space, so a
-        // pointer inside it is over the 3D viewport and a pointer outside it is
-        // over chrome. Write it to `ScenePointer`'s gate via `PanelRects`.
-        //
-        // This branch renders no `ViewportPanel`, so without this the
-        // `reset_scene_pointer` fail-open `true` persisted every frame and
-        // clicks on the side panels (Inspector/Explorer) leaked through into
-        // the scene — the "click panel → terrain selected" bug. In DockArea
-        // mode the transparent `ViewportPanel` sets the gate instead; in the
-        // empty `View` perspective no panels reserve space, so `available_rect`
-        // is the whole window and `over_scene` stays `true` (correct).
-        let central = ctx.available_rect();
-        let over_scene = ctx.pointer_latest_pos().is_some_and(|p| {
-            central.contains(p)
-                && !viewport::pointer_over_egui_popup(ctx, bevy::math::Vec2::new(p.x, p.y))
-        });
-        if let Some(mut rects) = world.get_resource_mut::<PanelRects>() {
-            rects.set_over_scene(over_scene);
-        }
+        // Scene-vs-chrome picking is handled by bevy_picking (egui occlusion via
+        // bevy_egui's picking backend), so there's no pointer gate to compute
+        // here anymore.
     }
 
     // ── Empty-viewport placeholder ──────────────────────────────────
