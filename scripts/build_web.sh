@@ -503,8 +503,21 @@ Run: cargo run -p lunco-assets -- download"
             && [ "$PROJECT_DIR/Cargo.lock" -nt "$worker_wasm_dist" ]; then
             lock_moved=1
         fi
+        # The src-wasm-vs-dist mtime test misses source-only edits: when the
+        # cargo build above is itself skip-gated (or incremental leaves the
+        # output mtime untouched), `worker_wasm_src` is NOT newer than the dist
+        # wasm even though a `.rs` under crates/ changed — and the worker ships
+        # STALE (observed: a run-loop fix in `experiments_runner.rs` never
+        # reached the worker, so Fast Run kept emitting the old fixed sample
+        # count). Reuse the source-aware `should_rebuild_worker` scan against
+        # the DIST wasm so any newer source forces a re-bindgen.
+        local worker_src_changed=0
+        if should_rebuild_worker "$worker_wasm_dist"; then
+            worker_src_changed=1
+        fi
         if [ "${WORKER_REBUILD:-}" != "force" ] \
             && [ "$lock_moved" != "1" ] \
+            && [ "$worker_src_changed" != "1" ] \
             && [ -f "$worker_wasm_src" ] \
             && [ -n "$worker_wasm_dist" ] \
             && [ ! "$worker_wasm_src" -nt "$worker_wasm_dist" ]; then

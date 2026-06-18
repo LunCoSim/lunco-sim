@@ -145,8 +145,11 @@ pub(crate) fn trigger_projection_if_needed(
         let target_changed = live_target != docstate.last_seen_target;
         let ast_stale = world.resource::<ModelicaDocumentRegistry>().host(doc_id).map(|h| h.document().ast_is_stale()).unwrap_or(false);
         if ast_stale { ui.ctx().request_repaint(); }
+        // One-shot re-projection requested when MSL became resident — forces a
+        // re-project so standard-library icons resolve, independent of gen/target.
+        let forced = docstate.force_reproject;
 
-        !ast_stale && !task_in_flight && (first_render || target_changed || (gen_advanced && {
+        !ast_stale && !task_in_flight && (first_render || target_changed || forced || (gen_advanced && {
             let new_hash = projection_relevant_source_hash(&*current_source);
             new_hash != docstate.last_seen_source_hash
         }))
@@ -230,6 +233,9 @@ fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: 
     state.complete_projection_handoff(doc_id);
     let docstate = match render_tab_id { Some(t) => state.get_mut_for_tab(t, doc_id), None => state.get_mut(Some(doc_id)) };
 
+    // Consume the one-shot MSL-ready re-projection request (if any) — this
+    // spawn satisfies it.
+    docstate.force_reproject = false;
     docstate.projection_task = Some(ProjectionTask {
         gen_at_spawn: gen,
         doc_at_spawn: doc_id,

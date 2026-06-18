@@ -1048,6 +1048,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
             let phase = match phase {
                 MslLoadPhase::FetchingManifest => "fetching manifest",
                 MslLoadPhase::FetchingBundle => "downloading",
+                MslLoadPhase::LoadingCache => "loading from cache",
                 MslLoadPhase::Decompressing => "extracting",
                 MslLoadPhase::Parsing => "loading",
             };

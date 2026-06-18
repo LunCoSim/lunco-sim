@@ -6,7 +6,7 @@ use lunco_workbench::{Panel, PanelId, PanelSlot};
 
 use crate::ui::WorkbenchState;
 use crate::ui::viz::{is_signal_plotted, set_signal_plotted};
-use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
+use crate::ModelicaModel;
 
 /// Per-input metadata snapshot — built once per render from
 /// [`crate::index::ModelicaIndex`] so the grid loop doesn't reborrow
@@ -178,35 +178,25 @@ impl Panel for TelemetryPanel {
                     .collect()
             };
 
-            // Play/Pause
+            // Play/Pause/Reset — dispatch the SAME commands as the top
+            // toolbar (`RunActiveModel` / `PauseActiveModel` /
+            // `ResetActiveModel`) instead of poking `ModelicaModel` /
+            // `ModelicaChannels` directly. One control vocabulary for the live
+            // run, so this panel and the toolbar can't drift (▶ here also
+            // compiles-if-stale, matching the toolbar's ▶ Run).
             ui.horizontal(|ui| {
                 if is_paused {
                     if ui.button("▶ Play").clicked() {
-                        if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
-                            m.paused = false;
-                        }
+                        world.commands().trigger(crate::ui::commands::RunActiveModel { doc: doc_id, class: None });
                     }
-                } else {
-                    if ui.button("⏸ Pause").clicked() {
-                        if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
-                            m.paused = true;
-                        }
-                    }
+                } else if ui.button("⏸ Pause").clicked() {
+                    world.commands().trigger(crate::ui::commands::PauseActiveModel { doc: doc_id });
                 }
                 ui.label(format!("Time: {current_time:.4} s"));
 
                 ui.add_space(ui.available_width() - 70.0);
                 if ui.button("🔄 Reset").clicked() {
-                    let sid = if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
-                        m.session_id += 1;
-                        m.is_stepping = true;
-                        m.current_time = 0.0;
-                        m.last_step_time = 0.0;
-                        Some(m.session_id)
-                    } else { None };
-                    if let (Some(sid), Some(channels)) = (sid, world.get_resource::<ModelicaChannels>()) {
-                        let _ = channels.tx.send(ModelicaCommand::Reset { entity, session_id: sid });
-                    }
+                    world.commands().trigger(crate::ui::commands::ResetActiveModel { doc: doc_id });
                 }
             });
             ui.separator();

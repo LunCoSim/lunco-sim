@@ -287,6 +287,11 @@ impl Default for MslLoadState {
 pub enum MslLoadPhase {
     FetchingManifest,
     FetchingBundle,
+    /// Bundle served from the browser's Cache Storage — no network download.
+    /// Distinct from [`FetchingBundle`](Self::FetchingBundle) so the status
+    /// line doesn't say "downloading" on a warm reload (the bundle is
+    /// content-hashed + cached-first-forever).
+    LoadingCache,
     Decompressing,
     /// Per-file AST parse, chunked across frames. `bytes_done` /
     /// `bytes_total` in the surrounding `Loading` variant carry the
@@ -298,7 +303,8 @@ impl MslLoadPhase {
     pub fn as_str(self) -> &'static str {
         match self {
             MslLoadPhase::FetchingManifest => "fetching manifest",
-            MslLoadPhase::FetchingBundle => "fetching MSL",
+            MslLoadPhase::FetchingBundle => "downloading MSL",
+            MslLoadPhase::LoadingCache => "loading MSL from cache",
             MslLoadPhase::Decompressing => "decompressing",
             MslLoadPhase::Parsing => "parsing MSL",
         }

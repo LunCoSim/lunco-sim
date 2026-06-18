@@ -221,6 +221,30 @@ fn render_unified_toolbar(
         .unwrap_or((0, 0));
     let runner_busy = runner_running > 0 || runner_queued > 0;
 
+    // Progress time of an experiment run in flight for THIS doc, if any.
+    // Unifies the top-panel run-status: the live sim already surfaces its
+    // `t=…s` in the toolbar, but a background Fast Run / experiment only
+    // showed a bare "N running" with no sense of progress. Reading the
+    // running experiment's `RunStatus::Running { t_current }` here lets the
+    // status pill report how far it has got — one run-status source in the
+    // toolbar for both the live stepper and the experiment runner.
+    let experiment_run_t: Option<f64> = {
+        let reg = world.get_resource::<lunco_experiments::ExperimentRegistry>();
+        let src = world.get_resource::<crate::experiments_runner::ExperimentSources>();
+        match (reg, src) {
+            (Some(reg), Some(src)) => src
+                .0
+                .iter()
+                .filter(|(_, d)| **d == doc)
+                .filter_map(|(id, _)| reg.get(*id))
+                .find_map(|e| match e.status {
+                    lunco_experiments::RunStatus::Running { t_current } => Some(t_current),
+                    _ => None,
+                }),
+            _ => None,
+        }
+    };
+
     let mut compile_clicked = false;
     let mut fast_run_clicked = false;
     let mut undo_clicked = false;
@@ -276,6 +300,7 @@ fn render_unified_toolbar(
             // Show the live count so several concurrent Fast Runs are
             // visible at a glance (e.g. "⏩ 3 running · ⏳ 2").
             let mut pill = format!("⏩ {runner_running} running");
+            if let Some(t) = experiment_run_t { pill.push_str(&format!(" · t={t:.2}s")); }
             if runner_queued > 0 { pill.push_str(&format!(" · ⏳ {runner_queued}")); }
             ui.colored_label(tokens.warning, pill).on_hover_text(
                 format!("Fast Run in progress — {runner_running} executing, {runner_queued} queued (background simulation)")

@@ -24,7 +24,11 @@ impl Plugin for PackageBrowserPlugin {
         app.init_resource::<PackageTreeCache>()
             .add_systems(
                 Update,
-                (handle_package_loading_tasks, reconcile_library_roots_on_ready),
+                (
+                    handle_package_loading_tasks,
+                    reconcile_library_roots_on_ready,
+                    reproject_diagrams_on_msl_ready,
+                ),
             );
     }
 }
@@ -47,6 +51,39 @@ pub fn reconcile_library_roots_on_ready(
         return;
     }
     cache.reconcile_library_roots();
+}
+
+/// Once the MSL standard library is **installed into the workspace engine**,
+/// force a one-shot re-projection of every open diagram so standard-library
+/// component icons (drawn as blank boxes when projected before MSL was
+/// resolvable — the web async-load gap) resolve.
+///
+/// Gated on [`MslBootstrapState::Done`], NOT `MslLoadState::Ready`: the bundle
+/// being *decoded* (`Ready`) precedes the engine *install* (`drive_msl_bootstrap`
+/// runs after, doing the ~700ms `replace_parsed_source_set`). `icon_for` reads
+/// the engine session, so re-projecting at `Ready` is too early — it would
+/// re-run before icons are resolvable and then the latch would never retry.
+/// Runs at most once per session via the `Local` latch. `CanvasDiagramState`
+/// is created lazily on first canvas render; if it isn't up yet we don't latch,
+/// so a later canvas still gets the request once it exists. Diagrams opened
+/// *after* the install project fresh and resolve icons without this.
+pub fn reproject_diagrams_on_msl_ready(
+    canvas: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
+    bootstrap: Option<Res<crate::engine_resource::MslBootstrapState>>,
+    mut done: Local<bool>,
+) {
+    if *done {
+        return;
+    }
+    if !matches!(
+        bootstrap.as_deref(),
+        Some(crate::engine_resource::MslBootstrapState::Done)
+    ) {
+        return;
+    }
+    let Some(mut canvas) = canvas else { return };
+    canvas.request_reproject_all();
+    *done = true;
 }
 
 pub fn handle_package_loading_tasks(
