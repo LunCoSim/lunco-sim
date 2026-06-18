@@ -141,7 +141,17 @@ pub(crate) fn trigger_projection_if_needed(
         let task_in_flight = docstate.projection_task.is_some();
         let first_render = !match render_tab_id { Some(t) => state.has_entry_for_tab(t), None => state.has_entry(doc_id) };
         let gen_advanced = gen != docstate.last_seen_gen && gen > docstate.canvas_acked_gen;
-        let live_target = render_target(world).filter(|(d, _)| *d == doc_id).and_then(|(_, drilled)| drilled).or_else(|| world.get_resource::<ModelTabs>().and_then(|t| t.drilled_class_for_doc(doc_id)));
+        let live_target = render_target(world)
+            .filter(|(d, _)| *d == doc_id)
+            .and_then(|(_, drilled)| drilled)
+            .or_else(|| {
+                world
+                    .get_resource::<ModelTabs>()
+                    .and_then(|t| t.drilled_class_for_doc(doc_id))
+            })
+            .or_else(|| {
+                crate::ui::panels::model_view::context::default_simulation_class(world, doc_id)
+            });
         let target_changed = live_target != docstate.last_seen_target;
         let ast_stale = world.resource::<ModelicaDocumentRegistry>().host(doc_id).map(|h| h.document().ast_is_stale()).unwrap_or(false);
         if ast_stale { ui.ctx().request_repaint(); }
@@ -149,7 +159,7 @@ pub(crate) fn trigger_projection_if_needed(
         // re-project so standard-library icons resolve, independent of gen/target.
         let forced = docstate.force_reproject;
 
-        !ast_stale && !task_in_flight && (first_render || target_changed || forced || (gen_advanced && {
+        !task_in_flight && (first_render || target_changed || forced || (!ast_stale && gen_advanced && {
             let new_hash = projection_relevant_source_hash(&*current_source);
             new_hash != docstate.last_seen_source_hash
         }))
@@ -175,7 +185,17 @@ fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: 
         (host.document().source_arc(), ast)
     };
     let (max_nodes, max_duration) = world.get_resource::<DiagramProjectionLimits>().map(|l| (l.max_nodes, l.max_duration)).unwrap_or((crate::ui::panels::canvas_projection::DEFAULT_MAX_DIAGRAM_NODES, std::time::Duration::from_secs(60)));
-    let target_class = render_target(world).filter(|(d, _)| *d == doc_id).and_then(|(_, drilled)| drilled).or_else(|| world.get_resource::<ModelTabs>().and_then(|t| t.drilled_class_for_doc(doc_id)));
+    let target_class = render_target(world)
+        .filter(|(d, _)| *d == doc_id)
+        .and_then(|(_, drilled)| drilled)
+        .or_else(|| {
+            world
+                .get_resource::<ModelTabs>()
+                .and_then(|t| t.drilled_class_for_doc(doc_id))
+        })
+        .or_else(|| {
+            crate::ui::panels::model_view::context::default_simulation_class(world, doc_id)
+        });
     let layout = world.get_resource::<crate::ui::panels::canvas_projection::DiagramAutoLayoutSettings>().cloned().unwrap_or_default();
     
     let mut state = world.resource_mut::<CanvasDiagramState>();

@@ -296,9 +296,7 @@ impl CompileStates {
 /// `open_model.detected_name`. Returns `None` when the doc has no
 /// AST yet (parse pending) or when no model declaration exists.
 pub fn detected_name_for(world: &bevy::prelude::World, doc: DocumentId) -> Option<String> {
-let host = world.resource::<ModelicaDocumentRegistry>().host(doc)?;
-    let ast = host.document().strict_ast()?;
-    crate::ast_extract::extract_model_name_from_ast(&ast)
+    crate::ui::panels::model_view::context::default_simulation_class(world, doc)
 }
 
 /// Read-only flag for `doc`. Replaces `open_model.read_only`.

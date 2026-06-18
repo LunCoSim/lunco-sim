@@ -559,7 +559,6 @@ fn make_worker(idx: usize, worker_url: &str) -> Result<Worker, JsValue> {
                     "[worker_transport] worker {idx} reports MSL ready: {docs} docs"
                 );
                 MSL_INSTALLED.with(|c| c.set(true));
-                flush_pending_parses();
                 flush_pending_commands();
                 flush_pending_run_fast();
             }
@@ -621,6 +620,9 @@ fn make_worker(idx: usize, worker_url: &str) -> Result<Worker, JsValue> {
 ///   2. Respawn a fresh worker in that slot and re-seed it with MSL, so pool
 ///      capacity self-heals (critical for the wasm default single-worker pool).
 fn handle_worker_error(idx: usize) {
+    if let Some(handle) = crate::engine_resource::global_engine_handle() {
+        handle.clear_all_pending();
+    }
     let crashed_run = {
         let p = pool().lock().unwrap();
         p.running.get(idx).copied().flatten()
@@ -927,26 +929,11 @@ pub fn __lc_test_worker_ping(tag: &str) {
 // to fire on the boot frame (most often the first restored autosave
 // doc).
 //
-// Fix: queue parses on the host side until `install_msl_in_worker`
-// has run. After that point the worker has its ready ack out *and*
-// has the MSL index, so parses can resolve imports against it. Drain
-// the queue right after we ship MSL so the gap is invisible to
-// callers.
-//
 // `wasm32-unknown-unknown` is single-threaded so a `RefCell` in a
 // `thread_local!` is enough — no `Mutex` needed.
-struct PendingParse {
-    doc_id: lunco_doc::DocumentId,
-    gen: u64,
-    uri: String,
-    source: String,
-}
-
 #[cfg(target_arch = "wasm32")]
 thread_local! {
     static MSL_INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static PENDING_PARSES: std::cell::RefCell<Vec<PendingParse>> =
-        const { std::cell::RefCell::new(Vec::new()) };
     // Commands that need MSL resolved (Compile, UpdateParameters, future RunFast)
     // queued until install_msl_in_worker drains them. Step/Reset/Despawn pass
     // through unconditionally — they don't recompile.
@@ -978,9 +965,12 @@ fn msl_installed() -> bool {
 ///
 /// Returns `false` when the worker isn't installed (very early boot
 /// or worker init failed); callers fall back to local parsing.
-/// Returns `true` when the request has been posted *or queued*
-/// behind the MSL-install gate (see the boot-race note above) — in
-/// both cases the host should consider it accepted.
+/// Returns `true` when the request has been posted — the host should
+/// consider it accepted.
+thread_local! {
+    static NEXT_PARSE_WORKER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub fn dispatch_parse_to_worker(
     doc_id: lunco_doc::DocumentId,
     gen: u64,
@@ -990,46 +980,19 @@ pub fn dispatch_parse_to_worker(
     if !is_worker_active() {
         return false;
     }
-    if !msl_installed() {
-        #[cfg(target_arch = "wasm32")]
-        PENDING_PARSES.with(|q| {
-            q.borrow_mut().push(PendingParse { doc_id, gen, uri, source });
-        });
-        #[cfg(not(target_arch = "wasm32"))]
-        let _ = (doc_id, gen, uri, source);
-        return true;
-    }
-    post_to_worker(
+    let idx = NEXT_PARSE_WORKER.with(|c| {
+        let current = c.get();
+        let n = pool().lock().unwrap().workers.len();
+        if n == 0 { return 0; }
+        c.set((current + 1) % n);
+        current % n
+    });
+    post_msg_to(
+        idx,
         &WireMessage::ParseDocument { doc_id, gen, uri, source },
         "parse",
     );
     true
-}
-
-/// Drain any parse requests queued by `dispatch_parse_to_worker`
-/// while the MSL install was still pending. Called from
-/// `install_msl_in_worker` after MSL is shipped to the worker.
-#[cfg(target_arch = "wasm32")]
-fn flush_pending_parses() {
-    let drained: Vec<PendingParse> = PENDING_PARSES.with(|q| q.borrow_mut().drain(..).collect());
-    if drained.is_empty() {
-        return;
-    }
-    bevy::log::info!(
-        "[worker_transport] flushing {} parse request(s) queued during MSL install",
-        drained.len()
-    );
-    for p in drained {
-        post_to_worker(
-            &WireMessage::ParseDocument {
-                doc_id: p.doc_id,
-                gen: p.gen,
-                uri: p.uri,
-                source: p.source,
-            },
-            "parse(flushed)",
-        );
-    }
 }
 
 /// JS-callable bridge that synthesizes a `ModelicaCommand::Compile` and
@@ -1130,11 +1093,10 @@ pub fn install_msl_in_worker(
         len
     );
     // Open the gate now that every worker has its index; drain anything
-    // that queued behind it (parses, compile-path commands, Fast Runs).
+    // that queued behind it (compile-path commands, Fast Runs).
     #[cfg(target_arch = "wasm32")]
     {
         MSL_INSTALLED.with(|c| c.set(true));
-        flush_pending_parses();
         flush_pending_commands();
         flush_pending_run_fast();
     }

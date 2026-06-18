@@ -193,6 +193,11 @@ impl ModelicaEngine {
         self.pending.len()
     }
 
+    /// Clear all pending parses. Used to unwedge the queue when a worker crashes.
+    pub fn clear_all_pending(&mut self) {
+        self.pending.clear();
+    }
+
     /// Take all completions accumulated since the last drain. Bevy
     /// adapter calls this once per `Update` tick.
     pub fn drain_completed(&mut self) -> Vec<(DocumentId, u64)> {
@@ -460,15 +465,25 @@ impl ModelicaEngine {
         &mut self,
         qualified: &str,
     ) -> Option<rumoca_compile::parsing::ast::ClassDef> {
-        let uri = self.session.class_lookup_query(qualified)?;
-        let parsed = self.session.parsed_file_query(&uri)?;
+        let Some(uri) = self.session.class_lookup_query(qualified) else {
+            bevy::log::warn!("[engine] class_def: class_lookup_query failed for {}", qualified);
+            return None;
+        };
+        let Some(parsed) = self.session.parsed_file_query(&uri) else {
+            bevy::log::warn!("[engine] class_def: parsed_file_query failed for uri {}", uri);
+            return None;
+        };
         // Route through the canonical within-aware lookup so this
         // path can't silently disagree with the read path when the
         // file carries a `within Foo;` clause and the caller asks
         // for `Foo.Bar` (the segment walk would look for "Foo" in
         // `parsed.classes`, which is keyed under "Bar"). Same bug
         // class as `walk_qualified` and `lookup_class_mut` had.
-        crate::diagram::find_class_by_qualified_name(&parsed, qualified).cloned()
+        let found = crate::diagram::find_class_by_qualified_name(&parsed, qualified).cloned();
+        if found.is_none() {
+            bevy::log::warn!("[engine] class_def: find_class_by_qualified_name failed for {} in uri {}", qualified, uri);
+        }
+        found
     }
 
     /// Whether `qualified` resolves to a class currently in the

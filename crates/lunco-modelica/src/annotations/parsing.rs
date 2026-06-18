@@ -203,28 +203,64 @@ pub fn extract_icon_via_engine(
         .map(|m| m.name)
         .collect();
 
-    let layers = engine.inherited_annotations(qualified);
-    if layers.is_empty() {
-        return None;
+    let mut visited = HashSet::new();
+    extract_icon_via_engine_recursive(qualified, engine, &falsy_params, &mut visited)
+}
+
+fn extract_icon_via_engine_recursive(
+    class_name: &str,
+    engine: &mut crate::engine::ModelicaEngine,
+    falsy_params: &HashSet<String>,
+    visited: &mut HashSet<String>,
+) -> Option<Icon> {
+    if !visited.insert(class_name.to_string()) {
+        return None; // cycle
     }
+    let class = engine.class_def(class_name)?;
+
     let mut merged_graphics: Vec<GraphicItem> = Vec::new();
     let mut inherited_cs: Option<CoordinateSystem> = None;
     let mut local_cs: Option<CoordinateSystem> = None;
-    let last_idx = layers.len() - 1;
-    for (i, ann) in layers.iter().enumerate() {
-        let Some(icon) = extract_icon_with_visibility(ann, &falsy_params) else {
-            continue;
-        };
-        if i == last_idx {
-            local_cs = Some(icon.coordinate_system);
-        } else {
-            inherited_cs = Some(icon.coordinate_system);
+
+    for ext in &class.extends {
+        let base_name: String = ext
+            .base_name
+            .name
+            .iter()
+            .map(|t| t.text.as_ref())
+            .collect::<Vec<&str>>()
+            .join(".");
+
+        let candidates = build_extends_candidates(class_name, &base_name, &class.imports);
+        let mut hit: Option<(String, ClassDef)> = None;
+        for candidate in candidates {
+            if let Some(base_class) = engine.class_def(&candidate) {
+                hit = Some((candidate, base_class));
+                break;
+            }
         }
+        let Some((resolved_name, _base_class)) = hit else { continue };
+        if let Some(base_icon) = extract_icon_via_engine_recursive(
+            &resolved_name,
+            engine,
+            falsy_params,
+            visited,
+        ) {
+            merged_graphics.extend(base_icon.graphics);
+            inherited_cs = Some(base_icon.coordinate_system);
+        }
+    }
+
+    let local = extract_icon_with_visibility(&class.annotation, falsy_params);
+    if let Some(icon) = local {
+        local_cs = Some(icon.coordinate_system);
         merged_graphics.extend(icon.graphics);
     }
+
     if merged_graphics.is_empty() && local_cs.is_none() && inherited_cs.is_none() {
         return None;
     }
+
     Some(Icon {
         coordinate_system: local_cs.or(inherited_cs).unwrap_or_default(),
         graphics: merged_graphics,

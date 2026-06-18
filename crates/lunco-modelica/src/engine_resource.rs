@@ -139,6 +139,13 @@ impl ModelicaEngineHandle {
         engine.finish_parse(doc_id, gen);
     }
 
+    /// Clear all pending parses. Used when a worker crashes to unwedge the
+    /// parse queue.
+    pub fn clear_all_pending(&self) {
+        let mut engine = self.lock();
+        engine.clear_all_pending();
+    }
+
     pub fn upsert_document_async<F>(
         &self,
         doc_id: DocumentId,
@@ -449,17 +456,15 @@ pub fn drive_engine_sync(
             if *doc_id == active { 0 } else { 1 }
         });
     }
-    // Wasm throttle: at most one parse in flight at a time. Rumoca
+    // Wasm throttle: at most 4 parses in flight at a time. Rumoca
     // parses on wasm32-unknown-unknown each take ~5 s of main-thread
-    // time; queueing five up at once means the active tab waits
-    // through four background reparses before getting a slot. The
-    // budget is global (counted across all docs) so a background tab
-    // can't sneak in either.
+    // time; previously this was capped to 1, but with a 4-worker pool
+    // we can sustain parallel parses without blocking the UI.
     //
     // Native: pool has real worker threads; concurrency is fine and
     // uncapped.
     #[cfg(target_arch = "wasm32")]
-    let max_in_flight: usize = 1;
+    let max_in_flight: usize = 4;
     #[cfg(not(target_arch = "wasm32"))]
     let max_in_flight: usize = usize::MAX;
 
@@ -721,6 +726,20 @@ pub enum MslBootstrapState {
     Done,
 }
 
+/// Notification event emitted exactly once per session by
+/// [`drive_msl_bootstrap`] the frame MSL is installed into the
+/// workspace engine session.
+///
+/// This is a *notification* (system tells the world "MSL is now
+/// resolvable"), **not** a user-facing command — observe it with
+/// `app.add_observer(fn)` rather than dispatching it from UI.
+///
+/// Typical observer: re-trigger canvas diagram projection so
+/// standard-library component icons resolve (they show as blank
+/// boxes when projected before MSL was available).
+#[derive(Event, Clone, Debug)]
+pub struct MslBecameReady;
+
 /// Bevy system: once the pre-parsed MSL bundle is **resident in memory**,
 /// bulk-install it into the workspace engine as a `DurableExternal` source root
 /// so main-thread hover/diagnostics/resolution see all of MSL at once. Runs at
@@ -749,6 +768,7 @@ fn drive_msl_bootstrap(
     handle: Res<ModelicaEngineHandle>,
     msl_state: Option<Res<lunco_assets::msl::MslLoadState>>,
     mut bootstrap: ResMut<MslBootstrapState>,
+    mut commands: Commands,
 ) {
     if matches!(*bootstrap, MslBootstrapState::Done) {
         return;
@@ -758,10 +778,8 @@ fn drive_msl_bootstrap(
         return;
     }
     // Eager bulk install iff the bundle is already resident in memory — the
-    // single predicate for both targets (web: always, post worker-decode;
-    // native: only if the lazy disk read already ran, normally not at boot, so
-    // native falls through to the per-class lazy path below). See the doc
-    // comment for why native intentionally stays lazy.
+    // single predicate for both targets (web: post worker-decode; native:
+    // post background warmup or lazy load).
     let parsed = crate::msl_remote::global_parsed_msl();
     if let Some(docs) = parsed {
         let t_clone = web_time::Instant::now();
@@ -789,16 +807,10 @@ fn drive_msl_bootstrap(
             replace_ms
         );
         *bootstrap = MslBootstrapState::Done;
-        return;
+        // Notify observers so they can react immediately (e.g. the canvas
+        // diagram reprojection that resolves standard-library icons). This
+        // fires once per session — the system becomes a no-op on the next
+        // tick once `bootstrap` is `Done`.
+        commands.trigger(MslBecameReady);
     }
-    // Bundle not resident in memory (native, before first use): leave the
-    // engine session unpopulated — `class_cache::peek_or_load_msl_class_blocking`
-    // installs classes on demand via `add_parsed_batch`. Mark `Done` so we don't
-    // re-check every tick; an explicit command can still call
-    // `engine.load_library_files` against `lunco_assets::msl_dir()` for eager
-    // preload.
-    bevy::log::info!(
-        "[EngineBootstrap] MSL ready; bundle not yet resident — engine session populated lazily per-class"
-    );
-    *bootstrap = MslBootstrapState::Done;
 }

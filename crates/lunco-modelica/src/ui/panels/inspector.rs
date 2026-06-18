@@ -132,10 +132,11 @@ impl Panel for InspectorPanel {
         //
         // Mirrors `canvas_diagram::active_class_for_doc`: the
         // drilled-in pin wins when set, otherwise the document's
-        // first non-package class (the same default the canvas
-        // projects).
-        let drilled_in =
-            crate::ui::panels::model_view::drilled_class_for_doc(world, doc_id);
+        // default simulation class (which prefers `experiment()` 
+        // annotated models).
+        let target_class =
+            crate::ui::panels::model_view::drilled_class_for_doc(world, doc_id)
+                .or_else(|| crate::ui::panels::model_view::context::default_simulation_class(world, doc_id));
 
         // Resolve the target class + component via the per-document
         // [`crate::index::ModelicaIndex`]. The Index is patched
@@ -150,16 +151,8 @@ impl Panel for InspectorPanel {
             };
             let index = host.document().index();
             // Resolve the target class. Drilled-in pin first; otherwise
-            // pick the first non-package class in the Index (mirrors
-            // `extract_model_name_from_ast`'s behaviour, but reading
-            // the projection rather than walking the AST).
-            let Some(class) = drilled_in.or_else(|| {
-                index
-                    .classes
-                    .values()
-                    .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
-                    .map(|c| c.name.clone())
-            }) else {
+            // pick the default simulation class.
+            let Some(class) = target_class else {
                 placeholder(ui, "Could not resolve target class.");
                 return;
             };

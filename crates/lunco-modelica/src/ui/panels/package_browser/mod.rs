@@ -27,9 +27,11 @@ impl Plugin for PackageBrowserPlugin {
                 (
                     handle_package_loading_tasks,
                     reconcile_library_roots_on_ready,
-                    reproject_diagrams_on_msl_ready,
                 ),
-            );
+            )
+            // Reactive: fires exactly once, the frame MSL enters the engine
+            // session. Replaces the old Local<bool>-latched polling system.
+            .add_observer(on_msl_became_ready);
     }
 }
 
@@ -53,37 +55,29 @@ pub fn reconcile_library_roots_on_ready(
     cache.reconcile_library_roots();
 }
 
-/// Once the MSL standard library is **installed into the workspace engine**,
-/// force a one-shot re-projection of every open diagram so standard-library
-/// component icons (drawn as blank boxes when projected before MSL was
-/// resolvable — the web async-load gap) resolve.
+/// Observer fired exactly once per session by [`crate::engine_resource::MslBecameReady`]
+/// (emitted from `drive_msl_bootstrap` the frame MSL is installed).
 ///
-/// Gated on [`MslBootstrapState::Done`], NOT `MslLoadState::Ready`: the bundle
-/// being *decoded* (`Ready`) precedes the engine *install* (`drive_msl_bootstrap`
-/// runs after, doing the ~700ms `replace_parsed_source_set`). `icon_for` reads
-/// the engine session, so re-projecting at `Ready` is too early — it would
-/// re-run before icons are resolvable and then the latch would never retry.
-/// Runs at most once per session via the `Local` latch. `CanvasDiagramState`
-/// is created lazily on first canvas render; if it isn't up yet we don't latch,
-/// so a later canvas still gets the request once it exists. Diagrams opened
-/// *after* the install project fresh and resolve icons without this.
-pub fn reproject_diagrams_on_msl_ready(
+/// Forces a one-shot re-projection of every currently-open canvas tab so
+/// standard-library component icons — shown as blank boxes when projected
+/// before MSL was available — resolve correctly.
+///
+/// Gated on the *engine install* event, **not** `MslLoadState::Ready`:
+/// `icon_for` reads the engine session, so re-projecting at `Ready` is too
+/// early (MSL is decoded but not yet in the session).
+fn on_msl_became_ready(
+    _trigger: On<crate::engine_resource::MslBecameReady>,
     canvas: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
-    bootstrap: Option<Res<crate::engine_resource::MslBootstrapState>>,
-    mut done: Local<bool>,
 ) {
-    if *done {
+    let Some(mut canvas) = canvas else {
+        // CanvasDiagramState is created lazily on first canvas render.
+        // If no canvas has opened yet, docs projected later will use a warm
+        // engine session and resolve icons without needing force_reproject.
+        bevy::log::debug!("[PackageBrowser] MslBecameReady: no canvas state yet — skipping force_reproject");
         return;
-    }
-    if !matches!(
-        bootstrap.as_deref(),
-        Some(crate::engine_resource::MslBootstrapState::Done)
-    ) {
-        return;
-    }
-    let Some(mut canvas) = canvas else { return };
+    };
     canvas.request_reproject_all();
-    *done = true;
+    bevy::log::info!("[PackageBrowser] MslBecameReady: triggered reproject_all for open canvas tabs");
 }
 
 pub fn handle_package_loading_tasks(
