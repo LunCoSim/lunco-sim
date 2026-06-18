@@ -33,6 +33,16 @@ use bevy::prelude::*;
 #[cfg(target_arch = "wasm32")]
 const KEY_PREFIX: &str = "lunco_modelica/untitled/";
 
+/// Namespace prefix for autosaved **uploaded / editable file** documents.
+/// On web there is no real filesystem behind an opened `.mo`, so a
+/// `DocumentOrigin::File { writable: true }` (the origin an upload lands as)
+/// would be lost on reload exactly like an Untitled scratch doc. We persist
+/// it here keyed by its path so `restore_from_localstorage` can rebuild the
+/// File-backed doc. Distinct prefix from [`KEY_PREFIX`] so restore knows which
+/// origin to reconstruct.
+#[cfg(target_arch = "wasm32")]
+const KEY_PREFIX_FILE: &str = "lunco_modelica/file/";
+
 /// Bevy plugin that wires the three lifecycle observers + the
 /// startup restore system. Add this **after** `ModelicaPlugin` so
 /// the document registry it observes is already initialised.
@@ -123,10 +133,16 @@ fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()
 }
 
-/// Build the storage key for a document's display name.
+/// Build the storage key for an Untitled document's display name.
 #[cfg(target_arch = "wasm32")]
 fn storage_key(display_name: &str) -> String {
     format!("{KEY_PREFIX}{display_name}")
+}
+
+/// Build the storage key for an uploaded/editable File document's path.
+#[cfg(target_arch = "wasm32")]
+fn file_storage_key(path: &str) -> String {
+    format!("{KEY_PREFIX_FILE}{path}")
 }
 
 /// Restore previously-autosaved Untitled documents at startup. One
@@ -141,17 +157,34 @@ fn restore_from_localstorage(world: &mut World) {
     if len == 0 {
         return;
     }
-    let mut entries: Vec<(String, String)> = Vec::new();
+    // (full_key, is_file, ident, source). `ident` is the display name for an
+    // Untitled doc or the path for an uploaded File doc. Scan BOTH namespaces
+    // so uploads come back too, not just scratch docs.
+    let mut entries: Vec<(String, bool, String, String)> = Vec::new();
     for i in 0..len {
         let Some(key) = storage.key(i).ok().flatten() else { continue };
-        let Some(name) = key.strip_prefix(KEY_PREFIX) else { continue };
         let Some(source) = storage.get_item(&key).ok().flatten() else { continue };
-        entries.push((name.to_string(), source));
+        if let Some(path) = key.strip_prefix(KEY_PREFIX_FILE) {
+            entries.push((key.clone(), true, path.to_string(), source));
+        } else if let Some(name) = key.strip_prefix(KEY_PREFIX) {
+            entries.push((key.clone(), false, name.to_string(), source));
+        }
     }
     // Sort so the restore order is deterministic across reloads —
     // localStorage iteration order is implementation-defined.
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-    for (display_name, source) in entries {
+    entries.sort_by(|a, b| a.2.cmp(&b.2));
+    for (full_key, is_file, ident, source) in entries {
+        // Display name: the filename stem for an uploaded file, the stored
+        // name for an Untitled doc.
+        let display_name = if is_file {
+            std::path::Path::new(&ident)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&ident)
+                .to_string()
+        } else {
+            ident.clone()
+        };
         // Skip if a doc with this display name already exists
         // (e.g. the bundled default tab, or a re-fired Startup).
         let already = {
@@ -168,20 +201,28 @@ fn restore_from_localstorage(world: &mut World) {
         if already {
             continue;
         }
+        // Rebuild the original origin: an uploaded file comes back as a
+        // writable File (so its name/path persist and it keeps autosaving);
+        // a scratch doc comes back Untitled.
+        let origin = if is_file {
+            lunco_doc::DocumentOrigin::File {
+                path: std::path::PathBuf::from(&ident),
+                writable: true,
+            }
+        } else {
+            lunco_doc::DocumentOrigin::untitled(display_name.clone())
+        };
         let mut registry = world.resource_mut::<crate::ui::state::ModelicaDocumentRegistry>();
-        let doc_id = registry.allocate_with_origin(
-            source,
-            lunco_doc::DocumentOrigin::untitled(display_name.clone()),
-        );
-        // Remember the key so a later close can clear localStorage
+        let doc_id = registry.allocate_with_origin(source, origin);
+        // Remember the full key so a later close can clear localStorage
         // even after the registry host is gone.
         world
             .resource_mut::<AutosaveKeys>()
             .by_doc
-            .insert(doc_id, display_name.clone());
-        // Register an in-memory entry so the Package Browser shows
-        // the doc under "Workspace / (Untitled)". The browser's
-        // existing render path picks it up; no extra UI plumbing.
+            .insert(doc_id, full_key);
+        // Register an in-memory entry so the Package Browser shows the doc
+        // under "Your Models". The browser's existing render path picks it up;
+        // no extra UI plumbing.
         if let Some(mut cache) = world
             .get_resource_mut::<crate::ui::panels::package_browser::PackageTreeCache>()
         {
@@ -259,15 +300,36 @@ fn autosave_on_changed(
     let Some(host) = registry.host(doc) else { return };
     let document = host.document();
     let origin = document.origin();
-    if !should_autosave(gesture.any(), origin.is_untitled()) {
+    // Persist any *writable* doc the browser would otherwise lose on reload:
+    //   - Untitled scratch docs        → keyed by display name (KEY_PREFIX)
+    //   - uploaded / editable `.mo`     → keyed by path        (KEY_PREFIX_FILE)
+    // Read-only origins (library/MSL/bundled) are never persisted. Both share
+    // the R1 gesture gate (`should_autosave` for the untitled side; the same
+    // `!gesture.any()` for files) so a half-drag is never snapshotted.
+    let key = if origin.is_untitled() {
+        if !should_autosave(gesture.any(), true) {
+            return;
+        }
+        storage_key(&origin.display_name())
+    } else if origin.is_writable() {
+        if gesture.any() {
+            return;
+        }
+        // Match the variant directly rather than `origin.path()` — bevy's
+        // `GetPath` prelude trait otherwise shadows the inherent method.
+        match origin {
+            lunco_doc::DocumentOrigin::File { path, .. } => {
+                file_storage_key(&path.to_string_lossy())
+            }
+            _ => return,
+        }
+    } else {
         return;
-    }
-    let display_name = origin.display_name();
-    let key = storage_key(&display_name);
+    };
     let _ = storage.set_item(&key, document.source());
-    // Capture the key while the doc still exists — `forget_on_closed`
+    // Capture the full key while the doc still exists — `forget_on_closed`
     // can't reach the origin once the registry host is removed.
-    keys.by_doc.insert(doc, display_name.to_string());
+    keys.by_doc.insert(doc, key);
 }
 
 /// Drop the autosaved entry when the user closes the tab — the
@@ -282,10 +344,9 @@ fn forget_on_closed(
     let doc = trigger.event().doc;
     // `CloseDocument`'s `on_close_document` observer removes the doc
     // from the registry *before* `DocumentClosed` fires, so the
-    // origin is unreachable here. Use the display name captured in
+    // origin is unreachable here. Use the full storage key captured in
     // `AutosaveKeys` while the doc still existed. Absent ⇒ the doc was
-    // never autosaved (File-backed / bundled) ⇒ nothing to clear.
-    let Some(display_name) = keys.by_doc.remove(&doc) else { return };
-    let key = storage_key(&display_name);
+    // never autosaved (read-only library/bundled) ⇒ nothing to clear.
+    let Some(key) = keys.by_doc.remove(&doc) else { return };
     let _ = storage.remove_item(&key);
 }

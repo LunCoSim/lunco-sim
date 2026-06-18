@@ -471,6 +471,15 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
         finish_run(&state, run_id);
         return;
     }
+    // Flip the registry status Queued → Running the moment this job leaves the
+    // queue (see the native `run_inner` emit for the full rationale). The
+    // off-thread worker's batch Fast Run emits no mid-solve `Progress`, so
+    // without this an in-browser long run would sit at "Queued" until it
+    // finished. `drain_pending_handles` maps this `Progress` to `Running`.
+    let _ = tx.send(RunUpdate::Progress {
+        t_current: bounds.t_start,
+        delta: None,
+    });
     let source_snapshot = state
         .lock()
         .ok()
@@ -638,6 +647,21 @@ fn run_inner(
 ) {
     let t_wall = web_time::Instant::now();
 
+    // Announce that this job has left the queue and is now executing. The
+    // batch path is one blocking `simulate_with_diagnostics` call that emits
+    // no mid-solve `Progress`, so without this the registry status would sit
+    // at `Queued` (set at dispatch) for the entire compile + solve and only
+    // flip straight to `Done` — making a long-grinding run look stuck in a
+    // queue. `drain_pending_handles` maps any `Progress` to
+    // `RunStatus::Running`, so this single emit flips the label to "Running"
+    // the moment the worker thread picks the job up (covering compile time
+    // too, not just the solve). Interactive runs additionally stream their
+    // own per-step `Progress` with the real `t_current`.
+    let _ = tx.send(RunUpdate::Progress {
+        t_current: bounds.t_start,
+        delta: None,
+    });
+
     // Resolve model source.
     let source = match state.lock() {
         Ok(s) => match s.sources.get(&model_ref) {
@@ -783,33 +807,57 @@ fn run_inner(
         return;
     }
 
-    // Solver options (tolerance / family / initial step) — derived by the
-    // shared `stepper_options_from_bounds`, which the wasm worker also calls,
-    // so the two can't drift (see that fn for the rationale on the defaults).
-    let stepper_opts = stepper_options_from_bounds(&bounds);
-
-    // The native sink is a crossbeam channel + atomic cancel flag; the wasm
-    // worker provides its own `RunSink`, so neither path duplicates sampling
-    // or streaming logic.
+    // Drive the run through the SHARED `drive_run` — the SAME entry point the
+    // wasm worker (`lunica_worker::run_fast_in_worker`) calls, so native and
+    // web can NOT diverge on solver selection / sampling. The only
+    // platform-specific piece is the `RunSink` impl (native = crossbeam
+    // channel + atomic cancel; worker = postMessage + cancel registry).
     let mut sink = ChannelSink { tx, cancel };
+    drive_run(&run_dae, &bounds, t_wall, &mut sink);
+}
 
+/// THE single simulation entry point, shared by the native runner
+/// ([`run_inner`]) and the wasm worker (`lunica_worker::run_fast_in_worker`).
+///
+/// Branches on [`RunBounds::runtime`](lunco_experiments::RunBounds::runtime):
+///   * [`Batch`](lunco_experiments::RuntimeMode::Batch) (default) — the
+///     dense-output [`run_batch_sim`] solve. The solver free-steps with its
+///     own adaptive step and output is dense-interpolated, so the solver step
+///     is decoupled from the output `dt`. This is why stiff long-horizon
+///     models (the lunar rover thermal system, the orbital-datacenter eclipse
+///     switch) complete here, where the interactive stepper — bounded by the
+///     output `dt` — collapses (`BDF step: step size too small at t=0`) unless
+///     `dt` is driven down to a few thousand seconds.
+///   * [`Interactive`](lunco_experiments::RuntimeMode::Interactive) — the live
+///     [`run_stepping_loop`], for streamable / steerable runs.
+///
+/// Keeping this one function (rather than each platform open-coding the match)
+/// is what guarantees the worker can't fall back to a stepper-only path again:
+/// the divergence that made stiff models run natively but fail in the browser.
+pub fn drive_run(
+    dae: &Dae,
+    bounds: &RunBounds,
+    started: web_time::Instant,
+    sink: &mut impl RunSink,
+) {
+    if sink.is_cancelled() {
+        sink.emit(RunUpdate::Cancelled);
+        return;
+    }
+    // Solver options (tolerance / family / initial step) — the SINGLE source
+    // (`stepper_options_from_bounds`) both runtimes derive from.
+    let stepper_opts = stepper_options_from_bounds(bounds);
     match bounds.runtime {
-        // Default: the non-interactive dense-output batch solve. The solver
-        // free-steps with its own adaptive step and output is produced by
-        // dense interpolation, so the solver step is decoupled from the
-        // output `dt`. This is why stiff long-horizon models (the lunar
-        // rover thermal system across multiple day/night cycles) complete
-        // here, where the interactive stepper — bounded by the output `dt`
-        // — collapses unless `dt` is driven down to a few thousand seconds.
         lunco_experiments::RuntimeMode::Batch => {
             // The batch solver reads its output grid from `opts.dt` (one column
-            // per `dt` step). The shared `stepper_options_from_bounds` leaves
-            // `opts.dt` as the *initial step* (`h0`) for the interactive path;
-            // for batch we instead resolve the requested output spacing — from
-            // either the `Interval` (`dt`) or the `NumberOfIntervals`
-            // (`n_intervals`) knob — so the run honours whichever the user
-            // chose. The solver free-steps regardless, so a coarse output grid
-            // doesn't constrain it.
+            // per `dt` step). `stepper_options_from_bounds` leaves `opts.dt` as
+            // the *initial step* (`h0`) for the interactive path; for batch we
+            // instead resolve the requested output spacing — from either the
+            // `Interval` (`dt`) or the `NumberOfIntervals` (`n_intervals`) knob
+            // — so the run honours whichever the user chose. The solver
+            // free-steps regardless, so a coarse output grid doesn't constrain
+            // it (and `run_batch_sim` decimates the event-flooded result back
+            // to that grid).
             let mut batch_opts = stepper_opts.clone();
             let output_dt = crate::sim_target::resolve_step_dt(
                 bounds.t_start,
@@ -826,11 +874,10 @@ fn run_inner(
                 bounds.dt,
                 bounds.n_intervals
             );
-            run_batch_sim(&run_dae, &batch_opts, t_wall, &mut sink);
+            run_batch_sim(dae, &batch_opts, started, sink);
         }
-        // Opt-in: the live `SimStepper` loop, for streamable/steerable runs.
         lunco_experiments::RuntimeMode::Interactive => {
-            let mut stepper = match rumoca_sim::SimStepper::new(&run_dae, stepper_opts) {
+            let mut stepper = match rumoca_sim::SimStepper::new(dae, stepper_opts) {
                 Ok(s) => s,
                 Err(e) => {
                     sink.emit(RunUpdate::Failed {
@@ -846,7 +893,7 @@ fn run_inner(
                 bounds.t_end,
                 bounds.dt
             );
-            run_stepping_loop(&mut stepper, &bounds, t_wall, &mut sink);
+            run_stepping_loop(&mut stepper, bounds, started, sink);
         }
     }
 }
@@ -862,7 +909,10 @@ fn run_inner(
 /// boundaries (before the solve, and before emitting the result) rather than
 /// mid-step; for the streamable/pausable behaviour use
 /// [`RuntimeMode::Interactive`](lunco_experiments::RuntimeMode::Interactive).
-#[cfg(not(target_arch = "wasm32"))]
+///
+/// Platform-agnostic: called by both native ([`drive_run`] via [`run_inner`])
+/// and the wasm worker. On wasm the whole solve runs off the main thread in
+/// the Web Worker, so the single blocking call doesn't stall the UI.
 fn run_batch_sim(
     dae: &Dae,
     opts: &rumoca_sim::SimOptions,
@@ -890,6 +940,24 @@ fn run_batch_sim(
         return;
     }
 
+    // Decimate to the requested output grid. rumoca's batch solver builds the
+    // grid from `opts.dt` correctly, but ALSO records an extra sample at every
+    // root/event crossing. Models with chattering discontinuities (e.g. an
+    // orbit `mod(time, period)` eclipse switch, or `if`-gated thresholds that
+    // re-trigger near a boundary) flood the trajectory with millions of event
+    // samples — a 2-orbit run of the orbital-datacenter model returned ~5M
+    // samples for a requested 1.1k-point grid (~4 GB across 75 vars; OOMs the
+    // wasm worker outright). Collapse back to the requested grid before storing
+    // / sending: for each grid time keep the nearest available sample. Guarded
+    // so the well-behaved exact-grid case (smooth models already return the
+    // grid) is left untouched.
+    let keep = batch_keep_indices(&result.times, opts.t_start, opts.t_end, opts.dt);
+    let raw_samples = result.times.len();
+    let (kept_times, gather): (Vec<f64>, Option<Vec<usize>>) = match &keep {
+        Some(idx) => (idx.iter().map(|&i| result.times[i]).collect(), Some(idx.clone())),
+        None => (result.times.clone(), None),
+    };
+
     // SimResult stores one column per visible variable (`data[var][t]`),
     // mirroring the `RunResult` series map keyed by variable name. Drop the
     // synthetic `time` column — `times` carries it.
@@ -898,19 +966,34 @@ fn run_batch_sim(
         if name == "time" {
             continue;
         }
-        let column = result.data.get(i).cloned().unwrap_or_default();
+        let full = result.data.get(i);
+        let column: Vec<f64> = match (&gather, full) {
+            (Some(idx), Some(col)) => idx.iter().map(|&j| col.get(j).copied().unwrap_or(f64::NAN)).collect(),
+            (None, Some(col)) => col.clone(),
+            (_, None) => Vec::new(),
+        };
         series.insert(name.clone(), column);
     }
 
-    let n_samples = result.times.len();
-    bevy::log::info!(
-        "[sim] simulate ok (batch): {} samples, {} vars, {:.2}s wall",
-        n_samples,
-        series.len(),
-        started.elapsed().as_secs_f64(),
-    );
+    let n_samples = kept_times.len();
+    if keep.is_some() {
+        bevy::log::info!(
+            "[sim] simulate ok (batch): {} samples (decimated from {} solver/event samples), {} vars, {:.2}s wall",
+            n_samples,
+            raw_samples,
+            series.len(),
+            started.elapsed().as_secs_f64(),
+        );
+    } else {
+        bevy::log::info!(
+            "[sim] simulate ok (batch): {} samples, {} vars, {:.2}s wall",
+            n_samples,
+            series.len(),
+            started.elapsed().as_secs_f64(),
+        );
+    }
     sink.emit(RunUpdate::Completed(RunResult {
-        times: result.times,
+        times: kept_times,
         series,
         meta: RunMeta {
             wall_time_ms: started.elapsed().as_millis() as u64,
@@ -918,6 +1001,52 @@ fn run_batch_sim(
             notes: None,
         },
     }));
+}
+
+/// Pick the sample indices to keep so a batch trajectory matches the requested
+/// output grid. rumoca emits the `opts.dt` grid PLUS an extra sample at every
+/// event/root crossing; for chattering models that's millions of points. For
+/// each grid time `t_start + k·dt` we keep the trajectory sample whose time is
+/// nearest (advancing a single monotonic cursor — O(n)), always keeping the
+/// first and last sample. Returns `None` (no decimation) when there's no usable
+/// `dt`, or when the trajectory is already at/under the grid size (the
+/// well-behaved smooth-model case — leave it byte-for-byte untouched).
+fn batch_keep_indices(times: &[f64], t_start: f64, t_end: f64, dt: Option<f64>) -> Option<Vec<usize>> {
+    let dt = dt?;
+    if !(dt > 0.0) || times.len() < 2 {
+        return None;
+    }
+    let span = (t_end - t_start).abs();
+    if !(span > 0.0) {
+        return None;
+    }
+    // +1 for the inclusive endpoint; small slack so we never over-decimate a
+    // result that already sits on (or just above) the grid.
+    let grid_n = (span / dt).round() as usize + 1;
+    if times.len() <= grid_n.saturating_mul(2) {
+        return None;
+    }
+    let mut keep: Vec<usize> = Vec::with_capacity(grid_n + 1);
+    let mut cursor = 0usize;
+    let n = times.len();
+    for k in 0..=grid_n {
+        let target = t_start + (k as f64) * dt;
+        // Advance while the next sample is closer to `target` than the current.
+        while cursor + 1 < n
+            && (times[cursor + 1] - target).abs() <= (times[cursor] - target).abs()
+        {
+            cursor += 1;
+        }
+        if keep.last() != Some(&cursor) {
+            keep.push(cursor);
+        }
+    }
+    // Guarantee the true final sample is present (events can land past the last
+    // grid node).
+    if keep.last() != Some(&(n - 1)) {
+        keep.push(n - 1);
+    }
+    Some(keep)
 }
 
 /// Cancellation + update sink for a stepping run. This is the ONE seam
@@ -1083,20 +1212,27 @@ pub fn run_stepping_loop(
     let mut last_emit_idx = 0;
     let mut last_progress_emit = web_time::Instant::now();
 
-    // On wasm, cap the OUTPUT sample interval so the solver is sampled
-    // frequently. The in-browser worker's wasm linear memory climbs between
-    // output samples and only stays bounded when they're frequent. Measured
-    // on the full stiff Rover run (5.1e6 s, tol 1e-6): step_dt≈25 s completes
-    // (~9 s wall), step_dt=50 s OOM-traps, the default span/500≈10205 s traps
-    // immediately — while native is flat at ~905 MB for ANY interval (so this
-    // is wasm-only; native keeps `resolve_step_dt` untouched). The lower bound
-    // keeps the sample count within `SAMPLE_CAP`; for the full Rover that floor
-    // is ~25.5 s, the proven-good value.
+    // Output grid spacing the user asked for (`Interval` / `numberOfIntervals`
+    // via `resolve_step_dt`). RECORDED identically on native and web, so the
+    // emitted sample count honours the request on both — no more wasm-only
+    // fixed ~`SAMPLE_CAP` point count.
+    let output_dt = step_dt;
+    // Solver advance per loop iteration. On wasm we bound it to a memory-safe
+    // cadence (the worker's linear memory climbs between *output* samples and
+    // only stays bounded when the solver is sampled frequently — see obs:
+    // step≈25s completes, 50s OOM-traps), but that cadence drives the SOLVER,
+    // not what we keep: output is decimated to `output_dt` below. Native steps
+    // straight to the next output point. This is the one place the two targets
+    // differ, and it no longer leaks into the user-visible sample count.
     #[cfg(target_arch = "wasm32")]
-    let step_dt = {
+    let internal_dt = {
         let span = (t_end - bounds.t_start).max(0.0);
-        step_dt.min(25.0).max(span / crate::sim_target::SAMPLE_CAP)
+        output_dt.min(25.0).max(span / crate::sim_target::SAMPLE_CAP)
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    let internal_dt = output_dt;
+    // Next output-grid time we still owe a sample for.
+    let mut next_output = bounds.t_start + output_dt;
 
     while stepper.time() < t_end {
         if sink.is_cancelled() {
@@ -1141,7 +1277,7 @@ pub fn run_stepping_loop(
             }
         }
 
-        if let Err(e) = stepper.step(step_dt) {
+        if let Err(e) = stepper.step(internal_dt) {
             bevy::log::warn!("[sim] simulate err: {e:?}");
             // Pack whatever we have so far into a partial result.
             let mut series = BTreeMap::new();
@@ -1164,11 +1300,25 @@ pub fn run_stepping_loop(
         }
 
         let t = stepper.time();
+        // Record on the requested output grid only. Internal sub-steps (the
+        // wasm memory cadence) between grid points are dropped, so the stored
+        // sample count equals span/output_dt on every target — the user's
+        // `dt`/`numberOfIntervals` is honoured identically native and web.
+        // Always keep the final sample once we reach `t_end`.
+        let at_end = t >= t_end;
+        if !(t + 0.5 * internal_dt >= next_output || at_end) {
+            continue;
+        }
         all_times.push(t);
         let current_values = stepper.state().values;
         for (i, name) in names.iter().enumerate() {
             let val = current_values.get(name).copied().unwrap_or(0.0);
             all_series[i].push(val);
+        }
+        // Advance the grid cursor past the sample we just stored so the next
+        // grid point is in the future (skips any we overshot in one step).
+        while next_output <= t {
+            next_output += output_dt;
         }
 
         // Throttle progress to ~10 Hz to avoid flooding the consumer and

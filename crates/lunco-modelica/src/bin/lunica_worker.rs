@@ -294,40 +294,19 @@ fn run_fast_in_worker(
         return;
     }
 
-    // Solver options — shared with native via `stepper_options_from_bounds`
-    // (TR-BDF2 + 1e-4 tol defaults), not the old bare `atol=rtol=1e-6` that
-    // silently ran BDF here while native ran TR-BDF2.
-    let stepper_opts =
-        lunco_modelica::experiments_runner::stepper_options_from_bounds(bounds);
-
-    let mut stepper = match rumoca_sim::SimStepper::new(&dae.dae, stepper_opts) {
-        Ok(s) => s,
-        Err(e) => {
-            post_run_update(
-                scope,
-                run_id,
-                lunco_experiments::RunUpdate::Failed {
-                    error: format!("stepper init: {e:?}"),
-                    partial: None,
-                },
-            );
-            return;
-        }
-    };
-
-    // Drive the run through the SHARED stepping loop — the exact same code
-    // native uses. `WorkerSink` is the only worker-specific part (postMessage
-    // + the cancel registry); the sampling/cap/streaming logic lives once in
-    // `run_stepping_loop`, so the worker can't drift from native again (which
-    // is how the old `bounds.dt.unwrap_or(0.01)` here OOM-trapped the browser
-    // on long horizons long after native was fixed).
+    // Drive the run through the SHARED `drive_run` — the EXACT same entry
+    // point native (`experiments_runner::run_inner`) uses. It honours
+    // `bounds.runtime`: Batch → the dense-output `simulate_with_diagnostics`
+    // solve (robust on stiff models), Interactive → the streamable
+    // `run_stepping_loop`. `WorkerSink` is the only worker-specific part
+    // (postMessage + the cancel registry). Previously the worker open-coded a
+    // stepper-only path, so stiff models (orbital-datacenter eclipse switch)
+    // ran natively via Batch but failed in the browser with
+    // `BDF step: step size too small at t=0`; routing through `drive_run`
+    // closes that divergence and also brings the worker the batch
+    // output-decimation.
     let mut sink = WorkerSink { scope, run_id };
-    lunco_modelica::experiments_runner::run_stepping_loop(
-        &mut stepper,
-        bounds,
-        started,
-        &mut sink,
-    );
+    lunco_modelica::experiments_runner::drive_run(&dae.dae, bounds, started, &mut sink);
     post_log(
         scope,
         format!("run_fast: done in {:.2}s", started.elapsed().as_secs_f64()),

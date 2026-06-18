@@ -352,6 +352,16 @@ pub struct CanvasDocState {
     /// instead of running fit-to-content, so a reopened diagram looks
     /// exactly as it did at exit. `None` for normally-opened docs.
     pub pending_view: Option<lunco_canvas::Viewport>,
+    /// One-shot re-projection request. Set on every open tab when the MSL
+    /// standard library finishes loading (web fetches + decodes it
+    /// asynchronously a few seconds after boot). A diagram projected *before*
+    /// MSL was resident draws its standard-library components — `FixedHeatFlow`,
+    /// `Gain`, … — as blank placeholder boxes, because neither icon source
+    /// (pre-baked index / engine session) had the class yet. This flag forces
+    /// one in-place re-projection so those icons resolve, **without** resetting
+    /// the camera (a `last_seen_gen = 0` reset would re-fit). Consumed +
+    /// cleared by `spawn_projection_task`.
+    pub force_reproject: bool,
 }
 
 impl Default for CanvasDocState {
@@ -404,6 +414,7 @@ impl Default for CanvasDocState {
             pulse_handle,
             edge_pulse_handle,
             pending_view: None,
+            force_reproject: false,
         }
     }
 }
@@ -464,6 +475,18 @@ impl CanvasDiagramState {
         handle: lunco_workbench::status_bus::BusyHandle,
     ) {
         self.pending_projection_handoff.insert(doc, handle);
+    }
+
+    /// Mark every open tab (and the shared fallback) for a one-shot
+    /// re-projection. Called when the MSL standard library becomes resident so
+    /// diagrams projected before its icons were available re-resolve them
+    /// (otherwise standard-library components stay as blank boxes until the
+    /// source is next edited). Re-projects in place — no camera reset.
+    pub fn request_reproject_all(&mut self) {
+        for st in self.per_tab.values_mut() {
+            st.force_reproject = true;
+        }
+        self.fallback.force_reproject = true;
     }
 
     /// Drop the handoff handle for `doc`, if any. Called from

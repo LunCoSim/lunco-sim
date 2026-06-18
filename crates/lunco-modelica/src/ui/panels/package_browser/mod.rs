@@ -24,7 +24,11 @@ impl Plugin for PackageBrowserPlugin {
         app.init_resource::<PackageTreeCache>()
             .add_systems(
                 Update,
-                (handle_package_loading_tasks, reconcile_library_roots_on_ready),
+                (
+                    handle_package_loading_tasks,
+                    reconcile_library_roots_on_ready,
+                    reproject_diagrams_on_msl_ready,
+                ),
             );
     }
 }
@@ -47,6 +51,31 @@ pub fn reconcile_library_roots_on_ready(
         return;
     }
     cache.reconcile_library_roots();
+}
+
+/// Once the MSL standard library is resident, force a one-shot re-projection
+/// of every open diagram so standard-library component icons (drawn as blank
+/// boxes when projected before MSL loaded — the web async-load gap) resolve.
+/// Runs at most once per session via the `Local` latch. `CanvasDiagramState`
+/// is created lazily on first canvas render; if it isn't up yet we don't latch,
+/// so a later canvas still gets the request once it exists.
+pub fn reproject_diagrams_on_msl_ready(
+    canvas: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
+    state: Option<Res<lunco_assets::msl::MslLoadState>>,
+    mut done: Local<bool>,
+) {
+    if *done {
+        return;
+    }
+    if !matches!(
+        state.as_deref(),
+        Some(lunco_assets::msl::MslLoadState::Ready { .. })
+    ) {
+        return;
+    }
+    let Some(mut canvas) = canvas else { return };
+    canvas.request_reproject_all();
+    *done = true;
 }
 
 pub fn handle_package_loading_tasks(
