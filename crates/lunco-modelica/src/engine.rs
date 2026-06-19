@@ -106,6 +106,16 @@ pub struct ModelicaEngine {
     /// `DocumentId` → URI used inside the session. Stable for the
     /// document's lifetime; freed on `Self::close_document`.
     uri_for_doc: HashMap<DocumentId, String>,
+    /// Qualified class name → file URI. Populated whenever an AST is
+    /// installed into the session (via `upsert_document_with_ast`,
+    /// `install_parsed_ast`, `install_lenient`, or `load_library_files`).
+    ///
+    /// `class_lookup_query` returns the qualified class name (not a file
+    /// URI), so `parsed_file_query` (which is keyed by file path) cannot
+    /// be called directly with its result. This map bridges the two:
+    /// `class_def` resolves the file URI here before calling
+    /// `parsed_file_query`.
+    class_to_uri: HashMap<String, String>,
     /// Documents whose async parse is currently in flight. Prevents
     /// double-spawning the same parse while a worker is mid-flight.
     /// Inserted by `mark_pending`; cleared by the worker on completion.
@@ -133,9 +143,32 @@ impl ModelicaEngine {
         Self {
             session: Session::default(),
             uri_for_doc: HashMap::new(),
+            class_to_uri: HashMap::new(),
             pending: HashSet::new(),
             completed: Vec::new(),
             parse_diags: HashMap::new(),
+        }
+    }
+
+    /// Populate `class_to_uri` from an AST that was just installed at
+    /// `file_uri`. Handles the MSL `within X.Y; model Z end Z;` shape:
+    /// each top-level class key `k` in `ast.classes` maps to the full
+    /// qualified name `<within>.<k>` (or just `k` when `within` is absent).
+    fn index_ast_classes(
+        &mut self,
+        file_uri: &str,
+        ast: &rumoca_compile::parsing::ast::StoredDefinition,
+    ) {
+        let prefix = ast.within.as_ref().map(|w| w.to_string()).unwrap_or_default();
+        for class_key in ast.classes.keys() {
+            let qualified = if prefix.is_empty() {
+                class_key.clone()
+            } else {
+                format!("{}.{}", prefix, class_key)
+            };
+            self.class_to_uri
+                .entry(qualified)
+                .or_insert_with(|| file_uri.to_string());
         }
     }
 
@@ -214,6 +247,7 @@ impl ModelicaEngine {
     ) {
         let uri = self.uri(doc_id);
         self.uri_for_doc.entry(doc_id).or_insert_with(|| uri.clone());
+        self.index_ast_classes(&uri, &ast);
         self.session.add_parsed_batch(vec![(uri, ast)]);
     }
 
@@ -244,6 +278,7 @@ impl ModelicaEngine {
     ) {
         let uri = self.uri(doc_id);
         self.uri_for_doc.entry(doc_id).or_insert_with(|| uri.clone());
+        self.index_ast_classes(&uri, &ast);
         self.session.add_parsed_batch(vec![(uri, ast)]);
     }
 
@@ -322,6 +357,20 @@ impl ModelicaEngine {
         let mut count = 0;
         for (uri, text) in &files {
             if self.session.add_document(uri, text).is_ok() {
+                // Index any classes for the fast qualified→URI lookup.
+                if let Some(ast) = self.session.parsed_file_query(uri) {
+                    let uri_clone = uri.clone();
+                    let prefix = ast.within.as_ref().map(|w| w.to_string()).unwrap_or_default();
+                    let keys: Vec<String> = ast.classes.keys().cloned().collect();
+                    for k in keys {
+                        let q = if prefix.is_empty() {
+                            k
+                        } else {
+                            format!("{}.{}", prefix, k)
+                        };
+                        self.class_to_uri.entry(q).or_insert_with(|| uri_clone.clone());
+                    }
+                }
                 count += 1;
             }
         }
@@ -461,18 +510,75 @@ impl ModelicaEngine {
     /// need filesystem-backed lazy loading should check `has_class`
     /// first, push the file via `session_mut().add_document`, then
     /// call `class_def`.
+    ///
+    /// ## URI vs qualified-name distinction
+    ///
+    /// `class_lookup_query` returns the **qualified class name** (e.g.
+    /// `"Modelica.Thermal.HeatTransfer.Sources.FixedTemperature"`),
+    /// **not** a file URI. `parsed_file_query` is keyed by file path
+    /// URI (e.g. `/…/FixedTemperature.mo`). We bridge these via the
+    /// `class_to_uri` map that is populated whenever an AST is
+    /// installed, and fall back to a linear search over the MSL bundle
+    /// for classes that arrived via `replace_parsed_source_set` (which
+    /// bypasses `add_document` and therefore skips `index_ast_classes`).
     pub fn class_def(
         &mut self,
         qualified: &str,
     ) -> Option<rumoca_compile::parsing::ast::ClassDef> {
-        let Some(uri) = self.session.class_lookup_query(qualified) else {
+        // Confirm the class is known to rumoca's session at all.
+        let resolved_key = self.session.class_lookup_query(qualified);
+        if resolved_key.is_none() {
             bevy::log::warn!("[engine] class_def: class_lookup_query failed for {}", qualified);
             return None;
-        };
-        let Some(parsed) = self.session.parsed_file_query(&uri) else {
-            bevy::log::warn!("[engine] class_def: parsed_file_query failed for uri {}", uri);
+        }
+
+        // Fast path: class_to_uri was populated when this AST was
+        // installed via upsert_document_with_ast / install_parsed_ast /
+        // load_library_files.
+        let file_uri: Option<String> = self.class_to_uri.get(qualified).cloned();
+
+        // Slow fallback: the class arrived via replace_parsed_source_set
+        // (e.g. the bulk MSL install), which bypasses add_document and
+        // therefore doesn't call index_ast_classes. Search the MSL bundle
+        // directly and remember the result for next time.
+        let file_uri = file_uri.or_else(|| {
+            let bundle = crate::msl_remote::parsed_msl_bundle()?;
+            for (uri, ast) in bundle.iter() {
+                let prefix = ast.within.as_ref().map(|w| w.to_string()).unwrap_or_default();
+                for class_key in ast.classes.keys() {
+                    let q = if prefix.is_empty() {
+                        class_key.clone()
+                    } else {
+                        format!("{}.{}", prefix, class_key)
+                    };
+                    if q == qualified {
+                        // Cache for subsequent lookups.
+                        self.class_to_uri
+                            .insert(qualified.to_string(), uri.clone());
+                        return Some(uri.clone());
+                    }
+                }
+            }
+            None
+        });
+
+        let Some(file_uri) = file_uri else {
+            bevy::log::warn!(
+                "[engine] class_def: no file URI found for class {} \
+                 (class_to_uri miss + MSL bundle miss)",
+                qualified
+            );
             return None;
         };
+
+        let Some(parsed) = self.session.parsed_file_query(&file_uri) else {
+            bevy::log::warn!(
+                "[engine] class_def: parsed_file_query failed for uri {} (class {})",
+                file_uri, qualified
+            );
+            return None;
+        };
+
         // Route through the canonical within-aware lookup so this
         // path can't silently disagree with the read path when the
         // file carries a `within Foo;` clause and the caller asks
@@ -481,7 +587,10 @@ impl ModelicaEngine {
         // class as `walk_qualified` and `lookup_class_mut` had.
         let found = crate::diagram::find_class_by_qualified_name(&parsed, qualified).cloned();
         if found.is_none() {
-            bevy::log::warn!("[engine] class_def: find_class_by_qualified_name failed for {} in uri {}", qualified, uri);
+            bevy::log::warn!(
+                "[engine] class_def: find_class_by_qualified_name failed for {} in uri {}",
+                qualified, file_uri
+            );
         }
         found
     }
@@ -699,6 +808,54 @@ mod tests {
             by_name["free"].default_value.is_none(),
             "free has no default: {:?}",
             by_name["free"].default_value
+        );
+    }
+
+    /// Verifies that `class_def` and `icon_for` can resolve an MSL class
+    /// (`Modelica.Thermal.HeatTransfer.Sources.FixedTemperature`) after
+    /// the bundle is loaded via `replace_parsed_source_set`.
+    ///
+    /// This is the canonical regression test for the URI-vs-qualified-name
+    /// mismatch bug: `class_lookup_query` returns a qualified name, not a
+    /// file URI, so `parsed_file_query` cannot be called with its return
+    /// value directly. The `class_to_uri` map + MSL bundle fallback in
+    /// `class_def` bridges the two.
+    #[test]
+    fn test_msl_fixed_temperature_class_def_and_icon() {
+        let bundle = crate::msl_remote::parsed_msl_bundle();
+        let Some(docs) = bundle else {
+            println!("MSL bundle not found, skipping test");
+            return;
+        };
+
+        let mut engine = ModelicaEngine::new();
+        let defs: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)> =
+            docs.iter().map(|(u, d)| (u.clone(), d.clone())).collect();
+        engine.session_mut().replace_parsed_source_set(
+            "msl",
+            rumoca_compile::compile::SourceRootKind::DurableExternal,
+            defs,
+            None,
+        );
+
+        let qualified = "Modelica.Thermal.HeatTransfer.Sources.FixedTemperature";
+        assert!(engine.has_class(qualified), "class must be in session");
+
+        let class_def = engine.class_def(qualified);
+        assert!(
+            class_def.is_some(),
+            "class_def must resolve FixedTemperature (URI/qualified-name bridge)"
+        );
+
+        let icon = engine.icon_for(qualified);
+        assert!(
+            icon.is_some(),
+            "icon_for must resolve FixedTemperature (inherits icon from Icons.FixedTemperature)"
+        );
+        let icon = icon.unwrap();
+        assert!(
+            !icon.graphics.is_empty(),
+            "FixedTemperature icon must have graphics, got empty"
         );
     }
 }

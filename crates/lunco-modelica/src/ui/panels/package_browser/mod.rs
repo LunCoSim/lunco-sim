@@ -56,29 +56,62 @@ pub fn reconcile_library_roots_on_ready(
 }
 
 /// Observer fired exactly once per session by [`crate::engine_resource::MslBecameReady`]
-/// (emitted from `drive_msl_bootstrap` the frame MSL is installed).
+/// (emitted from `drive_msl_bootstrap` the frame MSL is installed into the engine).
 ///
-/// Forces a one-shot re-projection of every currently-open canvas tab so
-/// standard-library component icons — shown as blank boxes when projected
-/// before MSL was available — resolve correctly.
+/// Does three things on that single frame:
 ///
-/// Gated on the *engine install* event, **not** `MslLoadState::Ready`:
-/// `icon_for` reads the engine session, so re-projecting at `Ready` is too
-/// early (MSL is decoded but not yet in the session).
+/// 1. **Re-projects** all open canvas tabs so standard-library component icons
+///    — shown as blank boxes when projected before MSL was available — resolve
+///    correctly. Gated on the *engine install* event (not `MslLoadState::Ready`)
+///    because `icon_for` reads the engine session.
+///
+/// 2. **Rebuilds the bundled examples tree** if it was empty at boot. On web the
+///    `msl_index.json` isn't available when `PackageTreeCache::new()` runs (the
+///    bundle hasn't been fetched yet), so `msl_bundled_nodes()` returns an empty
+///    slice and the 📦 LunCo Examples root shows nothing. Once the bundle lands
+///    and the engine is bootstrapped, we replace the children of `bundled_root`
+///    with the now-available node tree.
+///
+/// 3. **Reconciles library roots** so any third-party libs carried inside the
+///    parsed bundle (web only) appear in the tree at the same time.
 fn on_msl_became_ready(
     _trigger: On<crate::engine_resource::MslBecameReady>,
     canvas: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
+    mut cache: ResMut<PackageTreeCache>,
 ) {
-    let Some(mut canvas) = canvas else {
-        // CanvasDiagramState is created lazily on first canvas render.
-        // If no canvas has opened yet, docs projected later will use a warm
-        // engine session and resolve icons without needing force_reproject.
+    // ── 1. Canvas re-projection ───────────────────────────────────────
+    if let Some(mut canvas) = canvas {
+        canvas.request_reproject_all();
+        bevy::log::info!("[PackageBrowser] MslBecameReady: triggered reproject_all for open canvas tabs");
+    } else {
         bevy::log::debug!("[PackageBrowser] MslBecameReady: no canvas state yet — skipping force_reproject");
-        return;
-    };
-    canvas.request_reproject_all();
-    bevy::log::info!("[PackageBrowser] MslBecameReady: triggered reproject_all for open canvas tabs");
+    }
+
+    // ── 2. Rebuild bundled examples tree (web: was empty at boot) ─────
+    if !cache.bundled_tree_indexed {
+        let fresh = crate::visual_diagram::msl_bundled_nodes();
+        if !fresh.is_empty() {
+            // Find the bundled_root category and replace its children.
+            for root in &mut cache.roots {
+                if let PackageNode::Category { id, children, .. } = root {
+                    if id == "bundled_root" {
+                        *children = Some(fresh.to_vec());
+                        break;
+                    }
+                }
+            }
+            cache.bundled_tree_indexed = true;
+            bevy::log::info!(
+                "[PackageBrowser] MslBecameReady: rebuilt bundled examples tree ({} nodes)",
+                fresh.len()
+            );
+        }
+    }
+
+    // ── 3. Reconcile library roots ────────────────────────────────────
+    cache.reconcile_library_roots();
 }
+
 
 pub fn handle_package_loading_tasks(
     mut cache: ResMut<PackageTreeCache>,
