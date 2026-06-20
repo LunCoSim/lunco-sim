@@ -543,6 +543,18 @@ impl ModelicaEngine {
         // directly and remember the result for next time.
         let file_uri = file_uri.or_else(|| {
             let bundle = crate::msl_remote::parsed_msl_bundle()?;
+            // A `.mo` that declares top-level qualified class `q` (= within +
+            // top-level key) ALSO contains every class nested under it (MSL
+            // packs whole packages per file, e.g. `Modelica/Blocks/Examples.mo`
+            // holds `within Modelica.Blocks; package Examples … model
+            // PID_Controller …`). So the containing file for `qualified` is the
+            // one whose `q` is `qualified` itself or a dotted *prefix* of it.
+            // Match exact-or-prefix and keep the LONGEST `q` so the most
+            // specific file wins (`Modelica.Blocks.Examples` over the broader
+            // `Modelica.Blocks` package stub). The old exact-only match missed
+            // every nested class → `None` → callers (drill-in projection,
+            // icon resolution) retried every frame and rendered nothing.
+            let mut best: Option<(usize, String)> = None;
             for (uri, ast) in bundle.iter() {
                 let prefix = ast.within.as_ref().map(|w| w.to_string()).unwrap_or_default();
                 for class_key in ast.classes.keys() {
@@ -551,15 +563,18 @@ impl ModelicaEngine {
                     } else {
                         format!("{}.{}", prefix, class_key)
                     };
-                    if q == qualified {
-                        // Cache for subsequent lookups.
-                        self.class_to_uri
-                            .insert(qualified.to_string(), uri.clone());
-                        return Some(uri.clone());
+                    let is_container =
+                        qualified == q || qualified.starts_with(&format!("{}.", q));
+                    if is_container && best.as_ref().is_none_or(|(len, _)| q.len() > *len) {
+                        best = Some((q.len(), uri.clone()));
                     }
                 }
             }
-            None
+            best.map(|(_, uri)| {
+                // Cache for subsequent lookups (also breaks the per-frame retry).
+                self.class_to_uri.insert(qualified.to_string(), uri.clone());
+                uri
+            })
         });
 
         let Some(file_uri) = file_uri else {

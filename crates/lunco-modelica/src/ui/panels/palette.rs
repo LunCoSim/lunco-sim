@@ -497,11 +497,16 @@ pub(crate) fn place_component(
     // and `apply_ops` surfaces a one-shot banner. Pre-checking in
     // panels would duplicate the policy and inevitably drift.
 
-    // Resolve target class — drilled-in class on the canvas if set,
-    // otherwise the doc's first detected non-package class. B.3:
-    // derive scope from `ModelTabs` directly.
-    let drilled_in = crate::ui::panels::model_view::drilled_class_for_doc(world, doc_id);
-    let class = drilled_in
+    // Resolve target class — MUST match the class the canvas is actually
+    // projecting, or the component lands in a different class than the one
+    // on screen (added comps "don't appear", and the diagram's placement /
+    // move ops then target the wrong class → "component `x` not found in
+    // class `y`"). The projection resolves its target via
+    // `default_simulation_class` (drilled pin → run-target override →
+    // tier-ranked sim candidate); route through the SAME helper so add and
+    // view never disagree. First-non-package is only a last resort for docs
+    // with no simulatable candidate (where the canvas shows nothing anyway).
+    let class = crate::ui::panels::model_view::context::default_simulation_class(world, doc_id)
         .or_else(|| {
             // Fallback to the document's first non-package class, read
             // via the per-doc Index (sees optimistic structural patches
