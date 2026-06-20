@@ -8,7 +8,7 @@
 //! through a plain output→input wire — the ontology's
 //! `RadiationProvider → LocalRadiation → solar models` pipeline.
 //!
-//! This is the data-driven replacement for the ad-hoc `inject_sun_signals`
+//! This is the data-driven replacement for the earlier ad-hoc sun-injection
 //! prototype (which pushed straight into model *inputs*, bypassing wires). Here
 //! the value flows like any other signal: cosim stays domain-agnostic, and the
 //! USD wiring is explicit (`sun_azimuth` out → `sun_azimuth` in).
