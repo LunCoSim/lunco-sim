@@ -356,7 +356,7 @@ fn capture_command<C: Event + Reflect + TypePath>(
         match serde_json::to_value(&serializer) {
             Ok(v) => v,
             Err(e) => {
-                warn!("[wire] capture serialize {type_name} failed: {e}");
+                warn!("[sync] capture serialize {type_name} failed: {e}");
                 return;
             }
         }
@@ -412,7 +412,7 @@ pub fn apply_sync_command(
         };
         if let Err(reject) = authorize(&session_registry, ev.origin, &ev.type_name, target_gid) {
             warn!(
-                "[wire] rejected {} from {}: {:?}",
+                "[sync] rejected {} from {}: {:?}",
                 ev.type_name, ev.origin, reject
             );
             return;
@@ -432,11 +432,11 @@ pub fn apply_sync_command(
         let registry = world.resource::<AppTypeRegistry>().clone();
         let type_reg = registry.read();
         let Some(registration) = type_reg.get_with_short_type_path(&type_name) else {
-            warn!("[wire] unknown command type '{type_name}'");
+            warn!("[sync] unknown command type '{type_name}'");
             return;
         };
         let Some(reflect_event) = registration.data::<ReflectEvent>() else {
-            warn!("[wire] command '{type_name}' has no ReflectEvent");
+            warn!("[sync] command '{type_name}' has no ReflectEvent");
             return;
         };
         // Wire gids → local Entity bits, driven by the command's schema (needs
@@ -451,7 +451,7 @@ pub fn apply_sync_command(
         let reflected = match deserializer.deserialize(params) {
             Ok(r) => r,
             Err(e) => {
-                warn!("[wire] deserialize '{type_name}' failed: {e}");
+                warn!("[sync] deserialize '{type_name}' failed: {e}");
                 return;
             }
         };
@@ -529,7 +529,7 @@ pub fn drain_sync_inbox(
             SyncEnvelope::Handshake(h) => {
                 local.0 = SessionId(h.session);
                 tick.0 = h.tick;
-                info!("[wire] handshake: session={} tick={}", h.session, h.tick);
+                info!("[net] handshake: session={} tick={}", h.session, h.tick);
             }
             SyncEnvelope::Ownership(o) => {
                 // Clients adopt the host's authoritative who-owns-what table.
