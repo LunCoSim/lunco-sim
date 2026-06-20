@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 
-use crate::{AvianSim, SimComponent, SimConnection};
+use crate::{AvianSim, JointSim, SimComponent, SimConnection};
 
 /// System sets for co-simulation propagation.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -23,6 +23,8 @@ pub fn propagate_connections(
         Query<&AvianSim>,
         Query<&mut SimComponent>,
         Query<&mut AvianSim>,
+        Query<&JointSim>,
+        Query<&mut JointSim>,
     )>,
     // Reused across ticks — each FixedUpdate would otherwise allocate a
     // fresh Vec plus a fresh String per connection. Cleared before use.
@@ -38,6 +40,13 @@ pub fn propagate_connections(
     // AvianSim inputs are cleared by take_inputs() in apply_sim_forces instead.
     for mut comp in set.p2().iter_mut() {
         for val in comp.inputs.values_mut() {
+            *val = 0.0;
+        }
+    }
+    // JointSim inputs (e.g. `angle`) are setpoints; zero-then-accumulate so a
+    // single driving wire lands a clean value each tick (matches SimComponent).
+    for mut joint in set.p5().iter_mut() {
+        for val in joint.inputs.values_mut() {
             *val = 0.0;
         }
     }
@@ -64,6 +73,11 @@ pub fn propagate_connections(
                 set.p1().get(conn.start_element)
                     .ok()
                     .and_then(|a| a.outputs.get(&conn.start_connector).copied())
+            })
+            .or_else(|| {
+                set.p4().get(conn.start_element)
+                    .ok()
+                    .and_then(|j| j.outputs.get(&conn.start_connector).copied())
             });
 
         if let Some(val) = value {
@@ -79,7 +93,12 @@ pub fn propagate_connections(
         }
 
         if let Ok(mut avian) = set.p3().get_mut(end_element) {
-            let entry = avian.inputs.entry(end_connector).or_insert(0.0);
+            let entry = avian.inputs.entry(end_connector.clone()).or_insert(0.0);
+            *entry += value;
+        }
+
+        if let Ok(mut joint) = set.p5().get_mut(end_element) {
+            let entry = joint.inputs.entry(end_connector).or_insert(0.0);
             *entry += value;
         }
     }

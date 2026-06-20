@@ -31,7 +31,7 @@
 use bevy::prelude::*;
 
 use crate::connection::{PortDirection, PortType};
-use crate::{AvianSim, SimComponent};
+use crate::{AvianSim, JointSim, SimComponent};
 
 /// A discovered port: identity, causality, physical domain, current value.
 ///
@@ -98,6 +98,10 @@ pub fn entity_ports(world: &World, entity: Entity) -> Vec<PortRef> {
         push_map(&mut out, &a.outputs, PortDirection::Out);
         push_map(&mut out, &a.inputs, PortDirection::In);
     }
+    if let Some(j) = world.get::<JointSim>(entity) {
+        push_map(&mut out, &j.outputs, PortDirection::Out);
+        push_map(&mut out, &j.inputs, PortDirection::In);
+    }
     out
 }
 
@@ -114,6 +118,11 @@ pub fn read_port(world: &World, entity: Entity, name: &str) -> Option<f64> {
     }
     if let Some(a) = world.get::<AvianSim>(entity) {
         if let Some(v) = a.outputs.get(name).or_else(|| a.inputs.get(name)) {
+            return Some(*v);
+        }
+    }
+    if let Some(j) = world.get::<JointSim>(entity) {
+        if let Some(v) = j.outputs.get(name).or_else(|| j.inputs.get(name)) {
             return Some(*v);
         }
     }
@@ -143,6 +152,12 @@ pub fn write_port(world: &mut World, entity: Entity, name: &str, value: f64) -> 
     if let Some(mut a) = world.get_mut::<AvianSim>(entity) {
         if a.inputs.contains_key(name) {
             a.inputs.insert(name.to_string(), value);
+            return true;
+        }
+    }
+    if let Some(mut j) = world.get_mut::<JointSim>(entity) {
+        if j.inputs.contains_key(name) {
+            j.inputs.insert(name.to_string(), value);
             return true;
         }
     }

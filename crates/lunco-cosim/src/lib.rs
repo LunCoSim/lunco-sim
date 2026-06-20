@@ -44,6 +44,7 @@ use avian3d::prelude::PhysicsSystems;
 
 pub mod avian;
 pub mod component;
+pub mod joint;
 pub mod ports;
 pub mod suggestion;
 pub mod systems;
@@ -51,6 +52,7 @@ pub mod connection;
 
 pub use avian::*;
 pub use component::*;
+pub use joint::*;
 pub use ports::*;
 pub use suggestion::*;
 pub use connection::*;
@@ -74,10 +76,12 @@ impl Plugin for CoSimPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<SimComponent>()
             .register_type::<AvianSim>()
+            .register_type::<JointSim>()
             .register_type::<SimConnection>();
 
         app.add_observer(on_add_rigid_body);
         app.add_observer(on_add_rigid_body_forces);
+        app.add_observer(joint::on_add_revolute_joint);
 
         // CoSim runs in FixedUpdate (before Avian's FixedPostUpdate physics step).
         // Order: propagate wires first, then apply forces to Position.
@@ -102,6 +106,10 @@ impl Plugin for CoSimPlugin {
             (
                 systems::propagate::propagate_connections.in_set(systems::propagate::CosimSet::Propagate),
                 systems::apply_forces::apply_sim_forces.in_set(systems::apply_forces::CosimSet::ApplyForces),
+                // Joint drive is a port consumer like apply_sim_forces: it turns
+                // the propagated `angle` setpoint into joint-motor position
+                // control. Same set, same ordering (after propagate).
+                joint::apply_joint_drives.in_set(systems::apply_forces::CosimSet::ApplyForces),
             )
                 .run_if(|role: Res<lunco_core::NetworkRole>| {
                     !matches!(*role, lunco_core::NetworkRole::Client)
@@ -110,9 +118,15 @@ impl Plugin for CoSimPlugin {
 
         // Read Avian outputs AFTER Avian's Writeback (Position → Transform sync).
         // This ensures height/velocity values reflect the physics step that just ran.
+        // `read_joint_outputs` reads body GlobalTransforms post-step the same way,
+        // publishing the joint's measured `angle` to its Out port.
         app.add_systems(
             FixedPostUpdate,
-            systems::step_avian::read_avian_outputs.after(PhysicsSystems::Writeback),
+            (
+                systems::step_avian::read_avian_outputs,
+                joint::read_joint_outputs,
+            )
+                .after(PhysicsSystems::Writeback),
         );
 
         app.add_systems(Update, systems::collider::sync_collider);
