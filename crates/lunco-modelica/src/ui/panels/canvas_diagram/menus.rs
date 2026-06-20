@@ -128,9 +128,38 @@ pub(super) fn render_node_menu(
 fn collect_varying_signals(
     world: &mut World,
 ) -> Vec<(bevy::prelude::Entity, String)> {
-    let signals: Vec<(bevy::prelude::Entity, String)> = world
+    use bevy::prelude::Entity;
+    // A document's variables are registered in `SignalRegistry` under TWO
+    // entities: the live cosim entity (`ModelicaDocumentRegistry`) and the
+    // batch / Fast-Run playback entity (`PlaybackEntities`). Enumerating the
+    // whole registry therefore lists every path once per entity — the
+    // duplicate-variables bug. Resolve the active doc to its single canonical
+    // signal entity using the SAME precedence the plot data-fetch uses
+    // (`snapshots::stash_snapshots` doc→entity: the registry sim entity, lowest
+    // bits, wins; else the playback entity), then read only that entity's
+    // signals so the picker matches exactly what a doc-bound plot will show.
+    let bound_entity: Option<Entity> = active_doc_from_world(world).and_then(|d| {
+        let live = world
+            .get_resource::<crate::ui::state::ModelicaDocumentRegistry>()
+            .and_then(|reg| {
+                reg.iter_doc_for_entity()
+                    .filter(|(_, dd)| *dd == d)
+                    .map(|(e, _)| e)
+                    .min_by_key(|e| e.to_bits())
+            });
+        let playback = world
+            .get_resource::<crate::experiments_runner::PlaybackEntities>()
+            .and_then(|p| p.0.get(&d).copied());
+        live.or(playback)
+    });
+    let signals: Vec<(Entity, String)> = world
         .get_resource::<lunco_viz::SignalRegistry>()
-        .map(|r| r.iter_scalar().map(|(s, _)| (s.entity, s.path.clone())).collect())
+        .map(|r| {
+            r.iter_scalar()
+                .filter(|(s, _)| bound_entity.map_or(true, |be| s.entity == be))
+                .map(|(s, _)| (s.entity, s.path.clone()))
+                .collect()
+        })
         .unwrap_or_default();
     let mut v: Vec<_> = signals
         .into_iter()

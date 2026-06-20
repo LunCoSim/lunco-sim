@@ -178,11 +178,28 @@ pub(crate) fn trigger_projection_if_needed(
 }
 
 fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: u64, render_tab_id: Option<crate::ui::panels::model_view::TabId>) {
-    let (source, ast_arc) = {
+    let resolved = {
         let registry = world.resource::<ModelicaDocumentRegistry>();
-        let Some(host) = registry.host(doc_id) else { return; };
-        let Some(ast) = host.document().strict_ast() else { return; };
-        (host.document().source_arc(), ast)
+        registry
+            .host(doc_id)
+            .and_then(|host| host.document().strict_ast().map(|ast| (host.document().source_arc(), ast)))
+    };
+    let (source, ast_arc) = match resolved {
+        Some(v) => v,
+        None => {
+            // Doc/AST not ready yet (common on a fresh drill-in whose async
+            // parse hasn't landed). Without this, the parse→project busy
+            // handoff stashed by `drive_drill_in_loads` is never released and
+            // the tab spins on "loading" forever, because no projection task
+            // is created (so the deadline can't cancel it) and re-entry is
+            // gated on gen/target change. Release the handoff so the
+            // lifecycle falls through to Empty and re-projects once the AST
+            // lands (the parse bumps the document generation → gen_advanced).
+            world
+                .resource_mut::<CanvasDiagramState>()
+                .complete_projection_handoff(doc_id);
+            return;
+        }
     };
     let (max_nodes, max_duration) = world.get_resource::<DiagramProjectionLimits>().map(|l| (l.max_nodes, l.max_duration)).unwrap_or((crate::ui::panels::canvas_projection::DEFAULT_MAX_DIAGRAM_NODES, std::time::Duration::from_secs(60)));
     let target_class = render_target(world)
