@@ -807,8 +807,23 @@ fn drive_msl_bootstrap(
             replace_ms
         );
         *bootstrap = MslBootstrapState::Done;
+
+        // Make the baked class-metadata index (`msl_index.json`) resident now
+        // that MSL is ready. On web the source bundle (which carries the index)
+        // is fetched but kept compressed and was previously only unpacked lazily
+        // on the first editor drill-in — so the palette / "add component" menu /
+        // welcome list / bundled-examples tree / diagram icons (all of which read
+        // `msl_index.json` via `msl_class_library`) stayed empty until a drill-in.
+        // Unpack it here, at the single point MSL becomes ready, so those views
+        // populate without user interaction. Idempotent + no-op on native (the
+        // index is read straight off the on-disk source root). This is the same
+        // unpack the drill-in path performs, just done proactively once.
+        #[cfg(target_arch = "wasm32")]
+        crate::msl_remote::ensure_msl_source_unpacked();
+
         // Notify observers so they can react immediately (e.g. the canvas
-        // diagram reprojection that resolves standard-library icons). This
+        // diagram reprojection that resolves standard-library icons, and the
+        // bundled-examples tree rebuild now that the index is resident). This
         // fires once per session — the system becomes a no-op on the next
         // tick once `bootstrap` is `Done`.
         commands.trigger(MslBecameReady);

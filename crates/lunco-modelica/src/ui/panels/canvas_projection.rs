@@ -710,6 +710,34 @@ pub fn import_model_to_diagram_from_ast(
                     break;
                 }
             }
+            if component_def.is_none() {
+                if let Some(handle) = crate::engine_resource::global_engine_handle() {
+                    let mut engine = handle.lock();
+                    for cand in &candidates {
+                        if engine.has_class(cand.as_str()) {
+                            component_def = Some(crate::index::ClassEntry {
+                                name: cand.to_string(),
+                                kind: crate::index::ClassKind::Model,
+                                source_range: None,
+                                extends: Vec::new(),
+                                description: String::new(),
+                                children: Vec::new(),
+                                icon: None,
+                                documentation: (None, None),
+                                equation_count: 0,
+                                partial: false,
+                                experiment: None,
+                                ports: Vec::new(),
+                                parameters: Vec::new(),
+                                diagram_graphics: None,
+                                icon_text: None,
+                                category: "User".to_string(),
+                            });
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         // Last-resort placeholder: if every lookup missed, still

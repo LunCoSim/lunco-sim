@@ -87,11 +87,14 @@ fn on_msl_became_ready(
         bevy::log::debug!("[PackageBrowser] MslBecameReady: no canvas state yet — skipping force_reproject");
     }
 
-    // ── 2. Rebuild bundled examples tree (web: was empty at boot) ─────
+    // ── 2. Rebuild bundled examples tree ──────────────────────────────
+    // On web the source bundle (and therefore `msl_index.json`, which backs
+    // `msl_bundled_nodes`) isn't resident when `PackageTreeCache::new()` runs,
+    // so the 📦 LunCo Examples root is empty at boot. Now that the engine
+    // bootstrap has made the index resident, fill it in.
     if !cache.bundled_tree_indexed {
         let fresh = crate::visual_diagram::msl_bundled_nodes();
         if !fresh.is_empty() {
-            // Find the bundled_root category and replace its children.
             for root in &mut cache.roots {
                 if let PackageNode::Category { id, children, .. } = root {
                     if id == "bundled_root" {

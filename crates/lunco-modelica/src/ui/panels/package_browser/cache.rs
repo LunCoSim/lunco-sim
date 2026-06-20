@@ -98,6 +98,19 @@ impl PackageTreeCache {
         if self.library_roots_synced {
             return;
         }
+
+        // Cancel any in-flight library scans that started before MSL was ready.
+        self.tasks.clear();
+
+        // Reset library roots (e.g. Modelica) so they retry expanding with the now-available MSL.
+        for root in &mut self.roots {
+            if let PackageNode::Category { id, children, is_loading, .. } = root {
+                if id != "bundled_root" {
+                    *children = None;
+                    *is_loading = false;
+                }
+            }
+        }
         let existing: std::collections::HashSet<String> = self
             .roots
             .iter()
