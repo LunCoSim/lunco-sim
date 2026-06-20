@@ -815,22 +815,11 @@ fn extract_color(expr: &Expression) -> Option<Color> {
     Some(Color { r, g, b })
 }
 
+/// Numeric literal (with optional unary minus). Delegates to the
+/// canonical `ast_extract::numeric_of` so the Terminal/Unary decoding
+/// lives in one place.
 fn extract_number(expr: &Expression) -> Option<f64> {
-    match expr {
-        Expression::Terminal {
-            terminal_type,
-            token,
-            ..
-        } => match terminal_type {
-            TerminalType::UnsignedReal | TerminalType::UnsignedInteger => token.text.parse().ok(),
-            _ => None,
-        },
-        Expression::Unary { op, rhs, .. } => match op {
-            OpUnary::Minus => extract_number(rhs).map(|n| -n),
-            _ => None,
-        },
-        _ => None,
-    }
+    crate::ast_extract::numeric_of(expr)
 }
 
 fn extract_string(expr: &Expression) -> Option<String> {

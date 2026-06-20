@@ -474,8 +474,9 @@ fn extract_numeric_binding(expr: &Option<Expression>) -> Option<f64> {
 
 /// Parse a numeric literal expression (including a leading `-` unary
 /// minus — rumoca represents `-5` as `Unary(Minus, 5)`). Used for
-/// `min`/`max` modifier extraction where negative bounds are common.
-fn numeric_of(expr: &Expression) -> Option<f64> {
+/// `min`/`max` modifier extraction where negative bounds are common,
+/// and shared with the annotation parser (`annotations::parsing`).
+pub(crate) fn numeric_of(expr: &Expression) -> Option<f64> {
     use rumoca_compile::parsing::ir_core::OpUnary;
     match expr {
         Expression::Terminal { terminal_type, token, .. } => match terminal_type {

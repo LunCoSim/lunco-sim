@@ -6,7 +6,7 @@
 // a file parsed here is instant at runtime and vice versa.
 use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
 use rumoca_compile::parsing::{Causality, ClassType, Token, Variability};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
@@ -219,95 +219,10 @@ fn fallback_port_position(causality: &Causality, port_index: usize) -> (f32, f32
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct PortDef {
-    name: String,
-    connector_type: String,
-    msl_path: String,
-    is_flow: bool,
-    /// Port position in Modelica diagram coordinates (-100..100).
-    /// x < 0 = left side, x > 0 = right side, y > 0 = top, y < 0 = bottom.
-    /// (0, 0) means no annotation was found and position is unknown.
-    x: f32,
-    y: f32,
-    /// Port size in the parent class's icon coords (placement extent
-    /// width/height). Used by the canvas to scale the connector
-    /// class's authored Icon to OMEdit-equivalent size. Defaults to
-    /// 20×20 (matches the most common MSL placement) when no
-    /// Placement annotation was found.
-    #[serde(default = "default_port_size")]
-    size_x: f32,
-    #[serde(default = "default_port_size")]
-    size_y: f32,
-    /// Rotation from `Placement(transformation(rotation=...))` on the
-    /// port declaration. Plumbed to the canvas so connector icons
-    /// land oriented (e.g. PI's bottom `u_m` input has rotation=270
-    /// so the triangle points up).
-    #[serde(default)]
-    rotation_deg: f32,
-}
-
-fn default_port_size() -> f32 { 20.0 }
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct ParamDef {
-    name: String,
-    param_type: String,
-    default: String,
-    unit: Option<String>,
-}
-
-/// Local mirror of [`crate::index::ClassEntry`]'s serde
-/// shape (the canonical class record post-A2). Field names + serde
-/// defaults must stay aligned with the upstream struct so the JSON
-/// round-trips losslessly — runtime deserialises into `ClassEntry`
-/// directly and consumers read it through the unified read API.
-///
-/// Indexer populates only the fields it can compute (name, kind,
-/// description, ports, parameters, icon, etc.); per-doc runtime
-/// fields (source_range, extends, children, equation_count,
-/// experiment) stay at their defaults and are filled by the live
-/// AST producer when a user opens the file.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct MSLComponentDef {
-    /// Fully-qualified name (`Modelica.Electrical.Analog.Basic.Resistor`).
-    name: String,
-    /// Modelica class kind — same lowercase-keyword wire format
-    /// `ClassEntry` uses.
-    kind: crate::index::ClassKind,
-    /// Cleaned `"…"` class-header description string. Empty when
-    /// none was authored.
-    #[serde(default)]
-    description: String,
-    /// `(info, revisions)` from `Documentation(info=…, revisions=…)`.
-    /// Indexer only fills `.0` (info); `.1` stays `None` until the
-    /// live producer parses the AST.
-    #[serde(default)]
-    documentation: (Option<String>, Option<String>),
-    /// Parsed `Icon(graphics={...})` annotation — already merged
-    /// across the `extends` chain via `extract_icon_inherited`.
-    #[serde(default)]
-    icon: Option<crate::annotations::Icon>,
-    /// Parsed `Diagram(graphics={...})` annotation.
-    #[serde(default)]
-    diagram_graphics: Option<crate::annotations::Diagram>,
-    /// Schematic text label authored on the class (e.g. `"cosh"`).
-    #[serde(default)]
-    icon_text: Option<String>,
-    /// Category path for grouping in the palette
-    /// (`"Electrical/Analog/Basic"`).
-    #[serde(default)]
-    category: String,
-    /// `partial` keyword on the class header (MLS §4.4).
-    #[serde(default)]
-    partial: bool,
-    /// Extends-flattened port list.
-    #[serde(default)]
-    ports: Vec<PortDef>,
-    /// Extends-flattened parameter list.
-    #[serde(default)]
-    parameters: Vec<ParamDef>,
-}
+/// The indexer emits the canonical [`crate::index::ClassEntry`] and
+/// [`crate::visual_diagram::{PortDef, ParamDef}`] directly — `msl_index.json`
+/// deserialises straight back into those types at runtime, so there is no
+/// indexer-local mirror to keep field-aligned by hand.
 
 /// True when the top-level class `name` is actually the package
 /// declared by the containing folder — i.e. the `package.mo` file
@@ -724,7 +639,38 @@ impl MSLIndexer {
         self.classes.insert(full_name.to_string(), class);
     }
 
-    fn resolve_inheritance(&self, class_name: &str, ports: &mut Vec<PortDef>, params: &mut Vec<ParamDef>, visited: &mut HashSet<String>) {
+    /// Resolve a (possibly relative) `name` referenced from within
+    /// `context_class` by peeling the context's enclosing scope one
+    /// segment at a time and checking `self.classes` for a match.
+    /// Returns the first fully-qualified key that exists, or `None`.
+    ///
+    /// Reduced-form MLS §5.3 scope walk shared by `extends`-base and
+    /// component-type resolution below. NOTE: this is an indexer-side
+    /// heuristic — it doesn't consult imports and falls back on a
+    /// `Modelica.`-prefixed guess (at the `extends` call site). The
+    /// runtime resolves via rumoca's `class_lookup_query`; see the
+    /// icon resolver in `index_all`.
+    fn resolve_in_scope(&self, context_class: &str, name: &str) -> Option<String> {
+        let mut current_scope = context_class.to_string();
+        while !current_scope.is_empty() {
+            let candidate = if current_scope.contains('.') {
+                format!("{}.{}", crate::ast_extract::parent_qualified(&current_scope), name)
+            } else {
+                name.to_string()
+            };
+            if self.classes.contains_key(&candidate) {
+                return Some(candidate);
+            }
+            if current_scope.contains('.') {
+                current_scope = current_scope.rsplitn(2, '.').nth(1).unwrap().to_string();
+            } else {
+                break;
+            }
+        }
+        None
+    }
+
+    fn resolve_inheritance(&self, class_name: &str, ports: &mut Vec<crate::visual_diagram::PortDef>, params: &mut Vec<crate::visual_diagram::ParamDef>, visited: &mut HashSet<String>) {
         if visited.contains(class_name) { return; }
         visited.insert(class_name.to_string());
 
@@ -733,29 +679,9 @@ impl MSLIndexer {
             for ext in &class.extends {
                 let base_short_name = ext.base_name.name.iter().map(|s| s.text.to_string()).collect::<Vec<String>>().join(".");
                 
-                // Heuristic for Modelica name resolution
-                let mut resolved_base = None;
-                let mut current_scope = class_name.to_string();
-                while !current_scope.is_empty() {
-                    let candidate = if current_scope.contains('.') {
-                        format!("{}.{}", crate::ast_extract::parent_qualified(&current_scope), base_short_name)
-                    } else {
-                        base_short_name.clone()
-                    };
-
-                    if self.classes.contains_key(&candidate) {
-                        resolved_base = Some(candidate);
-                        break;
-                    }
-
-                    if current_scope.contains('.') {
-                        current_scope = current_scope.rsplitn(2, '.').nth(1).unwrap().to_string();
-                    } else {
-                        current_scope.clear();
-                    }
-                }
-
-                // Try absolute if not found
+                // Scope-chain resolution; fall back to an absolute /
+                // `Modelica.`-prefixed guess below.
+                let mut resolved_base = self.resolve_in_scope(class_name, &base_short_name);
                 if resolved_base.is_none() {
                     if self.classes.contains_key(&base_short_name) {
                         resolved_base = Some(base_short_name);
@@ -804,7 +730,7 @@ impl MSLIndexer {
                         // `canvas_diagram::si_unit_suffix`) can read
                         // `p.unit` directly. Until then `unit` is None
                         // and user-defined SI types lose their suffix.
-                        params.push(ParamDef {
+                        params.push(crate::visual_diagram::ParamDef {
                             name: comp.name.clone(),
                             param_type: comp.type_name.to_string(),
                             default,
@@ -933,38 +859,15 @@ impl MSLIndexer {
                         // resolution fails.
                         //
                         // Mirrors the scope-chain walk used above for
-                        // `extends` resolution: starting from the
-                        // declaring class's package, peel one segment
-                        // at a time and check `self.classes`.
-                        let mut resolved_path = type_str.clone();
-                        if !self.classes.contains_key(&resolved_path) {
-                            let mut current_scope = class_name.to_string();
-                            while !current_scope.is_empty() {
-                                let candidate = if current_scope.contains('.') {
-                                    format!(
-                                        "{}.{}",
-                                        crate::ast_extract::parent_qualified(&current_scope),
-                                        type_str,
-                                    )
-                                } else {
-                                    type_str.clone()
-                                };
-                                if self.classes.contains_key(&candidate) {
-                                    resolved_path = candidate;
-                                    break;
-                                }
-                                if current_scope.contains('.') {
-                                    current_scope = current_scope
-                                        .rsplitn(2, '.')
-                                        .nth(1)
-                                        .unwrap()
-                                        .to_string();
-                                } else {
-                                    current_scope.clear();
-                                }
-                            }
-                        }
-                        ports.push(PortDef {
+                        // `extends` resolution (no `Modelica.` fallback —
+                        // an unresolved type keeps its as-written name).
+                        let resolved_path = if self.classes.contains_key(&type_str) {
+                            type_str.clone()
+                        } else {
+                            self.resolve_in_scope(class_name, &type_str)
+                                .unwrap_or_else(|| type_str.clone())
+                        };
+                        ports.push(crate::visual_diagram::PortDef {
                             name: comp.name.clone(),
                             connector_type: type_str.clone(),
                             msl_path: resolved_path,
@@ -974,6 +877,12 @@ impl MSLIndexer {
                             size_x,
                             size_y,
                             rotation_deg,
+                            // Indexer doesn't compute these; the live
+                            // projector/painter fills wire color, port
+                            // kind, and flow-var metadata at runtime.
+                            color: None,
+                            kind: crate::visual_diagram::PortKind::default(),
+                            flow_vars: Vec::new(),
                         });
                     }
                 }
@@ -982,7 +891,7 @@ impl MSLIndexer {
     }
 
 
-    fn index_all(&mut self) -> Vec<MSLComponentDef> {
+    fn index_all(&mut self) -> Vec<crate::index::ClassEntry> {
         use std::sync::Arc;
         let mut all_comps = Vec::new();
 
@@ -1084,7 +993,12 @@ impl MSLIndexer {
                 };
 
                 let _ = (is_example, domain, short_name);
-                all_comps.push(MSLComponentDef {
+                // Emit the canonical `ClassEntry` directly. Per-doc
+                // runtime fields (source_range, extends, children,
+                // equation_count, experiment) stay at their defaults —
+                // the live AST producer fills them when a user opens
+                // the file.
+                all_comps.push(crate::index::ClassEntry {
                     name: full_name.to_string(),
                     kind: class_kind,
                     description: short_description.unwrap_or_default(),
@@ -1096,6 +1010,11 @@ impl MSLIndexer {
                     partial: class.partial,
                     ports,
                     parameters,
+                    source_range: None,
+                    extends: Vec::new(),
+                    children: Vec::new(),
+                    equation_count: 0,
+                    experiment: None,
                 });
             }
         }
@@ -1364,15 +1283,13 @@ pub fn run_with_cancel(
         bundled_nodes.len()
     );
 
-    // Local `MslIndex` mirror — wire-compatible with
-    // `crate::visual_diagram::MslIndex` (serde structurally
-    // matches), but built around the indexer's local
-    // `MSLComponentDef` so we don't need to share the type across
-    // crates. The bundled tree is now `Vec<PackageNode>` so the
-    // runtime is a trivial deserialise.
+    // Borrowing mirror of `crate::visual_diagram::MslIndex` — same
+    // field shape, but holds slices so we serialise without cloning
+    // `components`/`bundled` into an owned `MslIndex`. Both fields are
+    // the canonical types the runtime deserialises into directly.
     #[derive(Serialize)]
     struct LocalMslIndex<'a> {
-        components: &'a [MSLComponentDef],
+        components: &'a [crate::index::ClassEntry],
         bundled: &'a [crate::ui::panels::package_browser::types::PackageNode],
     }
     let output_path = lunco_assets::msl_dir().join("msl_index.json");
