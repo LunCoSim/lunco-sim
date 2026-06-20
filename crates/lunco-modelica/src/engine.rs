@@ -116,6 +116,26 @@ pub struct ModelicaEngine {
     /// `class_def` resolves the file URI here before calling
     /// `parsed_file_query`.
     class_to_uri: HashMap<String, String>,
+    /// Qualified class names we've already failed to bridge to a file
+    /// URI. The empty-diagram overlay calls `class_def` (via `icon_for`)
+    /// EVERY FRAME for the active class; without this negative cache an
+    /// unresolvable class re-ran the full MSL-bundle scan in `class_def`
+    /// each frame (~90 ms on a 2670-doc bundle) and spammed a warn per
+    /// frame. Cleared whenever any AST is installed (a previously-missing
+    /// class may become resolvable once its file lands) — see
+    /// `index_ast_classes` / `load_library_files` / `install_lenient`.
+    class_uri_misses: HashSet<String>,
+    /// Resolved-Icon cache, keyed by qualified class name. The
+    /// empty-diagram overlay calls `icon_for` EVERY FRAME for the active
+    /// class; `extract_icon_via_engine` walks the full inheritance chain
+    /// and `class_def`-CLONES the class + every `extends` base on each
+    /// call. Measured at ~80 ms/frame for a class with a deep MSL chain
+    /// (a static model card recomputed from scratch 60×/s). rumoca's
+    /// internal annotation memoisation does NOT eliminate these repeated
+    /// ClassDef clones, so we cache the merged result here. Cleared on
+    /// any AST install (icon graphics can change with the source) —
+    /// same lifecycle as `class_uri_misses`.
+    icon_cache: HashMap<String, Option<crate::annotations::Icon>>,
     /// Documents whose async parse is currently in flight. Prevents
     /// double-spawning the same parse while a worker is mid-flight.
     /// Inserted by `mark_pending`; cleared by the worker on completion.
@@ -144,6 +164,8 @@ impl ModelicaEngine {
             session: Session::default(),
             uri_for_doc: HashMap::new(),
             class_to_uri: HashMap::new(),
+            class_uri_misses: HashSet::new(),
+            icon_cache: HashMap::new(),
             pending: HashSet::new(),
             completed: Vec::new(),
             parse_diags: HashMap::new(),
@@ -159,6 +181,11 @@ impl ModelicaEngine {
         file_uri: &str,
         ast: &rumoca_compile::parsing::ast::StoredDefinition,
     ) {
+        // A newly-installed AST can make a previously-unresolvable class
+        // resolvable — drop the negative cache so `class_def` retries.
+        self.class_uri_misses.clear();
+        // Icon graphics can change with the source — drop the icon cache.
+        self.icon_cache.clear();
         let prefix = ast.within.as_ref().map(|w| w.to_string()).unwrap_or_default();
         for class_key in ast.classes.keys() {
             let qualified = if prefix.is_empty() {
@@ -257,6 +284,8 @@ impl ModelicaEngine {
     pub fn install_lenient(&mut self, doc_id: DocumentId, source: &str) {
         let uri = self.uri(doc_id);
         self.uri_for_doc.entry(doc_id).or_insert_with(|| uri.clone());
+        self.class_uri_misses.clear();
+        self.icon_cache.clear();
         let _ = self.session.add_document(&uri, source);
     }
 
@@ -314,11 +343,15 @@ impl ModelicaEngine {
     /// **Single AST-aware entry point for icon resolution.** Panels
     /// must use this — never call [`crate::annotations::extract_icon`]
     /// or [`crate::annotations::extract_icon_via_engine`] directly.
-    /// Pure delegation: rumoca's `class_lookup_query` resolves bare
-    /// names by suffix-match across session docs (MLS § 5), and
-    /// `class_inherited_annotations_query` is fingerprint-cached
-    /// inside rumoca. No secondary cache here — duplicating rumoca's
-    /// memoisation costs memory + invalidation complexity for no win.
+    /// rumoca's `class_lookup_query` resolves bare names by suffix-match
+    /// across session docs (MLS § 5). Result-cached via `icon_cache`:
+    /// `extract_icon_via_engine` walks the whole inheritance chain and
+    /// `class_def`-clones every class along it, which measured ~80 ms per
+    /// call for a deep MSL chain — far too costly to repeat every frame
+    /// for the static empty-diagram model card (the original "no
+    /// secondary cache" assumption that rumoca's annotation memoisation
+    /// covered this was wrong; it doesn't eliminate our per-call clones).
+    /// The cache is dropped on any AST install so edits still reflect.
     ///
     /// Off-thread-safe: never reads from disk, never spawns a parse.
     /// If `qualified` isn't in the session yet, returns `None` and
@@ -328,7 +361,16 @@ impl ModelicaEngine {
     /// AST-as-source-of-truth: the session IS the AST store;
     /// consulting it is consulting the AST.
     pub fn icon_for(&mut self, qualified: &str) -> Option<crate::annotations::Icon> {
-        crate::annotations::extract_icon_via_engine(qualified, self)
+        // Result cache — see `icon_cache`. The inheritance-walk +
+        // per-base ClassDef clones in `extract_icon_via_engine` are far
+        // too costly to repeat every frame for a static class. Cleared
+        // on AST install so edits still reflect.
+        if let Some(hit) = self.icon_cache.get(qualified) {
+            return hit.clone();
+        }
+        let icon = crate::annotations::extract_icon_via_engine(qualified, self);
+        self.icon_cache.insert(qualified.to_string(), icon.clone());
+        icon
     }
 
     /// Load a library (MSL or third-party) into the session as a
@@ -374,6 +416,9 @@ impl ModelicaEngine {
                 count += 1;
             }
         }
+        // New library classes may resolve previously-missing lookups.
+        self.class_uri_misses.clear();
+        self.icon_cache.clear();
         count
     }
 
@@ -525,9 +570,19 @@ impl ModelicaEngine {
         &mut self,
         qualified: &str,
     ) -> Option<rumoca_compile::parsing::ast::ClassDef> {
+        // Negative cache: skip the whole resolution (incl. the O(bundle)
+        // MSL scan below) for a class we've already failed to bridge. The
+        // empty-diagram overlay calls this every frame for the active
+        // class; re-running the scan + warn per frame was the ~90 ms/frame
+        // stall. Cleared on any AST install (see `index_ast_classes`).
+        if self.class_uri_misses.contains(qualified) {
+            return None;
+        }
+
         // Confirm the class is known to rumoca's session at all.
         let resolved_key = self.session.class_lookup_query(qualified);
         if resolved_key.is_none() {
+            self.class_uri_misses.insert(qualified.to_string());
             bevy::log::warn!("[engine] class_def: class_lookup_query failed for {}", qualified);
             return None;
         }
@@ -536,6 +591,26 @@ impl ModelicaEngine {
         // installed via upsert_document_with_ast / install_parsed_ast /
         // load_library_files.
         let file_uri: Option<String> = self.class_to_uri.get(qualified).cloned();
+
+        // Prefix path: `index_ast_classes` records only a file's TOP-LEVEL
+        // class key (e.g. `SatelliteDatacenter` for a user file that also
+        // holds the nested `SatelliteDatacenter.PowerSubsystem`). A nested
+        // class misses the exact lookup, but its containing file is already
+        // known under a dotted PREFIX. Match the LONGEST prefix already in
+        // `class_to_uri` (segment-boundary) so the most specific file wins.
+        // This resolves user-model nested classes in O(map) WITHOUT falling
+        // through to the MSL-bundle scan — the path that caused the storm.
+        let file_uri = file_uri.or_else(|| {
+            let mut best: Option<(usize, &String)> = None;
+            for (q, uri) in self.class_to_uri.iter() {
+                let is_container =
+                    qualified == q.as_str() || qualified.starts_with(&format!("{}.", q));
+                if is_container && best.as_ref().is_none_or(|(len, _)| q.len() > *len) {
+                    best = Some((q.len(), uri));
+                }
+            }
+            best.map(|(_, uri)| uri.clone())
+        });
 
         // Slow fallback: the class arrived via replace_parsed_source_set
         // (e.g. the bulk MSL install), which bypasses add_document and
@@ -570,14 +645,15 @@ impl ModelicaEngine {
                     }
                 }
             }
-            best.map(|(_, uri)| {
-                // Cache for subsequent lookups (also breaks the per-frame retry).
-                self.class_to_uri.insert(qualified.to_string(), uri.clone());
-                uri
-            })
+            // Caching of the resolved URI is unified below the chain.
+            best.map(|(_, uri)| uri)
         });
 
         let Some(file_uri) = file_uri else {
+            // Record the miss so the per-frame overlay caller stops
+            // re-running the bundle scan + this warn every frame. The
+            // warn now fires once per class (until an install clears it).
+            self.class_uri_misses.insert(qualified.to_string());
             bevy::log::warn!(
                 "[engine] class_def: no file URI found for class {} \
                  (class_to_uri miss + MSL bundle miss)",
@@ -585,6 +661,11 @@ impl ModelicaEngine {
             );
             return None;
         };
+        // Cache the bridged URI (prefix- or bundle-resolved) so subsequent
+        // lookups are O(1) exact hits and never re-scan.
+        self.class_to_uri
+            .entry(qualified.to_string())
+            .or_insert_with(|| file_uri.clone());
 
         let Some(parsed) = self.session.parsed_file_query(&file_uri) else {
             bevy::log::warn!(

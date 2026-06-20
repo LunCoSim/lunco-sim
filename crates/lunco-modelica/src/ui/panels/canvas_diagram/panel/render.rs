@@ -102,6 +102,7 @@ pub(crate) fn render_diagram_canvas(
             LifecycleState::Content => {}
         }
     }
+    mark("overlays", &mut phase_t, &mut phase_log);
 
     handle_drag_and_drop(ui, world, &response, active_doc, render_tab_id, tab_read_only, editing_class.clone());
     let menu_ops = handle_context_menu(ui, world, &response, active_doc, render_tab_id, tab_read_only, editing_class.as_deref());
@@ -137,13 +138,15 @@ pub(crate) fn render_diagram_canvas(
     }
     
     mark("tail (events/menu/fit)", &mut phase_t, &mut phase_log);
-    log_frame_times(_frame_t0.elapsed().as_secs_f64() * 1000.0, 0.0);
+    let frame_ms = _frame_t0.elapsed().as_secs_f64() * 1000.0;
+    log_frame_times(frame_ms, 0.0);
 
-    if trace_phases && !phase_log.is_empty() {
-        let total: f64 = phase_log.iter().map(|(_, ms)| *ms).sum();
-        if total > 30.0 {
-            let breakdown = phase_log.iter().map(|(name, ms)| format!("{name}={ms:.1}ms")).collect::<Vec<_>>().join(" ");
-            bevy::log::info!("[CanvasDiagram] render_canvas phases (sum={total:.1}ms): {breakdown}");
-        }
+    // Emit the per-phase breakdown on slow frames. Previously gated behind
+    // the `RENDER_CANVAS_TRACE` env var, which is always absent on wasm
+    // (no process env) — so the browser never got the breakdown that
+    // localises a stall to a phase. Now any slow frame self-reports.
+    if (trace_phases || frame_ms > 16.0) && !phase_log.is_empty() {
+        let breakdown = phase_log.iter().map(|(name, ms)| format!("{name}={ms:.1}ms")).collect::<Vec<_>>().join(" ");
+        bevy::log::warn!("[CanvasDiagram] slow-frame phases (total={frame_ms:.1}ms): {breakdown}");
     }
 }
