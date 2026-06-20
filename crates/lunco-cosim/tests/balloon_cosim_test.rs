@@ -26,6 +26,22 @@ use std::time::Duration;
 
 use avian3d::prelude::{Position, RigidBody};
 use lunco_cosim::{CoSimPlugin, SimComponent, SimConnection, AvianSim};
+
+/// Running max |force_y| seen in `AvianSim.inputs` after propagation, before the
+/// `apply_sim_forces` drain. The witness for "the netForce → force_y wire routed".
+#[derive(Resource, Default)]
+struct ForceYWitness(f64);
+
+/// Captures `AvianSim.inputs["force_y"]` between propagate and the force drain.
+fn capture_force_y(q: Query<&AvianSim>, mut witness: ResMut<ForceYWitness>) {
+    for avian in &q {
+        if let Some(&fy) = avian.inputs.get("force_y") {
+            if fy.abs() > witness.0.abs() {
+                witness.0 = fy;
+            }
+        }
+    }
+}
 use lunco_modelica::{
     ModelicaCorePlugin, ModelicaModel, ModelicaCommand, ModelicaChannels,
     extract_model_name, extract_parameters, extract_inputs_with_defaults,
@@ -98,15 +114,15 @@ fn setup_balloon_wires(
 
         commands.spawn(SimConnection {
             start_element: entity, start_connector: "netForce".into(),
-            end_element: entity, end_connector: "force_y".into(), scale: 1.0,
+            end_element: entity, end_connector: "force_y".into(), scale: 1.0, offset: 0.0,
         });
         commands.spawn(SimConnection {
             start_element: entity, start_connector: "height".into(),
-            end_element: entity, end_connector: "height".into(), scale: 1.0,
+            end_element: entity, end_connector: "height".into(), scale: 1.0, offset: 0.0,
         });
         commands.spawn(SimConnection {
             start_element: entity, start_connector: "velocity_y".into(),
-            end_element: entity, end_connector: "velocity".into(), scale: 1.0,
+            end_element: entity, end_connector: "velocity".into(), scale: 1.0, offset: 0.0,
         });
 
         commands.entity(entity).remove::<BalloonModelMarker>();
@@ -161,6 +177,18 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
         ),
     );
 
+    // `force_y` is a single-owner port: `propagate_connections` writes it into
+    // `AvianSim.inputs`, then `apply_sim_forces` drains it to 0 the same
+    // FixedUpdate. To witness the routed value we capture it in the window
+    // *after* propagate and *before* the drain, recording the running max.
+    app.init_resource::<ForceYWitness>();
+    app.add_systems(
+        FixedUpdate,
+        capture_force_y
+            .after(lunco_cosim::systems::propagate::CosimSet::Propagate)
+            .before(lunco_cosim::systems::apply_forces::CosimSet::ApplyForces),
+    );
+
     // Spawn balloon with the full component stack that apply_sim_forces expects.
     // We skip PhysicsPlugins, but the components themselves are just data.
     let balloon = app.world_mut().spawn((
@@ -192,21 +220,20 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
     //   - spawn_modelica_requests send Step commands
     //   - handle_modelica_responses update model.variables with fresh outputs
     //   - sync_modelica_outputs copy them to SimComponent.outputs
-    //   - propagate_connections write AvianSim.inputs["force_y"] AND
-    //     SimComponent.inputs["force_y"] (both written by the same system)
+    //   - propagate_connections write AvianSim.inputs["force_y"] (single owner)
+    //   - capture_force_y witness it before apply_sim_forces drains it
     //   - apply_sim_forces route the force into Avian via Forces::apply_force
     //
     // We sample:
     //   * `SimComponent.outputs["netForce"]` — the persistent Modelica output
-    //   * `SimComponent.inputs["force_y"]` — written by propagate each tick
-    //     alongside AvianSim.inputs, observable until the next propagate.
+    //   * `ForceYWitness` — the max force_y propagate wrote into AvianSim.inputs,
+    //     captured each FixedUpdate before the force drain.
     //
     // We do NOT assert on `LinearVelocity` or `Position` because this test
     // intentionally skips `PhysicsPlugins` — Avian's integrator isn't running,
     // so force application won't produce motion here. That's covered by
     // manual testing in the running app and by Avian's own tests.
     let mut last_netforce = 0.0_f64;
-    let mut last_force_y_seen = 0.0_f64;
 
     for _ in 0..200 {
         app.update();
@@ -218,13 +245,9 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
                     last_netforce = nf;
                 }
             }
-            if let Some(&fy) = comp.inputs.get("force_y") {
-                if fy.abs() > last_force_y_seen.abs() {
-                    last_force_y_seen = fy;
-                }
-            }
         }
     }
+    let last_force_y_seen = app.world().resource::<ForceYWitness>().0;
 
     // Dump final state for debuggability when the test fails.
     if let Some(comp) = app.world().get::<SimComponent>(balloon) {
@@ -249,7 +272,7 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
     );
     assert!(
         last_force_y_seen.abs() > 0.1,
-        "propagate_connections never wrote a non-zero force_y into SimComponent.inputs. \
+        "propagate_connections never wrote a non-zero force_y into AvianSim.inputs. \
          This means the netForce → force_y connection isn't routing correctly."
     );
 }

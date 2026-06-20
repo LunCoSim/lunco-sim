@@ -87,8 +87,17 @@ pub struct SimPorts {
 ///     end_element: balloon_entity,
 ///     end_connector: "force_y".into(),
 ///     scale: 1.0,
+///     offset: 0.0,
 /// });
 /// ```
+///
+/// ## Affine transform (SSP `LinearTransformation`)
+///
+/// The propagated value is `source * scale + offset`. `scale` is the SSP
+/// connection *factor* and `offset` the SSP *offset* — together they express
+/// unit conversions (Celsius↔Kelvin), sensor zero-points, and DAC/ADC gains
+/// (e.g. a `DigitalPort` raw register → physical units). `offset` defaults to
+/// `0.0` so existing pure-gain wires are unchanged.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
 pub struct SimConnection {
@@ -100,8 +109,10 @@ pub struct SimConnection {
     pub end_element: Entity,
     /// Name of the target port (must be an input).
     pub end_connector: String,
-    /// Scaling factor applied during propagation.
+    /// Multiplicative factor applied during propagation (SSP factor).
     pub scale: f64,
+    /// Additive offset applied after scaling (SSP offset). `value = src*scale + offset`.
+    pub offset: f64,
 }
 
 impl Default for SimConnection {
@@ -112,6 +123,7 @@ impl Default for SimConnection {
             end_element: Entity::PLACEHOLDER,
             end_connector: String::new(),
             scale: 1.0,
+            offset: 0.0,
         }
     }
 }

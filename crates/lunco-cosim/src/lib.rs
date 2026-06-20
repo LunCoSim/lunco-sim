@@ -111,8 +111,10 @@ impl Plugin for CoSimPlugin {
                 // control. Same set, same ordering (after propagate).
                 joint::apply_joint_drives.in_set(systems::apply_forces::CosimSet::ApplyForces),
             )
-                .run_if(|role: Res<lunco_core::NetworkRole>| {
-                    !matches!(*role, lunco_core::NetworkRole::Client)
+                .run_if(|role: Option<Res<lunco_core::NetworkRole>>| {
+                    // Absent role (single-player, headless tests) → run cosim.
+                    // Only a present `Client` role gates it off.
+                    !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client))
                 }),
         );
 
@@ -147,6 +149,7 @@ pub fn on_add_rigid_body(
         outputs: HashMap::default(),
     };
     avian.init_outputs();
+    avian.init_inputs();
     commands.entity(entity).try_insert(avian);
 }
 

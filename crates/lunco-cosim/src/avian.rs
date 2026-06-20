@@ -95,6 +95,21 @@ impl AvianSim {
         }
     }
 
+    /// Declare the force input connectors (value 0).
+    ///
+    /// Inputs are a model's public interface: declaring them up front lets the
+    /// wiring fabric's strict resolver ([`crate::ports::write_port`]) find the
+    /// slot and report a wire to any *un*declared input as dangling — instead of
+    /// silently creating it. Only the connectors [`apply_sim_forces`] actually
+    /// consumes are declared (torque is documented but not yet applied, so it is
+    /// intentionally left undeclared — a wire to it is a real error worth
+    /// surfacing).
+    pub fn init_inputs(&mut self) {
+        for name in Self::FORCE_INPUTS {
+            self.inputs.insert(name.to_string(), 0.0);
+        }
+    }
+
     /// Read current Avian state into output connectors.
     ///
     /// Reads from [`Position`], [`LinearVelocity`] and derived values.
@@ -116,14 +131,22 @@ impl AvianSim {
         }
     }
 
-    /// Take and clear accumulated force inputs.
+    /// Take accumulated force inputs, zeroing the slots.
     ///
-    /// Returns [fx, fy, fz] and removes the values from `inputs`.
-    /// Used by the co-simulation bridge to apply forces to Avian.
+    /// Returns [fx, fy, fz] and resets the values to 0 **without removing the
+    /// keys** — the force inputs are declared ports ([`init_inputs`]) that must
+    /// persist so next tick's [`propagate_connections`] can write them again
+    /// through the strict resolver. (Removing them, as the old drain did, would
+    /// make the strict write fail the following tick.)
     pub fn take_inputs(&mut self) -> [f64; 3] {
-        let fx = self.inputs.remove("force_x").unwrap_or(0.0);
-        let fy = self.inputs.remove("force_y").unwrap_or(0.0);
-        let fz = self.inputs.remove("force_z").unwrap_or(0.0);
-        [fx, fy, fz]
+        let mut take = |key: &str| match self.inputs.get_mut(key) {
+            Some(slot) => {
+                let v = *slot;
+                *slot = 0.0;
+                v
+            }
+            None => 0.0,
+        };
+        [take("force_x"), take("force_y"), take("force_z")]
     }
 }

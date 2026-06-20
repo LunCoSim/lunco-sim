@@ -27,6 +27,11 @@ pub use gravity_types::{Gravity, GravityBody, GravityModel, GravityProvider};
 pub mod lighting;
 pub use lighting::{EarthshineParams, LunarSun};
 
+/// Solar direction as a co-simulation source (`LocalSolar` + the sun→cosim
+/// bridge). The lighting-direction analog of the gravity bridge.
+pub mod solar;
+pub use solar::{compute_local_solar, inject_local_solar_into_cosim, LocalSolar};
+
 // Empty-bounds fallbacks for `SetEnvironmentLight`'s cascade rebuild. These
 // mirror `lunco_render::LunarSunShadow`'s defaults but are kept locally so this
 // crate need not depend on `lunco-render` (lighting → render would invert the
@@ -402,6 +407,7 @@ fn spawn_earthshine(mut commands: Commands, existing: Query<(), With<Earthshine>
 impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<LocalGravity>();
+        app.register_type::<LocalSolar>();
         app.register_type::<Earthshine>();
 
         // The one active-scene sun (lux + matched camera EV). Canonical lunar
@@ -436,6 +442,13 @@ impl Plugin for EnvironmentPlugin {
                 // before cosim copies outputs→inputs, so models read the real
                 // local value the same tick.
                 inject_local_gravity_into_cosim
+                    .in_set(EnvironmentSet::Apply)
+                    .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
+                // Solar source: mirror gravity. Compute the per-entity sun
+                // direction, then publish it as cosim outputs before propagation
+                // so a sun-tracking model reads it the same tick.
+                compute_local_solar.in_set(EnvironmentSet::Compute),
+                inject_local_solar_into_cosim
                     .in_set(EnvironmentSet::Apply)
                     .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
             ),

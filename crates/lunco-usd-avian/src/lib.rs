@@ -734,31 +734,38 @@ fn build_usd_physics_joints(
 
         info!("Built USD joint {} -> {} <-> {}", pending.joint_type, pending.body0_path, pending.body1_path);
 
+        // Put the avian joint component ON the joint prim entity itself (it
+        // already carries `UsdPrimPath` + the loader-assigned `GlobalEntityId`)
+        // rather than spawning a fresh anonymous entity. This makes the joint
+        // — and the `angle` port `lunco-cosim` auto-exposes on any
+        // `RevoluteJoint` — addressable by USD path, API id, or `Entity` alike,
+        // so the wiring fabric can target `</…/Joint>.angle` with no
+        // USD-specific lookup.
         match pending.joint_type.as_str() {
             "PhysicsPrismaticJoint" => {
-                commands.spawn((
+                commands.entity(joint_entity).insert(
                     PrismaticJoint::new(b0, b1)
                         .with_local_anchor1(pending.local_pos0)
                         .with_local_anchor2(pending.local_pos1)
                         .with_slider_axis(pending.axis)
                         .with_limits(pending.limit_lower, pending.limit_upper),
-                ));
+                );
             }
             "PhysicsRevoluteJoint" => {
-                commands.spawn((
+                commands.entity(joint_entity).insert(
                     RevoluteJoint::new(b0, b1)
                         .with_local_anchor1(pending.local_pos0)
                         .with_local_anchor2(pending.local_pos1)
                         .with_hinge_axis(pending.axis)
                         .with_angle_limits(pending.limit_lower, pending.limit_upper),
-                ));
+                );
             }
             "PhysicsFixedJoint" => {
-                commands.spawn((
+                commands.entity(joint_entity).insert(
                     FixedJoint::new(b0, b1)
                         .with_local_anchor1(pending.local_pos0)
                         .with_local_anchor2(pending.local_pos1),
-                ));
+                );
             }
             other => {
                 warn!("Unsupported USD joint type: {}", other);

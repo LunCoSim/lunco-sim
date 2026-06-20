@@ -44,11 +44,11 @@ fn test_balloon_force_propagation() {
     // Create connections (exactly as balloon_setup does)
     app.world_mut().spawn(SimConnection {
         start_element: balloon, start_connector: "netForce".into(),
-        end_element: balloon, end_connector: "force_y".into(), scale: 1.0,
+        end_element: balloon, end_connector: "force_y".into(), scale: 1.0, offset: 0.0,
     });
     app.world_mut().spawn(SimConnection {
         start_element: balloon, start_connector: "height".into(),
-        end_element: balloon, end_connector: "height".into(), scale: 1.0,
+        end_element: balloon, end_connector: "height".into(), scale: 1.0, offset: 0.0,
     });
 
     // Run propagation
@@ -93,11 +93,11 @@ fn test_balloon_connection_accumulation() {
     // Two connections to same target — forces should accumulate (50 + 100 = 150)
     app.world_mut().spawn(SimConnection {
         start_element: balloon, start_connector: "netForce".into(),
-        end_element: balloon, end_connector: "force_y".into(), scale: 1.0,
+        end_element: balloon, end_connector: "force_y".into(), scale: 1.0, offset: 0.0,
     });
     app.world_mut().spawn(SimConnection {
         start_element: balloon, start_connector: "buoyancy".into(),
-        end_element: balloon, end_connector: "force_y".into(), scale: 1.0,
+        end_element: balloon, end_connector: "force_y".into(), scale: 1.0, offset: 0.0,
     });
 
     // Run propagation — accumulates into AvianSim.inputs

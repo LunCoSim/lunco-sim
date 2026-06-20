@@ -233,6 +233,7 @@ pub fn process_usd_cosim_prims(
                         end_element: entity,
                         end_connector: to_port,
                         scale,
+                        offset: 0.0,
                     });
                 } else {
                     warn!("[usd-cosim] {} — could not parse wire entry '{}'", prim_path.path, trimmed);
@@ -537,6 +538,12 @@ pub fn process_usd_cosim_wires(
         let scale = reader
             .prim_attribute_value::<f64>(&sdf_path, "lunco:scale")
             .unwrap_or(1.0);
+        // SSP affine offset: `value = src*scale + offset`. Defaults to 0 so
+        // pure-gain wires are unaffected; used for unit biases and DAC/ADC
+        // zero-points (e.g. a DigitalPort register → physical units).
+        let offset = reader
+            .prim_attribute_value::<f64>(&sdf_path, "lunco:offset")
+            .unwrap_or(0.0);
 
         let from_str = from_path.to_string();
         let to_str = to_path.to_string();
@@ -553,11 +560,12 @@ pub fn process_usd_cosim_wires(
             end_element,
             end_connector: to_port.clone(),
             scale,
+            offset,
         });
         commands.entity(entity).insert(UsdSourcedWire);
         info!(
-            "[usd-cosim] wire {}.{} → {}.{} (scale={})",
-            from_str, from_port, to_str, to_port, scale,
+            "[usd-cosim] wire {}.{} → {}.{} (scale={}, offset={})",
+            from_str, from_port, to_str, to_port, scale, offset,
         );
     }
 }

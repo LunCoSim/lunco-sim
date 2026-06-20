@@ -751,6 +751,12 @@ pub struct HorizonShadowPlugin;
 impl Plugin for HorizonShadowPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<HorizonShadowTerrain>();
+        // Horizon baking/shading is a render-only feature: every system here
+        // needs render-asset stores (`Assets<Mesh>`/`Assets<Image>`/materials).
+        // Gate the whole chain on those existing so a headless app (cosim
+        // integration tests, server builds) cleanly skips it instead of
+        // panicking on a missing `ResMut<Assets<…>>`. The real app always has
+        // them, so this is a no-op there.
         app.add_systems(
             Update,
             (
@@ -759,7 +765,8 @@ impl Plugin for HorizonShadowPlugin {
                 wire_terrain_materials,
                 shade_dynamic_entities,
             )
-                .chain(),
+                .chain()
+                .run_if(resource_exists::<Assets<Image>>.and(resource_exists::<Assets<Mesh>>)),
         );
     }
 }
