@@ -420,14 +420,18 @@ fn main() {
     #[cfg(feature = "lunco-api")]
     app.add_plugins(lunco_api::LunCoApiPlugin::default());
 
-    // Multiplayer (opt-in). Native: `--host [port]` runs the listen-server,
-    // `--connect <addr>` joins one over WebTransport. Browser: `?connect=host`
-    // in the page URL (digest from the `#hash`). Absent ⇒ single-player (the
-    // networking substrate stays inert).
+    // Multiplayer. Native: `--host [port]` runs the listen-server, `--connect
+    // <addr>` auto-joins one. Browser: `?connect=host` in the page URL. With no
+    // address the plugin still loads **client-capable but idle** (single-player)
+    // so the in-sim *Connect* button / `JoinServer` command can dial a server at
+    // runtime — connecting is no longer a launch-time-only decision.
     #[cfg(feature = "networking")]
-    if let Some(mode) = lunco_networking::NetworkMode::resolve() {
+    {
+        let mode = lunco_networking::NetworkMode::resolve();
         info!("[net] networking mode: {mode:?}");
         app.add_plugins(lunco_networking::LunCoNetworkingPlugin { mode });
+        // Layer-4 Connect panel (address field + Connect/Disconnect button).
+        app.add_plugins(lunco_networking::ui::LunCoNetworkingUiPlugin);
     }
 
     if log_diag {

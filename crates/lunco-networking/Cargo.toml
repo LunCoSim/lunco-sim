@@ -13,7 +13,7 @@ required-features = ["networking"]
 default = []
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
-networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode"]
+networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:bevy_egui"]
 # Client-prediction diagnostics (render-jitter / velocity / correction census in
 # `diagnostics.rs`). OFF by default → not compiled into normal/shipping builds.
 # Build with it when chasing netcode jitter; once compiled it's active unless
@@ -22,6 +22,8 @@ net-diag = ["networking"]
 
 [dependencies]
 bevy = { workspace = true }
+# Layer-4 Connect/Disconnect panel (`ui` module), behind the `networking` feature.
+bevy_egui = { workspace = true, optional = true }
 lunco-core = { path = "../lunco-core" }
 # `default-features = false`: we only use the registry/executor types + plugin,
 # never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).
@@ -74,6 +76,14 @@ web-sys = { version = "0.3", features = ["Window", "Location", "Performance"] }
 # backend (`crypto.getRandomValues`) or it `compile_error!`s. We don't use it
 # directly — this entry exists only to turn the feature on via unification.
 getrandom = { version = "0.2", features = ["js"] }
+# URL-dialing WebTransport client IO (`wt_client`): lets the browser connect by
+# HOSTNAME (`https://lunica.lunco.space:5888`) so a real CA cert validates with no
+# digest — lightyear's built-in IO only dials `https://{ip}`. These are the SAME
+# crates lightyear already pulls (feature-unified — no extra build); declared
+# directly so we can build the dial URL ourselves. aeronet's wasm backend
+# (xwt-web) is selected by target cfg, not a feature.
+aeronet_webtransport = { version = "0.19", features = ["client"] }
+lightyear_aeronet = { version = "0.26.4", default-features = false }
 
 [lints]
 workspace = true

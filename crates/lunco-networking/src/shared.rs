@@ -39,7 +39,13 @@ pub(crate) fn peer_to_session(peer: PeerId) -> SessionId {
 
 /// Add the lightyear plugins, the protocol, the wire-channel declarations, and
 /// the host/client setup for `mode`.
-pub(crate) fn build_networking(app: &mut App, mode: &NetworkMode) {
+///
+/// `None` and `Some(Connect)` both build a **client-capable** app (the runtime
+/// `JoinServer` path needs `ClientPlugins` present from startup — Bevy can't add
+/// plugins later); `Some(Connect)` additionally auto-connects at `Startup`,
+/// while `None` stays idle (`NetworkRole::Standalone`, single-player) until a
+/// `JoinServer` command dials a server. `Some(Host)` builds the listen-server.
+pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
     // The transport-agnostic wire (codec, capture/apply, snapshots) the lightyear
     // ferry below drives. Both Host and Client need it.
     app.add_plugins(crate::sync::SyncPlugin);
@@ -52,7 +58,7 @@ pub(crate) fn build_networking(app: &mut App, mode: &NetworkMode) {
 
     let tick = Duration::from_secs_f64(lunco_core::SECS_PER_TICK);
     match mode {
-        NetworkMode::Host { port } => {
+        Some(NetworkMode::Host { port }) => {
             #[cfg(not(target_family = "wasm"))]
             {
                 app.insert_resource(NetworkRole::Host);
@@ -73,18 +79,39 @@ pub(crate) fn build_networking(app: &mut App, mode: &NetworkMode) {
                 warn!("Host mode is unsupported on wasm; use --connect");
             }
         }
-        NetworkMode::Connect { server, client_id } => {
-            app.insert_resource(NetworkRole::Client);
+        // None (idle local) or Some(Connect) — both are client-capable.
+        client_mode => {
             app.insert_resource(IsServer(false));
-            app.insert_resource(NetStatus {
-                role: NetworkRole::Client,
-                endpoint: server.to_string(),
-                peers: 0,
-                connected: false,
-            });
             app.add_plugins(lightyear::prelude::client::ClientPlugins { tick_duration: tick });
             add_protocol(app);
-            crate::client::setup_client(app, *server, *client_id);
+            // Ferry systems, disconnect observer, JoinServer/LeaveServer commands,
+            // and (wasm) the hostname-URL dialing plugin.
+            crate::client::register_client_systems(app);
+
+            if let Some(NetworkMode::Connect { server, client_id }) = client_mode {
+                // Auto-connect (CLI `--connect` / browser `?connect=`).
+                app.insert_resource(NetworkRole::Client);
+                app.insert_resource(NetStatus {
+                    role: NetworkRole::Client,
+                    endpoint: server.clone(),
+                    peers: 0,
+                    connected: false,
+                });
+                let server = server.clone();
+                let client_id = *client_id;
+                app.add_systems(Startup, move |mut commands: Commands| {
+                    crate::client::spawn_client(&mut commands, &server, client_id);
+                });
+            } else {
+                // Idle local sandbox — single-player until `JoinServer`.
+                app.insert_resource(NetworkRole::Standalone);
+                app.insert_resource(NetStatus {
+                    role: NetworkRole::Standalone,
+                    endpoint: String::new(),
+                    peers: 0,
+                    connected: false,
+                });
+            }
         }
     }
 }
