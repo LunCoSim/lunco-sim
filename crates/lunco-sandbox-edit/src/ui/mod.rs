@@ -121,7 +121,9 @@ pub struct BuildPerspective;
 
 impl Perspective for BuildPerspective {
     fn id(&self) -> PerspectiveId { PerspectiveId("rover_build") }
-    fn title(&self) -> String { "🏗 Build".into() }
+    // ⚒ (U+2692) instead of 🏗 (U+1F3D7) — the latter tofus in the
+    // bundled DejaVu fallback; ⚒ renders everywhere (see welcome.rs).
+    fn title(&self) -> String { "⚒ Build".into() }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         layout.set_side_browser_tabs(vec![
