@@ -18,12 +18,44 @@ pub(crate) const PRIVATE_KEY: [u8; 32] = [0u8; 32];
 // Reflect command payload (`SyncCommand.data`) still uses serde_json — bincode just
 // frames the envelope around it. Host and client always build together, so the
 // schema-coupled (non-self-describing) binary format is safe.
+/// Hard cap on a single decoded envelope. A hostile/corrupt frame whose bincode
+/// length prefix claims a huge `Vec`/`String` would otherwise make bincode
+/// pre-allocate that many bytes before reading a single field (memory DoS). 16
+/// MiB comfortably exceeds a full connect-baseline snapshot while bounding the
+/// blast radius. `with_fixint_encoding()` matches the format the free
+/// `bincode::serialize` below emits (the free fns are fixint; `options()` defaults
+/// to varint), so adding `.with_limit()` is purely a decode-side guard — the wire
+/// bytes are unchanged.
+pub(crate) const MAX_ENVELOPE_BYTES: u64 = 16 * 1024 * 1024;
+
 pub(crate) fn serialize_env(env: &SyncEnvelope) -> Option<Vec<u8>> {
-    bincode::serialize(env).ok()
+    match bincode::serialize(env) {
+        Ok(bytes) => Some(bytes),
+        Err(e) => {
+            warn!("[sync] envelope encode failed: {e}");
+            None
+        }
+    }
 }
 
 pub(crate) fn deserialize_env(bytes: &[u8]) -> Option<SyncEnvelope> {
-    bincode::deserialize(bytes).ok()
+    // Reject oversize frames up front, then cap bincode's internal allocation so
+    // a smaller frame with a lying length prefix can't pre-allocate gigabytes.
+    if bytes.len() as u64 > MAX_ENVELOPE_BYTES {
+        warn!("[sync] envelope decode rejected: {} bytes exceeds cap", bytes.len());
+        return None;
+    }
+    use bincode::Options;
+    let opts = bincode::options()
+        .with_fixint_encoding()
+        .with_limit(MAX_ENVELOPE_BYTES);
+    match opts.deserialize(bytes) {
+        Ok(env) => Some(env),
+        Err(e) => {
+            warn!("[sync] envelope decode failed ({} bytes): {e}", bytes.len());
+            None
+        }
+    }
 }
 
 /// Deterministic, collision-free `PeerId` → `SessionId`. Netcode peers carry a

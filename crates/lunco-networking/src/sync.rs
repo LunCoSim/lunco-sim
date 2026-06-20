@@ -455,6 +455,21 @@ pub fn apply_sync_command(
                 return;
             }
         };
+        // Guard against a panic in `ReflectEvent::trigger`: it builds the concrete
+        // type via `FromReflect`, falling back to `Default`/`FromWorld` and
+        // PANICKING when none apply (e.g. a struct still missing a no-`Default`
+        // field). Verify the value is fully constructible first so a malformed
+        // *wire* command logs and is dropped instead of killing the host. Mirrors
+        // the same guard in `lunco-api`'s `api_command_dispatcher`. (Types without
+        // a registered `ReflectFromReflect` keep the legacy path.)
+        let constructible = registration
+            .data::<bevy::reflect::ReflectFromReflect>()
+            .map(|fr| fr.from_reflect(reflected.as_ref()).is_some())
+            .unwrap_or(true);
+        if !constructible {
+            warn!("[sync] command '{type_name}' not constructible from params (missing/invalid fields); dropped");
+            return;
+        }
         // Guard set → the capture observer for this command suppresses the echo,
         // and possession skips local camera-bind for a remote origin.
         world.resource_mut::<SyncApplyGuard>().0 = Some(origin);
@@ -688,21 +703,30 @@ impl Plugin for SyncPlugin {
             // produced this frame and feeds the ferry's send, so it shares the ferry's
             // schedule).
             .add_systems(Update, (drain_sync_inbox, broadcast_new_spawns))
-            // `gather_snapshot` moves to `FixedUpdate`: it only writes our `SyncOutbox`
-            // (never calls lightyear), so it's safe to run on the sim clock. This
-            // decouples snapshot GENERATION (now a steady 20 Hz, tick-stamped, even
-            // when the window is unfocused and `Update` is render-throttled to ~5 Hz)
-            // from snapshot SEND (the ferry, still `Update`). The ferry then drains
-            // several queued snapshots in one throttled frame — a burst — but each
-            // carries its host `SimTick`, so the client interpolates them in tick-space
-            // and motion stays smooth (see `interpolate_proxies`).
+            // `gather_snapshot` runs on the sim clock (`FixedPostUpdate`): it only
+            // writes our `SyncOutbox` (never calls lightyear), so it's safe off the
+            // render clock. This decouples snapshot GENERATION (a steady 20 Hz,
+            // tick-stamped, even when the window is unfocused and `Update` is
+            // render-throttled to ~5 Hz) from snapshot SEND (the ferry, still
+            // `Update`). The ferry then drains several queued snapshots in one
+            // throttled frame — a burst — but each carries its host `SimTick`, so
+            // the client interpolates them in tick-space and motion stays smooth
+            // (see `interpolate_proxies`).
             // `.after(Writeback)`: sample the pose AFTER avian has integrated this
             // tick and synced `Position`/`Rotation` → `Transform`, so the snapshot's
             // pose and its `last_input_seq` ack are a consistent post-step pair —
             // matching how the client records its predicted pose (`record_predicted_state`,
             // also after writeback). Otherwise the host could ship last-tick's pose
             // stamped with this-tick's ack (a 1-tick mispair the client reconciles away).
-            .add_systems(FixedUpdate, gather_snapshot.after(PhysicsSystems::Writeback));
+            // Schedule = `FixedPostUpdate`, NOT `FixedUpdate`: avian's
+            // `PhysicsSystems::Writeback` set runs in `FixedPostUpdate`, so an
+            // `.after(Writeback)` in `FixedUpdate` constrains nothing (zero set
+            // members there → silent no-op) and would sample last-tick's pose
+            // stamped with this-tick's `last_input_seq`. `FixedPostUpdate` is on
+            // the same fixed clock (keeps the steady-20 Hz decoupling) AND honors
+            // the ordering — matching the client's `record_predicted_state`,
+            // which also records after writeback in `FixedPostUpdate`.
+            .add_systems(FixedPostUpdate, gather_snapshot.after(PhysicsSystems::Writeback));
     }
 }
 
