@@ -108,7 +108,7 @@ pub fn default_bounds() -> RunBounds {
 ///   1. `drilled_in` — the UI drill-in pin; the user is looking at a leaf
 ///      model and expects *that* to run, not the enclosing package.
 ///   2. the first `candidate` — caller supplies the tier-ranked
-///      [`simulation_candidates`](crate::index::ModelIndex::simulation_candidates)
+///      [`simulation_candidates`](crate::index::ModelicaIndex::simulation_candidates)
 ///      list, where an `experiment(...)`-annotated, non-partial class sorts
 ///      first (NOT arbitrary `HashMap` order).
 ///
@@ -146,7 +146,7 @@ impl std::fmt::Display for ClassResolveError {
 /// Resolve a caller-supplied simulation target — fully qualified OR a bare
 /// leaf name — to the canonical fully-qualified class, matched against the
 /// document's simulatable `candidates` (themselves always qualified, from
-/// [`simulation_candidates`](crate::index::ModelIndex::simulation_candidates)).
+/// [`simulation_candidates`](crate::index::ModelicaIndex::simulation_candidates)).
 ///
 /// THE single source of class-name resolution shared by every "run this
 /// class" surface (`CompileModel`, `FastRunActiveModel`, `RunExperiment`), so

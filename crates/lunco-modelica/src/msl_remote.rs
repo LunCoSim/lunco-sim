@@ -204,20 +204,6 @@ pub(crate) fn write_parsed_bundle(
     Ok(())
 }
 
-/// Decompress + bincode-decode a `parsed-*.bin.zst` blob into the
-/// `Vec<(uri, StoredDefinition)>` bundle. zstd-wrapped bincode produced by
-/// `build_msl_assets` (legacy `bincode::serialize`). One-shot — used by the
-/// **worker** (off the main thread); the main thread uses the chunked decoder
-/// below instead so it never blocks.
-#[cfg(target_arch = "wasm32")]
-pub fn decode_parsed_bundle(
-    compressed: &[u8],
-) -> Result<Vec<(String, rumoca_compile::parsing::StoredDefinition)>, String> {
-    let decoder = ruzstd::StreamingDecoder::new(compressed)
-        .map_err(|e| format!("zstd decoder: {e}"))?;
-    bincode::deserialize_from(decoder).map_err(|e| format!("bincode deserialize: {e}"))
-}
-
 /// Inflate a `parsed-*.bin.zst` blob to the raw bincode bytes, *without*
 /// deserializing. The worker uses this so it can both decode its own ASTs
 /// (`bincode::deserialize` the returned bytes) **and** ship the same decoded
@@ -999,12 +985,6 @@ struct SlotInner {
     pending_state: Option<MslLoadState>,
     /// The fetched + decompressed in-memory tree, handed off once.
     pending_source: Option<MslAssetSource>,
-    /// Pre-parsed `Vec<(uri, StoredDefinition)>` if the manifest had a
-    /// `parsed` entry. When `Some`, the drain skips the chunked-source
-    /// parse path and installs directly into `GLOBAL_PARSED_MSL`.
-    /// (Legacy fallback field — the boot path now uses the compressed fields
-    /// below; this stays `None` unless a non-parsed bundle is loaded.)
-    pending_parsed: Option<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>,
     /// Raw **compressed** `parsed-*.bin.zst` bytes. Decompressed/decoded off
     /// the boot future: shipped to the worker + chunk-decoded on main. This is
     /// the fast path when the manifest advertises a pre-parsed bundle.
@@ -1022,7 +1002,6 @@ struct MslLoadSlot(SharedSlot);
 fn drain_msl_load_slot(
     slot: Res<MslLoadSlot>,
     mut state: ResMut<MslLoadState>,
-    mut worker: ResMut<crate::worker::InlineWorker>,
     mut commands: Commands,
 ) {
     let mut inner = match slot.0.lock() {
@@ -1070,29 +1049,6 @@ fn drain_msl_load_slot(
         // consults so the next compile attempt picks it up regardless of
         // system ordering.
         lunco_assets::msl::install_global_msl_sources(sources_with_extras(source.clone()));
-
-        // Fast path: pre-parsed bundle was shipped and decoded. Install
-        // directly. The next time the user hits Compile, the inline
-        // worker will lazy-build a fresh `ModelicaCompiler` that picks
-        // up `GLOBAL_PARSED_MSL` and the model resolves cleanly.
-        if let Some(parsed_docs) = inner.pending_parsed.take() {
-            let count = parsed_docs.len();
-            bevy::log::info!(
-                "[MSL] using pre-parsed bundle — {count} docs ready (no on-page parse)"
-            );
-            // Forward to the off-thread worker (if installed) BEFORE
-            // moving `parsed_docs` into the main address space's
-            // `GLOBAL_PARSED_MSL`. The worker has its own wasm linear
-            // memory and OnceLock; without this hand-off, every compile
-            // dispatched to the worker would fail to resolve any
-            // `Modelica.*` reference.
-            crate::worker_transport::install_msl_in_worker(&parsed_docs);
-            install_global_parsed_msl(parsed_docs);
-            // Drop any previously-cached empty compiler so the next
-            // user-initiated compile rebuilds with MSL.
-            worker.reset_compiler();
-            return;
-        }
 
         // Slow path: only sources available. Hand the source pairs to
         // the chunked parse driver. Retrigger compile happens after

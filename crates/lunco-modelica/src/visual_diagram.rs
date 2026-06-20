@@ -310,16 +310,15 @@ impl VisualDiagram {
         // Default IconTransform = identity scaled to the standard
         // 20×20 fallback box, translated to `position`. Importer paths
         // that have a real Placement override this immediately.
-        let mut icon_transform = crate::icon_transform::IconTransform::from_placement(
-            (position.x, -position.y),  // Modelica +Y up, position is screen-Y
+        // `from_placement` bakes in the Y flip — recovered cleanly by
+        // flipping `position.y` above (Modelica +Y up, position is screen-Y).
+        let icon_transform = crate::icon_transform::IconTransform::from_placement(
+            (position.x, -position.y),
             (20.0, 20.0),
             false, false,
             0.0,
             (0.0, 0.0),
         );
-        // The from_placement bakes in the Y flip — recover it cleanly
-        // by also flipping `position.y` above.
-        let _ = &mut icon_transform; // silence unused-mut lint when const
 
         self.nodes.push(DiagramNode {
             id,
@@ -514,142 +513,9 @@ pub fn msl_class_by_path(path: &str) -> Option<crate::index::ClassEntry> {
         .cloned()
 }
 
-// ---------------------------------------------------------------------------
-// Code Generator — Diagram → Modelica Source
-// ---------------------------------------------------------------------------
-
-/// Generate Modelica source code from a visual diagram.
-///
-/// Returns the complete `.mo` file content as a string.
-pub fn generate_modelica_source(diagram: &VisualDiagram, model_name: &str) -> String {
-    let mut source = String::new();
-
-    // Model header
-    source.push_str(&format!("model {}\n", model_name));
-    source.push_str("  // Auto-generated from visual diagram\n\n");
-
-    // Imports — collect unique MSL paths needed
-    let mut imports: Vec<String> = diagram
-        .nodes
-        .iter()
-        .map(|n| n.component_def.name.clone())
-        .collect();
-    imports.sort();
-    imports.dedup();
-
-    for import_path in &imports {
-        source.push_str(&format!("  import {};\n", import_path));
-    }
-    if !imports.is_empty() {
-        source.push('\n');
-    }
-
-    // Component declarations
-    for node in &diagram.nodes {
-        let short_name = node.component_def.short_name().to_string();
-        let params: Vec<String> = node.parameter_values
-            .iter()
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect();
-        let param_str = if params.is_empty() {
-            String::new()
-        } else {
-            format!("({})", params.join(", "))
-        };
-        
-        let x = node.position.x;
-        let y = node.position.y;
-        // Note: Modelica coordinate space is typically +Y up, Snarl is +Y down.
-        // We invert Y here, mapping 1:1 pixels to coordinate space.
-        let annotation = format!(
-            " annotation(Placement(transformation(extent={{{{ {}, {} }}, {{ {}, {} }}}})))",
-            x - 20.0, -y - 20.0, x + 20.0, -y + 20.0
-        );
-
-        source.push_str(&format!(
-            "  {} {}{}{};\n",
-            short_name, node.instance_name, param_str, annotation
-        ));
-    }
-    source.push_str("\nequation\n");
-
-    // Connection equations
-    for edge in &diagram.edges {
-        let src_node = diagram.get_node(edge.source_node);
-        let tgt_node = diagram.get_node(edge.target_node);
-        if let (Some(src), Some(tgt)) = (src_node, tgt_node) {
-            source.push_str(&format!(
-                "  connect({}.{}, {}.{});\n",
-                src.instance_name, edge.source_port,
-                tgt.instance_name, edge.target_port
-            ));
-        }
-    }
-
-    // If no connections, add a dummy equation to make it valid
-    if diagram.edges.is_empty() && !diagram.nodes.is_empty() {
-        source.push_str("  // No connections yet\n");
-    }
-
-    source.push_str(&format!("end {};\n", model_name));
-    source
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Build a minimal `ClassEntry` fixture for source-generation
-    /// tests. Self-contained on purpose: the generated `msl_index.json`
-    /// (what `msl_class_library()` reads) carries the *real* MSL
-    /// defaults (`Resistor.R = 1`, plus `useHeatPort`/`T`/…), which are
-    /// both the wrong values for this assertion and order-unstable
-    /// through `parameter_values`' `HashMap`. Keep one param per
-    /// fixture so the single-entry render is deterministic.
-    fn fixture_class(name: &str, params: &[(&str, &str)]) -> crate::index::ClassEntry {
-        let parameters: Vec<_> = params
-            .iter()
-            .map(|(n, d)| {
-                serde_json::json!({
-                    "name": n, "param_type": "Real", "default": d, "unit": null
-                })
-            })
-            .collect();
-        serde_json::from_value(serde_json::json!({
-            "name": name,
-            "kind": "model",
-            "parameters": parameters,
-        }))
-        .expect("fixture ClassEntry deserialises")
-    }
-
-    #[test]
-    fn test_generate_rc_circuit() {
-        let mut diagram = VisualDiagram::default();
-
-        let v1_def = fixture_class("Modelica.Electrical.Analog.Sources.ConstantVoltage", &[("V", "1")]);
-        let r1_def = fixture_class("Modelica.Electrical.Analog.Basic.Resistor", &[("R", "100")]);
-        let c1_def = fixture_class("Modelica.Electrical.Analog.Basic.Capacitor", &[("C", "0.001")]);
-        let gnd_def = fixture_class("Modelica.Electrical.Analog.Basic.Ground", &[]);
-
-        let v1 = diagram.add_node(v1_def, Pos2::new(0.0, 0.0));
-        let r1 = diagram.add_node(r1_def, Pos2::new(200.0, 0.0));
-        let c1 = diagram.add_node(c1_def, Pos2::new(400.0, 0.0));
-        let gnd = diagram.add_node(gnd_def, Pos2::new(200.0, 200.0));
-        diagram.get_node_mut(gnd).unwrap().instance_name = "GND".into();
-
-        diagram.add_edge(v1, "p".into(), r1, "p".into());
-        diagram.add_edge(r1, "n".into(), c1, "p".into());
-        diagram.add_edge(c1, "n".into(), gnd, "p".into());
-        diagram.add_edge(v1, "n".into(), gnd, "p".into());
-
-        let source = generate_modelica_source(&diagram, "TestRC");
-        assert!(source.contains("model TestRC"));
-        assert!(source.contains("connect(C1.n, GND.p)"));
-        assert!(source.contains("Resistor R1(R=100)"));
-        assert!(source.contains("Capacitor C1(C=0.001)"));
-        assert!(source.contains("end TestRC"));
-    }
 
     #[test]
     fn test_msl_library_not_empty() {
