@@ -87,7 +87,7 @@ fn main() {
     app.add_plugins(bevy::log::LogPlugin::default());
     app.add_plugins(lunco_core::LunCoCorePlugin);
     app.add_plugins(lunco_api::LunCoApiPlugin::default());
-    app.add_plugins(LunCoNetworkingPlugin { mode });
+    app.add_plugins(LunCoNetworkingPlugin { mode: Some(mode) });
 
     // Register the command types so the wire reflect (de)serialize + trigger
     // path works (the domain plugins normally do this; the harness skips them).

@@ -74,6 +74,14 @@ web-sys = { version = "0.3", features = ["Window", "Location", "Performance"] }
 # backend (`crypto.getRandomValues`) or it `compile_error!`s. We don't use it
 # directly — this entry exists only to turn the feature on via unification.
 getrandom = { version = "0.2", features = ["js"] }
+# URL-dialing WebTransport client IO (`wt_client`): lets the browser connect by
+# HOSTNAME (`https://lunica.lunco.space:5888`) so a real CA cert validates with no
+# digest — lightyear's built-in IO only dials `https://{ip}`. These are the SAME
+# crates lightyear already pulls (feature-unified — no extra build); declared
+# directly so we can build the dial URL ourselves. aeronet's wasm backend
+# (xwt-web) is selected by target cfg, not a feature.
+aeronet_webtransport = { version = "0.19", features = ["client"] }
+lightyear_aeronet = { version = "0.26.4", default-features = false }
 
 [lints]
 workspace = true

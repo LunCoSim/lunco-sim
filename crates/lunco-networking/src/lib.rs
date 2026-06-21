@@ -16,6 +16,7 @@
 //! With the feature off the plugin is a no-op and single-player is unaffected.
 
 use bevy::prelude::*;
+#[cfg(not(target_family = "wasm"))]
 use std::net::SocketAddr;
 
 #[cfg(feature = "networking")]
@@ -30,6 +31,16 @@ pub mod sync;
 mod server;
 #[cfg(feature = "networking")]
 mod client;
+/// Browser-only WebTransport client IO that dials a **hostname URL**
+/// (`https://lunica.lunco.space:5888`) so a real CA cert validates with no
+/// digest — lightyear's built-in `WebTransportClientIo` only dials
+/// `https://{SocketAddr}` (IP-only). Native keeps lightyear's IO.
+#[cfg(all(feature = "networking", target_family = "wasm"))]
+mod wt_client;
+/// Layer-4 UI: the in-sim *Connect* panel (address field + Connect/Disconnect),
+/// which dispatches the `JoinServer`/`LeaveServer` commands. Behind the feature.
+#[cfg(feature = "networking")]
+pub mod ui;
 /// Client-prediction diagnostics (render-jitter / velocity / correction census).
 /// Compiled only under the `net-diag` feature (off by default — not in normal
 /// builds); silence a net-diag build at runtime with `LUNCO_NET_DIAG=0`. See
@@ -43,9 +54,12 @@ pub enum NetworkMode {
     /// Listen-server: run the authoritative world and accept WebTransport
     /// clients on `port`. (Native only.)
     Host { port: u16 },
-    /// Pure client: connect to `server` over WebTransport, identifying as
-    /// `client_id` (must be distinct per client).
-    Connect { server: SocketAddr, client_id: u64 },
+    /// Pure client: connect to `server` (a `host:port` string — a **hostname**
+    /// like `lunica.lunco.space:5888` or an `ip:port`) over WebTransport,
+    /// identifying as `client_id` (must be distinct per client). Kept as a
+    /// string so a DNS name survives to the browser, which resolves it when it
+    /// dials the WebTransport URL (a `SocketAddr` couldn't hold a hostname).
+    Connect { server: String, client_id: u64 },
 }
 
 impl NetworkMode {
@@ -65,17 +79,12 @@ impl NetworkMode {
                 }
                 "--connect" => {
                     let raw = args.get(i + 1).cloned().unwrap_or_default();
-                    let with_port = if raw.contains(':') {
-                        raw
-                    } else {
-                        format!("{raw}:5888")
-                    };
-                    let server: SocketAddr = with_port.parse().unwrap_or_else(|_| {
-                        SocketAddr::from(([127, 0, 0, 1], 5888))
-                    });
                     // Distinct per process so two clients get distinct sessions.
                     let client_id = std::process::id() as u64;
-                    return Some(NetworkMode::Connect { server, client_id });
+                    return Some(NetworkMode::Connect {
+                        server: normalize_addr(&raw),
+                        client_id,
+                    });
                 }
                 _ => {}
             }
@@ -97,11 +106,14 @@ impl NetworkMode {
         }
     }
 
-    /// Browser entry point: parse `?connect=host[:port]` from the page query
-    /// string (defaulting the port to `5888`). The WebTransport cert digest is
-    /// read separately from the URL `#hash` by the client adapter, so a full
-    /// browser join URL looks like `…/?connect=127.0.0.1:5888#<digest>`.
-    /// Only `Connect` is reachable on wasm — hosting is native-only.
+    /// Browser entry point. **Default is single-player (local sandbox)** — the
+    /// page boots offline; the user joins a session with the in-sim *Connect*
+    /// button (whose address field defaults to [`default_connect_host`], the page
+    /// origin). `?connect=host[:port]` is the dev / deep-link override that
+    /// auto-connects on load instead of waiting for the button.
+    ///
+    /// Port defaults to `5888` when the address carries none. Only `Connect` is
+    /// reachable on wasm — hosting is native-only.
     #[cfg(target_family = "wasm")]
     pub fn from_url() -> Option<Self> {
         let window = web_sys::window()?;
@@ -116,27 +128,111 @@ impl NetworkMode {
                     _ => None,
                 }
             })?;
-        let with_port = if raw.contains(':') {
-            raw
-        } else {
-            format!("{raw}:5888")
-        };
-        let server: SocketAddr = with_port.parse().ok()?;
-        // Distinct per tab so concurrent browser clients get distinct sessions:
-        // `performance.now()` is sub-millisecond and differs per page load.
-        let client_id = window
-            .performance()
-            .map(|p| p.now().to_bits())
-            .unwrap_or(1);
-        Some(NetworkMode::Connect { server, client_id })
+        Some(NetworkMode::Connect {
+            server: normalize_addr(&raw),
+            client_id: browser_client_id(),
+        })
+    }
+
+    /// Build a [`Connect`](NetworkMode::Connect) mode from a user-typed address
+    /// (the in-sim *Connect* button / the `JoinServer` command). Accepts a bare
+    /// `host`, `host:port`, or `ip:port`; the port defaults to `5888`. A bare DNS
+    /// name is fine now — the browser resolves it when it dials the WebTransport
+    /// URL. Returns `None` only for an empty address.
+    pub fn connect_to(addr: &str) -> Option<Self> {
+        if addr.trim().is_empty() {
+            return None;
+        }
+        #[cfg(target_family = "wasm")]
+        let client_id = browser_client_id();
+        #[cfg(not(target_family = "wasm"))]
+        let client_id = std::process::id() as u64;
+        Some(NetworkMode::Connect {
+            server: normalize_addr(addr),
+            client_id,
+        })
     }
 }
 
-/// Plugin that wires the lightyear WebTransport adapter for the chosen
-/// [`NetworkMode`]. Add it only when networking is desired (single-player omits
-/// it entirely).
+/// Normalize a user/URL address to a `host:port` string, defaulting the port to
+/// `5888`. Accepts a bare hostname (`lunica.lunco.space`), `host:port`, or
+/// `ip:port`. The host is kept as-is (hostname or IP) so the browser can resolve
+/// a DNS name when it dials the WebTransport URL.
+pub(crate) fn normalize_addr(raw: &str) -> String {
+    let raw = raw.trim();
+    if raw.contains(':') {
+        raw.to_string()
+    } else {
+        format!("{raw}:5888")
+    }
+}
+
+/// A distinct client id for a new connection: per-tab on wasm
+/// ([`browser_client_id`]), per-process on native. Used by `JoinServer` and the
+/// auto-connect path.
+pub(crate) fn next_client_id() -> u64 {
+    #[cfg(target_family = "wasm")]
+    {
+        browser_client_id()
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        std::process::id() as u64
+    }
+}
+
+/// Resolve a `host:port` string to a [`SocketAddr`] for the **native** netcode
+/// path (hostnames resolve via DNS). Falls back to `127.0.0.1:5888`. Browsers
+/// never call this — they dial the hostname URL directly.
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn resolve_socket_addr(server: &str) -> SocketAddr {
+    use std::net::ToSocketAddrs;
+    server
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut it| it.next())
+        .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 5888)))
+}
+
+/// The address the in-sim *Connect* button should default to: the page origin
+/// host on wasm (so "Connect" joins the server that served the sandbox), and
+/// localhost on native.
+pub fn default_connect_host() -> String {
+    #[cfg(target_family = "wasm")]
+    {
+        web_sys::window()
+            .and_then(|w| w.location().hostname().ok())
+            .filter(|h| !h.is_empty())
+            .map(|h| format!("{h}:5888"))
+            .unwrap_or_else(|| "127.0.0.1:5888".to_string())
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        "127.0.0.1:5888".to_string()
+    }
+}
+
+/// A per-tab client id for browser sessions. `performance.now()` is
+/// sub-millisecond and differs per page load, so concurrent tabs get distinct
+/// sessions.
+#[cfg(target_family = "wasm")]
+fn browser_client_id() -> u64 {
+    web_sys::window()
+        .and_then(|w| w.performance())
+        .map(|p| p.now().to_bits())
+        .unwrap_or(1)
+}
+
+/// Plugin that wires the lightyear WebTransport adapter.
+///
+/// `mode` is an [`Option`]: `Some(Host|Connect)` boots into that role (CLI
+/// `--host`/`--connect`, browser `?connect=`), while **`None` boots a
+/// client-capable but idle local sandbox** — single-player until a `JoinServer`
+/// command (the in-sim *Connect* button / HTTP API / MCP) dials a server at
+/// runtime. So this plugin is now added whenever the `networking` feature is on,
+/// not only when an address was supplied up front.
 pub struct LunCoNetworkingPlugin {
-    pub mode: NetworkMode,
+    pub mode: Option<NetworkMode>,
 }
 
 impl Plugin for LunCoNetworkingPlugin {

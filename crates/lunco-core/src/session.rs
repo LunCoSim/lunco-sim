@@ -53,7 +53,27 @@ pub struct NetStatus {
     pub peers: u32,
     /// Client: handshake completed (session assigned). Always `true` on a host.
     pub connected: bool,
+    /// Suggested address to pre-fill the Connect field (page origin on wasm,
+    /// `127.0.0.1:5888` on native). Seeded by the `lunco-networking` adapter so
+    /// the workbench's Network menu can offer a sensible default with **no**
+    /// lunco-networking dependency. Empty until the adapter seeds it.
+    pub connect_hint: String,
 }
+
+/// UI → wire bridge: "dial this server". Fired by the workbench's **Network**
+/// menu (which has no lunco-networking dependency); the optional adapter observes
+/// it and re-dispatches the typed `JoinServer` command. No-op when the wire layer
+/// isn't compiled in. This is the same always-on-seam trick as [`NetStatus`] (D7).
+#[derive(Event, Clone, Debug)]
+pub struct NetConnectRequest {
+    /// `host:port` — a hostname (`lunica.lunco.space:5888`) or `ip:port`.
+    pub address: String,
+}
+
+/// UI → wire bridge: "leave the current session" (return to single-player).
+/// Counterpart to [`NetConnectRequest`]; the adapter re-dispatches `LeaveServer`.
+#[derive(Event, Clone, Debug, Default)]
+pub struct NetDisconnectRequest;
 
 /// This peer's own session id. [`SessionId::LOCAL`] until a client handshake
 /// replaces it. Stamped as `origin` on every outgoing mutation so the host can
