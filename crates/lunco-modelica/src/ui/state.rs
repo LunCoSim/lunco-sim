@@ -712,7 +712,9 @@ mod tests {
 
         let host = reg.host(doc).expect("host registered");
         assert_eq!(host.document().source(), "model A end A;");
-        assert_eq!(host.generation(), 0, "allocate doesn't apply an op");
+        // Fresh doc is gen 1 from construction (placeholder-AST staleness
+        // seed); allocate itself applies no op on top of that.
+        assert_eq!(host.generation(), 1, "allocate doesn't apply an op");
     }
 
     #[test]
@@ -725,7 +727,7 @@ mod tests {
 
         let host = reg.host(doc).unwrap();
         assert_eq!(host.document().source(), "model B end B;");
-        assert_eq!(host.generation(), 1);
+        assert_eq!(host.generation(), 2); // gen 1 fresh + 1 checkpoint op
         assert!(host.can_undo());
     }
 
@@ -736,7 +738,7 @@ mod tests {
 
         let changed = reg.checkpoint_source(doc, "same".into());
         assert!(!changed, "re-checkpointing identical source must not bump generation");
-        assert_eq!(reg.host(doc).unwrap().generation(), 0);
+        assert_eq!(reg.host(doc).unwrap().generation(), 1); // unchanged fresh gen 1
     }
 
     #[test]
