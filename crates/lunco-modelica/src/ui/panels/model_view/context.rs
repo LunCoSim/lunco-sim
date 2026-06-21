@@ -57,7 +57,7 @@ pub fn resolve_tab_title(
     }
 
     let active_doc = world
-        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
     if active_doc == Some(doc) {
         if let Some(name) = crate::state::display_name_for(world, doc) {
@@ -73,7 +73,7 @@ pub fn sync_active_tab_to_doc(
     _drilled_class: Option<&str>,
 ) {
     let active_matches = world
-        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document)
         == Some(doc);
     // Fast-path: if we're already active AND the buffer is already bound
@@ -179,7 +179,7 @@ pub fn sync_active_tab_to_doc(
     }
 
     {
-        let mut ws = world.resource_mut::<lunco_workbench::WorkspaceResource>();
+        let mut ws = world.resource_mut::<lunco_workspace::WorkspaceResource>();
         ws.active_document = Some(doc);
     }
 

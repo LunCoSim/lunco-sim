@@ -21,7 +21,8 @@
 //! that never add `UsdUiPlugin`.
 
 use bevy::prelude::*;
-use lunco_workbench::{BrowserAction, BrowserActions, WorkspaceResource};
+use lunco_workbench::{BrowserAction, BrowserActions};
+use lunco_workspace::WorkspaceResource;
 
 use crate::commands::spawn_usd_load;
 

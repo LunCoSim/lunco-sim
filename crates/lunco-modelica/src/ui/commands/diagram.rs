@@ -35,7 +35,7 @@ pub fn on_move_component(trigger: On<MoveComponent>, mut commands: Commands) {
         use crate::document::ModelicaOp;
         use crate::pretty::Placement;
         let active_doc = world
-            .get_resource::<lunco_workbench::WorkspaceResource>()
+            .get_resource::<lunco_workspace::WorkspaceResource>()
             .and_then(|ws| ws.active_document);
         let Some(doc_id) = active_doc else {
             bevy::log::warn!("[MoveComponent] no active document");

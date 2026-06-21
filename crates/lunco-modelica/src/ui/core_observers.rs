@@ -268,7 +268,7 @@ pub fn relay_compile_requests(
 pub fn feed_parse_pacing(
     mut pacing: ResMut<crate::engine_resource::ParsePacing>,
     activity: Res<crate::ui::input_activity::InputActivity>,
-    workspace: Option<Res<lunco_workbench::WorkspaceResource>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
 ) {
     pacing.input_active = activity.is_active();
     pacing.active_document = workspace.as_deref().and_then(|ws| ws.active_document);

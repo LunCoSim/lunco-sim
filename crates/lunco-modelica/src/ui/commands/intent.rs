@@ -9,7 +9,7 @@ use crate::state::ModelicaDocumentRegistry;
 
 pub fn resolve_editor_intent(
     trigger: On<EditorIntent>,
-    workspace: Res<lunco_workbench::WorkspaceResource>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
     registry: Res<ModelicaDocumentRegistry>,
     mut pending_closes: ResMut<lunco_workbench::PendingTabCloses>,
     mut commands: Commands,

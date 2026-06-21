@@ -719,7 +719,7 @@ impl CanvasDiagramState {
 /// less critical (the projection still runs to completion off-thread)
 /// but throwing away its result earlier saves a tiny amount of work.
 pub fn cancel_inactive_projections(
-    workspace: Option<Res<lunco_workbench::WorkspaceResource>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut state: ResMut<CanvasDiagramState>,
 ) {
     let active = workspace.as_deref().and_then(|ws| ws.active_document);
@@ -833,7 +833,7 @@ pub fn active_doc_from_world(world: &World) -> Option<lunco_doc::DocumentId> {
         return Some(doc);
     }
     world
-        .resource::<lunco_workbench::WorkspaceResource>()
+        .resource::<lunco_workspace::WorkspaceResource>()
         .active_document
 }
 
@@ -852,7 +852,7 @@ pub(super) fn render_target(
         }
     }
     let doc = world
-        .resource::<lunco_workbench::WorkspaceResource>()
+        .resource::<lunco_workspace::WorkspaceResource>()
         .active_document?;
     let drilled = crate::sim_default::drilled_class_for_doc(world, doc);
     Some((doc, drilled))

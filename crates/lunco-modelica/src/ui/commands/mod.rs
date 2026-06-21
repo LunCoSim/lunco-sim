@@ -126,7 +126,7 @@ register_commands!(
 
 pub(super) fn resolve_active_doc(world: &World) -> Option<DocumentId> {
     world
-        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document)
 }
 

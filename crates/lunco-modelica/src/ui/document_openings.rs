@@ -276,7 +276,7 @@ pub fn track_simulate_busy(
 pub fn drive_file_load_openings(
     mut openings: ResMut<DocumentOpenings>,
     mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
-    mut workspace: ResMut<lunco_workbench::WorkspaceResource>,
+    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut canvas_state: ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>,
     mut tabs: ResMut<crate::model_tabs::ModelTabs>,
     mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,

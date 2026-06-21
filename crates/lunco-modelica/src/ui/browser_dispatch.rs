@@ -46,7 +46,7 @@ pub fn drain_browser_actions(world: &mut World) {
     // active Twin's root. Captured once so we don't fight the borrow
     // checker re-borrowing `WorkspaceResource` per action.
     let twin_root = {
-        let ws = world.resource::<lunco_workbench::WorkspaceResource>();
+        let ws = world.resource::<lunco_workspace::WorkspaceResource>();
         ws.active_twin
             .and_then(|id| ws.twin(id))
             .map(|t| t.root.clone())
@@ -162,7 +162,7 @@ pub fn drain_browser_actions(world: &mut World) {
                 // rendering a different doc, the new drill target is
                 // never observed and the diagram looks frozen.
                 world
-                    .resource_mut::<lunco_workbench::WorkspaceResource>()
+                    .resource_mut::<lunco_workspace::WorkspaceResource>()
                     .active_document = Some(doc);
             }
             BrowserAction::CloseDoc { doc } => {

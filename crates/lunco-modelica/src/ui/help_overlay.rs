@@ -296,7 +296,7 @@ fn manage_tutorial_doc(world: &mut World) {
     let wants_capture = world.resource::<HelpOverlayState>().wants_capture_doc;
     if wants_capture {
         let active = world
-            .resource::<lunco_workbench::WorkspaceResource>()
+            .resource::<lunco_workspace::WorkspaceResource>()
             .active_document;
         let mut state = world.resource_mut::<HelpOverlayState>();
         if active.is_some() {
@@ -338,7 +338,7 @@ fn manage_tutorial_doc(world: &mut World) {
         let doc = captured.or_else(|| {
             if pending {
                 world
-                    .resource::<lunco_workbench::WorkspaceResource>()
+                    .resource::<lunco_workspace::WorkspaceResource>()
                     .active_document
             } else {
                 None
@@ -348,7 +348,7 @@ fn manage_tutorial_doc(world: &mut World) {
             // Make the tour doc active so `EditorIntent::Close` (which
             // closes the active document) targets the right one.
             world
-                .resource_mut::<lunco_workbench::WorkspaceResource>()
+                .resource_mut::<lunco_workspace::WorkspaceResource>()
                 .active_document = Some(doc);
             world.trigger(lunco_doc_bevy::EditorIntent::Close);
         }

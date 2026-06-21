@@ -82,7 +82,7 @@ impl Panel for JournalPanel {
         let muted = theme.tokens.text_subdued;
 
         let active_doc = world
-            .get_resource::<lunco_workbench::WorkspaceResource>()
+            .get_resource::<lunco_workspace::WorkspaceResource>()
             .and_then(|ws| ws.active_document);
 
         // Tunability: the row cap comes from `lunco-settings`. Falls

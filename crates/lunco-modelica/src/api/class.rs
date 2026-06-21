@@ -139,7 +139,7 @@ fn is_ident_byte(b: u8) -> bool {
 /// rewrite — that's what this observer handles.
 pub fn on_rename_open_document_chain_to_modelica(
     trigger: On<lunco_workbench::file_ops::RenameOpenDocument>,
-    workspace: Res<lunco_workbench::WorkspaceResource>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
     registry: Res<crate::state::ModelicaDocumentRegistry>,
     mut commands: Commands,
 ) {
@@ -195,8 +195,8 @@ pub fn on_rename_open_document_chain_to_modelica(
 /// refs in other docs) are deliberately not addressed here — that's a
 /// separate slice with its own AST-resolver design.
 pub fn on_file_renamed_chain_to_modelica(
-    trigger: On<lunco_workbench::FileRenamed>,
-    workspace: Res<lunco_workbench::WorkspaceResource>,
+    trigger: On<lunco_workspace::FileRenamed>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
     mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
     mut commands: Commands,
 ) {

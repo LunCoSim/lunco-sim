@@ -87,7 +87,7 @@ pub fn update_file_load_result(mut state: ResMut<WorkbenchState>) {
 /// # What lives here (post–Workspace migration)
 ///
 /// This resource is now a **UI cache** on top of the authoritative
-/// session state in [`lunco_workbench::WorkspaceResource`]:
+/// session state in [`lunco_workspace::WorkspaceResource`]:
 ///
 /// - **Identity of the active document** lives on the Workspace
 ///   (`active_document: Option<DocumentId>`). This struct only carries
@@ -534,7 +534,7 @@ pub fn simulator_for(world: &World, doc: DocumentId) -> Option<Entity> {
 /// pinned id instead.
 pub fn active_simulator(world: &World) -> Option<Entity> {
     let active = world
-        .get_resource::<lunco_workbench::WorkspaceResource>()?
+        .get_resource::<lunco_workspace::WorkspaceResource>()?
         .active_document?;
     simulator_for(world, active)
 }

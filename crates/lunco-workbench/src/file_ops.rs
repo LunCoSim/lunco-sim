@@ -42,7 +42,7 @@ use lunco_doc_bevy::SaveAsDocument;
 use lunco_twin::{DocumentKindId, DocumentKindRegistry, TwinError, TwinMode};
 
 use crate::picker::{PickFollowUp, PickResolved};
-use crate::session::{FileRenamed, TwinAdded, TwinClosed, WorkspaceResource};
+use lunco_workspace::{FileRenamed, TwinAdded, TwinClosed, WorkspaceResource};
 
 /// Request a system "Open File" dialog.
 ///

@@ -408,7 +408,7 @@ pub fn on_create_new_scratch_model(
     mut cache: ResMut<PackageTreeCache>,
     mut model_tabs: ResMut<ModelTabs>,
     mut workbench: ResMut<WorkbenchState>,
-    mut workspace: ResMut<lunco_workbench::WorkspaceResource>,
+    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut commands: Commands,
 ) {
     let req_source = trigger.event().source.clone();
@@ -989,7 +989,7 @@ pub fn on_document_closed_cleanup(
     mut cache: ResMut<PackageTreeCache>,
     mut compile_states: ResMut<CompileStates>,
     mut workbench: ResMut<WorkbenchState>,
-    mut workspace: ResMut<lunco_workbench::WorkspaceResource>,
+    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut doc_pins: Option<ResMut<crate::ui::doc_pin::DocPinState>>,
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut drafts: Option<ResMut<crate::experiments_runner::ExperimentDrafts>>,

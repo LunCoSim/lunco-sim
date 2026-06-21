@@ -367,7 +367,7 @@ impl Panel for CodeEditorPanel {
             .and_then(|c| c.doc)
             .or_else(|| {
                 world
-                    .get_resource::<lunco_workbench::WorkspaceResource>()
+                    .get_resource::<lunco_workspace::WorkspaceResource>()
                     .and_then(|ws| ws.active_document)
             });
         // Pull display fields from the registry directly — this

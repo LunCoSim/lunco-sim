@@ -468,7 +468,7 @@ fn render_unified_toolbar(
 }
 
 fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
-    let doc_id = world.get_resource::<lunco_workbench::WorkspaceResource>().and_then(|ws| ws.active_document);
+    let doc_id = world.get_resource::<lunco_workspace::WorkspaceResource>().and_then(|ws| ws.active_document);
     let Some(doc) = doc_id else {
         ui.centered_and_justified(|ui| { ui.label(egui::RichText::new("No model open").weak()); });
         return;
@@ -573,7 +573,7 @@ fn render_html_as_markdown(ui: &mut egui::Ui, world: &mut World, target_width: f
 
 fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
     let theme = world.get_resource::<lunco_theme::Theme>().cloned().unwrap_or_else(lunco_theme::Theme::dark);
-    let active = world.get_resource::<lunco_workbench::WorkspaceResource>().and_then(|ws| ws.active_document);
+    let active = world.get_resource::<lunco_workspace::WorkspaceResource>().and_then(|ws| ws.active_document);
     let Some(doc) = active else {
         ui.centered_and_justified(|ui| { ui.label(egui::RichText::new("No model open").weak()); });
         return;

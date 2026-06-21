@@ -587,7 +587,7 @@ fn render_runtime_hint(
     msg: &str,
 ) {
     let active_doc = world
-        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|w| w.active_document);
     ui.horizontal_wrapped(|ui| {
         ui.label(egui::RichText::new(msg).color(muted).size(11.0));

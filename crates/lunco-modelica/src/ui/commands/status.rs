@@ -38,7 +38,7 @@ pub fn publish_unsaved_modelica_docs(
 
 pub fn update_status_bar(
     workbench: Res<WorkbenchState>,
-    workspace: Option<Res<lunco_workbench::WorkspaceResource>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     compile_states: Res<CompileStates>,
     layout: Option<ResMut<lunco_workbench::WorkbenchLayout>>,
     registry: Res<ModelicaDocumentRegistry>,

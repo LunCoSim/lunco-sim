@@ -84,7 +84,7 @@ impl Plugin for ModelSharePlugin {
 /// Resolve the active document's share URL, if there is an active model.
 fn active_share_url(world: &mut World) -> Option<String> {
     let doc_id = world
-        .get_resource::<lunco_workbench::WorkspaceResource>()?
+        .get_resource::<lunco_workspace::WorkspaceResource>()?
         .active_document?;
     let source = world
         .get_resource::<crate::state::ModelicaDocumentRegistry>()?

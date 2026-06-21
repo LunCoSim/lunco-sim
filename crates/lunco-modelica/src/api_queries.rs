@@ -5,7 +5,7 @@
 //! - **`ListBundled`** — embedded `assets/models/*.mo` examples. Modelica-
 //!   specific; lives here because that's where the data lives.
 //! - **`ListOpenDocuments`** — cross-domain workspace state. Reads
-//!   [`lunco_workbench::WorkspaceResource`], so it transparently surfaces
+//!   [`lunco_workspace::WorkspaceResource`], so it transparently surfaces
 //!   USD / SysML / Mission / Markdown documents in addition to Modelica
 //!   ones — anything the Workspace layer tracks.
 //!
@@ -23,7 +23,7 @@ use bevy::prelude::*;
 use lunco_api::{ApiErrorCode, ApiQueryProvider, ApiQueryRegistry, ApiResponse};
 use lunco_doc::{Document, DocumentOrigin};
 use lunco_twin::{DocumentKind, FileEntry, FileKind};
-use lunco_workbench::WorkspaceResource;
+use lunco_workspace::WorkspaceResource;
 
 use crate::ast_extract;
 use crate::experiments_runner::ExperimentSources;

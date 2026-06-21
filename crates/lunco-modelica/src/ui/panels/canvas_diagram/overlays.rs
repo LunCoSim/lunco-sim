@@ -116,7 +116,7 @@ pub(super) fn render_empty_diagram_overlay(
     world: &mut World,
 ) {
     let active = world
-        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
     let Some(doc) = active else { return };
     let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();

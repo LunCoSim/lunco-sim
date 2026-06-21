@@ -376,7 +376,7 @@ impl Panel for ExperimentsPanel {
             // ⏩ Run was hidden by `render_setup_section` (no doc /
             // no class), leaving the user pointing at empty space.
             let active_doc = world
-                .get_resource::<lunco_workbench::WorkspaceResource>()
+                .get_resource::<lunco_workspace::WorkspaceResource>()
                 .and_then(|w| w.active_document);
             let has_class = active_doc
                 .and_then(|doc| {
@@ -780,7 +780,7 @@ impl Panel for ExperimentsPanel {
                 .and_then(|s| s.0.get(&id).copied())
                 .or_else(|| {
                     world
-                        .get_resource::<lunco_workbench::WorkspaceResource>()
+                        .get_resource::<lunco_workspace::WorkspaceResource>()
                         .and_then(|ws| ws.active_document)
                 })
             {
@@ -2423,7 +2423,7 @@ fn active_doc_units(
     let mut out: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let Some(doc) = world
-        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document)
     else {
         return out;

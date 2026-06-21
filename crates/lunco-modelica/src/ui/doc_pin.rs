@@ -54,7 +54,7 @@ pub fn twin_id_for_doc(doc: DocumentId) -> TwinId {
 /// Active document from the workspace (most-recently-focused tab).
 pub fn active_doc(world: &World) -> Option<DocumentId> {
     world
-        .get_resource::<lunco_workbench::WorkspaceResource>()?
+        .get_resource::<lunco_workspace::WorkspaceResource>()?
         .active_document
 }
 

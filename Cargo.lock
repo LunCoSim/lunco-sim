@@ -7283,6 +7283,7 @@ dependencies = [
  "lunco-usd-bevy",
  "lunco-usd-sim",
  "lunco-workbench",
+ "lunco-workspace",
  "openusd",
  "serde",
  "serde_json",
@@ -7397,6 +7398,7 @@ dependencies = [
 name = "lunco-workspace"
 version = "0.1.0"
 dependencies = [
+ "bevy",
  "lunco-doc",
  "lunco-storage",
  "lunco-twin",

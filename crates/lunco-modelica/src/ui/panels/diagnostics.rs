@@ -129,7 +129,7 @@ impl Panel for DiagnosticsPanel {
         // (lint runs on the bound doc, so it's already the open tab).
         if let Some(loc) = jump {
             let doc = world
-                .get_resource::<lunco_workbench::WorkspaceResource>()
+                .get_resource::<lunco_workspace::WorkspaceResource>()
                 .and_then(|ws| ws.active_document);
             world
                 .get_resource_or_insert_with(crate::ui::panels::code_editor::EditorJumpRequest::default)
@@ -168,7 +168,7 @@ fn hash_str(s: Option<&str>) -> u64 {
 /// churning even when nothing was changing.
 pub fn refresh_diagnostics(
     // error lives on `CompileStates`.
-    workspace: Res<lunco_workbench::WorkspaceResource>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
     registry: Res<ModelicaDocumentRegistry>,
     compile_states: Res<crate::state::CompileStates>,
     mut diagnostics: ResMut<DiagnosticsLog>,

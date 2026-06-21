@@ -343,7 +343,7 @@ fn render_workspace_doc_row(
             let origin = host.map(|h| h.document().origin().clone());
             match origin {
                 Some(lunco_doc::DocumentOrigin::File { path, writable: true }) => {
-                    let ws = ctx.world.resource::<lunco_workbench::WorkspaceResource>();
+                    let ws = ctx.world.resource::<lunco_workspace::WorkspaceResource>();
                     let twin_root = ws
                         .active_twin
                         .and_then(|id| ws.twin(id))
@@ -463,7 +463,7 @@ pub(crate) fn render_workspace_doc(
 
     let active_doc: Option<DocumentId> = ctx
         .world
-        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
     let active_qualified: Option<String> = active_doc.and_then(|d| {
         crate::sim_default::drilled_class_for_doc(ctx.world, d)

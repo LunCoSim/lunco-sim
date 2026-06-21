@@ -375,7 +375,7 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
         // `ensure_for(doc_id, Some(qualified))` immediately above
         // already wrote it.
         if let Some(mut workspace) =
-            world.get_resource_mut::<lunco_workbench::WorkspaceResource>()
+            world.get_resource_mut::<lunco_workspace::WorkspaceResource>()
         {
             workspace.active_document = Some(doc_id);
         }

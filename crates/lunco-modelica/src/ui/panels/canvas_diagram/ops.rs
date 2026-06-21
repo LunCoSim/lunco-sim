@@ -36,7 +36,7 @@ pub(super) fn resolve_doc_context(world: &World) -> (Option<lunco_doc::DocumentI
     // caught up yet. Both paths are optional — the caller tolerates
     // `(None, None)` by deferring.
     let Some(doc_id) = world
-        .resource::<lunco_workbench::WorkspaceResource>()
+        .resource::<lunco_workspace::WorkspaceResource>()
         .active_document
     else {
         return (None, None);

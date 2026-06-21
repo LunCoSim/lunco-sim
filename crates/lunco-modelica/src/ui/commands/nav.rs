@@ -60,7 +60,7 @@ pub fn on_focus_document_by_name(
     }
     commands.queue(move |world: &mut World| {
         let hit = {
-            let ws = world.resource::<lunco_workbench::WorkspaceResource>();
+            let ws = world.resource::<lunco_workspace::WorkspaceResource>();
             let needle = pattern.to_lowercase();
             ws.documents()
                 .iter()

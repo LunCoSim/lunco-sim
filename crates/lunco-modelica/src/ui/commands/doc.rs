@@ -228,7 +228,7 @@ pub fn on_save_document(
 pub fn on_save_as_document(
     trigger: On<SaveAsDocument>,
     mut registry: ResMut<ModelicaDocumentRegistry>,
-    workspace: Res<lunco_workbench::WorkspaceResource>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
     mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
     mut commands: Commands,
 ) {

@@ -19,6 +19,9 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-assets = { path = "../lunco-assets" }
+# Editor-session binding (WorkspaceResource + events). ECS-only, no UI — the
+# binding moved here from lunco-workbench so non-ui consumers can read it.
+lunco-workspace = { path = "../lunco-workspace" }
 serde = { workspace = true }
 # `serde_json::Value` for the hot-exit `DocumentSnapshot.view_state`
 # field (USD leaves it null; Modelica fills it with a canvas Viewport).

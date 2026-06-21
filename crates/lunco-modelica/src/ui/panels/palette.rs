@@ -482,7 +482,7 @@ pub(crate) fn place_component(
     // no class to add into; we silently no-op.
     let active_doc = target_doc.or_else(|| {
         world
-            .get_resource::<lunco_workbench::WorkspaceResource>()
+            .get_resource::<lunco_workspace::WorkspaceResource>()
             .and_then(|ws| ws.active_document)
     });
     let Some(doc_id) = active_doc else {

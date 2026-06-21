@@ -275,7 +275,7 @@ fn close_drilled_tabs_on_class_removed(
 fn sync_workspace_on_doc_opened(
     trigger: On<lunco_doc_bevy::DocumentOpened>,
     registry: Res<ModelicaDocumentRegistry>,
-    mut ws: ResMut<lunco_workbench::WorkspaceResource>,
+    mut ws: ResMut<lunco_workspace::WorkspaceResource>,
     mut source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
 ) {
     let id = trigger.event().doc;
@@ -323,7 +323,7 @@ fn sync_workspace_on_doc_opened(
 /// Shadow-sync observer: Modelica doc closed → drop entry from Workspace.
 fn sync_workspace_on_doc_closed(
     trigger: On<lunco_doc_bevy::DocumentClosed>,
-    mut ws: ResMut<lunco_workbench::WorkspaceResource>,
+    mut ws: ResMut<lunco_workspace::WorkspaceResource>,
 ) {
     ws.close_document(trigger.event().doc);
 }
@@ -338,7 +338,7 @@ fn sync_workspace_on_doc_closed(
 fn sync_workspace_on_doc_saved(
     trigger: On<lunco_doc_bevy::DocumentSaved>,
     registry: Res<ModelicaDocumentRegistry>,
-    mut ws: ResMut<lunco_workbench::WorkspaceResource>,
+    mut ws: ResMut<lunco_workspace::WorkspaceResource>,
 ) {
     let id = trigger.event().doc;
     let Some(host) = registry.host(id) else { return };
@@ -387,7 +387,7 @@ fn sync_workspace_on_doc_saved(
 /// derived title should become `P.<drilled>` to match Dymola.
 fn derive_doc_title(
     registry: Res<ModelicaDocumentRegistry>,
-    mut ws: ResMut<lunco_workbench::WorkspaceResource>,
+    mut ws: ResMut<lunco_workspace::WorkspaceResource>,
 ) {
     // Cheap when nothing changed: each iteration is a HashMap lookup +
     // a string compare, write only on diff. No per-doc generation
@@ -433,8 +433,8 @@ fn derive_title_from_doc(doc: &crate::document::ModelicaDocument) -> String {
 /// means menu / picker / HTTP / scripts all converge on one path —
 /// the welcome button is now just another fire-and-forget caller.
 fn scan_twin_on_added(
-    trigger: On<lunco_workbench::TwinAdded>,
-    ws: Res<lunco_workbench::WorkspaceResource>,
+    trigger: On<lunco_workspace::TwinAdded>,
+    ws: Res<lunco_workspace::WorkspaceResource>,
     mut cache: ResMut<crate::package_tree::PackageTreeCache>,
 ) {
     let twin_id = trigger.event().twin;

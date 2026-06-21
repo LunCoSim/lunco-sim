@@ -12,11 +12,12 @@
 //! - a bounded **Recents** list so the user can re-open previous Twins /
 //!   loose files quickly.
 //!
-//! This crate is **UI-free, ECS-free, headless-capable**. It knows nothing
-//! about Bevy or egui — a Bevy `Resource` wrapper (or an observer surface)
-//! belongs in a downstream crate (`lunco-workspace-bevy`, or directly in
-//! `lunco-workbench` if the consumer prefers). That keeps headless CI and
-//! API-only servers able to use the same Workspace type the UI uses.
+//! This crate is **UI-free and headless-capable**. It depends only on the
+//! bevy ECS/app substrate (`Resource`/`Event`/`Plugin`/observers — no
+//! render/winit/egui), so the same Workspace + its [`session`] binding
+//! ([`WorkspaceResource`], [`WorkspacePlugin`], the add/close events) run
+//! identically in the windowed editor and a `--no-ui` API-only server.
+//! Recents *persistence* (config-dir I/O) is left to the consumer.
 //!
 //! # Twin is a view, not a container
 //!
@@ -44,8 +45,13 @@
 #![warn(missing_docs)]
 
 pub mod recents;
+pub mod session;
 
 pub use recents::Recents;
+pub use session::{
+    DocumentClosed, DocumentOpened, FileRenamed, RegisterDocument, TwinAdded, TwinClosed,
+    UnregisterDocument, WorkspacePlugin, WorkspaceResource,
+};
 
 pub use lunco_doc::{DocumentId, DocumentOrigin};
 pub use lunco_storage::StorageHandle;

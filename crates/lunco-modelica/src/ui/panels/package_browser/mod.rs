@@ -172,7 +172,7 @@ pub fn render_root_subtree(world: &mut World, ui: &mut egui::Ui, root_id: &str) 
     use bevy::tasks::AsyncComputeTaskPool;
 
     let active_path_str = world
-        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document)
         .and_then(|d| crate::state::display_name_for(world, d));
     let active_path = active_path_str.as_deref();
