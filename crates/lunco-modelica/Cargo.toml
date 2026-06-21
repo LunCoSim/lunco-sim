@@ -9,7 +9,7 @@ description = "Native Modelica simulation integration for LunCoSim using Rumoca"
 # --api` Just Works for screenshot-driven debugging. Building without it
 # (`cargo build --no-default-features`) drops the axum/tokio web stack,
 # which matters for the wasm32 binary.
-default = ["lunco-api", "lunco-api/transport-http", "ui"]
+default = ["lunco-api", "lunco-api/transport-http", "lunco-api/render", "ui"]
 # The egui Modelica IDE: panels, diagram canvas, plots, docs viewer. OFF ⇒ the
 # compile core (ModelicaCorePlugin) builds headless — no egui/winit, no lyon,
 # no workbench shell. Consumers that need only the compiler (lunco-usd-sim on a

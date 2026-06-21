@@ -73,7 +73,7 @@ lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 # `lunco-api` is on by default so native `cargo run --bin sandbox -- --api`
 # Just Works. Building without it (`--no-default-features`) drops the
 # axum/tokio web stack, which is mandatory for wasm32-unknown-unknown.
-default = ["celestial", "lunco-api", "lunco-api/transport-http"]
+default = ["celestial", "lunco-api", "lunco-api/transport-http", "lunco-api/render"]
 # `celestial` pulls in lunco-celestial's bundled Earth texture + Artemis-II
 # ephemeris (10s of MB). Off for the wasm sandbox build — it only needs
 # `GravityPlugin`, which is always compiled.
