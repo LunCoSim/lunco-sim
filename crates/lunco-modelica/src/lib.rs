@@ -959,6 +959,31 @@ pub mod api;
 pub mod model_share;
 pub use sim_stream::{new_sim_stream, SimSnapshot, SimStream, VarHistory, SimSample};
 
+/// UI-agnostic per-frame queue of live sim samples.
+///
+/// The core worker handler ([`worker::handle_modelica_responses`]) appends one
+/// [`SimSampleBatch`] per processed step; the reactive UI layer
+/// ([`ui::core_observers::drain_sim_samples_to_viz`]) drains it into
+/// `lunco_viz`. This keeps plot-history capture OUT of the core handler — core
+/// just emits samples; the UI projects them. A headless build has no drainer,
+/// so the queue is bounded at the producer (samples past the cap are dropped —
+/// there's no UI to plot them anyway).
+#[derive(Resource, Default)]
+pub struct SimSampleStream {
+    pub batches: Vec<SimSampleBatch>,
+}
+
+/// One sim step's observable samples for a single entity.
+pub struct SimSampleBatch {
+    pub entity: Entity,
+    pub document: lunco_doc::DocumentId,
+    pub time: f64,
+    /// `outputs` followed by `detected_symbols` (signal name → value).
+    pub samples: Vec<(String, f64)>,
+    pub is_new_model: bool,
+    pub is_parameter_update: bool,
+}
+
 /// UI-thread registry of per-entity lock-free sim streams (Phase A
 /// of the multi-sim architecture). On Compile the command observer
 /// calls [`SimStreamRegistry::get_or_insert`] and ships a clone of
@@ -1251,6 +1276,7 @@ fn build_modelica_core(app: &mut App) {
 
     app.init_resource::<crate::state::WorkbenchState>();
     app.init_resource::<SimStreamRegistry>();
+    app.init_resource::<SimSampleStream>();
 
     // Experiments / Fast Run: backend-agnostic registry + this crate's
     // ModelicaRunner binding. UI for the Run buttons and Experiments

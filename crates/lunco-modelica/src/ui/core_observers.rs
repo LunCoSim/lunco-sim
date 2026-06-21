@@ -9,6 +9,7 @@
 
 use bevy::prelude::*;
 use lunco_workbench::status_bus::{StatusBus, StatusLevel};
+use lunco_viz::{SignalMeta, SignalRef, SignalRegistry, VisualizationRegistry};
 
 use lunco_assets::msl::{MslLoadPhase, MslLoadState};
 
@@ -106,6 +107,74 @@ impl From<&MslLoadState> for MirrorMemo {
             },
             MslLoadState::Ready { .. } => Self { ready: true, ..Self::default() },
             MslLoadState::Failed(_) => Self { failed: true, ..Self::default() },
+        }
+    }
+}
+
+/// Drain core live-sim sample batches ([`crate::SimSampleStream`]) into the viz
+/// `SignalRegistry` — the reactive UI projection of the running simulation.
+///
+/// This is the plot-aware half of the old `worker::handle_modelica_responses`
+/// viz block; the core handler now only appends UI-agnostic samples. Per batch:
+/// clear history on a fresh compile, push every scalar, attach doc-index
+/// descriptions on compile/param-update, and reset the default graph bindings.
+pub fn drain_sim_samples_to_viz(
+    mut stream: ResMut<crate::SimSampleStream>,
+    mut signals: Option<ResMut<SignalRegistry>>,
+    mut viz_registry: Option<ResMut<VisualizationRegistry>>,
+    doc_registry: Option<Res<crate::state::ModelicaDocumentRegistry>>,
+) {
+    if stream.batches.is_empty() {
+        return;
+    }
+    // Always take (so the queue can't grow); drop if there's no SignalRegistry.
+    let batches = std::mem::take(&mut stream.batches);
+    let Some(sigs) = signals.as_deref_mut() else {
+        return;
+    };
+    for batch in &batches {
+        if batch.is_new_model {
+            for (name, _) in &batch.samples {
+                sigs.clear_history(&SignalRef::new(batch.entity, name.clone()));
+            }
+        }
+        for (name, val) in &batch.samples {
+            sigs.push_scalar(SignalRef::new(batch.entity, name.clone()), batch.time, *val);
+        }
+        // Descriptions from the document index (canonical AST projection),
+        // looked up by leaf name — refreshed on compile-type results.
+        if batch.is_new_model || batch.is_parameter_update {
+            let index_ref = doc_registry
+                .as_deref()
+                .and_then(|r| r.host(batch.document))
+                .map(|h| h.document().index());
+            if let Some(index) = index_ref {
+                for (name, _) in &batch.samples {
+                    let Some(entry) = index.find_component_by_leaf(name) else {
+                        continue;
+                    };
+                    if entry.description.is_empty() {
+                        continue;
+                    }
+                    sigs.update_meta(
+                        SignalRef::new(batch.entity, name.clone()),
+                        SignalMeta {
+                            description: Some(entry.description.clone()),
+                            unit: None,
+                            provenance: Some("modelica".to_string()),
+                        },
+                    );
+                }
+            }
+        }
+        // A fresh compile starts the default plot empty (users add signals via
+        // the Telemetry panel) — clear any stale bindings from a prior model.
+        if batch.is_new_model {
+            if let Some(reg) = viz_registry.as_deref_mut() {
+                if let Some(cfg) = reg.get_mut(crate::ui::viz::DEFAULT_MODELICA_GRAPH) {
+                    cfg.inputs.clear();
+                }
+            }
         }
     }
 }

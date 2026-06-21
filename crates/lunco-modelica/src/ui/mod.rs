@@ -739,6 +739,9 @@ impl Plugin for ModelicaUiPlugin {
             // Reactive UI observer of core `MslLoadState` → status bus (moved
             // here from the core MSL plugin; core no longer touches the bus).
             .add_systems(Update, core_observers::mirror_msl_state_to_status_bus)
+            // Reactive UI observer: drain core live-sim samples → viz plots.
+            // The core worker no longer references lunco_viz.
+            .add_systems(Update, core_observers::drain_sim_samples_to_viz)
             .init_resource::<panels::canvas_projection::DiagramAutoLayoutSettings>()
             .init_resource::<panels::palette::PaletteState>()
             .init_resource::<panels::palette::ComponentDragPayload>()

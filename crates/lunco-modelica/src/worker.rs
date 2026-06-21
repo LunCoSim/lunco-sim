@@ -1500,16 +1500,10 @@ pub fn handle_modelica_responses(
     // those setups without forcing them to pull in the UI module.
     compile_states: Option<ResMut<crate::state::CompileStates>>,
     console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
-    // Optional — a headless cosim harness may skip `LuncoVizPlugin`
-    // entirely. When present, every outgoing sample is published into
-    // the registry, and the default Modelica plot's bindings are
-    // seeded on first compile of each entity.
-    mut signals: Option<ResMut<lunco_viz::SignalRegistry>>,
-    mut viz_registry: Option<ResMut<lunco_viz::VisualizationRegistry>>,
-    // Optional so headless cosim tests (no UI plugin) still link.
-    // When present, signal-meta description tooltips read from the
-    // doc index, keeping AST as the single source of truth.
-    doc_registry: Option<Res<crate::state::ModelicaDocumentRegistry>>,
+    // Live sim samples leave the core handler through this UI-agnostic queue;
+    // the reactive UI viz observer (`ui::core_observers::drain_sim_samples_to_viz`)
+    // drains it into `lunco_viz`. Core no longer references any viz/plot types.
+    mut sample_stream: ResMut<crate::SimSampleStream>,
     runner_res: Option<Res<crate::ModelicaRunnerResource>>,
     source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
     status_bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
@@ -1797,93 +1791,28 @@ pub fn handle_modelica_responses(
             model.last_step_time = result.new_time;
             let time_val = result.new_time;
 
-            // Publish every outgoing scalar sample into the global
-            // `SignalRegistry`. The Graphs panel and any future
-            // visualization (Avian / USD / scripts) read uniformly
-            // from here — there is no longer a Modelica-specific
-            // shadow history.
-            if let Some(sigs) = signals.as_deref_mut() {
-                // Only a fresh compile (new DAE shape, possibly new
-                // signal set) clears the registry's history. Reset and
-                // parameter-update both restart sim-time at 0 but the
-                // signal *shape* is unchanged, and users want to keep
-                // seeing the prior run's curves while they iterate —
-                // wiping on every param tweak made the Graphs tab look
-                // permanently empty after any Telemetry edit.
-                if result.is_new_model {
-                    for (name, _) in result.detected_symbols.iter().chain(result.outputs.iter()) {
-                        sigs.clear_history(&lunco_viz::SignalRef::new(
-                            result.entity,
-                            name.clone(),
-                        ));
-                    }
-                }
-                for (name, val) in result.outputs.iter().chain(result.detected_symbols.iter()) {
-                    sigs.push_scalar(
-                        lunco_viz::SignalRef::new(result.entity, name.clone()),
-                        time_val,
-                        *val,
-                    );
-                }
-                // Publish / refresh description metadata on compile-
-                // type results so the viz inspector can show tooltips.
-                // Descriptions come from the document index (canonical
-                // AST projection), looked up by leaf name — same path
-                // Telemetry uses.
-                if result.is_new_model || result.is_parameter_update {
-                    let index_ref = doc_registry
-                        .as_deref()
-                        .and_then(|r| r.host(model.document))
-                        .map(|h| h.document().index());
-                    if let Some(index) = index_ref {
-                        for (name, _) in result
-                            .detected_symbols
-                            .iter()
-                            .chain(result.outputs.iter())
-                        {
-                            let Some(entry) = index.find_component_by_leaf(name) else {
-                                continue;
-                            };
-                            if entry.description.is_empty() {
-                                continue;
-                            }
-                            sigs.update_meta(
-                                lunco_viz::SignalRef::new(result.entity, name.clone()),
-                                lunco_viz::SignalMeta {
-                                    description: Some(entry.description.clone()),
-                                    unit: None,
-                                    provenance: Some("modelica".to_string()),
-                                },
-                            );
-                        }
-                    }
-                }
-            }
-
-            // Auto-seed the default Modelica plot with every observable
-            // from a freshly-compiled model. Preserves the pre-viz UX
-            // where compiling immediately filled the graph with all
-            // the model's observables. Does nothing when the user has
-            // already curated the bindings.
-            if result.is_new_model {
-                if let Some(reg) = viz_registry.as_deref_mut() {
-                    // Clear stale bindings from any prior model/entity so
-                    // switching models doesn't leave old signals plotted.
-                    // We deliberately do *not* auto-bind every detected
-                    // observable any more — a freshly compiled model
-                    // starts with an *empty* default plot. Users add
-                    // signals via the Telemetry panel checkboxes.
-                    // Avoids the noisy "12 lines on launch" experience
-                    // that prompted users to manually un-tick
-                    // everything before they could see what they
-                    // cared about.
-                    if let Some(cfg) = reg.get_mut(crate::ui::viz::DEFAULT_MODELICA_GRAPH) {
-                        cfg.inputs.clear();
-                    }
-                    let _ = result.entity;
-                    let _ = result.detected_symbols.len();
-                    let _ = model.parameters.len();
-                }
+            // Emit this step's observable samples to the reactive UI layer.
+            // The core handler no longer knows about plots / `lunco_viz`: it
+            // just appends UI-agnostic samples that `ui::core_observers::
+            // drain_sim_samples_to_viz` projects into the SignalRegistry (clear
+            // on a fresh compile, push every scalar, attach doc-index meta, and
+            // reset the default graph). Bounded at the producer so a headless
+            // build (no drainer) can't grow the queue without limit.
+            if sample_stream.batches.len() < 16_384 {
+                let samples: Vec<(String, f64)> = result
+                    .outputs
+                    .iter()
+                    .chain(result.detected_symbols.iter())
+                    .map(|(n, v)| (n.clone(), *v))
+                    .collect();
+                sample_stream.batches.push(crate::SimSampleBatch {
+                    entity: result.entity,
+                    document: model.document,
+                    time: time_val,
+                    samples,
+                    is_new_model: result.is_new_model,
+                    is_parameter_update: result.is_parameter_update,
+                });
             }
         }
     }
