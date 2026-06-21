@@ -37,6 +37,7 @@ pub use recording::*;
 mod intents;
 
 /// UI panels for avatar status, camera mode, and surface coordinates.
+#[cfg(feature = "ui")]
 pub mod ui;
 pub use intents::*;
 
