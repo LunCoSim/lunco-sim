@@ -17,23 +17,14 @@ pub use cache::PackageTreeCache;
 pub use render::PackageBrowserPanel;
 pub use scanner::{scan_twin_folder, discover_third_party_libs};
 
-pub struct PackageBrowserPlugin;
-
-impl Plugin for PackageBrowserPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<PackageTreeCache>()
-            .add_systems(
-                Update,
-                (
-                    handle_package_loading_tasks,
-                    reconcile_library_roots_on_ready,
-                ),
-            )
-            // Reactive: fires exactly once, the frame MSL enters the engine
-            // session. Replaces the old Local<bool>-latched polling system.
-            .add_observer(on_msl_became_ready);
-    }
-}
+// NOTE: there is deliberately no `PackageBrowserPlugin`. The package-browser
+// wiring (cache resource, `handle_package_loading_tasks`,
+// `reconcile_library_roots_on_ready`, and the `on_msl_became_ready` observer)
+// is registered directly in `crate::ui` plugin build, because the cache must be
+// seeded via `PackageTreeCache::new()` (native fs roots) — not the `Default`
+// impl an `init_resource` would use. A standalone plugin previously existed but
+// was never added to the app, so its observer never ran and MSL-ready never
+// re-projected open tabs.
 
 /// Fill in library roots that only become known after the MSL bundle loads
 /// (web: third-party libs carried in the parsed bundle). Native is already
@@ -74,7 +65,7 @@ pub fn reconcile_library_roots_on_ready(
 ///
 /// 3. **Reconciles library roots** so any third-party libs carried inside the
 ///    parsed bundle (web only) appear in the tree at the same time.
-fn on_msl_became_ready(
+pub fn on_msl_became_ready(
     _trigger: On<crate::engine_resource::MslBecameReady>,
     canvas: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
     mut cache: ResMut<PackageTreeCache>,

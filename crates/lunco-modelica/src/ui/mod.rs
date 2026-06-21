@@ -740,6 +740,15 @@ impl Plugin for ModelicaUiPlugin {
             .insert_resource(panels::package_browser::PackageTreeCache::new())
             .add_systems(Update, browser_dispatch::drain_browser_actions)
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
+            .add_systems(Update, panels::package_browser::reconcile_library_roots_on_ready)
+            // Reactive: fires once, the frame MSL enters the engine session —
+            // re-projects open canvas tabs (so std-lib icons resolve), rebuilds
+            // the bundled-examples tree, reconciles library roots. Previously
+            // lived in the never-added `PackageBrowserPlugin`; wired here so it
+            // actually runs (the bug behind "Modelica files not updated after
+            // MSL loaded": restored/auto-opened tabs projected empty pre-MSL
+            // and never recovered).
+            .add_observer(panels::package_browser::on_msl_became_ready)
             .add_systems(Update, cleanup_removed_documents)
             .add_systems(Update, drain_document_changes)
             .add_systems(Update, commands::drain_open_file_results)
