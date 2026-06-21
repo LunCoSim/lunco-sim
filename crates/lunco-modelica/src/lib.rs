@@ -106,6 +106,7 @@ pub mod annotations;
 // a model-semantics one. Re-exported here so the previous flat path
 // (`lunco_modelica::icon_paint::*`) keeps compiling for any external
 // consumer that hardcoded it.
+#[cfg(feature = "ui")]
 pub use ui::icon_paint;
 
 /// Single 2×3 affine transform per node from Modelica icon-local
@@ -858,6 +859,7 @@ fn diagnostics_from_sim_error(
 }
 
 
+#[cfg(feature = "ui")]
 pub mod ui;
 
 /// Bundled Modelica models for web deployment.
@@ -993,6 +995,7 @@ pub enum ModelicaSet {
 /// Sets up the background worker thread, channel resources, and response systems.
 /// Modelica stepping runs in [`FixedUpdate`] so all co-simulation engines share
 /// the same fixed timestep.
+#[cfg(feature = "ui")]
 pub struct ModelicaPlugin;
 
 /// Headless variant of [`ModelicaPlugin`] without UI panels.
@@ -1007,6 +1010,7 @@ impl Plugin for ModelicaCorePlugin {
     }
 }
 
+#[cfg(feature = "ui")]
 impl Plugin for ModelicaPlugin {
     fn build(&self, app: &mut App) {
         // The Modelica UI experience requires both core logic and plotting.
@@ -1090,6 +1094,7 @@ impl Plugin for ModelicaPlugin {
 /// `ClearColor`) is deliberately **not** owned here — Bevy always inserts
 /// defaults for those resources so an "insert-if-absent" guard can't tell
 /// a host's choice from the default. Those stay an app-shell concern.
+#[cfg(feature = "ui")]
 #[derive(Default)]
 pub struct ModelicaWorkbenchPlugin {
     /// UI knobs (help overlay, welcome panel). Defaults to the full
@@ -1098,6 +1103,7 @@ pub struct ModelicaWorkbenchPlugin {
     pub config: ModelicaUiConfig,
 }
 
+#[cfg(feature = "ui")]
 impl Plugin for ModelicaWorkbenchPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<lunco_workbench::WorkbenchPlugin>() {
@@ -1222,6 +1228,7 @@ fn build_modelica_core(app: &mut App) {
         app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res, rx_cmd, tx_res });
     }
 
+    #[cfg(feature = "ui")]
     app.init_resource::<ui::WorkbenchState>();
     app.init_resource::<SimStreamRegistry>();
 
@@ -1298,6 +1305,7 @@ fn build_modelica_core(app: &mut App) {
             worker_transport::pump_worker_respawns();
         });
         app.add_systems(Update, worker::inline_worker_process);
+        #[cfg(feature = "ui")]
         app.add_systems(Update, ui::update_file_load_result);
         // Drain Web-Worker RunUpdate streams into the runner's
         // RunHandle receivers and clear the runner's busy flag on

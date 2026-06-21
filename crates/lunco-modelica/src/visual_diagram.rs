@@ -43,7 +43,11 @@
 //! ```
 
 use bevy::prelude::*;
-use bevy_egui::egui::Pos2;
+// Diagram node positions are a plain 2D point. Aliased from bevy's `Vec2` (not
+// `egui::Pos2`) so this core module — consumed by the index/indexer/query
+// backend — carries no egui dependency. The egui editor converts at its render
+// boundary (`Vec2`↔`egui::Pos2` share `{x, y}: f32`).
+use bevy::math::Vec2 as Pos2;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
