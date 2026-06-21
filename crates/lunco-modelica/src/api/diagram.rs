@@ -47,7 +47,7 @@ pub fn on_connect_components(
             to: to.clone(),
             line: None,
         };
-        match crate::ui::panels::canvas_diagram::apply_one_op_as(
+        match crate::doc_ops::apply_one_op_as(
             world,
             doc,
             ModelicaOp::AddConnection {
@@ -117,7 +117,7 @@ pub fn on_disconnect_components(
         let Some(to) = parse_port_ref(&ev.to) else {
             return;
         };
-        match crate::ui::panels::canvas_diagram::apply_one_op_as(
+        match crate::doc_ops::apply_one_op_as(
             world,
             doc,
             ModelicaOp::RemoveConnection {

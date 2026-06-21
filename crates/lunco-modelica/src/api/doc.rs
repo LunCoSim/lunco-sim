@@ -34,7 +34,7 @@ pub fn on_set_document_source(
         if unchanged {
             return;
         }
-        match crate::ui::panels::canvas_diagram::apply_one_op_as(
+        match crate::doc_ops::apply_one_op_as(
             world,
             doc,
             ModelicaOp::ReplaceSource { new: source },

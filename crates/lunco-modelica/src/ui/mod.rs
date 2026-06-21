@@ -65,6 +65,8 @@ use crate::state::{CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 pub mod document_openings;
 
 pub mod commands;
+/// Reactive UI observers of core domain state (status-bus mirrors, etc.).
+pub mod core_observers;
 pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
 pub mod icon_paint;
@@ -734,6 +736,9 @@ impl Plugin for ModelicaUiPlugin {
             // user has a chronological audit trail of every status
             // event from every subsystem (MSL, compile, sim, …).
             .add_systems(Update, fan_status_bus_to_console)
+            // Reactive UI observer of core `MslLoadState` → status bus (moved
+            // here from the core MSL plugin; core no longer touches the bus).
+            .add_systems(Update, core_observers::mirror_msl_state_to_status_bus)
             .init_resource::<panels::canvas_projection::DiagramAutoLayoutSettings>()
             .init_resource::<panels::palette::PaletteState>()
             .init_resource::<panels::palette::ComponentDragPayload>()
