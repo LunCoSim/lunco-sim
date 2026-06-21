@@ -1,82 +1,56 @@
-//! LunCoSim Networking UI Plugin (Layer 4).
+//! LunCoSim Networking UI bridge (Layer 4).
 //!
-//! A small in-sim **Connect** panel: when local, an address field (defaulting to
-//! the page origin via [`crate::default_connect_host`]) + a Connect button; when
-//! connected, a Disconnect button. The buttons dispatch the typed
-//! [`JoinServer`](crate::client::JoinServer) / [`LeaveServer`](crate::client::LeaveServer)
-//! commands — the **same** commands the HTTP API, MCP, and CLI dispatch — so the
-//! UI never touches the connection directly; the networking internals do.
+//! The **Connect** controls themselves live in the workbench's top menu bar
+//! (the *Network* menu) — drawn with no lunco-networking dependency, off the
+//! always-on [`lunco_core::NetStatus`] seam. This plugin is the thin adapter
+//! that closes the loop:
 //!
-//! Layer 4: optional, separate from domain logic. The sim runs fine without it.
+//! - **seeds** [`NetStatus::connect_hint`] with [`crate::default_connect_host`]
+//!   (page origin on wasm, localhost on native) so the menu's address field has
+//!   a sensible default;
+//! - **observes** the menu's [`NetConnectRequest`] / [`NetDisconnectRequest`]
+//!   bridge events and re-dispatches the typed
+//!   [`JoinServer`](crate::client::JoinServer) /
+//!   [`LeaveServer`](crate::client::LeaveServer) commands — the **same** commands
+//!   the HTTP API, MCP, and CLI dispatch.
+//!
+//! Layer 4: optional. Headless builds simply never add this plugin; the menu's
+//! bridge events then go unobserved (no-op) and the sim runs single-player.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
-use lunco_core::{NetStatus, NetworkRole};
+use lunco_core::{NetConnectRequest, NetDisconnectRequest, NetStatus};
 
 use crate::client::{JoinServer, LeaveServer};
 
-/// Adds the Connect panel to the egui pass. Requires `EguiPlugin` (the sandbox
-/// gets it via the workbench); headless builds simply never add this plugin.
+/// Wires the Network-menu bridge: seeds the connect hint and forwards the menu's
+/// connect/disconnect requests to the typed networking commands.
 pub struct LunCoNetworkingUiPlugin;
 
 impl Plugin for LunCoNetworkingUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(EguiPrimaryContextPass, render_connect_panel);
+        app.add_systems(Startup, seed_connect_hint)
+            .add_observer(on_net_connect_request)
+            .add_observer(on_net_disconnect_request);
     }
 }
 
-/// Draw the Connect/Disconnect panel and dispatch `JoinServer`/`LeaveServer`.
-fn render_connect_panel(
-    mut egui_ctx: EguiContexts,
-    status: Option<Res<NetStatus>>,
-    mut commands: Commands,
-    // The editable address; seeded once from the page origin / localhost.
-    mut field: Local<Option<String>>,
-) {
-    let Ok(ctx) = egui_ctx.ctx_mut() else {
-        return;
-    };
-    let Some(status) = status else {
-        return;
-    };
+/// Pre-fill the Connect field's suggested address (once, if not already set).
+fn seed_connect_hint(mut status: ResMut<NetStatus>) {
+    if status.connect_hint.is_empty() {
+        status.connect_hint = crate::default_connect_host();
+    }
+}
 
-    let address = field.get_or_insert_with(crate::default_connect_host);
+/// Menu *Connect* → dispatch the typed [`JoinServer`] command.
+fn on_net_connect_request(trigger: On<NetConnectRequest>, mut commands: Commands) {
+    let address = trigger.address.trim().to_string();
+    if address.is_empty() {
+        return;
+    }
+    commands.trigger(JoinServer { address });
+}
 
-    egui::Window::new("🌐 Network")
-        .resizable(false)
-        .collapsible(true)
-        .default_open(false)
-        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 48.0))
-        .show(ctx, |ui| match status.role {
-            NetworkRole::Host => {
-                ui.label(format!("Hosting · {}", status.endpoint));
-            }
-            NetworkRole::Client => {
-                let state = if status.connected {
-                    "Connected"
-                } else {
-                    "Connecting…"
-                };
-                ui.label(format!("{state} → {}", status.endpoint));
-                if ui.button("Disconnect").clicked() {
-                    commands.trigger(LeaveServer {});
-                }
-            }
-            NetworkRole::Standalone => {
-                ui.label("Single-player (local)");
-                ui.horizontal(|ui| {
-                    ui.label("Server:");
-                    ui.text_edit_singleline(address);
-                });
-                let enabled = !address.trim().is_empty();
-                if ui
-                    .add_enabled(enabled, egui::Button::new("Connect"))
-                    .clicked()
-                {
-                    commands.trigger(JoinServer {
-                        address: address.clone(),
-                    });
-                }
-            }
-        });
+/// Menu *Disconnect* → dispatch the typed [`LeaveServer`] command.
+fn on_net_disconnect_request(_trigger: On<NetDisconnectRequest>, mut commands: Commands) {
+    commands.trigger(LeaveServer {});
 }

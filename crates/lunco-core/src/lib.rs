@@ -62,6 +62,7 @@ pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use session::{
     authorize, AppliedInputSeq, ArticulatedLink, ArticulatedVehicle, IncomingSnapshots, InputFrame,
     LocalSession,
+    NetConnectRequest, NetDisconnectRequest,
     NetExcluded, NetReplicate, NetSpawn,
     NetStatus, NetworkRole, NotPredictable, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns,
     PossessionPolicy,

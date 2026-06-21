@@ -13,7 +13,7 @@ required-features = ["networking"]
 default = []
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
-networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:bevy_egui"]
+networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode"]
 # Client-prediction diagnostics (render-jitter / velocity / correction census in
 # `diagnostics.rs`). OFF by default → not compiled into normal/shipping builds.
 # Build with it when chasing netcode jitter; once compiled it's active unless
@@ -22,8 +22,6 @@ net-diag = ["networking"]
 
 [dependencies]
 bevy = { workspace = true }
-# Layer-4 Connect/Disconnect panel (`ui` module), behind the `networking` feature.
-bevy_egui = { workspace = true, optional = true }
 lunco-core = { path = "../lunco-core" }
 # `default-features = false`: we only use the registry/executor types + plugin,
 # never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).

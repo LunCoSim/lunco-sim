@@ -100,6 +100,7 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
                     endpoint: format!(":{port}"),
                     peers: 0,
                     connected: true,
+                    ..Default::default()
                 });
                 app.add_plugins(lightyear::prelude::server::ServerPlugins { tick_duration: tick });
                 add_protocol(app);
@@ -128,6 +129,7 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
                     endpoint: server.clone(),
                     peers: 0,
                     connected: false,
+                    ..Default::default()
                 });
                 let server = server.clone();
                 let client_id = *client_id;
@@ -142,6 +144,7 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
                     endpoint: String::new(),
                     peers: 0,
                     connected: false,
+                    ..Default::default()
                 });
             }
         }

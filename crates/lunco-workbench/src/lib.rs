@@ -2443,6 +2443,72 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             });
             anchor_rects.push(("menu.help", r_help.response.rect));
 
+            // Network — Connect / Disconnect. Reads the always-on
+            // `lunco_core::NetStatus` and fires the `NetConnectRequest` /
+            // `NetDisconnectRequest` bridge events (no lunco-networking dep
+            // here, D7); the optional adapter observes them and dials. The
+            // menu is always present — in single-player it just offers a
+            // "Connect to server" field.
+            let r_network = ui.menu_button("Network", |ui| {
+                use lunco_core::{
+                    NetConnectRequest, NetDisconnectRequest, NetStatus, NetworkRole,
+                };
+                let status = world
+                    .get_resource::<NetStatus>()
+                    .cloned()
+                    .unwrap_or_default();
+                match status.role {
+                    NetworkRole::Host => {
+                        ui.label(format!("Hosting · {}", status.endpoint));
+                    }
+                    NetworkRole::Client => {
+                        let state = if status.connected {
+                            "Connected"
+                        } else {
+                            "Connecting…"
+                        };
+                        ui.label(format!("{state} → {}", status.endpoint));
+                        if ui.button("Disconnect").clicked() {
+                            world.trigger(NetDisconnectRequest);
+                            ui.close();
+                        }
+                    }
+                    NetworkRole::Standalone => {
+                        ui.label("Single-player (local)");
+                        ui.separator();
+                        // Editable address persisted in egui temp memory so it
+                        // survives across frames while the menu is open. Seeded
+                        // from the adapter's `connect_hint` (page origin / local).
+                        let id = ui.make_persistent_id("lunco_network_menu_address");
+                        let mut address = ui.data_mut(|d| {
+                            d.get_temp::<String>(id).unwrap_or_else(|| {
+                                if status.connect_hint.is_empty() {
+                                    "127.0.0.1:5888".to_string()
+                                } else {
+                                    status.connect_hint.clone()
+                                }
+                            })
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Server:");
+                            ui.text_edit_singleline(&mut address);
+                        });
+                        let enabled = !address.trim().is_empty();
+                        if ui
+                            .add_enabled(enabled, egui::Button::new("Connect"))
+                            .clicked()
+                        {
+                            world.trigger(NetConnectRequest {
+                                address: address.clone(),
+                            });
+                            ui.close();
+                        }
+                        ui.data_mut(|d| d.insert_temp(id, address));
+                    }
+                }
+            });
+            anchor_rects.push(("menu.network", r_network.response.rect));
+
             // Pause/Resume simulation. Toggles `Time<Virtual>` so both
             // physics (avian -> Time<Physics> derived from Virtual) and
             // the celestial clock (delta_secs gated) freeze together.
