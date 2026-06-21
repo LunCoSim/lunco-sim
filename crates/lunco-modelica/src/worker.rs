@@ -273,6 +273,24 @@ impl Default for ModelicaResult {
     }
 }
 
+impl ModelicaResult {
+    /// Overlay the `experiment(...)` annotation defaults lifted from a
+    /// compile result onto this message. Single source of the
+    /// `DaeCompilationResult` → `experiment_*` field mapping, which was
+    /// copy-pasted at both worker compile sites (native + inline-worker).
+    fn with_experiment(
+        mut self,
+        comp_res: &rumoca_compile::compile::DaeCompilationResult,
+    ) -> Self {
+        self.experiment_start_time = comp_res.experiment_start_time;
+        self.experiment_stop_time = comp_res.experiment_stop_time;
+        self.experiment_tolerance = comp_res.experiment_tolerance;
+        self.experiment_interval = comp_res.experiment_interval;
+        self.experiment_solver = comp_res.experiment_solver.clone();
+        self
+    }
+}
+
 /// Cached compilation result per entity.
 ///
 /// Stores the DAE and source hash so we can instantly rebuild a SimStepper
@@ -578,15 +596,6 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         );
                         match _compile_outcome {
                             Ok(comp_res) => {
-                                // Capture experiment(...) annotation
-                                // values BEFORE comp_res moves into the
-                                // cache; the Fast Run toolbar reads
-                                // these as bounds defaults.
-                                let exp_t_start = comp_res.experiment_start_time;
-                                let exp_t_end = comp_res.experiment_stop_time;
-                                let exp_tol = comp_res.experiment_tolerance;
-                                let exp_interval = comp_res.experiment_interval;
-                                let exp_solver = comp_res.experiment_solver.clone();
                                 match build_stepper(&comp_res) {
                                     Ok(mut stepper) => {
                                         // Set input defaults via set_input so they're runtime-changeable
@@ -610,15 +619,11 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             log_message: Some(format!("Model '{}' compiled.", model_name)),
                                             is_new_model: true, is_parameter_update: false, is_reset: false,
                                             detected_input_names: input_names,
-                                            experiment_start_time: exp_t_start,
-                                            experiment_stop_time: exp_t_end,
-                                            experiment_tolerance: exp_tol,
-                                            experiment_interval: exp_interval,
-                                            experiment_solver: exp_solver,
                                             compiled_model_name: Some(model_name.clone()),
                                             loaded_source_root_id: None,
                                             compile_diagnostics: Vec::new(),
-                                        });
+                                            ..Default::default()
+                                        }.with_experiment(&comp_res));
                                     }
                                     Err(e) => {
                                         let mut r = result_ok(entity, session_id);
@@ -1127,11 +1132,6 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             };
             match compile_outcome {
                 Ok(comp_res) => {
-                    let exp_t_start = comp_res.experiment_start_time;
-                    let exp_t_end = comp_res.experiment_stop_time;
-                    let exp_tol = comp_res.experiment_tolerance;
-                    let exp_interval = comp_res.experiment_interval;
-                    let exp_solver = comp_res.experiment_solver.clone();
                     match build_stepper(&comp_res) {
                         Ok(mut stepper) => {
                             apply_input_defaults_validated(&mut stepper, &input_defaults, "Compile");
@@ -1149,15 +1149,11 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                                 log_message: Some("Compiled successfully.".to_string()),
                                 is_new_model: true, is_parameter_update: false, is_reset: false,
                                 detected_input_names: input_names,
-                                experiment_start_time: exp_t_start,
-                                experiment_stop_time: exp_t_end,
-                                experiment_tolerance: exp_tol,
-                                experiment_interval: exp_interval,
-                                experiment_solver: exp_solver,
                                 compiled_model_name: Some(model_name.clone()),
                                 loaded_source_root_id: None,
                                 compile_diagnostics: Vec::new(),
-                            });
+                                ..Default::default()
+                            }.with_experiment(&comp_res));
                         }
                         Err(e) => {
                             send(ModelicaResult {

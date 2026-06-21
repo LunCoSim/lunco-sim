@@ -825,25 +825,19 @@ impl MSLIndexer {
                         let placement = crate::annotations::extract_placement(
                             &comp.annotation,
                         );
-                        let (x, y) = placement
+                        // Shared extent→centre/size math (see
+                        // `Transformation::centre_size`); position and size
+                        // fall back independently when no placement is given.
+                        let centre_size = placement
                             .as_ref()
-                            .map(|p| {
-                                let extent = &p.transformation.extent;
-                                let cx = (extent.p1.x + extent.p2.x) / 2.0
-                                    + p.transformation.origin.x;
-                                let cy = (extent.p1.y + extent.p2.y) / 2.0
-                                    + p.transformation.origin.y;
-                                (cx as f32, cy as f32)
-                            })
+                            .map(|p| p.transformation.centre_size());
+                        let (x, y) = centre_size
+                            .map(|(cx, cy, _, _)| (cx as f32, cy as f32))
                             .unwrap_or_else(|| {
                                 fallback_port_position(&comp.causality, ports.len())
                             });
-                        let (size_x, size_y) = placement
-                            .as_ref()
-                            .map(|p| {
-                                let e = &p.transformation.extent;
-                                ((e.p2.x - e.p1.x).abs() as f32, (e.p2.y - e.p1.y).abs() as f32)
-                            })
+                        let (size_x, size_y) = centre_size
+                            .map(|(_, _, w, h)| (w as f32, h as f32))
                             .unwrap_or((20.0, 20.0));
                         let rotation_deg = placement
                             .as_ref()

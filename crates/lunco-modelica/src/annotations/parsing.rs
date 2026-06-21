@@ -323,14 +323,14 @@ fn build_extends_candidates(
         }
     }
 
-    let class_parts: Vec<&str> = class_name.split('.').collect();
-    if class_parts.len() > 1 {
-        for stop in (1..class_parts.len()).rev() {
-            let pkg = class_parts[..stop].join(".");
-            let candidate = format!("{pkg}.{base_name}");
-            if candidate != base_name {
-                out.push(candidate);
-            }
+    // Scope-chain candidates (sibling → parent → root) come from the single
+    // canonical §5.3 resolver `diagram::scope_chain_candidates`, so the walk
+    // can't drift from the rest of the crate. Its trailing bare `base_name` is
+    // the one we already pushed first, so skip it. The import candidates above
+    // are layered on top — they are not part of the scope walk.
+    for cand in crate::diagram::scope_chain_candidates(base_name, Some(class_name)) {
+        if cand != base_name {
+            out.push(cand);
         }
     }
     out

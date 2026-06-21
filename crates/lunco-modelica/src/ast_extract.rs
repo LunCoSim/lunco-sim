@@ -87,13 +87,12 @@ pub fn qualify(parent: &str, child: &str) -> String {
 /// display form (`"Modelica.Blocks.PID"` → `"PID"`). For names
 /// without any `.`, returns the whole input. Empty input → empty.
 ///
-/// Subscript-naïve: callers that may receive component paths with
-/// bracketed expressions containing dots (`a[b.c].x`) should
-/// pre-strip the brackets via `s.split('[').next()` — true subscript
-/// awareness would require rumoca-core's `top_level_last_segment`,
-/// which workbench callers can adopt once it's exposed publicly.
+/// Delegates to rumoca-core's `top_level_last_segment`, so it is
+/// **subscript-aware**: dots inside bracketed subscripts (`a.b[c.d]`)
+/// are ignored rather than split on. Single source of truth shared
+/// with rumoca's own name handling.
 pub fn short_name(qualified: &str) -> &str {
-    qualified.rsplit('.').next().unwrap_or(qualified)
+    rumoca_compile::parsing::ir_core::top_level_last_segment(qualified)
 }
 
 /// Decode Modelica string-literal escape sequences. Replaces `\"`,
@@ -171,9 +170,11 @@ pub fn string_literal_value(
 /// previously had two competing idioms (`rsplit_once('.').map(...)`
 /// and `rsplitn(2, '.').nth(1).unwrap_or("")`) at ~12 sites; the
 /// latter is one typo away from "first segment" instead of "all but
-/// last". Same subscript caveat as [`short_name`].
+/// last". Delegates to rumoca-core's `parent_scope` (subscript-aware,
+/// shared with rumoca); its `None` for single-segment names maps to
+/// the empty top-level scope `""`.
 pub fn parent_qualified(qualified: &str) -> &str {
-    qualified.rsplit_once('.').map(|(parent, _)| parent).unwrap_or("")
+    rumoca_compile::parsing::ir_core::parent_scope(qualified).unwrap_or("")
 }
 
 /// Return ALL non-package classes (qualified) reachable from the
