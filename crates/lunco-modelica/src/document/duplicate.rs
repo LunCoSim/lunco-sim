@@ -486,6 +486,29 @@ end Foo;
     }
 
     #[test]
+    fn duplicate_nested_rocketstage_model_parses() {
+        // The "Duplicate to edit" path from the read-only RocketStage tab:
+        // duplicate the *nested* model `RocketStage` (not the package),
+        // producing `within AnnotatedRocketStage; model RocketStageCopy …`.
+        // Runtime showed "(no classes yet)" — this asserts the slice parses
+        // and yields the renamed model.
+        let src = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/models/AnnotatedRocketStage.mo"
+        ));
+        let out = duplicate(
+            src,
+            "RocketStage",
+            "RocketStageCopy",
+            Some("AnnotatedRocketStage.RocketStage"),
+        );
+        assert!(parses_clean(&out), "nested-model duplicate must parse:\n{out}");
+        assert!(out.contains("model RocketStageCopy"), "renamed:\n{out}");
+        assert!(out.contains("end RocketStageCopy;"), "end renamed:\n{out}");
+        assert_eq!(within_package(&out).as_deref(), Some("AnnotatedRocketStage"));
+    }
+
+    #[test]
     fn duplicate_flat_model_keeps_keyword_and_semicolon() {
         // The core regression isolated: `ClassDef.location` omits the
         // `model` keyword and the trailing `;`. Pre-fix this produced
