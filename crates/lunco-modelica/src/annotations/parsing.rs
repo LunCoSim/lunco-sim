@@ -117,10 +117,20 @@ pub fn extract_experiment(annotations: &[Expression]) -> Option<Experiment> {
 // Inheritance logic
 // ---------------------------------------------------------------------------
 
-pub fn extract_icon_inherited<F>(
+/// Walk a class's `extends` chain and merge inherited + local icon
+/// graphics into a single [`Icon`]. The merge algorithm (recurse into
+/// bases first, append local graphics last, inherit the coordinate
+/// system from the first source that declares one) is shared by both
+/// the indexer (closure resolver over the scanned class map) and the
+/// runtime ([`extract_icon_via_engine`], engine resolver). Only the
+/// resolver and the *source* of `falsy_params` differ — the caller
+/// computes the falsy set once over the full chain and passes it down
+/// unchanged.
+fn merge_inherited_icon<F>(
     class_name: &str,
     class: &ClassDef,
     resolver: &mut F,
+    falsy_params: &HashSet<String>,
     visited: &mut HashSet<String>,
 ) -> Option<Icon>
 where
@@ -150,10 +160,11 @@ where
             }
         }
         let Some((resolved_name, base_class)) = hit else { continue };
-        if let Some(base_icon) = extract_icon_inherited(
+        if let Some(base_icon) = merge_inherited_icon(
             &resolved_name,
             base_class.as_ref(),
             resolver,
+            falsy_params,
             visited,
         ) {
             merged_graphics.extend(base_icon.graphics);
@@ -161,16 +172,7 @@ where
         }
     }
 
-    let mut falsy_params: HashSet<String> = HashSet::new();
-    let mut falsy_visited: HashSet<String> = HashSet::new();
-    collect_falsy_bool_params_recursive(
-        class_name,
-        class,
-        resolver,
-        &mut falsy_params,
-        &mut falsy_visited,
-    );
-    let local = extract_icon_with_visibility(&class.annotation, &falsy_params);
+    let local = extract_icon_with_visibility(&class.annotation, falsy_params);
     let local_cs = local.as_ref().map(|i| i.coordinate_system);
     if let Some(icon) = local {
         merged_graphics.extend(icon.graphics);
@@ -186,6 +188,37 @@ where
     })
 }
 
+/// Indexer entry point: merge a scanned class's inherited icon using a
+/// closure that maps `class-name → ClassDef`. The falsy-parameter set
+/// (bool params explicitly bound to `false`, used to drop conditionally
+/// hidden graphics) is collected once over the *whole* chain — a
+/// superset of any single level — so it matches the flattened semantics
+/// of [`extract_icon_via_engine`].
+pub fn extract_icon_inherited<F>(
+    class_name: &str,
+    class: &ClassDef,
+    resolver: &mut F,
+    visited: &mut HashSet<String>,
+) -> Option<Icon>
+where
+    F: FnMut(&str) -> Option<Arc<ClassDef>>,
+{
+    let mut falsy_params: HashSet<String> = HashSet::new();
+    let mut falsy_visited: HashSet<String> = HashSet::new();
+    collect_falsy_bool_params_recursive(
+        class_name,
+        class,
+        resolver,
+        &mut falsy_params,
+        &mut falsy_visited,
+    );
+    merge_inherited_icon(class_name, class, resolver, &falsy_params, visited)
+}
+
+/// Runtime entry point: merge a class's inherited icon via the live
+/// [`ModelicaEngine`]. The falsy set comes from the engine's typed,
+/// modification-aware member view (`inherited_members_typed`), so an
+/// overridden `useHeatPort = true` correctly *un-hides* a base graphic.
 pub fn extract_icon_via_engine(
     qualified: &str,
     engine: &mut crate::engine::ModelicaEngine,
@@ -203,68 +236,12 @@ pub fn extract_icon_via_engine(
         .map(|m| m.name)
         .collect();
 
+    let top = engine.class_def(qualified)?;
+    let mut resolver = |name: &str| -> Option<Arc<ClassDef>> {
+        engine.class_def(name).map(Arc::new)
+    };
     let mut visited = HashSet::new();
-    extract_icon_via_engine_recursive(qualified, engine, &falsy_params, &mut visited)
-}
-
-fn extract_icon_via_engine_recursive(
-    class_name: &str,
-    engine: &mut crate::engine::ModelicaEngine,
-    falsy_params: &HashSet<String>,
-    visited: &mut HashSet<String>,
-) -> Option<Icon> {
-    if !visited.insert(class_name.to_string()) {
-        return None; // cycle
-    }
-    let class = engine.class_def(class_name)?;
-
-    let mut merged_graphics: Vec<GraphicItem> = Vec::new();
-    let mut inherited_cs: Option<CoordinateSystem> = None;
-    let mut local_cs: Option<CoordinateSystem> = None;
-
-    for ext in &class.extends {
-        let base_name: String = ext
-            .base_name
-            .name
-            .iter()
-            .map(|t| t.text.as_ref())
-            .collect::<Vec<&str>>()
-            .join(".");
-
-        let candidates = build_extends_candidates(class_name, &base_name, &class.imports);
-        let mut hit: Option<(String, ClassDef)> = None;
-        for candidate in candidates {
-            if let Some(base_class) = engine.class_def(&candidate) {
-                hit = Some((candidate, base_class));
-                break;
-            }
-        }
-        let Some((resolved_name, _base_class)) = hit else { continue };
-        if let Some(base_icon) = extract_icon_via_engine_recursive(
-            &resolved_name,
-            engine,
-            falsy_params,
-            visited,
-        ) {
-            merged_graphics.extend(base_icon.graphics);
-            inherited_cs = Some(base_icon.coordinate_system);
-        }
-    }
-
-    let local = extract_icon_with_visibility(&class.annotation, falsy_params);
-    if let Some(icon) = local {
-        local_cs = Some(icon.coordinate_system);
-        merged_graphics.extend(icon.graphics);
-    }
-
-    if merged_graphics.is_empty() && local_cs.is_none() && inherited_cs.is_none() {
-        return None;
-    }
-
-    Some(Icon {
-        coordinate_system: local_cs.or(inherited_cs).unwrap_or_default(),
-        graphics: merged_graphics,
-    })
+    merge_inherited_icon(qualified, &top, &mut resolver, &falsy_params, &mut visited)
 }
 
 // ---------------------------------------------------------------------------
