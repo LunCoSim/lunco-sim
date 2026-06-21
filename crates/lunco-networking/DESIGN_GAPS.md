@@ -83,15 +83,40 @@ pass through). `source` is the stage's **stable logical asset path** via
 `AssetServer::get_path(stage_handle.id())` — explicitly the asset path, **not** the
 content-hash `AssetId`, per D3b. `lunco-core`'s assignment system then derives the id.
 
-> **KNOWN LIMITATION — instancing collision (B.1, follow-up).** `source` keys on the
-> *referenced stage's* asset path and `path` is the prim's *in-stage* path, both
-> identical across instances. Adding the **same** USD asset twice in one scene
-> (two rovers from `rucheyok.usda`) makes both roots derive the same id from
-> `(usd, rucheyok.usda, /Rucheyok)` — a collision. Correct for the
-> single-instance MVP scene; not yet for instancing. Fix = fold the *composed/instance
-> root path* into `source` (or use the composed scene path as `path`) so
-> `/World/Rover1/...` and `/World/Rover2/...` diverge. The D3a debug-time collision
-> check **catches** this at content load (loud, not silent) — acceptable to defer.
+> **RESOLVED — instancing collision (B.1), 2026-06-21.** The collision and its fix
+> split by *where* the duplicate lives:
+>
+> - **Authored scene (two references in one stage):** never collided. The two
+>   references compose to **distinct** in-stage paths (`/World/Rover1/Wheel` vs
+>   `/World/Rover2/Wheel`), so `Content` already keys them apart. The original
+>   worry — two roots deriving `(usd, rucheyok.usda, /Rucheyok)` — only arises if
+>   both are mounted at the *same* prim path, which authored references don't do.
+> - **Runtime spawn of the same asset twice (palette/API):** this is the case that
+>   actually collided. Both spawns share one deduped asset handle and compose the
+>   *same* paths, so descendant prims derived identical `Content` ids. The **root**
+>   was already disambiguated (it carries `SkipContentStamp` → an authoritative,
+>   replicated id). The **descendants** were not.
+>
+> **Fix (hierarchical identity, the USD-standard model).** Descendants of a
+> runtime-spawned instance now derive from the instance root rather than taking a
+> `Content` id: `Provenance::Derived{ parent: <root's id>, role: <prim path
+> relative to root> }`. Two spawns have distinct root ids (authoritative on the
+> server, the *same* id pinned on the client via `apply_replicated_spawns`), so
+> descendants diverge — and because `derive_id` is a pure function of
+> `(parent, role)`, every peer computes the same id with only the root replicated.
+> This matches how USD itself handles duplicates (references at unique namespace
+> paths; `instanceable` prototypes addressed *relative to the instance root*) —
+> identity composes down the namespace, never minted independently per internal prim.
+>
+> **Mechanism** (in `lunco-usd-bevy`, zero `lunco-core` change): `UsdInstanceRoot`
+> seeds the runtime-spawn root bundle atomically; `UsdInstanceMember{root, root_path}`
+> propagates down the subtree (atomic with each child's `UsdPrimPath` so the spawn
+> observer sees it); the loader parks descendants as `Provenance::Local` (a no-op in
+> `assign_global_entity_ids`, so they never take a premature/colliding id);
+> `resolve_usd_instance_identities` upgrades them to `Derived` once the root id is
+> allocated (≤1 frame later). Authored scene prims are untouched (no markers →
+> `Content` as before). The D3a debug-time collision check remains as a backstop.
+> See [[project_usd_instance_identity_derived]].
 
 ### C. Cosim coupling decides prediction eligibility
 Prediction works only if the client can compute the same forces the server does.

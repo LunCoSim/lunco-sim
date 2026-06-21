@@ -4,7 +4,7 @@
 //! and terrain. Each entry knows how to spawn itself (USD file or procedural).
 
 use bevy::prelude::*;
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath};
 
 /// Marker components used by `lunco-cosim`'s integration tests to tag a
 /// test entity that should go through a mini compile-and-wire pipeline
@@ -139,6 +139,11 @@ pub fn spawn_usd_entry(
         Name::new(entry.display_name.clone()),
         lunco_core::SelectableRoot,
         lunco_core::GridAnchor,
+        // Seeds hierarchical instance identity (gap G2/B.1): the USD loader
+        // gives this runtime spawn's descendants `Derived` ids off this root's
+        // unique id, so two spawns of the same asset don't collide. Atomic with
+        // `UsdPrimPath` so the spawn observer sees it.
+        UsdInstanceRoot,
         UsdPrimPath {
             stage_handle: handle,
             path: prim_path,

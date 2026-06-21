@@ -75,10 +75,14 @@ our `GlobalEntityId`/`Provenance` identity (M1). Instead:
 ### Gameplay gates (the MVP_MULTIPLAYER_GAPS fixes)
 - **G1 input isolation** — `LocalAvatar` marker (lunco-avatar); gate
   `translate_intents_to_commands` to `With<LocalAvatar>`; server maps no input for remotes.
-- **G2 spawn identity** — runtime spawns stamp `Provenance::Authoritative` root +
-  `SkipContentStamp`; USD loader suppresses its `Content` stamp under that marker; children
-  `Provenance::Local` (addressed locally via `port_map`, never collide). Single-instance
-  startup-scene prims unchanged.
+- **G2 spawn identity** — runtime spawns stamp `SkipContentStamp` on the root, so
+  `assign_global_entity_ids` mints an **authoritative** id (ignoring the loader's `Content`
+  stamp) that the client pins from the spawn broadcast. Descendants get a hierarchical id:
+  `spawn_usd_entry` seeds `UsdInstanceRoot`, the loader propagates `UsdInstanceMember` and
+  parks each descendant `Local`, then `resolve_usd_instance_identities` upgrades it to
+  `Derived{ parent: root_id, role }` (≤1 frame) — so two spawns of the same asset never
+  collide and reconstruct identically on every peer. Single-instance startup-scene prims
+  unchanged (they keep `Content`). (Shipped 2026-06-21; see USD_REPLICATION_POLICY §runtime-spawn identity.)
 - **G3 sessions** — client handshake → `LocalSession` + mark its avatar `LocalAvatar`.
 - **G4 ownership** — `PossessVessel` claims ownership (server, from `SyncApplyGuard` origin);
   `DriveRover` authorized against ownership; `authorize` rejects cross-rover commands.

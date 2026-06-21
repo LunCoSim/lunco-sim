@@ -43,46 +43,54 @@ fn test_sim_status_can_step() {
 }
 
 // ---------------------------------------------------------------------------
-// AvianSim Tests
+// Avian body ports (resolved live from Position/LinearVelocity, no mirror)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_avian_sim_default() {
-    let avian = AvianSim::default();
-    assert!(avian.inputs.is_empty());
-    assert!(avian.outputs.is_empty());
-}
+fn test_avian_body_ports_listed() {
+    // A rigid body auto-exposes position/velocity outputs + force inputs through
+    // the `AVIAN` spec table — no marker component, detected by presence.
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    let e = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Position(DVec3::new(0.0, 0.0, 0.0)),
+            LinearVelocity(DVec3::ZERO),
+        ))
+        .id();
 
-#[test]
-fn test_avian_sim_init_outputs() {
-    let mut avian = AvianSim::default();
-    avian.init_outputs();
-    assert!(avian.outputs.contains_key("position_x"));
-    assert!(avian.outputs.contains_key("position_y"));
-    assert!(avian.outputs.contains_key("position_z"));
-    assert!(avian.outputs.contains_key("velocity_x"));
-    assert!(avian.outputs.contains_key("velocity_y"));
-    assert!(avian.outputs.contains_key("velocity_z"));
-    assert!(avian.outputs.contains_key("height"));
-    // All initialized to 0.0
-    for val in avian.outputs.values() {
-        assert_eq!(*val, 0.0);
+    let names: Vec<String> = entity_ports(app.world(), e)
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    for expected in [
+        "position_x", "position_y", "position_z", "height", "velocity_x",
+        "velocity_y", "velocity_z", "force_x", "force_y", "force_z",
+    ] {
+        assert!(names.contains(&expected.to_string()), "missing port {expected}");
     }
 }
 
 #[test]
-fn test_avian_sim_read_state() {
-    let mut avian = AvianSim::default();
-    avian.init_outputs();
+fn test_avian_body_ports_read_live_state() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    let e = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Position(DVec3::new(100.0, 1200.0, 50.0)),
+            LinearVelocity(DVec3::new(1.0, 3.2, 0.5)),
+        ))
+        .id();
 
-    let position = Position(DVec3::new(100.0, 1200.0, 50.0));
-    let velocity = LinearVelocity(DVec3::new(1.0, 3.2, 0.5));
-    avian.read_state(Some(&position), Some(&velocity));
-
-    assert_eq!(avian.outputs["position_x"], 100.0);
-    assert_eq!(avian.outputs["position_y"], 1200.0);
-    assert_eq!(avian.outputs["height"], 1200.0); // alias
-    assert_eq!(avian.outputs["velocity_y"], 3.2);
+    let w = app.world();
+    assert_eq!(read_output_port(w, e, "position_x"), Some(100.0));
+    assert_eq!(read_output_port(w, e, "position_y"), Some(1200.0));
+    assert_eq!(read_output_port(w, e, "height"), Some(1200.0)); // alias
+    assert_eq!(read_output_port(w, e, "velocity_y"), Some(3.2));
 }
 
 // ---------------------------------------------------------------------------
@@ -179,12 +187,12 @@ fn test_propagate_avian_to_sim_component() {
 
     let mut app = build_test_app();
 
-    // Spawn entity with both AvianSim and SimComponent
+    // Spawn a rigid body (auto-exposes the `height` output from Position) with a
+    // SimComponent that has a `height` input.
     let entity = app.world_mut().spawn((
         RigidBody::Dynamic,
         Position(DVec3::new(0.0, 1200.0, 0.0)),
         LinearVelocity(DVec3::new(0.0, 3.2, 0.0)),
-        AvianSim::default(),
         SimComponent {
             model_name: "Balloon".into(),
             inputs: [("height".into(), 0.0), ("velocity".into(), 0.0)].into_iter().collect(),
@@ -192,7 +200,7 @@ fn test_propagate_avian_to_sim_component() {
         },
     )).id();
 
-    // Wire: AvianSim.height → SimComponent.height
+    // Wire: avian height output → SimComponent height input (same entity).
     app.world_mut().spawn(SimConnection {
         start_element: entity,
         start_connector: "height".into(),
@@ -202,11 +210,8 @@ fn test_propagate_avian_to_sim_component() {
         offset: 0.0,
     });
 
-    // First read Avian state
-    app.world_mut().run_system_cached(lunco_cosim::systems::step_avian::read_avian_outputs)
-        .unwrap();
-
-    // Then propagate wires
+    // Propagate — the source `height` is read live from Position (no snapshot
+    // system needed); avian state is stable until a physics step runs.
     app.world_mut().run_system_cached(lunco_cosim::systems::propagate::propagate_connections)
         .unwrap();
 
@@ -215,30 +220,30 @@ fn test_propagate_avian_to_sim_component() {
 }
 
 // ---------------------------------------------------------------------------
-// AvianSim Auto-Add Tests
+// Avian presence-detection (no observer, no marker component)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_avian_sim_auto_added_on_rigid_body() {
-    // Test that the On<Add, RigidBody> observer adds AvianSim.
-    // We create a minimal app with just the observer, avoiding PhysicsPlugins
-    // which require resources not provided by MinimalPlugins.
+fn test_rigid_body_exposes_ports_by_presence() {
+    // No observer/marker: a RigidBody entity exposes avian ports purely by
+    // component presence through the resolver. An entity without one exposes none.
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
-    // Add just the observer, not the full CoSimPlugin
-    app.add_observer(lunco_cosim::on_add_rigid_body);
 
-    // Spawn an entity without RigidBody first
-    let entity = app.world_mut().spawn_empty().id();
-    app.update(); // Let startup systems run
-
-    // Now add RigidBody via commands — triggers On<Add, RigidBody>
-    app.world_mut().commands().entity(entity).insert(RigidBody::Dynamic);
-    app.update(); // Process the observer
-
+    let plain = app.world_mut().spawn_empty().id();
     assert!(
-        app.world().get::<AvianSim>(entity).is_some(),
-        "AvianSim should be auto-added when RigidBody is inserted"
+        read_output_port(app.world(), plain, "height").is_none(),
+        "a non-body entity exposes no avian ports"
+    );
+
+    let body = app
+        .world_mut()
+        .spawn((RigidBody::Dynamic, Position(DVec3::new(0.0, 7.0, 0.0))))
+        .id();
+    assert_eq!(
+        read_output_port(app.world(), body, "height"),
+        Some(7.0),
+        "a RigidBody+Position entity exposes the height port"
     );
 }
 
@@ -260,10 +265,7 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
         ..default()
     }).id();
 
-    let target = app.world_mut().spawn((
-        RigidBody::Dynamic,
-        AvianSim::default(),
-    )).id();
+    let target = app.world_mut().spawn(RigidBody::Dynamic).id();
 
     // Two connections to same force target: netForce + buoyancy → force_y
     app.world_mut().spawn(SimConnection {
@@ -283,27 +285,29 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
         offset: 0.0,
     });
 
-    // Propagate — should accumulate both connections into AvianSim.inputs["force_y"]
+    // Propagate — both wires sum into the force_y input, which lands in
+    // `PendingForces.f.y` (readable through the resolver's input side).
     app.world_mut().run_system_cached(
         lunco_cosim::systems::propagate::propagate_connections,
     ).unwrap();
 
-    {
-        let avian = app.world().get::<AvianSim>(target).unwrap();
-        assert_eq!(avian.inputs["force_y"], 50.0, "forces should accumulate: 30 + 20 = 50");
-    }
+    assert_eq!(
+        read_input_port(app.world(), target, "force_y"),
+        Some(50.0),
+        "forces should accumulate: 30 + 20 = 50"
+    );
 
-    // apply_sim_forces drains the force inputs via take_inputs. Force inputs
-    // are declared ports, so the drain ZEROS the slot (keeps the key) rather
-    // than removing it — the slot must persist so next tick's propagate can
-    // write it again through the strict resolver.
+    // apply_pending_forces drains the accumulator into avian and zeroes it, so
+    // accumulation starts fresh next tick.
     app.world_mut().run_system_cached(
-        lunco_cosim::systems::apply_forces::apply_sim_forces,
+        lunco_cosim::avian::apply_pending_forces,
     ).unwrap();
 
-    let avian = app.world().get::<AvianSim>(target).unwrap();
-    assert_eq!(avian.inputs["force_y"], 0.0,
-        "apply_sim_forces should drain force_y to 0 (keeping the declared port)");
+    assert_eq!(
+        read_input_port(app.world(), target, "force_y"),
+        Some(0.0),
+        "apply_pending_forces should drain force_y to 0"
+    );
 }
 
 // ---------------------------------------------------------------------------

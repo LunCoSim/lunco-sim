@@ -19,7 +19,7 @@ commits. Reconciled against the committed code, the picture today is:
 |---|---|---|
 | 1 Connect (transport) | spike only | ✅ **DONE** — lightyear WebTransport host+client wired in-app (`server.rs`/`client.rs`), `SessionId` allocation, `SessionRegistry`, late-join replay (`ad638410`) |
 | 2 Per-user identity | substrate only | ✅ session table + handshake (session+tick); **G3 server-owned avatar still client-local** |
-| 3 Create a rover | local only | ✅ **DONE** — `SpawnEntity` over the sync layer + replicate (`apply_replicated_spawns`); **G2 collision FIXED** (`SkipContentStamp` → Authoritative id) |
+| 3 Create a rover | local only | ✅ **DONE** — `SpawnEntity` over the sync layer + replicate (`apply_replicated_spawns`); **G2 collision FIXED** root (`SkipContentStamp` → Authoritative id) **and descendants** (`UsdInstanceMember` → hierarchical `Derived`, 2026-06-21) |
 | 4 Possess | local only | ✅ **DONE** — over the sync layer `PossessVessel` + server ownership validation + `broadcast_ownership` (`f9976ed5`); **G4 drive-auth enforced** via `authorize()` |
 | 5 Individually drive + predict | all missing | ✅ **CORE DONE** — 20 Hz snapshot replication, input-replay **prediction + reconciliation** (`717f8d66` + reconcile extraction); polish (tick-sync/jitter) remains |
 | G5 disconnect cleanup | unspecified | ✅ **DONE** — `on_server_disconnected` → `release_session` frees owned entities |
@@ -113,6 +113,24 @@ either (a) suppress the loader's `Content` stamping for runtime subtrees and sta
 `Authoritative`+`Derived` instead, or (b) the loader must distinguish "I'm loading the
 startup stage" from "I'm instancing at runtime." Currently `spawn.rs` stamps **nothing**
 and relies on the loader — so today every runtime rover would silently collide.
+
+> **✅ SHIPPED 2026-06-21 — both root and descendants.** As-built it's option (a),
+> split in two:
+> - **Root:** `spawn_usd_entry` stamps `SkipContentStamp` (+ the spawn path adds
+>   `NetSpawn`/`NetReplicate`). `assign_global_entity_ids` mints an **authoritative**
+>   id for it and **ignores** the loader's `Content` stamp. Client pins the same id
+>   via `apply_replicated_spawns`. (This was the part previously marked "fixed".)
+> - **Descendants (the remaining half):** `spawn_usd_entry` also seeds an
+>   `UsdInstanceRoot` marker atomically; the loader propagates `UsdInstanceMember`
+>   down the subtree, **parks** each descendant as `Provenance::Local`, and
+>   `resolve_usd_instance_identities` upgrades it to
+>   `Derived{ parent: root_id, role: path-relative-to-root }` once the root id
+>   exists (≤1 frame). Parking as `Local` (not leaving it unstamped) is load-bearing:
+>   it stops `assign_global_entity_ids` from auto-allocating a colliding id in the
+>   gap frame. Same root id on both peers → matching descendant ids, root-only
+>   replication. Authored scene prims keep `Content` (already unique). All in
+>   `lunco-usd-bevy`, zero `lunco-core` change. See DESIGN_GAPS §B.1 +
+>   `project_usd_instance_identity_derived`.
 
 ### G3 — Avatars are identity-less client-side singletons; MP needs server-owned, session-bound avatars
 Avatars (`lunco-avatar/src/lib.rs:331`, `lunco-client/.../sandbox.rs:559`) spawn

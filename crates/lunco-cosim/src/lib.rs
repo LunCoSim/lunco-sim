@@ -37,10 +37,7 @@
 //! });
 //! ```
 
-use std::collections::HashMap;
-
 use bevy::prelude::*;
-use avian3d::prelude::PhysicsSystems;
 
 pub mod avian;
 pub mod component;
@@ -75,13 +72,12 @@ pub struct CoSimPlugin;
 impl Plugin for CoSimPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<SimComponent>()
-            .register_type::<AvianSim>()
-            .register_type::<JointSim>()
+            .register_type::<PendingForces>()
             .register_type::<SimConnection>();
 
-        app.add_observer(on_add_rigid_body);
-        app.add_observer(on_add_rigid_body_forces);
-        app.add_observer(joint::on_add_revolute_joint);
+        // No per-kind observers: avian rigid bodies and joints are detected by
+        // component presence through the `AVIAN` spec table (see
+        // `docs/architecture/AVIAN_PORT_BACKEND_PLAN.md`).
 
         // CoSim runs in FixedUpdate (before Avian's FixedPostUpdate physics step).
         // Order: propagate wires first, then apply forces to Position.
@@ -96,6 +92,28 @@ impl Plugin for CoSimPlugin {
                 .chain(),
         );
 
+        // Pin the two wiring fabrics in a deterministic order. The hardware DAC
+        // (`lunco_core::ControlDacSet` → `wire_system`: `DigitalPort` →
+        // `PhysicalPort.value`) writes values the cosim resolver now exposes as
+        // `"value"` ports, so a `SimConnection` can read a `PhysicalPort` the DAC
+        // just drove. Force the DAC to run BEFORE propagate so that read sees
+        // *this* tick's DAC output, not last tick's — otherwise the relative
+        // order is unspecified, giving a 1-tick skew that varies frame-to-frame
+        // and diverges host vs client under prediction (the same class of bug
+        // that `ControlDacSet`-on-the-fixed-clock already fixed once). Vacuous
+        // when `wire_system` isn't registered (the set is simply empty).
+        app.configure_sets(
+            FixedUpdate,
+            lunco_core::ControlDacSet.before(systems::propagate::CosimSet::Propagate),
+        );
+
+        // Diagnostic: a `PhysicalPort` must be driven by ONE fabric, not both.
+        // Runs only on frames where new wiring appeared (see `any_new_wiring`).
+        app.add_systems(
+            Update,
+            warn_dual_driven_ports.run_if(any_new_wiring),
+        );
+
         // Server-authoritative networking: a pure client must NOT run cosim on
         // replicated objects — it renders host snapshots. Running cosim here
         // would fight the snapshot (objects drift/jitter when the server is
@@ -105,11 +123,11 @@ impl Plugin for CoSimPlugin {
             FixedUpdate,
             (
                 systems::propagate::propagate_connections.in_set(systems::propagate::CosimSet::Propagate),
-                systems::apply_forces::apply_sim_forces.in_set(systems::apply_forces::CosimSet::ApplyForces),
-                // Joint drive is a port consumer like apply_sim_forces: it turns
-                // the propagated `angle` setpoint into joint-motor position
-                // control. Same set, same ordering (after propagate).
-                joint::apply_joint_drives.in_set(systems::apply_forces::CosimSet::ApplyForces),
+                // The single avian force consumer: drains `PendingForces` (filled
+                // by propagation's `force_*` writes) into avian's `Forces`. Joint
+                // motors are driven inline by the `angle` input port's write
+                // closure during propagation, so no separate joint-drive system.
+                avian::apply_pending_forces.in_set(systems::apply_forces::CosimSet::ApplyForces),
             )
                 .run_if(|role: Option<Res<lunco_core::NetworkRole>>| {
                     // Absent role (single-player, headless tests) → run cosim.
@@ -118,52 +136,64 @@ impl Plugin for CoSimPlugin {
                 }),
         );
 
-        // Read Avian outputs AFTER Avian's Writeback (Position → Transform sync).
-        // This ensures height/velocity values reflect the physics step that just ran.
-        // `read_joint_outputs` reads body GlobalTransforms post-step the same way,
-        // publishing the joint's measured `angle` to its Out port.
-        app.add_systems(
-            FixedPostUpdate,
-            (
-                systems::step_avian::read_avian_outputs,
-                joint::read_joint_outputs,
-            )
-                .after(PhysicsSystems::Writeback),
-        );
+        // Avian outputs (position/velocity, joint twist) are read on demand
+        // through the resolver — avian's state is stable between physics steps,
+        // so no per-tick snapshot system is needed.
 
         app.add_systems(Update, systems::collider::sync_collider);
     }
 }
 
-/// Observer: auto-adds [`crate::AvianSim`] to any entity that gets a [`avian3d::prelude::RigidBody`].
+/// Run condition: did any wiring (a [`SimConnection`] or a hardware
+/// [`lunco_core::architecture::Wire`]) get added this frame?
 ///
-/// This makes Avian available as a co-simulation model alongside
-/// any other model (Modelica, FMU, GMAT) on the same entity.
-pub fn on_add_rigid_body(
-    trigger: On<Add, avian3d::prelude::RigidBody>,
-    mut commands: Commands,
-) {
-    let entity = trigger.entity;
-    let mut avian = AvianSim {
-        inputs: HashMap::default(),
-        outputs: HashMap::default(),
-    };
-    avian.init_outputs();
-    avian.init_inputs();
-    commands.entity(entity).try_insert(avian);
+/// [`warn_dual_driven_ports`] only needs to re-scan when the wire set changes,
+/// so this gates it off on the steady-state frames (the overwhelming majority).
+fn any_new_wiring(
+    new_conns: Query<(), Added<SimConnection>>,
+    new_wires: Query<(), Added<lunco_core::architecture::Wire>>,
+) -> bool {
+    !new_conns.is_empty() || !new_wires.is_empty()
 }
 
-/// Observer: auto-adds [`Forces`] to any entity that gets a [`avian3d::prelude::RigidBody`].
+/// Diagnostic: warn when a [`lunco_core::architecture::PhysicalPort`] is driven
+/// by **both** wiring fabrics.
 ///
-/// This is required for [`apply_sim_forces`] to work — Avian only creates the
-/// `Forces` component lazily on first access, but the co-simulation bridge
-/// needs it present before the physics step.
-pub fn on_add_rigid_body_forces(
-    trigger: On<Add, avian3d::prelude::RigidBody>,
-    mut commands: Commands,
+/// The hardware DAC (`wire_system`, [`lunco_core::architecture::Wire`] →
+/// `PhysicalPort.value`) and a cosim [`SimConnection`] targeting that same port
+/// (`end_connector == "value"`) are two writers of one slot, with *different*
+/// scale semantics — the DAC normalizes `i16/32767 * scale`, the connection
+/// applies the affine `src*scale + offset` in raw units. The last writer in
+/// schedule order wins, and on a client the DAC runs while cosim is gated off
+/// (server-authoritative), so the winner differs host vs client. That is a
+/// scene-authoring error, not something to silently resolve — we surface it
+/// loudly, once per offending port.
+fn warn_dual_driven_ports(
+    q_wires: Query<&lunco_core::architecture::Wire>,
+    q_conns: Query<&SimConnection>,
+    mut warned: Local<std::collections::HashSet<Entity>>,
 ) {
-    let entity = trigger.entity;
-    // SAFETY: Forces is a zero-sized query data type. try_insert only adds it
-    // if absent (won't overwrite), and the observer fires exactly once per entity.
-    commands.entity(entity).try_insert(());
+    for conn in q_conns.iter() {
+        // Only the `PhysicalPort` "value" slot is a write-write hazard: the DAC
+        // writes it, and so does a connection naming it. (A connection driving a
+        // `DigitalPort` "raw" register that a `Wire` then *reads* is a legal
+        // chain, not a conflict.)
+        if conn.end_connector != PHYSICAL_PORT_NAME {
+            continue;
+        }
+        let target = conn.end_element;
+        if target == Entity::PLACEHOLDER || warned.contains(&target) {
+            continue;
+        }
+        if q_wires.iter().any(|w| w.target == target) {
+            warn!(
+                "[cosim] PhysicalPort on {:?} is driven by BOTH a hardware Wire \
+                 (normalized DAC) and a SimConnection ('{}', affine) — two writers \
+                 of one slot. Last-in-schedule wins and host/client diverge under \
+                 prediction. Drive it from one fabric only.",
+                target, PHYSICAL_PORT_NAME
+            );
+            warned.insert(target);
+        }
+    }
 }

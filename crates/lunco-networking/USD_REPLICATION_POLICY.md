@@ -37,6 +37,26 @@ prims with `physics:body0` (chassis) and `physics:body1` (wheel) rel targets —
 `lunco-usd-sim`'s `process_usd_sim_prims` (Pass 1 joint scan + Pass-2 stamping). There is
 **no runtime physics-graph heuristic** and no build-order side-effect.
 
+### Runtime-spawn identity (B.1, resolved 2026-06-21)
+
+A runtime spawn (palette/API) of the same asset more than once needs every spawned
+entity — not just the root — to get a **distinct, peer-agreed** id. The root is handled by
+`SkipContentStamp` → an authoritative id the server allocates and replicates. Its
+**descendants** can't take a `Content` id: two spawns compose identical prim paths, so the
+content ids would collide. Instead they derive **hierarchically** from the instance root,
+exactly as USD itself namespaces instance internals:
+
+| Entity in a runtime spawn | Identity | How |
+|---------------------------|----------|-----|
+| Instance **root**         | authoritative, replicated | `SkipContentStamp`; server allocates, client pins via `apply_replicated_spawns` |
+| Instance **descendant**   | `Provenance::Derived{ parent: root_id, role: path-relative-to-root }` | `lunco-usd-bevy` seeds `UsdInstanceRoot` on the root, propagates `UsdInstanceMember` down, parks each descendant `Local`, then `resolve_usd_instance_identities` upgrades it once the root id exists |
+
+Because `derive_id` is a pure function of `(parent, role)` and the root id is the *same* on
+both peers (allocated on the server, pinned on the client), descendants reconstruct
+**locally** with matching ids — only the root replicates. Authored scene prims are
+unaffected: they keep `Content`, whose composed prim paths are already unique per reference.
+See `DESIGN_GAPS.md` §B.1 and [[project_usd_instance_identity_derived]].
+
 ## Overrides — author only for exceptions
 
 Namespace `lunco:net:*`, read at load by `process_usd_sim_prims` (mapping unit-tested in

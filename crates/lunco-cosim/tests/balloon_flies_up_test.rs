@@ -22,20 +22,19 @@ use bevy::time::TimeUpdateStrategy;
 use std::time::Duration;
 
 use avian3d::prelude::*;
-use lunco_cosim::{AvianSim, CoSimPlugin, SimComponent, SimConnection};
+use lunco_cosim::{CoSimPlugin, PendingForces, SimComponent, SimConnection};
 
 /// Running max |force_y| that `propagate_connections` wrote into
-/// `AvianSim.inputs`, captured before `apply_sim_forces` drains it (force_y is a
-/// single-owner port — see `balloon_cosim_test`).
+/// `PendingForces`, captured before `apply_pending_forces` drains it (force_y is
+/// a single-owner port — see `balloon_cosim_test`).
 #[derive(Resource, Default)]
 struct ForceYWitness(f64);
 
-fn capture_force_y(q: Query<&AvianSim>, mut witness: ResMut<ForceYWitness>) {
-    for avian in &q {
-        if let Some(&fy) = avian.inputs.get("force_y") {
-            if fy.abs() > witness.0.abs() {
-                witness.0 = fy;
-            }
+fn capture_force_y(q: Query<&PendingForces>, mut witness: ResMut<ForceYWitness>) {
+    for pf in &q {
+        let fy = pf.f.y;
+        if fy.abs() > witness.0.abs() {
+            witness.0 = fy;
         }
     }
 }

@@ -29,20 +29,30 @@
 //! fixed name so wires can reference it: [`PHYSICAL_PORT_NAME`] (`"value"`) and
 //! [`DIGITAL_PORT_NAME`] (`"raw"`).
 //!
+//! ## One backend table, four thin operations
+//!
+//! Every port-bearing backend is one [`PortBackend`] entry in [`BACKENDS`]
+//! (list / read-output / read-input / write-input). The four public functions
+//! ([`entity_ports`], [`read_output_port`], [`read_port`], [`write_port`]) just
+//! fold over that table in order, so a new backend is added in **one place** —
+//! no more editing four functions in lockstep (which silently drifted: each
+//! risked a different backend order, a different name-shadowing outcome). The
+//! table order *is* the resolution precedence (first match wins).
+//!
 //! ## TODO(ports): tag-driven exposure
 //!
-//! The backends are still hand-enumerated below. Replace with a
-//! `#[derive(SimExposed)]` + `#[port(in|out)]` reflect-harvest so any component
-//! field becomes a port by tagging (the ontology's "Attribute exposed via Bevy
-//! Reflection"). Keep these function signatures stable so that lands as a
-//! drop-in: callers (`propagate`, the API, the inspector) are unchanged.
+//! The table is still authored by hand. The next step is a
+//! `#[derive(SimExposed)]` + `#[port(in|out)]` reflect-harvest that *generates*
+//! [`BACKENDS`] entries from tagged component fields (the ontology's "Attribute
+//! exposed via Bevy Reflection"). The function signatures and the table shape
+//! stay stable so that lands as a drop-in: callers are unchanged.
 
 use bevy::prelude::*;
 
 use lunco_core::architecture::{DigitalPort, PhysicalPort};
 
 use crate::connection::{PortDirection, PortType};
-use crate::{AvianSim, JointSim, SimComponent};
+use crate::SimComponent;
 
 /// The fixed port name a [`PhysicalPort`] exposes (its `f32` `value`).
 pub const PHYSICAL_PORT_NAME: &str = "value";
@@ -105,40 +115,258 @@ fn push_map(
     }
 }
 
+/// One port-bearing backend, expressed as four operations over `(World,
+/// Entity)`. The whole resolver is a fold over [`BACKENDS`] — entries are
+/// non-capturing closures coerced to `fn` pointers, so the table is a `const`.
+///
+/// Each op is causality-correct: `read_output`/`read_input` see only the
+/// matching direction, `write_input` only accepts an existing input slot (the
+/// strictness that lets `propagate` report dangling wires). A single-value
+/// backend ([`PhysicalPort`]/[`DigitalPort`]) is bidirectional — its one scalar
+/// *is* both its output and its input, so it answers all three.
+struct PortBackend {
+    /// Append this backend's ports on `entity` (outputs then inputs) to `out`.
+    list: fn(&World, Entity, &mut Vec<PortRef>),
+    /// Read the **output** named `name`, or `None` if this backend has no such
+    /// output on `entity`.
+    read_output: fn(&World, Entity, &str) -> Option<f64>,
+    /// Read the **input** named `name`, or `None`.
+    read_input: fn(&World, Entity, &str) -> Option<f64>,
+    /// Write `value` to **input** `name`; `true` iff the port existed here.
+    write_input: fn(&mut World, Entity, &str, f64) -> bool,
+}
+
+/// One avian port: a named scalar on an avian component, with its causality,
+/// physical domain, and read/write realization. Part of an [`AvianGroup`].
+///
+/// Avian's components are foreign types, so they are exposed by an external spec
+/// (these closures) rather than `#[derive]` — see `docs/architecture/
+/// AVIAN_PORT_BACKEND_PLAN.md`. Most ports are a one-line field read; the few
+/// derived/semantic ones (joint twist, motor target) are named functions.
+pub struct AvianPort {
+    /// Port name (e.g. `"position_y"`, `"force_y"`, `"angle"`).
+    pub name: &'static str,
+    /// Causality. `read_output` consults `Out`/`InOut`; `read_input`/`write`
+    /// consult `In`/`InOut`.
+    pub dir: PortDirection,
+    /// Physical domain (UI grouping / future connection validation).
+    pub port_type: PortType,
+    /// Read the current value. `None` for a port with no readable backing.
+    pub read: Option<fn(&World, Entity) -> Option<f64>>,
+    /// Write the value. `None` for a read-only state output. `true` if applied.
+    pub write: Option<fn(&mut World, Entity, f64) -> bool>,
+}
+
+/// A group of avian ports gated on a component's presence — one avian kind
+/// (rigid body, revolute joint, …). Declared in [`crate::avian`] /
+/// [`crate::joint`] and folded into the single avian [`PortBackend`] entry below.
+/// Adding a kind (prismatic joint, sensor, …) is one entry in [`AVIAN`] plus its
+/// group declaration — no new struct, observer, or system.
+pub struct AvianGroup {
+    /// Does `entity` belong to this group (carry the gating component)?
+    pub present: fn(&World, Entity) -> bool,
+    /// The ports this kind exposes.
+    pub ports: &'static [AvianPort],
+}
+
+/// The avian backend table: every avian kind we expose, in one place.
+const AVIAN: &[AvianGroup] = &[
+    crate::avian::RIGID_BODY_GROUP,
+    crate::joint::REVOLUTE_JOINT_GROUP,
+];
+
+fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
+    for group in AVIAN {
+        if !(group.present)(world, entity) {
+            continue;
+        }
+        for p in group.ports {
+            // A readable port whose backing component is absent (e.g. velocity
+            // on a kinematic body) simply doesn't list; a write-only declared
+            // port lists with value 0.
+            let value = match p.read {
+                Some(read) => match read(world, entity) {
+                    Some(v) => v,
+                    None => continue,
+                },
+                None => 0.0,
+            };
+            out.push(PortRef {
+                name: p.name.to_string(),
+                direction: p.dir,
+                port_type: p.port_type,
+                value,
+            });
+        }
+    }
+}
+
+fn avian_read_output(world: &World, entity: Entity, name: &str) -> Option<f64> {
+    for group in AVIAN {
+        if !(group.present)(world, entity) {
+            continue;
+        }
+        for p in group.ports {
+            if p.name == name && matches!(p.dir, PortDirection::Out | PortDirection::InOut) {
+                if let Some(read) = p.read {
+                    if let Some(v) = read(world, entity) {
+                        return Some(v);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn avian_read_input(world: &World, entity: Entity, name: &str) -> Option<f64> {
+    for group in AVIAN {
+        if !(group.present)(world, entity) {
+            continue;
+        }
+        for p in group.ports {
+            if p.name == name && matches!(p.dir, PortDirection::In | PortDirection::InOut) {
+                if let Some(read) = p.read {
+                    if let Some(v) = read(world, entity) {
+                        return Some(v);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn avian_write_input(world: &mut World, entity: Entity, name: &str, value: f64) -> bool {
+    for group in AVIAN {
+        if !(group.present)(world, entity) {
+            continue;
+        }
+        for p in group.ports {
+            if p.name == name && matches!(p.dir, PortDirection::In | PortDirection::InOut) {
+                if let Some(write) = p.write {
+                    return write(world, entity, value);
+                }
+            }
+        }
+    }
+    false
+}
+
+/// The backend table — **the** list of port-bearing component types, in
+/// resolution-precedence order. Adding a backend is one entry here; the four
+/// public functions below pick it up automatically.
+const BACKENDS: &[PortBackend] = &[
+    // --- Map-based backends: HashMap<String, f64> inputs/outputs ---
+    PortBackend {
+        list: |w, e, out| {
+            if let Some(c) = w.get::<SimComponent>(e) {
+                push_map(out, &c.outputs, PortDirection::Out);
+                push_map(out, &c.inputs, PortDirection::In);
+            }
+        },
+        read_output: |w, e, n| w.get::<SimComponent>(e).and_then(|c| c.outputs.get(n).copied()),
+        read_input: |w, e, n| w.get::<SimComponent>(e).and_then(|c| c.inputs.get(n).copied()),
+        write_input: |w, e, n, v| {
+            if let Some(mut c) = w.get_mut::<SimComponent>(e) {
+                if c.inputs.contains_key(n) {
+                    c.inputs.insert(n.to_string(), v);
+                    return true;
+                }
+            }
+            false
+        },
+    },
+    // Avian (rigid bodies + revolute joints), folded from the `AVIAN` spec
+    // table. One entry replaces the former per-kind `AvianSim`/`JointSim`
+    // backends; new avian kinds are added in `AVIAN`, not here.
+    PortBackend {
+        list: avian_list,
+        read_output: avian_read_output,
+        read_input: avian_read_input,
+        write_input: avian_write_input,
+    },
+    // --- Single-value SysML/hardware ports: one bidirectional scalar each ---
+    PortBackend {
+        list: |w, e, out| {
+            if let Some(p) = w.get::<PhysicalPort>(e) {
+                out.push(PortRef {
+                    name: PHYSICAL_PORT_NAME.to_string(),
+                    direction: PortDirection::InOut,
+                    port_type: PortType::Signal,
+                    value: p.value as f64,
+                });
+            }
+        },
+        read_output: |w, e, n| {
+            if n != PHYSICAL_PORT_NAME {
+                return None;
+            }
+            w.get::<PhysicalPort>(e).map(|p| p.value as f64)
+        },
+        // Bidirectional: the one value is both output and input.
+        read_input: |w, e, n| {
+            if n != PHYSICAL_PORT_NAME {
+                return None;
+            }
+            w.get::<PhysicalPort>(e).map(|p| p.value as f64)
+        },
+        write_input: |w, e, n, v| {
+            if n != PHYSICAL_PORT_NAME {
+                return false;
+            }
+            if let Some(mut p) = w.get_mut::<PhysicalPort>(e) {
+                p.value = v as f32;
+                return true;
+            }
+            false
+        },
+    },
+    PortBackend {
+        list: |w, e, out| {
+            if let Some(d) = w.get::<DigitalPort>(e) {
+                out.push(PortRef {
+                    name: DIGITAL_PORT_NAME.to_string(),
+                    direction: PortDirection::InOut,
+                    port_type: PortType::Signal,
+                    value: d.raw_value as f64,
+                });
+            }
+        },
+        read_output: |w, e, n| {
+            if n != DIGITAL_PORT_NAME {
+                return None;
+            }
+            w.get::<DigitalPort>(e).map(|d| d.raw_value as f64)
+        },
+        read_input: |w, e, n| {
+            if n != DIGITAL_PORT_NAME {
+                return None;
+            }
+            w.get::<DigitalPort>(e).map(|d| d.raw_value as f64)
+        },
+        write_input: |w, e, n, v| {
+            if n != DIGITAL_PORT_NAME {
+                return false;
+            }
+            if let Some(mut d) = w.get_mut::<DigitalPort>(e) {
+                // DAC quantization: saturate the continuous value into the i16
+                // register, exactly as real hardware clamps out-of-range commands.
+                d.raw_value = v.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16;
+                return true;
+            }
+            false
+        },
+    },
+];
+
 /// Enumerate every exposed port on `entity`, across all port-bearing backends.
 ///
-/// The backbone of `ListPorts`. TODO(ports): replace the hand-written backend
-/// set with the reflect-harvest (see module docs).
+/// The backbone of `ListPorts` — folds [`BACKENDS`] in precedence order.
 pub fn entity_ports(world: &World, entity: Entity) -> Vec<PortRef> {
     let mut out = Vec::new();
-    if let Some(c) = world.get::<SimComponent>(entity) {
-        push_map(&mut out, &c.outputs, PortDirection::Out);
-        push_map(&mut out, &c.inputs, PortDirection::In);
-    }
-    if let Some(a) = world.get::<AvianSim>(entity) {
-        push_map(&mut out, &a.outputs, PortDirection::Out);
-        push_map(&mut out, &a.inputs, PortDirection::In);
-    }
-    if let Some(j) = world.get::<JointSim>(entity) {
-        push_map(&mut out, &j.outputs, PortDirection::Out);
-        push_map(&mut out, &j.inputs, PortDirection::In);
-    }
-    // Single-value SysML/hardware ports: one bidirectional scalar each.
-    if let Some(p) = world.get::<PhysicalPort>(entity) {
-        out.push(PortRef {
-            name: PHYSICAL_PORT_NAME.to_string(),
-            direction: PortDirection::InOut,
-            port_type: PortType::Signal,
-            value: p.value as f64,
-        });
-    }
-    if let Some(d) = world.get::<DigitalPort>(entity) {
-        out.push(PortRef {
-            name: DIGITAL_PORT_NAME.to_string(),
-            direction: PortDirection::InOut,
-            port_type: PortType::Signal,
-            value: d.raw_value as f64,
-        });
+    for backend in BACKENDS {
+        (backend.list)(world, entity, &mut out);
     }
     out
 }
@@ -146,39 +374,16 @@ pub fn entity_ports(world: &World, entity: Entity) -> Vec<PortRef> {
 /// Read the **output** named `name` on `entity` — the value a connection reads
 /// from its *source*.
 ///
-/// A connection source must be an output, so this searches `outputs` maps only
-/// (plus the bidirectional single-value ports, whose one value *is* their
-/// output). This is critical when a name exists as both an input and an output
-/// on one entity — e.g. a balloon's `height` is a `SimComponent` *input* and an
+/// A connection source must be an output, so this searches `outputs` only (plus
+/// the bidirectional single-value ports, whose one value *is* their output).
+/// This is critical when a name exists as both an input and an output on one
+/// entity — e.g. a balloon's `height` is a `SimComponent` *input* and an
 /// `AvianSim` *output*; the wire must read the AvianSim output, not the stale
 /// SimComponent input. The read side of [`crate::systems::propagate`].
 pub fn read_output_port(world: &World, entity: Entity, name: &str) -> Option<f64> {
-    if let Some(c) = world.get::<SimComponent>(entity) {
-        if let Some(v) = c.outputs.get(name) {
-            return Some(*v);
-        }
-    }
-    if let Some(a) = world.get::<AvianSim>(entity) {
-        if let Some(v) = a.outputs.get(name) {
-            return Some(*v);
-        }
-    }
-    if let Some(j) = world.get::<JointSim>(entity) {
-        if let Some(v) = j.outputs.get(name) {
-            return Some(*v);
-        }
-    }
-    if name == PHYSICAL_PORT_NAME {
-        if let Some(p) = world.get::<PhysicalPort>(entity) {
-            return Some(p.value as f64);
-        }
-    }
-    if name == DIGITAL_PORT_NAME {
-        if let Some(d) = world.get::<DigitalPort>(entity) {
-            return Some(d.raw_value as f64);
-        }
-    }
-    None
+    BACKENDS
+        .iter()
+        .find_map(|backend| (backend.read_output)(world, entity, name))
 }
 
 /// Read the current value of port `name` on `entity`, preferring an **output**
@@ -189,22 +394,21 @@ pub fn read_port(world: &World, entity: Entity, name: &str) -> Option<f64> {
     if let Some(v) = read_output_port(world, entity, name) {
         return Some(v);
     }
-    if let Some(c) = world.get::<SimComponent>(entity) {
-        if let Some(v) = c.inputs.get(name) {
-            return Some(*v);
-        }
-    }
-    if let Some(a) = world.get::<AvianSim>(entity) {
-        if let Some(v) = a.inputs.get(name) {
-            return Some(*v);
-        }
-    }
-    if let Some(j) = world.get::<JointSim>(entity) {
-        if let Some(v) = j.inputs.get(name) {
-            return Some(*v);
-        }
-    }
-    None
+    BACKENDS
+        .iter()
+        .find_map(|backend| (backend.read_input)(world, entity, name))
+}
+
+/// Read the **input** value of port `name` on `entity` — the commanded side,
+/// skipping outputs. `None` if no input port of that name exists.
+///
+/// Distinct from [`read_port`] (which prefers outputs): use this where the input
+/// specifically is wanted — e.g. the inspector reading a joint's commanded motor
+/// setpoint as opposed to its measured angle (both named `angle`).
+pub fn read_input_port(world: &World, entity: Entity, name: &str) -> Option<f64> {
+    BACKENDS
+        .iter()
+        .find_map(|backend| (backend.read_input)(world, entity, name))
 }
 
 /// Write `value` to **input** port `name` on `entity`. Returns `true` if such an
@@ -215,7 +419,7 @@ pub fn read_port(world: &World, entity: Entity, name: &str) -> Option<f64> {
 /// and the propagation master report dangling wires. `Out`-only ports are not
 /// writable; the single-value ports ([`PhysicalPort`]/[`DigitalPort`]) are
 /// bidirectional and always accept a write (with saturation for the `i16`
-/// register).
+/// register). First backend that owns the port wins.
 ///
 /// Shared by `SetPort` and [`crate::systems::propagate::propagate_connections`].
 ///
@@ -224,35 +428,8 @@ pub fn read_port(world: &World, entity: Entity, name: &str) -> Option<f64> {
 /// until released — locked design decision 2). Today a wired input reverts next
 /// tick; an unwired input holds.
 pub fn write_port(world: &mut World, entity: Entity, name: &str, value: f64) -> bool {
-    if let Some(mut c) = world.get_mut::<SimComponent>(entity) {
-        if c.inputs.contains_key(name) {
-            c.inputs.insert(name.to_string(), value);
-            return true;
-        }
-    }
-    if let Some(mut a) = world.get_mut::<AvianSim>(entity) {
-        if a.inputs.contains_key(name) {
-            a.inputs.insert(name.to_string(), value);
-            return true;
-        }
-    }
-    if let Some(mut j) = world.get_mut::<JointSim>(entity) {
-        if j.inputs.contains_key(name) {
-            j.inputs.insert(name.to_string(), value);
-            return true;
-        }
-    }
-    if name == PHYSICAL_PORT_NAME {
-        if let Some(mut p) = world.get_mut::<PhysicalPort>(entity) {
-            p.value = value as f32;
-            return true;
-        }
-    }
-    if name == DIGITAL_PORT_NAME {
-        if let Some(mut d) = world.get_mut::<DigitalPort>(entity) {
-            // DAC quantization: saturate the continuous value into the i16
-            // register, exactly as real hardware clamps out-of-range commands.
-            d.raw_value = value.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16;
+    for backend in BACKENDS {
+        if (backend.write_input)(world, entity, name, value) {
             return true;
         }
     }

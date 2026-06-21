@@ -70,6 +70,11 @@ impl Plugin for UsdBevyPlugin {
                 Update,
                 (
                     sync_usd_visuals.run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<UsdStageAsset>>),
+                    // Upgrades parked runtime-instance descendants to a
+                    // hierarchical `Derived` id (gap G2/B.1) once their root id
+                    // is allocated. Cheap: the query is empty unless a runtime
+                    // spawn is mid-flight.
+                    resolve_usd_instance_identities,
                     hide_glb_placeholder_meshes,
                     poll_diagnostic_label_font,
                     reveal_placeholder_on_failure,
@@ -202,6 +207,49 @@ pub struct LoadIntoGrid(pub Entity);
 #[derive(Component, Debug, Clone, Copy)]
 pub struct UsdAwaitingStage;
 
+/// Seed marker for hierarchical instance identity (gap G2/B.1). Placed
+/// **atomically** (in the same spawn bundle as `UsdPrimPath`) on the root of a
+/// runtime-spawned USD instance — a palette/API spawn, never authored scene
+/// content. The loader reads it to start propagating [`UsdInstanceMember`] down
+/// the subtree.
+///
+/// Why a dedicated marker rather than reusing `SkipContentStamp`: that stamp is
+/// inserted in a *separate* command after the root spawn, so the
+/// `Add<UsdPrimPath>` observer can fire before it lands. The loader needs the
+/// signal to be present the instant the root is instantiated, which only an
+/// atomic bundle component guarantees.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct UsdInstanceRoot;
+
+/// Propagated down a runtime-spawned USD instance subtree so each descendant
+/// derives its identity from the instance root rather than taking a `Content`
+/// id (gap G2/B.1: two spawns of the same asset compose identical prim paths,
+/// so their descendants' content ids would collide).
+///
+/// `root` is the instance-root entity — it owns a unique, replicated
+/// `GlobalEntityId`. `root_path` is the root's composed prim path; a member's
+/// *role* is its own prim path relative to it. The loader parks each descendant
+/// as [`lunco_core::Provenance::Local`] and `resolve_usd_instance_identities`
+/// upgrades it to a deterministic `Derived` provenance once the root id exists.
+#[derive(Component, Debug, Clone)]
+pub struct UsdInstanceMember {
+    /// The instance-root entity this member descends from.
+    pub root: Entity,
+    /// The instance root's composed prim path (the prefix to strip for `role`).
+    pub root_path: String,
+}
+
+/// A USD instance member's *role*: its prim path relative to the instance root.
+/// `/SolarPanel` + `/SolarPanel/Frame/Bolt` → `Frame/Bolt`. Falls back to the
+/// full (leading-slash-trimmed) path if the prefix doesn't match.
+fn instance_role(root_path: &str, prim_path: &str) -> String {
+    prim_path
+        .strip_prefix(root_path)
+        .map(|s| s.trim_start_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| prim_path.trim_start_matches('/').to_string())
+}
+
 /// Translates a single USD prim into Bevy/big_space/avian components on
 /// `entity`. The caller has already verified that the stage is loaded.
 ///
@@ -228,6 +276,8 @@ fn instantiate_usd_prim(
     existing_vis: Option<&Visibility>,
     existing_tf: Option<&Transform>,
     load_into_grid: Option<&LoadIntoGrid>,
+    is_instance_root: bool,
+    inherited_member: Option<&UsdInstanceMember>,
     commands: &mut Commands,
     stages: &Assets<UsdStageAsset>,
     asset_server: &AssetServer,
@@ -272,21 +322,48 @@ fn instantiate_usd_prim(
         };
         let Ok(sdf_path) = SdfPath::new(&resolved_path) else { return; };
 
-        // M1 identity (Ph1): this entity is reconstructed from shared USD
-        // content, so stamp a deterministic `Provenance::Content`. The
-        // `source` is the stage's **stable logical asset path** (NOT the
-        // content-hash `AssetId` — D3b in DECISIONS.md), so the same prim
-        // derives the same `GlobalEntityId` on every peer with zero
-        // coordination. `derive_id` canonicalizes `path` itself. Stages not
-        // loaded from a path (runtime-authored, `get_path` → None) get no
-        // stamp here, so the core assignment fallback allocates instead.
-        if let Some(source) = asset_server.get_path(prim_path.stage_handle.id()) {
+        // M1 identity (Ph1). Two regimes:
+        //
+        //  * **Descendant of a runtime-spawned instance** (`inherited_member`):
+        //    a palette/API spawn of the same asset composes identical prim
+        //    paths, so a `Content` id would collide across instances (gap
+        //    G2/B.1). Park it as `Provenance::Local` now and let
+        //    `resolve_usd_instance_identities` upgrade it to a deterministic
+        //    `Derived` id (parent = the instance root's unique, replicated id;
+        //    role = path relative to the root) once that root id is allocated.
+        //    The root id isn't minted yet during this synchronous instantiation,
+        //    so the upgrade must be deferred.
+        //
+        //  * **Authored scene prim** (and the instance root itself): stamp the
+        //    deterministic `Provenance::Content`. The `source` is the stage's
+        //    **stable logical asset path** (NOT the content-hash `AssetId` —
+        //    D3b in DECISIONS.md), so the same prim derives the same
+        //    `GlobalEntityId` on every peer. The instance root *also* takes a
+        //    `Content` stamp here, but `assign_global_entity_ids` ignores it
+        //    (the root carries `SkipContentStamp` → authoritative id). Stages
+        //    not loaded from a path (`get_path` → None) get no stamp, so the
+        //    core assignment fallback allocates instead.
+        if inherited_member.is_some() {
+            commands
+                .entity(entity)
+                .insert(lunco_core::Provenance::Local);
+        } else if let Some(source) = asset_server.get_path(prim_path.stage_handle.id()) {
             commands.entity(entity).insert(lunco_core::Provenance::Content {
                 namespace: "usd".into(),
                 source: source.path().to_string_lossy().into_owned(),
                 path: resolved_path.clone(),
             });
         }
+
+        // Membership to hand down to children: inherited if we're mid-subtree,
+        // or freshly rooted at *this* entity if it is the instance root. `None`
+        // for ordinary scene prims (their descendants keep `Content` identity).
+        let child_member: Option<UsdInstanceMember> = inherited_member.cloned().or_else(|| {
+            is_instance_root.then(|| UsdInstanceMember {
+                root: entity,
+                root_path: resolved_path.clone(),
+            })
+        });
 
         // Skip inactive prims
         if let Ok(Some(val)) = reader.try_get(&sdf_path, "active") {
@@ -617,15 +694,35 @@ fn instantiate_usd_prim(
             // collider-child prims (e.g. Chassis) as RigidBody::Static.
             // Bevy's relationship system fans the reverse `Children`
             // edge from ChildOf automatically.
-            if let Some(LoadIntoGrid(grid)) = load_into_grid {
-                commands.spawn((
-                    base_components,
-                    CellCoord::default(),
-                    lunco_core::GridAnchor,
-                    ChildOf(*grid),
-                ));
-            } else {
-                commands.spawn((base_components, ChildOf(entity)));
+            //
+            // `UsdInstanceMember` (when present) must ALSO be in this atomic
+            // bundle: the `on_usd_prim_added` observer reads it to decide the
+            // child's identity regime, so a later `insert` would race the
+            // observer and let the child take a colliding `Content` id.
+            match (load_into_grid, &child_member) {
+                (Some(LoadIntoGrid(grid)), Some(member)) => {
+                    commands.spawn((
+                        base_components,
+                        CellCoord::default(),
+                        lunco_core::GridAnchor,
+                        ChildOf(*grid),
+                        member.clone(),
+                    ));
+                }
+                (Some(LoadIntoGrid(grid)), None) => {
+                    commands.spawn((
+                        base_components,
+                        CellCoord::default(),
+                        lunco_core::GridAnchor,
+                        ChildOf(*grid),
+                    ));
+                }
+                (None, Some(member)) => {
+                    commands.spawn((base_components, ChildOf(entity), member.clone()));
+                }
+                (None, None) => {
+                    commands.spawn((base_components, ChildOf(entity)));
+                }
             }
         }
     }
@@ -644,7 +741,14 @@ fn instantiate_usd_prim(
 fn on_usd_prim_added(
     trigger: On<Add, UsdPrimPath>,
     q: Query<
-        (&UsdPrimPath, Option<&Visibility>, Option<&Transform>, Option<&LoadIntoGrid>),
+        (
+            &UsdPrimPath,
+            Option<&Visibility>,
+            Option<&Transform>,
+            Option<&LoadIntoGrid>,
+            Has<UsdInstanceRoot>,
+            Option<&UsdInstanceMember>,
+        ),
         Without<UsdVisualSynced>,
     >,
     mut commands: Commands,
@@ -654,7 +758,7 @@ fn on_usd_prim_added(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let entity = trigger.entity;
-    let Ok((prim_path, vis, tf, load_into)) = q.get(entity) else { return; };
+    let Ok((prim_path, vis, tf, load_into, is_instance_root, member)) = q.get(entity) else { return; };
 
     if stages.get(&prim_path.stage_handle).is_none() {
         commands.entity(entity).insert(UsdAwaitingStage);
@@ -667,6 +771,8 @@ fn on_usd_prim_added(
         vis,
         tf,
         load_into,
+        is_instance_root,
+        member,
         &mut commands,
         &stages,
         &asset_server,
@@ -693,7 +799,15 @@ fn on_usd_prim_added(
 pub fn sync_usd_visuals(
     mut ev: MessageReader<AssetEvent<UsdStageAsset>>,
     q: Query<
-        (Entity, &UsdPrimPath, Option<&Visibility>, Option<&Transform>, Option<&LoadIntoGrid>),
+        (
+            Entity,
+            &UsdPrimPath,
+            Option<&Visibility>,
+            Option<&Transform>,
+            Option<&LoadIntoGrid>,
+            Has<UsdInstanceRoot>,
+            Option<&UsdInstanceMember>,
+        ),
         (With<UsdAwaitingStage>, Without<UsdVisualSynced>),
     >,
     mut commands: Commands,
@@ -711,7 +825,7 @@ pub fn sync_usd_visuals(
     }
     if loaded.is_empty() { return; }
 
-    for (entity, prim_path, vis, tf, load_into) in q.iter() {
+    for (entity, prim_path, vis, tf, load_into, is_instance_root, member) in q.iter() {
         if loaded.iter().any(|id| prim_path.stage_handle.id() == *id) {
             commands.entity(entity).remove::<UsdAwaitingStage>();
             instantiate_usd_prim(
@@ -720,6 +834,8 @@ pub fn sync_usd_visuals(
                 vis,
                 tf,
                 load_into,
+                is_instance_root,
+                member,
                 &mut commands,
                 &stages,
                 &asset_server,
@@ -727,6 +843,45 @@ pub fn sync_usd_visuals(
                 &mut materials,
             );
         }
+    }
+}
+
+/// Upgrades parked runtime-instance descendants (gap G2/B.1) from their
+/// placeholder [`lunco_core::Provenance::Local`] to a deterministic
+/// [`lunco_core::Provenance::Derived`] once their instance root has been
+/// allocated a [`lunco_core::GlobalEntityId`].
+///
+/// The loader parks each descendant the instant it is instantiated — the root
+/// id is not minted yet at that point. Here we read the root's (authoritative
+/// on the server, replicated on clients) id and the member's prim path to mint
+/// `Derived{ parent: root_id, role: <path relative to root> }`. Two spawns of
+/// the same asset have distinct root ids, so their descendants get distinct
+/// ids; and because `derive_id` is a pure function of `(parent, role)`, every
+/// peer computes the same id with zero coordination.
+///
+/// Convergence is at most one frame behind the root's id allocation: the member
+/// stays parked (`Local` is a no-op in `assign_global_entity_ids`, so it is
+/// never given a colliding auto-allocated id) until this runs, after which the
+/// same-frame `assign_global_entity_ids` (PostUpdate) derives the real id.
+/// `UsdInstanceMember` is removed on upgrade so each member resolves once.
+fn resolve_usd_instance_identities(
+    mut commands: Commands,
+    members: Query<
+        (Entity, &UsdInstanceMember, &UsdPrimPath),
+        Without<lunco_core::GlobalEntityId>,
+    >,
+    roots: Query<&lunco_core::GlobalEntityId>,
+) {
+    for (entity, member, prim_path) in members.iter() {
+        let Ok(root_gid) = roots.get(member.root) else { continue };
+        let role = instance_role(&member.root_path, &prim_path.path);
+        commands
+            .entity(entity)
+            .insert(lunco_core::Provenance::Derived {
+                parent: root_gid.get(),
+                role,
+            })
+            .remove::<UsdInstanceMember>();
     }
 }
 
@@ -1313,5 +1468,90 @@ pub fn reveal_placeholder_on_failure(
 }
 
 
-// [Removed faulty tests]
+#[cfg(test)]
+mod instance_identity_tests {
+    //! Gap G2/B.1: descendants of a runtime-spawned USD instance must derive a
+    //! hierarchical identity from the instance root, so two spawns of the same
+    //! asset (identical composed prim paths) don't collide.
+    use super::*;
+    use lunco_core::{identity::derive_id, GlobalEntityId, Provenance};
+
+    #[test]
+    fn role_is_path_relative_to_root() {
+        assert_eq!(instance_role("/SolarPanel", "/SolarPanel/Frame"), "Frame");
+        assert_eq!(instance_role("/SolarPanel", "/SolarPanel/Frame/Bolt"), "Frame/Bolt");
+        // Prefix mismatch → fall back to the full (slash-trimmed) path.
+        assert_eq!(instance_role("/SolarPanel", "/Other/Frame"), "Other/Frame");
+        // Root itself (degenerate) → non-empty fallback, never "".
+        assert_eq!(instance_role("/SolarPanel", "/SolarPanel"), "SolarPanel");
+    }
+
+    /// The core regression: two instances of the SAME asset compose identical
+    /// prim paths, so the same role string — yet distinct root ids must yield
+    /// distinct descendant ids. Drives the real resolver system.
+    #[test]
+    fn two_instances_of_same_asset_get_distinct_descendant_ids() {
+        let mut app = App::new();
+
+        // Two instance roots, each pinned to a unique (replicated) id.
+        let root_a = app.world_mut().spawn(GlobalEntityId::from_raw(1001)).id();
+        let root_b = app.world_mut().spawn(GlobalEntityId::from_raw(2002)).id();
+
+        // A descendant of each — identical asset-local path "/Rover/Wheel_FL".
+        let spawn_member = |app: &mut App, root: Entity| {
+            app.world_mut()
+                .spawn((
+                    UsdInstanceMember { root, root_path: "/Rover".into() },
+                    UsdPrimPath { stage_handle: Handle::default(), path: "/Rover/Wheel_FL".into() },
+                ))
+                .id()
+        };
+        let wheel_a = spawn_member(&mut app, root_a);
+        let wheel_b = spawn_member(&mut app, root_b);
+
+        app.world_mut()
+            .run_system_cached(resolve_usd_instance_identities)
+            .unwrap();
+
+        let pa = app.world().get::<Provenance>(wheel_a).cloned().unwrap();
+        let pb = app.world().get::<Provenance>(wheel_b).cloned().unwrap();
+
+        // Hierarchical: same role, different parent.
+        assert_eq!(pa, Provenance::Derived { parent: 1001, role: "Wheel_FL".into() });
+        assert_eq!(pb, Provenance::Derived { parent: 2002, role: "Wheel_FL".into() });
+
+        // The whole point: the derived ids are distinct (no collision) and
+        // deterministic.
+        let id_a = derive_id(&pa).unwrap();
+        let id_b = derive_id(&pb).unwrap();
+        assert_ne!(id_a, id_b, "two instances must not collide");
+        assert_eq!(derive_id(&pa).unwrap(), id_a, "derive_id is deterministic");
+
+        // Membership consumed → each member resolves exactly once.
+        assert!(app.world().get::<UsdInstanceMember>(wheel_a).is_none());
+    }
+
+    /// A member whose root has no id yet stays parked (no premature/colliding
+    /// id), so the upgrade is correctly deferred to a later frame.
+    #[test]
+    fn member_waits_for_root_id() {
+        let mut app = App::new();
+        let root = app.world_mut().spawn_empty().id(); // no GlobalEntityId yet
+        let member = app
+            .world_mut()
+            .spawn((
+                UsdInstanceMember { root, root_path: "/Rover".into() },
+                UsdPrimPath { stage_handle: Handle::default(), path: "/Rover/Wheel_FL".into() },
+            ))
+            .id();
+
+        app.world_mut()
+            .run_system_cached(resolve_usd_instance_identities)
+            .unwrap();
+
+        // Still parked: no Derived stamped, membership retained for retry.
+        assert!(app.world().get::<Provenance>(member).is_none());
+        assert!(app.world().get::<UsdInstanceMember>(member).is_some());
+    }
+}
 

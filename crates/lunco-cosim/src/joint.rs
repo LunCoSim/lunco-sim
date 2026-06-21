@@ -1,141 +1,129 @@
-//! Joint backend — a revolute joint exposed as a co-simulation model.
+//! Avian revolute joints exposed as co-simulation ports (the **joint** half of
+//! the avian backend; [`crate::avian`] is the body half).
 //!
-//! A physics joint is just another model with named ports: a revolute joint
-//! has one rotational degree of freedom, so it exposes a single port `angle`
-//! in **both** directions —
+//! A revolute joint has one rotational DOF, so it exposes a single port `angle`
+//! in **both** directions:
 //!
 //! | Port    | Direction | Meaning                                          |
 //! |---------|-----------|--------------------------------------------------|
 //! | `angle` | `In`      | commanded target angle (rad) — drives the motor  |
 //! | `angle` | `Out`     | measured current angle (rad) — read back by wires|
 //!
-//! This mirrors [`crate::AvianSim`]: the joint is an engine-native backend, so
-//! it auto-exposes its ports with **no USD authoring** (an observer attaches
-//! [`JointSim`] to every [`avian3d::prelude::RevoluteJoint`], exactly like
-//! [`crate::on_add_rigid_body`] attaches `AvianSim` to every `RigidBody`). A
-//! USD/Modelica connection simply wires *to* `</Joint>.angle` — the FMI/SSP
-//! contract — and the backend realizes it.
-//!
 //! ## Realization
 //!
-//! The joint is the connector: [`apply_joint_drives`] feeds the commanded
-//! `angle` into the joint's own [`avian3d::prelude::AngularMotor`]
-//! (`target_position`, position control), so Avian's solver rotates the bodies
-//! about the hinge. This is **not** a `Transform` write — the joint drives
-//! itself, and it works for dynamic bodies (a kinematic-pose hack is not
-//! needed because avian 0.6.1 has a real angular position motor).
+//! The joint is the connector. The `In` port's write **drives the joint's own
+//! [`avian3d::prelude::AngularMotor`]** (`target_position`, position control), so
+//! avian's solver rotates the bodies about the hinge — not a `Transform` write,
+//! and it works for dynamic bodies. The `Out` port **measures** the current
+//! relative angle about the hinge axis on demand (the twist of `body2` relative
+//! to `body1`), so the realized DOF flows back through wires like any other
+//! output.
 //!
-//! [`read_joint_outputs`] measures the current relative angle about the hinge
-//! axis after the physics step and publishes it to the `Out` port, so the
-//! measured DOF flows back through wires like any other model output.
+//! ## Driven only when wired
+//!
+//! Crucially, the motor is touched **only when a wire targets `angle`** — the
+//! write closure runs solely from the propagation master. An un-wired revolute
+//! joint (e.g. a rover wheel driven by `lunco_hardware::MotorActuator`'s velocity
+//! motor) is left entirely alone, so the two never fight over `joint.motor`.
 
-use std::collections::HashMap;
-
-use avian3d::prelude::{MotorModel, Rotation, RevoluteJoint};
+use avian3d::prelude::{MotorModel, RevoluteJoint, Rotation};
 use bevy::prelude::*;
+
+use crate::connection::{PortDirection, PortType};
+use crate::ports::{AvianGroup, AvianPort};
 
 /// The port name a revolute joint exposes in both directions.
 pub const JOINT_ANGLE_PORT: &str = "angle";
 
-/// Maximum torque (N·m) the auto-exposed joint motor may apply to reach the
-/// commanded angle. Generous so the joint holds its target against gravity for
-/// the structures we drive (masts, panels); tune per-joint later if needed.
+/// Maximum torque (N·m) the joint motor may apply to reach the commanded angle.
+/// Generous so the joint holds its target against gravity for the structures we
+/// drive (masts, panels); tune per-joint later if needed.
 const JOINT_MOTOR_MAX_TORQUE: f64 = 1.0e8;
 
-/// Motor model for the auto-exposed joint drive.
+/// Motor model for the joint drive.
 ///
 /// `SpringDamper`, slightly **overdamped** (`damping_ratio > 1.0`). avian's
 /// `MotorModel::DEFAULT` (5 Hz, ζ=1.0) overshoots ~40% on a hard step under
 /// XPBD substepping (effective damping drops below nominal — measured live), so
-/// we overdamp to track without overshoot. The frequency sets how fast the
-/// joint chases its setpoint; ~3 Hz settles in well under a second while
-/// staying smooth for the slow setpoints our Modelica controllers emit.
+/// we overdamp to track without overshoot. The frequency sets how fast the joint
+/// chases its setpoint; ~3 Hz settles in well under a second while staying smooth
+/// for the slow setpoints our Modelica controllers emit.
 const JOINT_MOTOR_MODEL: MotorModel = MotorModel::SpringDamper {
     frequency: 3.0,
     damping_ratio: 2.0,
 };
 
-/// Co-simulation marker for a revolute joint: the joint's `angle` DOF as named
-/// `In`/`Out` ports.
+/// The revolute-joint port group: measured `angle` out, commanded `angle` in.
 ///
-/// Auto-attached by [`on_add_revolute_joint`]. The maps *are* the live port
-/// table (see [`crate::ports`]): `inputs["angle"]` is the commanded target,
-/// `outputs["angle"]` is the measured current angle.
-#[derive(Component, Debug, Clone, Reflect)]
-#[reflect(Component)]
-pub struct JointSim {
-    /// Input ports keyed by name (`angle` = commanded target, rad).
-    pub inputs: HashMap<String, f64>,
-    /// Output ports keyed by name (`angle` = measured current, rad).
-    pub outputs: HashMap<String, f64>,
+/// Gated on [`RevoluteJoint`] presence. The `Out` port reads the measured twist;
+/// the `In` port reads the current motor setpoint and writes drive the motor.
+pub const REVOLUTE_JOINT_GROUP: AvianGroup = AvianGroup {
+    present: |w, e| w.get::<RevoluteJoint>(e).is_some(),
+    ports: &[
+        AvianPort {
+            name: JOINT_ANGLE_PORT,
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(read_measured_angle),
+            write: None,
+        },
+        AvianPort {
+            name: JOINT_ANGLE_PORT,
+            dir: PortDirection::In,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<RevoluteJoint>(e).map(|j| j.motor.target_position)),
+            write: Some(write_motor_angle),
+        },
+    ],
+};
+
+/// Measured angle (`Out`): the twist of `body2`'s orientation relative to
+/// `body1` about the hinge axis. Reads avian's authoritative [`Rotation`]
+/// (populated by `Writeback`), so during the next tick's propagation it reflects
+/// the physics step that just completed.
+fn read_measured_angle(world: &World, entity: Entity) -> Option<f64> {
+    let j = world.get::<RevoluteJoint>(entity)?;
+    let r1 = world.get::<Rotation>(j.body1)?;
+    let r2 = world.get::<Rotation>(j.body2)?;
+    let axis = j.hinge_axis.as_vec3();
+    Some(twist_angle(dquat_to_quat(r1.0), dquat_to_quat(r2.0), axis) as f64)
 }
 
-impl Default for JointSim {
-    fn default() -> Self {
-        let mut inputs = HashMap::default();
-        inputs.insert(JOINT_ANGLE_PORT.to_string(), 0.0);
-        let mut outputs = HashMap::default();
-        outputs.insert(JOINT_ANGLE_PORT.to_string(), 0.0);
-        Self { inputs, outputs }
+/// Commanded angle (`In`): drive the joint's angular motor to `value` via
+/// position control. Returns `true` (the port exists) even for a non-finite
+/// command, which is ignored as a transient rather than written.
+fn write_motor_angle(world: &mut World, entity: Entity, value: f64) -> bool {
+    let Some(mut j) = world.get_mut::<RevoluteJoint>(entity) else {
+        return false;
+    };
+    if !value.is_finite() {
+        return true;
     }
+    j.motor.enabled = true;
+    j.motor.target_position = value;
+    j.motor.target_velocity = 0.0;
+    j.motor.motor_model = JOINT_MOTOR_MODEL;
+    if j.motor.max_torque <= 0.0 {
+        j.motor.max_torque = JOINT_MOTOR_MAX_TORQUE;
+    }
+    true
 }
 
-/// Observer: auto-adds [`JointSim`] to any entity that gets a
-/// [`avian3d::prelude::RevoluteJoint`].
-///
-/// This makes every revolute joint a first-class co-simulation model whose
-/// `angle` can be wired to/from any other model, with no USD port declaration —
-/// the engine-exposed-var precedent set by [`crate::on_add_rigid_body`].
-pub fn on_add_revolute_joint(trigger: On<Add, RevoluteJoint>, mut commands: Commands) {
-    commands.entity(trigger.entity).try_insert(JointSim::default());
-}
-
-/// Per-tick consumer: drives each joint's angular motor to the commanded
-/// `inputs["angle"]`.
-///
-/// Position control through the joint's own [`AngularMotor`] — the joint is the
-/// connector, so the solver realizes the angle by rotating the bodies about the
-/// hinge. No `Transform` write, works for dynamic bodies.
-pub fn apply_joint_drives(mut q: Query<(&JointSim, &mut RevoluteJoint)>) {
-    for (sim, mut joint) in &mut q {
-        let Some(&angle) = sim.inputs.get(JOINT_ANGLE_PORT) else {
-            continue;
-        };
-        if !angle.is_finite() {
-            continue;
+/// First entity in `root`'s subtree carrying a [`RevoluteJoint`] (the joint that
+/// exposes the `angle` port). Selection targets the logical root, but the joint
+/// prim is usually nested (e.g. `/SolarTower/Hinge`), so the inspector resolves
+/// it through here. Keeps the avian-type coupling inside this crate.
+pub fn joint_angle_holder(world: &mut World, root: Entity) -> Option<Entity> {
+    let mut stack = vec![root];
+    while let Some(e) = stack.pop() {
+        if world.get::<RevoluteJoint>(e).is_some() {
+            return Some(e);
         }
-        joint.motor.enabled = true;
-        joint.motor.target_position = angle;
-        joint.motor.target_velocity = 0.0;
-        joint.motor.motor_model = JOINT_MOTOR_MODEL;
-        if joint.motor.max_torque <= 0.0 {
-            joint.motor.max_torque = JOINT_MOTOR_MAX_TORQUE;
+        if let Some(children) = world.get::<Children>(e) {
+            stack.extend(children.iter());
         }
     }
-}
-
-/// After the physics step: publish each joint's measured current angle to its
-/// `Out` port, so wires can read the realized DOF.
-///
-/// The measured angle is the twist of `body2`'s orientation relative to
-/// `body1` about the hinge axis (frame anchors are identity in our authored
-/// joints, so the local hinge axis is the body-local axis). Reads avian's
-/// authoritative [`Rotation`] — populated by `Writeback` this same
-/// `FixedPostUpdate` — rather than `GlobalTransform`, which Bevy only
-/// propagates later in `PostUpdate` and would be stale here.
-pub fn read_joint_outputs(
-    mut q_joint: Query<(&mut JointSim, &RevoluteJoint)>,
-    q_rot: Query<&Rotation>,
-) {
-    for (mut sim, joint) in &mut q_joint {
-        let (Ok(r1), Ok(r2)) = (q_rot.get(joint.body1), q_rot.get(joint.body2)) else {
-            continue;
-        };
-        let axis = joint.hinge_axis.as_vec3();
-        let angle = twist_angle(dquat_to_quat(r1.0), dquat_to_quat(r2.0), axis);
-        sim.outputs
-            .insert(JOINT_ANGLE_PORT.to_string(), angle as f64);
-    }
+    None
 }
 
 /// Avian's `Rotation` wraps a `DQuat` (f64 build); narrow to a glam `Quat`

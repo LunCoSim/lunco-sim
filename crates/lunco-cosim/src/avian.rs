@@ -1,152 +1,155 @@
-//! Avian physics as a co-simulation model.
+//! Avian rigid bodies exposed as co-simulation ports (the **body** half of the
+//! avian backend; [`crate::joint`] is the joint half).
 //!
-//! Avian is treated identically to any other simulation model:
-//! it has inputs (forces) and outputs (state).
+//! Avian's components are foreign types we don't own, so they are exposed
+//! through a declarative port spec ([`crate::ports::AvianGroup`]) rather than a
+//! mirror component per kind. A rigid body publishes its position/velocity as
+//! read-only outputs and accepts forces as inputs — all addressing avian's own
+//! `Position`/`LinearVelocity`/`Forces` directly, with no `HashMap` mirror and
+//! no per-tick sync system to keep a copy in step.
+//!
+//! Force inputs are an **additive sink**: the wire write lands in
+//! [`PendingForces`] (the propagation master has already summed all wires into
+//! that one value), and the single generic [`apply_pending_forces`] system
+//! applies it through avian's query-shaped `Forces` API and clears it each tick.
+//! That one system is the only per-tick avian system left.
 
+use avian3d::prelude::{Forces, LinearVelocity, Position, RigidBody, WriteRigidBodyForces};
+use bevy::math::DVec3;
 use bevy::prelude::*;
-use avian3d::prelude::*;
-use std::collections::HashMap;
 
-/// Avian physics as a co-simulation model.
+use crate::connection::{PortDirection, PortType};
+use crate::ports::{AvianGroup, AvianPort};
+
+/// Per-entity force accumulator written by `force_*` input ports and drained
+/// into avian each physics tick by [`apply_pending_forces`].
 ///
-/// Auto-added to any entity with a [`avian3d::prelude::RigidBody`]. Exposes Avian state
-/// as named outputs and accepts forces as named inputs.
-///
-/// ## Input Connectors
-///
-/// | Name       | Effect                                  |
-/// |------------|-----------------------------------------|
-/// | `force_x`  | `Forces::apply_force(DVec3::X * value)` |
-/// | `force_y`  | `Forces::apply_force(DVec3::Y * value)` |
-/// | `force_z`  | `Forces::apply_force(DVec3::Z * value)` |
-/// | `torque_x` | `Forces::apply_torque(DVec3::X * value)`|
-/// | `torque_y` | `Forces::apply_torque(DVec3::Y * value)`|
-/// | `torque_z` | `Forces::apply_torque(DVec3::Z * value)`|
-///
-/// ## Output Connectors
-///
-/// | Name           | Source                            |
-/// |----------------|-----------------------------------|
-/// | `position_x`   | `Position.0.x`                   |
-/// | `position_y`   | `Position.0.y`                    |
-/// | `position_z`   | `Position.0.z`                    |
-/// | `velocity_x`   | `LinearVelocity.0.x`             |
-/// | `velocity_y`   | `LinearVelocity.0.y`             |
-/// | `velocity_z`   | `LinearVelocity.0.z`             |
-/// | `height`       | Alias for `position_y`           |
-///
-/// ## Manual Stepping
-///
-/// Avian can be stepped manually instead of relying on Bevy's fixed schedule:
-///
-/// ```rust,ignore
-/// world.resource_mut::<Time<Physics>>().advance_by(dt);
-/// world.try_schedule_scope(PhysicsSchedule, |world, schedule| {
-///     schedule.run(world);
-/// });
-/// ```
-///
-/// This lets the co-simulation master control the exact step order.
-#[derive(Component, Debug, Clone, Reflect)]
-#[reflect(Component)]
-pub struct AvianSim {
-    /// Input connectors — forces/torques from other models.
-    ///
-    /// Applied during [`systems::apply_forces::apply_sim_forces`]
-    /// before the Avian physics step.
-    pub inputs: HashMap<String, f64>,
-    /// Output connectors — position, velocity, derived values.
-    ///
-    /// Read by [`systems::propagate::propagate_connections`] every frame.
-    pub outputs: HashMap<String, f64>,
+/// Replaces the old `AvianSim.inputs` mirror map. A wire to `force_y` sets `f.y`
+/// (already summed across wires by the propagation master); next tick the
+/// summed value is rewritten. Inserted lazily on the first force write, so a
+/// body that is never force-driven never carries it.
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component, Default)]
+pub struct PendingForces {
+    /// World-space linear force (N) to apply this tick.
+    pub f: DVec3,
 }
 
-impl Default for AvianSim {
-    fn default() -> Self {
-        Self {
-            inputs: HashMap::default(),
-            outputs: HashMap::default(),
-        }
+/// Ensure `entity` carries [`PendingForces`], then mutate it. The `force_*`
+/// write closures use this so an un-driven body stays clean until first written.
+fn with_pending(world: &mut World, entity: Entity, set: impl FnOnce(&mut PendingForces)) -> bool {
+    if world.get::<PendingForces>(entity).is_none() {
+        world.entity_mut(entity).insert(PendingForces::default());
+    }
+    if let Some(mut pf) = world.get_mut::<PendingForces>(entity) {
+        set(&mut pf);
+        true
+    } else {
+        false
     }
 }
 
-impl AvianSim {
-    /// Input connector names for forces.
-    pub const FORCE_INPUTS: &'static [&'static str] = &["force_x", "force_y", "force_z"];
-    /// Input connector names for torques.
-    pub const TORQUE_INPUTS: &'static [&'static str] = &["torque_x", "torque_y", "torque_z"];
-    /// Output connector names for positions.
-    pub const POSITION_OUTPUTS: &'static [&'static str] = &["position_x", "position_y", "position_z"];
-    /// Output connector names for velocities.
-    pub const VELOCITY_OUTPUTS: &'static [&'static str] = &["velocity_x", "velocity_y", "velocity_z"];
-    /// Alias output connector names.
-    pub const ALIAS_OUTPUTS: &'static [&'static str] = &["height"];
+/// The rigid-body port group: position/velocity outputs + force inputs.
+///
+/// Gated on [`RigidBody`] presence. Position ports resolve from [`Position`]
+/// (present on every body); velocity ports from [`LinearVelocity`] (dynamic
+/// bodies only — absent on a kinematic body, so those ports simply don't list).
+pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
+    present: |w, e| w.get::<RigidBody>(e).is_some(),
+    ports: &[
+        AvianPort {
+            name: "position_x",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.x)),
+            write: None,
+        },
+        AvianPort {
+            name: "position_y",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.y)),
+            write: None,
+        },
+        AvianPort {
+            name: "position_z",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.z)),
+            write: None,
+        },
+        // `height` is the conventional alias for `position_y`.
+        AvianPort {
+            name: "height",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.y)),
+            write: None,
+        },
+        AvianPort {
+            name: "velocity_x",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.x)),
+            write: None,
+        },
+        AvianPort {
+            name: "velocity_y",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.y)),
+            write: None,
+        },
+        AvianPort {
+            name: "velocity_z",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.z)),
+            write: None,
+        },
+        // Force inputs: additive sink into `PendingForces`. Reading returns the
+        // value pending this tick (0 once applied/cleared).
+        AvianPort {
+            name: "force_x",
+            dir: PortDirection::In,
+            port_type: PortType::Force,
+            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f.x))),
+            write: Some(|w, e, v| with_pending(w, e, |pf| pf.f.x = v)),
+        },
+        AvianPort {
+            name: "force_y",
+            dir: PortDirection::In,
+            port_type: PortType::Force,
+            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f.y))),
+            write: Some(|w, e, v| with_pending(w, e, |pf| pf.f.y = v)),
+        },
+        AvianPort {
+            name: "force_z",
+            dir: PortDirection::In,
+            port_type: PortType::Force,
+            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f.z))),
+            write: Some(|w, e, v| with_pending(w, e, |pf| pf.f.z = v)),
+        },
+    ],
+};
 
-    /// Initialize output connectors with zeros.
-    pub fn init_outputs(&mut self) {
-        for name in Self::POSITION_OUTPUTS {
-            self.outputs.insert(name.to_string(), 0.0);
-        }
-        for name in Self::VELOCITY_OUTPUTS {
-            self.outputs.insert(name.to_string(), 0.0);
-        }
-        for name in Self::ALIAS_OUTPUTS {
-            self.outputs.insert(name.to_string(), 0.0);
-        }
-    }
-
-    /// Declare the force input connectors (value 0).
-    ///
-    /// Inputs are a model's public interface: declaring them up front lets the
-    /// wiring fabric's strict resolver ([`crate::ports::write_port`]) find the
-    /// slot and report a wire to any *un*declared input as dangling — instead of
-    /// silently creating it. Only the connectors [`apply_sim_forces`] actually
-    /// consumes are declared (torque is documented but not yet applied, so it is
-    /// intentionally left undeclared — a wire to it is a real error worth
-    /// surfacing).
-    pub fn init_inputs(&mut self) {
-        for name in Self::FORCE_INPUTS {
-            self.inputs.insert(name.to_string(), 0.0);
-        }
-    }
-
-    /// Read current Avian state into output connectors.
-    ///
-    /// Reads from [`Position`], [`LinearVelocity`] and derived values.
-    pub fn read_state(
-        &mut self,
-        position: Option<&Position>,
-        linear_velocity: Option<&LinearVelocity>,
-    ) {
-        if let Some(pos) = position {
-            self.outputs.insert("position_x".into(), pos.0.x);
-            self.outputs.insert("position_y".into(), pos.0.y);
-            self.outputs.insert("position_z".into(), pos.0.z);
-            self.outputs.insert("height".into(), pos.0.y); // alias
-        }
-        if let Some(lin_vel) = linear_velocity {
-            self.outputs.insert("velocity_x".into(), lin_vel.0.x);
-            self.outputs.insert("velocity_y".into(), lin_vel.0.y);
-            self.outputs.insert("velocity_z".into(), lin_vel.0.z);
-        }
-    }
-
-    /// Take accumulated force inputs, zeroing the slots.
-    ///
-    /// Returns [fx, fy, fz] and resets the values to 0 **without removing the
-    /// keys** — the force inputs are declared ports ([`init_inputs`]) that must
-    /// persist so next tick's [`propagate_connections`] can write them again
-    /// through the strict resolver. (Removing them, as the old drain did, would
-    /// make the strict write fail the following tick.)
-    pub fn take_inputs(&mut self) -> [f64; 3] {
-        let mut take = |key: &str| match self.inputs.get_mut(key) {
-            Some(slot) => {
-                let v = *slot;
-                *slot = 0.0;
-                v
+/// Apply each entity's accumulated [`PendingForces`] into avian, then clear it.
+///
+/// The single per-tick avian system: it bridges the `force_*` ports (which land
+/// in [`PendingForces`]) to avian's query-shaped `Forces` writer. Avian clears
+/// non-constant forces each step, so re-applying the freshly summed value every
+/// tick is correct. Runs in [`crate::systems::apply_forces::CosimSet::ApplyForces`]
+/// (after propagation).
+pub fn apply_pending_forces(
+    mut q_pending: Query<(Entity, &mut PendingForces)>,
+    mut forces: Query<Forces>,
+) {
+    for (e, mut pf) in &mut q_pending {
+        if pf.f != DVec3::ZERO {
+            if let Ok(mut f) = forces.get_mut(e) {
+                f.apply_force(pf.f);
             }
-            None => 0.0,
-        };
-        [take("force_x"), take("force_y"), take("force_z")]
+        }
+        pf.f = DVec3::ZERO;
     }
 }

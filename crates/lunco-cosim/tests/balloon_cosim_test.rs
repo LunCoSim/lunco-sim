@@ -25,20 +25,19 @@ use bevy::time::TimePlugin;
 use std::time::Duration;
 
 use avian3d::prelude::{Position, RigidBody};
-use lunco_cosim::{CoSimPlugin, SimComponent, SimConnection, AvianSim};
+use lunco_cosim::{CoSimPlugin, PendingForces, SimComponent, SimConnection};
 
-/// Running max |force_y| seen in `AvianSim.inputs` after propagation, before the
-/// `apply_sim_forces` drain. The witness for "the netForce → force_y wire routed".
+/// Running max |force_y| seen in `PendingForces` after propagation, before the
+/// `apply_pending_forces` drain. The witness for "the netForce → force_y wire routed".
 #[derive(Resource, Default)]
 struct ForceYWitness(f64);
 
-/// Captures `AvianSim.inputs["force_y"]` between propagate and the force drain.
-fn capture_force_y(q: Query<&AvianSim>, mut witness: ResMut<ForceYWitness>) {
-    for avian in &q {
-        if let Some(&fy) = avian.inputs.get("force_y") {
-            if fy.abs() > witness.0.abs() {
-                witness.0 = fy;
-            }
+/// Captures `PendingForces.f.y` between propagate and the force drain.
+fn capture_force_y(q: Query<&PendingForces>, mut witness: ResMut<ForceYWitness>) {
+    for pf in &q {
+        let fy = pf.f.y;
+        if fy.abs() > witness.0.abs() {
+            witness.0 = fy;
         }
     }
 }
@@ -196,7 +195,6 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
         Transform::from_xyz(0.0, 15.0, 0.0),
         Position::from_xyz(0.0, 15.0, 0.0),
         RigidBody::Dynamic,
-        AvianSim::default(),
         BalloonModelMarker::default(),
     )).id();
 
