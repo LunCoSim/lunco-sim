@@ -365,6 +365,13 @@ pub(crate) fn build_duplicate_source(
         }
         None => source.to_string(),
     };
+    // Keep the `within` clause: it gives the copied body the origin package's
+    // lexical scope (e.g. the `SI` unit alias the MSL examples rely on), which
+    // a top-level lift would lose — `unresolved type reference: 'SI.Angle'`.
+    // The cost is that the copy's real class name is `<origin_pkg>.<new_name>`,
+    // so the run/compile path must dispatch that QUALIFIED name (see
+    // `within_package` + its use in `dispatch_experiment`); dispatching the bare
+    // leaf fails `model not found` in Instantiate.
     match origin_fqn {
         Some(fqn) => {
             let mut parts: Vec<&str> = fqn.split('.').collect();
@@ -378,6 +385,29 @@ pub(crate) fn build_duplicate_source(
         }
         None => renamed,
     }
+}
+
+/// Extract the package named in a leading `within <pkg>;` clause, if present.
+///
+/// A duplicated library class is emitted as `within P; <class>` (see
+/// [`build_duplicate_source`]), so rumoca compiles it as `P.<class>`. The
+/// run/compile dispatch must qualify the target class with `P` or instantiate
+/// fails `model not found`. Returns `None` for top-level sources (no `within`).
+pub(crate) fn within_package(source: &str) -> Option<String> {
+    for raw in source.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        let rest = line.strip_prefix("within")?;
+        // `within` must be followed by whitespace (not e.g. `withinFoo`).
+        if !rest.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let pkg = rest.trim().trim_end_matches(';').trim();
+        return (!pkg.is_empty()).then(|| pkg.to_string());
+    }
+    None
 }
 
 #[cfg(test)]
@@ -451,6 +481,8 @@ end Foo;
             out.starts_with("within AnnotatedRocketStage;"),
             "within clause prepended"
         );
+        // The qualified run name the dispatch must use (within + copy name).
+        assert_eq!(within_package(&out).as_deref(), Some("AnnotatedRocketStage"));
     }
 
     #[test]

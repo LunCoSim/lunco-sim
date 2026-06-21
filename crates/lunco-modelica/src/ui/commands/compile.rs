@@ -1541,6 +1541,21 @@ fn dispatch_experiment(
             }
         };
 
+        // A duplicated library class (OpenExample → editable copy) is emitted
+        // with a `within P;` header, so rumoca compiles it as `P.<class>`. The
+        // `within` is load-bearing — it gives the copied body the origin
+        // package's import scope (e.g. the `SI` unit alias) — so we can't strip
+        // it. Instead, qualify the run target with `P`: dispatching the bare
+        // leaf fails `model not found` in Instantiate, while `P.<class>`
+        // resolves against the merged session. No-op for top-level scratch
+        // models and for read-only library drills (empty overlay source).
+        let model_name = match crate::document::duplicate::within_package(&source) {
+            Some(pkg) if !model_name.starts_with(&format!("{pkg}.")) => {
+                format!("{pkg}.{model_name}")
+            }
+            _ => model_name,
+        };
+
         let model_ref = lunco_experiments::ModelRef(model_name.clone());
 
         // Snapshot source into the runner so the worker thread / web
@@ -1569,10 +1584,11 @@ fn dispatch_experiment(
         // name, but `experiment_map` is keyed by `c.name` (qualified), so an
         // exact-only lookup would miss the `experiment(...)` annotation and
         // silently fall back to the 1 s default.
+        let model_leaf = model_name.rsplit('.').next().unwrap_or(model_name.as_str());
         let annotation = experiment_map.get(&model_name).or_else(|| {
             experiment_map
                 .iter()
-                .find(|(k, _)| k.rsplit('.').next() == Some(model_name.as_str()))
+                .find(|(k, _)| k.rsplit('.').next() == Some(model_leaf))
                 .map(|(_, v)| v)
         });
         if let Some(exp) = annotation {
