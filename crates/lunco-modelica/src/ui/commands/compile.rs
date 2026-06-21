@@ -1541,7 +1541,7 @@ fn dispatch_experiment(
             }
         };
 
-        // A duplicated library class (OpenExample → editable copy) is emitted
+        // A duplicated library class (OpenClass with Duplicate → editable copy) is emitted
         // with a `within P;` header, so rumoca compiles it as `P.<class>`. The
         // `within` is load-bearing — it gives the copied body the origin
         // package's import scope (e.g. the `SI` unit alias) — so we can't strip

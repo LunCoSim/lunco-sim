@@ -262,7 +262,7 @@ const STATIC_TOOLS = [
   },
   {
     name: 'open_uri',
-    description: 'Unified open command — dispatches on the URI scheme. Accepts `bundled://Filename.mo` (embedded example), `mem://Name` (re-focus existing Untitled tab), a dot-separated qualified Modelica name (`Modelica.Blocks.Examples.PID_Controller`, opened as MSL example), or a filesystem path. Use this in preference to `OpenFile`/`OpenClass`/`OpenExample`.',
+    description: 'Unified open command — dispatches on the URI scheme. Accepts `bundled://Filename.mo` (embedded example), `mem://Name` (re-focus existing Untitled tab), a dot-separated qualified Modelica name (`Modelica.Blocks.Examples.PID_Controller`, opened as MSL example), or a filesystem path. Use this in preference to `OpenFile`/`OpenClass`.',
     inputSchema: {
       type: 'object',
       properties: {

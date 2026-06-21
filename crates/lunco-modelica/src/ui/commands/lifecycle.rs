@@ -67,13 +67,6 @@ pub struct OpenClass {
     pub action: ClassAction,
 }
 
-/// Open (or focus, if already open) an MSL class as a fresh editable
-/// copy.
-#[Command(default)]
-pub struct OpenExample {
-    pub qualified: String,
-}
-
 /// Open the same document in a new tab (split / sibling view).
 #[Command(default)]
 pub struct OpenInNewView {
@@ -746,18 +739,6 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
         ));
 }
 
-#[on_command(OpenExample)]
-pub fn on_open_example(
-    trigger: On<OpenExample>,
-    mut commands: Commands,
-) {
-    let qualified = trigger.event().qualified.clone();
-    commands.trigger(OpenClass {
-        qualified,
-        action: ClassAction::Duplicate { name: String::new() },
-    });
-}
-
 #[on_command(OpenInNewView)]
 pub fn on_open_in_new_view(trigger: On<OpenInNewView>, mut commands: Commands) {
     let doc = trigger.event().doc;
@@ -954,7 +935,13 @@ pub fn on_open(trigger: On<Open>, mut commands: Commands) {
         && !uri.contains('/')
         && !uri.contains('\\');
     if looks_like_qualified_name {
-        commands.trigger(OpenExample { qualified: uri });
+        // A bare qualified name (e.g. `Modelica.Blocks.Examples.PID_Controller`)
+        // is an "open as my editable copy" request — dispatch as a duplicate
+        // with an empty name so the handler derives the default `<short>Copy`.
+        commands.trigger(OpenClass {
+            qualified: uri,
+            action: ClassAction::Duplicate { name: String::new() },
+        });
         return;
     }
 

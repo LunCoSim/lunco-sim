@@ -25,7 +25,7 @@ pub use compile::{
 pub use doc::{Undo, Redo, FormatDocument, SaveActiveDocument, SaveActiveDocumentAs};
 pub use lifecycle::{
     CreateNewScratchModel, DuplicateModelFromReadOnly, DuplicateActiveDoc, OpenClass,
-    OpenExample, OpenInNewView, Open, ClassAction, CloseDialogState, PendingCloseAfterSave,
+    OpenInNewView, Open, ClassAction, CloseDialogState, PendingCloseAfterSave,
     PendingTabCloseScopes, TabCloseScope, GetFile,
 };
 pub use nav::{
@@ -109,7 +109,6 @@ register_commands!(
     plot::on_new_plot_panel,
     lifecycle::on_open,
     lifecycle::on_open_class,
-    lifecycle::on_open_example,
     lifecycle::on_open_file,
     nav::on_pan_canvas,
     util::on_ping,

@@ -90,8 +90,7 @@ them.
 | Command | Params | Purpose |
 |---|---|---|
 | `OpenFile` | `{path}` | Open any `.mo` file from disk into a new tab. Use this for non-MSL examples (`assets/models/*.mo`) — `OpenClass` only works on MSL paths. |
-| `OpenClass` | `{qualified}` | MSL drill-in by qualified name OR (with the open-doc fallback) drill into a class within an already-loaded doc. |
-| `OpenExample` | `{qualified}` | MSL example duplicate-to-workspace. Returns "Could not locate" for non-MSL paths. |
+| `OpenClass` | `{qualified, action?}` | MSL drill-in by qualified name OR (with the open-doc fallback) drill into a class within an already-loaded doc. `action: {Duplicate: {name: ""}}` = open as an editable workspace copy (empty name → derives `<short>Copy`); default `View` = read-only drill-in. |
 | `FormatDocument` | `{doc}` (`0`=active) | Run `rumoca-tool-fmt` on active doc; replaces source via `ReplaceSource`. |
 | `GetFile` | `{path}` | Read file from disk and log contents at INFO. |
 | `InspectActiveDoc` | `{}` | Log parsed AST class tree of active doc — use to diagnose "0 nodes" projections. |
@@ -112,7 +111,7 @@ them.
 ```
 1. Start workbench (run_in_background:true).
 2. Monitor until READY.
-3. OpenFile or OpenExample to load model.
+3. OpenFile or OpenClass to load model.
 4. Wait ~3-5s for rumoca parse + projection (background tasks).
 5. OpenClass or drill action if scoping to a sub-class.
 6. Wait ~3-5s for the post-drill projection to land.
