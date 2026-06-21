@@ -42,8 +42,8 @@ pub fn on_move_component(trigger: On<MoveComponent>, mut commands: Commands) {
             return;
         };
         let class = if ev.class.is_empty() {
-            crate::ui::panels::model_view::drilled_class_for_doc(world, doc_id)
-                .or_else(|| crate::ui::state::detected_name_for(world, doc_id))
+            crate::sim_default::drilled_class_for_doc(world, doc_id)
+                .or_else(|| crate::state::detected_name_for(world, doc_id))
                 .unwrap_or_default()
         } else {
             ev.class.clone()
@@ -101,8 +101,8 @@ pub fn on_add_canvas_plot(trigger: On<AddCanvasPlot>, mut commands: Commands) {
             );
             return;
         }
-        let class = crate::ui::panels::model_view::drilled_class_for_doc(world, doc)
-            .or_else(|| crate::ui::state::detected_name_for(world, doc))
+        let class = crate::sim_default::drilled_class_for_doc(world, doc)
+            .or_else(|| crate::state::detected_name_for(world, doc))
             .unwrap_or_default();
         if class.is_empty() {
             bevy::log::warn!("[AddCanvasPlot] could not resolve target class for doc");

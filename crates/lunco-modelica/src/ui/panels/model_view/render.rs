@@ -5,12 +5,12 @@ use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_workbench::{InstancePanel, Panel, PanelId, PanelSlot};
 
-use super::types::{MODEL_VIEW_KIND, ModelViewMode, TabId, TabRenderContext};
-use super::tabs::ModelTabs;
+use crate::model_tabs_types::{MODEL_VIEW_KIND, ModelViewMode, TabId, TabRenderContext};
+use crate::model_tabs::ModelTabs;
 use super::context::{resolve_tab_target, resolve_tab_title, sync_active_tab_to_doc};
 use crate::ui::panels::code_editor::{CodeEditorPanel, EditorBufferState};
 use crate::ui::panels::canvas_diagram::CanvasDiagramPanel;
-use crate::ui::{CompileState, CompileStates, ModelicaDocumentRegistry};
+use crate::state::{CompileState, CompileStates, ModelicaDocumentRegistry};
 
 pub struct ModelViewPanel {
     code: CodeEditorPanel,
@@ -82,7 +82,7 @@ impl InstancePanel for ModelViewPanel {
 
         ui.separator();
 
-        let tab_read_only = crate::ui::state::read_only_for(world, doc);
+        let tab_read_only = crate::state::read_only_for(world, doc);
         if tab_read_only {
             let mut banner_duplicate_clicked = false;
             egui::Frame::NONE
@@ -196,7 +196,7 @@ fn render_unified_toolbar(
         .unwrap_or_else(|| lunco_theme::Theme::dark().tokens);
     
     let compile_state = world.resource::<CompileStates>().state_of(doc);
-    let is_read_only = crate::ui::state::read_only_for(world, doc);
+    let is_read_only = crate::state::read_only_for(world, doc);
     let compilation_error = world.get_resource::<CompileStates>().and_then(|cs| cs.error_for(doc).map(str::to_string));
     let undo_redo = world.resource::<ModelicaDocumentRegistry>().host(doc).map(|h| (h.can_undo(), h.can_redo(), h.undo_depth(), h.redo_depth()));
 
@@ -426,7 +426,7 @@ fn render_unified_toolbar(
         // Drilled-in pin → tier-ranked simulation root (shared precedence,
         // so the Fast Run popup never disagrees with the Experiments Setup
         // form about which class is the default runnable system).
-        let model_ref = super::context::default_simulation_class(world, doc)
+        let model_ref = crate::sim_default::default_simulation_class(world, doc)
             .map(lunco_experiments::ModelRef);
         if let Some(model_ref) = model_ref {
             // Canvas ⏩ always opens the setup modal — one predictable
@@ -478,7 +478,7 @@ fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
     // within-prefix fallback chain so the docs view doesn't have to
     // re-derive it (and drift from the badge / inspector lookups).
     let (class_name, class_description, info, revisions) = {
-        let drilled = super::context::drilled_class_for_doc(world, doc);
+        let drilled = crate::sim_default::drilled_class_for_doc(world, doc);
         crate::class_metadata::resolve_metadata_for_doc(world, doc, drilled.as_deref())
             .map(|m| {
                 let (info, revs) = m.documentation;

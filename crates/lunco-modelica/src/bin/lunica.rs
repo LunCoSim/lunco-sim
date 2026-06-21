@@ -298,7 +298,7 @@ fn setup_web_workbench(
     mut workbench_state: ResMut<lunco_modelica::ui::WorkbenchState>,
     mut doc_registry: ResMut<lunco_modelica::ui::ModelicaDocumentRegistry>,
     compile_states: ResMut<lunco_modelica::ui::CompileStates>,
-    mut model_tabs: ResMut<lunco_modelica::ui::panels::model_view::ModelTabs>,
+    mut model_tabs: ResMut<lunco_modelica::model_tabs::ModelTabs>,
     mut layout: ResMut<lunco_workbench::WorkbenchLayout>,
     model_info: Res<BundledModelInfo>,
 ) {
@@ -343,7 +343,7 @@ fn setup_web_workbench(
     // Open the model tab so the user lands on the model view.
     let tab_id = model_tabs.ensure_for(doc_id, None);
     layout.open_instance(
-        lunco_modelica::ui::panels::model_view::MODEL_VIEW_KIND,
+        lunco_modelica::model_tabs_types::MODEL_VIEW_KIND,
         tab_id,
     );
 

@@ -172,7 +172,7 @@ pub fn render_pin_header(
 
 pub fn doc_display_name(world: &World, doc: DocumentId) -> String {
     world
-        .get_resource::<crate::ui::ModelicaDocumentRegistry>()
+        .get_resource::<crate::state::ModelicaDocumentRegistry>()
         .and_then(|reg| reg.host(doc))
         .map(|host| host.document().origin().display_name())
         .unwrap_or_else(|| format!("doc#{:?}", doc))

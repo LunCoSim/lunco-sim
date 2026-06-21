@@ -506,12 +506,12 @@ pub(crate) fn place_component(
     // tier-ranked sim candidate); route through the SAME helper so add and
     // view never disagree. First-non-package is only a last resort for docs
     // with no simulatable candidate (where the canvas shows nothing anyway).
-    let class = crate::ui::panels::model_view::context::default_simulation_class(world, doc_id)
+    let class = crate::sim_default::default_simulation_class(world, doc_id)
         .or_else(|| {
             // Fallback to the document's first non-package class, read
             // via the per-doc Index (sees optimistic structural patches
             // and avoids walking the AST every palette click).
-            let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+            let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
             let host = registry.host(doc_id)?;
             host.document()
                 .index()

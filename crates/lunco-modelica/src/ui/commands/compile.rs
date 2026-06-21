@@ -26,7 +26,7 @@ use std::collections::HashMap;
 
 use lunco_core::{Command, on_command, register_commands};
 
-use crate::ui::{CompileStates, ModelicaDocumentRegistry, WorkbenchState};
+use crate::state::{CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 use crate::{ModelicaChannels, ModelicaCommand, ModelicaModel};
 
 use super::{entity_for_doc, resolve_active_doc};
@@ -140,7 +140,7 @@ pub(crate) fn render_fast_run_setup(
     mut egui_ctx: bevy_egui::EguiContexts,
     mut setup: ResMut<FastRunSetupState>,
     mut drafts: ResMut<crate::experiments_runner::ExperimentDrafts>,
-    mut run_targets: ResMut<crate::ui::panels::model_view::RunTargetOverrides>,
+    mut run_targets: ResMut<crate::sim_default::RunTargetOverrides>,
     mut commands: Commands,
 ) {
     let Ok(ctx) = egui_ctx.ctx_mut() else {
@@ -507,7 +507,7 @@ pub(crate) fn render_fast_run_setup(
 pub(crate) fn render_compile_class_picker(
     mut egui_ctx: bevy_egui::EguiContexts,
     mut picker: ResMut<CompileClassPickerState>,
-    mut tabs: ResMut<crate::ui::panels::model_view::ModelTabs>,
+    mut tabs: ResMut<crate::model_tabs::ModelTabs>,
     mut commands: Commands,
 ) {
     let Ok(ctx) = egui_ctx.ctx_mut() else {
@@ -651,7 +651,7 @@ pub fn on_compile_model(
     mut sim_streams: ResMut<crate::SimStreamRegistry>,
     channels: Option<Res<ModelicaChannels>>,
     mut q_models: Query<&mut ModelicaModel>,
-    model_tabs: Res<crate::ui::panels::model_view::ModelTabs>,
+    model_tabs: Res<crate::model_tabs::ModelTabs>,
     mut world_source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
     mut status_bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
 ) {
@@ -1379,7 +1379,7 @@ pub(crate) fn bounds_from_annotation(
     doc: DocumentId,
     model_ref: &lunco_experiments::ModelRef,
 ) -> Option<lunco_experiments::RunBounds> {
-    let reg = world.get_resource::<crate::ui::state::ModelicaDocumentRegistry>()?;
+    let reg = world.get_resource::<crate::state::ModelicaDocumentRegistry>()?;
     let host = reg.host(doc)?;
     let index = host.document().index();
     let class = index
@@ -1453,7 +1453,7 @@ fn dispatch_experiment(
         // models (AnnotatedRocketStage etc.) fail with "no compilable
         // top-level class".
         let (source, filename, candidates, experiment_map) = {
-            let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+            let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
             let host = match registry.host(doc) {
                 Some(h) => h,
                 None => {
@@ -1512,7 +1512,7 @@ fn dispatch_experiment(
             },
             None => {
                 let has_drill =
-                    crate::ui::panels::model_view::drilled_class_for_doc(world, doc).is_some();
+                    crate::sim_default::drilled_class_for_doc(world, doc).is_some();
                 if !has_drill && candidates.len() > 1 {
                     if let Some(mut picker) =
                         world.get_resource_mut::<CompileClassPickerState>()
@@ -1528,7 +1528,7 @@ fn dispatch_experiment(
                     }
                     return None;
                 }
-                match crate::ui::panels::model_view::default_simulation_class(world, doc) {
+                match crate::sim_default::default_simulation_class(world, doc) {
                     Some(c) => c,
                     None => {
                         bevy::log::warn!(
@@ -1775,7 +1775,7 @@ pub fn on_confirm_class_picker(trigger: On<ConfirmClassPicker>, mut commands: Co
         // Pin the drilled class so the re-dispatch resolves directly (mirrors
         // `render_compile_class_picker`'s confirm branch).
         if let Some(mut tabs) =
-            world.get_resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+            world.get_resource_mut::<crate::model_tabs::ModelTabs>()
         {
             for (_, state) in tabs.iter_mut_for_doc(doc) {
                 state.drilled_class = Some(chosen.clone());

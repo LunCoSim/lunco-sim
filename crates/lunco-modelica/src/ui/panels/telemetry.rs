@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 
-use crate::ui::WorkbenchState;
+use crate::state::WorkbenchState;
 use crate::ui::viz::{is_signal_plotted, set_signal_plotted};
 use crate::ModelicaModel;
 
@@ -128,7 +128,7 @@ impl Panel for TelemetryPanel {
             let pinned_entity = world
                 .get_resource::<WorkbenchState>()
                 .and_then(|s| s.selected_entity);
-            let resolved = crate::ui::state::simulator_for(world, doc_id)
+            let resolved = crate::state::simulator_for(world, doc_id)
                 .or(pinned_entity);
             let has = resolved
                 .map(|e| world.get::<ModelicaModel>(e).is_some())
@@ -154,7 +154,7 @@ impl Panel for TelemetryPanel {
             let input_rows: Vec<InputRow> = {
                 let mut sorted: Vec<(String, f64)> = inputs.into_iter().collect();
                 sorted.sort_by(|a, b| a.0.cmp(&b.0));
-                let registry = world.get_resource::<crate::ui::ModelicaDocumentRegistry>();
+                let registry = world.get_resource::<crate::state::ModelicaDocumentRegistry>();
                 let index_ref = registry
                     .and_then(|r| r.host(doc_id))
                     .map(|h| h.document().index());
@@ -435,7 +435,7 @@ impl Panel for TelemetryPanel {
             
             // Proactively pull names from the document index if we're
             // looking at a model that hasn't run yet.
-            let registry = world.get_resource::<crate::ui::ModelicaDocumentRegistry>();
+            let registry = world.get_resource::<crate::state::ModelicaDocumentRegistry>();
             let index_ref = registry
                 .and_then(|r| r.host(doc_id))
                 .map(|h| h.document().index());
@@ -668,7 +668,7 @@ fn render_selected_components_inspector(
     // type's parameter description-comments from the index for hover
     // help on the rows below.
     {
-        let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+        let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
         if let Some(host) = registry.host(doc_id) {
             let index = host.document().index();
             for row in &mut rows {
@@ -1092,7 +1092,7 @@ fn render_active_class_parameters(
     // editing on bundled / locked-source documents (otherwise the
     // user types into a field that silently rejects the write).
     let (rows, read_only): (Vec<FlatParam>, bool) = {
-        let Some(registry) = world.get_resource::<crate::ui::ModelicaDocumentRegistry>() else {
+        let Some(registry) = world.get_resource::<crate::state::ModelicaDocumentRegistry>() else {
             return;
         };
         let Some(host) = registry.host(doc_id) else { return };

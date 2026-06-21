@@ -5,7 +5,7 @@ use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentSaved, SaveAsDocument, SaveDocument, UndoDocument, RedoDocument};
 use lunco_core::{Command, on_command};
 
-use crate::ui::{ModelicaDocumentRegistry, WorkbenchState, panels::code_editor::EditorBufferState};
+use crate::state::{ModelicaDocumentRegistry, WorkbenchState}; use crate::ui::panels::code_editor::EditorBufferState;
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 
@@ -337,7 +337,7 @@ pub fn on_format_document(trigger: On<FormatDocument>, mut commands: Commands) {
             bevy::log::warn!("[FormatDocument] no active document");
             return;
         };
-        let workbench_read_only = crate::ui::state::read_only_for(world, doc);
+        let workbench_read_only = crate::state::read_only_for(world, doc);
         if workbench_read_only {
             bevy::log::info!("[FormatDocument] tab is read-only — skipping");
             return;

@@ -58,9 +58,10 @@ pub use theme::CanvasThemeSnapshot;
 pub use panel::CanvasDiagramPanel;
 pub(crate) use panel::invalidate_port_icon_cache;
 pub use ops::{
-    active_class_for_doc, apply_one_op_as, apply_ops_as, apply_ops_public,
-    drain_pending_structural_ops, on_auto_arrange_diagram, PendingStructuralOps,
+    active_class_for_doc, apply_ops_as, apply_ops_public, on_auto_arrange_diagram,
 };
+// Op-application core moved to the egui-free `crate::doc_ops` module.
+pub use crate::doc_ops::{apply_one_op_as, drain_pending_structural_ops, PendingStructuralOps};
 pub use pulse::{
     DEFAULT_EDGE_FLASH_MS, DEFAULT_PULSE_MS, EdgePulseHandle, PendingApiConnection,
     PendingApiConnectionQueue, PendingApiFocus, PendingApiFocusQueue, PulseEntry, PulseHandle,
@@ -432,7 +433,7 @@ impl Default for CanvasDocState {
 /// `CanvasDocState` (viewport, selection, scene, projection task)
 /// so two tabs viewing the same `(doc, drilled_class)` can pan,
 /// zoom, and select independently.
-pub type CanvasKey = crate::ui::panels::model_view::TabId;
+pub type CanvasKey = crate::model_tabs_types::TabId;
 
 #[derive(Resource, Default)]
 pub struct CanvasDiagramState {
@@ -819,14 +820,14 @@ pub enum ContextMenuTarget {
 /// Shorthand used by free helpers that don't already have the
 /// active doc threaded through.
 ///
-/// Prefers the per-render-call [`TabRenderContext`](crate::ui::panels::model_view::TabRenderContext)
+/// Prefers the per-render-call [`TabRenderContext`](crate::model_tabs_types::TabRenderContext)
 /// so canvas bodies on a split see their own tab, then falls back
 /// to the workspace-wide focused tab. Code paths that aren't part
 /// of a tab body render (event observers, side-panel systems) hit
 /// the fallback.
 pub fn active_doc_from_world(world: &World) -> Option<lunco_doc::DocumentId> {
     if let Some((doc, _)) = world
-        .get_resource::<crate::ui::panels::model_view::TabRenderContext>()
+        .get_resource::<crate::model_tabs_types::TabRenderContext>()
         .and_then(|c| c.current())
     {
         return Some(doc);
@@ -844,7 +845,7 @@ pub(super) fn render_target(
     world: &World,
 ) -> Option<(lunco_doc::DocumentId, Option<String>)> {
     if let Some(ctx) = world
-        .get_resource::<crate::ui::panels::model_view::TabRenderContext>()
+        .get_resource::<crate::model_tabs_types::TabRenderContext>()
     {
         if let Some(doc) = ctx.doc {
             return Some((doc, ctx.drilled_class.clone()));
@@ -853,7 +854,7 @@ pub(super) fn render_target(
     let doc = world
         .resource::<lunco_workbench::WorkspaceResource>()
         .active_document?;
-    let drilled = crate::ui::panels::model_view::drilled_class_for_doc(world, doc);
+    let drilled = crate::sim_default::drilled_class_for_doc(world, doc);
     Some((doc, drilled))
 }
 

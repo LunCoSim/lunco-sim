@@ -6,7 +6,7 @@ use lunco_workbench::{Panel, PanelId, PanelSlot};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::ui::{ModelicaDocumentRegistry, WorkbenchState};
+use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
 
 /// Per-tab editor buffer snapshot. Stashed in `EditorBufferState.per_doc`
 /// when the user switches tabs and restored when they switch back, so
@@ -363,7 +363,7 @@ impl Panel for CodeEditorPanel {
         // workspace-wide active doc for non-tab render paths
         // (welcome screen, no tab open).
         let tab_target: Option<lunco_doc::DocumentId> = world
-            .get_resource::<crate::ui::panels::model_view::TabRenderContext>()
+            .get_resource::<crate::model_tabs_types::TabRenderContext>()
             .and_then(|c| c.doc)
             .or_else(|| {
                 world
@@ -405,7 +405,7 @@ impl Panel for CodeEditorPanel {
                     .unwrap_or(false);
             let err = tab_target.and_then(|d| {
                 world
-                    .get_resource::<crate::ui::CompileStates>()
+                    .get_resource::<crate::state::CompileStates>()
                     .and_then(|cs| cs.error_for(d).map(str::to_string))
             });
             (err, entity, loading)

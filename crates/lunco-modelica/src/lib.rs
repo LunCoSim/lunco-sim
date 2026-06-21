@@ -119,6 +119,27 @@ pub mod icon_transform;
 /// Visual diagram editor — drag-and-drop component composition.
 pub mod visual_diagram;
 
+// ── Egui-free core modules lifted out of the (egui-gated) `ui` module so the
+//    headless / server build (`--no-default-features`) compiles. The egui
+//    rendering for these lives under `ui::panels::*`. ────────────────────────
+/// Workbench-side document registry + shared UI-agnostic state (was `ui::state`).
+pub mod state;
+/// Modelica tab registry data types (was `ui::panels::model_view::types`).
+pub mod model_tabs_types;
+/// `ModelTabs` registry (was `ui::panels::model_view::tabs`).
+pub mod model_tabs;
+/// Documentation annotation extractor (was `ui::panels::model_view::parsing`).
+pub mod doc_extract;
+/// Default-simulation-class resolution + run-target overrides
+/// (was `ui::panels::model_view::context::default_simulation_class` & friends).
+pub mod sim_default;
+/// Package-tree backend: egui-free data + scanning logic for the library /
+/// package browser (was `ui::panels::package_browser::{types,scanner,cache,library_tree}`).
+pub mod package_tree;
+/// Egui-free Modelica document ops application
+/// (was `ui::panels::canvas_diagram::ops::apply_one_op_as` & helpers).
+pub mod doc_ops;
+
 /// Per-document UI projection — what panels read instead of the AST.
 /// Skeleton; population happens in the upcoming AST-canonical refactor.
 /// See `docs/architecture/REFACTOR_PLAN.md`.
@@ -1228,8 +1249,7 @@ fn build_modelica_core(app: &mut App) {
         app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res, rx_cmd, tx_res });
     }
 
-    #[cfg(feature = "ui")]
-    app.init_resource::<ui::WorkbenchState>();
+    app.init_resource::<crate::state::WorkbenchState>();
     app.init_resource::<SimStreamRegistry>();
 
     // Experiments / Fast Run: backend-agnostic registry + this crate's
@@ -1305,8 +1325,7 @@ fn build_modelica_core(app: &mut App) {
             worker_transport::pump_worker_respawns();
         });
         app.add_systems(Update, worker::inline_worker_process);
-        #[cfg(feature = "ui")]
-        app.add_systems(Update, ui::update_file_load_result);
+        app.add_systems(Update, crate::state::update_file_load_result);
         // Drain Web-Worker RunUpdate streams into the runner's
         // RunHandle receivers and clear the runner's busy flag on
         // terminal updates. Cheap when no run is in flight.

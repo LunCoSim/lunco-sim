@@ -1,5 +1,5 @@
 //! Long-lived [`ModelicaEngine`] exposed as a Bevy resource and
-//! kept in lockstep with [`crate::ui::state::ModelicaDocumentRegistry`].
+//! kept in lockstep with [`crate::state::ModelicaDocumentRegistry`].
 //!
 //! ## Why a long-lived engine
 //!
@@ -250,7 +250,7 @@ pub fn ast_debounce_for_size(src_len: usize) -> u128 {
 
 pub fn drive_engine_sync(
     handle: Res<ModelicaEngineHandle>,
-    mut registry: ResMut<crate::ui::state::ModelicaDocumentRegistry>,
+    mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
     mut cursor: ResMut<EngineSyncCursor>,
     activity: Res<crate::ui::input_activity::InputActivity>,
     workspace: Option<Res<lunco_workbench::WorkspaceResource>>,
@@ -645,7 +645,7 @@ pub fn drive_engine_sync(
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
 pub fn drain_worker_parse_results(
     handle: Res<ModelicaEngineHandle>,
-    mut registry: ResMut<crate::ui::state::ModelicaDocumentRegistry>,
+    mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
 ) {
     #[cfg(target_arch = "wasm32")]
     {

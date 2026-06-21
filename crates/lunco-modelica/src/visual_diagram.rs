@@ -194,7 +194,7 @@ pub struct MslIndex {
     /// runtime is a trivial deserialise — no shape conversion.
     /// Empty when the indexer was run before this format landed.
     #[serde(default)]
-    pub bundled: Vec<crate::ui::panels::package_browser::types::PackageNode>,
+    pub bundled: Vec<crate::package_tree::types::PackageNode>,
 }
 
 /// A node instance placed on the visual canvas.
@@ -414,7 +414,7 @@ pub fn msl_class_library() -> &'static [crate::index::ClassEntry] {
 /// Pre-baked `PackageNode` tree for the bundled-models root in the
 /// Package Browser. Empty when the running `msl_index.json` predates
 /// this format — callers should fall back to flat-leaf rendering.
-pub fn msl_bundled_nodes() -> &'static [crate::ui::panels::package_browser::types::PackageNode] {
+pub fn msl_bundled_nodes() -> &'static [crate::package_tree::types::PackageNode] {
     msl_index().map(|i| i.bundled.as_slice()).unwrap_or(&[])
 }
 
@@ -472,7 +472,7 @@ fn parse_msl_index(text: &str) -> Option<MslIndex> {
     }
     if let Ok(relaxed) = serde_json::from_str::<Relaxed>(text) {
         let bundled = serde_json::from_value::<
-            Vec<crate::ui::panels::package_browser::types::PackageNode>,
+            Vec<crate::package_tree::types::PackageNode>,
         >(relaxed.bundled)
         .unwrap_or_default();
         return Some(MslIndex {

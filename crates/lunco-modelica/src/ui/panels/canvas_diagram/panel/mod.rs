@@ -11,7 +11,7 @@ use bevy_egui::egui;
 use lunco_canvas::Scene;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 
-use crate::ui::panels::model_view::TabRenderContext;
+use crate::model_tabs_types::TabRenderContext;
 use super::{CANVAS_DIAGRAM_PANEL_ID, CanvasDiagramState, active_doc_from_world};
 use projection_sync::{trigger_projection_if_needed, poll_and_swap_projection};
 use render::render_diagram_canvas;

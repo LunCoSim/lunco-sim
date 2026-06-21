@@ -1366,7 +1366,7 @@ pub struct ModelicaModel {
     /// All other observable variables (Real soc, etc)
     pub variables: HashMap<String, f64>,
     /// Canonical id of the Modelica source document backing this entity,
-    /// looked up in [`crate::ui::state::ModelicaDocumentRegistry`]. `DocumentId::default()`
+    /// looked up in [`crate::state::ModelicaDocumentRegistry`]. `DocumentId::default()`
     /// (`0`) means "no document assigned yet"; systems should treat it as
     /// a miss. Not reflected — ids are session-local allocations, not
     /// scene-serializable.
@@ -1493,12 +1493,12 @@ pub fn handle_modelica_responses(
     // `workbench_state` was the home of `compilation_error` (B.3
     // phase 4, retired). Param kept in the signature in case other
     // worker paths need it; prefix `_` silences the unused warning.
-    mut _workbench_state: ResMut<crate::ui::WorkbenchState>,
+    mut _workbench_state: ResMut<crate::state::WorkbenchState>,
     // Headless callers (e.g. cosim tests) run this system without the
     // UI plugin, so the console + compile-state resources may be
     // absent. Make both optional so the core stepping path survives
     // those setups without forcing them to pull in the UI module.
-    compile_states: Option<ResMut<crate::ui::CompileStates>>,
+    compile_states: Option<ResMut<crate::state::CompileStates>>,
     console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
     // Optional — a headless cosim harness may skip `LuncoVizPlugin`
     // entirely. When present, every outgoing sample is published into
@@ -1509,7 +1509,7 @@ pub fn handle_modelica_responses(
     // Optional so headless cosim tests (no UI plugin) still link.
     // When present, signal-meta description tooltips read from the
     // doc index, keeping AST as the single source of truth.
-    doc_registry: Option<Res<crate::ui::ModelicaDocumentRegistry>>,
+    doc_registry: Option<Res<crate::state::ModelicaDocumentRegistry>>,
     runner_res: Option<Res<crate::ModelicaRunnerResource>>,
     source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
     status_bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
@@ -1643,9 +1643,9 @@ pub fn handle_modelica_responses(
             let is_compile_result = result.is_new_model || result.is_parameter_update;
             if is_compile_result && !model.document.is_unassigned() {
                 let new_state = if result.error.is_some() {
-                    crate::ui::CompileState::Error
+                    crate::state::CompileState::Error
                 } else {
-                    crate::ui::CompileState::Ready
+                    crate::state::CompileState::Ready
                 };
                 if let Some(cs) = compile_states.as_mut() {
                     let elapsed = cs.mark_finished(model.document, new_state);
@@ -1657,7 +1657,7 @@ pub fn handle_modelica_responses(
                             format!("{:.0} ms", ms)
                         };
                         match new_state {
-                            crate::ui::CompileState::Error => {
+                            crate::state::CompileState::Error => {
                                 warn!(
                                     "[Modelica] Compile finished with error for `{}` in {}",
                                     model.model_name, human
@@ -1669,7 +1669,7 @@ pub fn handle_modelica_responses(
                                     ));
                                 }
                             }
-                            crate::ui::CompileState::Ready => {
+                            crate::state::CompileState::Ready => {
                                 info!(
                                     "[Modelica] Compile finished for `{}` in {}",
                                     model.model_name, human

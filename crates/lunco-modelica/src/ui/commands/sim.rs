@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
 use lunco_core::{Command, on_command};
-use crate::ui::ModelicaDocumentRegistry;
+use crate::state::ModelicaDocumentRegistry;
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 

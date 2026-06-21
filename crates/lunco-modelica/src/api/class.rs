@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use lunco_core::{Command, on_command};
 use lunco_doc::DocumentId;
 use crate::document::ModelicaOp;
-use crate::ui::state::ModelicaDocumentRegistry;
+use crate::state::ModelicaDocumentRegistry;
 use super::util::resolve_doc;
 
 /// Rename a top-level class within an open Modelica document.
@@ -140,7 +140,7 @@ fn is_ident_byte(b: u8) -> bool {
 pub fn on_rename_open_document_chain_to_modelica(
     trigger: On<lunco_workbench::file_ops::RenameOpenDocument>,
     workspace: Res<lunco_workbench::WorkspaceResource>,
-    registry: Res<crate::ui::state::ModelicaDocumentRegistry>,
+    registry: Res<crate::state::ModelicaDocumentRegistry>,
     mut commands: Commands,
 ) {
     use lunco_doc::DocumentOrigin;
@@ -197,7 +197,7 @@ pub fn on_rename_open_document_chain_to_modelica(
 pub fn on_file_renamed_chain_to_modelica(
     trigger: On<lunco_workbench::FileRenamed>,
     workspace: Res<lunco_workbench::WorkspaceResource>,
-    mut registry: ResMut<crate::ui::state::ModelicaDocumentRegistry>,
+    mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
     mut commands: Commands,
 ) {
     use lunco_doc::DocumentOrigin;

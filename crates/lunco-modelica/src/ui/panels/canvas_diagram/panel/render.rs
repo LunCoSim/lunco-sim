@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use crate::ui::panels::model_view::TabRenderContext;
+use crate::model_tabs_types::TabRenderContext;
 use super::super::{CanvasDiagramState, CanvasSnapSettings, ops, overlays};
 use super::util::{mark, log_frame_times};
 use super::snapshots::stash_snapshots;
@@ -23,7 +23,7 @@ pub(crate) fn render_diagram_canvas(
     mark("resolve_doc_context", &mut phase_t, &mut phase_log);
 
     let active_doc = doc_id;
-    let tab_read_only = active_doc.map(|d| crate::ui::state::read_only_for(world, d)).unwrap_or(false);
+    let tab_read_only = active_doc.map(|d| crate::state::read_only_for(world, d)).unwrap_or(false);
 
     let snap_settings = world.get_resource::<CanvasSnapSettings>().filter(|s| s.enabled).map(|s| lunco_canvas::SnapSettings { step: s.step });
 
@@ -69,7 +69,7 @@ pub(crate) fn render_diagram_canvas(
         let theme = world.get_resource::<lunco_theme::Theme>().cloned().unwrap_or_else(lunco_theme::Theme::dark);
         let drilled_class = render_tab_id
             .and_then(|tid| {
-                let tabs = world.resource::<crate::ui::panels::model_view::ModelTabs>();
+                let tabs = world.resource::<crate::model_tabs::ModelTabs>();
                 tabs.get(tid).and_then(|t| t.drilled_class.clone())
             })
             .unwrap_or_default();

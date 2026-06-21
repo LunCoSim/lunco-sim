@@ -132,7 +132,7 @@ pub(super) fn resolve_active_doc(world: &World) -> Option<DocumentId> {
 
 pub(super) fn entity_for_doc(world: &World, doc: DocumentId) -> Option<Entity> {
     world
-        .get_resource::<crate::ui::ModelicaDocumentRegistry>()
+        .get_resource::<crate::state::ModelicaDocumentRegistry>()
         .and_then(|r| r.entities_linked_to(doc).into_iter().next())
 }
 

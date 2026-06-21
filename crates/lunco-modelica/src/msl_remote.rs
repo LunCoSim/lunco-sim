@@ -521,7 +521,7 @@ fn sources_with_extras(primary: MslAssetSource) -> Vec<MslAssetSource> {
     {
         if matches!(sources[0], MslAssetSource::Filesystem(_)) {
             for (subdir, _pkg) in
-                crate::ui::panels::package_browser::scanner::discover_third_party_libs()
+                crate::package_tree::scanner::discover_third_party_libs()
             {
                 sources.push(MslAssetSource::Filesystem(
                     lunco_assets::cache_dir().join(subdir),

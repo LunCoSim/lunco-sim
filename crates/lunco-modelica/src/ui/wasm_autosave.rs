@@ -208,7 +208,7 @@ fn restore_from_localstorage(world: &mut World) {
         // (e.g. the bundled default tab, or a re-fired Startup).
         let already = {
             let cache = world
-                .get_resource::<crate::ui::panels::package_browser::PackageTreeCache>();
+                .get_resource::<crate::package_tree::PackageTreeCache>();
             cache
                 .map(|c| {
                     c.in_memory_models
@@ -234,7 +234,7 @@ fn restore_from_localstorage(world: &mut World) {
         // Was this doc an open tab last session, and into which class was it
         // drilled? Looked up before `full_key` is moved into `AutosaveKeys`.
         let tab_drilled = session_tabs.get(&full_key).cloned();
-        let mut registry = world.resource_mut::<crate::ui::state::ModelicaDocumentRegistry>();
+        let mut registry = world.resource_mut::<crate::state::ModelicaDocumentRegistry>();
         let doc_id = registry.allocate_with_origin(source, origin);
         // Remember the full key so a later close can clear localStorage
         // even after the registry host is gone.
@@ -246,12 +246,12 @@ fn restore_from_localstorage(world: &mut World) {
         // under "Your Models". The browser's existing render path picks it up;
         // no extra UI plumbing.
         if let Some(mut cache) = world
-            .get_resource_mut::<crate::ui::panels::package_browser::PackageTreeCache>()
+            .get_resource_mut::<crate::package_tree::PackageTreeCache>()
         {
             let id = format!("mem://{display_name}");
             cache
                 .in_memory_models
-                .push(crate::ui::panels::package_browser::InMemoryEntry {
+                .push(crate::package_tree::InMemoryEntry {
                     display_name,
                     id,
                     doc: doc_id,
@@ -264,11 +264,11 @@ fn restore_from_localstorage(world: &mut World) {
         // uploaded files as a sensible fallback when there's no session record.
         if let Some(drilled) = tab_drilled.or(if is_file { Some(None) } else { None }) {
             let tab_id = world
-                .resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+                .resource_mut::<crate::model_tabs::ModelTabs>()
                 .ensure_for(doc_id, drilled);
             if let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() {
                 layout.open_instance(
-                    crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                    crate::model_tabs_types::MODEL_VIEW_KIND,
                     tab_id,
                 );
             }
@@ -329,7 +329,7 @@ pub fn should_autosave(active: bool, is_untitled: bool) -> bool {
 #[cfg(target_arch = "wasm32")]
 fn autosave_on_changed(
     trigger: bevy::prelude::On<lunco_doc_bevy::DocumentChanged>,
-    registry: bevy::prelude::Res<crate::ui::state::ModelicaDocumentRegistry>,
+    registry: bevy::prelude::Res<crate::state::ModelicaDocumentRegistry>,
     gesture: bevy::prelude::Res<IsGestureActive>,
     mut keys: bevy::prelude::ResMut<AutosaveKeys>,
 ) {
@@ -386,8 +386,8 @@ fn autosave_on_changed(
 /// as docs anyway. Writes only when the serialized set changes (cheap idle).
 #[cfg(target_arch = "wasm32")]
 fn persist_open_tabs(
-    tabs: bevy::prelude::Res<crate::ui::panels::model_view::ModelTabs>,
-    registry: bevy::prelude::Res<crate::ui::state::ModelicaDocumentRegistry>,
+    tabs: bevy::prelude::Res<crate::model_tabs::ModelTabs>,
+    registry: bevy::prelude::Res<crate::state::ModelicaDocumentRegistry>,
     mut last: bevy::prelude::Local<String>,
 ) {
     let Some(storage) = local_storage() else { return };

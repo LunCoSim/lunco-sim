@@ -138,7 +138,7 @@ pub struct WorkbenchState {
 ///
 /// Separate from [`crate::ModelicaModel::is_stepping`] (a per-entity simulation
 /// tick guard) and from error *content* (which lives in
-/// [`crate::ui::state::WorkbenchState`] today). This enum is the
+/// [`crate::state::WorkbenchState`] today). This enum is the
 /// answer to "is a compile in flight for this document?" — UI uses it
 /// to disable the Compile button while the worker is busy and to show
 /// an at-a-glance status chip.
@@ -296,7 +296,7 @@ impl CompileStates {
 /// `open_model.detected_name`. Returns `None` when the doc has no
 /// AST yet (parse pending) or when no model declaration exists.
 pub fn detected_name_for(world: &bevy::prelude::World, doc: DocumentId) -> Option<String> {
-    crate::ui::panels::model_view::context::default_simulation_class(world, doc)
+    crate::sim_default::default_simulation_class(world, doc)
 }
 
 /// Read-only flag for `doc`. Replaces `open_model.read_only`.

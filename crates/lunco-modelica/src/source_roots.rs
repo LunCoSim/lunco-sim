@@ -114,7 +114,7 @@ pub struct SourceRoot {
 /// `ModelicaPlugin`; populated at plugin start by inventorying:
 ///  - MSL via [`lunco_assets::msl_source_root_path`].
 ///  - Third-party libraries via
-///    [`crate::ui::panels::package_browser::scanner::discover_third_party_libs`].
+///    [`crate::package_tree::scanner::discover_third_party_libs`].
 ///  - Bundled examples via [`crate::models::bundled_models`].
 ///
 /// **Inventory only at this stage** — no loads run until PR-B's
@@ -157,7 +157,7 @@ impl SourceRootRegistry {
         // implemented for the package-browser tree; we reuse it here
         // for the compile-gate registry.
         for (cache_subdir, root_name) in
-            crate::ui::panels::package_browser::scanner::discover_third_party_libs()
+            crate::package_tree::scanner::discover_third_party_libs()
         {
             let root_dir = lunco_assets::cache_dir()
                 .join(&cache_subdir)

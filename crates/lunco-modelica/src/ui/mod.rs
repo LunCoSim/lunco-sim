@@ -59,10 +59,10 @@
 
 use bevy::prelude::*;
 use lunco_workbench::{Perspective, PerspectiveId, WorkbenchAppExt, WorkbenchLayout, PanelId};
+// Core document/library/compile state moved out of `ui` into `crate::state`.
+use crate::state::{CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 
-pub mod state;
 pub mod document_openings;
-pub use state::*;
 
 pub mod commands;
 pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
@@ -164,8 +164,8 @@ struct ClassRemovedWatermark(std::collections::HashMap<lunco_doc::DocumentId, u6
 /// changes) rather than O(history).
 fn close_drilled_tabs_on_class_removed(
     trigger: On<lunco_doc_bevy::DocumentChanged>,
-    registry: Res<crate::ui::state::ModelicaDocumentRegistry>,
-    mut tabs: ResMut<crate::ui::panels::model_view::ModelTabs>,
+    registry: Res<crate::state::ModelicaDocumentRegistry>,
+    mut tabs: ResMut<crate::model_tabs::ModelTabs>,
     mut watermark: ResMut<ClassRemovedWatermark>,
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut drafts: Option<ResMut<crate::experiments_runner::ExperimentDrafts>>,
@@ -433,7 +433,7 @@ fn derive_title_from_doc(doc: &crate::document::ModelicaDocument) -> String {
 fn scan_twin_on_added(
     trigger: On<lunco_workbench::TwinAdded>,
     ws: Res<lunco_workbench::WorkspaceResource>,
-    mut cache: ResMut<panels::package_browser::PackageTreeCache>,
+    mut cache: ResMut<crate::package_tree::PackageTreeCache>,
 ) {
     let twin_id = trigger.event().twin;
     let Some(twin) = ws.twin(twin_id) else {
@@ -441,7 +441,7 @@ fn scan_twin_on_added(
     };
     let folder = twin.root.clone();
     let pool = bevy::tasks::AsyncComputeTaskPool::get();
-    let task = pool.spawn(async move { panels::package_browser::scanner::scan_twin_folder(folder) });
+    let task = pool.spawn(async move { crate::package_tree::scan_twin_folder(folder) });
     cache.twin = None;
     cache.twin_scan_task = Some(task);
 }
@@ -705,9 +705,9 @@ impl Plugin for ModelicaUiPlugin {
         app.init_resource::<WorkbenchState>()
             .init_resource::<ModelicaDocumentRegistry>()
             .init_resource::<CompileStates>()
-            .init_resource::<panels::model_view::ModelTabs>()
-            .init_resource::<panels::model_view::RunTargetOverrides>()
-            .init_resource::<panels::model_view::TabRenderContext>()
+            .init_resource::<crate::model_tabs::ModelTabs>()
+            .init_resource::<crate::sim_default::RunTargetOverrides>()
+            .init_resource::<crate::model_tabs_types::TabRenderContext>()
             .init_resource::<panels::code_editor::EditorBufferState>()
             .init_resource::<panels::console::ConsoleLog>()
             .init_resource::<panels::diagnostics::DiagnosticsLog>()
@@ -737,7 +737,7 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<panels::canvas_projection::DiagramAutoLayoutSettings>()
             .init_resource::<panels::palette::PaletteState>()
             .init_resource::<panels::palette::ComponentDragPayload>()
-            .insert_resource(panels::package_browser::PackageTreeCache::new())
+            .insert_resource(crate::package_tree::PackageTreeCache::new())
             .add_systems(Update, browser_dispatch::drain_browser_actions)
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
             .add_systems(Update, cleanup_removed_documents)

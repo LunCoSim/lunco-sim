@@ -4,15 +4,15 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_canvas::Scene;
 use lunco_doc::Document;
-use crate::ui::state::ModelicaDocumentRegistry;
-use crate::ui::panels::model_view::{ModelTabs};
+use crate::state::ModelicaDocumentRegistry;
+use crate::model_tabs::ModelTabs;
 use super::super::{CanvasDiagramState, DiagramProjectionLimits, ProjectionTask, active_doc_from_world, decorations, render_target};
 use super::super::projection::{project_scene, projection_relevant_source_hash, recover_edges_from_ast};
 
 pub(crate) fn poll_and_swap_projection(
     ui: &mut egui::Ui,
     world: &mut World,
-    render_tab_id: Option<crate::ui::panels::model_view::TabId>,
+    render_tab_id: Option<crate::model_tabs_types::TabId>,
 ) {
     let active_doc = active_doc_from_world(world);
     let current_gen_for_deadline = active_doc.and_then(|d| {
@@ -125,7 +125,7 @@ pub(crate) fn poll_and_swap_projection(
 pub(crate) fn trigger_projection_if_needed(
     ui: &mut egui::Ui,
     world: &mut World,
-    render_tab_id: Option<crate::ui::panels::model_view::TabId>,
+    render_tab_id: Option<crate::model_tabs_types::TabId>,
 ) {
     let Some(doc_id) = active_doc_from_world(world) else { return; };
     let gen = world.resource::<ModelicaDocumentRegistry>().host(doc_id).map(|h| h.document().generation()).unwrap_or(0);
@@ -150,7 +150,7 @@ pub(crate) fn trigger_projection_if_needed(
                     .and_then(|t| t.drilled_class_for_doc(doc_id))
             })
             .or_else(|| {
-                crate::ui::panels::model_view::context::default_simulation_class(world, doc_id)
+                crate::sim_default::default_simulation_class(world, doc_id)
             });
         let target_changed = live_target != docstate.last_seen_target;
         let ast_stale = world.resource::<ModelicaDocumentRegistry>().host(doc_id).map(|h| h.document().ast_is_stale()).unwrap_or(false);
@@ -177,7 +177,7 @@ pub(crate) fn trigger_projection_if_needed(
     }
 }
 
-fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: u64, render_tab_id: Option<crate::ui::panels::model_view::TabId>) {
+fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: u64, render_tab_id: Option<crate::model_tabs_types::TabId>) {
     let resolved = {
         let registry = world.resource::<ModelicaDocumentRegistry>();
         registry
@@ -211,7 +211,7 @@ fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: 
                 .and_then(|t| t.drilled_class_for_doc(doc_id))
         })
         .or_else(|| {
-            crate::ui::panels::model_view::context::default_simulation_class(world, doc_id)
+            crate::sim_default::default_simulation_class(world, doc_id)
         });
     let layout = world.get_resource::<crate::ui::panels::canvas_projection::DiagramAutoLayoutSettings>().cloned().unwrap_or_default();
     

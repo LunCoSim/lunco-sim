@@ -9,11 +9,11 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_theme::ColorAlpha;
 
-use crate::ui::state::ModelicaDocumentRegistry;
+use crate::state::ModelicaDocumentRegistry;
 use crate::ui::theme::ModelicaThemeExt;
 
 use super::active_doc_from_world;
-// `crate::ui::panels::model_view::drilled_class_for_doc`.
+// `crate::sim_default::drilled_class_for_doc`.
 
 // `render_drill_in_loading_overlay` and `render_projecting_overlay`
 // retired — replaced by
@@ -119,7 +119,7 @@ pub(super) fn render_empty_diagram_overlay(
         .get_resource::<lunco_workbench::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
     let Some(doc) = active else { return };
-    let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+    let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
     let Some(host) = registry.host(doc) else { return };
     let document = host.document();
     let theme = world
@@ -137,7 +137,7 @@ pub(super) fn render_empty_diagram_overlay(
     let counts = {
         let active_doc = active_doc_from_world(world);
         let drilled = active_doc.and_then(|doc| {
-            crate::ui::panels::model_view::drilled_class_for_doc(world, doc)
+            crate::sim_default::drilled_class_for_doc(world, doc)
         });
         let registry = world.resource::<ModelicaDocumentRegistry>();
         active_doc

@@ -1,7 +1,7 @@
 //! Periodic update/sync systems: StatusBar and UnsavedDocs.
 
 use bevy::prelude::*;
-use crate::ui::{ModelicaDocumentRegistry, WorkbenchState, CompileStates};
+use crate::state::{ModelicaDocumentRegistry, WorkbenchState, CompileStates};
 
 pub fn publish_unsaved_modelica_docs(
     registry: Res<ModelicaDocumentRegistry>,
@@ -66,10 +66,10 @@ pub fn update_status_bar(
     let text = match active_doc {
         None => "ready".to_string(),
         Some(doc) => match compile_states.state_of(doc) {
-            crate::ui::CompileState::Compiling => format!("⏳ Compiling {model_name}…"),
-            crate::ui::CompileState::Error => format!("⚠ Compile error in {model_name}"),
-            crate::ui::CompileState::Ready => format!("✓ Compiled {model_name}"),
-            crate::ui::CompileState::Idle => format!("● {model_name}"),
+            crate::state::CompileState::Compiling => format!("⏳ Compiling {model_name}…"),
+            crate::state::CompileState::Error => format!("⚠ Compile error in {model_name}"),
+            crate::state::CompileState::Ready => format!("✓ Compiled {model_name}"),
+            crate::state::CompileState::Idle => format!("● {model_name}"),
         },
     };
     layout.set_status(text);
