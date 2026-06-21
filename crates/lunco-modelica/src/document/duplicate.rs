@@ -509,6 +509,27 @@ end Foo;
     }
 
     #[test]
+    fn duplicate_bundled_nested_class_resolves_via_get_model() {
+        // Runtime repro of the "(no classes yet)" bug: the MSL/OpenClass
+        // duplicate path (`spawn_duplicate_class_task`) resolves source via
+        // the MSL index, which does NOT contain bundled `assets/models/*.mo`
+        // examples. The fallback reads the bundled file keyed by the
+        // qualified head segment. This test mirrors that fallback: look up
+        // `AnnotatedRocketStage.mo` by head, extract the nested `RocketStage`,
+        // and assert the duplicate has a real class (not a comment-only doc).
+        let qualified = "AnnotatedRocketStage.RocketStage";
+        let head = qualified.split('.').next().unwrap();
+        let src = crate::models::get_model(&format!("{head}.mo"))
+            .expect("AnnotatedRocketStage.mo must be bundled");
+        let origin_short = qualified.rsplit('.').next().unwrap();
+        let out = duplicate(src, origin_short, "RocketStageCopy", Some(qualified));
+        assert!(parses_clean(&out), "bundled duplicate must parse:\n{out}");
+        assert!(out.contains("model RocketStageCopy"), "renamed:\n{out}");
+        assert!(out.contains("end RocketStageCopy;"), "end renamed:\n{out}");
+        assert_eq!(within_package(&out).as_deref(), Some("AnnotatedRocketStage"));
+    }
+
+    #[test]
     fn duplicate_flat_model_keeps_keyword_and_semicolon() {
         // The core regression isolated: `ClassDef.location` omits the
         // `model` keyword and the trailing `;`. Pre-fix this produced

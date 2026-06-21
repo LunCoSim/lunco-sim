@@ -195,9 +195,20 @@ fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: 
             // gated on gen/target change. Release the handoff so the
             // lifecycle falls through to Empty and re-projects once the AST
             // lands (the parse bumps the document generation → gen_advanced).
-            world
-                .resource_mut::<CanvasDiagramState>()
-                .complete_projection_handoff(doc_id);
+            let mut state = world.resource_mut::<CanvasDiagramState>();
+            state.complete_projection_handoff(doc_id);
+            // Consume the one-shot MSL-ready reprojection request too. If we
+            // leave `force_reproject` set, `trigger_projection_if_needed`
+            // re-enters every frame (forced=true) and we spin here until the
+            // AST lands — wasted work each frame. Safe to drop: when the
+            // async parse completes it bumps the generation, and
+            // first_render/gen_advanced re-spawns the projection with MSL now
+            // resident, so standard-library icons still resolve.
+            let docstate = match render_tab_id {
+                Some(t) => state.get_mut_for_tab(t, doc_id),
+                None => state.get_mut(Some(doc_id)),
+            };
+            docstate.force_reproject = false;
             return;
         }
     };

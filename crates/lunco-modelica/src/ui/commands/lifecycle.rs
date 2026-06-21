@@ -674,29 +674,59 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
     let origin_short_for_task = origin_short.clone();
     let name_for_task = name.clone();
     let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-        let Some(path) = crate::library_fs::resolve_class_path_indexed(&qualified_for_task) else {
-            return crate::document::ModelicaDocument::with_origin(
-                doc_id,
-                format!("// Could not locate MSL file for {qualified_for_task}\n"),
-                DocumentOrigin::untitled(name_for_task),
-            );
+        // Resolve the origin source. MSL classes resolve through the
+        // library index; everything else (bundled `assets/models/*.mo`
+        // examples like `AnnotatedRocketStage.RocketStage`) is NOT in
+        // that index, so fall back to the embedded bundled source keyed
+        // by the qualified head segment (`AnnotatedRocketStage.RocketStage`
+        // → `AnnotatedRocketStage.mo`). Without this fallback a bundled
+        // duplicate produced a comment-only doc ("Could not locate MSL
+        // file") that parsed to zero classes → "(no classes yet)".
+        let msl_path = crate::library_fs::resolve_class_path_indexed(&qualified_for_task);
+        let (source_full, imports) = match &msl_path {
+            Some(path) => {
+                let src = lunco_assets::msl::msl_read(path)
+                    .and_then(|b| String::from_utf8(b).ok())
+                    .unwrap_or_default();
+                (src, collect_parent_imports(path))
+            }
+            None => {
+                let head = qualified_for_task
+                    .split('.')
+                    .next()
+                    .unwrap_or(&qualified_for_task);
+                let filename = format!("{head}.mo");
+                match crate::models::get_model(&filename) {
+                    // Bundled examples are self-contained — no enclosing
+                    // package chain to harvest imports from.
+                    Some(src) => (src.to_string(), Vec::new()),
+                    None => {
+                        return crate::document::ModelicaDocument::with_origin(
+                            doc_id,
+                            format!("// Could not locate source for {qualified_for_task}\n"),
+                            DocumentOrigin::untitled(name_for_task),
+                        );
+                    }
+                }
+            }
         };
-        let source_full = lunco_assets::msl::msl_read(&path)
-            .and_then(|b| String::from_utf8(b).ok())
-            .unwrap_or_default();
-        
+
         // Prefer the path-cached spans (cheap on repeat MSL duplications);
-        // fall back to an inline parse if resolution fails. Either way the
-        // spans are absolute in `source_full` and `build_duplicate_source`
-        // slices to the class span before rewriting.
-        let spans = crate::document::duplicate::extract_class_spans_via_path(
-            &path,
-            &source_full,
-            &origin_short_for_task,
-        )
-        .filter(|s| s.full_start < s.full_end && s.full_end <= source_full.len())
-        .or_else(|| extract_class_spans_inline(&source_full, &origin_short_for_task));
-        let imports = collect_parent_imports(&path);
+        // fall back to an inline parse (always used for bundled, which has
+        // no on-disk path). Either way the spans are absolute in
+        // `source_full` and `build_duplicate_source` slices to the class
+        // span before rewriting.
+        let spans = msl_path
+            .as_ref()
+            .and_then(|path| {
+                crate::document::duplicate::extract_class_spans_via_path(
+                    path,
+                    &source_full,
+                    &origin_short_for_task,
+                )
+            })
+            .filter(|s| s.full_start < s.full_end && s.full_end <= source_full.len())
+            .or_else(|| extract_class_spans_inline(&source_full, &origin_short_for_task));
         let copy_src = build_duplicate_source(
             &source_full,
             spans.as_ref(),
