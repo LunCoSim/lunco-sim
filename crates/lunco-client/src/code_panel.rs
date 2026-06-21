@@ -13,7 +13,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_modelica::ui::ModelicaDocumentRegistry;
+use lunco_modelica::state::ModelicaDocumentRegistry;
 use lunco_sandbox_edit::SelectedEntity;
 use lunco_scripting::ScriptRegistry;
 use lunco_scripting::doc::ScriptedModel;

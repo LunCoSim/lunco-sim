@@ -1142,7 +1142,7 @@ fn modelica_parameters_section(
     world: &mut World,
     entity: Entity,
 ) {
-    use lunco_modelica::ui::ModelicaDocumentRegistry;
+    use lunco_modelica::state::ModelicaDocumentRegistry;
     // Use the canvas_diagram-level re-export, not the private `ops`
     // submodule path. Submodules of canvas_diagram (ops, projection,
     // panel, …) are crate-private encapsulation; the public surface

@@ -19,6 +19,9 @@ ui = [
     "dep:lunco-viz", "dep:lunco-canvas", "dep:egui_plot", "dep:egui_commonmark",
     "dep:egui_extras", "dep:htmd", "dep:lyon_tessellation", "dep:lyon_path",
     "dep:lyon_geom", "lunco-doc-bevy/ui",
+    # bevy_egui pulls bevy_render + bevy_window; the lunica WINDOW additionally
+    # needs the winit backend (no longer in the workspace bevy default).
+    "bevy/bevy_winit", "bevy/bevy_window", "bevy/x11", "bevy/wayland",
 ]
 # Compile the API in. Transport is chosen automatically: the native HTTP
 # server comes from `lunco-api/transport-http` (added to `default` above);

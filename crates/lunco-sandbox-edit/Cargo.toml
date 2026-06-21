@@ -17,7 +17,11 @@ lunco-api = { path = "../lunco-api", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-workbench = { path = "../lunco-workbench" }
-lunco-modelica = { path = "../lunco-modelica", default-features = false }
+# This crate's egui inspector (`ui/inspector.rs::modelica_parameters_section`)
+# uses lunco-modelica's egui UI surface (apply_ops_public etc.), so enable its
+# `ui` feature. (Phase 2: when carving the headless server, sandbox-edit is a
+# GUI-only crate and won't be in the server tree.)
+lunco-modelica = { path = "../lunco-modelica", default-features = false, features = ["ui"] }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-cosim = { path = "../lunco-cosim" }

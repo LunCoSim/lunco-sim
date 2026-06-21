@@ -19,7 +19,11 @@ transport-http = ["dep:axum", "dep:tokio", "tokio/full"]
 
 [dependencies]
 lunco-core = { path = "../lunco-core" }
-bevy = { workspace = true }
+# TODO(phase2): gate the screenshot/Camera3d path in executor.rs behind a
+# `render` feature so a headless server builds this crate UI-free. For now
+# (workspace bevy is substrate-only) the render features the screenshot code
+# needs are pulled here unconditionally to keep the GUI green.
+bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_window"] }
 image = "0.25"
 serde = { workspace = true }
 serde_json = { workspace = true }
