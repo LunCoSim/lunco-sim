@@ -259,3 +259,131 @@ pub fn relay_compile_requests(
         });
     }
 }
+
+/// Feed UI input/workspace state into the core [`crate::engine_resource::ParsePacing`]
+/// hints that `drive_engine_sync` reads. The core parse scheduler consumes the
+/// hints (typing debounce, active-tab priority) without ever naming the UI
+/// resources. Ordered `.before(drive_engine_sync)` so the hints are fresh for
+/// this frame's parse decisions.
+pub fn feed_parse_pacing(
+    mut pacing: ResMut<crate::engine_resource::ParsePacing>,
+    activity: Res<crate::ui::input_activity::InputActivity>,
+    workspace: Option<Res<lunco_workbench::WorkspaceResource>>,
+) {
+    pacing.input_active = activity.is_active();
+    pacing.active_document = workspace.as_deref().and_then(|ws| ws.active_document);
+}
+
+/// Reactive UI: project terminal experiment-run events into the UI surfaces.
+/// The core `drain_pending_handles` writes results/status into the registry and
+/// emits the lifecycle messages; this observer renders them — console lines for
+/// every terminal state, plus (on completion) the plot auto-pick and the
+/// `SignalRegistry` playback publish that canvas plot tiles resolve against.
+///
+/// All result data is recovered from the registry (core wrote it before the
+/// message fired), so the messages stay thin and core never touches the plot /
+/// signal / console resources.
+pub fn project_run_results_to_ui(
+    mut commands: Commands,
+    mut ev_completed: MessageReader<lunco_experiments::RunCompleted>,
+    mut ev_failed: MessageReader<lunco_experiments::RunFailed>,
+    mut ev_cancelled: MessageReader<lunco_experiments::RunCancelled>,
+    registry: Res<lunco_experiments::ExperimentRegistry>,
+    sources: Res<crate::experiments_runner::ExperimentSources>,
+    mut playback: ResMut<crate::experiments_runner::PlaybackEntities>,
+    mut console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
+    mut plot_states: Option<ResMut<crate::ui::panels::experiments::PlotPanelStates>>,
+    active_plot: Option<Res<crate::ui::panels::experiments::ActivePlot>>,
+    mut signals: Option<ResMut<SignalRegistry>>,
+) {
+    for ev in ev_completed.read() {
+        let run_id = ev.experiment_id;
+        let Some(entry) = registry.get(run_id) else { continue };
+        let run_name = entry.name.clone();
+        let Some(result) = entry.result.as_ref() else { continue };
+        let n_samples = result.times.len();
+        let n_vars = result.series.len();
+        let wall = result.meta.wall_time_ms;
+
+        // Auto-visible: a run that just completed is what the user is looking
+        // at, no checkbox needed. Mark it visible on the active plot tab only
+        // (per-plot visibility — other plot windows stay untouched, matching
+        // Dymola's per-window curve set). Also auto-pick a few variables on the
+        // very first completion so the plot has content without hunting through
+        // Telemetry. Skip parameters (constant series) — pick the first 3
+        // dynamic signals by series-variance heuristic.
+        if let Some(states) = plot_states.as_mut() {
+            let viz = active_plot
+                .as_deref()
+                .copied()
+                .unwrap_or_default()
+                .or_default();
+            let entry = states.entry(viz);
+            entry.visible_experiments.insert(run_id);
+            if entry.picked_vars.is_empty() {
+                let mut by_var: Vec<(&String, f64)> = result
+                    .series
+                    .iter()
+                    .map(|(k, v)| {
+                        let n = v.len().max(1) as f64;
+                        let mean = v.iter().copied().sum::<f64>() / n;
+                        let var = v.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / n;
+                        (k, var)
+                    })
+                    .filter(|(_, v)| v.is_finite() && *v > 1e-12)
+                    .collect();
+                by_var.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                for (k, _) in by_var.into_iter().take(3) {
+                    entry.picked_vars.insert(k.clone());
+                }
+            }
+        }
+
+        if let Some(c) = console.as_mut() {
+            c.info(format!(
+                "✓ {run_name} done: {n_samples} samples × {n_vars} vars in {wall} ms"
+            ));
+        }
+
+        // Publish the run's series into `SignalRegistry` under a per-doc
+        // playback entity, so canvas plot tiles bound by `PlotBinding::Doc`
+        // resolve to real (entity, path) samples without needing a live cosim
+        // entity. One entity per doc, reused across runs — drop prior signals
+        // then push the new run's data.
+        if let (Some(doc_id), Some(signals_mut)) =
+            (sources.0.get(&run_id).copied(), signals.as_deref_mut())
+        {
+            let entity = *playback
+                .0
+                .entry(doc_id)
+                .or_insert_with(|| commands.spawn_empty().id());
+            signals_mut.drop_entity(entity);
+            for (path, samples) in &result.series {
+                let sig = SignalRef { entity, path: path.clone() };
+                for (t, v) in result.times.iter().zip(samples.iter()) {
+                    signals_mut.push_scalar(sig.clone(), *t, *v);
+                }
+            }
+        }
+    }
+
+    for ev in ev_failed.read() {
+        let run_name = registry
+            .get(ev.experiment_id)
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| "Fast Run".into());
+        if let Some(c) = console.as_mut() {
+            c.error(format!("⚠ {run_name} FAILED: {}", ev.error));
+        }
+    }
+
+    for ev in ev_cancelled.read() {
+        let run_name = registry
+            .get(ev.experiment_id)
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| "Fast Run".into());
+        if let Some(c) = console.as_mut() {
+            c.info(format!("⊘ {run_name} cancelled"));
+        }
+    }
+}

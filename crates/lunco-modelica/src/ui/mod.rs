@@ -748,6 +748,16 @@ impl Plugin for ModelicaUiPlugin {
             .add_systems(Update, core_observers::mirror_source_roots_to_status_bus)
             // Reactive UI: relay core compile requests → CompileModel command.
             .add_systems(Update, core_observers::relay_compile_requests)
+            // Reactive UI: feed input/workspace pacing hints into the core
+            // parse scheduler (before it reads them this frame).
+            .add_systems(
+                Update,
+                core_observers::feed_parse_pacing
+                    .before(crate::engine_resource::drive_engine_sync),
+            )
+            // Reactive UI: project terminal experiment-run events into console,
+            // plot auto-pick, and SignalRegistry playback.
+            .add_systems(Update, core_observers::project_run_results_to_ui)
             .init_resource::<panels::canvas_projection::DiagramAutoLayoutSettings>()
             .init_resource::<panels::palette::PaletteState>()
             .init_resource::<panels::palette::ComponentDragPayload>()
