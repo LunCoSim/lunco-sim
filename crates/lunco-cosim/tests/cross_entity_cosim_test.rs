@@ -148,11 +148,13 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
         start_element: oscillator, start_connector: "signal".into(),
         end_element:   amplifier,  end_connector:   "signal".into(),
         scale: 1.0,
+        offset: 0.0,
     });
     app.world_mut().spawn(SimConnection {
         start_element: amplifier, start_connector: "scaled".into(),
         end_element:   target,    end_connector:   "force_y".into(),
         scale: 1.0,
+        offset: 0.0,
     });
 
     // ── Wire engines to nodes ───────────────────────────────────────

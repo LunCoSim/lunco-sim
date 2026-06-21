@@ -1,0 +1,86 @@
+#usda 1.0
+(
+    defaultPrim = "SandboxScene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Minimal scene to verify the cosim joint MOTOR (Phase 3).
+#   - Ground (static collider)
+#   - Anchor (kinematic, fixed in space — body0)
+#   - Arm    (dynamic — body1), sticks out +X from the hinge
+#   - Hinge  (PhysicsRevoluteJoint, axis Y) connecting Anchor & Arm
+#
+# The hinge axis is vertical (Y), the arm is horizontal, so gravity
+# applies no torque about the hinge axis — the arm stays level and the
+# angular motor can freely yaw it in the XZ plane.
+#
+# Verify: the joint auto-exposes port `angle`. `SetPort {api_id:<hinge>,
+# name:"angle", value:1.2}` should drive `apply_joint_drives` →
+# motor.target_position, and the Arm should yaw to ~1.2 rad about Y.
+#
+# Loaded by `sandbox --scene scenes/sandbox/revolute_motor_test.usda`.
+
+def Xform "SandboxScene"
+{
+    custom bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.4, 0.4, 0.45)
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+    # Avatar so the API observer has someone to focus from.
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        float lunco:cameraYaw = 0.0
+        float lunco:cameraPitch = -0.4
+        double3 xformOp:translate = (0.0, 8.0, 12.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Cube "Anchor" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.6
+        double3 xformOp:translate = (0.0, 5.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (1.0, 0.2, 0.2)
+        float physics:mass = 1.0
+        bool physics:kinematicEnabled = true
+    }
+
+    def Cube "Arm" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.5
+        double3 xformOp:translate = (2.0, 5.0, 0.0)
+        double3 xformOp:scale = (4.0, 0.4, 0.4)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.2, 0.6, 1.0)
+        float physics:mass = 1.0
+    }
+
+    def PhysicsRevoluteJoint "Hinge"
+    {
+        rel physics:body0 = </SandboxScene/Anchor>
+        rel physics:body1 = </SandboxScene/Arm>
+        uniform token physics:axis = "Y"
+        # Hinge at the Anchor center (world 0,5,0). Arm's local anchor is
+        # -2 along X so its hinge point sits at the Anchor center.
+        point3f physics:localPos0 = (0.0, 0, 0)
+        point3f physics:localPos1 = (-2.0, 0, 0)
+    }
+}

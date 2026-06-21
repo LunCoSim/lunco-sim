@@ -22,7 +22,34 @@ use bevy::time::TimeUpdateStrategy;
 use std::time::Duration;
 
 use avian3d::prelude::*;
-use lunco_cosim::{CoSimPlugin, SimComponent, SimConnection};
+use lunco_cosim::{AvianSim, CoSimPlugin, SimComponent, SimConnection};
+
+/// Running max |force_y| that `propagate_connections` wrote into
+/// `AvianSim.inputs`, captured before `apply_sim_forces` drains it (force_y is a
+/// single-owner port — see `balloon_cosim_test`).
+#[derive(Resource, Default)]
+struct ForceYWitness(f64);
+
+fn capture_force_y(q: Query<&AvianSim>, mut witness: ResMut<ForceYWitness>) {
+    for avian in &q {
+        if let Some(&fy) = avian.inputs.get("force_y") {
+            if fy.abs() > witness.0.abs() {
+                witness.0 = fy;
+            }
+        }
+    }
+}
+
+/// Registers the [`ForceYWitness`] capture between propagate and the force drain.
+fn add_force_y_witness(app: &mut App) {
+    app.init_resource::<ForceYWitness>();
+    app.add_systems(
+        FixedUpdate,
+        capture_force_y
+            .after(lunco_cosim::systems::propagate::CosimSet::Propagate)
+            .before(lunco_cosim::systems::apply_forces::CosimSet::ApplyForces),
+    );
+}
 use lunco_modelica::{
     extract_inputs_with_defaults, extract_model_name, extract_parameters, ModelicaChannels,
     ModelicaCommand, ModelicaCorePlugin, ModelicaModel,
@@ -88,15 +115,15 @@ fn setup_balloon_wires(
 
         commands.spawn(SimConnection {
             start_element: entity, start_connector: "netForce".into(),
-            end_element: entity,   end_connector: "force_y".into(), scale: 1.0,
+            end_element: entity,   end_connector: "force_y".into(), scale: 1.0, offset: 0.0,
         });
         commands.spawn(SimConnection {
             start_element: entity, start_connector: "height".into(),
-            end_element: entity,   end_connector: "height".into(), scale: 1.0,
+            end_element: entity,   end_connector: "height".into(), scale: 1.0, offset: 0.0,
         });
         commands.spawn(SimConnection {
             start_element: entity, start_connector: "velocity_y".into(),
-            end_element: entity,   end_connector: "velocity".into(), scale: 1.0,
+            end_element: entity,   end_connector: "velocity".into(), scale: 1.0, offset: 0.0,
         });
 
         commands.entity(entity).remove::<BalloonModelMarker>();
@@ -141,6 +168,7 @@ fn balloon_flies_up_under_buoyancy() {
     .insert_resource(Time::<Fixed>::from_hz(60.0));
 
     app.add_plugins((CoSimPlugin, ModelicaCorePlugin));
+    add_force_y_witness(&mut app);
 
     app.add_systems(
         Update,
@@ -187,11 +215,11 @@ fn balloon_flies_up_under_buoyancy() {
         app.update();
         std::thread::sleep(Duration::from_millis(2));
 
-        if let Some(comp) = app.world().get::<SimComponent>(balloon) {
-            if let Some(&fy) = comp.inputs.get("force_y") {
-                if fy.abs() > max_force_y.abs() { max_force_y = fy; }
-            }
-        }
+        // force_y is a single-owner port written into AvianSim.inputs and
+        // drained by apply_sim_forces each tick; `capture_force_y` witnesses the
+        // running max between the two (the value is monotonic, so reading it
+        // each iteration is fine).
+        max_force_y = app.world().resource::<ForceYWitness>().0;
         if let Some(v) = app.world().get::<LinearVelocity>(balloon) {
             if v.0.y.abs() > max_velocity_y.abs() { max_velocity_y = v.0.y; }
         }
@@ -248,6 +276,7 @@ fn balloon_flies_up_with_flat_gravity() {
     .insert_resource(Time::<Fixed>::from_hz(60.0));
 
     app.add_plugins((CoSimPlugin, ModelicaCorePlugin, GravityPlugin, EnvironmentPlugin));
+    add_force_y_witness(&mut app);
 
     app.add_systems(
         Update,

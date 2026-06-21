@@ -257,6 +257,13 @@ fn main() {
             group
         })
         .add_plugins(WireframePlugin::default())
+        // bevy_picking's mesh backend: makes all visible Mesh3d entities
+        // pickable (require_markers defaults to false), so scene selection /
+        // possession / spawn-placement run as `Pointer<Click>` observers.
+        // bevy_egui's picking backend (enabled by default, capture_pointer_input
+        // = true) emits a higher-order hit over chrome, so egui transparently
+        // occludes the 3D — no hand-rolled scene/chrome gate needed.
+        .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
         // EntityCount is cheap and useful any time we look at perf; add
         // unconditionally. LogDiagnosticsPlugin is loud — it prints a
         // multi-line summary every second — so gate it on `--log-diag`.
@@ -302,13 +309,11 @@ fn main() {
             app.register_panel(code_panel::CodePanel);
             app.register_panel(models_palette::ModelsPalette);
             app.init_resource::<models_palette::AttachState>();
-            // Attach click runs BEFORE shift-click selection so a ball
-            // click in attach-mode lands as an attach, not a select.
-            app.add_systems(
-                Update,
-                models_palette::handle_attach_click
-                    .before(lunco_sandbox_edit::selection::handle_entity_selection),
-            );
+            // Attach is bevy_picking-driven (observes the same `Pointer<Click>`
+            // as selection; egui occlusion handled by the framework). When an
+            // attachment is pending it consumes the pick and sets the marker.
+            app.add_observer(models_palette::on_scene_click_attach);
+            app.add_systems(Update, models_palette::attach_escape_system);
         })
         // Default scene-wide fill for scenes that author no lighting; a
         // scene-authored UsdLux light takes ambient over (DomeLight
@@ -337,8 +342,8 @@ fn main() {
             ApplyForcesCosimSet::ApplyForces,
             ModelicaSet::SpawnRequests,
         ).chain())
-        // Selection must run before avatar possession so DragModeActive flag is set
-        .add_systems(Update, lunco_sandbox_edit::selection::handle_entity_selection.before(lunco_avatar::avatar_raycast_possession))
+        // Scene selection + possession are bevy_picking observers now (registered
+        // in their own plugins), so there's no Update-ordering to maintain here.
         // Auto-tag every new window-targeting Camera3d with
         // WorkbenchViewportCamera so the workbench's PostUpdate viewport
         // sync confines it to the ViewportPanel's rect (preventing the
@@ -547,20 +552,16 @@ struct ScenePath(String);
 fn collect_scroll_input_gated(
     mut egui_contexts: EguiContexts,
     mut scroll_res: ResMut<lunco_avatar::CameraScroll>,
-    panel_rects: Res<lunco_workbench::PanelRects>,
-    windows: Query<&Window>,
 ) {
     let Ok(ctx) = egui_contexts.ctx_mut() else { return };
-    let Some(window) = windows.iter().next() else { return };
-    let Some(cursor) = window.cursor_position() else { return };
-    // Outside the viewport rect (over docked chrome) → let egui scroll the panel.
-    // Fails open when no viewport rect is recorded (full-window perspective).
-    if !panel_rects.is_empty() && !panel_rects.any_contains(cursor * window.scale_factor()) {
-        return;
-    }
-    // A foreground popup (combo/menu/colour-picker) floating over the viewport
-    // owns its own scroll — don't also zoom the camera underneath it.
-    if lunco_workbench::pointer_over_egui_popup(ctx, cursor) {
+    // Wheel-zoom is the only scene input not routed through bevy_picking (it's
+    // not a pick). Gate it on egui's own `wants_pointer_input()` — true over any
+    // interactive widget, false over the bare 3D — read here in the egui pass so
+    // it's same-frame. Note: NOT `is_pointer_over_area`/`is_using_pointer`; the
+    // former is true over the full-window transparent egui area (would block the
+    // scene), the latter is true for the whole duration of a scroll (would block
+    // the scroll itself after the first notch).
+    if ctx.wants_pointer_input() {
         return;
     }
     scroll_res.delta += ctx.input(|i: &bevy_egui::egui::InputState| i.raw_scroll_delta.y);

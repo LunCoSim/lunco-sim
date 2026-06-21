@@ -125,6 +125,7 @@ fn test_propagate_sim_component_to_sim_component() {
         end_element: target,
         end_connector: "force_in".into(),
         scale: 1.0,
+        offset: 0.0,
     });
 
     // Run wire propagation
@@ -160,6 +161,7 @@ fn test_propagate_with_scale() {
         end_element: target,
         end_connector: "current_in".into(),
         scale: 0.5,
+        offset: 0.0,
     });
 
     app.world_mut().run_system_cached(
@@ -197,6 +199,7 @@ fn test_propagate_avian_to_sim_component() {
         end_element: entity,
         end_connector: "height".into(),
         scale: 1.0,
+        offset: 0.0,
     });
 
     // First read Avian state
@@ -269,6 +272,7 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
         end_element: target,
         end_connector: "force_y".into(),
         scale: 1.0,
+        offset: 0.0,
     });
     app.world_mut().spawn(SimConnection {
         start_element: source,
@@ -276,6 +280,7 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
         end_element: target,
         end_connector: "force_y".into(),
         scale: 1.0,
+        offset: 0.0,
     });
 
     // Propagate — should accumulate both connections into AvianSim.inputs["force_y"]
@@ -288,14 +293,17 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
         assert_eq!(avian.inputs["force_y"], 50.0, "forces should accumulate: 30 + 20 = 50");
     }
 
-    // apply_sim_forces should drain the inputs (they're taken via take_inputs)
+    // apply_sim_forces drains the force inputs via take_inputs. Force inputs
+    // are declared ports, so the drain ZEROS the slot (keeps the key) rather
+    // than removing it — the slot must persist so next tick's propagate can
+    // write it again through the strict resolver.
     app.world_mut().run_system_cached(
         lunco_cosim::systems::apply_forces::apply_sim_forces,
     ).unwrap();
 
     let avian = app.world().get::<AvianSim>(target).unwrap();
-    assert!(!avian.inputs.contains_key("force_y"),
-        "apply_sim_forces should drain force_y from AvianSim.inputs");
+    assert_eq!(avian.inputs["force_y"], 0.0,
+        "apply_sim_forces should drain force_y to 0 (keeping the declared port)");
 }
 
 // ---------------------------------------------------------------------------

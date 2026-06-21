@@ -307,9 +307,8 @@ pub use session::{
     TwinClosed, UnregisterDocument, WorkspacePlugin, WorkspaceResource,
 };
 pub use viewport::{
-    pointer_over_egui_popup, PanelRect, PanelRects, ViewportPanel, ViewportPlaceholder,
-    WorkbenchEguiHost, WorkbenchSceneCamera, WorkbenchViewportCamera, WorkbenchViewportPlugin,
-    VIEWPORT_PANEL_ID,
+    PanelRect, PanelRects, ViewportPanel, ViewportPlaceholder, WorkbenchEguiHost,
+    WorkbenchSceneCamera, WorkbenchViewportCamera, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
 };
 
 /// Get the backdrop colour from the active theme.
@@ -435,7 +434,12 @@ impl Plugin for WorkbenchPlugin {
             .add_observer(on_close_tab);
         register_all_commands(app);
         app
-            .add_systems(EguiPrimaryContextPass, render_workbench.in_set(WorkbenchRenderSet))
+            .add_systems(
+                EguiPrimaryContextPass,
+                render_workbench.in_set(WorkbenchRenderSet),
+            )
+            // Scene picking is handled by bevy_picking (egui occlusion via
+            // bevy_egui's picking backend) — no scene-pointer resource, no gate.
             .add_systems(bevy::prelude::Update, maintain_dock_widths);
 
         // Built-in Files section ships with the workbench so apps get
@@ -1668,6 +1672,8 @@ fn render_workbench(world: &mut World) {
     render_layout(&ctx, &mut layout, world, &theme);
 
     world.insert_resource(layout);
+    // No scene-pointer gate is computed here: scene picking is bevy_picking-driven
+    // and egui occlusion is handled by bevy_egui's picking backend.
 }
 
 /// First leaf node (in walk order) in a `Surface`'s tree, if any.
@@ -2731,6 +2737,9 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         // Central area: do NOT call CentralPanel — egui's bottom/side
         // panels reserve their space and the remaining region stays
         // free for the 3D scene that Bevy renders to the full window.
+        // Scene-vs-chrome picking is handled by bevy_picking (egui occlusion via
+        // bevy_egui's picking backend), so there's no pointer gate to compute
+        // here anymore.
     }
 
     // ── Empty-viewport placeholder ──────────────────────────────────

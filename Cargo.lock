@@ -7135,6 +7135,7 @@ dependencies = [
  "lunco-avatar",
  "lunco-controller",
  "lunco-core",
+ "lunco-cosim",
  "lunco-environment",
  "lunco-materials",
  "lunco-mobility",

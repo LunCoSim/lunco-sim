@@ -51,6 +51,20 @@ const KNOWN_GRAVITY_INPUTS: &[&str] = &["g", "gravity", "grav_accel"];
 /// gravity flows through an ordinary output→input [`crate::SimConnection`] like
 /// any other signal — correct on the Moon, Earth, or any body.
 pub const GRAVITY_SOURCE_CONNECTOR: &str = "gravity_accel";
+
+/// SimComponent **output** connector carrying the sun's azimuth (rad) at an
+/// entity's location.
+///
+/// Same contract as [`GRAVITY_SOURCE_CONNECTOR`]: cosim stays domain-agnostic,
+/// and a domain system (lunco-environment's solar bridge) writes the real value
+/// from the scene sun each tick, so a sun-tracking model receives it through an
+/// ordinary output→input [`crate::SimConnection`] — the doc's
+/// `RadiationProvider → LocalRadiation → solar models` pipeline.
+pub const SOLAR_AZIMUTH_CONNECTOR: &str = "sun_azimuth";
+/// SimComponent **output** connector carrying the sun's elevation (rad) at an
+/// entity's location. Companion to [`SOLAR_AZIMUTH_CONNECTOR`].
+pub const SOLAR_ELEVATION_CONNECTOR: &str = "sun_elevation";
+
 /// Known input variable names that suggest a height connection.
 const KNOWN_HEIGHT_INPUTS: &[&str] = &["height", "altitude", "h", "z"];
 /// Known input variable names that suggest a velocity connection.

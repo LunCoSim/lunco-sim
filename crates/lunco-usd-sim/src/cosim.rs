@@ -26,7 +26,6 @@
 //! is the authoritative path for USD-defined cosim entities.
 
 use bevy::prelude::*;
-use bevy::camera::visibility::RenderLayers;
 use big_space::prelude::CellCoord;
 use lunco_assets::assets_dir;
 use lunco_core::{Command, on_command, register_commands};
@@ -55,40 +54,6 @@ use crate::UsdSimProcessed;
 /// the same entity on subsequent ticks.
 #[derive(Component, Default)]
 pub struct UsdSourcedCosim;
-
-/// Local rotation axis an actuator drives.
-#[derive(Reflect, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RotAxis {
-    X,
-    Y,
-    Z,
-}
-
-/// Position-controls the body's revolute DOF about a USD-authored joint axis.
-///
-/// Authored in USD as `string lunco:simActuator = "<outputVar>:<channel>"`
-/// where `<channel>` is `rotateX|rotateY|rotateZ`. The prim is a
-/// **kinematic** body that also carries a standard `PhysicsRevoluteJoint`
-/// (which declares the DOF — axis/anchors/bodies — in the asset). Each
-/// `FixedUpdate`, [`apply_cosim_actuators`] sets the body's local rotation
-/// about `axis` to the commanded angle: kinematic position control, so it
-/// is reliable, never sleeps, and can be hand-driven.
-///
-/// The commanded angle is [`manual`](Self::manual) when set (UI / API
-/// override), otherwise `SimComponent.outputs[var]` (the Modelica
-/// controller — e.g. `SunTracker.mo`'s `yaw`). This is what lets the
-/// Inspector both watch the sun-tracker and grab the joint by hand.
-#[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component)]
-pub struct CosimActuator {
-    /// Output port name to read from `SimComponent.outputs` in Auto mode.
-    pub var: String,
-    /// Joint axis the value rotates about.
-    pub axis: RotAxis,
-    /// Manual override angle (rad). `Some` → the UI/API drives the joint and
-    /// the Modelica output is ignored; `None` → Auto (Modelica drives).
-    pub manual: Option<f64>,
-}
 
 /// Marker for cross-entity wire prims that have been resolved into a
 /// `SimConnection`. Wire prims are typeless USD nodes carrying the
@@ -170,16 +135,16 @@ pub fn process_usd_cosim_prims(
         // `&self`.
         let reader = &*stage.reader;
 
-        // Gate on `lunco:simWires` OR `lunco:simActuator` presence — those
-        // are the attributes that distinguish an *active* cosim entity
-        // (balloons fanning ports into Avian; a solar array whose Modelica
-        // output drives its rotation) from prims that merely declare a
-        // Modelica reference for documentation (wheels, motors, batteries —
-        // `lunco:modelicaModel` alone is a forward-looking schema, no
-        // translator behaviour).
+        // Gate on `lunco:simWires` presence — the attribute that distinguishes
+        // an *active* cosim entity (a balloon fanning ports into Avian; a solar
+        // tracker whose model output drives a joint via a wire) from prims that
+        // merely declare a Modelica reference for documentation (wheels, motors,
+        // batteries — `lunco:modelicaModel` alone is a forward-looking schema,
+        // no translator behaviour). Sun-tracking and every other joint drive now
+        // flow through the unified wiring fabric (`yaw -> </…/Joint>.angle`), so
+        // there is no separate actuator attribute.
         let wires_csv = reader.prim_attribute_value::<String>(&sdf_path, "lunco:simWires");
-        let actuator_csv = reader.prim_attribute_value::<String>(&sdf_path, "lunco:simActuator");
-        if wires_csv.is_none() && actuator_csv.is_none() {
+        if wires_csv.is_none() {
             continue;
         }
 
@@ -188,7 +153,7 @@ pub fn process_usd_cosim_prims(
 
         if modelica_path.is_none() && python_path.is_none() {
             warn!(
-                "[usd-cosim] {} declares lunco:simWires/simActuator but neither lunco:modelicaModel nor lunco:pythonModel — skipping",
+                "[usd-cosim] {} declares lunco:simWires but neither lunco:modelicaModel nor lunco:pythonModel — skipping",
                 prim_path.path
             );
             continue;
@@ -233,20 +198,11 @@ pub fn process_usd_cosim_prims(
                         end_element: entity,
                         end_connector: to_port,
                         scale,
+                        offset: 0.0,
                     });
                 } else {
                     warn!("[usd-cosim] {} — could not parse wire entry '{}'", prim_path.path, trimmed);
                 }
-            }
-        }
-
-        if let Some(actuator_csv) = &actuator_csv {
-            match parse_actuator(actuator_csv) {
-                Some(act) => { commands.entity(entity).insert(act); }
-                None => warn!(
-                    "[usd-cosim] {} — could not parse lunco:simActuator '{}' (expected `var:rotateX|rotateY|rotateZ`)",
-                    prim_path.path, actuator_csv
-                ),
             }
         }
 
@@ -537,6 +493,12 @@ pub fn process_usd_cosim_wires(
         let scale = reader
             .prim_attribute_value::<f64>(&sdf_path, "lunco:scale")
             .unwrap_or(1.0);
+        // SSP affine offset: `value = src*scale + offset`. Defaults to 0 so
+        // pure-gain wires are unaffected; used for unit biases and DAC/ADC
+        // zero-points (e.g. a DigitalPort register → physical units).
+        let offset = reader
+            .prim_attribute_value::<f64>(&sdf_path, "lunco:offset")
+            .unwrap_or(0.0);
 
         let from_str = from_path.to_string();
         let to_str = to_path.to_string();
@@ -553,11 +515,12 @@ pub fn process_usd_cosim_wires(
             end_element,
             end_connector: to_port.clone(),
             scale,
+            offset,
         });
         commands.entity(entity).insert(UsdSourcedWire);
         info!(
-            "[usd-cosim] wire {}.{} → {}.{} (scale={})",
-            from_str, from_port, to_str, to_port, scale,
+            "[usd-cosim] wire {}.{} → {}.{} (scale={}, offset={})",
+            from_str, from_port, to_str, to_port, scale, offset,
         );
     }
 }
@@ -591,101 +554,163 @@ fn parse_wire(raw: &str) -> Option<(String, String, f64)> {
     Some((from.to_string(), to.to_string(), scale))
 }
 
-/// Parses a `"var:rotateX|rotateY|rotateZ"` actuator binding. The
-/// rotation channel is case-insensitive (`rotateY` == `rotatey`).
-fn parse_actuator(raw: &str) -> Option<CosimActuator> {
-    let mut parts = raw.split(':');
-    let var = parts.next()?.trim();
-    let channel = parts.next()?.trim().to_ascii_lowercase();
-    if var.is_empty() {
-        return None;
-    }
-    let axis = match channel.as_str() {
-        "rotatex" => RotAxis::X,
-        "rotatey" => RotAxis::Y,
-        "rotatez" => RotAxis::Z,
-        _ => return None,
-    };
-    Some(CosimActuator { var: var.to_string(), axis, manual: None })
-}
+// ── Uniform port commands (ListPorts / GetPort / SetPort) ───────────────────
+//
+// The single API surface over the cosim **port table** (`lunco_cosim::ports`).
+// Every exposed value — Modelica var, Avian force/state, joint angle, env
+// signal — is read/written/listed here uniformly, regardless of which backend
+// owns it. These are the canonical port verbs; they are not aliases of
+// `CosimStatus` (which stays as richer per-entity cosim introspection).
 
-/// Per-tick: feed live engine signals into Modelica/script inputs by name.
-///
-/// Recognised input ports (radians, world frame): `sun_azimuth`,
-/// `sun_elevation`. A model opts in simply by declaring an `input Real
-/// sun_azimuth` — the engine fills it from the current Sun direction each
-/// step. This is the *sensor* dual of the actuator below: where the
-/// actuator pushes a model output into the scene, this pulls a scene
-/// signal into a model input.
-///
-/// Runs after `propagate_connections` (which zeroes all inputs) and
-/// before `sync_modelica_inputs` (which hands inputs to the worker), so
-/// the injected value reaches the next solver step intact.
-///
-/// The Sun is the brightest non-preview `DirectionalLight`
-/// (`Without<RenderLayers>` excludes RTT/preview suns; max-illuminance
-/// skips the dim earthshine fill light).
-pub fn inject_sun_signals(
-    q_sun: Query<(&GlobalTransform, &DirectionalLight), Without<RenderLayers>>,
-    mut q_comp: Query<&mut SimComponent, With<UsdSourcedCosim>>,
-) {
-    // Nothing to drive — skip the sun lookup entirely.
-    if q_comp.is_empty() {
-        return;
-    }
-    let Some((sun_gt, _)) = q_sun.iter().max_by(|a, b| {
-        a.1.illuminance
-            .partial_cmp(&b.1.illuminance)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    }) else {
-        return;
-    };
-
-    // `back()` is the direction the light points *from* → toward the sun.
-    let d: Vec3 = *sun_gt.back();
-    if !d.is_finite() || d.length_squared() < 1e-12 {
-        return;
-    }
-    let elevation = d.y.clamp(-1.0, 1.0).asin() as f64;
-    let azimuth = d.x.atan2(d.z) as f64;
-
-    for mut comp in &mut q_comp {
-        if let Some(slot) = comp.inputs.get_mut("sun_azimuth") {
-            *slot = azimuth;
-        }
-        if let Some(slot) = comp.inputs.get_mut("sun_elevation") {
-            *slot = elevation;
-        }
+/// Map a [`lunco_cosim::PortDirection`] to a stable wire string.
+fn port_dir_str(d: lunco_cosim::PortDirection) -> &'static str {
+    match d {
+        lunco_cosim::PortDirection::In => "in",
+        lunco_cosim::PortDirection::Out => "out",
+        lunco_cosim::PortDirection::InOut => "inout",
     }
 }
 
-/// Per-tick: position-control each [`CosimActuator`] body's revolute DOF.
-/// The commanded angle is the manual override if set (UI/API grabbed the
-/// joint), else the Modelica output `SimComponent.outputs[var]`. The body
-/// is kinematic, so writing its local rotation about the bound axis is the
-/// reliable way to set the joint angle — no solver fight, no sleeping, and
-/// hand-driving works. Translation/scale are preserved (only rotation is
-/// set). Runs after `sync_modelica_outputs` so the Auto angle is fresh.
-pub fn apply_cosim_actuators(
-    mut q: Query<(&CosimActuator, &SimComponent, &mut Transform)>,
-) {
-    for (act, comp, mut tf) in &mut q {
-        let angle = match act.manual {
-            Some(a) => a,
-            None => match comp.outputs.get(&act.var) {
-                Some(&v) => v,
-                None => continue,
-            },
-        };
-        if !angle.is_finite() {
-            continue;
+/// Map a [`lunco_cosim::PortType`] to a stable wire string.
+fn port_kind_str(t: lunco_cosim::PortType) -> &'static str {
+    match t {
+        lunco_cosim::PortType::Force => "force",
+        lunco_cosim::PortType::Kinematic => "kinematic",
+        lunco_cosim::PortType::Electrical => "electrical",
+        lunco_cosim::PortType::Thermal => "thermal",
+        lunco_cosim::PortType::Signal => "signal",
+    }
+}
+
+fn port_to_json(p: &lunco_cosim::PortRef) -> serde_json::Value {
+    serde_json::json!({
+        "name": p.name,
+        "direction": port_dir_str(p.direction),
+        "kind": port_kind_str(p.port_type),
+        "value": p.value,
+    })
+}
+
+/// Resolve the optional `api_id` / `entity` field of a params object to an ECS
+/// `Entity` via the `ApiEntityRegistry`. Returns `None` when absent (the
+/// caller lists all) or when the id doesn't resolve.
+fn resolve_param_entity(world: &mut World, params: &serde_json::Value) -> Option<Entity> {
+    let raw = params
+        .get("api_id")
+        .or_else(|| params.get("entity"))
+        .and_then(|v| v.as_u64())?;
+    let reg = world.get_resource::<lunco_api::ApiEntityRegistry>()?;
+    reg.resolve(&lunco_core::GlobalEntityId::from_raw(raw))
+}
+
+/// `ListPorts` — enumerate exposed ports. With `{"api_id": N}`, lists that
+/// entity's ports; without, lists every registered entity that has any port.
+///
+/// `curl … {"command":"ListPorts","params":{"api_id":12345}}`
+pub struct ListPortsProvider;
+
+impl lunco_api::ApiQueryProvider for ListPortsProvider {
+    fn name(&self) -> &'static str { "ListPorts" }
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
+        // Single-entity form.
+        if let Some(e) = resolve_param_entity(world, params) {
+            let ports: Vec<_> = lunco_cosim::entity_ports(world, e)
+                .iter()
+                .map(port_to_json)
+                .collect();
+            return lunco_api::ApiResponse::ok(serde_json::json!({ "ports": ports }));
         }
-        let a = angle as f32;
-        tf.rotation = match act.axis {
-            RotAxis::X => Quat::from_rotation_x(a),
-            RotAxis::Y => Quat::from_rotation_y(a),
-            RotAxis::Z => Quat::from_rotation_z(a),
+        // All-entities form: snapshot the registry list first (owned), then
+        // read ports — avoids holding the resource borrow across `entity_ports`.
+        let Some(reg) = world.get_resource::<lunco_api::ApiEntityRegistry>() else {
+            return lunco_api::ApiResponse::ok(serde_json::json!({ "entities": [] }));
         };
+        let entries = reg.entities();
+        let mut rows = Vec::new();
+        for (api_id, e) in entries {
+            let ports = lunco_cosim::entity_ports(world, e);
+            if ports.is_empty() {
+                continue;
+            }
+            rows.push(serde_json::json!({
+                "api_id": api_id.get(),
+                "name": world.get::<Name>(e).map(|n| n.as_str().to_string()).unwrap_or_default(),
+                "ports": ports.iter().map(port_to_json).collect::<Vec<_>>(),
+            }));
+        }
+        lunco_api::ApiResponse::ok(serde_json::json!({ "entities": rows }))
+    }
+}
+
+/// `GetPort` — read one port value.
+///
+/// `curl … {"command":"GetPort","params":{"api_id":N,"name":"yaw"}}`
+pub struct GetPortProvider;
+
+impl lunco_api::ApiQueryProvider for GetPortProvider {
+    fn name(&self) -> &'static str { "GetPort" }
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
+        let Some(e) = resolve_param_entity(world, params) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::EntityNotFound,
+                "GetPort requires a resolvable `api_id`",
+            );
+        };
+        let Some(name) = params.get("name").and_then(|v| v.as_str()) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::DeserializationError,
+                "GetPort requires a `name`",
+            );
+        };
+        match lunco_cosim::read_port(world, e, name) {
+            Some(value) => lunco_api::ApiResponse::ok(serde_json::json!({ "name": name, "value": value })),
+            None => lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::DeserializationError,
+                format!("no port `{}` on entity", name),
+            ),
+        }
+    }
+}
+
+/// `SetPort` — write a setpoint to one input port.
+///
+/// `curl … {"command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2}}`
+///
+/// TODO(ports): this writes the input slot once via [`lunco_cosim::write_port`];
+/// per decision 2 it must become a ControlStream **hold** (latest-wins,
+/// `hold_last(timeout)`, overriding a live wire until released). See
+/// `lunco-cosim/src/ports.rs::write_port`.
+pub struct SetPortProvider;
+
+impl lunco_api::ApiQueryProvider for SetPortProvider {
+    fn name(&self) -> &'static str { "SetPort" }
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
+        let Some(e) = resolve_param_entity(world, params) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::EntityNotFound,
+                "SetPort requires a resolvable `api_id`",
+            );
+        };
+        let Some(name) = params.get("name").and_then(|v| v.as_str()) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::DeserializationError,
+                "SetPort requires a `name`",
+            );
+        };
+        let Some(value) = params.get("value").and_then(|v| v.as_f64()) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::DeserializationError,
+                "SetPort requires a numeric `value`",
+            );
+        };
+        if lunco_cosim::write_port(world, e, name, value) {
+            lunco_api::ApiResponse::ok(serde_json::json!({ "name": name, "value": value }))
+        } else {
+            lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::DeserializationError,
+                format!("no writable input port `{}` on entity", name),
+            )
+        }
     }
 }
 
@@ -1069,9 +1094,7 @@ pub(crate) fn install(app: &mut App) {
     // panicking on a missing `Assets<…>` resource.
     app.init_asset::<ModelicaSource>()
         .init_asset::<PythonSource>()
-        .init_resource::<lunco_scripting::ScriptRegistry>()
-        .register_type::<CosimActuator>()
-        .register_type::<RotAxis>();
+        .init_resource::<lunco_scripting::ScriptRegistry>();
 
     app.add_systems(
         Update,
@@ -1103,16 +1126,6 @@ pub(crate) fn install(app: &mut App) {
         (
             sync_modelica_outputs.after(ModelicaSet::HandleResponses).before(PropagateCosimSet::Propagate),
             sync_script_outputs.after(ModelicaSet::HandleResponses).before(PropagateCosimSet::Propagate),
-            // Drive USD revolute joints from fresh Modelica outputs (the
-            // solar-array sun tracker). After outputs sync, before the
-            // physics solve (FixedPostUpdate) reads the joint frames.
-            apply_cosim_actuators.after(sync_modelica_outputs),
-            // Inject live engine signals (sun azimuth/elevation) into model
-            // inputs AFTER propagate has zeroed them and BEFORE they're
-            // handed to the worker.
-            inject_sun_signals
-                .after(ApplyForcesCosimSet::ApplyForces)
-                .before(sync_modelica_inputs),
             sync_modelica_inputs.after(ApplyForcesCosimSet::ApplyForces).before(ModelicaSet::SpawnRequests),
             sync_script_inputs.after(ApplyForcesCosimSet::ApplyForces).before(ModelicaSet::SpawnRequests),
         ),
@@ -1120,6 +1133,11 @@ pub(crate) fn install(app: &mut App) {
 
     app.add_systems(Startup, |reg: Option<ResMut<lunco_api::ApiQueryRegistry>>| {
         if let Some(mut reg) = reg {
+            // Canonical uniform port verbs (over `lunco_cosim::ports`).
+            reg.register(ListPortsProvider);
+            reg.register(GetPortProvider);
+            reg.register(SetPortProvider);
+            // Richer per-entity cosim introspection (not an alias of the above).
             reg.register(CosimStatusProvider);
         }
     });
