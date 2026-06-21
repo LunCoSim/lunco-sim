@@ -343,7 +343,7 @@ fn setup_web_workbench(
     // Open the model tab so the user lands on the model view.
     let tab_id = model_tabs.ensure_for(doc_id, None);
     layout.open_instance(
-        lunco_modelica::model_tabs_types::MODEL_VIEW_KIND,
+        lunco_modelica::ui::MODEL_VIEW_KIND,
         tab_id,
     );
 

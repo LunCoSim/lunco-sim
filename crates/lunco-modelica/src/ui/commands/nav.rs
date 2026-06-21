@@ -78,7 +78,7 @@ pub fn on_focus_document_by_name(
             .resource_mut::<crate::model_tabs::ModelTabs>()
             .ensure_for(doc, None);
         world.commands().trigger(lunco_workbench::OpenTab {
-            kind: crate::model_tabs_types::MODEL_VIEW_KIND,
+            kind: crate::ui::MODEL_VIEW_KIND,
             instance: tab_id,
         });
     });

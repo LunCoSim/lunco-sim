@@ -165,7 +165,7 @@ pub fn drive_duplicate_loads(
                     .map(|(id, _)| id);
                 if let Some(old_id) = placeholder {
                     commands.trigger(lunco_workbench::CloseTab {
-                        kind: crate::model_tabs_types::MODEL_VIEW_KIND,
+                        kind: crate::ui::MODEL_VIEW_KIND,
                         instance: old_id,
                     });
                     tabs.close_tab(old_id);
@@ -176,7 +176,7 @@ pub fn drive_duplicate_loads(
                         crate::model_tabs_types::ModelViewMode::Canvas;
                 }
                 commands.trigger(lunco_workbench::OpenTab {
-                    kind: crate::model_tabs_types::MODEL_VIEW_KIND,
+                    kind: crate::ui::MODEL_VIEW_KIND,
                     instance: new_id,
                 });
             }
@@ -380,7 +380,7 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
             workspace.active_document = Some(doc_id);
         }
         world.commands().trigger(lunco_workbench::OpenTab {
-            kind: crate::model_tabs_types::MODEL_VIEW_KIND,
+            kind: crate::ui::MODEL_VIEW_KIND,
             instance: tab_id,
         });
         bevy::log::info!(
@@ -513,7 +513,7 @@ fn open_drill_in_tab(
         tab_id
     };
     world.commands().trigger(lunco_workbench::OpenTab {
-        kind: crate::model_tabs_types::MODEL_VIEW_KIND,
+        kind: crate::ui::MODEL_VIEW_KIND,
         instance: tab_id,
     });
 

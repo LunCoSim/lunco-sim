@@ -138,7 +138,7 @@ pub fn drain_browser_actions(world: &mut World) {
                 // is removed from the World for the duration of rendering.
                 if let Some(old_id) = evict {
                     world.commands().trigger(lunco_workbench::CloseTab {
-                        kind: crate::model_tabs_types::MODEL_VIEW_KIND,
+                        kind: crate::ui::MODEL_VIEW_KIND,
                         instance: old_id,
                     });
                     world
@@ -151,7 +151,7 @@ pub fn drain_browser_actions(world: &mut World) {
                     }
                 }
                 world.commands().trigger(lunco_workbench::OpenTab {
-                    kind: crate::model_tabs_types::MODEL_VIEW_KIND,
+                    kind: crate::ui::MODEL_VIEW_KIND,
                     instance: tab_id,
                 });
                 // Make this doc the active workspace doc so the
@@ -166,7 +166,7 @@ pub fn drain_browser_actions(world: &mut World) {
                     .active_document = Some(doc);
             }
             BrowserAction::CloseDoc { doc } => {
-                use crate::model_tabs::ModelTabs; use crate::model_tabs_types::MODEL_VIEW_KIND;
+                use crate::model_tabs::ModelTabs; use crate::ui::MODEL_VIEW_KIND;
                 // Close every tab bound to the doc — dock layout via
                 // CloseTab triggers, ModelTabs state via
                 // `close_all_for_doc`, canvas via `drop_tab` — then

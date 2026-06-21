@@ -369,7 +369,7 @@ fn manage_tutorial_doc(world: &mut World) {
         (s.visible, s.screen, s.graphs_demo_ran_for == Some(s.screen))
     };
     if visible && screen == GRAPHS_STEP_INDEX && !already_ran {
-        let model_view_kind = crate::model_tabs_types::MODEL_VIEW_KIND;
+        let model_view_kind = crate::ui::MODEL_VIEW_KIND;
         let plot_kind = crate::ui::panels::graphs::MODELICA_PLOT_KIND;
         let mut saved: Option<lunco_workbench::TabLocation> = None;
         if let Some(mut layout) =

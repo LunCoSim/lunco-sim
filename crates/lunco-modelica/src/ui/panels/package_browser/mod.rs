@@ -314,7 +314,7 @@ pub(crate) fn resolve_mem_id(world: &World, id: &str) -> Option<ClassRef> {
 }
 
 fn open_bundled_class(world: &mut World, class: &ClassRef) {
-    use crate::model_tabs_types::MODEL_VIEW_KIND;
+    use crate::ui::MODEL_VIEW_KIND;
     use bevy::tasks::AsyncComputeTaskPool;
 
     let filename = match class.path.first() {
@@ -384,7 +384,8 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
 }
 
 fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
-    use crate::model_tabs_types::{MODEL_VIEW_KIND, ModelViewMode};
+    use crate::model_tabs_types::ModelViewMode;
+    use crate::ui::MODEL_VIEW_KIND;
     use bevy::tasks::AsyncComputeTaskPool;
 
     let drilled = if class.path.is_empty() { None } else { Some(class.qualified()) };
@@ -497,7 +498,7 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
 }
 
 fn focus_existing_doc_tab(world: &mut World, doc: lunco_doc::DocumentId, qualified: String) {
-    use crate::model_tabs_types::MODEL_VIEW_KIND;
+    use crate::ui::MODEL_VIEW_KIND;
     let drilled = if qualified.is_empty() { None } else { Some(qualified) };
     let tab_id = world
         .resource_mut::<crate::model_tabs::ModelTabs>()

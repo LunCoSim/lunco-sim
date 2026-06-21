@@ -268,7 +268,7 @@ fn restore_from_localstorage(world: &mut World) {
                 .ensure_for(doc_id, drilled);
             if let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() {
                 layout.open_instance(
-                    crate::model_tabs_types::MODEL_VIEW_KIND,
+                    crate::ui::MODEL_VIEW_KIND,
                     tab_id,
                 );
             }

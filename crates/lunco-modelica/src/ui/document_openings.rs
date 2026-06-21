@@ -335,7 +335,7 @@ pub fn drive_file_load_openings(
                     .collect();
                 for tab_id in orphan_tab_ids {
                     commands.trigger(lunco_workbench::CloseTab {
-                        kind: crate::model_tabs_types::MODEL_VIEW_KIND,
+                        kind: crate::ui::MODEL_VIEW_KIND,
                         instance: tab_id,
                     });
                     tabs.close_tab(tab_id);

@@ -19,7 +19,7 @@ use lunco_doc::DocumentId;
 use lunco_workbench::{DocumentSessionCodec, DocumentSnapshot, OpenTab};
 
 use crate::ui::panels::canvas_diagram::CanvasDiagramState;
-use crate::model_tabs::ModelTabs; use crate::model_tabs_types::MODEL_VIEW_KIND;
+use crate::model_tabs::ModelTabs; use crate::ui::MODEL_VIEW_KIND;
 use crate::state::ModelicaDocumentRegistry;
 
 const KIND: &str = "modelica";

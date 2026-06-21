@@ -14,7 +14,7 @@ use crate::document::duplicate::{
 use crate::state::{
     CompileStates, ModelicaDocumentRegistry, WorkbenchState,
 };
-use crate::model_tabs::ModelTabs; use crate::model_tabs_types::MODEL_VIEW_KIND;
+use crate::model_tabs::ModelTabs; use crate::ui::MODEL_VIEW_KIND;
 use crate::package_tree::PackageTreeCache;
 
 // ─── Command Structs ─────────────────────────────────────────────────────────

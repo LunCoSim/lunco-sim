@@ -5,7 +5,8 @@ use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_workbench::{InstancePanel, Panel, PanelId, PanelSlot};
 
-use crate::model_tabs_types::{MODEL_VIEW_KIND, ModelViewMode, TabId, TabRenderContext};
+use crate::model_tabs_types::{ModelViewMode, TabId, TabRenderContext};
+use crate::ui::MODEL_VIEW_KIND;
 use crate::model_tabs::ModelTabs;
 use super::context::{resolve_tab_target, resolve_tab_title, sync_active_tab_to_doc};
 use crate::ui::panels::code_editor::{CodeEditorPanel, EditorBufferState};

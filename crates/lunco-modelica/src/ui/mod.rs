@@ -62,6 +62,11 @@ use lunco_workbench::{Perspective, PerspectiveId, WorkbenchAppExt, WorkbenchLayo
 // Core document/library/compile state moved out of `ui` into `crate::state`.
 use crate::state::{CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 
+/// The [`PanelId`] under which `ModelViewPanel` is registered. Lives in the
+/// `ui` module because `PanelId` is a workbench (UI) panel-registry key — the
+/// core tab types in [`crate::model_tabs_types`] don't depend on it.
+pub const MODEL_VIEW_KIND: PanelId = PanelId("modelica_model_view");
+
 pub mod document_openings;
 
 pub mod commands;

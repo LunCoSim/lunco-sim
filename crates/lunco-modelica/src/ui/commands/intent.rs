@@ -38,7 +38,7 @@ pub fn resolve_editor_intent(
                     .get_resource_mut::<lunco_workbench::PendingTabCloses>()
                 {
                     q.push(lunco_workbench::TabId::Instance {
-                        kind: crate::model_tabs_types::MODEL_VIEW_KIND,
+                        kind: crate::ui::MODEL_VIEW_KIND,
                         instance: tab_id,
                     });
                 }
