@@ -360,7 +360,6 @@ pub fn ensure_loaded(
     registry: &mut SourceRootRegistry,
     id: &str,
     channels: &crate::ModelicaChannels,
-    status_bus: Option<&mut lunco_workbench::status_bus::StatusBus>,
 ) -> bool {
     let Some(entry) = registry.roots.get_mut(id) else {
         return false;
@@ -462,19 +461,9 @@ pub fn ensure_loaded(
         progress: 0.0,
         started: Instant::now(),
     };
-    if let Some(bus) = status_bus {
-        bus.push_progress(
-            STATUS_BUS_SOURCE,
-            format!("Loading library `{id}`…"),
-            0,
-            0,
-        );
-        bus.push(
-            STATUS_BUS_SOURCE,
-            lunco_workbench::status_bus::StatusLevel::Info,
-            format!("Loading library `{id}` ({summary})"),
-        );
-    }
+    // Status-bar feedback is projected from this `Loading` state by the reactive
+    // UI observer `ui::core_observers::mirror_source_roots_to_status_bus`. Core
+    // sets the state; it no longer touches the status bus.
     true
 }
 

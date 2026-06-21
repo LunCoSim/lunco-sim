@@ -178,3 +178,84 @@ pub fn drain_sim_samples_to_viz(
         }
     }
 }
+
+/// Reactive UI: project core [`crate::ModelicaNotice`] events into the Console
+/// panel. The core worker emits notices; this observer renders them.
+pub fn drain_notices_to_console(
+    mut notices: MessageReader<crate::ModelicaNotice>,
+    console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
+) {
+    let Some(mut console) = console else {
+        notices.clear();
+        return;
+    };
+    for n in notices.read() {
+        match n.level {
+            crate::NoticeLevel::Info => console.info(n.text.clone()),
+            crate::NoticeLevel::Warn => console.warn(n.text.clone()),
+            crate::NoticeLevel::Error => console.error(n.text.clone()),
+        }
+    }
+}
+
+/// Reactive UI: project core `SourceRootRegistry` load-state transitions into
+/// the status bar — progress while `Loading`, a completion entry on
+/// `Ready`/`Failed`. Core sets the registry state; it no longer touches the bus.
+pub fn mirror_source_roots_to_status_bus(
+    registry: Option<Res<crate::source_roots::SourceRootRegistry>>,
+    bus: Option<ResMut<StatusBus>>,
+    mut last: Local<std::collections::HashMap<String, u8>>,
+) {
+    use crate::source_roots::{LoadState, STATUS_BUS_SOURCE};
+    let (Some(registry), Some(mut bus)) = (registry, bus) else {
+        return;
+    };
+    for (id, root) in &registry.roots {
+        let disc = match &root.state {
+            LoadState::NotLoaded => 0u8,
+            LoadState::Loading { .. } => 1,
+            LoadState::Ready => 2,
+            LoadState::Failed(_) => 3,
+        };
+        if last.get(id) == Some(&disc) {
+            continue;
+        }
+        match &root.state {
+            LoadState::NotLoaded => {}
+            LoadState::Loading { .. } => {
+                bus.push_progress(STATUS_BUS_SOURCE, format!("Loading library `{id}`…"), 0, 0);
+                bus.push(STATUS_BUS_SOURCE, StatusLevel::Info, format!("Loading library `{id}`"));
+            }
+            LoadState::Ready => {
+                bus.clear_progress(STATUS_BUS_SOURCE);
+                bus.push(STATUS_BUS_SOURCE, StatusLevel::Info, format!("Library `{id}` ready"));
+            }
+            LoadState::Failed(msg) => {
+                bus.clear_progress(STATUS_BUS_SOURCE);
+                bus.push(
+                    STATUS_BUS_SOURCE,
+                    StatusLevel::Warn,
+                    format!("Library `{id}` load failed: {msg}"),
+                );
+            }
+        }
+        last.insert(id.clone(), disc);
+    }
+}
+
+/// Reactive UI: translate core [`crate::CompileRequested`] events into the UI
+/// `CompileModel` command. The core stepper asks for a compile without ever
+/// naming the UI command type.
+pub fn relay_compile_requests(
+    mut requests: MessageReader<crate::CompileRequested>,
+    mut commands: Commands,
+) {
+    for r in requests.read() {
+        commands.trigger(crate::ui::commands::CompileModel {
+            doc: r.doc,
+            class: r.class.clone(),
+            force: r.force,
+            resume_after_compile: r.resume_after_compile,
+        });
+    }
+}

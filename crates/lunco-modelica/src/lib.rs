@@ -973,6 +973,36 @@ pub struct SimSampleStream {
     pub batches: Vec<SimSampleBatch>,
 }
 
+/// UI-agnostic notice emitted by the core (compile lifecycle, worker crash,
+/// …). The reactive UI console observer
+/// ([`ui::core_observers::drain_notices_to_console`]) projects these into the
+/// Console panel. Core never references the console type.
+#[derive(Message, Clone)]
+pub struct ModelicaNotice {
+    pub level: NoticeLevel,
+    pub text: String,
+}
+
+/// Severity of a [`ModelicaNotice`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum NoticeLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+/// Core request to (re)compile a model — emitted by the core stepper when a
+/// model needs a stepper but has none yet (interactive "Run before compile").
+/// The reactive UI layer ([`ui::core_observers::relay_compile_requests`])
+/// translates it into the UI `CompileModel` command. Core stays UI-agnostic.
+#[derive(Message, Clone)]
+pub struct CompileRequested {
+    pub doc: lunco_doc::DocumentId,
+    pub class: Option<String>,
+    pub force: bool,
+    pub resume_after_compile: bool,
+}
+
 /// One sim step's observable samples for a single entity.
 pub struct SimSampleBatch {
     pub entity: Entity,
@@ -1277,6 +1307,8 @@ fn build_modelica_core(app: &mut App) {
     app.init_resource::<crate::state::WorkbenchState>();
     app.init_resource::<SimStreamRegistry>();
     app.init_resource::<SimSampleStream>();
+    app.add_message::<ModelicaNotice>();
+    app.add_message::<CompileRequested>();
 
     // Experiments / Fast Run: backend-agnostic registry + this crate's
     // ModelicaRunner binding. UI for the Run buttons and Experiments

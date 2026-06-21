@@ -1425,7 +1425,9 @@ pub fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
     time: Res<Time<Fixed>>,
     mut q_models: Query<(Entity, &mut ModelicaModel)>,
-    mut commands: Commands,
+    // Auto-compile request goes out as a core event; the UI relays it to the
+    // `CompileModel` command. Core no longer references the UI command.
+    mut compile_requests: MessageWriter<crate::CompileRequested>,
 ) {
     let dt = time.delta_secs_f64();
 
@@ -1447,7 +1449,7 @@ pub fn spawn_modelica_requests(
         if !model.is_compiled {
             let doc = model.document;
             if doc != lunco_doc::DocumentId::default() {
-                commands.trigger(crate::ui::commands::CompileModel {
+                compile_requests.write(crate::CompileRequested {
                     doc,
                     class: if model.model_name.is_empty() {
                         None
@@ -1494,31 +1496,27 @@ pub fn handle_modelica_responses(
     // phase 4, retired). Param kept in the signature in case other
     // worker paths need it; prefix `_` silences the unused warning.
     mut _workbench_state: ResMut<crate::state::WorkbenchState>,
-    // Headless callers (e.g. cosim tests) run this system without the
-    // UI plugin, so the console + compile-state resources may be
-    // absent. Make both optional so the core stepping path survives
-    // those setups without forcing them to pull in the UI module.
+    // Core compile-state (UI-agnostic). Optional so headless cosim tests run
+    // without it.
     compile_states: Option<ResMut<crate::state::CompileStates>>,
-    console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
+    // Lifecycle messages leave as core events; the reactive UI console observer
+    // projects them. Core no longer references the console panel.
+    mut notices: MessageWriter<crate::ModelicaNotice>,
     // Live sim samples leave the core handler through this UI-agnostic queue;
     // the reactive UI viz observer (`ui::core_observers::drain_sim_samples_to_viz`)
     // drains it into `lunco_viz`. Core no longer references any viz/plot types.
     mut sample_stream: ResMut<crate::SimSampleStream>,
     runner_res: Option<Res<crate::ModelicaRunnerResource>>,
     source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
-    status_bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
 ) {
     let mut compile_states = compile_states;
-    let mut console = console;
     let mut source_roots = source_roots;
-    let mut status_bus = status_bus;
     while let Ok(result) = channels.rx.try_recv() {
         // Source-root load ack: route to the registry and short-
         // circuit before any of the sim-result handling below
         // (which keys on `result.entity` — LoadSourceRoot uses
         // `Entity::PLACEHOLDER`).
         if let Some(root_id) = result.loaded_source_root_id.as_ref() {
-            let is_failure = result.error.is_some();
             if let Some(roots) = source_roots.as_deref_mut() {
                 if let Some(entry) = roots.roots.get_mut(root_id) {
                     if let Some(err) = result.error.as_ref() {
@@ -1538,26 +1536,9 @@ pub fn handle_modelica_responses(
                     }
                 }
             }
-            if let Some(bus) = status_bus.as_deref_mut() {
-                bus.clear_progress(crate::source_roots::STATUS_BUS_SOURCE);
-                if is_failure {
-                    bus.push(
-                        crate::source_roots::STATUS_BUS_SOURCE,
-                        lunco_workbench::status_bus::StatusLevel::Warn,
-                        format!(
-                            "Library `{}` load failed: {}",
-                            root_id,
-                            result.error.as_deref().unwrap_or(""),
-                        ),
-                    );
-                } else {
-                    bus.push(
-                        crate::source_roots::STATUS_BUS_SOURCE,
-                        lunco_workbench::status_bus::StatusLevel::Info,
-                        format!("Library `{}` ready", root_id),
-                    );
-                }
-            }
+            // Status-bar projection of this load result is handled by the
+            // reactive UI observer of `SourceRootRegistry` — core only sets the
+            // registry state above.
             continue;
         }
 
@@ -1597,9 +1578,10 @@ pub fn handle_modelica_responses(
         if result.entity == Entity::PLACEHOLDER {
             let msg = "Simulation worker crashed and restarted.";
             warn!("{msg}");
-            if let Some(c) = console.as_mut() {
-                c.error(msg);
-            }
+            notices.write(crate::ModelicaNotice {
+                level: crate::NoticeLevel::Error,
+                text: msg.to_string(),
+            });
             continue;
         }
 
@@ -1624,9 +1606,10 @@ pub fn handle_modelica_responses(
                 // update). Skip the per-Step logs so the console doesn't
                 // flood at 60 Hz.
                 if result.is_new_model || result.is_reset || result.is_parameter_update {
-                    if let Some(c) = console.as_mut() {
-                        c.info(format!("[{}] {msg}", model.model_name));
-                    }
+                    notices.write(crate::ModelicaNotice {
+                        level: crate::NoticeLevel::Info,
+                        text: format!("[{}] {msg}", model.model_name),
+                    });
                 }
             }
 
@@ -1656,24 +1639,26 @@ pub fn handle_modelica_responses(
                                     "[Modelica] Compile finished with error for `{}` in {}",
                                     model.model_name, human
                                 );
-                                if let Some(c) = console.as_mut() {
-                                    c.error(format!(
+                                notices.write(crate::ModelicaNotice {
+                                    level: crate::NoticeLevel::Error,
+                                    text: format!(
                                         "⏹ Compile FAILED: '{}' in {}",
                                         model.model_name, human
-                                    ));
-                                }
+                                    ),
+                                });
                             }
                             crate::state::CompileState::Ready => {
                                 info!(
                                     "[Modelica] Compile finished for `{}` in {}",
                                     model.model_name, human
                                 );
-                                if let Some(c) = console.as_mut() {
-                                    c.info(format!(
+                                notices.write(crate::ModelicaNotice {
+                                    level: crate::NoticeLevel::Info,
+                                    text: format!(
                                         "✓ Compile finished: '{}' in {}",
                                         model.model_name, human
-                                    ));
-                                }
+                                    ),
+                                });
                             }
                             _ => {}
                         }
@@ -1712,9 +1697,10 @@ pub fn handle_modelica_responses(
                 } else {
                     "Solver error"
                 };
-                if let Some(c) = console.as_mut() {
-                    c.error(format!("[{}] {prefix}: {err}", model.model_name));
-                }
+                notices.write(crate::ModelicaNotice {
+                    level: crate::NoticeLevel::Error,
+                    text: format!("[{}] {prefix}: {err}", model.model_name),
+                });
                 model.paused = true;
                 // A failed Compile/Step must not silently auto-play on a
                 // later, unrelated successful compile: clear the resume
