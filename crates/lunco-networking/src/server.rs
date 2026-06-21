@@ -40,28 +40,42 @@ const ENV_TLS_KEY: &str = "LUNCO_TLS_KEY";
 ///   print + persist the cert digest so a browser can pin it via the connect
 ///   URL `#<digest>` (there's no CA to vouch for a self-signed cert).
 ///
-/// A failed PEM load falls back to the dev self-signed path (logged), so a
-/// misconfigured env can't take the host down.
+/// **Fail-loud:** if the env vars ARE set but the PEM can't be loaded, this
+/// PANICS rather than silently serving a self-signed cert. An operator who set
+/// `LUNCO_TLS_CERT`/`LUNCO_TLS_KEY` asked for that specific identity; falling
+/// back would hand browsers an untrusted cert (connection refused) with no
+/// obvious server-side cause — a misconfiguration that looks like a network
+/// fault. Crashing surfaces it immediately in the service logs / exit code.
+/// The self-signed path is reached ONLY when both env vars are unset (dev).
 fn resolve_identity() -> Identity {
-    if let (Ok(cert_path), Ok(key_path)) = (std::env::var(ENV_TLS_CERT), std::env::var(ENV_TLS_KEY))
-    {
-        match load_pem_identity(&cert_path, &key_path) {
-            Ok(identity) => {
-                info!("🔐 WebTransport using cert from {cert_path}");
-                // A real CA cert's digest is unused (browsers validate the chain),
-                // but a *self-signed* cert pinned via these env vars still needs the
-                // hash-pin — so publish the digest here too. This is the supported
-                // way to get a STABLE digest across host restarts: point the env
-                // vars at a persisted self-signed cert instead of minting a fresh
-                // one each launch. See announce_digest.
-                announce_digest(&identity);
-                return identity;
-            }
-            Err(e) => error!(
-                "🔐 failed to load {ENV_TLS_CERT}/{ENV_TLS_KEY} ({e}); \
-                 falling back to self-signed dev cert"
-            ),
+    match (std::env::var(ENV_TLS_CERT), std::env::var(ENV_TLS_KEY)) {
+        (Ok(cert_path), Ok(key_path)) => {
+            let identity = load_pem_identity(&cert_path, &key_path).unwrap_or_else(|e| {
+                panic!(
+                    "🔐 {ENV_TLS_CERT}/{ENV_TLS_KEY} are set but the cert could not be \
+                     loaded ({e}). Refusing to start with a fallback self-signed cert — \
+                     browsers would reject it. Fix the PEM paths/permissions \
+                     (cert={cert_path}, key={key_path}) or unset both env vars to run \
+                     with a dev self-signed cert."
+                )
+            });
+            info!("🔐 WebTransport using cert from {cert_path}");
+            // A real CA cert's digest is unused (browsers validate the chain),
+            // but a *self-signed* cert pinned via these env vars still needs the
+            // hash-pin — so publish the digest here too. This is the supported
+            // way to get a STABLE digest across host restarts: point the env
+            // vars at a persisted self-signed cert instead of minting a fresh
+            // one each launch. See announce_digest.
+            announce_digest(&identity);
+            return identity;
         }
+        // Exactly one of the two set — almost certainly a typo'd/forgotten var.
+        // Fail loud rather than quietly ignoring the one that IS set.
+        (Ok(_), Err(_)) | (Err(_), Ok(_)) => panic!(
+            "🔐 only one of {ENV_TLS_CERT}/{ENV_TLS_KEY} is set; both are required to \
+             serve a CA cert. Set both, or unset both for a dev self-signed cert."
+        ),
+        (Err(_), Err(_)) => {}
     }
 
     // ECDSA-P256 self-signed cert — fresh each launch (→ a new digest every

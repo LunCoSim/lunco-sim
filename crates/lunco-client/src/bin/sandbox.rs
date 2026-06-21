@@ -116,6 +116,15 @@ fn main() {
     // seconds after the window loses focus. Two side-by-side windows means one
     // is always unfocused — so we keep it Continuous while networked.
     let networked = args.iter().any(|a| a == "--host" || a == "--connect");
+    // `--no-ui` (or `LUNCO_NO_UI=1`) runs the sandbox HEADLESS: no OS window, no
+    // winit, no GPU device, no egui/workbench chrome — just the server-authoritative
+    // sim (USD scene + avian physics + cosim + networking host). For a headless
+    // Ubuntu deploy of `sandbox.lunco.space`. The render plugins still load in
+    // `backends: None` mode so the asset stores (`Assets<Mesh>`/`Assets<StandardMaterial>`)
+    // exist — USD visual sync populates the meshes the avian colliders key off — but
+    // nothing is ever drawn. `ScheduleRunnerPlugin` drives the loop in winit's place.
+    let headless = args.iter().any(|a| a == "--no-ui")
+        || std::env::var("LUNCO_NO_UI").is_ok_and(|v| v != "0" && !v.is_empty());
     // Present mode. Networked side-by-side windows: one is ALWAYS unfocused, and an
     // unfocused window under `Fifo` (vsync) can block on present when the compositor
     // stops servicing it — which stalls the WHOLE update loop (sim + netcode + the
@@ -170,6 +179,61 @@ fn main() {
     // `DefaultPlugins`/`AssetPlugin` snapshots the source registry.
     lunco_assets::register_lunco_asset_sources(&mut app);
 
+    // Headless-aware base plugin group. Windowed: normal winit window + GPU.
+    // Headless (`--no-ui`): no primary window, winit disabled, GPU backend NONE.
+    // The render plugins still register the mesh/material asset stores (so USD
+    // visual sync can populate the meshes avian colliders read), but create no
+    // device and draw nothing. `ScheduleRunnerPlugin` (added below) ticks the app
+    // in winit's place.
+    let default_plugins = {
+        use bevy::render::settings::WgpuSettings;
+        let render_creation = if headless {
+            WgpuSettings { backends: None, ..default() }.into()
+        } else {
+            lunco_workbench::preferred_wgpu_settings().into()
+        };
+        let group = DefaultPlugins
+            .set(AssetPlugin {
+                file_path: std::env::current_dir().unwrap_or_default().join("assets").to_string_lossy().to_string(),
+                // Don't probe for `.meta` sidecars: we ship none, so every asset
+                // load would otherwise fire a failed `<asset>.meta` fetch.
+                meta_check: AssetMetaCheck::Never,
+                ..default()
+            })
+            .set(bevy::log::LogPlugin {
+                // Quieten third-party noise (rumoca JIT + diffsol per-step).
+                filter: "wgpu=error,naga=warn,cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
+                ..default()
+            })
+            .set(bevy::render::RenderPlugin { render_creation, ..default() });
+        if headless {
+            group
+                .set(WindowPlugin {
+                    primary_window: None,
+                    exit_condition: bevy::window::ExitCondition::DontExit,
+                    close_when_requested: false,
+                    ..default()
+                })
+                .disable::<bevy::winit::WinitPlugin>()
+        } else {
+            group.set(WindowPlugin {
+                primary_window: Some(Window {
+                    // On wasm, attach to the `#bevy` canvas and mirror its CSS size.
+                    #[cfg(target_arch = "wasm32")]
+                    canvas: Some("#bevy".to_string()),
+                    #[cfg(target_arch = "wasm32")]
+                    fit_canvas_to_parent: true,
+                    present_mode,
+                    // Centralized merged-titlebar chrome + persisted geometry.
+                    ..lunco_workbench::restored_window(window_title)
+                }),
+                ..default()
+            })
+        }
+        .build()
+        .disable::<TransformPlugin>()
+    };
+
     app.insert_resource(ScenePath(scene_path))
         .insert_resource(virtual_time)
         // Match the workbench theme's backdrop so the window's first-
@@ -200,52 +264,7 @@ fn main() {
             exposure_ev100: 9.7,
             ..Default::default()
         })
-        .add_plugins(DefaultPlugins
-            .set(AssetPlugin {
-                file_path: std::env::current_dir().unwrap_or_default().join("assets").to_string_lossy().to_string(),
-                // Don't probe for `.meta` sidecars: we ship none, so every asset
-                // load would otherwise fire a failed `<asset>.meta` fetch. Benign
-                // (Bevy falls back to defaults) but on wasm each 404 dumps a long
-                // console stack trace. `Never` skips the probe entirely.
-                meta_check: AssetMetaCheck::Never,
-                ..default()
-            })
-            .set(WindowPlugin {
-                primary_window: Some(Window {
-                    // On wasm, attach to the `#bevy` canvas in index.html and
-                    // mirror its parent's CSS size to the bevy window. Without
-                    // this winit never sees DOM resize events and the canvas
-                    // stays at its default 1x1 logical size — menu bars and
-                    // panels render outside the visible area.
-                    #[cfg(target_arch = "wasm32")]
-                    canvas: Some("#bevy".to_string()),
-                    #[cfg(target_arch = "wasm32")]
-                    fit_canvas_to_parent: true,
-                    present_mode,
-                    // Centralized merged-titlebar chrome + persisted-geometry
-                    // restore (size/position). Ship defaults live as named
-                    // constants in `lunco-workbench`, not here.
-                    ..lunco_workbench::restored_window(window_title)
-                }),
-                ..default()
-            })
-            .set(bevy::log::LogPlugin {
-                // Quieten third-party noise: rumoca's JIT + diffsol's solver
-                // both emit per-function and per-step info that floods the
-                // log during balloon stepping. Override via RUST_LOG when
-                // diagnosing one of them.
-                filter: "wgpu=error,naga=warn,cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
-                ..default()
-            })
-            .set(bevy::render::RenderPlugin {
-                // DX12 on Windows avoids the Vulkan window-resize panics
-                // (depth/color size mismatch + SurfaceAcquireSemaphores). Other
-                // platforms keep wgpu defaults. See lunco_workbench::render_robustness.
-                render_creation: lunco_workbench::preferred_wgpu_settings().into(),
-                ..default()
-            })
-            .build()
-            .disable::<TransformPlugin>())
+        .add_plugins(default_plugins)
         .add_plugins({
             // big_space only registers `BigSpaceValidationPlugin` when
             // `debug_assertions` is on (or the `debug` feature). Calling
@@ -256,14 +275,6 @@ fn main() {
             let group = group.disable::<big_space::validation::BigSpaceValidationPlugin>();
             group
         })
-        .add_plugins(WireframePlugin::default())
-        // bevy_picking's mesh backend: makes all visible Mesh3d entities
-        // pickable (require_markers defaults to false), so scene selection /
-        // possession / spawn-placement run as `Pointer<Click>` observers.
-        // bevy_egui's picking backend (enabled by default, capture_pointer_input
-        // = true) emits a higher-order hit over chrome, so egui transparently
-        // occludes the 3D — no hand-rolled scene/chrome gate needed.
-        .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
         // EntityCount is cheap and useful any time we look at perf; add
         // unconditionally. LogDiagnosticsPlugin is loud — it prints a
         // multi-line summary every second — so gate it on `--log-diag`.
@@ -277,7 +288,6 @@ fn main() {
         // headless `rover_jitter` probe. See `project_physical_rover_suspension`.
         .insert_resource(avian3d::prelude::SubstepCount(12))
         .add_plugins(CoSimPlugin)
-        .add_plugins(lunco_workbench::WorkbenchPlugin)
         .add_plugins(lunco_core::LunCoCorePlugin)
         // Persistent world shell: one BigSpace root + `WorldGrid` + one
         // `FloatingOrigin`. Scenes mount into it via `ensure_world_root`.
@@ -287,34 +297,17 @@ fn main() {
         .add_plugins(TerrainPlugin)
         .add_plugins(LunCoHardwarePlugin)
         .add_plugins(LunCoMobilityPlugin)
+        // USD scene load + avian collider build + cosim wiring — server-authoritative
+        // sim, headless-safe (colliders are pure CPU; visual sync only writes the
+        // mesh/material asset stores, never touches a GPU device).
         .add_plugins(UsdPlugins)
-        // Phase 3+: surface USD documents in the Twin browser, plus
-        // the singleton render-to-texture viewport so clicking a
-        // `.usda` row in the file browser previews it in a workbench
-        // tab (Blender-style orbit: left-drag rotates, scroll zooms).
-        // The viewport draws to its own offscreen `Image`, so the
-        // primary 3D scene camera is unaffected.
-        .add_plugins(UsdUiPlugin)
-        .add_plugins(UsdViewportPlugin)
-        .add_plugins(SandboxEditPlugin)
-        .add_plugins(lunco_sandbox_edit::ui::SandboxEditUiPlugin)
+        // Vessel input + possession command observers. Headless-safe: leafwing's
+        // InputManager rides on bevy_input (no winit), so the keyboard just
+        // produces nothing on a server while the Drive/Brake/Possess command
+        // observers + their wire type registrations the host needs stay live.
         .add_plugins(LunCoControllerPlugin)
         .add_plugins(LunCoAvatarPlugin)
-        .add_plugins(BlueprintMaterialPlugin)
-        .add_plugins(ShaderMaterialPlugin)
         .add_plugins(lunco_scripting::LunCoScriptingPlugin)
-        // Rover-specific panels and the attach-a-model click flow.
-        .add_plugins(|app: &mut App| {
-            use lunco_workbench::WorkbenchAppExt;
-            app.register_panel(code_panel::CodePanel);
-            app.register_panel(models_palette::ModelsPalette);
-            app.init_resource::<models_palette::AttachState>();
-            // Attach is bevy_picking-driven (observes the same `Pointer<Click>`
-            // as selection; egui occlusion handled by the framework). When an
-            // attachment is pending it consumes the pick and sets the marker.
-            app.add_observer(models_palette::on_scene_click_attach);
-            app.add_systems(Update, models_palette::attach_escape_system);
-        })
         // Default scene-wide fill for scenes that author no lighting; a
         // scene-authored UsdLux light takes ambient over (DomeLight
         // intensity, or 0 when absent). Runtime control: Inspector →
@@ -324,13 +317,6 @@ fn main() {
             ..Default::default()
         })
         .add_systems(Startup, setup_sandbox)
-        // ModelicaPlugin's AnalyzePerspective is registered before SandboxEditUiPlugin's
-        // workspaces, so without this nudge we'd boot into the Modelica layout.
-        // Activate the 3D-only View workspace by default — full-screen scene,
-        // no panels. User can switch to Build via the workspace tabs.
-        .add_systems(Startup, |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
-            layout.activate_perspective(lunco_workbench::PerspectiveId("sandbox_view"));
-        })
         // Cosim pipeline ordering inside FixedUpdate:
         //   HandleResponses → Propagate → ApplyForces → SpawnRequests.
         // All USD-driven cosim wiring (compile dispatch, SimComponent
@@ -341,45 +327,81 @@ fn main() {
             PropagateCosimSet::Propagate,
             ApplyForcesCosimSet::ApplyForces,
             ModelicaSet::SpawnRequests,
-        ).chain())
-        // Scene selection + possession are bevy_picking observers now (registered
-        // in their own plugins), so there's no Update-ordering to maintain here.
-        // Auto-tag every new window-targeting Camera3d with
-        // WorkbenchViewportCamera so the workbench's PostUpdate viewport
-        // sync confines it to the ViewportPanel's rect (preventing the
-        // full-window 3D bleed-on-pass-skip class of bug). USD- and
-        // Avatar-spawned cameras land async over many frames; the
-        // `Added<Camera3d>` filter catches each as it arrives. RTT
-        // cameras (USD preview, vello diagrams) target an Image and
-        // are skipped — they should *not* be confined to the panel.
-        .add_systems(Update, auto_tag_workbench_3d_cameras)
-        // Force the sharpest shadow filter on every 3D camera as it arrives
-        // (USD/Avatar cameras spawn async over many frames). `Hardware2x2` gives
-        // the hard, airless-Moon shadow terminator instead of soft PCF.
-        .add_systems(Update, force_hard_shadow_filtering)
-        // Mirror of `lunco-client/src/main.rs::collect_scroll_input`,
-        // gated to "egui doesn't want the scroll" so scrolling inside a
-        // dock panel (Twin browser, Console, etc.) goes to that
-        // widget, while scrolling over the viewport rect (or any
-        // passive area where egui has no interactive use for it) goes
-        // to the avatar's `CameraScroll` resource. Without this
-        // system, the avatar zoom systems (`SpringArm`, `Orbit`,
-        // `Chase`) never see scroll deltas — sandbox was the one
-        // binary missing this bridge (memory id 5109).
-        .add_systems(EguiPrimaryContextPass, collect_scroll_input_gated)
-        // Transform/visibility propagation is owned entirely by big_space
-        // (`propagate_high_precision` for CellCoord/grid entities,
-        // `propagate_low_precision` for ordinary children). USD prims are
-        // spawned grid-anchored with visibility components already inserted
-        // (lunco-usd-bevy), so they fall under low-precision propagation —
-        // no custom fallback needed. The previous
-        // `global_transform_propagation_system` was removed (2026-05-29): it
-        // fought big_space and corrupted GlobalTransform on every entity
-        // (same bug lunica's main.rs documents as the surface-camera-roll
-        // root cause). Profiling showed it cost ~0 ms; this is a correctness
-        // fix, not an FPS fix.
-        .add_systems(PostUpdate,
-            spawn_fallback_avatar.after(avian3d::prelude::PhysicsSystems::Writeback));
+        ).chain());
+
+    // ── UI / render-only layer (skipped under `--no-ui`) ──────────────────
+    // Everything here draws pixels, opens egui panels, or drives an interactive
+    // camera. A headless server runs the sim, physics, scene, cosim, and
+    // networking host above *without* any of it. The render plugins still loaded
+    // in `backends: None` mode so the asset stores exist; these plugins are what
+    // would actually need a GPU / window / pointer.
+    if !headless {
+        app.add_plugins(WireframePlugin::default())
+            // bevy_picking's mesh backend: makes visible Mesh3d entities pickable,
+            // so scene selection / possession / spawn-placement run as click observers.
+            .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
+            .add_plugins(lunco_workbench::WorkbenchPlugin)
+            // USD Twin browser + the offscreen RTT preview viewport.
+            .add_plugins(UsdUiPlugin)
+            .add_plugins(UsdViewportPlugin)
+            .add_plugins(SandboxEditPlugin)
+            .add_plugins(lunco_sandbox_edit::ui::SandboxEditUiPlugin)
+            .add_plugins(BlueprintMaterialPlugin)
+            .add_plugins(ShaderMaterialPlugin)
+            // Rover-specific panels and the attach-a-model click flow.
+            .add_plugins(|app: &mut App| {
+                use lunco_workbench::WorkbenchAppExt;
+                app.register_panel(code_panel::CodePanel);
+                app.register_panel(models_palette::ModelsPalette);
+                app.init_resource::<models_palette::AttachState>();
+                // Attach is bevy_picking-driven (observes the same `Pointer<Click>`
+                // as selection; egui occlusion handled by the framework).
+                app.add_observer(models_palette::on_scene_click_attach);
+                app.add_systems(Update, models_palette::attach_escape_system);
+            })
+            // ModelicaPlugin's AnalyzePerspective registers before SandboxEditUiPlugin's
+            // workspaces; without this nudge we'd boot into the Modelica layout.
+            // Activate the 3D-only View workspace by default.
+            .add_systems(Startup, |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
+                layout.activate_perspective(lunco_workbench::PerspectiveId("sandbox_view"));
+            })
+            // Confine window-targeting cameras to the ViewportPanel rect (prevents
+            // the full-window 3D bleed-on-pass-skip bug). RTT cameras are skipped.
+            .add_systems(Update, auto_tag_workbench_3d_cameras)
+            // Sharpest shadow filter (hard airless-Moon terminator) on each camera.
+            .add_systems(Update, force_hard_shadow_filtering)
+            // egui scroll → avatar `CameraScroll` bridge (gated on the viewport rect).
+            .add_systems(EguiPrimaryContextPass, collect_scroll_input_gated)
+            // Fallback free-flight camera when the scene authors none — interactive
+            // only; a headless server has no user to control.
+            .add_systems(PostUpdate,
+                spawn_fallback_avatar.after(avian3d::prelude::PhysicsSystems::Writeback));
+    }
+
+    if headless {
+        // Modelica COMPILE CORE only (channels + worker thread + `.mo` asset
+        // loader + compile-dispatch systems) — NO egui/viz/workbench. Windowed
+        // builds get this transitively via `ModelicaWorkbenchPlugin`; headless
+        // must add it directly or the cosim `on_load_scene` observer panics on a
+        // missing `Res<ModelicaChannels>`. The server runs Modelica cosim models
+        // authoritatively, so it needs the real compile path, not a stub.
+        app.add_plugins(lunco_modelica::ModelicaCorePlugin);
+
+        // Spawn-command CORE (runtime spawn/move/property commands + the
+        // `apply_net_replication` system that tags dynamic scene bodies with
+        // `NetReplicate`). Windowed builds get this transitively via
+        // `SandboxEditPlugin`; without it the headless host replicates NOTHING
+        // (the connect baseline is empty) because nothing marks the rovers. The
+        // gizmo/selection/physics-viz halves of `SandboxEditPlugin` stay UI-only.
+        app.add_plugins(lunco_sandbox_edit::commands::SpawnCommandPlugin);
+
+        // No winit event loop drives updates headless, so install a runner that
+        // ticks the app at the sim's fixed rate. (Windowed builds are paced by
+        // winit / vsync.)
+        app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
+            std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ as f64),
+        ));
+    }
 
     // Embed the FULL lunica workbench as the "Design" workspace via the
     // shared bundle — same clipboard bridge, autosave, worker, and panels
@@ -389,12 +411,17 @@ fn main() {
     // place inside a 3D physics demo). Welcome panel stays ON — it's the
     // same landing page lunica uses for the Design tab; disabling it left
     // the centre empty and the 3D sandbox viewport bled through.
-    app.add_plugins(ModelicaWorkbenchPlugin {
-        config: ModelicaUiConfig {
-            include_help_overlay: false,
-            include_welcome_panel: true,
-        },
-    });
+    // egui IDE workspace — UI only. (A headless server that needs server-side
+    // Modelica cosim would add `ModelicaCorePlugin` instead; the default sandbox
+    // scene doesn't, so skip the whole thing.)
+    if !headless {
+        app.add_plugins(ModelicaWorkbenchPlugin {
+            config: ModelicaUiConfig {
+                include_help_overlay: false,
+                include_welcome_panel: true,
+            },
+        });
+    }
 
     // Dismiss the HTML loading screen once the first frame paints
     // (wasm-only; no-op on native). Pairs with `web/index.html` →
@@ -435,7 +462,10 @@ fn main() {
         let mode = lunco_networking::NetworkMode::resolve();
         info!("[net] networking mode: {mode:?}");
         app.add_plugins(lunco_networking::LunCoNetworkingPlugin { mode });
-        // Layer-4 Connect panel (address field + Connect/Disconnect button).
+        // Connect-menu bridge adapter (seeds connect_hint, re-dispatches the
+        // NetConnect/Disconnect bridge events). Observers + a Startup seed only —
+        // no egui — so it's safe headless too; keep it so the host still answers
+        // runtime JoinServer/LeaveServer.
         app.add_plugins(lunco_networking::ui::LunCoNetworkingUiPlugin);
     }
 
@@ -446,8 +476,14 @@ fn main() {
     // Forced window placement (`--window-pos`). Parses the flag and (when
     // present) inserts the resource, suppresses geometry persistence, and
     // registers the placer system — all in `lunco-workbench` so any binary
-    // gets the same behaviour.
-    lunco_workbench::wire_window_placement(&mut app, &args);
+    // gets the same behaviour. Winit-specific, so skip it headless.
+    if !headless {
+        lunco_workbench::wire_window_placement(&mut app, &args);
+    }
+
+    if headless {
+        info!("[net] sandbox running HEADLESS (--no-ui): no window/GPU/egui; sim + networking host only");
+    }
 
     app.run();
 }

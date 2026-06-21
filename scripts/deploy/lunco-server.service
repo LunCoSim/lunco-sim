@@ -1,0 +1,73 @@
+[Unit]
+# LunCo headless sim server (WebTransport host) for sandbox.lunco.space.
+# Runs the `sandbox` binary with --no-ui: no window/GPU/egui, just the
+# server-authoritative sim + the WebTransport host on UDP :5888.
+Description=LunCo headless sim server (WebTransport host)
+Documentation=file:/opt/lunco/deploy/DEPLOY.md
+After=network-online.target
+Wants=network-online.target
+
+# Trip into `failed` (not an endless restart loop) after repeated crashes, so
+# `systemctl status` surfaces a genuinely broken config (e.g. a bad cert, which
+# is a deliberate fail-loud panic). StartLimit* live in [Unit].
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+
+# --- Identity ----------------------------------------------------------------
+# Dedicated unprivileged service account (create it once, see README).
+User=lunco
+Group=lunco
+
+# --- Layout ------------------------------------------------------------------
+# The native binary loads assets from `<WorkingDirectory>/assets`, so the
+# working directory MUST contain the `assets/` tree shipped next to the binary.
+WorkingDirectory=/opt/lunco
+ExecStart=/opt/lunco/sandbox --no-ui --host 5888 --api 4101
+
+# --- Configuration -----------------------------------------------------------
+# TLS cert paths + tunables live in this env file (see lunco-server.env).
+# `-` prefix: don't fail to start if the file is briefly missing.
+EnvironmentFile=-/opt/lunco/lunco-server.env
+
+# --- Restart policy ----------------------------------------------------------
+# Fail-loud cert handling means a bad/half-configured cert PANICS on boot
+# (by design). Restart, but back off so a genuinely broken config doesn't spin
+# (the StartLimit in [Unit] trips it into `failed` after repeated crashes).
+Restart=on-failure
+RestartSec=5
+
+# Stop: SIGTERM is enough (the ScheduleRunner loop exits on signal).
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# --- Hardening (safe defaults; relax only if something legitimately needs it) -
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# Writable paths the process actually needs:
+#   - /opt/lunco/certs : the deploy-hook-copied cert the service reads
+#   - /opt/lunco/.cache: rumoca / MSL / model cache the Modelica core writes
+ReadWritePaths=/opt/lunco/certs /opt/lunco/.cache
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+# WebTransport/QUIC is UDP/IPv4+IPv6; HTTP API is loopback. No raw sockets.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Leave W^X OFF: the Modelica JIT (cranelift) maps writable+executable pages.
+MemoryDenyWriteExecute=false
+
+# --- Logging -----------------------------------------------------------------
+# Goes to the journal: `journalctl -u lunco-server -f`.
+Environment=RUST_LOG=info
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
