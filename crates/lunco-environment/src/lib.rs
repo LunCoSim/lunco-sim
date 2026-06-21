@@ -384,6 +384,11 @@ pub struct EnvironmentPlugin;
 /// one already exists). Direction is roughly opposite the default sun azimuth,
 /// just above the horizon — fixed for v1 (ephemeris-correct Earth direction is
 /// a later refinement); live-tunable level/color via `SetEnvironmentLight`.
+///
+/// Native only: the web build renders on WebGL2, which supports a single
+/// `DirectionalLight`. A second light there culls the sun, so earthshine is
+/// not spawned on wasm (see the gated registration in `EnvironmentPlugin`).
+#[cfg(not(target_arch = "wasm32"))]
 fn spawn_earthshine(mut commands: Commands, existing: Query<(), With<Earthshine>>) {
     if !existing.is_empty() {
         return;
@@ -420,7 +425,10 @@ impl Plugin for EnvironmentPlugin {
         // carries the `HorizonShadowTerrain` marker (USD-stamped).
         app.add_plugins(HorizonShadowPlugin);
 
-        // The cool-blue earthshine fill (persistent, shadowless).
+        // The cool-blue earthshine fill (persistent, shadowless). Skipped on
+        // web: WebGL2 supports only ONE `DirectionalLight`, and a second one
+        // culls the sun — keep the sun, drop the fill.
+        #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Startup, spawn_earthshine);
 
         // Register environment commands (SetEnvironmentLight). The macro-built

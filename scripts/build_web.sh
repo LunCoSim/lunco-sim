@@ -459,6 +459,12 @@ Run: cargo run -p lunco-assets -- download"
         rsync -a --delete "$PROJECT_DIR/assets/" "$dist_dir/assets/"
     fi
 
+    # Include the deployment script in the dist bundle
+    if [ -f "$PROJECT_DIR/scripts/copy_to_html_folder.sh" ]; then
+        info "Copying copy_to_html_folder.sh → $dist_dir/"
+        cp "$PROJECT_DIR/scripts/copy_to_html_folder.sh" "$dist_dir/"
+    fi
+
     # Show output size
     WASM_SIZE=$(du -h "$dist_dir/${binary}_bg.wasm" | cut -f1)
     JS_SIZE=$(du -h "$dist_dir/${binary}.js" | cut -f1)

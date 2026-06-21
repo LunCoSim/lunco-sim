@@ -381,6 +381,17 @@ pub fn run() -> Result<(), JsValue> {
     let scope = worker_global();
     let scope_for_cb = scope.clone();
 
+    // Announce the wire-protocol fingerprint BEFORE any bincode traffic. The
+    // main thread compares it against its own `WIRE_BUILD_ID`; a mismatch means
+    // this worker wasm is stale relative to the main bundle and is reported
+    // loudly there. Plain string (not bincode) so the framing can't itself be a
+    // victim of the layout drift it detects.
+    let _ = scope.post_message(&JsValue::from_str(&format!(
+        "{}{}",
+        lunco_modelica::worker_transport::WIRE_HANDSHAKE_PREFIX,
+        lunco_modelica::worker_transport::WIRE_BUILD_ID,
+    )));
+
     let onmessage = Closure::wrap(Box::new(move |event: MessageEvent| {
         let bytes: Vec<u8> = match Uint8Array::new(&event.data()).to_vec() {
             v if !v.is_empty() => v,

@@ -295,6 +295,29 @@ fn post_bytes_to(idx: usize, bytes: &[u8], label: &str) {
     }
 }
 
+/// Wire-protocol fingerprint baked in by `build.rs` (hash of the workspace
+/// `Cargo.lock` + this crate's `src/`). The `lunica_worker` binary links this
+/// same crate, so a worker built from identical source carries an identical id.
+/// A stale worker carries a different one — caught by the boot handshake below.
+pub const WIRE_BUILD_ID: &str = env!("LUNCO_WIRE_BUILD_ID");
+
+/// Prefix of the plain-string message the worker posts once on boot
+/// (`"LUNCO_WIRE:<id>"`). Deliberately NOT bincode: its framing must survive
+/// the exact `WireMessage` layout drift it exists to detect.
+pub const WIRE_HANDSHAKE_PREFIX: &str = "LUNCO_WIRE:";
+
+thread_local! {
+    /// Set true if any worker announced a `WIRE_BUILD_ID` that disagrees with
+    /// ours — i.e. the shipped worker wasm is stale. Surfaced loudly; the
+    /// worker pool is useless in this state (every bincode message mis-decodes).
+    static WIRE_MISMATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// True once a stale-worker wire mismatch has been detected this session.
+pub fn wire_protocol_mismatch() -> bool {
+    WIRE_MISMATCH.with(|c| c.get())
+}
+
 /// Serialize and post a `WireMessage` to worker `idx`.
 fn post_msg_to(idx: usize, msg: &WireMessage, label: &str) {
     let bytes = match bincode::serialize(msg) {
@@ -528,6 +551,33 @@ fn make_worker(idx: usize, worker_url: &str) -> Result<Worker, JsValue> {
 
     let onmessage = Closure::wrap(Box::new(move |event: MessageEvent| {
         let data = event.data();
+        // Plain-string boot handshake: `"LUNCO_WIRE:<build-id>"`. It rides a JS
+        // string (not bincode), so its framing is immune to the WireMessage
+        // layout drift it guards against. A mismatch means this worker wasm was
+        // built from different source than the main bundle — every subsequent
+        // bincode message would mis-decode (`UUID parsing failed`, `unexpected
+        // end of file`). Fail LOUD; do not paper over it with a main-thread
+        // fallback. Fix = rebuild the worker so it matches the main bundle.
+        if let Some(s) = data.as_string() {
+            if let Some(id) = s.strip_prefix(WIRE_HANDSHAKE_PREFIX) {
+                if id == WIRE_BUILD_ID {
+                    bevy::log::info!(
+                        "[worker_transport] worker {idx} wire handshake OK ({id})"
+                    );
+                } else {
+                    WIRE_MISMATCH.with(|c| c.set(true));
+                    bevy::log::error!(
+                        "[worker_transport] STALE WORKER: worker {idx} wire id {id} != \
+                         main {WIRE_BUILD_ID}. The shipped lunica_worker wasm was built \
+                         from different source than this bundle — Modelica compile/run is \
+                         BROKEN until it is rebuilt in lockstep. Run \
+                         `WORKER_REBUILD=force ./scripts/build_web.sh sandbox` (and verify \
+                         build_web copies the freshly-built worker into the served dist)."
+                    );
+                }
+                return;
+            }
+        }
         // The only bare `ArrayBuffer` in the protocol is the worker shipping the
         // decompressed MSL bincode bytes back (transferred zero-copy). Every
         // other message is a `Uint8Array` of a bincode `WireResult`. Branch here
