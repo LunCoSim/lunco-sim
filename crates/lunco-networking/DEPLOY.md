@@ -17,14 +17,54 @@ sim host owns UDP 5888 directly and reads the same cert files.
 
 ---
 
-## 0. Prerequisites
+## Quick path (scripts)
+
+The build + deploy is scripted; the manual sections below are what those scripts
+do under the hood.
+
+```bash
+# SERVER (native, headless). Let's Encrypt by DEFAULT.
+./scripts/build.sh sandbox-server --release
+./scripts/deploy_server.sh deploy@sandbox.lunco.space --email you@lunco.space
+#   rsyncs binary + assets + this kit, then provisions the box (apt deps, lunco
+#   user, systemd unit, ufw UDP 5888, certbot cert + renewal hook) and starts it.
+#   dev/localhost box without a real cert:  add --self-signed
+#   also serve the web client from the same box: add --web (ships dist/sandbox/)
+
+# CLIENT (wasm, optimized) — separate web host (or the same box with --web above).
+./scripts/build.sh sandbox --release
+./scripts/deploy_web.sh deploy@host:/var/www/sandbox     # brotli/gzip + rsync
+```
+
+`deploy_server.sh` flags: `--release`/`--dev`, `--domain`, `--email`,
+`--self-signed`, `--web`, `--no-cert`, `--no-provision` (rsync only),
+`--dry-run`, `--ssh-port`, `--prefix`. It runs `scripts/deploy/server-bootstrap.sh`
+on the box (idempotent — safe to re-run for redeploys).
+
+---
+
+## 0. Prerequisites (manual reference)
 
 ```bash
 sudo apt update
+# Web tier + tooling:
 sudo apt install -y nginx certbot python3-certbot-nginx ufw rsync
+# Server binary runtime libs. The headless binary links NO GPU/Vulkan/X11/audio
+# (backends:None never loads a graphics driver) — `ldd` shows only these beyond
+# libc. `libwayland-client0` is linked by winit but UNUSED (WinitPlugin is
+# disabled under --no-ui); it must still be PRESENT or the dynamic loader fails
+# at exec. libudev1 ships with systemd. TLS is static rustls — no libssl needed.
+sudo apt install -y libwayland-client0 libudev1
 # Build host needs the Rust toolchain (rustup) + the repo. The build can run on
 # the same box or anywhere x86_64-linux; only the binary + assets get shipped.
 ```
+
+> **glibc compatibility.** The binary is a glibc-dynamic ELF. If the server's
+> Ubuntu is **older** than the build host, it fails at startup with
+> `GLIBC_x.xx not found`. Either **build on the server box**, or build in a
+> container matching the server's Ubuntu release. (Same glibc-or-newer rule for
+> `libwayland-client0`/`libudev1`.) No GPU, Xvfb, or display is needed on the
+> server regardless.
 
 DNS: an `A`/`AAAA` record for `sandbox.lunco.space` → this box's public IP.
 
