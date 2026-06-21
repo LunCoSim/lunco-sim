@@ -74,14 +74,16 @@ pub fn on_add_modelica_component(
                     ev.type_name
                 );
                 let anim_ms = if ev.animation_ms == 0 {
-                    crate::ui::panels::canvas_diagram::DEFAULT_PULSE_MS
+                    crate::canvas_feedback::DEFAULT_PULSE_MS
                 } else {
                     ev.animation_ms
                 };
-                if let Some(mut q) = world.get_resource_mut::<
-                    crate::ui::panels::canvas_diagram::PendingApiFocusQueue,
-                >() {
-                    q.push(crate::ui::panels::canvas_diagram::PendingApiFocus {
+                // UI-only feedback: present in the windowed editor, absent
+                // (no-op) on a headless server where the queue isn't inserted.
+                if let Some(mut q) =
+                    world.get_resource_mut::<crate::canvas_feedback::PendingApiFocusQueue>()
+                {
+                    q.push(crate::canvas_feedback::PendingApiFocus {
                         doc,
                         name: ev.name.clone(),
                         queued_at: web_time::Instant::now(),

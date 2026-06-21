@@ -128,6 +128,8 @@ pub mod state;
 pub mod model_tabs_types;
 /// `ModelTabs` registry (was `ui::panels::model_view::tabs`).
 pub mod model_tabs;
+/// Core data for API-driven canvas focus/connection pulses (UI drains them).
+pub mod canvas_feedback;
 /// Documentation annotation extractor (was `ui::panels::model_view::parsing`).
 pub mod doc_extract;
 /// Default-simulation-class resolution + run-target overrides
@@ -1204,7 +1206,7 @@ impl Plugin for ModelicaWorkbenchPlugin {
         // platforms) + the wasm boot loader that opens a model carried in
         // the page URL fragment. Cross-platform: the command works on
         // native too (copies a public link).
-        app.add_plugins(model_share::ModelSharePlugin);
+        app.add_plugins(ui::model_share::ModelSharePlugin);
 
         // Off-thread Modelica worker. wasm32 has no real threads, so an
         // inline rumoca compile (seconds for non-trivial models) freezes

@@ -40,6 +40,10 @@ tracy = ["bevy/trace_tracy"]
 [[bin]]
 name = "lunica"
 path = "src/bin/lunica.rs"
+# The native Modelica workbench window — inherently the full egui GUI, so it
+# requires the `ui` feature. A `--no-default-features` (headless/server) build
+# skips this bin; the library still builds UI-free.
+required-features = ["ui"]
 
 # Off-thread Modelica worker — wasm32 only. Built as a second wasm bundle
 # the main page launches via `new Worker()`. See

@@ -273,3 +273,120 @@ pub fn apply_one_op_as(
     }
     result
 }
+
+/// Apply a **batch** of ops to `doc_id` with the canonical journal +
+/// read-only handling. This is the egui-free core of the canvas's
+/// `apply_ops`: the UI wrapper layers tab-pinning, timing probes, and the
+/// projection/repaint flourishes on top, but the actual mutation funnels
+/// through here so the API path (`api::on_apply_modelica_ops`) and a
+/// headless server apply ops identically to the editor.
+///
+/// Batch-atomic deferral: if any op needs a fresh AST (see
+/// [`op_needs_fresh_ast_pre_apply`]) and the doc's syntax cache is stale, the
+/// WHOLE batch is queued (in order) into [`PendingStructuralOps`] so
+/// dependent intra-batch ops (e.g. `AddClass` then `AddVariable` in that
+/// class) apply against the same freshly-parsed tree on the next
+/// [`drain_pending_structural_ops`] tick.
+///
+/// Returns whether any op applied synchronously (`false` on full-batch
+/// deferral or an all-no-op / registry-missing batch).
+pub fn apply_ops_as(
+    world: &mut World,
+    doc_id: lunco_doc::DocumentId,
+    ops: Vec<ModelicaOp>,
+    author: lunco_twin_journal::AuthorTag,
+) -> bool {
+    // Deferral gate: queue the whole batch in order if any op reads the AST
+    // and the syntax cache is stale (keeps intra-batch ops on one fresh tree).
+    if ops.iter().any(op_needs_fresh_ast_pre_apply) {
+        let stale = world
+            .get_resource::<ModelicaDocumentRegistry>()
+            .and_then(|r| r.host(doc_id))
+            .map(|h| h.document().syntax_is_stale())
+            .unwrap_or(false);
+        if stale {
+            if let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() {
+                if let Some(host) = registry.host_mut(doc_id) {
+                    host.document_mut().waive_ast_debounce();
+                }
+            }
+            let mut pending = world.resource_mut::<PendingStructuralOps>();
+            let queue = pending.queue.entry(doc_id).or_default();
+            for op in ops {
+                queue.push_back((op, author.clone()));
+            }
+            return false;
+        }
+    }
+
+    // Preload any newly-referenced MSL class on a background task so the
+    // engine session is warm by the time projection re-runs. Fire-and-forget;
+    // rumoca's content-hash artifact cache dedupes repeated requests.
+    for op in &ops {
+        if let ModelicaOp::AddComponent { decl, .. } = op {
+            if decl.type_name.starts_with("Modelica.") {
+                let qualified = decl.type_name.clone();
+                bevy::tasks::AsyncComputeTaskPool::get()
+                    .spawn(async move {
+                        let _ = crate::class_cache::peek_or_load_msl_class_blocking(&qualified);
+                    })
+                    .detach();
+            }
+        }
+    }
+
+    let n = ops.len();
+    let mut any_applied = false;
+    let mut hit_read_only = false;
+    let mut journal_pairs: Vec<(serde_json::Value, serde_json::Value)> = Vec::new();
+    {
+        let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() else {
+            bevy::log::warn!("[doc_ops] apply_ops: registry missing ({n} op(s))");
+            return false;
+        };
+        let Some(host) = registry.host_mut(doc_id) else {
+            bevy::log::warn!("[doc_ops] apply_ops: doc {doc_id:?} not in registry ({n} op(s))");
+            return false;
+        };
+        for op in ops {
+            let (result, pair) = apply_one_op_kernel(host, op);
+            match result {
+                Ok(_) => {
+                    any_applied = true;
+                    if let Some(p) = pair {
+                        journal_pairs.push(p);
+                    }
+                }
+                // Document layer rejects mutations on read-only origins (MSL
+                // drill-in, bundled library) — surface ONE banner per batch.
+                Err(lunco_doc::Reject::ReadOnly) => hit_read_only = true,
+                Err(e) => bevy::log::warn!("[doc_ops] op failed: {e}"),
+            }
+        }
+        if any_applied {
+            registry.mark_changed(doc_id);
+        }
+    }
+
+    // Record captured op pairs into the canonical Twin journal (one lock).
+    for (forward, backward) in journal_pairs {
+        record_journal_entry(world, doc_id, author.clone(), forward, backward);
+    }
+
+    if hit_read_only {
+        if let Some(mut cs) = world.get_resource_mut::<crate::state::CompileStates>() {
+            // Don't clobber a real compile error.
+            if cs.error_for(doc_id).is_none() {
+                cs.set_error(
+                    doc_id,
+                    "Read-only library tab — edits rejected. \
+                     Use File → Duplicate to Workspace to create an \
+                     editable copy."
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    any_applied
+}

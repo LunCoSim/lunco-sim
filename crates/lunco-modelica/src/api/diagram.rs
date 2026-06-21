@@ -65,14 +65,15 @@ pub fn on_connect_components(
                     ev.to
                 );
                 let anim_ms = if ev.animation_ms == 0 {
-                    crate::ui::panels::canvas_diagram::DEFAULT_EDGE_FLASH_MS
+                    crate::canvas_feedback::DEFAULT_EDGE_FLASH_MS
                 } else {
                     ev.animation_ms
                 };
-                if let Some(mut q) = world.get_resource_mut::<
-                    crate::ui::panels::canvas_diagram::PendingApiConnectionQueue,
-                >() {
-                    q.push(crate::ui::panels::canvas_diagram::PendingApiConnection {
+                // UI-only feedback: absent (no-op) on a headless server.
+                if let Some(mut q) =
+                    world.get_resource_mut::<crate::canvas_feedback::PendingApiConnectionQueue>()
+                {
+                    q.push(crate::canvas_feedback::PendingApiConnection {
                         doc,
                         from_component: from.component,
                         from_port: from.port,

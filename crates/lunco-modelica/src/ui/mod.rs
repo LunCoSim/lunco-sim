@@ -72,6 +72,10 @@ pub mod document_openings;
 pub mod commands;
 /// Reactive UI observers of core domain state (status-bus mirrors, etc.).
 pub mod core_observers;
+/// UI→core bridge: workbench rename events → `RenameModelicaClass`.
+pub mod rename_chain;
+/// Bevy/UI integration for shareable model links (clipboard + boot loader).
+pub mod model_share;
 pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
 pub mod icon_paint;
@@ -727,8 +731,8 @@ impl Plugin for ModelicaUiPlugin {
             // `viewport.set_target` (which auto-eases) once the new
             // node has landed in the projected scene. See
             // `docs/architecture/20-domain-modelica.md` § 9c.
-            .init_resource::<panels::canvas_diagram::PendingApiFocusQueue>()
-            .init_resource::<panels::canvas_diagram::PendingApiConnectionQueue>()
+            .init_resource::<crate::canvas_feedback::PendingApiFocusQueue>()
+            .init_resource::<crate::canvas_feedback::PendingApiConnectionQueue>()
             .add_systems(
                 Update,
                 (
@@ -763,6 +767,8 @@ impl Plugin for ModelicaUiPlugin {
             // Reactive UI: project terminal experiment-run events into console,
             // plot auto-pick, and SignalRegistry playback.
             .add_systems(Update, core_observers::project_run_results_to_ui)
+            // UI→core: workbench Untitled-draft rename → RenameModelicaClass.
+            .add_observer(rename_chain::on_rename_open_document_chain_to_modelica)
             .init_resource::<panels::canvas_projection::DiagramAutoLayoutSettings>()
             .init_resource::<panels::palette::PaletteState>()
             .init_resource::<panels::palette::ComponentDragPayload>()

@@ -587,19 +587,9 @@ pub fn apply_ops_public(
     );
 }
 
-/// Variant of [`apply_ops_public`] that lets the caller specify the
-/// author tag attached to journal entries. Used by API observers
-/// (`tool: "api"`), agent-script bridges (`tool: "agent:<name>"`), and
-/// future remote-replay paths. UI gestures should keep using
-/// [`apply_ops_public`] (defaults to `local_user`).
-pub fn apply_ops_as(
-    world: &mut World,
-    doc_id: lunco_doc::DocumentId,
-    ops: Vec<ModelicaOp>,
-    author: lunco_twin_journal::AuthorTag,
-) {
-    apply_ops(world, doc_id, ops, author);
-}
+// The author-specifying batch entry point (used by the API / agent bridges)
+// is now the egui-free `crate::doc_ops::apply_ops_as` — callers that don't
+// need the canvas flourishes apply there directly.
 
 pub(super) fn apply_ops(
     world: &mut World,
@@ -607,36 +597,6 @@ pub(super) fn apply_ops(
     ops: Vec<ModelicaOp>,
     author: lunco_twin_journal::AuthorTag,
 ) {
-    // Deferral gate: same contract as `apply_one_op_as`. If any op
-    // in the batch reads the AST to apply and the syntax cache is
-    // stale, queue the *entire* batch so dependent intra-batch ops
-    // (e.g. AddClass + AddVariable in that class) stay in order
-    // and apply against the same fresh tree.
-    if ops.iter().any(crate::doc_ops::op_needs_fresh_ast_pre_apply) {
-        let stale = world
-            .get_resource::<ModelicaDocumentRegistry>()
-            .and_then(|r| r.host(doc_id))
-            .map(|h| h.document().syntax_is_stale())
-            .unwrap_or(false);
-        if stale {
-            if let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() {
-                if let Some(host) = registry.host_mut(doc_id) {
-                    host.document_mut().waive_ast_debounce();
-                }
-            }
-            let mut pending = world.resource_mut::<crate::doc_ops::PendingStructuralOps>();
-            let queue = pending.queue.entry(doc_id).or_default();
-            for op in ops {
-                queue.push_back((op, author.clone()));
-            }
-            return;
-        }
-    }
-
-    // TEMP: timing instrumentation to find the source of the
-    // multi-second lag observed when adding components from the
-    // right-click menu. Each phase is timed independently so we
-    // know which one to optimise.
     let t_start = web_time::Instant::now();
     // Auto-pin every tab pointing at this doc — VS Code semantics:
     // any edit to a preview tab promotes it to a permanent tab so
@@ -654,132 +614,22 @@ pub(super) fn apply_ops(
     // (not just canvas render) gets logged for the next 5 seconds —
     // catches main-thread blocks anywhere in the schedule.
     crate::frame_time_probe_stamp_edit(world);
-    let n = ops.len();
-    let mut any_applied = false;
-    let mut hit_read_only = false;
-    // Capture before the consuming loop: did this batch include a
+    // Capture before the core consumes `ops`: did this batch include a
     // drag-style op whose visual was already applied to the scene?
     // See the `canvas_acked_gen` block below.
     let any_optimistic_visual = ops
         .iter()
         .any(|op| matches!(op, ModelicaOp::SetPlacement { .. }));
 
-    // Preload any newly-referenced MSL class on a background task
-    // so the engine session is warm by the time the projection
-    // re-runs. Fire-and-forget; rumoca's content-hash artifact
-    // cache dedupes repeated requests for the same file.
-    for op in &ops {
-        if let ModelicaOp::AddComponent { decl, .. } = op {
-            if decl.type_name.starts_with("Modelica.") {
-                let qualified = decl.type_name.clone();
-                bevy::tasks::AsyncComputeTaskPool::get()
-                    .spawn(async move {
-                        let _ = crate::class_cache::peek_or_load_msl_class_blocking(&qualified);
-                    })
-                    .detach();
-            }
-        }
-    }
-    let preload_ms = 0.0_f64;
-
-    let t_apply_start = web_time::Instant::now();
-    // Captured (forward, inverse) op-summary pairs recorded into the
-    // canonical Twin journal once the registry borrow drops. Built
-    // inside the loop so each pair sees the inverse the host just
-    // pushed onto its undo stack.
-    let mut journal_pairs: Vec<(serde_json::Value, serde_json::Value)> = Vec::new();
-    {
-        let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() else {
-            bevy::log::warn!(
-                "[CanvasDiagram] tried to apply {} op(s) but registry missing",
-                n
-            );
-            return;
-        };
-        let Some(host) = registry.host_mut(doc_id) else {
-            bevy::log::warn!(
-                "[CanvasDiagram] tried to apply {} op(s) but doc {:?} not in registry",
-                n,
-                doc_id
-            );
-            return;
-        };
-        for op in ops {
-            bevy::log::info!("[CanvasDiagram] applying {:?}", op);
-            let (result, pair) = crate::doc_ops::apply_one_op_kernel(host, op);
-            match result {
-                Ok(_) => {
-                    any_applied = true;
-                    if let Some(p) = pair {
-                        journal_pairs.push(p);
-                    }
-                }
-                Err(lunco_doc::Reject::ReadOnly) => {
-                    // Document layer rejects mutations on read-only
-                    // origins (MSL drill-in, bundled library). We
-                    // surface ONE banner per op-batch instead of
-                    // spamming per op.
-                    hit_read_only = true;
-                }
-                Err(e) => bevy::log::warn!("[CanvasDiagram] op failed: {}", e),
-            }
-        }
-        // Kernel waives the AST debounce per successful op; reparse
-        // is async via `drive_engine_sync`. No sync reparse here.
-        if any_applied {
-            // Queue one `DocumentChanged` notification for the batch
-            // (drained each frame, deduped by `drain_pending_changes`).
-            // Without this, downstream observers (canvas reproject,
-            // dirty-dot, diagnostics) rely on incidental dirty signals
-            // and can miss batch edits.
-            registry.mark_changed(doc_id);
-        }
-    }
-    let apply_ms = t_apply_start.elapsed().as_secs_f64() * 1000.0;
-
-    // Record the captured op pairs into the canonical Twin journal.
-    // Single lock per batch keeps contention bounded; ordering matches
-    // apply order so undo / replay walk the journal in the right
-    // direction. Author flows in from the public entry point — UI
-    // gestures default to `local_user`; API observers and agent
-    // bridges pass their own tag.
-    if !journal_pairs.is_empty() {
-        if let Some(journal) = world.get_resource::<lunco_doc_bevy::JournalResource>() {
-            journal.with_write(|j| {
-                for (forward, backward) in journal_pairs.drain(..) {
-                    j.record_op_value(
-                        author.clone(),
-                        doc_id,
-                        lunco_twin_journal::DomainKind::Modelica,
-                        forward,
-                        backward,
-                        None,
-                    );
-                }
-            });
-        }
-    }
-
-    if hit_read_only {
-        if let Some(mut cs) = world.get_resource_mut::<crate::state::CompileStates>() {
-            // Don't clobber a real compile error.
-            if cs.error_for(doc_id).is_none() {
-                cs.set_error(
-                    doc_id,
-                    "Read-only library tab — edits rejected. \
-                     Use File → Duplicate to Workspace to create an \
-                     editable copy."
-                        .to_string(),
-                );
-            }
-        }
-    }
-
+    // Core mutation (egui-free): batch deferral + per-op kernel + canonical
+    // journal + read-only banner + mark_changed + MSL preload. Shared with
+    // the API / headless path (`crate::doc_ops::apply_ops_as`) so the canvas
+    // and the API apply ops identically. Returns whether anything applied
+    // synchronously (false on full-batch deferral or all-no-op).
+    let any_applied = crate::doc_ops::apply_ops_as(world, doc_id, ops, author);
     if !any_applied {
         bevy::log::info!(
-            "[CanvasDiagram] apply_ops timing (NO-OP): preload={:.1}ms apply={:.1}ms total={:.1}ms",
-            preload_ms,
-            apply_ms,
+            "[CanvasDiagram] apply_ops (no-op / deferred) total={:.1}ms",
             t_start.elapsed().as_secs_f64() * 1000.0
         );
         return;
@@ -889,9 +739,7 @@ pub(super) fn apply_ops(
     let repaint_ms = t_repaint_start.elapsed().as_secs_f64() * 1000.0;
 
     bevy::log::info!(
-        "[CanvasDiagram] apply_ops timing: preload={:.1}ms apply={:.1}ms mirror={:.1}ms repaint={:.1}ms total={:.1}ms",
-        preload_ms,
-        apply_ms,
+        "[CanvasDiagram] apply_ops timing: mirror={:.1}ms repaint={:.1}ms total={:.1}ms",
         mirror_ms,
         repaint_ms,
         t_start.elapsed().as_secs_f64() * 1000.0
