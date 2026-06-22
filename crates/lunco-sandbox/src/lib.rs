@@ -1,8 +1,13 @@
-//! A standalone sandbox for rapid testing of ground mobility and physics.
+//! The LunCo sandbox application — ground mobility + physics, loaded from USD.
 //!
-//! Loads the entire scene from USD **synchronously** during Startup,
-//! so all entities (rover chassis + wheels) exist before physics runs.
-//! This matches the original sandbox behavior exactly.
+//! [`run`] builds and runs the app. It is the single shared entry point for BOTH
+//! binaries:
+//!   - `sandbox` (this crate, default `ui` feature) — the windowed GUI;
+//!   - `sandbox-server` (the `lunco-sandbox-server` crate, no `ui`) — headless.
+//!
+//! GUI vs. headless is decided inside `run` by the `ui` feature (+ the `--no-ui`
+//! runtime flag); see the `headless` binding. Keeping the whole app in this lib
+//! means the two bins are thin shims and can never drift.
 
 // glibc's allocator serialises cross-thread allocations through a
 // shared arena lock; with avian's contact graph allocating heavily on
@@ -64,16 +69,17 @@ use big_space::prelude::Grid;
 use lunco_materials::{BlueprintMaterialPlugin, ShaderMaterialPlugin};
 
 #[cfg(feature = "ui")]
-#[path = "../code_panel.rs"]
+#[path = "code_panel.rs"]
 mod code_panel;
 #[cfg(feature = "ui")]
-#[path = "../models_palette.rs"]
+#[path = "models_palette.rs"]
 mod models_palette;
 
-/// Parse API port from CLI args.
-/// 
-/// Supports:
-fn main() {
+/// Build and run the sandbox app. Shared by the `sandbox` (GUI) and
+/// `sandbox-server` (headless) binaries — the `ui` feature + `--no-ui` flag
+/// select which. Reads CLI args (`--api`, `--scene`, `--host`/`--connect`, …)
+/// from `std::env`.
+pub fn run() {
     // Match lunica's pattern: scan argv for `--api <port>`
     // so the window title can advertise the listening port. Saves
     // confusion when several instances run side-by-side.

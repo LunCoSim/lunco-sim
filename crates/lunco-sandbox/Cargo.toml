@@ -1,15 +1,24 @@
 [package]
-name = "lunco-client"
+name = "lunco-sandbox"
 version = "0.6.0-dev"
 edition = "2021"
+# `cargo run -p lunco-sandbox` runs the GUI sandbox (not the legacy `main.rs`
+# bin that carries the package name).
+default-run = "sandbox"
+
+# The app itself lives in `src/lib.rs` (`pub fn run()` + the global allocator),
+# shared by the `sandbox` GUI bin here and the headless `sandbox-server` bin in
+# the sibling `lunco-sandbox-server` crate — so the two can never drift.
+[lib]
+name = "lunco_sandbox"
+path = "src/lib.rs"
 
 [[bin]]
 name = "sandbox"
 path = "src/bin/sandbox.rs"
-# Single source for desktop AND web — `#[cfg(target_arch = "wasm32")]`
-# blocks in `sandbox.rs` handle platform differences, so `build_web.sh
-# build sandbox` just compiles this bin with `--target
-# wasm32-unknown-unknown`. No `_web` alias; served at `dist/sandbox/`.
+# Single desktop+web source: `build_web.sh build sandbox` compiles `lib.rs`'s
+# `run()` (via this bin) for `wasm32` — `#[cfg(target_arch = "wasm32")]` blocks
+# in the lib handle platform differences. Served at `dist/sandbox/`.
 
 [[bin]]
 name = "lunco_client_web"
@@ -155,6 +164,10 @@ networking = ["dep:lunco-networking", "lunco-networking/networking", "lunco-api"
 # Netcode jitter diagnostics — off by default (not in normal builds). Build with
 # `--features networking,net-diag` when debugging; see lunco-networking/diagnostics.rs.
 net-diag = ["networking", "lunco-networking/net-diag"]
+# Drive-actuation chain tracing — off by default. Build with `--features
+# drive-diag` to trace the DriveRover → port → wheel-force path when a rover
+# won't move / snaps back; see lunco-mobility's `drive_diag!`.
+drive-diag = ["lunco-mobility/drive-diag"]
 python = ["lunco-scripting/python"]
 # Built-in screen recording (Ctrl+Shift+R). Forwards to lunco-avatar's encoder,
 # which links libx264 — native Linux/macOS only, NOT Windows or wasm. Build with

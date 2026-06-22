@@ -58,7 +58,7 @@ get_binary_config() {
             echo "lunco-modelica"
             ;;
         sandbox)
-            echo "lunco-client"
+            echo "lunco-sandbox"
             ;;
         *)
             error "Unknown binary: $binary"

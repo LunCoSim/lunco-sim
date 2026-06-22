@@ -6,7 +6,8 @@ members = [
     "crates/lunco-controller",
     "crates/lunco-attributes",
     "crates/lunco-avatar",
-    "crates/lunco-client",
+    "crates/lunco-sandbox",
+    "crates/lunco-sandbox-server",
     "crates/lunco-telemetry",
     "crates/lunco-celestial",
     "crates/lunco-celestial-ephemeris",
@@ -50,8 +51,13 @@ members = [
 # no binary reaches — lunco-attributes, lunco-cache, lunco-obc, lunco-telemetry,
 # and the feature-gated lunco-networking — so default builds don't compile dead
 # weight. Use `--workspace` to include everything (e.g. CI lint/test sweeps).
+#
+# `lunco-sandbox-server` is intentionally NOT here: it must be built/run via
+# `-p lunco-sandbox-server` so Cargo resolves `lunco-sandbox` WITHOUT `ui` (a
+# bare/`--workspace` build would unify `ui` on via the GUI `sandbox` bin and the
+# server would then try to open a window). `cargo run -p lunco-sandbox-server`.
 default-members = [
-    "crates/lunco-client",
+    "crates/lunco-sandbox",
     "crates/lunco-modelica",
 ]
 resolver = "2"
