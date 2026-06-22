@@ -587,6 +587,45 @@ pub fn import_model_to_diagram_from_ast(
         }
     }
 
+    // Standalone duplicate of a nested bundled class: the doc is just
+    // `within P; <leaf>`, so its own AST holds none of the sibling
+    // component classes (`Tank`/`Valve`/`Engine`/…) the leaf instantiates —
+    // they live in the bundled package P. When only this doc is loaded
+    // (e.g. after a session restore re-seats just `RocketStageCopy.mo`),
+    // package P isn't in the engine session either, so every component
+    // falls through to the placeholder gray box. Parse the bundled package
+    // and register its classes so their authored `Icon` graphics render.
+    // Mirrors the compile path's `extra_sources` seeding. No-op for MSL
+    // `within` packages (not bundled → `bundled_source_for` returns None)
+    // and for top-level scratch docs (no `within`). `register_local_class`
+    // skips names already registered above, so the doc's own siblings win.
+    if let Some(within) = ast.within.as_ref() {
+        let pkg = within
+            .name
+            .iter()
+            .map(|t| t.text.as_ref())
+            .collect::<Vec<_>>()
+            .join(".");
+        if !pkg.is_empty() {
+            if let Some(bundled) = crate::ui::class_source::bundled_source_for(&pkg) {
+                if let Ok(pkg_ast) =
+                    rumoca_phase_parse::parse_to_ast(bundled, "within-pkg.mo")
+                {
+                    for (_top_name, top_class) in pkg_ast.classes.iter() {
+                        for (nested_name, nested_class) in top_class.classes.iter() {
+                            register_local_class(
+                                &mut local_classes_by_short,
+                                nested_name.as_str(),
+                                nested_class,
+                                &pkg_ast,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Index every component in the projection scope by short name so
     // the layout loop can walk rumoca's typed `annotation: Vec<Expression>`
     // for each instance instead of pattern-matching source text.

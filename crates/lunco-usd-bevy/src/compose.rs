@@ -25,7 +25,6 @@
 //! skipped (none exist today).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 use bevy::asset::{AssetPath, LoadContext};

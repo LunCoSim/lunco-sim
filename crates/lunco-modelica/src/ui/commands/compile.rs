@@ -835,6 +835,19 @@ pub fn on_compile_model(
         console.error(format!("Compile failed: {msg}"));
         return;
     };
+    // A duplicated library/bundled class is emitted with a `within P;` header,
+    // so rumoca instantiates it as `P.<class>`. Once the enclosing package is
+    // in the session (the bundled-extra seeding below for nested bundled
+    // duplicates), the bare leaf fails `model not found` in Instantiate — so
+    // qualify the target with `P`. Mirrors the run path in
+    // `dispatch_experiment`. No-op for top-level scratch models (no `within`)
+    // and for drilled MSL classes (empty overlay source → no `within`).
+    let model_name = match crate::document::duplicate::within_package(&source) {
+        Some(pkg) if !model_name.starts_with(&format!("{pkg}.")) => {
+            format!("{pkg}.{model_name}")
+        }
+        _ => model_name,
+    };
     // Find or spawn the entity linked to this document.
     let linked = registry.entities_linked_to(doc);
 
@@ -1012,7 +1025,7 @@ pub fn on_compile_model(
         };
         let mut claimed: std::collections::HashSet<String> =
             class_names_of(doc).into_iter().collect();
-        let extra_sources: Vec<(String, String)> = registry
+        let mut extra_sources: Vec<(String, String)> = registry
             .iter()
             .filter_map(|(other_doc, host)| {
                 if other_doc == doc {
@@ -1041,6 +1054,23 @@ pub fn on_compile_model(
                 Some((filename, document.source().to_string()))
             })
             .collect();
+        // A duplicated *nested* bundled class compiles as `within P; <leaf>`,
+        // but the bundled package P (which defines the leaf's sibling classes
+        // `Tank`/`Valve`/`Engine`/…) is on no search path and is not an open
+        // doc, so the open-doc scan above can't supply it — the compile fails
+        // `unresolved type reference: 'Tank'`. Re-seat the whole bundled
+        // package so rumoca can satisfy those references in the same `within`
+        // scope. Mirrors the run path in `dispatch_experiment`. MSL
+        // within-packages are not bundled (return None) and are left alone;
+        // the `claimed` guard avoids a duplicate-class collision if the
+        // package is somehow already overlaid.
+        if let Some(pkg) = crate::document::duplicate::within_package(&source) {
+            if !claimed.contains(&pkg) {
+                if let Some(bundled) = crate::ui::class_source::bundled_source_for(&pkg) {
+                    extra_sources.push((format!("{pkg}.mo"), bundled.to_string()));
+                }
+            }
+        }
         // PR-B/C: source-root dep scan + lazy load.
         //
         // Walk the doc's AST to find every qualified type root
@@ -1556,6 +1586,24 @@ fn dispatch_experiment(
             _ => model_name,
         };
 
+        // A duplicated *nested* class (e.g. `AnnotatedRocketStage.RocketStage`)
+        // is emitted as `within P; <leaf>` — dropping the sibling classes it
+        // refers to (`Tank`, `Valve`, `Engine`, …) that live alongside it in
+        // package P. For a filesystem/MSL `within`, P is already on the global
+        // session path so those siblings resolve. But a *bundled* example
+        // package is on no search path: compiling the lone leaf fails
+        // `unresolved type reference: 'Tank'`. Re-attach the whole bundled
+        // package as an extra source so `compile_str_multi` merges the siblings
+        // back into the same `within` scope. MSL within-packages are not
+        // bundled (return None here) and are left untouched.
+        let extras: Vec<(String, String)> =
+            match crate::document::duplicate::within_package(&source) {
+                Some(pkg) => crate::ui::class_source::bundled_source_for(&pkg)
+                    .map(|s| vec![(format!("{pkg}.mo"), s.to_string())])
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            };
+
         let model_ref = lunco_experiments::ModelRef(model_name.clone());
 
         // Snapshot source into the runner so the worker thread / web
@@ -1573,7 +1621,7 @@ fn dispatch_experiment(
                 model_name: model_name.clone(),
                 source,
                 filename,
-                extras: Vec::new(),
+                extras,
             },
         );
 

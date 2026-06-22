@@ -518,8 +518,7 @@ end Foo;
         // `AnnotatedRocketStage.mo` by head, extract the nested `RocketStage`,
         // and assert the duplicate has a real class (not a comment-only doc).
         let qualified = "AnnotatedRocketStage.RocketStage";
-        let head = qualified.split('.').next().unwrap();
-        let src = crate::models::get_model(&format!("{head}.mo"))
+        let src = crate::ui::class_source::bundled_source_for(qualified)
             .expect("AnnotatedRocketStage.mo must be bundled");
         let origin_short = qualified.rsplit('.').next().unwrap();
         let out = duplicate(src, origin_short, "RocketStageCopy", Some(qualified));
@@ -527,6 +526,46 @@ end Foo;
         assert!(out.contains("model RocketStageCopy"), "renamed:\n{out}");
         assert!(out.contains("end RocketStageCopy;"), "end renamed:\n{out}");
         assert_eq!(within_package(&out).as_deref(), Some("AnnotatedRocketStage"));
+    }
+
+    #[test]
+    fn nested_duplicate_extra_carries_referenced_siblings() {
+        // Compile regression: duplicating the *nested* `RocketStage` emits
+        // `within AnnotatedRocketStage; model RocketStageCopy …`, whose body
+        // references the sibling classes `Tank`/`Valve`/`Engine`/`Airframe`.
+        // The lone leaf can't compile (`unresolved type reference: 'Tank'`)
+        // unless the enclosing bundled package is re-seated as an extra source.
+        // dispatch_experiment computes that extra as
+        // `bundled_source_for(within_package(dup))`; this asserts the pieces
+        // line up — the dup names a within-package, and that package's bundled
+        // source provides every sibling the leaf refers to.
+        let src = crate::ui::class_source::bundled_source_for("AnnotatedRocketStage.RocketStage")
+            .expect("AnnotatedRocketStage.mo must be bundled");
+        let dup = duplicate(
+            src,
+            "RocketStage",
+            "RocketStageCopy",
+            Some("AnnotatedRocketStage.RocketStage"),
+        );
+        // The leaf body still refers to its siblings by simple name…
+        for sib in ["Tank", "Valve", "Engine", "Airframe"] {
+            assert!(
+                dup.contains(&format!("{sib} ")),
+                "duplicated leaf should reference sibling `{sib}`:\n{dup}"
+            );
+        }
+        // …and the extra the compile path attaches (the bundled package keyed
+        // by the within-package name) must define every one of them.
+        let pkg = within_package(&dup).expect("nested dup has a within-package");
+        assert_eq!(pkg, "AnnotatedRocketStage");
+        let extra = crate::ui::class_source::bundled_source_for(&pkg)
+            .expect("within-package resolves to bundled source");
+        for sib in ["Tank", "Valve", "Engine", "Airframe"] {
+            assert!(
+                extra.contains(&format!("model {sib}")),
+                "bundled extra must define sibling `model {sib}`"
+            );
+        }
     }
 
     #[test]

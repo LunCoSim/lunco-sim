@@ -12,7 +12,7 @@ pub use ops::{ModelicaOp, ModelicaChange, OpKind, FreshAst, CHANGE_HISTORY_CAPAC
 mod tests {
     use super::*;
     use lunco_doc::{DocumentHost, DocumentId, Reject};
-    use crate::pretty::{ComponentDecl, ConnectEquation};
+    use crate::pretty::ComponentDecl;
 
     fn doc() -> DocumentHost<ModelicaDocument> {
         DocumentHost::new(ModelicaDocument::new(

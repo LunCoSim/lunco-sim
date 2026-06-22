@@ -61,6 +61,7 @@ use bevy::prelude::*;
 use lunco_workbench::{Perspective, PerspectiveId, WorkbenchAppExt, WorkbenchLayout, PanelId};
 
 pub mod state;
+pub mod class_source;
 pub mod document_openings;
 pub use state::*;
 
