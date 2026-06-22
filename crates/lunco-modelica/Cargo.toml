@@ -236,6 +236,11 @@ zstd = "0.13"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+# bevy_math → rand pulls getrandom 0.3, which on wasm needs an explicit backend.
+# The lunica_worker bundle builds out of this crate, so the browser-crypto
+# (`wasm_js`) feature must be enabled here too; build_web.sh sets the matching
+# `--cfg getrandom_backend="wasm_js"` (cfg + feature are both required).
+getrandom = { version = "0.3", features = ["wasm_js"] }
 # `Response`, `Request`, `RequestInit`, `Headers` for the MSL fetcher
 # (see `src/msl_remote.rs`); the rest predate this work.
 web-sys = { version = "0.3", features = [

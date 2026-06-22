@@ -110,6 +110,11 @@ console_error_panic_hook = "0.1"
 # URL-parameter boot path (`?workspace=…&open=…`) reads `window.location.search`.
 web-sys = { version = "0.3", features = ["Window", "Location"] }
 js-sys = "0.3"
+# ahash (egui 0.26.2 → catppuccin-egui → lunco-theme) and lightyear's netcode
+# RNG pull getrandom 0.3, which on wasm needs an explicit backend. Enable the
+# browser-crypto (`wasm_js`) feature here; build_web.sh sets the matching
+# `--cfg getrandom_backend="wasm_js"` (both are required).
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [lints]
 workspace = true

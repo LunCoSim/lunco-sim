@@ -252,7 +252,12 @@ build_wasm() {
             info "net-diag ENABLED for this web build (jitter/velocity/correction census → browser console)"
         fi
     fi
-    RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis" \
+    # `getrandom_backend="wasm_js"`: ahash (via egui 0.26.2 → catppuccin-egui →
+    # lunco-theme) and lightyear's netcode RNG pull getrandom 0.3, which refuses
+    # to compile for wasm32-unknown-unknown unless a backend is named. The
+    # browser-crypto backend is correct here; the `wasm_js` *feature* is enabled
+    # on getrandom in lunco-client's wasm deps (cfg + feature are both required).
+    RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis --cfg=getrandom_backend=\"wasm_js\"" \
         cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$cargo_bin" -p "$crate" --no-default-features --features "$wasm_features"
 
     # Off-thread Modelica worker bundle. wasm32 has no real threads, so
@@ -270,7 +275,7 @@ build_wasm() {
                 # Worker always builds out of lunco-modelica (that's where the
                 # Modelica compile + step pipeline lives) regardless of which
                 # main bundle is asking for it.
-                RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis" \
+                RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis --cfg=getrandom_backend=\"wasm_js\"" \
                     cargo build --profile "$profile" --target wasm32-unknown-unknown --bin lunica_worker -p lunco-modelica --no-default-features
             else
                 # See should_rebuild_worker rustdoc — finding "newer" .rs
