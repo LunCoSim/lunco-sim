@@ -4,12 +4,31 @@ version = "0.1.0"
 edition = "2021"
 description = "Per-entity environmental state (gravity, atmosphere, radiation) computed from celestial body providers."
 
+[features]
+default = ["render"]
+# Presentation half of the environment crate: the sun/earthshine lighting
+# (`SetEnvironmentLight`, `Earthshine`), the solar→cosim direction feed (reads
+# the scene `DirectionalLight`), and the baked horizon terrain self-shadowing.
+# OFF ⇒ only the render-free sim core builds: gravity (`LocalGravity`, force
+# application, the gravity→cosim bridge) and the pure-data lighting params
+# (`LunarSun`, `EarthshineParams`). A headless server takes
+# `default-features = false` and stays free of bevy_pbr/light/render.
+render = [
+    "bevy/bevy_pbr", "bevy/bevy_gltf", "bevy/bevy_scene", "bevy/bevy_mesh",
+    "bevy/bevy_light", "bevy/bevy_post_process", "bevy/bevy_anti_alias",
+    "bevy/mesh_picking", "dep:lunco-materials",
+]
+
 [dependencies]
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking"] }
+# Substrate-only by default; the `render` feature adds the bevy render stack the
+# lighting/horizon half needs.
+bevy = { workspace = true }
 avian3d = { workspace = true, features = ["default-collider"] }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-core = { path = "../lunco-core" }
-lunco-materials = { path = "../lunco-materials" }
+# Render-only: the horizon shadow shaders use `ShaderMaterial`. Pulled in by the
+# `render` feature.
+lunco-materials = { path = "../lunco-materials", optional = true }
 
 [lints]
 workspace = true

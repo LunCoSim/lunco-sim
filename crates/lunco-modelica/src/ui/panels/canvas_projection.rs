@@ -225,7 +225,9 @@ fn build_visual_diagram_from_scan(
             }
         };
 
-        let node_id = diagram.add_node(def.clone(), pos);
+        // `pos` is an egui screen point; the diagram stores positions as bevy
+        // `Vec2` (egui-free core type). Same `{x, y}: f32`.
+        let node_id = diagram.add_node(def.clone(), bevy::math::Vec2::new(pos.x, pos.y));
         if let Some(n) = diagram.get_node_mut(node_id) {
             n.instance_name = comp.instance_name.clone();
         }
@@ -947,7 +949,9 @@ pub fn import_model_to_diagram_from_ast(
                 )
             });
 
-            let node_id = diagram.add_node(def.clone(), pos);
+            // `pos` is an egui screen point; the diagram stores positions as bevy
+        // `Vec2` (egui-free core type). Same `{x, y}: f32`.
+        let node_id = diagram.add_node(def.clone(), bevy::math::Vec2::new(pos.x, pos.y));
 
             if let Some(diagram_node) = diagram.get_node_mut(node_id) {
                 diagram_node.instance_name = short_name.to_string();

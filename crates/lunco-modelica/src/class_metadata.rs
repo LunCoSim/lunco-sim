@@ -103,7 +103,7 @@ pub fn resolve_metadata_for_doc(
     drilled: Option<&str>,
 ) -> Option<ClassMetadata> {
     let registry = world
-        .get_resource::<crate::ui::state::ModelicaDocumentRegistry>()?;
+        .get_resource::<crate::state::ModelicaDocumentRegistry>()?;
     let host = registry.host(doc_id)?;
     let index = host.document().index();
     if let Some(q) = drilled {
@@ -147,7 +147,7 @@ pub fn resolve_metadata_for_doc(
 /// whose backing doc happens to be open.
 fn workspace_doc_metadata(world: &World, class: &ClassRef) -> Option<ClassMetadata> {
     let registry = world
-        .get_resource::<crate::ui::state::ModelicaDocumentRegistry>()?;
+        .get_resource::<crate::state::ModelicaDocumentRegistry>()?;
     let target_doc = match &class.library {
         Library::UserFile { path } => registry.find_by_path(path),
         Library::Untitled(doc_id) => Some(*doc_id),

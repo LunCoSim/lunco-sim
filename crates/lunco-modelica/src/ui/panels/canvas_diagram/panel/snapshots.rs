@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use crate::ui::state::{ModelicaDocumentRegistry};
+use crate::state::{ModelicaDocumentRegistry};
 use crate::ModelicaModel;
 
 /// Resolve the `(min, max)` attributes of an input `member` on a
@@ -100,7 +100,7 @@ pub(crate) fn stash_snapshots(ui: &egui::Context, world: &mut World, doc_id: Opt
         lunco_viz::kinds::canvas_plot_node::stash_signal_snapshot(ui, snapshot);
     }
 
-    let canvas_sim = doc_id.and_then(|d| crate::ui::state::simulator_for(world, d));
+    let canvas_sim = doc_id.and_then(|d| crate::state::simulator_for(world, d));
 
     // ─── Live Values ───
     {

@@ -10,6 +10,7 @@
 
 use bevy::prelude::*;
 use bevy::reflect::TypeRegistry;
+#[cfg(feature = "render")]
 use std::io::Cursor;
 use crate::{
     registry::ApiEntityRegistry,
@@ -62,7 +63,6 @@ pub fn api_request_observer(
     type_registry: Res<AppTypeRegistry>,
     cmd_results: Res<lunco_core::CommandResults>,
     q_meta: Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
-    q_cameras: Query<Entity, With<Camera3d>>,
     // World pose for QueryEntity / future telemetry. `GlobalTransform`
     // mirrors Avian's `Position` post-writeback — we read it (instead
     // of Avian's `Position` directly) to keep this crate free of an
@@ -74,7 +74,7 @@ pub fn api_request_observer(
 
     let maybe_response = {
         let type_reg = type_registry.read();
-        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &visibility, &type_reg, &cmd_results, &q_meta, &q_cameras, &q_transforms, correlation_id)
+        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &visibility, &type_reg, &cmd_results, &q_meta, &q_transforms, correlation_id)
     };
 
     // None means the response is deferred (e.g. waiting for ScreenshotCaptured).
@@ -415,13 +415,15 @@ fn execute_request(
     type_registry: &TypeRegistry,
     cmd_results: &lunco_core::CommandResults,
     q_meta: &Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
-    _q_cameras: &Query<Entity, With<Camera3d>>,
     q_transforms: &Query<&GlobalTransform>,
     correlation_id: u64,
 ) -> Option<ApiResponse> {
     match request {
         ApiRequest::ExecuteCommand { command, params } => {
             // Special-case: CaptureScreenshot — response depends on save_to_file param.
+            // Only available with the `render` feature; on a headless server this
+            // falls through and resolves as "command not found".
+            #[cfg(feature = "render")]
             if command == "CaptureScreenshot" {
                 let save_to_file = params
                     .get("save_to_file")
@@ -595,10 +597,12 @@ fn execute_request(
     }
 }
 
+#[cfg(feature = "render")]
 use bevy::render::view::screenshot::ScreenshotCaptured;
 
 /// Pending screenshot request — set before the screenshot is triggered so the
 /// ScreenshotCaptured observer knows what to do with the image.
+#[cfg(feature = "render")]
 #[derive(Resource, Default)]
 pub struct PendingScreenshotRequest {
     /// correlation_id of the HTTP request waiting for the screenshot (raw-PNG mode).
@@ -617,18 +621,23 @@ pub struct ApiExecutorPlugin;
 impl Plugin for ApiExecutorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ApiIdCounter>()
-            .init_resource::<PendingScreenshotRequest>()
             // Command-result store + active-id scope. Also init'd by
             // lunco-core; idempotent, kept here so the API plugin is
             // self-contained (the executor reads CommandResults as a Res).
             .init_resource::<lunco_core::CommandResults>()
             .init_resource::<lunco_core::ActiveCommandId>()
             .add_observer(api_request_observer)
-            .add_observer(api_command_dispatcher)
+            .add_observer(api_command_dispatcher);
+
+        // Screenshot capture rides the bevy render stack — only present with
+        // the `render` feature (off on a headless server).
+        #[cfg(feature = "render")]
+        app.init_resource::<PendingScreenshotRequest>()
             .add_observer(save_screenshot);
     }
 }
 
+#[cfg(feature = "render")]
 fn save_screenshot(
     trigger: On<ScreenshotCaptured>,
     mut pending: ResMut<PendingScreenshotRequest>,

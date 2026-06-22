@@ -59,13 +59,24 @@
 
 use bevy::prelude::*;
 use lunco_workbench::{Perspective, PerspectiveId, WorkbenchAppExt, WorkbenchLayout, PanelId};
+// Core document/library/compile state moved out of `ui` into `crate::state`.
+use crate::state::{CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 
-pub mod state;
+/// The [`PanelId`] under which `ModelViewPanel` is registered. Lives in the
+/// `ui` module because `PanelId` is a workbench (UI) panel-registry key — the
+/// core tab types in [`crate::model_tabs_types`] don't depend on it.
+pub const MODEL_VIEW_KIND: PanelId = PanelId("modelica_model_view");
+
 pub mod class_source;
 pub mod document_openings;
-pub use state::*;
 
 pub mod commands;
+/// Reactive UI observers of core domain state (status-bus mirrors, etc.).
+pub mod core_observers;
+/// UI→core bridge: workbench rename events → `RenameModelicaClass`.
+pub mod rename_chain;
+/// Bevy/UI integration for shareable model links (clipboard + boot loader).
+pub mod model_share;
 pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
 pub mod icon_paint;
@@ -165,8 +176,8 @@ struct ClassRemovedWatermark(std::collections::HashMap<lunco_doc::DocumentId, u6
 /// changes) rather than O(history).
 fn close_drilled_tabs_on_class_removed(
     trigger: On<lunco_doc_bevy::DocumentChanged>,
-    registry: Res<crate::ui::state::ModelicaDocumentRegistry>,
-    mut tabs: ResMut<crate::ui::panels::model_view::ModelTabs>,
+    registry: Res<crate::state::ModelicaDocumentRegistry>,
+    mut tabs: ResMut<crate::model_tabs::ModelTabs>,
     mut watermark: ResMut<ClassRemovedWatermark>,
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut drafts: Option<ResMut<crate::experiments_runner::ExperimentDrafts>>,
@@ -274,7 +285,7 @@ fn close_drilled_tabs_on_class_removed(
 fn sync_workspace_on_doc_opened(
     trigger: On<lunco_doc_bevy::DocumentOpened>,
     registry: Res<ModelicaDocumentRegistry>,
-    mut ws: ResMut<lunco_workbench::WorkspaceResource>,
+    mut ws: ResMut<lunco_workspace::WorkspaceResource>,
     mut source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
 ) {
     let id = trigger.event().doc;
@@ -322,7 +333,7 @@ fn sync_workspace_on_doc_opened(
 /// Shadow-sync observer: Modelica doc closed → drop entry from Workspace.
 fn sync_workspace_on_doc_closed(
     trigger: On<lunco_doc_bevy::DocumentClosed>,
-    mut ws: ResMut<lunco_workbench::WorkspaceResource>,
+    mut ws: ResMut<lunco_workspace::WorkspaceResource>,
 ) {
     ws.close_document(trigger.event().doc);
 }
@@ -337,7 +348,7 @@ fn sync_workspace_on_doc_closed(
 fn sync_workspace_on_doc_saved(
     trigger: On<lunco_doc_bevy::DocumentSaved>,
     registry: Res<ModelicaDocumentRegistry>,
-    mut ws: ResMut<lunco_workbench::WorkspaceResource>,
+    mut ws: ResMut<lunco_workspace::WorkspaceResource>,
 ) {
     let id = trigger.event().doc;
     let Some(host) = registry.host(id) else { return };
@@ -386,7 +397,7 @@ fn sync_workspace_on_doc_saved(
 /// derived title should become `P.<drilled>` to match Dymola.
 fn derive_doc_title(
     registry: Res<ModelicaDocumentRegistry>,
-    mut ws: ResMut<lunco_workbench::WorkspaceResource>,
+    mut ws: ResMut<lunco_workspace::WorkspaceResource>,
 ) {
     // Cheap when nothing changed: each iteration is a HashMap lookup +
     // a string compare, write only on diff. No per-doc generation
@@ -432,9 +443,9 @@ fn derive_title_from_doc(doc: &crate::document::ModelicaDocument) -> String {
 /// means menu / picker / HTTP / scripts all converge on one path —
 /// the welcome button is now just another fire-and-forget caller.
 fn scan_twin_on_added(
-    trigger: On<lunco_workbench::TwinAdded>,
-    ws: Res<lunco_workbench::WorkspaceResource>,
-    mut cache: ResMut<panels::package_browser::PackageTreeCache>,
+    trigger: On<lunco_workspace::TwinAdded>,
+    ws: Res<lunco_workspace::WorkspaceResource>,
+    mut cache: ResMut<crate::package_tree::PackageTreeCache>,
 ) {
     let twin_id = trigger.event().twin;
     let Some(twin) = ws.twin(twin_id) else {
@@ -442,7 +453,7 @@ fn scan_twin_on_added(
     };
     let folder = twin.root.clone();
     let pool = bevy::tasks::AsyncComputeTaskPool::get();
-    let task = pool.spawn(async move { panels::package_browser::scanner::scan_twin_folder(folder) });
+    let task = pool.spawn(async move { crate::package_tree::scan_twin_folder(folder) });
     cache.twin = None;
     cache.twin_scan_task = Some(task);
 }
@@ -706,9 +717,9 @@ impl Plugin for ModelicaUiPlugin {
         app.init_resource::<WorkbenchState>()
             .init_resource::<ModelicaDocumentRegistry>()
             .init_resource::<CompileStates>()
-            .init_resource::<panels::model_view::ModelTabs>()
-            .init_resource::<panels::model_view::RunTargetOverrides>()
-            .init_resource::<panels::model_view::TabRenderContext>()
+            .init_resource::<crate::model_tabs::ModelTabs>()
+            .init_resource::<crate::sim_default::RunTargetOverrides>()
+            .init_resource::<crate::model_tabs_types::TabRenderContext>()
             .init_resource::<panels::code_editor::EditorBufferState>()
             .init_resource::<panels::console::ConsoleLog>()
             .init_resource::<panels::diagnostics::DiagnosticsLog>()
@@ -721,8 +732,8 @@ impl Plugin for ModelicaUiPlugin {
             // `viewport.set_target` (which auto-eases) once the new
             // node has landed in the projected scene. See
             // `docs/architecture/20-domain-modelica.md` § 9c.
-            .init_resource::<panels::canvas_diagram::PendingApiFocusQueue>()
-            .init_resource::<panels::canvas_diagram::PendingApiConnectionQueue>()
+            .init_resource::<crate::canvas_feedback::PendingApiFocusQueue>()
+            .init_resource::<crate::canvas_feedback::PendingApiConnectionQueue>()
             .add_systems(
                 Update,
                 (
@@ -735,10 +746,34 @@ impl Plugin for ModelicaUiPlugin {
             // user has a chronological audit trail of every status
             // event from every subsystem (MSL, compile, sim, …).
             .add_systems(Update, fan_status_bus_to_console)
+            // Reactive UI observer of core `MslLoadState` → status bus (moved
+            // here from the core MSL plugin; core no longer touches the bus).
+            .add_systems(Update, core_observers::mirror_msl_state_to_status_bus)
+            // Reactive UI observer: drain core live-sim samples → viz plots.
+            // The core worker no longer references lunco_viz.
+            .add_systems(Update, core_observers::drain_sim_samples_to_viz)
+            // Reactive UI observers: core notices → Console; source-root load
+            // state → status bar. Core emits events/state; these project them.
+            .add_systems(Update, core_observers::drain_notices_to_console)
+            .add_systems(Update, core_observers::mirror_source_roots_to_status_bus)
+            // Reactive UI: relay core compile requests → CompileModel command.
+            .add_systems(Update, core_observers::relay_compile_requests)
+            // Reactive UI: feed input/workspace pacing hints into the core
+            // parse scheduler (before it reads them this frame).
+            .add_systems(
+                Update,
+                core_observers::feed_parse_pacing
+                    .before(crate::engine_resource::drive_engine_sync),
+            )
+            // Reactive UI: project terminal experiment-run events into console,
+            // plot auto-pick, and SignalRegistry playback.
+            .add_systems(Update, core_observers::project_run_results_to_ui)
+            // UI→core: workbench Untitled-draft rename → RenameModelicaClass.
+            .add_observer(rename_chain::on_rename_open_document_chain_to_modelica)
             .init_resource::<panels::canvas_projection::DiagramAutoLayoutSettings>()
             .init_resource::<panels::palette::PaletteState>()
             .init_resource::<panels::palette::ComponentDragPayload>()
-            .insert_resource(panels::package_browser::PackageTreeCache::new())
+            .insert_resource(crate::package_tree::PackageTreeCache::new())
             .add_systems(Update, browser_dispatch::drain_browser_actions)
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
             .add_systems(Update, panels::package_browser::reconcile_library_roots_on_ready)

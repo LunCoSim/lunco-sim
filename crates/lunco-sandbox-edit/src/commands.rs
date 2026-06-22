@@ -2435,6 +2435,19 @@ impl Plugin for SpawnCommandPlugin {
         app.init_resource::<InterpBuffers>();
         app.init_resource::<PredictedStateLog>();
         app.init_resource::<ProxyPlaybackClock>();
+        // Resources this plugin's OWN systems read, so it stands alone without the
+        // UI-layer `SandboxEditPlugin` / the render-layer `ShaderMaterialPlugin`
+        // (e.g. a headless `--no-ui` server that adds only `SpawnCommandPlugin`).
+        // `init_resource` is idempotent, so when those plugins also init these it's
+        // a harmless no-op:
+        //   - `SpawnCatalog`   — read by `maintain_catalogs` + `apply_replicated_spawns`;
+        //   - `SelectedEntity` — read by `on_select_entity`;
+        //   - `ShaderCatalog`  — read by `maintain_catalogs` (per-frame) + the shader
+        //     command observers. Lives in `lunco_materials`; an empty one is fine on
+        //     a server (shader discovery populates it but nothing renders it).
+        app.init_resource::<crate::catalog::SpawnCatalog>();
+        app.init_resource::<crate::SelectedEntity>();
+        app.init_resource::<lunco_materials::ShaderCatalog>();
         // Networking: instantiate host-replicated spawns, buffer + interpolate
         // proxies from snapshots, and keep proxies kinematic. All no-op in
         // single-player. Order matters:

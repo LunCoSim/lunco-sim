@@ -106,6 +106,7 @@ pub mod annotations;
 // a model-semantics one. Re-exported here so the previous flat path
 // (`lunco_modelica::icon_paint::*`) keeps compiling for any external
 // consumer that hardcoded it.
+#[cfg(feature = "ui")]
 pub use ui::icon_paint;
 
 /// Single 2×3 affine transform per node from Modelica icon-local
@@ -117,6 +118,29 @@ pub mod icon_transform;
 
 /// Visual diagram editor — drag-and-drop component composition.
 pub mod visual_diagram;
+
+// ── Egui-free core modules lifted out of the (egui-gated) `ui` module so the
+//    headless / server build (`--no-default-features`) compiles. The egui
+//    rendering for these lives under `ui::panels::*`. ────────────────────────
+/// Workbench-side document registry + shared UI-agnostic state (was `ui::state`).
+pub mod state;
+/// Modelica tab registry data types (was `ui::panels::model_view::types`).
+pub mod model_tabs_types;
+/// `ModelTabs` registry (was `ui::panels::model_view::tabs`).
+pub mod model_tabs;
+/// Core data for API-driven canvas focus/connection pulses (UI drains them).
+pub mod canvas_feedback;
+/// Documentation annotation extractor (was `ui::panels::model_view::parsing`).
+pub mod doc_extract;
+/// Default-simulation-class resolution + run-target overrides
+/// (was `ui::panels::model_view::context::default_simulation_class` & friends).
+pub mod sim_default;
+/// Package-tree backend: egui-free data + scanning logic for the library /
+/// package browser (was `ui::panels::package_browser::{types,scanner,cache,library_tree}`).
+pub mod package_tree;
+/// Egui-free Modelica document ops application
+/// (was `ui::panels::canvas_diagram::ops::apply_one_op_as` & helpers).
+pub mod doc_ops;
 
 /// Per-document UI projection — what panels read instead of the AST.
 /// Skeleton; population happens in the upcoming AST-canonical refactor.
@@ -858,6 +882,7 @@ fn diagnostics_from_sim_error(
 }
 
 
+#[cfg(feature = "ui")]
 pub mod ui;
 
 /// Bundled Modelica models for web deployment.
@@ -936,6 +961,61 @@ pub mod api;
 pub mod model_share;
 pub use sim_stream::{new_sim_stream, SimSnapshot, SimStream, VarHistory, SimSample};
 
+/// UI-agnostic per-frame queue of live sim samples.
+///
+/// The core worker handler ([`worker::handle_modelica_responses`]) appends one
+/// [`SimSampleBatch`] per processed step; the reactive UI layer
+/// ([`ui::core_observers::drain_sim_samples_to_viz`]) drains it into
+/// `lunco_viz`. This keeps plot-history capture OUT of the core handler — core
+/// just emits samples; the UI projects them. A headless build has no drainer,
+/// so the queue is bounded at the producer (samples past the cap are dropped —
+/// there's no UI to plot them anyway).
+#[derive(Resource, Default)]
+pub struct SimSampleStream {
+    pub batches: Vec<SimSampleBatch>,
+}
+
+/// UI-agnostic notice emitted by the core (compile lifecycle, worker crash,
+/// …). The reactive UI console observer
+/// ([`ui::core_observers::drain_notices_to_console`]) projects these into the
+/// Console panel. Core never references the console type.
+#[derive(Message, Clone)]
+pub struct ModelicaNotice {
+    pub level: NoticeLevel,
+    pub text: String,
+}
+
+/// Severity of a [`ModelicaNotice`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum NoticeLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+/// Core request to (re)compile a model — emitted by the core stepper when a
+/// model needs a stepper but has none yet (interactive "Run before compile").
+/// The reactive UI layer ([`ui::core_observers::relay_compile_requests`])
+/// translates it into the UI `CompileModel` command. Core stays UI-agnostic.
+#[derive(Message, Clone)]
+pub struct CompileRequested {
+    pub doc: lunco_doc::DocumentId,
+    pub class: Option<String>,
+    pub force: bool,
+    pub resume_after_compile: bool,
+}
+
+/// One sim step's observable samples for a single entity.
+pub struct SimSampleBatch {
+    pub entity: Entity,
+    pub document: lunco_doc::DocumentId,
+    pub time: f64,
+    /// `outputs` followed by `detected_symbols` (signal name → value).
+    pub samples: Vec<(String, f64)>,
+    pub is_new_model: bool,
+    pub is_parameter_update: bool,
+}
+
 /// UI-thread registry of per-entity lock-free sim streams (Phase A
 /// of the multi-sim architecture). On Compile the command observer
 /// calls [`SimStreamRegistry::get_or_insert`] and ships a clone of
@@ -993,6 +1073,7 @@ pub enum ModelicaSet {
 /// Sets up the background worker thread, channel resources, and response systems.
 /// Modelica stepping runs in [`FixedUpdate`] so all co-simulation engines share
 /// the same fixed timestep.
+#[cfg(feature = "ui")]
 pub struct ModelicaPlugin;
 
 /// Headless variant of [`ModelicaPlugin`] without UI panels.
@@ -1007,6 +1088,7 @@ impl Plugin for ModelicaCorePlugin {
     }
 }
 
+#[cfg(feature = "ui")]
 impl Plugin for ModelicaPlugin {
     fn build(&self, app: &mut App) {
         // The Modelica UI experience requires both core logic and plotting.
@@ -1090,6 +1172,7 @@ impl Plugin for ModelicaPlugin {
 /// `ClearColor`) is deliberately **not** owned here — Bevy always inserts
 /// defaults for those resources so an "insert-if-absent" guard can't tell
 /// a host's choice from the default. Those stay an app-shell concern.
+#[cfg(feature = "ui")]
 #[derive(Default)]
 pub struct ModelicaWorkbenchPlugin {
     /// UI knobs (help overlay, welcome panel). Defaults to the full
@@ -1098,6 +1181,7 @@ pub struct ModelicaWorkbenchPlugin {
     pub config: ModelicaUiConfig,
 }
 
+#[cfg(feature = "ui")]
 impl Plugin for ModelicaWorkbenchPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<lunco_workbench::WorkbenchPlugin>() {
@@ -1122,7 +1206,7 @@ impl Plugin for ModelicaWorkbenchPlugin {
         // platforms) + the wasm boot loader that opens a model carried in
         // the page URL fragment. Cross-platform: the command works on
         // native too (copies a public link).
-        app.add_plugins(model_share::ModelSharePlugin);
+        app.add_plugins(ui::model_share::ModelSharePlugin);
 
         // Off-thread Modelica worker. wasm32 has no real threads, so an
         // inline rumoca compile (seconds for non-trivial models) freezes
@@ -1222,8 +1306,11 @@ fn build_modelica_core(app: &mut App) {
         app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res, rx_cmd, tx_res });
     }
 
-    app.init_resource::<ui::WorkbenchState>();
+    app.init_resource::<crate::state::WorkbenchState>();
     app.init_resource::<SimStreamRegistry>();
+    app.init_resource::<SimSampleStream>();
+    app.add_message::<ModelicaNotice>();
+    app.add_message::<CompileRequested>();
 
     // Experiments / Fast Run: backend-agnostic registry + this crate's
     // ModelicaRunner binding. UI for the Run buttons and Experiments
@@ -1298,7 +1385,7 @@ fn build_modelica_core(app: &mut App) {
             worker_transport::pump_worker_respawns();
         });
         app.add_systems(Update, worker::inline_worker_process);
-        app.add_systems(Update, ui::update_file_load_result);
+        app.add_systems(Update, crate::state::update_file_load_result);
         // Drain Web-Worker RunUpdate streams into the runner's
         // RunHandle receivers and clear the runner's busy flag on
         // terminal updates. Cheap when no run is in flight.

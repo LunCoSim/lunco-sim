@@ -14,7 +14,7 @@ use crate::document::ModelicaOp;
 use super::ops::{component_headers, op_remove_component, op_remove_edge};
 use super::palette::{self, PaletteSettings};
 use super::{CanvasDiagramState, active_doc_from_world};
-use crate::ui::panels::model_view::TabRenderContext;
+use crate::model_tabs_types::TabRenderContext;
 
 /// Build a `SetConnectionLine` op from the current edge's waypoints
 /// after applying `mutate` to a fresh copy. `mutate` may insert,
@@ -52,7 +52,7 @@ fn op_modify_waypoints(
 /// outside a panel render call (observers, off-render systems);
 /// callers fall back to first-tab semantics in that case via
 /// `CanvasDiagramState::get_for_render`.
-fn render_tab_id(world: &World) -> Option<crate::ui::panels::model_view::TabId> {
+fn render_tab_id(world: &World) -> Option<crate::model_tabs_types::TabId> {
     world
         .get_resource::<TabRenderContext>()
         .and_then(|c| c.tab_id)
@@ -140,7 +140,7 @@ fn collect_varying_signals(
     // signals so the picker matches exactly what a doc-bound plot will show.
     let bound_entity: Option<Entity> = active_doc_from_world(world).and_then(|d| {
         let live = world
-            .get_resource::<crate::ui::state::ModelicaDocumentRegistry>()
+            .get_resource::<crate::state::ModelicaDocumentRegistry>()
             .and_then(|reg| {
                 reg.iter_doc_for_entity()
                     .filter(|(_, dd)| *dd == d)

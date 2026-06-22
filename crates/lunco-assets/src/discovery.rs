@@ -8,8 +8,9 @@
 //!
 //! Lives in `lunco-assets` because this crate already owns *where assets live*
 //! — the [`TwinRoots`](crate::twin_source::TwinRoots) registry and the
-//! `twin://` / `lunco://` schemes. Native-only (the web build has no
-//! filesystem); returns an empty list on wasm so callers compile uniformly.
+//! `twin://` / `lunco://` schemes. Native walks the filesystem; the web build
+//! (no filesystem) enumerates the engine library from a compile-time manifest
+//! baked by `build.rs`, so the spawn/shader catalogs populate on wasm too.
 
 use std::path::Path;
 
@@ -36,7 +37,8 @@ pub struct AssetFile {
 /// List every `*.<ext>` in the project: the engine `assets/` library first,
 /// then each open Twin root (sorted by name). Recurses subdirectories,
 /// skipping hidden dirs and `target/`. `ext` is the bare extension without the
-/// dot (`"usda"`, `"wgsl"`). Native-only — empty on wasm.
+/// dot (`"usda"`, `"wgsl"`). Native walks the disk; the wasm twin below reads
+/// the baked manifest (engine library only).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn list_assets(roots: &TwinRoots, ext: &str) -> Vec<AssetFile> {
     let mut out = Vec::new();
@@ -72,10 +74,35 @@ pub fn list_assets(roots: &TwinRoots, ext: &str) -> Vec<AssetFile> {
     out
 }
 
-/// wasm stub — no filesystem to walk.
+/// Compile-time manifest of the engine asset library, baked by `build.rs` (the
+/// browser has no filesystem to walk). Only `usda`/`wgsl` are baked.
 #[cfg(target_arch = "wasm32")]
-pub fn list_assets(_roots: &TwinRoots, _ext: &str) -> Vec<AssetFile> {
-    Vec::new()
+mod baked {
+    include!(concat!(env!("OUT_DIR"), "/baked_asset_manifest.rs"));
+}
+
+/// Web: enumerate the engine library from the baked manifest. Twin roots are
+/// http-served (TODO) so they contribute nothing yet — engine `assets/` only,
+/// which is what the spawn/shader catalogs need to resolve replicated spawns
+/// and built-in props. `abs_path` is the bare relative path: web consumers
+/// can't read file contents (e.g. `read_spawn_meta` falls back to defaults).
+#[cfg(target_arch = "wasm32")]
+pub fn list_assets(_roots: &TwinRoots, ext: &str) -> Vec<AssetFile> {
+    let suffix = format!(".{ext}");
+    baked::BAKED_ASSET_RELS
+        .iter()
+        .filter(|r| r.ends_with(&suffix))
+        .map(|&r| {
+            let rel = r.to_string();
+            AssetFile {
+                asset_path: rel.clone(),
+                stem: stem_of(&rel),
+                abs_path: std::path::PathBuf::from(&rel),
+                twin: None,
+                rel,
+            }
+        })
+        .collect()
 }
 
 /// Convenience: every `*.usda` in the project. Thin wrapper over [`list_assets`].
@@ -103,7 +130,6 @@ fn walk(base: &Path, dir: &Path, ext: &str, f: &mut impl FnMut(String)) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn stem_of(rel: &str) -> String {
     Path::new(rel)
         .file_stem()

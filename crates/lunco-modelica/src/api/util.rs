@@ -7,7 +7,7 @@ use crate::pretty::PortRef;
 pub fn resolve_doc(world: &World, raw: DocumentId) -> Option<DocumentId> {
     if raw.is_unassigned() {
         world
-            .get_resource::<lunco_workbench::WorkspaceResource>()
+            .get_resource::<lunco_workspace::WorkspaceResource>()
             .and_then(|ws| ws.active_document)
     } else {
         Some(raw)

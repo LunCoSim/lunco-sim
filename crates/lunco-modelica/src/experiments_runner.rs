@@ -1827,19 +1827,12 @@ pub struct PlaybackEntities(
 /// (`RunProgress` / `RunCompleted` / `RunFailed` / `RunCancelled`).
 /// Removes handles whose runs have terminated.
 pub fn drain_pending_handles(
-    mut commands: bevy::prelude::Commands,
     mut pending: ResMut<PendingHandles>,
     mut registry: ResMut<ExperimentRegistry>,
     mut ev_progress: MessageWriter<RunProgress>,
     mut ev_completed: MessageWriter<RunCompleted>,
     mut ev_failed: MessageWriter<RunFailed>,
     mut ev_cancelled: MessageWriter<RunCancelled>,
-    sources: Res<ExperimentSources>,
-    mut console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
-    mut plot_states: Option<ResMut<crate::ui::panels::experiments::PlotPanelStates>>,
-    active_plot: Option<Res<crate::ui::panels::experiments::ActivePlot>>,
-    mut playback: ResMut<PlaybackEntities>,
-    mut signals: Option<ResMut<lunco_viz::SignalRegistry>>,
 ) {
     let mut keep: Vec<RunHandle> = Vec::with_capacity(pending.0.len());
     for handle in pending.0.drain(..) {
@@ -1867,83 +1860,11 @@ pub fn drain_pending_handles(
                         n_vars,
                         wall
                     );
-                    // Auto-visible: a run that just completed is what
-                    // the user is looking at, no checkbox needed. Mark
-                    // it visible on the active plot tab only (per-plot
-                    // visibility — other plot windows stay untouched,
-                    // matching Dymola's per-window curve set).
-                    // Also auto-pick a few variables on the very first
-                    // completion so the plot has content without
-                    // hunting through Telemetry. Skip parameters
-                    // (constant series) — pick the first 3 dynamic
-                    // signals by series-variance heuristic.
-                    if let Some(states) = plot_states.as_mut() {
-                        let viz = active_plot
-                            .as_deref()
-                            .copied()
-                            .unwrap_or_default()
-                            .or_default();
-                        let entry = states.entry(viz);
-                        entry.visible_experiments.insert(handle.run_id);
-                        if entry.picked_vars.is_empty() {
-                            let mut by_var: Vec<(&String, f64)> = result
-                                .series
-                                .iter()
-                                .map(|(k, v)| {
-                                    let n = v.len().max(1) as f64;
-                                    let mean = v.iter().copied().sum::<f64>() / n;
-                                    let var = v
-                                        .iter()
-                                        .map(|x| (x - mean) * (x - mean))
-                                        .sum::<f64>()
-                                        / n;
-                                    (k, var)
-                                })
-                                .filter(|(_, v)| v.is_finite() && *v > 1e-12)
-                                .collect();
-                            by_var.sort_by(|a, b| {
-                                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-                            });
-                            for (k, _) in by_var.into_iter().take(3) {
-                                entry.picked_vars.insert(k.clone());
-                            }
-                        }
-                    }
-                    let run_name = registry
-                        .get(handle.run_id)
-                        .map(|e| e.name.clone())
-                        .unwrap_or_else(|| "Run".into());
-                    if let Some(c) = console.as_mut() {
-                        c.info(format!(
-                            "✓ {run_name} done: {n_samples} samples × {n_vars} vars in {wall} ms"
-                        ));
-                    }
-                    // Publish the run's series into `SignalRegistry`
-                    // under a per-doc playback entity, so canvas plot
-                    // tiles bound by `PlotBinding::Doc` resolve to
-                    // real (entity, path) samples without needing a
-                    // live cosim entity. One entity per doc, reused
-                    // across runs — drop prior signals then push the
-                    // new run's data.
-                    if let (Some(doc_id), Some(signals_mut)) = (
-                        sources.0.get(&handle.run_id).copied(),
-                        signals.as_deref_mut(),
-                    ) {
-                        let entity = *playback
-                            .0
-                            .entry(doc_id)
-                            .or_insert_with(|| commands.spawn_empty().id());
-                        signals_mut.drop_entity(entity);
-                        for (path, samples) in &result.series {
-                            let sig = lunco_viz::SignalRef {
-                                entity,
-                                path: path.clone(),
-                            };
-                            for (t, v) in result.times.iter().zip(samples.iter()) {
-                                signals_mut.push_scalar(sig.clone(), *t, *v);
-                            }
-                        }
-                    }
+                    // UI projection of a completed run (console line, plot
+                    // auto-pick, SignalRegistry playback publish) is handled
+                    // reactively by `ui::core_observers::project_completed_run`
+                    // off the `RunCompleted` message below — core only writes
+                    // the result + status into the registry here.
                     registry.set_result(handle.run_id, result);
                     registry.set_status(
                         handle.run_id,
@@ -1959,13 +1880,6 @@ pub fn drain_pending_handles(
                         "[experiments] run {:?} failed: {error}",
                         handle.run_id
                     );
-                    let run_name = registry
-                        .get(handle.run_id)
-                        .map(|e| e.name.clone())
-                        .unwrap_or_else(|| "Fast Run".into());
-                    if let Some(c) = console.as_mut() {
-                        c.error(format!("⚠ {run_name} FAILED: {error}"));
-                    }
                     let had_partial = partial.is_some();
                     if let Some(p) = partial {
                         registry.set_result(handle.run_id, p);
@@ -1984,13 +1898,6 @@ pub fn drain_pending_handles(
                     terminal = true;
                 }
                 RunUpdate::Cancelled => {
-                    let run_name = registry
-                        .get(handle.run_id)
-                        .map(|e| e.name.clone())
-                        .unwrap_or_else(|| "Fast Run".into());
-                    if let Some(c) = console.as_mut() {
-                        c.info(format!("⊘ {run_name} cancelled"));
-                    }
                     registry.set_status(handle.run_id, RunStatus::Cancelled);
                     ev_cancelled.write(RunCancelled {
                         experiment_id: handle.run_id,

@@ -10,10 +10,17 @@
 
 use avian3d::prelude::{Forces, Mass, RigidBody, WriteRigidBodyForces};
 use bevy::prelude::*;
-use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, GlobalAmbientLight};
-use bevy::camera::Exposure;
-use bevy::post_process::bloom::Bloom;
 use bevy::math::DVec3;
+// Render-only: the `SetEnvironmentLight` tuner reaches into the bevy light /
+// camera / post-process stack. Gated so the sim core (gravity) builds without
+// bevy_light/bevy_render.
+#[cfg(feature = "render")]
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, GlobalAmbientLight};
+#[cfg(feature = "render")]
+use bevy::camera::Exposure;
+#[cfg(feature = "render")]
+use bevy::post_process::bloom::Bloom;
+#[cfg(feature = "render")]
 use lunco_core::{Command, on_command, register_commands};
 
 /// Gravity configuration types (`Gravity`, `GravityBody`, `GravityProvider`,
@@ -28,8 +35,12 @@ pub mod lighting;
 pub use lighting::{EarthshineParams, LunarSun};
 
 /// Solar direction as a co-simulation source (`LocalSolar` + the sun→cosim
-/// bridge). The lighting-direction analog of the gravity bridge.
+/// bridge). The lighting-direction analog of the gravity bridge. Render-gated:
+/// it reads the scene `DirectionalLight` for the sun direction, which only
+/// exists when bevy_light is compiled.
+#[cfg(feature = "render")]
 pub mod solar;
+#[cfg(feature = "render")]
 pub use solar::{compute_local_solar, inject_local_solar_into_cosim, LocalSolar};
 
 // Empty-bounds fallbacks for `SetEnvironmentLight`'s cascade rebuild. These
@@ -38,12 +49,16 @@ pub use solar::{compute_local_solar, inject_local_solar_into_cosim, LocalSolar};
 // layering: render is presentation, below environment). Keep in sync by hand if
 // the render defaults change — they rarely do, and a drift only affects the
 // runtime tuner's fallback when no live cascade bounds exist.
+#[cfg(feature = "render")]
 const FALLBACK_FIRST_CASCADE_FAR_BOUND: f32 = 40.0;
+#[cfg(feature = "render")]
 const FALLBACK_MAX_SHADOW_DISTANCE: f32 = 1500.0;
 
 /// Baked horizon-map terrain self-shadowing (the long-range half of the
 /// two-system shadow design). See the module docs.
+#[cfg(feature = "render")]
 pub mod horizon;
+#[cfg(feature = "render")]
 pub use horizon::{HorizonMap, HorizonShadowPlugin};
 
 /// System sets for environment computation and consumption.
@@ -212,6 +227,7 @@ pub fn inject_local_gravity_into_cosim(
 ///   scene-wide fill; the per-camera `AmbientLight` component is only an
 ///   override). Lower it (~30–60) for deep, high-contrast lunar shadow cores;
 ///   the airless Moon has near-black shadows.
+#[cfg(feature = "render")]
 #[Command(default)]
 pub struct SetEnvironmentLight {
     /// Sun azimuth in radians (`EulerRot::YXZ` yaw). `None` keeps current.
@@ -262,6 +278,7 @@ pub struct SetEnvironmentLight {
 /// Moon always has earthshine, so it survives the USD light-import that
 /// despawns fallback suns. The `SetEnvironmentLight` sun loop excludes it via
 /// `Without<Earthshine>` so a sun tweak never overwrites the fill.
+#[cfg(feature = "render")]
 #[derive(Component, Debug, Clone, Copy, Reflect, Default)]
 #[reflect(Component)]
 pub struct Earthshine;
@@ -276,6 +293,7 @@ pub struct Earthshine;
 /// script hooks all dispatch this same command. (The USD loader is the
 /// *creation* path: it spawns the light entity from `DistantLight` prims;
 /// every later change flows through here.)
+#[cfg(feature = "render")]
 #[on_command(SetEnvironmentLight)]
 fn on_set_environment_light(
     _cmd: SetEnvironmentLight,
@@ -367,6 +385,7 @@ fn on_set_environment_light(
     }
 }
 
+#[cfg(feature = "render")]
 register_commands!(on_set_environment_light);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -385,10 +404,11 @@ pub struct EnvironmentPlugin;
 /// just above the horizon — fixed for v1 (ephemeris-correct Earth direction is
 /// a later refinement); live-tunable level/color via `SetEnvironmentLight`.
 ///
-/// Native only: the web build renders on WebGL2, which supports a single
-/// `DirectionalLight`. A second light there culls the sun, so earthshine is
-/// not spawned on wasm (see the gated registration in `EnvironmentPlugin`).
-#[cfg(not(target_arch = "wasm32"))]
+/// Render builds only, and within those, native only: the web build renders on
+/// WebGL2, which supports a single `DirectionalLight`. A second light there
+/// culls the sun, so earthshine is not spawned on wasm (see the gated
+/// registration in `EnvironmentPlugin`).
+#[cfg(all(feature = "render", not(target_arch = "wasm32")))]
 fn spawn_earthshine(mut commands: Commands, existing: Query<(), With<Earthshine>>) {
     if !existing.is_empty() {
         return;
@@ -412,35 +432,21 @@ fn spawn_earthshine(mut commands: Commands, existing: Query<(), With<Earthshine>
 impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<LocalGravity>();
-        app.register_type::<LocalSolar>();
-        app.register_type::<Earthshine>();
 
-        // The one active-scene sun (lux + matched camera EV). Canonical lunar
-        // default unless a scene `insert_resource`d its own studio values first
-        // (`init_resource` is a no-op when already present). Sun spawns and
-        // camera `Exposure`s read this so the two never drift apart.
+        // The one active-scene sun (lux + matched camera EV). Pure data
+        // (no render types), so it's available even on a headless server —
+        // `lunco-usd-sim` reads it as an `Option<Res<LunarSun>>`. Canonical
+        // lunar default unless a scene `insert_resource`d its own studio
+        // values first (`init_resource` is a no-op when already present).
         app.init_resource::<LunarSun>();
-
-        // Horizon-map terrain self-shadowing. Inert until a terrain
-        // carries the `HorizonShadowTerrain` marker (USD-stamped).
-        app.add_plugins(HorizonShadowPlugin);
-
-        // The cool-blue earthshine fill (persistent, shadowless). Skipped on
-        // web: WebGL2 supports only ONE `DirectionalLight`, and a second one
-        // culls the sun — keep the sun, drop the fill.
-        #[cfg(not(target_arch = "wasm32"))]
-        app.add_systems(Startup, spawn_earthshine);
-
-        // Register environment commands (SetEnvironmentLight). The macro-built
-        // `register_all_commands` does `register_type` + `add_observer` so the
-        // HTTP/MCP API can dispatch it by reflected type name.
-        register_all_commands(app);
 
         app.configure_sets(
             FixedUpdate,
             (EnvironmentSet::Compute, EnvironmentSet::Apply).chain(),
         );
 
+        // Sim core — render-free. Gravity computation, force application, and
+        // the gravity→cosim bridge.
         app.add_systems(
             FixedUpdate,
             (
@@ -452,14 +458,45 @@ impl Plugin for EnvironmentPlugin {
                 inject_local_gravity_into_cosim
                     .in_set(EnvironmentSet::Apply)
                     .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
-                // Solar source: mirror gravity. Compute the per-entity sun
-                // direction, then publish it as cosim outputs before propagation
-                // so a sun-tracking model reads it the same tick.
-                compute_local_solar.in_set(EnvironmentSet::Compute),
-                inject_local_solar_into_cosim
-                    .in_set(EnvironmentSet::Apply)
-                    .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
             ),
         );
+
+        // Presentation half — the lighting tuner, earthshine fill, horizon
+        // shadows, and the solar→cosim direction feed (which reads the scene
+        // `DirectionalLight`). Off on a headless server.
+        #[cfg(feature = "render")]
+        {
+            app.register_type::<LocalSolar>();
+            app.register_type::<Earthshine>();
+
+            // Horizon-map terrain self-shadowing. Inert until a terrain
+            // carries the `HorizonShadowTerrain` marker (USD-stamped).
+            app.add_plugins(HorizonShadowPlugin);
+
+            // The cool-blue earthshine fill (persistent, shadowless). Skipped
+            // on web: WebGL2 supports only ONE `DirectionalLight`, and a second
+            // one culls the sun — keep the sun, drop the fill.
+            #[cfg(not(target_arch = "wasm32"))]
+            app.add_systems(Startup, spawn_earthshine);
+
+            // Register environment commands (SetEnvironmentLight). The
+            // macro-built `register_all_commands` does `register_type` +
+            // `add_observer` so the HTTP/MCP API can dispatch it by reflected
+            // type name.
+            register_all_commands(app);
+
+            // Solar source: mirror gravity. Compute the per-entity sun
+            // direction, then publish it as cosim outputs before propagation
+            // so a sun-tracking model reads it the same tick.
+            app.add_systems(
+                FixedUpdate,
+                (
+                    compute_local_solar.in_set(EnvironmentSet::Compute),
+                    inject_local_solar_into_cosim
+                        .in_set(EnvironmentSet::Apply)
+                        .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
+                ),
+            );
+        }
     }
 }

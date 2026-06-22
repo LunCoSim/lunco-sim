@@ -45,7 +45,7 @@ impl Plugin for IconWarmerPlugin {
 /// Observer body — extracted so unit tests can drive it without Bevy.
 fn on_document_opened_warm(
     trigger: On<DocumentOpened>,
-    registry: Res<crate::ui::state::ModelicaDocumentRegistry>,
+    registry: Res<crate::state::ModelicaDocumentRegistry>,
 ) {
     let doc_id = trigger.event().doc;
     let Some(host) = registry.host(doc_id) else {

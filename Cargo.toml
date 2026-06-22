@@ -94,21 +94,20 @@ bevy = { version = "0.18.1", default-features = false, features = [
     # crates that need 3D opt in via their own Cargo.toml so the
     # Lunica (LunCoSim Modelica Workbench) web binary doesn't carry them. See
     # `crates/lunco-client/Cargo.toml` for the opt-in pattern.
+    # SUBSTRATE ONLY (ECS / app / log / state / color — no GPU, window, winit,
+    # egui). This baseline reaches every `bevy = { workspace = true }` crate, so
+    # render-free crates (lunco-core, lunco-cosim, lunco-networking, …) and the
+    # `--no-ui` server binary do NOT transitively link bevy_render / bevy_winit /
+    # wayland. Render/window/winit are opted into by the consumer:
+    #   - render crates add `features = ["bevy_pbr", …]` (pulls bevy_render);
+    #   - bevy_egui pulls bevy_render + bevy_window itself, so egui crates self-heal;
+    #   - GUI BINARIES add the windowing backend (bevy_winit/wayland/x11/bevy_window)
+    #     via their own bevy feature list.
     "bevy_log",                    # info!/warn!/error! macros workspace-wide
     "bevy_state",                  # state machine (some panels)
-    "bevy_color",                  # Color / ClearColor
-    "bevy_input_focus",            # focus tracking for egui
+    "bevy_color",                  # Color / ClearColor (ECS-level, no GPU)
+    "bevy_input_focus",            # focus tracking (ECS-level)
     "multi_threaded",              # task pools (AsyncCompute/Io)
-    "bevy_render",                 # bevy_egui needs render + winit + window
-    "bevy_winit",
-    "bevy_window",
-    "bevy_camera",
-    "bevy_core_pipeline",
-    "bevy_image",                  # egui_extras image loaders + asset pipeline
-    "webgl2",                      # wasm renderer (WebGL2 backend — broadest browser support, egui works fine)
-    "x11",                         # Linux X11 backend
-    "wayland",                     # Linux Wayland backend (avoids XWayland stalls on Wayland sessions)
-    "bevy_picking",                # picking core (sub-backends are opt-in)
     # NOTE: `trace_tracy` is intentionally NOT in the workspace default features
     # because tracy-client-sys requires a C++ compile that doesn't work
     # targeting wasm32-unknown-unknown *or* Windows MSVC 2019. It is re-enabled

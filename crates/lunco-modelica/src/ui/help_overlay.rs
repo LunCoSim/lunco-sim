@@ -22,7 +22,7 @@ use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_workbench::HelpAnchors;
 use serde::{Deserialize, Serialize};
 
-use crate::ui::state::ModelicaDocumentRegistry;
+use crate::state::ModelicaDocumentRegistry;
 
 /// Persisted "seen the tour" flag.
 #[derive(Resource, Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
@@ -296,7 +296,7 @@ fn manage_tutorial_doc(world: &mut World) {
     let wants_capture = world.resource::<HelpOverlayState>().wants_capture_doc;
     if wants_capture {
         let active = world
-            .resource::<lunco_workbench::WorkspaceResource>()
+            .resource::<lunco_workspace::WorkspaceResource>()
             .active_document;
         let mut state = world.resource_mut::<HelpOverlayState>();
         if active.is_some() {
@@ -338,7 +338,7 @@ fn manage_tutorial_doc(world: &mut World) {
         let doc = captured.or_else(|| {
             if pending {
                 world
-                    .resource::<lunco_workbench::WorkspaceResource>()
+                    .resource::<lunco_workspace::WorkspaceResource>()
                     .active_document
             } else {
                 None
@@ -348,7 +348,7 @@ fn manage_tutorial_doc(world: &mut World) {
             // Make the tour doc active so `EditorIntent::Close` (which
             // closes the active document) targets the right one.
             world
-                .resource_mut::<lunco_workbench::WorkspaceResource>()
+                .resource_mut::<lunco_workspace::WorkspaceResource>()
                 .active_document = Some(doc);
             world.trigger(lunco_doc_bevy::EditorIntent::Close);
         }
@@ -369,7 +369,7 @@ fn manage_tutorial_doc(world: &mut World) {
         (s.visible, s.screen, s.graphs_demo_ran_for == Some(s.screen))
     };
     if visible && screen == GRAPHS_STEP_INDEX && !already_ran {
-        let model_view_kind = crate::ui::panels::model_view::MODEL_VIEW_KIND;
+        let model_view_kind = crate::ui::MODEL_VIEW_KIND;
         let plot_kind = crate::ui::panels::graphs::MODELICA_PLOT_KIND;
         let mut saved: Option<lunco_workbench::TabLocation> = None;
         if let Some(mut layout) =

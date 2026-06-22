@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use lunco_core::{Command, on_command};
 use lunco_doc::DocumentId;
 use crate::document::ModelicaOp;
-use crate::ui::state::ModelicaDocumentRegistry;
+use crate::state::ModelicaDocumentRegistry;
 use super::util::resolve_doc;
 
 /// Rename a top-level class within an open Modelica document.
@@ -55,7 +55,7 @@ pub fn on_rename_modelica_class(
             }
         };
 
-        match crate::ui::panels::canvas_diagram::apply_one_op_as(
+        match crate::doc_ops::apply_one_op_as(
             world,
             doc,
             ModelicaOp::ReplaceSource { new: new_source },
@@ -129,53 +129,9 @@ fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// Chain observer: workbench [`lunco_workbench::file_ops::RenameOpenDocument`]
-/// → [`RenameModelicaClass`] for Untitled Modelica drafts.
-///
-/// The workbench's own observer routes saved files via
-/// [`lunco_workbench::file_ops::RenameTwinEntry`] (which then chains
-/// here via [`on_file_renamed_chain_to_modelica`]). Untitled docs have
-/// no on-disk presence, so the rename is purely a class-declaration
-/// rewrite — that's what this observer handles.
-pub fn on_rename_open_document_chain_to_modelica(
-    trigger: On<lunco_workbench::file_ops::RenameOpenDocument>,
-    workspace: Res<lunco_workbench::WorkspaceResource>,
-    registry: Res<crate::ui::state::ModelicaDocumentRegistry>,
-    mut commands: Commands,
-) {
-    use lunco_doc::DocumentOrigin;
-    let ev = trigger.event();
-    let Some(entry) = workspace.document(ev.doc) else {
-        return;
-    };
-    // Only handle Untitled drafts; saved files go through the
-    // RenameTwinEntry → FileRenamed → on_file_renamed_chain_to_modelica
-    // path.
-    let DocumentOrigin::Untitled { name } = &entry.origin else {
-        return;
-    };
-    // Confirm the doc is actually Modelica before firing
-    // RenameModelicaClass.
-    if registry.host(ev.doc).is_none() {
-        return;
-    }
-    let old_name = name.clone();
-    let new_name = ev.new_name.trim().to_string();
-    if new_name.is_empty() || new_name == old_name {
-        return;
-    }
-    bevy::log::info!(
-        "[RenameOpenDocument→Modelica] Untitled doc={} {} → {}",
-        ev.doc,
-        old_name,
-        new_name
-    );
-    commands.trigger(RenameModelicaClass {
-        doc: ev.doc,
-        old_name,
-        new_name,
-    });
-}
+// `on_rename_open_document_chain_to_modelica` (Untitled-draft rename via the
+// workbench `RenameOpenDocument` UI event) moved to `crate::ui::rename_chain`
+// — it names a workbench type, so it can't live in the core API plugin.
 
 /// Chain observer: when the workbench fires [`FileRenamed`] after a
 /// successful on-disk rename, and the renamed entry is a `.mo` file
@@ -195,9 +151,9 @@ pub fn on_rename_open_document_chain_to_modelica(
 /// refs in other docs) are deliberately not addressed here — that's a
 /// separate slice with its own AST-resolver design.
 pub fn on_file_renamed_chain_to_modelica(
-    trigger: On<lunco_workbench::FileRenamed>,
-    workspace: Res<lunco_workbench::WorkspaceResource>,
-    mut registry: ResMut<crate::ui::state::ModelicaDocumentRegistry>,
+    trigger: On<lunco_workspace::FileRenamed>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
+    mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
     mut commands: Commands,
 ) {
     use lunco_doc::DocumentOrigin;

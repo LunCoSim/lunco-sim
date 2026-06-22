@@ -2,7 +2,7 @@
 //!
 //! Holds one [`OpeningState`] per [`DocumentId`] until the parse
 //! resolves and the driver hands the document to
-//! [`crate::ui::state::ModelicaDocumentRegistry`]. Each variant
+//! [`crate::state::ModelicaDocumentRegistry`]. Each variant
 //! owns its own typed `Task<...>` plus a [`lunco_workbench::status_bus::BusyHandle`]
 //! that keeps a `(BusyScope::Document, "opening"|"drill-in"|"duplicate")`
 //! entry on the bus for the parse lifetime.
@@ -25,7 +25,7 @@ use lunco_doc::DocumentId;
 use std::collections::HashMap;
 
 use crate::ui::panels::canvas_diagram::loads::{DrillInBinding, DuplicateBinding};
-use crate::ui::panels::package_browser::cache::FileLoadResult;
+use crate::package_tree::cache::FileLoadResult;
 
 /// One in-flight document open. Each variant carries the typed
 /// `Task<...>` plus the metadata that variant's driver needs to
@@ -138,7 +138,7 @@ pub struct AstReparseBusyHandles {
 /// `bus.lifecycle(Document(d), ...)` alone without an ast-stale
 /// fallback predicate.
 pub fn track_ast_reparse_busy(
-    registry: Res<crate::ui::state::ModelicaDocumentRegistry>,
+    registry: Res<crate::state::ModelicaDocumentRegistry>,
     mut handles: ResMut<AstReparseBusyHandles>,
     mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
 ) {
@@ -168,7 +168,7 @@ pub fn track_ast_reparse_busy(
 
 /// In-flight per-document `StatusBus` handles for compile work.
 /// Same edge-triggered pattern as [`AstReparseBusyHandles`]: minted
-/// when [`crate::ui::CompileStates::is_compiling`] rises, dropped
+/// when [`crate::state::CompileStates::is_compiling`] rises, dropped
 /// when it falls — with the terminal outcome (`Succeeded` /
 /// `Failed(msg)`) recorded for [`lunco_workbench::status_bus::StatusBus::lifecycle`]
 /// consumers.
@@ -188,8 +188,8 @@ pub struct CompileBusyHandles {
 /// transitions into `Compiling`, drops it (with `Failed(msg)` if
 /// the terminal state is `Error`) when it transitions out.
 pub fn track_compile_busy(
-    compile_states: Res<crate::ui::CompileStates>,
-    registry: Res<crate::ui::state::ModelicaDocumentRegistry>,
+    compile_states: Res<crate::state::CompileStates>,
+    registry: Res<crate::state::ModelicaDocumentRegistry>,
     mut handles: ResMut<CompileBusyHandles>,
     mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
 ) {
@@ -275,10 +275,10 @@ pub fn track_simulate_busy(
 /// drain that lived in `handle_package_loading_tasks`.
 pub fn drive_file_load_openings(
     mut openings: ResMut<DocumentOpenings>,
-    mut registry: ResMut<crate::ui::state::ModelicaDocumentRegistry>,
-    mut workspace: ResMut<lunco_workbench::WorkspaceResource>,
+    mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
+    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut canvas_state: ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>,
-    mut tabs: ResMut<crate::ui::panels::model_view::ModelTabs>,
+    mut tabs: ResMut<crate::model_tabs::ModelTabs>,
     mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
     mut commands: Commands,
 ) {
@@ -329,13 +329,13 @@ pub fn drive_file_load_openings(
                 let mut busy = busy;
                 busy.set_outcome(lunco_workbench::status_bus::BusyOutcome::Failed(msg));
                 drop(busy);
-                let orphan_tab_ids: Vec<crate::ui::panels::model_view::TabId> = tabs
+                let orphan_tab_ids: Vec<crate::model_tabs_types::TabId> = tabs
                     .iter_mut_for_doc(ready.doc_id)
                     .map(|(id, _)| id)
                     .collect();
                 for tab_id in orphan_tab_ids {
                     commands.trigger(lunco_workbench::CloseTab {
-                        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                        kind: crate::ui::MODEL_VIEW_KIND,
                         instance: tab_id,
                     });
                     tabs.close_tab(tab_id);

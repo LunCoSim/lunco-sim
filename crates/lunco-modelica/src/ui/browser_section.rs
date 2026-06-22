@@ -3,7 +3,7 @@
 //! ## What it shows
 //!
 //! 1. Every Modelica document currently loaded in the
-//!    [`crate::ui::state::ModelicaDocumentRegistry`] — drafts, duplicates from the
+//!    [`crate::state::ModelicaDocumentRegistry`] — drafts, duplicates from the
 //!    Welcome examples, files opened in earlier sessions. This is the
 //!    workspace's authoritative view of "what Modelica content does
 //!    the user have right now."
@@ -37,8 +37,8 @@ use lunco_workbench::{BrowserAction, BrowserCtx, BrowserSection};
 use rumoca_compile::parsing::ClassType;
 
 // `DrilledInClassNames` reads migrated to
-// `crate::ui::panels::model_view::drilled_class_for_doc`.
-use crate::ui::state::ModelicaDocumentRegistry;
+// `crate::sim_default::drilled_class_for_doc`.
+use crate::state::ModelicaDocumentRegistry;
 
 /// One Modelica class entry rendered in the tree.
 #[derive(Debug, Clone)]
@@ -94,12 +94,12 @@ impl BrowserSection for ModelicaSection {
         let library_rows: Vec<(String, String)> = {
             let cache = ctx
                 .world
-                .resource::<crate::ui::panels::package_browser::PackageTreeCache>();
+                .resource::<crate::package_tree::PackageTreeCache>();
             cache
                 .roots
                 .iter()
                 .filter_map(|root| match root {
-                    crate::ui::panels::package_browser::PackageNode::Category {
+                    crate::package_tree::PackageNode::Category {
                         id,
                         name,
                         ..
@@ -343,7 +343,7 @@ fn render_workspace_doc_row(
             let origin = host.map(|h| h.document().origin().clone());
             match origin {
                 Some(lunco_doc::DocumentOrigin::File { path, writable: true }) => {
-                    let ws = ctx.world.resource::<lunco_workbench::WorkspaceResource>();
+                    let ws = ctx.world.resource::<lunco_workspace::WorkspaceResource>();
                     let twin_root = ws
                         .active_twin
                         .and_then(|id| ws.twin(id))
@@ -430,7 +430,7 @@ fn render_workspace_doc_row(
 /// the outer `CollapsingHeader` row carrying this doc's name has
 /// already been drawn; we just paint the children inline.
 ///
-/// Source-of-truth read of [`crate::ui::state::ModelicaDocumentRegistry`] via the doc's
+/// Source-of-truth read of [`crate::state::ModelicaDocumentRegistry`] via the doc's
 /// [`crate::index::ModelicaIndex`]. Stateless; the registry's
 /// off-thread refresh + per-op optimistic patches keep the Index current.
 pub(crate) fn render_workspace_doc(
@@ -463,10 +463,10 @@ pub(crate) fn render_workspace_doc(
 
     let active_doc: Option<DocumentId> = ctx
         .world
-        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
     let active_qualified: Option<String> = active_doc.and_then(|d| {
-        crate::ui::panels::model_view::drilled_class_for_doc(ctx.world, d)
+        crate::sim_default::drilled_class_for_doc(ctx.world, d)
     });
 
     // Collapse the redundant wrapper when the document holds a

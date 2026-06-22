@@ -11,11 +11,11 @@ use std::sync::Arc;
 use crate::document::duplicate::{
     build_duplicate_source, collect_parent_imports, extract_class_spans_inline,
 };
-use crate::ui::{
+use crate::state::{
     CompileStates, ModelicaDocumentRegistry, WorkbenchState,
 };
-use crate::ui::panels::model_view::{ModelTabs, MODEL_VIEW_KIND};
-use crate::ui::panels::package_browser::PackageTreeCache;
+use crate::model_tabs::ModelTabs; use crate::ui::MODEL_VIEW_KIND;
+use crate::package_tree::PackageTreeCache;
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 
@@ -197,7 +197,7 @@ pub fn request_app_close(world: &mut World) {
         // to a workbench-level "find tab(s) for doc id" registry).
         // Synthetic instance=0 is the fallback when no tab is open
         // for the dirty doc (registry-only edits).
-        let tabs = world.get_resource::<crate::ui::panels::model_view::ModelTabs>();
+        let tabs = world.get_resource::<crate::model_tabs::ModelTabs>();
         let mut out = Vec::new();
         for doc_id in dirty_ids {
             let mut any = false;
@@ -401,7 +401,7 @@ pub fn on_create_new_scratch_model(
     mut cache: ResMut<PackageTreeCache>,
     mut model_tabs: ResMut<ModelTabs>,
     mut workbench: ResMut<WorkbenchState>,
-    mut workspace: ResMut<lunco_workbench::WorkspaceResource>,
+    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut commands: Commands,
 ) {
     let req_source = trigger.event().source.clone();
@@ -436,7 +436,7 @@ pub fn on_create_new_scratch_model(
     cache.in_memory_models.retain(|e| e.id != mem_id);
     cache
         .in_memory_models
-        .push(crate::ui::panels::package_browser::InMemoryEntry {
+        .push(crate::package_tree::InMemoryEntry {
             display_name: name,
             id: mem_id,
             doc: doc_id,
@@ -525,14 +525,14 @@ pub fn on_duplicate_model_from_read_only(
     cache.in_memory_models.retain(|e| e.id != mem_id);
     cache
         .in_memory_models
-        .push(crate::ui::panels::package_browser::InMemoryEntry {
+        .push(crate::package_tree::InMemoryEntry {
             display_name: name.clone(),
             id: mem_id,
             doc: doc_id,
         });
     let tab_id = model_tabs.ensure_for(doc_id, None);
     if let Some(tab) = model_tabs.get_mut(tab_id) {
-        tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+        tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
     }
     commands.trigger(lunco_workbench::OpenTab {
         kind: MODEL_VIEW_KIND,
@@ -655,7 +655,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
         cache.in_memory_models.retain(|e| e.id != mem_id);
         cache
             .in_memory_models
-            .push(crate::ui::panels::package_browser::InMemoryEntry {
+            .push(crate::package_tree::InMemoryEntry {
                 display_name: name.clone(),
                 id: mem_id,
                 doc: doc_id,
@@ -666,7 +666,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
             .resource_mut::<ModelTabs>();
         let tab_id = model_tabs.ensure_for(doc_id, None);
         if let Some(tab) = model_tabs.get_mut(tab_id) {
-            tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+            tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
         }
         tab_id
     };
@@ -909,7 +909,7 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
         let mut tabs = world.resource_mut::<ModelTabs>();
         let tab_id = tabs.ensure_for(doc_id, None);
         if let Some(tab) = tabs.get_mut(tab_id) {
-            tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+            tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
         }
         world.commands().trigger(lunco_workbench::OpenTab {
             kind: MODEL_VIEW_KIND,
@@ -1001,7 +1001,7 @@ pub fn on_document_closed_cleanup(
     mut cache: ResMut<PackageTreeCache>,
     mut compile_states: ResMut<CompileStates>,
     mut workbench: ResMut<WorkbenchState>,
-    mut workspace: ResMut<lunco_workbench::WorkspaceResource>,
+    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut doc_pins: Option<ResMut<crate::ui::doc_pin::DocPinState>>,
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut drafts: Option<ResMut<crate::experiments_runner::ExperimentDrafts>>,

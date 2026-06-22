@@ -9,37 +9,9 @@
 use bevy::prelude::*;
 
 use super::CanvasDiagramState;
-
-/// One pending camera focus, queued by an API caller, drained by the
-/// canvas's per-frame system once the projection settles.
-#[derive(Debug, Clone)]
-pub struct PendingApiFocus {
-    /// Document the new component lives in.
-    pub doc: lunco_doc::DocumentId,
-    /// Component instance name (matches `Node.origin` after projection).
-    pub name: String,
-    /// When the API caller queued this. Used both for batch debounce
-    /// and timeout GC.
-    pub queued_at: web_time::Instant,
-    /// Per-call pulse glow duration (ms). 0 disables the glow for
-    /// this entry. Defaults to `DEFAULT_PULSE_MS` when the API
-    /// caller didn't supply `animation_ms`.
-    pub animation_ms: u32,
-}
-
-/// FIFO queue of pending API-driven focuses. `ApiEdits::on_add_modelica_component`
-/// pushes; the canvas's `drive_pending_api_focus` system drains.
-///
-/// Kept as a `Vec` not a `HashMap` so order is preserved — batch debounce
-/// needs to know whether the *latest* push is recent enough to coalesce.
-#[derive(Resource, Default)]
-pub struct PendingApiFocusQueue(pub Vec<PendingApiFocus>);
-
-impl PendingApiFocusQueue {
-    pub fn push(&mut self, focus: PendingApiFocus) {
-        self.0.push(focus);
-    }
-}
+// The API-feedback queue *data* lives in the egui-free core module
+// `crate::canvas_feedback`; these UI systems drain it.
+use crate::canvas_feedback::{PendingApiConnectionQueue, PendingApiFocusQueue};
 
 /// Window for batch-collapse: if a new entry arrives within this of
 /// the previous one, the system holds back from focusing on the older
@@ -51,46 +23,12 @@ const BATCH_WINDOW: std::time::Duration = std::time::Duration::from_millis(200);
 /// failed AddComponent ops or rename races.
 const FOCUS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Default pulse duration when the API caller doesn't override it.
-/// Per-call override lives on `AddModelicaComponent.animation_ms` /
-/// `ConnectComponents.animation_ms`; 0 disables the highlight
-/// entirely. Quartic slow-tail (`alpha = 1 - t^4`) decay regardless
-/// of total length.
-pub const DEFAULT_PULSE_MS: u32 = 2000;
-pub const DEFAULT_EDGE_FLASH_MS: u32 = 1500;
-
 /// Stagger between consecutive node-pulse start times within a batch.
 /// Adds a "slight delay between elements" feel (per user feedback)
 /// without actually delaying the source mutation — the components
 /// land in the scene at once; the *pulse* is what reveals them in
 /// sequence. Empty for batch=1.
 const PULSE_STAGGER_MS: u64 = 250;
-
-/// Connection-add queue (mirror of `PendingApiFocusQueue` but for
-/// `ConnectComponents`). The driver matches each entry against the
-/// scene's edge list (by from/to component+port) and pushes a brief
-/// flash entry into the doc's `edge_pulse_handle`.
-#[derive(Resource, Default)]
-pub struct PendingApiConnectionQueue(pub Vec<PendingApiConnection>);
-
-#[derive(Debug, Clone)]
-pub struct PendingApiConnection {
-    pub doc: lunco_doc::DocumentId,
-    pub from_component: String,
-    pub from_port: String,
-    pub to_component: String,
-    pub to_port: String,
-    pub queued_at: web_time::Instant,
-    /// Per-call edge-flash duration (ms). 0 = no flash. Defaults to
-    /// `DEFAULT_EDGE_FLASH_MS` when not supplied.
-    pub animation_ms: u32,
-}
-
-impl PendingApiConnectionQueue {
-    pub fn push(&mut self, entry: PendingApiConnection) {
-        self.0.push(entry);
-    }
-}
 
 /// Edge-pulse coordinator layer. Drawing happens inside
 /// `OrthogonalEdgeVisual::draw` so the highlight follows the wire's

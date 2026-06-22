@@ -5,7 +5,7 @@
 //! - **`ListBundled`** — embedded `assets/models/*.mo` examples. Modelica-
 //!   specific; lives here because that's where the data lives.
 //! - **`ListOpenDocuments`** — cross-domain workspace state. Reads
-//!   [`lunco_workbench::WorkspaceResource`], so it transparently surfaces
+//!   [`lunco_workspace::WorkspaceResource`], so it transparently surfaces
 //!   USD / SysML / Mission / Markdown documents in addition to Modelica
 //!   ones — anything the Workspace layer tracks.
 //!
@@ -23,15 +23,15 @@ use bevy::prelude::*;
 use lunco_api::{ApiErrorCode, ApiQueryProvider, ApiQueryRegistry, ApiResponse};
 use lunco_doc::{Document, DocumentOrigin};
 use lunco_twin::{DocumentKind, FileEntry, FileKind};
-use lunco_workbench::WorkspaceResource;
+use lunco_workspace::WorkspaceResource;
 
 use crate::ast_extract;
 use crate::experiments_runner::ExperimentSources;
 use crate::models::bundled_models;
 use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
 // `DrilledInClassNames` reads migrated to
-// `crate::ui::panels::model_view::drilled_class_for_doc`.
-use crate::ui::state::{CompileState, CompileStates, ModelicaDocumentRegistry};
+// `crate::sim_default::drilled_class_for_doc`.
+use crate::state::{CompileState, CompileStates, ModelicaDocumentRegistry};
 use crate::visual_diagram::msl_class_library;
 use lunco_doc::DocumentId;
 
@@ -617,7 +617,7 @@ impl ApiQueryProvider for CompileStatusProvider {
         // `TabRenderContext` is in scope (which is the case here —
         // API queries run off-render).
         let drilled_in =
-            crate::ui::panels::model_view::drilled_class_for_doc(world, doc_id);
+            crate::sim_default::drilled_class_for_doc(world, doc_id);
         // `picker_pending` mirrors the gate in `on_compile_model`: we
         // would be in the picker branch if no class is pinned and the
         // doc has 2+ non-package classes. Easier to recompute than to
@@ -653,7 +653,7 @@ impl ApiQueryProvider for CompileStatusProvider {
             && candidates.len() >= 2;
 
         let error_message = world
-            .get_resource::<crate::ui::CompileStates>()
+            .get_resource::<crate::state::CompileStates>()
             .and_then(|cs| cs.error_for(doc_id).map(str::to_string));
 
         // Live run-state, read from the `ModelicaModel` for this doc's
@@ -1247,7 +1247,7 @@ impl ApiQueryProvider for DescribeModelProvider {
         // `TabRenderContext` is in scope (which is the case here —
         // API queries run off-render).
         let drilled_in =
-            crate::ui::panels::model_view::drilled_class_for_doc(world, doc_id);
+            crate::sim_default::drilled_class_for_doc(world, doc_id);
 
         let registry = world.resource::<ModelicaDocumentRegistry>();
         let Some(host) = registry.host(doc_id) else {

@@ -4,9 +4,9 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 
-use crate::ui::state::{ModelLibrary};
-use super::types::{PackageNode, TwinNode};
-use super::cache::{PackageTreeCache, ScanResult};
+use crate::state::{ModelLibrary};
+use crate::package_tree::types::{PackageNode, TwinNode};
+use crate::package_tree::cache::{PackageTreeCache, ScanResult};
 
 pub struct PackageBrowserPanel;
 
@@ -23,9 +23,9 @@ impl Panel for PackageBrowserPanel {
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         let active_path_str = world
-            .get_resource::<lunco_workbench::WorkspaceResource>()
+            .get_resource::<lunco_workspace::WorkspaceResource>()
             .and_then(|ws| ws.active_document)
-            .and_then(|d| crate::ui::state::display_name_for(world, d));
+            .and_then(|d| crate::state::display_name_for(world, d));
         let active_path = active_path_str.as_deref();
         
         let theme = world
@@ -199,7 +199,7 @@ pub(crate) fn render_node_single(
                         let pid = id.clone();
                         let pp = package_path.clone();
                         tasks.push(pool.spawn(async move {
-                            let kids = super::library_tree::library_tree().children(&pp);
+                            let kids = crate::package_tree::library_tree::library_tree().children(&pp);
                             ScanResult { parent_id: pid, children: kids }
                         }));
                     }
@@ -220,10 +220,10 @@ pub(crate) fn render_node_single(
                     crate::ui::browser_section::paint_badge(ui, badge, theme);
                 } else {
                     let icon = match library {
-                        crate::ui::state::ModelLibrary::MSL => "?",
-                        crate::ui::state::ModelLibrary::Bundled => "📦",
-                        crate::ui::state::ModelLibrary::User => "📁",
-                        crate::ui::state::ModelLibrary::InMemory => "💾",
+                        crate::state::ModelLibrary::MSL => "?",
+                        crate::state::ModelLibrary::Bundled => "📦",
+                        crate::state::ModelLibrary::User => "📁",
+                        crate::state::ModelLibrary::InMemory => "💾",
                     };
                     ui.label(egui::RichText::new(icon).size(11.0));
                 }
@@ -241,7 +241,7 @@ pub(crate) fn render_node_single(
                 resp = resp.on_hover_text(format!("Kind: {}", kind.as_keyword()));
             }
 
-            if matches!(library, crate::ui::state::ModelLibrary::MSL) {
+            if matches!(library, crate::state::ModelLibrary::MSL) {
                 let msl_path = id.strip_prefix("msl_path:").unwrap_or(id).to_string();
                 if ui.rect_contains_pointer(resp.rect) && ui.input(|i| i.pointer.any_down()) {
                     action = Some(PackageAction::DragStart { msl_path });

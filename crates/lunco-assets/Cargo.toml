@@ -5,7 +5,13 @@ edition = "2021"
 description = "Unified asset management for LunCoSim — cache resolution, versioned downloads, texture processing, and loading abstraction"
 
 [dependencies]
-bevy = { workspace = true }
+# `bevy_asset` is required here directly: this crate defines the `twin://` /
+# `lunco://` AssetReaders (twin_source.rs uses `bevy::asset::io::*`). The
+# workspace bevy default is substrate-only (no render/asset) since the render
+# gating, so declare the feature here rather than relying on a consumer to
+# unify it in — otherwise the standalone `build_msl_assets` host bin fails to
+# compile (E0433: `bevy::asset` not found).
+bevy = { workspace = true, features = ["bevy_asset"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

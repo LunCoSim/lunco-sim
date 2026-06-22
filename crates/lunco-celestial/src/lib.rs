@@ -35,6 +35,7 @@ pub use lunco_terrain::*;
 pub use lunco_terrain::TerrainTileConfig;
 
 /// UI panels for celestial time control and body browser.
+#[cfg(feature = "ui")]
 pub mod ui;
 pub mod commands;
 pub use commands::*;

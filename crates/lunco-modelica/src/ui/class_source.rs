@@ -21,7 +21,7 @@
 //! rewrite it (duplicate). Both sit on the same path building blocks so
 //! they cannot disagree about a class's home.
 
-use crate::ui::state::ModelicaDocumentRegistry;
+use crate::state::ModelicaDocumentRegistry;
 use bevy::prelude::World;
 
 /// A class's source text plus the metadata an extract/rewrite pass needs.

@@ -1362,7 +1362,7 @@ pub struct ModelicaModel {
     /// All other observable variables (Real soc, etc)
     pub variables: HashMap<String, f64>,
     /// Canonical id of the Modelica source document backing this entity,
-    /// looked up in [`crate::ui::state::ModelicaDocumentRegistry`]. `DocumentId::default()`
+    /// looked up in [`crate::state::ModelicaDocumentRegistry`]. `DocumentId::default()`
     /// (`0`) means "no document assigned yet"; systems should treat it as
     /// a miss. Not reflected — ids are session-local allocations, not
     /// scene-serializable.
@@ -1421,7 +1421,9 @@ pub fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
     time: Res<Time<Fixed>>,
     mut q_models: Query<(Entity, &mut ModelicaModel)>,
-    mut commands: Commands,
+    // Auto-compile request goes out as a core event; the UI relays it to the
+    // `CompileModel` command. Core no longer references the UI command.
+    mut compile_requests: MessageWriter<crate::CompileRequested>,
 ) {
     let dt = time.delta_secs_f64();
 
@@ -1443,7 +1445,7 @@ pub fn spawn_modelica_requests(
         if !model.is_compiled {
             let doc = model.document;
             if doc != lunco_doc::DocumentId::default() {
-                commands.trigger(crate::ui::commands::CompileModel {
+                compile_requests.write(crate::CompileRequested {
                     doc,
                     class: if model.model_name.is_empty() {
                         None
@@ -1489,38 +1491,28 @@ pub fn handle_modelica_responses(
     // `workbench_state` was the home of `compilation_error` (B.3
     // phase 4, retired). Param kept in the signature in case other
     // worker paths need it; prefix `_` silences the unused warning.
-    mut _workbench_state: ResMut<crate::ui::WorkbenchState>,
-    // Headless callers (e.g. cosim tests) run this system without the
-    // UI plugin, so the console + compile-state resources may be
-    // absent. Make both optional so the core stepping path survives
-    // those setups without forcing them to pull in the UI module.
-    compile_states: Option<ResMut<crate::ui::CompileStates>>,
-    console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
-    // Optional — a headless cosim harness may skip `LuncoVizPlugin`
-    // entirely. When present, every outgoing sample is published into
-    // the registry, and the default Modelica plot's bindings are
-    // seeded on first compile of each entity.
-    mut signals: Option<ResMut<lunco_viz::SignalRegistry>>,
-    mut viz_registry: Option<ResMut<lunco_viz::VisualizationRegistry>>,
-    // Optional so headless cosim tests (no UI plugin) still link.
-    // When present, signal-meta description tooltips read from the
-    // doc index, keeping AST as the single source of truth.
-    doc_registry: Option<Res<crate::ui::ModelicaDocumentRegistry>>,
+    mut _workbench_state: ResMut<crate::state::WorkbenchState>,
+    // Core compile-state (UI-agnostic). Optional so headless cosim tests run
+    // without it.
+    compile_states: Option<ResMut<crate::state::CompileStates>>,
+    // Lifecycle messages leave as core events; the reactive UI console observer
+    // projects them. Core no longer references the console panel.
+    mut notices: MessageWriter<crate::ModelicaNotice>,
+    // Live sim samples leave the core handler through this UI-agnostic queue;
+    // the reactive UI viz observer (`ui::core_observers::drain_sim_samples_to_viz`)
+    // drains it into `lunco_viz`. Core no longer references any viz/plot types.
+    mut sample_stream: ResMut<crate::SimSampleStream>,
     runner_res: Option<Res<crate::ModelicaRunnerResource>>,
     source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
-    status_bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
 ) {
     let mut compile_states = compile_states;
-    let mut console = console;
     let mut source_roots = source_roots;
-    let mut status_bus = status_bus;
     while let Ok(result) = channels.rx.try_recv() {
         // Source-root load ack: route to the registry and short-
         // circuit before any of the sim-result handling below
         // (which keys on `result.entity` — LoadSourceRoot uses
         // `Entity::PLACEHOLDER`).
         if let Some(root_id) = result.loaded_source_root_id.as_ref() {
-            let is_failure = result.error.is_some();
             if let Some(roots) = source_roots.as_deref_mut() {
                 if let Some(entry) = roots.roots.get_mut(root_id) {
                     if let Some(err) = result.error.as_ref() {
@@ -1540,26 +1532,9 @@ pub fn handle_modelica_responses(
                     }
                 }
             }
-            if let Some(bus) = status_bus.as_deref_mut() {
-                bus.clear_progress(crate::source_roots::STATUS_BUS_SOURCE);
-                if is_failure {
-                    bus.push(
-                        crate::source_roots::STATUS_BUS_SOURCE,
-                        lunco_workbench::status_bus::StatusLevel::Warn,
-                        format!(
-                            "Library `{}` load failed: {}",
-                            root_id,
-                            result.error.as_deref().unwrap_or(""),
-                        ),
-                    );
-                } else {
-                    bus.push(
-                        crate::source_roots::STATUS_BUS_SOURCE,
-                        lunco_workbench::status_bus::StatusLevel::Info,
-                        format!("Library `{}` ready", root_id),
-                    );
-                }
-            }
+            // Status-bar projection of this load result is handled by the
+            // reactive UI observer of `SourceRootRegistry` — core only sets the
+            // registry state above.
             continue;
         }
 
@@ -1599,9 +1574,10 @@ pub fn handle_modelica_responses(
         if result.entity == Entity::PLACEHOLDER {
             let msg = "Simulation worker crashed and restarted.";
             warn!("{msg}");
-            if let Some(c) = console.as_mut() {
-                c.error(msg);
-            }
+            notices.write(crate::ModelicaNotice {
+                level: crate::NoticeLevel::Error,
+                text: msg.to_string(),
+            });
             continue;
         }
 
@@ -1626,9 +1602,10 @@ pub fn handle_modelica_responses(
                 // update). Skip the per-Step logs so the console doesn't
                 // flood at 60 Hz.
                 if result.is_new_model || result.is_reset || result.is_parameter_update {
-                    if let Some(c) = console.as_mut() {
-                        c.info(format!("[{}] {msg}", model.model_name));
-                    }
+                    notices.write(crate::ModelicaNotice {
+                        level: crate::NoticeLevel::Info,
+                        text: format!("[{}] {msg}", model.model_name),
+                    });
                 }
             }
 
@@ -1639,9 +1616,9 @@ pub fn handle_modelica_responses(
             let is_compile_result = result.is_new_model || result.is_parameter_update;
             if is_compile_result && !model.document.is_unassigned() {
                 let new_state = if result.error.is_some() {
-                    crate::ui::CompileState::Error
+                    crate::state::CompileState::Error
                 } else {
-                    crate::ui::CompileState::Ready
+                    crate::state::CompileState::Ready
                 };
                 if let Some(cs) = compile_states.as_mut() {
                     let elapsed = cs.mark_finished(model.document, new_state);
@@ -1653,29 +1630,31 @@ pub fn handle_modelica_responses(
                             format!("{:.0} ms", ms)
                         };
                         match new_state {
-                            crate::ui::CompileState::Error => {
+                            crate::state::CompileState::Error => {
                                 warn!(
                                     "[Modelica] Compile finished with error for `{}` in {}",
                                     model.model_name, human
                                 );
-                                if let Some(c) = console.as_mut() {
-                                    c.error(format!(
+                                notices.write(crate::ModelicaNotice {
+                                    level: crate::NoticeLevel::Error,
+                                    text: format!(
                                         "⏹ Compile FAILED: '{}' in {}",
                                         model.model_name, human
-                                    ));
-                                }
+                                    ),
+                                });
                             }
-                            crate::ui::CompileState::Ready => {
+                            crate::state::CompileState::Ready => {
                                 info!(
                                     "[Modelica] Compile finished for `{}` in {}",
                                     model.model_name, human
                                 );
-                                if let Some(c) = console.as_mut() {
-                                    c.info(format!(
+                                notices.write(crate::ModelicaNotice {
+                                    level: crate::NoticeLevel::Info,
+                                    text: format!(
                                         "✓ Compile finished: '{}' in {}",
                                         model.model_name, human
-                                    ));
-                                }
+                                    ),
+                                });
                             }
                             _ => {}
                         }
@@ -1714,9 +1693,10 @@ pub fn handle_modelica_responses(
                 } else {
                     "Solver error"
                 };
-                if let Some(c) = console.as_mut() {
-                    c.error(format!("[{}] {prefix}: {err}", model.model_name));
-                }
+                notices.write(crate::ModelicaNotice {
+                    level: crate::NoticeLevel::Error,
+                    text: format!("[{}] {prefix}: {err}", model.model_name),
+                });
                 model.paused = true;
                 // A failed Compile/Step must not silently auto-play on a
                 // later, unrelated successful compile: clear the resume
@@ -1793,93 +1773,28 @@ pub fn handle_modelica_responses(
             model.last_step_time = result.new_time;
             let time_val = result.new_time;
 
-            // Publish every outgoing scalar sample into the global
-            // `SignalRegistry`. The Graphs panel and any future
-            // visualization (Avian / USD / scripts) read uniformly
-            // from here — there is no longer a Modelica-specific
-            // shadow history.
-            if let Some(sigs) = signals.as_deref_mut() {
-                // Only a fresh compile (new DAE shape, possibly new
-                // signal set) clears the registry's history. Reset and
-                // parameter-update both restart sim-time at 0 but the
-                // signal *shape* is unchanged, and users want to keep
-                // seeing the prior run's curves while they iterate —
-                // wiping on every param tweak made the Graphs tab look
-                // permanently empty after any Telemetry edit.
-                if result.is_new_model {
-                    for (name, _) in result.detected_symbols.iter().chain(result.outputs.iter()) {
-                        sigs.clear_history(&lunco_viz::SignalRef::new(
-                            result.entity,
-                            name.clone(),
-                        ));
-                    }
-                }
-                for (name, val) in result.outputs.iter().chain(result.detected_symbols.iter()) {
-                    sigs.push_scalar(
-                        lunco_viz::SignalRef::new(result.entity, name.clone()),
-                        time_val,
-                        *val,
-                    );
-                }
-                // Publish / refresh description metadata on compile-
-                // type results so the viz inspector can show tooltips.
-                // Descriptions come from the document index (canonical
-                // AST projection), looked up by leaf name — same path
-                // Telemetry uses.
-                if result.is_new_model || result.is_parameter_update {
-                    let index_ref = doc_registry
-                        .as_deref()
-                        .and_then(|r| r.host(model.document))
-                        .map(|h| h.document().index());
-                    if let Some(index) = index_ref {
-                        for (name, _) in result
-                            .detected_symbols
-                            .iter()
-                            .chain(result.outputs.iter())
-                        {
-                            let Some(entry) = index.find_component_by_leaf(name) else {
-                                continue;
-                            };
-                            if entry.description.is_empty() {
-                                continue;
-                            }
-                            sigs.update_meta(
-                                lunco_viz::SignalRef::new(result.entity, name.clone()),
-                                lunco_viz::SignalMeta {
-                                    description: Some(entry.description.clone()),
-                                    unit: None,
-                                    provenance: Some("modelica".to_string()),
-                                },
-                            );
-                        }
-                    }
-                }
-            }
-
-            // Auto-seed the default Modelica plot with every observable
-            // from a freshly-compiled model. Preserves the pre-viz UX
-            // where compiling immediately filled the graph with all
-            // the model's observables. Does nothing when the user has
-            // already curated the bindings.
-            if result.is_new_model {
-                if let Some(reg) = viz_registry.as_deref_mut() {
-                    // Clear stale bindings from any prior model/entity so
-                    // switching models doesn't leave old signals plotted.
-                    // We deliberately do *not* auto-bind every detected
-                    // observable any more — a freshly compiled model
-                    // starts with an *empty* default plot. Users add
-                    // signals via the Telemetry panel checkboxes.
-                    // Avoids the noisy "12 lines on launch" experience
-                    // that prompted users to manually un-tick
-                    // everything before they could see what they
-                    // cared about.
-                    if let Some(cfg) = reg.get_mut(crate::ui::viz::DEFAULT_MODELICA_GRAPH) {
-                        cfg.inputs.clear();
-                    }
-                    let _ = result.entity;
-                    let _ = result.detected_symbols.len();
-                    let _ = model.parameters.len();
-                }
+            // Emit this step's observable samples to the reactive UI layer.
+            // The core handler no longer knows about plots / `lunco_viz`: it
+            // just appends UI-agnostic samples that `ui::core_observers::
+            // drain_sim_samples_to_viz` projects into the SignalRegistry (clear
+            // on a fresh compile, push every scalar, attach doc-index meta, and
+            // reset the default graph). Bounded at the producer so a headless
+            // build (no drainer) can't grow the queue without limit.
+            if sample_stream.batches.len() < 16_384 {
+                let samples: Vec<(String, f64)> = result
+                    .outputs
+                    .iter()
+                    .chain(result.detected_symbols.iter())
+                    .map(|(n, v)| (n.clone(), *v))
+                    .collect();
+                sample_stream.batches.push(crate::SimSampleBatch {
+                    entity: result.entity,
+                    document: model.document,
+                    time: time_val,
+                    samples,
+                    is_new_model: result.is_new_model,
+                    is_parameter_update: result.is_parameter_update,
+                });
             }
         }
     }

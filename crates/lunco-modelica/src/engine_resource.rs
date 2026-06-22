@@ -1,5 +1,5 @@
 //! Long-lived [`ModelicaEngine`] exposed as a Bevy resource and
-//! kept in lockstep with [`crate::ui::state::ModelicaDocumentRegistry`].
+//! kept in lockstep with [`crate::state::ModelicaDocumentRegistry`].
 //!
 //! ## Why a long-lived engine
 //!
@@ -214,6 +214,22 @@ pub struct EngineSyncCursor {
     last_synced: HashMap<DocumentId, u64>,
 }
 
+/// UI-supplied pacing hints for the async parse scheduler in
+/// [`drive_engine_sync`]. Core owns this resource with inert defaults — a
+/// headless build never refreshes it, so parses fire eagerly (no input is
+/// ever "active", no focused document to prioritise). The UI layer updates
+/// it each frame from its input-activity / workspace state; core consumes
+/// the hints without ever naming those UI types.
+#[derive(Resource, Default)]
+pub struct ParsePacing {
+    /// True while the user is actively typing — defers the edit-reparse
+    /// debounce so a keystroke burst settles before paying for a parse.
+    pub input_active: bool,
+    /// The focused document, prioritised first in the async parse queue so
+    /// the tab the user is staring at reparses ahead of background tabs.
+    pub active_document: Option<DocumentId>,
+}
+
 /// Sync open Modelica documents into the engine session. Generation-
 /// gated: docs whose generation hasn't advanced since the previous
 /// sync are no-ops. Docs that have been removed from the registry
@@ -250,18 +266,14 @@ pub fn ast_debounce_for_size(src_len: usize) -> u128 {
 
 pub fn drive_engine_sync(
     handle: Res<ModelicaEngineHandle>,
-    mut registry: ResMut<crate::ui::state::ModelicaDocumentRegistry>,
+    mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
     mut cursor: ResMut<EngineSyncCursor>,
-    activity: Res<crate::ui::input_activity::InputActivity>,
-    workspace: Option<Res<lunco_workbench::WorkspaceResource>>,
+    pacing: Res<ParsePacing>,
 ) {
     // Active tab's doc id (if any). Used below to prioritise its
-    // reparse over any background tabs queued behind it. `Option`
-    // because the workspace resource may not be installed yet during
-    // very-early boot ticks.
-    let active_doc: Option<DocumentId> = workspace
-        .as_deref()
-        .and_then(|ws| ws.active_document);
+    // reparse over any background tabs queued behind it. `None` until
+    // the UI feeds the hint (headless: always `None` → no reordering).
+    let active_doc: Option<DocumentId> = pacing.active_document;
     // ── 1. Drain async-parse completions ──────────────────────────────
     // Pull every completion the workers have queued since the last
     // tick. For each, fetch the strict AST from the session and
@@ -512,7 +524,7 @@ pub fn drive_engine_sync(
                 Some(t) => now.duration_since(t).as_millis() >= debounce_ms,
                 None => true,
             };
-            if !elapsed_ok || activity.is_active() {
+            if !elapsed_ok || pacing.input_active {
                 continue;
             }
         }
@@ -645,7 +657,7 @@ pub fn drive_engine_sync(
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
 pub fn drain_worker_parse_results(
     handle: Res<ModelicaEngineHandle>,
-    mut registry: ResMut<crate::ui::state::ModelicaDocumentRegistry>,
+    mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
 ) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -708,6 +720,7 @@ impl Plugin for ModelicaEnginePlugin {
         let _ = GLOBAL_ENGINE.set(handle.clone());
         app.insert_resource(handle)
             .init_resource::<EngineSyncCursor>()
+            .init_resource::<ParsePacing>()
             .init_resource::<MslBootstrapState>()
             .add_systems(
                 Update,

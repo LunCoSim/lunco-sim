@@ -3,19 +3,18 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use crate::class_ref::{ClassRef, Library};
-use crate::ui::state::ModelicaDocumentRegistry;
+use crate::state::ModelicaDocumentRegistry;
 use std::path::{PathBuf};
 
-pub mod types;
-pub mod cache;
-pub mod scanner;
-pub mod library_tree;
 pub mod render;
 
-pub use types::{PackageNode, InMemoryEntry};
-pub use cache::PackageTreeCache;
+// The egui-free package-tree backend (data types, scanner, cache,
+// library-tree builder) moved to the ungated `crate::package_tree`
+// module so the headless/server build can resolve packages without
+// egui. This panel renders that backend; pull the names it uses into
+// scope (not re-exported — callers reach them via `crate::package_tree`).
+use crate::package_tree::{PackageNode, InMemoryEntry, PackageTreeCache};
 pub use render::PackageBrowserPanel;
-pub use scanner::{scan_twin_folder, discover_third_party_libs};
 
 // NOTE: there is deliberately no `PackageBrowserPlugin`. The package-browser
 // wiring (cache resource, `handle_package_loading_tasks`,
@@ -164,9 +163,9 @@ pub fn render_root_subtree(world: &mut World, ui: &mut egui::Ui, root_id: &str) 
     use bevy::tasks::AsyncComputeTaskPool;
 
     let active_path_str = world
-        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document)
-        .and_then(|d| crate::ui::state::display_name_for(world, d));
+        .and_then(|d| crate::state::display_name_for(world, d));
     let active_path = active_path_str.as_deref();
     let theme = world
         .get_resource::<lunco_theme::Theme>()
@@ -205,9 +204,9 @@ pub fn render_root_subtree(world: &mut World, ui: &mut egui::Ui, root_id: &str) 
                 let pkg_path = package_path.clone();
                 let task = pool.spawn(async move {
                     let children =
-                        crate::ui::panels::package_browser::library_tree::library_tree()
+                        crate::package_tree::library_tree::library_tree()
                             .children(&pkg_path);
-                    crate::ui::panels::package_browser::cache::ScanResult { parent_id, children }
+                    crate::package_tree::cache::ScanResult { parent_id, children }
                 });
                 cache.tasks.push(task);
             }
@@ -306,7 +305,7 @@ pub(crate) fn resolve_mem_id(world: &World, id: &str) -> Option<ClassRef> {
 }
 
 fn open_bundled_class(world: &mut World, class: &ClassRef) {
-    use crate::ui::panels::model_view::MODEL_VIEW_KIND;
+    use crate::ui::MODEL_VIEW_KIND;
     use bevy::tasks::AsyncComputeTaskPool;
 
     let filename = match class.path.first() {
@@ -321,7 +320,7 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
     let already_open = world.resource::<ModelicaDocumentRegistry>().find_bundled(&filename);
     if let Some(doc) = already_open {
         let tab_id = world
-            .resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+            .resource_mut::<crate::model_tabs::ModelTabs>()
             .ensure_for(doc, drilled_for_tab.clone());
         world.commands().trigger(lunco_workbench::OpenTab { kind: MODEL_VIEW_KIND, instance: tab_id });
         return;
@@ -329,7 +328,7 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
 
     let reserved_doc_id = world.resource_mut::<ModelicaDocumentRegistry>().reserve_id();
     let tab_id = world
-        .resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+        .resource_mut::<crate::model_tabs::ModelTabs>()
         .ensure_for(reserved_doc_id, drilled_for_tab.clone());
     world.commands().trigger(lunco_workbench::OpenTab { kind: MODEL_VIEW_KIND, instance: tab_id });
 
@@ -347,7 +346,7 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
                 "Bundled model not found: {filename_for_task}"
             )),
         };
-        crate::ui::panels::package_browser::cache::FileLoadResult {
+        crate::package_tree::cache::FileLoadResult {
             doc_id: reserved_doc_id,
             result,
         }
@@ -376,7 +375,8 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
 }
 
 fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
-    use crate::ui::panels::model_view::{MODEL_VIEW_KIND, ModelViewMode};
+    use crate::model_tabs_types::ModelViewMode;
+    use crate::ui::MODEL_VIEW_KIND;
     use bevy::tasks::AsyncComputeTaskPool;
 
     let drilled = if class.path.is_empty() { None } else { Some(class.qualified()) };
@@ -426,11 +426,11 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
             }
         }
         let tab_id = world
-            .resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+            .resource_mut::<crate::model_tabs::ModelTabs>()
             .ensure_for(doc, drilled.clone());
         if let Some(mode) = initial_mode {
             world
-                .resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+                .resource_mut::<crate::model_tabs::ModelTabs>()
                 .set_view_mode(tab_id, mode);
         }
         world.commands().trigger(lunco_workbench::OpenTab { kind: MODEL_VIEW_KIND, instance: tab_id });
@@ -439,11 +439,11 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
 
     let reserved_doc_id = world.resource_mut::<ModelicaDocumentRegistry>().reserve_id();
     let tab_id = world
-        .resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+        .resource_mut::<crate::model_tabs::ModelTabs>()
         .ensure_for(reserved_doc_id, drilled.clone());
     if let Some(mode) = initial_mode {
         world
-            .resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+            .resource_mut::<crate::model_tabs::ModelTabs>()
             .set_view_mode(tab_id, mode);
     }
     world.commands().trigger(lunco_workbench::OpenTab { kind: MODEL_VIEW_KIND, instance: tab_id });
@@ -461,7 +461,7 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
                 )
             })
             .map_err(|e| format!("Failed to read {}: {e}", path_for_task.display()));
-        crate::ui::panels::package_browser::cache::FileLoadResult {
+        crate::package_tree::cache::FileLoadResult {
             doc_id: reserved_doc_id,
             result,
         }
@@ -489,10 +489,10 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
 }
 
 fn focus_existing_doc_tab(world: &mut World, doc: lunco_doc::DocumentId, qualified: String) {
-    use crate::ui::panels::model_view::MODEL_VIEW_KIND;
+    use crate::ui::MODEL_VIEW_KIND;
     let drilled = if qualified.is_empty() { None } else { Some(qualified) };
     let tab_id = world
-        .resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+        .resource_mut::<crate::model_tabs::ModelTabs>()
         .ensure_for(doc, drilled);
     world.commands().trigger(lunco_workbench::OpenTab { kind: MODEL_VIEW_KIND, instance: tab_id });
 }

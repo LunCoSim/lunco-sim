@@ -376,12 +376,12 @@ impl Panel for ExperimentsPanel {
             // ⏩ Run was hidden by `render_setup_section` (no doc /
             // no class), leaving the user pointing at empty space.
             let active_doc = world
-                .get_resource::<lunco_workbench::WorkspaceResource>()
+                .get_resource::<lunco_workspace::WorkspaceResource>()
                 .and_then(|w| w.active_document);
             let has_class = active_doc
                 .and_then(|doc| {
                     world
-                        .get_resource::<crate::ui::state::ModelicaDocumentRegistry>()
+                        .get_resource::<crate::state::ModelicaDocumentRegistry>()
                         .and_then(|r| r.host(doc))
                         .map(|h| {
                             h.document().index().classes.values().any(|c| {
@@ -780,7 +780,7 @@ impl Panel for ExperimentsPanel {
                 .and_then(|s| s.0.get(&id).copied())
                 .or_else(|| {
                     world
-                        .get_resource::<lunco_workbench::WorkspaceResource>()
+                        .get_resource::<lunco_workspace::WorkspaceResource>()
                         .and_then(|ws| ws.active_document)
                 })
             {
@@ -812,7 +812,7 @@ impl ExperimentsPanel {
             return;
         };
         let (model_name, source, candidates) = match world
-            .get_resource::<crate::ui::state::ModelicaDocumentRegistry>()
+            .get_resource::<crate::state::ModelicaDocumentRegistry>()
             .and_then(|r| r.host(doc))
         {
             Some(h) => {
@@ -825,7 +825,7 @@ impl ExperimentsPanel {
                 // Drilled-in pin → tier-ranked simulation root (shared
                 // precedence; see `default_simulation_class`). Keeps this
                 // Setup form in lock-step with the Fast Run popup.
-                match crate::ui::panels::model_view::default_simulation_class(world, doc) {
+                match crate::sim_default::default_simulation_class(world, doc) {
                     Some(c) => (c, document.source().to_string(), candidates),
                     None => return,
                 }
@@ -984,7 +984,7 @@ impl ExperimentsPanel {
         // frame default_simulation_class — and the whole Setup form /
         // override editor — resolve to it, without moving the canvas view.
         if let Some(cls) = pick_class {
-            crate::ui::panels::model_view::set_run_target_for_doc(world, doc, &cls);
+            crate::sim_default::set_run_target_for_doc(world, doc, &cls);
         }
         if bounds.t_end <= bounds.t_start {
             ui.label(
@@ -1262,7 +1262,7 @@ impl ExperimentsPanel {
         else {
             return;
         };
-        let registry = match world.get_resource::<crate::ui::state::ModelicaDocumentRegistry>() {
+        let registry = match world.get_resource::<crate::state::ModelicaDocumentRegistry>() {
             Some(r) => r,
             None => return,
         };
@@ -1278,7 +1278,7 @@ impl ExperimentsPanel {
         // section stays visible even when `strict_ast()` returns None
         // because of a recoverable parse warning.
         let drilled = world
-            .get_resource::<crate::ui::panels::model_view::ModelTabs>()
+            .get_resource::<crate::model_tabs::ModelTabs>()
             .and_then(|t| t.drilled_class_for_doc(doc));
         let first_non_pkg = document
             .index()
@@ -2423,12 +2423,12 @@ fn active_doc_units(
     let mut out: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let Some(doc) = world
-        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document)
     else {
         return out;
     };
-    let Some(registry) = world.get_resource::<crate::ui::state::ModelicaDocumentRegistry>()
+    let Some(registry) = world.get_resource::<crate::state::ModelicaDocumentRegistry>()
     else {
         return out;
     };

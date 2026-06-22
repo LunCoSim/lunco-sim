@@ -6853,6 +6853,7 @@ dependencies = [
  "bevy_egui",
  "big_space",
  "console_error_panic_hook",
+ "getrandom 0.3.4",
  "js-sys",
  "leafwing-input-manager",
  "lunco-api",
@@ -7030,6 +7031,7 @@ dependencies = [
  "egui_extras",
  "egui_plot",
  "futures-lite",
+ "getrandom 0.3.4",
  "htmd",
  "image",
  "include_dir",
@@ -7283,6 +7285,7 @@ dependencies = [
  "lunco-usd-bevy",
  "lunco-usd-sim",
  "lunco-workbench",
+ "lunco-workspace",
  "openusd",
  "serde",
  "serde_json",
@@ -7397,6 +7400,7 @@ dependencies = [
 name = "lunco-workspace"
 version = "0.1.0"
 dependencies = [
+ "bevy",
  "lunco-doc",
  "lunco-storage",
  "lunco-twin",

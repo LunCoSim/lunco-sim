@@ -5,14 +5,14 @@
 //! id eagerly, spawn an off-thread loader on
 //! `AsyncComputeTaskPool`, and install the prebuilt
 //! [`crate::document::ModelicaDocument`] via
-//! [`crate::ui::state::ModelicaDocumentRegistry::install_prebuilt`]
+//! [`crate::state::ModelicaDocumentRegistry::install_prebuilt`]
 //! when the load completes. The in-flight task and metadata live
 //! in [`crate::ui::document_openings::DocumentOpenings`]; the
 //! per-frame drivers below poll their own variant.
 
 use bevy::prelude::*;
 use crate::ui::document_openings::{DocumentOpenings, OpeningState};
-use crate::ui::state::ModelicaDocumentRegistry;
+use crate::state::ModelicaDocumentRegistry;
 
 /// Tab-to-class binding for drill-in tabs whose document hasn't
 /// been installed in the registry yet. Stored in
@@ -72,7 +72,7 @@ pub fn drive_duplicate_loads(
     mut registry: bevy::prelude::ResMut<ModelicaDocumentRegistry>,
     mut probe: Option<bevy::prelude::ResMut<crate::FrameTimeProbe>>,
     mut egui_q: bevy::prelude::Query<&mut bevy_egui::EguiContext>,
-    mut tabs: bevy::prelude::ResMut<crate::ui::panels::model_view::ModelTabs>,
+    mut tabs: bevy::prelude::ResMut<crate::model_tabs::ModelTabs>,
     mut canvas_state: bevy::prelude::ResMut<super::CanvasDiagramState>,
     mut commands: bevy::prelude::Commands,
 ) {
@@ -153,7 +153,7 @@ pub fn drive_duplicate_loads(
                     .map(|(id, _)| id);
                 if let Some(old_id) = placeholder {
                     commands.trigger(lunco_workbench::CloseTab {
-                        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                        kind: crate::ui::MODEL_VIEW_KIND,
                         instance: old_id,
                     });
                     tabs.close_tab(old_id);
@@ -161,10 +161,10 @@ pub fn drive_duplicate_loads(
                 let new_id = tabs.ensure_for(doc_id, Some(q));
                 if let Some(tab) = tabs.get_mut(new_id) {
                     tab.view_mode =
-                        crate::ui::panels::model_view::ModelViewMode::Canvas;
+                        crate::model_tabs_types::ModelViewMode::Canvas;
                 }
                 commands.trigger(lunco_workbench::OpenTab {
-                    kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                    kind: crate::ui::MODEL_VIEW_KIND,
                     instance: new_id,
                 });
             }
@@ -209,7 +209,7 @@ pub fn drive_duplicate_loads(
 pub fn drive_drill_in_loads(
     mut openings: bevy::prelude::ResMut<DocumentOpenings>,
     mut registry: bevy::prelude::ResMut<ModelicaDocumentRegistry>,
-    mut tabs: bevy::prelude::ResMut<crate::ui::panels::model_view::ModelTabs>,
+    mut tabs: bevy::prelude::ResMut<crate::model_tabs::ModelTabs>,
     mut egui_q: bevy::prelude::Query<&mut bevy_egui::EguiContext>,
     mut canvas_state: bevy::prelude::ResMut<super::CanvasDiagramState>,
 ) {
@@ -293,7 +293,7 @@ pub fn drive_drill_in_loads(
             // may now point at the same doc (sibling drill-ins);
             // scope by `(doc, qualified)`.
             if let Some(tab) = tabs.find_for_mut(doc_id, Some(qualified.as_str())) {
-                tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Icon;
+                tab.view_mode = crate::model_tabs_types::ModelViewMode::Icon;
             }
         }
         info!(
@@ -343,26 +343,26 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
         // TabId rather than DocumentId.
         let tab_id = {
             let mut tabs = world
-                .resource_mut::<crate::ui::panels::model_view::ModelTabs>();
+                .resource_mut::<crate::model_tabs::ModelTabs>();
             // Drill-in is a deliberate navigation gesture (canvas
             // double-click), so the tab is pinned via ensure_for —
             // not the preview slot. Same-class re-drill focuses;
             // sibling drills still get their own tabs.
             let tab_id = tabs.ensure_for(doc_id, Some(qualified.to_string()));
             if let Some(tab) = tabs.get_mut(tab_id) {
-                tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+                tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
             }
             tab_id
         };
         // `ensure_for(doc_id, Some(qualified))` immediately above
         // already wrote it.
         if let Some(mut workspace) =
-            world.get_resource_mut::<lunco_workbench::WorkspaceResource>()
+            world.get_resource_mut::<lunco_workspace::WorkspaceResource>()
         {
             workspace.active_document = Some(doc_id);
         }
         world.commands().trigger(lunco_workbench::OpenTab {
-            kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+            kind: crate::ui::MODEL_VIEW_KIND,
             instance: tab_id,
         });
         bevy::log::info!(
@@ -403,7 +403,7 @@ fn open_drill_in_tab(
     let model_path_id = format!("msl://{qualified}");
     let existing_doc = {
         let registry = world.resource::<ModelicaDocumentRegistry>();
-        let tabs = world.resource::<crate::ui::panels::model_view::ModelTabs>();
+        let tabs = world.resource::<crate::model_tabs::ModelTabs>();
         // A tab whose `(doc.file, drilled_class)` matches the new
         // request — re-focus it instead of allocating a duplicate.
         tabs.iter().find_map(|(_id, state)| {
@@ -486,16 +486,16 @@ fn open_drill_in_tab(
     // scratch models; drill-in is a different use case.
     let tab_id = {
         let mut model_tabs =
-            world.resource_mut::<crate::ui::panels::model_view::ModelTabs>();
+            world.resource_mut::<crate::model_tabs::ModelTabs>();
         let tab_id =
             model_tabs.ensure_for(doc_id, Some(qualified.to_string()));
         if let Some(tab) = model_tabs.get_mut(tab_id) {
-            tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+            tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
         }
         tab_id
     };
     world.commands().trigger(lunco_workbench::OpenTab {
-        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+        kind: crate::ui::MODEL_VIEW_KIND,
         instance: tab_id,
     });
 

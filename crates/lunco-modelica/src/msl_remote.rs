@@ -521,7 +521,7 @@ fn sources_with_extras(primary: MslAssetSource) -> Vec<MslAssetSource> {
     {
         if matches!(sources[0], MslAssetSource::Filesystem(_)) {
             for (subdir, _pkg) in
-                crate::ui::panels::package_browser::scanner::discover_third_party_libs()
+                crate::package_tree::scanner::discover_third_party_libs()
             {
                 sources.push(MslAssetSource::Filesystem(
                     lunco_assets::cache_dir().join(subdir),
@@ -587,11 +587,9 @@ impl Plugin for MslRemotePlugin {
         use lunco_settings::AppSettingsExt;
         app.register_settings_section::<crate::msl_settings::MslSettings>();
 
-        // Cross-platform: mirror MSL state changes into the workbench
-        // status bus so renderers (status bar, console, diagnostics)
-        // pick them up uniformly. Lives in this plugin (not the bus
-        // crate) because it knows about `MslLoadState` shape.
-        app.add_systems(Update, mirror_state_to_status_bus);
+        // (The MSL-state → status-bus mirror is a UI reactive observer; it
+        // lives in `ui::core_observers` and is registered by the UI plugin.
+        // Core just owns `MslLoadState`.)
 
         // Native: prefer an already-materialised tree (workspace dev
         // cache, user-supplied override, or a previously-completed
@@ -1177,123 +1175,8 @@ fn log_state_transition(s: &MslLoadState) {
     }
 }
 
-// ─── State → StatusBus mirror (cross-platform) ─────────────────────
-
-/// Watch [`MslLoadState`] and translate transitions / progress ticks
-/// into [`StatusBus`] events. Phase changes become discrete `Info`
-/// entries (preserved in history); byte/file counts within a phase
-/// become `Progress` ticks (updated in place).
-///
-/// This system uses the *legacy* `push_progress`/`clear_progress`
-/// API rather than `begin` + `BusyHandle` because it is a state
-/// mirror, not a task owner — there is no scope-bound future to
-/// carry the handle. `MslLoadState` itself is the lifetime
-/// authority. Legacy progress events implicitly target
-/// [`BusyScope::Global`], which matches the actual semantics
-/// (MSL preload affects the whole workspace). Don't refactor this
-/// to `begin` without first introducing a place to store the
-/// handle that drops in lockstep with state transitions.
-fn mirror_state_to_status_bus(
-    state: Res<MslLoadState>,
-    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
-    mut last: bevy::prelude::Local<Option<MirrorMemo>>,
-) {
-    let Some(mut bus) = bus else {
-        return;
-    };
-    let now_summary = MirrorMemo::from(&*state);
-    let prior_phase_label = last.as_ref().and_then(|m| m.phase_label);
-
-    match &*state {
-        MslLoadState::NotStarted => {}
-        MslLoadState::Loading { phase, bytes_done, bytes_total } => {
-            let label = msl_phase_label(*phase);
-            // Phase transition → discrete history entry.
-            if prior_phase_label != Some(label) {
-                bus.push(
-                    MSL_SOURCE,
-                    lunco_workbench::status_bus::StatusLevel::Info,
-                    label,
-                );
-            }
-            // Progress tick (in-place; doesn't accumulate in history).
-            let detail = format_progress_detail(*phase, *bytes_done, *bytes_total);
-            bus.push_progress(MSL_SOURCE, detail, *bytes_done, *bytes_total);
-        }
-        MslLoadState::Ready { file_count, .. } => {
-            // Only fire once per Ready transition (re-renders shouldn't spam).
-            if !matches!(last.as_ref(), Some(MirrorMemo { ready: true, .. })) {
-                bus.push(
-                    MSL_SOURCE,
-                    lunco_workbench::status_bus::StatusLevel::Info,
-                    format!("ready — {file_count} files"),
-                );
-                bus.clear_progress(MSL_SOURCE);
-            }
-        }
-        MslLoadState::Failed(msg) => {
-            if !matches!(last.as_ref(), Some(MirrorMemo { failed: true, .. })) {
-                bus.push(
-                    MSL_SOURCE,
-                    lunco_workbench::status_bus::StatusLevel::Error,
-                    msg.clone(),
-                );
-                bus.clear_progress(MSL_SOURCE);
-            }
-        }
-    }
-
-    *last = Some(now_summary);
-}
-
-const MSL_SOURCE: &str = "MSL";
-
-fn msl_phase_label(p: MslLoadPhase) -> &'static str {
-    match p {
-        MslLoadPhase::FetchingManifest => "fetching manifest",
-        MslLoadPhase::FetchingBundle   => "downloading",
-        MslLoadPhase::LoadingCache     => "loading from cache",
-        MslLoadPhase::Decompressing    => "decompressing",
-        MslLoadPhase::Parsing          => "loading",
-    }
-}
-
-fn format_progress_detail(phase: MslLoadPhase, done: u64, total: u64) -> String {
-    let label = msl_phase_label(phase);
-    match phase {
-        MslLoadPhase::Parsing if total > 0 => format!("{label} {done} / {total}"),
-        _ if total > 0 => format!(
-            "{label} — {:.1} / {:.1} MB",
-            done as f64 / 1_048_576.0,
-            total as f64 / 1_048_576.0,
-        ),
-        _ => label.to_string(),
-    }
-}
-
-#[derive(Default)]
-struct MirrorMemo {
-    phase_label: Option<&'static str>,
-    ready: bool,
-    failed: bool,
-}
-
-impl From<&MslLoadState> for MirrorMemo {
-    fn from(s: &MslLoadState) -> Self {
-        match s {
-            MslLoadState::NotStarted => Self::default(),
-            MslLoadState::Loading { phase, .. } => Self {
-                phase_label: Some(msl_phase_label(*phase)),
-                ..Self::default()
-            },
-            MslLoadState::Ready { .. } => Self { ready: true, ..Self::default() },
-            MslLoadState::Failed(_) => Self { failed: true, ..Self::default() },
-        }
-    }
-}
-
-// (Status bar UI lives in lunco-workbench's egui status panel; this
-// module just publishes events to the bus via mirror_state_to_status_bus.)
+// The MSL-state → status-bus mirror moved to `crate::ui::core_observers`
+// (reactive UI layer). Core here only owns `MslLoadState` + `MslLoadPhase`.
 
 // ─── Web fetcher implementation ─────────────────────────────────────
 

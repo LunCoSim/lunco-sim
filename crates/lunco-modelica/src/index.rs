@@ -789,7 +789,7 @@ fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def:
     // in lockstep with the model_view / canvas_diagram extractors.
     let icon = crate::annotations::extract_icon(&class_def.annotation);
     let documentation =
-        crate::ui::panels::model_view::extract_documentation(&class_def.annotation);
+        crate::doc_extract::extract_documentation(&class_def.annotation);
     let experiment = crate::annotations::extract_experiment(&class_def.annotation);
 
     // Count non-trivial equations: skip `Empty` placeholders and

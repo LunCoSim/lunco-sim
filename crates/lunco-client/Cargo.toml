@@ -20,7 +20,11 @@ name = "model_viewer"
 path = "src/bin/model_viewer.rs"
 
 [dependencies]
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "smaa_luts", "mesh_picking", "tonemapping_luts", "bevy_gizmos", "bevy_gizmos_render"] }
+# GUI binary: pbr/gltf/etc pull bevy_render; the windowing backend
+# (bevy_winit/bevy_window/x11/wayland/webgl2/bevy_picking) is no longer in the
+# workspace default, so this — the GUI binary crate — adds it here. (Phase 2
+# will move these behind a `ui` feature so a `--no-ui` server build omits them.)
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "smaa_luts", "mesh_picking", "tonemapping_luts", "bevy_gizmos", "bevy_gizmos_render", "bevy_winit", "bevy_window", "x11", "wayland", "webgl2", "bevy_picking"] }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
@@ -69,7 +73,7 @@ lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 # `lunco-api` is on by default so native `cargo run --bin sandbox -- --api`
 # Just Works. Building without it (`--no-default-features`) drops the
 # axum/tokio web stack, which is mandatory for wasm32-unknown-unknown.
-default = ["celestial", "lunco-api", "lunco-api/transport-http"]
+default = ["celestial", "lunco-api", "lunco-api/transport-http", "lunco-api/render"]
 # `celestial` pulls in lunco-celestial's bundled Earth texture + Artemis-II
 # ephemeris (10s of MB). Off for the wasm sandbox build — it only needs
 # `GravityPlugin`, which is always compiled.
@@ -106,6 +110,11 @@ console_error_panic_hook = "0.1"
 # URL-parameter boot path (`?workspace=…&open=…`) reads `window.location.search`.
 web-sys = { version = "0.3", features = ["Window", "Location"] }
 js-sys = "0.3"
+# ahash (egui 0.26.2 → catppuccin-egui → lunco-theme) and lightyear's netcode
+# RNG pull getrandom 0.3, which on wasm needs an explicit backend. Enable the
+# browser-crypto (`wasm_js`) feature here; build_web.sh sets the matching
+# `--cfg getrandom_backend="wasm_js"` (both are required).
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [lints]
 workspace = true

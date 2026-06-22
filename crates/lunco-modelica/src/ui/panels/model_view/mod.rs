@@ -1,19 +1,23 @@
 //! Modelica multi-instance view — the central hub for model editing.
 
-pub mod types;
-pub mod tabs;
 pub mod context;
 pub mod render;
-pub mod parsing;
 
-pub use types::{MODEL_VIEW_KIND, ModelTabState, ModelViewMode, TabId, TabRenderContext};
-pub use tabs::ModelTabs;
-pub use context::{default_simulation_class, drilled_class_for_doc, set_run_target_for_doc, sync_active_tab_to_doc, RunTargetOverrides};
+// Data types (`types`), the `ModelTabs` registry (`tabs`), the
+// documentation extractor (`parsing`), and the default-simulation-class
+// resolver (`context::default_simulation_class` & friends) all moved to
+// egui-free core modules:
+//   - `crate::model_tabs_types` — MODEL_VIEW_KIND, ModelTabState, …
+//   - `crate::model_tabs`       — ModelTabs
+//   - `crate::doc_extract`      — extract_documentation
+//   - `crate::sim_default`      — default_simulation_class, RunTargetOverrides, …
+pub use context::sync_active_tab_to_doc;
 pub use render::ModelViewPanel;
-pub use parsing::extract_documentation;
 
 use bevy::prelude::*;
 use lunco_workbench::WorkbenchAppExt;
+use crate::model_tabs::ModelTabs;
+use crate::model_tabs_types::TabRenderContext;
 
 pub struct ModelViewPlugin;
 
@@ -21,7 +25,7 @@ impl Plugin for ModelViewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ModelTabs>()
             .init_resource::<TabRenderContext>()
-            .init_resource::<context::RunTargetOverrides>()
+            .init_resource::<crate::sim_default::RunTargetOverrides>()
             .register_instance_panel(ModelViewPanel::default());
     }
 }

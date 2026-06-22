@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_canvas::{Pos as CanvasPos, Rect as CanvasRect};
 use crate::document::ModelicaOp;
-use crate::ui::state::{ModelicaDocumentRegistry};
+use crate::state::{ModelicaDocumentRegistry};
 use super::super::{CanvasDiagramState, ContextMenuTarget, PendingContextMenu, ICON_W, ops, menus};
 use super::super::loads::drill_into_class;
 
@@ -13,7 +13,7 @@ pub(crate) fn handle_context_menu(
     world: &mut World,
     response: &egui::Response,
     doc_id: Option<lunco_doc::DocumentId>,
-    render_tab_id: Option<crate::ui::panels::model_view::TabId>,
+    render_tab_id: Option<crate::model_tabs_types::TabId>,
     tab_read_only: bool,
     editing_class: Option<&str>,
 ) -> Vec<ModelicaOp> {
@@ -98,7 +98,7 @@ pub(crate) fn handle_drag_and_drop(
     world: &mut World,
     response: &egui::Response,
     doc_id: Option<lunco_doc::DocumentId>,
-    render_tab_id: Option<crate::ui::panels::model_view::TabId>,
+    render_tab_id: Option<crate::model_tabs_types::TabId>,
     tab_read_only: bool,
     editing_class: Option<String>,
 ) {
@@ -128,7 +128,7 @@ pub(crate) fn handle_drag_and_drop(
                     );
                     let click_world = world.resource::<CanvasDiagramState>().get(active_doc).canvas.viewport.screen_to_world(CanvasPos::new(p.x, p.y), screen_rect);
                     let class = editing_class.unwrap_or_else(|| {
-                        world.get_resource::<crate::ui::panels::model_view::ModelTabs>()
+                        world.get_resource::<crate::model_tabs::ModelTabs>()
                             .and_then(|t| t.drilled_class_for_doc(doc_id))
                             .or_else(|| {
                                 let registry = world.resource::<ModelicaDocumentRegistry>();
