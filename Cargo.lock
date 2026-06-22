@@ -7422,6 +7422,9 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "big_space",
+ "console_error_panic_hook",
+ "getrandom 0.3.4",
+ "js-sys",
  "lunco-api",
  "lunco-assets",
  "lunco-avatar",
@@ -7436,7 +7439,10 @@ dependencies = [
  "lunco-mobility",
  "lunco-robotics",
  "lunco-ui",
+ "lunco-web",
  "lunco-workbench",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

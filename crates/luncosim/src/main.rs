@@ -45,8 +45,14 @@ fn collect_scroll_input(
     scroll_res.delta += ctx.input(|i: &bevy_egui::egui::InputState| i.raw_scroll_delta.y);
 }
 
-/// Main entry point for the simulation.
+/// Main entry point for the simulation. Single source for desktop AND web —
+/// `#[cfg(target_arch = "wasm32")]` blocks handle platform differences, so
+/// `build_web.sh build luncosim` compiles this same `fn main` for `wasm32`.
 fn main() {
+    // wasm: route panics to the browser console.
+    #[cfg(target_arch = "wasm32")]
+    console_error_panic_hook::set_once();
+
     let mut app = App::new();
     // Register every LunCo asset source (cached_textures://, lunco-lib://,
     // lunco://, twin://) + the shared `TwinRoots` resource in ONE shared place
@@ -55,22 +61,47 @@ fn main() {
     // (`lunco://` is the engine asset library; an external collaborative
     // protocol, if added later, should take a distinct scheme like `lunco-net://`.)
     lunco_assets::register_lunco_asset_sources(&mut app);
+
+    // Primary window: native gets the merged-titlebar workbench chrome; the
+    // browser attaches to the `<canvas id="bevy">` and mirrors its CSS size.
+    #[cfg(not(target_arch = "wasm32"))]
+    let primary_window = lunco_workbench::merged_titlebar_window("LunCo");
+    #[cfg(target_arch = "wasm32")]
+    let primary_window = Window {
+        title: "LunCoSim".into(),
+        canvas: Some("#bevy".into()),
+        fit_canvas_to_parent: true,
+        prevent_default_event_handling: true,
+        ..default()
+    };
+
     app.insert_resource(Time::<Fixed>::from_hz(lunco_core::FIXED_HZ))
         .insert_resource(ClearColor(Color::BLACK))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(lunco_workbench::merged_titlebar_window("LunCo")),
+            primary_window: Some(primary_window),
             ..default()
         }).set(bevy::render::RenderPlugin {
-            // DX12 on Windows avoids the Vulkan window-resize panics
-            // (depth/color size mismatch + SurfaceAcquireSemaphores). Other
-            // platforms keep wgpu defaults. See lunco_workbench::render_robustness.
+            // DX12 on Windows avoids the Vulkan window-resize panics (depth/color
+            // size mismatch + SurfaceAcquireSemaphores); other platforms (incl.
+            // wasm/WebGL2) keep wgpu defaults. See lunco_workbench::render_robustness.
             render_creation: lunco_workbench::preferred_wgpu_settings().into(),
             ..default()
         }).build().disable::<TransformPlugin>())
-        .add_plugins(big_space::prelude::BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
+        .add_plugins({
+            // big_space only registers `BigSpaceValidationPlugin` under
+            // `debug_assertions`; disabling it in a release build (incl. the wasm
+            // release the web build ships) panics, so gate the `.disable()`.
+            let group = big_space::prelude::BigSpaceDefaultPlugins.build();
+            #[cfg(debug_assertions)]
+            let group = group.disable::<big_space::validation::BigSpaceValidationPlugin>();
+            group
+        })
         .add_plugins(lunco_core::LunCoCorePlugin)
         .insert_resource(lunco_core::DragModeActive { active: false })
         .add_plugins(lunco_workbench::WorkbenchPlugin)
+        // Dismiss the HTML loading screen once the first frame paints (wasm-only;
+        // no-op native). Pairs with `crates/lunco-web/web/index.html`.
+        .add_plugins(lunco_web::WebReadyPlugin)
         .add_systems(EguiPrimaryContextPass, collect_scroll_input);
 
     // Register UI panels — Mission Control as the right inspector. The
