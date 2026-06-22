@@ -6,6 +6,7 @@ members = [
     "crates/lunco-controller",
     "crates/lunco-attributes",
     "crates/lunco-avatar",
+    "crates/luncosim",
     "crates/lunco-sandbox",
     "crates/lunco-sandbox-server",
     "crates/lunco-telemetry",
@@ -60,6 +61,7 @@ members = [
 # `lunco_sandbox::run_headless()`, which forces the windowless path regardless of
 # the linked `ui` feature.) `cargo run -p lunco-sandbox-server`.
 default-members = [
+    "crates/luncosim",
     "crates/lunco-sandbox",
     "crates/lunco-modelica",
 ]

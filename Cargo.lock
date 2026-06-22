@@ -7415,6 +7415,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "luncosim"
+version = "0.6.0-dev"
+dependencies = [
+ "avian3d 0.6.1",
+ "bevy",
+ "bevy_egui",
+ "big_space",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-avatar",
+ "lunco-celestial",
+ "lunco-celestial-ephemeris",
+ "lunco-controller",
+ "lunco-core",
+ "lunco-environment",
+ "lunco-fsw",
+ "lunco-hardware",
+ "lunco-materials",
+ "lunco-mobility",
+ "lunco-robotics",
+ "lunco-ui",
+ "lunco-workbench",
+]
+
+[[package]]
 name = "lyon_geom"
 version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"

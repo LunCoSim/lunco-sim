@@ -1,0 +1,61 @@
+[package]
+name = "luncosim"
+version = "0.6.0-dev"
+edition = "2021"
+description = "LunCoSim — the full lunar-mission simulator: celestial bodies + ephemeris, solar-system-scale big_space, an orbital camera (auto-focus Earth), and the whole FSW / hardware / mobility / robotics / avatar stack under the workbench. The flagship windowed app (cf. `sandbox` = ground-physics test bed, `lunica` = Modelica workbench)."
+
+# The app is a single `src/main.rs` (bin name = crate name = `luncosim`):
+#   cargo run -p luncosim
+
+[dependencies]
+# Always a windowed GUI app, so the full render + windowing stack is
+# unconditional here (unlike `lunco-sandbox`, which gates it behind `ui` for its
+# headless server). bevy_egui drives the workbench chrome.
+bevy = { workspace = true, features = [
+    "bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_window",
+    "bevy_winit", "x11", "wayland", "webgl2", "bevy_picking", "mesh_picking",
+    "bevy_post_process", "bevy_anti_alias", "smaa_luts", "tonemapping_luts",
+    "bevy_gizmos", "bevy_gizmos_render",
+] }
+bevy_egui = { workspace = true }
+avian3d = { workspace = true }
+big_space = { workspace = true }
+
+lunco-assets = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-ui = { path = "../lunco-ui" }
+lunco-workbench = { path = "../lunco-workbench" }
+lunco-materials = { path = "../lunco-materials" }
+# avatar's egui UI (`avatar::ui::AvatarUiPlugin`) is used, so keep its `ui`
+# feature (default-on) — no `default-features = false` here.
+lunco-avatar = { path = "../lunco-avatar" }
+lunco-celestial = { path = "../lunco-celestial" }
+lunco-environment = { path = "../lunco-environment" }
+lunco-fsw = { path = "../lunco-fsw" }
+lunco-hardware = { path = "../lunco-hardware" }
+lunco-mobility = { path = "../lunco-mobility" }
+lunco-robotics = { path = "../lunco-robotics" }
+lunco-controller = { path = "../lunco-controller" }
+# `LunCoApiPlugin` is added unconditionally (HTTP automation); `winit` enables
+# the event-loop waker (this is a windowed app), `render` the screenshot path.
+lunco-api = { path = "../lunco-api", default-features = false, features = ["transport-http", "render", "winit"] }
+
+# Earth/Moon ephemeris (Artemis-II) — native only; the wasm path skips it (see
+# the `#[cfg(not(target_arch = "wasm32"))]` in main.rs).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
+
+[features]
+# Celestial bodies + textures + ephemeris are the whole point, so on by default.
+default = ["celestial"]
+# Bakes Earth/Moon textures + the Artemis-II ephemeris into the binary (via
+# lunco-celestial's `embed-assets`). The celestial plugins themselves load
+# whenever `sandbox` is off (see below).
+celestial = ["lunco-celestial/embed-assets"]
+# Legacy toggle: build the simulator WITHOUT the celestial/orbital layer (a
+# bare ground scene). `main.rs` gates `CelestialPlugin`/`EphemerisPlugin` on
+# `not(feature = "sandbox")`.
+sandbox = []
+
+[lints]
+workspace = true

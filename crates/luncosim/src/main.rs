@@ -1,9 +1,11 @@
-//! Primary entry point for the LunCo simulation client.
+//! LunCoSim — the full lunar-mission simulator.
 //!
-//! This crate assembles all simulation plugins (Celestial, FSW, Hardware,
-//! Robotics, etc.) into a cohesive application. It handles the high-level
-//! Bevy app configuration, including asset sourcing, plugin initialization,
-//! and global coordinate synchronization.
+//! The flagship windowed app: celestial bodies + ephemeris, solar-system-scale
+//! big_space, an orbital camera (auto-focus Earth on boot), and the whole
+//! FSW / Hardware / Mobility / Robotics / Avatar stack under the workbench.
+//! (Cf. the `sandbox` bin = ground-physics test bed, `lunica` = Modelica
+//! workbench.) Assembles all simulation plugins into one cohesive Bevy app —
+//! asset sourcing, plugin init, and big_space global coordinate propagation.
 //!
 //! ## Transform Propagation
 //!
