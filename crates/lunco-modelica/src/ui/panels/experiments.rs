@@ -2322,22 +2322,13 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
     };
 
     let storage = lunco_storage::FileStorage::new();
-    let hint = lunco_storage::SaveHint {
+    let hint = lunco_workbench::picker::SaveHint {
         suggested_name: Some(format!("{file_stem}.csv")),
         start_dir: None,
-        filters: vec![lunco_storage::OpenFilter::new("CSV", &["csv"])],
+        filters: vec![lunco_workbench::picker::OpenFilter::new("CSV", &["csv"])],
     };
-    let handle = match futures_lite::future::block_on(storage.pick_save(&hint)) {
-        Ok(Some(h)) => h,
-        Ok(None) => return,
-        Err(e) => {
-            if let Some(mut console) =
-                world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
-            {
-                console.error(format!("CSV export: picker failed: {e}"));
-            }
-            return;
-        }
+    let Some(handle) = lunco_workbench::picker::pick_save_blocking(&hint) else {
+        return; // user cancelled the save dialog
     };
     if let Err(e) = futures_lite::future::block_on(storage.write(&handle, csv_text.as_bytes())) {
         if let Some(mut console) =

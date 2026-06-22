@@ -17,7 +17,10 @@
 #
 # Available binaries:
 #   lunica   - Modelica Workbench IDE
-#   sandbox  - Simulation Sandbox
+#   sandbox  - Simulation Sandbox (ground physics)
+#   luncosim - Full lunar-mission simulator (celestial + orbital). No Modelica
+#              worker / MSL bundle (not a Modelica IDE). Textures load over HTTP
+#              (built without `celestial` embed-assets).
 # ============================================================================
 
 set -e
@@ -58,11 +61,14 @@ get_binary_config() {
             echo "lunco-modelica"
             ;;
         sandbox)
-            echo "lunco-client"
+            echo "lunco-sandbox"
+            ;;
+        luncosim)
+            echo "luncosim"
             ;;
         *)
             error "Unknown binary: $binary"
-            error "Available binaries: lunica, sandbox"
+            error "Available binaries: lunica, sandbox, luncosim"
             exit 1
             ;;
     esac
@@ -241,7 +247,14 @@ build_wasm() {
     # client-only on wasm); lunica does not. Browser join is URL-driven
     # (`?connect=host#<digest>`), see `NetworkMode::from_url`.
     local wasm_features="lunco-api"
-    if [ "$binary" = "sandbox" ]; then
+    # luncosim has no `lunco-api` cargo feature (the API is an unconditional dep,
+    # JS-bridge on wasm). Build it with NO features: celestial bodies load when
+    # `sandbox` is off (the default), and we deliberately skip `celestial`
+    # (embed-assets) on web — baking the Earth/Moon textures via `include_bytes!`
+    # bloats the wasm and needs the asset cache; the browser loads them over HTTP.
+    if [ "$binary" = "luncosim" ]; then
+        wasm_features=""
+    elif [ "$binary" = "sandbox" ]; then
         wasm_features="lunco-api,networking"
         # Opt the client-prediction diagnostics into the browser build with
         # NET_DIAG=1 (off by default — same `net-diag` cargo feature as native).
@@ -257,8 +270,10 @@ build_wasm() {
     # to compile for wasm32-unknown-unknown unless a backend is named. The
     # browser-crypto backend is correct here; the `wasm_js` *feature* is enabled
     # on getrandom in lunco-client's wasm deps (cfg + feature are both required).
+    # `${wasm_features:+--features ...}` omits the flag entirely when empty
+    # (luncosim builds with no extra features).
     RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis --cfg=getrandom_backend=\"wasm_js\"" \
-        cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$cargo_bin" -p "$crate" --no-default-features --features "$wasm_features"
+        cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$cargo_bin" -p "$crate" --no-default-features ${wasm_features:+--features "$wasm_features"}
 
     # Off-thread Modelica worker bundle. wasm32 has no real threads, so
     # without this every rumoca compile (a few seconds for non-trivial
@@ -468,6 +483,31 @@ Run: cargo run -p lunco-assets -- download"
     if [ -f "$PROJECT_DIR/scripts/copy_to_html_folder.sh" ]; then
         info "Copying copy_to_html_folder.sh → $dist_dir/"
         cp "$PROJECT_DIR/scripts/copy_to_html_folder.sh" "$dist_dir/"
+    fi
+
+    # luncosim renders Earth/Moon as celestial bodies; their PROCESSED textures
+    # (`cached_textures://earth.png|moon.png`) load over HTTP same-origin —
+    # `cache_dir()` resolves to ".cache" on wasm, so the bevy HTTP reader fetches
+    # `<origin>/.cache/textures/<tex>`. Stage them next to the wasm (same idea as
+    # the DejaVu font above). Populate the cache first with:
+    #   cargo run -p lunco-assets -- download && cargo run -p lunco-assets -- process
+    if [ "$binary" = "luncosim" ]; then
+        for tex in earth.png moon.png; do
+            local tex_src=""
+            for candidate in \
+                "$PROJECT_DIR/../.cache/textures/$tex" \
+                "$PROJECT_DIR/.cache/textures/$tex"; do
+                if [ -f "$candidate" ]; then tex_src="$candidate"; break; fi
+            done
+            if [ -n "$tex_src" ]; then
+                mkdir -p "$dist_dir/.cache/textures"
+                cp "$tex_src" "$dist_dir/.cache/textures/$tex"
+                info "Copied $tex → $dist_dir/.cache/textures/"
+            else
+                warn "celestial texture $tex not found — that body renders untextured in \
+the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-assets -- process"
+            fi
+        done
     fi
 
     # Show output size

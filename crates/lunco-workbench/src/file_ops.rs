@@ -300,7 +300,7 @@ fn on_show_open_file_picker(
 
     let ext_refs: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
     commands.trigger(PickHandle {
-        mode: PickMode::OpenFile(lunco_storage::OpenFilter::new(
+        mode: PickMode::OpenFile(crate::picker::OpenFilter::new(
             "Supported files",
             &ext_refs,
         )),

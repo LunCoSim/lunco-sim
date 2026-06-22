@@ -1,8 +1,9 @@
 //! Native filesystem backend for [`crate::Storage`].
 //!
-//! Reads / writes via `std::fs`; pickers via `rfd::FileDialog`. Only
-//! handles [`StorageHandle::File`] and [`StorageHandle::Memory`]
-//! variants — other variants return [`StorageError::Unsupported`].
+//! Reads / writes via `std::fs`. Only handles [`StorageHandle::File`] and
+//! [`StorageHandle::Memory`] variants — other variants return
+//! [`StorageError::Unsupported`]. (File-open/save pickers are a UI concern and
+//! live in `lunco_workbench::picker`, not on the `Storage` trait.)
 //!
 //! `Memory` is included here so unit / integration tests don't need a
 //! real temp dir. A single in-process map stores the blobs; different
@@ -25,7 +26,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::{OpenFilter, SaveHint, Storage, StorageError, StorageHandle, StorageResult};
+use crate::{Storage, StorageError, StorageHandle, StorageResult};
 
 /// Native-filesystem backend.
 ///
@@ -125,73 +126,6 @@ impl Storage for FileStorage {
             }
             StorageHandle::Memory(_) => true,
             _ => false,
-        }
-    }
-
-    async fn pick_open(
-        &self,
-        #[allow(unused_variables)]
-        filter: &OpenFilter,
-    ) -> StorageResult<Option<StorageHandle>> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut dialog = rfd::FileDialog::new();
-            let exts: Vec<&str> =
-                filter.extensions.iter().map(|s| s.as_str()).collect();
-            if !exts.is_empty() {
-                dialog = dialog.add_filter(&filter.name, &exts);
-            }
-            Ok(dialog.pick_file().map(StorageHandle::File))
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            Err(StorageError::Unsupported("Native pickers unavailable on wasm32".into()))
-        }
-    }
-
-    async fn pick_save(
-        &self,
-        #[allow(unused_variables)]
-        hint: &SaveHint,
-    ) -> StorageResult<Option<StorageHandle>> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut dialog = rfd::FileDialog::new();
-            if let Some(name) = &hint.suggested_name {
-                dialog = dialog.set_file_name(name);
-            }
-            if let Some(StorageHandle::File(dir)) = &hint.start_dir {
-                let start: std::path::PathBuf = if dir.is_dir() {
-                    dir.clone()
-                } else {
-                    dir.parent().map(std::path::PathBuf::from).unwrap_or_default()
-                };
-                if !start.as_os_str().is_empty() {
-                    dialog = dialog.set_directory(&start);
-                }
-            }
-            for f in &hint.filters {
-                let exts: Vec<&str> = f.extensions.iter().map(|s| s.as_str()).collect();
-                if !exts.is_empty() {
-                    dialog = dialog.add_filter(&f.name, &exts);
-                }
-            }
-            Ok(dialog.save_file().map(StorageHandle::File))
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            Err(StorageError::Unsupported("Native pickers unavailable on wasm32".into()))
-        }
-    }
-
-    async fn pick_folder(&self) -> StorageResult<Option<StorageHandle>> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            Ok(rfd::FileDialog::new().pick_folder().map(StorageHandle::File))
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            Err(StorageError::Unsupported("Native pickers unavailable on wasm32".into()))
         }
     }
 }

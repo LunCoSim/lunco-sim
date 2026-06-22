@@ -29,7 +29,7 @@
 
 use async_trait::async_trait;
 
-use crate::{OpenFilter, SaveHint, Storage, StorageError, StorageHandle, StorageResult};
+use crate::{Storage, StorageError, StorageHandle, StorageResult};
 
 /// Browser-`localStorage` backend. Zero-sized — all state lives in the
 /// origin's `localStorage`, shared across every `WebStorage` instance
@@ -102,24 +102,6 @@ impl Storage for WebStorage {
         // Anything we can address is writable until the quota is hit
         // (which a real `write` reports). Unaddressable handles are not.
         Self::key(handle).is_ok()
-    }
-
-    async fn pick_open(&self, _filter: &OpenFilter) -> StorageResult<Option<StorageHandle>> {
-        Err(StorageError::Unsupported(
-            "WebStorage has no picker — use the FSA picker in lunco-workbench".into(),
-        ))
-    }
-
-    async fn pick_save(&self, _hint: &SaveHint) -> StorageResult<Option<StorageHandle>> {
-        Err(StorageError::Unsupported(
-            "WebStorage has no picker — use the FSA picker in lunco-workbench".into(),
-        ))
-    }
-
-    async fn pick_folder(&self) -> StorageResult<Option<StorageHandle>> {
-        Err(StorageError::Unsupported(
-            "WebStorage has no folder picker on the web".into(),
-        ))
     }
 }
 

@@ -6778,7 +6778,6 @@ dependencies = [
  "lunco-theme",
  "lunco-workbench",
  "serde",
- "transform-gizmo-bevy",
 ]
 
 [[package]]
@@ -6842,49 +6841,6 @@ dependencies = [
  "lunco-celestial",
  "serde_json",
  "ureq",
-]
-
-[[package]]
-name = "lunco-client"
-version = "0.6.0-dev"
-dependencies = [
- "avian3d 0.6.1",
- "bevy",
- "bevy_egui",
- "big_space",
- "console_error_panic_hook",
- "getrandom 0.3.4",
- "js-sys",
- "leafwing-input-manager",
- "lunco-api",
- "lunco-assets",
- "lunco-avatar",
- "lunco-celestial",
- "lunco-celestial-ephemeris",
- "lunco-controller",
- "lunco-core",
- "lunco-cosim",
- "lunco-doc",
- "lunco-environment",
- "lunco-fsw",
- "lunco-hardware",
- "lunco-materials",
- "lunco-mobility",
- "lunco-modelica",
- "lunco-networking",
- "lunco-render",
- "lunco-robotics",
- "lunco-sandbox-edit",
- "lunco-scripting",
- "lunco-terrain",
- "lunco-theme",
- "lunco-ui",
- "lunco-usd",
- "lunco-web",
- "lunco-workbench",
- "mimalloc",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]
@@ -7126,6 +7082,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-sandbox"
+version = "0.6.0-dev"
+dependencies = [
+ "avian3d 0.6.1",
+ "bevy",
+ "bevy_egui",
+ "big_space",
+ "console_error_panic_hook",
+ "getrandom 0.3.4",
+ "js-sys",
+ "leafwing-input-manager",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-avatar",
+ "lunco-celestial",
+ "lunco-celestial-ephemeris",
+ "lunco-controller",
+ "lunco-core",
+ "lunco-cosim",
+ "lunco-doc",
+ "lunco-environment",
+ "lunco-fsw",
+ "lunco-hardware",
+ "lunco-materials",
+ "lunco-mobility",
+ "lunco-modelica",
+ "lunco-networking",
+ "lunco-render",
+ "lunco-robotics",
+ "lunco-sandbox-edit",
+ "lunco-scripting",
+ "lunco-terrain",
+ "lunco-theme",
+ "lunco-ui",
+ "lunco-usd",
+ "lunco-web",
+ "lunco-workbench",
+ "mimalloc",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "lunco-sandbox-edit"
 version = "0.1.0"
 dependencies = [
@@ -7149,6 +7148,13 @@ dependencies = [
  "lunco-usd-sim",
  "lunco-workbench",
  "transform-gizmo-bevy",
+]
+
+[[package]]
+name = "lunco-sandbox-server"
+version = "0.6.0-dev"
+dependencies = [
+ "lunco-sandbox",
 ]
 
 [[package]]
@@ -7184,7 +7190,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures-lite",
- "rfd",
  "serde",
  "thiserror 2.0.18",
  "web-sys",
@@ -7407,6 +7412,37 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "luncosim"
+version = "0.6.0-dev"
+dependencies = [
+ "avian3d 0.6.1",
+ "bevy",
+ "bevy_egui",
+ "big_space",
+ "console_error_panic_hook",
+ "getrandom 0.3.4",
+ "js-sys",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-avatar",
+ "lunco-celestial",
+ "lunco-celestial-ephemeris",
+ "lunco-controller",
+ "lunco-core",
+ "lunco-environment",
+ "lunco-fsw",
+ "lunco-hardware",
+ "lunco-materials",
+ "lunco-mobility",
+ "lunco-robotics",
+ "lunco-ui",
+ "lunco-web",
+ "lunco-workbench",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

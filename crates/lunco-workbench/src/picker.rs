@@ -29,7 +29,82 @@
 
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
-use lunco_storage::{OpenFilter, SaveHint, StorageHandle};
+use lunco_storage::StorageHandle;
+
+/// One entry in a picker's file-type filter list. A picker may show
+/// several — e.g. "Modelica models", "All files".
+///
+/// Lives here, with the dialog, rather than on the `lunco-storage` I/O trait —
+/// the file picker is a UI concern.
+#[derive(Debug, Clone)]
+pub struct OpenFilter {
+    /// Human-readable group label ("Modelica models").
+    pub name: String,
+    /// Extensions without the leading dot ("mo", "mos").
+    pub extensions: Vec<String>,
+}
+
+impl OpenFilter {
+    /// Convenience constructor.
+    pub fn new(name: impl Into<String>, extensions: &[&str]) -> Self {
+        Self {
+            name: name.into(),
+            extensions: extensions.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+}
+
+/// Hints for a save dialog: starting directory, default filename, and filter
+/// list. All optional; the picker falls back to its own defaults when missing.
+#[derive(Debug, Clone, Default)]
+pub struct SaveHint {
+    /// Default filename shown in the picker.
+    pub suggested_name: Option<String>,
+    /// Starting directory. For a previously-saved document this is usually the
+    /// document's own origin folder so "Save As" opens next to the existing file.
+    pub start_dir: Option<StorageHandle>,
+    /// File type filters offered in the picker.
+    pub filters: Vec<OpenFilter>,
+}
+
+/// Blocking "save as" dialog. Returns the chosen path as a
+/// [`StorageHandle::File`], or `None` on cancel.
+///
+/// For UI panels that want a synchronous picker (the CSV/plot export flows in
+/// the Modelica IDE) rather than the event-driven [`PickHandle`] command. Native
+/// `rfd`; a no-op returning `None` on wasm (browsers have no blocking picker).
+/// This is the home of the file dialog — `lunco-storage` (the I/O trait)
+/// deliberately carries no `rfd`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn pick_save_blocking(hint: &SaveHint) -> Option<StorageHandle> {
+    let mut dialog = rfd::FileDialog::new();
+    if let Some(name) = &hint.suggested_name {
+        dialog = dialog.set_file_name(name);
+    }
+    if let Some(StorageHandle::File(dir)) = &hint.start_dir {
+        let start: std::path::PathBuf = if dir.is_dir() {
+            dir.clone()
+        } else {
+            dir.parent().map(std::path::PathBuf::from).unwrap_or_default()
+        };
+        if !start.as_os_str().is_empty() {
+            dialog = dialog.set_directory(&start);
+        }
+    }
+    for f in &hint.filters {
+        let exts: Vec<&str> = f.extensions.iter().map(|s| s.as_str()).collect();
+        if !exts.is_empty() {
+            dialog = dialog.add_filter(&f.name, &exts);
+        }
+    }
+    dialog.save_file().map(StorageHandle::File)
+}
+
+/// wasm stub — browsers have no synchronous file picker.
+#[cfg(target_arch = "wasm32")]
+pub fn pick_save_blocking(_hint: &SaveHint) -> Option<StorageHandle> {
+    None
+}
 
 /// What kind of system dialog to show.
 #[derive(Clone, Debug)]

@@ -279,10 +279,10 @@ pub fn on_save_as_document(
             .and_then(|id| workspace.twin(id))
             .map(|t| lunco_storage::StorageHandle::File(t.root.clone()));
         commands.trigger(lunco_workbench::picker::PickHandle {
-            mode: lunco_workbench::picker::PickMode::SaveFile(lunco_storage::SaveHint {
+            mode: lunco_workbench::picker::PickMode::SaveFile(lunco_workbench::picker::SaveHint {
                 suggested_name: Some(suggested_name),
                 start_dir,
-                filters: vec![lunco_storage::OpenFilter::new("Modelica models", &["mo"])],
+                filters: vec![lunco_workbench::picker::OpenFilter::new("Modelica models", &["mo"])],
             }),
             on_resolved: lunco_workbench::picker::PickFollowUp::SaveAs(doc),
         });

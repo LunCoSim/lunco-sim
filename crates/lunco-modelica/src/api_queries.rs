@@ -529,7 +529,7 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
             );
         }
 
-        use crate::ui::commands::compile::{bounds_from_annotation, resolve_setup_bounds};
+        use crate::model_commands::{bounds_from_annotation, resolve_setup_bounds};
         use lunco_experiments::{ExperimentRunner, ModelRef};
 
         let classes: Vec<serde_json::Value> = class_list
@@ -1760,7 +1760,7 @@ impl ApiQueryProvider for SetModelInputProvider {
             return err_missing_field("value");
         };
 
-        match crate::ui::commands::apply_set_model_input(world, doc, &name, value) {
+        match crate::model_commands::apply_set_model_input(world, doc, &name, value) {
             Ok(resolved_doc) => ApiResponse::ok(serde_json::json!({
                 "ok": true,
                 "doc": resolved_doc.raw(),
@@ -1768,7 +1768,7 @@ impl ApiQueryProvider for SetModelInputProvider {
                 "value": value,
             })),
             Err(e) => {
-                use crate::ui::commands::SetModelInputError;
+                use crate::model_commands::SetModelInputError;
                 let code = match e {
                     SetModelInputError::NoActiveDocument
                     | SetModelInputError::NoLinkedEntity { .. }

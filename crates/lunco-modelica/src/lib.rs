@@ -152,6 +152,10 @@ pub mod index;
 /// gathers inputs and calls down. See [`sim_target`].
 pub mod sim_target;
 
+/// Core (UI-free) Modelica command helpers — `SetModelInput` application + sim-
+/// bounds resolution — shared by the egui workbench and the headless API server.
+pub mod model_commands;
+
 /// Per-Twin Modelica domain engine: long-lived `rumoca_compile::Session`
 /// + per-doc URI mapping. Provides cross-file inheritance-merged queries.
 pub mod engine;
@@ -1403,7 +1407,7 @@ fn build_modelica_core(app: &mut App) {
 /// it later — the modelica plugin does not pick the idle policy
 /// itself, just respects what the host app chose. No-op when the
 /// app is headless (no `WinitSettings` resource).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "ui"))]
 fn sim_focus_pace(
     settings: Option<ResMut<bevy::winit::WinitSettings>>,
     pending: Option<Res<experiments_runner::PendingHandles>>,
@@ -1426,11 +1430,10 @@ fn sim_focus_pace(
     }
 }
 
-// On wasm the winit settings model differs (the rAF loop drives
-// updates regardless of focus); the throttle this guards against
-// doesn't exist there. Empty no-op keeps the symbol present so
-// `add_systems` compiles for both targets.
-#[cfg(target_arch = "wasm32")]
+// No-op when there's no winit `WinitSettings` to pace: on wasm (the rAF loop
+// drives updates regardless of focus) and on a headless `--no-ui` server (no
+// winit compiled in). Keeps the symbol present so `add_systems` compiles.
+#[cfg(any(target_arch = "wasm32", not(feature = "ui")))]
 fn sim_focus_pace() {}
 
 /// Global frame-time probe — start of frame.

@@ -10,11 +10,65 @@ use bevy::picking::pointer::PointerButton;
 use transform_gizmo_bevy::GizmoTarget;
 
 use crate::{SpawnState, SelectedEntity};
-use crate::commands::SelectEntity;
+use lunco_core::Command;
 
 /// Component marking an entity as currently selected.
 #[derive(Component)]
 pub struct Selected;
+
+/// Select an entity by API id — the headless/scriptable equivalent of a
+/// Shift+Left-click in the viewport. Drives the same [`SelectedEntity`]
+/// resource and [`Selected`] highlight the mouse path uses, so the Inspector
+/// immediately shows that entity's components (Transform, Physics, Shader
+/// Parameters, …). Pass `entity_id == 0` to clear the selection.
+///
+/// Selection is an editor concept (it targets the Inspector/gizmo), so this
+/// command lives in the `ui`-gated selection module — a headless server exposes
+/// no selection.
+#[Command(default)]
+pub struct SelectEntity {
+    /// API id from `ListEntities` — `u64` "Pattern B", resolved in the
+    /// observer via `ApiEntityRegistry` (same as `FocusEntityById`). `0`
+    /// clears the selection.
+    pub entity_id: u64,
+}
+
+/// Observer for [`SelectEntity`]: clears the previous highlight and selects
+/// the requested entity (or clears selection on id 0).
+pub fn on_select_entity(
+    trigger: On<SelectEntity>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    mut selected: ResMut<SelectedEntity>,
+    q_old: Query<Entity, With<Selected>>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+
+    // Clear any existing highlight + gizmo (mirrors the click path).
+    for old in q_old.iter() {
+        commands
+            .entity(old)
+            .remove::<Selected>()
+            .remove::<GizmoTarget>();
+    }
+
+    if cmd.entity_id == 0 {
+        selected.entity = None;
+        info!("SELECT_ENTITY: cleared selection");
+        return;
+    }
+
+    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
+    let Some(target) = registry.resolve(&global_id) else {
+        warn!("SELECT_ENTITY: no api_id={} in registry", cmd.entity_id);
+        selected.entity = None;
+        return;
+    };
+
+    commands.entity(target).insert(Selected);
+    selected.entity = Some(target);
+    info!("SELECT_ENTITY: selected api_id={} ({target:?})", cmd.entity_id);
+}
 
 /// Finds the most appropriate entity to select from a hit entity.
 ///

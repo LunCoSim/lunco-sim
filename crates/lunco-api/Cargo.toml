@@ -19,6 +19,13 @@ transport-http = ["dep:axum", "dep:tokio", "tokio/full"]
 # On by default so GUI binaries get screenshots with no extra opt-in.
 render = ["bevy/bevy_render", "bevy/bevy_core_pipeline", "bevy/bevy_window", "dep:image", "dep:web-time"]
 
+# Windowed-app optimization: hook the winit event loop so an incoming HTTP
+# request wakes the app immediately (vs. waiting for the next reactive tick).
+# Needs `bevy::winit`. OFF for a headless `--no-ui` server — it has no event loop
+# (ScheduleRunnerPlugin ticks continuously), so the waker is a no-op anyway.
+# GUI binaries enable it via `lunco-client`'s `ui` feature.
+winit = ["bevy/bevy_winit"]
+
 # NOTE: there is no `transport-wasm` feature. On wasm32 the only usable
 # transport is the `window.lunco_api` JS bridge (a browser can't bind TCP), so
 # it compiles *automatically* under `cfg(target_arch = "wasm32")`. Its deps

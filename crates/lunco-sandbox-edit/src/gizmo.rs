@@ -33,6 +33,23 @@ pub struct GizmoPrevPos {
     pub had_rotation_interpolation: bool,
 }
 
+/// Mirrors each `GizmoTarget`'s active state onto the core
+/// [`lunco_core::GizmoDragging`] marker, so render/sim crates (e.g. the avatar
+/// camera-follow systems) can react to a drag **without** depending on
+/// `transform-gizmo-bevy`. This is the only place the marker is written.
+pub fn sync_gizmo_dragging_marker(
+    mut commands: Commands,
+    q: Query<(Entity, &GizmoTarget)>,
+) {
+    for (e, gt) in &q {
+        if gt.is_active() {
+            commands.entity(e).insert(lunco_core::GizmoDragging);
+        } else {
+            commands.entity(e).remove::<lunco_core::GizmoDragging>();
+        }
+    }
+}
+
 /// Makes the selected entity kinematic and freezes the coordinate system when gizmo drag starts.
 pub fn capture_gizmo_start(
     selected: Res<SelectedEntity>,
