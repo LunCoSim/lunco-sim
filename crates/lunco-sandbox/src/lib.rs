@@ -64,7 +64,9 @@ use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
 use lunco_modelica::ModelicaSet;
 #[cfg(feature = "ui")]
 use lunco_modelica::{ModelicaWorkbenchPlugin, ModelicaUiConfig};
-use big_space::prelude::Grid;
+// `Grid` comes from the `big_space::prelude::*` glob above; it's only named in
+// the `ui`-gated fallback-avatar spawner, so no separate import (which would be
+// unused in a headless build).
 #[cfg(feature = "ui")]
 use lunco_materials::{BlueprintMaterialPlugin, ShaderMaterialPlugin};
 
@@ -75,11 +77,30 @@ mod code_panel;
 #[path = "models_palette.rs"]
 mod models_palette;
 
-/// Build and run the sandbox app. Shared by the `sandbox` (GUI) and
-/// `sandbox-server` (headless) binaries — the `ui` feature + `--no-ui` flag
-/// select which. Reads CLI args (`--api`, `--scene`, `--host`/`--connect`, …)
-/// from `std::env`.
+/// Run the sandbox, choosing GUI vs. headless from the build + flags: headless
+/// when the `ui` feature is absent, or `--no-ui` / `LUNCO_NO_UI` is set;
+/// otherwise the windowed GUI. This is the `sandbox` (GUI) bin's entry point.
 pub fn run() {
+    let headless = !cfg!(feature = "ui")
+        || std::env::args().any(|a| a == "--no-ui")
+        || std::env::var("LUNCO_NO_UI").is_ok_and(|v| v != "0" && !v.is_empty());
+    run_with_mode(headless);
+}
+
+/// Run the sandbox HEADLESS, unconditionally — the `sandbox-server` bin's entry
+/// point. Forcing the mode here (rather than inferring it from the absent `ui`
+/// feature) makes the server stay windowless **even if `ui` gets unified on** by
+/// a `cargo build --workspace` (which compiles the GUI `sandbox` bin alongside
+/// it). So the server never tries to open a window; in a lean `-p
+/// lunco-sandbox-server` build the GUI stack isn't linked at all.
+pub fn run_headless() {
+    run_with_mode(true);
+}
+
+/// Shared app builder. `headless` is decided by the caller ([`run`] /
+/// [`run_headless`]); the `#[cfg(feature = "ui")]` branches below additionally
+/// strip the windowing code when the feature is off.
+fn run_with_mode(headless: bool) {
     // Match lunica's pattern: scan argv for `--api <port>`
     // so the window title can advertise the listening port. Saves
     // confusion when several instances run side-by-side.
@@ -89,6 +110,9 @@ pub fn run() {
     // refresh — typically 60 Hz on laptops. Useful for measuring real
     // CPU/GPU headroom without the display cap.
     let args: Vec<String> = std::env::args().collect();
+    // Window-title port hint — windowed (`ui`) builds only; the API plugin reads
+    // `--api` itself, so the headless server needs nothing from this.
+    #[cfg(feature = "ui")]
     let api_port: Option<u16> = {
         let mut port = None;
         for i in 0..args.len() {
@@ -104,6 +128,7 @@ pub fn run() {
         }
         port
     };
+    #[cfg(feature = "ui")]
     let no_vsync = args.iter().any(|a| a == "--no-vsync");
     // `--no-throttle` forces the window to keep updating at full rate even when
     // unfocused, disabling the `reactive_low_power` background throttle (~1 FPS).
@@ -112,6 +137,7 @@ pub fn run() {
     // unfocused test window drops to 1 FPS, so motion can't be observed). This
     // flag keeps it Continuous regardless of focus. Networking already forces
     // Continuous (keepalive requirement), so this is a no-op there.
+    #[cfg(feature = "ui")]
     let no_throttle = args.iter().any(|a| a == "--no-throttle");
     // `--scene <path>` overrides the default sandbox_scene.usda load.
     // Path is relative to the asset source root (`assets/`). Used by
@@ -143,20 +169,17 @@ pub fn run() {
     // (~1 FPS) starves them past the timeout, dropping the connection a few
     // seconds after the window loses focus. Two side-by-side windows means one
     // is always unfocused — so we keep it Continuous while networked.
+    #[cfg(feature = "ui")]
     let networked = args.iter().any(|a| a == "--host" || a == "--connect");
-    // `--no-ui` (or `LUNCO_NO_UI=1`) runs the sandbox HEADLESS: no OS window, no
-    // winit, no GPU device, no egui/workbench chrome — just the server-authoritative
-    // sim (USD scene + avian physics + cosim + networking host). For a headless
-    // Ubuntu deploy of `sandbox.lunco.space`. The render plugins still load in
-    // `backends: None` mode so the asset stores (`Assets<Mesh>`/`Assets<StandardMaterial>`)
-    // exist — USD visual sync populates the meshes the avian colliders key off — but
-    // nothing is ever drawn. `ScheduleRunnerPlugin` drives the loop in winit's place.
-    // Without the `ui` feature there is NO winit/egui/workbench compiled in, so
-    // the binary is a headless server unconditionally — `cfg!` folds to `true`
-    // and the windowed code paths below are `#[cfg(feature = "ui")]`-stripped.
-    let headless = !cfg!(feature = "ui")
-        || args.iter().any(|a| a == "--no-ui")
-        || std::env::var("LUNCO_NO_UI").is_ok_and(|v| v != "0" && !v.is_empty());
+    // `headless` is a parameter (see `run` / `run_headless`). When true the sim
+    // runs with no OS window/winit/egui — just the server-authoritative sim (USD
+    // scene + avian physics + cosim + networking host), e.g. for the
+    // `sandbox.lunco.space` deploy. The render plugins still load in `backends:
+    // None` mode so the asset stores (`Assets<Mesh>`/`Assets<StandardMaterial>`)
+    // exist — USD visual sync populates the meshes the avian colliders key off —
+    // but nothing is ever drawn; `ScheduleRunnerPlugin` drives the loop in winit's
+    // place. Without the `ui` feature the windowed paths below are
+    // `#[cfg(feature = "ui")]`-stripped, so only the headless path compiles.
     // Present mode. Networked side-by-side windows: one is ALWAYS unfocused, and an
     // unfocused window under `Fifo` (vsync) can block on present when the compositor
     // stops servicing it — which stalls the WHOLE update loop (sim + netcode + the
@@ -164,11 +187,13 @@ pub fn run() {
     // in focus → clunky sync" symptom. `Continuous` update mode alone doesn't help
     // because the stall is in `present`, not the redraw request. Use non-blocking
     // `Mailbox` while networked so the background window keeps ticking at full rate.
+    #[cfg(feature = "ui")]
     let present_mode = if no_vsync || networked {
         bevy::window::PresentMode::Mailbox
     } else {
         bevy::window::PresentMode::Fifo
     };
+    #[cfg(feature = "ui")]
     let window_title = match api_port {
         Some(p) => format!("sandbox — Listening on {p}"),
         None => "sandbox".to_string(),

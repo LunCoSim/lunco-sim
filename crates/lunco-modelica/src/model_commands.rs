@@ -106,6 +106,11 @@ pub fn apply_set_model_input(
 
 /// Read the `experiment(...)` annotation bounds for a model from live document
 /// state. `None` if the class or annotation is absent.
+///
+/// Callers are the egui workbench (`ui::commands::compile`) and the API query
+/// path (`api_queries`, behind modelica's `lunco-api`); a pure compile-core
+/// build (e.g. the physics sandbox server) links neither, hence `allow(dead_code)`.
+#[allow(dead_code)]
 pub(crate) fn bounds_from_annotation(
     world: &World,
     doc: DocumentId,
@@ -133,6 +138,7 @@ pub(crate) fn bounds_from_annotation(
 /// cache is populated by a background worker callback, so letting it win would
 /// make a run's snapshotted bounds depend on dispatch timing (the flaky-
 /// terminator race). See [`crate::sim_target::resolve_bounds`].
+#[allow(dead_code)] // see `bounds_from_annotation` — no caller in a pure compile-core build
 pub(crate) fn resolve_setup_bounds(
     world: &World,
     doc: DocumentId,

@@ -52,10 +52,13 @@ members = [
 # and the feature-gated lunco-networking — so default builds don't compile dead
 # weight. Use `--workspace` to include everything (e.g. CI lint/test sweeps).
 #
-# `lunco-sandbox-server` is intentionally NOT here: it must be built/run via
-# `-p lunco-sandbox-server` so Cargo resolves `lunco-sandbox` WITHOUT `ui` (a
-# bare/`--workspace` build would unify `ui` on via the GUI `sandbox` bin and the
-# server would then try to open a window). `cargo run -p lunco-sandbox-server`.
+# `lunco-sandbox-server` is intentionally NOT here — for LEANNESS, not
+# correctness: built via `-p lunco-sandbox-server`, Cargo resolves
+# `lunco-sandbox` WITHOUT `ui`, so the GUI/winit/egui stack isn't linked. (A
+# bare/`--workspace` build unifies `ui` on via the GUI `sandbox` bin, making the
+# server binary heavier — but it STILL runs headless: the bin calls
+# `lunco_sandbox::run_headless()`, which forces the windowless path regardless of
+# the linked `ui` feature.) `cargo run -p lunco-sandbox-server`.
 default-members = [
     "crates/lunco-sandbox",
     "crates/lunco-modelica",
