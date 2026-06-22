@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 bevy = { workspace = true }
 serde_json = { workspace = true }
-lunco-celestial = { path = "../lunco-celestial" }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-assets = { workspace = true }
 celestial-ephemeris = "0.1.1-alpha.2"
 celestial-time = "0.1.1-alpha.2"

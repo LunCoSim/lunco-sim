@@ -392,24 +392,13 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
     }
 
     let storage = lunco_storage::FileStorage::new();
-    let hint = lunco_storage::SaveHint {
+    let hint = lunco_workbench::picker::SaveHint {
         suggested_name: Some(format!("modelica_plot_{}.csv", viz_id.0)),
         start_dir: None,
-        filters: vec![lunco_storage::OpenFilter::new("CSV", &["csv"])],
+        filters: vec![lunco_workbench::picker::OpenFilter::new("CSV", &["csv"])],
     };
-    let handle = match futures_lite::future::block_on(<lunco_storage::FileStorage as lunco_storage::Storage>::pick_save(
-        &storage, &hint,
-    )) {
-        Ok(Some(h)) => h,
-        Ok(None) => return,
-        Err(e) => {
-            if let Some(mut console) =
-                world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
-            {
-                console.error(format!("CSV export: picker failed: {e}"));
-            }
-            return;
-        }
+    let Some(handle) = lunco_workbench::picker::pick_save_blocking(&hint) else {
+        return; // user cancelled the save dialog
     };
 
     if let Err(e) = futures_lite::future::block_on(<lunco_storage::FileStorage as lunco_storage::Storage>::write(

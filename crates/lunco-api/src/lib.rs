@@ -160,10 +160,11 @@ impl Plugin for LunCoApiPlugin {
             let mut bridge = HttpBridge::new(tx);
 
             // Hook the winit event loop so requests wake the app immediately
-            // instead of waiting for the next reactive tick. Native only —
-            // the wasm build runs a continuous requestAnimationFrame loop, so
-            // the router drains every frame regardless.
-            #[cfg(feature = "transport-http")]
+            // instead of waiting for the next reactive tick. Native + windowed
+            // only (the `winit` feature): the wasm build runs a continuous
+            // requestAnimationFrame loop and a headless server ticks via
+            // ScheduleRunnerPlugin, so neither needs (or has) the waker.
+            #[cfg(all(feature = "transport-http", feature = "winit"))]
             if let Some(proxy) = app.world().get_resource::<bevy::winit::EventLoopProxyWrapper>() {
                 let proxy = (**proxy).clone();
                 bridge = bridge.with_waker(std::sync::Arc::new(move || {

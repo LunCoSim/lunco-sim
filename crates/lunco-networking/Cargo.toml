@@ -28,8 +28,11 @@ lunco-core = { path = "../lunco-core" }
 # Native builds still get transport-http via lunco-client's own default features.
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-mobility = { path = "../lunco-mobility" }
-lunco-avatar = { path = "../lunco-avatar" }
-lunco-sandbox-edit = { path = "../lunco-sandbox-edit" }
+# Wire substrate needs avatar/sandbox-edit COMPONENTS + commands, never their
+# egui editor UI — `default-features = false` keeps the networked headless server
+# (and this crate) egui/winit-free.
+lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-sandbox-edit = { path = "../lunco-sandbox-edit", default-features = false }
 # Read by the wire's `gather_snapshot`: avian velocity (LinearVelocity/
 # AngularVelocity) for client-side prediction, big_space `CellCoord` so
 # replication carries the integer cell alongside the f64 absolute position.

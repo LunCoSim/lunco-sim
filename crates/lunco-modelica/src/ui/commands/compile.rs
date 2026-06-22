@@ -1365,55 +1365,12 @@ fn param_map_from_mods(
 /// `label`, when set, replaces the auto-generated "Run N" name so sweep rows
 /// are identifiable in `ListRuns`. Returns the new experiment id, or `None`
 /// when dispatch can't proceed (no doc, ambiguous class → picker, etc.).
-/// Build [`RunBounds`] from a model's `experiment(...)` annotation in
-/// the AST. `None` when the class has no annotation or no StopTime
-/// (a StopTime is what makes the annotation usable).
-pub(crate) fn bounds_from_annotation(
-    world: &World,
-    doc: DocumentId,
-    model_ref: &lunco_experiments::ModelRef,
-) -> Option<lunco_experiments::RunBounds> {
-    let reg = world.get_resource::<crate::state::ModelicaDocumentRegistry>()?;
-    let host = reg.host(doc)?;
-    let index = host.document().index();
-    let class = index
-        .classes
-        .get(&model_ref.0)
-        .or_else(|| index.classes.values().find(|c| c.name == model_ref.0))?;
-    let exp = class.experiment.as_ref()?;
-    // World-gathering done; the annotation→bounds mapping is pure.
-    crate::sim_target::bounds_from_experiment(exp)
-}
-
-/// Single source of truth for the simulation bounds shown in BOTH the
-/// Fast Run popup and the Experiments-tab Setup form, so the two
-/// surfaces never disagree. Precedence: saved draft override → AST
-/// `experiment(...)` annotation → runner annotation cache
-/// (`default_bounds`) → `sim_target::DEFAULT_STOP_TIME` (1 s, the
-/// Modelica spec default) fallback.
-///
-/// The fresh AST annotation outranks the async runner cache deliberately:
-/// the cache is populated by a background worker callback, so letting it win
-/// would make a run's snapshotted bounds depend on dispatch timing (the
-/// flaky-terminator race). See [`crate::sim_target::resolve_bounds`].
-pub(crate) fn resolve_setup_bounds(
-    world: &World,
-    doc: DocumentId,
-    model_ref: &lunco_experiments::ModelRef,
-) -> lunco_experiments::RunBounds {
-    use lunco_experiments::ExperimentRunner;
-    // Gather the three precedence tiers from live state; the precedence +
-    // fallback are owned by `sim_target::resolve_bounds` (single source of
-    // truth, incl. the canonical `DEFAULT_STOP_TIME`).
-    let draft = world
-        .get_resource::<crate::experiments_runner::ExperimentDrafts>()
-        .and_then(|d| d.get(doc, model_ref).and_then(|dr| dr.bounds_override.clone()));
-    let annotation = bounds_from_annotation(world, doc, model_ref);
-    let runner_cached = world
-        .get_resource::<crate::ModelicaRunnerResource>()
-        .and_then(|r| r.0.default_bounds(model_ref));
-    crate::sim_target::resolve_bounds(draft, annotation, runner_cached)
-}
+// `bounds_from_annotation` + `resolve_setup_bounds` are UI-free (they read
+// document/runner state) and moved to `crate::model_commands` so the headless
+// API server resolves sim bounds too. Re-exported here so the local callers
+// below and the `crate::ui::commands::compile::{...}` paths used by the
+// Experiments / Model-View panels keep resolving.
+pub(crate) use crate::model_commands::{bounds_from_annotation, resolve_setup_bounds};
 
 fn dispatch_experiment(
     world: &mut World,

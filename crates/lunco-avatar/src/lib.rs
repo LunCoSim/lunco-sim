@@ -20,7 +20,6 @@ use bevy::math::DVec3;
 use leafwing_input_manager::prelude::*;
 use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 
-use transform_gizmo_bevy::GizmoTarget;
 use lunco_controller::ControllerLink;
 use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands};
 use lunco_core::attach::migrate_to_grid;
@@ -521,7 +520,7 @@ fn spring_arm_system(
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     _q_parents: Query<&ChildOf>,
-    q_gizmo: Query<&GizmoTarget>,
+    q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
 
     defaults: Res<CameraDefaults>,
 
@@ -535,10 +534,9 @@ fn spring_arm_system(
     let dt = time.delta_secs();
 
     for (_avatar_ent, mut tf, mut cell, mut arm, child_of, surface_mode) in q_avatar.iter_mut() {
-        // Skip follow if target is being dragged by a gizmo
-        if let Ok(gt) = q_gizmo.get(arm.target) {
-            if gt.is_active() { continue; }
-        }
+        // Skip follow while the target is being dragged by the editor gizmo
+        // (marker set by sandbox-edit; never present on a headless server).
+        if q_dragging.get(arm.target).is_ok() { continue; }
 
         let Ok((t_cell, t_tf)) = q_spatial.get(arm.target) else { continue; };
         let t_cell = t_cell.copied().unwrap_or_default();
@@ -687,7 +685,7 @@ fn chase_camera_system(
     mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut ChaseCamera, &ChildOf), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
-    q_gizmo: Query<&GizmoTarget>,
+    q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
     defaults: Res<CameraDefaults>,
     mut scroll_res: ResMut<CameraScroll>,
     sens: Res<CameraScrollSensitivity>,
@@ -698,10 +696,9 @@ fn chase_camera_system(
     let dt = time.delta_secs();
 
     for (_avatar_ent, mut tf, mut cell, mut chase, child_of) in q_avatar.iter_mut() {
-        // Skip follow if target is being dragged by a gizmo
-        if let Ok(gt) = q_gizmo.get(chase.target) {
-            if gt.is_active() { continue; }
-        }
+        // Skip follow while the target is being dragged by the editor gizmo
+        // (marker set by sandbox-edit; never present on a headless server).
+        if q_dragging.get(chase.target).is_ok() { continue; }
 
         let Ok((t_cell, t_tf)) = q_spatial.get(chase.target) else { continue; };
         let t_cell = t_cell.copied().unwrap_or_default();
@@ -752,7 +749,7 @@ fn orbit_system(
     q_parents: Query<&ChildOf>,
     q_bodies: Query<&CelestialBody>,
     q_sc: Query<&Spacecraft>,
-    q_gizmo: Query<&GizmoTarget>,
+    q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
     defaults: Res<CameraDefaults>,
     mut scroll_res: ResMut<CameraScroll>,
     sens: Res<CameraScrollSensitivity>,
@@ -765,10 +762,9 @@ fn orbit_system(
     let dt = time.delta_secs();
 
     for (avatar_ent, mut tf, mut cell, mut orbit, child_of) in q_avatar.iter_mut() {
-        // Skip follow if target is being dragged by a gizmo
-        if let Ok(gt) = q_gizmo.get(orbit.target) {
-            if gt.is_active() { continue; }
-        }
+        // Skip follow while the target is being dragged by the editor gizmo
+        // (marker set by sandbox-edit; never present on a headless server).
+        if q_dragging.get(orbit.target).is_ok() { continue; }
 
         let Ok((_t_cell, _t_tf)) = q_spatial.get(orbit.target) else { continue; };
 

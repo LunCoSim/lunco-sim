@@ -14,17 +14,26 @@ path = "src/bin/sandbox.rs"
 [[bin]]
 name = "lunco_client_web"
 path = "src/bin/lunco_client_web.rs"
+# Web GUI bin — pulls the full workbench/egui stack. Skipped in a lean
+# `--no-default-features --features server` build (which omits `ui`).
+required-features = ["ui"]
 
 [[bin]]
 name = "model_viewer"
 path = "src/bin/model_viewer.rs"
+# Native model viewer — opens a winit window (DefaultPlugins) + the HTTP API.
+required-features = ["ui", "lunco-api"]
 
 [dependencies]
-# GUI binary: pbr/gltf/etc pull bevy_render; the windowing backend
-# (bevy_winit/bevy_window/x11/wayland/webgl2/bevy_picking) is no longer in the
-# workspace default, so this — the GUI binary crate — adds it here. (Phase 2
-# will move these behind a `ui` feature so a `--no-ui` server build omits them.)
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "smaa_luts", "mesh_picking", "tonemapping_luts", "bevy_gizmos", "bevy_gizmos_render", "bevy_winit", "bevy_window", "x11", "wayland", "webgl2", "bevy_picking"] }
+# Render ASSET-STORE features (always on, even headless): `bevy_pbr` pulls
+# `bevy_render`, which registers `Assets<Mesh>`/`Assets<StandardMaterial>` —
+# USD visual sync populates the meshes avian colliders key off, and the
+# `--no-ui` server still runs RenderPlugin in `backends: None` mode. `bevy_light`
+# (DirectionalLight/GlobalAmbientLight) and `bevy_window` (Window/PresentMode/
+# WindowPlugin types) are referenced on the headless path too, so they stay here.
+# The actual WINDOWING/INTERACTION stack (winit backend, picking, post-process,
+# gizmos) lives behind the `ui` feature below so a server build omits it entirely.
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_window"] }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
@@ -34,29 +43,49 @@ lunco-mobility = { path = "../lunco-mobility" }
 lunco-robotics = { path = "../lunco-robotics" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-fsw = { path = "../lunco-fsw" }
-lunco-avatar = { path = "../lunco-avatar" }
+# `default-features = false` drops avatar's egui/workbench/gizmo UI layer for the
+# lean server; the `ui` feature below re-enables it (`lunco-avatar/ui`) for the
+# GUI build. (Template for the celestial/usd/sandbox-edit pass — until those are
+# gated too, their transitive `lunco-avatar` (default) edges keep avatar/ui on
+# in non-server builds via Cargo feature unification.)
+lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-render = { path = "../lunco-render" }
-lunco-celestial = { path = "../lunco-celestial" }
+# `default-features = false` drops celestial's egui inspector (`CelestialUiPlugin`,
+# not used by the sandbox bin). The `celestial` feature still pulls embed-assets.
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-terrain = { path = "../lunco-terrain" }
-lunco-materials = { path = "../lunco-materials" }
 lunco-modelica = { path = "../lunco-modelica", default-features = false }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
-lunco-doc = { path = "../lunco-doc" }
-lunco-theme = { path = "../lunco-theme" }
-lunco-usd = { path = "../lunco-usd" }
-lunco-sandbox-edit = { path = "../lunco-sandbox-edit" }
-lunco-ui = { path = "../lunco-ui" }
-lunco-workbench = { path = "../lunco-workbench" }
+# USD core (scene load + collider build) is always needed; its Twin-browser /
+# viewport egui UI rides `lunco-usd/ui`, re-enabled below by the `ui` feature.
+lunco-usd = { path = "../lunco-usd", default-features = false }
+# `lunco-sandbox-edit` is NOT optional: the headless server needs its
+# `commands::SpawnCommandPlugin` (runtime spawn/move + `NetReplicate` tagging).
+# The gizmo/selection/physics-viz halves are gated behind `feature = "ui"` in
+# sandbox.rs, not here.
+# Headless server needs only `commands::SpawnCommandPlugin` (kept feature-free);
+# the editor (gizmo/selection/inspector) rides `lunco-sandbox-edit/ui` below.
+lunco-sandbox-edit = { path = "../lunco-sandbox-edit", default-features = false }
 lunco-web = { workspace = true }
 lunco-assets = { workspace = true }
+# ── UI-only crate deps (gated behind the `ui` feature) ────────────────────
+# A `--no-ui` server build (`--no-default-features --features server`) omits
+# these entirely: the egui workbench, the blueprint/shader material editors,
+# the doc/theme/general-UI crates. sandbox.rs cfg-gates every use behind
+# `feature = "ui"`.
+lunco-materials = { path = "../lunco-materials", optional = true }
+lunco-doc = { path = "../lunco-doc", optional = true }
+lunco-theme = { path = "../lunco-theme", optional = true }
+lunco-ui = { path = "../lunco-ui", optional = true }
+lunco-workbench = { path = "../lunco-workbench", optional = true }
+bevy_egui = { workspace = true, optional = true }
 # `default-features = false` so the native (`lunco-api`) and web (`web`)
 # features choose the transport: `transport-http` (axum/TcpListener) vs.
 # `transport-wasm` (the `window.lunco_api` JS bridge).
 lunco-api = { path = "../lunco-api", optional = true, default-features = false }
 lunco-networking = { path = "../lunco-networking", optional = true }
-bevy_egui = { workspace = true }
 
 # Replace glibc's allocator with mimalloc on native targets. Bevy +
 # avian generate huge cross-thread allocator traffic; glibc's
@@ -70,10 +99,46 @@ mimalloc = "0.1"
 lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 
 [features]
-# `lunco-api` is on by default so native `cargo run --bin sandbox -- --api`
-# Just Works. Building without it (`--no-default-features`) drops the
-# axum/tokio web stack, which is mandatory for wasm32-unknown-unknown.
-default = ["celestial", "lunco-api", "lunco-api/transport-http", "lunco-api/render"]
+# `ui` + `lunco-api` are on by default so native `cargo run --bin sandbox -- --api`
+# Just Works (windowed GUI + HTTP API). A lean HEADLESS server drops both layers:
+#   cargo build -p lunco-client --bin sandbox --no-default-features --features server
+# which omits winit/wayland/x11/egui/picking/gizmos + the workbench/material/doc
+# UI crates entirely — the SAME `sandbox` bin, just a different feature set.
+default = ["ui", "celestial", "lunco-api", "lunco-api/transport-http", "lunco-api/render"]
+# Windowed GUI: the winit windowing backend + render-effect features + every
+# UI crate (egui workbench, material editors, doc/theme/ui). Off for a headless
+# server. The render ASSET-STORE features (bevy_pbr/mesh/light/window) stay in
+# the always-on `bevy` dep above — the server still needs them for `backends:None`.
+ui = [
+    "lunco-avatar/ui",
+    "lunco-usd/ui",
+    "lunco-sandbox-edit/ui",
+    "lunco-modelica/ui",
+    "lunco-api?/winit",
+    "dep:lunco-workbench",
+    "dep:lunco-materials",
+    "dep:lunco-doc",
+    "dep:lunco-theme",
+    "dep:lunco-ui",
+    "dep:bevy_egui",
+    "bevy/bevy_winit",
+    "bevy/x11",
+    "bevy/wayland",
+    "bevy/webgl2",
+    "bevy/bevy_picking",
+    "bevy/mesh_picking",
+    "bevy/bevy_post_process",
+    "bevy/bevy_anti_alias",
+    "bevy/smaa_luts",
+    "bevy/tonemapping_luts",
+    "bevy/bevy_gizmos",
+    "bevy/bevy_gizmos_render",
+]
+# Lean headless multiplayer server: API + networking host, NO `ui`. Build with
+# `--no-default-features --features server`. Skips `celestial` (bundled Earth
+# texture + ephemeris, ~10s of MB) — the server only needs `GravityPlugin`,
+# always compiled.
+server = ["lunco-api", "lunco-api/transport-http", "networking"]
 # `celestial` pulls in lunco-celestial's bundled Earth texture + Artemis-II
 # ephemeris (10s of MB). Off for the wasm sandbox build — it only needs
 # `GravityPlugin`, which is always compiled.

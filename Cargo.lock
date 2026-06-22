@@ -6778,7 +6778,6 @@ dependencies = [
  "lunco-theme",
  "lunco-workbench",
  "serde",
- "transform-gizmo-bevy",
 ]
 
 [[package]]
@@ -7184,7 +7183,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures-lite",
- "rfd",
  "serde",
  "thiserror 2.0.18",
  "web-sys",

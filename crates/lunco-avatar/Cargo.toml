@@ -14,9 +14,8 @@ lunco-theme = { path = "../lunco-theme", optional = true }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
-transform-gizmo-bevy = "0.9.0"
 lunco-controller = { path = "../lunco-controller" }
-lunco-celestial = { path = "../lunco-celestial" }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-environment = { path = "../lunco-environment" }
 lunco-core = { path = "../lunco-core" }
 lunco-mobility = { path = "../lunco-mobility" }

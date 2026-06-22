@@ -28,6 +28,10 @@ ui = [
 # the wasm build (`build_web.sh --features lunco-api`) gets the
 # `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
 lunco-api = ["dep:lunco-api"]
+# Headless Modelica compile/run server: the HTTP API, no `ui`. Build the lunica
+# bin with `--no-default-features --features server`. No `lunco-api/render` (the
+# server captures no screenshots) and no winit/egui.
+server = ["lunco-api", "lunco-api/transport-http"]
 # Opt-in Tracy profiler hook. Off by default because tracy-client-sys needs a
 # C++ compile that breaks on wasm32 and on Windows MSVC 2019 (missing
 # `RelationProcessorDie` enumerant in pre-2004 Win10 SDKs). Enable with
@@ -43,10 +47,10 @@ tracy = ["bevy/trace_tracy"]
 [[bin]]
 name = "lunica"
 path = "src/bin/lunica.rs"
-# The native Modelica workbench window — inherently the full egui GUI, so it
-# requires the `ui` feature. A `--no-default-features` (headless/server) build
-# skips this bin; the library still builds UI-free.
-required-features = ["ui"]
+# ONE source, two shapes (like `sandbox`): the default `ui` build is the egui
+# workbench window; `--no-default-features --features server` (or `--no-ui` at
+# runtime) builds the same bin as a HEADLESS Modelica compile/run server (HTTP
+# API, no egui/winit). `lunica.rs` cfg-gates the UI paths, so no required-features.
 
 # Off-thread Modelica worker — wasm32 only. Built as a second wasm bundle
 # the main page launches via `new Worker()`. See

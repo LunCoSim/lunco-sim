@@ -18,33 +18,55 @@ use bevy::prelude::*;
 use bevy::asset::{AssetMetaCheck, AssetPlugin};
 // `bevy::camera::*` exists on both native and `--no-default-features`
 // wasm; `bevy::render::camera::*` only when `bevy_render` is enabled.
+#[cfg(feature = "ui")]
 use bevy::camera::RenderTarget;
+#[cfg(feature = "ui")]
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
+#[cfg(feature = "ui")]
 use lunco_workbench::WorkbenchViewportCamera;
+#[cfg(feature = "ui")]
 use bevy::pbr::wireframe::WireframePlugin;
 use big_space::prelude::*;
 use avian3d::prelude::PhysicsPlugins;
+#[cfg(feature = "ui")]
 use leafwing_input_manager::prelude::*;
 
 use lunco_mobility::LunCoMobilityPlugin;
 use lunco_hardware::LunCoHardwarePlugin;
-use lunco_usd::{ui::{UsdUiPlugin, UsdViewportPlugin}, LoadScene, UsdPlugins};
+// USD core (scene load + collider build) is always needed; the Twin browser /
+// RTT viewport UI plugins are `ui`-only.
+use lunco_usd::{LoadScene, UsdPlugins};
+#[cfg(feature = "ui")]
+use lunco_usd::ui::{UsdUiPlugin, UsdViewportPlugin};
 use lunco_terrain::TerrainPlugin;
+#[cfg(feature = "ui")]
 use lunco_sandbox_edit::SandboxEditPlugin;
 use lunco_controller::LunCoControllerPlugin;
-use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, AdaptiveNearPlane};
+// `LunCoAvatarPlugin` is always added (vessel possession / controller link);
+// the camera types are only used by the `ui`-only fallback-avatar spawner.
+use lunco_avatar::LunCoAvatarPlugin;
+#[cfg(feature = "ui")]
+use lunco_avatar::{IntentAnalogState, FreeFlightCamera, AdaptiveNearPlane};
 use lunco_celestial::GravityPlugin;
 use lunco_environment::EnvironmentPlugin;
+#[cfg(feature = "ui")]
 use lunco_core::Avatar;
 use lunco_cosim::CoSimPlugin;
 use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
-use lunco_modelica::{ModelicaWorkbenchPlugin, ModelicaSet, ModelicaUiConfig};
+// `ModelicaSet` orders the cosim pipeline (always); the egui workbench plugin
+// is `ui`-only — headless adds `ModelicaCorePlugin` directly instead.
+use lunco_modelica::ModelicaSet;
+#[cfg(feature = "ui")]
+use lunco_modelica::{ModelicaWorkbenchPlugin, ModelicaUiConfig};
 use big_space::prelude::Grid;
+#[cfg(feature = "ui")]
 use lunco_materials::{BlueprintMaterialPlugin, ShaderMaterialPlugin};
 
+#[cfg(feature = "ui")]
 #[path = "../code_panel.rs"]
 mod code_panel;
+#[cfg(feature = "ui")]
 #[path = "../models_palette.rs"]
 mod models_palette;
 
@@ -123,7 +145,11 @@ fn main() {
     // `backends: None` mode so the asset stores (`Assets<Mesh>`/`Assets<StandardMaterial>`)
     // exist — USD visual sync populates the meshes the avian colliders key off — but
     // nothing is ever drawn. `ScheduleRunnerPlugin` drives the loop in winit's place.
-    let headless = args.iter().any(|a| a == "--no-ui")
+    // Without the `ui` feature there is NO winit/egui/workbench compiled in, so
+    // the binary is a headless server unconditionally — `cfg!` folds to `true`
+    // and the windowed code paths below are `#[cfg(feature = "ui")]`-stripped.
+    let headless = !cfg!(feature = "ui")
+        || args.iter().any(|a| a == "--no-ui")
         || std::env::var("LUNCO_NO_UI").is_ok_and(|v| v != "0" && !v.is_empty());
     // Present mode. Networked side-by-side windows: one is ALWAYS unfocused, and an
     // unfocused window under `Fifo` (vsync) can block on present when the compositor
@@ -149,6 +175,8 @@ fn main() {
     // background. Applies on wasm too — the original "UI vanishes on
     // zoom" bug surfaced under reactive mode where the egui chrome
     // could stay stale while the 3D pass kept refreshing.
+    // Winit pacing knobs — only when the windowing backend is compiled in.
+    #[cfg(feature = "ui")]
     {
         use bevy::winit::{UpdateMode, WinitSettings};
         app.insert_resource(WinitSettings {
@@ -187,11 +215,18 @@ fn main() {
     // in winit's place.
     let default_plugins = {
         use bevy::render::settings::WgpuSettings;
+        // Headless (and every `--no-ui`-feature build) uses `backends: None` — the
+        // render world + asset stores initialise, but no GPU device is created.
+        // Windowed `ui` builds ask the workbench for its preferred adapter settings.
+        #[cfg(feature = "ui")]
         let render_creation = if headless {
             WgpuSettings { backends: None, ..default() }.into()
         } else {
             lunco_workbench::preferred_wgpu_settings().into()
         };
+        #[cfg(not(feature = "ui"))]
+        let render_creation = WgpuSettings { backends: None, ..default() }.into();
+
         let group = DefaultPlugins
             .set(AssetPlugin {
                 file_path: std::env::current_dir().unwrap_or_default().join("assets").to_string_lossy().to_string(),
@@ -206,7 +241,13 @@ fn main() {
                 ..default()
             })
             .set(bevy::render::RenderPlugin { render_creation, ..default() });
-        if headless {
+
+        // Window/winit setup. With the `ui` feature the runtime `--no-ui` flag
+        // still picks the headless variant (no primary window, WinitPlugin
+        // disabled). Without `ui` there's no winit crate to disable, so the
+        // server just declares a windowless `WindowPlugin`.
+        #[cfg(feature = "ui")]
+        let group = if headless {
             group
                 .set(WindowPlugin {
                     primary_window: None,
@@ -229,9 +270,16 @@ fn main() {
                 }),
                 ..default()
             })
-        }
-        .build()
-        .disable::<TransformPlugin>()
+        };
+        #[cfg(not(feature = "ui"))]
+        let group = group.set(WindowPlugin {
+            primary_window: None,
+            exit_condition: bevy::window::ExitCondition::DontExit,
+            close_when_requested: false,
+            ..default()
+        });
+
+        group.build().disable::<TransformPlugin>()
     };
 
     app.insert_resource(ScenePath(scene_path))
@@ -335,6 +383,7 @@ fn main() {
     // networking host above *without* any of it. The render plugins still loaded
     // in `backends: None` mode so the asset stores exist; these plugins are what
     // would actually need a GPU / window / pointer.
+    #[cfg(feature = "ui")]
     if !headless {
         app.add_plugins(WireframePlugin::default())
             // bevy_picking's mesh backend: makes visible Mesh3d entities pickable,
@@ -414,6 +463,7 @@ fn main() {
     // egui IDE workspace — UI only. (A headless server that needs server-side
     // Modelica cosim would add `ModelicaCorePlugin` instead; the default sandbox
     // scene doesn't, so skip the whole thing.)
+    #[cfg(feature = "ui")]
     if !headless {
         app.add_plugins(ModelicaWorkbenchPlugin {
             config: ModelicaUiConfig {
@@ -477,6 +527,7 @@ fn main() {
     // present) inserts the resource, suppresses geometry persistence, and
     // registers the placer system — all in `lunco-workbench` so any binary
     // gets the same behaviour. Winit-specific, so skip it headless.
+    #[cfg(feature = "ui")]
     if !headless {
         lunco_workbench::wire_window_placement(&mut app, &args);
     }
@@ -589,6 +640,7 @@ struct ScenePath(String);
 /// the wheel scrolls the panel instead of zooming — the behaviour the old
 /// `wants_pointer_input` hover gate was trying (and failing over the scene) to
 /// get.
+#[cfg(feature = "ui")]
 fn collect_scroll_input_gated(
     mut egui_contexts: EguiContexts,
     mut scroll_res: ResMut<lunco_avatar::CameraScroll>,
@@ -619,6 +671,7 @@ fn collect_scroll_input_gated(
 /// component is inserted. USD scene-load and async Avatar spawning
 /// can both land Camera3d entities long after `Startup`; this catches
 /// each as it arrives.
+#[cfg(feature = "ui")]
 fn auto_tag_workbench_3d_cameras(
     mut commands: Commands,
     new_cams: Query<
@@ -749,8 +802,10 @@ fn setup_sandbox(world: &mut World) {
 /// `FloatingOrigin`s (which big_space resets every frame, killing perf
 /// and breaking propagation). Wait a grace period; if the scene didn't
 /// publish a camera by then, spawn the fallback exactly once.
+#[cfg(feature = "ui")]
 const FALLBACK_AVATAR_GRACE_SECS: f32 = 2.0;
 
+#[cfg(feature = "ui")]
 fn spawn_fallback_avatar(
     time: Res<Time>,
     q_cameras: Query<Entity, With<Camera3d>>,
@@ -807,6 +862,7 @@ fn spawn_fallback_avatar(
 /// Inserts the sharpest shadow filter (`Hardware2x2`) on every 3D camera as it
 /// appears. USD- and Avatar-spawned cameras land async over many frames; the
 /// `Without<ShadowFilteringMethod>` filter catches each exactly once.
+#[cfg(feature = "ui")]
 fn force_hard_shadow_filtering(
     mut commands: Commands,
     q: Query<Entity, (With<Camera3d>, Without<bevy::light::ShadowFilteringMethod>)>,

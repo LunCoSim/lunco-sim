@@ -29,6 +29,9 @@
 //! app shell (window + frame pacing + native `--api`).
 
 use bevy::prelude::*;
+// The egui workbench shell — UI only. A headless `--no-ui` (or `--no-default-
+// features`) lunica adds `ModelicaCorePlugin` (compile core) instead.
+#[cfg(feature = "ui")]
 use lunco_modelica::ModelicaWorkbenchPlugin;
 
 #[cfg(target_arch = "wasm32")]
@@ -76,7 +79,16 @@ fn main() {
     // advertise the listening port (automation drives the workbench via
     // it; visible in the title bar avoids confusion when several
     // instances run side-by-side — e.g. user on 3000 + a test on 3001).
+    // Headless when built without the `ui` feature, or asked at runtime via
+    // `--no-ui` / `LUNCO_NO_UI`. A headless lunica is a Modelica compile/run
+    // server (HTTP API), no window or egui. `cfg!` folds to `true` when `ui`
+    // is off, stripping the windowed paths below.
     #[cfg(not(target_arch = "wasm32"))]
+    let headless = !cfg!(feature = "ui")
+        || std::env::args().any(|a| a == "--no-ui")
+        || std::env::var("LUNCO_NO_UI").is_ok_and(|v| v != "0" && !v.is_empty());
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "ui"))]
     let window_title: String = {
         let args: Vec<String> = std::env::args().collect();
         let mut api_port: Option<u16> = None;
@@ -155,67 +167,91 @@ fn main() {
     #[cfg(target_arch = "wasm32")]
     app.insert_resource(ClearColor(Color::srgb_u8(0x1a, 0x1a, 0x1a)));
 
-    // Window. Native: centered desktop window with the merged-titlebar
-    // chrome; route the OS X-button through the in-app save-prompt flow
-    // (`close_when_requested: false`) so dirty-doc dialogs aren't skipped.
-    #[cfg(not(target_arch = "wasm32"))]
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            // Centralized merged-titlebar chrome + persisted-geometry
-            // restore. Ship-default size lives in `lunco-workbench`.
-            ..lunco_workbench::restored_window(window_title)
-        }),
-        close_when_requested: false,
-        ..default()
-    }));
-
-    // Window. Wasm: render into `<canvas id="bevy">` and mirror its
-    // parent's CSS size; let egui see keyboard events too.
-    #[cfg(target_arch = "wasm32")]
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "Lunica".into(),
-            resolution: bevy::window::WindowResolution::new(1280, 720),
-            canvas: Some("#bevy".into()),
-            fit_canvas_to_parent: true,
-            prevent_default_event_handling: true,
+    // ── Native GUI: winit window + the egui workbench (ui, not --no-ui) ──
+    #[cfg(all(not(target_arch = "wasm32"), feature = "ui"))]
+    if !headless {
+        // Centered desktop window with merged-titlebar chrome; route the OS
+        // X-button through the in-app save-prompt flow (`close_when_requested:
+        // false`) so dirty-doc dialogs aren't skipped.
+        app.add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                ..lunco_workbench::restored_window(window_title)
+            }),
+            close_when_requested: false,
             ..default()
-        }),
-        ..default()
-    }));
-
-    // The whole workbench: WorkbenchPlugin + ModelicaPlugin + (on wasm)
-    // clipboard bridge, autosave, and off-thread worker. Same bundle the
-    // sandbox embeds as its Design tab, so the two can't drift.
-    app.add_plugins(ModelicaWorkbenchPlugin::default());
-
-    // Dismiss the HTML loading screen once the first frame paints
-    // (wasm-only; no-op on native). Pairs with `web/index.html` →
-    // `lunco-boot.js`. See `lunco_web`.
-    app.add_plugins(lunco_web::WebReadyPlugin);
-
-    // Native-only HTTP automation bridge. The feature is off on wasm
-    // (`--no-default-features` drops the axum/tokio stack), so the cfg is
-    // false there and `lunco_api` isn't even linked.
-    #[cfg(feature = "lunco-api")]
-    app.add_plugins(lunco_api::LunCoApiPlugin::default());
-
-    // Frame pacing — applies to BOTH targets now. (Web previously lacked
-    // this, which is exactly why the "UI vanishes on zoom" bug surfaced
-    // only on the web build.)
-    //
-    // Focused: Continuous lets vsync / requestAnimationFrame act as the
-    // pacer so each Update lands on a real vblank. An independent
-    // Reactive(1/60s) timer drifts against the real refresh and stalls
-    // present every ~13 frames (the 5 Hz spike train). Unfocused:
-    // ReactiveLowPower(1s) keeps fans quiet in the background.
-    {
+        }));
+        // The whole workbench: WorkbenchPlugin + ModelicaPlugin + clipboard,
+        // autosave, worker. Same bundle the sandbox embeds as its Design tab.
+        app.add_plugins(ModelicaWorkbenchPlugin::default());
+        // Frame pacing: Continuous focused (vsync paces Update); low-power
+        // unfocused. (The 5 Hz "UI vanishes on zoom" spike-train fix.)
         use bevy::winit::{UpdateMode, WinitSettings};
         app.insert_resource(WinitSettings {
             focused_mode: UpdateMode::Continuous,
             unfocused_mode: UpdateMode::reactive_low_power(std::time::Duration::from_secs(1)),
         });
     }
+
+    // ── Native HEADLESS: Modelica compile/run server, no window/winit/egui ──
+    // ScheduleRunnerPlugin ticks the app in winit's place; the HTTP API serves
+    // compile/run requests. In a `ui` build asked to run `--no-ui`, render +
+    // winit still link, so disable them (backends:None, WinitPlugin off); a
+    // `--no-default-features` build has neither, so plain DefaultPlugins
+    // degrades to no-render/no-window automatically.
+    #[cfg(not(target_arch = "wasm32"))]
+    if headless {
+        #[cfg(feature = "ui")]
+        let base = DefaultPlugins
+            .set(bevy::render::RenderPlugin {
+                render_creation: bevy::render::settings::WgpuSettings { backends: None, ..default() }.into(),
+                ..default()
+            })
+            .set(WindowPlugin {
+                primary_window: None,
+                exit_condition: bevy::window::ExitCondition::DontExit,
+                close_when_requested: false,
+                ..default()
+            })
+            .disable::<bevy::winit::WinitPlugin>();
+        #[cfg(not(feature = "ui"))]
+        let base = DefaultPlugins;
+
+        app.add_plugins(base.set(bevy::log::LogPlugin {
+            filter: "cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
+            ..default()
+        }));
+        app.add_plugins(lunco_modelica::ModelicaCorePlugin);
+        app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
+            std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ as f64),
+        ));
+        info!("[lunica] running HEADLESS: Modelica compile core + API, no window/egui");
+    }
+
+    // ── Wasm: render into `<canvas id="bevy">`, mirror its CSS size ──
+    #[cfg(target_arch = "wasm32")]
+    {
+        app.add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Lunica".into(),
+                resolution: bevy::window::WindowResolution::new(1280, 720),
+                canvas: Some("#bevy".into()),
+                fit_canvas_to_parent: true,
+                prevent_default_event_handling: true,
+                ..default()
+            }),
+            ..default()
+        }));
+        app.add_plugins(ModelicaWorkbenchPlugin::default());
+    }
+
+    // Dismiss the HTML loading screen once the first frame paints (wasm-only;
+    // no-op native). Pairs with `web/index.html` → `lunco-boot.js`.
+    app.add_plugins(lunco_web::WebReadyPlugin);
+
+    // HTTP automation bridge — native `--api` server / wasm JS bridge. Linked in
+    // the GUI and the headless compile server alike (the latter's reason to exist).
+    #[cfg(feature = "lunco-api")]
+    app.add_plugins(lunco_api::LunCoApiPlugin::default());
 
     // Cap FixedUpdate catchup after a slow frame. Bevy default: a 250ms
     // hitch breeds ~15 fixed ticks next frame, which makes that frame slow

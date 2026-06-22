@@ -195,44 +195,8 @@ fn path_is_under(p: &Path, root: &Path) -> bool {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Picker parameters
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// One entry in a picker's file-type filter list. A picker may show
-/// several — e.g. "Modelica models", "All files".
-#[derive(Debug, Clone)]
-pub struct OpenFilter {
-    /// Human-readable group label ("Modelica models").
-    pub name: String,
-    /// Extensions without the leading dot ("mo", "mos").
-    pub extensions: Vec<String>,
-}
-
-impl OpenFilter {
-    /// Convenience constructor.
-    pub fn new(name: impl Into<String>, extensions: &[&str]) -> Self {
-        Self {
-            name: name.into(),
-            extensions: extensions.iter().map(|s| s.to_string()).collect(),
-        }
-    }
-}
-
-/// Hints for a save dialog: starting directory, default filename,
-/// and filter list. All optional; the picker falls back to its own
-/// defaults when a field is missing.
-#[derive(Debug, Clone, Default)]
-pub struct SaveHint {
-    /// Default filename shown in the picker.
-    pub suggested_name: Option<String>,
-    /// Starting directory. For a new document previously saved, this
-    /// is usually the document's own origin folder so "Save As" opens
-    /// next to the existing file.
-    pub start_dir: Option<StorageHandle>,
-    /// File type filters offered in the picker.
-    pub filters: Vec<OpenFilter>,
-}
+// Picker parameter types (`OpenFilter`/`SaveHint`) moved to the workbench's
+// picker with the dialog itself — see the note on the `Storage` trait below.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The trait
@@ -293,15 +257,9 @@ pub trait Storage: Send + Sync {
     /// `write` is the ground truth.
     async fn is_writable(&self, handle: &StorageHandle) -> bool;
 
-    /// Show an "open" picker and return the chosen handle.
-    /// Returns `Ok(None)` if the user cancelled.
-    async fn pick_open(&self, filter: &OpenFilter) -> StorageResult<Option<StorageHandle>>;
-
-    /// Show a "save as" picker and return the chosen handle.
-    /// Returns `Ok(None)` if the user cancelled.
-    async fn pick_save(&self, hint: &SaveHint) -> StorageResult<Option<StorageHandle>>;
-
-    /// Show an "open folder" picker. Used for "Open Twin folder" and
-    /// "Open Workspace folder" flows.
-    async fn pick_folder(&self) -> StorageResult<Option<StorageHandle>>;
+    // NOTE: file-OPEN/SAVE/FOLDER pickers are a UI concern and live in the
+    // workbench (`lunco_workbench::picker`, native `rfd` + future wasm FSA), NOT
+    // on this I/O trait. Keeping `rfd` out of `lunco-storage` keeps the crate (and
+    // the 8 crates that depend on it, incl. the headless server) free of the
+    // native file-dialog → wayland/winit pull.
 }

@@ -370,6 +370,14 @@ fn apply_wheel_drive(
     for (wheel, wheel_tf, hits, parent) in q_wheels.iter() {
         let parent_entity = parent.parent();
         if let Ok((mut forces, body, fsw)) = q_chassis.get_mut(parent_entity) {
+            // [DBG drive] report the drive port the wheel will read, the body kind,
+            // and contact — gated to nonzero throttle so it only fires while driving.
+            if let Ok(dbgport) = q_ports.get(wheel.drive_port) {
+                if dbgport.value.abs() > f32::EPSILON {
+                    info!("[DBG drive] apply_wheel_drive: chassis {:?} body={:?} port.value={} normal_force={} has_contact={}",
+                        parent_entity, body, dbgport.value, wheel.last_normal_force, hits.iter().next().is_some());
+                }
+            }
             // Skip forces if body is kinematic
             if matches!(body, RigidBody::Kinematic) { continue; }
             // Braking: the wheel-spin model locks the spin, but the chassis only
@@ -635,7 +643,11 @@ fn on_drive_rover(
     q_ack: Query<&AckermannSteer>,
     mut q_digital_ports: Query<&mut DigitalPort>,
 ) {
-    let Ok(fsw) = q_rovers.get_mut(cmd.target) else { return };
+    let Ok(fsw) = q_rovers.get_mut(cmd.target) else {
+        info!("[DBG drive] on_drive_rover: NO FlightSoftware+RoverVessel on target {:?} (fwd={})", cmd.target, cmd.forward);
+        return;
+    };
+    info!("[DBG drive] on_drive_rover: target {:?} fwd={} steer={} brake={} ports={:?}", cmd.target, cmd.forward, cmd.steer, fsw.brake_active, fsw.port_map);
 
     if fsw.brake_active {
         for name in ["drive_left", "drive_right", "steering"] {
