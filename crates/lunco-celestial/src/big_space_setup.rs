@@ -112,20 +112,14 @@ pub fn setup_big_space_hierarchy(
     // FloatingOrigin holder (the shell's OriginAnchor) the Observer Camera claims.
     q_world_root: Query<Entity, With<lunco_core::WorldRoot>>,
     q_prior_origins: Query<Entity, With<FloatingOrigin>>,
-    #[cfg(target_arch = "wasm32")] embedded_earth: Option<Res<crate::embedded_assets::EmbeddedEarthTexture>>,
-    #[cfg(target_arch = "wasm32")] embedded_moon: Option<Res<crate::embedded_assets::EmbeddedMoonTexture>>,
 ) {
-    // Helper to get Earth texture: embedded on wasm32, from cache on desktop
-    #[cfg(not(target_arch = "wasm32"))]
-    let earth_texture = asset_server.load("cached_textures://earth.png");
-    #[cfg(target_arch = "wasm32")]
-    let earth_texture = embedded_earth.as_ref().map(|e| e.0.clone()).unwrap_or_default();
-
-    // Helper to get Moon texture: embedded on wasm32 (optional), from cache on desktop
-    #[cfg(not(target_arch = "wasm32"))]
-    let moon_texture = asset_server.load("cached_textures://moon.png");
-    #[cfg(target_arch = "wasm32")]
-    let moon_texture = embedded_moon.as_ref().and_then(|e| e.0.clone()).unwrap_or_default();
+    // Earth/Moon textures load from the `cached_textures://` source on EVERY
+    // platform — NOT baked into the binary. Desktop reads the cache dir; wasm
+    // HTTP-fetches them same-origin (`cache_dir()` = ".cache" on wasm, so the
+    // bevy HTTP reader resolves `<origin>/.cache/textures/<tex>`, staged there by
+    // build_web.sh). A 4K Earth + Moon are tens of MB — far too large to embed.
+    let earth_texture: Handle<Image> = asset_server.load("cached_textures://earth.png");
+    let moon_texture: Handle<Image> = asset_server.load("cached_textures://moon.png");
 
     // 1. Reuse the single world-shell BigSpace root if present; otherwise
     //    (standalone celestial, no WorldShellPlugin) spawn our own. This is the

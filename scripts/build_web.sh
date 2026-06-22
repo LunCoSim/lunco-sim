@@ -479,6 +479,31 @@ Run: cargo run -p lunco-assets -- download"
         rsync -a --delete "$PROJECT_DIR/assets/" "$dist_dir/assets/"
     fi
 
+    # luncosim renders Earth/Moon as celestial bodies; their PROCESSED textures
+    # (`cached_textures://earth.png|moon.png`) load over HTTP same-origin —
+    # `cache_dir()` resolves to ".cache" on wasm, so the bevy HTTP reader fetches
+    # `<origin>/.cache/textures/<tex>`. Stage them next to the wasm (same idea as
+    # the DejaVu font above). Populate the cache first with:
+    #   cargo run -p lunco-assets -- download && cargo run -p lunco-assets -- process
+    if [ "$binary" = "luncosim" ]; then
+        for tex in earth.png moon.png; do
+            local tex_src=""
+            for candidate in \
+                "$PROJECT_DIR/../.cache/textures/$tex" \
+                "$PROJECT_DIR/.cache/textures/$tex"; do
+                if [ -f "$candidate" ]; then tex_src="$candidate"; break; fi
+            done
+            if [ -n "$tex_src" ]; then
+                mkdir -p "$dist_dir/.cache/textures"
+                cp "$tex_src" "$dist_dir/.cache/textures/$tex"
+                info "Copied $tex → $dist_dir/.cache/textures/"
+            else
+                warn "celestial texture $tex not found — that body renders untextured in \
+the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-assets -- process"
+            fi
+        done
+    fi
+
     # Show output size
     WASM_SIZE=$(du -h "$dist_dir/${binary}_bg.wasm" | cut -f1)
     JS_SIZE=$(du -h "$dist_dir/${binary}.js" | cut -f1)
