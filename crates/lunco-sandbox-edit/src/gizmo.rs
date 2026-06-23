@@ -18,11 +18,11 @@ use big_space::prelude::FloatingOrigin;
 use avian3d::prelude::{LinearVelocity, RigidBody, TranslationInterpolation, RotationInterpolation};
 use transform_gizmo_bevy::{GizmoCamera, GizmoTarget};
 
-/// Tracks the previous absolute world position and metadata for drag lifecycle.
+/// Tracks the previous parent-local position and metadata for drag lifecycle.
 #[derive(Component)]
 pub struct GizmoPrevPos {
-    /// Absolute world position in the previous frame (meters).
-    pub abs_pos: DVec3,
+    /// Parent-local position in the previous frame (meters).
+    pub local_pos: DVec3,
     /// Original RigidBody type before drag started.
     pub original_body: RigidBody,
     /// Whether the entity had TranslationInterpolation.
@@ -62,8 +62,6 @@ pub fn capture_gizmo_start(
     q_rigid_bodies: Query<&RigidBody>,
     q_prev_pos: Query<&GizmoPrevPos>,
     q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&big_space::prelude::Grid>,
     q_interpolation: Query<(Has<TranslationInterpolation>, Has<RotationInterpolation>)>,
     q_floating_origin: Query<Entity, With<FloatingOrigin>>,
     mut commands: Commands,
@@ -82,19 +80,16 @@ pub fn capture_gizmo_start(
 
         let original_body = q_rigid_bodies.get(entity).copied().unwrap_or(RigidBody::Dynamic);
 
-        // Resolve initial absolute world position.
-        let Ok((cell, tf)) = q_spatial.get(entity) else { continue; };
-        let cell = cell.copied().unwrap_or_default();
-        let abs_pos = lunco_core::coords::world_position_seeded(
-            entity, &cell, tf, &q_parents, &q_grids, &q_spatial
-        );
+        // Resolve initial parent-local position.
+        let Ok((_, tf)) = q_spatial.get(entity) else { continue; };
+        let local_pos = tf.translation.as_dvec3();
 
-        info!("GIZMO: drag started for {:?}, abs_pos={:?}", entity, abs_pos);
+        info!("GIZMO: drag started for {:?}, local_pos={:?}", entity, local_pos);
 
         commands.entity(entity)
             .insert(RigidBody::Kinematic)
             .insert(GizmoPrevPos { 
-                abs_pos, 
+                local_pos, 
                 original_body,
                 had_translation_interpolation: had_translation,
                 had_rotation_interpolation: had_rotation,
@@ -114,12 +109,10 @@ pub fn capture_gizmo_start(
 
 
 
-/// Syncs Avian `Position` and computes velocity from absolute world coordinates.
+/// Syncs Avian `Position` and computes velocity from local coordinates.
 pub fn sync_gizmo_transforms(
     gizmo_targets: Query<(Entity, &GizmoTarget)>,
     q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&big_space::prelude::Grid>,
     mut q_position: Query<&mut avian3d::physics_transform::Position>,
     mut q_rotation: Query<&mut avian3d::physics_transform::Rotation>,
     mut q_lin_vel: Query<&mut LinearVelocity>,
@@ -129,15 +122,11 @@ pub fn sync_gizmo_transforms(
     for (entity, gizmo_target) in gizmo_targets.iter() {
         if !gizmo_target.is_active() { continue; }
 
-        let Ok((cell, tf)) = q_spatial.get(entity) else { continue; };
-        let cell = cell.copied().unwrap_or_default();
-
-        let current_abs_pos = lunco_core::coords::world_position_seeded(
-            entity, &cell, tf, &q_parents, &q_grids, &q_spatial
-        );
+        let Ok((_, tf)) = q_spatial.get(entity) else { continue; };
+        let local_pos = tf.translation.as_dvec3();
 
         if let Ok(mut pos) = q_position.get_mut(entity) {
-            pos.0 = current_abs_pos;
+            pos.0 = local_pos;
         }
         
         if let Ok(mut rot) = q_rotation.get_mut(entity) {
@@ -147,13 +136,38 @@ pub fn sync_gizmo_transforms(
         let dt = time.delta_secs();
         if dt > 1e-6 {
             if let Ok(mut prev) = q_prev_pos.get_mut(entity) {
-                let delta = current_abs_pos - prev.abs_pos;
+                let delta = local_pos - prev.local_pos;
                 if let Ok(mut lin_vel) = q_lin_vel.get_mut(entity) {
                     lin_vel.0 = delta / dt as f64;
                 }
-                prev.abs_pos = current_abs_pos;
+                prev.local_pos = local_pos;
             }
         }
+    }
+}
+
+/// TODO: Architectural Workaround for User vs. Physics Authority Conflict
+///
+/// **Why we have this:**
+/// During active user-drag (gizmo), the visual editor (`transform-gizmo-bevy`)
+/// is the absolute authority on `Transform`. However, because the entity has
+/// `LinearVelocity` set (so joint-coupled dynamic child bodies are dragged along
+/// by the solver), Avian's integrator updates the physics `Position` and its
+/// writeback system overwrites `Transform` with `local_pos + delta`. Without this
+/// system restoring the visual position, `transform-gizmo-bevy` would read the
+/// overwritten value and add the new mouse delta on top of it, creating a 2x
+/// speed feedback loop (runaway/multiplication of movement).
+///
+/// **The Proper Fix:**
+/// Once Avian3D introduces a first-class Kinematic Drive/Teleport API (allowing
+/// manual positioning of kinematic bodies with implicit velocity calculation for
+/// joints *without* running the integrator step) or a way to disable writeback
+/// on a per-entity basis, this system should be replaced with that native API.
+pub fn restore_dragged_transform(
+    mut q: Query<(&mut Transform, &GizmoPrevPos)>,
+) {
+    for (mut tf, prev) in q.iter_mut() {
+        tf.translation = prev.local_pos.as_vec3();
     }
 }
 
@@ -230,12 +244,12 @@ mod tests {
     #[test]
     fn test_gizmo_prev_pos_component() {
         let pos = GizmoPrevPos { 
-            abs_pos: DVec3::new(1.0, 2.0, 3.0), 
+            local_pos: DVec3::new(1.0, 2.0, 3.0), 
             original_body: RigidBody::Dynamic,
             had_translation_interpolation: false,
             had_rotation_interpolation: false,
         };
-        assert_eq!(pos.abs_pos, DVec3::new(1.0, 2.0, 3.0));
+        assert_eq!(pos.local_pos, DVec3::new(1.0, 2.0, 3.0));
     }
 
     #[test]
@@ -251,7 +265,7 @@ mod tests {
             RigidBody::Kinematic,
             GizmoTarget::default(),
             GizmoPrevPos { 
-                abs_pos: DVec3::ZERO, 
+                local_pos: DVec3::ZERO, 
                 original_body: RigidBody::Dynamic,
                 had_translation_interpolation: false,
                 had_rotation_interpolation: false,

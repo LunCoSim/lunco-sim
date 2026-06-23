@@ -104,6 +104,12 @@ impl Plugin for SandboxEditPlugin {
             gizmo::sync_gizmo_transforms.after(gizmo::capture_gizmo_start),
             gizmo::restore_gizmo_dynamic.after(gizmo::sync_gizmo_transforms),
         ));
+        app.add_systems(
+            PostUpdate,
+            gizmo::restore_dragged_transform
+                .after(avian3d::schedule::PhysicsSystems::Writeback)
+                .before(bevy::transform::TransformSystems::Propagate),
+        );
         app.add_systems(Update, gizmo::sync_gizmo_camera);
         // Publish the drag state as the core `GizmoDragging` marker so transform-
         // gizmo-free crates (avatar camera follow) can read it.
