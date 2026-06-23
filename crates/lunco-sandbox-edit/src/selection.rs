@@ -9,6 +9,10 @@ use bevy::picking::events::{Click, Pointer};
 use bevy::picking::pointer::PointerButton;
 use transform_gizmo_bevy::GizmoTarget;
 
+use bevy::camera::primitives::Aabb;
+use bevy::math::Isometry3d;
+use bevy::math::primitives::Cuboid;
+
 use crate::{SpawnState, SelectedEntities};
 use lunco_core::Command;
 
@@ -279,6 +283,66 @@ pub fn handle_deselect_keys(
     inspector_target.part = None;
     // `DragModeActive` is driven by `gizmo::sync_gizmo_dragging_marker` from the
     // gizmo's active state; removing the `GizmoTarget`s above clears it next tick.
+}
+
+/// Draws an AABB highlight for selected objects using Bevy Gizmos.
+pub fn draw_selection_bounds(
+    q_selected: Query<Entity, With<Selected>>,
+    q_aabb: Query<(&GlobalTransform, &Aabb)>,
+    q_children: Query<&Children>,
+    mut gizmos: Gizmos,
+    theme: Res<lunco_theme::Theme>,
+    mut queue: Local<Vec<Entity>>,
+) {
+    let color32 = theme.tokens.accent;
+    let [r, g, b, a] = color32.to_srgba_unmultiplied();
+    let color = Color::srgba(
+        r as f32 / 255.0,
+        g as f32 / 255.0,
+        b as f32 / 255.0,
+        a as f32 / 255.0,
+    );
+    
+    for selected_ent in q_selected.iter() {
+        let mut min = Vec3::splat(f32::MAX);
+        let mut max = Vec3::splat(f32::MIN);
+        let mut has_aabb = false;
+
+        queue.clear();
+        queue.push(selected_ent);
+        while let Some(e) = queue.pop() {
+            if let Ok((gtf, aabb)) = q_aabb.get(e) {
+                // To properly calculate the AABB, we take the 8 corners of the local AABB,
+                // transform them to global space, and expand our min/max.
+                let ext = Vec3::from(aabb.half_extents);
+                let center = Vec3::from(aabb.center);
+                for x in [-ext.x, ext.x] {
+                    for y in [-ext.y, ext.y] {
+                        for z in [-ext.z, ext.z] {
+                            let local_p = center + Vec3::new(x, y, z);
+                            let global_p = gtf.transform_point(local_p);
+                            min = min.min(global_p);
+                            max = max.max(global_p);
+                        }
+                    }
+                }
+                has_aabb = true;
+            }
+            if let Ok(children) = q_children.get(e) {
+                queue.extend(children.iter());
+            }
+        }
+
+        if has_aabb {
+            let center = (min + max) * 0.5;
+            let size = max - min;
+            gizmos.primitive_3d(
+                &Cuboid { half_size: size * 0.5 },
+                Isometry3d::from_translation(center),
+                color,
+            );
+        }
+    }
 }
 
 #[cfg(test)]

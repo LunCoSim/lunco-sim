@@ -90,6 +90,7 @@ impl Plugin for SandboxEditPlugin {
         // registered here, not in the headless `SpawnCommandPlugin`.
         app.add_observer(selection::on_select_entity);
         app.register_type::<selection::SelectEntity>();
+        app.add_systems(Update, selection::draw_selection_bounds);
 
         // Gizmo systems run in Last schedule (after transform-gizmo-bevy's update_gizmos):
         // 1. capture_gizmo_start - makes body kinematic when drag starts
