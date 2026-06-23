@@ -2393,7 +2393,7 @@ impl Plugin for SpawnCommandPlugin {
         //     command observers. Lives in `lunco_materials`; an empty one is fine on
         //     a server (shader discovery populates it but nothing renders it).
         app.init_resource::<crate::catalog::SpawnCatalog>();
-        app.init_resource::<crate::SelectedEntity>();
+        app.init_resource::<crate::SelectedEntities>();
         app.init_resource::<lunco_materials::ShaderCatalog>();
         // Networking: instantiate host-replicated spawns, buffer + interpolate
         // proxies from snapshots, and keep proxies kinematic. All no-op in

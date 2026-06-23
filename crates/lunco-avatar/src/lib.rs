@@ -1224,14 +1224,17 @@ pub fn avatar_raycast_possession(
     q_ground: Query<Entity, With<lunco_core::Ground>>,
 ) {
     use bevy::picking::pointer::PointerButton;
-    // Stop the click auto-propagating to ancestors (global observer would re-fire
-    // up the hierarchy); we resolve the clickable root ourselves. Runs at the leaf.
-    click.propagate(false);
     // Left button only.
     if click.button != PointerButton::Primary { return; }
     // Chrome guard — egui's pick has no world position.
     if click.hit.position.is_none() { return; }
-    // Alt-click is reserved for gizmo selection in lunco-sandbox-edit.
+    // Shift+click is reserved for entity selection / gizmo multi-select in
+    // lunco-sandbox-edit (`on_scene_click_select`, the other global
+    // `Pointer<Click>` observer). A plain left-click possesses/follows/focuses;
+    // a Shift+click never does. This modifier split is what keeps the two
+    // observers from both acting on a single click.
+    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { return; }
+    // Alt-click is likewise reserved for the editor.
     if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) { return; }
     // Mid-drag on a transform gizmo: don't flip the camera under the user.
     if drag_mode_active.active { return; }
@@ -1253,6 +1256,10 @@ pub fn avatar_raycast_possession(
     if let Some(root) = find_clickable_from_hit(click.entity, &q_parents, &q_selectable, &q_ground) {
         min_t = click.hit.depth;
         nearest_clickable = Some(root);
+        
+        // Stop the click auto-propagating to ancestors ONLY if we found a valid hit
+        // that we might process. Otherwise let it bubble.
+        click.propagate(false);
     }
 
     // Spacecraft hit-spheres (no real colliders) — possessable, not selectable.

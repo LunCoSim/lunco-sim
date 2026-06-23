@@ -9,7 +9,7 @@ use bevy::picking::events::{Click, Pointer};
 use bevy::picking::pointer::PointerButton;
 use transform_gizmo_bevy::GizmoTarget;
 
-use crate::{SpawnState, SelectedEntity};
+use crate::{SpawnState, SelectedEntities};
 use lunco_core::Command;
 
 /// Component marking an entity as currently selected.
@@ -17,7 +17,7 @@ use lunco_core::Command;
 pub struct Selected;
 
 /// Select an entity by API id — the headless/scriptable equivalent of a
-/// Shift+Left-click in the viewport. Drives the same [`SelectedEntity`]
+/// Shift+Left-click in the viewport. Drives the same [`SelectedEntities`]
 /// resource and [`Selected`] highlight the mouse path uses, so the Inspector
 /// immediately shows that entity's components (Transform, Physics, Shader
 /// Parameters, …). Pass `entity_id == 0` to clear the selection.
@@ -31,6 +31,10 @@ pub struct SelectEntity {
     /// observer via `ApiEntityRegistry` (same as `FocusEntityById`). `0`
     /// clears the selection.
     pub entity_id: u64,
+    /// If true, maintains the previous selection and adds this entity to it (like Shift-click)
+    pub extend: bool,
+    /// If true, toggles the selection state of the entity (like Cmd/Ctrl-click)
+    pub toggle: bool,
 }
 
 /// Observer for [`SelectEntity`]: clears the previous highlight and selects
@@ -38,22 +42,18 @@ pub struct SelectEntity {
 pub fn on_select_entity(
     trigger: On<SelectEntity>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    mut selected: ResMut<SelectedEntity>,
+    mut selected: ResMut<SelectedEntities>,
+    mut drag_mode: ResMut<lunco_core::DragModeActive>,
     q_old: Query<Entity, With<Selected>>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
 
-    // Clear any existing highlight + gizmo (mirrors the click path).
-    for old in q_old.iter() {
-        commands
-            .entity(old)
-            .remove::<Selected>()
-            .remove::<GizmoTarget>();
-    }
-
     if cmd.entity_id == 0 {
-        selected.entity = None;
+        for old in q_old.iter() {
+            commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
+        }
+        selected.entities.clear();
         info!("SELECT_ENTITY: cleared selection");
         return;
     }
@@ -61,13 +61,41 @@ pub fn on_select_entity(
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
     let Some(target) = registry.resolve(&global_id) else {
         warn!("SELECT_ENTITY: no api_id={} in registry", cmd.entity_id);
-        selected.entity = None;
+        if !cmd.extend && !cmd.toggle {
+            for old in q_old.iter() {
+                commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
+            }
+            selected.entities.clear();
+        }
+        drag_mode.active = !selected.entities.is_empty();
         return;
     };
 
-    commands.entity(target).insert(Selected);
-    selected.entity = Some(target);
-    info!("SELECT_ENTITY: selected api_id={} ({target:?})", cmd.entity_id);
+    let is_selected = selected.entities.contains(&target);
+
+    if !cmd.extend && !cmd.toggle {
+        // Clear old selection if not extending or toggling
+        for old in q_old.iter() {
+            if old != target {
+                commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
+            }
+        }
+        selected.entities.clear();
+    }
+
+    if cmd.toggle && is_selected {
+        commands.entity(target).remove::<Selected>().remove::<GizmoTarget>();
+        selected.entities.retain(|e| *e != target);
+        info!("SELECT_ENTITY: deselected api_id={} ({target:?})", cmd.entity_id);
+    } else {
+        commands.entity(target).insert((Selected, GizmoTarget::default()));
+        if !selected.entities.contains(&target) {
+            selected.entities.push(target);
+        }
+        info!("SELECT_ENTITY: selected api_id={} ({target:?})", cmd.entity_id);
+    }
+    
+    drag_mode.active = !selected.entities.is_empty();
 }
 
 /// Finds the most appropriate entity to select from a hit entity.
@@ -130,13 +158,13 @@ fn find_selectable(
 /// rejects every chrome click with no hand-rolled gate, no `ScenePointer`, no
 /// manual ray-cast, and no cross-schedule staleness.
 ///
-/// - **Plain click** selects the entity under the cursor (highlight only).
-///   Possession (`on_scene_click_possess`) observes the same click to dispatch
-///   `PossessVessel`/`FollowTarget`.
-/// - **Alt+click** selects *and* attaches a `GizmoTarget`; sets `DragModeActive`
-///   so the camera-click handler stays out of the way until Escape.
-/// - Re-clicking the already-selected component on a sub-part DRILLS the
-///   Inspector to that part.
+/// - **Shift+click** toggles the entity under the cursor in the multi-selection,
+///   attaches a `GizmoTarget`, and sets `DragModeActive` so the camera-click
+///   handler stays out of the way until Escape. This is the *only* path that
+///   selects — a plain (un-modified) click is owned by the avatar's
+///   possess/follow/focus observer (`avatar_raycast_possession`).
+/// - **Shift+click on a sub-part** of the already-selected primary DRILLS the
+///   Inspector to that part instead of toggling the whole object off.
 ///
 /// Deselect is explicit (Escape/Backspace via [`handle_deselect_keys`], the
 /// Explorer, or selecting another entity) — a click on empty space or a panel
@@ -149,8 +177,7 @@ pub fn on_scene_click_select(
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_parents: Query<&ChildOf>,
     q_selected_old: Query<Entity, With<Selected>>,
-    mut selected: ResMut<SelectedEntity>,
-    mut drag_mode: ResMut<lunco_core::DragModeActive>,
+    mut selected: ResMut<SelectedEntities>,
     mut inspector_target: ResMut<crate::InspectorTarget>,
     mut commands: Commands,
 ) {
@@ -172,34 +199,59 @@ pub fn on_scene_click_select(
         return;
     }
 
-    // Selection state (the `Selected` highlight + `SelectedEntity` resource) is
+    // Selection is **Shift+click** only. A plain (un-modified) left-click is
+    // reserved for the avatar's possess/follow/focus path
+    // (`avatar_raycast_possession`, the other global `Pointer<Click>` observer):
+    // partitioning by the Shift modifier is what keeps the two observers from
+    // both acting on one click. Without this gate a plain click on a rover would
+    // BOTH possess it AND select-with-gizmo it — the gizmo makes the body
+    // kinematic and `DragModeActive` blocks possession, which is what broke
+    // joint-rover possession and made Shift-select appear to "not work".
+    let shift_held = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    if !shift_held {
+        return;
+    }
+
+    // Selection state (the `Selected` highlight + `SelectedEntities` resource) is
     // owned by the `SelectEntity` command/observer — the single mutation path
     // the API and Explorer also use. Entities missing an API id fall back to a
     // direct mutation so they stay selectable.
     let select = |commands: &mut Commands,
-                  selected: &mut SelectedEntity,
+                  selected: &mut SelectedEntities,
                   old: &Query<Entity, With<Selected>>,
-                  entity: Option<Entity>| {
+                  entity: Option<Entity>,
+                  extend: bool,
+                  toggle: bool| {
         match entity.and_then(|e| registry.api_id_for(e).map(|id| (e, id))) {
-            Some((_, id)) => commands.trigger(SelectEntity { entity_id: id.get() }),
+            Some((_, id)) => commands.trigger(SelectEntity { entity_id: id.get(), extend, toggle }),
             None => {
-                for e in old.iter() {
-                    commands.entity(e).remove::<Selected>().remove::<GizmoTarget>();
-                }
-                match entity {
-                    Some(e) => {
-                        commands.entity(e).insert(Selected);
-                        selected.entity = Some(e);
+                if !extend && !toggle {
+                    for e in old.iter() {
+                        if Some(e) != entity {
+                            commands.entity(e).remove::<Selected>().remove::<GizmoTarget>();
+                        }
                     }
-                    None => selected.entity = None,
+                    selected.entities.clear();
+                }
+
+                if let Some(e) = entity {
+                    let is_selected = selected.entities.contains(&e);
+                    if toggle && is_selected {
+                        commands.entity(e).remove::<Selected>().remove::<GizmoTarget>();
+                        selected.entities.retain(|x| *x != e);
+                    } else {
+                        commands.entity(e).insert(Selected);
+                        if !selected.entities.contains(&e) {
+                            selected.entities.push(e);
+                        }
+                    }
                 }
             }
         }
     };
 
     let hit_entity = click.entity;
-    let prev_selected = selected.entity;
-    let alt_held = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+    let prev_selected = selected.primary();
 
     // Resolve the picked mesh to its selectable (nearest `SelectableRoot`
     // ancestor, or the hit entity itself for ground/props).
@@ -207,22 +259,17 @@ pub fn on_scene_click_select(
         return;
     };
 
-    // DRILL: a plain click on the ALREADY-selected component, landing on one of
-    // its sub-parts, aims the Inspector at that part instead of re-selecting.
-    if !alt_held && prev_selected == Some(entity) && hit_entity != entity {
+    // DRILL: Shift+click on a sub-part of the ALREADY-selected primary aims the
+    // Inspector at that part instead of toggling the whole object out of the
+    // selection.
+    if prev_selected == Some(entity) && hit_entity != entity {
         inspector_target.part = Some(hit_entity);
-        drag_mode.active = false;
         return;
     }
 
-    select(&mut commands, &mut selected, &q_selected_old, Some(entity));
+    // Shift+click toggles this entity in the multi-selection (extend + toggle).
+    select(&mut commands, &mut selected, &q_selected_old, Some(entity), true, true);
     inspector_target.part = None;
-    if alt_held {
-        commands.entity(entity).insert(GizmoTarget::default());
-        drag_mode.active = true;
-    } else {
-        drag_mode.active = false;
-    }
 }
 
 /// Escape / Backspace clears the selection and gizmo. Split out of the click
@@ -232,7 +279,7 @@ pub fn on_scene_click_select(
 pub fn handle_deselect_keys(
     keys: Res<ButtonInput<KeyCode>>,
     q_selected_old: Query<Entity, With<Selected>>,
-    mut selected: ResMut<SelectedEntity>,
+    mut selected: ResMut<SelectedEntities>,
     mut drag_mode: ResMut<lunco_core::DragModeActive>,
     mut inspector_target: ResMut<crate::InspectorTarget>,
     mut commands: Commands,
@@ -243,7 +290,7 @@ pub fn handle_deselect_keys(
     for e in q_selected_old.iter() {
         commands.entity(e).remove::<Selected>().remove::<GizmoTarget>();
     }
-    selected.entity = None;
+    selected.entities.clear();
     inspector_target.part = None;
     drag_mode.active = false;
 }
@@ -253,8 +300,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_selected_entity_default() {
-        let selected = SelectedEntity::default();
-        assert!(selected.entity.is_none());
+    fn test_selected_entities_default() {
+        let selected = SelectedEntities::default();
+        assert!(selected.primary().is_none());
     }
 }

@@ -9,7 +9,7 @@ use lunco_workbench::{Panel, PanelId, PanelSlot};
 use lunco_mobility::WheelRaycast;
 use lunco_cosim::{JointSim, JOINT_ANGLE_PORT};
 
-use crate::{SelectedEntity, UndoStack, UndoAction};
+use crate::{SelectedEntities, UndoStack, UndoAction};
 
 /// Inspector panel — editable entity parameters.
 pub struct Inspector;
@@ -46,15 +46,16 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
 
         // Delete hotkey
         if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
-            if let Some(entity) = world.get_resource::<SelectedEntity>().and_then(|s| s.entity) {
+            let primary = world.get_resource::<SelectedEntities>().and_then(|s| s.primary());
+            if let Some(entity) = primary {
                 if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
                     undo.push(UndoAction::Spawned { entity });
                 }
                 if world.get_entity(entity).is_ok() {
                     world.commands().entity(entity).despawn();
                 }
-                if let Some(mut selected) = world.get_resource_mut::<SelectedEntity>() {
-                    selected.entity = None;
+                if let Some(mut selected) = world.get_resource_mut::<SelectedEntities>() {
+                    selected.entities.retain(|e| *e != entity);
                 }
                 return;
             }
@@ -94,7 +95,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
         // while a different object was selected.
 
         // Get current selection
-        let Some(entity) = world.get_resource::<SelectedEntity>().and_then(|s| s.entity) else {
+        let Some(entity) = world.get_resource::<SelectedEntities>().and_then(|s| s.primary()) else {
             ui.label("No entity selected.");
             ui.label("Press Shift+Left-click on an object to select it.");
             return;
@@ -310,8 +311,8 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
             if world.get_entity(entity).is_ok() {
                 world.commands().entity(entity).despawn();
             }
-            if let Some(mut selected) = world.get_resource_mut::<SelectedEntity>() {
-                selected.entity = None;
+            if let Some(mut selected) = world.get_resource_mut::<SelectedEntities>() {
+                selected.entities.retain(|e| *e != entity);
             }
         }
     }

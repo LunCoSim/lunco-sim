@@ -91,12 +91,28 @@ pub fn on_add_revolute_joint(trigger: On<Add, RevoluteJoint>, mut commands: Comm
 }
 
 /// Per-tick consumer: drives each joint's angular motor to the commanded
-/// `inputs["angle"]`.
+/// `inputs["angle"]` — position control through the joint's own [`AngularMotor`].
+/// The joint is the connector, so the solver realizes the angle by rotating the
+/// bodies about the hinge. No `Transform` write, works for dynamic bodies. This
+/// covers both wire-commanded joints (a Modelica controller posing a mast) and
+/// hand-commanded ones (the Inspector setpoint slider / `SetPort` on an un-wired
+/// joint, which "holds" — see `lunco_cosim::write_port`).
 ///
-/// Position control through the joint's own [`AngularMotor`] — the joint is the
-/// connector, so the solver realizes the angle by rotating the bodies about the
-/// hinge. No `Transform` write, works for dynamic bodies.
-pub fn apply_joint_drives(mut q: Query<(&JointSim, &mut RevoluteJoint)>) {
+/// ## Actuator-owned joints are excluded
+///
+/// Every [`RevoluteJoint`] auto-gets a [`JointSim`], but a rover's **wheel
+/// joints** are not posed by an `angle` setpoint — they're spun by a velocity
+/// motor ([`lunco_hardware::MotorActuator`] writes `motor.target_velocity`) and
+/// steered by a frame rotation (`SteeringActuator`). If this position-hold
+/// (`target_velocity = 0`, [`JOINT_MOTOR_MODEL`] spring-damper toward
+/// `target_position`) also ran on them, it would zero the velocity command every
+/// tick and pin each wheel at its setpoint with enormous torque — the rover
+/// wouldn't move. The actuator is the single owner of such a joint's `motor`, so
+/// it's tagged [`lunco_core::ActuatorDrivenJoint`] (by `lunco_hardware` when the
+/// actuator is added) and excluded here via the query filter.
+pub fn apply_joint_drives(
+    mut q: Query<(&JointSim, &mut RevoluteJoint), Without<lunco_core::ActuatorDrivenJoint>>,
+) {
     for (sim, mut joint) in &mut q {
         let Some(&angle) = sim.inputs.get(JOINT_ANGLE_PORT) else {
             continue;

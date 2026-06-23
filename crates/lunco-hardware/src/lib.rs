@@ -18,6 +18,11 @@ impl Plugin for LunCoHardwarePlugin {
            .register_type::<BrakeActuator>()
            .register_type::<SteeringActuator>()
            .register_type::<AngularVelocitySensor>()
+           // A wheel joint driven by an actuator owns its own `motor`; mark it
+           // so the cosim joint backend (`apply_joint_drives`) doesn't also
+           // position-hold it and freeze the wheel. See `ActuatorDrivenJoint`.
+           .add_observer(mark_actuator_driven_motor)
+           .add_observer(mark_actuator_driven_steer)
            .add_systems(FixedUpdate, (
                steering_actuator_system,
                motor_actuator_system,
@@ -25,6 +30,19 @@ impl Plugin for LunCoHardwarePlugin {
                sensor_velocity_system,
            ).chain().run_if(|tw: Res<lunco_core::TimeWarpState>| tw.is_running()));
     }
+}
+
+/// Stamp [`lunco_core::ActuatorDrivenJoint`] on any joint that gains a
+/// [`MotorActuator`] — the velocity motor is now the sole owner of `motor`.
+fn mark_actuator_driven_motor(trigger: On<Add, MotorActuator>, mut commands: Commands) {
+    commands.entity(trigger.entity).try_insert(lunco_core::ActuatorDrivenJoint);
+}
+
+/// Stamp [`lunco_core::ActuatorDrivenJoint`] on any joint that gains a
+/// [`SteeringActuator`] — the frame-steer owns `motor`/frame, not the cosim
+/// position-hold. (Front wheels carry both actuators; `try_insert` is idempotent.)
+fn mark_actuator_driven_steer(trigger: On<Add, SteeringActuator>, mut commands: Commands) {
+    commands.entity(trigger.entity).try_insert(lunco_core::ActuatorDrivenJoint);
 }
 
 /// A wheel-hub motor that drives a rover the **physically correct** way: it

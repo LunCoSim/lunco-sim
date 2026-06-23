@@ -22,6 +22,27 @@ use big_space::prelude::CellCoord;
 #[reflect(Component)]
 pub struct GridAnchor;
 
+/// Marker: this revolute joint's **motor is owned by an external actuator**
+/// (a velocity drive or a frame-steer), not by the cosim joint backend.
+///
+/// Every `RevoluteJoint` is auto-exposed as a cosim model with an `angle` port,
+/// and [`lunco_cosim::apply_joint_drives`] position-holds that joint's
+/// `motor.target_position` toward the commanded `angle`. That is correct for a
+/// mast/panel posed by a wire or the Inspector slider, but **wrong** for a rover
+/// wheel: those are spun by `lunco_hardware::MotorActuator` (a velocity motor)
+/// and steered by `SteeringActuator` (a frame rotation). If both wrote the same
+/// `motor`, the position-hold would zero the velocity command every tick and
+/// freeze the wheel.
+///
+/// So `apply_joint_drives` skips any joint carrying this marker; the actuator is
+/// the single owner of its motor. `lunco_hardware` stamps it automatically when
+/// a `MotorActuator`/`SteeringActuator` is added. Lives in `lunco-core` so the
+/// cosim backend and the hardware actuators can agree on the contract without
+/// depending on each other (same pattern as [`HorizonShadowTerrain`]).
+#[derive(Component, Debug, Default, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct ActuatorDrivenJoint;
+
 /// A `GridAnchor` that participates in cross-Grid SOI migration.
 ///
 /// Rovers, spacecraft, free-flying probes — anything whose dominant

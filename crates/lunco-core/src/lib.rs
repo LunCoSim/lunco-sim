@@ -50,7 +50,8 @@ pub use commands::{
     SyncChannel,
 };
 pub use markers::{
-    FallbackSceneLight, GridAnchor, HorizonShadowTerrain, SoiMigrant, SunAngularDiameter,
+    ActuatorDrivenJoint, FallbackSceneLight, GridAnchor, HorizonShadowTerrain, SoiMigrant,
+    SunAngularDiameter,
 };
 pub use invariants::BigSpaceInvariantsPlugin;
 pub use world::{
@@ -410,6 +411,7 @@ impl Plugin for LunCoCorePlugin {
         app.add_plugins(BigSpaceInvariantsPlugin);
         app.register_type::<GridAnchor>()
            .register_type::<SoiMigrant>()
+           .register_type::<ActuatorDrivenJoint>()
            .register_type::<Severity>()
            .register_type::<TelemetryValue>()
            .register_type::<TelemetryEvent>()

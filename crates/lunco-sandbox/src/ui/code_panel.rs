@@ -1,6 +1,6 @@
 //! Code panel — shows the source for the currently-selected entity.
 //!
-//! Reads `SelectedEntity`, then queries:
+//! Reads `SelectedEntities`, then queries:
 //!   - `lunco_modelica::ui::ModelicaDocumentRegistry` for `.mo` source
 //!     attached to a `ModelicaModel` entity (e.g. the Red Balloon).
 //!   - `lunco_scripting::ScriptRegistry` + `ScriptedModel` component for
@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_modelica::state::ModelicaDocumentRegistry;
-use lunco_sandbox_edit::SelectedEntity;
+use lunco_sandbox_edit::SelectedEntities;
 use lunco_scripting::ScriptRegistry;
 use lunco_scripting::doc::ScriptedModel;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
@@ -41,8 +41,8 @@ fn code_panel_content(ui: &mut egui::Ui, world: &mut World) {
     ui.heading("Code");
 
     let Some(entity) = world
-        .get_resource::<SelectedEntity>()
-        .and_then(|s| s.entity)
+        .get_resource::<SelectedEntities>()
+        .and_then(|s| s.primary())
     else {
         ui.label("No entity selected.");
         ui.label(egui::RichText::new("Shift+click an object to select.").weak());

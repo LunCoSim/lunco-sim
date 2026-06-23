@@ -38,11 +38,30 @@ fn test_solar_panel_usda_has_material_type() {
     );
 }
 
-/// Verifies the catalog entry for solar_panel exists with correct config
+/// Verifies the solar_panel is *discovered* into the catalog with the right
+/// display name and folder-derived category.
+///
+/// The catalog is fully data-driven now: `SpawnCatalog::default()` is empty and
+/// every spawnable is found at runtime by `scan_usd_into_catalog`, with its
+/// category derived from the parent folder (no hardcoded `SpawnCategory` enum).
+/// So `components/power/solar_panel.usda` yields display "Solar Panel" + category
+/// "Power" (the immediate folder, title-cased), not a Rust-side taxonomy.
 #[test]
 fn test_solar_panel_catalog_entry() {
-    let catalog = lunco_sandbox_edit::catalog::SpawnCatalog::default();
-    let entry = catalog.get("solar_panel").expect("solar_panel should exist");
+    use lunco_assets::twin_source::TwinRoots;
+
+    // cwd under `cargo test` is the crate dir, so reach the workspace `assets/`
+    // via the compile-time manifest dir (same hop the USD-file tests above use).
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    let roots = TwinRoots::default();
+    roots.register("assets", assets);
+
+    let mut catalog = lunco_sandbox_edit::catalog::SpawnCatalog::default();
+    lunco_sandbox_edit::catalog::scan_usd_into_catalog(&roots, &mut catalog);
+
+    let entry = catalog
+        .get("solar_panel")
+        .expect("solar_panel.usda should be discovered under assets/");
     assert_eq!(entry.display_name, "Solar Panel");
-    assert_eq!(entry.category, lunco_sandbox_edit::catalog::SpawnCategory::Component);
+    assert_eq!(entry.category, "Power");
 }

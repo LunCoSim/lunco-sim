@@ -18,7 +18,7 @@ use big_space::prelude::FloatingOrigin;
 use avian3d::prelude::{LinearVelocity, RigidBody, TranslationInterpolation, RotationInterpolation};
 use transform_gizmo_bevy::{GizmoCamera, GizmoTarget};
 
-use crate::SelectedEntity;
+// Removed SelectedEntity import
 
 /// Tracks the previous absolute world position and metadata for drag lifecycle.
 #[derive(Component)]
@@ -52,8 +52,7 @@ pub fn sync_gizmo_dragging_marker(
 
 /// Makes the selected entity kinematic and freezes the coordinate system when gizmo drag starts.
 pub fn capture_gizmo_start(
-    selected: Res<SelectedEntity>,
-    gizmo_targets: Query<&GizmoTarget>,
+    gizmo_targets: Query<(Entity, &GizmoTarget)>,
     q_rigid_bodies: Query<&RigidBody>,
     q_prev_pos: Query<&GizmoPrevPos>,
     q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
@@ -63,52 +62,55 @@ pub fn capture_gizmo_start(
     q_floating_origin: Query<Entity, With<FloatingOrigin>>,
     mut commands: Commands,
 ) {
-    let Some(entity) = selected.entity else { return; };
+    let mut captured_any = false;
+    for (entity, gizmo_target) in gizmo_targets.iter() {
+        if !gizmo_target.is_active() { continue; }
+        if q_prev_pos.get(entity).is_ok() { continue; }
+        captured_any = true;
 
-    let Ok(gizmo_target) = gizmo_targets.get(entity) else { return; };
-    if !gizmo_target.is_active() { return; }
+        // 2. DISABLE INTERPOLATION
+        // Remove interpolation components so the visual mesh doesn't "fight" the gizmo.
+        let (had_translation, had_rotation) = q_interpolation.get(entity).unwrap_or((false, false));
+        if had_translation { commands.entity(entity).remove::<TranslationInterpolation>(); }
+        if had_rotation { commands.entity(entity).remove::<RotationInterpolation>(); }
 
-    if q_prev_pos.get(entity).is_ok() { return; }
+        let original_body = q_rigid_bodies.get(entity).copied().unwrap_or(RigidBody::Dynamic);
 
-    // 1. FREEZE COORDINATE SYSTEM
-    // Remove FloatingOrigin from the camera. This stops big_space from shifting 
-    // the world while we drag, breaking the positive feedback loop with the camera.
-    for cam_ent in q_floating_origin.iter() {
-        commands.entity(cam_ent).remove::<FloatingOrigin>();
-        info!("GIZMO: freezing FloatingOrigin on camera {:?}", cam_ent);
+        // Resolve initial absolute world position.
+        let Ok((cell, tf)) = q_spatial.get(entity) else { continue; };
+        let cell = cell.copied().unwrap_or_default();
+        let abs_pos = lunco_core::coords::world_position_seeded(
+            entity, &cell, tf, &q_parents, &q_grids, &q_spatial
+        );
+
+        info!("GIZMO: drag started for {:?}, abs_pos={:?}", entity, abs_pos);
+
+        commands.entity(entity)
+            .insert(RigidBody::Kinematic)
+            .insert(GizmoPrevPos { 
+                abs_pos, 
+                original_body,
+                had_translation_interpolation: had_translation,
+                had_rotation_interpolation: had_rotation,
+            });
     }
 
-    // 2. DISABLE INTERPOLATION
-    // Remove interpolation components so the visual mesh doesn't "fight" the gizmo.
-    let (had_translation, had_rotation) = q_interpolation.get(entity).unwrap_or((false, false));
-    if had_translation { commands.entity(entity).remove::<TranslationInterpolation>(); }
-    if had_rotation { commands.entity(entity).remove::<RotationInterpolation>(); }
-
-    let original_body = q_rigid_bodies.get(entity).copied().unwrap_or(RigidBody::Dynamic);
-
-    // Resolve initial absolute world position.
-    let Ok((cell, tf)) = q_spatial.get(entity) else { return; };
-    let cell = cell.copied().unwrap_or_default();
-    let abs_pos = lunco_core::coords::world_position_seeded(
-        entity, &cell, tf, &q_parents, &q_grids, &q_spatial
-    );
-
-    info!("GIZMO: drag started for {:?}, abs_pos={:?}", entity, abs_pos);
-
-    commands.entity(entity)
-        .insert(RigidBody::Kinematic)
-        .insert(GizmoPrevPos { 
-            abs_pos, 
-            original_body,
-            had_translation_interpolation: had_translation,
-            had_rotation_interpolation: had_rotation,
-        });
+    if captured_any {
+        // 1. FREEZE COORDINATE SYSTEM
+        // Remove FloatingOrigin from the camera. This stops big_space from shifting 
+        // the world while we drag, breaking the positive feedback loop with the camera.
+        for cam_ent in q_floating_origin.iter() {
+            commands.entity(cam_ent).remove::<FloatingOrigin>();
+            info!("GIZMO: freezing FloatingOrigin on camera {:?}", cam_ent);
+        }
+    }
 }
+
+
 
 /// Syncs Avian `Position` and computes velocity from absolute world coordinates.
 pub fn sync_gizmo_transforms(
-    selected: Res<SelectedEntity>,
-    gizmo_targets: Query<&GizmoTarget>,
+    gizmo_targets: Query<(Entity, &GizmoTarget)>,
     q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
@@ -118,73 +120,81 @@ pub fn sync_gizmo_transforms(
     mut q_prev_pos: Query<&mut GizmoPrevPos>,
     time: Res<Time>,
 ) {
-    let Some(entity) = selected.entity else { return; };
+    for (entity, gizmo_target) in gizmo_targets.iter() {
+        if !gizmo_target.is_active() { continue; }
 
-    let Ok(gizmo_target) = gizmo_targets.get(entity) else { return; };
-    if !gizmo_target.is_active() { return; }
+        let Ok((cell, tf)) = q_spatial.get(entity) else { continue; };
+        let cell = cell.copied().unwrap_or_default();
 
-    let Ok((cell, tf)) = q_spatial.get(entity) else { return; };
-    let cell = cell.copied().unwrap_or_default();
+        let current_abs_pos = lunco_core::coords::world_position_seeded(
+            entity, &cell, tf, &q_parents, &q_grids, &q_spatial
+        );
 
-    let current_abs_pos = lunco_core::coords::world_position_seeded(
-        entity, &cell, tf, &q_parents, &q_grids, &q_spatial
-    );
+        if let Ok(mut pos) = q_position.get_mut(entity) {
+            pos.0 = current_abs_pos;
+        }
+        
+        if let Ok(mut rot) = q_rotation.get_mut(entity) {
+            rot.0 = tf.rotation.as_dquat();
+        }
 
-    if let Ok(mut pos) = q_position.get_mut(entity) {
-        pos.0 = current_abs_pos;
-    }
-    
-    if let Ok(mut rot) = q_rotation.get_mut(entity) {
-        rot.0 = tf.rotation.as_dquat();
-    }
-
-    let dt = time.delta_secs();
-    if dt > 1e-6 {
-        if let Ok(mut prev) = q_prev_pos.get_mut(entity) {
-            let delta = current_abs_pos - prev.abs_pos;
-            if let Ok(mut lin_vel) = q_lin_vel.get_mut(entity) {
-                lin_vel.0 = delta / dt as f64;
+        let dt = time.delta_secs();
+        if dt > 1e-6 {
+            if let Ok(mut prev) = q_prev_pos.get_mut(entity) {
+                let delta = current_abs_pos - prev.abs_pos;
+                if let Ok(mut lin_vel) = q_lin_vel.get_mut(entity) {
+                    lin_vel.0 = delta / dt as f64;
+                }
+                prev.abs_pos = current_abs_pos;
             }
-            prev.abs_pos = current_abs_pos;
         }
     }
 }
 
 /// Restores dynamic state and re-enables origin tracking when gizmo drag ends.
 pub fn restore_gizmo_dynamic(
-    selected: Res<SelectedEntity>,
     gizmo_targets: Query<&GizmoTarget>,
-    q_prev_pos: Query<&GizmoPrevPos>,
+    q_prev_pos: Query<(Entity, &GizmoPrevPos)>,
     mut q_lin_vel: Query<&mut LinearVelocity>,
     q_avatar: Query<Entity, With<lunco_core::Avatar>>,
+    q_floating_origin: Query<Entity, With<FloatingOrigin>>,
     mut commands: Commands,
 ) {
-    let Some(entity) = selected.entity else { return; };
+    let mut restored_any = false;
+    for (entity, prev) in q_prev_pos.iter() {
+        if let Ok(gizmo_target) = gizmo_targets.get(entity) {
+            if gizmo_target.is_active() { continue; }
+        }
+        
+        restored_any = true;
 
-    let Ok(prev) = q_prev_pos.get(entity) else { return; };
-    let Ok(gizmo_target) = gizmo_targets.get(entity) else { return; };
-    if gizmo_target.is_active() { return; }
+        info!("GIZMO: drag ended for {:?}, restoring coordinate systems", entity);
 
-    info!("GIZMO: drag ended for {:?}, restoring coordinate systems", entity);
+        // 2. RESTORE INTERPOLATION
+        if prev.had_translation_interpolation { commands.entity(entity).insert(TranslationInterpolation); }
+        if prev.had_rotation_interpolation { commands.entity(entity).insert(RotationInterpolation); }
 
-    // 1. RESTORE ORIGIN TRACKING
-    // Re-attach FloatingOrigin to the avatar camera.
-    for av_ent in q_avatar.iter() {
-        commands.entity(av_ent).insert(FloatingOrigin);
-        info!("GIZMO: restored FloatingOrigin on avatar camera {:?}", av_ent);
+        if let Ok(mut vel) = q_lin_vel.get_mut(entity) {
+            vel.0 = DVec3::ZERO;
+        }
+
+        commands.entity(entity)
+            .insert(prev.original_body)
+            .remove::<GizmoPrevPos>();
     }
 
-    // 2. RESTORE INTERPOLATION
-    if prev.had_translation_interpolation { commands.entity(entity).insert(TranslationInterpolation); }
-    if prev.had_rotation_interpolation { commands.entity(entity).insert(RotationInterpolation); }
-
-    if let Ok(mut vel) = q_lin_vel.get_mut(entity) {
-        vel.0 = DVec3::ZERO;
+    if restored_any {
+        // 1. RESTORE ORIGIN TRACKING
+        // Claim FloatingOrigin from the fallback anchor.
+        for origin in q_floating_origin.iter() {
+            commands.entity(origin).remove::<FloatingOrigin>();
+        }
+        // Re-attach FloatingOrigin to the avatar camera.
+        for av_ent in q_avatar.iter() {
+            commands.entity(av_ent).insert(FloatingOrigin);
+            info!("GIZMO: restored FloatingOrigin on avatar camera {:?}", av_ent);
+        }
     }
-
-    commands.entity(entity)
-        .insert(prev.original_body)
-        .remove::<GizmoPrevPos>();
 }
 
 /// Ensures the primary window camera carries the GizmoCamera marker.
@@ -217,8 +227,10 @@ mod tests {
 
     #[test]
     fn test_possessed_entity_gizmo_restoration() {
+        use crate::SelectedEntities;
+        
         let mut app = App::new();
-        app.init_resource::<SelectedEntity>();
+        app.init_resource::<SelectedEntities>();
         app.add_systems(Update, restore_gizmo_dynamic);
 
         let vessel = app.world_mut().spawn((
@@ -235,7 +247,7 @@ mod tests {
         )).id();
         
         app.world_mut().spawn(ControllerLink { vessel_entity: vessel });
-        app.world_mut().resource_mut::<SelectedEntity>().entity = Some(vessel);
+        app.world_mut().resource_mut::<SelectedEntities>().entities.push(vessel);
 
         app.update();
         

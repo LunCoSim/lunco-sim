@@ -4,7 +4,7 @@
 //! without requiring GPU, window, or physics systems.
 
 use bevy::prelude::*;
-use lunco_sandbox_edit::SelectedEntity;
+use lunco_sandbox_edit::SelectedEntities;
 use lunco_core::DragModeActive;
 
 // ─── Selection State Machine Tests ─────────────────────────────────────────────
@@ -12,20 +12,20 @@ use lunco_core::DragModeActive;
 /// Simulates the complete selection lifecycle that selection.rs implements
 #[test]
 fn test_shift_click_selects_entity() {
-    let mut selected = SelectedEntity::default();
+    let mut selected = SelectedEntities::default();
     let mut drag_mode = DragModeActive { active: false };
     let rover = Entity::from_bits(42);
 
     // Initial state
-    assert!(selected.entity.is_none());
+    assert!(selected.primary().is_none());
     assert!(!drag_mode.active);
 
     // --- ACTION: Shift+Left-click (selection.rs logic) ---
-    selected.entity = Some(rover);
+    selected.entities.push(rover);
     drag_mode.active = true;
 
     // Verify selection state
-    assert_eq!(selected.entity, Some(rover));
+    assert_eq!(selected.primary(), Some(rover));
     assert!(drag_mode.active, "DragModeActive must be set to block possession");
 }
 
@@ -49,21 +49,21 @@ fn test_selection_blocks_possession() {
 /// Verifies that after deselection, possession is allowed again
 #[test]
 fn test_deselection_allows_possession() {
-    let mut selected = SelectedEntity::default();
+    let mut selected = SelectedEntities::default();
     let mut drag_mode = DragModeActive { active: false };
     let rover = Entity::from_bits(42);
 
     // Select
-    selected.entity = Some(rover);
+    selected.entities.push(rover);
     drag_mode.active = true;
     assert!(drag_mode.active);
 
     // --- ACTION: Escape (deselection) ---
-    selected.entity = None;
+    selected.entities.clear();
     drag_mode.active = false;
 
     // Verify deselection
-    assert!(selected.entity.is_none(), "Entity should be deselected");
+    assert!(selected.primary().is_none(), "Entity should be deselected");
     assert!(!drag_mode.active, "DragModeActive must be cleared to allow possession");
 
     // Verify possession is now allowed
@@ -79,39 +79,40 @@ fn test_deselection_allows_possession() {
 /// Tests Escape key behavior during selection
 #[test]
 fn test_escape_cancels_selection() {
-    let mut selected = SelectedEntity::default();
+    let mut selected = SelectedEntities::default();
     let mut drag_mode = DragModeActive { active: false };
     let rover = Entity::from_bits(42);
 
     // Select
-    selected.entity = Some(rover);
+    selected.entities.push(rover);
     drag_mode.active = true;
 
     // --- ACTION: Escape key (selection.rs logic) ---
-    selected.entity = None;
+    selected.entities.clear();
     drag_mode.active = false;
 
     // Verify everything is cleared
-    assert!(selected.entity.is_none(), "Entity should be deselected");
+    assert!(selected.primary().is_none(), "Entity should be deselected");
     assert!(!drag_mode.active, "Possession should be allowed after cancel");
 }
 
 /// Tests switching selection between entities
 #[test]
 fn test_switching_selection() {
-    let mut selected = SelectedEntity::default();
+    let mut selected = SelectedEntities::default();
     let mut drag_mode = DragModeActive { active: false };
     let rover1 = Entity::from_bits(100);
     let rover2 = Entity::from_bits(200);
 
     // Select first rover
-    selected.entity = Some(rover1);
+    selected.entities.push(rover1);
     drag_mode.active = true;
 
     // Select second rover (replace selection)
-    selected.entity = Some(rover2);
+    selected.entities.clear();
+    selected.entities.push(rover2);
     drag_mode.active = true; // Still active
 
-    assert_eq!(selected.entity, Some(rover2), "Should now select second rover");
+    assert_eq!(selected.primary(), Some(rover2), "Should now select second rover");
     assert!(drag_mode.active, "Possession should still be blocked");
 }
