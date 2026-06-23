@@ -711,14 +711,19 @@ build_msl_bundle() {
     # produces byte-identical output anyway — the only thing the
     # script saves is ~2 s of parse + compress work.
     #
-    # Override with `MSL_REBUILD=force` if you've changed the
-    # bundler binary itself (`build_msl_assets`) or its serialisation
-    # format and want a guaranteed re-pack.
+    # Override with `MSL_REBUILD=force` for a guaranteed re-pack.
     #
-    # The staleness check only tracks `.cache/msl`; when extra libraries are
-    # requested (`MSL_EXTRA_LIBS`) their sources aren't tracked here, so we
-    # never take the skip shortcut — always repack to pick them up.
-    if [ -z "${MSL_EXTRA_LIBS:-}" ] && [ "${MSL_REBUILD:-}" != "force" ] && [ -f "$msl_dir/manifest.json" ]; then
+    # Bust the skip on three inputs, not just `.cache/msl` mtimes:
+    #   1. `.cache/msl/*.mo` newer than the manifest — the sources changed.
+    #   2. The bundler's OWN source newer than the manifest — its packing
+    #      logic changed (e.g. a new `--exclude` filter or serialisation
+    #      format). Tracking this makes the old `MSL_REBUILD=force`-after-a-
+    #      bundler-edit ritual automatic; a stale bundle is silent corruption.
+    #   3. `MSL_EXTRA_LIBS`/`MSL_EXCLUDE_LIBS` requested — the set of packed
+    #      libraries is config-driven and not captured by mtimes, so always
+    #      repack to honour the current config.
+    if [ -z "${MSL_EXTRA_LIBS:-}" ] && [ -z "${MSL_EXCLUDE_LIBS:-}" ] \
+        && [ "${MSL_REBUILD:-}" != "force" ] && [ -f "$msl_dir/manifest.json" ]; then
         local msl_src
         for candidate in \
             "$PROJECT_DIR/../.cache/msl" \
@@ -726,9 +731,11 @@ build_msl_bundle() {
             if [ -d "$candidate" ]; then msl_src="$candidate"; break; fi
         done
         if [ -n "$msl_src" ]; then
-            local newer
+            local newer newer_bundler
             newer=$(find "$msl_src" -name '*.mo' -newer "$msl_dir/manifest.json" -print -quit 2>/dev/null)
-            if [ -z "$newer" ]; then
+            newer_bundler=$(find "$PROJECT_DIR/crates/lunco-assets/src" -name '*.rs' \
+                -newer "$msl_dir/manifest.json" -print -quit 2>/dev/null)
+            if [ -z "$newer" ] && [ -z "$newer_bundler" ]; then
                 info "MSL bundle up-to-date ($msl_src) — skipping pack (set MSL_REBUILD=force to override)"
                 return 0
             fi
@@ -759,6 +766,21 @@ build_msl_bundle() {
             done
             info "Bundling extra library roots: $MSL_EXTRA_LIBS"
         fi
+    fi
+
+    # The Modelica Association ships its own regression/conversion test suites
+    # (ModelicaTest, ModelicaTestConversion4, ModelicaTestOverdetermined) INSIDE
+    # the MSL source tree. They are not part of the library you import, and
+    # Dymola/OMEdit don't load them by default — so we keep them out of the web
+    # bundle. Override the list (colon-separated; `*` = prefix match) via
+    # `MSL_EXCLUDE_LIBS`, or set it empty to ship everything.
+    local exclude_libs="${MSL_EXCLUDE_LIBS-ModelicaTest*}"
+    if [ -n "$exclude_libs" ]; then
+        local IFS=':'
+        for name in $exclude_libs; do
+            [ -n "$name" ] && extra_args+=(--exclude "$name")
+        done
+        info "Excluding top-level packages: $exclude_libs"
     fi
 
     rm -rf "$msl_dir"

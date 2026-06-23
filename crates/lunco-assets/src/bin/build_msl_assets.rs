@@ -49,6 +49,10 @@
 //!   wasm-side change is needed.
 //! - Skipped: `Resources/` images and matrix data. Step 1b will add these
 //!   once we know the wasm runtime needs them — most compile paths don't.
+//! - Skipped: any top-level package named by `--exclude <name>` (repeatable;
+//!   `<name>*` is a prefix match). Used to drop the MSL distribution's in-tree
+//!   test suites (`--exclude 'ModelicaTest*'`) — they ship inside the MSL tree
+//!   but aren't part of the library. Applied only at each root's top level.
 
 #![cfg(not(target_arch = "wasm32"))]
 // Native-only build-time bundler on the documented `clippy.toml`
@@ -75,6 +79,7 @@ fn main() {
     let mut msl_root_override: Option<PathBuf> = None;
     let mut extra_roots: Vec<PathBuf> = Vec::new();
     let mut discover_extras = false;
+    let mut exclude: Vec<String> = Vec::new();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -93,10 +98,14 @@ fn main() {
             "--discover-extras" => {
                 discover_extras = true;
             }
+            "--exclude" => {
+                i += 1;
+                exclude.push(args[i].clone());
+            }
             "-h" | "--help" => {
                 eprintln!(
                     "usage: build_msl_assets --out <dir> [--msl-root <dir>] \
-                     [--extra-root <dir>]... [--discover-extras]"
+                     [--extra-root <dir>]... [--discover-extras] [--exclude <name>]..."
                 );
                 return;
             }
@@ -146,10 +155,13 @@ fn main() {
     // it — each root contributes its own top-level package dir as a namespace
     // (`Modelica/…`, `Buildings/…`). A single combined tar + parsed set holds
     // them all; the web resolver iterates roots, so keys must not collide.
+    if !exclude.is_empty() {
+        eprintln!("excluding top-level packages: {}", exclude.join(", "));
+    }
     let mut entries: Vec<(PathBuf, PathBuf)> = Vec::new();
     for root in &roots {
         let mut files: Vec<PathBuf> = Vec::new();
-        collect_mo_files(root, root, &mut files);
+        collect_mo_files(root, root, &exclude, &mut files);
         for f in files {
             entries.push((root.clone(), f));
         }
@@ -239,6 +251,10 @@ fn main() {
         },
         "rumoca_artifact_tag": RUMOCA_ARTIFACT_TAG,
         "msl_root_marker": "Modelica/package.mo",
+        // Top-level packages filtered out of this bundle (e.g. `ModelicaTest*`).
+        // Recorded so the bundle is self-describing and the build script can
+        // tell whether a cached bundle matches the requested exclude config.
+        "excluded_packages": exclude,
     });
     let manifest_path = out_dir.join("manifest.json");
     let manifest_bytes = serde_json::to_vec_pretty(&manifest).expect("serialise manifest");
@@ -330,20 +346,44 @@ fn serialise_parsed(parsed: &[(String, rumoca_ir_ast::StoredDefinition)], dest: 
     uncompressed
 }
 
-fn collect_mo_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
+/// Walk `dir` (under `root`), collecting every `.mo` file.
+///
+/// `exclude` drops top-level packages by name — applied ONLY at the root level
+/// (`dir == root`) so a coincidentally-named nested package is never affected.
+/// A pattern ending in `*` is a prefix match (e.g. `ModelicaTest*` catches the
+/// `ModelicaTest/` dir plus the `ModelicaTestConversion4.mo` /
+/// `ModelicaTestOverdetermined.mo` siblings, and any future `ModelicaTest…`
+/// suite an MSL bump adds). A top-level `.mo`'s package name is its file stem.
+fn collect_mo_files(root: &Path, dir: &Path, exclude: &[String], out: &mut Vec<PathBuf>) {
     let Ok(rd) = fs::read_dir(dir) else { return };
+    let at_top = dir == root;
     for entry in rd.flatten() {
         let path = entry.path();
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if at_top {
+            // Top-level package name: dir name as-is, or the `.mo` file stem.
+            let pkg = name.strip_suffix(".mo").unwrap_or(name);
+            if exclude.iter().any(|p| pkg_matches(pkg, p)) {
+                continue;
+            }
+        }
         if path.is_dir() {
             // Skip rumoca's own caches inside the MSL tree, if present.
-            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
             if matches!(name, ".cache" | "target" | "Resources") {
                 continue;
             }
-            collect_mo_files(root, &path, out);
+            collect_mo_files(root, &path, exclude, out);
         } else if path.extension().and_then(|s| s.to_str()) == Some("mo") {
             out.push(path);
         }
+    }
+}
+
+/// Exact match, or prefix match when `pattern` ends in `*`.
+fn pkg_matches(pkg: &str, pattern: &str) -> bool {
+    match pattern.strip_suffix('*') {
+        Some(prefix) => pkg.starts_with(prefix),
+        None => pkg == pattern,
     }
 }
 
