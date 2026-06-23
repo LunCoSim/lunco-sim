@@ -22,6 +22,12 @@ ui = [
     # bevy_egui pulls bevy_render + bevy_window; the lunica WINDOW additionally
     # needs the winit backend (no longer in the workspace bevy default).
     "bevy/bevy_winit", "bevy/bevy_window", "bevy/x11", "bevy/wayland",
+    # wasm GPU backend for the egui render pass. Since the workspace made render
+    # opt-in (bevy default no longer bundles a wgpu backend), the web build linked
+    # bevy_render with NO backend and panicked at startup ("No wgpu backend
+    # feature ... was enabled"). WebGL2 matches the sandbox web build; native is
+    # unaffected (it uses vulkan/metal/dx12).
+    "bevy/webgl2",
 ]
 # Compile the API in. Transport is chosen automatically: the native HTTP
 # server comes from `lunco-api/transport-http` (added to `default` above);

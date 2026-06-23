@@ -243,10 +243,17 @@ build_wasm() {
     # mandatory, not optional.
     local cargo_bin
     cargo_bin=$(get_cargo_bin_name "$binary")
+    # `ui` is REQUIRED for the web GUI builds: since the egui-ectomy refactor it
+    # is a real cargo feature (egui/winit/workbench live behind it, no longer
+    # unconditional deps). `--no-default-features` strips it, so we re-add it
+    # explicitly — without it the wasm build links no window/egui (lunco_workbench
+    # unresolved) and degrades to a headless server in the browser. luncosim is
+    # the exception (it has no `ui` feature — egui is an unconditional dep there).
+    #
     # sandbox carries the optional multiplayer wire (lightyear WebTransport,
     # client-only on wasm); lunica does not. Browser join is URL-driven
     # (`?connect=host#<digest>`), see `NetworkMode::from_url`.
-    local wasm_features="lunco-api"
+    local wasm_features="lunco-api,ui"
     # luncosim has no `lunco-api` cargo feature (the API is an unconditional dep,
     # JS-bridge on wasm). Build it with NO features: celestial bodies load when
     # `sandbox` is off (the default), and we deliberately skip `celestial`
@@ -255,7 +262,7 @@ build_wasm() {
     if [ "$binary" = "luncosim" ]; then
         wasm_features=""
     elif [ "$binary" = "sandbox" ]; then
-        wasm_features="lunco-api,networking"
+        wasm_features="lunco-api,networking,ui"
         # Opt the client-prediction diagnostics into the browser build with
         # NET_DIAG=1 (off by default — same `net-diag` cargo feature as native).
         # Output lands in the browser console as `[net-diag …]` lines; mute a
