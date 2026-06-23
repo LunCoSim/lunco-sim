@@ -18,8 +18,6 @@ use big_space::prelude::FloatingOrigin;
 use avian3d::prelude::{LinearVelocity, RigidBody, TranslationInterpolation, RotationInterpolation};
 use transform_gizmo_bevy::{GizmoCamera, GizmoTarget};
 
-// Removed SelectedEntity import
-
 /// Tracks the previous absolute world position and metadata for drag lifecycle.
 #[derive(Component)]
 pub struct GizmoPrevPos {
@@ -40,14 +38,22 @@ pub struct GizmoPrevPos {
 pub fn sync_gizmo_dragging_marker(
     mut commands: Commands,
     q: Query<(Entity, &GizmoTarget)>,
+    mut drag_mode: ResMut<lunco_core::DragModeActive>,
 ) {
+    let mut any_active = false;
     for (e, gt) in &q {
         if gt.is_active() {
+            any_active = true;
             commands.entity(e).insert(lunco_core::GizmoDragging);
         } else {
             commands.entity(e).remove::<lunco_core::GizmoDragging>();
         }
     }
+    // Single writer of `DragModeActive`: possession (plain-click) is blocked ONLY
+    // while a gizmo handle is actively dragged — not merely because something is
+    // selected. So Shift-selecting an object just highlights it; you can still
+    // plain-click to possess a rover.
+    drag_mode.active = any_active;
 }
 
 /// Makes the selected entity kinematic and freezes the coordinate system when gizmo drag starts.
@@ -183,7 +189,14 @@ pub fn restore_gizmo_dynamic(
             .remove::<GizmoPrevPos>();
     }
 
-    if restored_any {
+    // Re-attach FloatingOrigin to the avatar camera ONLY when the LAST drag
+    // ends — i.e. no `GizmoTarget` is still active. With several entities
+    // shift-selected and dragged together, restoring the origin the instant the
+    // first one releases would un-freeze big_space *underneath* the entities
+    // still being dragged (re-introducing the camera/origin feedback loop the
+    // capture-time freeze exists to prevent).
+    let any_still_active = gizmo_targets.iter().any(|gt| gt.is_active());
+    if restored_any && !any_still_active {
         // 1. RESTORE ORIGIN TRACKING
         // Claim FloatingOrigin from the fallback anchor.
         for origin in q_floating_origin.iter() {

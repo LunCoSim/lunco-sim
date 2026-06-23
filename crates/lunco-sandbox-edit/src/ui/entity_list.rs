@@ -12,8 +12,6 @@ use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 use std::collections::{HashMap, HashSet};
 
-// Removed SelectedEntity import
-
 /// Entity list panel — hierarchy tree of scene entities.
 pub struct EntityList;
 
@@ -245,45 +243,23 @@ fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut W
         }
     });
 
-    // Route selection through the single mutation path (the `SelectEntity`
-    // command the viewport click + API also use), so it clears the previous
-    // `Selected`/`GizmoTarget` and updates `SelectedEntity` before the Inspector
-    // renders later this same egui pass. Sub-parts (wheels) have no API id, so
-    // they fall back to a direct `SelectedEntity` write — enough for the
-    // Inspector to retarget, without the highlight/gizmo bookkeeping.
+    // Route selection through the same `crate::selection::apply_selection` the
+    // viewport-click and `SelectEntity` API use — keyed by `Entity` (sub-parts
+    // share api_ids, so id round-trips select the wrong instance). Shift = extend
+    // + toggle (multi-select), plain click = replace. The Inspector reads the
+    // updated `SelectedEntities` later in this same egui pass.
     if let Some((entity, shift_held)) = to_select {
-        let is_selected = world.get_resource::<crate::SelectedEntities>().unwrap().entities.contains(&entity);
-
-        if !shift_held {
-            // Clear other selections
-            let old: Vec<Entity> = world
-                .query_filtered::<Entity, With<crate::selection::Selected>>()
-                .iter(world)
-                .collect();
-            for o in old {
-                if o != entity {
-                    world
-                        .entity_mut(o)
-                        .remove::<crate::selection::Selected>()
-                        .remove::<transform_gizmo_bevy::GizmoTarget>();
-                }
-            }
-            world.get_resource_mut::<crate::SelectedEntities>().unwrap().entities.clear();
-        }
-
-        if shift_held && is_selected {
-            world.entity_mut(entity).remove::<crate::selection::Selected>().remove::<transform_gizmo_bevy::GizmoTarget>();
-            world.get_resource_mut::<crate::SelectedEntities>().unwrap().entities.retain(|e| *e != entity);
-        } else {
-            world.entity_mut(entity).insert((crate::selection::Selected, transform_gizmo_bevy::GizmoTarget::default()));
-            let mut selected = world.get_resource_mut::<crate::SelectedEntities>().unwrap();
-            if !selected.entities.contains(&entity) {
-                selected.entities.push(entity);
-            }
-        }
-        
-        let is_empty = world.get_resource::<crate::SelectedEntities>().unwrap().entities.is_empty();
-        world.get_resource_mut::<lunco_core::DragModeActive>().unwrap().active = !is_empty;
+        let old: Vec<Entity> = world
+            .query_filtered::<Entity, With<crate::selection::Selected>>()
+            .iter(world)
+            .collect();
+        world.resource_scope(|world, mut selected: Mut<crate::SelectedEntities>| {
+            let mut commands = world.commands();
+            crate::selection::apply_selection(
+                &mut commands, &mut selected, old, entity, shift_held, shift_held,
+            );
+        });
+        world.flush();
     }
 
     // Double-click flies the camera to the entity via the same `FocusEntityById`

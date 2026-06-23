@@ -1241,6 +1241,14 @@ pub fn avatar_raycast_possession(
     // Spawn placement tool armed: clicks place objects, don't possess.
     if spawn_tool_active.0 { return; }
 
+    // This observer handles the plain click now (it passed every guard above), so
+    // stop the auto-propagation to ancestor entities — otherwise a global
+    // observer re-fires once per ancestor. The analytic spacecraft/celestial
+    // sphere tests below depend on the ray, not on `click.entity`, so they'd
+    // re-trigger `PossessVessel`/`FocusTarget` for every ancestor in the chain
+    // (we must not gate this on a *mesh* hit being found, the earlier bug).
+    click.propagate(false);
+
     // Build the world ray from the avatar camera through the click position, so
     // the analytic hit-sphere tests (celestial bodies / spacecraft, which have
     // no pickable mesh) still work alongside the mesh pick.
@@ -1256,10 +1264,6 @@ pub fn avatar_raycast_possession(
     if let Some(root) = find_clickable_from_hit(click.entity, &q_parents, &q_selectable, &q_ground) {
         min_t = click.hit.depth;
         nearest_clickable = Some(root);
-        
-        // Stop the click auto-propagating to ancestors ONLY if we found a valid hit
-        // that we might process. Otherwise let it bubble.
-        click.propagate(false);
     }
 
     // Spacecraft hit-spheres (no real colliders) — possessable, not selectable.
