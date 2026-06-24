@@ -191,7 +191,7 @@ fn steering_actuator_system(
         // Physical wheel: apply to the joint frame here. (Raycast wheel: no joint,
         // its transform is rotated by apply_wheel_steering from output_angle.)
         if let Some(mut joint) = joint {
-            joint.frame1.basis = JointBasis::Local(DQuat::from_rotation_y(angle).into());
+            joint.frame1.basis = JointBasis::Local(DQuat::from_rotation_y(-angle).into());
         }
     }
 }

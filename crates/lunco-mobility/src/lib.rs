@@ -488,7 +488,7 @@ fn apply_wheel_steering(
                 continue;
             }
         }
-        transform.rotation = Quat::from_rotation_y(steer.output_angle as f32);
+        transform.rotation = Quat::from_rotation_y(-steer.output_angle as f32);
     }
 }
 

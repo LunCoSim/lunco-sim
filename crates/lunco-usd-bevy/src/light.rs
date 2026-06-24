@@ -43,8 +43,11 @@ use openusd::usda::TextReader;
 /// own light prim.
 pub use lunco_core::FallbackSceneLight;
 
-/// Marker stamped on every entity instantiated from a UsdLux light prim.
-/// Its `Add` observer enforces the fallback policy (see module docs).
+/// Marker for a *dominant* scene light — a sun (`DistantLight`) or sky
+/// (`DomeLight`) — whose presence retires the binary's fallback sun/ambient.
+/// Its `Add` observer enforces that policy (see module docs). Deliberately
+/// NOT stamped on local lights like `SphereLight` headlights: a spawned
+/// vessel's lamp must not darken the scene by despawning the fallback sun.
 #[derive(Component)]
 pub struct UsdAuthoredLight;
 
@@ -209,18 +212,19 @@ pub(crate) fn instantiate_light_prim(
                     .clamp(0.0, 1.0);
                 let inner_angle = outer_angle * (1.0 - softness);
 
-                commands.entity(entity).insert((
-                    SpotLight {
-                        color,
-                        intensity: intensity_cd,
-                        range,
-                        shadows_enabled,
-                        inner_angle,
-                        outer_angle,
-                        ..default()
-                    },
-                    UsdAuthoredLight,
-                ));
+                // No `UsdAuthoredLight`: a SphereLight is a *local* light (e.g. a
+                // vessel headlight), not a scene-dominant sun/sky. Stamping it
+                // would retire the binary's fallback sun the instant a rover
+                // spawns — see the marker docs.
+                commands.entity(entity).insert(SpotLight {
+                    color,
+                    intensity: intensity_cd,
+                    range,
+                    shadows_enabled,
+                    inner_angle,
+                    outer_angle,
+                    ..default()
+                });
                 info!(
                     "[usd-bevy] {} SphereLight (SpotLight) intensity={} cd, range={} m, cone={} deg",
                     sdf_path.as_str(),
@@ -229,17 +233,15 @@ pub(crate) fn instantiate_light_prim(
                     cone_angle_deg
                 );
             } else {
-                // Pointlight path (standard SphereLight)
-                commands.entity(entity).insert((
-                    PointLight {
-                        color,
-                        intensity: intensity_cd,
-                        range,
-                        shadows_enabled,
-                        ..default()
-                    },
-                    UsdAuthoredLight,
-                ));
+                // Pointlight path (standard SphereLight). No `UsdAuthoredLight`
+                // — local light, must not retire the fallback sun (see above).
+                commands.entity(entity).insert(PointLight {
+                    color,
+                    intensity: intensity_cd,
+                    range,
+                    shadows_enabled,
+                    ..default()
+                });
                 info!(
                     "[usd-bevy] {} SphereLight (PointLight) intensity={} cd, range={} m",
                     sdf_path.as_str(),

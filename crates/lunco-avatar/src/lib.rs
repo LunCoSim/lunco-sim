@@ -569,9 +569,9 @@ fn spring_arm_system(
         // forward vector flips around as it rolls — deriving heading from it
         // swings the camera wildly. For those, heading is user-only (yaw).
         let target_heading_d = if arm.track_heading {
-            let target_fwd_d = t_tf.rotation.mul_vec3(Vec3::Z).as_dvec3();
+            let target_fwd_d = t_tf.rotation.mul_vec3(Vec3::NEG_Z).as_dvec3();
             if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
-                target_fwd_d.x.atan2(target_fwd_d.z)
+                -target_fwd_d.x.atan2(-target_fwd_d.z)
             } else { 0.0 }
         } else {
             0.0
