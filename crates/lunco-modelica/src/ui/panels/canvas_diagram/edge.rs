@@ -708,7 +708,7 @@ fn diag_log_edge_lookup(
         .filter(|k| k.starts_with(source_path) || k.starts_with(target_path))
         .cloned()
         .collect();
-    bevy::log::info!(
+    bevy::log::debug!(
         "[edge-diag] {source_path} -> {target_path} fv={fv_name} \
          src={v_src:?} tgt={v_tgt:?} near_keys={near:?}"
     );
@@ -740,7 +740,7 @@ fn diag_log_empty_flow_vars(
     if !changed {
         return;
     }
-    bevy::log::warn!(
+    bevy::log::debug!(
         "[edge-diag] EMPTY flow_vars on edge {source_path} -> {target_path} \
          connector_type={connector_type:?} near_keys={near:?}"
     );

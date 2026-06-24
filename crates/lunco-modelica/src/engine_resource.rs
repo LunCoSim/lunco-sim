@@ -795,6 +795,25 @@ fn drive_msl_bootstrap(
     // post background warmup or lazy load).
     let parsed = crate::msl_remote::global_parsed_msl();
     if let Some(docs) = parsed {
+        // PERF TODO (web, ~850 ms main-thread freeze): profiling (2026-06-24)
+        // shows this install is the single biggest hitch after MSL lands —
+        // `clone ≈ 90–260 ms` + `replace_parsed_source_set ≈ 760–810 ms`, all
+        // on the main thread, so egui+bevy freeze for ~1 s. Two parts, both
+        // needing an UPSTREAM rumoca change (don't hack locally):
+        //   1. The clone below materialises an owned `Vec<(String, AST)>`
+        //      because `replace_parsed_source_set` consumes a `Vec`. We can't
+        //      `take` the shared `global_parsed_msl` bundle — it has 20+
+        //      post-install readers (class_cache, engine class-lookup,
+        //      document drill-in, package_tree). FIX: give rumoca a
+        //      borrowed/`Arc`-input variant so we pass the bundle by reference
+        //      and drop the clone entirely.
+        //   2. `replace_parsed_source_set` (the ~800 ms) builds MSL scope
+        //      tables in one blocking FFI call. FIX: a chunked/streaming
+        //      install (yield across frames) or an off-thread build — but the
+        //      engine session is `Arc<Mutex>` main-thread-bound, so off-thread
+        //      needs rumoca to support a detached index build too.
+        // Until then this is an inherent one-time freeze; the `MslLoadState`
+        // hint covers the icon side but there's no spinner during this frame.
         let t_clone = web_time::Instant::now();
         let defs: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)> =
             docs.iter().map(|(u, d)| (u.clone(), d.clone())).collect();

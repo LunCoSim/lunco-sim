@@ -517,7 +517,11 @@ pub(super) fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramN
             .as_ref()
             .map(|p| p.flow_vars.iter().map(|f| f.name.clone()).collect())
             .unwrap_or_default();
-        bevy::log::info!(
+        // Per-edge diagnostic — `debug!`, not `info!`, so it doesn't spam the
+        // browser console on every projection. Console I/O is a real cost on
+        // wasm and this fires once per edge × every reproject. `RUST_LOG=debug`
+        // brings it back.
+        bevy::log::debug!(
             "[proj-diag] edge {src_path_dbg} -> {tgt_path_dbg} \
              src_port_def_found={} src_node_ports={src_port_ports:?} \
              flow_vars={resolved_flow_vars:?} connector_type={:?}",
