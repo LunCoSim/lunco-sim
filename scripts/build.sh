@@ -85,7 +85,7 @@ case "$TARGET" in
         fi
         info "native server build ($label)…"
         cargo build "${profile_args[@]}" \
-            --bin sandbox -p lunco-client --features networking \
+            --bin sandbox -p lunco-sandbox --features networking \
             "${PASS[@]+"${PASS[@]}"}"
         success "server binary: $PROJECT_DIR/$out"
 

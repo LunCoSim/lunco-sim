@@ -77,7 +77,7 @@ From a checkout of this repo (`networking` branch):
 ```bash
 # (a) headless server binary — native release. Same `sandbox` bin, run with
 #     --no-ui. `networking` pulls lunco-api (the --api HTTP server) via defaults.
-cargo build --release --bin sandbox -p lunco-client --features networking
+cargo build --release --bin sandbox -p lunco-sandbox --features networking
 #   -> target/release/sandbox
 
 # (b) wasm client bundle.
@@ -247,5 +247,5 @@ rsync -av --delete dist/sandbox/ $DEST:/opt/lunco/web/sandbox/   # no restart ne
 | `wasm` 404 / wrong MIME | nginx `types { application/wasm wasm; }` missing or bundle not under `/opt/lunco/web/sandbox`. |
 
 See also: `src/server.rs` (cert handling),
-`../lunco-client/src/bin/sandbox.rs` (`--no-ui` headless wiring).
+`../lunco-sandbox/src/bin/sandbox.rs` (`--no-ui` headless wiring).
 The deploy config files live in `../../scripts/deploy/`.
