@@ -102,6 +102,96 @@ pub(crate) fn render_diagram_canvas(
             LifecycleState::Content => {}
         }
     }
+
+    // ─── "Icons update when MSL loaded" hint ───
+    //
+    // On web the MSL bundle decodes in the background (~tens of
+    // seconds) while the diagram already renders with provisional
+    // partial types — standard-library components resolve to gray
+    // placeholder boxes (`node.rs` `!drew_icon` path) until MSL
+    // installs and the `MslBecameReady` observer reprojects every
+    // open tab with real icons. Surface that so the gray boxes read
+    // as "still loading", not "broken render".
+    //
+    // Visible until icons actually resolve, not just until MSL bytes
+    // land: `MslLoadState` flips to `Ready` a step *before* the
+    // reproject that swaps the gray boxes for icons. `MslBecameReady`
+    // then sets each tab's `force_reproject`; we keep the hint while
+    // that one-shot flag is still pending so there's no bare
+    // gray-boxes-with-no-text frame between Ready and reproject. Once
+    // the reproject spawns, `force_reproject` clears and the canvas
+    // enters its `Loading` lifecycle (the centred spinner), so the
+    // window is fully covered. `force_reproject` is set *only* by
+    // `request_reproject_all` (the MSL-ready handler), so it stays
+    // MSL-specific.
+    {
+        let msl_pending = world
+            .get_resource::<lunco_assets::msl::MslLoadState>()
+            .map(|s| s.is_pending())
+            .unwrap_or(true);
+        let (has_content, reproject_pending) = {
+            let state = world.resource::<CanvasDiagramState>();
+            let docstate = match render_tab_id {
+                Some(t) => state.get_for_tab(t),
+                None => state.get(active_doc),
+            };
+            (
+                docstate.canvas.scene.node_count() > 0,
+                docstate.force_reproject,
+            )
+        };
+        if (msl_pending || reproject_pending) && has_content {
+            // A compile dispatched while MSL is still loading can't finish
+            // until the standard library installs (the worker parse path
+            // needs MSL resident — but the worker queues it and runs it on
+            // its `MslReady`, see worker_transport.rs). When one is pending,
+            // extend the hint with a second line so the user knows the
+            // action wasn't lost. Doc-scoped via `is_compiling(d)` only — a
+            // global runner-busy check would light this hint up on tab A
+            // when an unrelated run on tab B is in flight; the Fast Run path
+            // has its own notice in the experiments panel.
+            let compile_pending = active_doc
+                .and_then(|d| {
+                    world
+                        .get_resource::<crate::state::CompileStates>()
+                        .map(|cs| cs.is_compiling(d))
+                })
+                .unwrap_or(false);
+            let color = world
+                .get_resource::<lunco_theme::Theme>()
+                .map(|t| t.tokens.warning)
+                .unwrap_or_else(|| lunco_theme::Theme::dark().tokens.warning);
+            let painter = ui
+                .painter()
+                .clone()
+                .with_clip_rect(ui.clip_rect().intersect(response.rect));
+            let font = egui::FontId::proportional(11.0);
+            let mut y = response.rect.bottom() - 8.0;
+            painter.text(
+                egui::pos2(response.rect.left() + 10.0, y),
+                egui::Align2::LEFT_BOTTOM,
+                "⏳ Icons will be updated when MSL loaded",
+                font.clone(),
+                color,
+            );
+            if compile_pending {
+                y -= 16.0;
+                painter.text(
+                    egui::pos2(response.rect.left() + 10.0, y),
+                    egui::Align2::LEFT_BOTTOM,
+                    "⏳ Compilation will run when MSL is ready",
+                    font,
+                    color,
+                );
+            }
+            // Coarse poll, not a per-frame spin: MSL readiness flips on a
+            // background task, so a ~250ms re-check clears the hint promptly
+            // without pinning the whole workbench to full-rate redraw for the
+            // entire (slow, resource-constrained) decode window.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(250));
+        }
+    }
     mark("overlays", &mut phase_t, &mut phase_log);
 
     handle_drag_and_drop(ui, world, &response, active_doc, render_tab_id, tab_read_only, editing_class.clone());

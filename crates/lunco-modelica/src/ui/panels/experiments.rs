@@ -803,7 +803,10 @@ impl ExperimentsPanel {
     /// per-`ModelRef` draft; the toolbar's ⏩ Fast button reads the
     /// same draft, so changes here are visible there immediately.
     fn render_setup_section(&self, ui: &mut egui::Ui, world: &mut World) {
-        let col_error = world.resource::<lunco_theme::Theme>().tokens.error;
+        let (col_error, col_accent) = {
+            let t = world.resource::<lunco_theme::Theme>();
+            (t.tokens.error, t.tokens.accent)
+        };
         // Resolve target doc + model class. Honor the experiments
         // pin so a pinned panel keeps its setup form while the user
         // edits a different tab.
@@ -882,6 +885,27 @@ impl ExperimentsPanel {
             .map(|r| (r.0.in_flight_count(), r.0.queued_count(), r.0.max_parallel()))
             .unwrap_or((0, 0, 1));
         let any_in_flight = running_now > 0;
+
+        // On web the MSL bundle is still decoding for the first ~tens of
+        // seconds. A Fast Run dispatched in that window compiles fine for
+        // MSL-free models but, for a model that depends on the standard
+        // library, the worker queues it and runs it once MSL is resident
+        // (see worker_transport.rs `MslReady` flush). Gate a user-facing
+        // notice on `MslLoadState::is_pending()` (false at boot on native,
+        // false post-decode on web) so the run doesn't look stuck.
+        let msl_pending = world
+            .get_resource::<lunco_assets::msl::MslLoadState>()
+            .map(|s| s.is_pending())
+            .unwrap_or(true);
+        // If the MSL load *failed*, a run that depends on the standard
+        // library can never complete (the worker never gets MSL resident, so
+        // the queued command is never flushed). `msl_pending` is false in
+        // that state, so without this the panel would just show a normal
+        // "▶ running" chip on a permanently-stuck run with no explanation.
+        let msl_error = match world.get_resource::<lunco_assets::msl::MslLoadState>() {
+            Some(lunco_assets::msl::MslLoadState::Failed(msg)) => Some(msg.clone()),
+            _ => None,
+        };
 
         // Annotation-default reference for "is this what the model
         // says?" tagging next to the bounds inputs.
@@ -992,6 +1016,37 @@ impl ExperimentsPanel {
                     .color(col_error)
                     .size(11.0),
             );
+        }
+
+        // While MSL is still loading, tell the user a Run won't be lost —
+        // it starts once the standard library is ready. Shown when a run is
+        // pending (just clicked, queued, or in-flight and likely blocked on
+        // MSL) so the "nothing happened" gap reads as "waiting on MSL".
+        if msl_pending && (run_clicked || any_in_flight || queued_now > 0) {
+            ui.label(
+                egui::RichText::new(
+                    "⏳ Modelica Standard Library still loading — this run \
+                     will start automatically once MSL is ready.",
+                )
+                .color(col_accent)
+                .size(11.0),
+            );
+            // Coarse poll, not a per-frame spin — MSL readiness flips on a
+            // background task; a ~250ms re-check clears the notice promptly.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(250));
+        } else if let Some(err) = &msl_error {
+            if any_in_flight || queued_now > 0 {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "⚠ Modelica Standard Library failed to load — a run that \
+                         needs MSL can't complete. Reinstall MSL, then run again. \
+                         ({err})"
+                    ))
+                    .color(col_error)
+                    .size(11.0),
+                );
+            }
         }
 
         // Bounds + inputs live behind a collapsing chip so the table

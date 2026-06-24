@@ -282,6 +282,25 @@ impl Default for MslLoadState {
     }
 }
 
+impl MslLoadState {
+    /// True once the MSL bundle is resident and resolvable (the single
+    /// readiness predicate; the inverse of [`is_pending`](Self::is_pending)
+    /// plus the terminal `Failed` state). Prefer this over hand-rolled
+    /// `matches!(.., Ready { .. })` at call sites so the readiness rule
+    /// lives in one place.
+    pub fn is_ready(&self) -> bool {
+        matches!(self, MslLoadState::Ready { .. })
+    }
+
+    /// True while MSL is still on its way to `Ready` — i.e. not yet started,
+    /// or actively loading. `Failed` is **not** pending (it will never
+    /// become ready), so callers that want "still arriving" semantics get
+    /// `false` for a failed load.
+    pub fn is_pending(&self) -> bool {
+        matches!(self, MslLoadState::NotStarted | MslLoadState::Loading { .. })
+    }
+}
+
 /// Phases of remote MSL load. Surfaced in UI as a single status line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MslLoadPhase {
