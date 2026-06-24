@@ -782,10 +782,16 @@ fn apply_standard_material(
         .map(|v| Color::srgb(v.x, v.y, v.z))
         .unwrap_or(Color::WHITE);
 
+    let emissive = get_attribute_as_vec3(reader, sdf_path, "primvars:emissiveColor")
+        .or_else(|| get_attribute_as_vec3(reader, sdf_path, "emissiveColor"))
+        .map(|v| LinearRgba::new(v.x, v.y, v.z, 1.0))
+        .unwrap_or(LinearRgba::BLACK);
+
     entity_cmd.insert((
         Mesh3d(mesh_handle.clone()),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: color,
+            emissive,
             ..default()
         }))
     ));

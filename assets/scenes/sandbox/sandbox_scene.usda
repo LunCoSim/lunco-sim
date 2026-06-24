@@ -450,5 +450,7 @@ def Xform "SandboxScene"
         bool physics:rigidBodyEnabled = false # Static platform
         bool physics:collisionEnabled = true
     }
+
 }
+
 
