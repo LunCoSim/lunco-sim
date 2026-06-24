@@ -182,6 +182,22 @@ fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: 
         let registry = world.resource::<ModelicaDocumentRegistry>();
         registry
             .host(doc_id)
+            // Reject a STALE AST. A freshly-opened doc starts life with a
+            // `SyntaxCache::empty(gen 0)` placeholder while `generation` is
+            // already 1 — and that placeholder has no parse errors, so
+            // `strict_ast()` hands back `Some(empty StoredDefinition)`. The
+            // very first canvas render (`first_render`) bypasses the
+            // `ast_stale` guard in `trigger_projection_if_needed` and would
+            // otherwise project this empty AST → 0 nodes → `last_seen_gen`
+            // pinned to the current generation. The async parse then lands at
+            // the SAME generation (parse install doesn't bump it), so
+            // `gen_advanced` is false and the diagram never re-projects —
+            // leaving the model stuck on the "no diagram" card (the
+            // RocketStage-opened-after-MSL-ready bug). Treating a stale AST as
+            // "not ready" routes us into the early-return below, which leaves
+            // `last_seen_gen` untouched so the real parse triggers a proper
+            // re-projection.
+            .filter(|host| !host.document().ast_is_stale())
             .and_then(|host| host.document().strict_ast().map(|ast| (host.document().source_arc(), ast)))
     };
     let (source, ast_arc) = match resolved {
