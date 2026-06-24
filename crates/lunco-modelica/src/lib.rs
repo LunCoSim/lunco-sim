@@ -1213,18 +1213,17 @@ impl Plugin for ModelicaWorkbenchPlugin {
         app.add_plugins(ui::model_share::ModelSharePlugin);
 
         // Off-thread Modelica worker. wasm32 has no real threads, so an
-        // inline rumoca compile (seconds for non-trivial models) freezes
-        // the render loop and the page appears hung. `ModelicaPlugin`
-        // above already registered the result sender, so the JS Worker
-        // can be attached now. Non-fatal: the inline worker remains a
-        // fallback if the bundle is missing or COOP/COEP is misconfigured.
+        // inline rumoca *compile* (seconds for non-trivial models) freezes the
+        // render loop. The worker pool handles that heavy compile/run work — but
+        // it is NOT spawned here. Spawning it eagerly at boot is a cold compile
+        // of each ~60 MB worker bundle that can take tens of seconds on a weak
+        // machine, and the diagram must not wait on it. We only register the
+        // worker URL now; `worker_transport::ensure_pool_spawned` spawns the
+        // pool the first time a compile/run is requested. Parsing-for-diagram
+        // runs on the main thread until a worker is warm (see
+        // `dispatch_parse_to_worker`), so the model renders immediately.
         #[cfg(target_arch = "wasm32")]
-        if let Err(e) = worker_transport::install_worker("./worker/worker_bootstrap.js") {
-            bevy::log::error!(
-                "[ModelicaWorkbenchPlugin] off-thread worker failed to start; \
-                 falling back to inline compile path: {e:?}"
-            );
-        }
+        worker_transport::register_worker_url("./worker/worker_bootstrap.js");
     }
 }
 
@@ -1374,14 +1373,19 @@ fn build_modelica_core(app: &mut App) {
 
     #[cfg(target_arch = "wasm32")]
     {
-        // Both systems run every Update; only one actually does work per
-        // frame. `pump_commands_to_worker` early-returns if the JS worker
-        // hasn't been installed yet — which keeps `inline_worker_process`
-        // as the fallback dispatch until then. Once `install_worker` is
-        // called by the binary, pump_commands wins because it drains
-        // `rx_cmd` first; inline_worker_process then sees an empty queue
-        // and no-ops.
-        app.add_systems(Update, worker_transport::pump_commands_to_worker);
+        // Command dispatch on wasm. `pump_commands_to_worker` is the primary
+        // drainer: on a queued command it lazily spawns the worker pool and
+        // ships the command off-thread. It is ordered BEFORE
+        // `inline_worker_process` so that, whenever the pool spawns, the inline
+        // fallback sees an empty queue and no-ops. The inline (main-thread)
+        // path only does work when `pump_commands_to_worker` declines — i.e.
+        // the worker bundle failed to spawn — so a missing/blocked worker still
+        // compiles (just on the main thread).
+        app.add_systems(
+            Update,
+            worker_transport::pump_commands_to_worker
+                .before(worker::inline_worker_process),
+        );
         // Re-seed MSL into workers respawned after a crash, deferred so the
         // ~165 MB bundle isn't re-allocated on the (memory-starved) crash
         // stack. Cheap no-op when nothing is pending.

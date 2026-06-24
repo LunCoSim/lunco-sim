@@ -567,6 +567,66 @@ pub fn install_worker(worker_url: &str) -> Result<(), JsValue> {
     Ok(())
 }
 
+/// Register the worker-script URL for later lazy spawning, WITHOUT starting any
+/// worker. Called once at boot. The pool itself is spawned on first demand by
+/// [`ensure_pool_spawned`] — see its doc for why the diagram must not wait on
+/// the pool's startup.
+pub fn register_worker_url(worker_url: &str) {
+    let _ = WORKER_URL.set(worker_url.to_string());
+}
+
+/// Spawn the worker pool on first demand (a compile or Fast Run) if it isn't up
+/// yet, and seed it with MSL. The pool is deliberately NOT spawned at boot:
+/// parsing-for-diagram runs on the main thread (see `dispatch_parse_to_worker`),
+/// so the diagram renders without ever waiting on the pool's startup — which is
+/// a cold compile of each ~60 MB worker bundle and can take tens of seconds on a
+/// weak machine. Workers exist only for the heavy, user-initiated compile/run
+/// work, so we pay that startup the first time one is actually requested. No-op
+/// once the pool is up.
+pub fn ensure_pool_spawned() {
+    if is_worker_active() {
+        return;
+    }
+    let Some(url) = WORKER_URL.get() else {
+        bevy::log::warn!("[worker_transport] ensure_pool_spawned: no worker URL registered");
+        return;
+    };
+    if let Err(e) = install_worker(url) {
+        bevy::log::error!("[worker_transport] lazy worker pool spawn failed: {e:?}");
+        return;
+    }
+    // Seed the freshly-spawned pool with MSL so it can compile. Main already
+    // holds the decoded bundle (decoded on the main thread at boot), so the
+    // retained `MSL_WIRE` envelope is `provide_to_main = false` — workers decode
+    // for their own compiles only. Ship to worker 0; its `MslReady` seeds the
+    // rest. If MSL isn't available yet (a compile requested before the bundle
+    // loaded — rare, and gated behind `msl_installed()` anyway), the MSL
+    // bootstrap will ship to the now-existing pool when it runs.
+    let seeded = if let Some(env) = MSL_WIRE.get() {
+        let mut p = pool().lock().unwrap();
+        match p.workers.first() {
+            Some(WorkerHandle(worker)) => match post_array_to(worker, env) {
+                Ok(()) => {
+                    p.msl[0] = MslState::Decoding;
+                    true
+                }
+                Err(e) => {
+                    bevy::log::error!(
+                        "[worker_transport] lazy MSL seed to worker 0 failed: {e:?}"
+                    );
+                    false
+                }
+            },
+            None => false,
+        }
+    } else {
+        false
+    };
+    bevy::log::info!(
+        "[worker_transport] lazy worker pool spawned (msl_seeded={seeded}) — for compile/run"
+    );
+}
+
 /// Construct one `Worker`, wired with both an `onmessage` (results) and an
 /// `onerror` (crash) handler. The message handler routes every message kind
 /// through the process-global handlers, so all pooled workers are
@@ -805,8 +865,9 @@ pub fn pump_worker_respawns() {
     };
     if let Some(idx) = ready {
         post_bytes_to(idx, bytes, "respawn MSL reinstall (deferred)");
-        // The re-seed envelope is `provide_to_main = true` (benign — main
-        // dedupes), and its `MslReady` will flip this worker back to `Ready`.
+        // The re-seed envelope is `provide_to_main = false` (main already holds
+        // the decoded bundle), and its `MslReady` flips this worker back to
+        // `Ready`.
         if let Ok(mut p) = pool().lock() {
             if let Some(s) = p.msl.get_mut(idx) {
                 *s = MslState::Decoding;
@@ -823,12 +884,21 @@ pub fn pump_worker_respawns() {
 /// worker's `process_inline_command` runs in its own thread and posts results
 /// back asynchronously via `onmessage` (see [`install_worker`]).
 pub fn pump_commands_to_worker(channels: Res<ModelicaChannels>) {
-    if !is_worker_active() {
-        // install_worker hasn't run yet — main app is mid-bootstrap.
-        // Commands stay in the channel; we'll catch them next tick.
+    // Idle tick — nothing queued, so don't spawn the pool. (Must run BEFORE
+    // `inline_worker_process` so that, once we DO spawn, the inline fallback
+    // sees an empty queue and no-ops — see the ordering in lib.rs.)
+    if channels.rx_cmd.is_empty() {
         return;
     }
-
+    // A command is waiting: compiles/runs are exactly the heavy work the worker
+    // pool exists for, so spawn it lazily now.
+    ensure_pool_spawned();
+    if !is_worker_active() {
+        // Pool couldn't be spawned (worker bundle missing / COOP misconfigured).
+        // Leave the commands queued for the main-thread `inline_worker_process`
+        // fallback, which runs after this system.
+        return;
+    }
     while let Ok(cmd) = channels.rx_cmd.try_recv() {
         // Boot-race gate: Compile / UpdateParameters need the worker's
         // MSL index to be populated, otherwise rumoca emits silent
@@ -865,6 +935,9 @@ pub fn dispatch_run_fast(
     >,
     bounds: lunco_experiments::RunBounds,
 ) -> bool {
+    // A Fast Run is the heavy work the worker pool exists for — spawn it now if
+    // it isn't up yet (lazy boot). The run then queues behind MSL install below.
+    ensure_pool_spawned();
     if !is_worker_active() {
         return false;
     }
@@ -1108,31 +1181,34 @@ pub fn dispatch_parse_to_worker(
     if !is_worker_active() {
         return false;
     }
-    // Route the parse to a worker that is NOT busy decoding the MSL bundle and
-    // NOT running a Fast Run, so a freshly-opened model parses immediately
-    // instead of queuing behind the multi-second MSL decode (the reported
-    // "no diagram until MSL downloads" bug). The decode runs only on worker 0
-    // at boot (see `install_msl_compressed_in_worker`), so the secondaries are
-    // free to parse; once worker 0 reports ready it becomes parse-eligible
-    // again while the secondaries decode. Parsing needs no MSL, so an
-    // `Absent`-MSL worker is fine. Falls back to plain round-robin when every
-    // worker is busy. Compute the index under the lock, then drop it before
-    // `post_msg_to` (which re-locks) to avoid a self-deadlock.
+    // Off-thread parse ONLY on a worker that is already MSL-`Ready` and free.
+    // The worker pool is spawned lazily for compile/run and is not used to gate
+    // the diagram: until a worker is genuinely warm, parsing stays on the main
+    // thread (caller's fallback when this returns `false`). This is what keeps
+    // the diagram off the worker pool's (slow) startup path — it only ever uses
+    // the main thread or an already-warm worker, never a booting one. Once the
+    // pool is warm (post first compile/run), reparses ride the free worker so
+    // editing large files stays responsive. Compute the index under the lock,
+    // then drop it before `post_msg_to` (which re-locks) to avoid a deadlock.
     let idx = {
         let p = pool().lock().unwrap();
         let n = p.workers.len();
         if n == 0 {
-            0
-        } else {
-            let start = NEXT_PARSE_WORKER.with(|c| {
-                let s = c.get();
-                c.set((s + 1) % n);
-                s % n
-            });
-            (0..n)
-                .map(|k| (start + k) % n)
-                .find(|&i| p.msl[i] != MslState::Decoding && p.running[i].is_none())
-                .unwrap_or(start)
+            return false;
+        }
+        let start = NEXT_PARSE_WORKER.with(|c| {
+            let s = c.get();
+            c.set((s + 1) % n);
+            s % n
+        });
+        match (0..n)
+            .map(|k| (start + k) % n)
+            .find(|&i| p.msl[i] == MslState::Ready && p.running[i].is_none())
+        {
+            Some(i) => i,
+            // No warm, free worker → parse on the main thread instead of queuing
+            // behind a booting worker or a running simulation.
+            None => return false,
         }
     };
     post_msg_to(
