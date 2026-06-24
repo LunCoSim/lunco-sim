@@ -2877,6 +2877,12 @@ fn render_status_bar_inner(
     };
     let perf_stats = world.resource::<perf_hud::PerfStats>().clone();
     let perf_enabled = world.resource::<perf_hud::PerfHudSettings>().enabled;
+    // The networking chip only paints when not standalone; reserve room
+    // for it on the right so the clickable status region doesn't overlap.
+    let net_active = world
+        .get_resource::<lunco_core::NetStatus>()
+        .map(|s| !matches!(s.role, lunco_core::NetworkRole::Standalone))
+        .unwrap_or(false);
 
     ui.horizontal(|ui| {
         // The whole strip is one clickable region; the popup anchors
@@ -2884,6 +2890,16 @@ fn render_status_bar_inner(
         let response = ui
             .scope(|ui| {
                 ui.set_height(18.0);
+                // Whole strip is the click target, not just the dot+text:
+                // stretch this region to fill the available width minus the
+                // space the right-aligned perf HUD / net chip will claim.
+                // The content stays left-aligned; the trailing empty space
+                // is still part of the response rect, so a click anywhere on
+                // the bar opens the history popup.
+                let right_reserve = 8.0
+                    + if perf_enabled { 300.0 } else { 0.0 }
+                    + if net_active { 220.0 } else { 0.0 };
+                ui.set_min_width((ui.available_width() - right_reserve).max(160.0));
                 if let Some(l) = latest.as_ref() {
                     let dot_color = match l.level {
                         StatusLevel::Error => theme.tokens.error,

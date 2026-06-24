@@ -3,21 +3,17 @@
 //!
 //! See `docs/architecture/25-experiments.md` for the design.
 //!
-//! ## v1 limitations
+//! ## Parameter / input injection
 //!
-//! - Overrides go through source-string mutation (rumoca has no public
-//!   `compile_with_modifications` yet). Only top-level literal
-//!   `parameter` declarations are supported. See
-//!   [`apply_overrides_to_source`].
-//! - Reflatten on every override change. Cache keyed by
-//!   (source_hash, override_set) is a future optimization. See TODO.
+//! Inputs and parameter overrides are applied at the **DAE level** by
+//! rebinding each target variable's `start` after a single clean compile
+//! (see [`apply_value_bindings_to_dae`]) — NOT by mutating source. One
+//! compile is shared across a whole sweep; there is no source-rewriting
+//! fallback. A target that is neither a top-level DAE parameter nor input
+//! (or a non-scalar value) is a hard error rather than a silent re-compile.
+//!
 //! - One in-flight Fast Run per runner instance. Native enforcement
 //!   matches wasm worker serialization.
-//!
-//! ## TODO(rumoca)
-//! Replace string injection with `rumoca-compile::compile_with_modifications`
-//! once upstream exposes `ClassModification` on the public API.
-//! See `rumoca-ir-ast::visitor`.
 //!
 //! ## Compile-once parameter sweeps
 //! Overrides are applied at the *DAE* level, not by reflattening per run.
@@ -46,7 +42,8 @@ use lunco_experiments::{
 };
 use rumoca_compile::compile::Dae;
 // Used only by the native-only DAE-override fast path (`apply_overrides_to_dae`).
-#[cfg(not(target_arch = "wasm32"))]
+// Used by `apply_value_bindings_to_dae` on BOTH platforms (native runner and
+// the wasm worker both inject run values at the DAE level), so not wasm-gated.
 use rumoca_compile::parsing::ir_core::{
     Expression as DaeExpression, Literal as DaeLiteral, Span as DaeSpan, VarName as DaeVarName,
 };
@@ -604,31 +601,46 @@ fn dae_cache_key(src: &ModelSource, after_inputs: &str) -> u64 {
     h.finish()
 }
 
-/// Apply parameter overrides directly to a compiled DAE by rebinding each
-/// target parameter's `start` to a literal. Relies on rumoca's
-/// `preserve_overridable_param_starts` fold keeping computed dependents
-/// symbolic, so overriding a base (e.g. `Isp`) recomputes its dependents
-/// (e.g. `massRatio`) at `SimStepper::new` via `build_params`. Returns `Err`
-/// (→ caller recompiles with string-injected source) when a target isn't a
-/// top-level DAE parameter or the value isn't a scalar literal.
-#[cfg(not(target_arch = "wasm32"))]
-fn apply_overrides_to_dae(
+/// Apply value bindings — both parameter overrides AND experiment input
+/// values — directly to a compiled DAE by rebinding each target variable's
+/// `start` to a literal. This is THE single place run values are injected;
+/// there is no source-rewriting fallback. Both the native runner and the wasm
+/// worker call it, so the two platforms inject identically.
+///
+/// A target is looked up first among DAE `parameters`, then `inputs`:
+/// - **Parameters** rely on rumoca's `preserve_overridable_param_starts` fold
+///   keeping computed dependents symbolic, so overriding a base (e.g. `Isp`)
+///   recomputes its dependents (e.g. `massRatio`) at `SimStepper::new` via
+///   `build_params`.
+/// - **Inputs**: the build seeds each input's initial value from its `start`
+///   once (the batch solver never calls `set_input`), so rebinding `start`
+///   here pins the input to a constant for the run — the DAE-level analog of
+///   the old `input X` → `parameter X = v` source rewrite, with no rumoca
+///   change required.
+///
+/// Returns `Err` when a target is neither a parameter nor an input, or the
+/// value isn't a scalar literal — a hard error (no silent source-rewrite
+/// fallback that would diverge the run's source from what was compiled).
+pub fn apply_value_bindings_to_dae(
     dae: &mut Dae,
-    overrides: &BTreeMap<ParamPath, ParamValue>,
+    bindings: &BTreeMap<ParamPath, ParamValue>,
 ) -> Result<(), String> {
-    for (path, value) in overrides {
+    for (path, value) in bindings {
         let key = DaeVarName::new(path.0.clone());
         let var = dae
             .variables
             .parameters
             .get_mut(&key)
-            .ok_or_else(|| format!("'{}' is not a top-level DAE parameter", path.0))?;
+            .or_else(|| dae.variables.inputs.get_mut(&key))
+            .ok_or_else(|| {
+                format!("'{}' is not a top-level DAE parameter or input", path.0)
+            })?;
         let lit = match value {
             ParamValue::Real(x) => DaeLiteral::Real(*x),
             ParamValue::Int(x) => DaeLiteral::Integer(*x),
             ParamValue::Bool(b) => DaeLiteral::Boolean(*b),
             ParamValue::String(s) => DaeLiteral::String(s.clone()),
-            _ => return Err(format!("override for '{}' is not a scalar literal", path.0)),
+            _ => return Err(format!("binding for '{}' is not a scalar literal", path.0)),
         };
         var.start = Some(DaeExpression::Literal { value: lit, span: DaeSpan::default() });
     }
@@ -683,23 +695,6 @@ fn run_inner(
         }
     };
 
-    // Apply input substitutions first (input → parameter), then
-    // parameter overrides on the rewritten source.
-    let after_inputs = match apply_inputs_to_source(&source.source, &inputs) {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = tx.send(RunUpdate::Failed {
-                error: format!("input substitution failed: {e}"),
-                partial: None,
-            });
-            return;
-        }
-    };
-    if cancel.load(Ordering::SeqCst) {
-        let _ = tx.send(RunUpdate::Cancelled);
-        return;
-    }
-
     // Persistent runner compiler: clone the handle out of `state` (brief
     // lock), then compile under the compiler's OWN lock so the multi-second
     // compile never holds `state` and stall the scheduler / parallel runs.
@@ -715,10 +710,11 @@ fn run_inner(
         }
     };
 
-    // Compile-once: compile the input-substituted source (NO overrides baked
-    // in) a single time and cache the resulting DAE keyed by source hash. A
-    // parameter sweep recompiles zero times after the first run.
-    let key = dae_cache_key(&source, &after_inputs);
+    // Compile-once: compile the CLEAN model source (no inputs/overrides baked
+    // in) a single time and cache the resulting DAE. Inputs and overrides are
+    // applied to the DAE afterwards (see `apply_value_bindings_to_dae`), so a
+    // whole parameter/input sweep shares ONE compile and recompiles zero times.
+    let key = dae_cache_key(&source, "");
     let cached = state.lock().ok().and_then(|s| s.dae_cache.get(&key).cloned());
     let base_dae: Arc<Dae> = match cached {
         Some(d) => d,
@@ -727,7 +723,7 @@ fn run_inner(
                 let mut compiler = compiler_handle.lock().unwrap_or_else(|e| e.into_inner());
                 compiler.compile_str_multi(
                     &source.model_name,
-                    &after_inputs,
+                    &source.source,
                     &source.filename,
                     &source.extras,
                 )
@@ -756,50 +752,25 @@ fn run_inner(
         return;
     }
 
-    // Apply parameter overrides at the DAE level (the compile-once fast path).
-    // Fall back to a string-injected recompile if any override can't be set
-    // there (non-top-level param, or non-scalar value).
-    let run_dae: Arc<Dae> = if overrides.is_empty() {
+    // Merge inputs + overrides into one binding set and apply at the DAE level
+    // — the SINGLE injection path, no source rewriting. Inputs and parameter
+    // overrides are the same operation (pin a top-level variable to a value),
+    // so they share `apply_value_bindings_to_dae`. An empty set reuses the
+    // cached base DAE untouched.
+    let mut bindings = inputs;
+    bindings.extend(overrides);
+    let run_dae: Arc<Dae> = if bindings.is_empty() {
         base_dae
     } else {
         let mut d = (*base_dae).clone();
-        match apply_overrides_to_dae(&mut d, &overrides) {
-            Ok(()) => Arc::new(d),
-            Err(reason) => {
-                bevy::log::debug!(
-                    "[runner] DAE override fast-path unavailable ({reason}); recompiling with injected source"
-                );
-                let injected = match apply_overrides_to_source(&after_inputs, &overrides) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        let _ = tx.send(RunUpdate::Failed {
-                            error: format!("override application failed: {e}"),
-                            partial: None,
-                        });
-                        return;
-                    }
-                };
-                let compiled = {
-                    let mut compiler = compiler_handle.lock().unwrap_or_else(|e| e.into_inner());
-                    compiler.compile_str_multi(
-                        &source.model_name,
-                        &injected,
-                        &source.filename,
-                        &source.extras,
-                    )
-                };
-                match compiled {
-                    Ok(d) => d.dae,
-                    Err(e) => {
-                        let _ = tx.send(RunUpdate::Failed {
-                            error: format!("compile failed: {e}"),
-                            partial: None,
-                        });
-                        return;
-                    }
-                }
-            }
+        if let Err(reason) = apply_value_bindings_to_dae(&mut d, &bindings) {
+            let _ = tx.send(RunUpdate::Failed {
+                error: format!("parameter/input binding failed: {reason}"),
+                partial: None,
+            });
+            return;
         }
+        Arc::new(d)
     };
 
     if cancel.load(Ordering::SeqCst) {
@@ -1426,44 +1397,6 @@ pub fn detect_top_level_inputs(source: &str) -> Vec<DetectedInput> {
     out
 }
 
-/// Substitute input declarations with parameter declarations so the
-/// batch simulator sees a fixed value. Replaces
-/// `input <Type> <name>` with `parameter <Type> <name> = <value>`.
-/// Only fires for inputs the user actually set; unset inputs stay
-/// as `input` and the simulator defaults them to 0.
-pub fn apply_inputs_to_source(
-    source: &str,
-    inputs: &BTreeMap<ParamPath, ParamValue>,
-) -> Result<String, String> {
-    if inputs.is_empty() {
-        return Ok(source.to_string());
-    }
-    let mut out = source.to_string();
-    for (path, value) in inputs {
-        let leaf = crate::ast_extract::short_name(&path.0);
-        let escaped = regex::escape(leaf);
-        let re = regex::Regex::new(&format!(
-            r"(?m)\binput\b(\s+[A-Za-z_][A-Za-z0-9_.\[\]]*)\s+{}\b\s*;",
-            escaped
-        ))
-        .map_err(|e| format!("input regex: {e}"))?;
-        let lit = format_literal(value);
-        let replaced = re
-            .replace(
-                &out,
-                format!("parameter$1 {} = {};", leaf, lit).as_str(),
-            )
-            .into_owned();
-        if replaced == out {
-            return Err(format!(
-                "input '{leaf}' not found at the top level of the model source"
-            ));
-        }
-        out = replaced;
-    }
-    Ok(out)
-}
-
 /// Detect top-level `parameter` declarations in a Modelica source
 /// string. v1: scans the textual source only (no AST traversal),
 /// matches the same patterns `replace_param_literal` accepts. Used by
@@ -1598,141 +1531,6 @@ fn looks_like_literal(rhs: &str) -> bool {
     // Fall through: identifier / expression / function call / array
     // literal — v1 doesn't substitute these via regex.
     false
-}
-
-/// Mutate `source` so each top-level literal `parameter` declaration
-/// listed in `overrides` carries the new value.
-///
-/// v1 implementation: simple regex-based replacement of
-/// `parameter <Type> <name> = <literal>`. Limitations:
-///
-/// - Only matches top-level literal RHS (numbers, true/false,
-///   quoted strings). Expression-bound or inherited params are
-///   silently skipped — caller filters those out at UI time so the
-///   user sees them greyed.
-/// - Requires the param declaration to be in the supplied source
-///   (won't traverse imports). Same limitation as the UI editor.
-///
-/// Returns `Err` if a requested override name isn't found in the
-/// source — surfaces as a Failed run with a clear message instead of
-/// running with stale params silently.
-pub fn apply_overrides_to_source(
-    source: &str,
-    overrides: &BTreeMap<ParamPath, ParamValue>,
-) -> Result<String, String> {
-    if overrides.is_empty() {
-        return Ok(source.to_string());
-    }
-    let mut out = source.to_string();
-    for (path, value) in overrides {
-        // We look for `parameter <whitespace and type stuff> <name> = <literal>`.
-        // The path may be dotted (component.subcomponent.param); v1 only
-        // supports the trailing identifier in the model's own source.
-        // Inherited params raise an error per spec.
-        let leaf = crate::ast_extract::short_name(&path.0);
-        let new_literal = format_literal(value);
-        let replaced = replace_param_literal(&out, leaf, &new_literal)?;
-        out = replaced;
-    }
-    Ok(out)
-}
-
-fn format_literal(v: &ParamValue) -> String {
-    match v {
-        ParamValue::Real(x) => {
-            // Keep "5.0" not "5" so the parser still sees Real.
-            if x.fract() == 0.0 && x.is_finite() {
-                format!("{x:.1}")
-            } else {
-                format!("{x}")
-            }
-        }
-        ParamValue::Int(x) => format!("{x}"),
-        ParamValue::Bool(b) => if *b { "true".into() } else { "false".into() },
-        ParamValue::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
-        ParamValue::Enum(s) => s.clone(),
-        ParamValue::RealArray(xs) => {
-            let inner: Vec<String> = xs.iter().map(|x| format!("{x}")).collect();
-            format!("{{{}}}", inner.join(", "))
-        }
-    }
-}
-
-/// Find `parameter ... <name> [(modifiers)] = <literal>;` and substitute
-/// the literal.
-///
-/// We can't use a full Modelica parser here without re-flattening, which
-/// defeats the point. So we anchor a loose regex on the declaration up to
-/// the parameter name, then scan forward tracking bracket depth to find the
-/// declaration's *own* `=` (the first `=` at depth 0) and the terminating
-/// `;`/`,`. Tracking depth is what lets a value-modifier such as
-/// `g(unit="m/s2") = 9.81` keep its `unit="m/s2"` — the `=` inside the
-/// parentheses is at depth 1 and correctly skipped (a plain `[^=;]*=` regex
-/// would wrongly match that inner `=` and clobber the modifier).
-fn replace_param_literal(
-    source: &str,
-    name: &str,
-    new_literal: &str,
-) -> Result<String, String> {
-    // Anchor on `parameter [final] [each] <type…> <name>` only — do NOT let
-    // the regex consume the `=`, since the binding `=` must be located by
-    // the depth-aware scan below.
-    let escaped = regex::escape(name);
-    let re = regex::Regex::new(&format!(
-        r"(?m)\bparameter\b[^;]*?\b{}\b",
-        escaped
-    ))
-    .map_err(|e| format!("override regex build failed: {e}"))?;
-    let mat = match re.find(source) {
-        Some(m) => m,
-        None => {
-            return Err(format!(
-                "parameter '{name}' not found at the top level of the model source — \
-                 inherited / expression-bound params are not supported in v1"
-            ));
-        }
-    };
-    // Scan from just after the name for the declaration's `=` and end.
-    let scan_start = mat.end();
-    let tail = &source[scan_start..];
-    let mut depth: i32 = 0;
-    let mut eq_off: Option<usize> = None;
-    let mut end_off: Option<usize> = None;
-    for (i, ch) in tail.char_indices() {
-        match ch {
-            '{' | '(' | '[' => depth += 1,
-            '}' | ')' | ']' => depth -= 1,
-            '=' if depth == 0 && eq_off.is_none() => eq_off = Some(i),
-            ';' | ',' if depth == 0 => {
-                end_off = Some(i);
-                break;
-            }
-            _ => {}
-        }
-    }
-    let end_off = end_off.unwrap_or(tail.len());
-    let eq_off = match eq_off {
-        Some(e) if e < end_off => e,
-        // No top-level `=` before the terminator → no literal binding to
-        // replace (expression-bound / no default). Same v1 limitation as
-        // the UI detector flags.
-        _ => {
-            return Err(format!(
-                "parameter '{name}' has no literal default binding — \
-                 override unsupported in v1"
-            ));
-        }
-    };
-    // Replace the span after the `=` (the value) with ` <literal>`, keeping
-    // everything up to and including the `=` and the terminator onward.
-    let value_start = scan_start + eq_off + 1; // byte right after `=`
-    let value_end = scan_start + end_off;
-    let mut out = String::with_capacity(source.len() + new_literal.len() + 1);
-    out.push_str(&source[..value_start]);
-    out.push(' ');
-    out.push_str(new_literal);
-    out.push_str(&source[value_end..]);
-    Ok(out)
 }
 
 /// Per-(document, model) parameter override + bounds draft state.
@@ -2053,41 +1851,6 @@ mod tests {
             mb(read_kb("VmHWM:"))
         );
         let _ = sampler.join();
-    }
-
-    #[test]
-    fn override_real_literal() {
-        let src = "model M\n  parameter Real m = 1.5;\nequation\nend M;\n";
-        let mut ov: BTreeMap<ParamPath, ParamValue> = BTreeMap::new();
-        ov.insert(ParamPath("m".into()), ParamValue::Real(2.5));
-        let out = apply_overrides_to_source(src, &ov).unwrap();
-        assert!(out.contains("parameter Real m = 2.5"));
-        assert!(!out.contains("1.5"));
-    }
-
-    #[test]
-    fn override_with_modifier() {
-        let src = "model M\n  parameter Real g(unit=\"m/s2\") = 9.81;\nend M;\n";
-        let mut ov: BTreeMap<ParamPath, ParamValue> = BTreeMap::new();
-        ov.insert(ParamPath("g".into()), ParamValue::Real(3.71));
-        let out = apply_overrides_to_source(src, &ov).unwrap();
-        assert!(out.contains("3.71"));
-        assert!(out.contains("unit=\"m/s2\""));
-    }
-
-    #[test]
-    fn missing_param_errors() {
-        let src = "model M\n  Real x;\nend M;\n";
-        let mut ov: BTreeMap<ParamPath, ParamValue> = BTreeMap::new();
-        ov.insert(ParamPath("nope".into()), ParamValue::Real(1.0));
-        assert!(apply_overrides_to_source(src, &ov).is_err());
-    }
-
-    #[test]
-    fn integer_and_bool_format() {
-        assert_eq!(format_literal(&ParamValue::Int(7)), "7");
-        assert_eq!(format_literal(&ParamValue::Bool(true)), "true");
-        assert_eq!(format_literal(&ParamValue::Real(3.0)), "3.0");
     }
 
     // ── Step 2: settings / cap resolution ──

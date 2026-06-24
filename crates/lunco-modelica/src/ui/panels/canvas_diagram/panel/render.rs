@@ -125,10 +125,19 @@ pub(crate) fn render_diagram_canvas(
     // `request_reproject_all` (the MSL-ready handler), so it stays
     // MSL-specific.
     {
-        let msl_pending = world
-            .get_resource::<lunco_assets::msl::MslLoadState>()
-            .map(|s| s.is_pending())
-            .unwrap_or(true);
+        let msl_state = world.get_resource::<lunco_assets::msl::MslLoadState>();
+        let msl_pending = msl_state.map(|s| s.is_pending()).unwrap_or(true);
+        // Live load detail (phase + %) while the bundle is still arriving,
+        // so the diagram shows *why* the icons are gray and how far along
+        // the download/parse is — not just a static "loading" string.
+        let msl_detail = msl_state.and_then(|s| match s {
+            lunco_assets::msl::MslLoadState::Loading {
+                phase,
+                bytes_done,
+                bytes_total,
+            } => Some(format_msl_loading_hint(*phase, *bytes_done, *bytes_total)),
+            _ => None,
+        });
         let (has_content, reproject_pending) = {
             let state = world.resource::<CanvasDiagramState>();
             let docstate = match render_tab_id {
@@ -141,21 +150,28 @@ pub(crate) fn render_diagram_canvas(
             )
         };
         if (msl_pending || reproject_pending) && has_content {
-            // A compile dispatched while MSL is still loading can't finish
-            // until the standard library installs (the worker parse path
-            // needs MSL resident — but the worker queues it and runs it on
-            // its `MslReady`, see worker_transport.rs). When one is pending,
-            // extend the hint with a second line so the user knows the
-            // action wasn't lost. Doc-scoped via `is_compiling(d)` only — a
-            // global runner-busy check would light this hint up on tab A
-            // when an unrelated run on tab B is in flight; the Fast Run path
-            // has its own notice in the experiments panel.
+            // A compile or run dispatched while MSL is still loading can't
+            // finish until the standard library installs (the worker parse
+            // path needs MSL resident — but the worker queues it and runs it
+            // on its `MslReady`, see worker_transport.rs). When one is
+            // pending, extend the hint with a second line so the user knows
+            // the action wasn't lost.
+            //
+            // Compile is doc-scoped (`is_compiling(d)`). A Fast Run is tracked
+            // only by the process-global runner, so we light the run line
+            // whenever it has queued/in-flight work — acceptable here because
+            // this hint only shows *while MSL is still loading*, when the one
+            // queued thing is what the user just clicked.
             let compile_pending = active_doc
                 .and_then(|d| {
                     world
                         .get_resource::<crate::state::CompileStates>()
                         .map(|cs| cs.is_compiling(d))
                 })
+                .unwrap_or(false);
+            let run_pending = world
+                .get_resource::<crate::ModelicaRunnerResource>()
+                .map(|r| r.0.in_flight_count() > 0 || r.0.queued_count() > 0)
                 .unwrap_or(false);
             let color = world
                 .get_resource::<lunco_theme::Theme>()
@@ -167,19 +183,33 @@ pub(crate) fn render_diagram_canvas(
                 .with_clip_rect(ui.clip_rect().intersect(response.rect));
             let font = egui::FontId::proportional(11.0);
             let mut y = response.rect.bottom() - 8.0;
+            // First line: icons-pending + live load progress when available.
+            let first_line = match &msl_detail {
+                Some(d) => format!("⏳ {d} · icons update when ready"),
+                None => "⏳ Icons will be updated when MSL loaded".to_string(),
+            };
             painter.text(
                 egui::pos2(response.rect.left() + 10.0, y),
                 egui::Align2::LEFT_BOTTOM,
-                "⏳ Icons will be updated when MSL loaded",
+                first_line,
                 font.clone(),
                 color,
             );
-            if compile_pending {
+            // Second line: deferred-action notice (compile takes priority
+            // over run since it's doc-scoped and more specific).
+            let deferred = if compile_pending {
+                Some("⏳ Compilation will run when MSL is ready")
+            } else if run_pending {
+                Some("⏳ Simulation will start when MSL is ready")
+            } else {
+                None
+            };
+            if let Some(line) = deferred {
                 y -= 16.0;
                 painter.text(
                     egui::pos2(response.rect.left() + 10.0, y),
                     egui::Align2::LEFT_BOTTOM,
-                    "⏳ Compilation will run when MSL is ready",
+                    line,
                     font,
                     color,
                 );
@@ -238,5 +268,29 @@ pub(crate) fn render_diagram_canvas(
     if (trace_phases || frame_ms > 16.0) && !phase_log.is_empty() {
         let breakdown = phase_log.iter().map(|(name, ms)| format!("{name}={ms:.1}ms")).collect::<Vec<_>>().join(" ");
         bevy::log::warn!("[CanvasDiagram] slow-frame phases (total={frame_ms:.1}ms): {breakdown}");
+    }
+}
+
+/// Human-readable one-liner for the in-diagram MSL-loading hint, e.g.
+/// `Loading Modelica library — downloading MSL 47%` or
+/// `Loading Modelica library — parsing MSL 1200/2555`. The `Parsing`
+/// phase carries file counts in `done`/`total`; other phases carry bytes.
+/// Falls back to a bare phase label when `total` is unknown (`0`).
+fn format_msl_loading_hint(
+    phase: lunco_assets::msl::MslLoadPhase,
+    done: u64,
+    total: u64,
+) -> String {
+    use lunco_assets::msl::MslLoadPhase;
+    let label = phase.as_str();
+    match phase {
+        MslLoadPhase::Parsing if total > 0 => {
+            format!("Loading Modelica library — {label} {done}/{total}")
+        }
+        _ if total > 0 => {
+            let pct = (done as f64 / total as f64 * 100.0).clamp(0.0, 100.0);
+            format!("Loading Modelica library — {label} {pct:.0}%")
+        }
+        _ => format!("Loading Modelica library — {label}"),
     }
 }

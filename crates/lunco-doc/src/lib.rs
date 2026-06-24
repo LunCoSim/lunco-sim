@@ -330,6 +330,34 @@ impl DocumentOrigin {
         matches!(self, Self::Untitled { .. })
     }
 
+    /// Stable, unique URI identifying this document inside a compile
+    /// session — the document's TRUE identity, distinct from both its
+    /// human label ([`display_name`](Self::display_name)) and the
+    /// qualified name of any class it defines.
+    ///
+    /// This is what a rumoca session keys a document by. It must be:
+    /// - **stable** across recompiles of the same document (so
+    ///   `update_document` replaces the slot in place rather than
+    ///   registering a second copy), and
+    /// - **unique** per document (so two open files never collide).
+    ///
+    /// It is deliberately *not* a class name: a single file can declare
+    /// several top-level classes (`model A; model B;`), so the file —
+    /// not any one class — is the unit rumoca dedups. Keying by class
+    /// name would register the whole file twice when two of its classes
+    /// are compiled, tripping the merge pass's duplicate-class guard.
+    ///
+    /// `File` uses its full path (not the stem — `a/Foo.mo` and
+    /// `b/Foo.mo` must differ); `Bundled` its filename; `Untitled` its
+    /// already-unique `Untitled-<id>` name.
+    pub fn session_uri(&self) -> String {
+        match self {
+            Self::Untitled { name } => name.clone(),
+            Self::Bundled { filename } => filename.clone(),
+            Self::File { path, .. } => path.to_string_lossy().into_owned(),
+        }
+    }
+
     /// Best-effort display name — the tab title before any
     /// domain-specific overrides. File stem for `File`, the stashed
     /// `name` for `Untitled`, the filename stem for `Bundled`.

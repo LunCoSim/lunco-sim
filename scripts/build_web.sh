@@ -417,7 +417,11 @@ generate_bindings() {
     fi
     rm -rf "$dist_dir"
     mkdir -p "$dist_dir"
-    cp "$bindgen_out_dir"/* "$dist_dir/"
+    # Recursive: wasm-bindgen emits a `snippets/` subdir (JS interop shims that
+    # the generated loader imports at runtime). A non-recursive `cp` errors on
+    # it under `set -e` and aborts the build before index.html / worker / msl
+    # are staged — leaving a half-populated dist that serves a blank page.
+    cp -r "$bindgen_out_dir"/. "$dist_dir/"
     if [ -n "$stashed_worker" ]; then
         mkdir -p "$dist_dir/worker"
         cp -r "$stashed_worker"/. "$dist_dir/worker/"
@@ -573,15 +577,34 @@ the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-as
         if should_rebuild_worker "$worker_wasm_dist"; then
             worker_src_changed=1
         fi
+        # Authoritative staleness signal: does the dist worker already bake the
+        # exact wire id of the freshly-staged MAIN bundle? The mtime/Cargo.lock
+        # heuristics above race against content-hash rewrites (hash_worker_wasm
+        # touches the dist mtime every build) and incremental builds that leave
+        # the cargo output mtime untouched — the whole class of "stale worker
+        # silently shipped" bugs (build_web history: Cargo.lock gate, source-edit
+        # gate, …). The baked `LUNCO_WIRE_BUILD_ID` is the ground truth the
+        # runtime boot handshake checks, so gate the skip on it directly: only
+        # skip when the shipped worker provably matches main. If the id can't be
+        # read (format drift) `worker_has_wire` stays 0 and we rebuild — safe.
+        local main_wasm_dist="$dist_dir/${binary}_bg.wasm"
+        local expected_wire_id="" worker_has_wire=0
+        expected_wire_id=$(strings "$main_wasm_dist" 2>/dev/null \
+            | grep -oE 'LUNCO_WIRE:[0-9a-f]{16}' | head -1 | sed 's/LUNCO_WIRE://')
+        if [ -n "$expected_wire_id" ] && [ -n "$worker_wasm_dist" ] \
+            && strings "$worker_wasm_dist" 2>/dev/null | grep -q "$expected_wire_id"; then
+            worker_has_wire=1
+        fi
         if [ "${WORKER_REBUILD:-}" != "force" ] \
             && [ "$lock_moved" != "1" ] \
             && [ "$worker_src_changed" != "1" ] \
+            && [ "$worker_has_wire" = "1" ] \
             && [ -f "$worker_wasm_src" ] \
             && [ -n "$worker_wasm_dist" ] \
             && [ ! "$worker_wasm_src" -nt "$worker_wasm_dist" ]; then
             local worker_size
             worker_size=$(du -h "$worker_wasm_dist" | cut -f1)
-            info "Worker bundle up-to-date ($worker_size) — bindgen skipped"
+            info "Worker bundle up-to-date ($worker_size, wire $expected_wire_id) — bindgen skipped"
             # Still ensure the dist wasm is content-hashed (idempotent) — a
             # bare-named worker left by an older build would otherwise persist.
             hash_worker_wasm "$worker_dist_dir" "$worker_bin"
@@ -610,7 +633,9 @@ the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-as
         fi
         rm -rf "$worker_dist_dir"
         mkdir -p "$worker_dist_dir"
-        cp "$worker_bindgen_dir"/* "$worker_dist_dir/"
+        # Recursive (see the main-bundle copy): wasm-bindgen emits a `snippets/`
+        # subdir; a non-recursive cp aborts the build under `set -e`.
+        cp -r "$worker_bindgen_dir"/. "$worker_dist_dir/"
         # Content-hash the multi-MB `_bg.wasm` (the aggressively-cached artifact)
         # and repoint the generated loader. The `.js` shims keep stable names so
         # the Rust `install_worker("./worker/worker_bootstrap.js")` URL is
@@ -632,6 +657,14 @@ the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-as
         local worker_size
         worker_size=$(du -h "$worker_dist_dir/${worker_bin}_bg"*.wasm 2>/dev/null | cut -f1 | head -1)
         info "Worker bundle: $worker_size at $worker_dist_dir"
+        # Hard lockstep guard: the worker just staged MUST bake the same wire id
+        # as the main bundle, or the runtime handshake rejects it and Modelica
+        # compile/run silently breaks. Fail the build here instead of shipping a
+        # broken pair to `serve`/deploy.
+        assert_wire_lockstep \
+            "$dist_dir/${binary}_bg.wasm" \
+            "$(ls "$worker_dist_dir/${worker_bin}_bg"*.wasm 2>/dev/null | head -1)" \
+            "$binary"
     fi
 }
 
@@ -645,6 +678,32 @@ the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-as
 # stale from the browser cache. Idempotent: hashes a bare `${bin}_bg.wasm`
 # (rename + repoint the generated loader) and no-ops once already hashed. Runs
 # on BOTH the rebuild and up-to-date paths so the dist is always hashed.
+# Hard guard against shipping a stale worker. The off-thread worker and the
+# main bundle both bake `LUNCO_WIRE_BUILD_ID` (a hash of Cargo.lock + this
+# crate's src/); if they disagree, the boot handshake in worker_transport
+# reports "STALE WORKER" and every bincode message mis-decodes — Modelica
+# compile/run is broken. The staleness heuristics in generate_bindings are
+# best-effort; this is the backstop that makes a mismatched pair impossible to
+# ship: it reads the id baked into each wasm and exits non-zero on mismatch.
+# Degrades to a warning (never a false failure) when the id can't be extracted.
+assert_wire_lockstep() {
+    local main_wasm="$1" worker_wasm="$2" bin="${3:-lunica}"
+    local id
+    id=$(strings "$main_wasm" 2>/dev/null \
+        | grep -oE 'LUNCO_WIRE:[0-9a-f]{16}' | head -1 | sed 's/LUNCO_WIRE://')
+    if [ -z "$id" ]; then
+        warn "wire-lockstep guard: could not read main wire id from $(basename "$main_wasm" 2>/dev/null) — skipping check"
+        return 0
+    fi
+    if [ -z "$worker_wasm" ] || ! strings "$worker_wasm" 2>/dev/null | grep -q "$id"; then
+        error "WIRE LOCKSTEP FAILED: shipped worker does not bake main wire id $id."
+        error "  A stale worker would ship → runtime 'STALE WORKER', Modelica compile/run BROKEN."
+        error "  Fix: WORKER_REBUILD=force ./scripts/build_web.sh build $bin"
+        exit 1
+    fi
+    success "Wire lockstep OK — main + worker both bake $id"
+}
+
 hash_worker_wasm() {
     local dir="$1" bin="$2"
     local bare="$dir/${bin}_bg.wasm"

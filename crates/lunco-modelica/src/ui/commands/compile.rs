@@ -1024,6 +1024,16 @@ pub fn on_compile_model(
         };
         let mut claimed: std::collections::HashSet<String> =
             class_names_of(doc).into_iter().collect();
+        // The primary document's stable session URI — its canonical identity
+        // (file path / bundled name / Untitled-<id>), NOT a class name and NOT
+        // "model.mo". This is the key the worker seats the source under, and it
+        // MUST match what the Fast Run path passes for the same document so the
+        // shared per-worker rumoca session never holds it under two filenames
+        // (the duplicate-class merge error).
+        let primary_doc_uri = registry
+            .host(doc)
+            .map(|h| h.document().origin().session_uri())
+            .unwrap_or_else(|| "model.mo".to_string());
         let mut extra_sources: Vec<(String, String)> = registry
             .iter()
             .filter_map(|(other_doc, host)| {
@@ -1101,6 +1111,7 @@ pub fn on_compile_model(
             session_id,
             model_name,
             source,
+            doc_uri: primary_doc_uri,
             extra_sources,
             stream: Some(stream),
         });
@@ -1448,7 +1459,14 @@ fn dispatch_experiment(
             // drilled MSL example (e.g. `Modelica.Blocks.Examples.PID_Controller`)
             // run without a self-duplicate-class collision.
             let source = compile_overlay_source(document);
-            let filename = document.origin().display_name();
+            // The document's stable session URI — the SAME canonical identity
+            // the interactive `Compile` path passes (file path / bundled name /
+            // Untitled-<id>). NOT `display_name()` (a non-unique label) and NOT
+            // a class name (a file may declare several classes). Keying both
+            // paths identically is what stops the shared per-worker rumoca
+            // session from registering this document under two filenames and
+            // tripping the duplicate-class merge error.
+            let filename = document.origin().session_uri();
             let index = document.index();
             // Tier-ranked candidates (an `experiment(...)`-annotated class
             // sorts first), the SAME ranking the Experiments Setup form and

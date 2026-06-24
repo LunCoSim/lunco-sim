@@ -1266,6 +1266,7 @@ pub fn __lc_test_dispatch_compile(model_name: &str, source: &str) {
         session_id: 1,
         model_name: model_name.to_string(),
         source: source.to_string(),
+        doc_uri: "model.mo".to_string(),
         extra_sources: Vec::new(),
         stream: None,
     };

@@ -229,6 +229,19 @@ pub struct ModelicaCompiler {
     /// this and never pays the MSL cost. Latches `true` after one install
     /// so subsequent compiles skip the gate entirely.
     msl_installed: bool,
+    /// URIs of the user documents currently seated as overlays in this
+    /// reused session (NOT the MSL/library source roots). Every compile is
+    /// HERMETIC with respect to prior compiles: before seating its own
+    /// document set, a compile evicts any previously-seated user doc that is
+    /// not part of *this* compile. Without this, a prior compile's primary
+    /// overlay stays resident, and compiling a SECOND document that defines
+    /// the same package (e.g. the same model opened in two tabs / restored +
+    /// shared) leaves the package registered under two URIs → rumoca's merge
+    /// pass fails with `Duplicate class '…' found in '…' with non-identical
+    /// definition`. The per-doc `session_uri` keying alone can't prevent this
+    /// because the two docs legitimately have different URIs; the session
+    /// itself must hold only the active compile's user docs.
+    seated_user_uris: std::collections::HashSet<String>,
 }
 
 impl ModelicaCompiler {
@@ -258,6 +271,7 @@ impl ModelicaCompiler {
         let mut compiler = Self {
             session: Session::new(SessionConfig::default()),
             msl_installed: false,
+            seated_user_uris: std::collections::HashSet::new(),
         };
         // Escape hatch: `LUNCO_MODELICA_PRELOAD_MSL=1` forces the old eager
         // behaviour, e.g. to pre-pay the install before a latency-sensitive
@@ -499,8 +513,31 @@ impl ModelicaCompiler {
         source: &str,
         filename: &str,
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        let mut keep = std::collections::HashSet::new();
+        keep.insert(filename.to_string());
+        self.evict_user_docs_except(&keep);
         self.session.update_document(filename, source);
+        self.seated_user_uris = keep;
         self.compile_loaded(model_name)
+    }
+
+    /// Remove every previously-seated user-document overlay whose URI is not
+    /// in `keep`, so the reused session holds ONLY the active compile's user
+    /// docs (plus the immutable MSL/library source roots). This is what makes
+    /// each compile hermetic against prior compiles — see
+    /// [`Self::seated_user_uris`]. MSL roots are installed via
+    /// `replace_parsed_source_set` (not tracked here), so they're untouched.
+    fn evict_user_docs_except(&mut self, keep: &std::collections::HashSet<String>) {
+        let stale: Vec<String> = self
+            .seated_user_uris
+            .iter()
+            .filter(|uri| !keep.contains(*uri))
+            .cloned()
+            .collect();
+        for uri in stale {
+            self.session.remove_document(&uri);
+            self.seated_user_uris.remove(&uri);
+        }
     }
 
     /// Recompute **structured, located** diagnostics for a model that
@@ -539,6 +576,17 @@ impl ModelicaCompiler {
     /// sibling untitled doc that holds the package). Each extra is
     /// loaded via the same `update_document` path; rumoca dedups by
     /// filename so re-loading the same file is harmless.
+    ///
+    /// The active compile's user docs (primary + extras) become the session's
+    /// ENTIRE user-overlay set: any previously-seated user doc that isn't part
+    /// of this compile is evicted first (see [`Self::seated_user_uris`] /
+    /// [`Self::evict_user_docs_except`]). This keeps the reused session
+    /// hermetic — a prior compile of the same package under a different URI
+    /// (e.g. the same model open in two tabs) can't linger and trip rumoca's
+    /// `Duplicate class '…' found in '…' with non-identical definition`. The
+    /// seated docs are left resident on return (the error-path
+    /// `compile_diagnostics` re-reads them); they're pruned by the NEXT
+    /// compile, not removed here.
     pub fn compile_str_multi(
         &mut self,
         model_name: &str,
@@ -546,6 +594,14 @@ impl ModelicaCompiler {
         filename: &str,
         extras: &[(String, String)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        let mut keep = std::collections::HashSet::new();
+        keep.insert(filename.to_string());
+        for (extra_filename, _) in extras {
+            if extra_filename != filename {
+                keep.insert(extra_filename.clone());
+            }
+        }
+        self.evict_user_docs_except(&keep);
         for (extra_filename, extra_source) in extras {
             if extra_filename == filename {
                 continue;
@@ -553,6 +609,7 @@ impl ModelicaCompiler {
             self.session.update_document(extra_filename, extra_source);
         }
         self.session.update_document(filename, source);
+        self.seated_user_uris = keep;
         self.compile_loaded(model_name)
     }
 
