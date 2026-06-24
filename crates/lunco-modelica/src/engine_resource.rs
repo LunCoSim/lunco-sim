@@ -859,5 +859,14 @@ fn drive_msl_bootstrap(
         // fires once per session — the system becomes a no-op on the next
         // tick once `bootstrap` is `Done`.
         commands.trigger(MslBecameReady);
+
+        // Pre-warm the compile/run worker pool now that MSL is resident, so the
+        // user's first compile doesn't pay the lazy cold start (profiled at
+        // ~40 s of worker startup on top of a ~4.5 s compile). Diagrams already
+        // rendered on the main thread, so this overlaps the worker startup with
+        // the user reading the diagram. Guarded (no-op until the MSL seed
+        // envelope is retained) so it can never strand an unseeded worker.
+        #[cfg(target_arch = "wasm32")]
+        crate::worker_transport::prewarm_pool_on_msl_ready();
     }
 }

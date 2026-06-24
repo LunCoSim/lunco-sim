@@ -627,6 +627,30 @@ pub fn ensure_pool_spawned() {
     );
 }
 
+/// Pre-warm the worker pool the moment MSL is resident, so the user's FIRST
+/// compile/run doesn't pay the full lazy cold start. Profiling (2026-06-24)
+/// showed a first compile taking ~46 s wall-clock of which only ~4.5 s was the
+/// actual compile — the rest was this pool's cold start (4× ~58 MB worker wasm
+/// instantiate + worker-0 MSL decode) happening *after* the user clicked. The
+/// diagram is rendered on the main thread and is already up by the time MSL is
+/// ready, so warming the pool here overlaps that startup with the user reading
+/// the diagram instead of blocking their first compile. The heavy work runs in
+/// the worker threads; the main-thread cost here is just posting the seed.
+///
+/// SAFETY: only acts when the MSL seed envelope (`MSL_WIRE`) is already
+/// retained. If it isn't, this is a no-op and the normal lazy path on the first
+/// compile still applies — so this can never spawn an unseeded worker 0 that
+/// would then never become `Ready` (which would hang every compile). Idempotent
+/// via `ensure_pool_spawned`'s `is_worker_active` guard.
+pub fn prewarm_pool_on_msl_ready() {
+    if MSL_WIRE.get().is_none() {
+        // Seed not retained yet — leave it to the lazy first-compile path,
+        // which seeds worker 0 itself. Never spawn an unseeded pool here.
+        return;
+    }
+    ensure_pool_spawned();
+}
+
 /// Construct one `Worker`, wired with both an `onmessage` (results) and an
 /// `onerror` (crash) handler. The message handler routes every message kind
 /// through the process-global handlers, so all pooled workers are
