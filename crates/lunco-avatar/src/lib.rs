@@ -21,7 +21,7 @@ use leafwing_input_manager::prelude::*;
 use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 
 use lunco_controller::ControllerLink;
-use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands, SessionProfiles, SessionRegistry, LocalSession, NetworkRole, SessionId};
+use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands, SessionProfiles, LocalSession, NetworkRole};
 use lunco_core::attach::migrate_to_grid;
 use lunco_celestial::{CelestialClock, LocalGravityField, TeleportToSurface, LeaveSurface};
 use lunco_environment::{GravityBody, GravityProvider};
@@ -443,6 +443,8 @@ impl Plugin for LunCoAvatarPlugin {
 
         app.register_settings_section::<ProfileSettings>();
         app.register_type::<UpdateProfile>().add_observer(on_update_profile);
+        app.init_resource::<RoverNameTagSettings>()
+           .register_type::<RoverNameTagSettings>();
 
         app.add_systems(Update, (
             avatar_init_system,
@@ -452,11 +454,15 @@ impl Plugin for LunCoAvatarPlugin {
             avatar_global_hotkeys,
             surface_mode_transition_system,
             enforce_ownership,
-            update_rover_name_tags,
-            rotate_rover_name_tags,
-            sync_profile_on_connect,
-            sync_profile_local,
+            sync_profile,
         ));
+
+        // Possessed-rover name tags: an egui screen-space overlay (the scene has
+        // only a `Camera3d`, so world-anchored `Text2d` never renders). Registered
+        // here — not in `AvatarUiPlugin` — because the sandbox adds only
+        // `LunCoAvatarPlugin`; `AvatarUiPlugin` is luncosim-only.
+        #[cfg(feature = "ui")]
+        app.add_systems(bevy_egui::EguiPrimaryContextPass, crate::ui::draw_rover_name_tags);
 
         // Chase camera shares the rover's fixed-step time domain so its
         // slerp/lerp uses a constant `dt = 1/60s`. Variable render-frame `dt`
@@ -2190,9 +2196,41 @@ fn get_physical_body(
     target // Fallback
 }
 
-#[derive(Component)]
-pub struct RoverNameTag {
-    pub session_id: SessionId,
+/// Global visual settings for floating rover name tags.
+///
+/// The tags are drawn as an egui overlay (see [`crate::ui::draw_rover_name_tags`])
+/// rather than as `Text2d` world entities: this app renders the scene through a
+/// single `Camera3d` and owns the only 2D camera for egui, so world-anchored
+/// `Text2d` never projects into the 3D viewport. The overlay instead projects
+/// each possessed rover's world position through the avatar camera every frame.
+#[derive(Resource, Reflect, Clone, Debug)]
+#[reflect(Resource)]
+pub struct RoverNameTagSettings {
+    /// Nominal font size, rendered at exactly [`reference_distance`](Self::reference_distance)
+    /// from the camera. Closer rovers scale the tag up, farther ones scale it down.
+    pub font_size: f32,
+    /// Color of the floating name tag text.
+    pub text_color: Color,
+    /// Vertical offset of the tag above the rover's origin, in world units.
+    pub vertical_offset: f32,
+    /// Camera distance (world units) at which the tag renders at [`font_size`](Self::font_size).
+    /// The on-screen size scales as `reference_distance / distance`.
+    pub reference_distance: f32,
+    /// Camera distance (world units) past which the tag is fully faded out and culled.
+    /// Tags begin fading from [`reference_distance`](Self::reference_distance) toward this.
+    pub max_distance: f32,
+}
+
+impl Default for RoverNameTagSettings {
+    fn default() -> Self {
+        Self {
+            font_size: 26.0,
+            text_color: Color::WHITE,
+            vertical_offset: 2.0,
+            reference_distance: 15.0,
+            max_distance: 150.0,
+        }
+    }
 }
 
 fn on_update_profile(
@@ -2206,89 +2244,17 @@ fn on_update_profile(
     info!("[net] session {} set name to '{}'", origin.0, trigger.event().name);
 }
 
-pub fn update_rover_name_tags(
-    mut commands: Commands,
-    registry: Res<SessionRegistry>,
-    profiles: Res<SessionProfiles>,
-    q_rovers: Query<(Entity, &lunco_core::GlobalEntityId)>,
-    q_name_tags: Query<(Entity, &ChildOf, &RoverNameTag)>,
-    mut q_text: Query<&mut Text2d>,
-) {
-    let mut possessed = std::collections::HashMap::new();
-    for (entity, gid) in q_rovers.iter() {
-        if let Some(session_id) = registry.owner_of(gid.get()) {
-            let username = profiles.profiles.get(&session_id.0)
-                .cloned()
-                .unwrap_or_else(|| format!("Player {}", session_id.0));
-            possessed.insert(entity, (session_id, username));
-        }
-    }
 
-    let mut tagged_rovers = std::collections::HashSet::new();
-
-    for (tag_entity, child_of, tag) in q_name_tags.iter() {
-        let rover_entity = child_of.parent();
-        if let Some((session_id, username)) = possessed.get(&rover_entity) {
-            if tag.session_id == *session_id {
-                if let Ok(mut text) = q_text.get_mut(tag_entity) {
-                    if text.0 != *username {
-                        text.0 = username.clone();
-                    }
-                }
-                tagged_rovers.insert(rover_entity);
-            } else {
-                commands.entity(tag_entity).despawn();
-            }
-        } else {
-            commands.entity(tag_entity).despawn();
-        }
-    }
-
-    for (rover_entity, (session_id, username)) in possessed {
-        if !tagged_rovers.contains(&rover_entity) {
-            commands.entity(rover_entity).with_children(|parent| {
-                parent.spawn((
-                    RoverNameTag { session_id },
-                    Text2d::new(username),
-                    TextFont {
-                        font_size: 24.0,
-                        ..default()
-                    },
-                    TextColor(Color::WHITE),
-                    Transform::from_translation(Vec3::Y * 2.0),
-                ));
-            });
-        }
-    }
-}
-
-pub fn rotate_rover_name_tags(
-    mut q_billboards: Query<(&mut Transform, &ChildOf), With<RoverNameTag>>,
-    q_camera: Query<&GlobalTransform, (With<Camera>, With<lunco_core::Avatar>)>,
-    q_global: Query<&GlobalTransform>,
-) {
-    if let Some(cam_gtf) = q_camera.iter().next() {
-        let cam_rot = cam_gtf.compute_transform().rotation;
-        for (mut tf, child_of) in q_billboards.iter_mut() {
-            if let Ok(p_gtf) = q_global.get(child_of.parent()) {
-                let p_rot = p_gtf.compute_transform().rotation;
-                tf.rotation = p_rot.inverse() * cam_rot;
-            } else {
-                tf.rotation = cam_rot;
-            }
-        }
-    }
-}
-
-fn sync_profile_on_connect(
+fn sync_profile(
+    role: Res<NetworkRole>,
     local: Res<LocalSession>,
     settings: Res<ProfileSettings>,
     mut last_sent: Local<Option<u64>>,
     mut last_name: Local<Option<String>>,
     mut commands: Commands,
 ) {
-    let session = local.0 .0;
-    if session == 0 {
+    let session = local.0.0;
+    if *role == NetworkRole::Client && session == 0 {
         *last_sent = None;
         return;
     }
@@ -2299,19 +2265,6 @@ fn sync_profile_on_connect(
         commands.trigger(UpdateProfile { name: current_name.clone() });
         *last_sent = Some(session);
         *last_name = Some(current_name);
-    }
-}
-
-fn sync_profile_local(
-    role: Res<NetworkRole>,
-    settings: Res<ProfileSettings>,
-    mut profiles: ResMut<SessionProfiles>,
-) {
-    if *role == NetworkRole::Standalone {
-        let name = settings.username.clone();
-        if profiles.profiles.get(&0).is_none_or(|n| *n != name) {
-            profiles.profiles.insert(0, name);
-        }
     }
 }
 

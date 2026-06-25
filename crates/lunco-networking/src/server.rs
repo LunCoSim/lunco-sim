@@ -402,17 +402,19 @@ fn on_server_connected(
     info!("[net] client connected: peer={peer:?} session={}", session.0);
 }
 
-/// Client dropped: free everything its session owned (G5).
+/// Client dropped: free everything its session owned (G5) and remove its profile.
 fn on_server_disconnected(
     trigger: On<Add, Disconnected>,
     q_client: Query<&RemoteId, With<ClientOf>>,
     mut registry: ResMut<SessionRegistry>,
+    mut profiles: ResMut<SessionProfiles>,
 ) {
     if let Ok(remote) = q_client.get(trigger.entity) {
         let session = peer_to_session(remote.0);
         let freed = registry.release_session(session);
+        profiles.profiles.remove(&session.0);
         info!(
-            "[net] client disconnected: session={} freed {} entities",
+            "[net] client disconnected: session={} freed {} entities, profiles updated",
             session.0,
             freed.len()
         );

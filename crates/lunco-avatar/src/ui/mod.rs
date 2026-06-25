@@ -2,10 +2,11 @@
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
-use bevy_egui::egui;
+use bevy_egui::{egui, EguiContexts};
 use lunco_workbench::{Panel, PanelId, PanelSlot, WorkbenchAppExt};
 
-use lunco_core::Avatar;
+use lunco_core::{Avatar, GlobalEntityId, SessionProfiles, SessionRegistry};
+use crate::RoverNameTagSettings;
 use lunco_celestial::{CelestialBody, LocalGravityField, LeaveSurface};
 use big_space::prelude::{CellCoord, Grid};
 
@@ -165,5 +166,84 @@ pub struct AvatarUiPlugin;
 impl Plugin for AvatarUiPlugin {
     fn build(&self, app: &mut App) {
         app.register_panel(AvatarStatusPanel);
+    }
+}
+
+/// Draw a floating name tag above every possessed rover, in screen space.
+///
+/// Registered in the egui pass by [`crate::LunCoAvatarPlugin`] (ui-gated) so it
+/// composites on top of the 3D viewport regardless of camera setup. Each rover's
+/// world position (plus a vertical offset) is projected through the active avatar
+/// camera; rovers behind the camera or off the near plane are skipped
+/// (`world_to_viewport` returns `Err`).
+pub fn draw_rover_name_tags(
+    mut egui_ctx: EguiContexts,
+    registry: Res<SessionRegistry>,
+    profiles: Res<SessionProfiles>,
+    settings: Res<RoverNameTagSettings>,
+    q_camera: Query<(&Camera, &GlobalTransform), With<Avatar>>,
+    q_rovers: Query<(&GlobalEntityId, &GlobalTransform)>,
+) {
+    // The avatar camera is the one rendering this client's viewport. Without it
+    // (e.g. headless / pre-spawn) there is nothing to project against.
+    let Some((camera, cam_gtf)) = q_camera.iter().next() else { return };
+
+    let Ok(ctx) = egui_ctx.ctx_mut() else { return };
+
+    let [tr, tg, tb, _] = settings.text_color.to_srgba().to_u8_array();
+    let origin = ctx.content_rect().min.to_vec2();
+    let cam_pos = cam_gtf.translation();
+
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("rover_name_tags"),
+    ));
+
+    for (gid, gtf) in q_rovers.iter() {
+        let Some(session) = registry.owner_of(gid.get()) else { continue };
+
+        // Distance from the camera drives both size and fade. Cull past the
+        // max so we don't paint a swarm of pinpoint tags across the horizon.
+        let distance = gtf.translation().distance(cam_pos);
+        if distance > settings.max_distance {
+            continue;
+        }
+
+        // Size scales inversely with distance (`reference / distance`): a rover
+        // at `reference_distance` renders at the nominal `font_size`, closer ones
+        // grow, farther ones shrink. Clamp so it never balloons or vanishes.
+        let scale = (settings.reference_distance / distance.max(0.01)).clamp(0.35, 2.5);
+        let font_size = (settings.font_size * scale).max(7.0);
+
+        // Fade linearly from `reference_distance` out to `max_distance`.
+        let fade = if distance <= settings.reference_distance {
+            1.0
+        } else {
+            let span = (settings.max_distance - settings.reference_distance).max(0.01);
+            (1.0 - (distance - settings.reference_distance) / span).clamp(0.0, 1.0)
+        };
+
+        let name = profiles
+            .profiles
+            .get(&session.0)
+            .cloned()
+            .unwrap_or_else(|| format!("Player {}", session.0));
+
+        let world = gtf.translation() + Vec3::Y * settings.vertical_offset;
+        let Ok(viewport) = camera.world_to_viewport(cam_gtf, world) else { continue };
+        let pos = egui::pos2(viewport.x, viewport.y) + origin;
+
+        let text_color =
+            egui::Color32::from_rgba_unmultiplied(tr, tg, tb, (255.0 * fade) as u8);
+        let font = egui::FontId::proportional(font_size);
+
+        // Anchor the text centered just above the projected point, with a
+        // semi-transparent backing so it stays legible over bright terrain.
+        let galley = painter.layout_no_wrap(name, font, text_color);
+        let size = galley.size();
+        let top_left = pos - egui::vec2(size.x * 0.5, size.y);
+        let bg = egui::Rect::from_min_size(top_left, size).expand2(egui::vec2(4.0, 2.0));
+        painter.rect_filled(bg, 3.0, egui::Color32::from_black_alpha((150.0 * fade) as u8));
+        painter.galley(top_left, galley, text_color);
     }
 }
