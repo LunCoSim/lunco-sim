@@ -1048,20 +1048,24 @@ pub fn reconcile_owned_prediction(
     }
 }
 
-/// Client Phase B (`PREDICTION_MEMBERSHIP.md`): designate **runtime-spawned free
-/// dynamic props** (a ball / crate you bump with a rover) as
-/// [`lunco_core::PredictedDynamic`], so they run local physics + state-reconcile
-/// instead of being kinematic-pinned + interpolated — giving a crisp local
-/// rover↔prop collision in the same frame.
+/// Client Phase B (`PREDICTION_MEMBERSHIP.md`): designate **every replicated free
+/// dynamic prop** (a ball / crate / cone — whether runtime-spawned OR authored
+/// scene content) as [`lunco_core::PredictedDynamic`], so it runs local physics +
+/// state-reconcile instead of being kinematic-pinned + interpolated. That makes
+/// physics feel **live on the client**: bump a prop and it moves in the same
+/// frame, then the snapshot reconcile corrects any drift.
 ///
-/// Restricting to [`lunco_core::SkipContentStamp`] (runtime spawns, D4
-/// `Authoritative`) is the **cosim guard**: balloons / `CosimTarget` are scene
-/// CONTENT (never `SkipContentStamp`), so they can't be caught here — and they
-/// must NOT be predicted, their motion is server-only (Gap C). Rovers
-/// (`RoverVessel`) and the possessed rover (`OwnedLocally`) are excluded too — they
-/// have their own paths. Flips the body to `Dynamic` (a freshly-spawned prop may
-/// already have been pinned `Kinematic` by `force_kinematic_proxies` the prior
-/// frame); a `Static` prop is left alone. Client-only.
+/// The cosim guard is now [`lunco_core::NotPredictable`] ALONE — stamped on every
+/// cosim-driven / server-only body by `tag_cosim_opaque` and the USD net policy
+/// (balloons / `CosimTarget`, whose forces are server-only and not locally
+/// computable). That marker was added precisely so the structural
+/// `SkipContentStamp` guard wouldn't have to be the only thing (see
+/// `NotPredictable`'s doc) — so we no longer restrict to runtime spawns, which
+/// had frozen plain scene-content physics props server-only. Rovers
+/// (`RoverVessel`) and the possessed rover (`OwnedLocally`) are excluded — they
+/// have their own paths. Flips the body to `Dynamic` (it may already have been
+/// pinned `Kinematic` by `force_kinematic_proxies` the prior frame); a `Static`
+/// prop is left alone. Client-only.
 pub fn maintain_predicted_dynamic(
     role: Res<lunco_core::NetworkRole>,
     mut commands: Commands,
@@ -1069,14 +1073,15 @@ pub fn maintain_predicted_dynamic(
         (Entity, &RigidBody),
         (
             With<lunco_core::NetReplicate>,
-            With<lunco_core::SkipContentStamp>,
             Without<lunco_core::RoverVessel>,
             Without<lunco_core::OwnedLocally>,
             Without<lunco_core::PredictedDynamic>,
-            // §6 opaque guard: a cosim-driven body (server-only forces) is never
-            // locally computable, so it must never be predicted even if it somehow
-            // arrived as a runtime spawn. Belt-and-suspenders with the structural
-            // `SkipContentStamp` guard above (cosim props are scene content).
+            // The cosim/server-only guard: a cosim-driven body (Modelica balloon,
+            // CosimTarget, …) has forces we can't reproduce locally, so it must
+            // never be predicted — it stays a kinematic, snapshot-driven proxy.
+            // This is now the SOLE membership guard (the old `SkipContentStamp`
+            // runtime-spawn restriction is dropped so authored scene props run
+            // live physics too).
             Without<lunco_core::NotPredictable>,
         ),
     >,

@@ -411,9 +411,15 @@ pub fn apply_sync_command(
                 .and_then(|r| authz_target_gid(&ev.params, r.type_id(), &type_reg))
         };
         if let Err(reject) = authorize(&session_registry, ev.origin, &ev.type_name, target_gid) {
+            // Diagnostic: show the gid the command targets, who (if anyone) the
+            // host thinks owns it, and the full ownership table — so a drive
+            // rejected despite a successful possession reveals whether it's a
+            // target/possession gid mismatch (articulated root vs clicked link)
+            // or an empty/stale ownership table (registry desync).
+            let owner = target_gid.and_then(|g| session_registry.owner_of(g));
             warn!(
-                "[sync] rejected {} from {}: {:?}",
-                ev.type_name, ev.origin, reject
+                "[sync] rejected {} from {}: {:?} | target_gid={:?} current_owner={:?} owners={:?}",
+                ev.type_name, ev.origin, reject, target_gid, owner, session_registry.snapshot(),
             );
             return;
         }

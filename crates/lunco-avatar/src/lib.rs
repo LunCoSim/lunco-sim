@@ -303,12 +303,32 @@ fn record_possession_authority(
     let cmd = trigger.event();
     let origin = guard.0.unwrap_or(local.0);
     if let Ok(gid) = q_gid.get(cmd.target) {
-        match registry.claim(origin, gid.get()) {
-            Ok(()) => info!("[auth] session {origin} possesses entity {}", gid.get()),
-            Err(cur) => warn!(
-                "[auth] entity {} already owned by {cur}; {origin} possession denied",
+        // One vessel per player. If the new target is claimable (free, or already
+        // ours), drop EVERY vessel this session currently holds before claiming
+        // it — so clicking through rovers swaps control instead of hoarding
+        // ownership and locking every other player out under the Exclusive
+        // policy. Frees are broadcast by `broadcast_ownership`; the prior owner's
+        // client drops its stale bind via `enforce_ownership`. We check
+        // `may_possess` FIRST so a denied claim (vessel owned by someone else)
+        // never costs us the vessel we already hold.
+        if registry.may_possess(origin, gid.get()) {
+            let freed = registry.release_session(origin);
+            let _ = registry.claim(origin, gid.get()); // infallible after may_possess
+            if freed.is_empty() {
+                info!("[auth] session {origin} possesses entity {}", gid.get());
+            } else {
+                info!(
+                    "[auth] session {origin} possesses entity {} (released {} prior vessel(s))",
+                    gid.get(),
+                    freed.len()
+                );
+            }
+        } else {
+            let cur = registry.owner_of(gid.get());
+            warn!(
+                "[auth] entity {} already owned by {cur:?}; {origin} possession denied",
                 gid.get()
-            ),
+            );
         }
     }
 }
