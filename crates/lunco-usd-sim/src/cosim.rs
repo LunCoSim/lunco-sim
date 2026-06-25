@@ -110,6 +110,7 @@ fn any_unwrapped_modelica(
 pub fn process_usd_cosim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath), Without<UsdSourcedCosim>>,
+    q_rover: Query<(), With<lunco_core::RoverVessel>>,
     stages: Res<Assets<UsdStageAsset>>,
     asset_server: Res<AssetServer>,
 ) {
@@ -164,6 +165,24 @@ pub fn process_usd_cosim_prims(
             UsdSimProcessed,
             lunco_core::SelectableRoot,
         ));
+
+        // Opaque-body guard, applied HERE (cosim intent is known the instant we
+        // read `lunco:modelicaModel`/`lunco:pythonModel`) rather than only later
+        // in `tag_cosim_opaque`, which waits for the asynchronously-wrapped
+        // `SimComponent`. That async gap was a prediction-takeover race: on a
+        // client, `maintain_predicted_dynamic` (sandbox-edit) could stamp a balloon
+        // `PredictedDynamic` during the multi-frame window before `NotPredictable`
+        // landed — once b99991dd dropped the `SkipContentStamp` structural guard,
+        // `NotPredictable` became the SOLE membership guard, so a late stamp meant
+        // the body got predicted (local physics + cosim forces) and diverged.
+        // Stamping at prim-read time closes the window. Rovers are excluded — a
+        // rover chassis is locally computable even when it carries cosim subsystems
+        // (mirrors `tag_cosim_opaque`'s `Without<RoverVessel>`). Harmless on
+        // non-`RigidBody` cosim prims (e.g. a joint-driven solar tracker): the
+        // marker is inert where prediction never runs.
+        if q_rover.get(entity).is_err() {
+            commands.entity(entity).insert(lunco_core::NotPredictable);
+        }
 
         // Source files are loaded through Bevy's `AssetServer` rather
         // than `std::fs::read_to_string`. On native this reads from the
