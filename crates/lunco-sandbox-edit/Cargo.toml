@@ -4,27 +4,59 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking"] }
-bevy_egui = { workspace = true }
-lunco-theme = { path = "../lunco-theme" }
+# Render ASSET-STORE bevy features stay always-on (the catalog/commands path
+# spawns USD entities with meshes + materials, and the headless server still
+# runs RenderPlugin in `backends:None`). The editor-only render-effect + picking
+# features (bevy_post_process/bevy_anti_alias/mesh_picking) ride the `ui` feature.
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light"] }
+# egui inspector, theme, transform gizmo, and the picking backend are all editor
+# concerns — optional, on `ui`. `commands::SpawnCommandPlugin` (the only thing a
+# headless server adds from this crate) uses none of them.
+bevy_egui = { workspace = true, optional = true }
+lunco-theme = { path = "../lunco-theme", optional = true }
+transform-gizmo-bevy = { version = "0.9.0", optional = true }
+bevy_picking = { version = "0.18.1", optional = true }
+lunco-workbench = { path = "../lunco-workbench", optional = true }
 avian3d = { workspace = true }
 
 big_space.workspace = true
-transform-gizmo-bevy = "0.9.0"
-bevy_picking = "0.18.1"
 lunco-core = { path = "../lunco-core" }
+lunco-doc = { path = "../lunco-doc" }
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
 lunco-mobility = { path = "../lunco-mobility" }
-lunco-workbench = { path = "../lunco-workbench" }
+# `default-features = false` keeps modelica/avatar egui-free for the headless
+# server; the `ui` feature below re-enables them. The egui inspector
+# (`ui/inspector.rs::modelica_parameters_section`) uses lunco-modelica's egui UI
+# surface, so `ui` propagates `lunco-modelica/ui`.
 lunco-modelica = { path = "../lunco-modelica", default-features = false }
+lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-materials = { path = "../lunco-materials" }
-lunco-avatar = { path = "../lunco-avatar" }
+lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-assets = { path = "../lunco-assets" }
+
+[features]
+default = ["ui"]
+# In-scene editor: gizmo, selection, inspector panels, physics-viz, spawn ghost.
+# OFF ⇒ only `catalog` + `commands::SpawnCommandPlugin` compile (the headless
+# server's runtime spawn / NetReplicate path) — no egui, no winit, no picking.
+ui = [
+    "dep:bevy_egui",
+    "dep:lunco-theme",
+    "dep:transform-gizmo-bevy",
+    "dep:bevy_picking",
+    "dep:lunco-workbench",
+    "lunco-modelica/ui",
+    "lunco-avatar/ui",
+    "lunco-usd/ui",
+    "bevy/bevy_post_process",
+    "bevy/bevy_anti_alias",
+    "bevy/mesh_picking",
+]
 
 [lints]
 workspace = true

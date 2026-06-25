@@ -583,7 +583,11 @@ impl ModelicaEngine {
         let resolved_key = self.session.class_lookup_query(qualified);
         if resolved_key.is_none() {
             self.class_uri_misses.insert(qualified.to_string());
-            bevy::log::warn!("[engine] class_def: class_lookup_query failed for {}", qualified);
+            // `debug!`, not `warn!`: this fires for every standard-library
+            // class during the pre-MSL projection (expected — resolution
+            // retries once MSL installs), spamming the wasm console. The
+            // `class_uri_misses` guard already dedupes per class.
+            bevy::log::debug!("[engine] class_def: class_lookup_query failed for {}", qualified);
             return None;
         }
 
@@ -651,10 +655,12 @@ impl ModelicaEngine {
 
         let Some(file_uri) = file_uri else {
             // Record the miss so the per-frame overlay caller stops
-            // re-running the bundle scan + this warn every frame. The
-            // warn now fires once per class (until an install clears it).
+            // re-running the bundle scan + this log every frame. It fires
+            // once per class (until an install clears it). `debug!`, not
+            // `warn!`: every standard-library class misses here during the
+            // pre-MSL projection — expected, and it spammed the wasm console.
             self.class_uri_misses.insert(qualified.to_string());
-            bevy::log::warn!(
+            bevy::log::debug!(
                 "[engine] class_def: no file URI found for class {} \
                  (class_to_uri miss + MSL bundle miss)",
                 qualified

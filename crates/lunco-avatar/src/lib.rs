@@ -20,7 +20,6 @@ use bevy::math::DVec3;
 use leafwing_input_manager::prelude::*;
 use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 
-use transform_gizmo_bevy::GizmoTarget;
 use lunco_controller::ControllerLink;
 use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands};
 use lunco_core::attach::migrate_to_grid;
@@ -37,6 +36,7 @@ pub use recording::*;
 mod intents;
 
 /// UI panels for avatar status, camera mode, and surface coordinates.
+#[cfg(feature = "ui")]
 pub mod ui;
 pub use intents::*;
 
@@ -219,6 +219,23 @@ pub struct FrameBlend {
 #[reflect(Component)]
 pub struct AdaptiveNearPlane;
 
+/// Marker for a **provisional** avatar camera — a stand-in spawned so the user
+/// always has a controllable view while a scene is still loading and hasn't yet
+/// authored its own Avatar camera.
+///
+/// It is *provisional* because the authored USD Avatar is the intended
+/// perspective and **takes over** as soon as it materialises (which, on a slow
+/// web/HTTP asset load, can be many seconds after the stand-in appeared). The
+/// USD-avatar takeover despawns every entity carrying this marker in the **same
+/// command flush** that installs the authored camera, so the provisional never
+/// coexists with the real one — two simultaneous order-0 window `Camera3d`s
+/// would otherwise produce camera-order ambiguity (double scene render) and a
+/// duplicate `GizmoCamera`. A scene that authors no Avatar keeps its provisional
+/// camera indefinitely: that is the legitimate permanent-fallback case.
+#[derive(Component, Reflect, Clone, Debug, Default)]
+#[reflect(Component)]
+pub struct ProvisionalAvatarCamera;
+
 /// Marker component: camera/rover operates in surface-relative mode.
 ///
 /// When present, camera systems use `LocalGravityField.local_up` as "up"
@@ -286,12 +303,32 @@ fn record_possession_authority(
     let cmd = trigger.event();
     let origin = guard.0.unwrap_or(local.0);
     if let Ok(gid) = q_gid.get(cmd.target) {
-        match registry.claim(origin, gid.get()) {
-            Ok(()) => info!("[auth] session {origin} possesses entity {}", gid.get()),
-            Err(cur) => warn!(
-                "[auth] entity {} already owned by {cur}; {origin} possession denied",
+        // One vessel per player. If the new target is claimable (free, or already
+        // ours), drop EVERY vessel this session currently holds before claiming
+        // it — so clicking through rovers swaps control instead of hoarding
+        // ownership and locking every other player out under the Exclusive
+        // policy. Frees are broadcast by `broadcast_ownership`; the prior owner's
+        // client drops its stale bind via `enforce_ownership`. We check
+        // `may_possess` FIRST so a denied claim (vessel owned by someone else)
+        // never costs us the vessel we already hold.
+        if registry.may_possess(origin, gid.get()) {
+            let freed = registry.release_session(origin);
+            let _ = registry.claim(origin, gid.get()); // infallible after may_possess
+            if freed.is_empty() {
+                info!("[auth] session {origin} possesses entity {}", gid.get());
+            } else {
+                info!(
+                    "[auth] session {origin} possesses entity {} (released {} prior vessel(s))",
+                    gid.get(),
+                    freed.len()
+                );
+            }
+        } else {
+            let cur = registry.owner_of(gid.get());
+            warn!(
+                "[auth] entity {} already owned by {cur:?}; {origin} possession denied",
                 gid.get()
-            ),
+            );
         }
     }
 }
@@ -397,6 +434,7 @@ impl Plugin for LunCoAvatarPlugin {
            .register_type::<FreeFlightCamera>()
            .register_type::<FrameBlend>()
            .register_type::<AdaptiveNearPlane>()
+           .register_type::<ProvisionalAvatarCamera>()
            .register_type::<SurfaceRelativeMode>()
            .register_type::<SurfaceCamera>()
            .register_type::<SurfaceModeThreshold>()
@@ -520,7 +558,7 @@ fn spring_arm_system(
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     _q_parents: Query<&ChildOf>,
-    q_gizmo: Query<&GizmoTarget>,
+    q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
 
     defaults: Res<CameraDefaults>,
 
@@ -534,10 +572,9 @@ fn spring_arm_system(
     let dt = time.delta_secs();
 
     for (_avatar_ent, mut tf, mut cell, mut arm, child_of, surface_mode) in q_avatar.iter_mut() {
-        // Skip follow if target is being dragged by a gizmo
-        if let Ok(gt) = q_gizmo.get(arm.target) {
-            if gt.is_active() { continue; }
-        }
+        // Skip follow while the target is being dragged by the editor gizmo
+        // (marker set by sandbox-edit; never present on a headless server).
+        if q_dragging.get(arm.target).is_ok() { continue; }
 
         let Ok((t_cell, t_tf)) = q_spatial.get(arm.target) else { continue; };
         let t_cell = t_cell.copied().unwrap_or_default();
@@ -570,9 +607,9 @@ fn spring_arm_system(
         // forward vector flips around as it rolls — deriving heading from it
         // swings the camera wildly. For those, heading is user-only (yaw).
         let target_heading_d = if arm.track_heading {
-            let target_fwd_d = t_tf.rotation.mul_vec3(Vec3::Z).as_dvec3();
+            let target_fwd_d = t_tf.rotation.mul_vec3(Vec3::NEG_Z).as_dvec3();
             if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
-                target_fwd_d.x.atan2(target_fwd_d.z)
+                -target_fwd_d.x.atan2(-target_fwd_d.z)
             } else { 0.0 }
         } else {
             0.0
@@ -686,7 +723,7 @@ fn chase_camera_system(
     mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut ChaseCamera, &ChildOf), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
-    q_gizmo: Query<&GizmoTarget>,
+    q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
     defaults: Res<CameraDefaults>,
     mut scroll_res: ResMut<CameraScroll>,
     sens: Res<CameraScrollSensitivity>,
@@ -697,10 +734,9 @@ fn chase_camera_system(
     let dt = time.delta_secs();
 
     for (_avatar_ent, mut tf, mut cell, mut chase, child_of) in q_avatar.iter_mut() {
-        // Skip follow if target is being dragged by a gizmo
-        if let Ok(gt) = q_gizmo.get(chase.target) {
-            if gt.is_active() { continue; }
-        }
+        // Skip follow while the target is being dragged by the editor gizmo
+        // (marker set by sandbox-edit; never present on a headless server).
+        if q_dragging.get(chase.target).is_ok() { continue; }
 
         let Ok((t_cell, t_tf)) = q_spatial.get(chase.target) else { continue; };
         let t_cell = t_cell.copied().unwrap_or_default();
@@ -751,7 +787,7 @@ fn orbit_system(
     q_parents: Query<&ChildOf>,
     q_bodies: Query<&CelestialBody>,
     q_sc: Query<&Spacecraft>,
-    q_gizmo: Query<&GizmoTarget>,
+    q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
     defaults: Res<CameraDefaults>,
     mut scroll_res: ResMut<CameraScroll>,
     sens: Res<CameraScrollSensitivity>,
@@ -764,10 +800,9 @@ fn orbit_system(
     let dt = time.delta_secs();
 
     for (avatar_ent, mut tf, mut cell, mut orbit, child_of) in q_avatar.iter_mut() {
-        // Skip follow if target is being dragged by a gizmo
-        if let Ok(gt) = q_gizmo.get(orbit.target) {
-            if gt.is_active() { continue; }
-        }
+        // Skip follow while the target is being dragged by the editor gizmo
+        // (marker set by sandbox-edit; never present on a headless server).
+        if q_dragging.get(orbit.target).is_ok() { continue; }
 
         let Ok((_t_cell, _t_tf)) = q_spatial.get(orbit.target) else { continue; };
 
@@ -1227,19 +1262,30 @@ pub fn avatar_raycast_possession(
     q_ground: Query<Entity, With<lunco_core::Ground>>,
 ) {
     use bevy::picking::pointer::PointerButton;
-    // Stop the click auto-propagating to ancestors (global observer would re-fire
-    // up the hierarchy); we resolve the clickable root ourselves. Runs at the leaf.
-    click.propagate(false);
     // Left button only.
     if click.button != PointerButton::Primary { return; }
     // Chrome guard — egui's pick has no world position.
     if click.hit.position.is_none() { return; }
-    // Alt-click is reserved for gizmo selection in lunco-sandbox-edit.
+    // Shift+click is reserved for entity selection / gizmo multi-select in
+    // lunco-sandbox-edit (`on_scene_click_select`, the other global
+    // `Pointer<Click>` observer). A plain left-click possesses/follows/focuses;
+    // a Shift+click never does. This modifier split is what keeps the two
+    // observers from both acting on a single click.
+    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { return; }
+    // Alt-click is likewise reserved for the editor.
     if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) { return; }
     // Mid-drag on a transform gizmo: don't flip the camera under the user.
     if drag_mode_active.active { return; }
     // Spawn placement tool armed: clicks place objects, don't possess.
     if spawn_tool_active.0 { return; }
+
+    // This observer handles the plain click now (it passed every guard above), so
+    // stop the auto-propagation to ancestor entities — otherwise a global
+    // observer re-fires once per ancestor. The analytic spacecraft/celestial
+    // sphere tests below depend on the ray, not on `click.entity`, so they'd
+    // re-trigger `PossessVessel`/`FocusTarget` for every ancestor in the chain
+    // (we must not gate this on a *mesh* hit being found, the earlier bug).
+    click.propagate(false);
 
     // Build the world ray from the avatar camera through the click position, so
     // the analytic hit-sphere tests (celestial bodies / spacecraft, which have

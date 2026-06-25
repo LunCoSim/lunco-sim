@@ -6,12 +6,20 @@ description = "Bevy integration for the LunCoSim Document System — generic doc
 
 [dependencies]
 bevy = { workspace = true }
-bevy_egui = { workspace = true }
+# egui only powers two UI-only systems (keyboard-intent suppression + repaint
+# fanout). Optional so a headless `--no-default-features` build (server) drops
+# egui→winit entirely; the document-lifecycle events/types stay egui-free.
+bevy_egui = { workspace = true, optional = true }
 # `Command`, `on_command`, `register_commands` macro re-exports.
 lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
 # Canonical Twin-scoped op journal (Lamport-ordered, CRDT-shapable schema).
 lunco-twin-journal = { path = "../lunco-twin-journal" }
+
+[features]
+default = ["ui"]
+# The egui-dependent editor-intent + view-sync systems. Off ⇒ no bevy_egui.
+ui = ["dep:bevy_egui"]
 
 [lints]
 workspace = true

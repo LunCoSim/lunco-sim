@@ -365,6 +365,13 @@ pub(crate) fn build_duplicate_source(
         }
         None => source.to_string(),
     };
+    // Keep the `within` clause: it gives the copied body the origin package's
+    // lexical scope (e.g. the `SI` unit alias the MSL examples rely on), which
+    // a top-level lift would lose — `unresolved type reference: 'SI.Angle'`.
+    // The cost is that the copy's real class name is `<origin_pkg>.<new_name>`,
+    // so the run/compile path must dispatch that QUALIFIED name (see
+    // `within_package` + its use in `dispatch_experiment`); dispatching the bare
+    // leaf fails `model not found` in Instantiate.
     match origin_fqn {
         Some(fqn) => {
             let mut parts: Vec<&str> = fqn.split('.').collect();
@@ -378,6 +385,29 @@ pub(crate) fn build_duplicate_source(
         }
         None => renamed,
     }
+}
+
+/// Extract the package named in a leading `within <pkg>;` clause, if present.
+///
+/// A duplicated library class is emitted as `within P; <class>` (see
+/// [`build_duplicate_source`]), so rumoca compiles it as `P.<class>`. The
+/// run/compile dispatch must qualify the target class with `P` or instantiate
+/// fails `model not found`. Returns `None` for top-level sources (no `within`).
+pub(crate) fn within_package(source: &str) -> Option<String> {
+    for raw in source.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        let rest = line.strip_prefix("within")?;
+        // `within` must be followed by whitespace (not e.g. `withinFoo`).
+        if !rest.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let pkg = rest.trim().trim_end_matches(';').trim();
+        return (!pkg.is_empty()).then(|| pkg.to_string());
+    }
+    None
 }
 
 #[cfg(test)]
@@ -451,6 +481,91 @@ end Foo;
             out.starts_with("within AnnotatedRocketStage;"),
             "within clause prepended"
         );
+        // The qualified run name the dispatch must use (within + copy name).
+        assert_eq!(within_package(&out).as_deref(), Some("AnnotatedRocketStage"));
+    }
+
+    #[test]
+    fn duplicate_nested_rocketstage_model_parses() {
+        // The "Duplicate to edit" path from the read-only RocketStage tab:
+        // duplicate the *nested* model `RocketStage` (not the package),
+        // producing `within AnnotatedRocketStage; model RocketStageCopy …`.
+        // Runtime showed "(no classes yet)" — this asserts the slice parses
+        // and yields the renamed model.
+        let src = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/models/AnnotatedRocketStage.mo"
+        ));
+        let out = duplicate(
+            src,
+            "RocketStage",
+            "RocketStageCopy",
+            Some("AnnotatedRocketStage.RocketStage"),
+        );
+        assert!(parses_clean(&out), "nested-model duplicate must parse:\n{out}");
+        assert!(out.contains("model RocketStageCopy"), "renamed:\n{out}");
+        assert!(out.contains("end RocketStageCopy;"), "end renamed:\n{out}");
+        assert_eq!(within_package(&out).as_deref(), Some("AnnotatedRocketStage"));
+    }
+
+    #[test]
+    fn duplicate_bundled_nested_class_resolves_via_get_model() {
+        // Runtime repro of the "(no classes yet)" bug: the MSL/OpenClass
+        // duplicate path (`spawn_duplicate_class_task`) resolves source via
+        // the MSL index, which does NOT contain bundled `assets/models/*.mo`
+        // examples. The fallback reads the bundled file keyed by the
+        // qualified head segment. This test mirrors that fallback: look up
+        // `AnnotatedRocketStage.mo` by head, extract the nested `RocketStage`,
+        // and assert the duplicate has a real class (not a comment-only doc).
+        let qualified = "AnnotatedRocketStage.RocketStage";
+        let src = crate::ui::class_source::bundled_source_for(qualified)
+            .expect("AnnotatedRocketStage.mo must be bundled");
+        let origin_short = qualified.rsplit('.').next().unwrap();
+        let out = duplicate(src, origin_short, "RocketStageCopy", Some(qualified));
+        assert!(parses_clean(&out), "bundled duplicate must parse:\n{out}");
+        assert!(out.contains("model RocketStageCopy"), "renamed:\n{out}");
+        assert!(out.contains("end RocketStageCopy;"), "end renamed:\n{out}");
+        assert_eq!(within_package(&out).as_deref(), Some("AnnotatedRocketStage"));
+    }
+
+    #[test]
+    fn nested_duplicate_extra_carries_referenced_siblings() {
+        // Compile regression: duplicating the *nested* `RocketStage` emits
+        // `within AnnotatedRocketStage; model RocketStageCopy …`, whose body
+        // references the sibling classes `Tank`/`Valve`/`Engine`/`Airframe`.
+        // The lone leaf can't compile (`unresolved type reference: 'Tank'`)
+        // unless the enclosing bundled package is re-seated as an extra source.
+        // dispatch_experiment computes that extra as
+        // `bundled_source_for(within_package(dup))`; this asserts the pieces
+        // line up — the dup names a within-package, and that package's bundled
+        // source provides every sibling the leaf refers to.
+        let src = crate::ui::class_source::bundled_source_for("AnnotatedRocketStage.RocketStage")
+            .expect("AnnotatedRocketStage.mo must be bundled");
+        let dup = duplicate(
+            src,
+            "RocketStage",
+            "RocketStageCopy",
+            Some("AnnotatedRocketStage.RocketStage"),
+        );
+        // The leaf body still refers to its siblings by simple name…
+        for sib in ["Tank", "Valve", "Engine", "Airframe"] {
+            assert!(
+                dup.contains(&format!("{sib} ")),
+                "duplicated leaf should reference sibling `{sib}`:\n{dup}"
+            );
+        }
+        // …and the extra the compile path attaches (the bundled package keyed
+        // by the within-package name) must define every one of them.
+        let pkg = within_package(&dup).expect("nested dup has a within-package");
+        assert_eq!(pkg, "AnnotatedRocketStage");
+        let extra = crate::ui::class_source::bundled_source_for(&pkg)
+            .expect("within-package resolves to bundled source");
+        for sib in ["Tank", "Valve", "Engine", "Airframe"] {
+            assert!(
+                extra.contains(&format!("model {sib}")),
+                "bundled extra must define sibling `model {sib}`"
+            );
+        }
     }
 
     #[test]

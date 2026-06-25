@@ -1,0 +1,198 @@
+[package]
+name = "lunco-sandbox"
+version = "0.6.0-dev"
+edition = "2021"
+# `cargo run -p lunco-sandbox` runs the GUI sandbox (not the legacy `main.rs`
+# bin that carries the package name).
+default-run = "sandbox"
+
+# The app itself lives in `src/lib.rs` (`pub fn run()` + the global allocator),
+# shared by the `sandbox` GUI bin here and the headless `sandbox-server` bin in
+# the sibling `lunco-sandbox-server` crate — so the two can never drift.
+[lib]
+name = "lunco_sandbox"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sandbox"
+path = "src/bin/sandbox.rs"
+# Single desktop+web source: `build_web.sh build sandbox` compiles `lib.rs`'s
+# `run()` (via this bin) for `wasm32` — `#[cfg(target_arch = "wasm32")]` blocks
+# in the lib handle platform differences. Served at `dist/sandbox/`.
+
+# Physics test harnesses in `src/bin/` — `cargo run -p lunco-sandbox --bin <name>`.
+# `rover_jitter` / `rover_turn` are headless probes (auto-discovered, build
+# without `ui`); `joint_minimal` opens a window, so it needs `ui`.
+[[bin]]
+name = "joint_minimal"
+path = "src/bin/joint_minimal.rs"
+required-features = ["ui"]
+
+[dependencies]
+# Render ASSET-STORE features (always on, even headless): `bevy_pbr` pulls
+# `bevy_render`, which registers `Assets<Mesh>`/`Assets<StandardMaterial>` —
+# USD visual sync populates the meshes avian colliders key off, and the
+# `--no-ui` server still runs RenderPlugin in `backends: None` mode. `bevy_light`
+# (DirectionalLight/GlobalAmbientLight) and `bevy_window` (Window/PresentMode/
+# WindowPlugin types) are referenced on the headless path too, so they stay here.
+# The actual WINDOWING/INTERACTION stack (winit backend, picking, post-process,
+# gizmos) lives behind the `ui` feature below so a server build omits it entirely.
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_window"] }
+avian3d = { workspace = true }
+big_space = { workspace = true }
+leafwing-input-manager = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-hardware = { path = "../lunco-hardware" }
+lunco-mobility = { path = "../lunco-mobility" }
+lunco-robotics = { path = "../lunco-robotics" }
+lunco-controller = { path = "../lunco-controller" }
+lunco-fsw = { path = "../lunco-fsw" }
+# `default-features = false` drops avatar's egui/workbench/gizmo UI layer for the
+# lean server; the `ui` feature below re-enables it (`lunco-avatar/ui`) for the
+# GUI build. (Template for the celestial/usd/sandbox-edit pass — until those are
+# gated too, their transitive `lunco-avatar` (default) edges keep avatar/ui on
+# in non-server builds via Cargo feature unification.)
+lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-render = { path = "../lunco-render" }
+# `default-features = false` drops celestial's egui inspector (`CelestialUiPlugin`,
+# not used by the sandbox bin). The `celestial` feature still pulls embed-assets.
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-terrain = { path = "../lunco-terrain" }
+lunco-modelica = { path = "../lunco-modelica", default-features = false }
+lunco-cosim = { path = "../lunco-cosim" }
+lunco-environment = { path = "../lunco-environment" }
+lunco-scripting = { path = "../lunco-scripting" }
+# USD core (scene load + collider build) is always needed; its Twin-browser /
+# viewport egui UI rides `lunco-usd/ui`, re-enabled below by the `ui` feature.
+lunco-usd = { path = "../lunco-usd", default-features = false }
+# `lunco-sandbox-edit` is NOT optional: the headless server needs its
+# `commands::SpawnCommandPlugin` (runtime spawn/move + `NetReplicate` tagging).
+# The gizmo/selection/physics-viz halves are gated behind `feature = "ui"` in
+# sandbox.rs, not here.
+# Headless server needs only `commands::SpawnCommandPlugin` (kept feature-free);
+# the editor (gizmo/selection/inspector) rides `lunco-sandbox-edit/ui` below.
+lunco-sandbox-edit = { path = "../lunco-sandbox-edit", default-features = false }
+lunco-web = { workspace = true }
+lunco-assets = { workspace = true }
+# ── UI-only crate deps (gated behind the `ui` feature) ────────────────────
+# A `--no-ui` server build (`--no-default-features --features server`) omits
+# these entirely: the egui workbench, the blueprint/shader material editors,
+# the doc/theme/general-UI crates. sandbox.rs cfg-gates every use behind
+# `feature = "ui"`.
+lunco-materials = { path = "../lunco-materials", optional = true }
+lunco-doc = { path = "../lunco-doc", optional = true }
+lunco-theme = { path = "../lunco-theme", optional = true }
+lunco-ui = { path = "../lunco-ui", optional = true }
+lunco-workbench = { path = "../lunco-workbench", optional = true }
+bevy_egui = { workspace = true, optional = true }
+# `default-features = false` so the native (`lunco-api`) and web (`web`)
+# features choose the transport: `transport-http` (axum/TcpListener) vs.
+# `transport-wasm` (the `window.lunco_api` JS bridge).
+lunco-api = { path = "../lunco-api", optional = true, default-features = false }
+lunco-networking = { path = "../lunco-networking", optional = true }
+
+# Replace glibc's allocator with mimalloc on native targets. Bevy +
+# avian generate huge cross-thread allocator traffic; glibc's
+# arena-per-thread fallback still hits a global lock which serialised
+# our hot frames against the avian contact-graph rebuild. mimalloc
+# uses per-thread heaps and lock-free fast paths, giving consistent
+# frame times. Wasm has its own allocator path, so this dep is native-
+# only.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+mimalloc = "0.1"
+lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
+
+[features]
+# `ui` + `lunco-api` + `networking` are on by default so native
+# `cargo run --bin sandbox` Just Works (windowed GUI + HTTP API + the multiplayer
+# wire — the in-app Network → Connect button and `--connect`/`--host` flags are
+# live without an extra `--features` flag). A lean HEADLESS server drops the GUI:
+#   cargo build -p lunco-sandbox --bin sandbox --no-default-features --features server
+# which omits winit/wayland/x11/egui/picking/gizmos + the workbench/material/doc
+# UI crates entirely — the SAME `sandbox` bin, just a different feature set. Single-
+# player with no wire: `--no-default-features --features ui,celestial,lunco-api`.
+# The wasm build sets its own feature set (`--no-default-features`), so this
+# default does not affect it.
+default = ["ui", "celestial", "lunco-api", "lunco-api/transport-http", "lunco-api/render", "networking"]
+# Windowed GUI: the winit windowing backend + render-effect features + every
+# UI crate (egui workbench, material editors, doc/theme/ui). Off for a headless
+# server. The render ASSET-STORE features (bevy_pbr/mesh/light/window) stay in
+# the always-on `bevy` dep above — the server still needs them for `backends:None`.
+ui = [
+    "lunco-avatar/ui",
+    "lunco-usd/ui",
+    "lunco-sandbox-edit/ui",
+    "lunco-modelica/ui",
+    "lunco-api?/winit",
+    "dep:lunco-workbench",
+    "dep:lunco-materials",
+    "dep:lunco-doc",
+    "dep:lunco-theme",
+    "dep:lunco-ui",
+    "dep:bevy_egui",
+    "bevy/bevy_winit",
+    "bevy/x11",
+    "bevy/wayland",
+    "bevy/webgl2",
+    "bevy/bevy_picking",
+    "bevy/mesh_picking",
+    "bevy/bevy_post_process",
+    "bevy/bevy_anti_alias",
+    "bevy/smaa_luts",
+    "bevy/tonemapping_luts",
+    "bevy/bevy_gizmos",
+    "bevy/bevy_gizmos_render",
+]
+# Lean headless multiplayer server: API + networking host, NO `ui`. Build with
+# `--no-default-features --features server`. Skips `celestial` (bundled Earth
+# texture + ephemeris, ~10s of MB) — the server only needs `GravityPlugin`,
+# always compiled.
+server = ["lunco-api", "lunco-api/transport-http", "networking"]
+# `celestial` pulls in lunco-celestial's bundled Earth texture + Artemis-II
+# ephemeris (10s of MB). Off for the wasm sandbox build — it only needs
+# `GravityPlugin`, which is always compiled.
+celestial = ["lunco-celestial/embed-assets"]
+sandbox = []
+# Compile the API in. Transport is chosen automatically: the native HTTP
+# server comes from `lunco-api/transport-http` (added to `default` above);
+# the wasm build (`build_web.sh --features lunco-api`) gets the
+# `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
+lunco-api = ["dep:lunco-api"]
+# Multiplayer over WebTransport (lightyear). Pulls in the real networking
+# adapter; the wire substrate (lunco-api) is required.
+networking = ["dep:lunco-networking", "lunco-networking/networking", "lunco-api"]
+# Netcode jitter diagnostics — off by default (not in normal builds). Build with
+# `--features networking,net-diag` when debugging; see lunco-networking/diagnostics.rs.
+net-diag = ["networking", "lunco-networking/net-diag"]
+# Drive-actuation chain tracing — off by default. Build with `--features
+# drive-diag` to trace the DriveRover → port → wheel-force path when a rover
+# won't move / snaps back; see lunco-mobility's `drive_diag!`.
+drive-diag = ["lunco-mobility/drive-diag"]
+python = ["lunco-scripting/python"]
+# Built-in screen recording (Ctrl+Shift+R). Forwards to lunco-avatar's encoder,
+# which links libx264 — native Linux/macOS only, NOT Windows or wasm. Build with
+# `cargo run --bin sandbox --features recording`. Without it the recording
+# settings/hotkey exist but capture nothing.
+recording = ["lunco-avatar/recording"]
+# Tracy profiler. Enable with `--features tracy` and connect a Tracy
+# GUI to see per-system flame graphs. Match the GUI version to the
+# tracy-client version pulled in by Bevy 0.18 (check `cargo tree -p
+# tracy-client` after enabling).
+tracy = ["bevy/trace_tracy"]
+
+# Web-specific: wasm32-unknown-unknown needs JS interop for console output,
+# panic hooks, and RNG (std::time is unavailable on wasm32).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
+# URL-parameter boot path (`?workspace=…&open=…`) reads `window.location.search`.
+web-sys = { version = "0.3", features = ["Window", "Location"] }
+js-sys = "0.3"
+# ahash (egui 0.26.2 → catppuccin-egui → lunco-theme) and lightyear's netcode
+# RNG pull getrandom 0.3, which on wasm needs an explicit backend. Enable the
+# browser-crypto (`wasm_js`) feature here; build_web.sh sets the matching
+# `--cfg getrandom_backend="wasm_js"` (both are required).
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[lints]
+workspace = true

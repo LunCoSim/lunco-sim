@@ -7,7 +7,7 @@ Transport-agnostic API layer for LunCoSim. Exposes simulation state and typed co
 ### 1. Start the simulator with API enabled
 
 ```bash
-# Default port (3000)
+# Default port (4101)
 cargo run --bin sandbox -- --api
 
 # Custom port
@@ -30,16 +30,16 @@ The `--api` flag enables the HTTP server. Without it, the sim runs normally with
 
 ```bash
 # Health check
-curl http://127.0.0.1:3000/api/health
+curl http://127.0.0.1:4101/api/health
 
 # Discover all available commands
-curl http://127.0.0.1:3000/api/commands/schema | jq .
+curl http://127.0.0.1:4101/api/commands/schema | jq .
 
 # List all entities
-curl http://127.0.0.1:3000/api/entities | jq .
+curl http://127.0.0.1:4101/api/entities | jq .
 
 # Query a specific entity
-curl http://127.0.0.1:3000/api/entities/<entity-ulid> | jq .
+curl http://127.0.0.1:4101/api/entities/<entity-ulid> | jq .
 ```
 
 ## Endpoints
@@ -112,7 +112,7 @@ Commands are typed — each domain crate defines its own command structs. The AP
 ### Example: Drive a Rover
 
 ```bash
-curl -X POST http://127.0.0.1:3000/api/commands \
+curl -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{
     "command": "DriveRover",
@@ -127,7 +127,7 @@ curl -X POST http://127.0.0.1:3000/api/commands \
 ### Example: Brake a Rover
 
 ```bash
-curl -X POST http://127.0.0.1:3000/api/commands \
+curl -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{
     "command": "BrakeRover",
@@ -141,7 +141,7 @@ curl -X POST http://127.0.0.1:3000/api/commands \
 ### Example: Spawn an Entity
 
 ```bash
-curl -X POST http://127.0.0.1:3000/api/commands \
+curl -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{
     "command": "SpawnEntity",
@@ -161,7 +161,7 @@ root parented to the first `Grid`. Use after editing a `.usda` file to
 pick up changes without restarting.
 
 ```bash
-curl -X POST http://127.0.0.1:3000/api/commands \
+curl -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{
     "command": "LoadScene",
@@ -181,15 +181,15 @@ Three avatar-camera commands, all share `{avatar, target}`:
 
 ```bash
 # Take direct control (rover, spacecraft)
-curl -X POST http://127.0.0.1:3000/api/commands \
+curl -X POST http://127.0.0.1:4101/api/commands \
   -d '{"command":"PossessVessel","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
 
 # Chase camera only — any SelectableRoot (balloons, props)
-curl -X POST http://127.0.0.1:3000/api/commands \
+curl -X POST http://127.0.0.1:4101/api/commands \
   -d '{"command":"FollowTarget","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
 
 # Orbit a celestial body
-curl -X POST http://127.0.0.1:3000/api/commands \
+curl -X POST http://127.0.0.1:4101/api/commands \
   -d '{"command":"FocusTarget","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
 ```
 
@@ -200,7 +200,7 @@ curl -X POST http://127.0.0.1:3000/api/commands \
 propagated wire values:
 
 ```bash
-curl -X POST http://127.0.0.1:3000/api/commands \
+curl -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{"command":"CosimStatus","params":{}}' | jq
 ```
@@ -282,7 +282,7 @@ fn parse_api_port() -> Option<u16> {
                     return Some(port);
                 }
             }
-            return Some(3000);
+            return Some(4101);
         }
     }
     None
@@ -374,11 +374,11 @@ observer returns `Result<Ack, String>` (see AGENTS.md § 4.2) records a
 
 ```bash
 # 1. dispatch → get the request id
-curl -s :3000/api/commands -d '{"command":"RunPython","params":{"code":"print(2+2)"}}'
+curl -s :4101/api/commands -d '{"command":"RunPython","params":{"code":"print(2+2)"}}'
 # → {"command_id": 7}
 
 # 2. poll the outcome by id
-curl -s :3000/api/commands -d '{"type":"QueryCommandResult","id":"7"}'
+curl -s :4101/api/commands -d '{"type":"QueryCommandResult","id":"7"}'
 # → {"data":{"id":7,"outcome":{"Succeeded":{"assigned":{"stdout":"4\n"}}}}}
 ```
 
@@ -449,9 +449,9 @@ that want a runtime-toggleable opt-out.
 
 | Binary | Flag | Default Port |
 |---|---|---|
-| `sandbox` | `--api [PORT]` | 3000 |
-| `lunica` | `--api [PORT]` | 3000 |
-| `model_viewer` | `--api [PORT]` | 3000 |
+| `sandbox` | `--api [PORT]` | 4101 |
+| `lunica` | `--api [PORT]` | 4101 |
+| `model_viewer` | `--api [PORT]` | 4101 |
 
 ## Troubleshooting
 

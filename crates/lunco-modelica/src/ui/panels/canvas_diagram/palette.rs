@@ -232,7 +232,7 @@ pub(super) fn render_msl_package_menu(
                     // falls back to the first-tab path — unchanged
                     // behaviour for non-render callers.
                     let tab = world
-                        .get_resource::<crate::ui::panels::model_view::TabRenderContext>()
+                        .get_resource::<crate::model_tabs_types::TabRenderContext>()
                         .and_then(|c| c.tab_id);
                     let state = world.resource::<CanvasDiagramState>();
                     pick_add_instance_name(

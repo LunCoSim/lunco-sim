@@ -789,7 +789,7 @@ fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def:
     // in lockstep with the model_view / canvas_diagram extractors.
     let icon = crate::annotations::extract_icon(&class_def.annotation);
     let documentation =
-        crate::ui::panels::model_view::extract_documentation(&class_def.annotation);
+        crate::doc_extract::extract_documentation(&class_def.annotation);
     let experiment = crate::annotations::extract_experiment(&class_def.annotation);
 
     // Count non-trivial equations: skip `Empty` placeholders and
@@ -959,19 +959,12 @@ fn endpoint_from_component_ref(cr: &ast::ComponentReference) -> ComponentEndpoin
 }
 
 fn annotation_placement_to_pretty(p: crate::annotations::Placement) -> Placement {
-    let extent = p.transformation.extent;
-    let origin = p.transformation.origin;
-    let x_min = extent.p1.x.min(extent.p2.x);
-    let x_max = extent.p1.x.max(extent.p2.x);
-    let y_min = extent.p1.y.min(extent.p2.y);
-    let y_max = extent.p1.y.max(extent.p2.y);
-    let cx = (x_min + x_max) * 0.5 + origin.x;
-    let cy = (y_min + y_max) * 0.5 + origin.y;
+    let (cx, cy, w, h) = p.transformation.centre_size();
     Placement {
         x: cx as f32,
         y: cy as f32,
-        width: (x_max - x_min) as f32,
-        height: (y_max - y_min) as f32,
+        width: w as f32,
+        height: h as f32,
     }
 }
 

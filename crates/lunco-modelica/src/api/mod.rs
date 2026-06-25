@@ -44,14 +44,13 @@ impl Plugin for ModelicaApiEditPlugin {
             .register_type::<ApiFillPattern>()
             .register_type::<ApiLinePattern>();
         register_all_commands(app);
-        // Chain: workbench `FileRenamed` → `RenameModelicaClass` for
-        // saved `.mo` files. Observer is not a `#[Command]`, so it's
-        // not in `register_commands!()` — added directly.
+        // Chain: core `lunco_workspace::FileRenamed` → `RenameModelicaClass`
+        // for saved `.mo` files. Observer is not a `#[Command]`, so it's not
+        // in `register_commands!()` — added directly. Names no UI types, so it
+        // stays in the core API plugin (dormant on a headless server, which
+        // never fires the event). The Untitled-draft rename chain (which names
+        // a workbench UI event) lives in `crate::ui::rename_chain` instead.
         app.add_observer(class::on_file_renamed_chain_to_modelica);
-        // Chain: workbench `RenameOpenDocument` → `RenameModelicaClass`
-        // for Untitled Modelica drafts (no on-disk path; the rename is
-        // purely a class-declaration rewrite).
-        app.add_observer(class::on_rename_open_document_chain_to_modelica);
     }
 }
 
@@ -384,7 +383,7 @@ pub fn on_apply_modelica_ops(
         if internal.is_empty() {
             return;
         }
-        crate::ui::panels::canvas_diagram::apply_ops_as(
+        crate::doc_ops::apply_ops_as(
             world,
             doc,
             internal,

@@ -2,8 +2,51 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use crate::ui::state::{ModelicaDocumentRegistry};
+use crate::state::{ModelicaDocumentRegistry};
 use crate::ModelicaModel;
+
+/// Resolve the `(min, max)` attributes of an input `member` on a
+/// component of type `ty`, by building (once, cached) a `ModelicaIndex`
+/// over the bundled package `pkg`'s source. This recovers real input
+/// bounds (e.g. `Valve.opening` → 0..100) for a standalone `within P;`
+/// duplicate whose own index can't see the package's class internals —
+/// without it the on-canvas input slider has no range to anchor to and
+/// falls back to a value-derived range that the user's drag can run away
+/// (the `valve.opening` → 3.4e21 crash). Cached per package; bundled
+/// sources are immutable so the index is parsed at most once per session.
+fn bundled_member_bounds(pkg: &str, ty: &str, member: &str) -> (Option<f64>, Option<f64>) {
+    thread_local! {
+        static CACHE: std::cell::RefCell<
+            std::collections::HashMap<String, std::rc::Rc<crate::index::ModelicaIndex>>,
+        > = std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    let idx = CACHE.with(|c| {
+        if let Some(i) = c.borrow().get(pkg) {
+            return Some(i.clone());
+        }
+        let src = crate::ui::class_source::bundled_source_for(pkg)?;
+        let ast = rumoca_phase_parse::parse_to_ast(src, "input-bounds.mo").ok()?;
+        let mut index = crate::index::ModelicaIndex::new();
+        index.rebuild_with_errors(&ast, src, false);
+        let rc = std::rc::Rc::new(index);
+        c.borrow_mut().insert(pkg.to_string(), rc.clone());
+        Some(rc)
+    });
+    let Some(idx) = idx else { return (None, None) };
+    // Match by member name AND owning class (exact or qualified suffix) so
+    // a member name shared across classes (e.g. `availability`) resolves to
+    // the right one.
+    let entry = idx.components.iter().find(|e| {
+        e.name == member && (e.class == ty || e.class.ends_with(&format!(".{ty}")))
+    });
+    match entry {
+        Some(e) => (
+            e.modifications.get("min").and_then(|s| s.parse().ok()),
+            e.modifications.get("max").and_then(|s| s.parse().ok()),
+        ),
+        None => (None, None),
+    }
+}
 
 pub(crate) fn stash_snapshots(ui: &egui::Context, world: &mut World, doc_id: Option<lunco_doc::DocumentId>) {
     // ─── Signals ───
@@ -57,7 +100,7 @@ pub(crate) fn stash_snapshots(ui: &egui::Context, world: &mut World, doc_id: Opt
         lunco_viz::kinds::canvas_plot_node::stash_signal_snapshot(ui, snapshot);
     }
 
-    let canvas_sim = doc_id.and_then(|d| crate::ui::state::simulator_for(world, d));
+    let canvas_sim = doc_id.and_then(|d| crate::state::simulator_for(world, d));
 
     // ─── Live Values ───
     {
@@ -92,17 +135,38 @@ pub(crate) fn stash_snapshots(ui: &egui::Context, world: &mut World, doc_id: Opt
         let mut control_snapshot = lunco_viz::kinds::canvas_plot_node::InputControlSnapshot::default();
         if let Some(entity) = canvas_sim {
             if let Some(model) = world.get::<ModelicaModel>(entity) {
-                let index_ref = world.get_resource::<ModelicaDocumentRegistry>()
-                    .and_then(|r| r.host(model.document))
-                    .map(|h| h.document().index());
+                let host = world.get_resource::<ModelicaDocumentRegistry>()
+                    .and_then(|r| r.host(model.document));
+                let index_ref = host.map(|h| h.document().index());
+                // A standalone `within P;` duplicate's own index can't see
+                // the sibling component classes (`Valve` etc.), so an input
+                // like `valve.opening` has no min/max → the slider falls back
+                // to a value-derived range that runs away. Recover the real
+                // bounds (0..100) from the bundled package P.
+                let within_pkg = host
+                    .and_then(|h| crate::document::duplicate::within_package(h.document().source()));
                 for (qualified, value) in &model.inputs {
-                    let (mn, mx) = index_ref
+                    let (mut mn, mut mx) = index_ref
                         .and_then(|idx| idx.find_component_by_leaf(qualified))
                         .map(|entry| (
                             entry.modifications.get("min").and_then(|s| s.parse().ok()),
                             entry.modifications.get("max").and_then(|s| s.parse().ok()),
                         ))
                         .unwrap_or((None, None));
+                    if mn.is_none() && mx.is_none() {
+                        if let (Some(pkg), Some((inst, member))) =
+                            (within_pkg.as_deref(), qualified.split_once('.'))
+                        {
+                            if let Some(ty) = index_ref
+                                .and_then(|idx| idx.find_component_by_leaf(inst))
+                                .map(|e| e.type_name.clone())
+                            {
+                                let (bmn, bmx) = bundled_member_bounds(pkg, &ty, member);
+                                mn = bmn;
+                                mx = bmx;
+                            }
+                        }
+                    }
                     control_snapshot.inputs.insert(qualified.to_string(), (*value, mn, mx));
                 }
             }

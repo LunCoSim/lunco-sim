@@ -54,7 +54,7 @@ pub fn twin_id_for_doc(doc: DocumentId) -> TwinId {
 /// Active document from the workspace (most-recently-focused tab).
 pub fn active_doc(world: &World) -> Option<DocumentId> {
     world
-        .get_resource::<lunco_workbench::WorkspaceResource>()?
+        .get_resource::<lunco_workspace::WorkspaceResource>()?
         .active_document
 }
 
@@ -172,7 +172,7 @@ pub fn render_pin_header(
 
 pub fn doc_display_name(world: &World, doc: DocumentId) -> String {
     world
-        .get_resource::<crate::ui::ModelicaDocumentRegistry>()
+        .get_resource::<crate::state::ModelicaDocumentRegistry>()
         .and_then(|reg| reg.host(doc))
         .map(|host| host.document().origin().display_name())
         .unwrap_or_else(|| format!("doc#{:?}", doc))

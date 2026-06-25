@@ -21,9 +21,9 @@ use crate::shared::{deserialize_env, serialize_env, PRIVATE_KEY, PROTOCOL_ID};
 /// process. Does **not** connect — connecting is [`spawn_client`], driven either
 /// by auto-connect (`?connect=` / `--connect`) or the `JoinServer` command.
 pub(crate) fn register_client_systems(app: &mut App) {
-    // Browser: register our hostname-URL dialing observer (lightyear's
-    // ClientPlugins already added the aeronet WebTransport plugin).
-    #[cfg(target_family = "wasm")]
+    // Both native and wasm use our hostname-URL dialing observer so that
+    // a real CA cert for `sandbox.lunco.space` validates correctly (lightyear's
+    // built-in `WebTransportClientIo` dials `https://{ip}`, which breaks SNI).
     app.add_plugins(crate::wt_client::WtUrlClientPlugin);
     // Host connection lost (server closed / netcode timeout): leave the
     // "connected" state instead of silently dead-reckoning stale snapshots.
@@ -41,17 +41,15 @@ pub(crate) fn register_client_systems(app: &mut App) {
 /// string — hostname or `ip:port`) and start the link. Callable from a `Startup`
 /// system (auto-connect) or the `JoinServer` command observer.
 ///
-/// The transport IO differs by target: **native** keeps lightyear's
-/// `WebTransportClientIo` (`PeerAddr`-driven, `https://{ip}`), fine for CLI dev
-/// that connects by IP. **wasm** uses our [`WtUrlClientIo`](crate::wt_client)
-/// which dials the hostname URL directly, so a real CA cert on a domain
-/// validates with no digest. Netcode never validates the transport address (the
-/// upstream check is disabled), so its `server_addr` is just token data — on
-/// wasm a placeholder carrying the right port is enough.
+/// Both native and wasm use [`WtUrlClientIo`](crate::wt_client) which dials a
+/// `https://{server}` URL directly. This lets the OS/browser resolve DNS and
+/// present the hostname in the TLS SNI field, so a CA cert for
+/// `sandbox.lunco.space` validates correctly on native builds. Netcode never
+/// validates the transport address (the upstream check is disabled), so its
+/// `server_addr` is just token data — a placeholder carrying the right port.
 pub(crate) fn spawn_client(commands: &mut Commands, server: &str, client_id: u64) -> Entity {
-    #[cfg(not(target_family = "wasm"))]
-    let server_addr = crate::resolve_socket_addr(server);
-    #[cfg(target_family = "wasm")]
+    // Netcode needs a `SocketAddr` for its token, but never validates it against
+    // the transport — the real dial is done by `WtUrlClientIo` below.
     let server_addr = SocketAddr::from(([127, 0, 0, 1], port_of(server)));
 
     let auth = Authentication::Manual {
@@ -78,15 +76,8 @@ pub(crate) fn spawn_client(commands: &mut Commands, server: &str, client_id: u64
             LocalAddr(client_addr),
             netcode,
         ));
-        // Native: lightyear's IP-dialing IO. wasm: our hostname-URL IO.
-        #[cfg(not(target_family = "wasm"))]
-        ent.insert((
-            PeerAddr(server_addr),
-            WebTransportClientIo {
-                certificate_digest: client_cert_digest(),
-            },
-        ));
-        #[cfg(target_family = "wasm")]
+        // Both native and wasm: dial the hostname URL so DNS resolves and SNI
+        // carries the domain name — required for CA cert validation on native.
         ent.insert(crate::wt_client::WtUrlClientIo {
             url: format!("https://{server}"),
             certificate_digest: client_cert_digest(),
@@ -159,13 +150,15 @@ lunco_core::register_commands!(on_join_server, on_leave_server);
 /// address (default `5888`). The host half is irrelevant — the browser dials the
 /// hostname URL via [`WtUrlClientIo`](crate::wt_client::WtUrlClientIo), not this
 /// `SocketAddr`.
-#[cfg(target_family = "wasm")]
+/// Parse the port out of a `host:port` string for the netcode placeholder
+/// address (default `5888`). The host half is irrelevant — `WtUrlClientIo`
+/// dials the full hostname URL; this is only used for the netcode token.
 fn port_of(server: &str) -> u16 {
     server
         .rsplit(':')
         .next()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(5888)
+        .unwrap_or(lunco_core::session::DEFAULT_HOST_PORT)
 }
 
 /// Reflect the handshake (non-zero [`LocalSession`]) into [`NetStatus`] so the
@@ -196,33 +189,36 @@ fn on_client_disconnected(
     warn!("[net] host connection lost — client disconnected");
 }
 
-/// Native: empty digest + the `dangerous-configuration` feature ⇒ no cert
-/// validation (localhost dev). The browser path reads the digest from the URL.
-#[cfg(not(target_family = "wasm"))]
-fn client_cert_digest() -> String {
-    String::new()
-}
-
-/// Browser: the digest is supplied in the connect URL hash (`#<digest>`), which
-/// dodges the spike's baked-digest staleness (SPIKE_PH0 §dev-cert-gotchas #4).
+/// Returns the cert digest for `WtUrlClientIo`.
 ///
-/// Normalized to **bare lowercase hex**: lightyear hex-decodes this string, so
-/// the colon-separated form the host logs (`ba:ae:…`) must have its separators
-/// stripped or it panics ("Hex string does not have an even number of digits").
-/// An empty hash ⇒ empty digest ⇒ no `serverCertificateHashes` ⇒ the browser
-/// does normal CA validation (the production path with a real cert on a domain).
-#[cfg(target_family = "wasm")]
+/// - **Native**: always empty → `WtUrlClientIo` uses the system CA store.
+///   Pass `--connect sandbox.lunco.space` and the Let's Encrypt cert validates.
+///   For localhost dev with a self-signed cert you'll need to pass the digest
+///   another way (e.g. an env var); that path isn't wired yet.
+/// - **Browser**: read from the URL hash (`#<digest>`). Empty hash ⇒ normal CA
+///   validation. Non-empty ⇒ pin for a self-signed dev cert (localhost only).
 fn client_cert_digest() -> String {
-    web_sys::window()
-        .and_then(|w| w.location().hash().ok())
-        .map(|h| {
-            h.trim_start_matches('#')
-                .chars()
-                .filter(|c| c.is_ascii_hexdigit())
-                .flat_map(char::to_lowercase)
-                .collect()
-        })
-        .unwrap_or_default()
+    #[cfg(not(target_family = "wasm"))]
+    {
+        // Production: system CA store validates the server cert normally.
+        // Dev override: set LUNCO_CERT_DIGEST=<hex> to pin a self-signed cert.
+        std::env::var("LUNCO_CERT_DIGEST").unwrap_or_default()
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        // Digest in the URL hash (`#<hex>`). Stripped of colons so lightyear's
+        // hex decoder doesn't panic on the colon-separated form the host logs.
+        web_sys::window()
+            .and_then(|w| w.location().hash().ok())
+            .map(|h| {
+                h.trim_start_matches('#')
+                    .chars()
+                    .filter(|c| c.is_ascii_hexdigit())
+                    .flat_map(char::to_lowercase)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 /// Drain outgoing commands to the server on their declared channel.

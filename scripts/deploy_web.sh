@@ -45,30 +45,79 @@ error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-BIN="${BIN:-lunica}"
 TARGET="${DEPLOY_TARGET:-${1:-}}"
+TYPE="${2:-${BIN:-lunica}}"
+CUSTOM_PATH="${3:-}"
 SSH_PORT="${SSH_PORT:-}"
 EXTRA_RSYNC="${EXTRA_RSYNC:-}"
-DIST_DIR="$PROJECT_DIR/dist/$BIN"
 
 if [ -z "$TARGET" ]; then
     error "No deploy target."
     cat >&2 <<EOF
 
-usage: $0 <user@host:/remote/path>
-   or: DEPLOY_TARGET="user@host:/path" $0
+Usage:
+    $0 <user@host[:path]> [type] [custom_path]
 
-example:
-   ./scripts/deploy_web.sh deploy@lunco.dev:/var/www/lunco
-   BIN=sandbox $0 deploy@lunco.dev:/var/www/rover
+Types:
+    lunica    - Web workbench IDE (default)
+    sandbox   - Web simulation sandbox
+    server    - Native headless sandbox server (binary + assets)
+
+Examples:
+    # Deploy lunica to ~/lunica:
+    $0 rod@38.242.231.159:~/lunica
+
+    # Deploy sandbox (web client) to ~/sandbox:
+    $0 rod@38.242.231.159:~/sandbox sandbox
+
+    # Deploy native server (binary + assets) to a path you choose:
+    $0 rod@38.242.231.159 server ~/sandbox-server
 EOF
     exit 2
 fi
 
-if [ ! -d "$DIST_DIR" ]; then
-    error "No bundle at $DIST_DIR"
-    info  "Run: ./scripts/build_web.sh build $BIN --release  (then deploy)"
-    exit 1
+# Split TARGET into HOST and PATH if it contains a colon
+HOST="$TARGET"
+PATH_PART=""
+if [[ "$TARGET" =~ : ]]; then
+    HOST="${TARGET%%:*}"
+    PATH_PART="${TARGET#*:}"
+fi
+
+# Determine final remote path
+REMOTE_PATH=""
+if [ -n "$CUSTOM_PATH" ]; then
+    REMOTE_PATH="$CUSTOM_PATH"
+elif [ -n "$PATH_PART" ]; then
+    REMOTE_PATH="$PATH_PART"
+else
+    error "No remote path provided."
+    cat >&2 <<EOF
+
+Error: You must specify a target path, either as part of the target argument
+(e.g., user@host:/path/to/dir) or as a custom path argument.
+
+Usage:
+    $0 <user@host[:path]> [type] [custom_path]
+EOF
+    exit 2
+fi
+
+# Determine source directory and validate bundle
+if [ "$TYPE" = "server" ]; then
+    DIST_DIR="$PROJECT_DIR/dist/server"
+    if [ ! -x "$DIST_DIR/sandbox" ] || [ ! -d "$DIST_DIR/assets" ]; then
+        error "No server bundle at $DIST_DIR (missing sandbox binary or assets/)"
+        info  "Build it first:  ./scripts/build.sh sandbox-server --release"
+        exit 1
+    fi
+else
+    DIST_DIR="$PROJECT_DIR/dist/$TYPE"
+    if [ ! -d "$DIST_DIR" ]; then
+        error "No bundle at $DIST_DIR"
+        info  "Build it first:  ./scripts/build_web.sh build $TYPE --release  (then deploy)"
+        exit 1
+    fi
 fi
 
 # ── Pre-compression ────────────────────────────────────────────────────
@@ -81,88 +130,94 @@ fi
 # gzip, png, jpg, woff2). Recompressing them is pure overhead and
 # typically grows the output.
 
-shopt -s globstar nullglob
-COMPRESSIBLE_EXTS=(wasm js html json css svg ts xml txt map)
-SKIP_EXTS=(zst br gz png jpg jpeg gif webp woff woff2 ttf otf eot ico)
+if [ "$TYPE" != "server" ]; then
+    shopt -s globstar nullglob
+    COMPRESSIBLE_EXTS=(wasm js html json css svg ts xml txt map)
+    SKIP_EXTS=(zst br gz png jpg jpeg gif webp woff woff2 ttf otf eot ico)
 
-is_skip_ext() {
-    local ext=$1
-    for s in "${SKIP_EXTS[@]}"; do [ "$ext" = "$s" ] && return 0; done
-    return 1
-}
-is_compressible_ext() {
-    local ext=$1
-    for c in "${COMPRESSIBLE_EXTS[@]}"; do [ "$ext" = "$c" ] && return 0; done
-    return 1
-}
+    is_skip_ext() {
+        local ext=$1
+        for s in "${SKIP_EXTS[@]}"; do [ "$ext" = "$s" ] && return 0; done
+        return 1
+    }
+    is_compressible_ext() {
+        local ext=$1
+        for c in "${COMPRESSIBLE_EXTS[@]}"; do [ "$ext" = "$c" ] && return 0; done
+        return 1
+    }
 
-# Brotli is preferred (typically ~20% smaller than gzip-9 on wasm);
-# gzip is the universal fallback for clients that don't send
-# `Accept-Encoding: br` (rare in modern browsers but cheap insurance).
-HAVE_BROTLI=0
-if command -v brotli &> /dev/null; then
-    HAVE_BROTLI=1
-else
-    warn "brotli not installed — skipping .br siblings (install: apt install brotli)"
-fi
-
-info "Pre-compressing files in $DIST_DIR (gzip -9$([ $HAVE_BROTLI -eq 1 ] && echo ' + brotli -q 11'))…"
-total_raw=0
-total_gz=0
-total_br=0
-file_count=0
-
-while IFS= read -r -d '' f; do
-    rel="${f#$DIST_DIR/}"
-    base="${rel##*/}"
-    ext="${base##*.}"
-    [ "$base" = "$ext" ] && ext=""    # files with no extension
-    is_skip_ext "$ext" && continue
-    is_compressible_ext "$ext" || continue
-
-    raw_size=$(stat -c '%s' "$f" 2>/dev/null || stat -f '%z' "$f")
-    total_raw=$((total_raw + raw_size))
-    file_count=$((file_count + 1))
-
-    # -k keeps original, -f overwrites existing .gz, -n drops mtime
-    # for reproducible output, -9 = max compression.
-    gzip -kfn -9 "$f"
-    gz_size=$(stat -c '%s' "$f.gz" 2>/dev/null || stat -f '%z' "$f.gz")
-    total_gz=$((total_gz + gz_size))
-
-    # -q 11 = max quality (slow but one-shot at deploy time).
-    # --large_window=24 lets the encoder use a 16 MB window — meaningful
-    # for the 20+ MB wasm blob. Some old decoders cap at window=22, but
-    # every browser brotli decoder accepts up to 24.
-    if [ $HAVE_BROTLI -eq 1 ]; then
-        brotli -f -k -q 11 --large_window=24 -o "$f.br" "$f"
-        br_size=$(stat -c '%s' "$f.br" 2>/dev/null || stat -f '%z' "$f.br")
-        total_br=$((total_br + br_size))
-    fi
-done < <(find "$DIST_DIR" -type f -print0)
-
-if [ $file_count -gt 0 ]; then
-    raw_mb=$(awk "BEGIN{printf \"%.1f\", $total_raw/1048576}")
-    gz_mb=$(awk  "BEGIN{printf \"%.1f\", $total_gz/1048576}")
-    gz_ratio=$(awk  "BEGIN{printf \"%.1f\", $total_raw/$total_gz}")
-    if [ $HAVE_BROTLI -eq 1 ]; then
-        br_mb=$(awk    "BEGIN{printf \"%.1f\", $total_br/1048576}")
-        br_ratio=$(awk "BEGIN{printf \"%.1f\", $total_raw/$total_br}")
-        info "Compressed $file_count file(s): ${raw_mb} MB raw → ${gz_mb} MB gz (${gz_ratio}×), ${br_mb} MB br (${br_ratio}×)"
+    # Brotli is preferred (typically ~20% smaller than gzip-9 on wasm);
+    # gzip is the universal fallback for clients that don't send
+    # `Accept-Encoding: br` (rare in modern browsers but cheap insurance).
+    HAVE_BROTLI=0
+    if command -v brotli &> /dev/null; then
+        HAVE_BROTLI=1
     else
-        info "Compressed $file_count file(s): ${raw_mb} MB → ${gz_mb} MB (${gz_ratio}× smaller)"
+        warn "brotli not installed — skipping .br siblings (install: apt install brotli)"
     fi
-else
-    info "No compressible files found."
+
+    info "Pre-compressing files in $DIST_DIR (gzip -9$([ $HAVE_BROTLI -eq 1 ] && echo ' + brotli -q 11'))…"
+    total_raw=0
+    total_gz=0
+    total_br=0
+    file_count=0
+
+    while IFS= read -r -d '' f; do
+        rel="${f#$DIST_DIR/}"
+        base="${rel##*/}"
+        ext="${base##*.}"
+        [ "$base" = "$ext" ] && ext=""    # files with no extension
+        is_skip_ext "$ext" && continue
+        is_compressible_ext "$ext" || continue
+
+        raw_size=$(stat -c '%s' "$f" 2>/dev/null || stat -f '%z' "$f")
+        total_raw=$((total_raw + raw_size))
+        file_count=$((file_count + 1))
+
+        # -k keeps original, -f overwrites existing .gz, -n drops mtime
+        # for reproducible output, -9 = max compression.
+        gzip -kfn -9 "$f"
+        gz_size=$(stat -c '%s' "$f.gz" 2>/dev/null || stat -f '%z' "$f.gz")
+        total_gz=$((total_gz + gz_size))
+
+        # -q 11 = max quality (slow but one-shot at deploy time).
+        # --large_window=24 lets the encoder use a 16 MB window — meaningful
+        # for the 20+ MB wasm blob. Some old decoders cap at window=22, but
+        # every browser brotli decoder accepts up to 24.
+        if [ $HAVE_BROTLI -eq 1 ]; then
+            brotli -f -k -q 11 --large_window=24 -o "$f.br" "$f"
+            br_size=$(stat -c '%s' "$f.br" 2>/dev/null || stat -f '%z' "$f.br")
+            total_br=$((total_br + br_size))
+        fi
+    done < <(find "$DIST_DIR" -type f -print0)
+
+    if [ $file_count -gt 0 ]; then
+        raw_mb=$(awk "BEGIN{printf \"%.1f\", $total_raw/1048576}")
+        gz_mb=$(awk  "BEGIN{printf \"%.1f\", $total_gz/1048576}")
+        gz_ratio=$(awk  "BEGIN{printf \"%.1f\", $total_raw/$total_gz}")
+        if [ $HAVE_BROTLI -eq 1 ]; then
+            br_mb=$(awk    "BEGIN{printf \"%.1f\", $total_br/1048576}")
+            br_ratio=$(awk "BEGIN{printf \"%.1f\", $total_raw/$total_br}")
+            info "Compressed $file_count file(s): ${raw_mb} MB raw → ${gz_mb} MB gz (${gz_ratio}×), ${br_mb} MB br (${br_ratio}×)"
+        else
+            info "Compressed $file_count file(s): ${raw_mb} MB → ${gz_mb} MB (${gz_ratio}× smaller)"
+        fi
+    else
+        info "No compressible files found."
+    fi
 fi
 
 # ── Rsync ──────────────────────────────────────────────────────────────
 RSYNC_OPTS=(
     -avz
-    --delete                  # remote becomes a mirror of dist/<bin>/
+    --delete                  # remote becomes a mirror of source
     --human-readable
     --progress
 )
+if [ "$TYPE" = "server" ]; then
+    RSYNC_OPTS+=(--exclude='/web/')
+fi
+
 SSH_CMD="ssh"
 [ -n "$SSH_PORT" ] && SSH_CMD="ssh -p $SSH_PORT"
 RSYNC_OPTS+=(-e "$SSH_CMD")
@@ -172,16 +227,22 @@ read -r -a EXTRA_ARR <<< "$EXTRA_RSYNC"
 
 # Trailing slash on source ↔ contents-of-dir, no slash on target.
 SRC="$DIST_DIR/"
-DST="${TARGET%/}/"
+DST="$HOST:${REMOTE_PATH%/}/"
 
 info "Uploading $SRC → $DST"
 [ -n "$EXTRA_RSYNC" ] && info "Extra rsync args: $EXTRA_RSYNC"
 rsync "${RSYNC_OPTS[@]}" "$SRC" "$DST"
 
-success "Deployed $BIN to $TARGET"
+if [ "$TYPE" = "server" ]; then
+    success "Deployed server binary + assets to $HOST:$REMOTE_PATH"
+    info "Nothing was restarted. Run the binary however you run it on the box."
+else
+    success "Deployed $TYPE web client to $HOST:$REMOTE_PATH"
+fi
 
-# ── nginx configuration hint ──────────────────────────────────────────
-cat <<'EOF'
+if [ "$TYPE" != "server" ]; then
+    # ── nginx configuration hint ──────────────────────────────────────────
+    cat <<'EOF'
 
 Reminder — make sure your nginx site is configured to use the
 pre-compressed `.gz` siblings (otherwise nginx compresses on-the-fly
@@ -231,3 +292,4 @@ Verify the pre-compressed sibling is actually served:
     curl -I -H "Accept-Encoding: gzip" https://lunco.example/lunica_bg.wasm
     # expect:  Content-Encoding: gzip
 EOF
+fi

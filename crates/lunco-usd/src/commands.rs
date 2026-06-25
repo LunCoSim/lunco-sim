@@ -36,7 +36,8 @@ use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened, SaveDocument};
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 use lunco_workbench::file_ops::{NewDocument, OpenFile};
-use lunco_workbench::{TwinAdded, ViewportPlaceholder, WorkspaceResource};
+use lunco_workbench::ViewportPlaceholder;
+use lunco_workspace::{TwinAdded, WorkspaceResource};
 use lunco_usd_bevy::UsdPrimPath;
 
 use crate::document::UsdOp;
@@ -677,7 +678,7 @@ mod tests {
     #[cfg(test)]
     fn scene_cmds_for_twin(toml_body: &str, dir_name: &str) -> SceneCmds {
         use lunco_twin::TwinMode;
-        use lunco_workbench::WorkspaceResource;
+        use lunco_workspace::WorkspaceResource;
 
         let tmp = std::env::temp_dir().join(dir_name);
         let _ = std::fs::remove_dir_all(&tmp);
@@ -690,6 +691,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<WorkspaceResource>();
+        app.init_resource::<lunco_assets::twin_source::TwinRoots>();
         app.add_plugins(UsdCommandsPlugin);
         app.init_resource::<SceneCmds>();
         app.add_observer(|t: On<LoadScene>, mut c: ResMut<SceneCmds>| {
@@ -709,7 +711,7 @@ mod tests {
             .resource_mut::<WorkspaceResource>()
             .add_twin(twin);
         app.world_mut()
-            .trigger(lunco_workbench::TwinAdded { twin: twin_id });
+            .trigger(lunco_workspace::TwinAdded { twin: twin_id });
         for _ in 0..4 {
             app.update();
         }
@@ -723,7 +725,7 @@ mod tests {
     #[cfg(test)]
     fn scene_cmds_for_empty_folder(dir_name: &str) -> SceneCmds {
         use lunco_twin::TwinMode;
-        use lunco_workbench::WorkspaceResource;
+        use lunco_workspace::WorkspaceResource;
 
         let tmp = std::env::temp_dir().join(dir_name);
         let _ = std::fs::remove_dir_all(&tmp);
@@ -733,6 +735,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<WorkspaceResource>();
+        app.init_resource::<lunco_assets::twin_source::TwinRoots>();
         app.add_plugins(UsdCommandsPlugin);
         app.init_resource::<SceneCmds>();
         app.add_observer(|t: On<LoadScene>, mut c: ResMut<SceneCmds>| {
@@ -752,7 +755,7 @@ mod tests {
             .resource_mut::<WorkspaceResource>()
             .add_twin(twin);
         app.world_mut()
-            .trigger(lunco_workbench::TwinAdded { twin: twin_id });
+            .trigger(lunco_workspace::TwinAdded { twin: twin_id });
         for _ in 0..4 {
             app.update();
         }

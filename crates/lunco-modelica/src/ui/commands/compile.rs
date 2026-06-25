@@ -26,7 +26,7 @@ use std::collections::HashMap;
 
 use lunco_core::{Command, on_command, register_commands};
 
-use crate::ui::{CompileStates, ModelicaDocumentRegistry, WorkbenchState};
+use crate::state::{CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 use crate::{ModelicaChannels, ModelicaCommand, ModelicaModel};
 
 use super::{entity_for_doc, resolve_active_doc};
@@ -140,7 +140,7 @@ pub(crate) fn render_fast_run_setup(
     mut egui_ctx: bevy_egui::EguiContexts,
     mut setup: ResMut<FastRunSetupState>,
     mut drafts: ResMut<crate::experiments_runner::ExperimentDrafts>,
-    mut run_targets: ResMut<crate::ui::panels::model_view::RunTargetOverrides>,
+    mut run_targets: ResMut<crate::sim_default::RunTargetOverrides>,
     mut commands: Commands,
 ) {
     let Ok(ctx) = egui_ctx.ctx_mut() else {
@@ -507,7 +507,7 @@ pub(crate) fn render_fast_run_setup(
 pub(crate) fn render_compile_class_picker(
     mut egui_ctx: bevy_egui::EguiContexts,
     mut picker: ResMut<CompileClassPickerState>,
-    mut tabs: ResMut<crate::ui::panels::model_view::ModelTabs>,
+    mut tabs: ResMut<crate::model_tabs::ModelTabs>,
     mut commands: Commands,
 ) {
     let Ok(ctx) = egui_ctx.ctx_mut() else {
@@ -651,9 +651,8 @@ pub fn on_compile_model(
     mut sim_streams: ResMut<crate::SimStreamRegistry>,
     channels: Option<Res<ModelicaChannels>>,
     mut q_models: Query<&mut ModelicaModel>,
-    model_tabs: Res<crate::ui::panels::model_view::ModelTabs>,
+    model_tabs: Res<crate::model_tabs::ModelTabs>,
     mut world_source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
-    mut status_bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
 ) {
     let doc = trigger.event().doc;
     let explicit_class = trigger.event().class.clone();
@@ -835,6 +834,19 @@ pub fn on_compile_model(
         console.error(format!("Compile failed: {msg}"));
         return;
     };
+    // A duplicated library/bundled class is emitted with a `within P;` header,
+    // so rumoca instantiates it as `P.<class>`. Once the enclosing package is
+    // in the session (the bundled-extra seeding below for nested bundled
+    // duplicates), the bare leaf fails `model not found` in Instantiate — so
+    // qualify the target with `P`. Mirrors the run path in
+    // `dispatch_experiment`. No-op for top-level scratch models (no `within`)
+    // and for drilled MSL classes (empty overlay source → no `within`).
+    let model_name = match crate::document::duplicate::within_package(&source) {
+        Some(pkg) if !model_name.starts_with(&format!("{pkg}.")) => {
+            format!("{pkg}.{model_name}")
+        }
+        _ => model_name,
+    };
     // Find or spawn the entity linked to this document.
     let linked = registry.entities_linked_to(doc);
 
@@ -1012,7 +1024,17 @@ pub fn on_compile_model(
         };
         let mut claimed: std::collections::HashSet<String> =
             class_names_of(doc).into_iter().collect();
-        let extra_sources: Vec<(String, String)> = registry
+        // The primary document's stable session URI — its canonical identity
+        // (file path / bundled name / Untitled-<id>), NOT a class name and NOT
+        // "model.mo". This is the key the worker seats the source under, and it
+        // MUST match what the Fast Run path passes for the same document so the
+        // shared per-worker rumoca session never holds it under two filenames
+        // (the duplicate-class merge error).
+        let primary_doc_uri = registry
+            .host(doc)
+            .map(|h| h.document().origin().session_uri())
+            .unwrap_or_else(|| "model.mo".to_string());
+        let mut extra_sources: Vec<(String, String)> = registry
             .iter()
             .filter_map(|(other_doc, host)| {
                 if other_doc == doc {
@@ -1041,6 +1063,23 @@ pub fn on_compile_model(
                 Some((filename, document.source().to_string()))
             })
             .collect();
+        // A duplicated *nested* bundled class compiles as `within P; <leaf>`,
+        // but the bundled package P (which defines the leaf's sibling classes
+        // `Tank`/`Valve`/`Engine`/…) is on no search path and is not an open
+        // doc, so the open-doc scan above can't supply it — the compile fails
+        // `unresolved type reference: 'Tank'`. Re-seat the whole bundled
+        // package so rumoca can satisfy those references in the same `within`
+        // scope. Mirrors the run path in `dispatch_experiment`. MSL
+        // within-packages are not bundled (return None) and are left alone;
+        // the `claimed` guard avoids a duplicate-class collision if the
+        // package is somehow already overlaid.
+        if let Some(pkg) = crate::document::duplicate::within_package(&source) {
+            if !claimed.contains(&pkg) {
+                if let Some(bundled) = crate::ui::class_source::bundled_source_for(&pkg) {
+                    extra_sources.push((format!("{pkg}.mo"), bundled.to_string()));
+                }
+            }
+        }
         // PR-B/C: source-root dep scan + lazy load.
         //
         // Walk the doc's AST to find every qualified type root
@@ -1063,12 +1102,7 @@ pub fn on_compile_model(
                 crate::source_roots::log_compile_deps(roots, &model_name, &ast);
                 let deps = crate::source_roots::scan_source_root_deps(&ast);
                 for root in &deps {
-                    crate::source_roots::ensure_loaded(
-                        roots,
-                        root,
-                        &channels,
-                        status_bus.as_deref_mut(),
-                    );
+                    crate::source_roots::ensure_loaded(roots, root, &channels);
                 }
             }
         }
@@ -1077,6 +1111,7 @@ pub fn on_compile_model(
             session_id,
             model_name,
             source,
+            doc_uri: primary_doc_uri,
             extra_sources,
             stream: Some(stream),
         });
@@ -1371,55 +1406,12 @@ fn param_map_from_mods(
 /// `label`, when set, replaces the auto-generated "Run N" name so sweep rows
 /// are identifiable in `ListRuns`. Returns the new experiment id, or `None`
 /// when dispatch can't proceed (no doc, ambiguous class → picker, etc.).
-/// Build [`RunBounds`] from a model's `experiment(...)` annotation in
-/// the AST. `None` when the class has no annotation or no StopTime
-/// (a StopTime is what makes the annotation usable).
-pub(crate) fn bounds_from_annotation(
-    world: &World,
-    doc: DocumentId,
-    model_ref: &lunco_experiments::ModelRef,
-) -> Option<lunco_experiments::RunBounds> {
-    let reg = world.get_resource::<crate::ui::state::ModelicaDocumentRegistry>()?;
-    let host = reg.host(doc)?;
-    let index = host.document().index();
-    let class = index
-        .classes
-        .get(&model_ref.0)
-        .or_else(|| index.classes.values().find(|c| c.name == model_ref.0))?;
-    let exp = class.experiment.as_ref()?;
-    // World-gathering done; the annotation→bounds mapping is pure.
-    crate::sim_target::bounds_from_experiment(exp)
-}
-
-/// Single source of truth for the simulation bounds shown in BOTH the
-/// Fast Run popup and the Experiments-tab Setup form, so the two
-/// surfaces never disagree. Precedence: saved draft override → AST
-/// `experiment(...)` annotation → runner annotation cache
-/// (`default_bounds`) → `sim_target::DEFAULT_STOP_TIME` (1 s, the
-/// Modelica spec default) fallback.
-///
-/// The fresh AST annotation outranks the async runner cache deliberately:
-/// the cache is populated by a background worker callback, so letting it win
-/// would make a run's snapshotted bounds depend on dispatch timing (the
-/// flaky-terminator race). See [`crate::sim_target::resolve_bounds`].
-pub(crate) fn resolve_setup_bounds(
-    world: &World,
-    doc: DocumentId,
-    model_ref: &lunco_experiments::ModelRef,
-) -> lunco_experiments::RunBounds {
-    use lunco_experiments::ExperimentRunner;
-    // Gather the three precedence tiers from live state; the precedence +
-    // fallback are owned by `sim_target::resolve_bounds` (single source of
-    // truth, incl. the canonical `DEFAULT_STOP_TIME`).
-    let draft = world
-        .get_resource::<crate::experiments_runner::ExperimentDrafts>()
-        .and_then(|d| d.get(doc, model_ref).and_then(|dr| dr.bounds_override.clone()));
-    let annotation = bounds_from_annotation(world, doc, model_ref);
-    let runner_cached = world
-        .get_resource::<crate::ModelicaRunnerResource>()
-        .and_then(|r| r.0.default_bounds(model_ref));
-    crate::sim_target::resolve_bounds(draft, annotation, runner_cached)
-}
+// `bounds_from_annotation` + `resolve_setup_bounds` are UI-free (they read
+// document/runner state) and moved to `crate::model_commands` so the headless
+// API server resolves sim bounds too. Re-exported here so the local callers
+// below and the `crate::ui::commands::compile::{...}` paths used by the
+// Experiments / Model-View panels keep resolving.
+pub(crate) use crate::model_commands::{bounds_from_annotation, resolve_setup_bounds};
 
 fn dispatch_experiment(
     world: &mut World,
@@ -1453,7 +1445,7 @@ fn dispatch_experiment(
         // models (AnnotatedRocketStage etc.) fail with "no compilable
         // top-level class".
         let (source, filename, candidates, experiment_map) = {
-            let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+            let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
             let host = match registry.host(doc) {
                 Some(h) => h,
                 None => {
@@ -1467,7 +1459,14 @@ fn dispatch_experiment(
             // drilled MSL example (e.g. `Modelica.Blocks.Examples.PID_Controller`)
             // run without a self-duplicate-class collision.
             let source = compile_overlay_source(document);
-            let filename = document.origin().display_name();
+            // The document's stable session URI — the SAME canonical identity
+            // the interactive `Compile` path passes (file path / bundled name /
+            // Untitled-<id>). NOT `display_name()` (a non-unique label) and NOT
+            // a class name (a file may declare several classes). Keying both
+            // paths identically is what stops the shared per-worker rumoca
+            // session from registering this document under two filenames and
+            // tripping the duplicate-class merge error.
+            let filename = document.origin().session_uri();
             let index = document.index();
             // Tier-ranked candidates (an `experiment(...)`-annotated class
             // sorts first), the SAME ranking the Experiments Setup form and
@@ -1512,7 +1511,7 @@ fn dispatch_experiment(
             },
             None => {
                 let has_drill =
-                    crate::ui::panels::model_view::drilled_class_for_doc(world, doc).is_some();
+                    crate::sim_default::drilled_class_for_doc(world, doc).is_some();
                 if !has_drill && candidates.len() > 1 {
                     if let Some(mut picker) =
                         world.get_resource_mut::<CompileClassPickerState>()
@@ -1528,7 +1527,7 @@ fn dispatch_experiment(
                     }
                     return None;
                 }
-                match crate::ui::panels::model_view::default_simulation_class(world, doc) {
+                match crate::sim_default::default_simulation_class(world, doc) {
                     Some(c) => c,
                     None => {
                         bevy::log::warn!(
@@ -1540,6 +1539,39 @@ fn dispatch_experiment(
                 }
             }
         };
+
+        // A duplicated library class (OpenClass with Duplicate → editable copy) is emitted
+        // with a `within P;` header, so rumoca compiles it as `P.<class>`. The
+        // `within` is load-bearing — it gives the copied body the origin
+        // package's import scope (e.g. the `SI` unit alias) — so we can't strip
+        // it. Instead, qualify the run target with `P`: dispatching the bare
+        // leaf fails `model not found` in Instantiate, while `P.<class>`
+        // resolves against the merged session. No-op for top-level scratch
+        // models and for read-only library drills (empty overlay source).
+        let model_name = match crate::document::duplicate::within_package(&source) {
+            Some(pkg) if !model_name.starts_with(&format!("{pkg}.")) => {
+                format!("{pkg}.{model_name}")
+            }
+            _ => model_name,
+        };
+
+        // A duplicated *nested* class (e.g. `AnnotatedRocketStage.RocketStage`)
+        // is emitted as `within P; <leaf>` — dropping the sibling classes it
+        // refers to (`Tank`, `Valve`, `Engine`, …) that live alongside it in
+        // package P. For a filesystem/MSL `within`, P is already on the global
+        // session path so those siblings resolve. But a *bundled* example
+        // package is on no search path: compiling the lone leaf fails
+        // `unresolved type reference: 'Tank'`. Re-attach the whole bundled
+        // package as an extra source so `compile_str_multi` merges the siblings
+        // back into the same `within` scope. MSL within-packages are not
+        // bundled (return None here) and are left untouched.
+        let extras: Vec<(String, String)> =
+            match crate::document::duplicate::within_package(&source) {
+                Some(pkg) => crate::ui::class_source::bundled_source_for(&pkg)
+                    .map(|s| vec![(format!("{pkg}.mo"), s.to_string())])
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            };
 
         let model_ref = lunco_experiments::ModelRef(model_name.clone());
 
@@ -1558,7 +1590,7 @@ fn dispatch_experiment(
                 model_name: model_name.clone(),
                 source,
                 filename,
-                extras: Vec::new(),
+                extras,
             },
         );
 
@@ -1569,10 +1601,11 @@ fn dispatch_experiment(
         // name, but `experiment_map` is keyed by `c.name` (qualified), so an
         // exact-only lookup would miss the `experiment(...)` annotation and
         // silently fall back to the 1 s default.
+        let model_leaf = model_name.rsplit('.').next().unwrap_or(model_name.as_str());
         let annotation = experiment_map.get(&model_name).or_else(|| {
             experiment_map
                 .iter()
-                .find(|(k, _)| k.rsplit('.').next() == Some(model_name.as_str()))
+                .find(|(k, _)| k.rsplit('.').next() == Some(model_leaf))
                 .map(|(_, v)| v)
         });
         if let Some(exp) = annotation {
@@ -1775,7 +1808,7 @@ pub fn on_confirm_class_picker(trigger: On<ConfirmClassPicker>, mut commands: Co
         // Pin the drilled class so the re-dispatch resolves directly (mirrors
         // `render_compile_class_picker`'s confirm branch).
         if let Some(mut tabs) =
-            world.get_resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+            world.get_resource_mut::<crate::model_tabs::ModelTabs>()
         {
             for (_, state) in tabs.iter_mut_for_doc(doc) {
                 state.drilled_class = Some(chosen.clone());

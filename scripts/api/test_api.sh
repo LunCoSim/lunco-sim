@@ -6,11 +6,11 @@
 #
 # Tests the API against a running LunCoSim instance.
 # Make sure the sim is running with `--api` flag first:
-#   cargo run --bin sandbox -- --api 3000
+#   cargo run --bin sandbox -- --api 4101
 
 set -e
 
-PORT="${1:-3000}"
+PORT="${1:-4101}"
 BASE="http://127.0.0.1:${PORT}/api"
 
 echo "🚀 LunCoSim API Tests (port ${PORT})"

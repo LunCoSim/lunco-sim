@@ -207,38 +207,9 @@ fn run_fast_in_worker(
     inputs: &std::collections::BTreeMap<lunco_experiments::ParamPath, lunco_experiments::ParamValue>,
     bounds: &lunco_experiments::RunBounds,
 ) {
-    use lunco_modelica::experiments_runner::{apply_inputs_to_source, apply_overrides_to_source};
+    use lunco_modelica::experiments_runner::apply_value_bindings_to_dae;
     let started = web_time::Instant::now();
     post_log(scope, format!("run_fast: start run={run_id:?} model={model_name}"));
-
-    let after_inputs = match apply_inputs_to_source(source, inputs) {
-        Ok(s) => s,
-        Err(e) => {
-            post_run_update(
-                scope,
-                run_id,
-                lunco_experiments::RunUpdate::Failed {
-                    error: format!("input substitution failed: {e}"),
-                    partial: None,
-                },
-            );
-            return;
-        }
-    };
-    let injected = match apply_overrides_to_source(&after_inputs, overrides) {
-        Ok(s) => s,
-        Err(e) => {
-            post_run_update(
-                scope,
-                run_id,
-                lunco_experiments::RunUpdate::Failed {
-                    error: format!("override failed: {e}"),
-                    partial: None,
-                },
-            );
-            return;
-        }
-    };
 
     if is_cancelled(run_id) {
         clear_cancel();
@@ -246,15 +217,16 @@ fn run_fast_in_worker(
         return;
     }
 
-    // Compile via the worker's persistent ModelicaCompiler. Reuses
-    // the compile cache the worker already maintains for normal
-    // Compile commands.
+    // Compile the CLEAN model source (no inputs/overrides baked in) via the
+    // worker's persistent ModelicaCompiler — identical to the interactive
+    // Compile path and to native `run_inner`, so the source seated in the
+    // shared session is always the same. Reuses the worker's compile cache.
     let compile = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         STATE.with(|s| {
             let mut state = s.try_borrow_mut().expect("worker state borrow");
             state
                 .compiler()
-                .compile_str_multi(model_name, &injected, filename, extras)
+                .compile_str_multi(model_name, source, filename, extras)
         })
     }));
     let dae = match compile {
@@ -294,6 +266,31 @@ fn run_fast_in_worker(
         return;
     }
 
+    // Inject run values (experiment inputs + parameter overrides) at the DAE
+    // level — the SINGLE injection path, identical to native. No source
+    // rewriting, so the run's DAE derives from exactly the compiled source.
+    // `dae.dae` is an `Arc<Dae>` (shared compile cache); clone the inner DAE
+    // before mutating, exactly as native `run_inner` does.
+    let mut bindings = inputs.clone();
+    bindings.extend(overrides.clone());
+    let run_dae = if bindings.is_empty() {
+        dae.dae.clone()
+    } else {
+        let mut d = (*dae.dae).clone();
+        if let Err(reason) = apply_value_bindings_to_dae(&mut d, &bindings) {
+            post_run_update(
+                scope,
+                run_id,
+                lunco_experiments::RunUpdate::Failed {
+                    error: format!("parameter/input binding failed: {reason}"),
+                    partial: None,
+                },
+            );
+            return;
+        }
+        std::sync::Arc::new(d)
+    };
+
     // Drive the run through the SHARED `drive_run` — the EXACT same entry
     // point native (`experiments_runner::run_inner`) uses. It honours
     // `bounds.runtime`: Batch → the dense-output `simulate_with_diagnostics`
@@ -306,7 +303,7 @@ fn run_fast_in_worker(
     // closes that divergence and also brings the worker the batch
     // output-decimation.
     let mut sink = WorkerSink { scope, run_id };
-    lunco_modelica::experiments_runner::drive_run(&dae.dae, bounds, started, &mut sink);
+    lunco_modelica::experiments_runner::drive_run(&run_dae, bounds, started, &mut sink);
     post_log(
         scope,
         format!("run_fast: done in {:.2}s", started.elapsed().as_secs_f64()),
@@ -380,6 +377,17 @@ pub fn run() -> Result<(), JsValue> {
 
     let scope = worker_global();
     let scope_for_cb = scope.clone();
+
+    // Announce the wire-protocol fingerprint BEFORE any bincode traffic. The
+    // main thread compares it against its own `WIRE_BUILD_ID`; a mismatch means
+    // this worker wasm is stale relative to the main bundle and is reported
+    // loudly there. Plain string (not bincode) so the framing can't itself be a
+    // victim of the layout drift it detects.
+    let _ = scope.post_message(&JsValue::from_str(&format!(
+        "{}{}",
+        lunco_modelica::worker_transport::WIRE_HANDSHAKE_PREFIX,
+        lunco_modelica::worker_transport::WIRE_BUILD_ID,
+    )));
 
     let onmessage = Closure::wrap(Box::new(move |event: MessageEvent| {
         let bytes: Vec<u8> = match Uint8Array::new(&event.data()).to_vec() {

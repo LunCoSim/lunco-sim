@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
-use super::types::{ModelTabState, ModelViewMode, TabId};
+use crate::model_tabs_types::{ModelTabState, ModelViewMode, TabId};
 
 /// Registry of open model view tabs.
 #[derive(Resource, Default)]

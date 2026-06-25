@@ -175,6 +175,8 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
             session_id: 0,
             model_name,
             source: OSCILLATOR_MO.to_string(),
+            doc_uri: "model.mo".to_string(),
+            extra_sources: Vec::new(),
             stream: None,
         });
     }

@@ -11,11 +11,11 @@ use std::sync::Arc;
 use crate::document::duplicate::{
     build_duplicate_source, collect_parent_imports, extract_class_spans_inline,
 };
-use crate::ui::{
+use crate::state::{
     CompileStates, ModelicaDocumentRegistry, WorkbenchState,
 };
-use crate::ui::panels::model_view::{ModelTabs, MODEL_VIEW_KIND};
-use crate::ui::panels::package_browser::PackageTreeCache;
+use crate::model_tabs::ModelTabs; use crate::ui::MODEL_VIEW_KIND;
+use crate::package_tree::PackageTreeCache;
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 
@@ -65,13 +65,6 @@ pub struct OpenClass {
     pub qualified: String,
     #[serde(default)]
     pub action: ClassAction,
-}
-
-/// Open (or focus, if already open) an MSL class as a fresh editable
-/// copy.
-#[Command(default)]
-pub struct OpenExample {
-    pub qualified: String,
 }
 
 /// Open the same document in a new tab (split / sibling view).
@@ -204,7 +197,7 @@ pub fn request_app_close(world: &mut World) {
         // to a workbench-level "find tab(s) for doc id" registry).
         // Synthetic instance=0 is the fallback when no tab is open
         // for the dirty doc (registry-only edits).
-        let tabs = world.get_resource::<crate::ui::panels::model_view::ModelTabs>();
+        let tabs = world.get_resource::<crate::model_tabs::ModelTabs>();
         let mut out = Vec::new();
         for doc_id in dirty_ids {
             let mut any = false;
@@ -408,7 +401,7 @@ pub fn on_create_new_scratch_model(
     mut cache: ResMut<PackageTreeCache>,
     mut model_tabs: ResMut<ModelTabs>,
     mut workbench: ResMut<WorkbenchState>,
-    mut workspace: ResMut<lunco_workbench::WorkspaceResource>,
+    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut commands: Commands,
 ) {
     let req_source = trigger.event().source.clone();
@@ -443,7 +436,7 @@ pub fn on_create_new_scratch_model(
     cache.in_memory_models.retain(|e| e.id != mem_id);
     cache
         .in_memory_models
-        .push(crate::ui::panels::package_browser::InMemoryEntry {
+        .push(crate::package_tree::InMemoryEntry {
             display_name: name,
             id: mem_id,
             doc: doc_id,
@@ -475,36 +468,42 @@ pub fn on_duplicate_model_from_read_only(
 ) {
     let source_doc = trigger.event().source_doc;
 
-    let (source_full, origin_class_short, origin_fqn, inner_drill) = {
+    let (source_full, origin_class_short, origin_fqn) = {
         let Some(host) = registry.host(source_doc) else {
             console.error("Duplicate failed: source doc not found in registry");
             return;
         };
         let doc = host.document();
+        // Duplicate whatever the user is *looking at*: the drilled-in
+        // class when the tab is drilled into a nested model (e.g.
+        // `AnnotatedRocketStage.RocketStage`), otherwise the top-level
+        // class. Extracting the drilled class *directly* — rather than
+        // copying the whole enclosing package and re-drilling into it —
+        // keeps this path consistent with `spawn_duplicate_class_task`
+        // (the by-name duplicate) and honours `build_duplicate_source`'s
+        // `within`-wrap contract. The old code always extracted the
+        // top-level package and named the copy after it, so duplicating a
+        // nested model produced a bogus `within Pkg; package PkgCopy` (a
+        // package nested in its own origin) whose re-drill target never
+        // matched the within-qualified name.
         let fqn = model_tabs.drilled_class_for_doc(source_doc);
-        let ast_opt = doc.strict_ast();
-        let top_short = ast_opt
+        let top_short = doc
+            .strict_ast()
             .as_ref()
             .and_then(|ast| ast.classes.iter().next().map(|(n, _)| n.clone()))
-            .or_else(|| {
-                fqn.as_ref()
-                    .and_then(|q| q.split('.').next().map(String::from))
-            })
+            .or_else(|| fqn.as_ref().and_then(|q| q.split('.').next().map(String::from)))
             .unwrap_or_else(|| doc.origin().display_name());
-        
-        let inner_drill: Option<String> = fqn.as_ref().and_then(|q| {
-            let suffix = q.rsplit('.').next().unwrap_or("");
-            (suffix != top_short).then(|| {
-                let after_top = q
-                    .split('.')
-                    .skip_while(|seg| *seg != top_short)
-                    .skip(1)
-                    .collect::<Vec<_>>()
-                    .join(".");
-                after_top
-            }).filter(|s| !s.is_empty())
-        });
-        (doc.source_arc(), top_short, fqn, inner_drill)
+        // Target qualified name = drilled class if drilled, else the
+        // top-level class. `build_duplicate_source` pops its last segment
+        // for the `within` clause, so a top-level target (no dot) yields
+        // no `within` — exactly right for copying a whole package/model.
+        let origin_fqn = fqn.unwrap_or_else(|| top_short.clone());
+        let origin_short = origin_fqn
+            .rsplit('.')
+            .next()
+            .map(String::from)
+            .unwrap_or(top_short);
+        (doc.source_arc(), origin_short, Some(origin_fqn))
     };
 
     let taken: std::collections::HashSet<String> = cache
@@ -526,14 +525,14 @@ pub fn on_duplicate_model_from_read_only(
     cache.in_memory_models.retain(|e| e.id != mem_id);
     cache
         .in_memory_models
-        .push(crate::ui::panels::package_browser::InMemoryEntry {
+        .push(crate::package_tree::InMemoryEntry {
             display_name: name.clone(),
             id: mem_id,
             doc: doc_id,
         });
     let tab_id = model_tabs.ensure_for(doc_id, None);
     if let Some(tab) = model_tabs.get_mut(tab_id) {
-        tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+        tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
     }
     commands.trigger(lunco_workbench::OpenTab {
         kind: MODEL_VIEW_KIND,
@@ -576,7 +575,6 @@ pub fn on_duplicate_model_from_read_only(
             crate::ui::panels::canvas_diagram::DuplicateBinding {
                 display_name: name.clone(),
                 origin_short: origin_class_short.clone(),
-                inner_drill: inner_drill,
                 task,
                 busy,
             },
@@ -657,7 +655,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
         cache.in_memory_models.retain(|e| e.id != mem_id);
         cache
             .in_memory_models
-            .push(crate::ui::panels::package_browser::InMemoryEntry {
+            .push(crate::package_tree::InMemoryEntry {
                 display_name: name.clone(),
                 id: mem_id,
                 doc: doc_id,
@@ -668,7 +666,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
             .resource_mut::<ModelTabs>();
         let tab_id = model_tabs.ensure_for(doc_id, None);
         if let Some(tab) = model_tabs.get_mut(tab_id) {
-            tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+            tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
         }
         tab_id
     };
@@ -677,33 +675,54 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
         instance: tab_id,
     });
 
+    // Resolve the origin source on the main thread — the unified
+    // resolver reads `World` (the open-document registry is one of its
+    // backends), so it can't run inside the bg task. It spans every
+    // backend (MSL/third-party index, filesystem libraries, open docs,
+    // bundled examples), which is what fixes "(no classes yet)" when
+    // duplicating a bundled composite: the old MSL-index-only lookup
+    // missed bundled files and emitted a comment-only document.
+    let resolved = crate::ui::class_source::resolve_class_source(world, &qualified);
+
     let qualified_for_task = qualified.clone();
     let origin_short_for_task = origin_short.clone();
     let name_for_task = name.clone();
     let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-        let Some(path) = crate::library_fs::resolve_class_path_indexed(&qualified_for_task) else {
+        let Some(crate::ui::class_source::ResolvedClassSource { source: source_full, origin_path }) =
+            resolved
+        else {
             return crate::document::ModelicaDocument::with_origin(
                 doc_id,
-                format!("// Could not locate MSL file for {qualified_for_task}\n"),
+                format!("// Could not locate source for {qualified_for_task}\n"),
                 DocumentOrigin::untitled(name_for_task),
             );
         };
-        let source_full = lunco_assets::msl::msl_read(&path)
-            .and_then(|b| String::from_utf8(b).ok())
+
+        // The heavy work stays off the main thread: enclosing-package
+        // import harvesting + the rewrite parse. Imports only exist for
+        // file-backed libraries (the chain of `package.mo` above the
+        // class); bundled/open-doc sources are self-contained.
+        let imports = origin_path
+            .as_ref()
+            .map(|p| collect_parent_imports(p))
             .unwrap_or_default();
-        
+
         // Prefer the path-cached spans (cheap on repeat MSL duplications);
-        // fall back to an inline parse if resolution fails. Either way the
-        // spans are absolute in `source_full` and `build_duplicate_source`
-        // slices to the class span before rewriting.
-        let spans = crate::document::duplicate::extract_class_spans_via_path(
-            &path,
-            &source_full,
-            &origin_short_for_task,
-        )
-        .filter(|s| s.full_start < s.full_end && s.full_end <= source_full.len())
-        .or_else(|| extract_class_spans_inline(&source_full, &origin_short_for_task));
-        let imports = collect_parent_imports(&path);
+        // fall back to an inline parse (always used for sources with no
+        // on-disk path). Either way the spans are absolute in
+        // `source_full` and `build_duplicate_source` slices to the class
+        // span before rewriting.
+        let spans = origin_path
+            .as_ref()
+            .and_then(|path| {
+                crate::document::duplicate::extract_class_spans_via_path(
+                    path,
+                    &source_full,
+                    &origin_short_for_task,
+                )
+            })
+            .filter(|s| s.full_start < s.full_end && s.full_end <= source_full.len())
+            .or_else(|| extract_class_spans_inline(&source_full, &origin_short_for_task));
         let copy_src = build_duplicate_source(
             &source_full,
             spans.as_ref(),
@@ -732,8 +751,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
             crate::ui::document_openings::OpeningState::Duplicate(
                 crate::ui::panels::canvas_diagram::DuplicateBinding {
                     display_name: name.clone(),
-                    origin_short: origin_short,
-                    inner_drill: None,
+                    origin_short,
                     task,
                     busy,
                 },
@@ -744,18 +762,6 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
         .info(format!(
             "📄 Opening class `{qualified}` → editable `{name}` (building…)"
         ));
-}
-
-#[on_command(OpenExample)]
-pub fn on_open_example(
-    trigger: On<OpenExample>,
-    mut commands: Commands,
-) {
-    let qualified = trigger.event().qualified.clone();
-    commands.trigger(OpenClass {
-        qualified,
-        action: ClassAction::Duplicate { name: String::new() },
-    });
 }
 
 #[on_command(OpenInNewView)]
@@ -903,7 +909,7 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
         let mut tabs = world.resource_mut::<ModelTabs>();
         let tab_id = tabs.ensure_for(doc_id, None);
         if let Some(tab) = tabs.get_mut(tab_id) {
-            tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+            tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
         }
         world.commands().trigger(lunco_workbench::OpenTab {
             kind: MODEL_VIEW_KIND,
@@ -954,7 +960,13 @@ pub fn on_open(trigger: On<Open>, mut commands: Commands) {
         && !uri.contains('/')
         && !uri.contains('\\');
     if looks_like_qualified_name {
-        commands.trigger(OpenExample { qualified: uri });
+        // A bare qualified name (e.g. `Modelica.Blocks.Examples.PID_Controller`)
+        // is an "open as my editable copy" request — dispatch as a duplicate
+        // with an empty name so the handler derives the default `<short>Copy`.
+        commands.trigger(OpenClass {
+            qualified: uri,
+            action: ClassAction::Duplicate { name: String::new() },
+        });
         return;
     }
 
@@ -989,7 +1001,7 @@ pub fn on_document_closed_cleanup(
     mut cache: ResMut<PackageTreeCache>,
     mut compile_states: ResMut<CompileStates>,
     mut workbench: ResMut<WorkbenchState>,
-    mut workspace: ResMut<lunco_workbench::WorkspaceResource>,
+    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut doc_pins: Option<ResMut<crate::ui::doc_pin::DocPinState>>,
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut drafts: Option<ResMut<crate::experiments_runner::ExperimentDrafts>>,

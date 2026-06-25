@@ -404,68 +404,70 @@ impl ModelicaComponentBuilder {
         if let Some(name) = &self.target_class {
             return name.clone();
         }
-        // Find first non-package class. Prepend the file's `within`
-        // clause so the returned target is fully-qualified — extends
-        // resolution walks the scope chain off this name, and a bare
-        // short name (e.g. `"PIDCopy"`) leaves `extends Interfaces.SISO`
-        // with no parent to walk up to. With `within`-prefixing,
-        // `Modelica.Blocks.Continuous.PIDCopy` lets the chain reach
-        // `Modelica.Blocks.Interfaces.SISO`.
-        let within_prefix: String = self
-            .ast
-            .within
-            .as_ref()
-            .map(|w| w.to_string())
-            .unwrap_or_default();
-        let qualify = |short: &str| -> String {
-            crate::ast_extract::qualify(&within_prefix, short)
-        };
-        // Models are the canonical "open this in the canvas" choice;
-        // connectors and types alone have no diagram. Walk in order:
-        //   1. top-level models / blocks
-        //   2. nested-in-package models / blocks
-        //   3. anything non-package at top level (last resort —
-        //      includes connectors, records, types)
-        let is_diagrammable = |t: ClassType| {
-            matches!(
-                t,
-                ClassType::Model | ClassType::Block | ClassType::Class
-            )
-        };
-        for (name, class) in &self.ast.classes {
-            if is_diagrammable(class.class_type.clone()) {
-                return qualify(name);
-            }
-        }
-        for (pkg_name, pkg) in &self.ast.classes {
-            if pkg.class_type != ClassType::Package {
-                continue;
-            }
-            for (inner_name, inner) in &pkg.classes {
-                if is_diagrammable(inner.class_type.clone()) {
-                    return qualify(&crate::ast_extract::qualify(pkg_name, inner_name));
-                }
-            }
-        }
-        // Fallback: first non-package anything (connectors, records,
-        // types). Better than picking the package and rendering
-        // nothing.
-        for (name, class) in &self.ast.classes {
-            if class.class_type != ClassType::Package {
-                return qualify(name);
-            }
-        }
-        self.ast
-            .classes
-            .keys()
-            .next()
-            .map(|n| qualify(n))
-            .unwrap_or_default()
+        resolve_primary_target(&self.ast).unwrap_or_default()
     }
 
     fn get_target_class(&self, name: &str) -> Option<&ClassDef> {
         find_class_by_qualified_name(&self.ast, name)
     }
+}
+
+/// The fully-qualified name of the class a package- or multi-class AST
+/// should open to on the canvas when no explicit drill target is given.
+///
+/// Mirrors the old `resolve_target_class` walk, extracted to a free
+/// function so the projection layer can resolve a sensible target for a
+/// package-shaped AST *instead of* rendering an empty card. Prepends the
+/// file's `within` clause so the returned name is fully-qualified —
+/// `extends` resolution walks the scope chain off this name, and a bare
+/// short name (e.g. `"PIDCopy"`) leaves `extends Interfaces.SISO` with no
+/// parent to walk up to.
+///
+/// Walk order:
+///   1. top-level models / blocks / classes
+///   2. nested-in-package models / blocks / classes (one level)
+///   3. any non-package class (connectors, records, types) — last resort
+///
+/// Returns `None` only when the AST has no classes at all.
+pub fn resolve_primary_target(
+    ast: &StoredDefinition,
+) -> Option<String> {
+    let within_prefix: String = ast
+        .within
+        .as_ref()
+        .map(|w| w.to_string())
+        .unwrap_or_default();
+    let qualify = |short: &str| -> String {
+        crate::ast_extract::qualify(&within_prefix, short)
+    };
+    // Models are the canonical "open this in the canvas" choice;
+    // connectors and types alone have no diagram.
+    let is_diagrammable = |t: ClassType| {
+        matches!(t, ClassType::Model | ClassType::Block | ClassType::Class)
+    };
+    for (name, class) in &ast.classes {
+        if is_diagrammable(class.class_type.clone()) {
+            return Some(qualify(name));
+        }
+    }
+    for (pkg_name, pkg) in &ast.classes {
+        if pkg.class_type != ClassType::Package {
+            continue;
+        }
+        for (inner_name, inner) in &pkg.classes {
+            if is_diagrammable(inner.class_type.clone()) {
+                return Some(qualify(&crate::ast_extract::qualify(pkg_name, inner_name)));
+            }
+        }
+    }
+    // Fallback: first non-package anything (connectors, records, types).
+    // Better than picking the package and rendering nothing.
+    for (name, class) in &ast.classes {
+        if class.class_type != ClassType::Package {
+            return Some(qualify(name));
+        }
+    }
+    ast.classes.keys().next().map(|n| qualify(n))
 }
 
 /// Resolve a qualified class name against a parsed `StoredDefinition`.

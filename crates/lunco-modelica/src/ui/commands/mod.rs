@@ -25,7 +25,7 @@ pub use compile::{
 pub use doc::{Undo, Redo, FormatDocument, SaveActiveDocument, SaveActiveDocumentAs};
 pub use lifecycle::{
     CreateNewScratchModel, DuplicateModelFromReadOnly, DuplicateActiveDoc, OpenClass,
-    OpenExample, OpenInNewView, Open, ClassAction, CloseDialogState, PendingCloseAfterSave,
+    OpenInNewView, Open, ClassAction, CloseDialogState, PendingCloseAfterSave,
     PendingTabCloseScopes, TabCloseScope, GetFile,
 };
 pub use nav::{
@@ -109,7 +109,6 @@ register_commands!(
     plot::on_new_plot_panel,
     lifecycle::on_open,
     lifecycle::on_open_class,
-    lifecycle::on_open_example,
     lifecycle::on_open_file,
     nav::on_pan_canvas,
     util::on_ping,
@@ -126,13 +125,13 @@ register_commands!(
 
 pub(super) fn resolve_active_doc(world: &World) -> Option<DocumentId> {
     world
-        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document)
 }
 
 pub(super) fn entity_for_doc(world: &World, doc: DocumentId) -> Option<Entity> {
     world
-        .get_resource::<crate::ui::ModelicaDocumentRegistry>()
+        .get_resource::<crate::state::ModelicaDocumentRegistry>()
         .and_then(|r| r.entities_linked_to(doc).into_iter().next())
 }
 

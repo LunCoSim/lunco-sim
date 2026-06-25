@@ -1,16 +1,15 @@
 //! Embedded assets for wasm32 builds.
 //!
-//! Shaders, textures, and mission data are baked into the binary at compile time
-//! so the web build doesn't need filesystem access or HTTP asset fetching.
+//! Shaders and mission data are baked into the binary at compile time. Textures
+//! are NOT — Earth/Moon are tens of MB, so they load from `cached_textures://`
+//! over HTTP on web (see `big_space_setup`), not `include_bytes!`.
 //!
 //! On desktop, these are ignored — assets load normally from disk.
 
 use bevy::prelude::*;
 use bevy_shader::Shader;
 #[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
-use bevy_asset::{load_internal_asset, RenderAssetUsages};
-#[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
-use bevy::image::{ImageSampler, ImageSamplerDescriptor, ImageAddressMode, ImageFilterMode};
+use bevy_asset::load_internal_asset;
 use std::marker::PhantomData;
 use uuid::Uuid;
 
@@ -28,15 +27,6 @@ const TRAJECTORY_SHADER_UUID: Uuid = Uuid::from_u128(0x2b3c4d5e6f7a8b9c0d1e2f3a4
 
 /// Const UUID-based handle for the trajectory shader.
 pub const TRAJECTORY_SHADER_HANDLE: Handle<Shader> = Handle::Uuid(TRAJECTORY_SHADER_UUID, PhantomData);
-
-// ============================================================================
-// Embedded Textures (Earth & Moon)
-// Use JPEG versions for smaller binary size (PNG is 55MB total, JPEG is 5MB)
-// Moon uses a solid grey fallback since no JPEG source is available.
-// ============================================================================
-
-#[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
-const EARTH_JPG: &[u8] = include_bytes!("../../../../.cache/textures/earth_source.jpg");
 
 // ============================================================================
 // Embedded Missions
@@ -79,12 +69,6 @@ impl Plugin for EmbeddedAssetsPlugin {
                 Shader::from_wgsl
             );
 
-            // Register textures (Earth only; Moon uses solid grey fallback)
-            let mut images = app.world_mut().resource_mut::<Assets<Image>>();
-            let earth_handle = images.add(load_image_from_bytes(EARTH_JPG).unwrap());
-            app.insert_resource(EmbeddedEarthTexture(earth_handle));
-            app.insert_resource(EmbeddedMoonTexture(None));
-
             // Register mission data
             app.insert_resource(EmbeddedMissionData {
                 artemis_2: ARTEMIS_2_JSON.to_string(),
@@ -101,15 +85,6 @@ impl Plugin for EmbeddedAssetsPlugin {
     }
 }
 
-/// Holds the embedded Earth texture handle (wasm32 only).
-#[derive(Resource)]
-pub struct EmbeddedEarthTexture(pub Handle<Image>);
-
-/// Holds the embedded Moon texture handle (wasm32 only).
-/// Currently not embedded due to binary size constraints — Moon uses a solid grey fallback.
-#[derive(Resource)]
-pub struct EmbeddedMoonTexture(pub Option<Handle<Image>>);
-
 /// Holds embedded mission JSON data (wasm32 only).
 #[derive(Resource)]
 pub struct EmbeddedMissionData {
@@ -117,18 +92,4 @@ pub struct EmbeddedMissionData {
     /// Embedded ephemeris CSV for Artemis 2 (target ID -1024).
     /// Format: JD, Date, X, Y, Z, VX, VY, VZ, LT, Range, RangeRate
     pub artemis_2_ephemeris_csv: String,
-}
-
-#[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
-fn load_image_from_bytes(bytes: &[u8]) -> Result<Image, image::ImageError> {
-    let img = image::load_from_memory(bytes)?;
-    let mut image = Image::from_dynamic(img, true, RenderAssetUsages::RENDER_WORLD);
-    // Use Linear mipmap filtering to reduce aliasing/jitter at distance
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-        mipmap_filter: ImageFilterMode::Linear,
-        address_mode_u: ImageAddressMode::Repeat,
-        address_mode_v: ImageAddressMode::ClampToEdge,
-        ..default()
-    });
-    Ok(image)
 }

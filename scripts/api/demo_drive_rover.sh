@@ -14,7 +14,7 @@
 
 set -e
 
-PORT="${1:-3000}"
+PORT="${1:-4101}"
 BASE="http://127.0.0.1:${PORT}/api"
 
 echo "🚗 LunCoSim Rover Drive Demo (port ${PORT})"

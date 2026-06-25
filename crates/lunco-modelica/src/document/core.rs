@@ -120,6 +120,18 @@ impl SyntaxCache {
         }
     }
 
+    /// THE single canonical way to turn Modelica source text into a
+    /// [`SyntaxCache`]. Parses with error **recovery** (`parse_to_syntax` →
+    /// `best_effort`) so a syntax error in one class never wipes the healthy
+    /// classes around it — the browser/index keep showing siblings mid-edit.
+    /// Every parse of an **editable** document's source funnels through here —
+    /// the async worker (via `install_parse_results`) and the synchronous
+    /// `refresh_ast_now`. Do NOT add a second editable source→cache path that
+    /// parses strictly: that reintroduces the "broken edit empties the whole
+    /// class tree" regression. (Read-only MSL *library* files are the lone
+    /// exception — `load_msl_file` eager-parses them once via rumoca's
+    /// multi-file `parse_files_parallel`; they can't be edited into a broken
+    /// state, so recovery doesn't apply.)
     pub fn from_source(source: &str, generation: u64) -> Self {
         if std::env::var_os("LUNCO_NO_PARSE").is_some() {
             return Self::empty(generation);
@@ -648,6 +660,15 @@ impl ModelicaDocument {
         // that hadn't installed the global engine.)
         let handle = crate::engine_resource::global_engine_handle();
 
+        // There is exactly ONE way to turn live source into a SyntaxCache:
+        // `SyntaxCache::from_source`, which parses with error RECOVERY so a
+        // broken class never wipes its healthy siblings. refresh_ast_now MUST
+        // NOT parse the source any other way — the old divergence here was a
+        // strict `parse_to_ast` that returned an empty AST on any error,
+        // silently emptying the class tree (browser/index) while the async
+        // worker path (`from_source` → `install_parse_results`) kept it. The
+        // only shortcut is a pre-parsed MSL bundle AST for file-backed docs,
+        // which is trusted and needs no reparse.
         let bundle_ast: Option<Arc<StoredDefinition>> = match &self.origin {
             DocumentOrigin::File { path, .. } => {
                 let key = path.to_string_lossy().to_string();
@@ -660,46 +681,27 @@ impl ModelicaDocument {
             _ => None,
         };
 
-        let arc_ast: Option<Arc<StoredDefinition>> = {
-            if let Some(ast) = bundle_ast.as_ref() {
-                if let Some(h) = handle.as_ref() {
-                    h.lock().upsert_document_with_ast(self.id, (**ast).clone());
-                }
-                Some(Arc::clone(ast))
-            } else {
-                #[cfg(target_arch = "wasm32")]
-                { None }
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    match rumoca_phase_parse::parse_to_ast(&self.source, "model.mo") {
-                        Ok(parsed) => {
-                            if let Some(h) = handle.as_ref() {
-                                h.lock().upsert_document_with_ast(self.id, parsed.clone());
-                            }
-                            Some(Arc::new(parsed))
-                        }
-                        Err(_) => None,
-                    }
-                }
-            }
+        let syntax = match bundle_ast {
+            Some(ast) => SyntaxCache {
+                generation: self.generation,
+                ast,
+                errors: Vec::new(),
+            },
+            None => SyntaxCache::from_source(&self.source, self.generation),
         };
 
-        match arc_ast {
-            Some(ast) => {
-                self.syntax = Arc::new(SyntaxCache {
-                    generation: self.generation,
-                    ast,
-                    errors: Vec::new(),
-                });
-            }
-            None => {
-                self.syntax = Arc::new(SyntaxCache {
-                    generation: self.generation,
-                    ast: Arc::new(StoredDefinition::default()),
-                    errors: vec![ParseDiag::message_only("strict parse failed".into())],
-                });
+        // Teach the global engine about a CLEAN AST so other docs can `extends`
+        // it. Skip on parse error: never feed the shared session a partial
+        // recovery AST (matches the prior behaviour, which upserted only a
+        // fully successful parse). Best-effort — a headless context / unit
+        // test may have no engine installed, which is fine.
+        if !syntax.has_errors() {
+            if let Some(h) = handle.as_ref() {
+                h.lock().upsert_document_with_ast(self.id, (*syntax.ast).clone());
             }
         }
+
+        self.syntax = Arc::new(syntax);
         self.rebuild_index();
         self.last_source_edit_at = None;
     }

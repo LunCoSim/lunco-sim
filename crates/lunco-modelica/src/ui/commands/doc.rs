@@ -5,7 +5,7 @@ use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentSaved, SaveAsDocument, SaveDocument, UndoDocument, RedoDocument};
 use lunco_core::{Command, on_command};
 
-use crate::ui::{ModelicaDocumentRegistry, WorkbenchState, panels::code_editor::EditorBufferState};
+use crate::state::{ModelicaDocumentRegistry, WorkbenchState}; use crate::ui::panels::code_editor::EditorBufferState;
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 
@@ -228,7 +228,7 @@ pub fn on_save_document(
 pub fn on_save_as_document(
     trigger: On<SaveAsDocument>,
     mut registry: ResMut<ModelicaDocumentRegistry>,
-    workspace: Res<lunco_workbench::WorkspaceResource>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
     mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
     mut commands: Commands,
 ) {
@@ -279,10 +279,10 @@ pub fn on_save_as_document(
             .and_then(|id| workspace.twin(id))
             .map(|t| lunco_storage::StorageHandle::File(t.root.clone()));
         commands.trigger(lunco_workbench::picker::PickHandle {
-            mode: lunco_workbench::picker::PickMode::SaveFile(lunco_storage::SaveHint {
+            mode: lunco_workbench::picker::PickMode::SaveFile(lunco_workbench::picker::SaveHint {
                 suggested_name: Some(suggested_name),
                 start_dir,
-                filters: vec![lunco_storage::OpenFilter::new("Modelica models", &["mo"])],
+                filters: vec![lunco_workbench::picker::OpenFilter::new("Modelica models", &["mo"])],
             }),
             on_resolved: lunco_workbench::picker::PickFollowUp::SaveAs(doc),
         });
@@ -337,7 +337,7 @@ pub fn on_format_document(trigger: On<FormatDocument>, mut commands: Commands) {
             bevy::log::warn!("[FormatDocument] no active document");
             return;
         };
-        let workbench_read_only = crate::ui::state::read_only_for(world, doc);
+        let workbench_read_only = crate::state::read_only_for(world, doc);
         if workbench_read_only {
             bevy::log::info!("[FormatDocument] tab is read-only — skipping");
             return;

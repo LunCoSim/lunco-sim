@@ -1,5 +1,5 @@
 //! Long-lived [`ModelicaEngine`] exposed as a Bevy resource and
-//! kept in lockstep with [`crate::ui::state::ModelicaDocumentRegistry`].
+//! kept in lockstep with [`crate::state::ModelicaDocumentRegistry`].
 //!
 //! ## Why a long-lived engine
 //!
@@ -214,6 +214,22 @@ pub struct EngineSyncCursor {
     last_synced: HashMap<DocumentId, u64>,
 }
 
+/// UI-supplied pacing hints for the async parse scheduler in
+/// [`drive_engine_sync`]. Core owns this resource with inert defaults — a
+/// headless build never refreshes it, so parses fire eagerly (no input is
+/// ever "active", no focused document to prioritise). The UI layer updates
+/// it each frame from its input-activity / workspace state; core consumes
+/// the hints without ever naming those UI types.
+#[derive(Resource, Default)]
+pub struct ParsePacing {
+    /// True while the user is actively typing — defers the edit-reparse
+    /// debounce so a keystroke burst settles before paying for a parse.
+    pub input_active: bool,
+    /// The focused document, prioritised first in the async parse queue so
+    /// the tab the user is staring at reparses ahead of background tabs.
+    pub active_document: Option<DocumentId>,
+}
+
 /// Sync open Modelica documents into the engine session. Generation-
 /// gated: docs whose generation hasn't advanced since the previous
 /// sync are no-ops. Docs that have been removed from the registry
@@ -250,18 +266,14 @@ pub fn ast_debounce_for_size(src_len: usize) -> u128 {
 
 pub fn drive_engine_sync(
     handle: Res<ModelicaEngineHandle>,
-    mut registry: ResMut<crate::ui::state::ModelicaDocumentRegistry>,
+    mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
     mut cursor: ResMut<EngineSyncCursor>,
-    activity: Res<crate::ui::input_activity::InputActivity>,
-    workspace: Option<Res<lunco_workbench::WorkspaceResource>>,
+    pacing: Res<ParsePacing>,
 ) {
     // Active tab's doc id (if any). Used below to prioritise its
-    // reparse over any background tabs queued behind it. `Option`
-    // because the workspace resource may not be installed yet during
-    // very-early boot ticks.
-    let active_doc: Option<DocumentId> = workspace
-        .as_deref()
-        .and_then(|ws| ws.active_document);
+    // reparse over any background tabs queued behind it. `None` until
+    // the UI feeds the hint (headless: always `None` → no reordering).
+    let active_doc: Option<DocumentId> = pacing.active_document;
     // ── 1. Drain async-parse completions ──────────────────────────────
     // Pull every completion the workers have queued since the last
     // tick. For each, fetch the strict AST from the session and
@@ -512,7 +524,7 @@ pub fn drive_engine_sync(
                 Some(t) => now.duration_since(t).as_millis() >= debounce_ms,
                 None => true,
             };
-            if !elapsed_ok || activity.is_active() {
+            if !elapsed_ok || pacing.input_active {
                 continue;
             }
         }
@@ -645,7 +657,7 @@ pub fn drive_engine_sync(
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
 pub fn drain_worker_parse_results(
     handle: Res<ModelicaEngineHandle>,
-    mut registry: ResMut<crate::ui::state::ModelicaDocumentRegistry>,
+    mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
 ) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -708,6 +720,7 @@ impl Plugin for ModelicaEnginePlugin {
         let _ = GLOBAL_ENGINE.set(handle.clone());
         app.insert_resource(handle)
             .init_resource::<EngineSyncCursor>()
+            .init_resource::<ParsePacing>()
             .init_resource::<MslBootstrapState>()
             .add_systems(
                 Update,
@@ -782,6 +795,25 @@ fn drive_msl_bootstrap(
     // post background warmup or lazy load).
     let parsed = crate::msl_remote::global_parsed_msl();
     if let Some(docs) = parsed {
+        // PERF TODO (web, ~850 ms main-thread freeze): profiling (2026-06-24)
+        // shows this install is the single biggest hitch after MSL lands —
+        // `clone ≈ 90–260 ms` + `replace_parsed_source_set ≈ 760–810 ms`, all
+        // on the main thread, so egui+bevy freeze for ~1 s. Two parts, both
+        // needing an UPSTREAM rumoca change (don't hack locally):
+        //   1. The clone below materialises an owned `Vec<(String, AST)>`
+        //      because `replace_parsed_source_set` consumes a `Vec`. We can't
+        //      `take` the shared `global_parsed_msl` bundle — it has 20+
+        //      post-install readers (class_cache, engine class-lookup,
+        //      document drill-in, package_tree). FIX: give rumoca a
+        //      borrowed/`Arc`-input variant so we pass the bundle by reference
+        //      and drop the clone entirely.
+        //   2. `replace_parsed_source_set` (the ~800 ms) builds MSL scope
+        //      tables in one blocking FFI call. FIX: a chunked/streaming
+        //      install (yield across frames) or an off-thread build — but the
+        //      engine session is `Arc<Mutex>` main-thread-bound, so off-thread
+        //      needs rumoca to support a detached index build too.
+        // Until then this is an inherent one-time freeze; the `MslLoadState`
+        // hint covers the icon side but there's no spinner during this frame.
         let t_clone = web_time::Instant::now();
         let defs: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)> =
             docs.iter().map(|(u, d)| (u.clone(), d.clone())).collect();
@@ -827,5 +859,14 @@ fn drive_msl_bootstrap(
         // fires once per session — the system becomes a no-op on the next
         // tick once `bootstrap` is `Done`.
         commands.trigger(MslBecameReady);
+
+        // Pre-warm the compile/run worker pool now that MSL is resident, so the
+        // user's first compile doesn't pay the lazy cold start (profiled at
+        // ~40 s of worker startup on top of a ~4.5 s compile). Diagrams already
+        // rendered on the main thread, so this overlaps the worker startup with
+        // the user reading the diagram. Guarded (no-op until the MSL seed
+        // envelope is retained) so it can never strand an unseeded worker.
+        #[cfg(target_arch = "wasm32")]
+        crate::worker_transport::prewarm_pool_on_msl_ready();
     }
 }

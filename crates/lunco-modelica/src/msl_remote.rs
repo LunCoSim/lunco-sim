@@ -521,7 +521,7 @@ fn sources_with_extras(primary: MslAssetSource) -> Vec<MslAssetSource> {
     {
         if matches!(sources[0], MslAssetSource::Filesystem(_)) {
             for (subdir, _pkg) in
-                crate::ui::panels::package_browser::scanner::discover_third_party_libs()
+                crate::package_tree::scanner::discover_third_party_libs()
             {
                 sources.push(MslAssetSource::Filesystem(
                     lunco_assets::cache_dir().join(subdir),
@@ -587,11 +587,9 @@ impl Plugin for MslRemotePlugin {
         use lunco_settings::AppSettingsExt;
         app.register_settings_section::<crate::msl_settings::MslSettings>();
 
-        // Cross-platform: mirror MSL state changes into the workbench
-        // status bus so renderers (status bar, console, diagnostics)
-        // pick them up uniformly. Lives in this plugin (not the bus
-        // crate) because it knows about `MslLoadState` shape.
-        app.add_systems(Update, mirror_state_to_status_bus);
+        // (The MSL-state → status-bus mirror is a UI reactive observer; it
+        // lives in `ui::core_observers` and is registered by the UI plugin.
+        // Core just owns `MslLoadState`.)
 
         // Native: prefer an already-materialised tree (workspace dev
         // cache, user-supplied override, or a previously-completed
@@ -1177,123 +1175,8 @@ fn log_state_transition(s: &MslLoadState) {
     }
 }
 
-// ─── State → StatusBus mirror (cross-platform) ─────────────────────
-
-/// Watch [`MslLoadState`] and translate transitions / progress ticks
-/// into [`StatusBus`] events. Phase changes become discrete `Info`
-/// entries (preserved in history); byte/file counts within a phase
-/// become `Progress` ticks (updated in place).
-///
-/// This system uses the *legacy* `push_progress`/`clear_progress`
-/// API rather than `begin` + `BusyHandle` because it is a state
-/// mirror, not a task owner — there is no scope-bound future to
-/// carry the handle. `MslLoadState` itself is the lifetime
-/// authority. Legacy progress events implicitly target
-/// [`BusyScope::Global`], which matches the actual semantics
-/// (MSL preload affects the whole workspace). Don't refactor this
-/// to `begin` without first introducing a place to store the
-/// handle that drops in lockstep with state transitions.
-fn mirror_state_to_status_bus(
-    state: Res<MslLoadState>,
-    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
-    mut last: bevy::prelude::Local<Option<MirrorMemo>>,
-) {
-    let Some(mut bus) = bus else {
-        return;
-    };
-    let now_summary = MirrorMemo::from(&*state);
-    let prior_phase_label = last.as_ref().and_then(|m| m.phase_label);
-
-    match &*state {
-        MslLoadState::NotStarted => {}
-        MslLoadState::Loading { phase, bytes_done, bytes_total } => {
-            let label = msl_phase_label(*phase);
-            // Phase transition → discrete history entry.
-            if prior_phase_label != Some(label) {
-                bus.push(
-                    MSL_SOURCE,
-                    lunco_workbench::status_bus::StatusLevel::Info,
-                    label,
-                );
-            }
-            // Progress tick (in-place; doesn't accumulate in history).
-            let detail = format_progress_detail(*phase, *bytes_done, *bytes_total);
-            bus.push_progress(MSL_SOURCE, detail, *bytes_done, *bytes_total);
-        }
-        MslLoadState::Ready { file_count, .. } => {
-            // Only fire once per Ready transition (re-renders shouldn't spam).
-            if !matches!(last.as_ref(), Some(MirrorMemo { ready: true, .. })) {
-                bus.push(
-                    MSL_SOURCE,
-                    lunco_workbench::status_bus::StatusLevel::Info,
-                    format!("ready — {file_count} files"),
-                );
-                bus.clear_progress(MSL_SOURCE);
-            }
-        }
-        MslLoadState::Failed(msg) => {
-            if !matches!(last.as_ref(), Some(MirrorMemo { failed: true, .. })) {
-                bus.push(
-                    MSL_SOURCE,
-                    lunco_workbench::status_bus::StatusLevel::Error,
-                    msg.clone(),
-                );
-                bus.clear_progress(MSL_SOURCE);
-            }
-        }
-    }
-
-    *last = Some(now_summary);
-}
-
-const MSL_SOURCE: &str = "MSL";
-
-fn msl_phase_label(p: MslLoadPhase) -> &'static str {
-    match p {
-        MslLoadPhase::FetchingManifest => "fetching manifest",
-        MslLoadPhase::FetchingBundle   => "downloading",
-        MslLoadPhase::LoadingCache     => "loading from cache",
-        MslLoadPhase::Decompressing    => "decompressing",
-        MslLoadPhase::Parsing          => "loading",
-    }
-}
-
-fn format_progress_detail(phase: MslLoadPhase, done: u64, total: u64) -> String {
-    let label = msl_phase_label(phase);
-    match phase {
-        MslLoadPhase::Parsing if total > 0 => format!("{label} {done} / {total}"),
-        _ if total > 0 => format!(
-            "{label} — {:.1} / {:.1} MB",
-            done as f64 / 1_048_576.0,
-            total as f64 / 1_048_576.0,
-        ),
-        _ => label.to_string(),
-    }
-}
-
-#[derive(Default)]
-struct MirrorMemo {
-    phase_label: Option<&'static str>,
-    ready: bool,
-    failed: bool,
-}
-
-impl From<&MslLoadState> for MirrorMemo {
-    fn from(s: &MslLoadState) -> Self {
-        match s {
-            MslLoadState::NotStarted => Self::default(),
-            MslLoadState::Loading { phase, .. } => Self {
-                phase_label: Some(msl_phase_label(*phase)),
-                ..Self::default()
-            },
-            MslLoadState::Ready { .. } => Self { ready: true, ..Self::default() },
-            MslLoadState::Failed(_) => Self { failed: true, ..Self::default() },
-        }
-    }
-}
-
-// (Status bar UI lives in lunco-workbench's egui status panel; this
-// module just publishes events to the bus via mirror_state_to_status_bus.)
+// The MSL-state → status-bus mirror moved to `crate::ui::core_observers`
+// (reactive UI layer). Core here only owns `MslLoadState` + `MslLoadPhase`.
 
 // ─── Web fetcher implementation ─────────────────────────────────────
 
@@ -1305,9 +1188,81 @@ mod web {
     use std::path::PathBuf;
 
     use lunco_assets::msl::{MslBundleEntry, MslInMemory, MslManifest};
-    use wasm_bindgen::JsCast;
+    use wasm_bindgen::prelude::*;
     use wasm_bindgen_futures::JsFuture;
     use web_sys::{Request, RequestInit, RequestMode, Response};
+
+    #[wasm_bindgen(inline_js = "
+        export async function fetch_bytes_cached_with_progress(cacheName, path, on_progress) {
+            const cache = await caches.open(cacheName);
+            const matchResponse = await cache.match(path);
+            
+            let response;
+            let fromCache = false;
+            if (matchResponse) {
+                response = matchResponse;
+                fromCache = true;
+            } else {
+                response = await fetch(path);
+                if (!response.ok) {
+                    throw new Error('fetch ' + path + ': HTTP ' + response.status + ' ' + response.statusText);
+                }
+            }
+            
+            const contentLength = response.headers.get('content-length');
+            const total = contentLength ? parseInt(contentLength, 10) : 0;
+            
+            const reader = response.body.getReader();
+            const chunks = [];
+            let receivedLength = 0;
+            
+            while (true) {
+                const {done, value} = await reader.read();
+                if (done) {
+                    break;
+                }
+                chunks.push(value);
+                receivedLength += value.length;
+                if (on_progress) {
+                    try {
+                        on_progress(receivedLength, total);
+                    } catch (e) {
+                        console.warn('on_progress error:', e);
+                    }
+                }
+            }
+            
+            const allChunks = new Uint8Array(receivedLength);
+            let position = 0;
+            for (let chunk of chunks) {
+                allChunks.set(chunk, position);
+                position += chunk.length;
+            }
+            
+            if (!fromCache) {
+                try {
+                    const cachedResponse = new Response(allChunks, {
+                        status: response.status,
+                        statusText: response.statusText,
+                        headers: response.headers
+                    });
+                    await cache.put(path, cachedResponse);
+                } catch (e) {
+                    console.warn('Failed to write to cache:', e);
+                }
+            }
+            
+            return allChunks;
+        }
+    ")]
+    extern "C" {
+        #[wasm_bindgen(catch)]
+        async fn fetch_bytes_cached_with_progress(
+            cache_name: &str,
+            path: &str,
+            on_progress: &js_sys::Function,
+        ) -> Result<JsValue, JsValue>;
+    }
 
     pub(super) async fn run_fetcher(slot: SharedSlot) {
         match try_fetch(&slot).await {
@@ -1350,20 +1305,35 @@ mod web {
         // ── for opening MSL files and as a fallback if the parsed
         // ── bundle is unavailable.
         let bundle_path = format!("msl/{}", manifest.sources.filename);
-        set_state(
-            slot,
-            MslLoadState::Loading {
-                phase: bundle_fetch_phase(&bundle_path).await,
-                bytes_done: 0,
-                bytes_total: manifest.sources.compressed_bytes
-                    + manifest
-                        .parsed
-                        .as_ref()
-                        .map(|p| p.compressed_bytes)
-                        .unwrap_or(0),
-            },
-        );
-        let sources_bytes = fetch_bytes_cached(&bundle_path).await?;
+        let phase1 = bundle_fetch_phase(&bundle_path).await;
+        let total_expected1 = manifest.sources.compressed_bytes
+            + manifest
+                .parsed
+                .as_ref()
+                .map(|p| p.compressed_bytes)
+                .unwrap_or(0);
+        
+        let progress_slot1 = slot.clone();
+        let progress_cb1 = Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, _total: f64| {
+            if let Ok(mut s) = progress_slot1.lock() {
+                s.pending_state = Some(MslLoadState::Loading {
+                    phase: phase1,
+                    bytes_done: done as u64,
+                    bytes_total: total_expected1,
+                });
+            }
+        });
+        
+        let sources_bytes_js = fetch_bytes_cached_with_progress(
+            CACHE_NAME,
+            &bundle_path,
+            progress_cb1.as_ref().unchecked_ref(),
+        )
+        .await
+        .map_err(|e| format!("sources bundle fetch: {e:?}"))?;
+        
+        let sources_bytes = js_sys::Uint8Array::new(&sources_bytes_js).to_vec();
+
         if sources_bytes.len() as u64 != manifest.sources.compressed_bytes {
             return Err(format!(
                 "sources bundle size {} != manifest {}",
@@ -1392,18 +1362,31 @@ mod web {
             manifest.parsed.as_ref().filter(|_| tag_ok)
         {
             let parsed_path = format!("msl/{}", parsed_meta.filename);
-            // Update progress to reflect that we've finished sources
-            // and are now downloading the parsed bundle on top.
-            set_state(
-                slot,
-                MslLoadState::Loading {
-                    phase: bundle_fetch_phase(&parsed_path).await,
-                    bytes_done: manifest.sources.compressed_bytes,
-                    bytes_total: manifest.sources.compressed_bytes
-                        + parsed_meta.compressed_bytes,
-                },
-            );
-            let bytes = fetch_bytes_cached(&parsed_path).await?;
+            let phase2 = bundle_fetch_phase(&parsed_path).await;
+            let total_expected2 = manifest.sources.compressed_bytes
+                + parsed_meta.compressed_bytes;
+            let offset = manifest.sources.compressed_bytes;
+            
+            let progress_slot2 = slot.clone();
+            let progress_cb2 = Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, _total: f64| {
+                if let Ok(mut s) = progress_slot2.lock() {
+                    s.pending_state = Some(MslLoadState::Loading {
+                        phase: phase2,
+                        bytes_done: offset + done as u64,
+                        bytes_total: total_expected2,
+                    });
+                }
+            });
+            
+            let bytes_js = fetch_bytes_cached_with_progress(
+                CACHE_NAME,
+                &parsed_path,
+                progress_cb2.as_ref().unchecked_ref(),
+            )
+            .await
+            .map_err(|e| format!("parsed bundle fetch: {e:?}"))?;
+            
+            let bytes = js_sys::Uint8Array::new(&bytes_js).to_vec();
             if bytes.len() as u64 != parsed_meta.compressed_bytes {
                 return Err(format!(
                     "parsed bundle size {} != manifest {}",
@@ -1608,16 +1591,7 @@ mod web {
         Ok(js_sys::Uint8Array::new(&array_buffer).to_vec())
     }
 
-    /// **Cache-first** fetch — for immutable, content-hashed bundles
-    /// (`sources-*.tar.zst`, `parsed-*.bin.zst`). Once cached they're served
-    /// from Cache Storage forever, with no network round-trip on reload.
-    async fn fetch_bytes_cached(path: &str) -> Result<Vec<u8>, String> {
-        let cache = open_cache().await?;
-        if let Some(bytes) = cache_lookup(&cache, path).await? {
-            return Ok(bytes);
-        }
-        network_fetch_and_cache(&cache, path).await
-    }
+
 
     /// **Stale-while-revalidate** fetch — for `manifest.json`, the one
     /// *mutable* artifact. It names the current content-hashed bundles, so the

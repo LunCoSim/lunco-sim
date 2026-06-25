@@ -6,23 +6,39 @@ edition = "2021"
 [dependencies]
 bevy = { workspace = true }
 openusd = { workspace = true }
+# Core USD subsystems — egui-free. The server keeps these: visual sync (meshes
+# for colliders), avian physics mapping, sim/scene + cosim LoadScene.
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
-lunco-doc-bevy = { path = "../lunco-doc-bevy" }
-lunco-workbench = { path = "../lunco-workbench" }
-lunco-theme = { path = "../lunco-theme" }
-lunco-ui = { path = "../lunco-ui" }
+# Only the document-lifecycle EVENTS (core); its egui systems are behind
+# doc-bevy's own `ui`, re-enabled by our `ui` feature below.
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-assets = { path = "../lunco-assets" }
-bevy_egui.workspace = true
+# Editor-session binding (WorkspaceResource + events). ECS-only, no UI — the
+# binding moved here from lunco-workbench so non-ui consumers can read it.
+lunco-workspace = { path = "../lunco-workspace" }
 serde = { workspace = true }
 # `serde_json::Value` for the hot-exit `DocumentSnapshot.view_state`
 # field (USD leaves it null; Modelica fills it with a canvas Viewport).
 serde_json = { workspace = true }
+
+# UI-only: the document/file commands (commands.rs) + browser/viewport panels
+# (ui/). Optional so a headless server build (`--no-default-features`) drops
+# egui + the egui workbench shell entirely.
+bevy_egui = { workspace = true, optional = true }
+lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-theme = { path = "../lunco-theme", optional = true }
+lunco-ui = { path = "../lunco-ui", optional = true }
+
+[features]
+default = ["ui"]
+# USD document commands + browser/viewport panels (egui + workbench shell).
+ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-theme", "dep:lunco-ui", "lunco-doc-bevy/ui"]
 
 [dev-dependencies]
 avian3d = { workspace = true }

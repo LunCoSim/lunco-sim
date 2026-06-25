@@ -4,15 +4,15 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_canvas::Scene;
 use lunco_doc::Document;
-use crate::ui::state::ModelicaDocumentRegistry;
-use crate::ui::panels::model_view::{ModelTabs};
+use crate::state::ModelicaDocumentRegistry;
+use crate::model_tabs::ModelTabs;
 use super::super::{CanvasDiagramState, DiagramProjectionLimits, ProjectionTask, active_doc_from_world, decorations, render_target};
 use super::super::projection::{project_scene, projection_relevant_source_hash, recover_edges_from_ast};
 
 pub(crate) fn poll_and_swap_projection(
     ui: &mut egui::Ui,
     world: &mut World,
-    render_tab_id: Option<crate::ui::panels::model_view::TabId>,
+    render_tab_id: Option<crate::model_tabs_types::TabId>,
 ) {
     let active_doc = active_doc_from_world(world);
     let current_gen_for_deadline = active_doc.and_then(|d| {
@@ -125,7 +125,7 @@ pub(crate) fn poll_and_swap_projection(
 pub(crate) fn trigger_projection_if_needed(
     ui: &mut egui::Ui,
     world: &mut World,
-    render_tab_id: Option<crate::ui::panels::model_view::TabId>,
+    render_tab_id: Option<crate::model_tabs_types::TabId>,
 ) {
     let Some(doc_id) = active_doc_from_world(world) else { return; };
     let gen = world.resource::<ModelicaDocumentRegistry>().host(doc_id).map(|h| h.document().generation()).unwrap_or(0);
@@ -150,7 +150,7 @@ pub(crate) fn trigger_projection_if_needed(
                     .and_then(|t| t.drilled_class_for_doc(doc_id))
             })
             .or_else(|| {
-                crate::ui::panels::model_view::context::default_simulation_class(world, doc_id)
+                crate::sim_default::default_simulation_class(world, doc_id)
             });
         let target_changed = live_target != docstate.last_seen_target;
         let ast_stale = world.resource::<ModelicaDocumentRegistry>().host(doc_id).map(|h| h.document().ast_is_stale()).unwrap_or(false);
@@ -177,11 +177,27 @@ pub(crate) fn trigger_projection_if_needed(
     }
 }
 
-fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: u64, render_tab_id: Option<crate::ui::panels::model_view::TabId>) {
+fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: u64, render_tab_id: Option<crate::model_tabs_types::TabId>) {
     let resolved = {
         let registry = world.resource::<ModelicaDocumentRegistry>();
         registry
             .host(doc_id)
+            // Reject a STALE AST. A freshly-opened doc starts life with a
+            // `SyntaxCache::empty(gen 0)` placeholder while `generation` is
+            // already 1 — and that placeholder has no parse errors, so
+            // `strict_ast()` hands back `Some(empty StoredDefinition)`. The
+            // very first canvas render (`first_render`) bypasses the
+            // `ast_stale` guard in `trigger_projection_if_needed` and would
+            // otherwise project this empty AST → 0 nodes → `last_seen_gen`
+            // pinned to the current generation. The async parse then lands at
+            // the SAME generation (parse install doesn't bump it), so
+            // `gen_advanced` is false and the diagram never re-projects —
+            // leaving the model stuck on the "no diagram" card (the
+            // RocketStage-opened-after-MSL-ready bug). Treating a stale AST as
+            // "not ready" routes us into the early-return below, which leaves
+            // `last_seen_gen` untouched so the real parse triggers a proper
+            // re-projection.
+            .filter(|host| !host.document().ast_is_stale())
             .and_then(|host| host.document().strict_ast().map(|ast| (host.document().source_arc(), ast)))
     };
     let (source, ast_arc) = match resolved {
@@ -195,9 +211,20 @@ fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: 
             // gated on gen/target change. Release the handoff so the
             // lifecycle falls through to Empty and re-projects once the AST
             // lands (the parse bumps the document generation → gen_advanced).
-            world
-                .resource_mut::<CanvasDiagramState>()
-                .complete_projection_handoff(doc_id);
+            let mut state = world.resource_mut::<CanvasDiagramState>();
+            state.complete_projection_handoff(doc_id);
+            // Consume the one-shot MSL-ready reprojection request too. If we
+            // leave `force_reproject` set, `trigger_projection_if_needed`
+            // re-enters every frame (forced=true) and we spin here until the
+            // AST lands — wasted work each frame. Safe to drop: when the
+            // async parse completes it bumps the generation, and
+            // first_render/gen_advanced re-spawns the projection with MSL now
+            // resident, so standard-library icons still resolve.
+            let docstate = match render_tab_id {
+                Some(t) => state.get_mut_for_tab(t, doc_id),
+                None => state.get_mut(Some(doc_id)),
+            };
+            docstate.force_reproject = false;
             return;
         }
     };
@@ -211,7 +238,7 @@ fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: 
                 .and_then(|t| t.drilled_class_for_doc(doc_id))
         })
         .or_else(|| {
-            crate::ui::panels::model_view::context::default_simulation_class(world, doc_id)
+            crate::sim_default::default_simulation_class(world, doc_id)
         });
     let layout = world.get_resource::<crate::ui::panels::canvas_projection::DiagramAutoLayoutSettings>().cloned().unwrap_or_default();
     

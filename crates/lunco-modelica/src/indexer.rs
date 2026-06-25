@@ -338,7 +338,7 @@ fn collect_documentation(
     out: &mut HashMap<String, String>,
 ) {
     let (info, _revisions) =
-        crate::ui::panels::model_view::extract_documentation(&class_def.annotation);
+        crate::doc_extract::extract_documentation(&class_def.annotation);
     if let Some(info) = info {
         out.insert(short_name.to_string(), clean_info_text(&info));
     }
@@ -825,25 +825,19 @@ impl MSLIndexer {
                         let placement = crate::annotations::extract_placement(
                             &comp.annotation,
                         );
-                        let (x, y) = placement
+                        // Shared extent→centre/size math (see
+                        // `Transformation::centre_size`); position and size
+                        // fall back independently when no placement is given.
+                        let centre_size = placement
                             .as_ref()
-                            .map(|p| {
-                                let extent = &p.transformation.extent;
-                                let cx = (extent.p1.x + extent.p2.x) / 2.0
-                                    + p.transformation.origin.x;
-                                let cy = (extent.p1.y + extent.p2.y) / 2.0
-                                    + p.transformation.origin.y;
-                                (cx as f32, cy as f32)
-                            })
+                            .map(|p| p.transformation.centre_size());
+                        let (x, y) = centre_size
+                            .map(|(cx, cy, _, _)| (cx as f32, cy as f32))
                             .unwrap_or_else(|| {
                                 fallback_port_position(&comp.causality, ports.len())
                             });
-                        let (size_x, size_y) = placement
-                            .as_ref()
-                            .map(|p| {
-                                let e = &p.transformation.extent;
-                                ((e.p2.x - e.p1.x).abs() as f32, (e.p2.y - e.p1.y).abs() as f32)
-                            })
+                        let (size_x, size_y) = centre_size
+                            .map(|(_, _, w, h)| (w as f32, h as f32))
                             .unwrap_or((20.0, 20.0));
                         let rotation_deg = placement
                             .as_ref()
@@ -1066,7 +1060,7 @@ pub(crate) fn native_msl_roots() -> (Vec<(std::path::PathBuf, String)>, Vec<std:
     // Discovered third-party libs — the same set the runtime resolves
     // natively and `build_msl_assets --discover-extras` ships to web.
     for (cache_subdir, package_dir) in
-        crate::ui::panels::package_browser::scanner::discover_third_party_libs()
+        crate::package_tree::scanner::discover_third_party_libs()
     {
         let lib_path = lunco_assets::cache_dir().join(&cache_subdir).join(&package_dir);
         if lib_path.exists() {
@@ -1290,7 +1284,7 @@ pub fn run_with_cancel(
     #[derive(Serialize)]
     struct LocalMslIndex<'a> {
         components: &'a [crate::index::ClassEntry],
-        bundled: &'a [crate::ui::panels::package_browser::types::PackageNode],
+        bundled: &'a [crate::package_tree::types::PackageNode],
     }
     let output_path = lunco_assets::msl_dir().join("msl_index.json");
     let index = LocalMslIndex {
@@ -1360,7 +1354,7 @@ pub fn run_with_cancel(
 /// Pure function over the in-memory `bundled_models()` list — no
 /// disk I/O beyond what `include_dir!` already inlined at compile
 /// time, so the cost is `n * parse(file)`, ≤ ~10 small files.
-fn scan_bundled_examples() -> Vec<crate::ui::panels::package_browser::types::PackageNode> {
+fn scan_bundled_examples() -> Vec<crate::package_tree::types::PackageNode> {
     use crate::models::bundled_models;
 
     // `parse_to_syntax(...).best_effort()` is the same path
@@ -1385,10 +1379,10 @@ fn bundled_class_node(
     short_name: &str,
     class_def: &ClassDef,
     parent_path: &str,
-) -> crate::ui::panels::package_browser::types::PackageNode {
+) -> crate::package_tree::types::PackageNode {
     use crate::index::ClassKind;
-    use crate::ui::panels::package_browser::types::PackageNode;
-    use crate::ui::state::ModelLibrary;
+    use crate::package_tree::types::PackageNode;
+    use crate::state::ModelLibrary;
 
     let qualified = crate::ast_extract::qualify(parent_path, short_name);
     let kind = crate::index::map_class_type(&class_def.class_type);

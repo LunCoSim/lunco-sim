@@ -225,7 +225,9 @@ fn build_visual_diagram_from_scan(
             }
         };
 
-        let node_id = diagram.add_node(def.clone(), pos);
+        // `pos` is an egui screen point; the diagram stores positions as bevy
+        // `Vec2` (egui-free core type). Same `{x, y}: f32`.
+        let node_id = diagram.add_node(def.clone(), bevy::math::Vec2::new(pos.x, pos.y));
         if let Some(n) = diagram.get_node_mut(node_id) {
             n.instance_name = comp.instance_name.clone();
         }
@@ -322,11 +324,29 @@ pub fn import_model_to_diagram_from_ast(
     // for the package case so the canvas paints empty instantly;
     // drill-in still works because that path goes through this same
     // function with `target_class = Some(...)`.
-    if target_class.is_none() && ast_looks_like_package(&ast) {
-        return None;
-    }
+    // Package-shaped AST with no explicit drill target: resolve the
+    // package's *primary* diagrammable class (experiment model first via
+    // AST order) and project just that one, rather than bailing to an
+    // empty card. Building a single class is cheap regardless of package
+    // size (the builder only walks the resolved class + its extends
+    // chain), so the old whole-package-walk concern no longer applies —
+    // and a composite model opened read-only (e.g.
+    // `AnnotatedRocketStage.RocketStage`, whose file is the whole
+    // package) now renders its diagram instead of the bare M-badge card.
+    // Falls back to `None` only when the package has no diagrammable
+    // class at all (pure connector/type package).
+    let resolved_target: Option<String> = match target_class {
+        Some(t) => Some(t.to_string()),
+        None if ast_looks_like_package(&ast) => {
+            match crate::diagram::resolve_primary_target(&ast) {
+                Some(t) => Some(t),
+                None => return None,
+            }
+        }
+        None => None,
+    };
     let mut builder = ModelicaComponentBuilder::from_ast(std::sync::Arc::clone(&ast));
-    if let Some(target) = target_class {
+    if let Some(target) = resolved_target.as_deref() {
         builder = builder.target_class(target);
     }
     let graph = builder.build();
@@ -357,7 +377,10 @@ pub fn import_model_to_diagram_from_ast(
     // or they end up displaying every sibling class's components
     // jumbled together. Honor the scope the caller asked for.
     if graph.node_count() == 0 {
-        if target_class.is_some() {
+        // A resolved target (explicit drill OR auto-picked package
+        // primary) means the scope is known — don't run the unscoped
+        // whole-source scan, which would jumble in sibling classes.
+        if resolved_target.is_some() {
             return None;
         }
         let scanned = scan_component_declarations_from_ast(&ast);
@@ -562,6 +585,45 @@ pub fn import_model_to_diagram_from_ast(
                     nested_class,
                     &ast,
                 );
+            }
+        }
+    }
+
+    // Standalone duplicate of a nested bundled class: the doc is just
+    // `within P; <leaf>`, so its own AST holds none of the sibling
+    // component classes (`Tank`/`Valve`/`Engine`/…) the leaf instantiates —
+    // they live in the bundled package P. When only this doc is loaded
+    // (e.g. after a session restore re-seats just `RocketStageCopy.mo`),
+    // package P isn't in the engine session either, so every component
+    // falls through to the placeholder gray box. Parse the bundled package
+    // and register its classes so their authored `Icon` graphics render.
+    // Mirrors the compile path's `extra_sources` seeding. No-op for MSL
+    // `within` packages (not bundled → `bundled_source_for` returns None)
+    // and for top-level scratch docs (no `within`). `register_local_class`
+    // skips names already registered above, so the doc's own siblings win.
+    if let Some(within) = ast.within.as_ref() {
+        let pkg = within
+            .name
+            .iter()
+            .map(|t| t.text.as_ref())
+            .collect::<Vec<_>>()
+            .join(".");
+        if !pkg.is_empty() {
+            if let Some(bundled) = crate::ui::class_source::bundled_source_for(&pkg) {
+                if let Ok(pkg_ast) =
+                    rumoca_phase_parse::parse_to_ast(bundled, "within-pkg.mo")
+                {
+                    for (_top_name, top_class) in pkg_ast.classes.iter() {
+                        for (nested_name, nested_class) in top_class.classes.iter() {
+                            register_local_class(
+                                &mut local_classes_by_short,
+                                nested_name.as_str(),
+                                nested_class,
+                                &pkg_ast,
+                            );
+                        }
+                    }
+                }
             }
         }
     }
@@ -887,7 +949,9 @@ pub fn import_model_to_diagram_from_ast(
                 )
             });
 
-            let node_id = diagram.add_node(def.clone(), pos);
+            // `pos` is an egui screen point; the diagram stores positions as bevy
+        // `Vec2` (egui-free core type). Same `{x, y}: f32`.
+        let node_id = diagram.add_node(def.clone(), bevy::math::Vec2::new(pos.x, pos.y));
 
             if let Some(diagram_node) = diagram.get_node_mut(node_id) {
                 diagram_node.instance_name = short_name.to_string();
@@ -1506,4 +1570,77 @@ fn format_modifier_expr(expr: &rumoca_compile::parsing::ast::Expression) -> Stri
 // ---------------------------------------------------------------------------
 // Diagram ↔ Snarl Sync
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod composite_slim_slice_tests {
+    use super::*;
+
+    /// Ground-truth the RocketStage card bug: a composite model loaded as a
+    /// slim slice (`within Pkg;\n model RocketStage ... end`) must still
+    /// project its 4 component instances as nodes — the sibling *types*
+    /// (Tank/Valve/…) are absent, but node creation only needs the
+    /// declarations, which the slice carries.
+    #[test]
+    fn rocketstage_slim_slice_projects_component_nodes() {
+        let full = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/models/AnnotatedRocketStage.mo"
+        ));
+        // Reproduce load_msl_class's slice: within + RocketStage body.
+        let ast_full = rumoca_phase_parse::parse_to_ast(full, "rs.mo").unwrap();
+        let class = crate::ast_extract::find_class_by_short_name(&ast_full, "RocketStage")
+            .expect("RocketStage in package");
+        let (s, e) = crate::ast_extract::class_full_text_span(class, full);
+        let slim = format!("within AnnotatedRocketStage;\n{}", &full[s..e]);
+
+        let ast = std::sync::Arc::new(
+            rumoca_phase_parse::parse_to_ast(&slim, "rs_slim.mo").unwrap(),
+        );
+        let layout = DiagramAutoLayoutSettings::default();
+        let diagram = import_model_to_diagram_from_ast(
+            ast,
+            &slim,
+            DEFAULT_MAX_DIAGRAM_NODES,
+            Some("AnnotatedRocketStage.RocketStage"),
+            &layout,
+        );
+        let n = diagram.as_ref().map(|d| d.nodes.len()).unwrap_or(0);
+        assert!(n >= 4, "expected >=4 component nodes, got {n}");
+    }
+
+    #[test]
+    fn rocketstage_scenarios() {
+        let full = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/models/AnnotatedRocketStage.mo"
+        ));
+        let layout = DiagramAutoLayoutSettings::default();
+        let project = |src: &str, target: Option<&str>| -> usize {
+            let ast = std::sync::Arc::new(
+                rumoca_phase_parse::parse_to_ast(src, "x.mo").unwrap(),
+            );
+            import_model_to_diagram_from_ast(
+                ast, src, DEFAULT_MAX_DIAGRAM_NODES, target, &layout,
+            )
+            .map(|d| d.nodes.len())
+            .unwrap_or(0)
+        };
+        // slim slice with no target
+        let ast_full = rumoca_phase_parse::parse_to_ast(full, "rs.mo").unwrap();
+        let class = crate::ast_extract::find_class_by_short_name(&ast_full, "RocketStage").unwrap();
+        let (s, e) = crate::ast_extract::class_full_text_span(class, full);
+        let slim = format!("within AnnotatedRocketStage;\n{}", &full[s..e]);
+
+        let slim_none = project(&slim, None);
+        let full_none = project(full, None);
+        let full_target = project(full, Some("AnnotatedRocketStage.RocketStage"));
+        // The bug: a composite model whose file is the whole package,
+        // opened with no explicit drill target, used to bail to an empty
+        // card (full_none == 0). It must now auto-resolve the primary
+        // class and render its diagram.
+        assert!(slim_none >= 4, "slim slice no-target: {slim_none}");
+        assert!(full_none >= 4, "full package no-target (the card bug): {full_none}");
+        assert!(full_target >= 4, "full package explicit target: {full_target}");
+    }
+}
 

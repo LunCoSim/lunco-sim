@@ -13,7 +13,10 @@ lunco-core = { path = "../lunco-core" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-hardware = { path = "../lunco-hardware" }
-lunco-avatar = { path = "../lunco-avatar" }
+# Only the camera components (FreeFlightCamera/OrbitCamera/…) — egui-free.
+# `default-features = false` keeps avatar's egui UI (+ workbench shell) out of a
+# headless server build.
+lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-modelica = { path = "../lunco-modelica", default-features = false }

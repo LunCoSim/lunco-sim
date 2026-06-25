@@ -50,6 +50,38 @@ fn fallback_range(value: f64) -> (f64, f64) {
     if value < 0.0 { (-mag, mag) } else { (0.0, mag) }
 }
 
+/// Stable heuristic domain for an unbounded input, cached per-input in
+/// egui temp data.
+///
+/// The naïve `fallback_range(live_value)` is recomputed every frame from
+/// the *current* value — and the slider maps "dragged to the top" to
+/// exactly that max. So holding the strip at the top sets
+/// `value = max = 2·value`, which then widens the range next frame,
+/// which lets the value double again: an exponential runaway that drove
+/// `valve.opening` to 3.4e21 and crashed the solver. The cure is a
+/// domain that does NOT move when the value lands inside it: seed it once
+/// from the first-seen value, and only widen (never recompute) if an
+/// external write pushes the value past an edge. A value that merely
+/// reaches the cached edge via dragging leaves the domain untouched, so
+/// the feedback loop is broken.
+fn stable_fallback_range(ctx: &egui::Context, name: &str, value: f64) -> (f64, f64) {
+    let id = egui::Id::new(("lunco_input_fallback_domain", name));
+    let (mut mn, mut mx) =
+        ctx.data(|d| d.get_temp::<(f64, f64)>(id)).unwrap_or_else(|| fallback_range(value));
+    // Widen only when the live value sits strictly outside the cached
+    // domain (an external set, never the slider's own output, which
+    // clamps to `[mn, mx]`). Monotonic: the domain can grow but never
+    // shrinks, so the strip position stays stable across frames.
+    if value < mn {
+        mn = if value < 0.0 { value * 2.0 } else { 0.0 };
+    }
+    if value > mx {
+        mx = value.abs().max(1.0) * 2.0;
+    }
+    ctx.data_mut(|d| d.insert_temp(id, (mn, mx)));
+    (mn, mx)
+}
+
 pub(super) fn paint_input_control_widget(
     ui: &mut egui::Ui,
     icon_rect: egui::Rect,
@@ -61,12 +93,16 @@ pub(super) fn paint_input_control_widget(
         return;
     }
     let snap = lunco_viz::kinds::canvas_plot_node::fetch_input_control_snapshot(ui.ctx());
+    let ctx = ui.ctx().clone();
     let prefix = format!("{instance_name}.");
 
     // Show a slider for *every* input on this instance, not just
-    // bounded ones. Unbounded inputs get a heuristic range derived
-    // from the current value so users still get a draggable control;
-    // they can always edit the parameter literal for precise input.
+    // bounded ones. Unbounded inputs get a STABLE heuristic range
+    // (see `stable_fallback_range`) so users still get a draggable
+    // control; they can always edit the parameter literal for precise
+    // input. The range must be stable across frames — a value-derived
+    // range let dragging to the top feed the value back into an
+    // ever-growing domain (the 3.4e21 `valve.opening` runaway).
     let mut bound: Vec<(String, f64, f64, f64)> = snap
         .inputs
         .iter()
@@ -74,7 +110,7 @@ pub(super) fn paint_input_control_widget(
         .map(|(name, (value, min, max))| {
             let (mn, mx) = match (min, max) {
                 (Some(a), Some(b)) if b > a => (*a, *b),
-                _ => fallback_range(*value),
+                _ => stable_fallback_range(&ctx, name, *value),
             };
             (name.clone(), *value, mn, mx)
         })

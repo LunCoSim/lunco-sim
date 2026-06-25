@@ -407,6 +407,7 @@ fn intent_defers_to_text_widget(intent: EditorIntent) -> bool {
 /// Registered by [`EditorIntentPlugin`]. Domain crates install
 /// resolvers (observers of [`EditorIntent`]) that fire concrete
 /// document commands ([`UndoDocument`] etc.) for their owned docs.
+#[cfg(feature = "ui")]
 pub fn keyboard_to_intent(
     keys: Res<ButtonInput<KeyCode>>,
     keybindings: Res<Keybindings>,
@@ -446,8 +447,11 @@ pub struct EditorIntentPlugin;
 
 impl Plugin for EditorIntentPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Keybindings>()
-            .add_systems(Update, keyboard_to_intent);
+        app.init_resource::<Keybindings>();
+        // The keyboard→intent system reads egui focus to defer Undo/Redo to
+        // text widgets; pure UI, so it's only present in `ui` builds.
+        #[cfg(feature = "ui")]
+        app.add_systems(Update, keyboard_to_intent);
     }
 }
 
@@ -467,11 +471,14 @@ impl Plugin for EditorIntentPlugin {
 pub struct ViewSyncPlugin;
 
 impl Plugin for ViewSyncPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_observer(view_sync_fanout);
+    fn build(&self, _app: &mut App) {
+        // Repaint fanout pokes egui contexts — UI-only.
+        #[cfg(feature = "ui")]
+        _app.add_observer(view_sync_fanout);
     }
 }
 
+#[cfg(feature = "ui")]
 fn view_sync_fanout(
     _trigger: On<DocumentChanged>,
     mut egui_q: Query<&mut bevy_egui::EguiContext>,

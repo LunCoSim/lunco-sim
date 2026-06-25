@@ -230,6 +230,24 @@ struct WorkerPool {
     /// (including the fall-back-to-0 case, where `running` isn't reassigned),
     /// cleared on the run's terminal update.
     run_to_worker: HashMap<lunco_experiments::ExperimentId, usize>,
+    /// Per-worker MSL-bundle state. The boot MSL decode is shipped to worker 0
+    /// *only* (so the rest stay free to parse — broadcasting it saturates the
+    /// whole pool and starves the parse, the reported boot bug); the
+    /// secondaries are seeded once worker 0 is ready. A worker can only run a
+    /// compile/Fast Run once its state is `Ready`; parsing needs no MSL and
+    /// runs on any non-`Decoding` worker.
+    msl: Vec<MslState>,
+}
+
+/// Per-worker MSL-bundle readiness. `Absent` → never seeded; `Decoding` → the
+/// compressed bundle was posted and the worker is decompressing+deserializing
+/// it off-thread (a multi-second job — keep parses off it); `Ready` → the
+/// worker has MSL in its session and can compile / run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MslState {
+    Absent,
+    Decoding,
+    Ready,
 }
 
 /// Hard ceiling on pool size. Each worker is a full wasm instance + ~MSL
@@ -242,9 +260,16 @@ static POOL: OnceLock<Mutex<WorkerPool>> = OnceLock::new();
 /// in place (see [`respawn_worker`]). Set once at [`install_worker`].
 static WORKER_URL: OnceLock<String> = OnceLock::new();
 
-/// The serialized `InstallParsedMsl` wire bytes, retained so a respawned
-/// worker can be re-seeded with the MSL index without re-fetching/parsing
-/// the bundle. Set once when [`install_msl_in_worker`] first runs.
+/// The serialized MSL-install wire bytes, retained so a worker can be (re)seeded
+/// without re-fetching/parsing the bundle. Reused for BOTH crash-respawn re-seed
+/// (`pump_worker_respawns`) AND secondary-worker boot seeding
+/// (`seed_secondary_workers`). On the compressed boot path it's an
+/// `InstallParsedMslCompressed { provide_to_main: false }` envelope (~16 MB):
+/// `false` is correct for every (re)seed because main already has the decoded
+/// bundle from worker 0's boot ship — or, if worker 0 died before providing it,
+/// from the main-thread fallback decode — so a (re)seeded worker never re-ships
+/// ~165 MB to main. On the decoded slow path (`install_msl_in_worker`) it's the
+/// decoded `InstallParsedMsl` bytes. Set once.
 static MSL_WIRE: OnceLock<Vec<u8>> = OnceLock::new();
 
 /// Respawned workers awaiting MSL re-seed, with the instant they respawned.
@@ -276,8 +301,19 @@ fn pool() -> &'static Mutex<WorkerPool> {
             workers: Vec::new(),
             running: Vec::new(),
             run_to_worker: HashMap::new(),
+            msl: Vec::new(),
         })
     })
+}
+
+/// Copy `bytes` into a fresh `Uint8Array` and `postMessage` it to `worker`
+/// (plain copy, no transfer). For callers that already hold the `&Worker` (e.g.
+/// while holding the pool lock and mutating adjacent per-worker state). Returns
+/// the post result so the caller can log with its own context.
+fn post_array_to(worker: &Worker, bytes: &[u8]) -> Result<(), JsValue> {
+    let array = Uint8Array::new_with_length(bytes.len() as u32);
+    array.copy_from(bytes);
+    worker.post_message(&array)
 }
 
 /// Post raw bytes to worker `idx`. No-op (with a warning) if the index is
@@ -288,11 +324,32 @@ fn post_bytes_to(idx: usize, bytes: &[u8], label: &str) {
         bevy::log::warn!("[worker_transport] {label}: worker {idx} not installed");
         return;
     };
-    let array = Uint8Array::new_with_length(bytes.len() as u32);
-    array.copy_from(bytes);
-    if let Err(e) = worker.post_message(&array) {
+    if let Err(e) = post_array_to(worker, bytes) {
         bevy::log::error!("[worker_transport] {label}: post_message failed: {e:?}");
     }
+}
+
+/// Wire-protocol fingerprint baked in by `build.rs` (hash of the workspace
+/// `Cargo.lock` + this crate's `src/`). The `lunica_worker` binary links this
+/// same crate, so a worker built from identical source carries an identical id.
+/// A stale worker carries a different one — caught by the boot handshake below.
+pub const WIRE_BUILD_ID: &str = env!("LUNCO_WIRE_BUILD_ID");
+
+/// Prefix of the plain-string message the worker posts once on boot
+/// (`"LUNCO_WIRE:<id>"`). Deliberately NOT bincode: its framing must survive
+/// the exact `WireMessage` layout drift it exists to detect.
+pub const WIRE_HANDSHAKE_PREFIX: &str = "LUNCO_WIRE:";
+
+thread_local! {
+    /// Set true if any worker announced a `WIRE_BUILD_ID` that disagrees with
+    /// ours — i.e. the shipped worker wasm is stale. Surfaced loudly; the
+    /// worker pool is useless in this state (every bincode message mis-decodes).
+    static WIRE_MISMATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// True once a stale-worker wire mismatch has been detected this session.
+pub fn wire_protocol_mismatch() -> bool {
+    WIRE_MISMATCH.with(|c| c.get())
 }
 
 /// Serialize and post a `WireMessage` to worker `idx`.
@@ -491,6 +548,7 @@ pub fn install_worker(worker_url: &str) -> Result<(), JsValue> {
             return Ok(());
         }
         p.running = vec![None; n];
+        p.msl = vec![MslState::Absent; n];
         p.workers = workers;
     }
     // Retain the script URL so a crashed worker can be respawned in place
@@ -507,6 +565,90 @@ pub fn install_worker(worker_url: &str) -> Result<(), JsValue> {
         "[worker_transport] worker pool installed: {n} worker(s) at {worker_url}"
     );
     Ok(())
+}
+
+/// Register the worker-script URL for later lazy spawning, WITHOUT starting any
+/// worker. Called once at boot. The pool itself is spawned on first demand by
+/// [`ensure_pool_spawned`] — see its doc for why the diagram must not wait on
+/// the pool's startup.
+pub fn register_worker_url(worker_url: &str) {
+    let _ = WORKER_URL.set(worker_url.to_string());
+}
+
+/// Spawn the worker pool on first demand (a compile or Fast Run) if it isn't up
+/// yet, and seed it with MSL. The pool is deliberately NOT spawned at boot:
+/// parsing-for-diagram runs on the main thread (see `dispatch_parse_to_worker`),
+/// so the diagram renders without ever waiting on the pool's startup — which is
+/// a cold compile of each ~60 MB worker bundle and can take tens of seconds on a
+/// weak machine. Workers exist only for the heavy, user-initiated compile/run
+/// work, so we pay that startup the first time one is actually requested. No-op
+/// once the pool is up.
+pub fn ensure_pool_spawned() {
+    if is_worker_active() {
+        return;
+    }
+    let Some(url) = WORKER_URL.get() else {
+        bevy::log::warn!("[worker_transport] ensure_pool_spawned: no worker URL registered");
+        return;
+    };
+    if let Err(e) = install_worker(url) {
+        bevy::log::error!("[worker_transport] lazy worker pool spawn failed: {e:?}");
+        return;
+    }
+    // Seed the freshly-spawned pool with MSL so it can compile. Main already
+    // holds the decoded bundle (decoded on the main thread at boot), so the
+    // retained `MSL_WIRE` envelope is `provide_to_main = false` — workers decode
+    // for their own compiles only. Ship to worker 0; its `MslReady` seeds the
+    // rest. If MSL isn't available yet (a compile requested before the bundle
+    // loaded — rare, and gated behind `msl_installed()` anyway), the MSL
+    // bootstrap will ship to the now-existing pool when it runs.
+    let seeded = if let Some(env) = MSL_WIRE.get() {
+        let mut p = pool().lock().unwrap();
+        match p.workers.first() {
+            Some(WorkerHandle(worker)) => match post_array_to(worker, env) {
+                Ok(()) => {
+                    p.msl[0] = MslState::Decoding;
+                    true
+                }
+                Err(e) => {
+                    bevy::log::error!(
+                        "[worker_transport] lazy MSL seed to worker 0 failed: {e:?}"
+                    );
+                    false
+                }
+            },
+            None => false,
+        }
+    } else {
+        false
+    };
+    bevy::log::info!(
+        "[worker_transport] lazy worker pool spawned (msl_seeded={seeded}) — for compile/run"
+    );
+}
+
+/// Pre-warm the worker pool the moment MSL is resident, so the user's FIRST
+/// compile/run doesn't pay the full lazy cold start. Profiling (2026-06-24)
+/// showed a first compile taking ~46 s wall-clock of which only ~4.5 s was the
+/// actual compile — the rest was this pool's cold start (4× ~58 MB worker wasm
+/// instantiate + worker-0 MSL decode) happening *after* the user clicked. The
+/// diagram is rendered on the main thread and is already up by the time MSL is
+/// ready, so warming the pool here overlaps that startup with the user reading
+/// the diagram instead of blocking their first compile. The heavy work runs in
+/// the worker threads; the main-thread cost here is just posting the seed.
+///
+/// SAFETY: only acts when the MSL seed envelope (`MSL_WIRE`) is already
+/// retained. If it isn't, this is a no-op and the normal lazy path on the first
+/// compile still applies — so this can never spawn an unseeded worker 0 that
+/// would then never become `Ready` (which would hang every compile). Idempotent
+/// via `ensure_pool_spawned`'s `is_worker_active` guard.
+pub fn prewarm_pool_on_msl_ready() {
+    if MSL_WIRE.get().is_none() {
+        // Seed not retained yet — leave it to the lazy first-compile path,
+        // which seeds worker 0 itself. Never spawn an unseeded pool here.
+        return;
+    }
+    ensure_pool_spawned();
 }
 
 /// Construct one `Worker`, wired with both an `onmessage` (results) and an
@@ -528,6 +670,33 @@ fn make_worker(idx: usize, worker_url: &str) -> Result<Worker, JsValue> {
 
     let onmessage = Closure::wrap(Box::new(move |event: MessageEvent| {
         let data = event.data();
+        // Plain-string boot handshake: `"LUNCO_WIRE:<build-id>"`. It rides a JS
+        // string (not bincode), so its framing is immune to the WireMessage
+        // layout drift it guards against. A mismatch means this worker wasm was
+        // built from different source than the main bundle — every subsequent
+        // bincode message would mis-decode (`UUID parsing failed`, `unexpected
+        // end of file`). Fail LOUD; do not paper over it with a main-thread
+        // fallback. Fix = rebuild the worker so it matches the main bundle.
+        if let Some(s) = data.as_string() {
+            if let Some(id) = s.strip_prefix(WIRE_HANDSHAKE_PREFIX) {
+                if id == WIRE_BUILD_ID {
+                    bevy::log::info!(
+                        "[worker_transport] worker {idx} wire handshake OK ({id})"
+                    );
+                } else {
+                    WIRE_MISMATCH.with(|c| c.set(true));
+                    bevy::log::error!(
+                        "[worker_transport] STALE WORKER: worker {idx} wire id {id} != \
+                         main {WIRE_BUILD_ID}. The shipped lunica_worker wasm was built \
+                         from different source than this bundle — Modelica compile/run is \
+                         BROKEN until it is rebuilt in lockstep. Run \
+                         `WORKER_REBUILD=force ./scripts/build_web.sh sandbox` (and verify \
+                         build_web copies the freshly-built worker into the served dist)."
+                    );
+                }
+                return;
+            }
+        }
         // The only bare `ArrayBuffer` in the protocol is the worker shipping the
         // decompressed MSL bincode bytes back (transferred zero-copy). Every
         // other message is a `Uint8Array` of a bincode `WireResult`. Branch here
@@ -558,7 +727,16 @@ fn make_worker(idx: usize, worker_url: &str) -> Result<Worker, JsValue> {
                 bevy::log::info!(
                     "[worker_transport] worker {idx} reports MSL ready: {docs} docs"
                 );
+                // This worker can now compile / run a Fast Run.
+                mark_worker_msl_ready(idx);
                 MSL_INSTALLED.with(|c| c.set(true));
+                // Worker 0 just finished the boot decode → seed the secondary
+                // workers now (off the retained compressed buffer) so the pool
+                // ramps up to full Fast-Run parallelism, without having
+                // saturated the pool while the model was parsing at boot.
+                if idx == 0 {
+                    seed_secondary_workers();
+                }
                 flush_pending_commands();
                 flush_pending_run_fast();
             }
@@ -670,6 +848,12 @@ fn respawn_worker(idx: usize) {
         if let Some(r) = p.running.get_mut(idx) {
             *r = None;
         }
+        // The fresh worker has no MSL until `pump_worker_respawns` re-seeds it;
+        // run dispatch skips non-`Ready` workers, so it won't be handed a run
+        // before its `MslReady` arrives.
+        if let Some(s) = p.msl.get_mut(idx) {
+            *s = MslState::Absent;
+        }
     }
     // Defer the MSL re-seed. Re-allocating the ~165 MB bundle right now —
     // on the crash stack, microseconds after a worker exhausted ~4 GB —
@@ -705,6 +889,14 @@ pub fn pump_worker_respawns() {
     };
     if let Some(idx) = ready {
         post_bytes_to(idx, bytes, "respawn MSL reinstall (deferred)");
+        // The re-seed envelope is `provide_to_main = false` (main already holds
+        // the decoded bundle), and its `MslReady` flips this worker back to
+        // `Ready`.
+        if let Ok(mut p) = pool().lock() {
+            if let Some(s) = p.msl.get_mut(idx) {
+                *s = MslState::Decoding;
+            }
+        }
         bevy::log::info!("[worker_transport] re-seeded MSL into respawned worker {idx}");
     }
 }
@@ -716,12 +908,21 @@ pub fn pump_worker_respawns() {
 /// worker's `process_inline_command` runs in its own thread and posts results
 /// back asynchronously via `onmessage` (see [`install_worker`]).
 pub fn pump_commands_to_worker(channels: Res<ModelicaChannels>) {
-    if !is_worker_active() {
-        // install_worker hasn't run yet — main app is mid-bootstrap.
-        // Commands stay in the channel; we'll catch them next tick.
+    // Idle tick — nothing queued, so don't spawn the pool. (Must run BEFORE
+    // `inline_worker_process` so that, once we DO spawn, the inline fallback
+    // sees an empty queue and no-ops — see the ordering in lib.rs.)
+    if channels.rx_cmd.is_empty() {
         return;
     }
-
+    // A command is waiting: compiles/runs are exactly the heavy work the worker
+    // pool exists for, so spawn it lazily now.
+    ensure_pool_spawned();
+    if !is_worker_active() {
+        // Pool couldn't be spawned (worker bundle missing / COOP misconfigured).
+        // Leave the commands queued for the main-thread `inline_worker_process`
+        // fallback, which runs after this system.
+        return;
+    }
     while let Ok(cmd) = channels.rx_cmd.try_recv() {
         // Boot-race gate: Compile / UpdateParameters need the worker's
         // MSL index to be populated, otherwise rumoca emits silent
@@ -758,6 +959,9 @@ pub fn dispatch_run_fast(
     >,
     bounds: lunco_experiments::RunBounds,
 ) -> bool {
+    // A Fast Run is the heavy work the worker pool exists for — spawn it now if
+    // it isn't up yet (lazy boot). The run then queues behind MSL install below.
+    ensure_pool_spawned();
     if !is_worker_active() {
         return false;
     }
@@ -776,7 +980,7 @@ pub fn dispatch_run_fast(
         PENDING_RUN_FAST.with(|q| q.borrow_mut().push(msg));
         return true;
     }
-    assign_and_post_run_fast(run_id, &msg);
+    assign_and_post_run_fast(run_id, msg);
     true
 }
 
@@ -785,8 +989,8 @@ pub fn dispatch_run_fast(
 /// compiles; falls back to worker 0 (serializing behind its current work)
 /// when every worker is busy. Records the `run_id → worker` mapping for
 /// cancel routing; the slot is freed in [`forward_run_update`] on terminal.
-fn assign_and_post_run_fast(run_id: lunco_experiments::ExperimentId, msg: &WireMessage) {
-    let bytes = match bincode::serialize(msg) {
+fn assign_and_post_run_fast(run_id: lunco_experiments::ExperimentId, msg: WireMessage) {
+    let bytes = match bincode::serialize(&msg) {
         Ok(b) => b,
         Err(e) => {
             bevy::log::error!("[worker_transport] run_fast: serialize failed: {e}");
@@ -799,18 +1003,40 @@ fn assign_and_post_run_fast(run_id: lunco_experiments::ExperimentId, msg: &WireM
         bevy::log::warn!("[worker_transport] run_fast: no workers installed");
         return;
     }
-    // Prefer a free worker that isn't the primary (1..n), else the primary.
-    // Skip workers awaiting an MSL re-seed after a recycle (their MSL index is
-    // empty so they'd fail the compile); fall back to any free worker, then to
-    // the primary, so a single-worker pool still makes progress.
-    let free_ready = |p: &WorkerPool| {
+    // Prefer a free, MSL-`Ready` worker that isn't the primary (1..n), else the
+    // primary. A worker is eligible only when its MSL is `Ready`: that skips
+    // `Absent`/`Decoding` secondaries (seeded only after worker 0 finishes the
+    // boot decode — until then their session is empty and a compile/run would
+    // fail with unresolved `Modelica.*`) AND recycle-respawn re-seeds (a
+    // reseed-pending worker is Absent/Decoding, never Ready — so no separate
+    // `is_reseed_pending` check is needed). If every Ready worker is busy,
+    // serialize behind a Ready one (incl. the primary).
+    let ready_free = |p: &WorkerPool| {
         (1..n)
             .chain(std::iter::once(0))
-            .find(|&i| p.running[i].is_none() && !is_reseed_pending(i))
+            .find(|&i| p.running[i].is_none() && p.msl[i] == MslState::Ready)
     };
-    let idx = free_ready(&p)
-        .or_else(|| (1..n).chain(std::iter::once(0)).find(|&i| p.running[i].is_none()))
-        .unwrap_or(0);
+    let chosen = ready_free(&p).or_else(|| {
+        (1..n)
+            .chain(std::iter::once(0))
+            .find(|&i| p.msl[i] == MslState::Ready)
+    });
+    let Some(idx) = chosen else {
+        // No MSL-`Ready` worker right now — e.g. worker 0 mid-recycle re-decode.
+        // (`MSL_INSTALLED` is a latch that stays set across a recycle, so
+        // `dispatch_run_fast` doesn't queue and lands here.) Dispatching to a
+        // non-Ready worker would compile against an empty session and fail with
+        // unresolved `Modelica.*`. Re-queue instead; the next worker's
+        // `MslReady` re-runs `flush_pending_run_fast`. (Cannot recurse: flush
+        // iterates a drained snapshot, so a re-queued run waits for the next
+        // readiness event.)
+        drop(p);
+        PENDING_RUN_FAST.with(|q| q.borrow_mut().push(msg));
+        bevy::log::info!(
+            "[worker_transport] run_fast: no MSL-Ready worker yet — re-queued run {run_id:?}"
+        );
+        return;
+    };
     if p.running[idx].is_none() {
         p.running[idx] = Some(run_id);
     }
@@ -818,9 +1044,7 @@ fn assign_and_post_run_fast(run_id: lunco_experiments::ExperimentId, msg: &WireM
     // Post inside the lock — wasm is single-threaded, so there's no
     // re-entrancy and no other code can observe a half-updated pool.
     let WorkerHandle(worker) = &p.workers[idx];
-    let array = Uint8Array::new_with_length(bytes.len() as u32);
-    array.copy_from(&bytes);
-    if let Err(e) = worker.post_message(&array) {
+    if let Err(e) = post_array_to(worker, &bytes) {
         bevy::log::error!("[worker_transport] run_fast: post to worker {idx} failed: {e:?}");
     }
 }
@@ -863,9 +1087,10 @@ fn flush_pending_run_fast() {
         "[worker_transport] flushing {} RunFast request(s) queued during MSL install",
         drained.len()
     );
-    for msg in &drained {
-        if let WireMessage::RunFast { run_id, .. } = msg {
-            assign_and_post_run_fast(*run_id, msg);
+    for msg in drained {
+        if let WireMessage::RunFast { run_id, .. } = &msg {
+            let run_id = *run_id;
+            assign_and_post_run_fast(run_id, msg);
         }
     }
 }
@@ -980,13 +1205,36 @@ pub fn dispatch_parse_to_worker(
     if !is_worker_active() {
         return false;
     }
-    let idx = NEXT_PARSE_WORKER.with(|c| {
-        let current = c.get();
-        let n = pool().lock().unwrap().workers.len();
-        if n == 0 { return 0; }
-        c.set((current + 1) % n);
-        current % n
-    });
+    // Off-thread parse ONLY on a worker that is already MSL-`Ready` and free.
+    // The worker pool is spawned lazily for compile/run and is not used to gate
+    // the diagram: until a worker is genuinely warm, parsing stays on the main
+    // thread (caller's fallback when this returns `false`). This is what keeps
+    // the diagram off the worker pool's (slow) startup path — it only ever uses
+    // the main thread or an already-warm worker, never a booting one. Once the
+    // pool is warm (post first compile/run), reparses ride the free worker so
+    // editing large files stays responsive. Compute the index under the lock,
+    // then drop it before `post_msg_to` (which re-locks) to avoid a deadlock.
+    let idx = {
+        let p = pool().lock().unwrap();
+        let n = p.workers.len();
+        if n == 0 {
+            return false;
+        }
+        let start = NEXT_PARSE_WORKER.with(|c| {
+            let s = c.get();
+            c.set((s + 1) % n);
+            s % n
+        });
+        match (0..n)
+            .map(|k| (start + k) % n)
+            .find(|&i| p.msl[i] == MslState::Ready && p.running[i].is_none())
+        {
+            Some(i) => i,
+            // No warm, free worker → parse on the main thread instead of queuing
+            // behind a booting worker or a running simulation.
+            None => return false,
+        }
+    };
     post_msg_to(
         idx,
         &WireMessage::ParseDocument { doc_id, gen, uri, source },
@@ -1018,6 +1266,7 @@ pub fn __lc_test_dispatch_compile(model_name: &str, source: &str) {
         session_id: 1,
         model_name: model_name.to_string(),
         source: source.to_string(),
+        doc_uri: "model.mo".to_string(),
         extra_sources: Vec::new(),
         stream: None,
     };
@@ -1060,7 +1309,7 @@ pub fn install_msl_in_worker(
     }
 
     let n = {
-        let p = pool().lock().unwrap();
+        let mut p = pool().lock().unwrap();
         let n = p.workers.len();
         if n == 0 {
             return;
@@ -1083,6 +1332,11 @@ pub fn install_msl_in_worker(
                     "[worker_transport] MSL install to worker {i} failed: {e:?}"
                 );
             }
+        }
+        // This path ships the already-decoded bundle directly into every
+        // worker (no `MslReady` round-trip), so they're all MSL-`Ready` now.
+        for s in p.msl.iter_mut() {
+            *s = MslState::Ready;
         }
         n
     };
@@ -1133,47 +1387,108 @@ pub fn install_msl_compressed_in_worker(compressed: &[u8]) -> usize {
         }
     };
 
-    // Retain a `provide_to_main = true` envelope for respawn re-seed: a respawned
-    // worker (even a non-primary one) reposting decoded bytes is benign — the
-    // main thread already has MSL and dedupes the duplicate. Respawns are rare.
+    // Retain ONE `provide_to_main = false` envelope (~16 MB), reused for both
+    // secondary seeding (`seed_secondary_workers`) and crash-respawn re-seed
+    // (`pump_worker_respawns`). `false` is correct for every (re)seed: main gets
+    // the decoded bundle from worker 0's boot ship below (or the main-thread
+    // fallback decode if worker 0 dies first), so no (re)seeded worker needs to
+    // re-ship ~165 MB to main. Pre-serialized once here so the seed path doesn't
+    // clone+serialize the bundle on the `MslReady` callback.
     if MSL_WIRE.get().is_none() {
-        if let Some(b) = encode(true) {
+        if let Some(b) = encode(false) {
             let _ = MSL_WIRE.set(b);
         }
     }
 
-    let mut last_len = 0usize;
-    let n = {
-        let p = pool().lock().unwrap();
-        let n = p.workers.len();
-        if n == 0 {
+    // Ship to worker 0 ONLY. Broadcasting this multi-second decode to every
+    // worker saturates the whole pool and starves the freshly-opened model's
+    // parse — the reported "no diagram until MSL downloads" bug (and with a
+    // 4-worker pool the parallel decodes even blew the worker-decode deadline,
+    // forcing a main-thread fallback decode). Worker 0 decodes alone (a full
+    // core, so faster) and ships the decoded bytes back to main; the
+    // secondaries stay free to parse and are seeded later, once worker 0
+    // reports `MslReady`. Zero-copy transfer (single recipient, so detaching
+    // the buffer is safe).
+    let Some(bytes) = encode(true) else { return 0 };
+    let posted = {
+        let mut p = pool().lock().unwrap();
+        if p.workers.is_empty() {
             return 0;
         }
-        let single = n == 1;
-        for (i, WorkerHandle(worker)) in p.workers.iter().enumerate() {
-            let Some(bytes) = encode(i == 0) else { continue };
-            last_len = bytes.len();
-            let array = Uint8Array::new_with_length(bytes.len() as u32);
-            array.copy_from(&bytes);
-            let res = if single {
-                let transfer = js_sys::Array::new();
-                transfer.push(&array.buffer());
-                worker.post_message_with_transfer(&array, &transfer)
-            } else {
-                worker.post_message(&array)
-            };
-            if let Err(e) = res {
+        let WorkerHandle(worker) = &p.workers[0];
+        let array = Uint8Array::new_with_length(bytes.len() as u32);
+        array.copy_from(&bytes);
+        let transfer = js_sys::Array::new();
+        transfer.push(&array.buffer());
+        match worker.post_message_with_transfer(&array, &transfer) {
+            Ok(()) => {
+                p.msl[0] = MslState::Decoding;
+                true
+            }
+            Err(e) => {
                 bevy::log::error!(
-                    "[worker_transport] compressed MSL install to worker {i} failed: {e:?}"
+                    "[worker_transport] compressed MSL install to worker 0 failed: {e:?}"
                 );
+                false
             }
         }
-        n
     };
-
+    if !posted {
+        return 0;
+    }
     bevy::log::info!(
-        "[worker_transport] shipped compressed MSL to {n} worker(s) (~{last_len} bytes each; \
-         worker 0 provides decoded MSL to main) — awaiting off-thread decode (gate opens on MslReady)"
+        "[worker_transport] shipped compressed MSL to worker 0 only (~{} bytes, zero-copy \
+         transfer); secondaries seed after worker 0 is ready — awaiting off-thread decode \
+         (gate opens on MslReady)",
+        bytes.len()
     );
-    n
+    1
+}
+
+/// Seed the secondary workers (`1..n`) with the retained `MSL_WIRE` envelope
+/// (`provide_to_main = false` — worker 0 already gave the decoded bytes to
+/// main). Called from worker 0's `MslReady` so the pool ramps up to full
+/// Fast-Run parallelism *after* boot, without having saturated the pool while
+/// the freshly-opened model was parsing. Idempotent — only seeds workers still
+/// in `Absent` state. Copies the pre-serialized envelope directly (no
+/// clone+serialize on this callback).
+fn seed_secondary_workers() {
+    let Some(env) = MSL_WIRE.get() else {
+        return;
+    };
+    let mut seeded = 0usize;
+    {
+        let mut p = pool().lock().unwrap();
+        let n = p.workers.len();
+        for i in 1..n {
+            if p.msl[i] != MslState::Absent || is_reseed_pending(i) {
+                continue;
+            }
+            let WorkerHandle(worker) = &p.workers[i];
+            match post_array_to(worker, env) {
+                Ok(()) => {
+                    p.msl[i] = MslState::Decoding;
+                    seeded += 1;
+                }
+                Err(e) => bevy::log::error!(
+                    "[worker_transport] secondary MSL seed to worker {i} failed: {e:?}"
+                ),
+            }
+        }
+    }
+    if seeded > 0 {
+        bevy::log::info!(
+            "[worker_transport] seeding MSL into {seeded} secondary worker(s) for Fast-Run \
+             parallelism"
+        );
+    }
+}
+
+/// Mark worker `idx` MSL-`Ready` (it can now compile / run a Fast Run).
+fn mark_worker_msl_ready(idx: usize) {
+    if let Ok(mut p) = pool().lock() {
+        if let Some(s) = p.msl.get_mut(idx) {
+            *s = MslState::Ready;
+        }
+    }
 }

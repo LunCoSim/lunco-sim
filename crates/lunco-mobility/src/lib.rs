@@ -34,6 +34,31 @@ use lunco_fsw::FlightSoftware;
 mod wheel_spin;
 use wheel_spin::update_wheel_spin;
 
+/// Drive-actuation chain diagnostic logging — see the `drive-diag` feature in
+/// `Cargo.toml`. Expands to `info!` when the feature is on, and to nothing
+/// (args not evaluated) when off, so it's zero-cost in normal builds. A single
+/// definition keeps the `#[cfg]` out of the physics systems themselves.
+#[cfg(feature = "drive-diag")]
+macro_rules! drive_diag {
+    ($($arg:tt)*) => { bevy::log::info!($($arg)*) };
+}
+#[cfg(not(feature = "drive-diag"))]
+macro_rules! drive_diag {
+    ($($arg:tt)*) => {};
+}
+
+/// Run `$body` only when the `drive-diag` feature is on. Used where the
+/// diagnostic needs extra work (an extra port read + throttle guard) that must
+/// also compile out, not just the log call.
+#[cfg(feature = "drive-diag")]
+macro_rules! drive_diag_block {
+    ($body:block) => { $body };
+}
+#[cfg(not(feature = "drive-diag"))]
+macro_rules! drive_diag_block {
+    ($body:block) => {};
+}
+
 /// Manages the integration of mobility physics and control observers.
 pub struct LunCoMobilityPlugin;
 
@@ -370,6 +395,18 @@ fn apply_wheel_drive(
     for (wheel, wheel_tf, hits, parent) in q_wheels.iter() {
         let parent_entity = parent.parent();
         if let Ok((mut forces, body, fsw)) = q_chassis.get_mut(parent_entity) {
+            // drive-diag: the drive port the wheel reads, the body kind (Dynamic
+            // vs Kinematic — the snap-back tell), and ground contact. Throttle-
+            // gated so it only fires while driving. Whole block compiles out
+            // (incl. the extra port read) without the `drive-diag` feature.
+            drive_diag_block!({
+                if let Ok(dbgport) = q_ports.get(wheel.drive_port) {
+                    if dbgport.value.abs() > f32::EPSILON {
+                        info!("[drive-diag] apply_wheel_drive: chassis {:?} body={:?} port.value={} normal_force={} has_contact={}",
+                            parent_entity, body, dbgport.value, wheel.last_normal_force, hits.iter().next().is_some());
+                    }
+                }
+            });
             // Skip forces if body is kinematic
             if matches!(body, RigidBody::Kinematic) { continue; }
             // Braking: the wheel-spin model locks the spin, but the chassis only
@@ -451,7 +488,7 @@ fn apply_wheel_steering(
                 continue;
             }
         }
-        transform.rotation = Quat::from_rotation_y(steer.output_angle as f32);
+        transform.rotation = Quat::from_rotation_y(-steer.output_angle as f32);
     }
 }
 
@@ -635,7 +672,11 @@ fn on_drive_rover(
     q_ack: Query<&AckermannSteer>,
     mut q_digital_ports: Query<&mut DigitalPort>,
 ) {
-    let Ok(fsw) = q_rovers.get_mut(cmd.target) else { return };
+    let Ok(fsw) = q_rovers.get_mut(cmd.target) else {
+        drive_diag!("[drive-diag] on_drive_rover: NO FlightSoftware+RoverVessel on target {:?} (fwd={})", cmd.target, cmd.forward);
+        return;
+    };
+    drive_diag!("[drive-diag] on_drive_rover: target {:?} fwd={} steer={} brake={} ports={:?}", cmd.target, cmd.forward, cmd.steer, fsw.brake_active, fsw.port_map);
 
     if fsw.brake_active {
         for name in ["drive_left", "drive_right", "steering"] {

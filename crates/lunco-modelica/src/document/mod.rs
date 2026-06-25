@@ -12,7 +12,7 @@ pub use ops::{ModelicaOp, ModelicaChange, OpKind, FreshAst, CHANGE_HISTORY_CAPAC
 mod tests {
     use super::*;
     use lunco_doc::{DocumentHost, DocumentId, Reject};
-    use crate::pretty::{ComponentDecl, ConnectEquation};
+    use crate::pretty::ComponentDecl;
 
     fn doc() -> DocumentHost<ModelicaDocument> {
         DocumentHost::new(ModelicaDocument::new(
@@ -24,7 +24,10 @@ mod tests {
     #[test]
     fn fresh_document_state() {
         let host = doc();
-        assert_eq!(host.generation(), 0);
+        // A fresh document starts at generation 1: the constructor seeds an
+        // empty placeholder SyntaxCache at gen 0 and bumps the doc to gen 1 so
+        // the AST reads as stale and the lazy parse / index rebuild fires.
+        assert_eq!(host.generation(), 1);
         assert_eq!(host.document().source(), "model Empty end Empty;\n");
         assert_eq!(host.document().id_owned(), DocumentId::new(1));
         assert!(!host.can_undo());
@@ -40,7 +43,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(host.document().source(), "model NewModel end NewModel;");
-        assert_eq!(host.generation(), 1);
+        assert_eq!(host.generation(), 2); // gen 1 fresh + 1 mutation
         assert!(host.can_undo());
     }
 
@@ -74,7 +77,7 @@ mod tests {
         host.apply(ModelicaOp::ReplaceSource { new: "b".into() }).unwrap();
         host.apply(ModelicaOp::ReplaceSource { new: "c".into() }).unwrap();
         assert_eq!(host.document().source(), "c");
-        assert_eq!(host.generation(), 3);
+        assert_eq!(host.generation(), 4); // gen 1 fresh + 3 mutations
 
         host.undo().unwrap();
         host.undo().unwrap();
@@ -91,11 +94,11 @@ mod tests {
     fn generation_monotonic_across_undo_redo() {
         let mut host = doc();
         host.apply(ModelicaOp::ReplaceSource { new: "a".into() }).unwrap();
-        assert_eq!(host.generation(), 1);
+        assert_eq!(host.generation(), 2); // gen 1 fresh + 1 mutation
         host.undo().unwrap();
-        assert_eq!(host.generation(), 2);
-        host.redo().unwrap();
         assert_eq!(host.generation(), 3);
+        host.redo().unwrap();
+        assert_eq!(host.generation(), 4);
     }
 
     #[test]
@@ -119,7 +122,7 @@ mod tests {
         .unwrap();
         host.document_mut().refresh_ast_now();
         let cache = host.document().ast();
-        assert_eq!(cache.generation, 1);
+        assert_eq!(cache.generation, 2); // gen 1 fresh + 1 mutation, then refreshed
         let ast = host.document().strict_ast().expect("strict_ast Some");
         assert!(ast.classes.contains_key("Foo"));
         assert!(!ast.classes.contains_key("Empty"));
@@ -136,10 +139,10 @@ mod tests {
             host.document().ast_is_stale(),
             "AST should be stale right after apply_patch"
         );
-        assert_eq!(host.document().ast().generation, 0);
+        assert_eq!(host.document().ast().generation, 0); // empty placeholder, never refreshed
         host.document_mut().refresh_ast_now();
         assert!(!host.document().ast_is_stale());
-        assert_eq!(host.document().ast().generation, 1);
+        assert_eq!(host.document().ast().generation, 2); // gen 1 fresh + 1 mutation, then refreshed
     }
 
     #[test]
@@ -151,7 +154,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(host.document().source(), "model Thing end Empty;\n");
-        assert_eq!(host.generation(), 1);
+        assert_eq!(host.generation(), 2); // gen 1 fresh + 1 mutation
 
         host.undo().unwrap();
         assert_eq!(host.document().source(), "model Empty end Empty;\n");
@@ -194,7 +197,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, Reject::InvalidOp(_)));
         assert_eq!(host.document().source(), "model Empty end Empty;\n");
-        assert_eq!(host.generation(), 0);
+        assert_eq!(host.generation(), 1); // rejected op leaves the fresh gen 1 untouched
     }
 
     #[test]
@@ -203,6 +206,9 @@ mod tests {
             DocumentId::new(1),
             "model M\n  Real a;\nend M;\n".to_string(),
         ));
+        // Parsing is lazy: refresh so the AST holds class M before the
+        // structural mutation (the live app parses async after construction).
+        host.document_mut().refresh_ast_now();
         host.apply(ModelicaOp::AddComponent {
             class: "M".into(),
             decl: ComponentDecl {
@@ -229,6 +235,8 @@ mod tests {
             DocumentId::new(1),
             original.to_string(),
         ));
+        // Parsing is lazy: refresh so the AST holds class M before the mutation.
+        host.document_mut().refresh_ast_now();
         host.apply(ModelicaOp::AddComponent {
             class: "M".into(),
             decl: ComponentDecl {

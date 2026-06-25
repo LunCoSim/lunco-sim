@@ -178,6 +178,22 @@ pub enum UsdOp {
         /// `[x, y, z]` in stage units.
         value: [f64; 3],
     },
+    /// Set an arbitrary attribute on the prim at `path`.
+    /// If the attribute is already authored, its right-hand side is replaced;
+    /// otherwise a new attribute line is inserted at the top of the prim body
+    /// with the given `type_name`.
+    SetAttribute {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose attribute to set.
+        path: String,
+        /// The name of the attribute (e.g. `primvars:displayColor` or `inputs:roughness`).
+        name: String,
+        /// The USD type name of the attribute (e.g. `color3f` or `float`).
+        type_name: String,
+        /// The attribute value formatted as a USD-compliant string.
+        value: String,
+    },
 }
 
 impl Default for UsdOp {
@@ -375,7 +391,8 @@ impl Document for UsdDocument {
             UsdOp::ReplaceSource { edit_target, .. }
             | UsdOp::AddPrim { edit_target, .. }
             | UsdOp::RemovePrim { edit_target, .. }
-            | UsdOp::SetTranslate { edit_target, .. } => edit_target,
+            | UsdOp::SetTranslate { edit_target, .. }
+            | UsdOp::SetAttribute { edit_target, .. } => edit_target,
         };
         if !edit_target.is_root() {
             return Err(DocumentError::ValidationFailed(format!(
@@ -437,6 +454,22 @@ impl Document for UsdDocument {
                     UsdChange::InfoOnly {
                         path,
                         attr: "xformOp:translate".into(),
+                    },
+                )
+            }
+            UsdOp::SetAttribute { path, name, type_name, value, .. } => {
+                let new_source = text_edit::set_attribute(&self.source, &path, &name, &type_name, &value)
+                    .ok_or_else(|| {
+                        DocumentError::ValidationFailed(format!(
+                            "SetAttribute: path `{}` not found",
+                            path
+                        ))
+                    })?;
+                self.replace_full_source(
+                    new_source,
+                    UsdChange::InfoOnly {
+                        path,
+                        attr: name,
                     },
                 )
             }

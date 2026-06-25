@@ -1,0 +1,26 @@
+[package]
+name = "lunco-sandbox-server"
+version = "0.6.0-dev"
+edition = "2021"
+description = "Headless launcher for the LunCo sandbox — the same app as `sandbox`, built without the GUI (no winit/egui) and with the API + networking host. Exists as its own crate purely so it can default to headless: Cargo default features are per-package, so a bin that's headless-by-default needs its own package."
+
+[[bin]]
+name = "sandbox-server"
+path = "src/main.rs"
+
+[dependencies]
+# The entire app (and the global allocator) lives in `lunco-sandbox`'s library;
+# this crate is a 3-line launcher. `default-features = false` drops `ui`
+# (winit/egui/workbench); `server` adds the HTTP API + networking host. So
+# `cargo run -p lunco-sandbox-server` is headless with NO flags — the whole
+# reason this crate exists.
+lunco-sandbox = { path = "../lunco-sandbox", default-features = false, features = ["server"] }
+
+[features]
+default = []
+# Optional: a windowed build of this same bin. Normally you'd just run
+# `-p lunco-sandbox` for the GUI; this is here for symmetry / debugging.
+ui = ["lunco-sandbox/ui"]
+
+[lints]
+workspace = true

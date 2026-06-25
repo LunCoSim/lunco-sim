@@ -3,7 +3,7 @@
 //! ## What it shows
 //!
 //! 1. Every Modelica document currently loaded in the
-//!    [`crate::ui::state::ModelicaDocumentRegistry`] — drafts, duplicates from the
+//!    [`crate::state::ModelicaDocumentRegistry`] — drafts, duplicates from the
 //!    Welcome examples, files opened in earlier sessions. This is the
 //!    workspace's authoritative view of "what Modelica content does
 //!    the user have right now."
@@ -37,8 +37,8 @@ use lunco_workbench::{BrowserAction, BrowserCtx, BrowserSection};
 use rumoca_compile::parsing::ClassType;
 
 // `DrilledInClassNames` reads migrated to
-// `crate::ui::panels::model_view::drilled_class_for_doc`.
-use crate::ui::state::ModelicaDocumentRegistry;
+// `crate::sim_default::drilled_class_for_doc`.
+use crate::state::ModelicaDocumentRegistry;
 
 /// One Modelica class entry rendered in the tree.
 #[derive(Debug, Clone)]
@@ -94,12 +94,12 @@ impl BrowserSection for ModelicaSection {
         let library_rows: Vec<(String, String)> = {
             let cache = ctx
                 .world
-                .resource::<crate::ui::panels::package_browser::PackageTreeCache>();
+                .resource::<crate::package_tree::PackageTreeCache>();
             cache
                 .roots
                 .iter()
                 .filter_map(|root| match root {
-                    crate::ui::panels::package_browser::PackageNode::Category {
+                    crate::package_tree::PackageNode::Category {
                         id,
                         name,
                         ..
@@ -343,7 +343,7 @@ fn render_workspace_doc_row(
             let origin = host.map(|h| h.document().origin().clone());
             match origin {
                 Some(lunco_doc::DocumentOrigin::File { path, writable: true }) => {
-                    let ws = ctx.world.resource::<lunco_workbench::WorkspaceResource>();
+                    let ws = ctx.world.resource::<lunco_workspace::WorkspaceResource>();
                     let twin_root = ws
                         .active_twin
                         .and_then(|id| ws.twin(id))
@@ -430,7 +430,7 @@ fn render_workspace_doc_row(
 /// the outer `CollapsingHeader` row carrying this doc's name has
 /// already been drawn; we just paint the children inline.
 ///
-/// Source-of-truth read of [`crate::ui::state::ModelicaDocumentRegistry`] via the doc's
+/// Source-of-truth read of [`crate::state::ModelicaDocumentRegistry`] via the doc's
 /// [`crate::index::ModelicaIndex`]. Stateless; the registry's
 /// off-thread refresh + per-op optimistic patches keep the Index current.
 pub(crate) fn render_workspace_doc(
@@ -463,10 +463,10 @@ pub(crate) fn render_workspace_doc(
 
     let active_doc: Option<DocumentId> = ctx
         .world
-        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
     let active_qualified: Option<String> = active_doc.and_then(|d| {
-        crate::ui::panels::model_view::drilled_class_for_doc(ctx.world, d)
+        crate::sim_default::drilled_class_for_doc(ctx.world, d)
     });
 
     // Collapse the redundant wrapper when the document holds a
@@ -603,11 +603,17 @@ fn classes_from_index(index: &crate::index::ModelicaIndex) -> (Vec<ClassEntry>, 
 #[cfg(test)]
 fn parse_classes(source: &str) -> (Vec<ClassEntry>, bool) {
     use lunco_doc::{DocumentId, DocumentOrigin};
-    let doc = crate::document::ModelicaDocument::with_origin(
+    let mut doc = crate::document::ModelicaDocument::with_origin(
         DocumentId::new(1),
         source.to_string(),
         DocumentOrigin::untitled("test"),
     );
+    // Parsing is lazy — the constructor seeds an empty placeholder index.
+    // `refresh_ast_now()` parses (with error recovery, via the single
+    // `SyntaxCache::from_source` path) and rebuilds the index. This is also a
+    // regression guard: if anyone makes refresh_ast_now parse strictly again,
+    // `broken_sibling_class_does_not_wipe_the_others` below will fail.
+    doc.refresh_ast_now();
     classes_from_index(doc.index())
 }
 
@@ -918,16 +924,19 @@ function F end F;
 "#;
         let (cs, _errors) = parse_classes(src);
         let kinds: Vec<&ClassType> = cs.iter().map(|c| &c.kind).collect();
+        // Order is the browser's display sort (`browser_sort_group`), not the
+        // source order: sub-packages first, then Model/Block/Connector/Record/
+        // Function leaves.
         // Don't `use ClassType::*` — `Function` collides with
         // `bevy::reflect::Function` re-exported through other paths.
         assert!(matches!(
             kinds.as_slice(),
             [
+                ClassType::Package,
                 ClassType::Model,
                 ClassType::Block,
                 ClassType::Connector,
                 ClassType::Record,
-                ClassType::Package,
                 ClassType::Function,
             ]
         ));
@@ -941,13 +950,15 @@ function F end F;
         assert_eq!(cs.len(), 1);
         assert_eq!(cs[0].short_name, "AnnotatedRocketStage");
         assert!(matches!(cs[0].kind, ClassType::Package));
-        // Children: RocketStage + Engine + Tank + Gimbal.
+        // Models in the package: RocketStage + Tank + Valve + Engine + Airframe
+        // (plus the FluidPort* / *Signal* connectors and the LunCoAnnotations
+        // sub-package, which are children too).
         let child_names: Vec<&str> = cs[0]
             .children
             .iter()
             .map(|c| c.short_name.as_str())
             .collect();
-        for expected in ["RocketStage", "Engine", "Tank", "Gimbal"] {
+        for expected in ["RocketStage", "Engine", "Tank", "Valve", "Airframe"] {
             assert!(
                 child_names.contains(&expected),
                 "missing {expected} (have {child_names:?})"

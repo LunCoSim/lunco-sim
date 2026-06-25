@@ -99,7 +99,7 @@ def Xform "Rucheyok" (
         uniform token axis = "Z"
         double radius = 2.0
         double height = 1.5
-        double3 xformOp:translate = (-8.5, 0, 10.5)
+        double3 xformOp:translate = (-8.5, 0, -10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (0.2, 0.8, 0.2)
 
@@ -124,7 +124,7 @@ def Xform "Rucheyok" (
         uniform token axis = "Z"
         double radius = 2.0
         double height = 1.5
-        double3 xformOp:translate = (8.5, 0, 10.5)
+        double3 xformOp:translate = (8.5, 0, -10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (0.2, 0.8, 0.2)
 
@@ -147,7 +147,7 @@ def Xform "Rucheyok" (
         uniform token axis = "Z"
         double radius = 2.0
         double height = 1.5
-        double3 xformOp:translate = (-8.5, 0, -10.5)
+        double3 xformOp:translate = (-8.5, 0, 10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (0.8, 0.2, 0.2)
 
@@ -170,7 +170,7 @@ def Xform "Rucheyok" (
         uniform token axis = "Z"
         double radius = 2.0
         double height = 1.5
-        double3 xformOp:translate = (8.5, 0, -10.5)
+        double3 xformOp:translate = (8.5, 0, 10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (0.8, 0.2, 0.2)
 

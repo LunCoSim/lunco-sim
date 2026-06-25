@@ -184,6 +184,7 @@ struct SpawnMeta {
     spawnable: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn read_spawn_meta(path: &std::path::Path) -> SpawnMeta {
     let mut meta = SpawnMeta { lift: 0.0, spawnable: true };
     let Ok(src) = std::fs::read_to_string(path) else { return meta };
@@ -201,6 +202,27 @@ fn read_spawn_meta(path: &std::path::Path) -> SpawnMeta {
         }
     }
     meta
+}
+
+/// Spawn metadata baked by `build.rs` (the browser can't line-scan the USD
+/// files). Keyed by engine-relative path.
+#[cfg(target_arch = "wasm32")]
+mod baked_spawn_meta {
+    include!(concat!(env!("OUT_DIR"), "/baked_spawn_meta.rs"));
+}
+
+/// Web: look the spawn metadata up in the baked manifest. `path` is the bare
+/// engine-relative path (`discovery::list_assets` sets `abs_path` to it on
+/// wasm), matching the keys `build.rs` baked. Unknown ⇒ spawnable default.
+#[cfg(target_arch = "wasm32")]
+fn read_spawn_meta(path: &std::path::Path) -> SpawnMeta {
+    let key = path.to_str().unwrap_or_default();
+    for (rel, spawnable, lift) in baked_spawn_meta::BAKED_SPAWN_META {
+        if *rel == key {
+            return SpawnMeta { lift: *lift, spawnable: *spawnable };
+        }
+    }
+    SpawnMeta { lift: 0.0, spawnable: true }
 }
 
 /// `habitat_fsh` → `Habitat Fsh`. Cheap presentable name from a file stem.

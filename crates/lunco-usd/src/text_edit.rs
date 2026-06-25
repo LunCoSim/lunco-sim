@@ -415,6 +415,44 @@ pub fn set_translate(source: &str, path: &str, value: [f64; 3]) -> Option<String
     Some(out)
 }
 
+/// Set an attribute value on the prim at `path`. If the attribute is already
+/// authored, its right-hand side is replaced; otherwise a new attribute
+/// line is inserted at the top of the prim body with the given `type_name`.
+///
+/// Returns the new source or `None` if the path doesn't resolve.
+pub fn set_attribute(
+    source: &str,
+    path: &str,
+    name: &str,
+    type_name: &str,
+    value: &str,
+) -> Option<String> {
+    let span = find_prim(source, path)?;
+    let body = &source[span.body.clone()];
+
+    // Replace existing value range, if any.
+    if let Some(rel) = find_attribute_value_range(body, name) {
+        let abs = (span.body.start + rel.start)..(span.body.start + rel.end);
+        let mut out = String::with_capacity(source.len());
+        out.push_str(&source[..abs.start]);
+        out.push_str(value);
+        out.push_str(&source[abs.end..]);
+        return Some(out);
+    }
+
+    // Insert a new attribute line at the top of the body.
+    let snippet = format!("    {} {} = {}\n", type_name, name, value);
+    let mut out = String::with_capacity(source.len() + snippet.len() + 1);
+    let insert_at = span.body.start;
+    out.push_str(&source[..insert_at]);
+    if !source[..insert_at].ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&snippet);
+    out.push_str(&source[insert_at..]);
+    Some(out)
+}
+
 /// Find the byte range of an attribute's right-hand-side value
 /// expression within a prim body. Matches both unannotated lines
 /// (`xformOp:translate = (...)`) and typed declarations
@@ -551,6 +589,20 @@ mod tests {
         assert!(!out.contains("(0, 0, 0)"));
         // xformOpOrder line not duplicated.
         assert_eq!(out.matches("xformOpOrder").count(), 1);
+    }
+
+    #[test]
+    fn set_attribute_inserts_when_absent() {
+        let out = set_attribute(TINY, "/World/Ball", "inputs:roughness", "float", "0.5").unwrap();
+        assert!(out.contains("float inputs:roughness = 0.5"));
+    }
+
+    #[test]
+    fn set_attribute_replaces_when_present() {
+        let with_existing = "#usda 1.0\ndef Xform \"World\"\n{\n    float inputs:roughness = 0.8\n}\n";
+        let out = set_attribute(with_existing, "/World", "inputs:roughness", "float", "0.2").unwrap();
+        assert!(out.contains("inputs:roughness = 0.2"));
+        assert!(!out.contains("0.8"));
     }
 
     #[test]

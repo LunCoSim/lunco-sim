@@ -71,6 +71,93 @@ def Xform "SkidRover" (
         color3f primvars:displayColor = (0.8, 0.8, 0.8)
     }
 
+    # Headlights (Spotlights pointing forward and tilted down by 15 deg, with visual geometry and light source)
+    def Xform "Headlight_L"
+    {
+        double3 xformOp:translate = (-0.8, 0.2, -1.75)
+        double3 xformOp:rotateXYZ = (-15, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+        def SphereLight "Light"
+        {
+            float inputs:intensity = 1000000.0  # 1M lumens for daylight exposure visibility
+            float inputs:exposure = 0.0
+            color3f inputs:color = (1.0, 0.95, 0.85) # Warm white halogen light
+            bool inputs:shadow:enable = true
+            float inputs:shaping:cone:angle = 45.0
+            float inputs:shaping:cone:softness = 0.3
+            float lunco:light:range = 60.0
+        }
+
+        # Casing of the headlight
+        def Cylinder "Casing"
+        {
+            uniform token axis = "Z"
+            double radius = 0.1
+            double height = 0.15
+            double3 xformOp:translate = (0, 0, 0.075)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.1, 0.1, 0.1) # Dark grey/black matte housing
+            bool physics:collisionEnabled = false
+        }
+
+        # Glowing lens of the headlight
+        def Cylinder "Lens"
+        {
+            uniform token axis = "Z"
+            double radius = 0.09
+            double height = 0.02
+            double3 xformOp:translate = (0, 0, -0.01)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (1.0, 0.95, 0.85)
+            color3f primvars:emissiveColor = (5.0, 4.75, 4.25) # Glowing lens
+            bool physics:collisionEnabled = false
+        }
+    }
+
+    def Xform "Headlight_R"
+    {
+        double3 xformOp:translate = (0.8, 0.2, -1.75)
+        double3 xformOp:rotateXYZ = (-15, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+        def SphereLight "Light"
+        {
+            float inputs:intensity = 1000000.0
+            float inputs:exposure = 0.0
+            color3f inputs:color = (1.0, 0.95, 0.85)
+            bool inputs:shadow:enable = true
+            float inputs:shaping:cone:angle = 45.0
+            float inputs:shaping:cone:softness = 0.3
+            float lunco:light:range = 60.0
+        }
+
+        # Casing of the headlight
+        def Cylinder "Casing"
+        {
+            uniform token axis = "Z"
+            double radius = 0.1
+            double height = 0.15
+            double3 xformOp:translate = (0, 0, 0.075)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.1, 0.1, 0.1)
+            bool physics:collisionEnabled = false
+        }
+
+        # Glowing lens of the headlight
+        def Cylinder "Lens"
+        {
+            uniform token axis = "Z"
+            double radius = 0.09
+            double height = 0.02
+            double3 xformOp:translate = (0, 0, -0.01)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (1.0, 0.95, 0.85)
+            color3f primvars:emissiveColor = (5.0, 4.75, 4.25)
+            bool physics:collisionEnabled = false
+        }
+    }
+
     # --- Wheels (reference the reusable mobility component) ---
     # Authored at RAYCAST ride height (y=-0.15). The `physical`
     # variant drops them to y=-0.65 via `over` opinions.

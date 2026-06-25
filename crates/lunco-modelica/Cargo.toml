@@ -9,12 +9,35 @@ description = "Native Modelica simulation integration for LunCoSim using Rumoca"
 # --api` Just Works for screenshot-driven debugging. Building without it
 # (`cargo build --no-default-features`) drops the axum/tokio web stack,
 # which matters for the wasm32 binary.
-default = ["lunco-api", "lunco-api/transport-http"]
+default = ["lunco-api", "lunco-api/transport-http", "lunco-api/render", "ui"]
+# The egui Modelica IDE: panels, diagram canvas, plots, docs viewer. OFF ⇒ the
+# compile core (ModelicaCorePlugin) builds headless — no egui/winit, no lyon,
+# no workbench shell. Consumers that need only the compiler (lunco-usd-sim on a
+# server) build with `default-features = false`.
+ui = [
+    "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-ui",
+    "dep:lunco-viz", "dep:lunco-canvas", "dep:egui_plot", "dep:egui_commonmark",
+    "dep:egui_extras", "dep:htmd", "dep:lyon_tessellation", "dep:lyon_path",
+    "dep:lyon_geom", "lunco-doc-bevy/ui",
+    # bevy_egui pulls bevy_render + bevy_window; the lunica WINDOW additionally
+    # needs the winit backend (no longer in the workspace bevy default).
+    "bevy/bevy_winit", "bevy/bevy_window", "bevy/x11", "bevy/wayland",
+    # wasm GPU backend for the egui render pass. Since the workspace made render
+    # opt-in (bevy default no longer bundles a wgpu backend), the web build linked
+    # bevy_render with NO backend and panicked at startup ("No wgpu backend
+    # feature ... was enabled"). WebGL2 matches the sandbox web build; native is
+    # unaffected (it uses vulkan/metal/dx12).
+    "bevy/webgl2",
+]
 # Compile the API in. Transport is chosen automatically: the native HTTP
 # server comes from `lunco-api/transport-http` (added to `default` above);
 # the wasm build (`build_web.sh --features lunco-api`) gets the
 # `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
 lunco-api = ["dep:lunco-api"]
+# Headless Modelica compile/run server: the HTTP API, no `ui`. Build the lunica
+# bin with `--no-default-features --features server`. No `lunco-api/render` (the
+# server captures no screenshots) and no winit/egui.
+server = ["lunco-api", "lunco-api/transport-http"]
 # Opt-in Tracy profiler hook. Off by default because tracy-client-sys needs a
 # C++ compile that breaks on wasm32 and on Windows MSVC 2019 (missing
 # `RelationProcessorDie` enumerant in pre-2004 Win10 SDKs). Enable with
@@ -30,6 +53,10 @@ tracy = ["bevy/trace_tracy"]
 [[bin]]
 name = "lunica"
 path = "src/bin/lunica.rs"
+# ONE source, two shapes (like `sandbox`): the default `ui` build is the egui
+# workbench window; `--no-default-features --features server` (or `--no-ui` at
+# runtime) builds the same bin as a HEADLESS Modelica compile/run server (HTTP
+# API, no egui/winit). `lunica.rs` cfg-gates the UI paths, so no required-features.
 
 # Off-thread Modelica worker — wasm32 only. Built as a second wasm bundle
 # the main page launches via `new Worker()`. See
@@ -45,23 +72,28 @@ path = "src/bin/msl_indexer.rs"
 
 [dependencies]
 bevy.workspace = true
-bevy_egui.workspace = true
+# The whole egui IDE stack is UI-only. Optional behind `ui` so the Modelica
+# COMPILE CORE (ModelicaCorePlugin: channels + worker + .mo loader + dispatch)
+# builds headless (`default-features = false`) for a server running cosim — no
+# egui→winit. The GUI/lunica build keeps `default = [..., "ui"]`.
+bevy_egui = { workspace = true, optional = true }
 lunco-assets = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-theme = { path = "../lunco-theme" }
+lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-doc = { path = "../lunco-doc" }
-lunco-doc-bevy = { path = "../lunco-doc-bevy" }
+# Core document-lifecycle events; its egui systems come back via `ui` below.
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-settings = { path = "../lunco-settings" }
-lunco-workbench = { path = "../lunco-workbench" }
+lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-web = { workspace = true }
-lunco-ui = { path = "../lunco-ui" }
-lunco-viz = { path = "../lunco-viz" }
-lunco-canvas = { path = "../lunco-canvas" }
+lunco-ui = { path = "../lunco-ui", optional = true }
+lunco-viz = { path = "../lunco-viz", optional = true }
+lunco-canvas = { path = "../lunco-canvas", optional = true }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-storage = { path = "../lunco-storage" }
-egui_plot = { workspace = true }
+egui_plot = { workspace = true, optional = true }
 # base64url encode/decode for shareable model links (see `model_share.rs`).
 # Already resolved transitively (0.22.x) — no new download.
 base64 = "0.22"
@@ -69,15 +101,15 @@ base64 = "0.22"
 # `egui_commonmark` pulls the right `egui` version transitively to
 # match bevy_egui 0.39 (→ egui 0.33). Syntax highlighting is enabled
 # so `<pre><code>` blocks in Modelica docs render with colour.
-egui_commonmark = { version = "0.22", features = ["better_syntax_highlighting"] }
+egui_commonmark = { version = "0.22", features = ["better_syntax_highlighting"], optional = true }
 # `all_loaders` wires up every shipped image source (file://, http://,
 # bytes://, raw paths) so images in Documentation HTML render. We add
 # a custom `modelica://` loader on top to resolve MSL-internal URIs
 # against the on-disk MSL tree.
-egui_extras = { version = "0.33", features = ["all_loaders"] }
+egui_extras = { version = "0.33", features = ["all_loaders"], optional = true }
 # Pure-Rust HTML → Markdown converter. Used once per Documentation
 # annotation to normalise into the shape commonmark expects.
-htmd = "0.5"
+htmd = { version = "0.5", optional = true }
 # Lock-free publish path from the Modelica worker thread into the UI:
 # each running sim owns an `Arc<ArcSwap<SimSnapshot>>` that the worker
 # updates after every Step. Plots read via `load()` — no mutex, no
@@ -90,9 +122,9 @@ arc-swap = "1"
 # (PartialValve's bowtie, sensor Y-marks, gauge X-shapes) need a real
 # tessellator. lyon does this in pure Rust with vertex/index buffer
 # output that drops straight into `egui::Mesh`. ~150 KB compiled.
-lyon_tessellation = "1"
-lyon_path = "1"
-lyon_geom = "1"
+lyon_tessellation = { version = "1", optional = true }
+lyon_path = { version = "1", optional = true }
+lyon_geom = { version = "1", optional = true }
 # Direct rayon dependency so `lunica` can configure the
 # global rayon pool BEFORE rumoca's `parse_files_parallel` initialises
 # it with `num_cpus - 1` threads. With rumoca's default, every
@@ -214,6 +246,11 @@ zstd = "0.13"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+# bevy_math → rand pulls getrandom 0.3, which on wasm needs an explicit backend.
+# The lunica_worker bundle builds out of this crate, so the browser-crypto
+# (`wasm_js`) feature must be enabled here too; build_web.sh sets the matching
+# `--cfg getrandom_backend="wasm_js"` (cfg + feature are both required).
+getrandom = { version = "0.3", features = ["wasm_js"] }
 # `Response`, `Request`, `RequestInit`, `Headers` for the MSL fetcher
 # (see `src/msl_remote.rs`); the rest predate this work.
 web-sys = { version = "0.3", features = [

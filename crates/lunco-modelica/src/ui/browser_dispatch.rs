@@ -46,7 +46,7 @@ pub fn drain_browser_actions(world: &mut World) {
     // active Twin's root. Captured once so we don't fight the borrow
     // checker re-borrowing `WorkspaceResource` per action.
     let twin_root = {
-        let ws = world.resource::<lunco_workbench::WorkspaceResource>();
+        let ws = world.resource::<lunco_workspace::WorkspaceResource>();
         ws.active_twin
             .and_then(|id| ws.twin(id))
             .map(|t| t.root.clone())
@@ -108,7 +108,7 @@ pub fn drain_browser_actions(world: &mut World) {
                 // OpenFile / new-doc paths. `ensure_preview_for_with_default`
                 // dedups them so both paths converge on one tab.
                 let default_class: Option<String> = world
-                    .get_resource::<crate::ui::state::ModelicaDocumentRegistry>()
+                    .get_resource::<crate::state::ModelicaDocumentRegistry>()
                     .and_then(|r| r.host(doc))
                     .and_then(|h| {
                         h.document()
@@ -125,7 +125,7 @@ pub fn drain_browser_actions(world: &mut World) {
                     });
                 let (tab_id, evict) = {
                     let mut model_tabs = world
-                        .resource_mut::<crate::ui::panels::model_view::ModelTabs>();
+                        .resource_mut::<crate::model_tabs::ModelTabs>();
                     model_tabs.ensure_preview_for_with_default(
                         doc,
                         Some(qualified_path),
@@ -138,11 +138,11 @@ pub fn drain_browser_actions(world: &mut World) {
                 // is removed from the World for the duration of rendering.
                 if let Some(old_id) = evict {
                     world.commands().trigger(lunco_workbench::CloseTab {
-                        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                        kind: crate::ui::MODEL_VIEW_KIND,
                         instance: old_id,
                     });
                     world
-                        .resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+                        .resource_mut::<crate::model_tabs::ModelTabs>()
                         .close_tab(old_id);
                     if let Some(mut state) = world
                         .get_resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
@@ -151,7 +151,7 @@ pub fn drain_browser_actions(world: &mut World) {
                     }
                 }
                 world.commands().trigger(lunco_workbench::OpenTab {
-                    kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                    kind: crate::ui::MODEL_VIEW_KIND,
                     instance: tab_id,
                 });
                 // Make this doc the active workspace doc so the
@@ -162,11 +162,11 @@ pub fn drain_browser_actions(world: &mut World) {
                 // rendering a different doc, the new drill target is
                 // never observed and the diagram looks frozen.
                 world
-                    .resource_mut::<lunco_workbench::WorkspaceResource>()
+                    .resource_mut::<lunco_workspace::WorkspaceResource>()
                     .active_document = Some(doc);
             }
             BrowserAction::CloseDoc { doc } => {
-                use crate::ui::panels::model_view::{ModelTabs, MODEL_VIEW_KIND};
+                use crate::model_tabs::ModelTabs; use crate::ui::MODEL_VIEW_KIND;
                 // Close every tab bound to the doc — dock layout via
                 // CloseTab triggers, ModelTabs state via
                 // `close_all_for_doc`, canvas via `drop_tab` — then

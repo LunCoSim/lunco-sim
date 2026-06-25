@@ -40,7 +40,7 @@ cd "$(git rev-parse --show-toplevel)"
 BIN_NAME=sandbox       # any cargo bin (sandbox, lunica, …)
 DURATION=20            # seconds of profiling after warmup
 WARMUP=8               # seconds to let the window open + scene load
-PORT=3001              # test port (3000 is the user's own session)
+PORT=3001              # test port (4101 is the user's own session default)
 SCENE=""               # empty → binary's default scene
 PROFILE="dev"          # dev = fast rebuild; profiling = release codegen
 BUILD=1

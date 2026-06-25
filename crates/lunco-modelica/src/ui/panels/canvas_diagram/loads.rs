@@ -5,14 +5,14 @@
 //! id eagerly, spawn an off-thread loader on
 //! `AsyncComputeTaskPool`, and install the prebuilt
 //! [`crate::document::ModelicaDocument`] via
-//! [`crate::ui::state::ModelicaDocumentRegistry::install_prebuilt`]
+//! [`crate::state::ModelicaDocumentRegistry::install_prebuilt`]
 //! when the load completes. The in-flight task and metadata live
 //! in [`crate::ui::document_openings::DocumentOpenings`]; the
 //! per-frame drivers below poll their own variant.
 
 use bevy::prelude::*;
 use crate::ui::document_openings::{DocumentOpenings, OpeningState};
-use crate::ui::state::ModelicaDocumentRegistry;
+use crate::state::ModelicaDocumentRegistry;
 
 /// Tab-to-class binding for drill-in tabs whose document hasn't
 /// been installed in the registry yet. Stored in
@@ -56,15 +56,6 @@ pub struct DrillInBinding {
 pub struct DuplicateBinding {
     pub display_name: String,
     pub origin_short: String,
-    /// Path *within* the duplicated top class the user was drilled
-    /// into when they hit Duplicate. e.g. duplicating an
-    /// `AnnotatedRocketStage` package while focused on its inner
-    /// `RocketStage` model lands here as `Some("RocketStage")` and
-    /// the install hook seeds `DrilledInClassNames` with
-    /// `<top_copy>.<inner_drill>` so the new tab opens on that
-    /// same inner class. `None` when the user was on the top
-    /// class itself.
-    pub inner_drill: Option<String>,
     pub task: bevy::tasks::Task<crate::document::ModelicaDocument>,
     /// RAII guard registered with [`lunco_workbench::status_bus::StatusBus`].
     /// Same lifecycle as [`DrillInBinding::busy`] — clears the
@@ -81,7 +72,7 @@ pub fn drive_duplicate_loads(
     mut registry: bevy::prelude::ResMut<ModelicaDocumentRegistry>,
     mut probe: Option<bevy::prelude::ResMut<crate::FrameTimeProbe>>,
     mut egui_q: bevy::prelude::Query<&mut bevy_egui::EguiContext>,
-    mut tabs: bevy::prelude::ResMut<crate::ui::panels::model_view::ModelTabs>,
+    mut tabs: bevy::prelude::ResMut<crate::model_tabs::ModelTabs>,
     mut canvas_state: bevy::prelude::ResMut<super::CanvasDiagramState>,
     mut commands: bevy::prelude::Commands,
 ) {
@@ -125,7 +116,6 @@ pub fn drive_duplicate_loads(
         canvas_state.stash_projection_handoff(doc_id, b.busy);
         let dup_display_name = b.display_name;
         let origin_short = b.origin_short;
-        let inner_drill = b.inner_drill;
         let t_install = web_time::Instant::now();
         registry.install_prebuilt(doc_id, doc);
         let install_ms = t_install.elapsed().as_secs_f64() * 1000.0;
@@ -134,26 +124,24 @@ pub fn drive_duplicate_loads(
             dup_display_name, origin_short,
         );
         had_install = true;
-        // Seed the drill-in target so the canvas projects the inner
-        // model, not the package's empty top-level. Duplicating a
-        // `package Foo { model Bar ... }` lands as
-        // `package FooCopy { model Bar ... }`; `DrilledInClassNames`
-        // points at `FooCopy.Bar` so the projection scopes the builder
-        // to that class. Without this the user sees the empty-overlay
-        // placeholder card and has to click into the package tree
-        // manually.
+        // Seed the drill-in target so the canvas projects the duplicated
+        // model, not the package's empty top-level. The duplicate is
+        // always the extracted target class — either a standalone model
+        // (`within Pkg; model BarCopy …`) or a whole copied package
+        // (`package FooCopy { model Bar … }`). Either way the first
+        // non-package class in the copy's Index is the thing to show; its
+        // `c.name` is already the within-qualified name, so it resolves
+        // directly. Without this the user sees the empty-overlay
+        // placeholder card and has to click into the tree manually.
         if let Some(host) = registry.host(doc_id) {
             // Read first non-package class from the per-doc Index;
             // sees optimistic patches and avoids walking the AST.
             let index = host.document().index();
-            let qualified = match inner_drill.as_deref() {
-                Some(rest) => Some(format!("{dup_display_name}.{rest}")),
-                None => index
-                    .classes
-                    .values()
-                    .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
-                    .map(|c| c.name.clone()),
-            };
+            let qualified = index
+                .classes
+                .values()
+                .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
+                .map(|c| c.name.clone());
             // Replace the `(doc, None)` placeholder with a fresh tab
             // bound to `(doc, Some(qualified))`. TabId bindings are
             // immutable; mutating drilled_class in place would collapse
@@ -165,7 +153,7 @@ pub fn drive_duplicate_loads(
                     .map(|(id, _)| id);
                 if let Some(old_id) = placeholder {
                     commands.trigger(lunco_workbench::CloseTab {
-                        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                        kind: crate::ui::MODEL_VIEW_KIND,
                         instance: old_id,
                     });
                     tabs.close_tab(old_id);
@@ -173,10 +161,10 @@ pub fn drive_duplicate_loads(
                 let new_id = tabs.ensure_for(doc_id, Some(q));
                 if let Some(tab) = tabs.get_mut(new_id) {
                     tab.view_mode =
-                        crate::ui::panels::model_view::ModelViewMode::Canvas;
+                        crate::model_tabs_types::ModelViewMode::Canvas;
                 }
                 commands.trigger(lunco_workbench::OpenTab {
-                    kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                    kind: crate::ui::MODEL_VIEW_KIND,
                     instance: new_id,
                 });
             }
@@ -221,7 +209,7 @@ pub fn drive_duplicate_loads(
 pub fn drive_drill_in_loads(
     mut openings: bevy::prelude::ResMut<DocumentOpenings>,
     mut registry: bevy::prelude::ResMut<ModelicaDocumentRegistry>,
-    mut tabs: bevy::prelude::ResMut<crate::ui::panels::model_view::ModelTabs>,
+    mut tabs: bevy::prelude::ResMut<crate::model_tabs::ModelTabs>,
     mut egui_q: bevy::prelude::Query<&mut bevy_egui::EguiContext>,
     mut canvas_state: bevy::prelude::ResMut<super::CanvasDiagramState>,
 ) {
@@ -305,7 +293,7 @@ pub fn drive_drill_in_loads(
             // may now point at the same doc (sibling drill-ins);
             // scope by `(doc, qualified)`.
             if let Some(tab) = tabs.find_for_mut(doc_id, Some(qualified.as_str())) {
-                tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Icon;
+                tab.view_mode = crate::model_tabs_types::ModelViewMode::Icon;
             }
         }
         info!(
@@ -344,16 +332,10 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
         return;
     }
     // Open-document fallback: find a host whose parsed AST resolves the
-    // qualified path. Reuse its tab + just set the drill-in class.
-    let target_doc: Option<lunco_doc::DocumentId> = {
-        let registry = world.resource::<ModelicaDocumentRegistry>();
-        registry.iter().find_map(|(doc_id, host)| {
-            host.document().strict_ast().and_then(|ast| {
-                crate::diagram::find_class_by_qualified_name(&ast, qualified)
-                    .map(|_| doc_id)
-            })
-        })
-    };
+    // qualified path. Reuse its tab + just set the drill-in class. Shares
+    // the "which open doc owns this class" rule with the by-name source
+    // resolver (duplicate) via the one helper.
+    let target_doc = crate::ui::class_source::find_open_doc_with_class(world, qualified);
     if let Some(doc_id) = target_doc {
         // Allocate (or focus) a tab dedicated to this `(doc, class)`.
         // Distinct sibling classes from the same `.mo` file get their
@@ -361,26 +343,26 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
         // TabId rather than DocumentId.
         let tab_id = {
             let mut tabs = world
-                .resource_mut::<crate::ui::panels::model_view::ModelTabs>();
+                .resource_mut::<crate::model_tabs::ModelTabs>();
             // Drill-in is a deliberate navigation gesture (canvas
             // double-click), so the tab is pinned via ensure_for —
             // not the preview slot. Same-class re-drill focuses;
             // sibling drills still get their own tabs.
             let tab_id = tabs.ensure_for(doc_id, Some(qualified.to_string()));
             if let Some(tab) = tabs.get_mut(tab_id) {
-                tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+                tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
             }
             tab_id
         };
         // `ensure_for(doc_id, Some(qualified))` immediately above
         // already wrote it.
         if let Some(mut workspace) =
-            world.get_resource_mut::<lunco_workbench::WorkspaceResource>()
+            world.get_resource_mut::<lunco_workspace::WorkspaceResource>()
         {
             workspace.active_document = Some(doc_id);
         }
         world.commands().trigger(lunco_workbench::OpenTab {
-            kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+            kind: crate::ui::MODEL_VIEW_KIND,
             instance: tab_id,
         });
         bevy::log::info!(
@@ -421,7 +403,7 @@ fn open_drill_in_tab(
     let model_path_id = format!("msl://{qualified}");
     let existing_doc = {
         let registry = world.resource::<ModelicaDocumentRegistry>();
-        let tabs = world.resource::<crate::ui::panels::model_view::ModelTabs>();
+        let tabs = world.resource::<crate::model_tabs::ModelTabs>();
         // A tab whose `(doc.file, drilled_class)` matches the new
         // request — re-focus it instead of allocating a duplicate.
         tabs.iter().find_map(|(_id, state)| {
@@ -504,16 +486,16 @@ fn open_drill_in_tab(
     // scratch models; drill-in is a different use case.
     let tab_id = {
         let mut model_tabs =
-            world.resource_mut::<crate::ui::panels::model_view::ModelTabs>();
+            world.resource_mut::<crate::model_tabs::ModelTabs>();
         let tab_id =
             model_tabs.ensure_for(doc_id, Some(qualified.to_string()));
         if let Some(tab) = model_tabs.get_mut(tab_id) {
-            tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+            tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
         }
         tab_id
     };
     world.commands().trigger(lunco_workbench::OpenTab {
-        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+        kind: crate::ui::MODEL_VIEW_KIND,
         instance: tab_id,
     });
 

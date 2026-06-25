@@ -29,6 +29,9 @@
 //! app shell (window + frame pacing + native `--api`).
 
 use bevy::prelude::*;
+// The egui workbench shell — UI only. A headless `--no-ui` (or `--no-default-
+// features`) lunica adds `ModelicaCorePlugin` (compile core) instead.
+#[cfg(feature = "ui")]
 use lunco_modelica::ModelicaWorkbenchPlugin;
 
 #[cfg(target_arch = "wasm32")]
@@ -75,27 +78,22 @@ fn main() {
     // ── Native-only: parse `--api <port>` so the window title can ────
     // advertise the listening port (automation drives the workbench via
     // it; visible in the title bar avoids confusion when several
-    // instances run side-by-side — e.g. user on 3000 + a test on 3001).
+    // instances run side-by-side — e.g. user on 4101 + a test on 3001).
+    // Headless when built without the `ui` feature, or asked at runtime via
+    // `--no-ui` / `LUNCO_NO_UI`. A headless lunica is a Modelica compile/run
+    // server (HTTP API), no window or egui. `cfg!` folds to `true` when `ui`
+    // is off, stripping the windowed paths below.
+    // Headless when built without the `ui` feature, or asked at runtime via
+    // `--no-ui` / `LUNCO_NO_UI`. A headless lunica is a Modelica compile/run
+    // server (HTTP API), no window or egui. wasm is never headless (the web
+    // build is always the GUI IDE). The window title is computed inside
+    // [`default_plugins`].
     #[cfg(not(target_arch = "wasm32"))]
-    let window_title: String = {
-        let args: Vec<String> = std::env::args().collect();
-        let mut api_port: Option<u16> = None;
-        for i in 0..args.len() {
-            if args[i] == "--api" {
-                api_port = Some(3000);
-                if i + 1 < args.len() {
-                    if let Ok(p) = args[i + 1].parse::<u16>() {
-                        api_port = Some(p);
-                    }
-                }
-                break;
-            }
-        }
-        match api_port {
-            Some(p) => format!("Lunica — Listening on {p}"),
-            None => "Lunica".to_string(),
-        }
-    };
+    let headless = !cfg!(feature = "ui")
+        || std::env::args().any(|a| a == "--no-ui")
+        || std::env::var("LUNCO_NO_UI").is_ok_and(|v| v != "0" && !v.is_empty());
+    #[cfg(target_arch = "wasm32")]
+    let headless = false;
 
     // ── wasm-only: pick the bundled model to auto-open ──────────────
     //
@@ -155,67 +153,53 @@ fn main() {
     #[cfg(target_arch = "wasm32")]
     app.insert_resource(ClearColor(Color::srgb_u8(0x1a, 0x1a, 0x1a)));
 
-    // Window. Native: centered desktop window with the merged-titlebar
-    // chrome; route the OS X-button through the in-app save-prompt flow
-    // (`close_when_requested: false`) so dirty-doc dialogs aren't skipped.
+    // ── Composition root ──────────────────────────────────────────────────
+    // Base plugins (window / render / winit backend) are chosen by mode in
+    // `default_plugins`; then we layer the egui workbench OR the headless
+    // compile core on top — lunica's "UI plugin" is the modelica crate's
+    // `ModelicaWorkbenchPlugin`, its "core plugin" the crate's
+    // `ModelicaCorePlugin`. Mirrors `lunco_sandbox`'s Core/Ui/Headless split.
+    app.add_plugins(default_plugins(headless));
+
+    // GUI (native windowed, or wasm — always windowed). The whole workbench:
+    // WorkbenchPlugin + ModelicaPlugin + clipboard, autosave, worker. Same
+    // bundle the sandbox embeds as its Design tab.
+    #[cfg(feature = "ui")]
+    if !headless {
+        app.add_plugins(ModelicaWorkbenchPlugin::default());
+        // Frame pacing: Continuous focused (vsync paces Update); low-power
+        // unfocused. (The 5 Hz "UI vanishes on zoom" spike-train fix.) Native
+        // only — wasm is paced by requestAnimationFrame.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use bevy::winit::{UpdateMode, WinitSettings};
+            app.insert_resource(WinitSettings {
+                focused_mode: UpdateMode::Continuous,
+                unfocused_mode: UpdateMode::reactive_low_power(std::time::Duration::from_secs(1)),
+            });
+        }
+    }
+
+    // HEADLESS: Modelica compile/run server. ScheduleRunnerPlugin ticks the app
+    // in winit's place; the HTTP API serves compile/run requests. (wasm is never
+    // headless.)
     #[cfg(not(target_arch = "wasm32"))]
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            // Centralized merged-titlebar chrome + persisted-geometry
-            // restore. Ship-default size lives in `lunco-workbench`.
-            ..lunco_workbench::restored_window(window_title)
-        }),
-        close_when_requested: false,
-        ..default()
-    }));
+    if headless {
+        app.add_plugins(lunco_modelica::ModelicaCorePlugin);
+        app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
+            std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ as f64),
+        ));
+        info!("[lunica] running HEADLESS: Modelica compile core + API, no window/egui");
+    }
 
-    // Window. Wasm: render into `<canvas id="bevy">` and mirror its
-    // parent's CSS size; let egui see keyboard events too.
-    #[cfg(target_arch = "wasm32")]
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "Lunica".into(),
-            resolution: bevy::window::WindowResolution::new(1280, 720),
-            canvas: Some("#bevy".into()),
-            fit_canvas_to_parent: true,
-            prevent_default_event_handling: true,
-            ..default()
-        }),
-        ..default()
-    }));
-
-    // The whole workbench: WorkbenchPlugin + ModelicaPlugin + (on wasm)
-    // clipboard bridge, autosave, and off-thread worker. Same bundle the
-    // sandbox embeds as its Design tab, so the two can't drift.
-    app.add_plugins(ModelicaWorkbenchPlugin::default());
-
-    // Dismiss the HTML loading screen once the first frame paints
-    // (wasm-only; no-op on native). Pairs with `web/index.html` →
-    // `lunco-boot.js`. See `lunco_web`.
+    // Dismiss the HTML loading screen once the first frame paints (wasm-only;
+    // no-op native). Pairs with `web/index.html` → `lunco-boot.js`.
     app.add_plugins(lunco_web::WebReadyPlugin);
 
-    // Native-only HTTP automation bridge. The feature is off on wasm
-    // (`--no-default-features` drops the axum/tokio stack), so the cfg is
-    // false there and `lunco_api` isn't even linked.
+    // HTTP automation bridge — native `--api` server / wasm JS bridge. Linked in
+    // the GUI and the headless compile server alike (the latter's reason to exist).
     #[cfg(feature = "lunco-api")]
     app.add_plugins(lunco_api::LunCoApiPlugin::default());
-
-    // Frame pacing — applies to BOTH targets now. (Web previously lacked
-    // this, which is exactly why the "UI vanishes on zoom" bug surfaced
-    // only on the web build.)
-    //
-    // Focused: Continuous lets vsync / requestAnimationFrame act as the
-    // pacer so each Update lands on a real vblank. An independent
-    // Reactive(1/60s) timer drifts against the real refresh and stalls
-    // present every ~13 frames (the 5 Hz spike train). Unfocused:
-    // ReactiveLowPower(1s) keeps fans quiet in the background.
-    {
-        use bevy::winit::{UpdateMode, WinitSettings};
-        app.insert_resource(WinitSettings {
-            focused_mode: UpdateMode::Continuous,
-            unfocused_mode: UpdateMode::reactive_low_power(std::time::Duration::from_secs(1)),
-        });
-    }
 
     // Cap FixedUpdate catchup after a slow frame. Bevy default: a 250ms
     // hitch breeds ~15 fixed ticks next frame, which makes that frame slow
@@ -243,6 +227,101 @@ fn main() {
     }
 
     app.run();
+}
+
+/// Base [`DefaultPlugins`] for the chosen mode. The window / render / winit
+/// backend must be decided at `PluginGroup` build time, so this is the one place
+/// the GUI/headless split touches plugin configuration — mirrors
+/// `lunco_sandbox::default_plugins`. The egui workbench vs. the compile core is
+/// layered on top by `main` (the composition root).
+fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
+    // A no-`ui` build is always headless, so the param is unused there.
+    #[cfg(not(feature = "ui"))]
+    let _ = headless;
+
+    // Windowed title — native advertises the `--api` port (so side-by-side
+    // instances are distinguishable); wasm is plain. Only used by the windowed
+    // branch below.
+    #[cfg(feature = "ui")]
+    let window_title: String = {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let args: Vec<String> = std::env::args().collect();
+            let mut api_port: Option<u16> = None;
+            for i in 0..args.len() {
+                if args[i] == "--api" {
+                    api_port = Some(lunco_core::session::DEFAULT_API_PORT);
+                    if i + 1 < args.len() {
+                        if let Ok(p) = args[i + 1].parse::<u16>() {
+                            api_port = Some(p);
+                        }
+                    }
+                    break;
+                }
+            }
+            match api_port {
+                Some(p) => format!("Lunica — Listening on {p}"),
+                None => "Lunica".to_string(),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            "Lunica".to_string()
+        }
+    };
+
+    #[cfg(feature = "ui")]
+    let group = if headless {
+        // `--no-ui` on a `ui` build: render + winit still link, so disable them
+        // (backends:None, WinitPlugin off).
+        DefaultPlugins
+            .set(bevy::render::RenderPlugin {
+                render_creation: bevy::render::settings::WgpuSettings { backends: None, ..default() }.into(),
+                ..default()
+            })
+            .set(WindowPlugin {
+                primary_window: None,
+                exit_condition: bevy::window::ExitCondition::DontExit,
+                close_when_requested: false,
+                ..default()
+            })
+            .disable::<bevy::winit::WinitPlugin>()
+            .set(headless_log())
+    } else {
+        // Windowed: merged-titlebar chrome (native) / `#bevy` canvas (wasm).
+        // Route the OS X-button through the in-app save-prompt flow
+        // (`close_when_requested: false`) so dirty-doc dialogs aren't skipped.
+        DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                #[cfg(target_arch = "wasm32")]
+                canvas: Some("#bevy".to_string()),
+                #[cfg(target_arch = "wasm32")]
+                fit_canvas_to_parent: true,
+                #[cfg(target_arch = "wasm32")]
+                prevent_default_event_handling: true,
+                ..lunco_workbench::restored_window(window_title)
+            }),
+            close_when_requested: false,
+            ..default()
+        })
+    };
+
+    // A `--no-default-features` build has neither render nor winit, so plain
+    // DefaultPlugins degrades to no-render/no-window automatically.
+    #[cfg(not(feature = "ui"))]
+    let group = DefaultPlugins.set(headless_log());
+
+    group.build()
+}
+
+/// Quietened log filter for the headless compile server (rumoca JIT + diffsol
+/// per-step noise downgraded to warn). The windowed GUI keeps Bevy's default
+/// `LogPlugin`.
+fn headless_log() -> bevy::log::LogPlugin {
+    bevy::log::LogPlugin {
+        filter: "cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
+        ..default()
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -295,10 +374,10 @@ struct WebWorkbench;
 fn setup_web_workbench(
     mut commands: Commands,
     channels: Res<lunco_modelica::ModelicaChannels>,
-    mut workbench_state: ResMut<lunco_modelica::ui::WorkbenchState>,
-    mut doc_registry: ResMut<lunco_modelica::ui::ModelicaDocumentRegistry>,
-    compile_states: ResMut<lunco_modelica::ui::CompileStates>,
-    mut model_tabs: ResMut<lunco_modelica::ui::panels::model_view::ModelTabs>,
+    mut workbench_state: ResMut<lunco_modelica::state::WorkbenchState>,
+    mut doc_registry: ResMut<lunco_modelica::state::ModelicaDocumentRegistry>,
+    compile_states: ResMut<lunco_modelica::state::CompileStates>,
+    mut model_tabs: ResMut<lunco_modelica::model_tabs::ModelTabs>,
     mut layout: ResMut<lunco_workbench::WorkbenchLayout>,
     model_info: Res<BundledModelInfo>,
 ) {
@@ -343,7 +422,7 @@ fn setup_web_workbench(
     // Open the model tab so the user lands on the model view.
     let tab_id = model_tabs.ensure_for(doc_id, None);
     layout.open_instance(
-        lunco_modelica::ui::panels::model_view::MODEL_VIEW_KIND,
+        lunco_modelica::ui::MODEL_VIEW_KIND,
         tab_id,
     );
 

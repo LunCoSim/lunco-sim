@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy::tasks::Task;
-use crate::ui::state::ModelLibrary;
+use crate::state::ModelLibrary;
 use super::types::{PackageNode, InMemoryEntry, TwinNode};
 
 pub struct ScanResult {
@@ -15,7 +15,7 @@ pub struct ScanResult {
 /// or decode failure that should be surfaced as a load-failed
 /// overlay (`StatusBus` → `BusyOutcome::Failed`). Display name /
 /// library / dedup key live on the matching
-/// [`crate::ui::document_openings::OpeningState::FileLoad`] for
+/// `ui::document_openings::OpeningState::FileLoad` for
 /// the duration of the load.
 pub struct FileLoadResult {
     pub doc_id: lunco_doc::DocumentId,

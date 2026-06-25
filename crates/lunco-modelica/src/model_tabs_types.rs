@@ -2,10 +2,9 @@
 
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
-use lunco_workbench::PanelId;
 
-/// The `PanelId` under which `ModelViewPanel` is registered.
-pub const MODEL_VIEW_KIND: PanelId = PanelId("modelica_model_view");
+// `MODEL_VIEW_KIND` (a workbench `PanelId`) lives in `crate::ui` — it's a UI
+// panel-registry key, and these tab *data* types are UI-free core.
 
 /// Which rendering mode a model tab is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -18,12 +18,18 @@
 
 use bevy::prelude::*;
 
+// `commands` (document/file verbs) + `ui` (browser/viewport panels) are the
+// egui + workbench-shell layer — UI only. `document`/`registry`/`text_edit` are
+// egui-free (USD doc model + the core document-lifecycle events).
+#[cfg(feature = "ui")]
 pub mod commands;
 pub mod document;
 pub mod registry;
 pub mod text_edit;
+#[cfg(feature = "ui")]
 pub mod ui;
 
+#[cfg(feature = "ui")]
 pub use commands::{ApplyUsdOp, UsdCommandsPlugin, USD_DOCUMENT_KIND};
 pub use document::{LayerId, UsdChange, UsdDocument, UsdOp};
 pub use registry::UsdDocumentRegistry;
@@ -52,7 +58,12 @@ impl Plugin for UsdPlugins {
             lunco_usd_bevy::UsdBevyPlugin,
             UsdAvianPlugin,
             UsdSimPlugin,
-            UsdCommandsPlugin,
         ));
+        // Document/file commands (OpenFile/NewDocument/SaveDocument + the
+        // viewport-placeholder/twin-doc observers) pull the egui workbench —
+        // UI only. The server triggers `LoadScene` directly (handled by
+        // UsdSimPlugin), so it doesn't need these.
+        #[cfg(feature = "ui")]
+        app.add_plugins(UsdCommandsPlugin);
     }
 }

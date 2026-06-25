@@ -94,6 +94,15 @@ pub enum ModelicaCommand {
         session_id: u64,
         model_name: String,
         source: String,
+        /// Stable session URI for the primary document (the document's
+        /// canonical identity from `DocumentOrigin::session_uri` — a file
+        /// path, bundled filename, or `Untitled-<id>`). The worker seats
+        /// `source` under THIS key, so the interactive Run, Fast Run,
+        /// Step, and parameter-update paths all key the same document
+        /// identically and rumoca's merge pass never sees it registered
+        /// under two filenames (the duplicate-class bug). NOT a class
+        /// name: a file may declare several top-level classes.
+        doc_uri: String,
         /// Sources from other open Modelica documents, as
         /// `(filename, source)` pairs. Loaded into the rumoca
         /// session before the primary `source` so cross-doc class
@@ -273,6 +282,24 @@ impl Default for ModelicaResult {
     }
 }
 
+impl ModelicaResult {
+    /// Overlay the `experiment(...)` annotation defaults lifted from a
+    /// compile result onto this message. Single source of the
+    /// `DaeCompilationResult` → `experiment_*` field mapping, which was
+    /// copy-pasted at both worker compile sites (native + inline-worker).
+    fn with_experiment(
+        mut self,
+        comp_res: &rumoca_compile::compile::DaeCompilationResult,
+    ) -> Self {
+        self.experiment_start_time = comp_res.experiment_start_time;
+        self.experiment_stop_time = comp_res.experiment_stop_time;
+        self.experiment_tolerance = comp_res.experiment_tolerance;
+        self.experiment_interval = comp_res.experiment_interval;
+        self.experiment_solver = comp_res.experiment_solver.clone();
+        self
+    }
+}
+
 /// Cached compilation result per entity.
 ///
 /// Stores the DAE and source hash so we can instantly rebuild a SimStepper
@@ -281,6 +308,11 @@ impl Default for ModelicaResult {
 struct CachedModel {
     model_name: String,
     source: Arc<str>,
+    /// The document's stable session URI (see `ModelicaCommand::Compile`'s
+    /// `doc_uri`). Every cached-source recompile — Reset, Step auto-init,
+    /// UpdateParameters — re-seats under this SAME key so the reused rumoca
+    /// session never holds the document under two filenames.
+    doc_uri: String,
 }
 
 /// Collect every readable variable from the stepper — states, inputs, and
@@ -413,7 +445,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
 
                             // Recompile stripped source to get a fresh stepper with input slots
                             let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
-                            match compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
+                            match compiler.compile_str(&cached.model_name, &stripped_source, &cached.doc_uri) {
                                 Ok(comp_res) => {
                                     match build_stepper(&comp_res) {
                                         Ok(mut stepper) => {
@@ -449,7 +481,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     // `e` is rumoca's formatted compile summary string.
                                     r.error = Some(format!("Reset compile error: {e}"));
                                     r.compile_diagnostics =
-                                        compiler.compile_diagnostics(&cached.model_name, "model.mo");
+                                        compiler.compile_diagnostics(&cached.model_name, &cached.doc_uri);
                                     r.is_reset = true;
                                     let _ = tx_inner.send(r);
                                 }
@@ -469,6 +501,15 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         }
                         current_sessions.insert(entity, session_id);
 
+                        // Re-seat under the SAME session URI the model was first
+                        // compiled with — UpdateParameters always follows a Compile,
+                        // so the entity is cached. Falling back to the model name
+                        // only happens for a never-compiled entity (shouldn't occur).
+                        let doc_uri = cached_models
+                            .get(&entity)
+                            .map(|c| c.doc_uri.clone())
+                            .unwrap_or_else(|| model_name.clone());
+
                         let temp_dir = modelica_dir().join(format!("{}_{}", entity.index(), entity.generation()));
                         let _ = std::fs::create_dir_all(&temp_dir);
                         let temp_path = temp_dir.join("model.mo");
@@ -483,7 +524,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         let (stripped_source, input_defaults) = strip_input_defaults(&source);
 
                         let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
-                        match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
+                        match compiler.compile_str(&model_name, &stripped_source, &doc_uri) {
                             Ok(comp_res) => {
                                 match build_stepper(&comp_res) {
                                     Ok(mut stepper) => {
@@ -493,6 +534,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                         cached_models.insert(entity, CachedModel {
                                             model_name: model_name.clone(),
                                             source: Arc::from(source),
+                                            doc_uri: doc_uri.clone(),
                                         });
                                         steppers.insert(entity, (session_id, model_name.clone(), stepper));
                                         let _ = tx_inner.send(ModelicaResult {
@@ -519,13 +561,13 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 let mut r = result_ok(entity, session_id);
                                 r.error = Some(format!("Re-compile Error: {e}"));
                                 r.compile_diagnostics =
-                                    compiler.compile_diagnostics(&model_name, "model.mo");
+                                    compiler.compile_diagnostics(&model_name, &doc_uri);
                                 r.is_parameter_update = true;
                                 let _ = tx_inner.send(r);
                             }
                         }
                     }
-                    ModelicaCommand::Compile { entity, session_id, model_name, source, extra_sources, stream } => {
+                    ModelicaCommand::Compile { entity, session_id, model_name, source, doc_uri, extra_sources, stream } => {
                         current_sessions.insert(entity, session_id);
                         if let Some(stream) = stream {
                             // Register the new lock-free publish target
@@ -566,9 +608,9 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         );
                         let t_compile = web_time::Instant::now();
                         let _compile_outcome = if extra_sources.is_empty() {
-                            compiler.compile_str(&model_name, &stripped_source, "model.mo")
+                            compiler.compile_str(&model_name, &stripped_source, &doc_uri)
                         } else {
-                            compiler.compile_str_multi(&model_name, &stripped_source, "model.mo", &extra_sources)
+                            compiler.compile_str_multi(&model_name, &stripped_source, &doc_uri, &extra_sources)
                         };
                         bevy::log::info!(
                             "[worker] compile_str returned for `{}` in {:.2}s ({})",
@@ -578,15 +620,6 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         );
                         match _compile_outcome {
                             Ok(comp_res) => {
-                                // Capture experiment(...) annotation
-                                // values BEFORE comp_res moves into the
-                                // cache; the Fast Run toolbar reads
-                                // these as bounds defaults.
-                                let exp_t_start = comp_res.experiment_start_time;
-                                let exp_t_end = comp_res.experiment_stop_time;
-                                let exp_tol = comp_res.experiment_tolerance;
-                                let exp_interval = comp_res.experiment_interval;
-                                let exp_solver = comp_res.experiment_solver.clone();
                                 match build_stepper(&comp_res) {
                                     Ok(mut stepper) => {
                                         // Set input defaults via set_input so they're runtime-changeable
@@ -601,6 +634,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                         cached_models.insert(entity, CachedModel {
                                             model_name: model_name.clone(),
                                             source: Arc::from(source),
+                                            doc_uri: doc_uri.clone(),
                                         });
                                         steppers.insert(entity, (session_id, model_name.clone(), stepper));
                                         let _ = tx_inner.send(ModelicaResult {
@@ -610,15 +644,11 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             log_message: Some(format!("Model '{}' compiled.", model_name)),
                                             is_new_model: true, is_parameter_update: false, is_reset: false,
                                             detected_input_names: input_names,
-                                            experiment_start_time: exp_t_start,
-                                            experiment_stop_time: exp_t_end,
-                                            experiment_tolerance: exp_tol,
-                                            experiment_interval: exp_interval,
-                                            experiment_solver: exp_solver,
                                             compiled_model_name: Some(model_name.clone()),
                                             loaded_source_root_id: None,
                                             compile_diagnostics: Vec::new(),
-                                        });
+                                            ..Default::default()
+                                        }.with_experiment(&comp_res));
                                     }
                                     Err(e) => {
                                         let mut r = result_ok(entity, session_id);
@@ -649,7 +679,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 // Diagnostics panel can make compile errors
                                 // click-to-source (rumoca StrictCompileReport).
                                 r.compile_diagnostics =
-                                    compiler.compile_diagnostics(&model_name, "model.mo");
+                                    compiler.compile_diagnostics(&model_name, &doc_uri);
                                 r.is_new_model = true;
                                 let _ = tx_inner.send(r);
                             }
@@ -672,7 +702,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 if cached.model_name == model_name {
                                     let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
                                     let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
-                                    if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
+                                    if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, &cached.doc_uri) {
                                         if let Ok(mut s) = build_stepper(&comp_res) {
                                             apply_input_defaults_validated(&mut s, &input_defaults, "Compile");
                                             // Then apply any user-provided input overrides
@@ -695,6 +725,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             cached_models.insert(entity, CachedModel {
                                                 model_name: model_name.clone(),
                                                 source: Arc::from(std::fs::read_to_string(&model_path).unwrap_or_default()),
+                                                doc_uri: model_path.to_string_lossy().into_owned(),
                                             });
 
                                             steppers.insert(entity, (session_id, model_name.clone(), s));
@@ -1043,7 +1074,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                     if cached.model_name == model_name {
                         let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
                         let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
-                        if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
+                        if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, &cached.doc_uri) {
                             if let Ok(mut s) = build_stepper(&comp_res) {
                                 apply_input_defaults_validated(&mut s, &input_defaults, "Compile");
                                 for (name, val) in &inputs { let _ = s.set_input(name, *val); }
@@ -1110,7 +1141,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 });
             }
         }
-        ModelicaCommand::Compile { entity, session_id, model_name, source, extra_sources, stream: _stream } => {
+        ModelicaCommand::Compile { entity, session_id, model_name, source, doc_uri, extra_sources, stream: _stream } => {
             // NB: the wasm inline worker runs on the Bevy main thread
             // today and does not publish to a lock-free SimStream.
             // Phase A lands on desktop first; TODO(arch-phase-b) wire
@@ -1121,17 +1152,12 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
 
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             let compile_outcome = if extra_sources.is_empty() {
-                compiler.compile_str(&model_name, &stripped_source, "model.mo")
+                compiler.compile_str(&model_name, &stripped_source, &doc_uri)
             } else {
-                compiler.compile_str_multi(&model_name, &stripped_source, "model.mo", &extra_sources)
+                compiler.compile_str_multi(&model_name, &stripped_source, &doc_uri, &extra_sources)
             };
             match compile_outcome {
                 Ok(comp_res) => {
-                    let exp_t_start = comp_res.experiment_start_time;
-                    let exp_t_end = comp_res.experiment_stop_time;
-                    let exp_tol = comp_res.experiment_tolerance;
-                    let exp_interval = comp_res.experiment_interval;
-                    let exp_solver = comp_res.experiment_solver.clone();
                     match build_stepper(&comp_res) {
                         Ok(mut stepper) => {
                             apply_input_defaults_validated(&mut stepper, &input_defaults, "Compile");
@@ -1139,6 +1165,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                             let symbols = collect_stepper_observables(&stepper);
                             w.cached_models.insert(entity, CachedModel {
                                 model_name: model_name.clone(), source: Arc::from(source.clone()),
+                                doc_uri: doc_uri.clone(),
                             });
 
                             w.steppers.insert(entity, (session_id, model_name.clone(), stepper));
@@ -1149,15 +1176,11 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                                 log_message: Some("Compiled successfully.".to_string()),
                                 is_new_model: true, is_parameter_update: false, is_reset: false,
                                 detected_input_names: input_names,
-                                experiment_start_time: exp_t_start,
-                                experiment_stop_time: exp_t_end,
-                                experiment_tolerance: exp_tol,
-                                experiment_interval: exp_interval,
-                                experiment_solver: exp_solver,
                                 compiled_model_name: Some(model_name.clone()),
                                 loaded_source_root_id: None,
                                 compile_diagnostics: Vec::new(),
-                            });
+                                ..Default::default()
+                            }.with_experiment(&comp_res));
                         }
                         Err(e) => {
                             send(ModelicaResult {
@@ -1175,7 +1198,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 Err(e) => {
                     // Structured, located diagnostics so the Diagnostics
                     // panel can make compile errors click-to-source.
-                    let diags = compiler.compile_diagnostics(&model_name, "model.mo");
+                    let diags = compiler.compile_diagnostics(&model_name, &doc_uri);
                     send(ModelicaResult {
                         entity, session_id, new_time: 0.0,
                         outputs: Vec::new(),
@@ -1194,7 +1217,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             if let Some(cached) = w.cached_models.get(&entity) {
                 let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
                 let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
-                match compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
+                match compiler.compile_str(&cached.model_name, &stripped_source, &cached.doc_uri) {
                     Ok(comp_res) => {
                         if let Ok(mut stepper) = build_stepper(&comp_res) {
                             apply_input_defaults_validated(&mut stepper, &input_defaults, "Compile");
@@ -1229,7 +1252,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                                 detected_symbols: Vec::new(), error: Some(format!("Reset compile error: {e}")),
                                 log_message: None, is_new_model: false, is_parameter_update: false, is_reset: true,
                                 detected_input_names: Vec::new(),
-                                compile_diagnostics: compiler.compile_diagnostics(&cached.model_name, "model.mo"),
+                                compile_diagnostics: compiler.compile_diagnostics(&cached.model_name, &cached.doc_uri),
                                 ..Default::default()
                                 });
                                 }
@@ -1256,9 +1279,15 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             w.current_sessions.insert(entity, session_id);
             let (stripped_source, input_defaults) = strip_input_defaults(&source);
 
+            // Re-seat under the model's original session URI (see the threaded
+            // handler) so the reused session never holds it under two filenames.
+            let doc_uri = w.cached_models
+                .get(&entity)
+                .map(|c| c.doc_uri.clone())
+                .unwrap_or_else(|| model_name.clone());
 
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
-            match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
+            match compiler.compile_str(&model_name, &stripped_source, &doc_uri) {
                 Ok(comp_res) => {
                     match build_stepper(&comp_res) {
                         Ok(mut stepper) => {
@@ -1267,6 +1296,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                             let symbols = collect_stepper_observables(&stepper);
                             w.cached_models.insert(entity, CachedModel {
                                 model_name: model_name.clone(), source: Arc::from(source.clone()),
+                                doc_uri: doc_uri.clone(),
                             });
 
                             w.steppers.insert(entity, (session_id, model_name.clone(), stepper));
@@ -1300,7 +1330,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                         detected_symbols: Vec::new(), error: Some(format!("Re-compile Error: {e}")),
                         log_message: None, is_new_model: false, is_parameter_update: true, is_reset: false,
                         detected_input_names: Vec::new(),
-                        compile_diagnostics: compiler.compile_diagnostics(&model_name, "model.mo"),
+                        compile_diagnostics: compiler.compile_diagnostics(&model_name, &doc_uri),
                         ..Default::default()
                     });
                 }
@@ -1366,7 +1396,7 @@ pub struct ModelicaModel {
     /// All other observable variables (Real soc, etc)
     pub variables: HashMap<String, f64>,
     /// Canonical id of the Modelica source document backing this entity,
-    /// looked up in [`crate::ui::state::ModelicaDocumentRegistry`]. `DocumentId::default()`
+    /// looked up in [`crate::state::ModelicaDocumentRegistry`]. `DocumentId::default()`
     /// (`0`) means "no document assigned yet"; systems should treat it as
     /// a miss. Not reflected — ids are session-local allocations, not
     /// scene-serializable.
@@ -1425,7 +1455,9 @@ pub fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
     time: Res<Time<Fixed>>,
     mut q_models: Query<(Entity, &mut ModelicaModel)>,
-    mut commands: Commands,
+    // Auto-compile request goes out as a core event; the UI relays it to the
+    // `CompileModel` command. Core no longer references the UI command.
+    mut compile_requests: MessageWriter<crate::CompileRequested>,
 ) {
     let dt = time.delta_secs_f64();
 
@@ -1447,7 +1479,7 @@ pub fn spawn_modelica_requests(
         if !model.is_compiled {
             let doc = model.document;
             if doc != lunco_doc::DocumentId::default() {
-                commands.trigger(crate::ui::commands::CompileModel {
+                compile_requests.write(crate::CompileRequested {
                     doc,
                     class: if model.model_name.is_empty() {
                         None
@@ -1493,38 +1525,28 @@ pub fn handle_modelica_responses(
     // `workbench_state` was the home of `compilation_error` (B.3
     // phase 4, retired). Param kept in the signature in case other
     // worker paths need it; prefix `_` silences the unused warning.
-    mut _workbench_state: ResMut<crate::ui::WorkbenchState>,
-    // Headless callers (e.g. cosim tests) run this system without the
-    // UI plugin, so the console + compile-state resources may be
-    // absent. Make both optional so the core stepping path survives
-    // those setups without forcing them to pull in the UI module.
-    compile_states: Option<ResMut<crate::ui::CompileStates>>,
-    console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
-    // Optional — a headless cosim harness may skip `LuncoVizPlugin`
-    // entirely. When present, every outgoing sample is published into
-    // the registry, and the default Modelica plot's bindings are
-    // seeded on first compile of each entity.
-    mut signals: Option<ResMut<lunco_viz::SignalRegistry>>,
-    mut viz_registry: Option<ResMut<lunco_viz::VisualizationRegistry>>,
-    // Optional so headless cosim tests (no UI plugin) still link.
-    // When present, signal-meta description tooltips read from the
-    // doc index, keeping AST as the single source of truth.
-    doc_registry: Option<Res<crate::ui::ModelicaDocumentRegistry>>,
+    mut _workbench_state: ResMut<crate::state::WorkbenchState>,
+    // Core compile-state (UI-agnostic). Optional so headless cosim tests run
+    // without it.
+    compile_states: Option<ResMut<crate::state::CompileStates>>,
+    // Lifecycle messages leave as core events; the reactive UI console observer
+    // projects them. Core no longer references the console panel.
+    mut notices: MessageWriter<crate::ModelicaNotice>,
+    // Live sim samples leave the core handler through this UI-agnostic queue;
+    // the reactive UI viz observer (`ui::core_observers::drain_sim_samples_to_viz`)
+    // drains it into `lunco_viz`. Core no longer references any viz/plot types.
+    mut sample_stream: ResMut<crate::SimSampleStream>,
     runner_res: Option<Res<crate::ModelicaRunnerResource>>,
     source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
-    status_bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
 ) {
     let mut compile_states = compile_states;
-    let mut console = console;
     let mut source_roots = source_roots;
-    let mut status_bus = status_bus;
     while let Ok(result) = channels.rx.try_recv() {
         // Source-root load ack: route to the registry and short-
         // circuit before any of the sim-result handling below
         // (which keys on `result.entity` — LoadSourceRoot uses
         // `Entity::PLACEHOLDER`).
         if let Some(root_id) = result.loaded_source_root_id.as_ref() {
-            let is_failure = result.error.is_some();
             if let Some(roots) = source_roots.as_deref_mut() {
                 if let Some(entry) = roots.roots.get_mut(root_id) {
                     if let Some(err) = result.error.as_ref() {
@@ -1544,26 +1566,9 @@ pub fn handle_modelica_responses(
                     }
                 }
             }
-            if let Some(bus) = status_bus.as_deref_mut() {
-                bus.clear_progress(crate::source_roots::STATUS_BUS_SOURCE);
-                if is_failure {
-                    bus.push(
-                        crate::source_roots::STATUS_BUS_SOURCE,
-                        lunco_workbench::status_bus::StatusLevel::Warn,
-                        format!(
-                            "Library `{}` load failed: {}",
-                            root_id,
-                            result.error.as_deref().unwrap_or(""),
-                        ),
-                    );
-                } else {
-                    bus.push(
-                        crate::source_roots::STATUS_BUS_SOURCE,
-                        lunco_workbench::status_bus::StatusLevel::Info,
-                        format!("Library `{}` ready", root_id),
-                    );
-                }
-            }
+            // Status-bar projection of this load result is handled by the
+            // reactive UI observer of `SourceRootRegistry` — core only sets the
+            // registry state above.
             continue;
         }
 
@@ -1603,9 +1608,10 @@ pub fn handle_modelica_responses(
         if result.entity == Entity::PLACEHOLDER {
             let msg = "Simulation worker crashed and restarted.";
             warn!("{msg}");
-            if let Some(c) = console.as_mut() {
-                c.error(msg);
-            }
+            notices.write(crate::ModelicaNotice {
+                level: crate::NoticeLevel::Error,
+                text: msg.to_string(),
+            });
             continue;
         }
 
@@ -1630,9 +1636,10 @@ pub fn handle_modelica_responses(
                 // update). Skip the per-Step logs so the console doesn't
                 // flood at 60 Hz.
                 if result.is_new_model || result.is_reset || result.is_parameter_update {
-                    if let Some(c) = console.as_mut() {
-                        c.info(format!("[{}] {msg}", model.model_name));
-                    }
+                    notices.write(crate::ModelicaNotice {
+                        level: crate::NoticeLevel::Info,
+                        text: format!("[{}] {msg}", model.model_name),
+                    });
                 }
             }
 
@@ -1643,9 +1650,9 @@ pub fn handle_modelica_responses(
             let is_compile_result = result.is_new_model || result.is_parameter_update;
             if is_compile_result && !model.document.is_unassigned() {
                 let new_state = if result.error.is_some() {
-                    crate::ui::CompileState::Error
+                    crate::state::CompileState::Error
                 } else {
-                    crate::ui::CompileState::Ready
+                    crate::state::CompileState::Ready
                 };
                 if let Some(cs) = compile_states.as_mut() {
                     let elapsed = cs.mark_finished(model.document, new_state);
@@ -1657,29 +1664,31 @@ pub fn handle_modelica_responses(
                             format!("{:.0} ms", ms)
                         };
                         match new_state {
-                            crate::ui::CompileState::Error => {
+                            crate::state::CompileState::Error => {
                                 warn!(
                                     "[Modelica] Compile finished with error for `{}` in {}",
                                     model.model_name, human
                                 );
-                                if let Some(c) = console.as_mut() {
-                                    c.error(format!(
+                                notices.write(crate::ModelicaNotice {
+                                    level: crate::NoticeLevel::Error,
+                                    text: format!(
                                         "⏹ Compile FAILED: '{}' in {}",
                                         model.model_name, human
-                                    ));
-                                }
+                                    ),
+                                });
                             }
-                            crate::ui::CompileState::Ready => {
+                            crate::state::CompileState::Ready => {
                                 info!(
                                     "[Modelica] Compile finished for `{}` in {}",
                                     model.model_name, human
                                 );
-                                if let Some(c) = console.as_mut() {
-                                    c.info(format!(
+                                notices.write(crate::ModelicaNotice {
+                                    level: crate::NoticeLevel::Info,
+                                    text: format!(
                                         "✓ Compile finished: '{}' in {}",
                                         model.model_name, human
-                                    ));
-                                }
+                                    ),
+                                });
                             }
                             _ => {}
                         }
@@ -1718,9 +1727,10 @@ pub fn handle_modelica_responses(
                 } else {
                     "Solver error"
                 };
-                if let Some(c) = console.as_mut() {
-                    c.error(format!("[{}] {prefix}: {err}", model.model_name));
-                }
+                notices.write(crate::ModelicaNotice {
+                    level: crate::NoticeLevel::Error,
+                    text: format!("[{}] {prefix}: {err}", model.model_name),
+                });
                 model.paused = true;
                 // A failed Compile/Step must not silently auto-play on a
                 // later, unrelated successful compile: clear the resume
@@ -1797,93 +1807,28 @@ pub fn handle_modelica_responses(
             model.last_step_time = result.new_time;
             let time_val = result.new_time;
 
-            // Publish every outgoing scalar sample into the global
-            // `SignalRegistry`. The Graphs panel and any future
-            // visualization (Avian / USD / scripts) read uniformly
-            // from here — there is no longer a Modelica-specific
-            // shadow history.
-            if let Some(sigs) = signals.as_deref_mut() {
-                // Only a fresh compile (new DAE shape, possibly new
-                // signal set) clears the registry's history. Reset and
-                // parameter-update both restart sim-time at 0 but the
-                // signal *shape* is unchanged, and users want to keep
-                // seeing the prior run's curves while they iterate —
-                // wiping on every param tweak made the Graphs tab look
-                // permanently empty after any Telemetry edit.
-                if result.is_new_model {
-                    for (name, _) in result.detected_symbols.iter().chain(result.outputs.iter()) {
-                        sigs.clear_history(&lunco_viz::SignalRef::new(
-                            result.entity,
-                            name.clone(),
-                        ));
-                    }
-                }
-                for (name, val) in result.outputs.iter().chain(result.detected_symbols.iter()) {
-                    sigs.push_scalar(
-                        lunco_viz::SignalRef::new(result.entity, name.clone()),
-                        time_val,
-                        *val,
-                    );
-                }
-                // Publish / refresh description metadata on compile-
-                // type results so the viz inspector can show tooltips.
-                // Descriptions come from the document index (canonical
-                // AST projection), looked up by leaf name — same path
-                // Telemetry uses.
-                if result.is_new_model || result.is_parameter_update {
-                    let index_ref = doc_registry
-                        .as_deref()
-                        .and_then(|r| r.host(model.document))
-                        .map(|h| h.document().index());
-                    if let Some(index) = index_ref {
-                        for (name, _) in result
-                            .detected_symbols
-                            .iter()
-                            .chain(result.outputs.iter())
-                        {
-                            let Some(entry) = index.find_component_by_leaf(name) else {
-                                continue;
-                            };
-                            if entry.description.is_empty() {
-                                continue;
-                            }
-                            sigs.update_meta(
-                                lunco_viz::SignalRef::new(result.entity, name.clone()),
-                                lunco_viz::SignalMeta {
-                                    description: Some(entry.description.clone()),
-                                    unit: None,
-                                    provenance: Some("modelica".to_string()),
-                                },
-                            );
-                        }
-                    }
-                }
-            }
-
-            // Auto-seed the default Modelica plot with every observable
-            // from a freshly-compiled model. Preserves the pre-viz UX
-            // where compiling immediately filled the graph with all
-            // the model's observables. Does nothing when the user has
-            // already curated the bindings.
-            if result.is_new_model {
-                if let Some(reg) = viz_registry.as_deref_mut() {
-                    // Clear stale bindings from any prior model/entity so
-                    // switching models doesn't leave old signals plotted.
-                    // We deliberately do *not* auto-bind every detected
-                    // observable any more — a freshly compiled model
-                    // starts with an *empty* default plot. Users add
-                    // signals via the Telemetry panel checkboxes.
-                    // Avoids the noisy "12 lines on launch" experience
-                    // that prompted users to manually un-tick
-                    // everything before they could see what they
-                    // cared about.
-                    if let Some(cfg) = reg.get_mut(crate::ui::viz::DEFAULT_MODELICA_GRAPH) {
-                        cfg.inputs.clear();
-                    }
-                    let _ = result.entity;
-                    let _ = result.detected_symbols.len();
-                    let _ = model.parameters.len();
-                }
+            // Emit this step's observable samples to the reactive UI layer.
+            // The core handler no longer knows about plots / `lunco_viz`: it
+            // just appends UI-agnostic samples that `ui::core_observers::
+            // drain_sim_samples_to_viz` projects into the SignalRegistry (clear
+            // on a fresh compile, push every scalar, attach doc-index meta, and
+            // reset the default graph). Bounded at the producer so a headless
+            // build (no drainer) can't grow the queue without limit.
+            if sample_stream.batches.len() < 16_384 {
+                let samples: Vec<(String, f64)> = result
+                    .outputs
+                    .iter()
+                    .chain(result.detected_symbols.iter())
+                    .map(|(n, v)| (n.clone(), *v))
+                    .collect();
+                sample_stream.batches.push(crate::SimSampleBatch {
+                    entity: result.entity,
+                    document: model.document,
+                    time: time_val,
+                    samples,
+                    is_new_model: result.is_new_model,
+                    is_parameter_update: result.is_parameter_update,
+                });
             }
         }
     }

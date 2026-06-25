@@ -74,7 +74,7 @@ impl Panel for InspectorPanel {
         // would reject it. The defensive guard before firing
         // `ApplyModelicaOps` is a belt-and-braces gesture.
         let read_only = {
-            let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+            let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
             registry
                 .host(doc_id)
                 .map(|h| h.document().is_read_only())
@@ -135,8 +135,8 @@ impl Panel for InspectorPanel {
         // default simulation class (which prefers `experiment()` 
         // annotated models).
         let target_class =
-            crate::ui::panels::model_view::drilled_class_for_doc(world, doc_id)
-                .or_else(|| crate::ui::panels::model_view::context::default_simulation_class(world, doc_id));
+            crate::sim_default::drilled_class_for_doc(world, doc_id)
+                .or_else(|| crate::sim_default::default_simulation_class(world, doc_id));
 
         // Resolve the target class + component via the per-document
         // [`crate::index::ModelicaIndex`]. The Index is patched
@@ -144,7 +144,7 @@ impl Panel for InspectorPanel {
         // `ModelicaDocument::apply_patch`) so this read sees fresh
         // state even during the 2.5 s AST-reparse debounce.
         let (component_info, class, param_desc) = {
-            let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+            let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
             let Some(host) = registry.host(doc_id) else {
                 placeholder(ui, "Document not in registry.");
                 return;
@@ -468,11 +468,11 @@ fn apply_plot_title(
             }
         }
     }
-    let class = crate::ui::panels::model_view::drilled_class_for_doc(world, doc_id)
+    let class = crate::sim_default::drilled_class_for_doc(world, doc_id)
         .or_else(|| {
             world
-                .get_resource::<crate::ui::WorkbenchState>()
-                .and_then(|_s| crate::ui::state::detected_name_for(world, doc_id))
+                .get_resource::<crate::state::WorkbenchState>()
+                .and_then(|_s| crate::state::detected_name_for(world, doc_id))
         })
         .unwrap_or_default();
     if class.is_empty() {
@@ -549,11 +549,11 @@ fn apply_plot_binding(
     //    the diagram annotation tracks the user's choice. Empty
     //    `signal_path` is "unbind" — only emit the Remove. Empty
     //    `prev_signal` is "first bind" — only emit the Add.
-    let class = crate::ui::panels::model_view::drilled_class_for_doc(world, doc_id)
+    let class = crate::sim_default::drilled_class_for_doc(world, doc_id)
         .or_else(|| {
             world
-                .get_resource::<crate::ui::WorkbenchState>()
-                .and_then(|_s| crate::ui::state::detected_name_for(world, doc_id))
+                .get_resource::<crate::state::WorkbenchState>()
+                .and_then(|_s| crate::state::detected_name_for(world, doc_id))
         })
         .unwrap_or_default();
     if class.is_empty() {
@@ -675,11 +675,11 @@ fn apply_diagram_text_string(
             }
         }
     }
-    let class = crate::ui::panels::model_view::drilled_class_for_doc(world, doc_id)
+    let class = crate::sim_default::drilled_class_for_doc(world, doc_id)
         .or_else(|| {
             world
-                .get_resource::<crate::ui::WorkbenchState>()
-                .and_then(|_s| crate::ui::state::detected_name_for(world, doc_id))
+                .get_resource::<crate::state::WorkbenchState>()
+                .and_then(|_s| crate::state::detected_name_for(world, doc_id))
         })
         .unwrap_or_default();
     if class.is_empty() {

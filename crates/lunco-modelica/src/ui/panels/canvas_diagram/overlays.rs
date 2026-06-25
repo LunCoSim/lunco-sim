@@ -9,11 +9,11 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_theme::ColorAlpha;
 
-use crate::ui::state::ModelicaDocumentRegistry;
+use crate::state::ModelicaDocumentRegistry;
 use crate::ui::theme::ModelicaThemeExt;
 
 use super::active_doc_from_world;
-// `crate::ui::panels::model_view::drilled_class_for_doc`.
+// `crate::sim_default::drilled_class_for_doc`.
 
 // `render_drill_in_loading_overlay` and `render_projecting_overlay`
 // retired — replaced by
@@ -116,10 +116,10 @@ pub(super) fn render_empty_diagram_overlay(
     world: &mut World,
 ) {
     let active = world
-        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
     let Some(doc) = active else { return };
-    let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+    let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
     let Some(host) = registry.host(doc) else { return };
     let document = host.document();
     let theme = world
@@ -137,7 +137,7 @@ pub(super) fn render_empty_diagram_overlay(
     let counts = {
         let active_doc = active_doc_from_world(world);
         let drilled = active_doc.and_then(|doc| {
-            crate::ui::panels::model_view::drilled_class_for_doc(world, doc)
+            crate::sim_default::drilled_class_for_doc(world, doc)
         });
         let registry = world.resource::<ModelicaDocumentRegistry>();
         active_doc
@@ -166,15 +166,28 @@ pub(super) fn render_empty_diagram_overlay(
     let (icon, class_type, description, param_names, input_names, output_names) =
         empty_overlay_class_info(world, active_doc, &class_name);
 
+    // Clamp the card to the visible canvas so it never overflows the
+    // clip rect and gets its edges cut off — the canvas viewport is
+    // often narrower than the card's natural 440px once the library
+    // tree and inspector panels are docked.
+    let card_size = egui::vec2(
+        440.0_f32.min(canvas_rect.width() - 24.0).max(220.0),
+        360.0_f32.min(canvas_rect.height() - 24.0).max(180.0),
+    );
     crate::ui::panels::placeholder::render_centered_card(
         ui,
         canvas_rect,
-        egui::vec2(440.0, 360.0),
+        card_size,
         &theme,
         |child| {
+            // Everything in the card wraps to the card width instead of
+            // clipping at the edge — the long description / hint lines
+            // used to run past the rounded border and get cut off.
+            child.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+
             // ── Hero strip ────────────────────────────────────────
             // Either the authored icon or a stylised type badge.
-            let hero_size = egui::vec2(120.0, 80.0);
+            let hero_size = egui::vec2(120.0, 72.0);
             let (_, hero_rect) = child.allocate_space(hero_size);
             if let Some(icon) = &icon {
                 crate::icon_paint::paint_graphics(
@@ -191,13 +204,13 @@ pub(super) fn render_empty_diagram_overlay(
                     &theme,
                 );
             }
-            child.add_space(8.0);
+            child.add_space(10.0);
 
             // ── Class name + type label ───────────────────────────
             child.label(
                 egui::RichText::new(&class_name)
                     .strong()
-                    .size(15.0)
+                    .size(16.0)
                     .color(theme.text_heading()),
             );
             if let Some(t) = class_type {
@@ -209,37 +222,52 @@ pub(super) fn render_empty_diagram_overlay(
                 );
             }
             if let Some(desc) = &description {
-                child.add_space(4.0);
+                child.add_space(6.0);
                 child.label(
                     egui::RichText::new(desc)
-                        .size(11.0)
+                        .size(11.5)
                         .color(theme.tokens.text),
                 );
             }
-            child.add_space(8.0);
+            child.add_space(10.0);
             child.separator();
-            child.add_space(6.0);
+            child.add_space(8.0);
 
-            // ── Named symbol bands ───────────────────────────────
-            paint_symbol_band(child, "Parameters", &param_names, counts.params, &theme);
-            paint_symbol_band(child, "Inputs", &input_names, counts.inputs, &theme);
-            paint_symbol_band(child, "Outputs", &output_names, counts.outputs, &theme);
+            // ── Named symbol bands + counts ───────────────────────
+            // Left-aligned in a full-width block so the rows read like
+            // a data sheet rather than a ragged centred stack.
+            child.scope(|ui| {
+                ui.set_width(ui.available_width());
+                ui.with_layout(
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                        paint_symbol_band(ui, "Parameters", &param_names, counts.params, &theme);
+                        paint_symbol_band(ui, "Inputs", &input_names, counts.inputs, &theme);
+                        paint_symbol_band(ui, "Outputs", &output_names, counts.outputs, &theme);
+                        if counts.equations > 0 || counts.connects > 0 {
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} equations · {} connect equations",
+                                    counts.equations, counts.connects,
+                                ))
+                                .small()
+                                .color(theme.text_muted()),
+                            );
+                        }
+                    },
+                );
+            });
 
-            child.add_space(6.0);
+            child.add_space(10.0);
             child.label(
-                egui::RichText::new(format!(
-                    "{} equations · {} connect equations",
-                    counts.equations, counts.connects,
-                ))
-                .small()
+                egui::RichText::new(
+                    "This class has no diagram. Switch to the Text tab to read or edit its source.",
+                )
+                .italics()
+                .size(10.5)
                 .color(theme.text_muted()),
-            );
-            child.add_space(4.0);
-            child.label(
-                egui::RichText::new("→ Switch to the Text tab to read / edit the source.")
-                    .italics()
-                    .size(10.0)
-                    .color(theme.text_muted()),
             );
         },
     );
@@ -384,22 +412,23 @@ pub(super) fn paint_symbol_band(
     if total == 0 && names.is_empty() {
         return;
     }
-    ui.horizontal(|ui| {
+    // Wrap so a long parameter list flows onto the next line within the
+    // card instead of overflowing the right edge.
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
         ui.label(
             egui::RichText::new(format!("{label}:"))
                 .small()
                 .color(theme.text_muted()),
         );
         let shown = names.iter().take(6).cloned().collect::<Vec<_>>().join(", ");
-        let suffix = if total > shown.len() && total > names.len().min(6) && names.len() > 6 {
-            format!(" + {} more", total - 6)
-        } else {
-            String::new()
-        };
         let display = if shown.is_empty() {
+            // No resolved names (e.g. inherited-only) — show the count.
             format!("({total})")
+        } else if total > names.len().min(6) {
+            format!("{shown} + {} more", total - names.len().min(6))
         } else {
-            format!("{shown}{suffix}")
+            shown
         };
         ui.monospace(
             egui::RichText::new(display)

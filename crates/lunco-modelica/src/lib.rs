@@ -106,6 +106,7 @@ pub mod annotations;
 // a model-semantics one. Re-exported here so the previous flat path
 // (`lunco_modelica::icon_paint::*`) keeps compiling for any external
 // consumer that hardcoded it.
+#[cfg(feature = "ui")]
 pub use ui::icon_paint;
 
 /// Single 2×3 affine transform per node from Modelica icon-local
@@ -118,6 +119,29 @@ pub mod icon_transform;
 /// Visual diagram editor — drag-and-drop component composition.
 pub mod visual_diagram;
 
+// ── Egui-free core modules lifted out of the (egui-gated) `ui` module so the
+//    headless / server build (`--no-default-features`) compiles. The egui
+//    rendering for these lives under `ui::panels::*`. ────────────────────────
+/// Workbench-side document registry + shared UI-agnostic state (was `ui::state`).
+pub mod state;
+/// Modelica tab registry data types (was `ui::panels::model_view::types`).
+pub mod model_tabs_types;
+/// `ModelTabs` registry (was `ui::panels::model_view::tabs`).
+pub mod model_tabs;
+/// Core data for API-driven canvas focus/connection pulses (UI drains them).
+pub mod canvas_feedback;
+/// Documentation annotation extractor (was `ui::panels::model_view::parsing`).
+pub mod doc_extract;
+/// Default-simulation-class resolution + run-target overrides
+/// (was `ui::panels::model_view::context::default_simulation_class` & friends).
+pub mod sim_default;
+/// Package-tree backend: egui-free data + scanning logic for the library /
+/// package browser (was `ui::panels::package_browser::{types,scanner,cache,library_tree}`).
+pub mod package_tree;
+/// Egui-free Modelica document ops application
+/// (was `ui::panels::canvas_diagram::ops::apply_one_op_as` & helpers).
+pub mod doc_ops;
+
 /// Per-document UI projection — what panels read instead of the AST.
 /// Skeleton; population happens in the upcoming AST-canonical refactor.
 /// See `docs/architecture/REFACTOR_PLAN.md`.
@@ -127,6 +151,10 @@ pub mod index;
 /// run, what bounds to run it with). No `World`/UI deps — the `ui/` layer
 /// gathers inputs and calls down. See [`sim_target`].
 pub mod sim_target;
+
+/// Core (UI-free) Modelica command helpers — `SetModelInput` application + sim-
+/// bounds resolution — shared by the egui workbench and the headless API server.
+pub mod model_commands;
 
 /// Per-Twin Modelica domain engine: long-lived `rumoca_compile::Session`
 /// + per-doc URI mapping. Provides cross-file inheritance-merged queries.
@@ -201,6 +229,19 @@ pub struct ModelicaCompiler {
     /// this and never pays the MSL cost. Latches `true` after one install
     /// so subsequent compiles skip the gate entirely.
     msl_installed: bool,
+    /// URIs of the user documents currently seated as overlays in this
+    /// reused session (NOT the MSL/library source roots). Every compile is
+    /// HERMETIC with respect to prior compiles: before seating its own
+    /// document set, a compile evicts any previously-seated user doc that is
+    /// not part of *this* compile. Without this, a prior compile's primary
+    /// overlay stays resident, and compiling a SECOND document that defines
+    /// the same package (e.g. the same model opened in two tabs / restored +
+    /// shared) leaves the package registered under two URIs → rumoca's merge
+    /// pass fails with `Duplicate class '…' found in '…' with non-identical
+    /// definition`. The per-doc `session_uri` keying alone can't prevent this
+    /// because the two docs legitimately have different URIs; the session
+    /// itself must hold only the active compile's user docs.
+    seated_user_uris: std::collections::HashSet<String>,
 }
 
 impl ModelicaCompiler {
@@ -230,6 +271,7 @@ impl ModelicaCompiler {
         let mut compiler = Self {
             session: Session::new(SessionConfig::default()),
             msl_installed: false,
+            seated_user_uris: std::collections::HashSet::new(),
         };
         // Escape hatch: `LUNCO_MODELICA_PRELOAD_MSL=1` forces the old eager
         // behaviour, e.g. to pre-pay the install before a latency-sensitive
@@ -471,8 +513,31 @@ impl ModelicaCompiler {
         source: &str,
         filename: &str,
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        let mut keep = std::collections::HashSet::new();
+        keep.insert(filename.to_string());
+        self.evict_user_docs_except(&keep);
         self.session.update_document(filename, source);
+        self.seated_user_uris = keep;
         self.compile_loaded(model_name)
+    }
+
+    /// Remove every previously-seated user-document overlay whose URI is not
+    /// in `keep`, so the reused session holds ONLY the active compile's user
+    /// docs (plus the immutable MSL/library source roots). This is what makes
+    /// each compile hermetic against prior compiles — see
+    /// [`Self::seated_user_uris`]. MSL roots are installed via
+    /// `replace_parsed_source_set` (not tracked here), so they're untouched.
+    fn evict_user_docs_except(&mut self, keep: &std::collections::HashSet<String>) {
+        let stale: Vec<String> = self
+            .seated_user_uris
+            .iter()
+            .filter(|uri| !keep.contains(*uri))
+            .cloned()
+            .collect();
+        for uri in stale {
+            self.session.remove_document(&uri);
+            self.seated_user_uris.remove(&uri);
+        }
     }
 
     /// Recompute **structured, located** diagnostics for a model that
@@ -511,6 +576,17 @@ impl ModelicaCompiler {
     /// sibling untitled doc that holds the package). Each extra is
     /// loaded via the same `update_document` path; rumoca dedups by
     /// filename so re-loading the same file is harmless.
+    ///
+    /// The active compile's user docs (primary + extras) become the session's
+    /// ENTIRE user-overlay set: any previously-seated user doc that isn't part
+    /// of this compile is evicted first (see [`Self::seated_user_uris`] /
+    /// [`Self::evict_user_docs_except`]). This keeps the reused session
+    /// hermetic — a prior compile of the same package under a different URI
+    /// (e.g. the same model open in two tabs) can't linger and trip rumoca's
+    /// `Duplicate class '…' found in '…' with non-identical definition`. The
+    /// seated docs are left resident on return (the error-path
+    /// `compile_diagnostics` re-reads them); they're pruned by the NEXT
+    /// compile, not removed here.
     pub fn compile_str_multi(
         &mut self,
         model_name: &str,
@@ -518,6 +594,14 @@ impl ModelicaCompiler {
         filename: &str,
         extras: &[(String, String)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        let mut keep = std::collections::HashSet::new();
+        keep.insert(filename.to_string());
+        for (extra_filename, _) in extras {
+            if extra_filename != filename {
+                keep.insert(extra_filename.clone());
+            }
+        }
+        self.evict_user_docs_except(&keep);
         for (extra_filename, extra_source) in extras {
             if extra_filename == filename {
                 continue;
@@ -525,6 +609,7 @@ impl ModelicaCompiler {
             self.session.update_document(extra_filename, extra_source);
         }
         self.session.update_document(filename, source);
+        self.seated_user_uris = keep;
         self.compile_loaded(model_name)
     }
 
@@ -858,6 +943,7 @@ fn diagnostics_from_sim_error(
 }
 
 
+#[cfg(feature = "ui")]
 pub mod ui;
 
 /// Bundled Modelica models for web deployment.
@@ -936,6 +1022,61 @@ pub mod api;
 pub mod model_share;
 pub use sim_stream::{new_sim_stream, SimSnapshot, SimStream, VarHistory, SimSample};
 
+/// UI-agnostic per-frame queue of live sim samples.
+///
+/// The core worker handler ([`worker::handle_modelica_responses`]) appends one
+/// [`SimSampleBatch`] per processed step; the reactive UI layer
+/// ([`ui::core_observers::drain_sim_samples_to_viz`]) drains it into
+/// `lunco_viz`. This keeps plot-history capture OUT of the core handler — core
+/// just emits samples; the UI projects them. A headless build has no drainer,
+/// so the queue is bounded at the producer (samples past the cap are dropped —
+/// there's no UI to plot them anyway).
+#[derive(Resource, Default)]
+pub struct SimSampleStream {
+    pub batches: Vec<SimSampleBatch>,
+}
+
+/// UI-agnostic notice emitted by the core (compile lifecycle, worker crash,
+/// …). The reactive UI console observer
+/// ([`ui::core_observers::drain_notices_to_console`]) projects these into the
+/// Console panel. Core never references the console type.
+#[derive(Message, Clone)]
+pub struct ModelicaNotice {
+    pub level: NoticeLevel,
+    pub text: String,
+}
+
+/// Severity of a [`ModelicaNotice`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum NoticeLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+/// Core request to (re)compile a model — emitted by the core stepper when a
+/// model needs a stepper but has none yet (interactive "Run before compile").
+/// The reactive UI layer ([`ui::core_observers::relay_compile_requests`])
+/// translates it into the UI `CompileModel` command. Core stays UI-agnostic.
+#[derive(Message, Clone)]
+pub struct CompileRequested {
+    pub doc: lunco_doc::DocumentId,
+    pub class: Option<String>,
+    pub force: bool,
+    pub resume_after_compile: bool,
+}
+
+/// One sim step's observable samples for a single entity.
+pub struct SimSampleBatch {
+    pub entity: Entity,
+    pub document: lunco_doc::DocumentId,
+    pub time: f64,
+    /// `outputs` followed by `detected_symbols` (signal name → value).
+    pub samples: Vec<(String, f64)>,
+    pub is_new_model: bool,
+    pub is_parameter_update: bool,
+}
+
 /// UI-thread registry of per-entity lock-free sim streams (Phase A
 /// of the multi-sim architecture). On Compile the command observer
 /// calls [`SimStreamRegistry::get_or_insert`] and ships a clone of
@@ -993,6 +1134,7 @@ pub enum ModelicaSet {
 /// Sets up the background worker thread, channel resources, and response systems.
 /// Modelica stepping runs in [`FixedUpdate`] so all co-simulation engines share
 /// the same fixed timestep.
+#[cfg(feature = "ui")]
 pub struct ModelicaPlugin;
 
 /// Headless variant of [`ModelicaPlugin`] without UI panels.
@@ -1007,6 +1149,7 @@ impl Plugin for ModelicaCorePlugin {
     }
 }
 
+#[cfg(feature = "ui")]
 impl Plugin for ModelicaPlugin {
     fn build(&self, app: &mut App) {
         // The Modelica UI experience requires both core logic and plotting.
@@ -1090,6 +1233,7 @@ impl Plugin for ModelicaPlugin {
 /// `ClearColor`) is deliberately **not** owned here — Bevy always inserts
 /// defaults for those resources so an "insert-if-absent" guard can't tell
 /// a host's choice from the default. Those stay an app-shell concern.
+#[cfg(feature = "ui")]
 #[derive(Default)]
 pub struct ModelicaWorkbenchPlugin {
     /// UI knobs (help overlay, welcome panel). Defaults to the full
@@ -1098,6 +1242,7 @@ pub struct ModelicaWorkbenchPlugin {
     pub config: ModelicaUiConfig,
 }
 
+#[cfg(feature = "ui")]
 impl Plugin for ModelicaWorkbenchPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<lunco_workbench::WorkbenchPlugin>() {
@@ -1122,21 +1267,20 @@ impl Plugin for ModelicaWorkbenchPlugin {
         // platforms) + the wasm boot loader that opens a model carried in
         // the page URL fragment. Cross-platform: the command works on
         // native too (copies a public link).
-        app.add_plugins(model_share::ModelSharePlugin);
+        app.add_plugins(ui::model_share::ModelSharePlugin);
 
         // Off-thread Modelica worker. wasm32 has no real threads, so an
-        // inline rumoca compile (seconds for non-trivial models) freezes
-        // the render loop and the page appears hung. `ModelicaPlugin`
-        // above already registered the result sender, so the JS Worker
-        // can be attached now. Non-fatal: the inline worker remains a
-        // fallback if the bundle is missing or COOP/COEP is misconfigured.
+        // inline rumoca *compile* (seconds for non-trivial models) freezes the
+        // render loop. The worker pool handles that heavy compile/run work — but
+        // it is NOT spawned here. Spawning it eagerly at boot is a cold compile
+        // of each ~60 MB worker bundle that can take tens of seconds on a weak
+        // machine, and the diagram must not wait on it. We only register the
+        // worker URL now; `worker_transport::ensure_pool_spawned` spawns the
+        // pool the first time a compile/run is requested. Parsing-for-diagram
+        // runs on the main thread until a worker is warm (see
+        // `dispatch_parse_to_worker`), so the model renders immediately.
         #[cfg(target_arch = "wasm32")]
-        if let Err(e) = worker_transport::install_worker("./worker/worker_bootstrap.js") {
-            bevy::log::error!(
-                "[ModelicaWorkbenchPlugin] off-thread worker failed to start; \
-                 falling back to inline compile path: {e:?}"
-            );
-        }
+        worker_transport::register_worker_url("./worker/worker_bootstrap.js");
     }
 }
 
@@ -1222,8 +1366,11 @@ fn build_modelica_core(app: &mut App) {
         app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res, rx_cmd, tx_res });
     }
 
-    app.init_resource::<ui::WorkbenchState>();
+    app.init_resource::<crate::state::WorkbenchState>();
     app.init_resource::<SimStreamRegistry>();
+    app.init_resource::<SimSampleStream>();
+    app.add_message::<ModelicaNotice>();
+    app.add_message::<CompileRequested>();
 
     // Experiments / Fast Run: backend-agnostic registry + this crate's
     // ModelicaRunner binding. UI for the Run buttons and Experiments
@@ -1283,14 +1430,19 @@ fn build_modelica_core(app: &mut App) {
 
     #[cfg(target_arch = "wasm32")]
     {
-        // Both systems run every Update; only one actually does work per
-        // frame. `pump_commands_to_worker` early-returns if the JS worker
-        // hasn't been installed yet — which keeps `inline_worker_process`
-        // as the fallback dispatch until then. Once `install_worker` is
-        // called by the binary, pump_commands wins because it drains
-        // `rx_cmd` first; inline_worker_process then sees an empty queue
-        // and no-ops.
-        app.add_systems(Update, worker_transport::pump_commands_to_worker);
+        // Command dispatch on wasm. `pump_commands_to_worker` is the primary
+        // drainer: on a queued command it lazily spawns the worker pool and
+        // ships the command off-thread. It is ordered BEFORE
+        // `inline_worker_process` so that, whenever the pool spawns, the inline
+        // fallback sees an empty queue and no-ops. The inline (main-thread)
+        // path only does work when `pump_commands_to_worker` declines — i.e.
+        // the worker bundle failed to spawn — so a missing/blocked worker still
+        // compiles (just on the main thread).
+        app.add_systems(
+            Update,
+            worker_transport::pump_commands_to_worker
+                .before(worker::inline_worker_process),
+        );
         // Re-seed MSL into workers respawned after a crash, deferred so the
         // ~165 MB bundle isn't re-allocated on the (memory-starved) crash
         // stack. Cheap no-op when nothing is pending.
@@ -1298,7 +1450,7 @@ fn build_modelica_core(app: &mut App) {
             worker_transport::pump_worker_respawns();
         });
         app.add_systems(Update, worker::inline_worker_process);
-        app.add_systems(Update, ui::update_file_load_result);
+        app.add_systems(Update, crate::state::update_file_load_result);
         // Drain Web-Worker RunUpdate streams into the runner's
         // RunHandle receivers and clear the runner's busy flag on
         // terminal updates. Cheap when no run is in flight.
@@ -1316,7 +1468,7 @@ fn build_modelica_core(app: &mut App) {
 /// it later — the modelica plugin does not pick the idle policy
 /// itself, just respects what the host app chose. No-op when the
 /// app is headless (no `WinitSettings` resource).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "ui"))]
 fn sim_focus_pace(
     settings: Option<ResMut<bevy::winit::WinitSettings>>,
     pending: Option<Res<experiments_runner::PendingHandles>>,
@@ -1339,11 +1491,10 @@ fn sim_focus_pace(
     }
 }
 
-// On wasm the winit settings model differs (the rAF loop drives
-// updates regardless of focus); the throttle this guards against
-// doesn't exist there. Empty no-op keeps the symbol present so
-// `add_systems` compiles for both targets.
-#[cfg(target_arch = "wasm32")]
+// No-op when there's no winit `WinitSettings` to pace: on wasm (the rAF loop
+// drives updates regardless of focus) and on a headless `--no-ui` server (no
+// winit compiled in). Keeps the symbol present so `add_systems` compiles.
+#[cfg(any(target_arch = "wasm32", not(feature = "ui")))]
 fn sim_focus_pace() {}
 
 /// Global frame-time probe — start of frame.

@@ -2,7 +2,7 @@
 name = "lunco-workspace"
 version = "0.1.0"
 edition = "2021"
-description = "LunCoSim's editor session (VS Code Workspace analog). Tracks open Twins + loose documents, the active Twin / Document / Perspective, and a recents list. Headless, UI-free, ECS-free — a Bevy `Resource` wrapper can be added in a consumer crate."
+description = "LunCoSim's editor session (VS Code Workspace analog). Tracks open Twins + loose documents, the active Twin / Document / Perspective, and a recents list. Headless and UI-free — depends only on the bevy ECS/app substrate (no render/winit/egui), so it runs identically in a windowed editor and a `--no-ui` server."
 
 [dependencies]
 lunco-doc     = { path = "../lunco-doc" }
@@ -10,6 +10,11 @@ lunco-twin    = { path = "../lunco-twin" }
 lunco-storage = { path = "../lunco-storage" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Bevy ECS/app SUBSTRATE only (no render/winit/egui). Declared directly rather
+# than `{ workspace = true }` so it does NOT inherit the workspace's UI feature
+# list (bevy_render/bevy_winit/wayland/x11) — that keeps this crate headless and
+# lets the `WorkspaceResource` binding + session events live with the data.
+bevy = { version = "0.18.1", default-features = false, features = ["bevy_log"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

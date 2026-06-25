@@ -42,7 +42,7 @@ use lunco_doc_bevy::SaveAsDocument;
 use lunco_twin::{DocumentKindId, DocumentKindRegistry, TwinError, TwinMode};
 
 use crate::picker::{PickFollowUp, PickResolved};
-use crate::session::{FileRenamed, TwinAdded, TwinClosed, WorkspaceResource};
+use lunco_workspace::{FileRenamed, TwinAdded, TwinClosed, WorkspaceResource};
 
 /// Request a system "Open File" dialog.
 ///
@@ -300,7 +300,7 @@ fn on_show_open_file_picker(
 
     let ext_refs: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
     commands.trigger(PickHandle {
-        mode: PickMode::OpenFile(lunco_storage::OpenFilter::new(
+        mode: PickMode::OpenFile(crate::picker::OpenFilter::new(
             "Supported files",
             &ext_refs,
         )),

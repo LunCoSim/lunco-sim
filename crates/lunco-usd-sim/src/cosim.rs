@@ -279,6 +279,10 @@ pub fn dispatch_loaded_modelica_sources(
             session_id: 0,
             model_name,
             source: src.text.clone(),
+            // Stable per-asset session URI (its asset path) — keeps this
+            // model's overlay distinct in the worker session and consistent
+            // across recompiles. See `ModelicaCommand::Compile::doc_uri`.
+            doc_uri: pending.asset_path.to_string(),
             extra_sources: Vec::new(),
             stream: None,
         });

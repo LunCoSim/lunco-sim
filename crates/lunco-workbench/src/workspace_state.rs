@@ -36,7 +36,7 @@ use bevy::prelude::*;
 use lunco_doc::DocumentOrigin;
 use serde::{Deserialize, Serialize};
 
-use crate::session::WorkspaceResource;
+use lunco_workspace::WorkspaceResource;
 use crate::WorkbenchLayout;
 
 /// Hot-exit snapshot of one open document — VSCode-style. Carries the

@@ -17,7 +17,10 @@
 #
 # Available binaries:
 #   lunica   - Modelica Workbench IDE
-#   sandbox  - Simulation Sandbox
+#   sandbox  - Simulation Sandbox (ground physics)
+#   luncosim - Full lunar-mission simulator (celestial + orbital). No Modelica
+#              worker / MSL bundle (not a Modelica IDE). Textures load over HTTP
+#              (built without `celestial` embed-assets).
 # ============================================================================
 
 set -e
@@ -58,11 +61,14 @@ get_binary_config() {
             echo "lunco-modelica"
             ;;
         sandbox)
-            echo "lunco-client"
+            echo "lunco-sandbox"
+            ;;
+        luncosim)
+            echo "luncosim"
             ;;
         *)
             error "Unknown binary: $binary"
-            error "Available binaries: lunica, sandbox"
+            error "Available binaries: lunica, sandbox, luncosim"
             exit 1
             ;;
     esac
@@ -237,12 +243,26 @@ build_wasm() {
     # mandatory, not optional.
     local cargo_bin
     cargo_bin=$(get_cargo_bin_name "$binary")
+    # `ui` is REQUIRED for the web GUI builds: since the egui-ectomy refactor it
+    # is a real cargo feature (egui/winit/workbench live behind it, no longer
+    # unconditional deps). `--no-default-features` strips it, so we re-add it
+    # explicitly — without it the wasm build links no window/egui (lunco_workbench
+    # unresolved) and degrades to a headless server in the browser. luncosim is
+    # the exception (it has no `ui` feature — egui is an unconditional dep there).
+    #
     # sandbox carries the optional multiplayer wire (lightyear WebTransport,
     # client-only on wasm); lunica does not. Browser join is URL-driven
     # (`?connect=host#<digest>`), see `NetworkMode::from_url`.
-    local wasm_features="lunco-api"
-    if [ "$binary" = "sandbox" ]; then
-        wasm_features="lunco-api,networking"
+    local wasm_features="lunco-api,ui"
+    # luncosim has no `lunco-api` cargo feature (the API is an unconditional dep,
+    # JS-bridge on wasm). Build it with NO features: celestial bodies load when
+    # `sandbox` is off (the default), and we deliberately skip `celestial`
+    # (embed-assets) on web — baking the Earth/Moon textures via `include_bytes!`
+    # bloats the wasm and needs the asset cache; the browser loads them over HTTP.
+    if [ "$binary" = "luncosim" ]; then
+        wasm_features=""
+    elif [ "$binary" = "sandbox" ]; then
+        wasm_features="lunco-api,networking,ui"
         # Opt the client-prediction diagnostics into the browser build with
         # NET_DIAG=1 (off by default — same `net-diag` cargo feature as native).
         # Output lands in the browser console as `[net-diag …]` lines; mute a
@@ -252,8 +272,15 @@ build_wasm() {
             info "net-diag ENABLED for this web build (jitter/velocity/correction census → browser console)"
         fi
     fi
-    RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis" \
-        cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$cargo_bin" -p "$crate" --no-default-features --features "$wasm_features"
+    # `getrandom_backend="wasm_js"`: ahash (via egui 0.26.2 → catppuccin-egui →
+    # lunco-theme) and lightyear's netcode RNG pull getrandom 0.3, which refuses
+    # to compile for wasm32-unknown-unknown unless a backend is named. The
+    # browser-crypto backend is correct here; the `wasm_js` *feature* is enabled
+    # on getrandom in lunco-client's wasm deps (cfg + feature are both required).
+    # `${wasm_features:+--features ...}` omits the flag entirely when empty
+    # (luncosim builds with no extra features).
+    RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis --cfg=getrandom_backend=\"wasm_js\"" \
+        cargo build --profile "$profile" --target wasm32-unknown-unknown --bin "$cargo_bin" -p "$crate" --no-default-features ${wasm_features:+--features "$wasm_features"}
 
     # Off-thread Modelica worker bundle. wasm32 has no real threads, so
     # without this every rumoca compile (a few seconds for non-trivial
@@ -270,7 +297,7 @@ build_wasm() {
                 # Worker always builds out of lunco-modelica (that's where the
                 # Modelica compile + step pipeline lives) regardless of which
                 # main bundle is asking for it.
-                RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis" \
+                RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis --cfg=getrandom_backend=\"wasm_js\"" \
                     cargo build --profile "$profile" --target wasm32-unknown-unknown --bin lunica_worker -p lunco-modelica --no-default-features
             else
                 # See should_rebuild_worker rustdoc — finding "newer" .rs
@@ -390,7 +417,11 @@ generate_bindings() {
     fi
     rm -rf "$dist_dir"
     mkdir -p "$dist_dir"
-    cp "$bindgen_out_dir"/* "$dist_dir/"
+    # Recursive: wasm-bindgen emits a `snippets/` subdir (JS interop shims that
+    # the generated loader imports at runtime). A non-recursive `cp` errors on
+    # it under `set -e` and aborts the build before index.html / worker / msl
+    # are staged — leaving a half-populated dist that serves a blank page.
+    cp -r "$bindgen_out_dir"/. "$dist_dir/"
     if [ -n "$stashed_worker" ]; then
         mkdir -p "$dist_dir/worker"
         cp -r "$stashed_worker"/. "$dist_dir/worker/"
@@ -459,6 +490,37 @@ Run: cargo run -p lunco-assets -- download"
         rsync -a --delete "$PROJECT_DIR/assets/" "$dist_dir/assets/"
     fi
 
+    # Include the deployment script in the dist bundle
+    if [ -f "$PROJECT_DIR/scripts/copy_to_html_folder.sh" ]; then
+        info "Copying copy_to_html_folder.sh → $dist_dir/"
+        cp "$PROJECT_DIR/scripts/copy_to_html_folder.sh" "$dist_dir/"
+    fi
+
+    # luncosim renders Earth/Moon as celestial bodies; their PROCESSED textures
+    # (`cached_textures://earth.png|moon.png`) load over HTTP same-origin —
+    # `cache_dir()` resolves to ".cache" on wasm, so the bevy HTTP reader fetches
+    # `<origin>/.cache/textures/<tex>`. Stage them next to the wasm (same idea as
+    # the DejaVu font above). Populate the cache first with:
+    #   cargo run -p lunco-assets -- download && cargo run -p lunco-assets -- process
+    if [ "$binary" = "luncosim" ]; then
+        for tex in earth.png moon.png; do
+            local tex_src=""
+            for candidate in \
+                "$PROJECT_DIR/../.cache/textures/$tex" \
+                "$PROJECT_DIR/.cache/textures/$tex"; do
+                if [ -f "$candidate" ]; then tex_src="$candidate"; break; fi
+            done
+            if [ -n "$tex_src" ]; then
+                mkdir -p "$dist_dir/.cache/textures"
+                cp "$tex_src" "$dist_dir/.cache/textures/$tex"
+                info "Copied $tex → $dist_dir/.cache/textures/"
+            else
+                warn "celestial texture $tex not found — that body renders untextured in \
+the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-assets -- process"
+            fi
+        done
+    fi
+
     # Show output size
     WASM_SIZE=$(du -h "$dist_dir/${binary}_bg.wasm" | cut -f1)
     JS_SIZE=$(du -h "$dist_dir/${binary}.js" | cut -f1)
@@ -515,15 +577,34 @@ Run: cargo run -p lunco-assets -- download"
         if should_rebuild_worker "$worker_wasm_dist"; then
             worker_src_changed=1
         fi
+        # Authoritative staleness signal: does the dist worker already bake the
+        # exact wire id of the freshly-staged MAIN bundle? The mtime/Cargo.lock
+        # heuristics above race against content-hash rewrites (hash_worker_wasm
+        # touches the dist mtime every build) and incremental builds that leave
+        # the cargo output mtime untouched — the whole class of "stale worker
+        # silently shipped" bugs (build_web history: Cargo.lock gate, source-edit
+        # gate, …). The baked `LUNCO_WIRE_BUILD_ID` is the ground truth the
+        # runtime boot handshake checks, so gate the skip on it directly: only
+        # skip when the shipped worker provably matches main. If the id can't be
+        # read (format drift) `worker_has_wire` stays 0 and we rebuild — safe.
+        local main_wasm_dist="$dist_dir/${binary}_bg.wasm"
+        local expected_wire_id="" worker_has_wire=0
+        expected_wire_id=$(strings "$main_wasm_dist" 2>/dev/null \
+            | grep -oE 'LUNCO_WIRE:[0-9a-f]{16}' | head -1 | sed 's/LUNCO_WIRE://')
+        if [ -n "$expected_wire_id" ] && [ -n "$worker_wasm_dist" ] \
+            && strings "$worker_wasm_dist" 2>/dev/null | grep -q "$expected_wire_id"; then
+            worker_has_wire=1
+        fi
         if [ "${WORKER_REBUILD:-}" != "force" ] \
             && [ "$lock_moved" != "1" ] \
             && [ "$worker_src_changed" != "1" ] \
+            && [ "$worker_has_wire" = "1" ] \
             && [ -f "$worker_wasm_src" ] \
             && [ -n "$worker_wasm_dist" ] \
             && [ ! "$worker_wasm_src" -nt "$worker_wasm_dist" ]; then
             local worker_size
             worker_size=$(du -h "$worker_wasm_dist" | cut -f1)
-            info "Worker bundle up-to-date ($worker_size) — bindgen skipped"
+            info "Worker bundle up-to-date ($worker_size, wire $expected_wire_id) — bindgen skipped"
             # Still ensure the dist wasm is content-hashed (idempotent) — a
             # bare-named worker left by an older build would otherwise persist.
             hash_worker_wasm "$worker_dist_dir" "$worker_bin"
@@ -552,7 +633,9 @@ Run: cargo run -p lunco-assets -- download"
         fi
         rm -rf "$worker_dist_dir"
         mkdir -p "$worker_dist_dir"
-        cp "$worker_bindgen_dir"/* "$worker_dist_dir/"
+        # Recursive (see the main-bundle copy): wasm-bindgen emits a `snippets/`
+        # subdir; a non-recursive cp aborts the build under `set -e`.
+        cp -r "$worker_bindgen_dir"/. "$worker_dist_dir/"
         # Content-hash the multi-MB `_bg.wasm` (the aggressively-cached artifact)
         # and repoint the generated loader. The `.js` shims keep stable names so
         # the Rust `install_worker("./worker/worker_bootstrap.js")` URL is
@@ -574,6 +657,14 @@ Run: cargo run -p lunco-assets -- download"
         local worker_size
         worker_size=$(du -h "$worker_dist_dir/${worker_bin}_bg"*.wasm 2>/dev/null | cut -f1 | head -1)
         info "Worker bundle: $worker_size at $worker_dist_dir"
+        # Hard lockstep guard: the worker just staged MUST bake the same wire id
+        # as the main bundle, or the runtime handshake rejects it and Modelica
+        # compile/run silently breaks. Fail the build here instead of shipping a
+        # broken pair to `serve`/deploy.
+        assert_wire_lockstep \
+            "$dist_dir/${binary}_bg.wasm" \
+            "$(ls "$worker_dist_dir/${worker_bin}_bg"*.wasm 2>/dev/null | head -1)" \
+            "$binary"
     fi
 }
 
@@ -587,6 +678,32 @@ Run: cargo run -p lunco-assets -- download"
 # stale from the browser cache. Idempotent: hashes a bare `${bin}_bg.wasm`
 # (rename + repoint the generated loader) and no-ops once already hashed. Runs
 # on BOTH the rebuild and up-to-date paths so the dist is always hashed.
+# Hard guard against shipping a stale worker. The off-thread worker and the
+# main bundle both bake `LUNCO_WIRE_BUILD_ID` (a hash of Cargo.lock + this
+# crate's src/); if they disagree, the boot handshake in worker_transport
+# reports "STALE WORKER" and every bincode message mis-decodes — Modelica
+# compile/run is broken. The staleness heuristics in generate_bindings are
+# best-effort; this is the backstop that makes a mismatched pair impossible to
+# ship: it reads the id baked into each wasm and exits non-zero on mismatch.
+# Degrades to a warning (never a false failure) when the id can't be extracted.
+assert_wire_lockstep() {
+    local main_wasm="$1" worker_wasm="$2" bin="${3:-lunica}"
+    local id
+    id=$(strings "$main_wasm" 2>/dev/null \
+        | grep -oE 'LUNCO_WIRE:[0-9a-f]{16}' | head -1 | sed 's/LUNCO_WIRE://')
+    if [ -z "$id" ]; then
+        warn "wire-lockstep guard: could not read main wire id from $(basename "$main_wasm" 2>/dev/null) — skipping check"
+        return 0
+    fi
+    if [ -z "$worker_wasm" ] || ! strings "$worker_wasm" 2>/dev/null | grep -q "$id"; then
+        error "WIRE LOCKSTEP FAILED: shipped worker does not bake main wire id $id."
+        error "  A stale worker would ship → runtime 'STALE WORKER', Modelica compile/run BROKEN."
+        error "  Fix: WORKER_REBUILD=force ./scripts/build_web.sh build $bin"
+        exit 1
+    fi
+    success "Wire lockstep OK — main + worker both bake $id"
+}
+
 hash_worker_wasm() {
     local dir="$1" bin="$2"
     local bare="$dir/${bin}_bg.wasm"
@@ -653,14 +770,19 @@ build_msl_bundle() {
     # produces byte-identical output anyway — the only thing the
     # script saves is ~2 s of parse + compress work.
     #
-    # Override with `MSL_REBUILD=force` if you've changed the
-    # bundler binary itself (`build_msl_assets`) or its serialisation
-    # format and want a guaranteed re-pack.
+    # Override with `MSL_REBUILD=force` for a guaranteed re-pack.
     #
-    # The staleness check only tracks `.cache/msl`; when extra libraries are
-    # requested (`MSL_EXTRA_LIBS`) their sources aren't tracked here, so we
-    # never take the skip shortcut — always repack to pick them up.
-    if [ -z "${MSL_EXTRA_LIBS:-}" ] && [ "${MSL_REBUILD:-}" != "force" ] && [ -f "$msl_dir/manifest.json" ]; then
+    # Bust the skip on three inputs, not just `.cache/msl` mtimes:
+    #   1. `.cache/msl/*.mo` newer than the manifest — the sources changed.
+    #   2. The bundler's OWN source newer than the manifest — its packing
+    #      logic changed (e.g. a new `--exclude` filter or serialisation
+    #      format). Tracking this makes the old `MSL_REBUILD=force`-after-a-
+    #      bundler-edit ritual automatic; a stale bundle is silent corruption.
+    #   3. `MSL_EXTRA_LIBS`/`MSL_EXCLUDE_LIBS` requested — the set of packed
+    #      libraries is config-driven and not captured by mtimes, so always
+    #      repack to honour the current config.
+    if [ -z "${MSL_EXTRA_LIBS:-}" ] && [ -z "${MSL_EXCLUDE_LIBS:-}" ] \
+        && [ "${MSL_REBUILD:-}" != "force" ] && [ -f "$msl_dir/manifest.json" ]; then
         local msl_src
         for candidate in \
             "$PROJECT_DIR/../.cache/msl" \
@@ -668,9 +790,11 @@ build_msl_bundle() {
             if [ -d "$candidate" ]; then msl_src="$candidate"; break; fi
         done
         if [ -n "$msl_src" ]; then
-            local newer
+            local newer newer_bundler
             newer=$(find "$msl_src" -name '*.mo' -newer "$msl_dir/manifest.json" -print -quit 2>/dev/null)
-            if [ -z "$newer" ]; then
+            newer_bundler=$(find "$PROJECT_DIR/crates/lunco-assets/src" -name '*.rs' \
+                -newer "$msl_dir/manifest.json" -print -quit 2>/dev/null)
+            if [ -z "$newer" ] && [ -z "$newer_bundler" ]; then
                 info "MSL bundle up-to-date ($msl_src) — skipping pack (set MSL_REBUILD=force to override)"
                 return 0
             fi
@@ -701,6 +825,21 @@ build_msl_bundle() {
             done
             info "Bundling extra library roots: $MSL_EXTRA_LIBS"
         fi
+    fi
+
+    # The Modelica Association ships its own regression/conversion test suites
+    # (ModelicaTest, ModelicaTestConversion4, ModelicaTestOverdetermined) INSIDE
+    # the MSL source tree. They are not part of the library you import, and
+    # Dymola/OMEdit don't load them by default — so we keep them out of the web
+    # bundle. Override the list (colon-separated; `*` = prefix match) via
+    # `MSL_EXCLUDE_LIBS`, or set it empty to ship everything.
+    local exclude_libs="${MSL_EXCLUDE_LIBS-ModelicaTest*}"
+    if [ -n "$exclude_libs" ]; then
+        local IFS=':'
+        for name in $exclude_libs; do
+            [ -n "$name" ] && extra_args+=(--exclude "$name")
+        done
+        info "Excluding top-level packages: $exclude_libs"
     fi
 
     rm -rf "$msl_dir"

@@ -152,7 +152,7 @@ fn collect_child_colliders_from_usd(
         // for the entity Transform).
         if let Ok(val) = reader.get(&child_path, "typeName") {
             if let Value::Token(ty) = &*val {
-                if ty.as_str() == "Cylinder" {
+                if matches!(ty.as_str(), "Cylinder" | "Cone" | "Capsule" | "Plane") {
                     let axis_tok = read_token_attribute(reader, &child_path, "axis")
                         .unwrap_or_else(|| "Z".to_string());
                     let axis_q = match axis_tok.as_str() {
@@ -239,6 +239,22 @@ fn build_collider_from_usd(reader: &TextReader, sdf_path: &SdfPath) -> Option<Co
             let radius = reader.prim_attribute_value::<f64>(sdf_path, "radius").unwrap_or(1.0);
             let height = reader.prim_attribute_value::<f64>(sdf_path, "height").unwrap_or(2.0);
             Collider::cylinder(radius, height)
+        }
+        "Cone" => {
+            let radius = reader.prim_attribute_value::<f64>(sdf_path, "radius").unwrap_or(1.0);
+            let height = reader.prim_attribute_value::<f64>(sdf_path, "height").unwrap_or(2.0);
+            Collider::cone(radius, height)
+        }
+        "Capsule" => {
+            let radius = reader.prim_attribute_value::<f64>(sdf_path, "radius").unwrap_or(0.5);
+            let height = reader.prim_attribute_value::<f64>(sdf_path, "height").unwrap_or(1.0);
+            Collider::capsule(radius, height)
+        }
+        "Plane" => {
+            let width = reader.prim_attribute_value::<f64>(sdf_path, "width").unwrap_or(2.0);
+            let length = reader.prim_attribute_value::<f64>(sdf_path, "length").unwrap_or(2.0);
+            // Represent as a thin cuboid so that bounds and scaling behave predictably and matching visual mapping
+            Collider::cuboid(width, 0.001, length)
         }
         _ => return None,
     };

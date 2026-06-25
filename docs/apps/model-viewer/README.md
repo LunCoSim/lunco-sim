@@ -18,7 +18,7 @@ cargo run --bin model_viewer -- [FLAGS]
 
 | Flag | Description |
 |---|---|
-| `--api [PORT]` | Enable the HTTP API server. Default port is 3000 (enabled by default). |
+| `--api [PORT]` | Enable the HTTP API server. Default port is 4101 (enabled by default). |
 
 ## See also
 

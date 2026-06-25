@@ -302,10 +302,10 @@ fn on_focus_panel(
 
 register_commands!(on_focus_panel,);
 pub use perspective::{Perspective, PerspectiveId};
-pub use session::{
-    DocumentClosed, DocumentOpened, FileRenamed, RegisterDocument, TwinAdded,
-    TwinClosed, UnregisterDocument, WorkspacePlugin, WorkspaceResource,
-};
+// The session binding (WorkspaceResource, WorkspacePlugin, add/close events)
+// lives in `lunco-workspace` now — consumers import it from there directly.
+// `session` here is just the workbench-side recents persistence.
+use lunco_workspace::WorkspaceResource;
 pub use viewport::{
     PanelRect, PanelRects, ViewportPanel, ViewportPlaceholder, WorkbenchEguiHost,
     WorkbenchSceneCamera, WorkbenchViewportCamera, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
@@ -347,13 +347,15 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<lunco_theme::ThemePlugin>() {
             app.add_plugins(lunco_theme::ThemePlugin);
         }
-        // Workspace (editor session) resource + event observers. Lives
-        // in a sub-plugin so headless tests / API-only servers that
-        // don't want the full dock shell can still get the Workspace
-        // wiring by adding just `WorkspacePlugin`.
-        if !app.is_plugin_added::<session::WorkspacePlugin>() {
-            app.add_plugins(session::WorkspacePlugin);
+        // Workspace (editor session) resource + event observers. Lives in
+        // `lunco-workspace` (bevy ECS substrate, no UI) so headless tests /
+        // API-only servers that don't want the full dock shell can install
+        // it directly. The workbench adds the recents-persistence sidecar on
+        // top (config-dir I/O, which the headless crate deliberately omits).
+        if !app.is_plugin_added::<lunco_workspace::WorkspacePlugin>() {
+            app.add_plugins(lunco_workspace::WorkspacePlugin);
         }
+        app.add_plugins(session::RecentsPlugin);
         // Cross-cutting status bus. Subsystems publish events here;
         // renderers (status bar, console fan-out, diagnostics fan-out)
         // are added separately by their owning plugins.
@@ -2489,7 +2491,10 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                         let mut address = ui.data_mut(|d| {
                             d.get_temp::<String>(id).unwrap_or_else(|| {
                                 if status.connect_hint.is_empty() {
-                                    "127.0.0.1:5888".to_string()
+                                    format!(
+                                        "127.0.0.1:{}",
+                                        lunco_core::session::DEFAULT_HOST_PORT
+                                    )
                                 } else {
                                     status.connect_hint.clone()
                                 }
@@ -2875,6 +2880,12 @@ fn render_status_bar_inner(
     };
     let perf_stats = world.resource::<perf_hud::PerfStats>().clone();
     let perf_enabled = world.resource::<perf_hud::PerfHudSettings>().enabled;
+    // The networking chip only paints when not standalone; reserve room
+    // for it on the right so the clickable status region doesn't overlap.
+    let net_active = world
+        .get_resource::<lunco_core::NetStatus>()
+        .map(|s| !matches!(s.role, lunco_core::NetworkRole::Standalone))
+        .unwrap_or(false);
 
     ui.horizontal(|ui| {
         // The whole strip is one clickable region; the popup anchors
@@ -2882,6 +2893,16 @@ fn render_status_bar_inner(
         let response = ui
             .scope(|ui| {
                 ui.set_height(18.0);
+                // Whole strip is the click target, not just the dot+text:
+                // stretch this region to fill the available width minus the
+                // space the right-aligned perf HUD / net chip will claim.
+                // The content stays left-aligned; the trailing empty space
+                // is still part of the response rect, so a click anywhere on
+                // the bar opens the history popup.
+                let right_reserve = 8.0
+                    + if perf_enabled { 300.0 } else { 0.0 }
+                    + if net_active { 220.0 } else { 0.0 };
+                ui.set_min_width((ui.available_width() - right_reserve).max(160.0));
                 if let Some(l) = latest.as_ref() {
                     let dot_color = match l.level {
                         StatusLevel::Error => theme.tokens.error,

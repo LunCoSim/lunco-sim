@@ -389,4 +389,68 @@ def Xform "SandboxScene"
         string lunco:toPort = "force_y"
         double lunco:scale = 1.0
     }
+
+    # --- Primitive Showcase (Testing our visual & physics primitive mapping) ---
+
+    def Cylinder "TestCylinder" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double radius = 0.5
+        double height = 2.0
+        token axis = "Z" # Default USD axis (tests rotation correction)
+        double3 xformOp:translate = (0.0, 5.0, -20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.2, 0.6, 0.9)
+        bool physics:rigidBodyEnabled = true
+        bool physics:collisionEnabled = true
+        float physics:mass = 1.0
+    }
+
+    def Cone "TestCone" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double radius = 0.6
+        double height = 1.5
+        token axis = "Y" # Test Y axis
+        double3 xformOp:translate = (5.0, 5.0, -20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.9, 0.3, 0.3)
+        bool physics:rigidBodyEnabled = true
+        bool physics:collisionEnabled = true
+        float physics:mass = 1.0
+    }
+
+    def Capsule "TestCapsule" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double radius = 0.4
+        double height = 1.2
+        token axis = "X" # Test X axis
+        double3 xformOp:translate = (10.0, 5.0, -20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.3, 0.8, 0.3)
+        bool physics:rigidBodyEnabled = true
+        bool physics:collisionEnabled = true
+        float physics:mass = 1.0
+    }
+
+    def Plane "TestPlane" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double width = 5.0
+        double length = 5.0
+        token axis = "Y" # Horizontal platform normal facing up
+        double3 xformOp:translate = (-5.0, 1.0, -20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.8, 0.8, 0.8)
+        bool physics:rigidBodyEnabled = false # Static platform
+        bool physics:collisionEnabled = true
+    }
+
 }
+
+

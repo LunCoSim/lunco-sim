@@ -43,8 +43,11 @@ use openusd::usda::TextReader;
 /// own light prim.
 pub use lunco_core::FallbackSceneLight;
 
-/// Marker stamped on every entity instantiated from a UsdLux light prim.
-/// Its `Add` observer enforces the fallback policy (see module docs).
+/// Marker for a *dominant* scene light — a sun (`DistantLight`) or sky
+/// (`DomeLight`) — whose presence retires the binary's fallback sun/ambient.
+/// Its `Add` observer enforces that policy (see module docs). Deliberately
+/// NOT stamped on local lights like `SphereLight` headlights: a spawned
+/// vessel's lamp must not darken the scene by despawning the fallback sun.
 #[derive(Component)]
 pub struct UsdAuthoredLight;
 
@@ -63,6 +66,21 @@ pub(crate) fn get_attribute_as_f32(reader: &TextReader, path: &SdfPath, attr: &s
         Value::Int(i) => Some(*i as f32),
         _ => None,
     }
+}
+
+/// Read a UsdLux light's authored intensity scaled by its exposure stops:
+/// `inputs:intensity` × 2^`inputs:exposure`. Used wherever a UsdLux light is
+/// turned into a Bevy light — the *unit* of the result depends on the target
+/// component (lux for `DirectionalLight`, candela for `Point`/`SpotLight`),
+/// but the photometric conversion is identical, so it lives here once.
+pub(crate) fn read_intensity_with_exposure(
+    reader: &TextReader,
+    path: &SdfPath,
+    default_intensity: f32,
+) -> f32 {
+    let intensity = get_attribute_as_f32(reader, path, "inputs:intensity").unwrap_or(default_intensity);
+    let exposure = get_attribute_as_f32(reader, path, "inputs:exposure").unwrap_or(0.0);
+    intensity * exposure.exp2()
 }
 
 /// Bool attribute reader (also accepts `int` 0/1 authoring).
@@ -97,10 +115,7 @@ pub(crate) fn instantiate_light_prim(
             // under Bevy's physically-based exposure — an unauthored
             // intensity almost certainly means "give me a sun", so default
             // to a workable 10 000 lx and let authors override.
-            let intensity =
-                get_attribute_as_f32(reader, sdf_path, "inputs:intensity").unwrap_or(10_000.0);
-            let exposure =
-                get_attribute_as_f32(reader, sdf_path, "inputs:exposure").unwrap_or(0.0);
+            let illuminance_lux = read_intensity_with_exposure(reader, sdf_path, 10_000.0);
             let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
                 .map(|c| Color::linear_rgb(c.x, c.y, c.z))
                 .unwrap_or(Color::WHITE);
@@ -126,7 +141,6 @@ pub(crate) fn instantiate_light_prim(
             // environment (materials → usd-bevy forbids the edge), so it carries
             // its own fallback const. Keep it in sync with `LunarSun::default`.
             const DEFAULT_SUN_ANGULAR_DIAMETER_DEG: f32 = 0.53;
-            let illuminance_lux = intensity * exposure.exp2();
             let angular_diameter_deg = get_attribute_as_f32(reader, sdf_path, "inputs:angle")
                 .unwrap_or(DEFAULT_SUN_ANGULAR_DIAMETER_DEG);
             let sun = LunarSunShadow {
@@ -136,8 +150,12 @@ pub(crate) fn instantiate_light_prim(
                     reader, sdf_path, "lunco:shadow:firstCascadeFarBound",
                 )
                 .unwrap_or(d.first_cascade_far_bound),
+                // TODO(review #3): clamp narrowed 1..=8 → 1..=4. If this is an
+                // intentional alignment with the canonical 4-cascade default,
+                // `warn!` when a scene authors >4 instead of silently clamping;
+                // if unintentional, restore 1..=8.
                 num_cascades: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:numCascades")
-                    .map(|n| (n as usize).clamp(1, 8))
+                    .map(|n| (n as usize).clamp(1, 4))
                     .unwrap_or(d.num_cascades),
                 depth_bias: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:depthBias")
                     .unwrap_or(d.depth_bias),
@@ -169,6 +187,68 @@ pub(crate) fn instantiate_light_prim(
                 .entity(entity)
                 .insert((UsdDomeAmbient(intensity), UsdAuthoredLight));
             info!("[usd-bevy] {} DomeLight ambient={intensity}", sdf_path.as_str());
+            true
+        }
+        Some("SphereLight") => {
+            // Bevy interprets `Point`/`SpotLight::intensity` as luminous
+            // intensity in candela (lm/sr), not total lumens.
+            let intensity_cd = read_intensity_with_exposure(reader, sdf_path, 1000.0);
+            let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
+                .map(|c| Color::linear_rgb(c.x, c.y, c.z))
+                .unwrap_or(Color::WHITE);
+            // TODO(review #2): defaults to true, and each rover authors two
+            // SphereLights. Spawning many rovers can exceed Bevy's per-cluster
+            // shadow-casting light cap → some headlights silently stop casting
+            // and/or framerate collapses. Consider defaulting rover headlight
+            // shadows off in the .usda, or capping shadow-casters in the loader.
+            let shadows_enabled = get_attribute_as_bool(reader, sdf_path, "inputs:shadow:enable").unwrap_or(true);
+            let range = get_attribute_as_f32(reader, sdf_path, "lunco:light:range").unwrap_or(30.0);
+
+            if let Some(cone_angle_deg) = get_attribute_as_f32(reader, sdf_path, "inputs:shaping:cone:angle") {
+                // Spotlight path (UsdLuxShapingAPI applied)
+                let outer_angle = (cone_angle_deg.to_radians() / 2.0).clamp(0.0, std::f32::consts::FRAC_PI_2);
+                let softness = get_attribute_as_f32(reader, sdf_path, "inputs:shaping:cone:softness")
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0);
+                let inner_angle = outer_angle * (1.0 - softness);
+
+                // No `UsdAuthoredLight`: a SphereLight is a *local* light (e.g. a
+                // vessel headlight), not a scene-dominant sun/sky. Stamping it
+                // would retire the binary's fallback sun the instant a rover
+                // spawns — see the marker docs.
+                commands.entity(entity).insert(SpotLight {
+                    color,
+                    intensity: intensity_cd,
+                    range,
+                    shadows_enabled,
+                    inner_angle,
+                    outer_angle,
+                    ..default()
+                });
+                info!(
+                    "[usd-bevy] {} SphereLight (SpotLight) intensity={} cd, range={} m, cone={} deg",
+                    sdf_path.as_str(),
+                    intensity_cd,
+                    range,
+                    cone_angle_deg
+                );
+            } else {
+                // Pointlight path (standard SphereLight). No `UsdAuthoredLight`
+                // — local light, must not retire the fallback sun (see above).
+                commands.entity(entity).insert(PointLight {
+                    color,
+                    intensity: intensity_cd,
+                    range,
+                    shadows_enabled,
+                    ..default()
+                });
+                info!(
+                    "[usd-bevy] {} SphereLight (PointLight) intensity={} cd, range={} m",
+                    sdf_path.as_str(),
+                    intensity_cd,
+                    range
+                );
+            }
             true
         }
         _ => false,

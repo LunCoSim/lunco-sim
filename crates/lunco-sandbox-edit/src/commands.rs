@@ -1048,20 +1048,24 @@ pub fn reconcile_owned_prediction(
     }
 }
 
-/// Client Phase B (`PREDICTION_MEMBERSHIP.md`): designate **runtime-spawned free
-/// dynamic props** (a ball / crate you bump with a rover) as
-/// [`lunco_core::PredictedDynamic`], so they run local physics + state-reconcile
-/// instead of being kinematic-pinned + interpolated — giving a crisp local
-/// rover↔prop collision in the same frame.
+/// Client Phase B (`PREDICTION_MEMBERSHIP.md`): designate **every replicated free
+/// dynamic prop** (a ball / crate / cone — whether runtime-spawned OR authored
+/// scene content) as [`lunco_core::PredictedDynamic`], so it runs local physics +
+/// state-reconcile instead of being kinematic-pinned + interpolated. That makes
+/// physics feel **live on the client**: bump a prop and it moves in the same
+/// frame, then the snapshot reconcile corrects any drift.
 ///
-/// Restricting to [`lunco_core::SkipContentStamp`] (runtime spawns, D4
-/// `Authoritative`) is the **cosim guard**: balloons / `CosimTarget` are scene
-/// CONTENT (never `SkipContentStamp`), so they can't be caught here — and they
-/// must NOT be predicted, their motion is server-only (Gap C). Rovers
-/// (`RoverVessel`) and the possessed rover (`OwnedLocally`) are excluded too — they
-/// have their own paths. Flips the body to `Dynamic` (a freshly-spawned prop may
-/// already have been pinned `Kinematic` by `force_kinematic_proxies` the prior
-/// frame); a `Static` prop is left alone. Client-only.
+/// The cosim guard is now [`lunco_core::NotPredictable`] ALONE — stamped on every
+/// cosim-driven / server-only body by `tag_cosim_opaque` and the USD net policy
+/// (balloons / `CosimTarget`, whose forces are server-only and not locally
+/// computable). That marker was added precisely so the structural
+/// `SkipContentStamp` guard wouldn't have to be the only thing (see
+/// `NotPredictable`'s doc) — so we no longer restrict to runtime spawns, which
+/// had frozen plain scene-content physics props server-only. Rovers
+/// (`RoverVessel`) and the possessed rover (`OwnedLocally`) are excluded — they
+/// have their own paths. Flips the body to `Dynamic` (it may already have been
+/// pinned `Kinematic` by `force_kinematic_proxies` the prior frame); a `Static`
+/// prop is left alone. Client-only.
 pub fn maintain_predicted_dynamic(
     role: Res<lunco_core::NetworkRole>,
     mut commands: Commands,
@@ -1069,14 +1073,15 @@ pub fn maintain_predicted_dynamic(
         (Entity, &RigidBody),
         (
             With<lunco_core::NetReplicate>,
-            With<lunco_core::SkipContentStamp>,
             Without<lunco_core::RoverVessel>,
             Without<lunco_core::OwnedLocally>,
             Without<lunco_core::PredictedDynamic>,
-            // §6 opaque guard: a cosim-driven body (server-only forces) is never
-            // locally computable, so it must never be predicted even if it somehow
-            // arrived as a runtime spawn. Belt-and-suspenders with the structural
-            // `SkipContentStamp` guard above (cosim props are scene content).
+            // The cosim/server-only guard: a cosim-driven body (Modelica balloon,
+            // CosimTarget, …) has forces we can't reproduce locally, so it must
+            // never be predicted — it stays a kinematic, snapshot-driven proxy.
+            // This is now the SOLE membership guard (the old `SkipContentStamp`
+            // runtime-spawn restriction is dropped so authored scene props run
+            // live physics too).
             Without<lunco_core::NotPredictable>,
         ),
     >,
@@ -1844,61 +1849,6 @@ pub fn on_focus_entity_by_id(
     );
 }
 
-/// Select an entity by API id — the headless/scriptable equivalent of a
-/// Shift+Left-click in the viewport. Drives the same [`SelectedEntity`]
-/// resource and [`Selected`](crate::selection::Selected) highlight the mouse
-/// path uses, so the Inspector immediately shows that entity's components
-/// (Transform, Physics, Shader Parameters, …). Pass `entity_id == 0` to clear
-/// the selection.
-///
-/// This is the selection primitive the Explorer's entity rows and API clients
-/// (MCP tools, screenshot automation) share; without it, selection was
-/// reachable only by a mouse click into the 3D view.
-#[Command(default)]
-pub struct SelectEntity {
-    /// API id from `ListEntities` — `u64` "Pattern B", resolved in the
-    /// observer via `ApiEntityRegistry` (same as [`FocusEntityById`]). `0`
-    /// clears the selection.
-    pub entity_id: u64,
-}
-
-/// Observer for [`SelectEntity`]: clears the previous highlight and selects
-/// the requested entity (or clears selection on id 0).
-pub fn on_select_entity(
-    trigger: On<SelectEntity>,
-    registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    mut selected: ResMut<crate::SelectedEntity>,
-    q_old: Query<Entity, With<crate::selection::Selected>>,
-    mut commands: Commands,
-) {
-    let cmd = trigger.event();
-
-    // Clear any existing highlight + gizmo (mirrors the click path).
-    for old in q_old.iter() {
-        commands
-            .entity(old)
-            .remove::<crate::selection::Selected>()
-            .remove::<transform_gizmo_bevy::GizmoTarget>();
-    }
-
-    if cmd.entity_id == 0 {
-        selected.entity = None;
-        info!("SELECT_ENTITY: cleared selection");
-        return;
-    }
-
-    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
-    let Some(target) = registry.resolve(&global_id) else {
-        warn!("SELECT_ENTITY: no api_id={} in registry", cmd.entity_id);
-        selected.entity = None;
-        return;
-    };
-
-    commands.entity(target).insert(crate::selection::Selected);
-    selected.entity = Some(target);
-    info!("SELECT_ENTITY: selected api_id={} ({target:?})", cmd.entity_id);
-}
-
 /// Aim the free-flight avatar camera: place it at `eye` and look at `target`
 /// (both absolute world-space). The flexible primitive — the client computes the
 /// angle (e.g. approach a wheel from its outboard side) and distance. Sets the
@@ -2397,7 +2347,10 @@ impl Plugin for SpawnCommandPlugin {
         app.add_observer(on_rescan_spawn_catalog);
         app.add_observer(on_set_object_property);
         app.add_observer(on_focus_entity_by_id);
-        app.add_observer(on_select_entity);
+        // NOTE: `SelectEntity`/`on_select_entity` are editor-only (they drive the
+        // Inspector highlight + gizmo) and live in the `ui`-gated `selection`
+        // module; `SandboxEditPlugin` registers them. The headless server has no
+        // selection, so they're absent here by design.
         app.add_observer(on_set_camera_look_at);
         app.add_observer(on_reload_shader);
         app.add_observer(on_set_shader_source);
@@ -2416,7 +2369,6 @@ impl Plugin for SpawnCommandPlugin {
         app.register_type::<RescanSpawnCatalog>();
         app.register_type::<SetObjectProperty>();
         app.register_type::<FocusEntityById>();
-        app.register_type::<SelectEntity>();
         app.register_type::<SetCameraLookAt>();
         app.register_type::<ReloadShader>();
         app.register_type::<SetShaderSource>();
@@ -2435,6 +2387,19 @@ impl Plugin for SpawnCommandPlugin {
         app.init_resource::<InterpBuffers>();
         app.init_resource::<PredictedStateLog>();
         app.init_resource::<ProxyPlaybackClock>();
+        // Resources this plugin's OWN systems read, so it stands alone without the
+        // UI-layer `SandboxEditPlugin` / the render-layer `ShaderMaterialPlugin`
+        // (e.g. a headless `--no-ui` server that adds only `SpawnCommandPlugin`).
+        // `init_resource` is idempotent, so when those plugins also init these it's
+        // a harmless no-op:
+        //   - `SpawnCatalog`   — read by `maintain_catalogs` + `apply_replicated_spawns`;
+        //   - `SelectedEntity` — read by `on_select_entity`;
+        //   - `ShaderCatalog`  — read by `maintain_catalogs` (per-frame) + the shader
+        //     command observers. Lives in `lunco_materials`; an empty one is fine on
+        //     a server (shader discovery populates it but nothing renders it).
+        app.init_resource::<crate::catalog::SpawnCatalog>();
+        app.init_resource::<crate::SelectedEntities>();
+        app.init_resource::<lunco_materials::ShaderCatalog>();
         // Networking: instantiate host-replicated spawns, buffer + interpolate
         // proxies from snapshots, and keep proxies kinematic. All no-op in
         // single-player. Order matters:

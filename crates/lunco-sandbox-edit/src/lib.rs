@@ -28,29 +28,43 @@
 //! });
 //! ```
 
+// Headless-safe: `catalog` (spawn registry) + `commands` (SpawnCommandPlugin =
+// runtime spawn/move + NetReplicate tagging) are the only parts a `--no-ui`
+// server needs. Everything below is the in-scene editor (gizmo/picking/egui),
+// gated on `ui`.
 pub mod catalog;
 pub mod commands;
+#[cfg(feature = "ui")]
 pub mod gizmo;
+#[cfg(feature = "ui")]
 pub mod perf_bridge;
+#[cfg(feature = "ui")]
 pub mod physics_viz;
+#[cfg(feature = "ui")]
 pub mod selection;
+#[cfg(feature = "ui")]
 pub mod spawn;
+#[cfg(feature = "ui")]
 pub mod undo;
 
 /// UI panels — WorkbenchPanel implementations (for editor mode).
+#[cfg(feature = "ui")]
 pub mod ui;
 
 use bevy::prelude::*;
 
+#[cfg(feature = "ui")]
 pub use undo::{UndoStack, UndoAction};
 
 /// Master plugin for all sandbox editing tools.
+#[cfg(feature = "ui")]
 pub struct SandboxEditPlugin;
 
+#[cfg(feature = "ui")]
 impl Plugin for SandboxEditPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SpawnState>()
-            .init_resource::<SelectedEntity>()
+            .init_resource::<SelectedEntities>()
             .init_resource::<InspectorTarget>()
             .init_resource::<UndoStack>()
             .init_resource::<catalog::SpawnCatalog>()
@@ -72,6 +86,12 @@ impl Plugin for SandboxEditPlugin {
         app.add_observer(selection::on_scene_click_select);
         app.add_observer(spawn::on_scene_click_spawn);
 
+        // Editor-only `SelectEntity` API command (Inspector highlight + gizmo) —
+        // registered here, not in the headless `SpawnCommandPlugin`.
+        app.add_observer(selection::on_select_entity);
+        app.register_type::<selection::SelectEntity>();
+        app.add_systems(Update, selection::draw_selection_bounds);
+
         // Gizmo systems run in Last schedule (after transform-gizmo-bevy's update_gizmos):
         // 1. capture_gizmo_start - makes body kinematic when drag starts
         // 2. sync_gizmo_transforms - syncs Position + GlobalTransform from Transform
@@ -84,7 +104,16 @@ impl Plugin for SandboxEditPlugin {
             gizmo::sync_gizmo_transforms.after(gizmo::capture_gizmo_start),
             gizmo::restore_gizmo_dynamic.after(gizmo::sync_gizmo_transforms),
         ));
+        app.add_systems(
+            PostUpdate,
+            gizmo::restore_dragged_transform
+                .after(avian3d::schedule::PhysicsSystems::Writeback)
+                .before(bevy::transform::TransformSystems::Propagate),
+        );
         app.add_systems(Update, gizmo::sync_gizmo_camera);
+        // Publish the drag state as the core `GizmoDragging` marker so transform-
+        // gizmo-free crates (avatar camera follow) can read it.
+        app.add_systems(Update, gizmo::sync_gizmo_dragging_marker);
         app.add_systems(Update, undo::handle_undo_input);
 
         // Physics-state arrows (velocity, force) for entities that
@@ -101,45 +130,19 @@ impl Plugin for SandboxEditPlugin {
         );
         physics_viz::register_all_commands(app);
 
-        // Custom picking backend: always report selected `GizmoTarget`s as
-        // hit by the pointer. Counteracts the gizmo's internal
-        // `gizmo_picking_backend` gate (`any_gizmo_hovered`) which would
-        // otherwise leave the gizmo inert when the cursor is over an
-        // egui dock surface. We can't disable that feature on
-        // `transform-gizmo-bevy 0.9` because its `gizmo_picking_backend`
-        // feature gate is incomplete (unconditional `use bevy_picking::...`
-        // imports), so we replicate the always-on behaviour here.
-        app.add_systems(
-            bevy::prelude::PreUpdate,
-            always_pick_gizmo_targets.in_set(bevy_picking::PickingSystems::Backend),
-        );
-    }
-}
-
-/// Picking backend that always reports `GizmoTarget` entities as hit
-/// by the pointer. See the comment in `SandboxEditPlugin::build` for
-/// why this is necessary.
-fn always_pick_gizmo_targets(
-    q_targets: Query<bevy::prelude::Entity, bevy::prelude::With<transform_gizmo_bevy::GizmoTarget>>,
-    pointers: Query<(&bevy_picking::pointer::PointerId, &bevy_picking::pointer::PointerLocation)>,
-    mut output: bevy::prelude::MessageWriter<bevy_picking::backend::PointerHits>,
-) {
-    let targets: Vec<bevy::prelude::Entity> = q_targets.iter().collect();
-    if targets.is_empty() {
-        return;
-    }
-    for (pointer_id, pointer_location) in &pointers {
-        if pointer_location.location.is_none() {
-            continue;
-        }
-        let hits: Vec<(bevy::prelude::Entity, bevy_picking::backend::HitData)> = targets
-            .iter()
-            .map(|e| (*e, bevy_picking::backend::HitData::new(*e, 0.0, None, None)))
-            .collect();
-        // High order so we sit above other picking backends in the
-        // HoverMap; the gizmo just needs to see the target as hit
-        // (it does its own handle hit-testing internally).
-        output.write(bevy_picking::backend::PointerHits::new(*pointer_id, hits, f32::INFINITY));
+        // NOTE: gizmo handle picking is provided by transform-gizmo-bevy's own
+        // `TransformGizmoPickingPlugin` (added by `TransformGizmoPlugin`). Its
+        // backend reports a target as hit ONLY when the cursor is actually over
+        // a handle (`gizmo.pick_preview`), at picking order `0.0`.
+        //
+        // We deliberately do NOT add an "always report gizmo targets" backend.
+        // An earlier version did (emitting every `GizmoTarget` at `f32::INFINITY`
+        // every frame), which masked all real mesh hits in the `HoverMap`: once
+        // one object was selected, every click resolved to that gizmo target
+        // instead of the entity under the cursor — breaking Shift-click
+        // multi-select and possessing a *different* rover. That override was a
+        // leftover from the docked-egui-viewport era; with the full-window 3D
+        // viewport + bevy_picking it is pure harm, so it's gone.
     }
 }
 
@@ -156,14 +159,21 @@ pub enum SpawnState {
     },
 }
 
-/// Tracks which entity is currently selected.
-#[derive(Resource, Default)]
-pub struct SelectedEntity {
-    /// The selected entity, if any.
-    pub entity: Option<Entity>,
+/// Tracks which entities are currently selected.
+#[derive(Resource, Default, Clone)]
+pub struct SelectedEntities {
+    /// The selected entities. The last one added is the "primary" selection.
+    pub entities: Vec<Entity>,
 }
 
-/// Which sub-part of the [`SelectedEntity`] the Inspector edits.
+impl SelectedEntities {
+    /// Returns the primary selected entity, if any.
+    pub fn primary(&self) -> Option<Entity> {
+        self.entities.last().copied()
+    }
+}
+
+/// Which sub-part of the [`SelectedEntities`] the Inspector edits.
 ///
 /// Selection targets a logical component root (a rover), but a component has
 /// many material-bearing parts (4 wheels + body). This narrows editing to one

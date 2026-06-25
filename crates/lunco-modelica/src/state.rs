@@ -87,7 +87,7 @@ pub fn update_file_load_result(mut state: ResMut<WorkbenchState>) {
 /// # What lives here (post–Workspace migration)
 ///
 /// This resource is now a **UI cache** on top of the authoritative
-/// session state in [`lunco_workbench::WorkspaceResource`]:
+/// session state in [`lunco_workspace::WorkspaceResource`]:
 ///
 /// - **Identity of the active document** lives on the Workspace
 ///   (`active_document: Option<DocumentId>`). This struct only carries
@@ -138,7 +138,7 @@ pub struct WorkbenchState {
 ///
 /// Separate from [`crate::ModelicaModel::is_stepping`] (a per-entity simulation
 /// tick guard) and from error *content* (which lives in
-/// [`crate::ui::state::WorkbenchState`] today). This enum is the
+/// [`crate::state::WorkbenchState`] today). This enum is the
 /// answer to "is a compile in flight for this document?" — UI uses it
 /// to disable the Compile button while the worker is busy and to show
 /// an at-a-glance status chip.
@@ -296,7 +296,7 @@ impl CompileStates {
 /// `open_model.detected_name`. Returns `None` when the doc has no
 /// AST yet (parse pending) or when no model declaration exists.
 pub fn detected_name_for(world: &bevy::prelude::World, doc: DocumentId) -> Option<String> {
-    crate::ui::panels::model_view::context::default_simulation_class(world, doc)
+    crate::sim_default::default_simulation_class(world, doc)
 }
 
 /// Read-only flag for `doc`. Replaces `open_model.read_only`.
@@ -534,7 +534,7 @@ pub fn simulator_for(world: &World, doc: DocumentId) -> Option<Entity> {
 /// pinned id instead.
 pub fn active_simulator(world: &World) -> Option<Entity> {
     let active = world
-        .get_resource::<lunco_workbench::WorkspaceResource>()?
+        .get_resource::<lunco_workspace::WorkspaceResource>()?
         .active_document?;
     simulator_for(world, active)
 }
@@ -712,7 +712,9 @@ mod tests {
 
         let host = reg.host(doc).expect("host registered");
         assert_eq!(host.document().source(), "model A end A;");
-        assert_eq!(host.generation(), 0, "allocate doesn't apply an op");
+        // Fresh doc is gen 1 from construction (placeholder-AST staleness
+        // seed); allocate itself applies no op on top of that.
+        assert_eq!(host.generation(), 1, "allocate doesn't apply an op");
     }
 
     #[test]
@@ -725,7 +727,7 @@ mod tests {
 
         let host = reg.host(doc).unwrap();
         assert_eq!(host.document().source(), "model B end B;");
-        assert_eq!(host.generation(), 1);
+        assert_eq!(host.generation(), 2); // gen 1 fresh + 1 checkpoint op
         assert!(host.can_undo());
     }
 
@@ -736,7 +738,7 @@ mod tests {
 
         let changed = reg.checkpoint_source(doc, "same".into());
         assert!(!changed, "re-checkpointing identical source must not bump generation");
-        assert_eq!(reg.host(doc).unwrap().generation(), 0);
+        assert_eq!(reg.host(doc).unwrap().generation(), 1); // unchanged fresh gen 1
     }
 
     #[test]

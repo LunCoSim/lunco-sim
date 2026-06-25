@@ -5,12 +5,26 @@ edition = "2021"
 description = "Transport-agnostic API layer for LunCoSim — HTTP, ROS2, IPC, etc."
 
 [features]
-default = ["transport-http"]
+default = ["transport-http", "render"]
 # Native HTTP server (axum + TcpListener). Opt-in so library consumers that
 # only need the registry/schema types stay axum-free. Pulls tokio's full
 # runtime/net — wasm-incompatible, so never enable this for wasm32 (the web
 # build leaves it off; the wasm JS bridge needs no feature — see below).
 transport-http = ["dep:axum", "dep:tokio", "tokio/full"]
+
+# Screenshot / `CaptureScreenshot` support. Pulls bevy's render stack
+# (`Screenshot` + `ScreenshotCaptured` live in `bevy_render`). A headless
+# server leaves this off so the whole crate builds render-free — the
+# `CaptureScreenshot` command then simply reports "command not found".
+# On by default so GUI binaries get screenshots with no extra opt-in.
+render = ["bevy/bevy_render", "bevy/bevy_core_pipeline", "bevy/bevy_window", "dep:image", "dep:web-time"]
+
+# Windowed-app optimization: hook the winit event loop so an incoming HTTP
+# request wakes the app immediately (vs. waiting for the next reactive tick).
+# Needs `bevy::winit`. OFF for a headless `--no-ui` server — it has no event loop
+# (ScheduleRunnerPlugin ticks continuously), so the waker is a no-op anyway.
+# GUI binaries enable it via `lunco-client`'s `ui` feature.
+winit = ["bevy/bevy_winit"]
 
 # NOTE: there is no `transport-wasm` feature. On wasm32 the only usable
 # transport is the `window.lunco_api` JS bridge (a browser can't bind TCP), so
@@ -19,13 +33,19 @@ transport-http = ["dep:axum", "dep:tokio", "tokio/full"]
 
 [dependencies]
 lunco-core = { path = "../lunco-core" }
+# Substrate-only by default; the `render` feature adds the bevy render stack
+# the screenshot path needs (see `[features]` above). A headless server depends
+# on this crate with `default-features = false` (or without `render`) to stay
+# render-free.
 bevy = { workspace = true }
-image = "0.25"
 serde = { workspace = true }
 serde_json = { workspace = true }
-# Wasm-safe `SystemTime` for the screenshot-filename timestamp (std::time
-# panics on wasm and trips the disallowed_methods lint).
-web-time = { workspace = true }
+# Screenshot-only deps — pulled in by the `render` feature. `image` encodes the
+# captured frame; `web-time` is a wasm-safe `SystemTime` for the screenshot
+# filename timestamp (std::time panics on wasm and trips the disallowed_methods
+# lint).
+image = { version = "0.25", optional = true }
+web-time = { workspace = true, optional = true }
 
 # Transport: HTTP (optional, native only). `tokio/full` is added by the
 # `transport-http` feature; the base dep stays featureless.

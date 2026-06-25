@@ -19,18 +19,18 @@ def Xform "Drivetrain"
 {
     over "Wheel_FL"
     {
-        double3 xformOp:translate = (-1.0, -0.15, 1.225)
+        double3 xformOp:translate = (-1.0, -0.15, -1.225)
     }
     over "Wheel_FR"
     {
-        double3 xformOp:translate = (1.0, -0.15, 1.225)
+        double3 xformOp:translate = (1.0, -0.15, -1.225)
     }
     over "Wheel_RL"
     {
-        double3 xformOp:translate = (-1.0, -0.15, -1.225)
+        double3 xformOp:translate = (-1.0, -0.15, 1.225)
     }
     over "Wheel_RR"
     {
-        double3 xformOp:translate = (1.0, -0.15, -1.225)
+        double3 xformOp:translate = (1.0, -0.15, 1.225)
     }
 }

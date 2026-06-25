@@ -60,7 +60,7 @@ pub fn on_focus_document_by_name(
     }
     commands.queue(move |world: &mut World| {
         let hit = {
-            let ws = world.resource::<lunco_workbench::WorkspaceResource>();
+            let ws = world.resource::<lunco_workspace::WorkspaceResource>();
             let needle = pattern.to_lowercase();
             ws.documents()
                 .iter()
@@ -75,10 +75,10 @@ pub fn on_focus_document_by_name(
             return;
         };
         let tab_id = world
-            .resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+            .resource_mut::<crate::model_tabs::ModelTabs>()
             .ensure_for(doc, None);
         world.commands().trigger(lunco_workbench::OpenTab {
-            kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+            kind: crate::ui::MODEL_VIEW_KIND,
             instance: tab_id,
         });
     });
@@ -96,7 +96,7 @@ pub fn on_set_view_mode(trigger: On<SetViewMode>, mut commands: Commands) {
         }) else {
             return;
         };
-        use crate::ui::panels::model_view::{ModelTabs, ModelViewMode};
+        use crate::model_tabs::ModelTabs; use crate::model_tabs_types::ModelViewMode;
         let new_mode = match mode_str.to_lowercase().as_str() {
             "text" | "source" => ModelViewMode::Text,
             "diagram" | "canvas" => ModelViewMode::Canvas,

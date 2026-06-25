@@ -1,6 +1,6 @@
 //! Tree node types and basic structures for the Package Browser.
 
-use crate::ui::state::ModelLibrary;
+use crate::state::ModelLibrary;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum PackageNode {

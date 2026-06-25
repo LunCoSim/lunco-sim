@@ -60,7 +60,7 @@ use lunco_fsw::FlightSoftware;
 use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
 use lunco_hardware::{MotorActuator, SteeringActuator};
 use lunco_core::RoverVessel;
-use lunco_avatar::{FreeFlightCamera, OrbitCamera, SpringArmCamera, AdaptiveNearPlane};
+use lunco_avatar::{FreeFlightCamera, OrbitCamera, SpringArmCamera, AdaptiveNearPlane, ProvisionalAvatarCamera};
 use lunco_core::Avatar;
 use lunco_core::architecture::IntentAnalogState;
 use leafwing_input_manager::prelude::ActionState;
@@ -252,6 +252,7 @@ fn process_usd_sim_prims(
     q_all_prims: Query<&UsdPrimPath>,
     q_grids: Query<Entity, With<Grid>>,
     q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
+    q_provisional_cameras: Query<Entity, With<ProvisionalAvatarCamera>>,
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -380,6 +381,19 @@ fn process_usd_sim_prims(
             for prior in q_existing_floating_origins.iter() {
                 if prior != entity {
                     commands.entity(prior).remove::<FloatingOrigin>();
+                }
+            }
+            // Complete the takeover: retire any PROVISIONAL stand-in camera
+            // (spawned by the sandbox while the scene was still loading) in THIS
+            // same command flush, so it never coexists with the authored camera
+            // as a second order-0 window `Camera3d` — which would otherwise
+            // produce camera-order ambiguity (double scene render) and a
+            // duplicate `GizmoCamera`. The marker is a separate entity from this
+            // avatar prim, so `entity` is never among them; the guard is belt-
+            // and-braces. See `ProvisionalAvatarCamera`.
+            for prov in q_provisional_cameras.iter() {
+                if prov != entity {
+                    commands.entity(prov).despawn();
                 }
             }
             let camera_mode = reader.prim_attribute_value::<String>(&sdf_path, "lunco:cameraMode")

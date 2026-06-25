@@ -84,7 +84,7 @@ they don't need to know about each other.
 ### Runtime reload
 
 ```bash
-curl -X POST http://127.0.0.1:3000/api/commands \
+curl -X POST http://127.0.0.1:4101/api/commands \
   -H 'Content-Type: application/json' \
   -d '{"command":"LoadScene","params":{"path":"scenes/sandbox/sandbox_scene.usda","root_prim":""}}'
 ```

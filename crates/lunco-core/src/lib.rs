@@ -50,7 +50,8 @@ pub use commands::{
     SyncChannel,
 };
 pub use markers::{
-    FallbackSceneLight, GridAnchor, HorizonShadowTerrain, SoiMigrant, SunAngularDiameter,
+    ActuatorDrivenJoint, FallbackSceneLight, GridAnchor, HorizonShadowTerrain, SoiMigrant,
+    SunAngularDiameter,
 };
 pub use invariants::BigSpaceInvariantsPlugin;
 pub use world::{
@@ -306,6 +307,17 @@ impl Default for DragModeActive {
 #[derive(Resource, Default)]
 pub struct SpawnToolActive(pub bool);
 
+/// Per-entity marker: this entity is currently being dragged by the editor
+/// transform gizmo.
+///
+/// Set/cleared by sandbox-edit's gizmo systems (an editor/UI concern that lives
+/// behind the `ui` feature). It exists in `lunco-core` so render/sim systems can
+/// react to a drag **without** depending on `transform-gizmo-bevy`: e.g. the
+/// avatar camera-follow systems pause following a target while it's dragged.
+/// On a headless server nothing inserts it, so those checks are simply always-false.
+#[derive(Component, Default)]
+pub struct GizmoDragging;
+
 /// Represents the current "wall clock" time in the simulation universe.
 ///
 /// Uses Julian Date for astronomical precision and provides a mechanism
@@ -399,6 +411,7 @@ impl Plugin for LunCoCorePlugin {
         app.add_plugins(BigSpaceInvariantsPlugin);
         app.register_type::<GridAnchor>()
            .register_type::<SoiMigrant>()
+           .register_type::<ActuatorDrivenJoint>()
            .register_type::<Severity>()
            .register_type::<TelemetryValue>()
            .register_type::<TelemetryEvent>()

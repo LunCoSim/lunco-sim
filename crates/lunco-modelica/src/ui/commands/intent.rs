@@ -3,13 +3,13 @@
 use bevy::prelude::*;
 use lunco_doc_bevy::{EditorIntent, SaveAsDocument, SaveDocument, UndoDocument, RedoDocument};
 use lunco_workbench::file_ops::NewDocument;
-use crate::ui::ModelicaDocumentRegistry;
+use crate::state::ModelicaDocumentRegistry;
 
 // ─── Observers ───────────────────────────────────────────────────────────────
 
 pub fn resolve_editor_intent(
     trigger: On<EditorIntent>,
-    workspace: Res<lunco_workbench::WorkspaceResource>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
     registry: Res<ModelicaDocumentRegistry>,
     mut pending_closes: ResMut<lunco_workbench::PendingTabCloses>,
     mut commands: Commands,
@@ -29,7 +29,7 @@ pub fn resolve_editor_intent(
         EditorIntent::Close => {
             commands.queue(move |world: &mut World| {
                 let Some(tab_id) = world
-                    .resource::<crate::ui::panels::model_view::ModelTabs>()
+                    .resource::<crate::model_tabs::ModelTabs>()
                     .any_for_doc(doc)
                 else {
                     return;
@@ -38,7 +38,7 @@ pub fn resolve_editor_intent(
                     .get_resource_mut::<lunco_workbench::PendingTabCloses>()
                 {
                     q.push(lunco_workbench::TabId::Instance {
-                        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                        kind: crate::ui::MODEL_VIEW_KIND,
                         instance: tab_id,
                     });
                 }

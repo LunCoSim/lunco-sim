@@ -502,6 +502,39 @@ fn instantiate_usd_prim(
                     // barrel made the top edge of the wheel look chunky.
                     Some(meshes.add(Cylinder::new(radius, height).mesh().resolution(64)))
                 }
+                Some("Cone") => {
+                    let radius = reader
+                        .prim_attribute_value::<f64>(&sdf_path, "radius")
+                        .unwrap_or(1.0) as f32;
+                    let height = reader
+                        .prim_attribute_value::<f64>(&sdf_path, "height")
+                        .unwrap_or(2.0) as f32;
+                    Some(meshes.add(Cone::new(radius, height).mesh().resolution(64)))
+                }
+                Some("Capsule") => {
+                    let radius = reader
+                        .prim_attribute_value::<f64>(&sdf_path, "radius")
+                        .unwrap_or(0.5) as f32;
+                    let height = reader
+                        .prim_attribute_value::<f64>(&sdf_path, "height")
+                        .unwrap_or(1.0) as f32;
+                    let half_length = height / 2.0;
+                    Some(meshes.add(
+                        Capsule3d::new(radius, half_length)
+                            .mesh()
+                            .latitudes(16)
+                            .longitudes(32),
+                    ))
+                }
+                Some("Plane") => {
+                    let width = reader
+                        .prim_attribute_value::<f64>(&sdf_path, "width")
+                        .unwrap_or(2.0) as f32;
+                    let length = reader
+                        .prim_attribute_value::<f64>(&sdf_path, "length")
+                        .unwrap_or(2.0) as f32;
+                    Some(meshes.add(Plane3d::default().mesh().size(width, length)))
+                }
                 _ => None,
             }
         };
@@ -594,7 +627,7 @@ fn instantiate_usd_prim(
         // Bevy `Cylinder` mesh appears along the authored axis without
         // an explicit `xformOp:rotateXYZ` hack. Goes after rotateXYZ so
         // it applies on top of any user-authored rotation.
-        if matches!(prim_type.as_deref(), Some("Cylinder")) {
+        if matches!(prim_type.as_deref(), Some("Cylinder" | "Cone" | "Capsule" | "Plane")) {
             let axis = match reader.try_get(&sdf_path, "axis") {
                 Ok(Some(v)) => match &*v {
                     Value::Token(t) | Value::String(t) => Some(t.clone()),
@@ -612,7 +645,13 @@ fn instantiate_usd_prim(
             if let Some(q) = axis_rot {
                 transform.rotation = transform.rotation * q;
             }
-            info!("[usd-bevy] {} cylinder axis={} rot={:?}", sdf_path.as_str(), axis, transform.rotation);
+            info!(
+                "[usd-bevy] {} {} axis={} rot={:?}",
+                sdf_path.as_str(),
+                prim_type.as_deref().unwrap_or(""),
+                axis,
+                transform.rotation
+            );
         }
         // `xformOp:scale` (UsdGeomXformable) — non-uniform scaling
         // composed with translate + rotate. Spec-compliant `Cube`
@@ -898,10 +937,32 @@ fn apply_standard_material(
         .map(|v| Color::srgb(v.x, v.y, v.z))
         .unwrap_or(Color::WHITE);
 
+    let emissive = get_attribute_as_vec3(reader, sdf_path, "primvars:emissiveColor")
+        .or_else(|| get_attribute_as_vec3(reader, sdf_path, "emissiveColor"))
+        .map(|v| LinearRgba::new(v.x, v.y, v.z, 1.0))
+        .unwrap_or(LinearRgba::BLACK);
+
+    let metallic = light::get_attribute_as_f32(reader, sdf_path, "inputs:metallic")
+        .or_else(|| light::get_attribute_as_f32(reader, sdf_path, "metallic"))
+        .unwrap_or(0.0);
+
+    let roughness = light::get_attribute_as_f32(reader, sdf_path, "inputs:roughness")
+        .or_else(|| light::get_attribute_as_f32(reader, sdf_path, "roughness"))
+        .or_else(|| light::get_attribute_as_f32(reader, sdf_path, "inputs:perceptual_roughness"))
+        .unwrap_or(0.5);
+
+    let reflectance = light::get_attribute_as_f32(reader, sdf_path, "inputs:reflectance")
+        .or_else(|| light::get_attribute_as_f32(reader, sdf_path, "reflectance"))
+        .unwrap_or(0.5);
+
     entity_cmd.insert((
         Mesh3d(mesh_handle.clone()),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: color,
+            emissive,
+            metallic,
+            perceptual_roughness: roughness,
+            reflectance,
             ..default()
         }))
     ));

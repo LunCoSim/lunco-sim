@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use crate::ui::panels::model_view::TabRenderContext;
+use crate::model_tabs_types::TabRenderContext;
 use super::super::{CanvasDiagramState, CanvasSnapSettings, ops, overlays};
 use super::util::{mark, log_frame_times};
 use super::snapshots::stash_snapshots;
@@ -23,7 +23,7 @@ pub(crate) fn render_diagram_canvas(
     mark("resolve_doc_context", &mut phase_t, &mut phase_log);
 
     let active_doc = doc_id;
-    let tab_read_only = active_doc.map(|d| crate::ui::state::read_only_for(world, d)).unwrap_or(false);
+    let tab_read_only = active_doc.map(|d| crate::state::read_only_for(world, d)).unwrap_or(false);
 
     let snap_settings = world.get_resource::<CanvasSnapSettings>().filter(|s| s.enabled).map(|s| lunco_canvas::SnapSettings { step: s.step });
 
@@ -69,7 +69,7 @@ pub(crate) fn render_diagram_canvas(
         let theme = world.get_resource::<lunco_theme::Theme>().cloned().unwrap_or_else(lunco_theme::Theme::dark);
         let drilled_class = render_tab_id
             .and_then(|tid| {
-                let tabs = world.resource::<crate::ui::panels::model_view::ModelTabs>();
+                let tabs = world.resource::<crate::model_tabs::ModelTabs>();
                 tabs.get(tid).and_then(|t| t.drilled_class.clone())
             })
             .unwrap_or_default();
@@ -100,6 +100,126 @@ pub(crate) fn render_diagram_canvas(
                 overlays::render_empty_diagram_overlay(ui, response.rect, world);
             }
             LifecycleState::Content => {}
+        }
+    }
+
+    // ─── "Icons update when MSL loaded" hint ───
+    //
+    // On web the MSL bundle decodes in the background (~tens of
+    // seconds) while the diagram already renders with provisional
+    // partial types — standard-library components resolve to gray
+    // placeholder boxes (`node.rs` `!drew_icon` path) until MSL
+    // installs and the `MslBecameReady` observer reprojects every
+    // open tab with real icons. Surface that so the gray boxes read
+    // as "still loading", not "broken render".
+    //
+    // Visible until icons actually resolve, not just until MSL bytes
+    // land: `MslLoadState` flips to `Ready` a step *before* the
+    // reproject that swaps the gray boxes for icons. `MslBecameReady`
+    // then sets each tab's `force_reproject`; we keep the hint while
+    // that one-shot flag is still pending so there's no bare
+    // gray-boxes-with-no-text frame between Ready and reproject. Once
+    // the reproject spawns, `force_reproject` clears and the canvas
+    // enters its `Loading` lifecycle (the centred spinner), so the
+    // window is fully covered. `force_reproject` is set *only* by
+    // `request_reproject_all` (the MSL-ready handler), so it stays
+    // MSL-specific.
+    {
+        let msl_state = world.get_resource::<lunco_assets::msl::MslLoadState>();
+        let msl_pending = msl_state.map(|s| s.is_pending()).unwrap_or(true);
+        // Live load detail (phase + %) while the bundle is still arriving,
+        // so the diagram shows *why* the icons are gray and how far along
+        // the download/parse is — not just a static "loading" string.
+        let msl_detail = msl_state.and_then(|s| match s {
+            lunco_assets::msl::MslLoadState::Loading {
+                phase,
+                bytes_done,
+                bytes_total,
+            } => Some(format_msl_loading_hint(*phase, *bytes_done, *bytes_total)),
+            _ => None,
+        });
+        let (has_content, reproject_pending) = {
+            let state = world.resource::<CanvasDiagramState>();
+            let docstate = match render_tab_id {
+                Some(t) => state.get_for_tab(t),
+                None => state.get(active_doc),
+            };
+            (
+                docstate.canvas.scene.node_count() > 0,
+                docstate.force_reproject,
+            )
+        };
+        if (msl_pending || reproject_pending) && has_content {
+            // A compile or run dispatched while MSL is still loading can't
+            // finish until the standard library installs (the worker parse
+            // path needs MSL resident — but the worker queues it and runs it
+            // on its `MslReady`, see worker_transport.rs). When one is
+            // pending, extend the hint with a second line so the user knows
+            // the action wasn't lost.
+            //
+            // Compile is doc-scoped (`is_compiling(d)`). A Fast Run is tracked
+            // only by the process-global runner, so we light the run line
+            // whenever it has queued/in-flight work — acceptable here because
+            // this hint only shows *while MSL is still loading*, when the one
+            // queued thing is what the user just clicked.
+            let compile_pending = active_doc
+                .and_then(|d| {
+                    world
+                        .get_resource::<crate::state::CompileStates>()
+                        .map(|cs| cs.is_compiling(d))
+                })
+                .unwrap_or(false);
+            let run_pending = world
+                .get_resource::<crate::ModelicaRunnerResource>()
+                .map(|r| r.0.in_flight_count() > 0 || r.0.queued_count() > 0)
+                .unwrap_or(false);
+            let color = world
+                .get_resource::<lunco_theme::Theme>()
+                .map(|t| t.tokens.warning)
+                .unwrap_or_else(|| lunco_theme::Theme::dark().tokens.warning);
+            let painter = ui
+                .painter()
+                .clone()
+                .with_clip_rect(ui.clip_rect().intersect(response.rect));
+            let font = egui::FontId::proportional(11.0);
+            let mut y = response.rect.bottom() - 8.0;
+            // First line: icons-pending + live load progress when available.
+            let first_line = match &msl_detail {
+                Some(d) => format!("⏳ {d} · icons update when ready"),
+                None => "⏳ Icons will be updated when MSL loaded".to_string(),
+            };
+            painter.text(
+                egui::pos2(response.rect.left() + 10.0, y),
+                egui::Align2::LEFT_BOTTOM,
+                first_line,
+                font.clone(),
+                color,
+            );
+            // Second line: deferred-action notice (compile takes priority
+            // over run since it's doc-scoped and more specific).
+            let deferred = if compile_pending {
+                Some("⏳ Compilation will run when MSL is ready")
+            } else if run_pending {
+                Some("⏳ Simulation will start when MSL is ready")
+            } else {
+                None
+            };
+            if let Some(line) = deferred {
+                y -= 16.0;
+                painter.text(
+                    egui::pos2(response.rect.left() + 10.0, y),
+                    egui::Align2::LEFT_BOTTOM,
+                    line,
+                    font,
+                    color,
+                );
+            }
+            // Coarse poll, not a per-frame spin: MSL readiness flips on a
+            // background task, so a ~250ms re-check clears the hint promptly
+            // without pinning the whole workbench to full-rate redraw for the
+            // entire (slow, resource-constrained) decode window.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
     mark("overlays", &mut phase_t, &mut phase_log);
@@ -148,5 +268,29 @@ pub(crate) fn render_diagram_canvas(
     if (trace_phases || frame_ms > 16.0) && !phase_log.is_empty() {
         let breakdown = phase_log.iter().map(|(name, ms)| format!("{name}={ms:.1}ms")).collect::<Vec<_>>().join(" ");
         bevy::log::warn!("[CanvasDiagram] slow-frame phases (total={frame_ms:.1}ms): {breakdown}");
+    }
+}
+
+/// Human-readable one-liner for the in-diagram MSL-loading hint, e.g.
+/// `Loading Modelica library — downloading MSL 47%` or
+/// `Loading Modelica library — parsing MSL 1200/2555`. The `Parsing`
+/// phase carries file counts in `done`/`total`; other phases carry bytes.
+/// Falls back to a bare phase label when `total` is unknown (`0`).
+fn format_msl_loading_hint(
+    phase: lunco_assets::msl::MslLoadPhase,
+    done: u64,
+    total: u64,
+) -> String {
+    use lunco_assets::msl::MslLoadPhase;
+    let label = phase.as_str();
+    match phase {
+        MslLoadPhase::Parsing if total > 0 => {
+            format!("Loading Modelica library — {label} {done}/{total}")
+        }
+        _ if total > 0 => {
+            let pct = (done as f64 / total as f64 * 100.0).clamp(0.0, 100.0);
+            format!("Loading Modelica library — {label} {pct:.0}%")
+        }
+        _ => format!("Loading Modelica library — {label}"),
     }
 }
