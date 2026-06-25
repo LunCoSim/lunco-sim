@@ -91,6 +91,19 @@ use std::collections::HashMap;
 /// - Otherwise → raycast path.
 ///
 /// No custom `lunco:` tokens drive this dispatch.
+/// Marker resource present **only** on a headless build with no GPU renderer
+/// (the `--no-ui` server). Visual components (`Mesh3d`, and especially the
+/// shader-pipeline `ShaderMaterial`) are produced by render-side systems that
+/// don't run without a renderer, so any setup that *waits* for them would block
+/// forever headless. [`process_usd_sim_prims`] consults this so the rover's
+/// raycast-wheel **physics** (drivetrain, ports, ray-casters) is built without a
+/// renderer — otherwise the authoritative headless server can never simulate or
+/// replicate a drivable rover (wheels stay deferred → no `WheelRaycast` → frozen
+/// rover). Absent on GUI builds, where the visuals do arrive and the wait is
+/// correct (keeps the wheel's shader material on the split visual child).
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct NoRenderVisuals;
+
 pub struct UsdSimPlugin;
 
 impl Plugin for UsdSimPlugin {
@@ -126,6 +139,12 @@ impl Plugin for UsdSimPlugin {
            .add_systems(Update, process_usd_sim_prims
                .run_if(any_unprocessed_usd_sim)
                .after(lunco_usd_bevy::sync_usd_visuals));
+        // Self-healing watchdog: a USD prim that stays unprocessed forever means
+        // an unmet dependency is silently deadlocking setup (the wheel-shader bug:
+        // physics deferred until a render-only `ShaderMaterial` that never arrives
+        // headless). This turns that invisible deadlock into a loud `error!` AND
+        // recovers by building the physics without the missing visual.
+        app.add_systems(Update, recover_stuck_usd_prims);
         // USD → cosim wiring (`lunco:modelicaModel`, `lunco:scriptModel`,
         // `lunco:simWires`) — see `cosim.rs`.
         cosim::install(app);
@@ -246,9 +265,75 @@ fn any_unprocessed_usd_sim(
     !q.is_empty()
 }
 
+/// Seconds a USD prim may remain unprocessed before the watchdog treats it as a
+/// real deadlock and recovers. Every prim `process_usd_sim_prims` touches is
+/// marked `UsdSimProcessed` in the same frame; the *only* prims that linger are
+/// ones it deliberately defers waiting on a dependency (a wheel waiting for its
+/// `Mesh3d`/`ShaderMaterial`). Async scene loads settle in well under this.
+const STUCK_PRIM_DEADLINE_SECS: f32 = 10.0;
+
+/// Stamped by [`recover_stuck_usd_prims`] on a prim that has been deferred too
+/// long. [`process_usd_sim_prims`] treats it like the headless `NoRenderVisuals`
+/// path for that one prim: stop waiting for the (never-arriving) visual and build
+/// the physics anyway. This is the self-heal — a forgotten `NoRenderVisuals`, or a
+/// future render-coupled gate, can no longer silently freeze a rover forever.
+#[derive(Component)]
+struct ForceBuildNoVisual;
+
+/// Self-healing watchdog (structural guard against the wheel-shader class of bug).
+/// `process_usd_sim_prims` defers a prim by `continue`-ing without marking it
+/// `UsdSimProcessed`; if the awaited dependency never arrives (e.g. a render-only
+/// `ShaderMaterial` on the headless server) the prim defers FOREVER and nothing
+/// complains — the rover silently never gets wheels. Once the unprocessed set has
+/// been **stuck (non-decreasing) for [`STUCK_PRIM_DEADLINE_SECS`]**, this:
+/// 1. logs a loud `error!` to the console (the built-in `tracing` system), and
+/// 2. **recovers** — stamps [`ForceBuildNoVisual`] on each stuck prim so the next
+///    `process_usd_sim_prims` builds its physics without the missing visual.
+///
+/// The app keeps running with drivable rovers instead of a silent deadlock. The
+/// query excludes already-recovered prims, and progress (a shrinking set) resets
+/// the timer, so a slow async load never trips it.
+fn recover_stuck_usd_prims(
+    time: Res<Time>,
+    q: Query<(Entity, &UsdPrimPath), (Without<UsdSimProcessed>, Without<ForceBuildNoVisual>)>,
+    mut commands: Commands,
+    mut stuck_for: Local<f32>,
+    mut last_count: Local<usize>,
+) {
+    let count = q.iter().count();
+    if count == 0 {
+        *stuck_for = 0.0;
+        *last_count = 0;
+        return;
+    }
+    if count < *last_count {
+        *stuck_for = 0.0; // progress — a normal async load, not a stall
+    } else {
+        *stuck_for += time.delta_secs();
+    }
+    *last_count = count;
+    if *stuck_for > STUCK_PRIM_DEADLINE_SECS {
+        let sample: Vec<String> = q.iter().take(8).map(|(_, p)| p.path.clone()).collect();
+        error!(
+            "[usd-sim] {count} USD prim(s) stuck unprocessed for >{:.0}s — an unmet \
+             dependency (most likely a render-only `ShaderMaterial`/`Mesh3d` that a \
+             headless/no-GPU build never produces) was deadlocking sim setup. \
+             RECOVERING: building physics without the missing visual. Paths: {sample:?}",
+            STUCK_PRIM_DEADLINE_SECS,
+        );
+        for (e, _) in q.iter() {
+            commands.entity(e).insert(ForceBuildNoVisual);
+        }
+        // Recovered prims leave the query next frame; reset so any genuinely-new
+        // stuck prim starts its own grace period cleanly.
+        *stuck_for = 0.0;
+        *last_count = 0;
+    }
+}
+
 fn process_usd_sim_prims(
     mut commands: Commands,
-    query: Query<(Entity, &UsdPrimPath, Option<&Transform>, Option<&Mesh3d>, Option<&MeshMaterial3d<StandardMaterial>>, Option<&MeshMaterial3d<lunco_materials::ShaderMaterial>>, Option<&ChildOf>), Without<UsdSimProcessed>>,
+    query: Query<(Entity, &UsdPrimPath, Option<&Transform>, Option<&Mesh3d>, Option<&MeshMaterial3d<StandardMaterial>>, Option<&MeshMaterial3d<lunco_materials::ShaderMaterial>>, Option<&ChildOf>, Option<&ForceBuildNoVisual>), Without<UsdSimProcessed>>,
     q_all_prims: Query<&UsdPrimPath>,
     q_grids: Query<Entity, With<Grid>>,
     q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
@@ -261,7 +346,15 @@ fn process_usd_sim_prims(
     // sun under a bright-tuned camera blacked the viewport). `Option` so the
     // loader still works in a stripped app without `EnvironmentPlugin`.
     active_sun: Option<Res<lunco_environment::LunarSun>>,
+    // Present only on a headless (`--no-ui`) server with no GPU. When set, do NOT
+    // wait for visual components (`Mesh3d`/`ShaderMaterial`) before building wheel
+    // PHYSICS — the renderer never produces them, so waiting deadlocks the
+    // drivetrain and the server can't simulate/replicate a drivable rover.
+    no_render_visuals: Option<Res<NoRenderVisuals>>,
 ) {
+    // Whether visual components will ever arrive. `false` headless ⇒ build the
+    // physics now and skip the visual-only split.
+    let visuals_coming = no_render_visuals.is_none();
     // --- Pass 1: collect authored revolute joints by their `body1` target ---
     //
     // Standard OpenUSD: a `def PhysicsRevoluteJoint` declares `rel
@@ -317,7 +410,10 @@ fn process_usd_sim_prims(
     }
 
     // --- Pass 2: Process all prims ---
-    for (entity, prim_path, maybe_tf, maybe_mesh, maybe_mat, maybe_shader_mat, maybe_child_of) in query.iter() {
+    for (entity, prim_path, maybe_tf, maybe_mesh, maybe_mat, maybe_shader_mat, maybe_child_of, force_build) in query.iter() {
+        // Per-prim escape hatch: the recovery watchdog stamped this prim after it
+        // was deferred too long, so stop waiting for its visual (as if headless).
+        let wait_for_visuals = visuals_coming && force_build.is_none();
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
 
@@ -584,7 +680,10 @@ fn process_usd_sim_prims(
         if let Some(radius) = reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleWheel:radius") {
             // Skip if mesh doesn't exist yet — sync_usd_visuals may not have processed
             // this prim. We'll retry next frame (not marking UsdSimProcessed).
-            if maybe_mesh.is_none() {
+            // Headless (no renderer) or recovered (watchdog): the mesh never
+            // comes, so don't wait — build the physics wheel without a visual
+            // (`setup_raycast_wheel` handles a `None` mesh: it skips the visual child).
+            if maybe_mesh.is_none() && wait_for_visuals {
                 debug!("Wheel {} has no mesh yet, skipping until next frame", prim_path.path);
                 continue;
             }
@@ -603,7 +702,14 @@ fn process_usd_sim_prims(
                 reader.prim_attribute_value::<String>(&sdf_path, "primvars:materialType").as_deref(),
                 Some("shader") | Some("usd_shader")
             ) && reader.prim_attribute_value::<String>(&sdf_path, "primvars:shaderPath").is_some();
-            if wants_shader && maybe_shader_mat.is_none() {
+            // Headless (no renderer): the `ShaderMaterial` is produced by a
+            // render-side observer that never runs without a GPU, so waiting for
+            // it deferred the wheel FOREVER — the server then never built the
+            // raycast drivetrain and rovers could not be driven or replicated.
+            // Build the physics now; the cosmetic wheel shader is irrelevant
+            // server-side. GUI builds still wait (so the split visual keeps it),
+            // unless the watchdog recovered this prim after a deadlock.
+            if wants_shader && maybe_shader_mat.is_none() && wait_for_visuals {
                 debug!("Wheel {} awaits ShaderMaterial from observer, deferring", prim_path.path);
                 continue;
             }

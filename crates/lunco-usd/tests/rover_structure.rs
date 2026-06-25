@@ -78,6 +78,67 @@ fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
     app
 }
 
+/// HEADLESS-PARITY GUARD — regression test for the wheel-shader deadlock.
+///
+/// On the `--no-ui` server there is no GPU, so the materials plugin (and its
+/// render pipeline) is absent → `Assets<ShaderMaterial>` does not exist →
+/// `apply_usd_shader_materials` no-ops → a wheel's `materialType="shader"` material
+/// NEVER arrives. The wheel PHYSICS must still build (gated by the `NoRenderVisuals`
+/// marker), or the authoritative server can never simulate or replicate a drivable
+/// rover — every wheel deadlocks `Without<UsdSimProcessed>` forever.
+///
+/// This reproduces that exact condition: **no `ShaderMaterial` asset registered**
+/// + `NoRenderVisuals` inserted. Without the fix, all 4 wheels deadlock (0
+/// `WheelRaycast`) and this fails — which is precisely what shipped to the server.
+#[test]
+fn headless_server_builds_wheel_physics_without_shader_material() {
+    let file = Path::new("../../assets/vessels/rovers/skid_rover.usda");
+    let raw = std::fs::read_to_string(file)
+        .unwrap_or_else(|e| panic!("Missing {}: {e}", file.display()));
+    let composed = compose_native_fs(&raw, file.parent().unwrap())
+        .unwrap_or_else(|| panic!("Composition failed for {}", file.display()));
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(AssetPlugin::default());
+    app.init_asset::<UsdStageAsset>();
+    app.init_asset::<Mesh>();
+    app.init_asset::<StandardMaterial>();
+    app.init_asset::<Image>();
+    app.init_asset::<bevy::shader::Shader>();
+    // DELIBERATELY no `init_asset::<ShaderMaterial>()` — this is what makes the
+    // app a faithful stand-in for the headless server (no materials plugin).
+    app.insert_resource(NoRenderVisuals); // the fix under test
+    app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
+
+    let handle = app
+        .world_mut()
+        .resource_mut::<Assets<UsdStageAsset>>()
+        .add(UsdStageAsset { reader: Arc::new(composed) });
+    app.world_mut().spawn((
+        Name::new("HeadlessRover"),
+        UsdPrimPath { stage_handle: handle, path: "/SkidRover".to_string() },
+        Transform::default(),
+        CellCoord::default(),
+        Visibility::Visible,
+        InheritedVisibility::default(),
+        ViewVisibility::default(),
+    ));
+
+    for _ in 0..10 {
+        app.update();
+    }
+    app.world_mut().flush();
+
+    let mut q = app.world_mut().query::<&WheelRaycast>();
+    let n = q.iter(app.world()).count();
+    assert_eq!(
+        n, 4,
+        "headless server (no ShaderMaterial) must still build 4 WheelRaycast wheels; \
+         got {n} — wheels deadlocked waiting on a render-only material the server never produces"
+    );
+}
+
 /// Verify that ALL rover files loaded through the real pipeline produce
 /// the exact same component structure as the original procedural spawn.
 #[test]

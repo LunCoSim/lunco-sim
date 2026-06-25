@@ -385,6 +385,14 @@ fn capture_command<C: Event + Reflect + TypePath>(
 
 // ── Apply ─────────────────────────────────────────────────────────────────────
 
+/// Short type-paths of the state-producing control commands that the authority
+/// gate ([`authorize`]) requires ownership for. The inbox drain sinks these to
+/// the end of a frame's batch so a possession that arrives alongside them is
+/// recorded first (see [`drain_sync_inbox`]).
+fn is_control_command(type_name: &str) -> bool {
+    matches!(type_name, "DriveRover" | "BrakeRover")
+}
+
 /// Apply an inbound command through the *same* reflect-trigger path as a local /
 /// HTTP command, with dedupe + authority + an echo guard.
 pub fn apply_sync_command(
@@ -500,7 +508,23 @@ pub fn drain_sync_inbox(
     if inbox.0.is_empty() {
         return;
     }
-    let drained: Vec<(SessionId, SyncEnvelope)> = std::mem::take(&mut inbox.0);
+    let mut drained: Vec<(SessionId, SyncEnvelope)> = std::mem::take(&mut inbox.0);
+    // Order within a frame: possession/structural commands BEFORE control commands.
+    // `DriveRover`/`BrakeRover` ride the unreliable `ControlStream` (datagrams,
+    // fast) while `PossessVessel` rides the reliable `CommandBus` (slightly
+    // slower), so a drive can land in the same inbox batch as — but ahead of — the
+    // possession that authorizes it. Applied in that order, the host authorizes the
+    // drive before recording ownership → spurious "not authorized" reject and the
+    // owning client's rover snapping back on every possession. A stable sort that
+    // sinks control commands to the end of the batch makes possession win, so
+    // `record_possession_authority` claims the vessel before `authorize` gates the
+    // drive. (A genuinely cross-frame reorder — reliable possess still in flight —
+    // is unaffected, but that is at most a couple of dropped inputs, not a
+    // persistent desync.)
+    drained.sort_by_key(|(_, env)| match env {
+        SyncEnvelope::Command(m) if is_control_command(&m.payload.type_name) => 1u8,
+        _ => 0,
+    });
     for (sender, env) in drained {
         match env {
             SyncEnvelope::Command(m) => {

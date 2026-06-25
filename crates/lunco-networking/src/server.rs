@@ -198,6 +198,12 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
             NetcodeServer::new(NetcodeConfig {
                 protocol_id: PROTOCOL_ID,
                 private_key: PRIVATE_KEY,
+                // 30s (default was ~10s): match the client QUIC `max_idle_timeout`
+                // so a client that stalls during heavy startup (USD scene load +
+                // Modelica cosim compile) or under host load isn't reaped before
+                // its loop resumes. Without this the netcode layer dropped clients
+                // ("Disconnection from netcode client …") seconds after connect.
+                client_timeout_secs: 30,
                 ..default()
             }),
             LocalAddr(server_addr),

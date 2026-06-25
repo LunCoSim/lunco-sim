@@ -145,7 +145,13 @@ fn native_client_config(url: &str, cert_digest: String) -> Result<ClientConfig> 
 
     Ok(config
         .keep_alive_interval(Some(Duration::from_secs(1)))
-        .max_idle_timeout(Some(Duration::from_secs(5)))
+        // 30s (was 5s): a client's frame loop legitimately stalls past a few
+        // seconds during heavy startup (USD scene load + Modelica cosim compile)
+        // or under host load, which stops keepalives and got the connection
+        // dropped almost immediately. 30s tolerates those hitches while still
+        // reaping a truly-dead peer. Must stay ≥ the server netcode client
+        // timeout (see `NetcodeConfig` in server.rs) so neither layer races ahead.
+        .max_idle_timeout(Some(Duration::from_secs(30)))
         .expect("valid idle timeout")
         .build())
 }

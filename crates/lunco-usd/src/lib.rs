@@ -36,6 +36,7 @@ pub use registry::UsdDocumentRegistry;
 pub use lunco_usd_bevy::{FallbackSceneLight, UsdAuthoredLight, UsdPrimPath, UsdStageAsset};
 pub use lunco_usd_avian::UsdAvianPlugin;
 pub use lunco_usd_sim::UsdSimPlugin;
+pub use lunco_usd_sim::NoRenderVisuals;
 pub use lunco_usd_sim::cosim::{ClearScene, LoadScene};
 
 /// Master plugin that bundles all USD subsystems together.

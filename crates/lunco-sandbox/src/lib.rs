@@ -396,6 +396,13 @@ impl Plugin for SandboxHeadlessPlugin {
         // gizmo/selection/physics-viz halves of `SandboxEditPlugin` stay UI-only.
         app.add_plugins(lunco_sandbox_edit::commands::SpawnCommandPlugin);
 
+        // No GPU renderer here, so the render-side systems that produce visual
+        // components (`Mesh3d`, and the shader-pipeline `ShaderMaterial`) never
+        // run. Tell the USD sim loader NOT to wait for them before building wheel
+        // physics — otherwise raycast rovers defer their drivetrain forever and
+        // the authoritative server can't simulate or replicate a drivable rover.
+        app.insert_resource(lunco_usd::NoRenderVisuals);
+
         // No winit event loop drives updates headless, so install a runner that
         // ticks the app at the sim's fixed rate. (Windowed builds are paced by
         // winit / vsync.)
