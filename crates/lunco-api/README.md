@@ -120,7 +120,7 @@ fn on_drive_rover_api(trigger: On<ApiCommandEvent>, ...) {
 use lunco_api::LunCoApiPlugin;
 
 app.add_plugins(LunCoApiPlugin::default());
-// HTTP server starts on port 3000
+// HTTP server starts on port 4101
 ```
 
 With custom config:

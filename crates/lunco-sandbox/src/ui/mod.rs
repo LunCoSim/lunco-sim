@@ -19,7 +19,7 @@ use leafwing_input_manager::prelude::*;
 use big_space::prelude::*;
 
 use lunco_workbench::WorkbenchViewportCamera;
-use lunco_avatar::{IntentAnalogState, FreeFlightCamera, AdaptiveNearPlane};
+use lunco_avatar::{IntentAnalogState, FreeFlightCamera, AdaptiveNearPlane, ProvisionalAvatarCamera};
 use lunco_core::Avatar;
 use lunco_modelica::{ModelicaWorkbenchPlugin, ModelicaUiConfig};
 
@@ -247,6 +247,12 @@ fn spawn_fallback_avatar(
             damping: None,
         },
         AdaptiveNearPlane,
+        // Provisional: the authored USD Avatar camera (if the scene has one)
+        // takes over and despawns this in the same flush it spawns — see
+        // `ProvisionalAvatarCamera`. Without the marker, a slow (web/HTTP) scene
+        // load that finishes *after* this stand-in appears leaves two order-0
+        // window cameras → camera-order ambiguity + duplicate GizmoCamera.
+        ProvisionalAvatarCamera,
         Transform::from_translation(Vec3::new(-30.0, 15.0, -20.0)),
         GlobalTransform::default(),
         FloatingOrigin,

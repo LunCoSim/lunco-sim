@@ -787,11 +787,27 @@ fn apply_standard_material(
         .map(|v| LinearRgba::new(v.x, v.y, v.z, 1.0))
         .unwrap_or(LinearRgba::BLACK);
 
+    let metallic = light::get_attribute_as_f32(reader, sdf_path, "inputs:metallic")
+        .or_else(|| light::get_attribute_as_f32(reader, sdf_path, "metallic"))
+        .unwrap_or(0.0);
+
+    let roughness = light::get_attribute_as_f32(reader, sdf_path, "inputs:roughness")
+        .or_else(|| light::get_attribute_as_f32(reader, sdf_path, "roughness"))
+        .or_else(|| light::get_attribute_as_f32(reader, sdf_path, "inputs:perceptual_roughness"))
+        .unwrap_or(0.5);
+
+    let reflectance = light::get_attribute_as_f32(reader, sdf_path, "inputs:reflectance")
+        .or_else(|| light::get_attribute_as_f32(reader, sdf_path, "reflectance"))
+        .unwrap_or(0.5);
+
     entity_cmd.insert((
         Mesh3d(mesh_handle.clone()),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: color,
             emissive,
+            metallic,
+            perceptual_roughness: roughness,
+            reflectance,
             ..default()
         }))
     ));

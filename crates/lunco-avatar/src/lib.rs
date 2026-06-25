@@ -219,6 +219,23 @@ pub struct FrameBlend {
 #[reflect(Component)]
 pub struct AdaptiveNearPlane;
 
+/// Marker for a **provisional** avatar camera — a stand-in spawned so the user
+/// always has a controllable view while a scene is still loading and hasn't yet
+/// authored its own Avatar camera.
+///
+/// It is *provisional* because the authored USD Avatar is the intended
+/// perspective and **takes over** as soon as it materialises (which, on a slow
+/// web/HTTP asset load, can be many seconds after the stand-in appeared). The
+/// USD-avatar takeover despawns every entity carrying this marker in the **same
+/// command flush** that installs the authored camera, so the provisional never
+/// coexists with the real one — two simultaneous order-0 window `Camera3d`s
+/// would otherwise produce camera-order ambiguity (double scene render) and a
+/// duplicate `GizmoCamera`. A scene that authors no Avatar keeps its provisional
+/// camera indefinitely: that is the legitimate permanent-fallback case.
+#[derive(Component, Reflect, Clone, Debug, Default)]
+#[reflect(Component)]
+pub struct ProvisionalAvatarCamera;
+
 /// Marker component: camera/rover operates in surface-relative mode.
 ///
 /// When present, camera systems use `LocalGravityField.local_up` as "up"
@@ -397,6 +414,7 @@ impl Plugin for LunCoAvatarPlugin {
            .register_type::<FreeFlightCamera>()
            .register_type::<FrameBlend>()
            .register_type::<AdaptiveNearPlane>()
+           .register_type::<ProvisionalAvatarCamera>()
            .register_type::<SurfaceRelativeMode>()
            .register_type::<SurfaceCamera>()
            .register_type::<SurfaceModeThreshold>()

@@ -691,6 +691,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<WorkspaceResource>();
+        app.init_resource::<lunco_assets::twin_source::TwinRoots>();
         app.add_plugins(UsdCommandsPlugin);
         app.init_resource::<SceneCmds>();
         app.add_observer(|t: On<LoadScene>, mut c: ResMut<SceneCmds>| {
@@ -734,6 +735,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<WorkspaceResource>();
+        app.init_resource::<lunco_assets::twin_source::TwinRoots>();
         app.add_plugins(UsdCommandsPlugin);
         app.init_resource::<SceneCmds>();
         app.add_observer(|t: On<LoadScene>, mut c: ResMut<SceneCmds>| {

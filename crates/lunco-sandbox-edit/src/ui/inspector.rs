@@ -10,6 +10,12 @@ use lunco_mobility::WheelRaycast;
 use lunco_cosim::{JointSim, JOINT_ANGLE_PORT};
 
 use crate::{SelectedEntities, UndoStack, UndoAction};
+use lunco_usd::document::{UsdOp, LayerId};
+use lunco_usd::commands::ApplyUsdOp;
+use lunco_usd::registry::UsdDocumentRegistry;
+use lunco_usd::ui::viewport::UsdViewportState;
+use lunco_doc::DocumentOrigin;
+use lunco_usd_bevy::UsdPrimPath;
 
 /// Inspector panel — editable entity parameters.
 pub struct Inspector;
@@ -263,7 +269,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
                     egui::CollapsingHeader::new("Material (PBR)")
                         .default_open(true)
                         .show(ui, |ui| {
-                            material_pbr_section(ui, world, &std_handles);
+                            material_pbr_section(ui, world, part, &std_handles);
                         });
                 }
             }
@@ -772,6 +778,24 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
         .entity(part)
         .remove::<MeshMaterial3d<StandardMaterial>>()
         .insert(MeshMaterial3d(handle));
+
+    // Propagate changes to USD
+    if world.get::<UsdPrimPath>(part).is_some() {
+        apply_usd_attribute_change(
+            world,
+            part,
+            "primvars:materialType",
+            "string",
+            "\"shader\"".to_string(),
+        );
+        apply_usd_attribute_change(
+            world,
+            part,
+            "primvars:shaderPath",
+            "asset",
+            format!("@{}@", path),
+        );
+    }
 }
 
 /// The full asset-path string of `part`'s current `ShaderMaterial` shader
@@ -943,7 +967,12 @@ fn apply_if_registered(world: &mut World, part: Entity, stem: &str) {
 /// (so one slider recolors the whole rover). Mutates the live assets in place
 /// for immediate feedback. Full photometric control: base color, alpha,
 /// emissive, metallic, roughness, reflectance, unlit, double-sided.
-fn material_pbr_section(ui: &mut egui::Ui, world: &mut World, handles: &[Handle<StandardMaterial>]) {
+fn material_pbr_section(
+    ui: &mut egui::Ui,
+    world: &mut World,
+    part: Entity,
+    handles: &[Handle<StandardMaterial>],
+) {
     let Some(handle) = handles.first().cloned() else {
         return;
     };
@@ -971,18 +1000,30 @@ fn material_pbr_section(ui: &mut egui::Ui, world: &mut World, handles: &[Handle<
     let (mut base, mut alpha, mut emissive, mut metallic, mut roughness, mut reflectance, mut unlit, mut double_sided) = snap;
 
     let mut changed = false;
+    let mut base_changed = false;
+    let mut emissive_changed = false;
+
     ui.horizontal(|ui| {
-        changed |= ui.color_edit_button_rgb(&mut base).changed();
+        let r = ui.color_edit_button_rgb(&mut base);
+        changed |= r.changed();
+        base_changed |= r.changed();
         ui.label("Base color");
     });
-    changed |= ui.add(egui::Slider::new(&mut alpha, 0.0..=1.0).text("Alpha")).changed();
+    let alpha_changed = ui.add(egui::Slider::new(&mut alpha, 0.0..=1.0).text("Alpha")).changed();
+    changed |= alpha_changed;
+    base_changed |= alpha_changed;
     ui.horizontal(|ui| {
-        changed |= ui.color_edit_button_rgb(&mut emissive).changed();
+        let r = ui.color_edit_button_rgb(&mut emissive);
+        changed |= r.changed();
+        emissive_changed |= r.changed();
         ui.label("Emissive");
     });
-    changed |= ui.add(egui::Slider::new(&mut metallic, 0.0..=1.0).text("Metallic")).changed();
-    changed |= ui.add(egui::Slider::new(&mut roughness, 0.0..=1.0).text("Roughness")).changed();
-    changed |= ui.add(egui::Slider::new(&mut reflectance, 0.0..=1.0).text("Reflectance")).changed();
+    let metallic_changed = ui.add(egui::Slider::new(&mut metallic, 0.0..=1.0).text("Metallic")).changed();
+    changed |= metallic_changed;
+    let roughness_changed = ui.add(egui::Slider::new(&mut roughness, 0.0..=1.0).text("Roughness")).changed();
+    changed |= roughness_changed;
+    let reflectance_changed = ui.add(egui::Slider::new(&mut reflectance, 0.0..=1.0).text("Reflectance")).changed();
+    changed |= reflectance_changed;
     changed |= ui.checkbox(&mut unlit, "Unlit").changed();
     changed |= ui.checkbox(&mut double_sided, "Double-sided").changed();
     if handles.len() > 1 {
@@ -1002,6 +1043,55 @@ fn material_pbr_section(ui: &mut egui::Ui, world: &mut World, handles: &[Handle<
                 m.double_sided = double_sided;
                 m.alpha_mode = if alpha >= 1.0 { AlphaMode::Opaque } else { AlphaMode::Blend };
                 m.cull_mode = if double_sided { None } else { Some(bevy::render::render_resource::Face::Back) };
+            }
+        }
+
+        // Propagate changes to USD
+        if world.get::<UsdPrimPath>(part).is_some() {
+            if base_changed {
+                apply_usd_attribute_change(
+                    world,
+                    part,
+                    "primvars:displayColor",
+                    "color3f[]",
+                    format!("[({}, {}, {})]", base[0], base[1], base[2]),
+                );
+            }
+            if emissive_changed {
+                apply_usd_attribute_change(
+                    world,
+                    part,
+                    "primvars:emissiveColor",
+                    "color3f",
+                    format!("({}, {}, {})", emissive[0], emissive[1], emissive[2]),
+                );
+            }
+            if metallic_changed {
+                apply_usd_attribute_change(
+                    world,
+                    part,
+                    "inputs:metallic",
+                    "float",
+                    format!("{:.3}", metallic),
+                );
+            }
+            if roughness_changed {
+                apply_usd_attribute_change(
+                    world,
+                    part,
+                    "inputs:roughness",
+                    "float",
+                    format!("{:.3}", roughness),
+                );
+            }
+            if reflectance_changed {
+                apply_usd_attribute_change(
+                    world,
+                    part,
+                    "inputs:reflectance",
+                    "float",
+                    format!("{:.3}", reflectance),
+                );
             }
         }
     }
@@ -1123,11 +1213,39 @@ fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entit
 
     // Apply to the live material asset (one re-upload).
     if !edits.is_empty() {
+        let usd_prim_exists = world.get::<UsdPrimPath>(entity).is_some();
         if let Some(mut mats) = world.get_resource_mut::<Assets<ShaderMaterial>>() {
             if let Some(mat) = mats.get_mut(&handle) {
-                for (name, v) in edits {
-                    mat.set(&name, v);
+                for (name, v) in edits.iter() {
+                    mat.set(name, *v);
                 }
+            }
+        }
+
+        // Propagate changes to USD
+        if usd_prim_exists {
+            for (name, v) in edits {
+                let usd_name = if name.starts_with("primvars:") {
+                    name.clone()
+                } else {
+                    format!("primvars:{}", name)
+                };
+                let (type_name, value_str) = match v {
+                    ParamValue::F32(x) => ("float", format!("{:.3}", x)),
+                    ParamValue::I32(x) => ("int", format!("{}", x)),
+                    ParamValue::U32(x) => ("uint", format!("{}", x)),
+                    ParamValue::Vec2(arr) => ("float2", format!("({}, {})", arr[0], arr[1])),
+                    ParamValue::Vec3(arr) => {
+                        let t = if name.to_lowercase().contains("color") || name.to_lowercase().contains("colour") {
+                            "color3f"
+                        } else {
+                            "float3"
+                        };
+                        (t, format!("({}, {}, {})", arr[0], arr[1], arr[2]))
+                    }
+                    ParamValue::Vec4(arr) => ("float4", format!("({}, {}, {}, {})", arr[0], arr[1], arr[2], arr[3])),
+                };
+                apply_usd_attribute_change(world, entity, &usd_name, type_name, value_str);
             }
         }
     }
@@ -1247,5 +1365,58 @@ fn modelica_parameters_section(
             model_name,
             source: new_source,
         });
+    }
+}
+
+/// Dispatch a `UsdOp::SetAttribute` command to write changes back to the USD document.
+fn apply_usd_attribute_change(
+    world: &mut World,
+    entity: Entity,
+    name: &str,
+    type_name: &str,
+    value: String,
+) {
+    let Some(prim) = world.get::<UsdPrimPath>(entity).cloned() else {
+        return;
+    };
+    let Some(asset_server) = world.get_resource::<AssetServer>() else {
+        return;
+    };
+    let Some(asset_path) = asset_server.get_path(prim.stage_handle.id()) else {
+        return;
+    };
+    let path_str = asset_path.path().to_string_lossy();
+
+    let Some(usd_registry) = world.get_resource::<UsdDocumentRegistry>() else {
+        return;
+    };
+    let doc_id = usd_registry.ids().find(|id| {
+        if let Some(h) = usd_registry.host(*id) {
+            match h.document().origin() {
+                DocumentOrigin::File { path, .. } => {
+                    path.to_string_lossy().ends_with(&*path_str)
+                }
+                _ => false,
+            }
+        } else {
+            false
+        }
+    });
+
+    let doc_id = doc_id.or_else(|| {
+        world
+            .get_resource::<UsdViewportState>()
+            .and_then(|v| v.active_doc())
+    });
+
+    if let Some(doc) = doc_id {
+        let op = UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: prim.path.clone(),
+            name: name.to_string(),
+            type_name: type_name.to_string(),
+            value,
+        };
+        world.trigger(ApplyUsdOp { doc, op });
     }
 }

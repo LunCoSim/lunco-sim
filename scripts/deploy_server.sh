@@ -1,38 +1,31 @@
 #!/usr/bin/env bash
 # ============================================================================
-# LunCoSim — native SERVER deploy
+# LunCoSim — sandbox deploy (server binary + wasm client)
 # ============================================================================
-# Ships the headless server binary + assets + deploy kit to a box over SSH and
-# provisions it (systemd + firewall + Let's Encrypt by default), then starts it.
-# Counterpart to deploy_web.sh (the CLIENT deploy). No artifact compression — a
-# native binary doesn't benefit from the brotli/gzip pass the wasm bundle gets.
+# Just rsyncs the artifacts to the paths YOU give. No default path, no service
+# restart, no provisioning. Like the lunica web deploy: copy to a path, done.
 #
 # Usage:
-#     ./scripts/deploy_server.sh <user@host> [options]
+#     ./scripts/deploy_server.sh <user@host> --server <path> [--web <path>] [opts]
+#
+# Paths (at least --server required, no defaults):
+#     --server <path>  remote dir for the native binary + assets (dist/server/)
+#     --web <path>     remote dir for the wasm client bundle      (dist/sandbox/)
 #
 # Options:
-#     --domain <d>     TLS domain          (default: sandbox.lunco.space)
-#     --release        ship target/release/sandbox  (DEFAULT)
-#     --dev            ship target/debug/sandbox instead
-#     --email <addr>   certbot email (recommended)
-#     --self-signed    DEV: skip Let's Encrypt; server self-signs (#digest pin)
-#     --web            also ship dist/sandbox/ + set up nginx on the box
-#     --no-cert        skip cert provisioning (you manage certs)
-#     --prefix <dir>   install root on box (default: /opt/lunco)
-#     --stage <dir>    staging dir on box  (default: ~/lunco-deploy)
 #     --ssh-port <n>   non-default SSH port
-#     --no-provision   rsync only; print the bootstrap command to run by hand
-#     --dry-run        rsync -n + don't run remote provisioning
-#
-# By DEFAULT the server is provisioned with a real Let's Encrypt certificate
-# (needs the --domain DNS pointing at the box + port 80 reachable). Use
-# --self-signed for a quick dev/localhost box.
+#     --dry-run        rsync -n; don't write anything
 #
 # Examples:
 #     ./scripts/build.sh sandbox-server --release
-#     ./scripts/deploy_server.sh deploy@sandbox.lunco.space --email you@lunco.space
-#     # dev box, no real cert, also serve the web client:
-#     ./scripts/deploy_server.sh deploy@1.2.3.4 --self-signed --web
+#     ./scripts/build_web.sh build sandbox --release
+#
+#     # server only:
+#     ./scripts/deploy_server.sh deploy@host --server ~/sandbox-server
+#
+#     # server + web in one go:
+#     ./scripts/deploy_server.sh deploy@host \
+#         --server ~/sandbox-server --web /var/www/html/sandbox.lunco.space
 # ============================================================================
 set -euo pipefail
 
@@ -45,84 +38,63 @@ error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-usage() { sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 HOST="${1:-}"; [ -z "$HOST" ] && usage 2
 case "$HOST" in -h|--help) usage 0 ;; esac
 shift
 
-DOMAIN="sandbox.lunco.space"; PREFIX="/opt/lunco"
-STAGE="lunco-deploy"; SSH_PORT=""; EMAIL=""
-SELF_SIGNED=0; WEB=0; NO_CERT=0; NO_PROVISION=0; DRY=0
+SERVER_PATH=""; WEB_PATH=""; SSH_PORT=""; DRY=0
+
 while [ $# -gt 0 ]; do
     case "$1" in
-        --domain)       DOMAIN="$2"; shift 2 ;;
-        # Binary profile is decided at BUILD time (build.sh sandbox-server
-        # [--release] stages dist/server/); accept these for muscle-memory.
-        --release|--dev) shift ;;
-        --email)        EMAIL="$2"; shift 2 ;;
-        --self-signed)  SELF_SIGNED=1; shift ;;
-        --web)          WEB=1; shift ;;
-        --no-cert)      NO_CERT=1; shift ;;
-        --prefix)       PREFIX="$2"; shift 2 ;;
-        --stage)        STAGE="$2"; shift 2 ;;
-        --ssh-port)     SSH_PORT="$2"; shift 2 ;;
-        --no-provision) NO_PROVISION=1; shift ;;
-        --dry-run)      DRY=1; shift ;;
-        -h|--help)      usage 0 ;;
+        --server)   SERVER_PATH="$2"; shift 2 ;;
+        --web)      WEB_PATH="$2"; shift 2 ;;
+        --ssh-port) SSH_PORT="$2"; shift 2 ;;
+        --dry-run)  DRY=1; shift ;;
+        -h|--help)  usage 0 ;;
         *) error "unknown arg: $1"; usage 2 ;;
     esac
 done
 
-# Self-contained server bundle assembled by build.sh sandbox-server.
-DIST="$PROJECT_DIR/dist/server"
-if [ ! -x "$DIST/sandbox" ] || [ ! -d "$DIST/assets" ] || [ ! -d "$DIST/deploy" ]; then
-    error "no server bundle at $DIST (missing sandbox/assets/deploy)"
+[ -z "$SERVER_PATH" ] && { error "no --server <path> given (required, no default)"; usage 2; }
+
+# ── Validate artifacts ────────────────────────────────────────────────────
+SERVER_DIST="$PROJECT_DIR/dist/server"
+WEB_DIST="$PROJECT_DIR/dist/sandbox"
+
+if [ ! -x "$SERVER_DIST/sandbox" ] || [ ! -d "$SERVER_DIST/assets" ]; then
+    error "no server bundle at $SERVER_DIST (missing sandbox binary or assets/)"
     info  "build it first:  ./scripts/build.sh sandbox-server --release"
     exit 1
 fi
-if [ "$WEB" -eq 1 ] && [ ! -d "$PROJECT_DIR/dist/sandbox" ]; then
-    error "--web set but no dist/sandbox/ — build it: ./scripts/build.sh sandbox --release"
+if [ -n "$WEB_PATH" ] && [ ! -d "$WEB_DIST" ]; then
+    error "no wasm bundle at $WEB_DIST"
+    info  "build it first:  ./scripts/build_web.sh build sandbox --release"
     exit 1
 fi
 
-SSH=(ssh); [ -n "$SSH_PORT" ] && SSH=(ssh -p "$SSH_PORT")
-RSH="ssh"; [ -n "$SSH_PORT" ] && RSH="ssh -p $SSH_PORT"
-RS=(rsync -a --info=progress2 -e "$RSH"); [ "$DRY" -eq 1 ] && RS+=(-n)
-DELRS=(rsync -a --delete --info=progress2 -e "$RSH"); [ "$DRY" -eq 1 ] && DELRS+=(-n)
+# ── rsync ─────────────────────────────────────────────────────────────────
+RSH="ssh${SSH_PORT:+ -p $SSH_PORT}"
+rs_d() { rsync -a --delete --info=progress2 -e "$RSH" ${DRY:+-n} "$@"; }
+remote() { ssh ${SSH_PORT:+-p "$SSH_PORT"} "$HOST" "$@"; }
 
-info "bundle : $DIST"
-info "target : $HOST:$STAGE  → install $PREFIX"
-info "cert   : $([ "$SELF_SIGNED" -eq 1 ] && echo 'self-signed (dev)' || { [ "$NO_CERT" -eq 1 ] && echo 'unmanaged (--no-cert)' || echo "Let's Encrypt ($DOMAIN)"; })"
+info "host    : $HOST"
+info "server  : $SERVER_DIST/sandbox  →  $HOST:$SERVER_PATH  ($(du -sh "$SERVER_DIST/sandbox" | cut -f1))"
+[ -n "$WEB_PATH" ] && info "web     : $WEB_DIST/  →  $HOST:$WEB_PATH"
+[ "$DRY" -eq 1 ] && warn "DRY RUN — no files will be written"
 
-# ── Stage artifacts on the box (no compression) ──────────────────────────
-"${SSH[@]}" "$HOST" "mkdir -p '$STAGE'" 2>/dev/null || { [ "$DRY" -eq 1 ] || { error "ssh to $HOST failed"; exit 1; }; }
-info "uploading server bundle (dist/server/ → $STAGE)…"
-# Exclude web/ from --delete so a separately-shipped wasm bundle isn't nuked
-# (and re-uploaded) on every server deploy.
-"${DELRS[@]}" --exclude='/web/' "$DIST/" "$HOST:$STAGE/"
-if [ "$WEB" -eq 1 ]; then
-    info "uploading wasm bundle (dist/sandbox/ → $STAGE/web)…"
-    "${DELRS[@]}" "$PROJECT_DIR/dist/sandbox/" "$HOST:$STAGE/web/"
-fi
-success "artifacts staged at $HOST:$STAGE"
+# Server binary + assets. --exclude='/web/' so a co-located web dir isn't wiped.
+info "uploading server binary + assets → $HOST:$SERVER_PATH …"
+remote "mkdir -p '$SERVER_PATH'"
+rs_d --exclude='/web/' "$SERVER_DIST/" "$HOST:$SERVER_PATH/"
 
-# ── Provision on the box ─────────────────────────────────────────────────
-BOOT_FLAGS=(--src "$STAGE" --domain "$DOMAIN" --prefix "$PREFIX")
-[ "$SELF_SIGNED" -eq 1 ] && BOOT_FLAGS+=(--self-signed)
-[ "$WEB" -eq 1 ]         && BOOT_FLAGS+=(--web)
-[ "$NO_CERT" -eq 1 ]     && BOOT_FLAGS+=(--no-cert)
-[ -n "$EMAIL" ]          && BOOT_FLAGS+=(--email "$EMAIL")
-BOOT_CMD="sudo bash '$STAGE/deploy/server-bootstrap.sh' ${BOOT_FLAGS[*]}"
-
-if [ "$DRY" -eq 1 ] || [ "$NO_PROVISION" -eq 1 ]; then
-    warn "skipping remote provisioning ($([ "$DRY" -eq 1 ] && echo --dry-run || echo --no-provision))."
-    info "run it on the box with:"
-    echo "    $RSH $HOST \"$BOOT_CMD\""
-    exit 0
+# Optional wasm client bundle.
+if [ -n "$WEB_PATH" ]; then
+    info "uploading wasm client bundle → $HOST:$WEB_PATH …"
+    remote "mkdir -p '$WEB_PATH'"
+    rs_d "$WEB_DIST/" "$HOST:$WEB_PATH/"
 fi
 
-info "provisioning on $HOST (sudo)…"
-"${SSH[@]}" -t "$HOST" "$BOOT_CMD"
-success "server deployed to $HOST"
-info "verify:  $RSH $HOST 'journalctl -u lunco-server -n 30 --no-pager'"
+success "artifacts uploaded"
+info "nothing was restarted. run the binary however you run it on the box."

@@ -35,7 +35,7 @@ mod client;
 /// (`https://lunica.lunco.space:5888`) so a real CA cert validates with no
 /// digest — lightyear's built-in `WebTransportClientIo` only dials
 /// `https://{SocketAddr}` (IP-only). Native keeps lightyear's IO.
-#[cfg(all(feature = "networking", target_family = "wasm"))]
+#[cfg(feature = "networking")]
 mod wt_client;
 /// Layer-4 UI: the in-sim *Connect* panel (address field + Connect/Disconnect),
 /// which dispatches the `JoinServer`/`LeaveServer` commands. Behind the feature.
@@ -74,7 +74,7 @@ impl NetworkMode {
                     let port = args
                         .get(i + 1)
                         .and_then(|s| s.parse::<u16>().ok())
-                        .unwrap_or(5888);
+                        .unwrap_or(lunco_core::session::DEFAULT_HOST_PORT);
                     return Some(NetworkMode::Host { port });
                 }
                 "--connect" => {
@@ -95,13 +95,30 @@ impl NetworkMode {
     /// Resolve the mode for the current target: CLI argv on native, the page
     /// URL on wasm. Single entry point so `sandbox.rs` doesn't need a target
     /// `cfg`. Returns `None` for single-player.
-    pub fn resolve() -> Option<Self> {
+    pub fn resolve(headless: bool) -> Option<Self> {
         #[cfg(not(target_family = "wasm"))]
         {
-            Self::from_args()
+            let mode = Self::from_args();
+            if mode.is_none() {
+                // If running headless / as a dedicated server, default to Host mode
+                let is_headless = headless
+                    || std::env::args().any(|a| a == "--no-ui")
+                    || std::env::var("LUNCO_NO_UI").is_ok_and(|v| v != "0" && !v.is_empty())
+                    || std::env::current_exe()
+                        .ok()
+                        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                        .is_some_and(|n| n.contains("sandbox-server"));
+                if is_headless {
+                    return Some(NetworkMode::Host {
+                        port: lunco_core::session::DEFAULT_HOST_PORT,
+                    });
+                }
+            }
+            mode
         }
         #[cfg(target_family = "wasm")]
         {
+            let _ = headless;
             Self::from_url()
         }
     }
@@ -163,7 +180,7 @@ pub(crate) fn normalize_addr(raw: &str) -> String {
     if raw.contains(':') {
         raw.to_string()
     } else {
-        format!("{raw}:5888")
+        format!("{raw}:{}", lunco_core::session::DEFAULT_HOST_PORT)
     }
 }
 
@@ -191,7 +208,9 @@ pub(crate) fn resolve_socket_addr(server: &str) -> SocketAddr {
         .to_socket_addrs()
         .ok()
         .and_then(|mut it| it.next())
-        .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 5888)))
+        .unwrap_or_else(|| {
+            SocketAddr::from(([127, 0, 0, 1], lunco_core::session::DEFAULT_HOST_PORT))
+        })
 }
 
 /// The address the in-sim *Connect* button should default to: the page origin
@@ -200,15 +219,16 @@ pub(crate) fn resolve_socket_addr(server: &str) -> SocketAddr {
 pub fn default_connect_host() -> String {
     #[cfg(target_family = "wasm")]
     {
+        use lunco_core::session::DEFAULT_HOST_PORT;
         web_sys::window()
             .and_then(|w| w.location().hostname().ok())
             .filter(|h| !h.is_empty())
-            .map(|h| format!("{h}:5888"))
-            .unwrap_or_else(|| "127.0.0.1:5888".to_string())
+            .map(|h| format!("{h}:{DEFAULT_HOST_PORT}"))
+            .unwrap_or_else(|| format!("127.0.0.1:{DEFAULT_HOST_PORT}"))
     }
     #[cfg(not(target_family = "wasm"))]
     {
-        "127.0.0.1:5888".to_string()
+        format!("127.0.0.1:{}", lunco_core::session::DEFAULT_HOST_PORT)
     }
 }
 

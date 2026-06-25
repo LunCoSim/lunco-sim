@@ -238,7 +238,7 @@ The `LoadScene` typed command (registered by `UsdSimPlugin`) reloads or
 replaces the active scene without restarting the binary:
 
 ```bash
-curl -X POST http://127.0.0.1:3000/api/commands \
+curl -X POST http://127.0.0.1:4101/api/commands \
   -d '{"command":"LoadScene","params":{"path":"scenes/sandbox/sandbox_scene.usda","root_prim":""}}'
 ```
 

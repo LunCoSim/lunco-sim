@@ -116,10 +116,10 @@ fn test_wheel_positions() {
     }
 
     let wheels = [
-        WheelExpect { path: "/Rucheyok/Wheel_FL", x: -8.5, z: 10.5, index: 0 },
-        WheelExpect { path: "/Rucheyok/Wheel_FR", x: 8.5, z: 10.5, index: 1 },
-        WheelExpect { path: "/Rucheyok/Wheel_RL", x: -8.5, z: -10.5, index: 2 },
-        WheelExpect { path: "/Rucheyok/Wheel_RR", x: 8.5, z: -10.5, index: 3 },
+        WheelExpect { path: "/Rucheyok/Wheel_FL", x: -8.5, z: -10.5, index: 0 },
+        WheelExpect { path: "/Rucheyok/Wheel_FR", x: 8.5, z: -10.5, index: 1 },
+        WheelExpect { path: "/Rucheyok/Wheel_RL", x: -8.5, z: 10.5, index: 2 },
+        WheelExpect { path: "/Rucheyok/Wheel_RR", x: 8.5, z: 10.5, index: 3 },
     ];
 
     for wheel in wheels {

@@ -19,7 +19,7 @@ cargo run --bin sandbox -- [FLAGS]
 
 | Flag | Description |
 |---|---|
-| `--api [PORT]` | Enable the HTTP API server. Default port is 3000. |
+| `--api [PORT]` | Enable the HTTP API server. Default port is 4101. |
 | `--scene <PATH>` | Load a specific USD scene. Path is relative to `assets/`. Default: `scenes/sandbox/sandbox_scene.usda`. |
 | `--no-vsync` | Disable VSync. FPS will not be capped by the display refresh rate. |
 | `--no-throttle` | Disable background throttling. The window will update at full rate even when unfocused. |

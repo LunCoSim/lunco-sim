@@ -78,7 +78,7 @@ fn main() {
     // ── Native-only: parse `--api <port>` so the window title can ────
     // advertise the listening port (automation drives the workbench via
     // it; visible in the title bar avoids confusion when several
-    // instances run side-by-side — e.g. user on 3000 + a test on 3001).
+    // instances run side-by-side — e.g. user on 4101 + a test on 3001).
     // Headless when built without the `ui` feature, or asked at runtime via
     // `--no-ui` / `LUNCO_NO_UI`. A headless lunica is a Modelica compile/run
     // server (HTTP API), no window or egui. `cfg!` folds to `true` when `ui`
@@ -250,7 +250,7 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
             let mut api_port: Option<u16> = None;
             for i in 0..args.len() {
                 if args[i] == "--api" {
-                    api_port = Some(3000);
+                    api_port = Some(lunco_core::session::DEFAULT_API_PORT);
                     if i + 1 < args.len() {
                         if let Ok(p) = args[i + 1].parse::<u16>() {
                             api_port = Some(p);

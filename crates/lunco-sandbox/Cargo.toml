@@ -103,12 +103,17 @@ mimalloc = "0.1"
 lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 
 [features]
-# `ui` + `lunco-api` are on by default so native `cargo run --bin sandbox -- --api`
-# Just Works (windowed GUI + HTTP API). A lean HEADLESS server drops both layers:
-#   cargo build -p lunco-client --bin sandbox --no-default-features --features server
+# `ui` + `lunco-api` + `networking` are on by default so native
+# `cargo run --bin sandbox` Just Works (windowed GUI + HTTP API + the multiplayer
+# wire — the in-app Network → Connect button and `--connect`/`--host` flags are
+# live without an extra `--features` flag). A lean HEADLESS server drops the GUI:
+#   cargo build -p lunco-sandbox --bin sandbox --no-default-features --features server
 # which omits winit/wayland/x11/egui/picking/gizmos + the workbench/material/doc
-# UI crates entirely — the SAME `sandbox` bin, just a different feature set.
-default = ["ui", "celestial", "lunco-api", "lunco-api/transport-http", "lunco-api/render"]
+# UI crates entirely — the SAME `sandbox` bin, just a different feature set. Single-
+# player with no wire: `--no-default-features --features ui,celestial,lunco-api`.
+# The wasm build sets its own feature set (`--no-default-features`), so this
+# default does not affect it.
+default = ["ui", "celestial", "lunco-api", "lunco-api/transport-http", "lunco-api/render", "networking"]
 # Windowed GUI: the winit windowing backend + render-effect features + every
 # UI crate (egui workbench, material editors, doc/theme/ui). Off for a headless
 # server. The render ASSET-STORE features (bevy_pbr/mesh/light/window) stay in

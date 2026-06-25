@@ -23,23 +23,21 @@ The build + deploy is scripted; the manual sections below are what those scripts
 do under the hood.
 
 ```bash
-# SERVER (native, headless). Let's Encrypt by DEFAULT.
+# Build both artifacts (server binary + wasm client):
 ./scripts/build.sh sandbox-server --release
-./scripts/deploy_server.sh deploy@sandbox.lunco.space --email you@lunco.space
-#   rsyncs binary + assets + this kit, then provisions the box (apt deps, lunco
-#   user, systemd unit, ufw UDP 5888, certbot cert + renewal hook) and starts it.
-#   dev/localhost box without a real cert:  add --self-signed
-#   also serve the web client from the same box: add --web (ships dist/sandbox/)
+./scripts/build_web.sh build sandbox --release
 
-# CLIENT (wasm, optimized) — separate web host (or the same box with --web above).
-./scripts/build.sh sandbox --release
-./scripts/deploy_web.sh deploy@host:/var/www/sandbox     # brotli/gzip + rsync
+# Redeploy (certs already managed by Let's Encrypt — the common case):
+# 1. Deploy native server (binary + assets):
+./scripts/deploy_sandbox_server.sh deploy@sandbox.lunco.space
+# 2. Deploy web client (WASM):
+./scripts/deploy_sandbox_web.sh deploy@sandbox.lunco.space
+
+# First-time provisioning only (installs apt deps, systemd unit, nginx, certbot):
+./scripts/deploy_server.sh deploy@sandbox.lunco.space --provision --email you@lunco.space
 ```
 
-`deploy_server.sh` flags: `--release`/`--dev`, `--domain`, `--email`,
-`--self-signed`, `--web`, `--no-cert`, `--no-provision` (rsync only),
-`--dry-run`, `--ssh-port`, `--prefix`. It runs `scripts/deploy/server-bootstrap.sh`
-on the box (idempotent — safe to re-run for redeploys).
+`deploy_server.sh` is retained for bootstrap/provisioning and supports the flags: `--prefix`, `--ssh-port`, `--no-restart`, `--dry-run`, `--provision` (sub-flags: `--domain`, `--email`, `--self-signed`, `--no-cert`, `--stage`).
 
 ---
 
@@ -75,10 +73,9 @@ DNS: an `A`/`AAAA` record for `sandbox.lunco.space` → this box's public IP.
 From a checkout of this repo (`networking` branch):
 
 ```bash
-# (a) headless server binary — native release. Same `sandbox` bin, run with
-#     --no-ui. `networking` pulls lunco-api (the --api HTTP server) via defaults.
-cargo build --release --bin sandbox -p lunco-sandbox --features networking
-#   -> target/release/sandbox
+# (a) headless server binary — native release. Runs headless by default (no winit/egui).
+cargo build --release --bin sandbox-server -p lunco-sandbox-server
+#   -> target/release/sandbox-server
 
 # (b) wasm client bundle.
 ./scripts/build_web.sh build sandbox

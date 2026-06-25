@@ -31,56 +31,101 @@ use wtransport::tls::{Certificate, CertificateChain, PrivateKey};
 const ENV_TLS_CERT: &str = "LUNCO_TLS_CERT";
 const ENV_TLS_KEY: &str = "LUNCO_TLS_KEY";
 
+/// Resolve explicit `(cert_path, key_path)` PEM paths to serve, or `None` for
+/// the dev self-signed path. Two ways to point at a cert, CLI taking precedence:
+///
+/// - **CLI** `--cert <path>` (the easy "just say where they are"):
+///   - a **directory** (e.g. a certbot live dir) → `<dir>/fullchain.pem` +
+///     `<dir>/privkey.pem`. So `--cert /etc/letsencrypt/live/sandbox.lunco.space`
+///     is all you need.
+///   - a **file** (ends in `.pem`/`.crt`/`.cer`) → that cert; the key comes from
+///     `--key <file>`, else the sibling `privkey.pem` next to it.
+/// - **Env** (fallback): `LUNCO_TLS_CERT` + `LUNCO_TLS_KEY`, both required.
+///
+/// `None` ⇒ both unset and no `--cert` ⇒ dev self-signed.
+fn resolve_cert_paths() -> Option<(String, String)> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut cli_cert: Option<String> = None;
+    let mut cli_key: Option<String> = None;
+    for i in 0..args.len() {
+        match args[i].as_str() {
+            "--cert" => cli_cert = args.get(i + 1).cloned(),
+            "--key" => cli_key = args.get(i + 1).cloned(),
+            _ => {}
+        }
+    }
+
+    if let Some(cert) = cli_cert.filter(|s| !s.is_empty()) {
+        // Distinguish a cert FILE from a live DIRECTORY by extension alone — no
+        // `std::fs` probe (raw fs is clippy-banned workspace-wide for wasm parity).
+        let is_file = [".pem", ".crt", ".cer", ".key"]
+            .iter()
+            .any(|ext| cert.ends_with(ext));
+        if !is_file {
+            // Directory layout: certbot's fullchain.pem + privkey.pem.
+            return Some((format!("{cert}/fullchain.pem"), format!("{cert}/privkey.pem")));
+        }
+        let key = cli_key.filter(|s| !s.is_empty()).unwrap_or_else(|| {
+            // Sibling privkey.pem next to the cert file.
+            match cert.rfind('/') {
+                Some(slash) => format!("{}/privkey.pem", &cert[..slash]),
+                None => "privkey.pem".to_string(),
+            }
+        });
+        return Some((cert, key));
+    }
+
+    match (std::env::var(ENV_TLS_CERT), std::env::var(ENV_TLS_KEY)) {
+        (Ok(c), Ok(k)) => Some((c, k)),
+        // Exactly one set — almost certainly a typo'd/forgotten var. Fail loud.
+        (Ok(_), Err(_)) | (Err(_), Ok(_)) => panic!(
+            "🔐 only one of {ENV_TLS_CERT}/{ENV_TLS_KEY} is set; both are required. \
+             Set both, pass `--cert <dir|file>`, or unset both for a dev self-signed cert."
+        ),
+        (Err(_), Err(_)) => None,
+    }
+}
+
 /// Resolve the host's WebTransport TLS identity.
 ///
-/// - **Production** (`LUNCO_TLS_CERT` + `LUNCO_TLS_KEY` set): load that CA-signed
-///   cert (e.g. certbot `fullchain.pem` + `privkey.pem`). Browsers validate via
-///   the normal chain, so clients connect with **no** `#digest` in the URL.
-/// - **Dev** (env unset): ECDSA-P256 self-signed for `localhost`/`127.0.0.1`;
-///   print + persist the cert digest so a browser can pin it via the connect
-///   URL `#<digest>` (there's no CA to vouch for a self-signed cert).
+/// - **Production** (`--cert <dir|file>`, or `LUNCO_TLS_CERT`+`LUNCO_TLS_KEY`):
+///   load that CA-signed cert (e.g. certbot `fullchain.pem` + `privkey.pem`).
+///   Browsers validate via the normal chain, so clients connect with **no**
+///   `#digest`. See [`resolve_cert_paths`].
+/// - **Dev** (nothing specified): ECDSA-P256 self-signed for
+///   `localhost`/`127.0.0.1`; print + persist the cert digest so a browser can
+///   pin it via the connect URL `#<digest>`. A **native** client dialing a bare
+///   IP skips validation entirely and needs no digest (see `wt_client.rs`).
 ///
-/// **Fail-loud:** if the env vars ARE set but the PEM can't be loaded, this
+/// **Fail-loud:** if a cert IS specified but the PEM can't be loaded, this
 /// PANICS rather than silently serving a self-signed cert. An operator who set
-/// `LUNCO_TLS_CERT`/`LUNCO_TLS_KEY` asked for that specific identity; falling
-/// back would hand browsers an untrusted cert (connection refused) with no
-/// obvious server-side cause — a misconfiguration that looks like a network
-/// fault. Crashing surfaces it immediately in the service logs / exit code.
-/// The self-signed path is reached ONLY when both env vars are unset (dev).
+/// it asked for that specific identity; falling back would hand browsers an
+/// untrusted cert (connection refused) with no obvious server-side cause — a
+/// misconfiguration that looks like a network fault. Crashing surfaces it
+/// immediately in the service logs / exit code.
 fn resolve_identity() -> Identity {
-    match (std::env::var(ENV_TLS_CERT), std::env::var(ENV_TLS_KEY)) {
-        (Ok(cert_path), Ok(key_path)) => {
-            let identity = load_pem_identity(&cert_path, &key_path).unwrap_or_else(|e| {
-                panic!(
-                    "🔐 {ENV_TLS_CERT}/{ENV_TLS_KEY} are set but the cert could not be \
-                     loaded ({e}). Refusing to start with a fallback self-signed cert — \
-                     browsers would reject it. Fix the PEM paths/permissions \
-                     (cert={cert_path}, key={key_path}) or unset both env vars to run \
-                     with a dev self-signed cert."
-                )
-            });
-            info!("🔐 WebTransport using cert from {cert_path}");
-            // A real CA cert's digest is unused (browsers validate the chain),
-            // but a *self-signed* cert pinned via these env vars still needs the
-            // hash-pin — so publish the digest here too. This is the supported
-            // way to get a STABLE digest across host restarts: point the env
-            // vars at a persisted self-signed cert instead of minting a fresh
-            // one each launch. See announce_digest.
-            announce_digest(&identity);
-            return identity;
-        }
-        // Exactly one of the two set — almost certainly a typo'd/forgotten var.
-        // Fail loud rather than quietly ignoring the one that IS set.
-        (Ok(_), Err(_)) | (Err(_), Ok(_)) => panic!(
-            "🔐 only one of {ENV_TLS_CERT}/{ENV_TLS_KEY} is set; both are required to \
-             serve a CA cert. Set both, or unset both for a dev self-signed cert."
-        ),
-        (Err(_), Err(_)) => {}
+    if let Some((cert_path, key_path)) = resolve_cert_paths() {
+        let identity = load_pem_identity(&cert_path, &key_path).unwrap_or_else(|e| {
+            panic!(
+                "🔐 a cert was specified but could not be loaded ({e}). Refusing to \
+                 start with a fallback self-signed cert — browsers would reject it. \
+                 Fix the PEM paths/permissions (cert={cert_path}, key={key_path}), or \
+                 remove `--cert`/the env vars to run with a dev self-signed cert."
+            )
+        });
+        info!("🔐 WebTransport using cert from {cert_path}");
+        // A real CA cert's digest is unused (browsers validate the chain), but a
+        // *self-signed* cert pinned this way still needs the hash-pin — so
+        // publish the digest here too. This is the supported way to get a STABLE
+        // digest across host restarts: point at a persisted self-signed cert
+        // instead of minting a fresh one each launch. See announce_digest.
+        announce_digest(&identity);
+        return identity;
     }
 
     // ECDSA-P256 self-signed cert — fresh each launch (→ a new digest every
-    // restart) UNLESS you pin a persisted one via the env vars above. Publish the
-    // digest so browser clients can pin it in the connect URL (`#<digest>`).
+    // restart) UNLESS you pin a persisted one above. Publish the digest so
+    // browser clients can pin it in the connect URL (`#<digest>`).
     let identity = Identity::self_signed(vec!["localhost".to_string(), "127.0.0.1".to_string()])
         .expect("self-signed certificate");
     announce_digest(&identity);

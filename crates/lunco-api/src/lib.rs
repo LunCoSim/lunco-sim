@@ -72,7 +72,8 @@ pub struct LunCoApiConfig {
 impl LunCoApiConfig {
     /// Create configuration by parsing CLI arguments (`--api [PORT]`).
     ///
-    /// If `--api` is present without a port, it defaults to 3000.
+    /// If `--api` is present without a port, it defaults to
+    /// [`DEFAULT_API_PORT`](lunco_core::session::DEFAULT_API_PORT).
     /// If `--api` is NOT present, returns configuration with HTTP disabled.
     pub fn from_args() -> Self {
         let args: Vec<String> = std::env::args().collect();
@@ -80,7 +81,7 @@ impl LunCoApiConfig {
 
         for i in 0..args.len() {
             if args[i] == "--api" {
-                port = Some(3000);
+                port = Some(lunco_core::session::DEFAULT_API_PORT);
                 if i + 1 < args.len() {
                     if let Ok(p) = args[i + 1].parse::<u16>() {
                         port = Some(p);

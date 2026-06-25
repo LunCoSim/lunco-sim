@@ -159,10 +159,10 @@ fn test_all_rover_files_match_procedural() {
         // the live log shows `Quat(0,0,-0.707,0.707)`).
         let expected_rot = Quat::from_rotation_arc(Vec3::Y, Vec3::X);
         let expected_positions = [
-            ("Wheel_FL", Vec3::new(-1.0, -0.15, 1.225)),
-            ("Wheel_FR", Vec3::new(1.0, -0.15, 1.225)),
-            ("Wheel_RL", Vec3::new(-1.0, -0.15, -1.225)),
-            ("Wheel_RR", Vec3::new(1.0, -0.15, -1.225)),
+            ("Wheel_FL", Vec3::new(-1.0, -0.15, -1.225)),
+            ("Wheel_FR", Vec3::new(1.0, -0.15, -1.225)),
+            ("Wheel_RL", Vec3::new(-1.0, -0.15, 1.225)),
+            ("Wheel_RR", Vec3::new(1.0, -0.15, 1.225)),
         ];
 
         for (w_name, exp_pos) in &expected_positions {

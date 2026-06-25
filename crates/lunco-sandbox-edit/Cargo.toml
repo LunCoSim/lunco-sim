@@ -21,6 +21,7 @@ avian3d = { workspace = true }
 
 big_space.workspace = true
 lunco-core = { path = "../lunco-core" }
+lunco-doc = { path = "../lunco-doc" }
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
 lunco-mobility = { path = "../lunco-mobility" }
@@ -29,6 +30,7 @@ lunco-mobility = { path = "../lunco-mobility" }
 # (`ui/inspector.rs::modelica_parameters_section`) uses lunco-modelica's egui UI
 # surface, so `ui` propagates `lunco-modelica/ui`.
 lunco-modelica = { path = "../lunco-modelica", default-features = false }
+lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-cosim = { path = "../lunco-cosim" }
@@ -50,6 +52,7 @@ ui = [
     "dep:lunco-workbench",
     "lunco-modelica/ui",
     "lunco-avatar/ui",
+    "lunco-usd/ui",
     "bevy/bevy_post_process",
     "bevy/bevy_anti_alias",
     "bevy/mesh_picking",

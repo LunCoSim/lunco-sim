@@ -11,6 +11,19 @@ use crate::commands::{Reject, SessionId};
 use bevy::prelude::*;
 use std::collections::{HashMap, VecDeque};
 
+/// Default WebTransport port for the listen-server / host and for any client
+/// address that omits an explicit port. Single source of truth for the `5888`
+/// that `--host`, `--connect`, the in-sim Connect panel, the wasm deep-link, and
+/// the deploy scripts all default to. Lives in core (no wire dep) so every crate
+/// — even ones without a `lunco-networking` dependency (e.g. the workbench
+/// Network menu) — can reference one constant.
+pub const DEFAULT_HOST_PORT: u16 = 5888;
+
+/// Default HTTP API port when `--api` is passed without an explicit value.
+/// Single source of truth for the `4101` the GUI / headless server bins bind to
+/// (loopback admin API) — matches the `lunco-server.service` unit and DEPLOY.md.
+pub const DEFAULT_API_PORT: u16 = 4101;
+
 /// Which side of the wire is this process? Drives three decisions:
 /// capture (`Standalone` never serializes), id minting (`Host` mints
 /// [`crate::Provenance::Authoritative`]), and apply (`Host` authorizes).

@@ -92,7 +92,7 @@ fn run_with_mode(headless: bool) {
     lunco_assets::register_lunco_asset_sources(&mut app);
 
     app.add_plugins(default_plugins(headless));
-    app.add_plugins(SandboxCorePlugin);
+    app.add_plugins(SandboxCorePlugin { headless });
 
     #[cfg(feature = "ui")]
     if !headless {
@@ -140,7 +140,7 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
         let mut api_port: Option<u16> = None;
         for i in 0..args.len() {
             if args[i] == "--api" {
-                api_port = Some(3000);
+                api_port = Some(lunco_core::session::DEFAULT_API_PORT);
                 if i + 1 < args.len() {
                     if let Ok(p) = args[i + 1].parse::<u16>() {
                         api_port = Some(p);
@@ -234,7 +234,9 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
 /// here every plugin is pure-CPU sim/state. USD visual sync only writes the
 /// mesh/material asset stores (never touches a GPU device), so it's safe under
 /// `backends: None`.
-pub struct SandboxCorePlugin;
+pub struct SandboxCorePlugin {
+    pub headless: bool,
+}
 
 impl Plugin for SandboxCorePlugin {
     fn build(&self, app: &mut App) {
@@ -353,7 +355,7 @@ impl Plugin for SandboxCorePlugin {
         // command can dial a server at runtime.
         #[cfg(feature = "networking")]
         {
-            let mode = lunco_networking::NetworkMode::resolve();
+            let mode = lunco_networking::NetworkMode::resolve(self.headless);
             info!("[net] networking mode: {mode:?}");
             app.add_plugins(lunco_networking::LunCoNetworkingPlugin { mode });
             // Connect-menu bridge adapter (seeds connect_hint, re-dispatches the

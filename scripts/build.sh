@@ -69,23 +69,23 @@ case "$TARGET" in
         ;;
 
     sandbox-server)
-        # NATIVE headless server: the same `sandbox` bin run with `--no-ui`.
-        # `networking` enables the WebTransport host; default features pull in
-        # lunco-api (the `--api` HTTP control server). No wasm, no display.
+        # NATIVE headless server: the `sandbox-server` bin from `lunco-sandbox-server`.
+        # default features are dropped to omit the GUI stack, and the `server` feature
+        # enables the HTTP API + networking host. No winit, no display.
         cd "$PROJECT_DIR"
         profile_args=()
-        out="target/debug/sandbox"
+        out="target/debug/sandbox-server"
         label="dev"
         rel_flag=""
         if [ "$RELEASE" -eq 1 ]; then
             profile_args=(--release)
-            out="target/release/sandbox"
+            out="target/release/sandbox-server"
             label="release"
             rel_flag=" --release"
         fi
         info "native server build ($label)…"
         cargo build "${profile_args[@]}" \
-            --bin sandbox -p lunco-sandbox --features networking \
+            --bin sandbox-server -p lunco-sandbox-server \
             "${PASS[@]+"${PASS[@]}"}"
         success "server binary: $PROJECT_DIR/$out"
 
@@ -105,8 +105,8 @@ case "$TARGET" in
         cp -f "$PROJECT_DIR/crates/lunco-networking/DEPLOY.md" "$DIST/DEPLOY.md"
         success "server bundle: $DIST ($(du -sh "$DIST/sandbox" | cut -f1) binary + assets + deploy kit)"
         [ "$RELEASE" -eq 0 ] && warn "dev build (opt-level 1). For deploy use --release (faster + smaller)."
-        info "run:    $out --no-ui --host 5888 --api 4101"
-        info "deploy: ./scripts/deploy_server.sh user@host"
+        info "run:    $out --host 5888 --api 4101   (5888/4101 are the defaults; numbers optional)"
+        info "deploy: ./scripts/deploy_server.sh user@host --server <remote-path> [--web <remote-path>]"
         ;;
 
     -h|--help)

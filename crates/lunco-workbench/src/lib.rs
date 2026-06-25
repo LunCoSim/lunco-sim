@@ -2491,7 +2491,10 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                         let mut address = ui.data_mut(|d| {
                             d.get_temp::<String>(id).unwrap_or_else(|| {
                                 if status.connect_hint.is_empty() {
-                                    "127.0.0.1:5888".to_string()
+                                    format!(
+                                        "127.0.0.1:{}",
+                                        lunco_core::session::DEFAULT_HOST_PORT
+                                    )
                                 } else {
                                     status.connect_hint.clone()
                                 }

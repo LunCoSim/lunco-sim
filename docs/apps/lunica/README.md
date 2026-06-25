@@ -18,7 +18,7 @@ cargo run --bin lunica -- [FLAGS]
 
 | Flag | Description |
 |---|---|
-| `--api [PORT]` | Enable the HTTP API server. Default port is 3000. |
+| `--api [PORT]` | Enable the HTTP API server. Default port is 4101. |
 
 ## Web Usage (Wasm)
 

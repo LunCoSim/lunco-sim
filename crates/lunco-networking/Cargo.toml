@@ -43,6 +43,16 @@ serde_json = { workspace = true, optional = true }
 # Binary wire codec for the snapshot/envelope hot path (replaces serde_json there —
 # ~2x smaller, no field names). serde_json stays for the Reflect command payload.
 bincode = { version = "1.3", optional = true }
+# URL-dialing WebTransport client IO (`wt_client`): lets the browser/native connect by
+# HOSTNAME (`https://sandbox.lunco.space:5888`) so a real CA cert validates with no
+# digest — lightyear's built-in IO only dials `https://{ip}`.
+# `dangerous-configuration` exposes wtransport's `with_no_cert_validation`, used
+# ONLY for direct bare-IP native connections (a self-signed server over LAN/dev,
+# no CA cert) — see `native_client_config` in wt_client.rs. Hostname connections
+# always use full CA validation; the insecure path never applies to them.
+aeronet_webtransport = { version = "0.19", features = ["client", "dangerous-configuration"] }
+lightyear_aeronet = { version = "0.26.4", default-features = false }
+
 
 # Native (desktop / dedicated server): full client+server WebTransport.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
@@ -77,14 +87,6 @@ web-sys = { version = "0.3", features = ["Window", "Location", "Performance"] }
 # backend (`crypto.getRandomValues`) or it `compile_error!`s. We don't use it
 # directly — this entry exists only to turn the feature on via unification.
 getrandom = { version = "0.2", features = ["js"] }
-# URL-dialing WebTransport client IO (`wt_client`): lets the browser connect by
-# HOSTNAME (`https://lunica.lunco.space:5888`) so a real CA cert validates with no
-# digest — lightyear's built-in IO only dials `https://{ip}`. These are the SAME
-# crates lightyear already pulls (feature-unified — no extra build); declared
-# directly so we can build the dial URL ourselves. aeronet's wasm backend
-# (xwt-web) is selected by target cfg, not a feature.
-aeronet_webtransport = { version = "0.19", features = ["client"] }
-lightyear_aeronet = { version = "0.26.4", default-features = false }
 
 [lints]
 workspace = true
