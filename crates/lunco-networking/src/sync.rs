@@ -35,7 +35,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use lunco_core::{
     authorize, AppliedInputSeq, GlobalEntityId, IncomingSnapshots, LocalSession, Mutation,
     NetReplicate, NetSpawn, NetworkRole, OpId, PendingReplicatedSpawns, ReplicatedSpawn, SessionId,
-    SessionRegistry, SimTick, SnapshotSample, SyncApplyGuard, SyncChannel,
+    SessionRegistry, SessionProfiles, SimTick, SnapshotSample, SyncApplyGuard, SyncChannel,
 };
 
 use lunco_api::executor::{authz_target_gid, globalize_command_ids, resolve_command_ids};
@@ -198,6 +198,13 @@ pub struct OwnershipMsg {
     pub entries: Vec<(u64, u64)>,
 }
 
+/// Host → clients: the authoritative mapping of session ID to username.
+/// Broadcast on change over the reliable CommandBus.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProfilesMsg {
+    pub entries: Vec<(u64, String)>,
+}
+
 /// Everything that crosses the wire, tagged for reliable/unreliable routing by
 /// the accompanying [`SyncChannel`]. `lunco-networking` (de)serializes these.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -207,6 +214,7 @@ pub enum SyncEnvelope {
     Spawn(SpawnReplicationMsg),
     Handshake(HandshakeMsg),
     Ownership(OwnershipMsg),
+    Profiles(ProfilesMsg),
     Ack(lunco_core::Ack),
 }
 
@@ -504,6 +512,7 @@ pub fn drain_sync_inbox(
     mut pending_spawns: ResMut<PendingReplicatedSpawns>,
     mut snapshots: ResMut<IncomingSnapshots>,
     mut registry: ResMut<SessionRegistry>,
+    mut profiles: ResMut<SessionProfiles>,
 ) {
     if inbox.0.is_empty() {
         return;
@@ -581,6 +590,11 @@ pub fn drain_sync_inbox(
                 // (The host never receives this — it *is* the authority.)
                 if !role.is_host() {
                     registry.replace_all(o.entries.into_iter().map(|(g, s)| (g, SessionId(s))));
+                }
+            }
+            SyncEnvelope::Profiles(p) => {
+                if !role.is_host() {
+                    profiles.profiles = p.entries.into_iter().collect();
                 }
             }
             SyncEnvelope::Ack(_) => { /* MVP is optimistic; acks unused */ }

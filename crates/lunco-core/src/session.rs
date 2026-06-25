@@ -229,6 +229,17 @@ impl SessionRegistry {
     }
 }
 
+/// Global mapping of SessionId (raw u64) to username strings.
+///
+/// On the host, this accumulates user profile updates. The host then
+/// broadcasts this mapping to all clients so they can render names above
+/// possessed rovers.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct SessionProfiles {
+    pub profiles: HashMap<u64, String>,
+}
+
+
 /// Suppress the USD loader's automatic [`crate::Provenance::Content`] stamping
 /// for a runtime-instanced subtree. Runtime instances get server-allocated
 /// identity (root `Authoritative`, children left un-networked) rather than

@@ -67,7 +67,7 @@ pub use session::{
     NetExcluded, NetReplicate, NetSpawn,
     NetStatus, NetworkRole, NotPredictable, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns,
     PossessionPolicy,
-    PredictedDynamic, ReplicatedChassisMotion, ReplicatedSpawn, SessionRegistry, SkipContentStamp,
+    PredictedDynamic, ReplicatedChassisMotion, ReplicatedSpawn, SessionRegistry, SessionProfiles, SkipContentStamp,
     SnapshotSample,
     VesselInputLog, SyncApplyGuard,
 };
@@ -462,6 +462,7 @@ pub(crate) fn register_core_resources(app: &mut App) {
         .init_resource::<session::SyncApplyGuard>()
         .init_resource::<session::NetStatus>()
         .init_resource::<session::SessionRegistry>()
+        .init_resource::<session::SessionProfiles>()
         .init_resource::<session::PendingReplicatedSpawns>()
         .init_resource::<session::IncomingSnapshots>()
         // Input-sequence bookkeeping is always-on substrate: the

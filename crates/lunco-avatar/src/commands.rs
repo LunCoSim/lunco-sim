@@ -65,3 +65,10 @@ pub struct FollowTarget {
     /// The entity to follow.
     pub target: Entity,
 }
+
+/// Update the profile name for the active user session.
+#[Command(default)]
+pub struct UpdateProfile {
+    pub name: String,
+}
+

@@ -10,11 +10,11 @@ use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use crate::sync::{
-    encode_quat, quantize_pos, HandshakeMsg, OwnershipMsg, SnapshotEntry, SnapshotMsg,
+    encode_quat, quantize_pos, HandshakeMsg, OwnershipMsg, ProfilesMsg, SnapshotEntry, SnapshotMsg,
     SpawnReplicationMsg, SyncEnvelope, SyncInbox, SyncOutbox,
 };
 use lunco_core::{
-    GlobalEntityId, NetReplicate, NetSpawn, NetStatus, SessionRegistry, SimTick, SyncChannel,
+    GlobalEntityId, NetReplicate, NetSpawn, NetStatus, SessionRegistry, SessionProfiles, SimTick, SyncChannel,
 };
 
 use crate::protocol::{CmdChannel, Frame, SnapChannel};
@@ -235,6 +235,7 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
             host_recv_inbox,
             update_host_netstatus,
             broadcast_ownership,
+            broadcast_profiles,
         ),
     );
 }
@@ -250,6 +251,20 @@ fn broadcast_ownership(registry: Res<SessionRegistry>, mut outbox: ResMut<SyncOu
         SyncChannel::CommandBus,
         SyncEnvelope::Ownership(OwnershipMsg {
             entries: registry.snapshot(),
+        }),
+    ));
+}
+
+/// Broadcast the authoritative session profile names map to all clients whenever
+/// it changes. Reliable channel. Host-only (registered in `setup_host`).
+fn broadcast_profiles(profiles: Res<SessionProfiles>, mut outbox: ResMut<SyncOutbox>) {
+    if !profiles.is_changed() {
+        return;
+    }
+    outbox.0.push((
+        SyncChannel::CommandBus,
+        SyncEnvelope::Profiles(ProfilesMsg {
+            entries: profiles.profiles.iter().map(|(&s, n)| (s, n.clone())).collect(),
         }),
     ));
 }
@@ -292,6 +307,7 @@ fn on_server_connected(
     q_spawns: Query<(&GlobalEntityId, &NetSpawn)>,
     q_repl: Query<(&GlobalEntityId, &Transform), With<NetReplicate>>,
     registry: Res<SessionRegistry>,
+    profiles: Res<SessionProfiles>,
     server: Single<&Server>,
     tick: Res<SimTick>,
     mut sender: ServerMultiMessageSender,
@@ -372,6 +388,15 @@ fn on_server_connected(
         SyncChannel::CommandBus,
         &SyncEnvelope::Ownership(OwnershipMsg {
             entries: registry.snapshot(),
+        }),
+    );
+    server_send(
+        &mut sender,
+        server,
+        &target,
+        SyncChannel::CommandBus,
+        &SyncEnvelope::Profiles(ProfilesMsg {
+            entries: profiles.profiles.iter().map(|(&s, n)| (s, n.clone())).collect(),
         }),
     );
     info!("[net] client connected: peer={peer:?} session={}", session.0);

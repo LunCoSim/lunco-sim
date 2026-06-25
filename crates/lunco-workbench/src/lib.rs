@@ -2465,6 +2465,22 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     .get_resource::<NetStatus>()
                     .cloned()
                     .unwrap_or_default();
+
+                // User Profile Settings Name Input
+                let mut profile = world.resource_mut::<lunco_settings::ProfileSettings>();
+                let mut name_changed = false;
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    if ui.text_edit_singleline(&mut profile.username).changed() {
+                        name_changed = true;
+                    }
+                });
+                if name_changed {
+                    let mut p = world.resource_mut::<lunco_settings::ProfileSettings>();
+                    p.set_changed();
+                }
+                ui.separator();
+
                 match status.role {
                     NetworkRole::Host => {
                         ui.label(format!("Hosting · {}", status.endpoint));

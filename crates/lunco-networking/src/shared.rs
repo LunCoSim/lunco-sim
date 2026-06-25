@@ -163,5 +163,6 @@ fn add_protocol(app: &mut App) {
     app.declare_channel::<lunco_mobility::BrakeRover>(SyncChannel::ControlStream);
     app.declare_channel::<lunco_avatar::PossessVessel>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_avatar::ReleaseVessel>(SyncChannel::CommandBus);
+    app.declare_channel::<lunco_avatar::UpdateProfile>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_sandbox_edit::commands::SpawnEntity>(SyncChannel::CommandBus);
 }

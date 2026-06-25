@@ -333,3 +333,22 @@ fn persist_section<S: SettingsSection>(
     settings.raw.insert(S::KEY.to_string(), value);
     settings.dirty = true;
 }
+
+/// Persisted user profile settings (e.g. username).
+#[derive(Resource, serde::Serialize, serde::Deserialize, Clone, PartialEq, Debug)]
+pub struct ProfileSettings {
+    pub username: String,
+}
+
+impl Default for ProfileSettings {
+    fn default() -> Self {
+        Self {
+            username: "Player".to_string(),
+        }
+    }
+}
+
+impl SettingsSection for ProfileSettings {
+    const KEY: &'static str = "profile";
+}
+

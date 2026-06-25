@@ -21,10 +21,11 @@ use leafwing_input_manager::prelude::*;
 use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 
 use lunco_controller::ControllerLink;
-use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands};
+use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands, SessionProfiles, SessionRegistry, LocalSession, NetworkRole, SessionId};
 use lunco_core::attach::migrate_to_grid;
 use lunco_celestial::{CelestialClock, LocalGravityField, TeleportToSurface, LeaveSurface};
 use lunco_environment::{GravityBody, GravityProvider};
+use lunco_settings::{AppSettingsExt, ProfileSettings};
 
 pub mod commands;
 pub use commands::*;
@@ -440,6 +441,9 @@ impl Plugin for LunCoAvatarPlugin {
            .register_type::<SurfaceModeThreshold>()
            .register_type::<MouseSensitivity>();
 
+        app.register_settings_section::<ProfileSettings>();
+        app.register_type::<UpdateProfile>().add_observer(on_update_profile);
+
         app.add_systems(Update, (
             avatar_init_system,
             capture_avatar_intent,
@@ -448,6 +452,10 @@ impl Plugin for LunCoAvatarPlugin {
             avatar_global_hotkeys,
             surface_mode_transition_system,
             enforce_ownership,
+            update_rover_name_tags,
+            rotate_rover_name_tags,
+            sync_profile_on_connect,
+            sync_profile_local,
         ));
 
         // Chase camera shares the rover's fixed-step time domain so its
@@ -2181,6 +2189,132 @@ fn get_physical_body(
     
     target // Fallback
 }
+
+#[derive(Component)]
+pub struct RoverNameTag {
+    pub session_id: SessionId,
+}
+
+fn on_update_profile(
+    trigger: On<UpdateProfile>,
+    guard: Res<lunco_core::SyncApplyGuard>,
+    local: Res<LocalSession>,
+    mut profiles: ResMut<SessionProfiles>,
+) {
+    let origin = guard.0.unwrap_or(local.0);
+    profiles.profiles.insert(origin.0, trigger.event().name.clone());
+    info!("[net] session {} set name to '{}'", origin.0, trigger.event().name);
+}
+
+pub fn update_rover_name_tags(
+    mut commands: Commands,
+    registry: Res<SessionRegistry>,
+    profiles: Res<SessionProfiles>,
+    q_rovers: Query<(Entity, &lunco_core::GlobalEntityId)>,
+    q_name_tags: Query<(Entity, &ChildOf, &RoverNameTag)>,
+    mut q_text: Query<&mut Text2d>,
+) {
+    let mut possessed = std::collections::HashMap::new();
+    for (entity, gid) in q_rovers.iter() {
+        if let Some(session_id) = registry.owner_of(gid.get()) {
+            let username = profiles.profiles.get(&session_id.0)
+                .cloned()
+                .unwrap_or_else(|| format!("Player {}", session_id.0));
+            possessed.insert(entity, (session_id, username));
+        }
+    }
+
+    let mut tagged_rovers = std::collections::HashSet::new();
+
+    for (tag_entity, child_of, tag) in q_name_tags.iter() {
+        let rover_entity = child_of.parent();
+        if let Some((session_id, username)) = possessed.get(&rover_entity) {
+            if tag.session_id == *session_id {
+                if let Ok(mut text) = q_text.get_mut(tag_entity) {
+                    if text.0 != *username {
+                        text.0 = username.clone();
+                    }
+                }
+                tagged_rovers.insert(rover_entity);
+            } else {
+                commands.entity(tag_entity).despawn();
+            }
+        } else {
+            commands.entity(tag_entity).despawn();
+        }
+    }
+
+    for (rover_entity, (session_id, username)) in possessed {
+        if !tagged_rovers.contains(&rover_entity) {
+            commands.entity(rover_entity).with_children(|parent| {
+                parent.spawn((
+                    RoverNameTag { session_id },
+                    Text2d::new(username),
+                    TextFont {
+                        font_size: 24.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    Transform::from_translation(Vec3::Y * 2.0),
+                ));
+            });
+        }
+    }
+}
+
+pub fn rotate_rover_name_tags(
+    mut q_billboards: Query<(&mut Transform, &ChildOf), With<RoverNameTag>>,
+    q_camera: Query<&GlobalTransform, (With<Camera>, With<lunco_core::Avatar>)>,
+    q_global: Query<&GlobalTransform>,
+) {
+    if let Some(cam_gtf) = q_camera.iter().next() {
+        let cam_rot = cam_gtf.compute_transform().rotation;
+        for (mut tf, child_of) in q_billboards.iter_mut() {
+            if let Ok(p_gtf) = q_global.get(child_of.parent()) {
+                let p_rot = p_gtf.compute_transform().rotation;
+                tf.rotation = p_rot.inverse() * cam_rot;
+            } else {
+                tf.rotation = cam_rot;
+            }
+        }
+    }
+}
+
+fn sync_profile_on_connect(
+    local: Res<LocalSession>,
+    settings: Res<ProfileSettings>,
+    mut last_sent: Local<Option<u64>>,
+    mut last_name: Local<Option<String>>,
+    mut commands: Commands,
+) {
+    let session = local.0 .0;
+    if session == 0 {
+        *last_sent = None;
+        return;
+    }
+    let current_name = settings.username.clone();
+    let should_send = last_sent.is_none_or(|s| s != session) 
+        || last_name.as_ref().is_none_or(|n| *n != current_name);
+    if should_send {
+        commands.trigger(UpdateProfile { name: current_name.clone() });
+        *last_sent = Some(session);
+        *last_name = Some(current_name);
+    }
+}
+
+fn sync_profile_local(
+    role: Res<NetworkRole>,
+    settings: Res<ProfileSettings>,
+    mut profiles: ResMut<SessionProfiles>,
+) {
+    if *role == NetworkRole::Standalone {
+        let name = settings.username.clone();
+        if profiles.profiles.get(&0).is_none_or(|n| *n != name) {
+            profiles.profiles.insert(0, name);
+        }
+    }
+}
+
 
 // ── Command Registration ────────────────────────────────────────────────────────
 
