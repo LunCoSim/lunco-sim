@@ -310,6 +310,17 @@ impl StatusBus {
     /// Update / install the active progress tick for `source`. Does
     /// not append to `history` — call `push(..., Info, ...)` separately
     /// to mark phase transitions you want preserved.
+    ///
+    /// The entry's `at` is the *start* time: when a tick replaces an
+    /// existing entry at the same `(Global, source)` key, the original
+    /// `at` is preserved rather than reset to now. This keeps
+    /// [`Self::display_latest`]'s "longest-running stays pinned" contract
+    /// intact for sources that tick continuously — e.g. the MSL download
+    /// (which starts at boot and re-pushes every frame) must stay the
+    /// pinned status-bar entry even when a later, shorter task (a queued
+    /// compile) begins. Resetting `at` each tick made MSL perennially the
+    /// *youngest* entry, so the bar flipped to "Compiling…" and the
+    /// download progress disappeared.
     pub fn push_progress(
         &mut self,
         source: &'static str,
@@ -317,17 +328,23 @@ impl StatusBus {
         done: u64,
         total: u64,
     ) {
+        let key = (BusyScope::Global, source);
+        let at = self
+            .active_progress
+            .get(&key)
+            .map(|e| e.at)
+            .unwrap_or_else(Instant::now);
         let ev = StatusEvent {
             scope: BusyScope::Global,
             source,
             level: StatusLevel::Progress,
             message: message.into(),
             progress: Some((done, total)),
-            at: Instant::now(),
+            at,
             busy_id: None,
             cancel: None,
         };
-        self.active_progress.insert((BusyScope::Global, source), ev);
+        self.active_progress.insert(key, ev);
         self.seq = self.seq.wrapping_add(1);
     }
 
@@ -697,6 +714,25 @@ mod tests {
         assert_eq!(bus.entries_in(BusyScope::Global).count(), 2);
         assert!(bus.is_busy(BusyScope::Tab(1)));
         assert!(bus.is_busy(BusyScope::Tab(2)));
+    }
+
+    #[test]
+    fn push_progress_preserves_start_time_so_display_latest_pins_oldest() {
+        // The status bar's `display_latest` shows the longest-running
+        // active entry. A continuously-ticking source (MSL download) must
+        // stay pinned even when a later, shorter task (compile) begins —
+        // re-pushing progress must NOT reset the entry's `at` to now.
+        let mut bus = StatusBus::default();
+        bus.push_progress("MSL", "downloading", 1, 100);
+        let msl_at = bus.display_latest().expect("msl entry").at;
+        // A later task starts after MSL.
+        let _compile = bus.begin(BusyScope::Document(1), "compile", "Compiling…");
+        // MSL keeps ticking (every frame).
+        bus.push_progress("MSL", "downloading", 50, 100);
+        // The pinned entry is still MSL (oldest start), not the compile.
+        let shown = bus.display_latest().expect("an entry");
+        assert_eq!(shown.source, "MSL");
+        assert_eq!(shown.at, msl_at, "push_progress must preserve start time");
     }
 
     #[test]

@@ -81,6 +81,7 @@ fn compile_balloon_model(
             session_id: 0,
             model_name,
             source,
+            doc_uri: "model.mo".to_string(),
             extra_sources: Vec::new(),
             stream: None,
         });

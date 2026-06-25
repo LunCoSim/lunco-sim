@@ -229,6 +229,19 @@ pub struct ModelicaCompiler {
     /// this and never pays the MSL cost. Latches `true` after one install
     /// so subsequent compiles skip the gate entirely.
     msl_installed: bool,
+    /// URIs of the user documents currently seated as overlays in this
+    /// reused session (NOT the MSL/library source roots). Every compile is
+    /// HERMETIC with respect to prior compiles: before seating its own
+    /// document set, a compile evicts any previously-seated user doc that is
+    /// not part of *this* compile. Without this, a prior compile's primary
+    /// overlay stays resident, and compiling a SECOND document that defines
+    /// the same package (e.g. the same model opened in two tabs / restored +
+    /// shared) leaves the package registered under two URIs → rumoca's merge
+    /// pass fails with `Duplicate class '…' found in '…' with non-identical
+    /// definition`. The per-doc `session_uri` keying alone can't prevent this
+    /// because the two docs legitimately have different URIs; the session
+    /// itself must hold only the active compile's user docs.
+    seated_user_uris: std::collections::HashSet<String>,
 }
 
 impl ModelicaCompiler {
@@ -258,6 +271,7 @@ impl ModelicaCompiler {
         let mut compiler = Self {
             session: Session::new(SessionConfig::default()),
             msl_installed: false,
+            seated_user_uris: std::collections::HashSet::new(),
         };
         // Escape hatch: `LUNCO_MODELICA_PRELOAD_MSL=1` forces the old eager
         // behaviour, e.g. to pre-pay the install before a latency-sensitive
@@ -499,8 +513,31 @@ impl ModelicaCompiler {
         source: &str,
         filename: &str,
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        let mut keep = std::collections::HashSet::new();
+        keep.insert(filename.to_string());
+        self.evict_user_docs_except(&keep);
         self.session.update_document(filename, source);
+        self.seated_user_uris = keep;
         self.compile_loaded(model_name)
+    }
+
+    /// Remove every previously-seated user-document overlay whose URI is not
+    /// in `keep`, so the reused session holds ONLY the active compile's user
+    /// docs (plus the immutable MSL/library source roots). This is what makes
+    /// each compile hermetic against prior compiles — see
+    /// [`Self::seated_user_uris`]. MSL roots are installed via
+    /// `replace_parsed_source_set` (not tracked here), so they're untouched.
+    fn evict_user_docs_except(&mut self, keep: &std::collections::HashSet<String>) {
+        let stale: Vec<String> = self
+            .seated_user_uris
+            .iter()
+            .filter(|uri| !keep.contains(*uri))
+            .cloned()
+            .collect();
+        for uri in stale {
+            self.session.remove_document(&uri);
+            self.seated_user_uris.remove(&uri);
+        }
     }
 
     /// Recompute **structured, located** diagnostics for a model that
@@ -539,6 +576,17 @@ impl ModelicaCompiler {
     /// sibling untitled doc that holds the package). Each extra is
     /// loaded via the same `update_document` path; rumoca dedups by
     /// filename so re-loading the same file is harmless.
+    ///
+    /// The active compile's user docs (primary + extras) become the session's
+    /// ENTIRE user-overlay set: any previously-seated user doc that isn't part
+    /// of this compile is evicted first (see [`Self::seated_user_uris`] /
+    /// [`Self::evict_user_docs_except`]). This keeps the reused session
+    /// hermetic — a prior compile of the same package under a different URI
+    /// (e.g. the same model open in two tabs) can't linger and trip rumoca's
+    /// `Duplicate class '…' found in '…' with non-identical definition`. The
+    /// seated docs are left resident on return (the error-path
+    /// `compile_diagnostics` re-reads them); they're pruned by the NEXT
+    /// compile, not removed here.
     pub fn compile_str_multi(
         &mut self,
         model_name: &str,
@@ -546,6 +594,14 @@ impl ModelicaCompiler {
         filename: &str,
         extras: &[(String, String)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        let mut keep = std::collections::HashSet::new();
+        keep.insert(filename.to_string());
+        for (extra_filename, _) in extras {
+            if extra_filename != filename {
+                keep.insert(extra_filename.clone());
+            }
+        }
+        self.evict_user_docs_except(&keep);
         for (extra_filename, extra_source) in extras {
             if extra_filename == filename {
                 continue;
@@ -553,6 +609,7 @@ impl ModelicaCompiler {
             self.session.update_document(extra_filename, extra_source);
         }
         self.session.update_document(filename, source);
+        self.seated_user_uris = keep;
         self.compile_loaded(model_name)
     }
 
@@ -1213,18 +1270,17 @@ impl Plugin for ModelicaWorkbenchPlugin {
         app.add_plugins(ui::model_share::ModelSharePlugin);
 
         // Off-thread Modelica worker. wasm32 has no real threads, so an
-        // inline rumoca compile (seconds for non-trivial models) freezes
-        // the render loop and the page appears hung. `ModelicaPlugin`
-        // above already registered the result sender, so the JS Worker
-        // can be attached now. Non-fatal: the inline worker remains a
-        // fallback if the bundle is missing or COOP/COEP is misconfigured.
+        // inline rumoca *compile* (seconds for non-trivial models) freezes the
+        // render loop. The worker pool handles that heavy compile/run work — but
+        // it is NOT spawned here. Spawning it eagerly at boot is a cold compile
+        // of each ~60 MB worker bundle that can take tens of seconds on a weak
+        // machine, and the diagram must not wait on it. We only register the
+        // worker URL now; `worker_transport::ensure_pool_spawned` spawns the
+        // pool the first time a compile/run is requested. Parsing-for-diagram
+        // runs on the main thread until a worker is warm (see
+        // `dispatch_parse_to_worker`), so the model renders immediately.
         #[cfg(target_arch = "wasm32")]
-        if let Err(e) = worker_transport::install_worker("./worker/worker_bootstrap.js") {
-            bevy::log::error!(
-                "[ModelicaWorkbenchPlugin] off-thread worker failed to start; \
-                 falling back to inline compile path: {e:?}"
-            );
-        }
+        worker_transport::register_worker_url("./worker/worker_bootstrap.js");
     }
 }
 
@@ -1374,14 +1430,19 @@ fn build_modelica_core(app: &mut App) {
 
     #[cfg(target_arch = "wasm32")]
     {
-        // Both systems run every Update; only one actually does work per
-        // frame. `pump_commands_to_worker` early-returns if the JS worker
-        // hasn't been installed yet — which keeps `inline_worker_process`
-        // as the fallback dispatch until then. Once `install_worker` is
-        // called by the binary, pump_commands wins because it drains
-        // `rx_cmd` first; inline_worker_process then sees an empty queue
-        // and no-ops.
-        app.add_systems(Update, worker_transport::pump_commands_to_worker);
+        // Command dispatch on wasm. `pump_commands_to_worker` is the primary
+        // drainer: on a queued command it lazily spawns the worker pool and
+        // ships the command off-thread. It is ordered BEFORE
+        // `inline_worker_process` so that, whenever the pool spawns, the inline
+        // fallback sees an empty queue and no-ops. The inline (main-thread)
+        // path only does work when `pump_commands_to_worker` declines — i.e.
+        // the worker bundle failed to spawn — so a missing/blocked worker still
+        // compiles (just on the main thread).
+        app.add_systems(
+            Update,
+            worker_transport::pump_commands_to_worker
+                .before(worker::inline_worker_process),
+        );
         // Re-seed MSL into workers respawned after a crash, deferred so the
         // ~165 MB bundle isn't re-allocated on the (memory-starved) crash
         // stack. Cheap no-op when nothing is pending.
