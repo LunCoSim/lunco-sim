@@ -45,7 +45,8 @@ members = [
     "crates/lunco-workspace",
     "crates/lunco-settings",
     "crates/lunco-experiments",
-    "crates/lunco-render"
+    "crates/lunco-render",
+    "crates/lunco-obstacle-field"
 ]
 # Bare `cargo build`/`check`/`test` (no `-p`/`--workspace`) operates on just the
 # two app crates and their dependency closure. This skips workspace members that
@@ -191,6 +192,13 @@ rfd = "0.15"
 tempfile = "3.10"
 thiserror = "2.0"
 async-trait = "0.1"
+# Seeded, reproducible RNG for procedural generation. ChaCha8Rng seeded via
+# `seed_from_u64` is deterministic across platforms and needs NO getrandom at
+# runtime — so the obstacle-field generator produces identical fields on
+# server + every client (networking replicates the spec, not the geometry) and
+# is wasm-safe without an entropy backend.
+rand = { version = "0.8", default-features = false, features = ["std"] }
+rand_chacha = "0.3"
 
 # ── Lints (inherited via `[lints] workspace = true` per crate) ───────
 # Encodes policy decisions:
