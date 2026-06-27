@@ -1218,6 +1218,7 @@ pub fn reconcile_predicted_dynamic(
         Option<&mut LinearVelocity>,
         Option<&mut AngularVelocity>,
         Option<&mut PendingCorrection>,
+        Has<lunco_core::RoverVessel>,
     )>,
     mut commands: Commands,
 ) {
@@ -1240,7 +1241,7 @@ pub fn reconcile_predicted_dynamic(
         let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(g)) else {
             continue;
         };
-        let Ok((pos, rot, lin, ang, off)) = q.get_mut(e) else {
+        let Ok((pos, rot, lin, ang, off, is_rover)) = q.get_mut(e) else {
             continue;
         };
         // Dynamic bodies always carry avian `Position`/`Rotation` (absolute, f64).
@@ -1282,23 +1283,37 @@ pub fn reconcile_predicted_dynamic(
             if let Some(mut pc) = off {
                 *pc = PendingCorrection::default();
             }
-        } else if dist > RECONCILE_EPS_POS || angle > RECONCILE_EPS_ROT {
-            // Soft CONTINUOUS spring (every fixed tick): SET the residual to the
-            // freshly-measured error; `drain_pending_corrections` eases a bounded bit
-            // per tick into Position/Rotation (smooth, never a Transform write).
-            // Velocity is LEFT to local physics so contacts/your push produce real,
-            // crisp response — the dead-zone above is the yield budget. This is what
-            // makes a remote body both stay synced AND interact.
-            let dpos = err.as_vec3();
-            match off {
-                Some(mut pc) => {
-                    pc.pos = dpos;
-                    pc.rot = rot_err;
+        } else {
+            // Feed-forward authoritative velocity to remote rovers so they dead-reckon
+            // smoothly between snapshots instead of sitting still (0 local velocity)
+            // and jumping/teleporting when the distance error exceeds the threshold.
+            if is_rover {
+                if let Some(mut l) = lin {
+                    l.0 = lv;
                 }
-                None => {
-                    commands
-                        .entity(e)
-                        .insert(PendingCorrection { pos: dpos, rot: rot_err });
+                if let Some(mut a) = ang {
+                    a.0 = av;
+                }
+            }
+
+            if dist > RECONCILE_EPS_POS || angle > RECONCILE_EPS_ROT {
+                // Soft CONTINUOUS spring (every fixed tick): SET the residual to the
+                // freshly-measured error; `drain_pending_corrections` eases a bounded bit
+                // per tick into Position/Rotation (smooth, never a Transform write).
+                // Velocity is LEFT to local physics so contacts/your push produce real,
+                // crisp response — the dead-zone above is the yield budget. This is what
+                // makes a remote body both stay synced AND interact.
+                let dpos = err.as_vec3();
+                match off {
+                    Some(mut pc) => {
+                        pc.pos = dpos;
+                        pc.rot = rot_err;
+                    }
+                    None => {
+                        commands
+                            .entity(e)
+                            .insert(PendingCorrection { pos: dpos, rot: rot_err });
+                    }
                 }
             }
         }
