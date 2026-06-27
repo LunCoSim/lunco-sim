@@ -7055,6 +7055,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-mobility",
+ "lunco-obstacle-field",
  "lunco-sandbox-edit",
  "lunco-settings",
  "lunco-storage",

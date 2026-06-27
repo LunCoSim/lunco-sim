@@ -20,7 +20,7 @@ use big_space::prelude::*;
 
 use lunco_workbench::WorkbenchViewportCamera;
 use lunco_avatar::{IntentAnalogState, FreeFlightCamera, AdaptiveNearPlane, ProvisionalAvatarCamera};
-use lunco_core::Avatar;
+use lunco_core::{Avatar, LocalAvatar};
 use lunco_modelica::{ModelicaWorkbenchPlugin, ModelicaUiConfig};
 
 mod code_panel;
@@ -258,6 +258,7 @@ fn spawn_fallback_avatar(
         FloatingOrigin,
         CellCoord::default(),
         Avatar,
+        LocalAvatar,
         IntentAnalogState::default(),
         ActionState::<lunco_core::UserIntent>::default(),
         lunco_controller::get_avatar_input_map(),

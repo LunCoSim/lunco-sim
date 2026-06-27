@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 use bevy_mesh::Indices;
 use big_space::prelude::CellCoord;
-use lunco_core::{ArticulatedVehicle, GridAnchor, WorldGrid};
+use lunco_core::{ArticulatedVehicle, GridAnchor, WorldGrid, Command, on_command, register_commands};
 use lunco_terrain::TerrainTile;
 
 use crate::assets::{bucket_index, bucket_sizes};
@@ -84,9 +84,28 @@ pub struct RegenerateField;
 /// `ObstacleFieldSpec` resource and fires `RegenerateField`.
 pub struct ObstacleFieldPlugin;
 
+#[Command(default)]
+pub struct UpdateObstacleFieldSpec {
+    pub spec: ObstacleFieldSpec,
+}
+
+#[on_command(UpdateObstacleFieldSpec)]
+fn on_update_obstacle_field_spec(
+    trigger: On<UpdateObstacleFieldSpec>,
+    mut spec: ResMut<ObstacleFieldSpec>,
+    mut ev: MessageWriter<RegenerateField>,
+) {
+    *spec = trigger.event().spec.clone();
+    ev.write(RegenerateField);
+    info!("[ObstacleField] Spec updated and regeneration triggered.");
+}
+
+register_commands!(on_update_obstacle_field_spec);
+
 impl Plugin for ObstacleFieldPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<ObstacleFieldSpec>()
+            .register_type::<UpdateObstacleFieldSpec>()
             .init_resource::<ObstacleFieldSpec>()
             .init_resource::<ObstacleFieldHeights>()
             .init_resource::<PhysicsHold>()
@@ -101,6 +120,7 @@ impl Plugin for ObstacleFieldPlugin {
                     remove_legacy_ground,
                 ),
             );
+        register_all_commands(app);
     }
 }
 

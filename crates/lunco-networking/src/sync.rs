@@ -253,6 +253,8 @@ pub struct TutorStatusMsg {
     pub tutor_session: u64,
     /// The active document on the tutor's screen.
     pub active_doc: Option<DocumentId>,
+    /// The active perspective on the tutor's screen.
+    pub active_perspective: Option<String>,
     /// The tutor avatar's position ([f32; 3]), rotation ([f32; 4]), cell coordinates ([i64; 3]), and ephemeris ID.
     pub avatar_state: Option<([f32; 3], [f32; 4], [i64; 3], Option<i32>)>,
     /// The target client ID, if any (None = Everyone).
@@ -270,6 +272,8 @@ pub struct StudentStatusMsg {
     pub student_session: u64,
     /// The active document on the student's screen.
     pub active_doc: Option<DocumentId>,
+    /// The active perspective on the student's screen.
+    pub active_perspective: Option<String>,
     /// The student avatar's position ([f32; 3]), rotation ([f32; 4]), cell coordinates ([i64; 3]), and ephemeris ID.
     pub avatar_state: Option<([f32; 3], [f32; 4], [i64; 3], Option<i32>)>,
 }
@@ -281,22 +285,34 @@ pub struct SharePerspectiveMsg {
     pub tutor_session: u64,
     /// The active document on the tutor's screen.
     pub active_doc: Option<DocumentId>,
+    /// The active perspective on the tutor's screen.
+    pub active_perspective: Option<String>,
     /// The tutor avatar's position ([f32; 3]), rotation ([f32; 4]), cell coordinates ([i64; 3]), and ephemeris ID.
     pub avatar_state: Option<([f32; 3], [f32; 4], [i64; 3], Option<i32>)>,
 }
 
 /// Persisted user tutorial preferences.
+/// Live tutor/student session state. Although registered as a `SettingsSection`
+/// for resource wiring, ALL fields are transient session state — they must NOT
+/// persist across boots (you should never boot already teaching/following, with
+/// a stale target, or with a sticky free-movement choice). Every field is
+/// `#[serde(skip)]`, so a saved config always reloads as `Default`.
 #[derive(Resource, serde::Serialize, serde::Deserialize, Clone, PartialEq, Debug)]
 pub struct TutorialSettings {
     /// Whether the local user is running as the tutor (streaming state).
+    #[serde(skip)]
     pub teach_mode: bool,
     /// Whether the local user is following the tutorial (blocking input, mirroring tutor).
+    #[serde(skip)]
     pub follow_mode: bool,
     /// Specific student session ID that the tutor is targeting (None = Everyone).
+    #[serde(skip)]
     pub target_client: Option<u64>,
     /// Whether the tutor is currently observing the target student's view instead of broadcasting.
+    #[serde(skip)]
     pub observe_mode: bool,
     /// Whether the tutor allows students/followers to move freely (disables continuous follow lock).
+    #[serde(skip)]
     pub allow_free_movement: bool,
 }
 
@@ -307,7 +323,10 @@ impl Default for TutorialSettings {
             follow_mode: false,
             target_client: None,
             observe_mode: false,
-            allow_free_movement: true,
+            // Default to LOCKED follow: when a tutor activates teach mode,
+            // targeted clients auto-enter follow mode (`follow_mode =
+            // !allow_free_movement`). The tutor can opt into free movement.
+            allow_free_movement: false,
         }
     }
 }
@@ -320,11 +339,13 @@ impl SettingsSection for TutorialSettings {
 #[derive(Resource, Default, Clone, Debug)]
 pub struct TutorStatusResource {
     pub active_doc: Option<DocumentId>,
+    pub active_perspective: Option<String>,
     pub avatar_state: Option<(Vec3, Quat, CellCoord, Option<i32>)>,
     pub target_client: Option<u64>,
     pub observe_mode: bool,
     pub allow_free_movement: bool,
     pub observed_student_doc: Option<DocumentId>,
+    pub observed_student_perspective: Option<String>,
     pub observed_student_avatar_state: Option<(Vec3, Quat, CellCoord, Option<i32>)>,
     pub tutor_active: bool,
     pub last_received_time: Option<f64>,
@@ -778,6 +799,7 @@ pub fn drain_sync_inbox(
                 // Allow anyone (including host) to follow the teacher, except the teacher themselves
                 if msg.tutor_session != local.0 .0 {
                     tutor_status.active_doc = msg.active_doc;
+                    tutor_status.active_perspective = msg.active_perspective.clone();
                     tutor_status.target_client = msg.target_client;
                     tutor_status.observe_mode = msg.observe_mode;
                     tutor_status.avatar_state = msg.avatar_state.map(|(pos, rot, cell, ephem_id)| {
@@ -842,6 +864,7 @@ pub fn drain_sync_inbox(
                     && tutorial_settings.observe_mode 
                 {
                     tutor_status.observed_student_doc = msg.active_doc;
+                    tutor_status.observed_student_perspective = msg.active_perspective.clone();
                     tutor_status.observed_student_avatar_state = msg.avatar_state.map(|(pos, rot, cell, ephem_id)| {
                         (
                             Vec3::from_array(pos),
@@ -1166,6 +1189,8 @@ pub fn send_tutor_status_updates(
     mut timer: Local<f32>,
     time: Res<Time>,
     mut outbox: ResMut<SyncOutbox>,
+    #[cfg(feature = "workbench")]
+    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
 ) {
     if !role.is_networked() {
         return;
@@ -1182,6 +1207,16 @@ pub fn send_tutor_status_updates(
     *timer = 0.0;
 
     let active_doc = workspace.active_document;
+    let active_perspective = {
+        #[cfg(feature = "workbench")]
+        {
+            layout.as_ref().and_then(|l| l.active_perspective()).map(|pid| pid.as_str().to_string())
+        }
+        #[cfg(not(feature = "workbench"))]
+        {
+            None
+        }
+    };
     let avatar_state = q_avatar.iter().next().map(|(transform, cell, child_of)| {
         let ephem_id = q_reference_frames.get(child_of.0).ok().map(|rf| rf.ephemeris_id);
         (
@@ -1197,6 +1232,7 @@ pub fn send_tutor_status_updates(
         SyncEnvelope::TutorStatus(TutorStatusMsg {
             tutor_session: local.0 .0,
             active_doc,
+            active_perspective,
             avatar_state,
             target_client: settings.target_client,
             observe_mode: settings.observe_mode,
@@ -1216,6 +1252,8 @@ pub fn send_student_status_updates(
     mut timer: Local<f32>,
     time: Res<Time>,
     mut outbox: ResMut<SyncOutbox>,
+    #[cfg(feature = "workbench")]
+    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
 ) {
     if !role.is_networked() {
         return;
@@ -1233,6 +1271,16 @@ pub fn send_student_status_updates(
     *timer = 0.0;
 
     let active_doc = workspace.active_document;
+    let active_perspective = {
+        #[cfg(feature = "workbench")]
+        {
+            layout.as_ref().and_then(|l| l.active_perspective()).map(|pid| pid.as_str().to_string())
+        }
+        #[cfg(not(feature = "workbench"))]
+        {
+            None
+        }
+    };
     let avatar_state = q_avatar.iter().next().map(|(transform, cell, child_of)| {
         let ephem_id = q_reference_frames.get(child_of.0).ok().map(|rf| rf.ephemeris_id);
         (
@@ -1248,6 +1296,7 @@ pub fn send_student_status_updates(
         SyncEnvelope::StudentStatus(StudentStatusMsg {
             student_session: local.0 .0,
             active_doc,
+            active_perspective,
             avatar_state,
         }),
     ));
@@ -1259,7 +1308,16 @@ pub fn send_student_status_updates(
 /// (follow, observe, one-shot look-at) so the snap logic lives in one place.
 fn snap_avatars_to(
     commands: &mut Commands,
-    q_avatar: &mut Query<(Entity, &mut Transform, &mut CellCoord, &ChildOf), With<LocalAvatar>>,
+    q_avatar: &mut Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut CellCoord,
+            &ChildOf,
+            Option<&mut lunco_avatar::FreeFlightCamera>,
+        ),
+        With<LocalAvatar>,
+    >,
     q_reference_frames: &Query<(Entity, &CelestialReferenceFrame)>,
     pos: Vec3,
     rot: Quat,
@@ -1272,8 +1330,22 @@ fn snap_avatars_to(
             .find(|(_, rf)| rf.ephemeris_id == ephem_id)
             .map(|(ent, _)| ent)
     });
+    // `freeflight_system` rebuilds `Transform.rotation` from the camera's stored
+    // `yaw`/`pitch` every frame (`Quat::from_euler(YXZ, yaw, pitch, 0)`), so
+    // writing `transform.rotation` alone is clobbered next frame. Decompose the
+    // target rotation back into yaw/pitch and write those so the camera system
+    // reproduces the mirrored orientation instead of fighting it.
+    let (target_yaw, target_pitch, _roll) = rot.to_euler(EulerRot::YXZ);
     let target_tf = Transform::from_translation(pos).with_rotation(rot);
-    for (avatar_entity, mut transform, mut cell_coord, child_of) in q_avatar.iter_mut() {
+    for (avatar_entity, mut transform, mut cell_coord, child_of, freeflight) in q_avatar.iter_mut() {
+        if let Some(mut ff) = freeflight {
+            if ff.yaw != target_yaw {
+                ff.yaw = target_yaw;
+            }
+            if ff.pitch != target_pitch {
+                ff.pitch = target_pitch;
+            }
+        }
         let target_grid = target_grid_entity.unwrap_or(child_of.0);
         if child_of.0 != target_grid {
             lunco_core::attach::migrate_to_grid(
@@ -1334,8 +1406,19 @@ pub fn apply_tutorial_mirroring(
     mut tutor_status: ResMut<TutorStatusResource>,
     local: Option<Res<LocalSession>>,
     mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
-    mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &ChildOf), With<LocalAvatar>>,
+    mut q_avatar: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut CellCoord,
+            &ChildOf,
+            Option<&mut lunco_avatar::FreeFlightCamera>,
+        ),
+        With<LocalAvatar>,
+    >,
     q_reference_frames: Query<(Entity, &CelestialReferenceFrame)>,
+    #[cfg(feature = "workbench")]
+    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
 ) {
     // Case 1: Student is in follow mode, mirroring tutor status
     if settings.follow_mode {
@@ -1354,6 +1437,17 @@ pub fn apply_tutorial_mirroring(
             // Mirror active document
             if workspace.active_document != tutor_status.active_doc {
                 workspace.active_document = tutor_status.active_doc;
+            }
+
+            // Mirror active perspective
+            #[cfg(feature = "workbench")]
+            if let Some(ref target_persp) = tutor_status.active_perspective {
+                if let Some(ref l) = layout {
+                    let current_persp = l.active_perspective().map(|pid| pid.as_str());
+                    if current_persp != Some(target_persp) {
+                        commands.trigger(lunco_workbench::perspective_command::ActivatePerspective { id: target_persp.clone() });
+                    }
+                }
             }
 
             // Mirror avatar transform, cell coordinate, and grid parent
@@ -1379,6 +1473,17 @@ pub fn apply_tutorial_mirroring(
                 workspace.active_document = tutor_status.observed_student_doc;
             }
 
+            // Mirror active perspective from the observed student
+            #[cfg(feature = "workbench")]
+            if let Some(ref target_persp) = tutor_status.observed_student_perspective {
+                if let Some(ref l) = layout {
+                    let current_persp = l.active_perspective().map(|pid| pid.as_str());
+                    if current_persp != Some(target_persp) {
+                        commands.trigger(lunco_workbench::perspective_command::ActivatePerspective { id: target_persp.clone() });
+                    }
+                }
+            }
+
             // Mirror avatar transform, cell coordinate, and grid parent from the observed student
             if let Some((pos, rot, cell, grid_ephemeris_id)) = tutor_status.observed_student_avatar_state {
                 snap_avatars_to(
@@ -1399,6 +1504,17 @@ pub fn apply_tutorial_mirroring(
         // Snap active document
         if workspace.active_document != msg.active_doc {
             workspace.active_document = msg.active_doc;
+        }
+
+        // Snap active perspective
+        #[cfg(feature = "workbench")]
+        if let Some(ref target_persp) = msg.active_perspective {
+            if let Some(ref l) = layout {
+                let current_persp = l.active_perspective().map(|pid| pid.as_str());
+                if current_persp != Some(target_persp) {
+                    commands.trigger(lunco_workbench::perspective_command::ActivatePerspective { id: target_persp.clone() });
+                }
+            }
         }
 
         // Snap avatar transform, cell, and grid parent
@@ -1611,8 +1727,20 @@ fn on_share_perspective(
     q_avatar: Query<(&Transform, &CellCoord, &ChildOf), With<LocalAvatar>>,
     q_reference_frames: Query<&CelestialReferenceFrame>,
     mut outbox: ResMut<SyncOutbox>,
+    #[cfg(feature = "workbench")]
+    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
 ) {
     let active_doc = workspace.active_document;
+    let active_perspective = {
+        #[cfg(feature = "workbench")]
+        {
+            layout.as_ref().and_then(|l| l.active_perspective()).map(|pid| pid.as_str().to_string())
+        }
+        #[cfg(not(feature = "workbench"))]
+        {
+            None
+        }
+    };
     let avatar_state = q_avatar.iter().next().map(|(transform, cell, child_of)| {
         let ephem_id = q_reference_frames.get(child_of.0).ok().map(|rf| rf.ephemeris_id);
         (
@@ -1628,6 +1756,7 @@ fn on_share_perspective(
         SyncEnvelope::SharePerspective(SharePerspectiveMsg {
             tutor_session: local.0 .0,
             active_doc,
+            active_perspective,
             avatar_state,
         }),
     ));
@@ -1642,6 +1771,40 @@ lunco_core::register_commands!(
     on_share_perspective,
     on_set_allow_free_movement,
 );
+
+/// Host: when ObstacleFieldSpec is updated, broadcast UpdateObstacleFieldSpec command to all clients.
+pub fn sync_obstacle_field_spec(
+    role: Res<NetworkRole>,
+    spec: Option<Res<lunco_obstacle_field::ObstacleFieldSpec>>,
+    mut outbox: ResMut<SyncOutbox>,
+    type_registry: Res<AppTypeRegistry>,
+    local: Res<LocalSession>,
+) {
+    if !role.is_host() {
+        return;
+    }
+    let Some(spec) = spec else {
+        return;
+    };
+    if spec.is_changed() {
+        let cmd = lunco_obstacle_field::plugin::UpdateObstacleFieldSpec {
+            spec: spec.clone(),
+        };
+        let type_name = "UpdateObstacleFieldSpec".to_string();
+        let type_reg = type_registry.read();
+        if type_reg.get_with_short_type_path(&type_name).is_some() {
+            let serializer = TypedReflectSerializer::new(&cmd, &type_reg);
+            if let Ok(data_val) = serde_json::to_value(&serializer) {
+                if let Ok(data) = serde_json::to_string(&data_val) {
+                    let mut mutation = Mutation::local(SyncCommand { type_name, data });
+                    mutation.origin = local.0;
+                    outbox.0.push((SyncChannel::CommandBus, SyncEnvelope::Command(mutation)));
+                    info!("[net] Broadcast ObstacleFieldSpec update to clients.");
+                }
+            }
+        }
+    }
+}
 
 impl Plugin for SyncPlugin {
     fn build(&self, app: &mut App) {
@@ -1678,6 +1841,7 @@ impl Plugin for SyncPlugin {
                 apply_tutorial_mirroring,
                 update_tutor_lifecycle,
                 block_action_states,
+                sync_obstacle_field_spec,
             ))
             // `gather_snapshot` runs on the sim clock (`FixedPostUpdate`): it only
             // writes our `SyncOutbox` (never calls lightyear), so it's safe off the

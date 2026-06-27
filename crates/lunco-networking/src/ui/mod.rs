@@ -258,6 +258,51 @@ pub fn draw_collaborator_cursors(
             });
     }
 
+    // 1b. Draw Student Mode indicator when a tutor is active and this client is
+    // the targeted student, but we are NOT in follow mode (free movement allowed).
+    // Without this, a targeted/observed student has no indication they are the
+    // active student. (When follow_mode is on, the "Mirroring" banner above
+    // already conveys it, so skip to avoid stacking two banners.)
+    let is_targeted = tutor_status.target_client.is_none()
+        || tutor_status.target_client == Some(local.0 .0);
+    let is_active_student = tutor_status.tutor_active
+        && !tutorial_settings.follow_mode
+        && is_targeted;
+    if is_active_student {
+        egui::Area::new(egui::Id::new("student_overlay"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen_rect.min)
+            .show(ctx, |ui| {
+                let banner_width = 260.0;
+                let banner_height = 32.0;
+                let banner_rect = egui::Rect::from_center_size(
+                    egui::pos2(screen_rect.center().x, screen_rect.min.y + 40.0),
+                    egui::vec2(banner_width, banner_height),
+                );
+
+                let banner_bg = egui::Color32::from_rgb(30, 30, 46);
+                let banner_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(137, 180, 250)); // Blue accent
+                ui.painter().rect_filled(banner_rect, 6.0, banner_bg);
+                ui.painter().rect_stroke(
+                    banner_rect,
+                    6.0,
+                    banner_stroke,
+                    egui::StrokeKind::Outside,
+                );
+
+                let label = if tutor_status.observe_mode {
+                    "👤 Student Mode (Tutor is observing you)"
+                } else {
+                    "👤 Student Mode (Selected by tutor)"
+                };
+                let child_rect = banner_rect.shrink2(egui::vec2(10.0, 2.0));
+                let mut child_ui = ui.child_ui(child_rect, egui::Layout::left_to_right(egui::Align::Center), None);
+                child_ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(label).color(egui::Color32::WHITE).small());
+                });
+            });
+    }
+
     // 2. Draw Tutor Mode Indicator if teaching
     if tutorial_settings.teach_mode {
         egui::Area::new(egui::Id::new("tutor_overlay"))

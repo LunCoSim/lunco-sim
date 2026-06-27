@@ -61,7 +61,7 @@ use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
 use lunco_hardware::{MotorActuator, SteeringActuator};
 use lunco_core::RoverVessel;
 use lunco_avatar::{FreeFlightCamera, OrbitCamera, SpringArmCamera, AdaptiveNearPlane, ProvisionalAvatarCamera};
-use lunco_core::Avatar;
+use lunco_core::{Avatar, LocalAvatar};
 use lunco_core::architecture::IntentAnalogState;
 use leafwing_input_manager::prelude::ActionState;
 use lunco_controller::get_avatar_input_map;
@@ -545,6 +545,7 @@ fn process_usd_sim_prims(
                         FloatingOrigin,
                         CellCoord::default(),
                         Avatar,
+                        LocalAvatar,
                         IntentAnalogState::default(),
                         ActionState::<lunco_core::UserIntent>::default(),
                         get_avatar_input_map(),
@@ -567,6 +568,7 @@ fn process_usd_sim_prims(
                         FloatingOrigin,
                         CellCoord::default(),
                         Avatar,
+                        LocalAvatar,
                         IntentAnalogState::default(),
                         ActionState::<lunco_core::UserIntent>::default(),
                         get_avatar_input_map(),
@@ -593,6 +595,7 @@ fn process_usd_sim_prims(
                         FloatingOrigin,
                         CellCoord::default(),
                         Avatar,
+                        LocalAvatar,
                         IntentAnalogState::default(),
                         ActionState::<lunco_core::UserIntent>::default(),
                         get_avatar_input_map(),
@@ -609,6 +612,7 @@ fn process_usd_sim_prims(
                         FloatingOrigin,
                         CellCoord::default(),
                         Avatar,
+                        LocalAvatar,
                         IntentAnalogState::default(),
                         ActionState::<lunco_core::UserIntent>::default(),
                         get_avatar_input_map(),
