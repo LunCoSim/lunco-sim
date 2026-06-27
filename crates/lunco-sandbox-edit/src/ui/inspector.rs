@@ -9,7 +9,7 @@ use lunco_workbench::{Panel, PanelId, PanelSlot};
 use lunco_mobility::WheelRaycast;
 use lunco_cosim::{joint_angle_holder, read_input_port, read_output_port, JOINT_ANGLE_PORT};
 
-use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, RegenerateField};
+use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
 
 use crate::{SelectedEntities, UndoStack, UndoAction};
 use lunco_usd::document::{UsdOp, LayerId};
@@ -680,10 +680,9 @@ fn obstacle_field_section(ui: &mut egui::Ui, world: &mut World) {
     }
 
     if regen {
-        if let Some(mut msgs) =
-            world.get_resource_mut::<bevy::ecs::message::Messages<RegenerateField>>()
-        {
-            msgs.write(RegenerateField);
+        if let Some(spec) = world.get_resource::<ObstacleFieldSpec>() {
+            let spec_cloned = spec.clone();
+            world.trigger(UpdateObstacleFieldSpec { spec: spec_cloned });
         }
     }
 }

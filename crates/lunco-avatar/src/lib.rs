@@ -21,7 +21,7 @@ use leafwing_input_manager::prelude::*;
 use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 
 use lunco_controller::ControllerLink;
-use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands, SessionProfiles, LocalSession, NetworkRole};
+use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands, SessionProfiles, LocalSession, NetworkRole, LocalAvatar};
 use lunco_core::attach::migrate_to_grid;
 use lunco_celestial::{CelestialClock, LocalGravityField, TeleportToSurface, LeaveSurface};
 use lunco_environment::{GravityBody, GravityProvider};
@@ -528,6 +528,7 @@ pub fn spawn_avatar_camera(
         FloatingOrigin,
         CellCoord::default(),
         Avatar,
+        LocalAvatar,
         IntentAnalogState::default(),
         ActionState::<lunco_core::UserIntent>::default(),
         lunco_controller::get_avatar_input_map(),

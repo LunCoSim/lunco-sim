@@ -165,4 +165,5 @@ fn add_protocol(app: &mut App) {
     app.declare_channel::<lunco_avatar::ReleaseVessel>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_avatar::UpdateProfile>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_sandbox_edit::commands::SpawnEntity>(SyncChannel::CommandBus);
+    app.declare_channel::<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>(SyncChannel::CommandBus);
 }
