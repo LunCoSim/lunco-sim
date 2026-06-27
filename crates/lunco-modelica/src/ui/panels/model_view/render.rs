@@ -251,6 +251,7 @@ fn render_unified_toolbar(
     let mut undo_clicked = false;
     let mut redo_clicked = false;
     let mut dismiss_error = false;
+    let mut focus_diagnostics = false;
     let mut duplicate_clicked = false;
     let mut auto_arrange_clicked = false;
     let mut run_pause_clicked = false;
@@ -296,7 +297,29 @@ fn render_unified_toolbar(
         // one mode while staying silent in the other.
         let realtime_active = sim_state.map(|(p, _)| !p).unwrap_or(false);
         if let Some(ref err) = compilation_error {
-            if ui.colored_label(tokens.error, "⚠ Error").on_hover_text(format!("{err}\n(click to dismiss)")).clicked() { dismiss_error = true; }
+            // `colored_label` returns a non-interactive label — `.clicked()`
+            // on it never fired, which is why the old "click to dismiss"
+            // did nothing. Use an explicit click-sensing Label so the chip
+            // is actually a button: left-click opens the Diagnostics panel
+            // (where the full error text lives), right-click dismisses.
+            let resp = ui
+                .add(
+                    egui::Label::new(egui::RichText::new("⚠ Error").color(tokens.error))
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(format!(
+                    "{err}\n\nClick to open Diagnostics · right-click to dismiss"
+                ));
+            if resp.clicked() {
+                focus_diagnostics = true;
+            }
+            resp.context_menu(|ui| {
+                if ui.button("Dismiss error").clicked() {
+                    dismiss_error = true;
+                    ui.close_menu();
+                }
+            });
         } else if runner_busy {
             // Show the live count so several concurrent Fast Runs are
             // visible at a glance (e.g. "⏩ 3 running · ⏳ 2").
@@ -405,6 +428,7 @@ fn render_unified_toolbar(
     });
 
     if dismiss_error { if let Some(mut cs) = world.get_resource_mut::<CompileStates>() { cs.clear_error(doc); } }
+    if focus_diagnostics { world.commands().trigger(lunco_workbench::FocusPanel { id: "modelica_diagnostics".into() }); }
     if undo_clicked { world.commands().trigger(lunco_doc_bevy::UndoDocument { doc }); }
     if redo_clicked { world.commands().trigger(lunco_doc_bevy::RedoDocument { doc }); }
     if duplicate_clicked { world.commands().trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc: doc }); }

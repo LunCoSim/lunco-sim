@@ -156,6 +156,34 @@ impl Panel for ConsolePanel {
             {
                 clear_requested = true;
             }
+            // 📋 Copy — dump every line as plain text so console output can
+            // be pasted into a bug report. Per-row labels can't be cleanly
+            // range-selected, so a one-click "copy all" is the reliable path.
+            if count > 0
+                && ui
+                    .small_button("📋 Copy")
+                    .on_hover_text("Copy all console messages to the clipboard")
+                    .clicked()
+            {
+                let session_start = SESSION_START
+                    .get()
+                    .copied()
+                    .or_else(|| world.resource::<ConsoleLog>().messages.front().map(|m| m.at));
+                let mut text = String::new();
+                for msg in &world.resource::<ConsoleLog>().messages {
+                    let offset = session_start
+                        .and_then(|s| msg.at.checked_duration_since(s))
+                        .map(|d| d.as_secs_f32())
+                        .unwrap_or(0.0);
+                    text.push_str(&format!(
+                        "[+{:>6.2}s] {} {}\n",
+                        offset,
+                        msg.level.tag().trim(),
+                        msg.text
+                    ));
+                }
+                ui.ctx().copy_text(text);
+            }
         });
         ui.separator();
 

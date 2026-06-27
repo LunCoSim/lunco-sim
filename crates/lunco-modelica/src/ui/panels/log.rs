@@ -116,6 +116,18 @@ pub fn render_log_view(
         {
             *clear_requested = true;
         }
+        // 📋 Copy — dump every entry as plain text to the clipboard so a
+        // solver/compile error can be pasted into a bug report or search.
+        // Per-label `ui.label` rows can't be range-selected cleanly, so a
+        // one-click "copy all" is the reliable troubleshooting affordance.
+        if !entries.is_empty()
+            && ui
+                .small_button("📋 Copy")
+                .on_hover_text("Copy all messages to the clipboard")
+                .clicked()
+        {
+            ui.ctx().copy_text(format_entries_plain(entries));
+        }
     });
     ui.separator();
 
@@ -229,4 +241,28 @@ pub fn render_log_view(
             }
         });
     clicked
+}
+
+/// Render the whole log buffer as newline-separated plain text for the
+/// clipboard. Mirrors the on-screen row layout — `[ts] TAG [model] Lline:col text`
+/// — so a pasted dump reads the same as what the user saw.
+fn format_entries_plain(entries: &VecDeque<LogEntry>) -> String {
+    let session_start = entries.front().map(|e| e.at);
+    let mut out = String::new();
+    for entry in entries {
+        let offset = session_start
+            .and_then(|s| entry.at.checked_duration_since(s))
+            .map(|d| d.as_secs_f32())
+            .unwrap_or(0.0);
+        out.push_str(&format!("[{:>6.2}s] {} ", offset, entry.level.tag().trim()));
+        if let Some(model) = entry.model.as_deref() {
+            out.push_str(&format!("[{model}] "));
+        }
+        if let Some(loc) = entry.loc {
+            out.push_str(&format!("L{}:{} ", loc.line, loc.column));
+        }
+        out.push_str(&entry.text);
+        out.push('\n');
+    }
+    out
 }
