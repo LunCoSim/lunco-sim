@@ -348,6 +348,11 @@ def Xform "SandboxScene"
         # against pose updates. The coupled `JointTestB` (Dynamic)
         # follows via the `PhysicsFixedJoint` constraint.
         bool physics:kinematicEnabled = true
+        # Joints are not replicated to clients — without this flag,
+        # `maintain_predicted_dynamic` would flip this body to Dynamic,
+        # break the joint, and cause it to free-fall on clients.
+        # `opaque` = stay kinematic snapshot-proxy, never PredictedDynamic.
+        string lunco:net:authority = "opaque"
     }
 
     def Cube "JointTestB" (
@@ -359,6 +364,10 @@ def Xform "SandboxScene"
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (1.0, 0.6, 0.1)   # orange
         float physics:mass = 5.0
+        # Same reason as JointTestA: the PhysicsFixedJoint that constrains
+        # this body is not replicated; making it PredictedDynamic on the
+        # client breaks the joint and causes it to free-fall.
+        string lunco:net:authority = "opaque"
     }
 
     def PhysicsFixedJoint "JointTestLink"
