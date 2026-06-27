@@ -675,15 +675,24 @@ pub fn drain_sync_inbox(
                     }
                 }
                 for entry in s.entries {
+                    // Dequantize once; reuse for both the f32 render-space `t`
+                    // and the f64 world-space `pos`. In single-cell space they are
+                    // identical (cell origin is world origin).
+                    // IMPORTANT: `t` must NOT be zero — `reconcile_owned_prediction`
+                    // passes `sample.t` as the authority position to `reconcile_decision`
+                    // for the apples-to-apples f32 comparison against the predicted-
+                    // Transform history. A zeroed `t` reads authority as (0,0,0) every
+                    // snapshot → perpetual Snap reconcile back to world origin.
+                    let world_pos = dequantize_pos(entry.pos_q);
                     snapshots.0.push(SnapshotSample {
                         gid: entry.gid,
                         tick: s.tick,
-                        t: [0.0; 3], // filled from `pos` below, or quantize_pos inverse
+                        t: world_pos.as_vec3().to_array(), // f32 cell-relative (= absolute in single-cell)
                         r: decode_quat(entry.rot_packed).to_array(),
                         lv: entry.lv,
                         av: entry.av,
                         last_input_seq: entry.last_input_seq,
-                        pos: dequantize_pos(entry.pos_q).to_array(),
+                        pos: world_pos.to_array(), // f64 absolute world position
                         cell: [0; 3], // single-cell space config
                     });
                 }
