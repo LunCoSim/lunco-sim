@@ -528,6 +528,9 @@ pub struct PresenceInfo {
     /// Document the user is currently viewing, if any. `None` means
     /// the user is in the workspace root / no doc focused.
     pub active_doc: Option<DocumentId>,
+    /// Normalized cursor position relative to screen [x, y], both in [0.0, 1.0].
+    /// None means cursor is off-screen.
+    pub cursor: Option<[f32; 2]>,
 }
 
 impl PresenceInfo {

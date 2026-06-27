@@ -237,6 +237,66 @@ impl SessionRegistry {
 #[derive(Resource, Default, Debug, Clone)]
 pub struct SessionProfiles {
     pub profiles: HashMap<u64, String>,
+    pub colors: HashMap<u64, [u8; 3]>,
+}
+
+/// The role defining the user's capabilities in the session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AuthorityRole {
+    /// Owner has master authority over all space systems and can delegate subsystems.
+    Owner,
+    /// Operators can command the specific subsystems they have been granted.
+    Operator,
+    /// Observers have read-only telemetry access.
+    Observer,
+    /// Autonomous AI agent with restricted subsystem control.
+    AiAgent,
+}
+
+/// Information representing a user's active session, ready for Authn/Authz.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct UserSession {
+    /// The unique network session ID.
+    pub session_id: SessionId,
+    /// The username associated with the session.
+    pub username: String,
+    /// The active authorization role.
+    pub role: AuthorityRole,
+    /// Whether the user has completed authentication.
+    pub authenticated: bool,
+    /// An optional cryptographically secure token/ticket for verification.
+    pub token: Option<String>,
+}
+
+/// Role-Based Access Control registry for all active sessions.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct SessionRbac {
+    pub sessions: HashMap<u64, UserSession>,
+}
+
+impl SessionRbac {
+    /// Evaluates if a given session is authorized to perform an action requiring a specific role.
+    pub fn is_authorized(&self, session_id: SessionId, required_role: AuthorityRole) -> bool {
+        let Some(session) = self.sessions.get(&session_id.0) else {
+            return false;
+        };
+        if !session.authenticated {
+            return false;
+        }
+        // Owner has access to everything
+        if session.role == AuthorityRole::Owner {
+            return true;
+        }
+        // Simple role hierarchy evaluation
+        match (session.role, required_role) {
+            (AuthorityRole::Operator, AuthorityRole::Operator) => true,
+            (AuthorityRole::Operator, AuthorityRole::Observer) => true,
+            (AuthorityRole::AiAgent, AuthorityRole::AiAgent) => true,
+            (AuthorityRole::AiAgent, AuthorityRole::Observer) => true,
+            (AuthorityRole::Observer, AuthorityRole::Observer) => true,
+            _ => false,
+        }
+    }
 }
 
 
@@ -496,10 +556,23 @@ pub struct AppliedInputSeq(pub HashMap<u64, u32>);
 /// Single-player never reaches here (capture no-ops under `Standalone`).
 pub fn authorize(
     reg: &SessionRegistry,
+    rbac: &SessionRbac,
     origin: SessionId,
     type_name: &str,
     target_gid: Option<u64>,
 ) -> Result<(), Reject> {
+    // RBAC validation: check if the session has sufficient privileges.
+    let required_role = match type_name {
+        "DriveRover" | "BrakeRover" => AuthorityRole::Operator,
+        _ => AuthorityRole::Observer,
+    };
+
+    if !rbac.is_authorized(origin, required_role) {
+        return Err(Reject::InvalidOp(format!(
+            "session {origin} is not authorized: lacks role {required_role:?}"
+        )));
+    }
+
     match type_name {
         "DriveRover" | "BrakeRover" => match target_gid {
             Some(gid) if reg.owns(origin, gid) => Ok(()),
@@ -616,16 +689,45 @@ mod tests {
     fn authorize_drive_requires_ownership() {
         let mut reg = SessionRegistry::default();
         reg.claim(A, R1).unwrap();
+        let mut rbac = SessionRbac::default();
+        rbac.sessions.insert(A.0, UserSession {
+            session_id: A,
+            username: "Player A".to_string(),
+            role: AuthorityRole::Operator,
+            authenticated: true,
+            token: None,
+        });
+        rbac.sessions.insert(B.0, UserSession {
+            session_id: B,
+            username: "Player B".to_string(),
+            role: AuthorityRole::Operator,
+            authenticated: true,
+            token: None,
+        });
+
         // The owner may issue control commands.
-        assert!(authorize(&reg, A, "DriveRover", Some(R1)).is_ok());
-        assert!(authorize(&reg, A, "BrakeRover", Some(R1)).is_ok());
+        assert!(authorize(&reg, &rbac, A, "DriveRover", Some(R1)).is_ok());
+        assert!(authorize(&reg, &rbac, A, "BrakeRover", Some(R1)).is_ok());
         // A non-owner may not.
-        assert!(authorize(&reg, B, "DriveRover", Some(R1)).is_err());
+        assert!(authorize(&reg, &rbac, B, "DriveRover", Some(R1)).is_err());
         // A control command with no target is rejected.
-        assert!(authorize(&reg, A, "DriveRover", None).is_err());
+        assert!(authorize(&reg, &rbac, A, "DriveRover", None).is_err());
         // Possession + structural commands are always allowed (arbitration is in
         // `claim`, not the authority gate).
-        assert!(authorize(&reg, B, "PossessVessel", Some(R1)).is_ok());
-        assert!(authorize(&reg, B, "SpawnEntity", None).is_ok());
+        assert!(authorize(&reg, &rbac, B, "PossessVessel", Some(R1)).is_ok());
+        assert!(authorize(&reg, &rbac, B, "SpawnEntity", None).is_ok());
+
+        // An unauthenticated/unauthorized observer should be rejected for Operator command
+        let mut observer_rbac = SessionRbac::default();
+        observer_rbac.sessions.insert(A.0, UserSession {
+            session_id: A,
+            username: "Player A".to_string(),
+            role: AuthorityRole::Observer,
+            authenticated: true,
+            token: None,
+        });
+        assert!(authorize(&reg, &observer_rbac, A, "DriveRover", Some(R1)).is_err());
+        // But allowed for observer/structural commands
+        assert!(authorize(&reg, &observer_rbac, A, "PossessVessel", Some(R1)).is_ok());
     }
 }

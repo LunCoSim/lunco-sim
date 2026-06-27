@@ -1180,25 +1180,39 @@ pub fn maintain_predicted_vehicles(
 }
 
 /// Client Phase B: **state-based** reconciliation for [`lunco_core::PredictedDynamic`]
-/// free props. Unlike the owned rover there is NO input `seq` to replay, so we
-/// compare the body's CURRENT pose directly against the latest authoritative
-/// snapshot — `predicted == current` in [`lunco_core::reconcile_decision`], which
-/// reduces the decision to "how far is the body from authority right now":
-/// `InSync` → leave the local physics alone (crisp contact); a small divergence
-/// eases in; a gross one snaps; velocity is seated to authoritative so it stops
-/// re-diverging.
+/// bodies (free props + remote rovers). Unlike the owned rover there is NO input
+/// `seq` to replay, so we pull the body's CURRENT pose toward the authoritative
+/// curve directly.
 ///
-/// Fires at most ONCE per new snapshot (tracked by host gen-time per gid), NOT
-/// every frame: between snapshots the prop runs free local physics. Nudging it
-/// every frame would collapse it onto the authoritative pose and destroy the very
-/// local-prediction crispness this exists to provide. `FixedPostUpdate` after
-/// avian writeback; no-op on host/standalone (no `PredictedDynamic`).
+/// CONTINUOUS reconcile (revised 2026-06-26): runs EVERY fixed tick, in ABSOLUTE
+/// WORLD space, against the same delayed `sample_curve` target the kinematic proxies
+/// use (`pos_world`, f64). The previous design reconciled once per 20 Hz snapshot in
+/// f32 render space, which (a) let a free Dynamic body re-settle/tip on terrain
+/// between snapshots faster than the bounded correction could cancel → drift, and
+/// (b) seated `Position` from a cell-relative render value on the teleport path →
+/// non-origin-cell bodies collapsed toward the world origin (the pile-up). Working in
+/// absolute world fixes both. Pose is held by a soft spring fed through
+/// `PendingCorrection` (drained a bounded bit per tick — never a direct `Transform`
+/// write); velocity is left to LOCAL physics except on a gross teleport, so contacts
+/// and your push stay crisp. The `RECONCILE_EPS_*` dead-zone is the yield budget.
+/// `FixedPostUpdate` after avian writeback; no-op on host/standalone.
+/// Beyond this absolute-world position error (m) a predicted body has grossly
+/// desynced (first sight / respawn / long stall) → hard-teleport to authority.
+const RECONCILE_SNAP_DIST: f64 = 2.0;
+/// Dead-zone (m / rad ≈5.7°): below this the body is left to local physics — this
+/// tolerance IS the yield budget that lets a contact/push deviate the body crisply
+/// without the spring fighting it. Tune up if collisions feel mushy, down if drift.
+const RECONCILE_EPS_POS: f64 = 0.40;
+const RECONCILE_EPS_ROT: f32 = 0.10;
+
 pub fn reconcile_predicted_dynamic(
+    role: Res<lunco_core::NetworkRole>,
+    status: Res<lunco_core::NetStatus>,
     buffers: Res<InterpBuffers>,
+    clock: Res<ProxyPlaybackClock>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     q_pred: Query<&lunco_core::GlobalEntityId, With<lunco_core::PredictedDynamic>>,
     mut q: Query<(
-        &mut Transform,
         Option<&mut Position>,
         Option<&mut Rotation>,
         Option<&mut LinearVelocity>,
@@ -1206,80 +1220,90 @@ pub fn reconcile_predicted_dynamic(
         Option<&mut PendingCorrection>,
     )>,
     mut commands: Commands,
-    // Last host gen-time reconciled per gid, so we act once per fresh snapshot.
-    mut last_handled: Local<HashMap<u64, f64>>,
 ) {
+    if !matches!(*role, lunco_core::NetworkRole::Client) {
+        return;
+    }
+    if !status.connected {
+        return; // host lost — freeze, don't chase a stale curve
+    }
+    // Read (don't advance) the shared playback clock that `drive_kinematic_proxies`
+    // already stepped this tick: predicted bodies track the SAME delayed authoritative
+    // curve as the kinematic proxies, so the two never disagree on where authority is.
+    let render_t = clock.t;
     for gid in q_pred.iter() {
         let g = gid.get();
-        let Some(sample) = buffers.0.get(&g).and_then(|b| b.back()).copied() else {
+        let Some(buf) = buffers.0.get(&g) else { continue };
+        if buf.is_empty() {
             continue;
-        };
-        if last_handled.get(&g).is_some_and(|&t| t >= sample.gen_t) {
-            continue; // no fresh snapshot since last reconcile — let local physics run
         }
-        last_handled.insert(g, sample.gen_t);
         let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(g)) else {
             continue;
         };
-        let Ok((mut tf, pos, rot, lin, ang, off)) = q.get_mut(e) else {
+        let Ok((pos, rot, lin, ang, off)) = q.get_mut(e) else {
             continue;
         };
-        let decision = lunco_core::reconcile_decision(
-            tf.translation,
-            tf.rotation,
-            tf.translation,
-            tf.rotation,
-            sample.pos,
-            sample.rot,
-            lunco_core::ReconcileParams::default(),
-        );
-        if matches!(decision, lunco_core::Reconciliation::InSync) {
+        // Dynamic bodies always carry avian `Position`/`Rotation` (absolute, f64).
+        let (Some(mut pos), Some(mut rot)) = (pos, rot) else {
             continue;
+        };
+        // Authoritative target in ABSOLUTE WORLD (`pos_world`), via the same cubic
+        // curve the kinematic proxies follow. This is the fix for the earlier pile-up:
+        // the old code compared/seated in f32 render space (cell-relative), which
+        // collapsed non-origin-cell bodies toward the world origin. Everything here is
+        // absolute, so each body converges to its OWN pose.
+        let Some((here, here_rot, lv, av)) = sample_curve(buf, render_t) else {
+            continue;
+        };
+
+        let err = here - pos.0; // DVec3, absolute world
+        let dist = err.length();
+        let cur_rot = rot.0.as_quat();
+        let mut rot_err = (here_rot * cur_rot.inverse()).normalize();
+        if rot_err.w < 0.0 {
+            rot_err = -rot_err; // shortest arc
         }
-        match decision {
-            lunco_core::Reconciliation::InSync => unreachable!(),
-            // Park the correction; `drain_pending_corrections` applies it to the
-            // physics pose a few cm/degrees per fixed tick (see PendingCorrection
-            // docs — direct pose/Transform writes here reset the transform
-            // interpolation and popped the body).
-            lunco_core::Reconciliation::Correct { pos: new_pos, rot: new_rot } => {
-                let dpos = new_pos - tf.translation;
-                let drot = (new_rot * tf.rotation.inverse()).normalize();
-                match off {
-                    Some(mut pc) => {
-                        pc.pos += dpos;
-                        pc.rot = (drot * pc.rot).normalize();
-                    }
-                    None => {
-                        commands
-                            .entity(e)
-                            .insert(PendingCorrection { pos: dpos, rot: drot });
-                    }
+        let angle = rot_err.to_axis_angle().1.abs();
+
+        if dist > RECONCILE_SNAP_DIST {
+            // Gross desync / first sight: teleport. Seat Position/Rotation directly
+            // (NEVER `Transform` — avian writeback derives it; a Transform write here
+            // resets `bevy_transform_interpolation` → the historical jitter) and seat
+            // velocity so it stops diverging. Closing a >2 m gap with velocity would
+            // be a violent kick into anything in contact.
+            pos.0 = here;
+            rot.0 = here_rot.as_dquat();
+            if let Some(mut l) = lin {
+                l.0 = lv;
+            }
+            if let Some(mut a) = ang {
+                a.0 = av;
+            }
+            if let Some(mut pc) = off {
+                *pc = PendingCorrection::default();
+            }
+        } else if dist > RECONCILE_EPS_POS || angle > RECONCILE_EPS_ROT {
+            // Soft CONTINUOUS spring (every fixed tick): SET the residual to the
+            // freshly-measured error; `drain_pending_corrections` eases a bounded bit
+            // per tick into Position/Rotation (smooth, never a Transform write).
+            // Velocity is LEFT to local physics so contacts/your push produce real,
+            // crisp response — the dead-zone above is the yield budget. This is what
+            // makes a remote body both stay synced AND interact.
+            let dpos = err.as_vec3();
+            match off {
+                Some(mut pc) => {
+                    pc.pos = dpos;
+                    pc.rot = rot_err;
+                }
+                None => {
+                    commands
+                        .entity(e)
+                        .insert(PendingCorrection { pos: dpos, rot: rot_err });
                 }
             }
-            // Gross desync: teleport semantics — seat the pose directly and drop
-            // any queued residual.
-            lunco_core::Reconciliation::Snap { pos: new_pos, rot: new_rot } => {
-                tf.translation = new_pos;
-                tf.rotation = new_rot;
-                if let Some(mut p) = pos {
-                    p.0 = DVec3::new(new_pos.x as f64, new_pos.y as f64, new_pos.z as f64);
-                }
-                if let Some(mut r) = rot {
-                    r.0 = new_rot.as_dquat();
-                }
-                if let Some(mut pc) = off {
-                    *pc = PendingCorrection::default();
-                }
-            }
         }
-        // Seat velocity to authoritative so the prop stops re-diverging next tick.
-        if let Some(mut l) = lin {
-            l.0 = DVec3::new(sample.lv.x as f64, sample.lv.y as f64, sample.lv.z as f64);
-        }
-        if let Some(mut a) = ang {
-            a.0 = DVec3::new(sample.av.x as f64, sample.av.y as f64, sample.av.z as f64);
-        }
+        // else: within tolerance — leave the body entirely to local physics; any
+        // residual `PendingCorrection` finishes draining and removes itself.
     }
 }
 

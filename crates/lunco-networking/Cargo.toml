@@ -10,7 +10,7 @@ path = "src/bin/net_smoke.rs"
 required-features = ["networking"]
 
 [features]
-default = []
+default = ["workbench"]
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
 networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode"]
@@ -19,9 +19,11 @@ networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode"]
 # Build with it when chasing netcode jitter; once compiled it's active unless
 # silenced with `LUNCO_NET_DIAG=0`. Implies `networking` (pointless without the wire).
 net-diag = ["networking"]
+workbench = ["dep:lunco-workbench"]
 
 [dependencies]
 bevy = { workspace = true }
+lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-core = { path = "../lunco-core" }
 # `default-features = false`: we only use the registry/executor types + plugin,
 # never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).
@@ -32,7 +34,15 @@ lunco-mobility = { path = "../lunco-mobility" }
 # egui editor UI — `default-features = false` keeps the networked headless server
 # (and this crate) egui/winit-free.
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-celestial = { path = "../lunco-celestial" }
 lunco-sandbox-edit = { path = "../lunco-sandbox-edit", default-features = false }
+lunco-doc-bevy = { path = "../lunco-doc-bevy" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-settings = { path = "../lunco-settings" }
+lunco-workspace = { path = "../lunco-workspace" }
+lunco-controller = { path = "../lunco-controller" }
+bevy_egui = { workspace = true }
+leafwing-input-manager = { workspace = true }
 # Read by the wire's `gather_snapshot`: avian velocity (LinearVelocity/
 # AngularVelocity) for client-side prediction, big_space `CellCoord` so
 # replication carries the integer cell alongside the f64 absolute position.

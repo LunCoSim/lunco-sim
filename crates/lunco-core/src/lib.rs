@@ -463,6 +463,7 @@ pub(crate) fn register_core_resources(app: &mut App) {
         .init_resource::<session::NetStatus>()
         .init_resource::<session::SessionRegistry>()
         .init_resource::<session::SessionProfiles>()
+        .init_resource::<session::SessionRbac>()
         .init_resource::<session::PendingReplicatedSpawns>()
         .init_resource::<session::IncomingSnapshots>()
         // Input-sequence bookkeeping is always-on substrate: the

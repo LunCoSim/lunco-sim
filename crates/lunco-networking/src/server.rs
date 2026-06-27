@@ -261,10 +261,14 @@ fn broadcast_profiles(profiles: Res<SessionProfiles>, mut outbox: ResMut<SyncOut
     if !profiles.is_changed() {
         return;
     }
+    let entries = profiles.profiles.iter().map(|(&s, n)| {
+        let color = profiles.colors.get(&s).copied().unwrap_or_else(|| crate::sync::generate_user_color(s));
+        (s, n.clone(), color)
+    }).collect();
     outbox.0.push((
         SyncChannel::CommandBus,
         SyncEnvelope::Profiles(ProfilesMsg {
-            entries: profiles.profiles.iter().map(|(&s, n)| (s, n.clone())).collect(),
+            entries,
         }),
     ));
 }
@@ -311,12 +315,29 @@ fn on_server_connected(
     server: Single<&Server>,
     tick: Res<SimTick>,
     mut sender: ServerMultiMessageSender,
+    mut rbac: ResMut<lunco_core::session::SessionRbac>,
 ) {
     let Ok(remote) = q_client.get(trigger.entity) else {
         return;
     };
     let peer = remote.0;
     let session = peer_to_session(peer);
+
+    // Initialize client session in RBAC registry as an *authenticated* Observer.
+    // Observer-authorized-by-default: read-only telemetry plus possession/structural
+    // commands (which `authorize` gates at Observer) work immediately on connect — no
+    // profile-name round-trip required. The session is promoted to Operator (gaining
+    // DriveRover/BrakeRover) when it sets a name via `on_update_profile_rbac`. Inserting
+    // as unauthenticated here would default-deny *every* command until the first
+    // UpdateProfile lands, re-breaking possession (the MVP "structural always allowed"
+    // policy) for the whole connect→name window.
+    rbac.sessions.insert(session.0, lunco_core::session::UserSession {
+        session_id: session,
+        username: format!("Player {}", session.0),
+        role: lunco_core::session::AuthorityRole::Observer,
+        authenticated: true,
+        token: None,
+    });
     let server = server.into_inner();
     let target = NetworkTarget::Single(peer);
 
@@ -390,13 +411,17 @@ fn on_server_connected(
             entries: registry.snapshot(),
         }),
     );
+    let entries = profiles.profiles.iter().map(|(&s, n)| {
+        let color = profiles.colors.get(&s).copied().unwrap_or_else(|| crate::sync::generate_user_color(s));
+        (s, n.clone(), color)
+    }).collect();
     server_send(
         &mut sender,
         server,
         &target,
         SyncChannel::CommandBus,
         &SyncEnvelope::Profiles(ProfilesMsg {
-            entries: profiles.profiles.iter().map(|(&s, n)| (s, n.clone())).collect(),
+            entries,
         }),
     );
     info!("[net] client connected: peer={peer:?} session={}", session.0);
@@ -408,11 +433,13 @@ fn on_server_disconnected(
     q_client: Query<&RemoteId, With<ClientOf>>,
     mut registry: ResMut<SessionRegistry>,
     mut profiles: ResMut<SessionProfiles>,
+    mut rbac: ResMut<lunco_core::session::SessionRbac>,
 ) {
     if let Ok(remote) = q_client.get(trigger.entity) {
         let session = peer_to_session(remote.0);
         let freed = registry.release_session(session);
         profiles.profiles.remove(&session.0);
+        rbac.sessions.remove(&session.0);
         info!(
             "[net] client disconnected: session={} freed {} entities, profiles updated",
             session.0,
