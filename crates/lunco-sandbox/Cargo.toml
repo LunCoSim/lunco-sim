@@ -37,6 +37,17 @@ required-features = ["ui"]
 # WindowPlugin types) are referenced on the headless path too, so they stay here.
 # The actual WINDOWING/INTERACTION stack (winit backend, picking, post-process,
 # gizmos) lives behind the `ui` feature below so a server build omits it entirely.
+#
+# Scene type registration: the workspace bevy baseline is `default-features =
+# false`, so bevy's inventory-based `reflect_auto_register` (part of the
+# `default_app` group) is OFF and the app `TypeRegistry` has none of the core
+# component types. `Scene::write_to_world_with` then panics the instant a glTF
+# `SceneRoot` spawns ("unregistered type `bevy_camera::visibility::Visibility`").
+# We deliberately do NOT re-enable `reflect_auto_register`: it drags the whole
+# inventory registration closure into the final link, which tipped clang's
+# command line past its internal limit (link aborted with `std::length_error`).
+# Instead `UsdBevyPlugin` explicitly `register_type`s the bounded set of
+# glTF/USD scene component types — see `crates/lunco-usd-bevy/src/lib.rs`.
 bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_window"] }
 avian3d = { workspace = true }
 big_space = { workspace = true }
@@ -58,6 +69,7 @@ lunco-render = { path = "../lunco-render" }
 # not used by the sandbox bin). The `celestial` feature still pulls embed-assets.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-terrain = { path = "../lunco-terrain" }
+lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-modelica = { path = "../lunco-modelica", default-features = false }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-environment = { path = "../lunco-environment" }

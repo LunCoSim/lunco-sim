@@ -45,6 +45,7 @@ use lunco_hardware::LunCoHardwarePlugin;
 // RTT viewport UI plugins are `ui`-only (added by `SandboxUiPlugin`).
 use lunco_usd::{LoadScene, UsdPlugins};
 use lunco_terrain::TerrainPlugin;
+use lunco_obstacle_field::ObstacleFieldPlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::LunCoAvatarPlugin;
 use lunco_celestial::GravityPlugin;
@@ -312,6 +313,10 @@ impl Plugin for SandboxCorePlugin {
             .add_plugins(GravityPlugin)
             .add_plugins(EnvironmentPlugin)
             .add_plugins(TerrainPlugin)
+            // Procedural crater + rock field generator (replaces the flat Cube
+            // ground for rover mobility testing). Server-authoritative colliders;
+            // client adds visuals. See `project_obstacle_field_generator`.
+            .add_plugins(ObstacleFieldPlugin)
             .add_plugins(LunCoHardwarePlugin)
             .add_plugins(LunCoMobilityPlugin)
             // USD scene load + avian collider build + cosim wiring —

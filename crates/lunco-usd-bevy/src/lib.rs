@@ -55,6 +55,41 @@ pub struct UsdBevyPlugin;
 
 impl Plugin for UsdBevyPlugin {
     fn build(&self, app: &mut App) {
+        // Core glTF/USD scene component types. The workspace runs bevy with
+        // `default-features = false`, so bevy's `reflect_auto_register` is OFF
+        // and these are NOT auto-registered. Any glTF `SceneRoot` we spawn (USD
+        // payload overlay, terrain, rovers) is deserialized via
+        // `Scene::write_to_world_with`, which panics on the first unregistered
+        // component type. Register the bounded set a glTF scene can contain so
+        // the registry is complete WITHOUT pulling the inventory-based
+        // auto-register closure into the link (it overflowed clang's command
+        // line — see the bevy dep note in `lunco-sandbox/Cargo.toml`).
+        app.register_type::<Transform>()
+            .register_type::<GlobalTransform>()
+            .register_type::<Visibility>()
+            .register_type::<InheritedVisibility>()
+            .register_type::<ViewVisibility>()
+            .register_type::<Name>()
+            .register_type::<ChildOf>()
+            .register_type::<Children>()
+            .register_type::<bevy::camera::primitives::Aabb>()
+            .register_type::<Mesh3d>()
+            .register_type::<MeshMaterial3d<StandardMaterial>>()
+            // Skinned/morph meshes — glTF rover payloads are skinned.
+            .register_type::<bevy::mesh::skinning::SkinnedMesh>()
+            .register_type::<bevy::mesh::morph::MorphWeights>()
+            .register_type::<bevy::mesh::morph::MeshMorphWeights>()
+            // Lights the glTF loader may embed (USD-authored lights take a
+            // separate path, but a glTF can carry its own).
+            .register_type::<DirectionalLight>()
+            .register_type::<PointLight>()
+            .register_type::<SpotLight>()
+            .register_type::<bevy::gltf::GltfExtras>()
+            .register_type::<bevy::gltf::GltfSceneExtras>()
+            .register_type::<bevy::gltf::GltfMeshExtras>()
+            .register_type::<bevy::gltf::GltfMeshName>()
+            .register_type::<bevy::gltf::GltfMaterialExtras>()
+            .register_type::<bevy::gltf::GltfMaterialName>();
         app.init_asset::<UsdStageAsset>()
             .register_asset_loader(UsdLoader)
             .register_type::<UsdPrimPath>()

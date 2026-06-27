@@ -9,6 +9,8 @@ use lunco_workbench::{Panel, PanelId, PanelSlot};
 use lunco_mobility::WheelRaycast;
 use lunco_cosim::{joint_angle_holder, read_input_port, read_output_port, JOINT_ANGLE_PORT};
 
+use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, RegenerateField};
+
 use crate::{SelectedEntities, UndoStack, UndoAction};
 use lunco_usd::document::{UsdOp, LayerId};
 use lunco_usd::commands::ApplyUsdOp;
@@ -92,6 +94,16 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
         egui::CollapsingHeader::new("Camera")
             .default_open(false)
             .show(ui, |ui| camera_section(ui, world));
+        ui.separator();
+
+        // ── Obstacle Field (procedural craters + rocks) ──────────────
+        // Global generator controls (a Resource, not a selected entity), so it
+        // sits alongside Environment/Camera. Sliders edit the spec live; the
+        // field only rebuilds on release / button (regen is one synchronous
+        // pass — a brief hitch — so we don't rebuild every drag frame).
+        egui::CollapsingHeader::new("Obstacle Field (Craters & Rocks)")
+            .default_open(true)
+            .show(ui, |ui| obstacle_field_section(ui, world));
         ui.separator();
 
         // The terrain shader is NO LONGER an always-on section: the ground is
@@ -532,6 +544,147 @@ fn camera_section(ui: &mut egui::Ui, world: &mut World) {
 
     if any_change {
         world.trigger(cmd);
+    }
+}
+
+/// Live tuning for the procedural obstacle field. Sliders edit the
+/// `ObstacleFieldSpec` resource directly; the field rebuilds only on slider
+/// release / button press (a regen is one synchronous pass — backgrounding it is
+/// the next phase), so dragging stays smooth.
+fn obstacle_field_section(ui: &mut egui::Ui, world: &mut World) {
+    let mut regen = false;
+
+    {
+        let Some(mut spec) = world.get_resource_mut::<ObstacleFieldSpec>() else {
+            ui.label("Obstacle field plugin not active.");
+            return;
+        };
+
+        ui.horizontal(|ui| {
+            ui.label(format!("Seed {:#x}", spec.seed));
+            if ui.button("🎲 Reseed").clicked() {
+                // SplitMix64 step → a fresh, well-distributed seed.
+                spec.seed = spec
+                    .seed
+                    .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    .wrapping_add(0x2545_F491_4F6C_DD1D);
+                regen = true;
+            }
+        });
+
+        if ui
+            .add(egui::Slider::new(&mut spec.region_half_extent, 50.0..=500.0).text("Region ½ (m)"))
+            .drag_stopped()
+        {
+            regen = true;
+        }
+        if ui
+            .add(egui::Slider::new(&mut spec.grid_resolution, 65u32..=513).text("Grid res"))
+            .drag_stopped()
+        {
+            regen = true;
+        }
+
+        // Spatial pattern.
+        let mut kind = match spec.pattern {
+            Pattern::Uniform => 0usize,
+            Pattern::PoissonDisk { .. } => 1,
+            Pattern::Clustered { .. } => 2,
+        };
+        egui::ComboBox::from_label("Pattern")
+            .selected_text(["Uniform", "Poisson disk", "Clustered"][kind])
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut kind, 0, "Uniform");
+                ui.selectable_value(&mut kind, 1, "Poisson disk");
+                ui.selectable_value(&mut kind, 2, "Clustered");
+            });
+        let chosen = match kind {
+            0 => Pattern::Uniform,
+            1 => match spec.pattern {
+                p @ Pattern::PoissonDisk { .. } => p,
+                _ => Pattern::PoissonDisk { min_spacing: 3.0 },
+            },
+            _ => match spec.pattern {
+                p @ Pattern::Clustered { .. } => p,
+                _ => Pattern::Clustered { clusters: 8, spread: 25.0 },
+            },
+        };
+        if std::mem::discriminant(&spec.pattern) != std::mem::discriminant(&chosen) {
+            spec.pattern = chosen;
+            regen = true;
+        }
+        match &mut spec.pattern {
+            Pattern::PoissonDisk { min_spacing } => {
+                if ui
+                    .add(egui::Slider::new(min_spacing, 0.5..=10.0).text("Min spacing (m)"))
+                    .drag_stopped()
+                {
+                    regen = true;
+                }
+            }
+            Pattern::Clustered { clusters, spread } => {
+                if ui.add(egui::Slider::new(clusters, 1u32..=32).text("Clusters")).drag_stopped() {
+                    regen = true;
+                }
+                if ui.add(egui::Slider::new(spread, 2.0..=80.0).text("Spread (m)")).drag_stopped() {
+                    regen = true;
+                }
+            }
+            Pattern::Uniform => {}
+        }
+
+        egui::CollapsingHeader::new("Craters").default_open(true).show(ui, |ui| {
+            // Reborrow into a plain &mut so the disjoint field borrows below are
+            // allowed (ResMut's DerefMut would otherwise re-borrow the whole spec).
+            let s = &mut *spec;
+            if ui.checkbox(&mut s.craters.enabled, "Enabled").changed() {
+                regen = true;
+            }
+            for (val, range, label) in [
+                (&mut s.craters.density, 0.0..=60.0, "Density /ha"),
+                (&mut s.craters.depth_ratio, 0.0..=0.8, "Depth ratio"),
+                (&mut s.craters.rim_height_ratio, 0.0..=1.5, "Wall height ratio"),
+                (&mut s.craters.size.min, 0.5..=20.0, "Radius min"),
+                (&mut s.craters.size.mode, 0.5..=20.0, "Radius mode"),
+                (&mut s.craters.size.max, 0.5..=40.0, "Radius max"),
+            ] {
+                if ui.add(egui::Slider::new(val, range).text(label)).drag_stopped() {
+                    regen = true;
+                }
+            }
+        });
+
+        egui::CollapsingHeader::new("Rocks").default_open(true).show(ui, |ui| {
+            let s = &mut *spec;
+            if ui.checkbox(&mut s.rocks.enabled, "Enabled").changed() {
+                regen = true;
+            }
+            for (val, range, label) in [
+                (&mut s.rocks.density, 0.0..=400.0, "Density /ha"),
+                (&mut s.rocks.size.min, 0.05..=5.0, "Radius min"),
+                (&mut s.rocks.size.mode, 0.05..=5.0, "Radius mode"),
+                (&mut s.rocks.size.max, 0.05..=8.0, "Radius max"),
+                (&mut s.rocks.dynamic_fraction, 0.0..=1.0, "Dynamic frac"),
+            ] {
+                if ui.add(egui::Slider::new(val, range).text(label)).drag_stopped() {
+                    regen = true;
+                }
+            }
+        });
+
+        ui.separator();
+        if ui.button("♻ Regenerate").clicked() {
+            regen = true;
+        }
+        ui.label(egui::RichText::new("Field rebuilds on slider release.").small().weak());
+    }
+
+    if regen {
+        if let Some(mut msgs) =
+            world.get_resource_mut::<bevy::ecs::message::Messages<RegenerateField>>()
+        {
+            msgs.write(RegenerateField);
+        }
     }
 }
 

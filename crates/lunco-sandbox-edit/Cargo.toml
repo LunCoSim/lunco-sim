@@ -25,6 +25,7 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
 lunco-mobility = { path = "../lunco-mobility" }
+lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 # `default-features = false` keeps modelica/avatar egui-free for the headless
 # server; the `ui` feature below re-enables them. The egui inspector
 # (`ui/inspector.rs::modelica_parameters_section`) uses lunco-modelica's egui UI
