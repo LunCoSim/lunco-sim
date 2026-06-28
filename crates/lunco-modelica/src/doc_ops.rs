@@ -374,10 +374,10 @@ pub fn apply_ops_as(
     }
 
     if hit_read_only {
-        if let Some(mut cs) = world.get_resource_mut::<crate::state::CompileStates>() {
+        if let Some(mut cs) = world.get_resource_mut::<lunco_doc_bevy::DocumentDiagnostics>() {
             // Don't clobber a real compile error.
-            if cs.error_for(doc_id).is_none() {
-                cs.set_error(
+            if cs.error_message(doc_id).is_none() {
+                cs.set_error_message(
                     doc_id,
                     "Read-only library tab — edits rejected. \
                      Use File → Duplicate to Workspace to create an \

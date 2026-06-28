@@ -405,8 +405,8 @@ impl Panel for CodeEditorPanel {
                     .unwrap_or(false);
             let err = tab_target.and_then(|d| {
                 world
-                    .get_resource::<crate::state::CompileStates>()
-                    .and_then(|cs| cs.error_for(d).map(str::to_string))
+                    .get_resource::<lunco_doc_bevy::DocumentDiagnostics>()
+                    .and_then(|cs| cs.error_message(d).map(str::to_string))
             });
             (err, entity, loading)
         };

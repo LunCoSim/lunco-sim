@@ -11,9 +11,8 @@ use std::sync::Arc;
 use crate::document::duplicate::{
     build_duplicate_source, collect_parent_imports, extract_class_spans_inline,
 };
-use crate::state::{
-    CompileStates, ModelicaDocumentRegistry, WorkbenchState,
-};
+use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
+use lunco_doc_bevy::DocumentDiagnostics;
 use crate::model_tabs::ModelTabs; use crate::ui::MODEL_VIEW_KIND;
 use crate::package_tree::PackageTreeCache;
 
@@ -999,7 +998,7 @@ pub fn on_document_closed_cleanup(
     trigger: On<CloseDocument>,
     mut model_tabs: ResMut<ModelTabs>,
     mut cache: ResMut<PackageTreeCache>,
-    mut compile_states: ResMut<CompileStates>,
+    mut compile_states: ResMut<DocumentDiagnostics>,
     mut workbench: ResMut<WorkbenchState>,
     mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut doc_pins: Option<ResMut<crate::ui::doc_pin::DocPinState>>,

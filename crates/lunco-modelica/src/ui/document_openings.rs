@@ -168,7 +168,7 @@ pub fn track_ast_reparse_busy(
 
 /// In-flight per-document `StatusBus` handles for compile work.
 /// Same edge-triggered pattern as [`AstReparseBusyHandles`]: minted
-/// when [`crate::state::CompileStates::is_compiling`] rises, dropped
+/// when [`lunco_doc_bevy::DocumentDiagnostics::is_compiling`] rises, dropped
 /// when it falls — with the terminal outcome (`Succeeded` /
 /// `Failed(msg)`) recorded for [`lunco_workbench::status_bus::StatusBus::lifecycle`]
 /// consumers.
@@ -188,7 +188,7 @@ pub struct CompileBusyHandles {
 /// transitions into `Compiling`, drops it (with `Failed(msg)` if
 /// the terminal state is `Error`) when it transitions out.
 pub fn track_compile_busy(
-    compile_states: Res<crate::state::CompileStates>,
+    compile_states: Res<lunco_doc_bevy::DocumentDiagnostics>,
     registry: Res<crate::state::ModelicaDocumentRegistry>,
     mut handles: ResMut<CompileBusyHandles>,
     mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
@@ -223,7 +223,7 @@ pub fn track_compile_busy(
         .collect();
     for doc_id in to_drop {
         if let Some(mut handle) = handles.handles.remove(&doc_id) {
-            if let Some(msg) = compile_states.error_for(doc_id) {
+            if let Some(msg) = compile_states.error_message(doc_id) {
                 handle.set_outcome(BusyOutcome::Failed(msg.to_string()));
             }
             // Drop on scope exit clears the bus entry.

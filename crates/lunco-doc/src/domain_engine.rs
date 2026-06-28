@@ -104,42 +104,61 @@ pub enum DiagnosticSeverity {
     Hint,
 }
 
-/// One diagnostic produced by the domain engine for a document.
+/// One diagnostic produced by a domain (Modelica, scripting, …) for a document.
+///
+/// Location is 1-based `line`/`col` — the form every producer (rumoca, rhai)
+/// and every consumer (egui panel click-to-source, API/MCP status) actually
+/// uses, so no source-dependent byte conversions are needed at the boundaries.
+/// (Absolute byte ranges remain available via [`offset_to_line_col`] /
+/// [`line_col_to_offset`] + [`TextRange`], used independently by index spans.)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Diagnostic {
     /// How the diagnostic should be classified by the UI.
     pub severity: DiagnosticSeverity,
     /// Human-readable message body.
     pub message: String,
-    /// Source-text range the diagnostic refers to, if known.
-    pub range: Option<TextRange>,
+    /// 1-based source line, if located.
+    pub line: Option<u32>,
+    /// 1-based source column, if located.
+    pub col: Option<u32>,
 }
 
 impl Diagnostic {
-    /// An error diagnostic with an optional byte range.
-    pub fn error(message: impl Into<String>, range: Option<TextRange>) -> Self {
+    /// An error diagnostic at an optional 1-based `(line, col)`.
+    pub fn error(message: impl Into<String>, line: Option<u32>, col: Option<u32>) -> Self {
         Self {
             severity: DiagnosticSeverity::Error,
             message: message.into(),
-            range,
+            line,
+            col,
         }
     }
 
-    /// A warning diagnostic with an optional byte range.
-    pub fn warning(message: impl Into<String>, range: Option<TextRange>) -> Self {
+    /// A warning diagnostic at an optional 1-based `(line, col)`.
+    pub fn warning(message: impl Into<String>, line: Option<u32>, col: Option<u32>) -> Self {
         Self {
             severity: DiagnosticSeverity::Warning,
             message: message.into(),
-            range,
+            line,
+            col,
         }
     }
 
-    /// `(line, column)` of this diagnostic's range start in `source`, both
-    /// 1-based, or `None` if the diagnostic has no range. The render/API form
-    /// of the canonical byte `range` — UIs and APIs report line/col, producers
-    /// store bytes (LSP-precise, source-independent).
-    pub fn line_col(&self, source: &str) -> Option<(u32, u32)> {
-        self.range.map(|r| offset_to_line_col(source, r.start))
+    /// An error diagnostic with no source location (renders but isn't clickable).
+    pub fn message_only(message: impl Into<String>) -> Self {
+        Self::error(message, None, None)
+    }
+}
+
+impl From<String> for Diagnostic {
+    fn from(message: String) -> Self {
+        Self::message_only(message)
+    }
+}
+
+impl From<&str> for Diagnostic {
+    fn from(message: &str) -> Self {
+        Self::message_only(message)
     }
 }
 

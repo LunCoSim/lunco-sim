@@ -601,7 +601,7 @@ pub fn run() -> Result<(), JsValue> {
                     // Resolve byte spans → located diagnostics here, where
                     // the source is in hand, so the main thread receives
                     // clickable parse errors (not just debug strings).
-                    let errors: Vec<lunco_modelica::document::ParseDiag> = recovery
+                    let errors: Vec<lunco_doc::Diagnostic> = recovery
                         .parse_errors()
                         .iter()
                         .map(|e| lunco_modelica::document::parse_diag_from_error(e, &source))
@@ -623,7 +623,7 @@ pub fn run() -> Result<(), JsValue> {
                         );
                         (
                             rumoca_compile::parsing::ast::StoredDefinition::default(),
-                            vec![lunco_modelica::document::ParseDiag::message_only(format!(
+                            vec![lunco_doc::Diagnostic::message_only(format!(
                                 "worker panic: {msg}"
                             ))],
                         )

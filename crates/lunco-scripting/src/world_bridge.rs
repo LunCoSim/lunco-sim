@@ -906,7 +906,7 @@ pub fn tick_rhai_models(world: &mut World) {
                         if let Err(e) = engine.run_ast_with_scope(&mut state.scope, &ast) {
                             error!("[rhai] entity {entity:?} top-level failed: {e}");
                             compile_error =
-                                Some(rhai_diagnostic(e.to_string(), e.position(), &source));
+                                Some(rhai_diagnostic(e.to_string(), e.position()));
                         }
                         state.ast = Some(ast);
                     }
@@ -914,7 +914,7 @@ pub fn tick_rhai_models(world: &mut World) {
                         error!("[rhai] entity {entity:?} compile error: {e}");
                         diag_updates.push((
                             raw,
-                            Some(vec![rhai_diagnostic(e.to_string(), e.position(), &source)]),
+                            Some(vec![rhai_diagnostic(e.to_string(), e.position())]),
                         ));
                         state.ast = None;
                         continue;
@@ -934,7 +934,7 @@ pub fn tick_rhai_models(world: &mut World) {
                     if let Some((msg, pos)) =
                         call_hook(engine, &mut state.scope, ast, "on_start", gid, &mut state.this)
                     {
-                        runtime_error.get_or_insert_with(|| rhai_diagnostic(msg, pos, &source));
+                        runtime_error.get_or_insert_with(|| rhai_diagnostic(msg, pos));
                     }
                 }
                 // Deliver this tick's events, then advance the scenario.
@@ -947,13 +947,13 @@ pub fn tick_rhai_models(world: &mut World) {
                         &mut state.this,
                         event_to_map(ev),
                     ) {
-                        runtime_error.get_or_insert_with(|| rhai_diagnostic(msg, pos, &source));
+                        runtime_error.get_or_insert_with(|| rhai_diagnostic(msg, pos));
                     }
                 }
                 if let Some((msg, pos)) =
                     call_hook(engine, &mut state.scope, ast, "on_tick", gid, &mut state.this)
                 {
-                    runtime_error.get_or_insert_with(|| rhai_diagnostic(msg, pos, &source));
+                    runtime_error.get_or_insert_with(|| rhai_diagnostic(msg, pos));
                 }
             }
 
@@ -982,17 +982,14 @@ pub fn tick_rhai_models(world: &mut World) {
     }
 }
 
-/// Build an error [`Diagnostic`] from a rhai error message + [`rhai::Position`],
-/// resolving line/col against `source` into the canonical byte range.
-fn rhai_diagnostic(message: String, pos: rhai::Position, source: &str) -> Diagnostic {
-    let range = match (pos.line(), pos.position()) {
-        (Some(line), Some(col)) => {
-            let start = lunco_doc::line_col_to_offset(source, line as u32, col as u32);
-            Some(lunco_doc::TextRange::new(start, (start + 1).min(source.len())))
-        }
-        _ => None,
-    };
-    Diagnostic::error(message, range)
+/// Build an error [`Diagnostic`] from a rhai error message + [`rhai::Position`]
+/// (line/col map straight across — no source needed).
+fn rhai_diagnostic(message: String, pos: rhai::Position) -> Diagnostic {
+    Diagnostic::error(
+        message,
+        pos.line().map(|l| l as u32),
+        pos.position().map(|c| c as u32),
+    )
 }
 
 // ── Public entry point ─────────────────────────────────────────────────────

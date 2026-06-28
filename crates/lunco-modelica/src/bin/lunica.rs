@@ -376,7 +376,7 @@ fn setup_web_workbench(
     channels: Res<lunco_modelica::ModelicaChannels>,
     mut workbench_state: ResMut<lunco_modelica::state::WorkbenchState>,
     mut doc_registry: ResMut<lunco_modelica::state::ModelicaDocumentRegistry>,
-    compile_states: ResMut<lunco_modelica::state::CompileStates>,
+    compile_states: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
     mut model_tabs: ResMut<lunco_modelica::model_tabs::ModelTabs>,
     mut layout: ResMut<lunco_workbench::WorkbenchLayout>,
     model_info: Res<BundledModelInfo>,

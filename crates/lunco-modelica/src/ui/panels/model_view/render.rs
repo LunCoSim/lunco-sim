@@ -11,7 +11,9 @@ use crate::model_tabs::ModelTabs;
 use super::context::{resolve_tab_target, resolve_tab_title, sync_active_tab_to_doc};
 use crate::ui::panels::code_editor::{CodeEditorPanel, EditorBufferState};
 use crate::ui::panels::canvas_diagram::CanvasDiagramPanel;
-use crate::state::{CompileState, CompileStates, ModelicaDocumentRegistry};
+use crate::state::ModelicaDocumentRegistry;
+use lunco_doc::CompileState;
+use lunco_doc_bevy::DocumentDiagnostics;
 
 pub struct ModelViewPanel {
     code: CodeEditorPanel,
@@ -196,9 +198,9 @@ fn render_unified_toolbar(
         .map(|t| t.tokens.clone())
         .unwrap_or_else(|| lunco_theme::Theme::dark().tokens);
     
-    let compile_state = world.resource::<CompileStates>().state_of(doc);
+    let compile_state = world.resource::<DocumentDiagnostics>().state_of(doc);
     let is_read_only = crate::state::read_only_for(world, doc);
-    let compilation_error = world.get_resource::<CompileStates>().and_then(|cs| cs.error_for(doc).map(str::to_string));
+    let compilation_error = world.get_resource::<DocumentDiagnostics>().and_then(|cs| cs.error_message(doc).map(str::to_string));
     let undo_redo = world.resource::<ModelicaDocumentRegistry>().host(doc).map(|h| (h.can_undo(), h.can_redo(), h.undo_depth(), h.redo_depth()));
 
     let sim_state: Option<(bool, f64)> = world
@@ -427,7 +429,7 @@ fn render_unified_toolbar(
         }
     });
 
-    if dismiss_error { if let Some(mut cs) = world.get_resource_mut::<CompileStates>() { cs.clear_error(doc); } }
+    if dismiss_error { if let Some(mut cs) = world.get_resource_mut::<DocumentDiagnostics>() { cs.clear_error(doc); } }
     if focus_diagnostics { world.commands().trigger(lunco_workbench::FocusPanel { id: "modelica_diagnostics".into() }); }
     if undo_clicked { world.commands().trigger(lunco_doc_bevy::UndoDocument { doc }); }
     if redo_clicked { world.commands().trigger(lunco_doc_bevy::RedoDocument { doc }); }

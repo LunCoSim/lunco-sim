@@ -31,7 +31,9 @@ use crate::models::bundled_models;
 use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
 // `DrilledInClassNames` reads migrated to
 // `crate::sim_default::drilled_class_for_doc`.
-use crate::state::{CompileState, CompileStates, ModelicaDocumentRegistry};
+use crate::state::ModelicaDocumentRegistry;
+use lunco_doc::CompileState;
+use lunco_doc_bevy::DocumentDiagnostics;
 use crate::visual_diagram::msl_class_library;
 use lunco_doc::DocumentId;
 
@@ -609,7 +611,7 @@ impl ApiQueryProvider for CompileStatusProvider {
         // are scoped to the line, so successive `let`s are fine even though
         // we touch four different resources.
         let state = world
-            .get_resource::<CompileStates>()
+            .get_resource::<DocumentDiagnostics>()
             .map(|cs| cs.state_of(doc_id))
             .unwrap_or(CompileState::Idle);
         // of going through the `DrilledInClassNames` cache. The
@@ -653,8 +655,8 @@ impl ApiQueryProvider for CompileStatusProvider {
             && candidates.len() >= 2;
 
         let error_message = world
-            .get_resource::<crate::state::CompileStates>()
-            .and_then(|cs| cs.error_for(doc_id).map(str::to_string));
+            .get_resource::<lunco_doc_bevy::DocumentDiagnostics>()
+            .and_then(|cs| cs.error_message(doc_id).map(str::to_string));
 
         // Live run-state, read from the `ModelicaModel` for this doc's
         // entity (if one exists yet). Lets a single CompileStatus call

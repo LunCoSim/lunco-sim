@@ -17,7 +17,6 @@ use lunco_doc::DocumentId;
 use lunco_doc_bevy::{status_json, DocumentDiagnostics};
 
 use crate::doc::ScriptedModel;
-use crate::ScriptRegistry;
 
 /// `ScriptStatus { target }` → `{ state, ok, diagnostics: [{severity,message,line,col}] }`
 /// for the scenario attached to entity `target` (a `GlobalEntityId`). Returns an
@@ -51,17 +50,13 @@ impl ApiQueryProvider for ScriptStatusProvider {
 
         // No scenario attached → idle (not an error — the entity simply isn't scripted).
         let Some(doc_raw) = world.get::<ScriptedModel>(entity).and_then(|m| m.document_id) else {
-            return ApiResponse::ok(status_json(None, None));
+            return ApiResponse::ok(status_json(None));
         };
         let doc = DocumentId::new(doc_raw);
-        let source = world
-            .get_resource::<ScriptRegistry>()
-            .and_then(|r| r.documents.get(&doc))
-            .map(|h| h.document().source.clone());
         let entry = world
             .get_resource::<DocumentDiagnostics>()
             .and_then(|s| s.get(doc));
-        ApiResponse::ok(status_json(entry, source.as_deref()))
+        ApiResponse::ok(status_json(entry))
     }
 }
 

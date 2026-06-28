@@ -26,7 +26,8 @@ use std::collections::HashMap;
 
 use lunco_core::{Command, on_command, register_commands};
 
-use crate::state::{CompileStates, ModelicaDocumentRegistry, WorkbenchState};
+use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
+use lunco_doc_bevy::DocumentDiagnostics;
 use crate::{ModelicaChannels, ModelicaCommand, ModelicaModel};
 
 use super::{entity_for_doc, resolve_active_doc};
@@ -644,7 +645,7 @@ pub fn on_compile_model(
     mut commands: Commands,
     mut registry: ResMut<ModelicaDocumentRegistry>,
     workbench: ResMut<WorkbenchState>,
-    mut compile_states: ResMut<CompileStates>,
+    mut compile_states: ResMut<DocumentDiagnostics>,
     mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
     mut diagnostics: Option<ResMut<crate::ui::panels::diagnostics::DiagnosticsLog>>,
     mut picker: ResMut<CompileClassPickerState>,
@@ -748,7 +749,7 @@ pub fn on_compile_model(
         // extractors, which at least try once; if they also fail,
         // the error message below fires.
         let msg = "Could not parse Modelica source for compile.".to_string();
-        compile_states.set_error(doc, msg.clone());
+        compile_states.set_error_message(doc, msg.clone());
         console.error(format!("Compile failed: {msg}"));
         return;
     };
@@ -783,7 +784,7 @@ pub fn on_compile_model(
                     "compile_model class `{cls}` {e}. Candidates: [{}]",
                     candidate_classes.join(", ")
                 );
-                compile_states.set_error(doc, msg.clone());
+                compile_states.set_error_message(doc, msg.clone());
                 console.error(format!("Compile failed: {msg}"));
                 let _ = diagnostics;
                 return;
@@ -830,7 +831,7 @@ pub fn on_compile_model(
         .or(detected_first_class);
     let Some(model_name) = model_name else {
         let msg = "Could not find a valid model declaration.".to_string();
-        compile_states.set_error(doc, msg.clone());
+        compile_states.set_error_message(doc, msg.clone());
         console.error(format!("Compile failed: {msg}"));
         return;
     };

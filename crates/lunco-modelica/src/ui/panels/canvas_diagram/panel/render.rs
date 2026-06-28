@@ -165,7 +165,7 @@ pub(crate) fn render_diagram_canvas(
             let compile_pending = active_doc
                 .and_then(|d| {
                     world
-                        .get_resource::<crate::state::CompileStates>()
+                        .get_resource::<lunco_doc_bevy::DocumentDiagnostics>()
                         .map(|cs| cs.is_compiling(d))
                 })
                 .unwrap_or(false);

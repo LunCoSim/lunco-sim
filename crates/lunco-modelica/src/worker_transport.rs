@@ -175,7 +175,7 @@ pub enum WireResult {
         doc_id: lunco_doc::DocumentId,
         gen: u64,
         ast: rumoca_compile::parsing::StoredDefinition,
-        errors: Vec<crate::document::ParseDiag>,
+        errors: Vec<lunco_doc::Diagnostic>,
     },
     /// Lifecycle update for a Fast Run started via
     /// `WireMessage::RunFast`. The `run_id` lets the main thread
@@ -386,7 +386,7 @@ pub struct ParseDoneEnvelope {
     pub doc_id: lunco_doc::DocumentId,
     pub gen: u64,
     pub ast: rumoca_compile::parsing::StoredDefinition,
-    pub errors: Vec<crate::document::ParseDiag>,
+    pub errors: Vec<lunco_doc::Diagnostic>,
 }
 static PARSE_DONE_TX: OnceLock<crossbeam_channel::Sender<ParseDoneEnvelope>> = OnceLock::new();
 static PARSE_DONE_RX: OnceLock<crossbeam_channel::Receiver<ParseDoneEnvelope>> = OnceLock::new();

@@ -60,7 +60,8 @@
 use bevy::prelude::*;
 use lunco_workbench::{Perspective, PerspectiveId, WorkbenchAppExt, WorkbenchLayout, PanelId};
 // Core document/library/compile state moved out of `ui` into `crate::state`.
-use crate::state::{CompileStates, ModelicaDocumentRegistry, WorkbenchState};
+use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
+use lunco_doc_bevy::DocumentDiagnostics;
 
 /// The [`PanelId`] under which `ModelViewPanel` is registered. Lives in the
 /// `ui` module because `PanelId` is a workbench (UI) panel-registry key — the
@@ -469,7 +470,7 @@ fn scan_twin_on_added(
 fn cleanup_removed_documents(
     mut removed: RemovedComponents<ModelicaModel>,
     registry: Option<ResMut<ModelicaDocumentRegistry>>,
-    compile_states: Option<ResMut<CompileStates>>,
+    compile_states: Option<ResMut<DocumentDiagnostics>>,
     canvas_state: Option<ResMut<panels::canvas_diagram::CanvasDiagramState>>,
     signals: Option<ResMut<lunco_viz::SignalRegistry>>,
     viz_registry: Option<ResMut<lunco_viz::VisualizationRegistry>>,
@@ -716,7 +717,7 @@ impl Plugin for ModelicaUiPlugin {
 
         app.init_resource::<WorkbenchState>()
             .init_resource::<ModelicaDocumentRegistry>()
-            .init_resource::<CompileStates>()
+            .init_resource::<DocumentDiagnostics>()
             .init_resource::<crate::model_tabs::ModelTabs>()
             .init_resource::<crate::sim_default::RunTargetOverrides>()
             .init_resource::<crate::model_tabs_types::TabRenderContext>()
