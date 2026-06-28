@@ -110,13 +110,17 @@ pub fn apply_set_model_input(
 /// Callers are the egui workbench (`ui::commands::compile`) and the API query
 /// path (`api_queries`, behind modelica's `lunco-api`); a pure compile-core
 /// build (e.g. the physics sandbox server) links neither, hence `allow(dead_code)`.
+/// Generic over the resource-read context (see
+/// [`crate::sim_default::ResourceRead`]) so the egui panels (`PanelCtx`) and
+/// the `&World` callers resolve annotation bounds through one body, not
+/// hand-synced copies.
 #[allow(dead_code)]
-pub(crate) fn bounds_from_annotation(
-    world: &World,
+pub(crate) fn bounds_from_annotation_in<R: crate::sim_default::ResourceRead>(
+    ctx: &R,
     doc: DocumentId,
     model_ref: &lunco_experiments::ModelRef,
 ) -> Option<lunco_experiments::RunBounds> {
-    let reg = world.get_resource::<crate::state::ModelicaDocumentRegistry>()?;
+    let reg = ctx.read_resource::<crate::state::ModelicaDocumentRegistry>()?;
     let host = reg.host(doc)?;
     let index = host.document().index();
     let class = index
@@ -126,6 +130,21 @@ pub(crate) fn bounds_from_annotation(
     let exp = class.experiment.as_ref()?;
     // World-gathering done; the annotation→bounds mapping is pure.
     crate::sim_target::bounds_from_experiment(exp)
+}
+
+/// `&World` reader for the `experiment(...)` annotation bounds — see
+/// [`bounds_from_annotation_in`]. `None` if the class or annotation is absent.
+///
+/// Callers are the egui workbench (`ui::commands::compile`) and the API query
+/// path (`api_queries`, behind modelica's `lunco-api`); a pure compile-core
+/// build (e.g. the physics sandbox server) links neither, hence `allow(dead_code)`.
+#[allow(dead_code)]
+pub(crate) fn bounds_from_annotation(
+    world: &World,
+    doc: DocumentId,
+    model_ref: &lunco_experiments::ModelRef,
+) -> Option<lunco_experiments::RunBounds> {
+    bounds_from_annotation_in(world, doc, model_ref)
 }
 
 /// Single source of truth for the simulation bounds shown in BOTH the Fast Run
@@ -138,19 +157,34 @@ pub(crate) fn bounds_from_annotation(
 /// cache is populated by a background worker callback, so letting it win would
 /// make a run's snapshotted bounds depend on dispatch timing (the flaky-
 /// terminator race). See [`crate::sim_target::resolve_bounds`].
+///
+/// Generic over the resource-read context (see
+/// [`crate::sim_default::ResourceRead`]) so the Experiments Setup form resolves
+/// through `PanelCtx` during paint without a second inlined copy of this
+/// precedence — exactly the disagreement this helper exists to prevent.
+#[allow(dead_code)]
+pub(crate) fn resolve_setup_bounds_in<R: crate::sim_default::ResourceRead>(
+    ctx: &R,
+    doc: DocumentId,
+    model_ref: &lunco_experiments::ModelRef,
+) -> lunco_experiments::RunBounds {
+    use lunco_experiments::ExperimentRunner;
+    let draft = ctx
+        .read_resource::<crate::experiments_runner::ExperimentDrafts>()
+        .and_then(|d| d.get(doc, model_ref).and_then(|dr| dr.bounds_override.clone()));
+    let annotation = bounds_from_annotation_in(ctx, doc, model_ref);
+    let runner_cached = ctx
+        .read_resource::<crate::ModelicaRunnerResource>()
+        .and_then(|r| r.0.default_bounds(model_ref));
+    crate::sim_target::resolve_bounds(draft, annotation, runner_cached)
+}
+
+/// `&World` reader for the canonical setup bounds — see [`resolve_setup_bounds_in`].
 #[allow(dead_code)] // see `bounds_from_annotation` — no caller in a pure compile-core build
 pub(crate) fn resolve_setup_bounds(
     world: &World,
     doc: DocumentId,
     model_ref: &lunco_experiments::ModelRef,
 ) -> lunco_experiments::RunBounds {
-    use lunco_experiments::ExperimentRunner;
-    let draft = world
-        .get_resource::<crate::experiments_runner::ExperimentDrafts>()
-        .and_then(|d| d.get(doc, model_ref).and_then(|dr| dr.bounds_override.clone()));
-    let annotation = bounds_from_annotation(world, doc, model_ref);
-    let runner_cached = world
-        .get_resource::<crate::ModelicaRunnerResource>()
-        .and_then(|r| r.0.default_bounds(model_ref));
-    crate::sim_target::resolve_bounds(draft, annotation, runner_cached)
+    resolve_setup_bounds_in(world, doc, model_ref)
 }

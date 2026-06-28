@@ -40,32 +40,6 @@ use rumoca_compile::parsing::ClassType;
 // `crate::sim_default::drilled_class_for_doc`.
 use crate::state::ModelicaDocumentRegistry;
 
-/// `BrowserCtx` reader mirroring
-/// [`crate::sim_default::drilled_class_for_doc_ctx`]. `BrowserCtx` is
-/// not a `PanelCtx`, so the `_ctx` helper can't be reused — we read the
-/// same resources (`TabRenderContext`, `ModelTabs`) through the browser
-/// context directly.
-fn drilled_class_for_doc_bctx(
-    ctx: &BrowserCtx<'_, '_>,
-    doc: DocumentId,
-) -> Option<String> {
-    use crate::model_tabs::ModelTabs;
-    use crate::model_tabs_types::TabRenderContext;
-    if let Some(tc) = ctx.resource::<TabRenderContext>() {
-        if let Some(tab_id) = tc.tab_id {
-            if let Some(tabs) = ctx.resource::<ModelTabs>() {
-                if let Some(state) = tabs.get(tab_id) {
-                    if state.doc == doc {
-                        return state.drilled_class.clone();
-                    }
-                }
-            }
-        }
-    }
-    ctx.resource::<ModelTabs>()
-        .and_then(|t| t.drilled_class_for_doc(doc))
-}
-
 /// One Modelica class entry rendered in the tree.
 #[derive(Debug, Clone)]
 struct ClassEntry {
@@ -501,9 +475,8 @@ pub(crate) fn render_workspace_doc(
     let active_doc: Option<DocumentId> = ctx
         .resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
-    let active_qualified: Option<String> = active_doc.and_then(|d| {
-        drilled_class_for_doc_bctx(ctx, d)
-    });
+    let active_qualified: Option<String> =
+        active_doc.and_then(|d| crate::sim_default::drilled_class_for_doc_in(ctx, d));
 
     // Collapse the redundant wrapper when the document holds a
     // single top-level class whose short name matches the outer

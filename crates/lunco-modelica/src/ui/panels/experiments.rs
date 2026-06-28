@@ -855,35 +855,11 @@ impl ExperimentsPanel {
         };
         let model_ref = lunco_experiments::ModelRef(model_name.clone());
 
-        // Resolve via the SAME precedence the Fast Run popup uses, so the
-        // two setup surfaces never disagree (draft → AST `experiment(...)`
-        // annotation → runner cache → fallback). Inlined here because the
-        // canonical `resolve_setup_bounds` takes `&World`; the reads below
-        // mirror it exactly through `ctx.resource`.
-        let mut bounds = {
-            use lunco_experiments::ExperimentRunner;
-            let draft = ctx
-                .resource::<crate::experiments_runner::ExperimentDrafts>()
-                .and_then(|d| {
-                    d.get(doc, &model_ref).and_then(|dr| dr.bounds_override.clone())
-                });
-            let annotation = ctx
-                .resource::<crate::state::ModelicaDocumentRegistry>()
-                .and_then(|reg| reg.host(doc))
-                .and_then(|host| {
-                    let index = host.document().index();
-                    index
-                        .classes
-                        .get(&model_ref.0)
-                        .or_else(|| index.classes.values().find(|c| c.name == model_ref.0))
-                        .and_then(|c| c.experiment.as_ref())
-                        .and_then(crate::sim_target::bounds_from_experiment)
-                });
-            let runner_cached = ctx
-                .resource::<crate::ModelicaRunnerResource>()
-                .and_then(|r| r.0.default_bounds(&model_ref));
-            crate::sim_target::resolve_bounds(draft, annotation, runner_cached)
-        };
+        // Resolve via the SAME precedence the Fast Run popup uses, so the two
+        // setup surfaces never disagree (draft → AST `experiment(...)`
+        // annotation → runner cache → fallback). One canonical resolver,
+        // generic over the read context — see `model_commands::resolve_setup_bounds_in`.
+        let mut bounds = crate::model_commands::resolve_setup_bounds_in(&*ctx, doc, &model_ref);
         let mut bounds_changed = false;
 
         // Inputs come from the parsed AST of the resolved model class —
