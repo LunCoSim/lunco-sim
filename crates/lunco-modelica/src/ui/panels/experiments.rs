@@ -2503,7 +2503,7 @@ fn render_experiments_plot_inner(
 /// will work when an OPFS / browser-download backend lands for wasm.
 /// Cancelling the picker is a silent no-op; errors land in Console.
 fn export_experiment_csv(world: &mut World, id: ExperimentId) {
-    use lunco_storage::Storage as _;
+    use crate::ui::panels::csv_export;
 
     let (file_stem, csv_text) = {
         let registry = match world.get_resource::<ExperimentRegistry>() {
@@ -2530,7 +2530,7 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
             text.push(',');
             // Quote names that contain commas / quotes; Modelica
             // dotted paths normally don't, but be defensive.
-            push_csv_field(&mut text, v);
+            csv_export::push_csv_field(&mut text, v);
         }
         text.push('\n');
         // Data rows.
@@ -2563,40 +2563,16 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
         (safe_name, text)
     };
 
-    let storage = lunco_storage::FileStorage::new();
-    let hint = lunco_workbench::picker::SaveHint {
-        suggested_name: Some(format!("{file_stem}.csv")),
-        start_dir: None,
-        filters: vec![lunco_workbench::picker::OpenFilter::new("CSV", &["csv"])],
-    };
-    let Some(handle) = lunco_workbench::picker::pick_save_blocking(&hint) else {
-        return; // user cancelled the save dialog
-    };
-    if let Err(e) = futures_lite::future::block_on(storage.write(&handle, csv_text.as_bytes())) {
+    // Shared save dialog + write + error-console boilerplate (CQ-111).
+    // Emit the experiment-specific success line only when it actually wrote.
+    if csv_export::save_csv_via_dialog(world, &format!("{file_stem}.csv"), csv_text.as_bytes())
+        .is_some()
+    {
         if let Some(mut console) =
             world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
         {
-            console.error(format!("CSV export: write failed: {e}"));
+            console.info(format!("✓ Exported experiment to {file_stem}.csv"));
         }
-    } else if let Some(mut console) =
-        world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
-    {
-        console.info(format!("✓ Exported experiment to {file_stem}.csv"));
-    }
-}
-
-fn push_csv_field(out: &mut String, s: &str) {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
-        out.push('"');
-        for c in s.chars() {
-            if c == '"' {
-                out.push('"');
-            }
-            out.push(c);
-        }
-        out.push('"');
-    } else {
-        out.push_str(s);
     }
 }
 

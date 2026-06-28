@@ -16,7 +16,9 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
-use lunco_workbench::{DocumentSessionCodec, DocumentSnapshot, OpenTab};
+use lunco_workbench::{
+    finalize_revision, revision_term, DocumentSessionCodec, DocumentSnapshot, OpenTab,
+};
 
 use crate::ui::panels::canvas_diagram::CanvasDiagramState;
 use crate::model_tabs::ModelTabs; use crate::ui::MODEL_VIEW_KIND;
@@ -41,12 +43,7 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
         let mut acc = 0u64;
         let mut count = 0u64;
         for (id, host) in reg.iter() {
-            let gen = host.document().generation_owned();
-            acc ^= id
-                .raw()
-                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                .rotate_left((gen & 63) as u32)
-                ^ gen.wrapping_mul(0x1000_0000_01b3);
+            acc ^= revision_term(id.raw(), host.document().generation_owned());
             count += 1;
         }
         // Fold the per-doc canvas camera (quantized) so a pan/zoom — which
@@ -67,7 +64,7 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
                 }
             }
         }
-        acc.wrapping_add(count.wrapping_mul(0x100_0000_01b3))
+        finalize_revision(acc, count)
     }
 
     fn capture(&self, world: &mut World) -> Vec<(u64, DocumentSnapshot)> {

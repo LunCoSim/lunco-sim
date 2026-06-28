@@ -372,14 +372,7 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
     let mut csv = String::from("time");
     for col in &columns {
         csv.push(',');
-        // Escape label
-        if col.label.contains(',') || col.label.contains('"') || col.label.contains('\n') {
-            csv.push('"');
-            csv.push_str(&col.label.replace('"', "\"\""));
-            csv.push('"');
-        } else {
-            csv.push_str(&col.label);
-        }
+        crate::ui::panels::csv_export::push_csv_field(&mut csv, &col.label);
     }
     csv.push('\n');
 

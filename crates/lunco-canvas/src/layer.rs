@@ -223,11 +223,10 @@ impl Layer for EdgesLayer {
             // router still draw a stub-then-waypoint polyline.
             let from_port = from_node.ports.iter().find(|p| p.id == edge.from.port);
             let to_port = to_node.ports.iter().find(|p| p.id == edge.to.port);
+            // CQ-114: port anchor via Port::world_pos; centre fallback
+            // when the endpoint references a non-existent sub-port.
             let from_w = if let Some(p) = from_port {
-                crate::scene::Pos::new(
-                    from_node.rect.min.x + p.local_offset.x,
-                    from_node.rect.min.y + p.local_offset.y,
-                )
+                p.world_pos(from_node.rect)
             } else {
                 crate::scene::Pos::new(
                     (from_node.rect.min.x + from_node.rect.max.x) * 0.5,
@@ -235,10 +234,7 @@ impl Layer for EdgesLayer {
                 )
             };
             let to_w = if let Some(p) = to_port {
-                crate::scene::Pos::new(
-                    to_node.rect.min.x + p.local_offset.x,
-                    to_node.rect.min.y + p.local_offset.y,
-                )
+                p.world_pos(to_node.rect)
             } else {
                 crate::scene::Pos::new(
                     (to_node.rect.min.x + to_node.rect.max.x) * 0.5,
@@ -308,10 +304,7 @@ impl Layer for EdgesLayer {
             }
             let Some(node) = scene.node(*node_id) else { continue };
             let Some(port) = node.ports.iter().find(|p| p.id == *port_id) else { continue };
-            let world = crate::scene::Pos::new(
-                node.rect.min.x + port.local_offset.x,
-                node.rect.min.y + port.local_offset.y,
-            );
+            let world = port.world_pos(node.rect);
             let p = ctx.viewport.world_to_screen(world, sr);
             let center = egui::pos2(p.x.round(), p.y.round());
             // Radius scaled with zoom so the dot stays visible at

@@ -96,10 +96,9 @@ pub trait NodeVisual: Send + Sync {
         // Ports get priority — a port on the boundary of the body
         // should hit as a port, not as the body.
         for port in &node.ports {
-            let px = node.rect.min.x + port.local_offset.x;
-            let py = node.rect.min.y + port.local_offset.y;
-            let dx = world_pos.x - px;
-            let dy = world_pos.y - py;
+            let anchor = port.world_pos(node.rect);
+            let dx = world_pos.x - anchor.x;
+            let dy = world_pos.y - anchor.y;
             if dx * dx + dy * dy <= 36.0 {
                 // 6 world-unit radius
                 return Some(NodeHit::Port(port.id.clone()));
@@ -147,7 +146,7 @@ pub trait EdgeVisual: Send + Sync {
     /// distance check — covers bezier and straight edges adequately
     /// for selection; exotic shapes override.
     fn hit(&self, world_pos: Pos, from_world: Pos, to_world: Pos) -> bool {
-        perpendicular_dist_sq(world_pos, from_world, to_world) <= 16.0
+        crate::scene::perpendicular_dist_sq(world_pos, from_world, to_world) <= 16.0
     }
 
     /// Like [`Self::hit`] but reports *which part* of the edge the
@@ -176,28 +175,6 @@ pub trait EdgeVisual: Send + Sync {
             None
         }
     }
-}
-
-/// Squared perpendicular distance from `p` to the finite segment
-/// `(a,b)`. Endpoint-clamped — so clicking past the end of an edge
-/// doesn't count as a hit.
-fn perpendicular_dist_sq(p: Pos, a: Pos, b: Pos) -> f32 {
-    let ax = b.x - a.x;
-    let ay = b.y - a.y;
-    let len_sq = ax * ax + ay * ay;
-    if len_sq < f32::EPSILON {
-        // Degenerate segment — treat as point distance to a.
-        let dx = p.x - a.x;
-        let dy = p.y - a.y;
-        return dx * dx + dy * dy;
-    }
-    // Projection parameter t ∈ [0,1] of p onto segment.
-    let t = (((p.x - a.x) * ax + (p.y - a.y) * ay) / len_sq).clamp(0.0, 1.0);
-    let foot_x = a.x + t * ax;
-    let foot_y = a.y + t * ay;
-    let dx = p.x - foot_x;
-    let dy = p.y - foot_y;
-    dx * dx + dy * dy
 }
 
 /// Factory closure that builds a trait object from a node's

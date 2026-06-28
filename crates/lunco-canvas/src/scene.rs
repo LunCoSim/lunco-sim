@@ -107,9 +107,10 @@ pub enum EdgeHitKind {
 }
 
 /// Squared perpendicular distance from `p` to the finite segment
-/// `(a,b)`. Endpoint-clamped. Mirror of the one in `visual.rs`; kept
-/// private to scene so the two modules stay independent.
-fn perpendicular_dist_sq(p: Pos, a: Pos, b: Pos) -> f32 {
+/// `(a,b)`. Endpoint-clamped. CQ-114: single canonical copy for the
+/// crate — `visual.rs` routes its edge hit-test here instead of
+/// keeping a byte-identical duplicate.
+pub(crate) fn perpendicular_dist_sq(p: Pos, a: Pos, b: Pos) -> f32 {
     let ax = b.x - a.x;
     let ay = b.y - a.y;
     let len_sq = ax * ax + ay * ay;
@@ -202,6 +203,16 @@ impl Rect {
         }
     }
 
+    /// Axis-aligned bounding rect of two arbitrary corner points
+    /// (per-axis min/max). CQ-114: single source for the rubber-band
+    /// preview and commit paths in `tool`.
+    pub fn from_two_points(a: Pos, b: Pos) -> Self {
+        Self {
+            min: Pos::new(a.x.min(b.x), a.y.min(b.y)),
+            max: Pos::new(a.x.max(b.x), a.y.max(b.y)),
+        }
+    }
+
     pub fn width(&self) -> f32 {
         self.max.x - self.min.x
     }
@@ -258,6 +269,19 @@ pub struct Port {
     /// `"dataflow.f32"`. Free-form, caller validates. Empty string
     /// means "untyped".
     pub kind: SmolStr,
+}
+
+impl Port {
+    /// World-space anchor of this port given its owning node's rect:
+    /// `node_rect.min + local_offset`. CQ-114: single source for the
+    /// previously-duplicated inline computations across scene, tool,
+    /// and layer.
+    pub fn world_pos(&self, node_rect: Rect) -> Pos {
+        Pos::new(
+            node_rect.min.x + self.local_offset.x,
+            node_rect.min.y + self.local_offset.y,
+        )
+    }
 }
 
 /// A node in the scene.
@@ -526,10 +550,9 @@ impl Scene {
         let radius_sq = port_radius * port_radius;
         for (id, node) in self.nodes.iter().rev() {
             for port in &node.ports {
-                let px = node.rect.min.x + port.local_offset.x;
-                let py = node.rect.min.y + port.local_offset.y;
-                let dx = world_pos.x - px;
-                let dy = world_pos.y - py;
+                let anchor = port.world_pos(node.rect);
+                let dx = world_pos.x - anchor.x;
+                let dy = world_pos.y - anchor.y;
                 if dx * dx + dy * dy <= radius_sq {
                     return Some((*id, NodeHitKind::Port(port.id.clone())));
                 }
@@ -577,14 +600,8 @@ impl Scene {
         let from_port = from_node.ports.iter().find(|p| p.id == edge.from.port)?;
         let to_port = to_node.ports.iter().find(|p| p.id == edge.to.port)?;
         Some((
-            Pos::new(
-                from_node.rect.min.x + from_port.local_offset.x,
-                from_node.rect.min.y + from_port.local_offset.y,
-            ),
-            Pos::new(
-                to_node.rect.min.x + to_port.local_offset.x,
-                to_node.rect.min.y + to_port.local_offset.y,
-            ),
+            from_port.world_pos(from_node.rect),
+            to_port.world_pos(to_node.rect),
         ))
     }
 

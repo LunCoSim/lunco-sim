@@ -98,8 +98,9 @@ pub use window_persistence::{
     WindowPersistencePlugin, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
 };
 pub use workspace_state::{
-    workspace_state_path, AppDocumentSessionExt, DocumentSessionCodec, DocumentSessionRegistry,
-    DocumentSnapshot, WorkspaceState, WorkspaceStatePlugin,
+    finalize_revision, revision_term, workspace_state_path, AppDocumentSessionExt,
+    DocumentSessionCodec, DocumentSessionRegistry, DocumentSnapshot, WorkspaceState,
+    WorkspaceStatePlugin,
 };
 pub use render_robustness::preferred_wgpu_settings;
 

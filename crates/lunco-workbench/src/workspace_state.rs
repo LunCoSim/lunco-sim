@@ -144,6 +144,29 @@ pub trait DocumentSessionCodec: Send + Sync + 'static {
     }
 }
 
+/// One document's contribution to a [`DocumentSessionCodec::revision`] fold:
+/// mixes a document's id and generation into a single word. XOR-combine the term
+/// of every open document into a running accumulator (order-independent), then
+/// pass the accumulator and document count to [`finalize_revision`].
+///
+/// CQ-112: this exact bit-mixing was duplicated byte-for-byte in the modelica
+/// and usd session codecs; extracting it keeps both revision signals in lockstep.
+pub fn revision_term(id_raw: u64, generation: u64) -> u64 {
+    id_raw
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .rotate_left((generation & 63) as u32)
+        ^ generation.wrapping_mul(0x1000_0000_01b3)
+}
+
+/// Combine the XOR-folded [`revision_term`] accumulator with the open-document
+/// `count` into the final revision word. Mixing the count in makes the revision
+/// change on open/close even when the surviving terms happen to XOR-cancel.
+///
+/// CQ-112: shared by the modelica and usd session codecs.
+pub fn finalize_revision(acc: u64, count: u64) -> u64 {
+    acc.wrapping_add(count.wrapping_mul(0x100_0000_01b3))
+}
+
 /// Registry of per-domain [`DocumentSessionCodec`]s. Populated at plugin
 /// `build` time; iterated by the capture / restore systems.
 #[derive(Resource, Default)]

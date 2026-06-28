@@ -537,6 +537,94 @@ pub fn spawn_avatar_camera(
     )).id()
 }
 
+// ─── Shared Math Helpers (CQ-113 DRY) ────────────────────────────────────────
+
+/// Radial "up" (outward surface normal) at a grid-local position.
+///
+/// A body sits at its Grid origin, so the normalized grid-local position vector
+/// *is* the local up direction. Falls back to world-Y at/near the origin.
+///
+/// Consolidates the CQ-113 duplicate `if pos.length() > 1e-6 {
+/// (pos / pos.length()).as_vec3() } else { Vec3::Y }` math (was inlined in
+/// `spring_arm_system`, `freeflight_system`, `surface_camera_system`,
+/// `avatar_universal_locomotion_system`, and `avatar_behavior_input_system`).
+fn radial_up(pos: DVec3) -> Vec3 {
+    if pos.length() > 1e-6 {
+        (pos / pos.length()).as_vec3()
+    } else {
+        Vec3::Y
+    }
+}
+
+/// Build a surface-relative camera orientation from a local `up` (surface
+/// normal) plus `heading` and `pitch`.
+///
+/// Forward starts at local north (world-Y projected onto the tangent plane,
+/// falling back to Z near the poles), is yawed by `heading` about `up`, then
+/// pitched about the resulting right axis. Rebuilt from scratch (no incremental
+/// accumulation) so there is zero roll drift.
+///
+/// Consolidates the CQ-113 duplicate tangent-frame math that was byte-identical
+/// in `spring_arm_system` and `surface_camera_system`.
+fn tangent_frame(up: Vec3, heading: f32, pitch: f32) -> Quat {
+    let ref_dir = if up.dot(Vec3::Y).abs() < 0.9 { Vec3::Y } else { Vec3::Z };
+    let east = up.cross(ref_dir).normalize();
+    let north = east.cross(up).normalize();
+    let heading_q = Quat::from_axis_angle(up, heading);
+    let forward = heading_q.mul_vec3(north);
+    let right = forward.cross(up).normalize();
+    let base_rot = Quat::from_mat3(&Mat3::from_cols(right, up, -forward));
+    let pitch_q = Quat::from_axis_angle(right, pitch);
+    (pitch_q * base_rot).normalize()
+}
+
+/// Apply an accumulated mouse-scroll delta as a multiplicative (exponential)
+/// zoom to a camera arm `distance`, clamped to `[min_dist, max_dist]`, then
+/// consume the delta. Scroll up (delta > 0) zooms in; down zooms out.
+///
+/// Consolidates the CQ-113 duplicate zoom math shared by the spring-arm, chase,
+/// and orbit camera systems (they differed only in the clamp bounds).
+fn apply_scroll_zoom(distance: &mut f64, scroll_delta: &mut f32, sens: f32, min_dist: f64, max_dist: f64) {
+    if *scroll_delta != 0.0 {
+        let zoom_factor = (-*scroll_delta as f64 * sens as f64 * 0.01).exp();
+        *distance = (*distance * zoom_factor).clamp(min_dist, max_dist);
+        *scroll_delta = 0.0;
+    }
+}
+
+/// Migrate the avatar to a target's Grid, placing it at `final_abs_pos` /
+/// `final_rot` (root-frame absolute pose) converted into the target grid's
+/// local coordinates. No-op when `target_grid` is `None`/placeholder or not a
+/// live Grid.
+///
+/// Consolidates the CQ-113 duplicate migration block shared by
+/// `on_possess_command`, `on_follow_command`, and `on_focus_command`.
+fn migrate_avatar_to_target_grid(
+    commands: &mut Commands,
+    avatar_ent: Entity,
+    target_grid: Option<Entity>,
+    final_abs_pos: DVec3,
+    final_rot: Quat,
+    q_grids: &Query<&Grid>,
+    q_parents: &Query<&ChildOf>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+) {
+    if let Some(tg) = target_grid {
+        if tg != Entity::PLACEHOLDER {
+            if let Ok(target_grid_ref) = q_grids.get(tg) {
+                let target_grid_abs = lunco_core::coords::world_position_seeded(
+                    tg, &CellCoord::default(), &Transform::default(), q_parents, q_grids, q_spatial,
+                );
+                let (new_cell, new_translation) =
+                    target_grid_ref.translation_to_grid(final_abs_pos - target_grid_abs);
+                let local_tf =
+                    Transform::from_translation(new_translation).with_rotation(final_rot);
+                migrate_to_grid(commands, avatar_ent, tg, new_cell, local_tf);
+            }
+        }
+    }
+}
+
 // ─── Behavior Systems ────────────────────────────────────────────────────────
 
 /// Chase camera: follows a target in 3D, respecting full orientation
@@ -601,12 +689,7 @@ fn spring_arm_system(
         // Multiplicative zoom using exponential scaling — same formula as
         // ChaseCamera/OrbitCamera so raw pixel scroll deltas stay well-scaled.
         // Scroll up (delta > 0) -> zoom in. Scroll down (delta < 0) -> zoom out.
-        let min_dist = 5.0;
-        if scroll_res.delta != 0.0 {
-            let zoom_factor = (-scroll_res.delta as f64 * sens.value as f64 * 0.01).exp();
-            arm.distance = (arm.distance * zoom_factor).clamp(min_dist, 200.0);
-            scroll_res.delta = 0.0;
-        }
+        apply_scroll_zoom(&mut arm.distance, &mut scroll_res.delta, sens.value, 5.0, 200.0);
 
         // Resolve rover heading in double-precision to eliminate quantization
         // jitter. The rover Transform is already render-frame-interpolated by
@@ -636,27 +719,12 @@ fn spring_arm_system(
         let desired_rot = if surface_mode.is_some() {
             // "Up" = surface normal at the rover's position = rover's grid-local direction from body center.
             // Both rover and camera are on the Body's Grid; body is at Grid origin.
-            let up_d = target_pos;
-            let up_v = if up_d.length() > 1e-6 {
-                (up_d / up_d.length()).as_vec3()
-            } else {
-                Vec3::Y
-            };
-
+            let up_v = radial_up(target_pos);
             // Surface mode: compute rotation from scratch using local_up as "up".
             // This avoids accumulated roll drift from incremental rotations
             // (see surface_camera_investigation.md for root cause analysis).
-            let ref_dir = if up_v.dot(Vec3::Y).abs() < 0.9 { Vec3::Y } else { Vec3::Z };
-            let east = up_v.cross(ref_dir).normalize();
-            let north = east.cross(up_v).normalize();
-
-            // Combine rover heading with user yaw offset, applied around surface normal.
-            let heading_q = Quat::from_axis_angle(up_v, final_yaw);
-            let forward = heading_q.mul_vec3(north);
-            let right = forward.cross(up_v).normalize();
-            let base_rot = Quat::from_mat3(&Mat3::from_cols(right, up_v, -forward));
-            let pitch_q = Quat::from_axis_angle(right, arm.pitch);
-            (pitch_q * base_rot).normalize()
+            // Combines rover heading with user yaw offset around the surface normal.
+            tangent_frame(up_v, final_yaw, arm.pitch)
         } else {
             Quat::from_euler(EulerRot::YXZ, final_yaw, arm.pitch, 0.0)
         };
@@ -762,12 +830,7 @@ fn chase_camera_system(
 
         // Multiplicative zoom using exponential scaling.
         // Scroll up (delta > 0) -> zoom in. Scroll down (delta < 0) -> zoom out.
-        let min_dist = 5.0;
-        if scroll_res.delta != 0.0 {
-            let zoom_factor = (-scroll_res.delta as f64 * sens.value as f64 * 0.01).exp();
-            chase.distance = (chase.distance * zoom_factor).clamp(min_dist, 1.0e6);
-            scroll_res.delta = 0.0;
-        }
+        apply_scroll_zoom(&mut chase.distance, &mut scroll_res.delta, sens.value, 5.0, 1.0e6);
 
         // Follow target's full 3D orientation (heading + pitch + roll).
         // Same formula as SpringArmCamera: target rotation * user offset.
@@ -874,11 +937,7 @@ fn orbit_system(
 
         // Multiplicative zoom: proportional to current distance using exponential scaling.
         // Scroll up (delta > 0) -> zoom in. Scroll down (delta < 0) -> zoom out.
-        if scroll_res.delta != 0.0 {
-            let zoom_factor = (-scroll_res.delta as f64 * sens.value as f64 * 0.01).exp();
-            orbit.distance = (orbit.distance * zoom_factor).clamp(min_dist, 1.0e11);
-            scroll_res.delta = 0.0;
-        }
+        apply_scroll_zoom(&mut orbit.distance, &mut scroll_res.delta, sens.value, min_dist, 1.0e11);
 
         // Camera rotation from user yaw/pitch (ecliptic-locked).
         let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
@@ -938,10 +997,7 @@ fn freeflight_system(
         let rot = if surface_mode.is_some() {
             // Compute "up" from camera's grid-local position (body center → camera).
             let up_v = if let Ok(grid) = q_grids.get(child_of.0) {
-                let pos = grid.grid_position_double(cell, &tf);
-                if pos.length() > 1e-6 {
-                    (pos / pos.length()).as_vec3()
-                } else { Vec3::Y }
+                radial_up(grid.grid_position_double(cell, &tf))
             } else { Vec3::Y };
 
             // In surface mode, apply yaw/pitch as incremental rotations.
@@ -993,31 +1049,12 @@ fn surface_camera_system(
 
         // Grid-local position = world-space vector from body center to camera.
         // Body is at Grid origin (Transform::default()), so no offset needed.
-        let up_d = grid.grid_position_double(cell, &tf);
-        let up = if up_d.length() > 1e-6 {
-            (up_d / up_d.length()).as_vec3()
-        } else {
-            Vec3::Y
-        };
+        let up = radial_up(grid.grid_position_double(cell, &tf));
 
-        // Build local tangent frame: "north" = projection of world Y onto tangent plane.
-        // At the poles (where Y is parallel to up), fall back to Z.
-        let ref_dir = if up.dot(Vec3::Y).abs() < 0.9 { Vec3::Y } else { Vec3::Z };
-        let east = up.cross(ref_dir).normalize();
-        let north = east.cross(up).normalize();
-
-        // Apply heading rotation around up axis.
-        let heading_q = Quat::from_axis_angle(up, cam.heading);
-        let forward = heading_q.mul_vec3(north);
-        let right = forward.cross(up).normalize();
-
-        // Build base rotation: local -Z (Bevy forward) maps to world `forward`.
-        let base_rot = Quat::from_mat3(&Mat3::from_cols(right, up, -forward));
-
-        // Apply pitch around right axis.
-        let pitch_q = Quat::from_axis_angle(right, cam.pitch);
-
-        tf.rotation = (pitch_q * base_rot).normalize();
+        // Rebuild the rotation from scratch each frame from heading + pitch
+        // around the surface normal (local north = world-Y onto the tangent
+        // plane, Z near the poles). No incremental rotations -> zero roll drift.
+        tf.rotation = tangent_frame(up, cam.heading, cam.pitch);
     }
 }
 
@@ -1059,11 +1096,7 @@ fn avatar_universal_locomotion_system(
         // In surface mode, "up" = radial direction from body center (= current_pos normalized).
         // Otherwise use world Y.
         let up_dir = if surface_mode.is_some() {
-            if current_pos.length() > 1e-6 {
-                (current_pos / current_pos.length()).as_vec3()
-            } else {
-                Vec3::Y
-            }
+            radial_up(current_pos)
         } else {
             Vec3::Y
         };
@@ -1164,10 +1197,7 @@ fn avatar_behavior_input_system(
             if surface_mode.is_some() {
                 // "Up" = camera's grid-local position (body center → camera direction).
                 let up_v = if let Ok(grid) = q_grids.get(child_of.0) {
-                    let pos = grid.grid_position_double(cell, &tf);
-                    if pos.length() > 1e-6 {
-                        (pos / pos.length()).as_vec3()
-                    } else { Vec3::Y }
+                    radial_up(grid.grid_position_double(cell, &tf))
                 } else { Vec3::Y };
                 let yaw_q = Quat::from_axis_angle(up_v, delta_yaw);
                 let right: Vec3 = *tf.right();
@@ -1559,20 +1589,10 @@ fn on_possess_command(
     let final_abs_pos = target_abs + final_offset + Vec3::Y.as_dvec3() * end_vert_off as f64;
 
     // Migrate to target grid immediately
-    if let Some(tg) = target_grid {
-        if tg != Entity::PLACEHOLDER {
-            if let Ok(target_grid_ref) = q_grids.get(tg) {
-                let target_grid_abs = lunco_core::coords::world_position_seeded(
-                    tg, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
-                );
-                let (new_cell, new_translation) =
-                    target_grid_ref.translation_to_grid(final_abs_pos - target_grid_abs);
-                let local_tf =
-                    Transform::from_translation(new_translation).with_rotation(final_rot);
-                migrate_to_grid(&mut commands, avatar_ent, tg, new_cell, local_tf);
-            }
-        }
-    }
+    migrate_avatar_to_target_grid(
+        &mut commands, avatar_ent, target_grid, final_abs_pos, final_rot,
+        &q_grids, &q_parents, &q_spatial_abs,
+    );
 
     // VesselIntent state + input map go on the **avatar**, not the vessel.
     // `lunco-controller::translate_intents_to_commands` joins on
@@ -1685,20 +1705,10 @@ fn on_follow_command(
     let final_offset = final_rot.mul_vec3(Vec3::Z).as_dvec3() * end_distance;
     let final_abs_pos = target_abs + final_offset + Vec3::Y.as_dvec3() * end_vert_off as f64;
 
-    if let Some(tg) = target_grid {
-        if tg != Entity::PLACEHOLDER {
-            if let Ok(target_grid_ref) = q_grids.get(tg) {
-                let target_grid_abs = lunco_core::coords::world_position_seeded(
-                    tg, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
-                );
-                let (new_cell, new_translation) =
-                    target_grid_ref.translation_to_grid(final_abs_pos - target_grid_abs);
-                let local_tf =
-                    Transform::from_translation(new_translation).with_rotation(final_rot);
-                migrate_to_grid(&mut commands, avatar_ent, tg, new_cell, local_tf);
-            }
-        }
-    }
+    migrate_avatar_to_target_grid(
+        &mut commands, avatar_ent, target_grid, final_abs_pos, final_rot,
+        &q_grids, &q_parents, &q_spatial_abs,
+    );
 
     // Strip any prior controller binding — follow ≠ possess.
     let mut cmd_ent = commands.entity(avatar_ent);
@@ -1790,20 +1800,10 @@ fn on_focus_command(
     let final_abs_pos = target_abs + final_offset;
 
     // Migrate to target grid immediately
-    if let Some(tg) = target_grid {
-        if tg != Entity::PLACEHOLDER {
-            if let Ok(target_grid_ref) = q_grids.get(tg) {
-                let target_grid_abs = lunco_core::coords::world_position_seeded(
-                    tg, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
-                );
-                let (new_cell, new_translation) =
-                    target_grid_ref.translation_to_grid(final_abs_pos - target_grid_abs);
-                let local_tf =
-                    Transform::from_translation(new_translation).with_rotation(final_rot);
-                migrate_to_grid(&mut commands, avatar_ent, tg, new_cell, local_tf);
-            }
-        }
-    }
+    migrate_avatar_to_target_grid(
+        &mut commands, avatar_ent, target_grid, final_abs_pos, final_rot,
+        &q_grids, &q_parents, &q_spatial_abs,
+    );
 
     commands.entity(avatar_ent)
         .remove::<SpringArmCamera>()

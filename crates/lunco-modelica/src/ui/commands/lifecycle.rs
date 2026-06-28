@@ -392,6 +392,46 @@ pub fn finalize_app_close(
     exit_events.write(bevy::app::AppExit::Success);
 }
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// CQ-111: pick a workspace-unique display name. Starts from `base`; while
+/// the name collides with an existing in-memory model it appends a numeric
+/// suffix (`Base`, `Base2`, `Base3`, …), matching the historic dedup scheme.
+fn unique_in_memory_name(cache: &PackageTreeCache, base: &str) -> String {
+    let taken: std::collections::HashSet<&str> = cache
+        .in_memory_models
+        .iter()
+        .map(|e| e.display_name.as_str())
+        .collect();
+    let mut name = base.to_string();
+    let mut n: u32 = 2;
+    while taken.contains(name.as_str()) {
+        name = format!("{base}{n}");
+        n += 1;
+    }
+    name
+}
+
+/// CQ-111: tear down a single model tab. Triggers the workbench
+/// [`lunco_workbench::CloseTab`], drops the tab from [`ModelTabs`] and the
+/// canvas diagram state. Caller is responsible for the post-close
+/// `count_for_doc` / [`CloseDocument`] check (its placement differs per
+/// site). Runs inside a `&mut World` closure.
+fn close_model_tab(world: &mut World, tab_id: u64) {
+    world.commands().trigger(lunco_workbench::CloseTab {
+        kind: MODEL_VIEW_KIND,
+        instance: tab_id,
+    });
+    if let Some(mut tabs) = world.get_resource_mut::<ModelTabs>() {
+        tabs.close_tab(tab_id);
+    }
+    if let Some(mut state) =
+        world.get_resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
+    {
+        state.drop_tab(tab_id);
+    }
+}
+
 // ─── Observers ───────────────────────────────────────────────────────────────
 
 #[on_command(CreateNewScratchModel)]
@@ -407,24 +447,13 @@ pub fn on_create_new_scratch_model(
     let req_source = trigger.event().source.clone();
     let req_name = trigger.event().name.clone();
 
-    let taken: std::collections::HashSet<String> = cache
-        .in_memory_models
-        .iter()
-        .map(|e| e.display_name.clone())
-        .collect();
-
     // Base name: explicit request name → else the model name parsed from
     // the supplied source → else "Untitled". Then dedup with a numeric
     // suffix ("Untitled", "Untitled2", … — matching the prior scheme).
     let base = req_name
         .or_else(|| req_source.as_deref().and_then(crate::extract_model_name))
         .unwrap_or_else(|| "Untitled".to_string());
-    let mut name = base.clone();
-    let mut n: u32 = 2;
-    while taken.contains(&name) {
-        name = format!("{base}{n}");
-        n += 1;
-    }
+    let name = unique_in_memory_name(&cache, &base);
 
     let source = req_source.unwrap_or_else(|| format!("model {name}\nend {name};\n"));
     let mem_id = format!("mem://{name}");
@@ -506,18 +535,8 @@ pub fn on_duplicate_model_from_read_only(
         (doc.source_arc(), origin_short, Some(origin_fqn))
     };
 
-    let taken: std::collections::HashSet<String> = cache
-        .in_memory_models
-        .iter()
-        .map(|e| e.display_name.clone())
-        .collect();
     let base_name = format!("{origin_class_short}Copy");
-    let mut name = base_name.clone();
-    let mut n: u32 = 2;
-    while taken.contains(&name) {
-        name = format!("{base_name}{n}");
-        n += 1;
-    }
+    let name = unique_in_memory_name(&cache, &base_name);
 
     let doc_id = registry.reserve_id();
 
@@ -592,12 +611,7 @@ pub fn on_duplicate_model_from_read_only(
 pub fn on_duplicate_active_doc(trigger: On<DuplicateActiveDoc>, mut commands: Commands) {
     let raw = trigger.event().doc;
     commands.queue(move |world: &mut World| {
-        let doc = if raw.is_unassigned() {
-            super::resolve_active_doc(world)
-        } else {
-            Some(raw)
-        };
-        let Some(doc) = doc else {
+        let Some(doc) = super::resolve_doc_or_active(world, raw) else {
             bevy::log::warn!("[DuplicateActiveDoc] no active document");
             return;
         };
@@ -627,23 +641,12 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
         .map(str::to_string)
         .unwrap_or_else(|| qualified.clone());
 
-    let taken: std::collections::HashSet<String> = world
-        .resource::<PackageTreeCache>()
-        .in_memory_models
-        .iter()
-        .map(|e| e.display_name.clone())
-        .collect();
     let base_name = if name_hint.is_empty() {
         format!("{origin_short}Copy")
     } else {
         name_hint
     };
-    let mut name = base_name.clone();
-    let mut n: u32 = 2;
-    while taken.contains(&name) {
-        name = format!("{base_name}{n}");
-        n += 1;
-    }
+    let name = unique_in_memory_name(world.resource::<PackageTreeCache>(), &base_name);
 
     let doc_id = world
         .resource_mut::<ModelicaDocumentRegistry>()
@@ -1043,20 +1046,7 @@ pub fn finish_close_after_save(
     }
     commands.queue(move |world: &mut World| {
         for tab_id in tab_ids {
-            world.commands().trigger(lunco_workbench::CloseTab {
-                kind: MODEL_VIEW_KIND,
-                instance: tab_id,
-            });
-            if let Some(mut tabs) = world
-                .get_resource_mut::<ModelTabs>()
-            {
-                tabs.close_tab(tab_id);
-            }
-            if let Some(mut state) = world
-                .get_resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
-            {
-                state.drop_tab(tab_id);
-            }
+            close_model_tab(world, tab_id);
         }
         let last_gone = world
             .resource::<ModelTabs>()
@@ -1275,20 +1265,7 @@ pub fn render_close_dialogs(
             DialogAction::DontSave => {
                 let tab = originating_tab;
                 commands.queue(move |world: &mut World| {
-                    world.commands().trigger(lunco_workbench::CloseTab {
-                        kind: MODEL_VIEW_KIND,
-                        instance: tab,
-                    });
-                    if let Some(mut tabs) = world
-                        .get_resource_mut::<ModelTabs>()
-                    {
-                        tabs.close_tab(tab);
-                    }
-                    if let Some(mut state) = world
-                        .get_resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
-                    {
-                        state.drop_tab(tab);
-                    }
+                    close_model_tab(world, tab);
                     let last_gone = world
                         .resource::<ModelTabs>()
                         .count_for_doc(doc)

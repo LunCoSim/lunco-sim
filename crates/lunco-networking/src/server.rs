@@ -261,16 +261,32 @@ fn broadcast_ownership(registry: Res<SessionRegistry>, mut outbox: ResMut<SyncOu
     ));
 }
 
+/// Build the `(session, name, color)` entries for a [`ProfilesMsg`], resolving
+/// each session's color and falling back to the deterministic palette color when
+/// none is stored. CQ-112: shared by the periodic `broadcast_profiles` and the
+/// new-client baseline send.
+fn profiles_entries(profiles: &SessionProfiles) -> Vec<(u64, String, [u8; 3])> {
+    profiles
+        .profiles
+        .iter()
+        .map(|(&s, n)| {
+            let color = profiles
+                .colors
+                .get(&s)
+                .copied()
+                .unwrap_or_else(|| crate::sync::generate_user_color(s));
+            (s, n.clone(), color)
+        })
+        .collect()
+}
+
 /// Broadcast the authoritative session profile names map to all clients whenever
 /// it changes. Reliable channel. Host-only (registered in `setup_host`).
 fn broadcast_profiles(profiles: Res<SessionProfiles>, mut outbox: ResMut<SyncOutbox>) {
     if !profiles.is_changed() {
         return;
     }
-    let entries = profiles.profiles.iter().map(|(&s, n)| {
-        let color = profiles.colors.get(&s).copied().unwrap_or_else(|| crate::sync::generate_user_color(s));
-        (s, n.clone(), color)
-    }).collect();
+    let entries = profiles_entries(&profiles);
     outbox.0.push((
         SyncChannel::CommandBus,
         SyncEnvelope::Profiles(ProfilesMsg {
@@ -417,10 +433,7 @@ fn on_server_connected(
             entries: registry.snapshot(),
         }),
     );
-    let entries = profiles.profiles.iter().map(|(&s, n)| {
-        let color = profiles.colors.get(&s).copied().unwrap_or_else(|| crate::sync::generate_user_color(s));
-        (s, n.clone(), color)
-    }).collect();
+    let entries = profiles_entries(&profiles);
     server_send(
         &mut sender,
         server,

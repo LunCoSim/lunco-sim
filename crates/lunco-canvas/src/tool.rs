@@ -546,15 +546,10 @@ impl Tool for DefaultTool {
                 pointer_world,
                 ..
             } => {
-                let min = Pos::new(
-                    origin_world.x.min(pointer_world.x),
-                    origin_world.y.min(pointer_world.y),
-                );
-                let max = Pos::new(
-                    origin_world.x.max(pointer_world.x),
-                    origin_world.y.max(pointer_world.y),
-                );
-                Some(ToolPreview::RubberBand(Rect::from_min_max(min, max)))
+                Some(ToolPreview::RubberBand(Rect::from_two_points(
+                    *origin_world,
+                    *pointer_world,
+                )))
             }
             State::DraggingEdgeWaypoint { snap_x, snap_y, .. }
                 if snap_x.is_some() || snap_y.is_some() =>
@@ -689,12 +684,10 @@ impl DefaultTool {
                     .scene
                     .node(id)
                     .and_then(|n| {
-                        n.ports.iter().find(|p| p.id == port).map(|p| {
-                            Pos::new(
-                                n.rect.min.x + p.local_offset.x,
-                                n.rect.min.y + p.local_offset.y,
-                            )
-                        })
+                        n.ports
+                            .iter()
+                            .find(|p| p.id == port)
+                            .map(|p| p.world_pos(n.rect))
                     })
                     .unwrap_or(world);
                 PressTarget::Port(PortRef { node: id, port }, port_world)
@@ -1358,15 +1351,7 @@ impl DefaultTool {
                 extend,
                 toggle,
             } => {
-                let min = Pos::new(
-                    origin_world.x.min(pointer_world.x),
-                    origin_world.y.min(pointer_world.y),
-                );
-                let max = Pos::new(
-                    origin_world.x.max(pointer_world.x),
-                    origin_world.y.max(pointer_world.y),
-                );
-                let band = Rect::from_min_max(min, max);
+                let band = Rect::from_two_points(origin_world, pointer_world);
                 // "Any intersection with band" — including fully
                 // contained nodes (Figma/Miro convention). A "fully
                 // contained only" option is a UX switch we leave for
@@ -1510,10 +1495,9 @@ fn nearest_port_on_node(
     let node = scene.node(node_id)?;
     let mut best: Option<(f32, crate::scene::PortId)> = None;
     for port in &node.ports {
-        let px = node.rect.min.x + port.local_offset.x;
-        let py = node.rect.min.y + port.local_offset.y;
-        let dx = world_pos.x - px;
-        let dy = world_pos.y - py;
+        let anchor = port.world_pos(node.rect);
+        let dx = world_pos.x - anchor.x;
+        let dy = world_pos.y - anchor.y;
         let d2 = dx * dx + dy * dy;
         if best.as_ref().map_or(true, |(bd, _)| d2 < *bd) {
             best = Some((d2, port.id.clone()));

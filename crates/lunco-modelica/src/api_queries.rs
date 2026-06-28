@@ -813,26 +813,15 @@ fn latest_run_for_doc(
     world: &World,
     doc_id: DocumentId,
 ) -> serde_json::Value {
-    let Some(sources) = world.get_resource::<ExperimentSources>() else {
+    // CQ-114: reuse the most-recent-experiment-for-doc selection in
+    // [`latest_experiment_id_for_doc`] instead of duplicating the scan.
+    let Some(id) = latest_experiment_id_for_doc(world, doc_id) else {
         return serde_json::Value::Null;
     };
     let Some(registry) = world.get_resource::<ExperimentRegistry>() else {
         return serde_json::Value::Null;
     };
-    let mut best: Option<&lunco_experiments::Experiment> = None;
-    for (id, d) in &sources.0 {
-        if *d != doc_id {
-            continue;
-        }
-        if let Some(exp) = registry.get(*id) {
-            best = match best {
-                None => Some(exp),
-                Some(prev) if exp.created_at > prev.created_at => Some(exp),
-                Some(prev) => Some(prev),
-            };
-        }
-    }
-    match best {
+    match registry.get(id) {
         Some(exp) => serde_json::json!({
             "experiment_id": exp.id.0.to_string(),
             "name": exp.name,

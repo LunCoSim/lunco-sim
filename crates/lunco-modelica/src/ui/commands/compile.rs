@@ -29,7 +29,7 @@ use lunco_core::{Command, on_command, register_commands};
 use crate::state::{CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 use crate::{ModelicaChannels, ModelicaCommand, ModelicaModel};
 
-use super::{entity_for_doc, resolve_active_doc};
+use super::{entity_for_doc, resolve_doc_or_active};
 
 
 // ─── Compile typed command ────────────────────────────────────────────────
@@ -1185,11 +1185,7 @@ pub struct RestartActiveModel {
 pub fn on_pause_active_model(trigger: On<PauseActiveModel>, mut commands: Commands) {
     let raw = trigger.event().doc;
     commands.queue(move |world: &mut World| {
-        let Some(doc) = (if raw.is_unassigned() {
-            resolve_active_doc(world)
-        } else {
-            Some(raw)
-        }) else {
+        let Some(doc) = resolve_doc_or_active(world, raw) else {
             return;
         };
         if let Some(entity) = entity_for_doc(world, doc) {
@@ -1204,11 +1200,7 @@ pub fn on_pause_active_model(trigger: On<PauseActiveModel>, mut commands: Comman
 pub fn on_resume_active_model(trigger: On<ResumeActiveModel>, mut commands: Commands) {
     let raw = trigger.event().doc;
     commands.queue(move |world: &mut World| {
-        let Some(doc) = (if raw.is_unassigned() {
-            resolve_active_doc(world)
-        } else {
-            Some(raw)
-        }) else {
+        let Some(doc) = resolve_doc_or_active(world, raw) else {
             return;
         };
         if let Some(entity) = entity_for_doc(world, doc) {
@@ -1224,11 +1216,7 @@ pub fn on_run_active_model(trigger: On<RunActiveModel>, mut commands: Commands) 
     let raw = trigger.event().doc;
     let class = trigger.event().class.clone();
     commands.queue(move |world: &mut World| {
-        let Some(doc) = (if raw.is_unassigned() {
-            resolve_active_doc(world)
-        } else {
-            Some(raw)
-        }) else {
+        let Some(doc) = resolve_doc_or_active(world, raw) else {
             return;
         };
         let Some(entity) = entity_for_doc(world, doc) else {
@@ -1277,11 +1265,7 @@ pub fn on_run_active_model(trigger: On<RunActiveModel>, mut commands: Commands) 
 pub fn on_restart_active_model(trigger: On<RestartActiveModel>, mut commands: Commands) {
     let raw = trigger.event().doc;
     commands.queue(move |world: &mut World| {
-        let Some(doc) = (if raw.is_unassigned() {
-            resolve_active_doc(world)
-        } else {
-            Some(raw)
-        }) else {
+        let Some(doc) = resolve_doc_or_active(world, raw) else {
             return;
         };
         // Reset to t=0, then run. Mirrors the toolbar's Reset+Run
@@ -1430,11 +1414,7 @@ fn dispatch_experiment(
 ) -> Option<lunco_experiments::ExperimentId> {
     use lunco_experiments::ExperimentRunner;
     {
-        let Some(doc) = (if raw.is_unassigned() {
-            resolve_active_doc(world)
-        } else {
-            Some(raw)
-        }) else {
+        let Some(doc) = resolve_doc_or_active(world, raw) else {
             bevy::log::warn!("[dispatch_experiment] no active document");
             return None;
         };
@@ -2038,11 +2018,7 @@ pub fn on_rename_experiment(trigger: On<RenameExperiment>, mut commands: Command
 pub fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Commands) {
     let raw = trigger.event().doc;
     commands.queue(move |world: &mut World| {
-        let Some(doc) = (if raw.is_unassigned() {
-            resolve_active_doc(world)
-        } else {
-            Some(raw)
-        }) else {
+        let Some(doc) = resolve_doc_or_active(world, raw) else {
             return;
         };
         let Some(entity) = entity_for_doc(world, doc) else {
@@ -2096,12 +2072,7 @@ pub fn on_compile_active_model(trigger: On<CompileActiveModel>, mut commands: Co
     let raw = trigger.event().doc;
     let class = trigger.event().class.clone();
     commands.queue(move |world: &mut World| {
-        let doc = if raw.is_unassigned() {
-            resolve_active_doc(world)
-        } else {
-            Some(raw)
-        };
-        let Some(doc) = doc else {
+        let Some(doc) = resolve_doc_or_active(world, raw) else {
             bevy::log::warn!("[CompileActiveModel] no active document");
             return;
         };

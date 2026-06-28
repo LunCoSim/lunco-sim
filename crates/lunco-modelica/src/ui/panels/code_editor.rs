@@ -789,24 +789,35 @@ impl Panel for CodeEditorPanel {
                 ui.ctx().copy_text(payload);
             }
         }
-        if let Some((cut_start, cut_end)) = cut_range {
+        // CQ-111: shared char-range cut splice (rebuild text without
+        // `[start,end)`, reposition the caret to `start`). Used by both the
+        // menu cut block here and the keyboard cut block below. Nested item:
+        // no captured locals, in scope for the whole enclosing fn.
+        fn splice_out(
+            text: &mut String,
+            start: usize,
+            end: usize,
+            ctx: &egui::Context,
+            text_edit_id: egui::Id,
+        ) {
             let mut out = String::with_capacity(text.len());
             for (i, c) in text.chars().enumerate() {
-                if i < cut_start || i >= cut_end {
+                if i < start || i >= end {
                     out.push(c);
                 }
             }
-            text = out;
+            *text = out;
+            if let Some(mut state) = egui::TextEdit::load_state(ctx, text_edit_id) {
+                state.cursor.set_char_range(Some(egui::text::CCursorRange::one(
+                    egui::text::CCursor::new(start),
+                )));
+                state.store(ctx, text_edit_id);
+            }
+        }
+        if let Some((cut_start, cut_end)) = cut_range {
+            splice_out(&mut text, cut_start, cut_end, ui.ctx(), text_edit_id);
             new_text = text.clone();
             buffer_changed = true;
-            if let Some(mut state) =
-                egui::TextEdit::load_state(ui.ctx(), text_edit_id)
-            {
-                state.cursor.set_char_range(Some(
-                    egui::text::CCursorRange::one(egui::text::CCursor::new(cut_start)),
-                ));
-                state.store(ui.ctx(), text_edit_id);
-            }
         }
         if select_all_request {
             if let Some(mut state) =
@@ -911,23 +922,9 @@ impl Panel for CodeEditorPanel {
                 extracted == sel
             }).unwrap_or(false);
             if still_present {
-                let mut out = String::with_capacity(text.len());
-                for (i, c) in text.chars().enumerate() {
-                    if i < cut_start || i >= cut_end {
-                        out.push(c);
-                    }
-                }
-                text = out;
+                splice_out(&mut text, cut_start, cut_end, ui.ctx(), text_edit_id);
                 new_text = text.clone();
                 buffer_changed = true;
-                if let Some(mut state) =
-                    egui::TextEdit::load_state(ui.ctx(), text_edit_id)
-                {
-                    state.cursor.set_char_range(Some(
-                        egui::text::CCursorRange::one(egui::text::CCursor::new(cut_start)),
-                    ));
-                    state.store(ui.ctx(), text_edit_id);
-                }
             }
         }
 

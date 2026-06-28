@@ -3,6 +3,7 @@
 pub mod package_browser;
 pub mod code_editor;
 pub mod telemetry;
+pub mod csv_export;
 pub mod graphs;
 pub mod canvas_projection;
 pub mod canvas_diagram;

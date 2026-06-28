@@ -129,6 +129,17 @@ pub(super) fn resolve_active_doc(world: &World) -> Option<DocumentId> {
         .and_then(|ws| ws.active_document)
 }
 
+/// CQ-111: resolve a command's target document. An unassigned id means
+/// "act on the active document"; an explicit id is honored as-is. Returns
+/// `None` when unassigned and there is no active document.
+pub(super) fn resolve_doc_or_active(world: &World, raw: DocumentId) -> Option<DocumentId> {
+    if raw.is_unassigned() {
+        resolve_active_doc(world)
+    } else {
+        Some(raw)
+    }
+}
+
 pub(super) fn entity_for_doc(world: &World, doc: DocumentId) -> Option<Entity> {
     world
         .get_resource::<crate::state::ModelicaDocumentRegistry>()

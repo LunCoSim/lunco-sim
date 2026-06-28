@@ -201,56 +201,61 @@ fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
     }
 }
 
-fn avian_read_output(world: &World, entity: Entity, name: &str) -> Option<f64> {
+/// Resolve the first avian port named `name` whose causality satisfies `dir_ok`,
+/// scanning [`AVIAN`] groups in precedence order and skipping groups whose gating
+/// component is absent on `entity`. The returned reference is `'static` (groups
+/// are `const`), so callers may drop the immutable `world` borrow and re-borrow
+/// it mutably before invoking the port's `write`.
+///
+/// CQ-112: folds the identical group/present/name/direction scan that
+/// [`avian_read_output`], [`avian_read_input`], and [`avian_write_input`] each
+/// open-coded. Port `(name, dir)` pairs are unique within the avian table (the
+/// joint's two `angle` ports differ by direction), so first-match resolution is
+/// behaviour-identical to the prior "continue until a readable/writable match"
+/// loops.
+fn find_avian_port(
+    world: &World,
+    entity: Entity,
+    name: &str,
+    dir_ok: fn(PortDirection) -> bool,
+) -> Option<&'static AvianPort> {
     for group in AVIAN {
         if !(group.present)(world, entity) {
             continue;
         }
         for p in group.ports {
-            if p.name == name && matches!(p.dir, PortDirection::Out | PortDirection::InOut) {
-                if let Some(read) = p.read {
-                    if let Some(v) = read(world, entity) {
-                        return Some(v);
-                    }
-                }
+            if p.name == name && dir_ok(p.dir) {
+                return Some(p);
             }
         }
     }
     None
+}
+
+fn avian_read_output(world: &World, entity: Entity, name: &str) -> Option<f64> {
+    let port = find_avian_port(world, entity, name, |d| {
+        matches!(d, PortDirection::Out | PortDirection::InOut)
+    })?;
+    port.read?(world, entity)
 }
 
 fn avian_read_input(world: &World, entity: Entity, name: &str) -> Option<f64> {
-    for group in AVIAN {
-        if !(group.present)(world, entity) {
-            continue;
-        }
-        for p in group.ports {
-            if p.name == name && matches!(p.dir, PortDirection::In | PortDirection::InOut) {
-                if let Some(read) = p.read {
-                    if let Some(v) = read(world, entity) {
-                        return Some(v);
-                    }
-                }
-            }
-        }
-    }
-    None
+    let port = find_avian_port(world, entity, name, |d| {
+        matches!(d, PortDirection::In | PortDirection::InOut)
+    })?;
+    port.read?(world, entity)
 }
 
 fn avian_write_input(world: &mut World, entity: Entity, name: &str, value: f64) -> bool {
-    for group in AVIAN {
-        if !(group.present)(world, entity) {
-            continue;
-        }
-        for p in group.ports {
-            if p.name == name && matches!(p.dir, PortDirection::In | PortDirection::InOut) {
-                if let Some(write) = p.write {
-                    return write(world, entity, value);
-                }
-            }
-        }
+    let Some(port) = find_avian_port(world, entity, name, |d| {
+        matches!(d, PortDirection::In | PortDirection::InOut)
+    }) else {
+        return false;
+    };
+    match port.write {
+        Some(write) => write(world, entity, value),
+        None => false,
     }
-    false
 }
 
 /// The backend table — **the** list of port-bearing component types, in

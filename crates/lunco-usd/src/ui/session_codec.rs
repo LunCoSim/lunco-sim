@@ -13,7 +13,7 @@
 //! origin, is_dirty}`) — no changes to the registry or document types.
 
 use bevy::prelude::*;
-use lunco_workbench::{DocumentSessionCodec, DocumentSnapshot};
+use lunco_workbench::{finalize_revision, revision_term, DocumentSessionCodec, DocumentSnapshot};
 
 use crate::registry::UsdDocumentRegistry;
 
@@ -38,16 +38,11 @@ impl DocumentSessionCodec for UsdSessionCodec {
         let mut count = 0u64;
         for id in reg.ids().collect::<Vec<_>>() {
             if let Some(host) = reg.host(id) {
-                let gen = host.generation();
-                acc ^= id
-                    .raw()
-                    .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                    .rotate_left((gen & 63) as u32)
-                    ^ gen.wrapping_mul(0x1000_0000_01b3);
+                acc ^= revision_term(id.raw(), host.generation());
                 count += 1;
             }
         }
-        acc.wrapping_add(count.wrapping_mul(0x100_0000_01b3))
+        finalize_revision(acc, count)
     }
 
     fn capture(&self, world: &mut World) -> Vec<(u64, DocumentSnapshot)> {

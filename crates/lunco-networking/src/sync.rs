@@ -909,18 +909,7 @@ pub fn drain_sync_inbox(
                     tutor_status.active_perspective = msg.active_perspective.clone();
                     tutor_status.target_client = msg.target_client;
                     tutor_status.observe_mode = msg.observe_mode;
-                    tutor_status.avatar_state = msg.avatar_state.map(|(pos, rot, cell, ephem_id)| {
-                        (
-                            Vec3::from_array(pos),
-                            Quat::from_array(rot),
-                            CellCoord {
-                                x: cell[0],
-                                y: cell[1],
-                                z: cell[2],
-                            },
-                            ephem_id,
-                        )
-                    });
+                    tutor_status.avatar_state = msg.avatar_state.map(decode_avatar_state);
 
                     // Update timestamp and active status
                     let elapsed = time.elapsed_secs_f64();
@@ -980,18 +969,8 @@ pub fn drain_sync_inbox(
                 {
                     tutor_status.observed_student_doc = msg.active_doc;
                     tutor_status.observed_student_perspective = msg.active_perspective.clone();
-                    tutor_status.observed_student_avatar_state = msg.avatar_state.map(|(pos, rot, cell, ephem_id)| {
-                        (
-                            Vec3::from_array(pos),
-                            Quat::from_array(rot),
-                            CellCoord {
-                                x: cell[0],
-                                y: cell[1],
-                                z: cell[2],
-                            },
-                            ephem_id,
-                        )
-                    });
+                    tutor_status.observed_student_avatar_state =
+                        msg.avatar_state.map(decode_avatar_state);
                 }
             }
             SyncEnvelope::SharePerspective(mut msg) => {
@@ -1426,15 +1405,7 @@ pub fn send_tutor_status_updates(
             None
         }
     };
-    let avatar_state = q_avatar.iter().next().map(|(transform, cell, child_of)| {
-        let ephem_id = q_reference_frames.get(child_of.0).ok().map(|rf| rf.ephemeris_id);
-        (
-            transform.translation.to_array(),
-            transform.rotation.to_array(),
-            [cell.x, cell.y, cell.z],
-            ephem_id,
-        )
-    });
+    let avatar_state = capture_avatar_state(&q_avatar, &q_reference_frames);
 
     outbox.0.push((
         SyncChannel::ControlStream,
@@ -1490,15 +1461,7 @@ pub fn send_student_status_updates(
             None
         }
     };
-    let avatar_state = q_avatar.iter().next().map(|(transform, cell, child_of)| {
-        let ephem_id = q_reference_frames.get(child_of.0).ok().map(|rf| rf.ephemeris_id);
-        (
-            transform.translation.to_array(),
-            transform.rotation.to_array(),
-            [cell.x, cell.y, cell.z],
-            ephem_id,
-        )
-    });
+    let avatar_state = capture_avatar_state(&q_avatar, &q_reference_frames);
 
     outbox.0.push((
         SyncChannel::ControlStream,
@@ -1509,6 +1472,50 @@ pub fn send_student_status_updates(
             avatar_state,
         }),
     ));
+}
+
+/// Capture the local avatar's pose into the positional wire tuple
+/// (`translation`, `rotation`, cell coordinate, grid `ephemeris_id`) that the
+/// tutor/student/share-perspective envelopes carry. Reads the first
+/// `LocalAvatar` and resolves its grid's ephemeris id from the parent
+/// reference frame; `None` when no local avatar exists.
+///
+/// CQ-112: was duplicated verbatim in `send_tutor_status_updates`,
+/// `send_student_status_updates`, and `on_share_perspective`.
+fn capture_avatar_state(
+    q_avatar: &Query<(&Transform, &CellCoord, &ChildOf), With<LocalAvatar>>,
+    q_reference_frames: &Query<&CelestialReferenceFrame>,
+) -> Option<([f32; 3], [f32; 4], [i64; 3], Option<i32>)> {
+    q_avatar.iter().next().map(|(transform, cell, child_of)| {
+        let ephem_id = q_reference_frames.get(child_of.0).ok().map(|rf| rf.ephemeris_id);
+        (
+            transform.translation.to_array(),
+            transform.rotation.to_array(),
+            [cell.x, cell.y, cell.z],
+            ephem_id,
+        )
+    })
+}
+
+/// Decode the positional avatar wire tuple into engine types
+/// (`Vec3`/`Quat`/`CellCoord`). Inverse of [`capture_avatar_state`] — same field
+/// order: position, rotation, cell, ephemeris id.
+///
+/// CQ-112: was duplicated in the `TutorStatus`/`StudentStatus` receive arms and
+/// the one-shot look-at snap.
+fn decode_avatar_state(
+    (pos, rot, cell, ephem_id): ([f32; 3], [f32; 4], [i64; 3], Option<i32>),
+) -> (Vec3, Quat, CellCoord, Option<i32>) {
+    (
+        Vec3::from_array(pos),
+        Quat::from_array(rot),
+        CellCoord {
+            x: cell[0],
+            y: cell[1],
+            z: cell[2],
+        },
+        ephem_id,
+    )
 }
 
 /// Snap every `LocalAvatar` to a target pose, migrating to the grid that owns
@@ -1727,14 +1734,15 @@ pub fn apply_tutorial_mirroring(
         }
 
         // Snap avatar transform, cell, and grid parent
-        if let Some((pos, rot, cell, grid_ephemeris_id)) = msg.avatar_state {
+        if let Some(state) = msg.avatar_state {
+            let (pos, rot, cell, grid_ephemeris_id) = decode_avatar_state(state);
             snap_avatars_to(
                 &mut commands,
                 &mut q_avatar,
                 &q_reference_frames,
-                Vec3::from_array(pos),
-                Quat::from_array(rot),
-                CellCoord { x: cell[0], y: cell[1], z: cell[2] },
+                pos,
+                rot,
+                cell,
                 grid_ephemeris_id,
             );
         }
@@ -1950,15 +1958,7 @@ fn on_share_perspective(
             None
         }
     };
-    let avatar_state = q_avatar.iter().next().map(|(transform, cell, child_of)| {
-        let ephem_id = q_reference_frames.get(child_of.0).ok().map(|rf| rf.ephemeris_id);
-        (
-            transform.translation.to_array(),
-            transform.rotation.to_array(),
-            [cell.x, cell.y, cell.z],
-            ephem_id,
-        )
-    });
+    let avatar_state = capture_avatar_state(&q_avatar, &q_reference_frames);
 
     outbox.0.push((
         SyncChannel::CommandBus, // reliable
