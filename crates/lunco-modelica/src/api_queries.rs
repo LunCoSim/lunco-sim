@@ -605,13 +605,13 @@ impl ApiQueryProvider for CompileStatusProvider {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
-        // Pull each piece of state in turn — `world.resource::<...>` borrows
-        // are scoped to the line, so successive `let`s are fine even though
-        // we touch four different resources.
-        let state = world
+        // Fetch `CompileStates` once and derive both the compile state and
+        // the error message from it (CQ-216 — was two separate resource
+        // look-ups for the same resource).
+        let (state, error_message) = world
             .get_resource::<CompileStates>()
-            .map(|cs| cs.state_of(doc_id))
-            .unwrap_or(CompileState::Idle);
+            .map(|cs| (cs.state_of(doc_id), cs.error_for(doc_id).map(str::to_string)))
+            .unwrap_or((CompileState::Idle, None));
         // of going through the `DrilledInClassNames` cache. The
         // helper falls back to first-tab-for-doc when no
         // `TabRenderContext` is in scope (which is the case here —
@@ -657,22 +657,23 @@ impl ApiQueryProvider for CompileStatusProvider {
             && preferred_count != 1
             && candidates.len() >= 2;
 
-        let error_message = world
-            .get_resource::<crate::state::CompileStates>()
-            .and_then(|cs| cs.error_for(doc_id).map(str::to_string));
-
         // Live run-state, read from the `ModelicaModel` for this doc's
         // entity (if one exists yet). Lets a single CompileStatus call
         // answer "is it compiled / running / stale?" without a second
         // entity query. Defaults (no entity) report uncompiled + stale.
-        let doc_generation = world
+        // One `ModelicaDocumentRegistry` borrow yields both the doc
+        // generation and the linked run entity (CQ-216 — was two fetches).
+        let (doc_generation, run_entity) = world
             .get_resource::<ModelicaDocumentRegistry>()
-            .and_then(|r| r.host(doc_id))
-            .map(|h| h.document().generation_owned())
-            .unwrap_or(0);
-        let run_entity = world
-            .get_resource::<ModelicaDocumentRegistry>()
-            .and_then(|r| r.entities_linked_to(doc_id).into_iter().next());
+            .map(|r| {
+                let generation = r
+                    .host(doc_id)
+                    .map(|h| h.document().generation_owned())
+                    .unwrap_or(0);
+                let entity = r.entities_linked_to(doc_id).into_iter().next();
+                (generation, entity)
+            })
+            .unwrap_or((0, None));
         let (is_compiled, is_compiling, paused, running, run_stale, current_time) = run_entity
             .and_then(|e| world.get::<crate::ModelicaModel>(e))
             .map(|m| {

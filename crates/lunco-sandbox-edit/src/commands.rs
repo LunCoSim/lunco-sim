@@ -125,7 +125,10 @@ pub fn apply_replicated_spawns(
     let Some(grid) = q_grids.iter().next() else {
         return;
     };
-    for job in pending.0.drain(..).collect::<Vec<_>>() {
+    // Drain in place — the loop body touches only `commands`/`catalog`/
+    // `asset_server`, never `pending`, so the old `.collect::<Vec<_>>()`
+    // was a pure-waste allocation (CQ-216).
+    for job in pending.0.drain(..) {
         let Some(entry) = catalog.get(&job.entry_id) else {
             warn!("REPL_SPAWN: unknown entry '{}'", job.entry_id);
             continue;
@@ -456,7 +459,10 @@ pub fn ingest_snapshots(
     if snaps.0.is_empty() {
         return;
     }
-    for s in snaps.0.drain(..).collect::<Vec<_>>() {
+    // Drain in place — the body writes only into `buffers` (a separate
+    // resource), never back into `snaps`, so the `.collect::<Vec<_>>()`
+    // was a pure-waste allocation per ingest (CQ-216).
+    for s in snaps.0.drain(..) {
         let buf = buffers.0.entry(s.gid).or_default();
         buf.push_back(InterpSample {
             gen_t: s.tick as f64 * SECS_PER_TICK,
