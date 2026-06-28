@@ -132,6 +132,16 @@ impl<'w> PanelCtx<'w> {
         self.world.get_resource::<T>()
     }
 
+    /// O(1) read of a resource that is **structurally guaranteed** to exist —
+    /// one the app inserts at startup and never removes, e.g. the `Theme`
+    /// design tokens. Panics if absent, the same fail-fast contract as
+    /// `World::resource`. Use this instead of `resource().unwrap_or(<hardcoded
+    /// fallback>)`: a panel must not carry an off-palette magic-number copy of
+    /// a token for a resource that is always present.
+    pub fn resource_expect<T: Resource>(&self) -> &T {
+        self.world.resource::<T>()
+    }
+
     /// O(1) read of one entity's component (e.g. the selected entity).
     /// This is a direct hash lookup, not a scan.
     pub fn get<T: Component>(&self, entity: Entity) -> Option<&T> {
@@ -175,9 +185,18 @@ impl<'w> PanelCtx<'w> {
         f: impl FnOnce(&mut PanelCtx, &mut R) -> T,
     ) -> Option<T> {
         let mut r = self.world.remove_resource::<R>()?;
-        let result = f(self, &mut r);
+        // Re-insert `r` even if `f` panics. A section's egui paint can hit an
+        // id/layout assertion or index a stale row; without this guard the
+        // re-insert is skipped and `R` (e.g. `BrowserSectionRegistry` /
+        // `BrowserActions`) is dropped from the World permanently, wedging the
+        // panel on its red "resource missing" fallback and silently stalling
+        // its action outbox. Catch, restore, resume.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self, &mut r)));
         self.world.insert_resource(r);
-        Some(result)
+        match result {
+            Ok(t) => Some(t),
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 }
 

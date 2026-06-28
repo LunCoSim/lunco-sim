@@ -87,10 +87,7 @@ impl Panel for TelemetryPanel {
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // Fix selection leakage
         ui.style_mut().interaction.selectable_labels = false;
-        let muted = ctx
-            .resource::<lunco_theme::Theme>()
-            .map(|t| t.tokens.text_subdued)
-            .unwrap_or(egui::Color32::from_rgb(140, 140, 160));
+        let muted = ctx.resource_expect::<lunco_theme::Theme>().tokens.text_subdued;
 
         // Pin header — follow active tab by default; click 📍 to
         // pin this panel to the currently active model so it stays

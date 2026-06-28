@@ -214,10 +214,7 @@ impl Panel for EntityList {
     fn transparent_background(&self) -> bool { true }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let mantle = ctx
-            .resource::<lunco_theme::Theme>()
-            .map(|t| t.colors.mantle)
-            .unwrap_or(egui::Color32::from_rgb(30, 30, 46));
+        let mantle = ctx.resource_expect::<lunco_theme::Theme>().colors.mantle;
         egui::Frame::new()
             .fill(mantle)
             .inner_margin(8.0)

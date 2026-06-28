@@ -330,11 +330,44 @@ fn collect_stepper_observables(stepper: &SimStepper) -> Vec<(String, f64)> {
         .collect()
 }
 
+/// Largest physics `dt` integrated per `Step` before sub-stepping, in
+/// seconds (~30 Hz). Caps the catch-up burst after a stalled frame so one
+/// long gap can't explode the solver. CQ-110: was the bare `0.033`
+/// duplicated in the native + wasm Step arms.
+const MAX_STEP_DT: f64 = 0.033;
+/// Solver sub-steps per capped `Step` dt — used for both the `sub_dt`
+/// divisor and the integration loop count. CQ-110: was the bare `3`
+/// duplicated likewise.
+const STEP_SUBSTEPS: u32 = 3;
+
 /// Helper to build a ModelicaResult with defaults.
 fn result_ok(entity: Entity, session_id: u64) -> ModelicaResult {
     ModelicaResult {
         entity,
         session_id,
+        ..Default::default()
+    }
+}
+
+/// A successful `Reset` result (`is_reset`, `new_time = 0`, no error).
+/// CQ-110: the native and wasm Reset arms built this byte-identically —
+/// one constructor keeps the two `#[cfg]` twins from drifting. Pass the
+/// refreshed `symbols`/`input_names` (empty for the no-cached-model case)
+/// and the user-facing `log` line.
+fn reset_ok(
+    entity: Entity,
+    session_id: u64,
+    detected_symbols: Vec<(String, f64)>,
+    detected_input_names: Vec<String>,
+    log: &str,
+) -> ModelicaResult {
+    ModelicaResult {
+        entity,
+        session_id,
+        detected_symbols,
+        detected_input_names,
+        log_message: Some(log.to_string()),
+        is_reset: true,
         ..Default::default()
     }
 }
@@ -453,15 +486,10 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             let input_names: Vec<String> = stepper.input_names().to_vec();
                                             let symbols = collect_stepper_observables(&stepper);
                                             steppers.insert(entity, (session_id, cached.model_name.clone(), stepper));
-                                            let _ = tx_inner.send(ModelicaResult {
-                                                entity, session_id, new_time: 0.0,
-                                                outputs: Vec::new(),
-                                                detected_symbols: symbols, error: None,
-                                                log_message: Some("Reset complete.".to_string()),
-                                                is_new_model: false, is_parameter_update: false, is_reset: true,
-                                                detected_input_names: input_names,
-                                                ..Default::default()
-                                            });
+                                            let _ = tx_inner.send(reset_ok(
+                                                entity, session_id, symbols, input_names,
+                                                "Reset complete.",
+                                            ));
                                         }
                                         Err(e) => {
                                             let mut r = result_ok(entity, session_id);
@@ -488,10 +516,10 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             }
                         } else {
                             steppers.remove(&entity);
-                            let mut r = result_ok(entity, session_id);
-                            r.is_reset = true;
-                            r.log_message = Some("Reset complete (no cached model).".to_string());
-                            let _ = tx_inner.send(r);
+                            let _ = tx_inner.send(reset_ok(
+                                entity, session_id, Vec::new(), Vec::new(),
+                                "Reset complete (no cached model).",
+                            ));
                         }
                     }
                     ModelicaCommand::UpdateParameters { entity, session_id, model_name, source } => {
@@ -745,9 +773,9 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         if let Some((s_id, _, stepper)) = steppers.get_mut(&entity) {
                             if *s_id == session_id {
                                 for (name, val) in inputs { let _ = stepper.set_input(&name, val); }
-                                let capped_dt = dt.min(0.033); let sub_dt = capped_dt / 3.0;
+                                let capped_dt = dt.min(MAX_STEP_DT); let sub_dt = capped_dt / STEP_SUBSTEPS as f64;
                                 let mut step_err = None;
-                                for _ in 0..3 { if let Err(e) = stepper.step(sub_dt) { step_err = Some(e); break; } }
+                                for _ in 0..STEP_SUBSTEPS { if let Err(e) = stepper.step(sub_dt) { step_err = Some(e); break; } }
                                 if let Some(e) = step_err {
                                     let mut r = result_ok(entity, session_id);
                                     r.new_time = stepper.time();
@@ -1090,10 +1118,10 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             if let Some((s_id, _, stepper)) = w.steppers.get_mut(&entity) {
                 if *s_id == session_id {
                     for (name, val) in &inputs { let _ = stepper.set_input(name, *val); }
-                    let capped_dt = dt.min(0.033);
-                    let sub_dt = capped_dt / 3.0;
+                    let capped_dt = dt.min(MAX_STEP_DT);
+                    let sub_dt = capped_dt / STEP_SUBSTEPS as f64;
                     let mut step_err = None;
-                    for _ in 0..3 { if let Err(e) = stepper.step(sub_dt) { step_err = Some(e); break; } }
+                    for _ in 0..STEP_SUBSTEPS { if let Err(e) = stepper.step(sub_dt) { step_err = Some(e); break; } }
 
                     if let Some(e) = step_err {
                         send(ModelicaResult {
@@ -1224,15 +1252,10 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                             let input_names: Vec<String> = stepper.input_names().to_vec();
                             let symbols = collect_stepper_observables(&stepper);
                             w.steppers.insert(entity, (session_id, cached.model_name.clone(), stepper));
-                            send(ModelicaResult {
-                                entity, session_id, new_time: 0.0,
-                                outputs: Vec::new(),
-                                detected_symbols: symbols, error: None,
-                                log_message: Some("Reset complete.".to_string()),
-                                is_new_model: false, is_parameter_update: false, is_reset: true,
-                                detected_input_names: input_names,
-                                ..Default::default()
-                            });
+                            send(reset_ok(
+                                entity, session_id, symbols, input_names,
+                                "Reset complete.",
+                            ));
 
                                 } else {
                                 send(ModelicaResult {
@@ -1259,15 +1282,10 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                                 }
                                 } else {
                                 w.steppers.remove(&entity);
-                                send(ModelicaResult {
-                                entity, session_id, new_time: 0.0,
-                                outputs: Vec::new(),
-                                detected_symbols: Vec::new(), error: None,
-                                log_message: Some("Reset complete (no cached model).".to_string()),
-                                is_new_model: false, is_parameter_update: false, is_reset: true,
-                                detected_input_names: Vec::new(),
-                                ..Default::default()
-                                });
+                                send(reset_ok(
+                                entity, session_id, Vec::new(), Vec::new(),
+                                "Reset complete (no cached model).",
+                                ));
                                 }
 
         }

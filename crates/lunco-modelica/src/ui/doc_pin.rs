@@ -150,10 +150,7 @@ pub fn render_pin_header(
         .unwrap_or(None);
     let active = active_doc_ctx(ctx);
     let target = current_pin.or(active);
-    let muted = ctx
-        .resource::<lunco_theme::Theme>()
-        .map(|t| t.tokens.text_subdued)
-        .unwrap_or(egui::Color32::from_rgb(140, 140, 160));
+    let muted = ctx.resource_expect::<lunco_theme::Theme>().tokens.text_subdued;
 
     let label = match target {
         Some(doc) => doc_display_name_ctx(ctx, doc),
@@ -172,10 +169,7 @@ pub fn render_pin_header(
     // Visual accent when pinned — the 📍 / 📌 distinction alone is
     // too subtle in some fonts. A coloured PIN badge reads at a
     // glance and matches Dymola's "Current model" indicator.
-    let accent = ctx
-        .resource::<lunco_theme::Theme>()
-        .map(|t| t.tokens.accent)
-        .unwrap_or(egui::Color32::from_rgb(110, 170, 230));
+    let accent = ctx.resource_expect::<lunco_theme::Theme>().tokens.accent;
 
     let mut toggle = false;
     ui.horizontal(|ui| {

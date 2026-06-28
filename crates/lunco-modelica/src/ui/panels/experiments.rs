@@ -265,17 +265,9 @@ impl Panel for ExperimentsPanel {
         // Semantic colours from the theme. ThemePlugin is mandatory
         // (installed by WorkbenchPlugin), so this resource is always
         // present.
-        let (col_success, col_warning, col_error, col_subdued) = ctx
-            .resource::<lunco_theme::Theme>()
-            .map(|t| {
-                (t.tokens.success, t.tokens.warning, t.tokens.error, t.tokens.text_subdued)
-            })
-            .unwrap_or((
-                egui::Color32::from_rgb(0, 200, 0),
-                egui::Color32::from_rgb(240, 180, 0),
-                egui::Color32::from_rgb(220, 60, 60),
-                egui::Color32::from_rgb(140, 140, 160),
-            ));
+        let t = ctx.resource_expect::<lunco_theme::Theme>();
+        let (col_success, col_warning, col_error, col_subdued) =
+            (t.tokens.success, t.tokens.warning, t.tokens.error, t.tokens.text_subdued);
 
         // One outer ScrollArea wraps Setup + Parameter overrides +
         // experiments table + empty-state copy so the user can reach
@@ -1836,10 +1828,7 @@ fn render_experiments_plot_inner(
         // No doc resolved yet — draw just the doc badge. Action
         // buttons (New / Dup / Fit / CSV) live in the Graphs panel's
         // shared header, rendered above this body in every state.
-        let col_muted = ctx
-            .resource::<lunco_theme::Theme>()
-            .map(|t| t.tokens.text_subdued)
-            .unwrap_or(egui::Color32::from_rgb(140, 140, 160));
+        let col_muted = ctx.resource_expect::<lunco_theme::Theme>().tokens.text_subdued;
         ui.label(
             egui::RichText::new("📈 (no model)  ·  0 vars")
                 .color(col_muted)
@@ -1849,14 +1838,9 @@ fn render_experiments_plot_inner(
         return ExpPlotSummary::default();
     };
     let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
-    let (col_warning, col_accent, col_muted) = ctx
-        .resource::<lunco_theme::Theme>()
-        .map(|t| (t.tokens.warning, t.tokens.accent, t.tokens.text_subdued))
-        .unwrap_or((
-            egui::Color32::from_rgb(240, 180, 0),
-            egui::Color32::from_rgb(90, 150, 240),
-            egui::Color32::from_rgb(140, 140, 160),
-        ));
+    let t = ctx.resource_expect::<lunco_theme::Theme>();
+    let (col_warning, col_accent, col_muted) =
+        (t.tokens.warning, t.tokens.accent, t.tokens.text_subdued);
 
     // PlotPanelStates is both read AND written across this single frame:
     // `sync_twin` mutates it up front and the result must be visible to
