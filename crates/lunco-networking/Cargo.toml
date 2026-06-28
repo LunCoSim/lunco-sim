@@ -73,7 +73,7 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 # Binary wire codec for the snapshot/envelope hot path (replaces serde_json there —
 # ~2x smaller, no field names). serde_json stays for the Reflect command payload.
-bincode = { version = "1.3", optional = true }
+bincode = { workspace = true, optional = true }
 # URL-dialing WebTransport client IO (`wt_client`): lets the browser/native connect by
 # HOSTNAME (`https://sandbox.lunco.space:5888`) so a real CA cert validates with no
 # digest — lightyear's built-in IO only dials `https://{ip}`.
@@ -113,7 +113,7 @@ lightyear = { version = "0.26.4", default-features = false, optional = true, fea
 # Non-optional: `NetworkMode::from_url` (query parse + `performance.now()` for a
 # per-tab client id) and the client adapter's cert-digest read both need it, and
 # the crate is only ever compiled when the `networking` feature pulls it in.
-web-sys = { version = "0.3", features = ["Window", "Location", "Performance"] }
+web-sys = { workspace = true, features = ["Window", "Location", "Performance"] }
 # lightyear's netcode pulls getrandom 0.2 transitively; on wasm it needs the JS
 # backend (`crypto.getRandomValues`) or it `compile_error!`s. We don't use it
 # directly — this entry exists only to turn the feature on via unification.

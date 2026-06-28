@@ -23,7 +23,7 @@ bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "b
 bevy_egui = { workspace = true, optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-theme = { path = "../lunco-theme", optional = true }
-bevy_shader = "0.18.1"
+bevy_shader = { workspace = true }
 big_space = { workspace = true }
 # Heavy VSOP2013/ELP/EOP integration lives in the sibling crate
 # `lunco-celestial-ephemeris`. This crate only defines the
@@ -37,7 +37,7 @@ lunco-storage = { path = "../lunco-storage" }
 avian3d = { workspace = true }
 chrono = { workspace = true }
 lunco-controller = { path = "../lunco-controller" }
-bevy_asset = "0.18.1"
+bevy_asset = { workspace = true }
 futures-lite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -49,7 +49,7 @@ image = { workspace = true, optional = true }
 # ureq is desktop-only: HTTP client with TLS for downloading ephemeris data
 # On wasm32, use browser fetch() via web-sys instead
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ureq = { version = "2.9", features = ["tls"] }
+ureq = { workspace = true }
 
 [lints]
 workspace = true

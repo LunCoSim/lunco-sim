@@ -54,10 +54,10 @@ lunco-api = { path = "../lunco-api", default-features = false, features = ["tran
 # Web: the JS-bridge API + the wasm glue (panic hook, canvas sizing, RNG backend).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 lunco-api = { path = "../lunco-api", default-features = false }
-wasm-bindgen = "0.2"
-console_error_panic_hook = "0.1"
-web-sys = { version = "0.3", features = ["Window", "Location"] }
-js-sys = "0.3"
+wasm-bindgen = { workspace = true }
+console_error_panic_hook = { workspace = true }
+web-sys = { workspace = true, features = ["Window", "Location"] }
+js-sys = { workspace = true }
 # ahash (egui → catppuccin-egui → lunco-theme) pulls getrandom 0.3, which on
 # wasm needs an explicit backend; `build_web.sh` sets the matching
 # `--cfg getrandom_backend="wasm_js"` (both the feature here and the cfg required).

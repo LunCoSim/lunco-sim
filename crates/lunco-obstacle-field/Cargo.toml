@@ -10,7 +10,7 @@ description = "Procedural crater + rock field generation for rover testing in Lu
 # modules (spec/sampler/field/assets) only touch glam (Vec2/Vec3), available at
 # the substrate level — the render features are for the plugin layer.
 bevy = { workspace = true, features = ["bevy_pbr", "bevy_mesh", "bevy_render", "bevy_scene", "bevy_light"] }
-bevy_mesh = "0.18.1"
+bevy_mesh = { workspace = true }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 lunco-core = { path = "../lunco-core" }

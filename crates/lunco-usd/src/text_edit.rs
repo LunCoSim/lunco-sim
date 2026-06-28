@@ -396,9 +396,7 @@ pub fn set_translate(source: &str, path: &str, value: [f64; 3]) -> Option<String
     // Insert a new translate line at the top of the body.
     let mut snippet = String::new();
     if !body.contains("xformOpOrder") {
-        snippet.push_str(&format!(
-            "    uniform token[] xformOpOrder = [\"xformOp:translate\"]\n"
-        ));
+        snippet.push_str("    uniform token[] xformOpOrder = [\"xformOp:translate\"]\n");
     }
     snippet.push_str(&format!(
         "    double3 xformOp:translate = {}\n",

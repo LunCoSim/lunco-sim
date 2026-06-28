@@ -70,8 +70,7 @@
 use bevy::prelude::*;
 use bevy::camera::{ImageRenderTarget, RenderTarget};
 use bevy::image::Image;
-use bevy::asset::RenderAssetUsages;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
+use bevy::render::render_resource::{Extent3d, TextureFormat};
 use bevy::camera::visibility::RenderLayers;
 use bevy_egui::egui;
 use bevy_egui::{EguiTextureHandle, EguiUserTextures};
@@ -455,44 +454,12 @@ fn resize_viewport_image(
 /// (Bgra8UnormSrgb, RENDER_ATTACHMENT). Wrapped so the bootstrap
 /// reads cleanly.
 fn make_target_image(width: u32, height: u32) -> Image {
-    // `Image::new_target_texture` does the right thing for us in
-    // 0.18 (sets all three usage flags), but it picks default
-    // sample_count etc. We want a simple linear-RGBA target — egui
-    // displays sRGB so Bgra8UnormSrgb keeps colours right without
-    // an extra conversion pass.
-    // (Extent3d / TextureDimension are referenced through
-    // new_target_texture so we don't import them as dead code.)
-    let _ = (Extent3d::default(), TextureDimension::D2);
-    Image::new_target_texture(
-        width,
-        height,
-        TextureFormat::Bgra8UnormSrgb,
-        None,
-    )
-    .with_data_filled() // ensure RenderAssetUsages includes RENDER_WORLD
-}
-
-trait ImageExt {
-    fn with_data_filled(self) -> Self;
-}
-
-impl ImageExt for Image {
-    fn with_data_filled(mut self) -> Self {
-        // `new_target_texture` already fills with zeros and uses
-        // RenderAssetUsages::default(). This shim documents the
-        // intent and gives us a hook to flip flags later (e.g. drop
-        // MAIN_WORLD if we ever fully migrate ownership to the
-        // render world). No-op today.
-        self.asset_usage = RenderAssetUsages::default();
-        // The default usage flags from `new_target_texture` already
-        // include RENDER_ATTACHMENT — assert we didn't accidentally
-        // strip them.
-        debug_assert!(self
-            .texture_descriptor
-            .usage
-            .contains(TextureUsages::RENDER_ATTACHMENT));
-        self
-    }
+    // `Image::new_target_texture` sets all three usage flags (incl.
+    // RENDER_ATTACHMENT) and fills with zeros in 0.18, using
+    // RenderAssetUsages::default(). We want a simple linear-RGBA
+    // target — egui displays sRGB so Bgra8UnormSrgb keeps colours
+    // right without an extra conversion pass.
+    Image::new_target_texture(width, height, TextureFormat::Bgra8UnormSrgb, None)
 }
 
 // ─────────────────────────────────────────────────────────────────────

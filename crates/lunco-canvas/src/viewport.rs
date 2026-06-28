@@ -244,8 +244,6 @@ impl Viewport {
         // Convert config.ease (per-60fps-frame) to a per-second rate.
         // At dt = 1/60s, alpha ≈ config.ease; at larger dt it scales
         // correctly. The `min(1.0)` guards absurdly long frames.
-        let k = -self.config.ease.ln_1p().abs(); // unused — branch kept for future tuning
-        let _ = k;
         let alpha = 1.0 - (1.0 - self.config.ease).powf(dt * 60.0);
         let alpha = alpha.min(1.0);
         let moved = {

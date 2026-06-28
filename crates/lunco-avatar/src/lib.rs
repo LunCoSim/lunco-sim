@@ -1085,19 +1085,13 @@ fn avatar_universal_locomotion_system(
 /// Captures high-level [UserIntent] signals and forwards zoom input.
 fn capture_avatar_intent(
     mut q_avatar: Query<(Entity, &IntentState, &mut IntentAnalogState), With<Avatar>>,
-    _mouse: Res<ButtonInput<MouseButton>>,
-    windows: Query<&Window>,
-    mut last_mouse_pos: Local<Option<Vec2>>,
     clock: Option<Res<CelestialClock>>,
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     scroll_res: ResMut<CameraScroll>,
 ) {
-    let window = windows.iter().next();
-    let current_mouse_pos = window.and_then(|w| w.cursor_position());
     let mut delta = Vec2::ZERO;
     let mut mouse_moved = false;
-    *last_mouse_pos = current_mouse_pos;
 
     for (entity, intent_state, mut analog) in q_avatar.iter_mut() {
         let d = intent_state.axis_pair(&UserIntent::Look);
@@ -1486,13 +1480,9 @@ fn on_possess_command(
     q_spatial_abs: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_sc: Query<&Spacecraft>,
     q_vessel: Query<&Vessel>,
     q_vessel_gravity: Query<&GravityBody>,
-    _q_orbit: Query<&OrbitCamera>,
-    _q_spring: Query<&SpringArmCamera>,
-    _q_chase: Query<&ChaseCamera>,
     guard: Res<lunco_core::SyncApplyGuard>,
     registry: Res<lunco_core::SessionRegistry>,
     session: Res<lunco_core::LocalSession>,
@@ -1541,7 +1531,7 @@ fn on_possess_command(
     );
 
     // Compute target absolute position.
-    let target_abs = if let Ok((t_cell, t_tf)) = q_spatial.get(cmd.target) {
+    let target_abs = if let Ok((t_cell, t_tf)) = q_spatial_abs.get(cmd.target) {
         let cell = t_cell.copied().unwrap_or_default();
         lunco_core::coords::world_position_seeded(
             cmd.target, &cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,

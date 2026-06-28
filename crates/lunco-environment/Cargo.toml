@@ -23,7 +23,7 @@ render = [
 # Substrate-only by default; the `render` feature adds the bevy render stack the
 # lighting/horizon half needs.
 bevy = { workspace = true }
-avian3d = { workspace = true, features = ["default-collider"] }
+avian3d = { workspace = true }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-core = { path = "../lunco-core" }
 # Render-only: the horizon shadow shaders use `ShaderMaterial`. Pulled in by the

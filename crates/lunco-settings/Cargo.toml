@@ -18,7 +18,7 @@ lunco-storage = { path = "../lunco-storage" }
 # paths and silently no-ops for absolute ones). Same JSON shape on
 # both sides — see `wasm_storage_read`/`wasm_storage_write` in lib.rs.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3", features = ["Window", "Storage"] }
+web-sys = { workspace = true, features = ["Window", "Storage"] }
 
 [lints]
 workspace = true

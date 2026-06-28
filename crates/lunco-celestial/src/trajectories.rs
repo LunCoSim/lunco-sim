@@ -152,18 +152,6 @@ impl Plugin for TrajectoryPlugin {
     }
 }
 
-pub fn animate_trajectory_material(
-    time: Res<Time>,
-    mut materials: ResMut<Assets<TrajectoryMaterial>>,
-) {
-    let t = time.elapsed_secs();
-    for (_, mat) in materials.iter_mut() {
-        mat.extension.time = t;
-        // No pulse or oscillation as requested
-        mat.extension.pulse_pos = 0.0;
-    }
-}
-
 pub fn trajectory_setup_system(
     mut commands: Commands,
 ) {

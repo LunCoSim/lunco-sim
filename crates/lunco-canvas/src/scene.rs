@@ -604,22 +604,6 @@ impl Scene {
         }
         None
     }
-
-    /// Set of edge ids that touch any node in `ids`. Used by "delete
-    /// selection" to decide which connections become orphans before
-    /// the delete, so the caller can emit events in the right order.
-    pub fn edges_touching(&self, ids: &BTreeSet<NodeId>) -> Vec<EdgeId> {
-        self.edges
-            .iter()
-            .filter_map(|(eid, e)| {
-                if ids.contains(&e.from.node) || ids.contains(&e.to.node) {
-                    Some(*eid)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
 }
 
 #[cfg(test)]
