@@ -458,8 +458,20 @@ pub fn ingest_snapshots(
     }
     for s in snaps.0.drain(..).collect::<Vec<_>>() {
         let buf = buffers.0.entry(s.gid).or_default();
+        let gen_t = s.tick as f64 * SECS_PER_TICK;
+        // Drop out-of-order / duplicate snapshots. `SnapChannel` is
+        // `UnorderedUnreliable`, so a stale connect-baseline (or a reordered
+        // datagram) can arrive *after* a newer periodic snapshot. Appending it
+        // would seat an older sample behind the newest one, corrupting the
+        // bracket search in `sample_curve` and snapping the proxy backward.
+        // `back()` is always the highest tick accepted so far (we only ever
+        // push strictly-newer samples and prune from the front), so it is the
+        // correct monotonic gate.
+        if buf.back().is_some_and(|last| gen_t <= last.gen_t) {
+            continue;
+        }
         buf.push_back(InterpSample {
-            gen_t: s.tick as f64 * SECS_PER_TICK,
+            gen_t,
             pos: Vec3::from(s.t),
             rot: Quat::from_array(s.r),
             pos_world: DVec3::from_array(s.pos),

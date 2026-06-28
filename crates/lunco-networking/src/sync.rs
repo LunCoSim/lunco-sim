@@ -701,20 +701,30 @@ pub fn apply_sync_command(
 ///
 /// Returns whether the arm should keep processing:
 /// - non-host peer → `true` (clients never gate; they trust the host-stamped relay),
-/// - host + authenticated sender → `true` (caller stamps + relays + consumes),
-/// - host + unauthenticated sender → `false` (caller `continue`s: not relayed, not consumed).
+/// - host + `Operator`-or-higher sender → `true` (caller stamps + relays + consumes),
+/// - host + Observer/unauthenticated sender → `false` (caller `continue`s: not relayed, not consumed).
 ///
-/// Gated at `Observer` (any authenticated session), **not** `Operator`: teaching is
-/// a UI toggle and a fresh client is only an Observer until it sets a name, so an
-/// Operator gate would silently drop an un-named client-tutor. The real protection
-/// is the sender-stamp + authenticated floor.
+/// Gated at **`Operator`**, not `Observer`. Every raw connection is auto-inserted as
+/// an authenticated `Observer` (`server.rs`), so an Observer floor is no gate at all:
+/// any peer could emit `TutorStatus { allow_free_movement: false }` and freeze every
+/// other peer's input + seize their camera. `Operator` is the same bar the control
+/// commands use, and a client reaches it only by sending an `UpdateProfile`
+/// (`on_update_profile_rbac`) — an intentional act, not a side effect of connecting.
+/// A legitimate tutor sets a profile before teaching, so this does not drop real
+/// tutors; it drops the passive/auto Observer that the threat relies on.
+///
+/// This closes the unprivileged-floor hole. It does NOT make teaching fully safe:
+/// `Operator` promotion is still token-less self-promotion (see `on_update_profile_rbac`),
+/// and a broadcast `TutorStatus` still locks *all* peers rather than only opted-in
+/// followers. Real fixes — verified-token auth and per-peer follow opt-in — are
+/// tracked separately (review H4/M2 and target opt-in).
 #[inline]
 fn authed_for_avatar_relay(
     role: &NetworkRole,
     rbac: &lunco_core::session::SessionRbac,
     sender: SessionId,
 ) -> bool {
-    !role.is_host() || rbac.is_authorized(sender, lunco_core::session::AuthorityRole::Observer)
+    !role.is_host() || rbac.is_authorized(sender, lunco_core::session::AuthorityRole::Operator)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -770,12 +780,17 @@ pub fn drain_sync_inbox(
                 });
             }
             SyncEnvelope::Snapshot(s) => {
+                // Authority: only the host produces snapshots; clients adopt them.
+                // The host must never ingest a client-sent Snapshot into its own
+                // `IncomingSnapshots` (it would let a client move host-authoritative
+                // bodies). Same guard the Despawn arm enforces.
+                if role.is_host() {
+                    continue;
+                }
                 // Adopt host simulation clock (keeps remote interpolation in sync).
-                if !role.is_host() {
-                    let host_tick = s.tick;
-                    if tick.0 < host_tick {
-                        tick.0 = host_tick;
-                    }
+                let host_tick = s.tick;
+                if tick.0 < host_tick {
+                    tick.0 = host_tick;
                 }
                 for entry in s.entries {
                     // Dequantize once; reuse for both the f32 render-space `t`
@@ -801,6 +816,14 @@ pub fn drain_sync_inbox(
                 }
             }
             SyncEnvelope::Spawn(spawn) => {
+                // Authority: only the host spawns replicated entities; clients apply.
+                // Without this guard any client could push an arbitrary catalog spawn
+                // pinned to an attacker-chosen gid (`apply_replicated_spawns` is not
+                // role-gated), colliding with an existing GlobalEntityId and corrupting
+                // registry resolution / snapshot routing / despawn. Mirror Despawn.
+                if role.is_host() {
+                    continue;
+                }
                 pending_spawns.0.push(ReplicatedSpawn {
                     gid: spawn.gid,
                     entry_id: spawn.entry_id,

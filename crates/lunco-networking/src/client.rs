@@ -117,6 +117,7 @@ fn on_join_server(
     existing: Query<Entity, With<Client>>,
     mut role: ResMut<NetworkRole>,
     mut status: ResMut<NetStatus>,
+    mut local: ResMut<LocalSession>,
 ) {
     // Drop any current connection first, then dial the new address.
     for e in &existing {
@@ -128,6 +129,12 @@ fn on_join_server(
     status.role = NetworkRole::Client;
     status.endpoint = address;
     status.connected = false;
+    // Clear any session carried over from a prior connection. Until the new
+    // host's Handshake lands, this client has no authoritative identity —
+    // leaving the stale `LocalSession` in place makes `update_client_netstatus`
+    // report `connected` and lets prediction/proxy systems act under the old
+    // session during the connect window. `on_leave_server` does the same reset.
+    local.0 = SessionId::LOCAL;
 }
 
 #[lunco_core::on_command(LeaveServer)]
