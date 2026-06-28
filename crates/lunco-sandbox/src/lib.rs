@@ -363,10 +363,11 @@ impl Plugin for SandboxCorePlugin {
             let mode = lunco_networking::NetworkMode::resolve(self.headless);
             info!("[net] networking mode: {mode:?}");
             app.add_plugins(lunco_networking::LunCoNetworkingPlugin { mode });
-            // Connect-menu bridge adapter (seeds connect_hint, re-dispatches the
-            // NetConnect/Disconnect bridge events). Observers + a Startup seed
-            // only — no egui — so it's safe headless; keep it so the host still
-            // answers runtime JoinServer/LeaveServer.
+            // Connect-menu bridge adapter + egui presence/tutorial overlays. Pulls
+            // bevy_egui, so it's GUI-only and gated on `ui` (CQ-601) — the headless
+            // server omits it. The host still answers runtime JoinServer/LeaveServer
+            // via the networking plugin's typed command path (not this bridge).
+            #[cfg(feature = "ui")]
             app.add_plugins(lunco_networking::ui::LunCoNetworkingUiPlugin);
         }
 

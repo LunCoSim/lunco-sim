@@ -101,7 +101,10 @@ bevy_egui = { workspace = true, optional = true }
 # features choose the transport: `transport-http` (axum/TcpListener) vs.
 # `transport-wasm` (the `window.lunco_api` JS bridge).
 lunco-api = { path = "../lunco-api", optional = true, default-features = false }
-lunco-networking = { path = "../lunco-networking", optional = true }
+# `default-features = false`: networking's egui/workbench `ui` feature is opt-in
+# (CQ-601). The GUI build re-enables it via this crate's `ui` feature
+# (`lunco-networking?/ui`); the headless `server` build leaves it off.
+lunco-networking = { path = "../lunco-networking", optional = true, default-features = false }
 
 # Replace glibc's allocator with mimalloc on native targets. Bevy +
 # avian generate huge cross-thread allocator traffic; glibc's
@@ -135,6 +138,9 @@ ui = [
     "lunco-usd/ui",
     "lunco-sandbox-edit/ui",
     "lunco-modelica/ui",
+    # egui presence/tutorial overlays + Network menu bridge — only when networking
+    # is also enabled (`?`); the headless server's `server` feature omits this.
+    "lunco-networking?/ui",
     "lunco-api?/winit",
     "dep:lunco-workbench",
     "dep:lunco-materials",

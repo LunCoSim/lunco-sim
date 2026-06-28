@@ -10,7 +10,11 @@ path = "src/bin/net_smoke.rs"
 required-features = ["networking"]
 
 [features]
-default = ["workbench"]
+# Default = headless-clean: no egui, no workbench, no networking wire. The
+# GUI-free `lunco-sandbox-server` depends on this crate (transitively) WITHOUT
+# the `ui` feature, so default MUST NOT pull egui/workbench (CQ-601). The GUI
+# `lunco-sandbox` opts into `ui` explicitly.
+default = []
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
 networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode"]
@@ -19,6 +23,13 @@ networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode"]
 # Build with it when chasing netcode jitter; once compiled it's active unless
 # silenced with `LUNCO_NET_DIAG=0`. Implies `networking` (pointless without the wire).
 net-diag = ["networking"]
+# Layer-4 in-sim UI (`mod ui`): the egui presence-cursor / tutorial overlays +
+# the Network/settings menu bridge. Pulls `bevy_egui` (otherwise NOT linked) and
+# the workbench. Implies `networking` because the bridge re-dispatches the typed
+# JoinServer/LeaveServer commands from `client`/`sync`. OFF for headless servers.
+ui = ["networking", "dep:bevy_egui", "workbench"]
+# Perspective/layout sync against the workbench (`sync.rs` ActivatePerspective +
+# WorkbenchLayout reads). UI-adjacent but no egui itself; pulled in by `ui`.
 workbench = ["dep:lunco-workbench"]
 
 [dependencies]
@@ -35,14 +46,23 @@ lunco-mobility = { path = "../lunco-mobility" }
 # egui editor UI — `default-features = false` keeps the networked headless server
 # (and this crate) egui/winit-free.
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
-lunco-celestial = { path = "../lunco-celestial" }
+# `default-features = false`: we read only `CelestialReferenceFrame` (the
+# always-compiled registry component) for snapshot grid parenting — never
+# celestial's egui inspector (`ui` feature). Keeps the headless server egui-free.
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-sandbox-edit = { path = "../lunco-sandbox-edit", default-features = false }
-lunco-doc-bevy = { path = "../lunco-doc-bevy" }
+# `default-features = false`: we use only the egui-free `Presence`/`UserId`/
+# `PresenceInfo` document-lifecycle types, never doc-bevy's `ui` editor-intent
+# systems. Default features here would turn on `lunco-doc-bevy/ui` (→ bevy_egui)
+# for the WHOLE build via feature unification — the real CQ-601 headless leak.
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-doc = { path = "../lunco-doc" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-controller = { path = "../lunco-controller" }
-bevy_egui = { workspace = true }
+# Optional: only the Layer-4 `mod ui` (egui overlays) uses it, behind the `ui`
+# feature. Headless servers never link egui.
+bevy_egui = { workspace = true, optional = true }
 leafwing-input-manager = { workspace = true }
 # Read by the wire's `gather_snapshot`: avian velocity (LinearVelocity/
 # AngularVelocity) for client-side prediction, big_space `CellCoord` so

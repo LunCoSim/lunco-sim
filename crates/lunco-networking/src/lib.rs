@@ -38,8 +38,10 @@ mod client;
 #[cfg(feature = "networking")]
 mod wt_client;
 /// Layer-4 UI: the in-sim *Connect* panel (address field + Connect/Disconnect),
-/// which dispatches the `JoinServer`/`LeaveServer` commands. Behind the feature.
-#[cfg(feature = "networking")]
+/// which dispatches the `JoinServer`/`LeaveServer` commands, plus the egui
+/// presence-cursor / tutorial overlays. Behind the `ui` feature (which implies
+/// `networking`) so headless servers never link egui (CQ-601).
+#[cfg(feature = "ui")]
 pub mod ui;
 /// Client-prediction diagnostics (render-jitter / velocity / correction census).
 /// Compiled only under the `net-diag` feature (off by default — not in normal
