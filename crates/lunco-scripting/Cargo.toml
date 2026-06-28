@@ -6,6 +6,10 @@ edition = "2021"
 [dependencies]
 bevy = { workspace = true }
 lunco-doc = { path = "../lunco-doc" }
+# Shared per-document diagnostics store (the unified error-reporting substrate
+# used by Modelica + scripting). `default-features = false` drops its egui `ui`
+# feature so headless / wasm scripting builds don't pull bevy_egui→winit.
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 # Script execution is exposed as typed `#[Command]`s (RunPython/RunLua) via
 # the macros + `Ack`/`OpId`/`CommandResults` substrate in lunco-core. The API
 # discovers them by reflection (AppTypeRegistry) — no direct lunco-api dep.

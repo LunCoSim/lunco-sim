@@ -6931,6 +6931,7 @@ dependencies = [
  "lunco-core",
  "lunco-doc",
  "lunco-twin-journal",
+ "serde_json",
 ]
 
 [[package]]
@@ -7223,6 +7224,7 @@ dependencies = [
  "lunco-api",
  "lunco-core",
  "lunco-doc",
+ "lunco-doc-bevy",
  "lunco-tools",
  "lunco-tools-rhai",
  "pyo3",

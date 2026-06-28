@@ -13,6 +13,9 @@ pub mod world_bridge;
 /// Importable rhai tool libraries (named `libname::fn` modules).
 #[cfg(feature = "rhai")]
 pub mod tool_libs;
+/// Scripting adapter onto the unified diagnostics store (`ScriptStatus` query).
+#[cfg(feature = "rhai")]
+pub mod diagnostics;
 
 use std::collections::HashMap;
 use lunco_doc::{DocumentId, DocumentHost};
@@ -64,6 +67,10 @@ impl Plugin for LunCoScriptingPlugin {
             // BEFORE the runtime engine is built, so build_world_engine's refresh
             // binds them immediately.
             tool_libs::register_builtins();
+            // Shared per-document diagnostics store (also init'd by Modelica;
+            // init_resource is idempotent). Scenario compile/runtime errors land
+            // here and surface via the ScriptStatus query.
+            app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>();
             app.init_resource::<world_bridge::PendingWorldScripts>();
             app.init_resource::<world_bridge::RhaiModelRuntime>();
             // Mints document ids for scenarios attached via RunScenario.
@@ -75,6 +82,7 @@ impl Plugin for LunCoScriptingPlugin {
             // Tool-library discovery on the API (ListToolLibraries/GetToolLibrary);
             // registration rides the RegisterToolLibrary command.
             tool_libs::register_queries(app);
+            diagnostics::register_queries(app);
             app.add_systems(
                 FixedUpdate,
                 (

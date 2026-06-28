@@ -55,6 +55,9 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod diagnostics;
+pub use diagnostics::{status_json, DocDiagnostics, DocumentDiagnostics};
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

@@ -465,6 +465,78 @@ fn builtin_formation_tool_library_drives_a_follower() {
     );
 }
 
+/// Poll the `ScriptStatus` query for an entity (the unified diagnostics surface).
+fn script_status(app: &mut App, gid: u64) -> serde_json::Value {
+    use lunco_api::queries::ApiQueryRegistry;
+    use lunco_api::schema::ApiResponse;
+    let provider = app
+        .world()
+        .resource::<ApiQueryRegistry>()
+        .get("ScriptStatus")
+        .expect("ScriptStatus provider registered");
+    match provider.execute(app.world_mut(), &serde_json::json!({ "target": gid })) {
+        ApiResponse::Ok { data, .. } => data.expect("ScriptStatus returns data"),
+        other => panic!("ScriptStatus returned {other:?}"),
+    }
+}
+
+#[test]
+fn script_status_reports_compile_error_then_clears_on_fix() {
+    // Error feedback end-to-end on the UNIFIED store: a syntax error surfaces
+    // through ScriptStatus (state=error + a located diagnostic), and a hot-reload
+    // with valid source clears it back to ready.
+    let mut app = build_app();
+    let _rover = spawn_rover(&mut app);
+
+    // 1. A scenario that fails to compile (empty RHS).
+    run_scenario(&mut app, ROVER_GID, "fn on_tick(me) { let x = ; }", 1);
+    tick(&mut app);
+    let s = script_status(&mut app, ROVER_GID);
+    assert_eq!(s["state"], "error", "compile error should be reported; got {s}");
+    assert_eq!(s["ok"], false);
+    let diags = s["diagnostics"].as_array().expect("diagnostics array");
+    assert!(!diags.is_empty(), "expected a diagnostic; got {s}");
+    assert!(
+        !diags[0]["message"].as_str().unwrap_or("").is_empty(),
+        "diagnostic should carry a message; got {s}"
+    );
+    assert!(
+        diags[0]["line"].is_number(),
+        "diagnostic should carry a 1-based line; got {s}"
+    );
+
+    // 2. Hot-reload with valid source → status clears to ready.
+    run_scenario(&mut app, ROVER_GID, "fn on_tick(me) { }", 2);
+    tick(&mut app);
+    let s2 = script_status(&mut app, ROVER_GID);
+    assert_eq!(s2["state"], "ready", "fix should clear the error; got {s2}");
+    assert_eq!(s2["ok"], true);
+    assert!(s2["diagnostics"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn script_status_reports_runtime_hook_errors() {
+    // A scenario that COMPILES but throws at runtime (indexing past an array)
+    // must also surface as an error through the same store.
+    let mut app = build_app();
+    let _rover = spawn_rover(&mut app);
+
+    run_scenario(
+        &mut app,
+        ROVER_GID,
+        "fn on_tick(me) { let a = [1]; let b = a[5]; }",
+        1,
+    );
+    tick(&mut app);
+
+    let s = script_status(&mut app, ROVER_GID);
+    assert_eq!(
+        s["state"], "error",
+        "runtime hook failure should be reported; got {s}"
+    );
+    assert!(!s["diagnostics"].as_array().unwrap().is_empty());
+}
+
 #[test]
 fn run_timeline_lowers_data_to_a_running_scenario() {
     // Layer 2 end-to-end: fire RunTimeline with a pure-DATA timeline over the

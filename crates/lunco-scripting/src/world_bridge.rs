@@ -52,7 +52,8 @@ use rhai::{Dynamic, Engine, ImmutableString, Map, AST};
 
 use crate::doc::{ScriptLanguage, ScriptedModel};
 use crate::ScriptRegistry;
-use lunco_doc::DocumentId;
+use lunco_doc::{Diagnostic, DocumentId};
+use lunco_doc_bevy::DocumentDiagnostics;
 
 // ── Scoped World access ────────────────────────────────────────────────────
 
@@ -768,16 +769,21 @@ fn call_hook(
     name: &str,
     self_id: i64,
     this: &mut Dynamic,
-) {
+) -> Option<(String, rhai::Position)> {
     let present = ast
         .iter_functions()
         .any(|f| f.name == name && f.params.len() == 1);
     if !present {
-        return;
+        return None;
     }
     let mut args = [Dynamic::from_int(self_id)];
-    if let Err(e) = engine.call_fn_raw(scope, ast, false, false, name, Some(this), &mut args) {
-        error!("[rhai] {name}() failed: {e}");
+    match engine.call_fn_raw(scope, ast, false, false, name, Some(this), &mut args) {
+        Ok(_) => None,
+        Err(e) => {
+            error!("[rhai] {name}() failed: {e}");
+            let pos = e.position();
+            Some((e.to_string(), pos))
+        }
     }
 }
 
@@ -790,25 +796,30 @@ fn call_event_hook(
     self_id: i64,
     this: &mut Dynamic,
     evt: Map,
-) {
+) -> Option<(String, rhai::Position)> {
     let present = ast
         .iter_functions()
         .any(|f| f.name == "on_event" && f.params.len() == 2);
     if !present {
-        return;
+        return None;
     }
     let mut args = [Dynamic::from_int(self_id), Dynamic::from_map(evt)];
-    if let Err(e) = engine.call_fn_raw(scope, ast, false, false, "on_event", Some(this), &mut args) {
-        error!("[rhai] on_event() failed: {e}");
+    match engine.call_fn_raw(scope, ast, false, false, "on_event", Some(this), &mut args) {
+        Ok(_) => None,
+        Err(e) => {
+            error!("[rhai] on_event() failed: {e}");
+            let pos = e.position();
+            Some((e.to_string(), pos))
+        }
     }
 }
 
 /// Exclusive system (FixedUpdate): drive every `ScriptedModel{Rhai}` through its
 /// lifecycle hooks against the live World.
 pub fn tick_rhai_models(world: &mut World) {
-    // 1. Snapshot the rhai models (entity + gid + doc generation + source),
-    //    releasing every World borrow before we execute scripts.
-    let mut work: Vec<(Entity, i64, u64, String)> = Vec::new();
+    // 1. Snapshot the rhai models (entity + doc id + gid + doc generation +
+    //    source), releasing every World borrow before we execute scripts.
+    let mut work: Vec<(Entity, u64, i64, u64, String)> = Vec::new();
     {
         let mut q = world.query::<(Entity, &ScriptedModel)>();
         let models: Vec<(Entity, bool, Option<ScriptLanguage>, Option<u64>)> = q
@@ -837,7 +848,7 @@ pub fn tick_rhai_models(world: &mut World) {
                 .api_id_for(entity)
                 .map(|g| g.get() as i64)
                 .unwrap_or(-1);
-            work.push((entity, gid, generation, source));
+            work.push((entity, raw, gid, generation, source));
         }
     }
     if work.is_empty() {
@@ -853,6 +864,11 @@ pub fn tick_rhai_models(world: &mut World) {
         .map(|mut inbox| std::mem::take(&mut inbox.pending))
         .unwrap_or_default();
 
+    // Per-document status to publish AFTER the scope (avoids interleaving the
+    // runtime borrow with a `DocumentDiagnostics` borrow): None = compiled OK,
+    // Some(diags) = errored. Only (re)compiles and runtime errors record here.
+    let mut diag_updates: Vec<(u64, Option<Vec<Diagnostic>>)> = Vec::new();
+
     world.resource_scope(|world, mut runtime: Mut<RhaiModelRuntime>| {
         let _scope = WorldScope::enter(world);
         // Hot-reload tool libraries if any were (re)registered since last tick.
@@ -865,7 +881,7 @@ pub fn tick_rhai_models(world: &mut World) {
             engine, states, ..
         } = &mut *runtime;
 
-        for (entity, gid, generation, source) in work {
+        for (entity, raw, gid, generation, source) in work {
             let state = states.entry(entity).or_insert_with(|| ModelState {
                 ast: None,
                 scope: rhai::Scope::new(),
@@ -874,9 +890,13 @@ pub fn tick_rhai_models(world: &mut World) {
                 started: false,
             });
 
+            let mut recompiled = false;
+            let mut compile_error: Option<Diagnostic> = None;
+
             // (Re)compile on first sight or generation bump, then run top-level
             // once to initialise the persistent scope (top-level `const`s).
             if state.ast.is_none() || state.generation != generation {
+                recompiled = true;
                 state.generation = generation;
                 state.started = false;
                 state.scope = rhai::Scope::new();
@@ -885,11 +905,17 @@ pub fn tick_rhai_models(world: &mut World) {
                     Ok(ast) => {
                         if let Err(e) = engine.run_ast_with_scope(&mut state.scope, &ast) {
                             error!("[rhai] entity {entity:?} top-level failed: {e}");
+                            compile_error =
+                                Some(rhai_diagnostic(e.to_string(), e.position(), &source));
                         }
                         state.ast = Some(ast);
                     }
                     Err(e) => {
                         error!("[rhai] entity {entity:?} compile error: {e}");
+                        diag_updates.push((
+                            raw,
+                            Some(vec![rhai_diagnostic(e.to_string(), e.position(), &source)]),
+                        ));
                         state.ast = None;
                         continue;
                     }
@@ -900,25 +926,73 @@ pub fn tick_rhai_models(world: &mut World) {
             if run_start {
                 state.started = true;
             }
+            // First runtime error from any hook this tick (compile error, if any,
+            // is reported alongside).
+            let mut runtime_error: Option<Diagnostic> = None;
             if let Some(ast) = &state.ast {
                 if run_start {
-                    call_hook(engine, &mut state.scope, ast, "on_start", gid, &mut state.this);
+                    if let Some((msg, pos)) =
+                        call_hook(engine, &mut state.scope, ast, "on_start", gid, &mut state.this)
+                    {
+                        runtime_error.get_or_insert_with(|| rhai_diagnostic(msg, pos, &source));
+                    }
                 }
                 // Deliver this tick's events, then advance the scenario.
                 for ev in &events {
-                    call_event_hook(
+                    if let Some((msg, pos)) = call_event_hook(
                         engine,
                         &mut state.scope,
                         ast,
                         gid,
                         &mut state.this,
                         event_to_map(ev),
-                    );
+                    ) {
+                        runtime_error.get_or_insert_with(|| rhai_diagnostic(msg, pos, &source));
+                    }
                 }
-                call_hook(engine, &mut state.scope, ast, "on_tick", gid, &mut state.this);
+                if let Some((msg, pos)) =
+                    call_hook(engine, &mut state.scope, ast, "on_tick", gid, &mut state.this)
+                {
+                    runtime_error.get_or_insert_with(|| rhai_diagnostic(msg, pos, &source));
+                }
+            }
+
+            // Publish status: any error(s) → Error; else mark OK only when we
+            // (re)compiled this tick (avoid rewriting the store every tick).
+            let mut diags = Vec::new();
+            diags.extend(compile_error);
+            diags.extend(runtime_error);
+            if !diags.is_empty() {
+                diag_updates.push((raw, Some(diags)));
+            } else if recompiled {
+                diag_updates.push((raw, None));
             }
         }
     });
+
+    // Apply collected status to the shared diagnostics store.
+    if !diag_updates.is_empty() {
+        let mut store = world.resource_mut::<DocumentDiagnostics>();
+        for (raw, status) in diag_updates {
+            match status {
+                Some(diags) => store.set_error(DocumentId::new(raw), diags),
+                None => store.set_ok(DocumentId::new(raw)),
+            }
+        }
+    }
+}
+
+/// Build an error [`Diagnostic`] from a rhai error message + [`rhai::Position`],
+/// resolving line/col against `source` into the canonical byte range.
+fn rhai_diagnostic(message: String, pos: rhai::Position, source: &str) -> Diagnostic {
+    let range = match (pos.line(), pos.position()) {
+        (Some(line), Some(col)) => {
+            let start = lunco_doc::line_col_to_offset(source, line as u32, col as u32);
+            Some(lunco_doc::TextRange::new(start, (start + 1).min(source.len())))
+        }
+        _ => None,
+    };
+    Diagnostic::error(message, range)
 }
 
 // ── Public entry point ─────────────────────────────────────────────────────

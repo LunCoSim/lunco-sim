@@ -69,8 +69,8 @@ pub mod domain_engine;
 pub mod refindex;
 
 pub use domain_engine::{
-    Diagnostic, DiagnosticSeverity, DomainEngine, DomainEngineError, NodeId, ResolvedRef,
-    SymbolRef, TextRange,
+    line_col_to_offset, offset_to_line_col, CompileState, Diagnostic, DiagnosticSeverity,
+    DomainEngine, DomainEngineError, NodeId, ResolvedRef, SymbolRef, TextRange,
 };
 pub use refindex::RefIndex;
 
