@@ -2,15 +2,17 @@
 //!
 //! [`NodeVisual`] and [`EdgeVisual`] are the two per-element trait
 //! objects the canvas renders through. Each scene [`crate::scene::Node`]
-//! and [`crate::scene::Edge`] stores a string `kind` + opaque
-//! `data: serde_json::Value`; at load / after-edit time the canvas
-//! looks up the kind in a [`VisualRegistry`] to (re)build the trait
-//! object.
+//! and [`crate::scene::Edge`] stores a string `kind` + an opaque,
+//! type-erased payload ([`crate::scene::NodeData`] =
+//! `Arc<dyn Any + Send + Sync>`); at load / after-edit time the canvas
+//! looks up the kind in a [`VisualRegistry`] and the factory downcasts
+//! the payload to its concrete struct to (re)build the trait object.
 //!
 //! The point of the indirection: `Box<dyn NodeVisual>` can't be
-//! serialised, but its `kind` + the struct it deserialises from can.
+//! serialised, but its `kind` + the typed payload behind the `Arc` can.
 //! When a `.lcscene` is loaded or a `Scene` snapshot is restored for
-//! undo, the registry reconstructs the visuals in one pass.
+//! undo, the host re-attaches typed `data` (the `Arc` is `#[serde(skip)]`)
+//! and the registry reconstructs the visuals in one pass.
 //!
 //! # What's NOT in this module
 //!

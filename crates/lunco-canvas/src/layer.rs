@@ -33,10 +33,23 @@
 
 use bevy_egui::egui;
 use lunco_theme::ColorAlpha;
+use smol_str::SmolStr;
 
 use crate::scene::Scene;
 use crate::selection::Selection;
 use crate::visual::{DrawCtx, VisualRegistry};
+
+/// Identity of a node/edge's type-erased payload, as a plain `usize`
+/// address of the backing `Arc` allocation (CQ-202 visual-cache key).
+/// `NodeData` is `Arc<dyn Any>`, which is immutable, so any edit
+/// necessarily produces a *new* `Arc` (a different address) — making
+/// the address a sound "did the data change?" key. Stored as `usize`
+/// rather than a raw pointer so the cache stays `Send + Sync` (the
+/// `Layer` trait requires it); the value is only ever compared, never
+/// dereferenced.
+fn data_addr(data: &crate::scene::NodeData) -> usize {
+    std::sync::Arc::as_ptr(data) as *const () as usize
+}
 
 /// One render pass. `draw` is called once per frame, in list order.
 pub trait Layer: Send + Sync {
@@ -129,12 +142,35 @@ impl Layer for GridLayer {
 /// graphic, not the node corner.
 pub struct EdgesLayer {
     registry_handle: std::sync::Arc<VisualRegistry>,
+    /// Per-edge built visual, keyed by id (CQ-202). Same identity rule
+    /// as [`CachedNodeVisual`].
+    visual_cache: std::collections::HashMap<crate::scene::EdgeId, CachedEdgeVisual>,
+    /// Endpoint-incidence map (`(node, port) → wire count`), cached
+    /// across frames and rebuilt only when the scene's structural
+    /// revision changes (CQ-202).
+    incidence: std::collections::HashMap<(crate::scene::NodeId, crate::scene::PortId), u32>,
+    /// `Scene::generation` the cached [`Self::incidence`] was built from.
+    /// `u64::MAX` sentinel forces a build on the first frame; because
+    /// generations come from a process-global monotonic counter, a
+    /// swapped-in scene can never coincidentally match a value this
+    /// layer has already observed.
+    incidence_gen: u64,
+}
+
+/// Cached, already-built edge visual plus its build identity (CQ-202).
+struct CachedEdgeVisual {
+    kind: SmolStr,
+    data_addr: usize,
+    visual: Box<dyn crate::visual::EdgeVisual>,
 }
 
 impl EdgesLayer {
     pub fn new(registry: std::sync::Arc<VisualRegistry>) -> Self {
         Self {
             registry_handle: registry,
+            visual_cache: std::collections::HashMap::new(),
+            incidence: std::collections::HashMap::new(),
+            incidence_gen: u64::MAX,
         }
     }
 }
@@ -149,25 +185,30 @@ impl Layer for EdgesLayer {
         // are connected" from "two wires that just happen to
         // visually overlap". 2-port connections (the common case)
         // never get a dot.
-        // TODO(CQ-202): this endpoint-incidence map is rebuilt from a full
-        // edge scan on EVERY frame, though it only changes when the wiring
-        // topology does. Cache it on the layer and recompute only when a
-        // Scene topology generation bumps (add/remove/reconnect edge) — needs
-        // a `topology_gen: u64` counter on `Scene` bumped by its edge
-        // mutators. Deferred: requires a Scene API change + in-app verify on
-        // a large diagram. See docs/code-quality-remediation.md (CQ-202).
-        let mut endpoint_counts: std::collections::HashMap<
-            (crate::scene::NodeId, crate::scene::PortId),
-            u32,
-        > = std::collections::HashMap::new();
-        for (_eid, edge) in scene.edges() {
-            *endpoint_counts
-                .entry((edge.from.node, edge.from.port.clone()))
-                .or_insert(0) += 1;
-            *endpoint_counts
-                .entry((edge.to.node, edge.to.port.clone()))
-                .or_insert(0) += 1;
+        // CQ-202: rebuild the endpoint-incidence map only when the scene's
+        // structural revision changes, not on every frame. (A node move
+        // bumps the revision too, which is harmless — the rebuild is a cheap
+        // O(edges) count with no per-element allocation.)
+        if self.incidence_gen != scene.generation() {
+            self.incidence.clear();
+            for (_eid, edge) in scene.edges() {
+                *self
+                    .incidence
+                    .entry((edge.from.node, edge.from.port.clone()))
+                    .or_insert(0) += 1;
+                *self
+                    .incidence
+                    .entry((edge.to.node, edge.to.port.clone()))
+                    .or_insert(0) += 1;
+            }
+            self.incidence_gen = scene.generation();
         }
+        let endpoint_counts = &self.incidence;
+
+        // Split borrows so the per-edge visual cache (mutated below) and the
+        // registry (read) don't alias.
+        let registry = &self.registry_handle;
+        let visual_cache = &mut self.visual_cache;
         for (eid, edge) in scene.edges() {
             let Some(from_node) = scene.node(edge.from.node) else { continue };
             let Some(to_node) = scene.node(edge.to.node) else { continue };
@@ -217,10 +258,22 @@ impl Layer for EdgesLayer {
             let to_s_raw = ctx.viewport.world_to_screen(to_w, sr);
             let from_s = crate::scene::Pos::new(from_s_raw.x.round(), from_s_raw.y.round());
             let to_s = crate::scene::Pos::new(to_s_raw.x.round(), to_s_raw.y.round());
-            let visual = self
-                .registry_handle
-                .build_edge(edge.kind.as_str(), &edge.data)
-                .unwrap_or_else(|| Box::new(crate::visual::PlaceholderEdgeVisual));
+            // CQ-202: reuse the cached edge visual unless its kind / data
+            // `Arc` changed (see NodesLayer for the rationale).
+            let addr = data_addr(&edge.data);
+            let stale = match visual_cache.get(eid) {
+                Some(c) => c.kind != edge.kind || c.data_addr != addr,
+                None => true,
+            };
+            if stale {
+                let visual = registry
+                    .build_edge(edge.kind.as_str(), &edge.data)
+                    .unwrap_or_else(|| Box::new(crate::visual::PlaceholderEdgeVisual));
+                visual_cache.insert(
+                    *eid,
+                    CachedEdgeVisual { kind: edge.kind.clone(), data_addr: addr, visual },
+                );
+            }
             let selected =
                 selection.contains(crate::selection::SelectItem::Edge(*eid));
             // Project the live waypoints (mid-drag this is what the
@@ -235,15 +288,21 @@ impl Layer for EdgesLayer {
                     crate::scene::Pos::new(s.x.round(), s.y.round())
                 })
                 .collect();
-            visual.draw(ctx, from_s, to_s, &waypoints_screen, selected);
+            visual_cache
+                .get(eid)
+                .unwrap()
+                .visual
+                .draw(ctx, from_s, to_s, &waypoints_screen, selected);
         }
+        // Evict visuals for edges that no longer exist (CQ-202).
+        visual_cache.retain(|id, _| scene.edge(*id).is_some());
         // Post-pass: junction dots. A small filled circle at any
         // port that hosts ≥3 incident wires. Drawn on top of the
         // edges (last in this layer) but still under the nodes
         // layer, so the icon body covers it where they overlap.
         let theme = lunco_theme::active(ctx.ui.ctx());
         let dot_color = theme.tokens.text;
-        for ((node_id, port_id), count) in &endpoint_counts {
+        for ((node_id, port_id), count) in endpoint_counts {
             if *count < 3 {
                 continue;
             }
@@ -268,38 +327,64 @@ impl Layer for EdgesLayer {
     }
 }
 
+/// Cached, already-built node visual plus the identity it was built
+/// from (CQ-202). Reused across frames while the node's `kind` and the
+/// `Arc` identity of its `data` are unchanged. Because a node *move*
+/// mutates only `rect` (passed to `draw` each frame), not `data`,
+/// dragging/panning never rebuilds a visual — only an actual data edit,
+/// which swaps the `data` `Arc`, does.
+struct CachedNodeVisual {
+    kind: SmolStr,
+    data_addr: usize,
+    visual: Box<dyn crate::visual::NodeVisual>,
+}
+
 /// Dispatches each node through the visual registry.
 pub struct NodesLayer {
     registry_handle: std::sync::Arc<VisualRegistry>,
+    /// Per-node built visual, keyed by id (CQ-202).
+    cache: std::collections::HashMap<crate::scene::NodeId, CachedNodeVisual>,
 }
 
 impl NodesLayer {
     pub fn new(registry: std::sync::Arc<VisualRegistry>) -> Self {
         Self {
             registry_handle: registry,
+            cache: std::collections::HashMap::new(),
         }
     }
 }
 
 impl Layer for NodesLayer {
     fn draw(&mut self, ctx: &mut DrawCtx, scene: &Scene, selection: &Selection) {
-        // TODO(CQ-202): `build_node` allocates a fresh `Box<dyn NodeVisual>`
-        // (re-parsing `node.data`) for every node every frame. Cache the
-        // built visual keyed by (kind, data identity), rebuilding only on
-        // edit. Blocked on a key: `Scene::Node.data` is an inline
-        // `serde_json::Value`, so there's no stable `Arc` pointer to key on
-        // yet — make `NodeData` Arc-backed first, then the cache is an
-        // O(1) ptr-keyed lookup. Same applies to `build_edge` above.
-        // See docs/code-quality-remediation.md (CQ-202).
+        // CQ-202: reuse the per-node `Box<dyn NodeVisual>` across frames
+        // instead of rebuilding (factory alloc + `data` downcast) for every
+        // node every frame. Invalidate an entry only when its `kind` or
+        // `data` `Arc` identity changes; the live `rect` is handed to `draw`
+        // each frame, so moves cost nothing here.
+        let registry = &self.registry_handle;
+        let cache = &mut self.cache;
         for (nid, node) in scene.nodes() {
-            let visual = self
-                .registry_handle
-                .build_node(node.kind.as_str(), &node.data)
-                .unwrap_or_else(|| Box::new(crate::visual::PlaceholderNodeVisual));
-            let selected =
-                selection.contains(crate::selection::SelectItem::Node(*nid));
-            visual.draw(ctx, node, selected);
+            let addr = data_addr(&node.data);
+            let stale = match cache.get(nid) {
+                Some(c) => c.kind != node.kind || c.data_addr != addr,
+                None => true,
+            };
+            if stale {
+                let visual = registry
+                    .build_node(node.kind.as_str(), &node.data)
+                    .unwrap_or_else(|| Box::new(crate::visual::PlaceholderNodeVisual));
+                cache.insert(
+                    *nid,
+                    CachedNodeVisual { kind: node.kind.clone(), data_addr: addr, visual },
+                );
+            }
+            let selected = selection.contains(crate::selection::SelectItem::Node(*nid));
+            cache.get(nid).unwrap().visual.draw(ctx, node, selected);
         }
+        // Evict visuals for nodes that no longer exist so the cache can't
+        // grow unbounded as nodes are deleted / re-projected.
+        cache.retain(|id, _| scene.node(*id).is_some());
     }
     fn name(&self) -> &'static str {
         "nodes"

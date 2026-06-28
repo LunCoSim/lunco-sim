@@ -34,10 +34,11 @@
 //!   `Scene` into a document op without any canvas-specific plumbing.
 //!
 //! `Box<dyn NodeVisual>` can't be serialised directly; instead, every
-//! node stores a **kind id** (`SmolStr`, e.g. `"modelica.icon"`) plus
-//! opaque `data: serde_json::Value`. At load time the crate's
-//! `VisualRegistry` rebuilds the trait object from the kind. See
-//! [`crate::visual::VisualRegistry`].
+//! node stores a **kind id** (`SmolStr`, e.g. `"modelica.icon"`) plus an
+//! opaque, type-erased payload ([`NodeData`] = `Arc<dyn Any + Send +
+//! Sync>`, `#[serde(skip)]`). At load time the crate's `VisualRegistry`
+//! rebuilds the trait object from the kind, downcasting the payload to
+//! its concrete struct. See [`crate::visual::VisualRegistry`].
 
 use std::any::Any;
 use std::collections::BTreeSet;
@@ -64,6 +65,19 @@ pub type NodeData = Arc<dyn Any + Send + Sync>;
 /// Scene needs a placeholder until the host re-attaches typed data.
 pub fn empty_node_data() -> NodeData {
     Arc::new(())
+}
+
+/// Process-global structural-revision source for [`Scene::generation`].
+/// Using one monotonic counter across *all* scenes (rather than a
+/// per-scene `+= 1`) guarantees a value never repeats, so a render
+/// layer that cached state from scene A can never get a false cache
+/// hit when scene B is swapped in — B's revision is necessarily a
+/// fresh, larger number (CQ-202). Starts at 1 so the `Default` scene's
+/// `generation == 0` is distinguishable from any real revision.
+static SCENE_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_revision() -> u64 {
+    SCENE_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Hit-test kind returned by [`Scene::hit_node`]. Mirrors
@@ -363,6 +377,15 @@ pub struct Scene {
     /// field on format bumps.
     #[serde(default)]
     next_id: u64,
+    /// Structural revision (CQ-202). Bumped from [`next_revision`] by
+    /// every mutator; render layers cache topology-derived state (the
+    /// edge endpoint-incidence map) keyed on it and recompute only on a
+    /// change. `#[serde(skip)]`: it's a runtime cache key, not authored
+    /// state, and must not perturb the byte-identical snapshot diff used
+    /// for undo — a deserialized scene resets to 0 and the next mutation
+    /// re-stamps it (and the layer's sentinel forces a first-draw build).
+    #[serde(skip)]
+    generation: u64,
 }
 
 impl Scene {
@@ -381,14 +404,23 @@ impl Scene {
         id
     }
 
+    /// Current structural revision (CQ-202) — see [`Scene::generation`].
+    /// Render layers compare this against their last-built value to skip
+    /// recomputing topology-derived caches on unchanged frames.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn insert_node(&mut self, node: Node) -> NodeId {
         let id = node.id;
         self.nodes.insert(id, node);
+        self.generation = next_revision();
         id
     }
     pub fn insert_edge(&mut self, edge: Edge) -> EdgeId {
         let id = edge.id;
         self.edges.insert(id, edge);
+        self.generation = next_revision();
         id
     }
 
@@ -412,24 +444,44 @@ impl Scene {
         for eid in &orphan_edges {
             self.edges.shift_remove(eid);
         }
+        self.generation = next_revision();
         Some((node, orphan_edges))
     }
 
     pub fn remove_edge(&mut self, id: EdgeId) -> Option<Edge> {
-        self.edges.shift_remove(&id)
+        let removed = self.edges.shift_remove(&id);
+        if removed.is_some() {
+            self.generation = next_revision();
+        }
+        removed
     }
 
     pub fn node(&self, id: NodeId) -> Option<&Node> {
         self.nodes.get(&id)
     }
+    /// Mutable node access. Conservatively bumps [`Scene::generation`] —
+    /// the caller is assumed to mutate (rect/ports/data), so any cached
+    /// topology-derived state must be considered stale (CQ-202).
     pub fn node_mut(&mut self, id: NodeId) -> Option<&mut Node> {
-        self.nodes.get_mut(&id)
+        if self.nodes.contains_key(&id) {
+            self.generation = next_revision();
+            self.nodes.get_mut(&id)
+        } else {
+            None
+        }
     }
     pub fn edge(&self, id: EdgeId) -> Option<&Edge> {
         self.edges.get(&id)
     }
+    /// Mutable edge access. Conservatively bumps [`Scene::generation`]
+    /// (the caller may reconnect endpoints, which changes incidence).
     pub fn edge_mut(&mut self, id: EdgeId) -> Option<&mut Edge> {
-        self.edges.get_mut(&id)
+        if self.edges.contains_key(&id) {
+            self.generation = next_revision();
+            self.edges.get_mut(&id)
+        } else {
+            None
+        }
     }
 
     pub fn nodes(&self) -> impl Iterator<Item = (&NodeId, &Node)> {
