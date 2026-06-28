@@ -1646,9 +1646,11 @@ struct PlotSeries {
 /// cloning `Arc`s (pointer bumps) and reads the catalog directly.
 #[derive(Resource, Default)]
 pub struct ExperimentsViewModel {
-    /// `(twin, sample-count signature, run count)` the cache was built
-    /// for. The signature grows as runs stream/complete, so a changed
-    /// total re-derives; an unchanged one skips the whole rebuild.
+    /// `(twin, content signature, run count)` the cache was built for. The
+    /// signature is a collision-resistant hash fold over each run's id,
+    /// status, and per-variable sample shape (see
+    /// [`populate_experiments_view_model`]); a changed signature re-derives,
+    /// an unchanged one skips the whole rebuild.
     built_for: Option<(lunco_experiments::TwinId, u64, u64)>,
     /// Shared time-value samples per `(run, variable)`.
     points: std::collections::HashMap<
@@ -1680,21 +1682,54 @@ pub fn populate_experiments_view_model(world: &mut World) {
     let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
 
     let (sig, run_count) = {
+        use lunco_experiments::RunStatus;
+        use std::hash::{Hash, Hasher};
         let Some(reg) = world.get_resource::<ExperimentRegistry>() else {
             clear(world);
             return;
         };
         let runs = reg.list_for_twin(&twin);
-        let sig: u64 = runs
-            .iter()
-            .map(|e| {
-                e.result
-                    .as_ref()
-                    .map(|r| (r.times.len() + r.series.len()) as u64)
-                    .unwrap_or(0)
-            })
-            .sum();
-        (sig, runs.len() as u64)
+        // Collision-resistant signature: a *summed* sample count collides
+        // trivially (a run that gains one variable and loses one time-sample,
+        // or any in-place result swap preserving the totals, leaves the sum
+        // unchanged — the cache then never rebuilds and the plot draws a stale
+        // trajectory). Fold per run: id + status (incl. `wall_time_ms` /
+        // `t_current`, so a same-shape re-run still re-derives) + `times.len()`
+        // + each `(variable, len)`. `RunStatus`/`f64` aren't `Hash`, hence the
+        // manual discriminant.
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for e in runs.iter() {
+            e.id.hash(&mut h);
+            match &e.status {
+                RunStatus::Pending => 0u8.hash(&mut h),
+                RunStatus::Queued => 1u8.hash(&mut h),
+                RunStatus::Running { t_current } => {
+                    2u8.hash(&mut h);
+                    t_current.to_bits().hash(&mut h);
+                }
+                RunStatus::Done { wall_time_ms } => {
+                    3u8.hash(&mut h);
+                    wall_time_ms.hash(&mut h);
+                }
+                RunStatus::Failed { error, partial } => {
+                    4u8.hash(&mut h);
+                    error.hash(&mut h);
+                    partial.hash(&mut h);
+                }
+                RunStatus::Cancelled => 5u8.hash(&mut h),
+            }
+            match &e.result {
+                Some(r) => {
+                    r.times.len().hash(&mut h);
+                    for (var, vals) in &r.series {
+                        var.hash(&mut h);
+                        vals.len().hash(&mut h);
+                    }
+                }
+                None => usize::MAX.hash(&mut h),
+            }
+        }
+        (h.finish(), runs.len() as u64)
     };
 
     let key = (twin.clone(), sig, run_count);
