@@ -18,12 +18,26 @@ anyhow = { workspace = true }
 # Default scripting backend: pure-Rust, wasm-clean, sandboxed. Optional so the
 # crate (and any binary) can be built with no interpreter at all.
 rhai = { workspace = true, optional = true }
+# Only the rhai World-bridge needs this: `cmd()` triggers `ApiCommandEvent`
+# (reusing the macro-reflected dispatcher + id-resolution), and reads resolve
+# `GlobalEntityId` via `ApiEntityRegistry`. Optional + gated on `rhai` so the
+# python-only / script-free builds don't pull it. No cycle: lunco-api has no
+# dep on lunco-scripting (it discovers RunRhai by reflection).
+# `default-features = false` is REQUIRED: lunco-api's default `transport-http`
+# pulls tokio/full → mio, which breaks the wasm build. We only need the
+# reflect-dispatch types (ApiCommandEvent) + ApiEntityRegistry, which are
+# transport-free. (Feature unification still gives the native app its HTTP
+# transport via the binary's own lunco-api dep.)
+lunco-api = { path = "../lunco-api", default-features = false, optional = true }
+# rhai World-bridge only: `world_pos()` walks the big_space float-origin
+# hierarchy (Grid / CellCoord) via lunco-core's coords helpers.
+big_space = { workspace = true, optional = true }
 
 [features]
 # rhai on by default — the browser-capable backend. Turn it off
 # (`--no-default-features`) for a script-free build.
 default = ["rhai"]
-rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom"]
+rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:big_space"]
 python = ["dep:pyo3", "dep:libloading", "dep:serde_json"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

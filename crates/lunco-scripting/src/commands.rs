@@ -15,13 +15,17 @@
 //! Adding another language later = a new `#[cfg(feature = "…")]` command here +
 //! a backend in `backend.rs` + one line in the registration list.
 
-#[cfg(any(feature = "rhai", feature = "python"))]
+#[cfg(feature = "python")]
 use crate::{backend::ScriptBackends, doc::ScriptLanguage};
 #[cfg(any(feature = "rhai", feature = "python"))]
 use bevy::prelude::*;
 use lunco_core::register_commands;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use lunco_core::{on_command, Ack, Command, OpId};
+#[cfg(feature = "rhai")]
+use lunco_core::ActiveCommandId;
+#[cfg(feature = "rhai")]
+use crate::world_bridge::PendingWorldScripts;
 
 #[cfg(feature = "rhai")]
 #[Command(default)]
@@ -29,15 +33,21 @@ pub struct RunRhai {
     pub code: String,
 }
 
+// rhai runs with full World access (`cmd`/`world_pos`/`get`/...), which an
+// observer can't hold. So the handler ENQUEUES the snippet under the active
+// request id; the exclusive `drain_world_scripts` system runs it next
+// FixedUpdate and overwrites this provisional outcome with the real stdout.
 #[cfg(feature = "rhai")]
 #[on_command(RunRhai)]
-fn on_run_rhai(_t: On<RunRhai>, backends: Res<ScriptBackends>) -> Result<Ack, String> {
-    let backend = backends
-        .get(ScriptLanguage::Rhai)
-        .ok_or_else(|| "rhai backend not registered".to_string())?;
-    let stdout = backend.eval(&cmd.code)?;
+fn on_run_rhai(
+    _t: On<RunRhai>,
+    active: Res<ActiveCommandId>,
+    mut pending: ResMut<PendingWorldScripts>,
+) -> Result<Ack, String> {
+    let id = active.get().unwrap_or(0);
+    pending.queue.push((id, cmd.code.clone()));
     let mut ack = Ack::new(OpId::new());
-    ack.assigned = serde_json::json!({ "stdout": stdout });
+    ack.assigned = serde_json::json!({ "status": "queued" });
     Ok(ack)
 }
 

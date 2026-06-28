@@ -7,6 +7,9 @@ pub mod python;
 pub mod repl;
 pub mod doc;
 pub mod source_asset;
+/// World-bound rhai execution (the `cmd`/`world_pos`/`get`/`find` bridge).
+#[cfg(feature = "rhai")]
+pub mod world_bridge;
 
 use std::collections::HashMap;
 use lunco_doc::{DocumentId, DocumentHost};
@@ -47,6 +50,16 @@ impl Plugin for LunCoScriptingPlugin {
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, repl::process_repl_commands);
         app.add_systems(FixedUpdate, run_scripted_models);
+
+        // World-bound rhai: a queue of (command_id, code) drained by an
+        // exclusive system so scripts can `cmd()`/read the live `&mut World`.
+        // `RunRhai` enqueues here instead of evaluating inline (an observer
+        // can't hold `&mut World`); the drain records real stdout afterwards.
+        #[cfg(feature = "rhai")]
+        {
+            app.init_resource::<world_bridge::PendingWorldScripts>();
+            app.add_systems(FixedUpdate, world_bridge::drain_world_scripts);
+        }
 
         // Pluggable script backends — one per language, per cargo feature.
         // The matching `RunPython` command is `#[cfg]`-gated on the same
