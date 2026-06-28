@@ -14,6 +14,15 @@ pub mod spawn_palette;
 pub mod inspector;
 pub mod entity_list;
 
+/// Schedule slot (in `Update`) for the UI *view-model* producers — the
+/// change-driven systems that derive render-ready state into resources for the
+/// egui panels to read (WP-8). `Update` runs before `EguiPrimaryContextPass`, so
+/// resources written here are visible to the panels the same frame. Later panels
+/// add their producers to this set; gate each with its own `run_if` so it only
+/// runs when its source data changes.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ViewModelSet;
+
 /// Plugin that registers all sandbox editing UI panels, the workbench
 /// 3D viewport placeholder, and two workspace presets:
 ///
@@ -86,6 +95,15 @@ impl Plugin for SandboxEditUiPlugin {
                     has_tour: false,
                 },
             );
+
+        // WP-8: the Entity list is a pure view over `EntityTreeView`, derived by
+        // a change-gated producer instead of being rebuilt every egui frame.
+        app.init_resource::<entity_list::EntityTreeView>().add_systems(
+            Update,
+            entity_list::populate_entity_tree_view
+                .in_set(ViewModelSet)
+                .run_if(entity_list::scene_topology_changed),
+        );
     }
 }
 

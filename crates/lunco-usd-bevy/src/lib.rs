@@ -493,84 +493,55 @@ fn instantiate_usd_prim(
         // **Legacy fallback**: `width`/`height`/`depth` on Cube prims is
         // still accepted so older `.usda` files keep working during the
         // migration. New authoring should use `size` + `xformOp:scale`.
+        // Shape dimensions (+ their magic defaults) come from the
+        // canonical `read_shape_dims` so the visual mesh and the avian
+        // collider can't desync. The mesh-quality params (sphere UV
+        // tessellation, cylinder/cone radial resolution, capsule
+        // lat/long) stay here — they're rendering-only and don't affect
+        // physics.
         let mesh_handle: Option<Handle<Mesh>> = if invisible {
             None
         } else {
-            match prim_type.as_deref() {
-                Some("Cube") => {
-                    let size = reader.prim_attribute_value::<f64>(&sdf_path, "size").unwrap_or(2.0) as f32;
-                    if let (Some(width), Some(height), Some(depth)) = (
-                        reader.prim_attribute_value::<f64>(&sdf_path, "width"),
-                        reader.prim_attribute_value::<f64>(&sdf_path, "height"),
-                        reader.prim_attribute_value::<f64>(&sdf_path, "depth"),
-                    ) {
-                        // Legacy form — width/height/depth are *full*
-                        // extents and bake into the mesh directly.
-                        Some(meshes.add(Cuboid::new(width as f32, height as f32, depth as f32)))
-                    } else {
-                        // Spec form: unit-ish Cube; xformOp:scale handles
-                        // non-uniform dimensions (set on Transform below).
-                        Some(meshes.add(Cuboid::new(size, size, size)))
-                    }
-                }
-                Some("Sphere") => {
-                    let radius = reader
-                        .prim_attribute_value::<f64>(&sdf_path, "radius")
-                        .unwrap_or(1.0) as f32;
+            match prim_type.as_deref().and_then(|ty| read_shape_dims(reader, &sdf_path, ty)) {
+                Some(ShapeDims::Cube { size, legacy_extents }) => match legacy_extents {
+                    // Legacy form — width/height/depth are *full* extents
+                    // and bake into the mesh directly.
+                    Some([w, h, d]) => Some(meshes.add(Cuboid::new(w as f32, h as f32, d as f32))),
+                    // Spec form: unit-ish Cube; xformOp:scale handles
+                    // non-uniform dimensions (set on Transform below).
+                    None => Some(meshes.add(Cuboid::new(size as f32, size as f32, size as f32))),
+                },
+                Some(ShapeDims::Sphere { radius }) => {
                     // Lat-long (UV) sphere, NOT an icosphere: a UV sphere has a
                     // clean rectangular UV unwrap (uv.x = longitude, uv.y =
                     // pole-to-pole latitude), which our ShaderMaterial checker
                     // (e.g. shaders/balloon.wgsl) needs to tile across the whole
                     // surface. An icosphere's UVs are distorted/seamed and leave
                     // large uncovered-looking patches.
-                    Some(meshes.add(Sphere::new(radius).mesh().uv(48, 32)))
+                    Some(meshes.add(Sphere::new(radius as f32).mesh().uv(48, 32)))
                 }
-                Some("Cylinder") => {
-                    let radius = reader
-                        .prim_attribute_value::<f64>(&sdf_path, "radius")
-                        .unwrap_or(1.0) as f32;
-                    let height = reader
-                        .prim_attribute_value::<f64>(&sdf_path, "height")
-                        .unwrap_or(2.0) as f32;
+                Some(ShapeDims::Cylinder { radius, height }) => {
                     // Bump radial resolution well above the default so the tire
                     // silhouette reads as round, not faceted — the low-poly
                     // barrel made the top edge of the wheel look chunky.
-                    Some(meshes.add(Cylinder::new(radius, height).mesh().resolution(64)))
+                    Some(meshes.add(Cylinder::new(radius as f32, height as f32).mesh().resolution(64)))
                 }
-                Some("Cone") => {
-                    let radius = reader
-                        .prim_attribute_value::<f64>(&sdf_path, "radius")
-                        .unwrap_or(1.0) as f32;
-                    let height = reader
-                        .prim_attribute_value::<f64>(&sdf_path, "height")
-                        .unwrap_or(2.0) as f32;
-                    Some(meshes.add(Cone::new(radius, height).mesh().resolution(64)))
+                Some(ShapeDims::Cone { radius, height }) => {
+                    Some(meshes.add(Cone::new(radius as f32, height as f32).mesh().resolution(64)))
                 }
-                Some("Capsule") => {
-                    let radius = reader
-                        .prim_attribute_value::<f64>(&sdf_path, "radius")
-                        .unwrap_or(0.5) as f32;
-                    let height = reader
-                        .prim_attribute_value::<f64>(&sdf_path, "height")
-                        .unwrap_or(1.0) as f32;
-                    let half_length = height / 2.0;
+                Some(ShapeDims::Capsule { radius, height }) => {
+                    let half_length = (height / 2.0) as f32;
                     Some(meshes.add(
-                        Capsule3d::new(radius, half_length)
+                        Capsule3d::new(radius as f32, half_length)
                             .mesh()
                             .latitudes(16)
                             .longitudes(32),
                     ))
                 }
-                Some("Plane") => {
-                    let width = reader
-                        .prim_attribute_value::<f64>(&sdf_path, "width")
-                        .unwrap_or(2.0) as f32;
-                    let length = reader
-                        .prim_attribute_value::<f64>(&sdf_path, "length")
-                        .unwrap_or(2.0) as f32;
-                    Some(meshes.add(Plane3d::default().mesh().size(width, length)))
+                Some(ShapeDims::Plane { width, length }) => {
+                    Some(meshes.add(Plane3d::default().mesh().size(width as f32, length as f32)))
                 }
-                _ => None,
+                None => None,
             }
         };
 
@@ -647,14 +618,12 @@ fn instantiate_usd_prim(
             }
         }
         if let Some(v) = get_attribute_as_vec3(reader, &sdf_path, "xformOp:rotateXYZ") {
-            // USD stores rotation in degrees; convert to radians for Bevy
-            // Only apply USD rotation if it's non-zero (to preserve existing spawn rotation)
+            // USD stores rotation in degrees; the canonical decoder
+            // converts to radians. Only apply USD rotation if it's
+            // non-zero (to preserve existing spawn rotation).
             let is_zero = v.x.abs() < 1e-6 && v.y.abs() < 1e-6 && v.z.abs() < 1e-6;
             if !is_zero {
-                let rx = v.x.to_radians();
-                let ry = v.y.to_radians();
-                let rz = v.z.to_radians();
-                transform.rotation = Quat::from_euler(EulerRot::XYZ, rx, ry, rz);
+                transform.rotation = euler_xyz_deg_to_quat(v);
             }
         }
         // UsdGeomCylinder.axis token (X|Y|Z, default Z). Compose the
@@ -663,21 +632,8 @@ fn instantiate_usd_prim(
         // an explicit `xformOp:rotateXYZ` hack. Goes after rotateXYZ so
         // it applies on top of any user-authored rotation.
         if matches!(prim_type.as_deref(), Some("Cylinder" | "Cone" | "Capsule" | "Plane")) {
-            let axis = match reader.try_get(&sdf_path, "axis") {
-                Ok(Some(v)) => match &*v {
-                    Value::Token(t) | Value::String(t) => Some(t.clone()),
-                    _ => None,
-                },
-                _ => None,
-            }
-            .or_else(|| get_attribute_as_string(reader, &sdf_path, "axis"))
-            .unwrap_or_else(|| "Z".to_string());
-            let axis_rot = match axis.as_str() {
-                "X" => Some(Quat::from_rotation_arc(Vec3::Y, Vec3::X)),
-                "Z" => Some(Quat::from_rotation_arc(Vec3::Y, Vec3::Z)),
-                _ => None,
-            };
-            if let Some(q) = axis_rot {
+            let axis = read_token(reader, &sdf_path, "axis").unwrap_or_else(|| "Z".to_string());
+            if let Some(q) = usd_axis_to_quat(&axis) {
                 transform.rotation = transform.rotation * q;
             }
             info!(
@@ -728,17 +684,8 @@ fn instantiate_usd_prim(
                 }
             }
 
-            // Pre-read child transform from USD
-            let mut child_tf = Transform::default();
-            if let Some(v) = get_attribute_as_vec3(reader, &child_path, "xformOp:translate") {
-                child_tf.translation = v;
-            }
-            if let Some(v) = get_attribute_as_vec3(reader, &child_path, "xformOp:rotateXYZ") {
-                let rx = v.x.to_radians();
-                let ry = v.y.to_radians();
-                let rz = v.z.to_radians();
-                child_tf.rotation = Quat::from_euler(EulerRot::XYZ, rx, ry, rz);
-            }
+            // Pre-read child transform from USD (canonical decoder).
+            let child_tf = read_transform_from_usd(reader, &child_path);
 
             let base_components = (
                 Name::new(child_path.to_string()),
@@ -1091,7 +1038,65 @@ pub fn read_rel_target(reader: &TextReader, prim_path: &SdfPath, rel_name: &str)
     None
 }
 
-fn get_attribute_as_string(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<String> {
+// ─────────────────────────────────────────────────────────────────────
+// Canonical USD attribute / geometry readers (WP-3 — CQ-101..104)
+//
+// `lunco-usd-bevy` is the lowest USD layer that the other USD crates
+// already depend on (`lunco-usd-avian` → here; `lunco-usd-sim` → here;
+// the top-level `lunco-usd` aggregator → all three). So the shared
+// parsing lives HERE — putting it in `lunco-usd` would be a dependency
+// cycle. These functions are the single home for the vec3/token/shape/
+// transform/axis parsing that used to be copy-pasted (and drifting)
+// between this crate and `lunco-usd-avian`.
+//
+// `read_vec3_f64` keeps the full f64 4-branch fallback ladder; the
+// `Vec3` (f32) and `DVec3` (f64, at the avian call site) wrappers cast
+// at the boundary, so physics anchors (`physics:localPos*`) keep f64
+// precision.
+// ─────────────────────────────────────────────────────────────────────
+
+/// THE canonical USD vec3 reader. Returns the raw `[f64; 3]` so callers
+/// keep full precision (avian joint anchors need it; downcasting to f32
+/// in the shared layer would silently lose precision).
+///
+/// Tries, in order: `[f32;3]` → `[f64;3]` → `Vec<f32>` → `Vec<f64>`.
+/// **This 4-branch ladder MUST stay intact** — it exists to avoid the
+/// documented silent-`None` "bodies launched into orbit" bug, where a
+/// `point3f` anchor (parsed as `[f32;3]`) read through a single-type
+/// path returned `None` and defaulted the joint anchor to zero.
+pub fn read_vec3_f64(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<[f64; 3]> {
+    // Fixed-size array forms first (`point3f`/`float3` → `[f32;3]`,
+    // `point3d`/`double3` → `[f64;3]`).
+    if let Some(v) = reader.prim_attribute_value::<[f32; 3]>(path, attr) {
+        return Some([v[0] as f64, v[1] as f64, v[2] as f64]);
+    }
+    if let Some(v) = reader.prim_attribute_value::<[f64; 3]>(path, attr) {
+        return Some([v[0], v[1], v[2]]);
+    }
+    // `Vec<f32>`/`Vec<f64>` array forms (rare in authored USD).
+    if let Some(v) = reader.prim_attribute_value::<Vec<f32>>(path, attr) {
+        if v.len() >= 3 { return Some([v[0] as f64, v[1] as f64, v[2] as f64]); }
+    }
+    if let Some(v) = reader.prim_attribute_value::<Vec<f64>>(path, attr) {
+        if v.len() >= 3 { return Some([v[0], v[1], v[2]]); }
+    }
+    None
+}
+
+/// Reads a 3-component vector attribute (`color3f` / `double3` / `float3`
+/// and `Vec<f32>`/`Vec<f64>` array forms) from a USD prim as a Bevy
+/// `Vec3` (f32). Thin wrapper over [`read_vec3_f64`] — reused by
+/// downstream crates (e.g. `lunco-usd-sim`'s shader authoring) so there
+/// is one canonical vec3 reader. `None` if absent or unconvertible.
+pub fn get_attribute_as_vec3(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<Vec3> {
+    read_vec3_f64(reader, path, attr).map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
+}
+
+/// Canonical USD token/string attribute reader. Reads the attribute's
+/// `default` value at `prim.attr` and returns it as a `String` for
+/// `token`, `string`, and `asset` value types. `None` if absent or a
+/// different type.
+pub fn read_token(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<String> {
     let attr_path = path.append_property(attr).ok()?;
     let val = reader.try_get(&attr_path, "default").ok().flatten()?;
     match &*val {
@@ -1101,26 +1106,107 @@ fn get_attribute_as_string(reader: &TextReader, path: &SdfPath, attr: &str) -> O
     }
 }
 
-/// Reads a 3-component vector attribute (`color3f` / `double3` / `float3` and
-/// `Vec<f32>`/`Vec<f64>` array forms) from a USD prim. Shared helper — reused by
-/// downstream crates (e.g. `lunco-usd-sim`'s shader authoring) so there is one
-/// canonical vec3 reader. `None` if absent or unconvertible.
-pub fn get_attribute_as_vec3(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<Vec3> {
-    // Handle fixed-size array types first (Vec3f, Vec3d)
-    if let Some(v) = reader.prim_attribute_value::<[f32; 3]>(path, attr) {
-        return Some(Vec3::new(v[0], v[1], v[2]));
+/// Back-compat alias for the string/asset call sites (visibility,
+/// `lunco:resolvedAsset`, …). Same impl as [`read_token`].
+fn get_attribute_as_string(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<String> {
+    read_token(reader, path, attr)
+}
+
+/// USD `xformOp:rotateXYZ` (Euler XYZ, **degrees** as authored) → Bevy
+/// `Quat` (radians). Canonical so the Euler order/units live in one
+/// place across both consumers.
+pub fn euler_xyz_deg_to_quat(deg: Vec3) -> Quat {
+    Quat::from_euler(
+        EulerRot::XYZ,
+        deg.x.to_radians(),
+        deg.y.to_radians(),
+        deg.z.to_radians(),
+    )
+}
+
+/// Canonical local-transform decode from `xformOp:translate` +
+/// `xformOp:rotateXYZ`. Scale is left at `ONE` (callers that need
+/// `xformOp:scale` compose it themselves; avian pre-applies scale onto
+/// the collider instead). Avian downcasts the resulting `Transform` to
+/// `DVec3`/`DQuat` at its call site.
+pub fn read_transform_from_usd(reader: &TextReader, path: &SdfPath) -> Transform {
+    let translation =
+        get_attribute_as_vec3(reader, path, "xformOp:translate").unwrap_or(Vec3::ZERO);
+    let rotation = get_attribute_as_vec3(reader, path, "xformOp:rotateXYZ")
+        .map(euler_xyz_deg_to_quat)
+        .unwrap_or(Quat::IDENTITY);
+    Transform { translation, rotation, scale: Vec3::ONE }
+}
+
+/// Canonical `UsdGeom` `axis` token → quaternion folding. A Bevy/Avian
+/// primitive (`Cylinder`/`Cone`/`Capsule`/`Plane`) is Y-axial; this
+/// rotates it onto the authored `axis`. `None` for `"Y"` (already
+/// aligned) or an unknown token — callers then leave the rotation
+/// untouched. Adding an axis case touches exactly this one place.
+pub fn usd_axis_to_quat(axis: &str) -> Option<Quat> {
+    match axis {
+        "X" => Some(Quat::from_rotation_arc(Vec3::Y, Vec3::X)),
+        "Z" => Some(Quat::from_rotation_arc(Vec3::Y, Vec3::Z)),
+        _ => None,
     }
-    if let Some(v) = reader.prim_attribute_value::<[f64; 3]>(path, attr) {
-        return Some(Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32));
-    }
-    // Handle Vec forms as fallback
-    if let Some(v) = reader.prim_attribute_value::<Vec<f32>>(path, attr) {
-        if v.len() >= 3 { return Some(Vec3::new(v[0], v[1], v[2])); }
-    }
-    if let Some(v) = reader.prim_attribute_value::<Vec<f64>>(path, attr) {
-        if v.len() >= 3 { return Some(Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32)); }
-    }
-    None
+}
+
+/// Dimensions of a USD primitive shape prim, with the spec-compliant
+/// defaults applied. One home (CQ-102) so the avian collider and the
+/// bevy mesh never desync. `Cube::size` is the spec form (default 2.0);
+/// `Cube::legacy_extents` carries the deprecated `width`/`height`/`depth`
+/// **full-extent** form when all three are authored.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShapeDims {
+    Cube { size: f64, legacy_extents: Option<[f64; 3]> },
+    Sphere { radius: f64 },
+    Cylinder { radius: f64, height: f64 },
+    Cone { radius: f64, height: f64 },
+    Capsule { radius: f64, height: f64 },
+    Plane { width: f64, length: f64 },
+}
+
+/// Read the dimensions of a USD primitive shape prim. `type_name` is the
+/// prim's `typeName` token (callers already have it). Returns `None` for
+/// an unsupported type. **The defaults here are the single source of
+/// truth** for both `lunco-usd-avian` (→ `Collider`) and this crate
+/// (→ `Mesh`); changing one here changes both, so they can't drift.
+pub fn read_shape_dims(reader: &TextReader, path: &SdfPath, type_name: &str) -> Option<ShapeDims> {
+    let dims = match type_name {
+        "Cube" => {
+            let size = reader.prim_attribute_value::<f64>(path, "size").unwrap_or(2.0);
+            let legacy_extents = match (
+                reader.prim_attribute_value::<f64>(path, "width"),
+                reader.prim_attribute_value::<f64>(path, "height"),
+                reader.prim_attribute_value::<f64>(path, "depth"),
+            ) {
+                (Some(w), Some(h), Some(d)) => Some([w, h, d]),
+                _ => None,
+            };
+            ShapeDims::Cube { size, legacy_extents }
+        }
+        "Sphere" => ShapeDims::Sphere {
+            radius: reader.prim_attribute_value::<f64>(path, "radius").unwrap_or(1.0),
+        },
+        "Cylinder" => ShapeDims::Cylinder {
+            radius: reader.prim_attribute_value::<f64>(path, "radius").unwrap_or(1.0),
+            height: reader.prim_attribute_value::<f64>(path, "height").unwrap_or(2.0),
+        },
+        "Cone" => ShapeDims::Cone {
+            radius: reader.prim_attribute_value::<f64>(path, "radius").unwrap_or(1.0),
+            height: reader.prim_attribute_value::<f64>(path, "height").unwrap_or(2.0),
+        },
+        "Capsule" => ShapeDims::Capsule {
+            radius: reader.prim_attribute_value::<f64>(path, "radius").unwrap_or(0.5),
+            height: reader.prim_attribute_value::<f64>(path, "height").unwrap_or(1.0),
+        },
+        "Plane" => ShapeDims::Plane {
+            width: reader.prim_attribute_value::<f64>(path, "width").unwrap_or(2.0),
+            length: reader.prim_attribute_value::<f64>(path, "length").unwrap_or(2.0),
+        },
+        _ => return None,
+    };
+    Some(dims)
 }
 
 /// Marker inserted on prim entities that own both a primitive Cube

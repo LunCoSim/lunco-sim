@@ -47,7 +47,10 @@ use bevy::math::DVec3;
 use bevy::mesh::VertexAttributeValues;
 use avian3d::prelude::*;
 use avian3d::physics_transform::{Position, Rotation};
-use lunco_usd_bevy::{has_api_schema, read_rel_target, UsdVisualSynced};
+use lunco_usd_bevy::{
+    has_api_schema, read_rel_target, read_shape_dims, read_transform_from_usd, usd_axis_to_quat,
+    ShapeDims, UsdVisualSynced,
+};
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 use openusd::sdf::{AbstractData, Path as SdfPath, Value};
 use openusd::usda::TextReader;
@@ -143,24 +146,19 @@ fn collect_child_colliders_from_usd(
             .unwrap_or(true);
         if !child_collision { continue; }
 
-        // Read child's local transform
+        // Read child's local transform (canonical decoder, shared with usd-bevy).
         let mut child_tf = read_transform_from_usd(reader, &child_path);
 
         // For Cylinder children, fold UsdGeomCylinder.axis into the
         // child's compound-local rotation so the Y-axis collider lines
         // up with the authored axis (mirrors what lunco-usd-bevy does
-        // for the entity Transform).
+        // for the entity Transform — same canonical `usd_axis_to_quat`).
         if let Ok(val) = reader.get(&child_path, "typeName") {
             if let Value::Token(ty) = &*val {
                 if matches!(ty.as_str(), "Cylinder" | "Cone" | "Capsule" | "Plane") {
                     let axis_tok = read_token_attribute(reader, &child_path, "axis")
                         .unwrap_or_else(|| "Z".to_string());
-                    let axis_q = match axis_tok.as_str() {
-                        "X" => Some(Quat::from_rotation_arc(Vec3::Y, Vec3::X)),
-                        "Z" => Some(Quat::from_rotation_arc(Vec3::Y, Vec3::Z)),
-                        _ => None,
-                    };
-                    if let Some(q) = axis_q {
+                    if let Some(q) = usd_axis_to_quat(&axis_tok) {
                         child_tf.rotation = child_tf.rotation * q;
                     }
                 }
@@ -217,46 +215,22 @@ fn build_collider_from_usd(reader: &TextReader, sdf_path: &SdfPath) -> Option<Co
     let Ok(val) = reader.get(sdf_path, "typeName") else { return None; };
     let Value::Token(ty) = &*val else { return None; };
 
-    // Build the INTRINSIC (unscaled) shape; the scale tail below owns scaling.
-    let collider = match ty.as_str() {
-        "Cube" => {
-            if let (Some(width), Some(height), Some(depth)) = (
-                reader.prim_attribute_value::<f64>(sdf_path, "width"),
-                reader.prim_attribute_value::<f64>(sdf_path, "height"),
-                reader.prim_attribute_value::<f64>(sdf_path, "depth"),
-            ) {
-                Collider::cuboid(width, height, depth)
-            } else {
-                let size = reader.prim_attribute_value::<f64>(sdf_path, "size").unwrap_or(2.0);
-                Collider::cuboid(size, size, size)
-            }
-        }
-        "Sphere" => {
-            let radius = reader.prim_attribute_value::<f64>(sdf_path, "radius").unwrap_or(1.0);
-            Collider::sphere(radius)
-        }
-        "Cylinder" => {
-            let radius = reader.prim_attribute_value::<f64>(sdf_path, "radius").unwrap_or(1.0);
-            let height = reader.prim_attribute_value::<f64>(sdf_path, "height").unwrap_or(2.0);
-            Collider::cylinder(radius, height)
-        }
-        "Cone" => {
-            let radius = reader.prim_attribute_value::<f64>(sdf_path, "radius").unwrap_or(1.0);
-            let height = reader.prim_attribute_value::<f64>(sdf_path, "height").unwrap_or(2.0);
-            Collider::cone(radius, height)
-        }
-        "Capsule" => {
-            let radius = reader.prim_attribute_value::<f64>(sdf_path, "radius").unwrap_or(0.5);
-            let height = reader.prim_attribute_value::<f64>(sdf_path, "height").unwrap_or(1.0);
-            Collider::capsule(radius, height)
-        }
-        "Plane" => {
-            let width = reader.prim_attribute_value::<f64>(sdf_path, "width").unwrap_or(2.0);
-            let length = reader.prim_attribute_value::<f64>(sdf_path, "length").unwrap_or(2.0);
-            // Represent as a thin cuboid so that bounds and scaling behave predictably and matching visual mapping
-            Collider::cuboid(width, 0.001, length)
-        }
-        _ => return None,
+    // Dimensions (+ their magic defaults) come from the canonical
+    // `read_shape_dims` shared with usd-bevy's mesh builder, so the
+    // collider can't desync from the visual mesh. Build the INTRINSIC
+    // (unscaled) shape; the scale tail below owns scaling.
+    let collider = match read_shape_dims(reader, sdf_path, ty.as_str())? {
+        ShapeDims::Cube { size, legacy_extents } => match legacy_extents {
+            Some([width, height, depth]) => Collider::cuboid(width, height, depth),
+            None => Collider::cuboid(size, size, size),
+        },
+        ShapeDims::Sphere { radius } => Collider::sphere(radius),
+        ShapeDims::Cylinder { radius, height } => Collider::cylinder(radius, height),
+        ShapeDims::Cone { radius, height } => Collider::cone(radius, height),
+        ShapeDims::Capsule { radius, height } => Collider::capsule(radius, height),
+        // Represent the plane as a thin cuboid so bounds and scaling
+        // behave predictably and match the visual mapping.
+        ShapeDims::Plane { width, length } => Collider::cuboid(width, 0.001, length),
     };
 
     Some(apply_collider_scale(collider, reader, sdf_path))
@@ -296,27 +270,6 @@ fn apply_collider_scale(mut collider: Collider, reader: &TextReader, sdf_path: &
         .unwrap_or((1.0, 1.0, 1.0));
     collider.set_scale(bevy::math::DVec3::new(scale.0, scale.1, scale.2), 10);
     collider
-}
-
-/// Reads the local transform from a USD prim.
-fn read_transform_from_usd(reader: &TextReader, sdf_path: &SdfPath) -> Transform {
-    let translation = read_vec3_attribute(reader, sdf_path, "xformOp:translate")
-        .map(|v| Vec3::new(v.x as f32, v.y as f32, v.z as f32))
-        .unwrap_or(Vec3::ZERO);
-
-    // Read rotation as Euler angles (degrees from USD → radians for Bevy)
-    let rotation = if let Some(rot) = read_vec3_attribute(reader, sdf_path, "xformOp:rotateXYZ") {
-        Quat::from_euler(
-            EulerRot::XYZ,
-            (rot.x as f32).to_radians(),
-            (rot.y as f32).to_radians(),
-            (rot.z as f32).to_radians(),
-        )
-    } else {
-        Quat::IDENTITY
-    };
-
-    Transform { translation, rotation, scale: Vec3::ONE }
 }
 
 /// Adds a collider component to an entity based on USD prim type and dimensions.
@@ -793,41 +746,20 @@ fn build_usd_physics_joints(
 }
 
 /// Reads a USD token attribute (e.g., `uniform token axis = "X"`).
+///
+/// Thin delegate to the canonical [`lunco_usd_bevy::read_token`] — the
+/// single home for token/string parsing shared with usd-bevy.
 fn read_token_attribute(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<String> {
-    if let Ok(val) = reader.get(path, attr) {
-        match &*val {
-            Value::Token(t) => return Some(t.clone()),
-            Value::String(s) => return Some(s.clone()),
-            _ => {}
-        }
-    }
-    None
+    lunco_usd_bevy::read_token(reader, path, attr)
 }
 
-/// Reads a DVec3 attribute (e.g., double3 xformOp:translate).
+/// Reads a `DVec3` attribute (e.g., `double3 xformOp:translate`) at full
+/// f64 precision.
 ///
-/// Tries both `Vec<f64>` and `Vec<f32>` since USD stores vector attributes as
-/// floating-point arrays. Returns `None` if the attribute doesn't exist or has
-/// fewer than 3 elements.
+/// Thin DVec3 adapter over the canonical [`lunco_usd_bevy::read_vec3_f64`]
+/// (the 4-branch `[f32;3]→[f64;3]→Vec<f32>→Vec<f64>` ladder). Keeping the
+/// reader f64 end-to-end is what avoids the documented silent-`None`
+/// "bodies launched into orbit" bug for `physics:localPos*` anchors.
 fn read_vec3_attribute(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<DVec3> {
-    // **Fixed-size array forms first** (`Value::Vec3f`/`Value::Vec3d`).
-    // USD's `point3f` and `float3` parse as `[f32; 3]`, `point3d` and
-    // `double3` as `[f64; 3]`. Without this, `physics:localPos0` etc.
-    // (declared `point3f` in our scenes) silently read as `None` and
-    // defaulted joint anchors to zero — producing infinite-stiffness
-    // corrective impulses that launched bodies into orbit.
-    if let Some(v) = reader.prim_attribute_value::<[f32; 3]>(path, attr) {
-        return Some(DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64));
-    }
-    if let Some(v) = reader.prim_attribute_value::<[f64; 3]>(path, attr) {
-        return Some(DVec3::new(v[0], v[1], v[2]));
-    }
-    // Vec<f32>/Vec<f64> array forms (rare in authored USD).
-    if let Some(v) = reader.prim_attribute_value::<Vec<f64>>(path, attr) {
-        if v.len() >= 3 { return Some(DVec3::new(v[0], v[1], v[2])); }
-    }
-    if let Some(v) = reader.prim_attribute_value::<Vec<f32>>(path, attr) {
-        if v.len() >= 3 { return Some(DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64)); }
-    }
-    None
+    lunco_usd_bevy::read_vec3_f64(reader, path, attr).map(|v| DVec3::new(v[0], v[1], v[2]))
 }

@@ -465,12 +465,48 @@ fn find_attribute_value_range(body: &str, attr: &str) -> Option<Range<usize>> {
     let needle = attr.as_bytes();
     let bytes = body.as_bytes();
     let mut i = 0;
-    while i + needle.len() <= bytes.len() {
-        i = skip_noise(bytes, i, bytes.len());
-        if i + needle.len() > bytes.len() {
-            return None;
+    // Brace/bracket/paren depth WITHIN the prim body. The body we're
+    // handed is the parent prim's body, so depth 0 == directly on the
+    // parent. Child `def|over|class { ... }` blocks (and `(metadata)` /
+    // array values) sit at depth ≥ 1; we must NOT match an attribute
+    // there or `SetTranslate`/`SetAttribute` on a parent that lacks the
+    // attribute would clobber a descendant's value (CQ-503).
+    let mut depth: i32 = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' | b'(' | b'[' => {
+                depth += 1;
+                i += 1;
+                continue;
+            }
+            b'}' | b')' | b']' => {
+                depth -= 1;
+                i += 1;
+                continue;
+            }
+            b'"' => {
+                // Skip a quoted string (no escape support) so braces /
+                // the needle inside string literals never count.
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    i += 1;
+                }
+                if i < bytes.len() {
+                    i += 1;
+                }
+                continue;
+            }
+            b'#' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            _ => {}
         }
-        if &bytes[i..i + needle.len()] == needle
+        if depth == 0
+            && i + needle.len() <= bytes.len()
+            && &bytes[i..i + needle.len()] == needle
             && (i == 0 || !is_ident_byte(bytes[i - 1]))
             && (i + needle.len() == bytes.len()
                 || !is_ident_byte(bytes[i + needle.len()]))
@@ -623,6 +659,50 @@ mod tests {
         // Translates land where expected.
         assert!(s.contains("xformOp:translate = (1, 0, 1)"));
         assert!(s.contains("xformOp:translate = (1, 0, -1)"));
+    }
+
+    #[test]
+    fn set_attribute_on_parent_does_not_clobber_child() {
+        // CQ-503 regression: the parent prim has NO `inputs:roughness`,
+        // but its child does. Setting it on the parent must ADD it to the
+        // parent and leave the child's value untouched — the depth-blind
+        // splicer used to overwrite the descendant.
+        let src = "#usda 1.0\ndef Xform \"World\"\n{\n    def Sphere \"Ball\"\n    {\n        float inputs:roughness = 0.8\n    }\n}\n";
+        let out = set_attribute(src, "/World", "inputs:roughness", "float", "0.2").unwrap();
+
+        // Child value preserved.
+        let ball = find_prim(&out, "/World/Ball").expect("child survives");
+        assert!(
+            out[ball.body.clone()].contains("inputs:roughness = 0.8"),
+            "child's roughness was clobbered: {out}"
+        );
+        // Parent got its own authoring.
+        assert!(out.contains("inputs:roughness = 0.2"));
+        // Exactly two authorings now (parent + child), neither lost.
+        assert_eq!(out.matches("inputs:roughness").count(), 2);
+        assert!(out.contains("0.8"));
+        assert!(out.contains("0.2"));
+    }
+
+    #[test]
+    fn set_translate_on_parent_does_not_clobber_child() {
+        // CQ-503 regression for the `set_translate` route (shares the
+        // same `find_attribute_value_range` scaffolding).
+        let src = "#usda 1.0\ndef Xform \"World\"\n{\n    def Sphere \"Ball\"\n    {\n        double3 xformOp:translate = (9, 9, 9)\n    }\n}\n";
+        let out = set_translate(src, "/World", [1.0, 2.0, 3.0]).unwrap();
+
+        // Child translate untouched.
+        let ball = find_prim(&out, "/World/Ball").expect("child survives");
+        assert!(
+            out[ball.body.clone()].contains("xformOp:translate = (9, 9, 9)"),
+            "child's translate was clobbered: {out}"
+        );
+        // Parent got its own translate.
+        assert!(out.contains("xformOp:translate = (1, 2, 3)"));
+        assert!(out.contains("(9, 9, 9)"));
+        // Still parseable.
+        let mut parser = openusd::usda::parser::Parser::new(&out);
+        parser.parse().expect("parses cleanly");
     }
 
     #[test]
