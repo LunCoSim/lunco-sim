@@ -187,6 +187,20 @@ pub fn build_world_engine() -> Engine {
         find_impl(name.as_str())
     });
 
+    // name(id) -> the entity's Name as a string, or () if unnamed/unknown. The
+    // reverse of find(name): turn an id (from list_entities/nearest/children/…)
+    // back into a human label for logging/UI.
+    engine.register_fn("name", |id: i64| -> Dynamic { name_impl(id as u64) });
+
+    // parent(id) -> parent entity id (i64), or () if it has no parent or the
+    // parent isn't a registered (script-visible) entity. Hierarchy traversal up.
+    engine.register_fn("parent", |id: i64| -> Dynamic { parent_impl(id as u64) });
+
+    // children(id) -> [id, ...] of the entity's DIRECT children that are
+    // registered entities (skips un-registered internal children). Empty if none.
+    // Hierarchy traversal down; compose with parent()/name() for tree walks.
+    engine.register_fn("children", |id: i64| -> rhai::Array { children_impl(id as u64) });
+
     // emit(name, value) -> bool — fire a TelemetryEvent on the shared bus
     // (reused, not reinvented): existing API-subscription + log observers see
     // it immediately, and scripts receive it next tick via on_event. `value`
@@ -515,6 +529,52 @@ fn find_impl(name: &str) -> i64 {
         -1
     })
     .unwrap_or(-1)
+}
+
+/// `name(id)` — the entity's `Name` as a rhai string, or `()` if unnamed/unknown.
+fn name_impl(gid: u64) -> Dynamic {
+    with_world(|world| {
+        let entity = resolve_entity(world, gid)?;
+        world
+            .get::<Name>(entity)
+            .map(|n| Dynamic::from(n.as_str().to_string()))
+    })
+    .flatten()
+    .unwrap_or(Dynamic::UNIT)
+}
+
+/// `parent(id)` — the parent's gid, or `()` if no parent / parent unregistered.
+fn parent_impl(gid: u64) -> Dynamic {
+    with_world(|world| {
+        let entity = resolve_entity(world, gid)?;
+        let parent = world.get::<ChildOf>(entity)?.parent();
+        world
+            .get_resource::<ApiEntityRegistry>()?
+            .api_id_for(parent)
+            .map(|g| Dynamic::from_int(g.get() as i64))
+    })
+    .flatten()
+    .unwrap_or(Dynamic::UNIT)
+}
+
+/// `children(id)` — gids of the entity's direct, registered children (skips
+/// children that have no `GlobalEntityId`). Empty array if none / unknown.
+fn children_impl(gid: u64) -> rhai::Array {
+    with_world(|world| {
+        let Some(entity) = resolve_entity(world, gid) else {
+            return rhai::Array::new();
+        };
+        let Some(children) = world.get::<Children>(entity) else {
+            return rhai::Array::new();
+        };
+        let reg = world.resource::<ApiEntityRegistry>();
+        children
+            .iter()
+            .filter_map(|child| reg.api_id_for(child))
+            .map(|g| Dynamic::from_int(g.get() as i64))
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -975,6 +1035,8 @@ mod tests {
                 "mission_plan",
                 include_str!("../rhai/examples/mission_plan.rhai"),
             ),
+            ("sequence", include_str!("../rhai/examples/sequence.rhai")),
+            ("timeline", include_str!("../rhai/examples/timeline.rhai")),
             (
                 "formation (tool lib)",
                 include_str!("../rhai/tools/formation.rhai"),
@@ -1061,5 +1123,98 @@ mod tests {
         let out = super::eval_with_world(&mut world, code).unwrap();
         // rhai prints the array as [20, 10, true, false, true]
         assert_eq!(out.trim(), "[20, 10, true, false, true]", "got {out}");
+    }
+
+    #[test]
+    fn sequencer_advances_through_steps() {
+        use bevy::prelude::World;
+        let mut world = World::new();
+        // No fixed clock → elapsed_seconds() is 0.0 every call, so wait(0.0)
+        // completes immediately and the cursor walks step 0→1→2→len, then no-ops.
+        // me=0 is a dummy id the predicate closures ignore.
+        let code = r#"
+            let steps = [ wait_until(|m| true), wait(0.0), wait_until(|m| true) ];
+            let cur = seq_init();
+            cur = run_steps(0, steps, cur); let a = cur.step;   // step0 done -> 1
+            cur = run_steps(0, steps, cur); let b = cur.step;   // step1 dwell -> 2
+            cur = run_steps(0, steps, cur); let c = cur.step;   // step2 done -> 3 (==len)
+            cur = run_steps(0, steps, cur); let d = cur.step;   // past end -> no-op
+            [a, b, c, d]
+        "#;
+        let out = super::eval_with_world(&mut world, code).unwrap();
+        assert_eq!(out.trim(), "[1, 2, 3, 3]", "got {out}");
+    }
+
+    #[test]
+    fn wait_for_event_completes_via_seq_note_event() {
+        use bevy::prelude::World;
+        let mut world = World::new();
+        // A wait_for("PING") step holds until seq_note_event feeds a matching
+        // event; an unrelated event must NOT advance it.
+        let code = r#"
+            let steps = [ wait_for("PING") ];
+            let cur = seq_init();
+            cur = run_steps(0, steps, cur); let before = cur.step;        // still 0
+            cur = seq_note_event(cur, #{ name: "OTHER" });
+            cur = run_steps(0, steps, cur); let after_other = cur.step;   // still 0
+            cur = seq_note_event(cur, #{ name: "PING" });
+            cur = run_steps(0, steps, cur); let after_ping = cur.step;    // now 1 (==len)
+            [before, after_other, after_ping]
+        "#;
+        let out = super::eval_with_world(&mut world, code).unwrap();
+        assert_eq!(out.trim(), "[0, 0, 1]", "got {out}");
+    }
+
+    #[test]
+    fn data_timeline_compiles_and_runs_on_layer1() {
+        use bevy::prelude::World;
+        let mut world = World::new();
+        // A pure-DATA timeline (the Layer-2 shape RunTimeline embeds): an emit
+        // one-shot, a 0s dwell, then wait-for-event. compile_timeline lowers it
+        // to Layer-1 steps run by run_steps; seq_note_event unblocks the wait.
+        let code = r#"
+            let data = [ #{ emit: "GO_MARK", value: 1 }, #{ wait: 0.0 }, #{ wait_event: "GO" } ];
+            let steps = compile_timeline(data);
+            let cur = seq_init();
+            cur = run_steps(0, steps, cur); let a = cur.step;   // emit once -> 1
+            cur = run_steps(0, steps, cur); let b = cur.step;   // dwell 0s   -> 2
+            cur = run_steps(0, steps, cur); let c = cur.step;   // wait_event -> still 2
+            cur = seq_note_event(cur, #{ name: "GO" });
+            cur = run_steps(0, steps, cur); let d = cur.step;   // event seen -> 3 (==len)
+            [steps.len(), a, b, c, d]
+        "#;
+        let out = super::eval_with_world(&mut world, code).unwrap();
+        assert_eq!(out.trim(), "[3, 1, 2, 2, 3]", "got {out}");
+    }
+
+    #[test]
+    fn hierarchy_verbs_walk_parent_children_and_name() {
+        use bevy::prelude::*;
+        use lunco_api::registry::ApiEntityRegistry;
+        use lunco_core::GlobalEntityId;
+
+        let mut world = World::new();
+        world.init_resource::<ApiEntityRegistry>();
+        let parent = world.spawn(Name::new("base")).id();
+        // Inserting ChildOf fires the relationship hook → parent gains Children.
+        let child = world.spawn((Name::new("arm"), ChildOf(parent))).id();
+        {
+            let mut reg = world.resource_mut::<ApiEntityRegistry>();
+            reg.assign(parent, GlobalEntityId::from_raw(100));
+            reg.assign(child, GlobalEntityId::from_raw(200));
+        }
+
+        // name() reverse-lookup, parent() up, children() down, and the () cases.
+        let code = r#"
+            [ name(100) == "base", name(200) == "arm",
+              parent(200), children(100).len(), children(100)[0],
+              name(999) == (), parent(100) == () ]
+        "#;
+        let out = super::eval_with_world(&mut world, code).unwrap();
+        assert_eq!(
+            out.trim(),
+            "[true, true, 100, 1, 200, true, true]",
+            "got {out}"
+        );
     }
 }

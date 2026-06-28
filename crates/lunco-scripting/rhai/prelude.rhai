@@ -15,7 +15,10 @@
 //                                        back as arrays ([x,y,z]/[x,y,z,w]),
 //                                        structs as maps
 //   list_entities() -> [#{id,name,type,pos}]  (type+pos enable in-rhai selection)
-//   find(name) -> id
+//   find(name) -> id              lookup: id of the entity named `name` (-1 if none)
+//   name(id) -> string            lookup: reverse of find — id back to its Name, or ()
+//   parent(id) -> id              tree:   parent's id, or () if none/unregistered
+//   children(id) -> [id, ...]     tree:   ids of direct registered children
 //   sim_tick() -> i64             time:  current fixed tick (integer)
 //   dt() -> f64                   time:  fixed-step delta in seconds (1/60)
 //   elapsed_seconds() -> f64      time:  monotonic sim seconds since startup
@@ -111,6 +114,126 @@ fn run_plan(entity, plan, idx, speed, radius) {
     }
     idx
 }
+
+// ── Sequencer (Layer 1: time/sequence primitives — PURE rhai policy) ─────────
+//
+// A general step sequencer over the same "thread state through `this`" rule as
+// run_plan (the engine binds `this` ONLY inside the hook, not in called fns), so
+// every primitive is STATELESS: it takes a cursor and returns the next cursor.
+// The hook owns the cursor on `this`.
+//
+// A STEP is a map; a SEQUENCE is an array of steps. Step shapes (use the
+// constructors below, or write the map literal directly):
+//   #{ act: |m| ..., done: |m| ... }   run `act` every tick; advance when `done`
+//   #{ act: |m| ... }                  one-shot: run `act` once, then advance
+//   #{ secs: 5.0 }                     dwell N seconds, then advance
+//   #{ done: |m| ... }                 wait until predicate true (no action)
+//   #{ event: "NAME" }                 wait until a matching event arrives
+// (`act`/`done`/`secs`/`event` avoid rhai's reserved `do`/`until`.)
+//
+// Events arrive in on_event, not on_tick, so wait-for-event needs the hook to
+// feed them in. The 3-hook shell (`me` is the host gid; state lives on `this`):
+//   fn on_start(me)      { this.cur = seq_init(); }
+//   fn on_tick(me)       { this.cur = run_steps(me, STEPS, this.cur); }
+//   fn on_event(me, evt) { this.cur = seq_note_event(this.cur, evt); }
+//
+// Progress is observable on the telemetry bus: STEP_COMPLETE(idx) per step and
+// SEQUENCE_COMPLETE(len) at the end (mirrors run_plan's OBJECTIVE/PLAN emits).
+
+/// Fresh sequencer cursor. `entered_at` is () until the first tick stamps it
+/// (so dwell timing works regardless of when the sequence starts).
+fn seq_init() { #{ step: 0, entered_at: (), events: [] } }
+
+/// Step constructors (sugar over the map literals; all optional to use).
+fn step(act, done) { #{ act: act, done: done } }   // closed-loop: act until done
+fn once(act)       { #{ act: act } }               // run once, then advance
+fn wait(secs)      { #{ secs: secs } }             // dwell `secs` seconds
+fn wait_until(done){ #{ done: done } }             // hold until predicate true
+fn wait_for(event) { #{ event: event } }           // hold until event `name` fires
+
+/// True when the current step `s` is complete. Precedence: explicit `done`
+/// predicate, else `secs` dwell, else `event` match, else one-shot (advance now).
+fn step_done(me, s, cur, now) {
+    if s.done != ()  { return s.done.call(me); }
+    if s.secs != ()  { return (now - cur.entered_at) >= s.secs; }
+    if s.event != () { return cur.events.some(|n| n == s.event); }
+    true
+}
+
+/// Advance a step sequence by one tick. Runs the current step's `act` (if any),
+/// then advances when the step is done. Returns the next cursor; when
+/// `cur.step >= steps.len()` the sequence is complete (subsequent calls no-op).
+/// Typical use in on_tick: `self.cur = run_steps(me, STEPS, self.cur);`
+fn run_steps(me, steps, cur) {
+    if cur.step >= steps.len() { return cur; }
+    let now = elapsed_seconds();
+    if cur.entered_at == () { cur.entered_at = now; }   // lazy stamp on entry
+    let s = steps[cur.step];
+    if s.act != () { s.act.call(me); }
+    if step_done(me, s, cur, now) {
+        emit("STEP_COMPLETE", cur.step);
+        cur.step += 1;
+        cur.entered_at = now;     // stamp the next step's entry time
+        cur.events = [];          // events are per-step; clear on advance
+        if cur.step >= steps.len() { emit("SEQUENCE_COMPLETE", cur.step); }
+    }
+    cur
+}
+
+/// Feed an on_event payload into the cursor's per-step event buffer so that
+/// `wait_for(name)` steps can complete. Call from on_event. Returns the cursor.
+fn seq_note_event(cur, evt) {
+    if evt.name != () { cur.events.push(evt.name); }
+    cur
+}
+
+// ── Timeline (Layer 2: a mission as DATA, interpreted onto Layer 1) ──────────
+//
+// Layer 1 steps carry rhai CLOSURES; a TIMELINE step is pure DATA (a map of
+// fields), so a whole mission is serialisable — authorable as a `const`, stored
+// in the Twin, or driven over the API by `RunTimeline` (which generates the
+// generic executor below). `compile_timeline` lowers data steps to Layer-1
+// steps ONCE (in on_start); on_tick then runs them with the same `run_steps`.
+//
+// Data step vocabulary (first matching field wins):
+//   #{ move_to: [x,y,z], speed: 1.0, radius: 2.0 }  drive until arrived (speed/radius optional)
+//   #{ cmd: "Name", params: #{...} }              fire any command once, then advance
+//   #{ emit: "NAME", value: v }                   emit a telemetry marker once
+//   #{ wait: 5.0 }                                dwell N seconds
+//   #{ wait_event: "NAME" }                       hold until an event arrives
+// Unknown steps lower to a no-op (skipped) — forward-compatible with new fields.
+//
+// Generic executor (RunTimeline injects exactly this around a `const TIMELINE`):
+//   fn on_start(me)      { this.cur = seq_init(); this.steps = compile_timeline(TIMELINE.steps); }
+//   fn on_tick(me)       { this.cur = run_steps(me, this.steps, this.cur); }
+//   fn on_event(me, evt) { this.cur = seq_note_event(this.cur, evt); }
+
+/// Lower ONE data step to a Layer-1 step (closures capturing the step's fields).
+fn timeline_step(s) {
+    if s.move_to != () {
+        let wp  = s.move_to;
+        let spd = if s.speed  != () { s.speed  } else { 1.0 };
+        let rad = if s.radius != () { s.radius } else { 2.0 };
+        return step(|m| nav_to(m, wp, spd, rad), |m| arrived(m, wp, rad));
+    }
+    if s.cmd != () {
+        let name = s.cmd;
+        let params = if s.params != () { s.params } else { #{} };
+        return once(|m| cmd(name, params));
+    }
+    if s.emit != () {
+        let name = s.emit;
+        let val = s.value;
+        return once(|m| emit(name, val));
+    }
+    if s.wait != () { return wait(s.wait); }
+    if s.wait_event != () { return wait_for(s.wait_event); }
+    once(|m| {})   // unknown → no-op, advance next tick
+}
+
+/// Lower a whole data timeline (array of data steps) to Layer-1 steps. Call ONCE
+/// in on_start and hold the result on `this`; feed it to run_steps each tick.
+fn compile_timeline(steps) { steps.map(|s| timeline_step(s)) }
 
 // ── Rover control (re-emit every tick: DriveRover has no persistent setpoint) ──
 

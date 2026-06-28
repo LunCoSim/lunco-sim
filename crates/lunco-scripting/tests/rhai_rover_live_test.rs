@@ -464,3 +464,82 @@ fn builtin_formation_tool_library_drives_a_follower() {
         "formation tool library should have driven the follower toward the leader; got {drives:?}"
     );
 }
+
+#[test]
+fn run_timeline_lowers_data_to_a_running_scenario() {
+    // Layer 2 end-to-end: fire RunTimeline with a pure-DATA timeline over the
+    // SAME ApiCommandEvent path the API/MCP use. The handler must serialise it
+    // into the generic executor, attach a ScriptedModel, and the runtime must
+    // drive the rover from the first `move_to` step (a far waypoint → drive forward).
+    use lunco_api::executor::ApiCommandEvent;
+
+    let mut app = build_app();
+    let rover = spawn_rover(&mut app); // bare, at origin facing -Z
+    assert!(app.world().get::<ScriptedModel>(rover).is_none());
+
+    // Object form with a far waypoint, then a brake command step.
+    let timeline = serde_json::json!({
+        "name": "t",
+        "steps": [
+            { "move_to": [0.0, 0.0, -20.0], "speed": 1.0, "radius": 2.0 },
+            { "cmd": "BrakeRover", "params": {} },
+        ],
+    })
+    .to_string();
+
+    app.world_mut().trigger(ApiCommandEvent {
+        command: "RunTimeline".to_string(),
+        params: serde_json::json!({ "target": ROVER_GID, "timeline": timeline }),
+        id: 1,
+    });
+    app.world_mut().flush();
+
+    assert!(
+        app.world().get::<ScriptedModel>(rover).is_some(),
+        "RunTimeline should attach a ScriptedModel"
+    );
+
+    tick(&mut app);
+
+    let drives = &app.world().resource::<DriveLog>().0;
+    assert!(
+        !drives.is_empty() && drives[0].0 > 0.0,
+        "first move_to step should drive the rover forward toward the waypoint; got {drives:?}"
+    );
+}
+
+#[test]
+fn run_timeline_arrives_advances_and_brakes() {
+    // A move_to step placed AT the rover (large radius) arrives immediately: nav_to
+    // brakes, the step completes (STEP_COMPLETE), and the next `cmd` step fires
+    // its BrakeRover. Proves data-step lowering + advancement + the cmd step.
+    use lunco_api::executor::ApiCommandEvent;
+
+    let mut app = build_app();
+    let _rover = spawn_rover(&mut app);
+
+    let timeline = serde_json::json!([
+        { "move_to": [0.0, 0.0, 0.0], "radius": 5.0 },
+        { "emit": "ARRIVED_A", "value": true },
+    ])
+    .to_string();
+
+    app.world_mut().trigger(ApiCommandEvent {
+        command: "RunTimeline".to_string(),
+        params: serde_json::json!({ "target": ROVER_GID, "timeline": timeline }),
+        id: 1,
+    });
+    app.world_mut().flush();
+
+    tick(&mut app);
+
+    assert!(
+        app.world().resource::<BrakeCount>().0 >= 1,
+        "arriving on the move_to step should brake"
+    );
+    let events = &app.world().resource::<EventLog>().0;
+    assert!(
+        events.iter().any(|n| n == "STEP_COMPLETE"),
+        "completing the move_to step should emit STEP_COMPLETE; got {events:?}"
+    );
+}
