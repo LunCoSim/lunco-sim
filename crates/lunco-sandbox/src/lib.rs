@@ -46,6 +46,7 @@ use lunco_hardware::LunCoHardwarePlugin;
 use lunco_usd::{LoadScene, UsdPlugins};
 use lunco_terrain::TerrainPlugin;
 use lunco_obstacle_field::ObstacleFieldPlugin;
+use lunco_terrain_streaming::TerrainStreamingPlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::LunCoAvatarPlugin;
 use lunco_celestial::GravityPlugin;
@@ -317,6 +318,10 @@ impl Plugin for SandboxCorePlugin {
             // ground for rover mobility testing). Server-authoritative colliders;
             // client adds visuals. See `project_obstacle_field_generator`.
             .add_plugins(ObstacleFieldPlugin)
+            // Streamed, dynamically-LOD'd terrain (DEM tiles + heightfield
+            // colliders). Inert at M0 (config only); see lunco-terrain-streaming
+            // and docs/terrain-streaming-PLAN.md.
+            .add_plugins(TerrainStreamingPlugin)
             .add_plugins(LunCoHardwarePlugin)
             .add_plugins(LunCoMobilityPlugin)
             // USD scene load + avian collider build + cosim wiring —

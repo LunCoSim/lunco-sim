@@ -70,6 +70,7 @@ lunco-render = { path = "../lunco-render" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-terrain = { path = "../lunco-terrain" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
+lunco-terrain-streaming = { path = "../lunco-terrain-streaming" }
 lunco-modelica = { path = "../lunco-modelica", default-features = false }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-environment = { path = "../lunco-environment" }

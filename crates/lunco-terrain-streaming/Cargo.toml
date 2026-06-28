@@ -1,0 +1,33 @@
+[package]
+name = "lunco-terrain-streaming"
+version = "0.1.0-dev"
+edition = "2021"
+description = "Streamed, dynamically-LOD'd lunar terrain (DEM tiles, clipmap/quadtree, heightfield colliders) for LunCoSim"
+
+[dependencies]
+# The pure-core modules (`tile`, `source`) touch only std + glam (Vec2/Vec3),
+# available at the substrate level. Render/physics features are added as the
+# plugin layer grows (M2 mesh build, M3 avian collider streaming) — kept out of
+# the M0/M1 core so it stays wasm-safe and fast to compile/test.
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_mesh", "bevy_render", "bevy_light"] }
+bevy_mesh = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+# Reuse the existing height-surface machinery instead of duplicating it: the DEM
+# loader fills `field::HeightGrid` (bilinear `height_at`, `to_mesh_data`,
+# `to_avian_heights` → `Collider::heightfield`) — the same grid the procedural
+# obstacle field already drives. No new grid/mesh/collider code.
+lunco-obstacle-field = { path = "../lunco-obstacle-field" }
+# M3 spawn: avian heightfield collider + big_space anchoring + cross-platform
+# byte I/O for the DEM asset (FileStorage native / WebStorage web).
+avian3d = { workspace = true }
+big_space = { workspace = true }
+lunco-storage = { path = "../lunco-storage" }
+serde = { workspace = true }
+# Decodes the float32 GeoTIFF heightmaps emitted by `lunar_terrain_exporter`.
+# Already in the workspace tree via `image`'s `tiff` feature; pure-Rust (weezl,
+# no GDAL) so the DEM loader stays wasm-safe. The flat `metadata.yaml` sidecar is
+# hand-parsed (see `dem.rs`) — no yaml dependency pulled in.
+tiff = "0.11"
+
+[lints]
+workspace = true
