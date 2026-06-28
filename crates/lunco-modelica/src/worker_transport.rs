@@ -1291,6 +1291,14 @@ pub fn __lc_test_dispatch_compile(model_name: &str, source: &str) {
 pub fn install_msl_in_worker(
     parsed: &[(String, rumoca_compile::parsing::StoredDefinition)],
 ) {
+    // TODO(CQ-213): `parsed.to_vec()` deep-clones the full ~165 MB parsed
+    // MSL bundle solely to wrap it in `WireMessage` for bincode. Serialize
+    // from a borrowing wrapper instead — a `#[derive(Serialize)]` enum whose
+    // `InstallParsedMsl(&[(String, StoredDefinition)])` variant reproduces the
+    // exact bincode discriminant + payload layout of the owned `WireMessage`
+    // variant (so the worker's owned deserialize is unaffected). Brittle
+    // (variant order must stay in lockstep) and wasm-only / unverifiable
+    // without a worker runtime, so deferred. See docs/code-quality-remediation.md.
     let envelope = WireMessage::InstallParsedMsl(parsed.to_vec());
     let bytes = match bincode::serialize(&envelope) {
         Ok(b) => b,

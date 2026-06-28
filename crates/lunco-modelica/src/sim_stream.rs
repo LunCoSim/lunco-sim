@@ -94,10 +94,27 @@ impl VarHistory {
     /// [`DEFAULT_HISTORY_CAPACITY`] by dropping the oldest entry.
     ///
     /// Used by the worker on each Step: build next snapshot =
-    /// `prev.append(new_sample)` per variable. Cheap because the
-    /// backing `Arc<Vec<_>>` is cloned lazily — Arcs bump a
-    /// refcount; `Vec` is only cloned when we need to mutate and
-    /// there's >1 reader.
+    /// `prev.append(new_sample)` per variable.
+    ///
+    /// COST (CQ-210): this is **O(capacity)** per call, not the
+    /// "cheap Arc CoW" an earlier comment claimed. Each published
+    /// snapshot is immutable and `advance` clones `prev`'s
+    /// `VarHistory` (Arc bump) before appending, so the backing
+    /// `Arc<Vec<_>>` always has refcount ≥ 2 here — there is no
+    /// sole-owner fast path to exploit. At steady state (len ==
+    /// capacity) every append copies the full window.
+    ///
+    /// TODO(CQ-210): a true O(1) append needs a lock-free
+    /// append-only ring shared between the worker and readers, with
+    /// each snapshot recording a monotonic watermark (length /
+    /// absolute index) instead of owning its own `Vec`. Readers read
+    /// `[..watermark]`; eviction uses absolute indices so it never
+    /// shifts live readers. That's an SPSC redesign with concurrency
+    /// invariants of its own — deferred to a focused pass with
+    /// in-app verification. NB: this cost is on the **worker
+    /// thread**, off the per-frame UI path, so it does not stall
+    /// input the way the main-thread findings do.
+    /// See docs/code-quality-remediation.md (CQ-210).
     pub fn append(&self, sample: SimSample) -> VarHistory {
         let mut next: Vec<SimSample> =
             Vec::with_capacity(self.samples.len().saturating_add(1));

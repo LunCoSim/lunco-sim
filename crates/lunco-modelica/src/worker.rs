@@ -510,15 +510,11 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             .map(|c| c.doc_uri.clone())
                             .unwrap_or_else(|| model_name.clone());
 
-                        let temp_dir = modelica_dir().join(format!("{}_{}", entity.index(), entity.generation()));
-                        let _ = std::fs::create_dir_all(&temp_dir);
-                        let temp_path = temp_dir.join("model.mo");
-                        if let Err(e) = std::fs::write(&temp_path, &source) {
-                            let mut r = result_ok(entity, session_id);
-                            r.error = Some(format!("IO Error: {e}"));
-                            let _ = tx_inner.send(r);
-                            return;
-                        }
+                        // CQ-213: removed a per-UpdateParameters `model.mo` temp write.
+                        // It wrote `source` to disk on every parameter update but
+                        // nothing read it back — `compile_str` below compiles the
+                        // in-memory `stripped_source` against `doc_uri`, and the
+                        // cache stores `source` directly. Pure blocking I/O.
 
                         // Strip input defaults so they become real runtime slots
                         let (stripped_source, input_defaults) = strip_input_defaults(&source);
@@ -724,7 +720,11 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             for (name, val) in &inputs { let _ = s.set_input(name, *val); }
                                             cached_models.insert(entity, CachedModel {
                                                 model_name: model_name.clone(),
-                                                source: Arc::from(std::fs::read_to_string(&model_path).unwrap_or_default()),
+                                                // Reuse the `source` already read from disk
+                                                // for this compile — re-reading `model_path`
+                                                // here was a second blocking read of bytes we
+                                                // hold (CQ-213).
+                                                source: Arc::from(source.clone()),
                                                 doc_uri: model_path.to_string_lossy().into_owned(),
                                             });
 

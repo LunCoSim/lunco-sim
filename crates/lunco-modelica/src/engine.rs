@@ -620,6 +620,17 @@ impl ModelicaEngine {
         // (e.g. the bulk MSL install), which bypasses add_document and
         // therefore doesn't call index_ast_classes. Search the MSL bundle
         // directly and remember the result for next time.
+        //
+        // TODO(CQ-211): this is an O(files × classes) linear scan of the
+        // process-wide MSL `Vec` bundle (~2700 classes). It's amortized —
+        // `class_to_uri` (above) + the `class_uri_misses` negative cache mean
+        // each class scans the bundle at most once — but a `HashMap<qualified,
+        // uri>` (+ a longest-prefix index) built ONCE at MSL install would
+        // make the cold lookup O(1)/O(prefix) and let the startup count walk
+        // (`msl_remote.rs`) drop its synchronous full tree traversal. Deferred:
+        // multi-file (engine/class_cache/msl_remote) and MSL resolution is
+        // regression-prone (nested-URI / within-prefix). See
+        // docs/code-quality-remediation.md (CQ-211).
         let file_uri = file_uri.or_else(|| {
             let bundle = crate::msl_remote::parsed_msl_bundle()?;
             // A `.mo` that declares top-level qualified class `q` (= within +

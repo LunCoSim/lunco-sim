@@ -345,14 +345,15 @@ impl NodeVisual for PlotNodeVisual {
             PlotBinding::Pinned { entity } => Entity::try_from_bits(*entity),
             PlotBinding::Doc { doc_id } => snapshot.doc_to_entity.get(doc_id).copied(),
         };
-        let points: Vec<SamplePoint> = resolved_entity
-            .and_then(|e| {
-                snapshot
-                    .samples
-                    .get(&(e, self.data.signal_path.clone()))
-                    .cloned()
-            })
-            .unwrap_or_default();
+        // Borrow the sample slice out of the (Arc-held) snapshot — it
+        // lives for the whole render, so there's no need to deep-clone
+        // the curve here. The single owned copy egui_plot demands is
+        // made once at `PlotPoints::from` below (CQ-207: was cloned
+        // twice — once on fetch, once into the plot).
+        let points: &[SamplePoint] = resolved_entity
+            .and_then(|e| snapshot.samples.get(&(e, self.data.signal_path.clone())))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
 
         // Adaptive density: at extreme zoom-out we drop to a bare
         // sparkline (under 40×30 px). Above that we *always* keep
@@ -369,7 +370,7 @@ impl NodeVisual for PlotNodeVisual {
                 let color = crate::signal::color_for_signal(&self.data.signal_path);
                 let (mut tmin, mut tmax, mut vmin, mut vmax) =
                     (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
-                for p in &points {
+                for p in points.iter() {
                     tmin = tmin.min(p[0]);
                     tmax = tmax.max(p[0]);
                     vmin = vmin.min(p[1]);
@@ -514,7 +515,7 @@ impl NodeVisual for PlotNodeVisual {
                     self.data.title.as_str()
                 };
                 plot_ui.line(
-                    Line::new(line_label, PlotPoints::from(points.clone())).color(color),
+                    Line::new(line_label, PlotPoints::from(points.to_vec())).color(color),
                 );
             }
         });
@@ -527,7 +528,7 @@ impl NodeVisual for PlotNodeVisual {
             let painter = ctx.ui.painter();
             let (mut tmax, mut vmin, mut vmax) =
                 (f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
-            for p in &points {
+            for p in points.iter() {
                 tmax = tmax.max(p[0]);
                 vmin = vmin.min(p[1]);
                 vmax = vmax.max(p[1]);

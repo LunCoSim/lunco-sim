@@ -380,6 +380,16 @@ fn process_usd_sim_prims(
     // wheel prims may be spawned on different frames; reading from the
     // SDF data directly avoids the race where a wheel is processed
     // before its joint sibling has an entity in the ECS.
+    //
+    // TODO(CQ-212): this Pass-1 re-scans every spec of every stage on
+    // *every frame* to rebuild `joint_targets` / `articulation_roots`,
+    // even when no stage SDF changed. Cache a per-stage joint index
+    // (keyed by stage `Handle` + an asset-change/generation stamp) and
+    // only rescan a stage when its SDF actually mutates; readers then do
+    // a direct path→spec lookup. (Sibling spots: `shader.rs` reads scan
+    // the whole stage per prim; `loaded_stages.rs` `prim_type_name` is an
+    // O(n²) tree render.) Deferred per request — not modifying USD here.
+    // See docs/code-quality-remediation.md (CQ-212).
     let mut seen_stages: std::collections::HashSet<Handle<UsdStageAsset>> = Default::default();
     for prim_path in q_all_prims.iter() {
         if !seen_stages.insert(prim_path.stage_handle.clone()) { continue; }

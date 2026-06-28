@@ -697,6 +697,21 @@ impl ModelicaIndex {
     /// Pair with [`Self::simulation_preferred_count`] to decide whether
     /// the picker should auto-skip.
     pub fn simulation_candidates(&self) -> Vec<String> {
+        self.ranked_simulation_candidates()
+            .into_iter()
+            .map(|(_, n)| n)
+            .collect()
+    }
+
+    /// Ranked `(tier, qualified_name)` simulation candidates, sorted
+    /// best-first (lowest tier, then name). The single primitive behind
+    /// both [`Self::simulation_candidates`] and
+    /// [`Self::simulation_preferred_count`]: each of those used to
+    /// independently rebuild `subcomponent_type_names()` and re-tier
+    /// every class, so a caller wanting *both* (e.g. `CompileStatus`)
+    /// paid for the whole walk twice (CQ-206). Compute this once and
+    /// derive both via [`Self::preferred_count_of`].
+    pub fn ranked_simulation_candidates(&self) -> Vec<(u8, String)> {
         let used_as_subcomponent = self.subcomponent_type_names();
         let mut ranked: Vec<(u8, &str)> = self
             .classes
@@ -705,7 +720,7 @@ impl ModelicaIndex {
             .map(|c| (sim_tier(c, &used_as_subcomponent), c.name.as_str()))
             .collect();
         ranked.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)));
-        ranked.into_iter().map(|(_, n)| n.to_string()).collect()
+        ranked.into_iter().map(|(t, n)| (t, n.to_string())).collect()
     }
 
     /// How many candidates sit in the *best non-empty* tier — i.e.
@@ -713,17 +728,19 @@ impl ModelicaIndex {
     /// use `== 1` as the trigger to bypass the picker entirely: with
     /// one obviously-preferred class there's nothing to disambiguate.
     pub fn simulation_preferred_count(&self) -> usize {
-        let used_as_subcomponent = self.subcomponent_type_names();
-        let tiers: Vec<u8> = self
-            .classes
-            .values()
-            .filter(|c| c.kind.is_simulatable() && !c.partial)
-            .map(|c| sim_tier(c, &used_as_subcomponent))
-            .collect();
-        let Some(&best) = tiers.iter().min() else {
+        Self::preferred_count_of(&self.ranked_simulation_candidates())
+    }
+
+    /// Best-tier count over an already-ranked candidate list (see
+    /// [`Self::ranked_simulation_candidates`]). Since `ranked` is sorted
+    /// best-first, the best tier is the head's tier and the count is its
+    /// run length — lets a caller that already has `ranked` derive the
+    /// preferred count without re-walking the index (CQ-206).
+    pub fn preferred_count_of(ranked: &[(u8, String)]) -> usize {
+        let Some((best, _)) = ranked.first() else {
             return 0;
         };
-        tiers.iter().filter(|&&t| t == best).count()
+        ranked.iter().take_while(|(t, _)| t == best).count()
     }
 
     fn subcomponent_type_names(&self) -> std::collections::HashSet<&str> {

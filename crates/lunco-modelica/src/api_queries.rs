@@ -631,8 +631,13 @@ impl ApiQueryProvider for CompileStatusProvider {
                 // Index — sees optimistic patches and avoids walking
                 // the AST. Same pattern as the candidates query above.
                 let index = doc_ref.index();
-                let cands = index.simulation_candidates();
-                let top_level = index.simulation_preferred_count();
+                // Rank once, derive both the candidate list and the
+                // preferred-tier count from it (CQ-206 — was two full
+                // index walks via simulation_candidates +
+                // simulation_preferred_count).
+                let ranked = index.ranked_simulation_candidates();
+                let top_level = crate::index::ModelicaIndex::preferred_count_of(&ranked);
+                let cands: Vec<String> = ranked.into_iter().map(|(_, n)| n).collect();
                 (cands, top_level, has_ast)
             }
             None => return err_doc_not_found(doc_id),
@@ -790,9 +795,12 @@ impl ApiQueryProvider for ListRunsProvider {
             let kb = b.get("created_at_ms").and_then(|v| v.as_u64()).unwrap_or(0);
             kb.cmp(&ka)
         });
+        // Read len before moving `rows` into the payload — no need to
+        // clone the whole vec just to also report its count (CQ-206).
+        let count = rows.len();
         ApiResponse::ok(serde_json::json!({
-            "runs": rows.clone(),
-            "count": rows.len(),
+            "runs": rows,
+            "count": count,
         }))
     }
 }

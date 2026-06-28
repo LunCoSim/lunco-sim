@@ -100,6 +100,11 @@ fn run_scripted_models(
                     let _ = locals.set_item("outputs", outputs_dict);
 
                     // 2. Run source
+                    // TODO(CQ-217): `py.run` re-parses + recompiles the script
+                    // source from scratch on *every* FixedUpdate tick. Compile
+                    // once (`PyModule`/`compile` → cached code object, keyed on
+                    // doc source revision) and only execute the cached code per
+                    // tick. See docs/code-quality-remediation.md (CQ-217).
                     let c_str = match std::ffi::CString::new(doc.source.as_str()) {
                         Ok(c) => c,
                         Err(_) => {

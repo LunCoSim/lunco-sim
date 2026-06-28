@@ -390,7 +390,12 @@ pub fn trajectory_alpha_update_system(
     q_paths: Query<(&TrajectoryPath, &TrajectoryView, &Children)>,
     q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
 ) {
-
+    // TODO(CQ-214): this rebuilds the full per-point ATTRIBUTE_COLOR Vec and
+    // re-uploads it to the GPU for every trajectory, every frame, with no
+    // change detection — even when the clock is paused or unchanged. Gate on
+    // `clock.is_changed()` (+ a per-view epoch/color stamp), and skip the
+    // re-upload when the alpha curve hasn't moved. See
+    // docs/code-quality-remediation.md (CQ-214).
     for (path, view, children) in q_paths.iter() {
         if path.points.len() < 2 { continue; }
         for child in children.iter() {

@@ -110,7 +110,9 @@ impl Plugin for SandboxEditUiPlugin {
         // produced each frame by an exclusive system before the egui pass.
         app.init_resource::<inspector::InspectorView>().add_systems(
             Update,
-            inspector::populate_inspector_view.in_set(ViewModelSet),
+            inspector::populate_inspector_view
+                .in_set(ViewModelSet)
+                .run_if(inspector::inspector_inputs_changed),
         );
     }
 }

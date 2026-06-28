@@ -75,9 +75,10 @@ pub struct InspectorView {
 }
 
 /// Producer for [`InspectorView`]. Exclusive (needs `&mut World` for the
-/// scans + `joint_angle_holder`); runs in `Update` before the egui pass.
-/// All reads are bounded single-entity lookups or small scans the panel
-/// used to do in-paint.
+/// scans + `joint_angle_holder`); runs in `Update` before the egui pass,
+/// gated by [`inspector_inputs_changed`] so the world scans are skipped on
+/// a quiescent scene. All reads are bounded single-entity lookups or small
+/// scans the panel used to do in-paint.
 pub fn populate_inspector_view(world: &mut World) {
     use bevy::camera::Exposure;
     use bevy::camera::visibility::RenderLayers;
@@ -172,6 +173,55 @@ pub fn populate_inspector_view(world: &mut World) {
     view.exposure_ev100 = exposure_ev100;
     view.bloom_intensity = bloom_intensity;
     view.joint = joint;
+}
+
+/// Run condition for [`populate_inspector_view`]: skip the world scans on a
+/// quiescent scene, the way the sibling [`super::entity_list::populate_entity_tree_view`]
+/// gates on [`super::entity_list::scene_topology_changed`]. Runs when any
+/// readout the Inspector shows could have changed — the selection moved, the
+/// scene sun / camera exposure / bloom / ambient was edited, or a directional
+/// light was removed (despawn) — and keeps running every frame while a joint
+/// readout is live (`view.joint.is_some()`) so the measured angle stays fresh
+/// during a sim. The `Local` flag forces one initial build (a freshly-added
+/// system does not see pre-existing entities as `Changed`). On an idle scene
+/// with nothing selected this returns `false` and every scan is skipped.
+pub(crate) fn inspector_inputs_changed(
+    mut first: Local<bool>,
+    view: Res<InspectorView>,
+    selection: Res<crate::SelectedEntities>,
+    ambient: Option<Res<bevy::light::GlobalAmbientLight>>,
+    lights: Query<
+        (),
+        (
+            Or<(
+                Changed<Transform>,
+                Changed<bevy::light::DirectionalLight>,
+                Changed<bevy::light::CascadeShadowConfig>,
+            )>,
+            With<bevy::light::DirectionalLight>,
+        ),
+    >,
+    cameras: Query<
+        (),
+        Or<(
+            Changed<bevy::camera::Exposure>,
+            Changed<bevy::post_process::bloom::Bloom>,
+        )>,
+    >,
+    mut removed_lights: RemovedComponents<bevy::light::DirectionalLight>,
+) -> bool {
+    // Drain the removal buffer every frame (so it doesn't accumulate) and note
+    // whether a directional light despawned since last frame.
+    let removed = removed_lights.read().count() > 0;
+    let run = !*first
+        || selection.is_changed()
+        || ambient.is_some_and(|a| a.is_changed())
+        || !lights.is_empty()
+        || !cameras.is_empty()
+        || removed
+        || view.joint.is_some();
+    *first = true;
+    run
 }
 
 /// Inspector panel — editable entity parameters.
@@ -409,14 +459,18 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                 shader_picker_for_part(ui, ctx, part);
                 shader_tools_ui(ui, ctx, part);
 
-                if let Some(holder) = first_shader_holder(ctx, part) {
+                // One subtree pass yields both the shader holder and the
+                // distinct PBR material handles (CQ-204: was two independent
+                // `subtree` walks of the same part — `first_shader_holder` +
+                // `collect_std_handles`).
+                let (std_handles, shader_holder) = part_materials(ctx, part);
+                if let Some(holder) = shader_holder {
                     egui::CollapsingHeader::new("Shader Parameters")
                         .default_open(true)
                         .show(ui, |ui| {
                             shader_parameters_section(ui, ctx, holder);
                         });
                 }
-                let std_handles = collect_std_handles(ctx, part);
                 if !std_handles.is_empty() {
                     egui::CollapsingHeader::new("Material (PBR)")
                         .default_open(true)
@@ -823,25 +877,31 @@ fn joint_control_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, j: JointReadout)
     }
 }
 
-/// Distinct `StandardMaterial` handles anywhere in `root`'s subtree.
-fn collect_std_handles(ctx: &PanelCtx, root: Entity) -> Vec<Handle<StandardMaterial>> {
-    let ents = subtree(ctx, root);
+/// Walk `root`'s subtree once, returning its distinct `StandardMaterial`
+/// handles and the first `ShaderMaterial`-bearing entity. Replaces the
+/// former `collect_std_handles` + `first_shader_holder`, which each ran an
+/// independent `subtree` walk of the same root (CQ-204).
+fn part_materials(
+    ctx: &PanelCtx,
+    root: Entity,
+) -> (Vec<Handle<StandardMaterial>>, Option<Entity>) {
     let mut handles: Vec<Handle<StandardMaterial>> = Vec::new();
-    for e in ents {
+    let mut shader_holder: Option<Entity> = None;
+    for e in subtree(ctx, root) {
         if let Some(m) = ctx.get::<MeshMaterial3d<StandardMaterial>>(e) {
             if !handles.iter().any(|h| h.id() == m.0.id()) {
                 handles.push(m.0.clone());
             }
         }
+        if shader_holder.is_none()
+            && ctx
+                .get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(e)
+                .is_some()
+        {
+            shader_holder = Some(e);
+        }
     }
-    handles
-}
-
-/// First entity in `root`'s subtree carrying a [`ShaderMaterial`], if any.
-fn first_shader_holder(ctx: &PanelCtx, root: Entity) -> Option<Entity> {
-    let ents = subtree(ctx, root);
-    ents.into_iter()
-        .find(|e| ctx.get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(*e).is_some())
+    (handles, shader_holder)
 }
 
 /// Material-bearing parts of `root`'s subtree, each labelled by its leaf name.

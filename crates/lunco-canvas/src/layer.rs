@@ -149,6 +149,13 @@ impl Layer for EdgesLayer {
         // are connected" from "two wires that just happen to
         // visually overlap". 2-port connections (the common case)
         // never get a dot.
+        // TODO(CQ-202): this endpoint-incidence map is rebuilt from a full
+        // edge scan on EVERY frame, though it only changes when the wiring
+        // topology does. Cache it on the layer and recompute only when a
+        // Scene topology generation bumps (add/remove/reconnect edge) — needs
+        // a `topology_gen: u64` counter on `Scene` bumped by its edge
+        // mutators. Deferred: requires a Scene API change + in-app verify on
+        // a large diagram. See docs/code-quality-remediation.md (CQ-202).
         let mut endpoint_counts: std::collections::HashMap<
             (crate::scene::NodeId, crate::scene::PortId),
             u32,
@@ -276,6 +283,14 @@ impl NodesLayer {
 
 impl Layer for NodesLayer {
     fn draw(&mut self, ctx: &mut DrawCtx, scene: &Scene, selection: &Selection) {
+        // TODO(CQ-202): `build_node` allocates a fresh `Box<dyn NodeVisual>`
+        // (re-parsing `node.data`) for every node every frame. Cache the
+        // built visual keyed by (kind, data identity), rebuilding only on
+        // edit. Blocked on a key: `Scene::Node.data` is an inline
+        // `serde_json::Value`, so there's no stable `Arc` pointer to key on
+        // yet — make `NodeData` Arc-backed first, then the cache is an
+        // O(1) ptr-keyed lookup. Same applies to `build_edge` above.
+        // See docs/code-quality-remediation.md (CQ-202).
         for (nid, node) in scene.nodes() {
             let visual = self
                 .registry_handle
