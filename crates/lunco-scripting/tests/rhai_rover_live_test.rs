@@ -188,14 +188,7 @@ fn setup(source: &str) -> (App, Entity) {
     let rover = spawn_rover(&mut app);
 
     let doc_id = DocumentId::new(1);
-    let doc = ScriptDocument {
-        id: 1,
-        generation: 0,
-        language: ScriptLanguage::Rhai,
-        source: source.to_string(),
-        inputs: vec![],
-        outputs: vec![],
-    };
+    let doc = ScriptDocument::new(1, ScriptLanguage::Rhai, source.to_string());
     app.world_mut()
         .resource_mut::<ScriptRegistry>()
         .documents

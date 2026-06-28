@@ -88,6 +88,11 @@ impl Plugin for LunCoScriptingPlugin {
             // Tool-library discovery on the API (ListToolLibraries/GetToolLibrary);
             // registration rides the RegisterToolLibrary command.
             tool_libs::register_queries(app);
+            // Twin persistence: load every `<twin>/tools/*.rhai` shared tool
+            // library when a Twin opens, so file-authored tools survive restarts
+            // (native only — no filesystem on wasm).
+            #[cfg(not(target_arch = "wasm32"))]
+            app.add_observer(tool_libs::load_tools_on_twin_added);
             diagnostics::register_queries(app);
             app.add_systems(
                 FixedUpdate,

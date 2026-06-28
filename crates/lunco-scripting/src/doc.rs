@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use lunco_doc::{Document, DocumentId, DocumentOp, DocumentError};
+use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -26,6 +26,59 @@ pub struct ScriptDocument {
     pub inputs: Vec<String>,
     /// Metadata about expected output pins (e.g., "motor_current").
     pub outputs: Vec<String>,
+    /// Where this script came from + whether it can be saved in place.
+    /// Drives persistence (Twin save/load) and the read-only guard in
+    /// [`apply`](Self::apply) — mirrors `ModelicaDocument`. Per-entity
+    /// scenarios attached via `RunScenario` start `Untitled`; tool-library
+    /// files loaded from the Twin carry a writable `File` origin.
+    #[serde(default = "default_origin")]
+    pub origin: DocumentOrigin,
+}
+
+/// Serde fallback for documents persisted before `origin` existed.
+fn default_origin() -> DocumentOrigin {
+    DocumentOrigin::untitled("Untitled")
+}
+
+impl ScriptDocument {
+    /// A new untitled script (the in-session scratch origin — editable, but
+    /// needs a Save-As / Twin binding before it can be written to disk).
+    pub fn new(id: u64, language: ScriptLanguage, source: impl Into<String>) -> Self {
+        Self {
+            id,
+            generation: 0,
+            language,
+            source: source.into(),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            origin: DocumentOrigin::untitled(format!("Untitled-{id}")),
+        }
+    }
+
+    /// Where this document came from.
+    pub fn origin(&self) -> &DocumentOrigin {
+        &self.origin
+    }
+
+    /// Rebind the origin (e.g. after a Save-As binds a file path, or a Twin
+    /// load attaches the source file).
+    pub fn set_origin(&mut self, origin: DocumentOrigin) {
+        self.origin = origin;
+    }
+
+    /// Human-readable label for tabs/logs — the file stem, bundled filename,
+    /// or the untitled name.
+    pub fn display_name(&self) -> String {
+        match &self.origin {
+            DocumentOrigin::File { path, .. } => path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("script")
+                .to_string(),
+            DocumentOrigin::Bundled { filename } => filename.clone(),
+            DocumentOrigin::Untitled { name } => name.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +104,15 @@ impl Document for ScriptDocument {
     }
 
     fn apply(&mut self, op: ScriptOp) -> Result<ScriptOp, DocumentError> {
+        // Origin-level read-only guard (bundled examples, read-only library
+        // tool files). `accepts_mutations()` — NOT `is_writable()` — so untitled
+        // scratch scripts stay editable. Mirrors `ModelicaDocument::apply`.
+        if !self.origin.accepts_mutations() {
+            return Err(DocumentError::ValidationFailed(format!(
+                "Script '{}' is read-only",
+                self.display_name()
+            )));
+        }
         if self.language == ScriptLanguage::Python && crate::python::get_python_status() != crate::python::PythonStatus::Available {
             return Err(DocumentError::ValidationFailed("Python is not available on this system. Editing Python scripts is disabled.".to_string()));
         }
@@ -112,5 +174,42 @@ pub struct ScriptedModel {
 impl Default for ScriptLanguage {
     fn default() -> Self {
         Self::Python
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn untitled_script_is_editable() {
+        let mut doc = ScriptDocument::new(1, ScriptLanguage::Rhai, "print(1);");
+        assert!(matches!(doc.origin(), DocumentOrigin::Untitled { .. }));
+        // Untitled scratch scripts accept mutations and bump the generation.
+        let inv = doc.apply(ScriptOp::SetSource("print(2);".into())).unwrap();
+        assert_eq!(doc.source, "print(2);");
+        assert_eq!(doc.generation, 1);
+        assert!(matches!(inv, ScriptOp::SetSource(s) if s == "print(1);"));
+    }
+
+    #[test]
+    fn readonly_file_origin_rejects_edits() {
+        let mut doc = ScriptDocument::new(2, ScriptLanguage::Rhai, "x");
+        doc.set_origin(DocumentOrigin::readonly_file("/libs/formation.rhai"));
+        assert_eq!(doc.display_name(), "formation");
+        let err = doc.apply(ScriptOp::SetSource("y".into()));
+        assert!(matches!(err, Err(DocumentError::ValidationFailed(_))));
+        // Source unchanged, generation not bumped.
+        assert_eq!(doc.source, "x");
+        assert_eq!(doc.generation, 0);
+    }
+
+    #[test]
+    fn writable_file_origin_allows_edits() {
+        let mut doc = ScriptDocument::new(3, ScriptLanguage::Rhai, "a");
+        doc.set_origin(DocumentOrigin::writable_file("/twin/tools/nav.rhai"));
+        assert_eq!(doc.display_name(), "nav");
+        doc.apply(ScriptOp::SetSource("b".into())).unwrap();
+        assert_eq!(doc.source, "b");
     }
 }

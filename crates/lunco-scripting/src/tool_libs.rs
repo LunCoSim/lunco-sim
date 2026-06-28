@@ -43,6 +43,87 @@ pub fn register_tool_library(name: &str, source: &str) {
     lunco_tools_rhai::register_rhai_tool(name, source);
 }
 
+// ── Twin persistence (shared tool libraries → files) ─────────────────────────
+//
+// Per-entity scenarios live embedded in USD prims (a separate path); shared,
+// reusable `name::fn` tool libraries persist as plain `<twin>/tools/*.rhai`
+// files — the file IS the source of truth, durable across restarts by
+// construction. On twin open we scan that dir and register each; the
+// `RegisterToolLibrary` command path can mirror an in-memory registration back
+// to disk via [`save_tool_library_file`]. Native-only (no filesystem on wasm).
+
+/// Sub-directory under a Twin root that holds shared rhai tool libraries.
+pub const TOOLS_DIR: &str = "tools";
+
+/// Scan `<root>/tools/*.rhai` and register each as a tool library (the file
+/// stem is the library name). Returns the names loaded. A single unreadable
+/// file is logged and skipped — never blocks the rest. Native-only.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_tool_libraries_from_dir(root: &std::path::Path) -> Vec<String> {
+    let dir = root.join(TOOLS_DIR);
+    let mut loaded = Vec::new();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        // No tools/ dir is the common case (twin has none) — not an error.
+        Err(_) => return loaded,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rhai") {
+            continue;
+        }
+        let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        match std::fs::read_to_string(&path) {
+            Ok(source) => {
+                register_tool_library(name, &source);
+                loaded.push(name.to_string());
+            }
+            Err(e) => warn!("[tool_libs] failed to read {}: {e}", path.display()),
+        }
+    }
+    loaded.sort();
+    loaded
+}
+
+/// Persist a tool library's source to `<root>/tools/<name>.rhai` (creating the
+/// dir if needed). The on-disk counterpart of [`register_tool_library`], so an
+/// interactively-registered library survives a restart. Native-only.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_tool_library_file(
+    root: &std::path::Path,
+    name: &str,
+    source: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    let dir = root.join(TOOLS_DIR);
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{name}.rhai"));
+    std::fs::write(&path, source)?;
+    Ok(path)
+}
+
+/// Observer: on Twin open, load every `tools/*.rhai` library so file-authored
+/// tools are available without re-registering. Native-only (the file scan).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_tools_on_twin_added(
+    trigger: On<lunco_workspace::TwinAdded>,
+    ws: Res<lunco_workspace::WorkspaceResource>,
+) {
+    let twin_id = trigger.event().twin;
+    let Some(twin) = ws.twin(twin_id) else {
+        return;
+    };
+    let loaded = load_tool_libraries_from_dir(&twin.root);
+    if !loaded.is_empty() {
+        info!(
+            "[tool_libs] loaded {} tool librar{} from Twin: {loaded:?}",
+            loaded.len(),
+            if loaded.len() == 1 { "y" } else { "ies" },
+        );
+    }
+}
+
 /// Registry generation (changes on every registration) — drives hot-reload.
 pub fn generation() -> u64 {
     lunco_tools::generation()
@@ -124,4 +205,43 @@ pub fn register_queries(app: &mut App) {
     let mut reg = app.world_mut().resource_mut::<ApiQueryRegistry>();
     reg.register(ListToolLibrariesProvider);
     reg.register(GetToolLibraryProvider);
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    /// `save_tool_library_file` → `load_tool_libraries_from_dir` round-trips,
+    /// and a loaded library is registered + readable via the registry.
+    #[test]
+    fn tool_library_file_save_load_roundtrip() {
+        // Unique temp root (no tempfile dep; pid keeps parallel runs disjoint).
+        let root = std::env::temp_dir().join(format!("lunco_tl_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+
+        let src = "fn double(x) { x * 2 }";
+        let path = save_tool_library_file(&root, "persist_probe", src).unwrap();
+        assert!(path.exists());
+        assert_eq!(path, root.join("tools").join("persist_probe.rhai"));
+
+        let loaded = load_tool_libraries_from_dir(&root);
+        assert!(loaded.contains(&"persist_probe".to_string()));
+
+        // Registered into the global tool registry, source readable back.
+        let tool = lunco_tools::get("persist_probe").expect("registered");
+        assert_eq!(tool.backend(), "rhai");
+        assert_eq!(tool.source(), Some(src));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A missing `tools/` dir is the common case — yields no libraries, no error.
+    #[test]
+    fn missing_tools_dir_is_empty_not_error() {
+        let root = std::env::temp_dir().join(format!("lunco_tl_none_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(load_tool_libraries_from_dir(&root).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

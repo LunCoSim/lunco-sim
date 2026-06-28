@@ -29,12 +29,9 @@ outputs["netForce"] = buoyancy - drag
 "#;
 
     let doc = ScriptDocument {
-        id: 100,
-        generation: 0,
-        language: ScriptLanguage::Python,
-        source: source.to_string(),
         inputs: vec!["height".to_string(), "velocity".to_string()],
         outputs: vec!["netForce".to_string()],
+        ..ScriptDocument::new(100, ScriptLanguage::Python, source.to_string())
     };
 
     app.world_mut().resource_mut::<ScriptRegistry>().documents.insert(doc_id, DocumentHost::new(doc));

@@ -145,14 +145,19 @@ fn attach_rhai_scenario(
         None => (alloc.next(), 0),
     };
 
-    let doc = ScriptDocument {
-        id: doc_id_raw,
-        generation,
-        language: ScriptLanguage::Rhai,
-        source,
-        inputs: vec![],
-        outputs: vec![],
-    };
+    let mut doc = ScriptDocument::new(doc_id_raw, ScriptLanguage::Rhai, source);
+    // Hot-reload reuses the doc id and bumps generation; `new` resets it to 0,
+    // so carry the computed generation through.
+    doc.generation = generation;
+    // TODO(persistence #3 — USD-embedded per-entity scripts): a scenario attached
+    // here is `Untitled` (ephemeral). To persist it WITH its entity, author the
+    // source onto the entity's USD prim as `custom string lunco:script = '''…'''`
+    // (via UsdOp::SetAttribute) on Twin save, and on spawn read it back
+    // (get_attribute_as_string) + RunScenario it. Origin stays in-memory; the prim
+    // link (UsdPrimPath, lunco-usd-bevy) keys persistence by entity, not file. The
+    // file-based path for SHARED tool libraries is already done (tool_libs.rs).
+    // ⚠ splicer parent/child same-attr-name bug — namespace carefully.
+    // Ref: project_tools_architecture / project_world_bridge_runtime_agnostic memory.
     registry
         .documents
         .insert(DocumentId::new(doc_id_raw), DocumentHost::new(doc));
@@ -182,11 +187,31 @@ pub struct RegisterToolLibrary {
 
 #[cfg(feature = "rhai")]
 #[on_command(RegisterToolLibrary)]
-fn on_register_tool_library(_t: On<RegisterToolLibrary>) -> Result<Ack, String> {
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+fn on_register_tool_library(
+    _t: On<RegisterToolLibrary>,
+    // Optional: present only when the workspace plugin is installed. Used to
+    // persist the library to the active Twin's `tools/` dir. `None` (headless /
+    // no-twin) just keeps the in-memory registration.
+    ws: Option<Res<lunco_workspace::WorkspaceResource>>,
+) -> Result<Ack, String> {
     if cmd.name.is_empty() {
         return Err("RegisterToolLibrary: `name` must not be empty".to_string());
     }
     crate::tool_libs::register_tool_library(&cmd.name, &cmd.source);
+    // Twin persistence: mirror the in-memory registration to
+    // `<twin>/tools/<name>.rhai` so it survives a restart (loaded back by the
+    // TwinAdded observer). Native only — no filesystem on wasm.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(root) = ws
+        .as_ref()
+        .and_then(|ws| ws.active_twin.and_then(|id| ws.twin(id)))
+        .map(|twin| twin.root.clone())
+    {
+        if let Err(e) = crate::tool_libs::save_tool_library_file(&root, &cmd.name, &cmd.source) {
+            warn!("[tool_libs] could not persist '{}' to Twin: {e}", cmd.name);
+        }
+    }
     let mut ack = Ack::new(OpId::new());
     ack.assigned = serde_json::json!({
         "name": cmd.name,

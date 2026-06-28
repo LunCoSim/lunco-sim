@@ -7227,6 +7227,7 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-tools",
  "lunco-tools-rhai",
+ "lunco-workspace",
  "pyo3",
  "rhai",
  "serde",
