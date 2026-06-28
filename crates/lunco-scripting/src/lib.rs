@@ -22,6 +22,10 @@ pub mod tool_libs;
 /// Scripting adapter onto the unified diagnostics store (`ScriptStatus` query).
 #[cfg(feature = "rhai")]
 pub mod diagnostics;
+/// Authoring catalog (`ScriptingCatalog` query) — the discoverability surface
+/// for editor completion / hover / docs.
+#[cfg(feature = "rhai")]
+pub mod catalog;
 
 use std::collections::HashMap;
 use lunco_doc::{DocumentId, DocumentHost};
@@ -94,6 +98,10 @@ impl Plugin for LunCoScriptingPlugin {
             #[cfg(not(target_arch = "wasm32"))]
             app.add_observer(tool_libs::load_tools_on_twin_added);
             diagnostics::register_queries(app);
+            // Authoring catalog: ScriptingCatalog aggregates the full callable
+            // surface (verbs + commands + queries + tools + prelude) for editor
+            // completion / hover / docs and agent discovery.
+            catalog::register_queries(app);
             app.add_systems(
                 FixedUpdate,
                 (

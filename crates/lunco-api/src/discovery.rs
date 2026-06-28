@@ -10,7 +10,9 @@ use crate::schema::{ApiSchema, CommandSchema, FieldSchema};
 /// Hidden commands (per [`ApiVisibility`]) are filtered out — they remain
 /// reflectable and dispatchable inside the app, but external API
 /// consumers see them as if they did not exist.
-pub(crate) fn discover_commands(
+/// Public so other crates (e.g. the scripting authoring catalog) can reuse the
+/// canonical command-reflection walk instead of duplicating it.
+pub fn discover_commands(
     type_registry: &TypeRegistry,
     visibility: Option<&ApiVisibility>,
 ) -> Vec<CommandSchema> {

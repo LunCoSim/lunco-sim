@@ -113,7 +113,7 @@ fn map_to_json(params: Map) -> serde_json::Value {
 /// Ergonomic policy wrappers (drive/distance/arrived/...), authored in rhai and
 /// embedded at compile time so they're available with zero IO on every target
 /// (incl. wasm). Edit `rhai/prelude.rhai` — no Rust change needed for new helpers.
-const PRELUDE: &str = include_str!("../rhai/prelude.rhai");
+pub(crate) const PRELUDE: &str = include_str!("../rhai/prelude.rhai");
 
 /// Build a rhai [`Engine`] with the World-bridge verbs registered, the embedded
 /// prelude loaded as a global module, and the same sandbox caps as the one-shot
