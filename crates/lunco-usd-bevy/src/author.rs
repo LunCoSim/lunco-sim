@@ -121,6 +121,32 @@ pub fn extract_root_layer_data(stage: &Stage) -> Result<sdf::Data> {
         .map_err(|e| anyhow!("extract root layer data: {e}"))
 }
 
+/// Author a `references = @asset_path@` arc onto the prim at `prim_path` in
+/// `data` (an explicit single-item reference list — `asset_path` is the bare
+/// path, no `@` delimiters; the serializer adds them). The prim spec must
+/// already exist — a reference is prim metadata, so the caller defines the prim
+/// first (e.g. [`open_doc_stage`] + `define_prim` + [`extract_root_layer_data`]).
+///
+/// openusd's Stage authoring API exposes no `add_reference`, so this is authored
+/// at the `sdf` level — the symmetric counterpart of how `compose` *reads*
+/// `Value::ReferenceListOp`, kept here so the op layer never hand-builds openusd
+/// value variants. The reference survives `data_to_usda` as a `references = @…@`
+/// metadata opinion and is resolved at render time by the PCP composer.
+pub fn author_reference(data: &mut sdf::Data, prim_path: &SdfPath, asset_path: &str) -> Result<()> {
+    let spec = data
+        .spec_mut(prim_path)
+        .ok_or_else(|| anyhow!("author_reference: no prim spec at {prim_path}"))?;
+    let reference = sdf::Reference {
+        asset_path: asset_path.to_string(),
+        ..Default::default()
+    };
+    spec.add(
+        "references",
+        Value::ReferenceListOp(sdf::ReferenceListOp::explicit([reference])),
+    );
+    Ok(())
+}
+
 /// Parse a single attribute value literal (e.g. `"(1, 0, 0)"`, `"0.5"`,
 /// `"(0.2, 0.2, 0.8)"`) of the given USD `type_name` into an [`sdf::Value`], by
 /// embedding it in a throwaway USDA snippet and letting openusd's own parser do
@@ -202,6 +228,35 @@ mod tests {
     use crate::usd_data::UsdDataExt;
 
     const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\ndef Xform \"World\"\n{\n    def Sphere \"Box\"\n    {\n        double radius = 1\n        def Sphere \"Inner\"\n        {\n            double radius = 9\n        }\n    }\n}\n";
+
+    /// A reference arc authored onto a defined prim survives serialization back
+    /// to USDA and re-parsing — the load-bearing property for the C4b spawn
+    /// producer (a spawn = a runtime prim that `references` its asset).
+    #[test]
+    fn author_reference_round_trips_through_usda() {
+        // Define the spawn prim exactly as `AddPrim` does (stage round-trip),
+        // then author the reference into the extracted data.
+        let stage = open_doc_stage(&usda_to_data("#usda 1.0\ndef Xform \"World\"\n{\n}\n").unwrap())
+            .unwrap();
+        stage.define_prim("/World/spawn_1").unwrap();
+        let mut data = extract_root_layer_data(&stage).unwrap();
+        let prim = SdfPath::new("/World/spawn_1").unwrap();
+        author_reference(&mut data, &prim, "vessels/rover.usda").unwrap();
+
+        // Serializes as a `references = @…@` opinion...
+        let text = data_to_usda(&data).unwrap();
+        assert!(text.contains("@vessels/rover.usda@"), "USDA must carry the reference:\n{text}");
+
+        // ...and survives a re-parse as an explicit ReferenceListOp.
+        let reparsed = usda_to_data(&text).unwrap();
+        match reparsed.spec(&prim).and_then(|s| s.get("references")) {
+            Some(Value::ReferenceListOp(op)) => {
+                assert_eq!(op.explicit_items.len(), 1);
+                assert_eq!(op.explicit_items[0].asset_path, "vessels/rover.usda");
+            }
+            other => panic!("expected a ReferenceListOp at {prim}, got {other:?}"),
+        }
+    }
 
     /// THE load-bearing property: a resolver-opened root layer is writable,
     /// path-addressed authoring lands in it, and `extract_root_layer_data`

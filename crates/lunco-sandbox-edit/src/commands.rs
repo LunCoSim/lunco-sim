@@ -21,7 +21,7 @@ use lunco_usd::registry::UsdDocumentRegistry;
 use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use std::collections::{HashMap, VecDeque};
-use crate::catalog::{SpawnCatalog, spawn_usd_entry};
+use crate::catalog::{SpawnCatalog, SpawnSource, spawn_usd_entry};
 
 /// Spawn an entity from the catalog at a given world position.
 #[Command]
@@ -1620,6 +1620,80 @@ pub fn persist_move_to_runtime_layer(
     });
 }
 
+/// Persist a runtime **spawn** into the active USD document's runtime layer
+/// (Phase C4b producer). Observes `SpawnEntity` alongside the ECS spawn handler
+/// [`on_spawn_entity_command`] but is fully decoupled from it — it touches no
+/// world/entity state.
+///
+/// A spawn is recorded as a runtime prim that **`references` the spawned asset**
+/// (`AddPrim{edit_target: runtime, reference}`) plus its drop position
+/// (`SetTranslate{edit_target: runtime}`). The reference + transform compose
+/// into the document's rendered/serialized view and ride the Twin journal, so
+/// the spawn survives in session history and the composed scene — while Save
+/// stays base-only (the runtime layer is never written to disk). Persisting is
+/// gated to when a USD document is active; palette spawns with no active doc
+/// (e.g. a headless server) are skipped.
+pub fn persist_spawn_to_runtime_layer(
+    trigger: On<SpawnEntity>,
+    catalog: Res<SpawnCatalog>,
+    usd_registry: Res<UsdDocumentRegistry>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    // Monotonic per-session disambiguator for spawn prim names (the runtime
+    // layer isn't persisted, so session scope is enough).
+    mut spawn_seq: Local<u32>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    let Some(workspace) = workspace else { return };
+    let Some(doc) = workspace.0.active_document else { return };
+    let Some(host) = usd_registry.host(doc) else { return };
+    let Some(entry) = catalog.get(&cmd.entry_id) else { return };
+    // The asset this spawn references (the only `SpawnSource` variant today).
+    let SpawnSource::UsdFile(asset_path) = &entry.source;
+
+    // Parent under the document's default prim (scene root) when it has one,
+    // else at the stage root. `stage_default_prim` returns the bare prim name.
+    let parent_path = lunco_usd_bevy::stage_default_prim(host.document().data())
+        .map(|p| format!("/{p}"))
+        .unwrap_or_else(|| "/".to_string());
+
+    // Unique, valid USD identifier for the spawn prim.
+    *spawn_seq += 1;
+    let stem: String = cmd
+        .entry_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    let name = format!("{stem}_{}", *spawn_seq);
+    let prim_path = if parent_path == "/" {
+        format!("/{name}")
+    } else {
+        format!("{parent_path}/{name}")
+    };
+
+    let v = cmd.position;
+    // 1) Author the referenced spawn prim into the runtime layer.
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path,
+            name,
+            type_name: None,
+            reference: Some(asset_path.clone()),
+        },
+    });
+    // 2) Record its drop position (applied after the AddPrim above).
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::SetTranslate {
+            edit_target: LayerId::runtime(),
+            path: prim_path,
+            value: [v.x as f64, v.y as f64, v.z as f64],
+        },
+    });
+}
+
 /// Marker inserted on a kinematic body that just received a
 /// `MoveEntity` (or analogous teleport) with a one-tick velocity
 /// pulse. [`clear_kinematic_pulse_velocity`] zeros that velocity
@@ -2510,6 +2584,8 @@ impl Plugin for SpawnCommandPlugin {
         app.add_observer(on_move_entity_command);
         // C4b: persist authored-scene moves into the active doc's runtime layer.
         app.add_observer(persist_move_to_runtime_layer);
+        // C4b: persist palette/API spawns as referenced runtime-layer prims.
+        app.add_observer(persist_spawn_to_runtime_layer);
         app.add_observer(on_rescan_spawn_catalog);
         app.add_observer(on_set_object_property);
         app.add_observer(on_focus_entity_by_id);
@@ -2795,6 +2871,76 @@ mod tests {
             .runtime_data()
             .spec(&lunco_usd_bevy::SdfPath::new("/PaletteSpawn").unwrap())
             .is_none());
+    }
+
+    // ── C4b: spawn → referenced runtime-layer prim ──────────────────────
+
+    #[test]
+    fn spawn_persists_referenced_prim_to_runtime_layer() {
+        use bevy::prelude::*;
+        use super::*;
+        use lunco_usd_bevy::usd_data::UsdDataExt;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
+        app.add_observer(persist_spawn_to_runtime_layer);
+
+        // Catalog with one spawnable asset.
+        let mut catalog = SpawnCatalog::default();
+        catalog.add_unique(crate::catalog::SpawnableEntry {
+            id: "test_rover".into(),
+            display_name: "Test Rover".into(),
+            category: "Rovers".into(),
+            source: SpawnSource::UsdFile("vessels/rovers/test_rover.usda".into()),
+            spawn_lift: 0.0,
+            default_transform: Transform::default(),
+        });
+        app.insert_resource(catalog);
+
+        // Active USD doc whose default prim is /World.
+        let doc = {
+            let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
+            reg.allocate(
+                "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n".to_string(),
+                lunco_doc::DocumentOrigin::untitled("Scene.usda".to_string()),
+            )
+        };
+        let mut ws = lunco_workspace::Workspace::default();
+        ws.active_document = Some(doc);
+        app.insert_resource(lunco_workspace::WorkspaceResource(ws));
+        app.update();
+
+        // Spawn it at a drop position.
+        let grid = app.world_mut().spawn_empty().id();
+        app.world_mut().trigger(SpawnEntity {
+            target: grid,
+            entry_id: "test_rover".into(),
+            position: Vec3::new(2.0, 0.0, 7.0),
+        });
+        for _ in 0..3 {
+            app.update();
+        }
+
+        let reg = app.world().resource::<UsdDocumentRegistry>();
+        let docu = reg.host(doc).expect("doc alive").document();
+        let prim = lunco_usd_bevy::SdfPath::new("/World/test_rover_1").unwrap();
+        // The referenced spawn prim landed under the default prim, in RUNTIME...
+        assert!(docu.runtime_data().spec(&prim).is_some(), "spawn prim authored in runtime layer");
+        assert!(docu.data().spec(&prim).is_none(), "base layer untouched by spawn");
+        assert_eq!(
+            docu.runtime_data().prim_attribute_value::<[f64; 3]>(&prim, "xformOp:translate"),
+            Some([2.0, 0.0, 7.0]),
+            "spawn drop position recorded in runtime layer"
+        );
+        // ...rides into the composed view as a resolvable reference...
+        let composed = docu.composed_source();
+        assert!(
+            composed.contains("@vessels/rovers/test_rover.usda@"),
+            "composed view must carry the spawn reference:\n{composed}"
+        );
+        // ...and is excluded from Save (base only).
+        assert!(!docu.source().contains("test_rover"), "spawn leaked into save:\n{}", docu.source());
     }
 }
 

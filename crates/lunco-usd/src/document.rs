@@ -179,6 +179,11 @@ pub enum UsdOp {
         name: String,
         /// Optional schema type (`Xform`, `Cube`, `Mesh`, …).
         type_name: Option<String>,
+        /// Optional asset reference (`@vessels/rover.usda@`, bare path, no `@`).
+        /// `Some` authors a `references` arc so the prim instances that asset —
+        /// this is how a runtime spawn persists (the referenced content + a
+        /// local `xformOp` override compose into the rendered prim).
+        reference: Option<String>,
     },
     /// Remove the prim at `path` together with its entire subtree. The
     /// inverse re-establishes the prior full source.
@@ -596,6 +601,7 @@ impl Document for UsdDocument {
                 parent_path,
                 name,
                 type_name,
+                reference,
                 ..
             } => {
                 // Parent must exist in either layer (root is implicit).
@@ -617,7 +623,13 @@ impl Document for UsdDocument {
                 if let Some(tn) = &type_name {
                     prim.set_type_name(tn.as_str()).map_err(author_err)?;
                 }
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let mut new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                // Author the asset reference (Stage has no `add_reference`, so this
+                // is set at the sdf level) — turns the prim into a runtime spawn.
+                if let Some(asset_path) = &reference {
+                    lunco_usd_bevy::author::author_reference(&mut new_data, &prim_sdf, asset_path)
+                        .map_err(author_err)?;
+                }
 
                 // A brand-new prim in this layer is exactly undone by removing
                 // it (from the same layer); otherwise fall back to the snapshot.
@@ -842,6 +854,7 @@ mod tests {
             parent_path: "/".into(),
             name: "Thing".into(),
             type_name: Some("Xform".into()),
+            reference: None,
         })
         .unwrap();
         let tail: Vec<_> = doc.changes_since(after_first).collect();
@@ -870,6 +883,7 @@ mod tests {
             parent_path: "/".into(),
             name: "Rover".into(),
             type_name: Some("Xform".into()),
+            reference: None,
         }))
         .unwrap();
         assert_eq!(prim_type(host.document(), "/Rover").as_deref(), Some("Xform"));
@@ -888,6 +902,7 @@ mod tests {
                 parent_path: "/Nope".into(),
                 name: "Body".into(),
                 type_name: Some("Cube".into()),
+                reference: None,
             })
             .unwrap_err();
         assert!(matches!(err, DocumentError::ValidationFailed(_)));
@@ -903,6 +918,7 @@ mod tests {
             parent_path: "/".into(),
             name: "Rover".into(),
             type_name: Some("Xform".into()),
+            reference: None,
         }))
         .unwrap();
         host.apply(Mutation::local(UsdOp::AddPrim {
@@ -910,6 +926,7 @@ mod tests {
             parent_path: "/Rover".into(),
             name: "WheelFL".into(),
             type_name: Some("Cube".into()),
+            reference: None,
         }))
         .unwrap();
         host.apply(Mutation::local(UsdOp::SetTranslate {
@@ -1025,6 +1042,7 @@ mod tests {
                 parent_path: "/".into(),
                 name: "X".into(),
                 type_name: Some("Xform".into()),
+                reference: None,
             })
             .unwrap_err();
         assert!(matches!(err, DocumentError::ValidationFailed(_)));
@@ -1058,6 +1076,7 @@ mod tests {
             parent_path: "/World".into(),
             name: "Obstacle".into(),
             type_name: Some("Sphere".into()),
+            reference: None,
         })
         .unwrap();
 
@@ -1079,6 +1098,7 @@ mod tests {
             parent_path: "/World".into(),
             name: "SpawnedRock".into(),
             type_name: Some("Cube".into()),
+            reference: None,
         })
         .unwrap();
         // The saved source (base layer) must NOT contain the runtime prim.
@@ -1099,6 +1119,7 @@ mod tests {
             parent_path: "/World".into(),
             name: "Obstacle".into(),
             type_name: Some("Sphere".into()),
+            reference: None,
         }))
         .unwrap();
         assert!(runtime_prim_exists(host.document(), "/World/Obstacle"));
@@ -1122,6 +1143,7 @@ mod tests {
             parent_path: "/World".into(),
             name: "Obstacle".into(),
             type_name: Some("Sphere".into()),
+            reference: None,
         })
         .unwrap();
 
@@ -1137,6 +1159,48 @@ mod tests {
     }
 
     #[test]
+    fn spawn_op_authors_runtime_reference_excluded_from_save() {
+        // C4b spawn producer: a spawn = a runtime prim that `references` its
+        // asset (type comes from the reference, so `type_name: None`).
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(36),
+            TINY_USDA,
+            DocumentOrigin::writable_file("/tmp/r.usda"),
+        ));
+        host.apply(Mutation::local(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/World".into(),
+            name: "rover_1".into(),
+            type_name: None,
+            reference: Some("vessels/rovers/skid_rover.usda".into()),
+        }))
+        .unwrap();
+
+        // The reference opinion lives in the RUNTIME layer, not the base.
+        assert!(runtime_prim_exists(host.document(), "/World/rover_1"));
+        assert!(!prim_exists(host.document(), "/World/rover_1"), "spawn must not touch base");
+        // It rides into the composed view (what the viewport renders /
+        // re-instantiates) as a resolvable reference opinion...
+        let composed = host.document().composed_source();
+        assert!(
+            composed.contains("@vessels/rovers/skid_rover.usda@"),
+            "composed view must carry the spawn reference:\n{composed}"
+        );
+        // ...and is EXCLUDED from Save (base only).
+        assert!(
+            !host.document().source().contains("skid_rover"),
+            "spawn leaked into the saved base layer:\n{}",
+            host.document().source()
+        );
+
+        // Undo removes the spawn from runtime (typed AddPrim→RemovePrim inverse),
+        // leaving the base untouched.
+        host.undo().unwrap();
+        assert!(!runtime_prim_exists(host.document(), "/World/rover_1"));
+        assert!(prim_exists(host.document(), "/World"), "base intact across spawn undo");
+    }
+
+    #[test]
     fn base_and_runtime_ops_are_independent() {
         let mut doc = UsdDocument::new(DocumentId::new(33), TINY_USDA);
         // Author into base.
@@ -1145,6 +1209,7 @@ mod tests {
             parent_path: "/".into(),
             name: "Rover".into(),
             type_name: Some("Xform".into()),
+            reference: None,
         })
         .unwrap();
         // Author into runtime.
@@ -1153,6 +1218,7 @@ mod tests {
             parent_path: "/World".into(),
             name: "Obstacle".into(),
             type_name: Some("Sphere".into()),
+            reference: None,
         })
         .unwrap();
 

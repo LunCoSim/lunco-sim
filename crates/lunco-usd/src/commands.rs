@@ -657,18 +657,21 @@ mod tests {
                 parent_path: "/".into(),
                 name: "Rover".into(),
                 type_name: Some("Xform".into()),
+                reference: None,
             },
             UsdOp::AddPrim {
                 edit_target: LayerId::root(),
                 parent_path: "/Rover".into(),
                 name: "Body".into(),
                 type_name: Some("Cube".into()),
+                reference: None,
             },
             UsdOp::AddPrim {
                 edit_target: LayerId::root(),
                 parent_path: "/Rover".into(),
                 name: "WheelFL".into(),
                 type_name: Some("Cube".into()),
+                reference: None,
             },
             UsdOp::SetTranslate {
                 edit_target: LayerId::root(),
@@ -733,6 +736,7 @@ mod tests {
                 parent_path: "/".into(),
                 name: "Rover".into(),
                 type_name: Some("Xform".into()),
+                reference: None,
             },
             UsdOp::SetTranslate {
                 edit_target: LayerId::root(),
