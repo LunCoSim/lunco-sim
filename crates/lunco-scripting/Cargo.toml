@@ -47,7 +47,9 @@ lunco-tools-rhai = { path = "../lunco-tools-rhai", optional = true }
 # (`--no-default-features`) for a script-free build.
 default = ["rhai"]
 rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:big_space", "dep:lunco-tools", "dep:lunco-tools-rhai"]
-python = ["dep:pyo3", "dep:libloading", "dep:serde_json"]
+# Python pulls the same world-bridge deps as rhai (lunco-api + big_space) so the
+# language-neutral `bridge_core` compiles for a python-only build too.
+python = ["dep:pyo3", "dep:libloading", "dep:serde_json", "dep:lunco-api", "dep:big_space"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 crossbeam-channel = { workspace = true }

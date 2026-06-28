@@ -1,6 +1,12 @@
 use bevy::prelude::*;
 
 pub mod backend;
+/// Language-neutral world bridge (verbs + native `ValueBuilder`); rhai/Python
+/// are thin bindings over it. Compiled whenever a backend that uses it is
+/// enabled — it pulls the ECS/world deps (`lunco-api`, `big_space`) those
+/// features provide.
+#[cfg(any(feature = "rhai", feature = "python"))]
+pub mod bridge_core;
 pub mod commands;
 pub mod python;
 #[cfg(not(target_arch = "wasm32"))]
@@ -125,6 +131,18 @@ fn run_scripted_models(
         let doc = host.document();
 
         // Execution logic for Python/Lua
+        //
+        // TODO(python world-bridge): this runs Python with inputs/outputs dicts
+        // but NO World access — it's a non-exclusive system, so the bridge verbs
+        // (`lunco.cmd`/`get`/`query`/…) have no `bridge_core::WorldScope` and
+        // would no-op. To give Python the same world access rhai has, move this
+        // execution into an EXCLUSIVE system (`world: &mut World`) that mirrors
+        // `world_bridge::tick_rhai_models`: snapshot (entity, inputs, source)
+        // first, then `let _scope = bridge_core::WorldScope::enter(world);`
+        // around `py.run`, then write outputs back AFTER the scope. The verbs
+        // themselves are already language-neutral in `bridge_core`; only the
+        // `lunco` module registration (see python/mod.rs) + this scope wiring
+        // remain. Ref: project_world_bridge_runtime_agnostic memory.
         if doc.language == doc::ScriptLanguage::Python {
             #[cfg(feature = "python")]
             {

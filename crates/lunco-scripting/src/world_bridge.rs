@@ -33,67 +33,79 @@
 #![cfg(feature = "rhai")]
 
 use bevy::prelude::*;
-use bevy::ecs::reflect::ReflectComponent;
-use bevy::ecs::system::SystemState;
-use bevy::math::DVec3;
-use big_space::prelude::*;
-use std::cell::Cell;
 
-use lunco_core::{
-    coords, Ack, CelestialBody, CelestialClock, CommandOutcome, CommandResults, GlobalEntityId,
-    OpId, RoverVessel, Severity, SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
-};
-use lunco_api::executor::ApiCommandEvent;
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_api::queries::ApiQueryRegistry;
-use lunco_api::schema::ApiResponse;
+use lunco_core::{Ack, CommandResults, OpId, TelemetryEvent, TelemetryValue};
 
 use rhai::{Dynamic, Engine, ImmutableString, Map, AST};
 
+use crate::bridge_core::{self, ValueBuilder};
 use crate::doc::{ScriptLanguage, ScriptedModel};
 use crate::ScriptRegistry;
 use lunco_doc::{Diagnostic, DocumentId};
 use lunco_doc_bevy::DocumentDiagnostics;
 
-// ── Scoped World access ────────────────────────────────────────────────────
+// ── Native value builder (rhai) ────────────────────────────────────────────
+//
+// The world-access logic lives in [`crate::bridge_core`], language-neutral. This
+// is the rhai binding: `RhaiBuilder` constructs native `Dynamic` values so the
+// core's generic readers build `reflect → Dynamic` in one hop (no JSON on the
+// read path). `WorldScope` / `with_world` also live in `bridge_core` now.
 
-thread_local! {
-    /// Raw pointer to the World currently being scripted. Non-null only while a
-    /// [`WorldScope`] guard is alive (i.e. inside `eval_with_world`).
-    static WORLD_PTR: Cell<*mut World> = const { Cell::new(std::ptr::null_mut()) };
-}
+/// Builds native rhai `Dynamic` values for the bridge core's generic readers —
+/// the rhai impl of [`ValueBuilder`]. Unit struct, zero cost.
+pub struct RhaiBuilder;
 
-/// RAII guard that publishes a `&mut World` to the thread-local for the
-/// lifetime of a script evaluation, and clears it on drop (even on panic).
-struct WorldScope;
-
-impl WorldScope {
-    fn enter(world: &mut World) -> Self {
-        WORLD_PTR.with(|p| p.set(world as *mut World));
-        WorldScope
+impl ValueBuilder for RhaiBuilder {
+    type Value = Dynamic;
+    fn unit(&self) -> Dynamic {
+        Dynamic::UNIT
     }
-}
-
-impl Drop for WorldScope {
-    fn drop(&mut self) {
-        WORLD_PTR.with(|p| p.set(std::ptr::null_mut()));
+    fn float(&self, f: f64) -> Dynamic {
+        Dynamic::from_float(f)
     }
-}
-
-/// Run `f` with the scoped World, or return `None` if called outside a script
-/// evaluation (no active scope). SAFETY: the pointer is only ever set to a live
-/// `&mut World` borrow held by `eval_with_world` for the duration of the call;
-/// registered functions run synchronously and never re-enter while a borrow is
-/// outstanding, so the reconstructed `&mut` is unique.
-fn with_world<R>(f: impl FnOnce(&mut World) -> R) -> Option<R> {
-    WORLD_PTR.with(|p| {
-        let ptr = p.get();
-        if ptr.is_null() {
-            None
-        } else {
-            Some(f(unsafe { &mut *ptr }))
+    fn int(&self, i: i64) -> Dynamic {
+        Dynamic::from_int(i)
+    }
+    fn bool(&self, b: bool) -> Dynamic {
+        Dynamic::from_bool(b)
+    }
+    fn string(&self, s: &str) -> Dynamic {
+        Dynamic::from(s.to_string())
+    }
+    fn array(&self, items: Vec<Dynamic>) -> Dynamic {
+        Dynamic::from_array(items)
+    }
+    fn map(&self, entries: Vec<(String, Dynamic)>) -> Dynamic {
+        let mut m = Map::new();
+        for (k, v) in entries {
+            m.insert(k.into(), v);
         }
-    })
+        Dynamic::from_map(m)
+    }
+}
+
+/// Map a rhai value to the engine-wide [`TelemetryValue`] for `emit`. Scalars
+/// map directly; everything else stringifies; unit is a bare pulse.
+fn rhai_to_telemetry(value: &Dynamic) -> TelemetryValue {
+    if value.is_unit() {
+        TelemetryValue::Bool(true)
+    } else if let Ok(f) = value.as_float() {
+        TelemetryValue::F64(f)
+    } else if let Ok(i) = value.as_int() {
+        TelemetryValue::I64(i)
+    } else if let Ok(b) = value.as_bool() {
+        TelemetryValue::Bool(b)
+    } else {
+        TelemetryValue::String(value.to_string())
+    }
+}
+
+/// Convert a rhai params map to the JSON the API command/query layer expects —
+/// the one inherent JSON seam (`cmd`/`query` params are *defined* as JSON).
+fn map_to_json(params: Map) -> serde_json::Value {
+    rhai::serde::from_dynamic::<serde_json::Value>(&Dynamic::from_map(params))
+        .unwrap_or(serde_json::Value::Null)
 }
 
 // ── Engine construction ────────────────────────────────────────────────────
@@ -121,24 +133,21 @@ pub fn build_world_engine() -> Engine {
     // spawned entity's gid, an allocated name — enabling create-then-manipulate
     // in one tick. `ok=false` + `error` on a handler error/rejection.
     engine.register_fn("cmd", |name: ImmutableString, params: Map| -> Dynamic {
-        cmd_impl(name.as_str(), Dynamic::from_map(params))
+        bridge_core::cmd(&RhaiBuilder, name.as_str(), map_to_json(params))
     });
     // cmd(name) -> #{...} — convenience for unit/all-defaulted commands.
     engine.register_fn("cmd", |name: ImmutableString| -> Dynamic {
-        cmd_impl(name.as_str(), Dynamic::from_map(Map::new()))
+        bridge_core::cmd(&RhaiBuilder, name.as_str(), serde_json::json!({}))
     });
 
-    // world_pos(id) -> [x, y, z] in DVec3 absolute world space, or () on miss.
+    // world_pos(id) -> [x, y, z] absolute world space, or () on miss.
     engine.register_fn("world_pos", |id: i64| -> Dynamic {
-        match world_pos_impl(id as u64) {
-            Some(v) => {
-                let arr: rhai::Array = vec![
-                    Dynamic::from_float(v.x),
-                    Dynamic::from_float(v.y),
-                    Dynamic::from_float(v.z),
-                ];
-                Dynamic::from_array(arr)
-            }
+        match bridge_core::world_pos(id as u64) {
+            Some(v) => RhaiBuilder.array(vec![
+                Dynamic::from_float(v.x),
+                Dynamic::from_float(v.y),
+                Dynamic::from_float(v.z),
+            ]),
             None => Dynamic::UNIT,
         }
     });
@@ -148,27 +157,26 @@ pub fn build_world_engine() -> Engine {
     // float-origin hierarchy). All steering MATH stays in rhai (the prelude);
     // this just exposes the heading vector, like world_pos exposes position.
     engine.register_fn("world_forward", |id: i64| -> Dynamic {
-        match world_forward_impl(id as u64) {
-            Some(v) => {
-                let arr: rhai::Array = vec![
-                    Dynamic::from_float(v.x),
-                    Dynamic::from_float(v.y),
-                    Dynamic::from_float(v.z),
-                ];
-                Dynamic::from_array(arr)
-            }
+        match bridge_core::world_forward(id as u64) {
+            Some(v) => RhaiBuilder.array(vec![
+                Dynamic::from_float(v.x),
+                Dynamic::from_float(v.y),
+                Dynamic::from_float(v.z),
+            ]),
             None => Dynamic::UNIT,
         }
     });
 
-    // get(id, "Component.field") -> Dynamic (f64/i64/bool/string) or ().
-    // The generic reflection read — the finished EntityProxy.
+    // get(id, "Component.field") -> Dynamic (f64/i64/bool/string/array/map) or ().
+    // The generic reflection read — built native (reflect → Dynamic, one hop).
     engine.register_fn("get", |id: i64, path: ImmutableString| -> Dynamic {
-        get_field_impl(id as u64, path.as_str()).unwrap_or(Dynamic::UNIT)
+        bridge_core::get_field(&RhaiBuilder, id as u64, path.as_str()).unwrap_or(Dynamic::UNIT)
     });
 
-    // list_entities() -> [#{ id, name }] for every registered GlobalEntityId.
-    engine.register_fn("list_entities", list_entities_impl);
+    // list_entities() -> [#{ id, name, type, pos }] for every registered entity.
+    engine.register_fn("list_entities", || -> Dynamic {
+        bridge_core::list_entities(&RhaiBuilder)
+    });
 
     // query(name, #{params}) -> Dynamic — the READ twin of cmd(): invoke any
     // registered `ApiQueryProvider` by name (Raycast, Nearest, GroundHeight,
@@ -177,76 +185,68 @@ pub fn build_world_engine() -> Engine {
     // lunco-mobility); scripting reaches them generically here without taking a
     // physics dependency. Returns () if the provider is missing or errors.
     engine.register_fn("query", |name: ImmutableString, params: Map| -> Dynamic {
-        query_impl(name.as_str(), Dynamic::from_map(params))
+        bridge_core::query(&RhaiBuilder, name.as_str(), map_to_json(params))
     });
     engine.register_fn("query", |name: ImmutableString| -> Dynamic {
-        query_impl(name.as_str(), Dynamic::UNIT)
+        bridge_core::query(&RhaiBuilder, name.as_str(), serde_json::Value::Null)
     });
 
     // find(name) -> id (i64), or -1 if no entity has that Name.
     engine.register_fn("find", |name: ImmutableString| -> i64 {
-        find_impl(name.as_str())
+        bridge_core::find(name.as_str())
     });
 
     // name(id) -> the entity's Name as a string, or () if unnamed/unknown. The
     // reverse of find(name): turn an id (from list_entities/nearest/children/…)
     // back into a human label for logging/UI.
-    engine.register_fn("name", |id: i64| -> Dynamic { name_impl(id as u64) });
+    engine.register_fn("name", |id: i64| -> Dynamic {
+        bridge_core::name_of(id as u64).map(Dynamic::from).unwrap_or(Dynamic::UNIT)
+    });
 
     // parent(id) -> parent entity id (i64), or () if it has no parent or the
     // parent isn't a registered (script-visible) entity. Hierarchy traversal up.
-    engine.register_fn("parent", |id: i64| -> Dynamic { parent_impl(id as u64) });
+    engine.register_fn("parent", |id: i64| -> Dynamic {
+        bridge_core::parent_of(id as u64).map(Dynamic::from_int).unwrap_or(Dynamic::UNIT)
+    });
 
     // children(id) -> [id, ...] of the entity's DIRECT children that are
     // registered entities (skips un-registered internal children). Empty if none.
     // Hierarchy traversal down; compose with parent()/name() for tree walks.
-    engine.register_fn("children", |id: i64| -> rhai::Array { children_impl(id as u64) });
+    engine.register_fn("children", |id: i64| -> Dynamic {
+        RhaiBuilder.array(
+            bridge_core::children_of(id as u64)
+                .into_iter()
+                .map(Dynamic::from_int)
+                .collect(),
+        )
+    });
 
     // emit(name, value) -> bool — fire a TelemetryEvent on the shared bus
     // (reused, not reinvented): existing API-subscription + log observers see
     // it immediately, and scripts receive it next tick via on_event. `value`
     // may be float / int / bool / string.
     engine.register_fn("emit", |name: ImmutableString, value: Dynamic| -> bool {
-        emit_impl(name.as_str(), value)
+        bridge_core::emit(name.as_str(), rhai_to_telemetry(&value))
     });
     // emit(name) — a bare pulse (no payload).
     engine.register_fn("emit", |name: ImmutableString| -> bool {
-        emit_impl(name.as_str(), Dynamic::UNIT)
+        bridge_core::emit(name.as_str(), TelemetryValue::Bool(true))
     });
 
     // sim_tick() -> i64 — current FixedUpdate tick.
-    engine.register_fn("sim_tick", || -> i64 {
-        with_world(|w| w.get_resource::<SimTick>().map(|t| t.0 as i64))
-            .flatten()
-            .unwrap_or(0)
-    });
+    engine.register_fn("sim_tick", || -> i64 { bridge_core::sim_tick() });
 
     // dt() -> f64 — the fixed-step integration delta in seconds (1/FIXED_HZ).
     // The per-tick `dt` an on_tick hook should multiply rates by for
     // frame-rate-independent integration. Falls back to the canonical
     // SECS_PER_TICK if no `Time<Fixed>` is in scope (e.g. a bare test world).
-    engine.register_fn("dt", || -> f64 {
-        with_world(|w| {
-            w.get_resource::<Time<bevy::time::Fixed>>()
-                .map(|t| t.delta_secs_f64())
-        })
-        .flatten()
-        .filter(|d| *d > 0.0)
-        .unwrap_or(SECS_PER_TICK)
-    });
+    engine.register_fn("dt", || -> f64 { bridge_core::dt() });
 
     // elapsed_seconds() -> f64 — monotonic simulation seconds since startup, for
     // second-based timeouts / rate limits (`this.t0`-relative dwell, etc.). Uses
     // the fixed clock's elapsed time (advances only while the sim steps), 0.0 if
     // unavailable.
-    engine.register_fn("elapsed_seconds", || -> f64 {
-        with_world(|w| {
-            w.get_resource::<Time<bevy::time::Fixed>>()
-                .map(|t| t.elapsed_secs_f64())
-        })
-        .flatten()
-        .unwrap_or(0.0)
-    });
+    engine.register_fn("elapsed_seconds", || -> f64 { bridge_core::elapsed_seconds() });
 
     // Load the embedded prelude as a global module so its helpers are callable
     // unqualified (e.g. `drive(r, 1.0, 0.0)`). Compiled against the same engine
@@ -267,424 +267,6 @@ pub fn build_world_engine() -> Engine {
     crate::tool_libs::refresh(&mut engine);
 
     engine
-}
-
-// ── Verb implementations ───────────────────────────────────────────────────
-
-/// Build the `#{ id, ok, data, error }` result map a `cmd()` call returns from a
-/// recorded [`CommandOutcome`]. `Succeeded` surfaces the handler's `assigned`
-/// bag as `data` (the spawned gid / allocated name); `Failed`/`Rejected` set
-/// `ok=false` + `error`; `Pending`/`None` (fire-and-forget or async) are
-/// reported as accepted (`ok=true`, no `data`).
-fn command_result_map(id: u64, outcome: Option<&CommandOutcome>) -> Dynamic {
-    let mut m = Map::new();
-    m.insert("id".into(), Dynamic::from_int(id as i64));
-    match outcome {
-        Some(CommandOutcome::Succeeded(ack)) => {
-            m.insert("ok".into(), Dynamic::from_bool(true));
-            if !ack.assigned.is_null() {
-                m.insert(
-                    "data".into(),
-                    rhai::serde::to_dynamic(&ack.assigned).unwrap_or(Dynamic::UNIT),
-                );
-            }
-        }
-        Some(CommandOutcome::Failed(msg)) => {
-            m.insert("ok".into(), Dynamic::from_bool(false));
-            m.insert("error".into(), Dynamic::from(msg.clone()));
-        }
-        Some(CommandOutcome::Rejected(reject)) => {
-            m.insert("ok".into(), Dynamic::from_bool(false));
-            m.insert("error".into(), Dynamic::from(reject.to_string()));
-        }
-        // Accepted but no terminal outcome recorded: a fire-and-forget command
-        // (most, e.g. DriveRover) or an async one. Treat as success-no-data.
-        Some(CommandOutcome::Pending) | None => {
-            m.insert("ok".into(), Dynamic::from_bool(true));
-        }
-    }
-    Dynamic::from_map(m)
-}
-
-fn cmd_impl(name: &str, params: Dynamic) -> Dynamic {
-    // rhai Map -> serde_json::Value (rhai `serde` feature drives Serialize).
-    let params_json = rhai::serde::from_dynamic::<serde_json::Value>(&params)
-        .unwrap_or(serde_json::Value::Null);
-
-    let id = OpId::new().0;
-    with_world(|world| {
-        world.trigger(ApiCommandEvent {
-            command: name.to_string(),
-            params: params_json,
-            id,
-        });
-        // The dispatcher defers the real command trigger via `commands.queue`;
-        // flush so it runs NOW and any result-reporting handler records its Ack
-        // under `id` before we read it back. This synchronous round-trip is what
-        // lets `cmd()` return the handler's assigned data, not just an id.
-        world.flush();
-        let outcome = world
-            .get_resource::<CommandResults>()
-            .and_then(|r| r.get(id).cloned());
-        command_result_map(id, outcome.as_ref())
-    })
-    .unwrap_or_else(|| {
-        // No World in scope — only happens if a verb is called outside a script
-        // evaluation (shouldn't occur in practice).
-        let mut m = Map::new();
-        m.insert("id".into(), Dynamic::from_int(-1));
-        m.insert("ok".into(), Dynamic::from_bool(false));
-        m.insert("error".into(), Dynamic::from("no world in scope".to_string()));
-        Dynamic::from_map(m)
-    })
-}
-
-/// Invoke a registered [`ApiQueryProvider`](lunco_api::queries::ApiQueryProvider)
-/// by name and return its data as rhai values. The read-side counterpart to
-/// [`cmd_impl`]: scripting consumes the internal query API generically, so
-/// physics/spatial providers (avian-backed Raycast, etc.) stay in their owning
-/// crates and never become a scripting dependency. `()` on missing/errored.
-fn query_impl(name: &str, params: Dynamic) -> Dynamic {
-    let params_json = if params.is_unit() {
-        serde_json::Value::Null
-    } else {
-        rhai::serde::from_dynamic::<serde_json::Value>(&params).unwrap_or(serde_json::Value::Null)
-    };
-
-    with_world(|world| {
-        let Some(provider) = world
-            .get_resource::<ApiQueryRegistry>()
-            .and_then(|reg| reg.get(name))
-        else {
-            return Dynamic::UNIT;
-        };
-        match provider.execute(world, &params_json) {
-            ApiResponse::Ok {
-                data: Some(data), ..
-            } => rhai::serde::to_dynamic(&data).unwrap_or(Dynamic::UNIT),
-            _ => Dynamic::UNIT,
-        }
-    })
-    .unwrap_or(Dynamic::UNIT)
-}
-
-/// Map a rhai value to the engine-wide [`TelemetryValue`] (the YAMCS-aligned
-/// payload type). Floats/ints/bools map directly; everything else stringifies.
-fn dynamic_to_telemetry_value(value: &Dynamic) -> TelemetryValue {
-    if value.is_unit() {
-        TelemetryValue::Bool(true) // a bare pulse
-    } else if let Ok(f) = value.as_float() {
-        TelemetryValue::F64(f)
-    } else if let Ok(i) = value.as_int() {
-        TelemetryValue::I64(i)
-    } else if let Ok(b) = value.as_bool() {
-        TelemetryValue::Bool(b)
-    } else {
-        TelemetryValue::String(value.to_string())
-    }
-}
-
-fn emit_impl(name: &str, value: Dynamic) -> bool {
-    with_world(|world| {
-        let timestamp = world
-            .get_resource::<CelestialClock>()
-            .map(|c| c.epoch)
-            .unwrap_or(0.0);
-        world.trigger(TelemetryEvent {
-            name: name.to_string(),
-            severity: Severity::Info,
-            data: dynamic_to_telemetry_value(&value),
-            timestamp,
-        });
-    })
-    .is_some()
-}
-
-/// Convert a [`TelemetryValue`] back into a rhai [`Dynamic`] for `on_event`.
-fn telemetry_value_to_dynamic(v: &TelemetryValue) -> Dynamic {
-    match v {
-        TelemetryValue::F64(x) => Dynamic::from_float(*x),
-        TelemetryValue::I64(x) => Dynamic::from_int(*x),
-        TelemetryValue::Bool(x) => Dynamic::from_bool(*x),
-        TelemetryValue::String(x) => Dynamic::from(x.clone()),
-    }
-}
-
-/// Build the `#{ name, value, severity, timestamp }` map passed to `on_event`.
-fn event_to_map(ev: &TelemetryEvent) -> Map {
-    let mut m = Map::new();
-    m.insert("name".into(), Dynamic::from(ev.name.clone()));
-    m.insert("value".into(), telemetry_value_to_dynamic(&ev.data));
-    m.insert("severity".into(), Dynamic::from(format!("{:?}", ev.severity)));
-    m.insert("timestamp".into(), Dynamic::from_float(ev.timestamp));
-    m
-}
-
-fn world_pos_impl(gid: u64) -> Option<DVec3> {
-    with_world(|world| {
-        let entity = resolve_entity(world, gid)?;
-        let mut state: SystemState<(
-            Query<&ChildOf>,
-            Query<&Grid>,
-            Query<(Option<&CellCoord>, &Transform)>,
-        )> = SystemState::new(world);
-        let (q_parents, q_grids, q_spatial) = state.get(world);
-        coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
-    })
-    .flatten()
-}
-
-fn world_forward_impl(gid: u64) -> Option<DVec3> {
-    with_world(|world| {
-        let entity = resolve_entity(world, gid)?;
-        // GlobalTransform's rotation is true world orientation (the float-origin
-        // offset only affects translation), so its forward vector is valid.
-        let gt = world.get::<GlobalTransform>(entity)?;
-        let f = gt.forward();
-        Some(DVec3::new(f.x as f64, f.y as f64, f.z as f64))
-    })
-    .flatten()
-}
-
-fn get_field_impl(gid: u64, path: &str) -> Option<Dynamic> {
-    // Split "Component.field.sub" into the component short name and the reflect
-    // sub-path (".field.sub"). A bare "Component" reads the whole component as
-    // its Debug string (rarely useful, but harmless).
-    let (comp, sub) = match path.split_once('.') {
-        Some((c, rest)) => (c, format!(".{rest}")),
-        None => (path, String::new()),
-    };
-
-    with_world(|world| {
-        let entity = resolve_entity(world, gid)?;
-        let registry = world.resource::<AppTypeRegistry>().clone();
-        let reg = registry.read();
-        let registration = reg.get_with_short_type_path(comp)?;
-        let reflect_component = registration.data::<ReflectComponent>()?;
-        let entity_ref = world.get_entity(entity).ok()?;
-        let reflected = reflect_component.reflect(entity_ref)?;
-
-        let field: &dyn bevy::reflect::PartialReflect = if sub.is_empty() {
-            reflected.as_partial_reflect()
-        } else {
-            reflected.reflect_path(sub.as_str()).ok()?
-        };
-        dynamic_from_reflect(field)
-    })
-    .flatten()
-}
-
-fn list_entities_impl() -> rhai::Array {
-    with_world(|world| {
-        let pairs = world.resource::<ApiEntityRegistry>().entities();
-        // One SystemState carries every per-entity read (float-origin pose
-        // hierarchy + name/kind) so the loop never re-borrows the World. Returns
-        // `#{ id, name, type, pos }` — enough for scripts to filter/score/select
-        // with idiomatic `list_entities().filter(...).reduce(...)` (the in-rhai
-        // selection toolkit in the prelude builds on exactly these fields).
-        let mut state: SystemState<(
-            Query<&ChildOf>,
-            Query<&Grid>,
-            Query<(Option<&CellCoord>, &Transform)>,
-            Query<(Option<&Name>, Option<&RoverVessel>, Option<&CelestialBody>)>,
-        )> = SystemState::new(world);
-        let (q_parents, q_grids, q_spatial, q_meta) = state.get(world);
-        pairs
-            .into_iter()
-            .map(|(gid, entity)| {
-                let mut m = Map::new();
-                m.insert("id".into(), Dynamic::from_int(gid.get() as i64));
-                let (name, rover, body) = q_meta.get(entity).unwrap_or((None, None, None));
-                m.insert(
-                    "name".into(),
-                    Dynamic::from(name.map(|n| n.as_str().to_string()).unwrap_or_default()),
-                );
-                // Same kind taxonomy the HTTP API's ListEntities uses.
-                let kind = if rover.is_some() {
-                    "rover"
-                } else if body.is_some() {
-                    "planet"
-                } else {
-                    "unknown"
-                };
-                m.insert("type".into(), Dynamic::from(kind.to_string()));
-                let pos = coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
-                    .map(|v| f64_array(&[v.x, v.y, v.z]))
-                    .unwrap_or(Dynamic::UNIT);
-                m.insert("pos".into(), pos);
-                Dynamic::from_map(m)
-            })
-            .collect()
-    })
-    .unwrap_or_default()
-}
-
-fn find_impl(name: &str) -> i64 {
-    with_world(|world| {
-        let pairs = world.resource::<ApiEntityRegistry>().entities();
-        for (gid, entity) in pairs {
-            if world.get::<Name>(entity).map(|n| n.as_str()) == Some(name) {
-                return gid.get() as i64;
-            }
-        }
-        -1
-    })
-    .unwrap_or(-1)
-}
-
-/// `name(id)` — the entity's `Name` as a rhai string, or `()` if unnamed/unknown.
-fn name_impl(gid: u64) -> Dynamic {
-    with_world(|world| {
-        let entity = resolve_entity(world, gid)?;
-        world
-            .get::<Name>(entity)
-            .map(|n| Dynamic::from(n.as_str().to_string()))
-    })
-    .flatten()
-    .unwrap_or(Dynamic::UNIT)
-}
-
-/// `parent(id)` — the parent's gid, or `()` if no parent / parent unregistered.
-fn parent_impl(gid: u64) -> Dynamic {
-    with_world(|world| {
-        let entity = resolve_entity(world, gid)?;
-        let parent = world.get::<ChildOf>(entity)?.parent();
-        world
-            .get_resource::<ApiEntityRegistry>()?
-            .api_id_for(parent)
-            .map(|g| Dynamic::from_int(g.get() as i64))
-    })
-    .flatten()
-    .unwrap_or(Dynamic::UNIT)
-}
-
-/// `children(id)` — gids of the entity's direct, registered children (skips
-/// children that have no `GlobalEntityId`). Empty array if none / unknown.
-fn children_impl(gid: u64) -> rhai::Array {
-    with_world(|world| {
-        let Some(entity) = resolve_entity(world, gid) else {
-            return rhai::Array::new();
-        };
-        let Some(children) = world.get::<Children>(entity) else {
-            return rhai::Array::new();
-        };
-        let reg = world.resource::<ApiEntityRegistry>();
-        children
-            .iter()
-            .filter_map(|child| reg.api_id_for(child))
-            .map(|g| Dynamic::from_int(g.get() as i64))
-            .collect()
-    })
-    .unwrap_or_default()
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-fn resolve_entity(world: &World, gid: u64) -> Option<Entity> {
-    world
-        .get_resource::<ApiEntityRegistry>()?
-        .resolve(&GlobalEntityId::from_raw(gid))
-}
-
-/// Best-effort conversion of a reflected scalar into a rhai [`Dynamic`].
-/// Covers the common numeric / bool / string leaf types; anything else falls
-/// back to its `Debug` string so the script at least sees a value.
-/// Build a rhai array from f64 components (vectors/quats → `[x,y,z]`).
-fn f64_array(xs: &[f64]) -> Dynamic {
-    Dynamic::from_array(xs.iter().copied().map(Dynamic::from_float).collect())
-}
-
-/// Convert a reflected value to a rhai [`Dynamic`].
-///
-/// Beyond scalars, glam vectors/quats become rhai arrays (`Vec3` → `[x,y,z]`,
-/// `Quat` → `[x,y,z,w]`) so `get()` returns values the prelude vector math
-/// (`vsub`/`vlen`/…) operates on directly — e.g. `get(id, "LinearVelocity")`
-/// or `get(id, "Transform.translation")`. Newtype components (e.g.
-/// `LinearVelocity(Vec3)`) unwrap to their inner value; structs become rhai
-/// object-maps; lists/arrays/tuples become rhai arrays. Anything still
-/// unconvertible (enums, opaque) falls back to its Debug string.
-fn dynamic_from_reflect(value: &dyn bevy::reflect::PartialReflect) -> Option<Dynamic> {
-    use bevy::math::{DQuat, DVec2, Quat, Vec2, Vec3};
-    use bevy::reflect::ReflectRef;
-
-    if let Some(reflected) = value.try_as_reflect() {
-        let any = reflected.as_any();
-        // glam vectors / quats → rhai arrays (the common component-read case).
-        if let Some(v) = any.downcast_ref::<Vec3>() {
-            return Some(f64_array(&[v.x as f64, v.y as f64, v.z as f64]));
-        }
-        if let Some(v) = any.downcast_ref::<DVec3>() {
-            return Some(f64_array(&[v.x, v.y, v.z]));
-        }
-        if let Some(v) = any.downcast_ref::<Vec2>() {
-            return Some(f64_array(&[v.x as f64, v.y as f64]));
-        }
-        if let Some(v) = any.downcast_ref::<DVec2>() {
-            return Some(f64_array(&[v.x, v.y]));
-        }
-        if let Some(v) = any.downcast_ref::<Quat>() {
-            return Some(f64_array(&[v.x as f64, v.y as f64, v.z as f64, v.w as f64]));
-        }
-        if let Some(v) = any.downcast_ref::<DQuat>() {
-            return Some(f64_array(&[v.x, v.y, v.z, v.w]));
-        }
-        // scalars
-        if let Some(v) = any.downcast_ref::<f64>() {
-            return Some(Dynamic::from_float(*v));
-        }
-        if let Some(v) = any.downcast_ref::<f32>() {
-            return Some(Dynamic::from_float(*v as f64));
-        }
-        if let Some(v) = any.downcast_ref::<i64>() {
-            return Some(Dynamic::from_int(*v));
-        }
-        if let Some(v) = any.downcast_ref::<i32>() {
-            return Some(Dynamic::from_int(*v as i64));
-        }
-        if let Some(v) = any.downcast_ref::<u32>() {
-            return Some(Dynamic::from_int(*v as i64));
-        }
-        if let Some(v) = any.downcast_ref::<u64>() {
-            return Some(Dynamic::from_int(*v as i64));
-        }
-        if let Some(v) = any.downcast_ref::<bool>() {
-            return Some(Dynamic::from_bool(*v));
-        }
-        if let Some(v) = any.downcast_ref::<String>() {
-            return Some(Dynamic::from(v.clone()));
-        }
-    }
-
-    // Structural fallback: containers → arrays, newtypes unwrap, structs → maps.
-    match value.reflect_ref() {
-        ReflectRef::List(l) => Some(Dynamic::from_array(
-            l.iter().filter_map(dynamic_from_reflect).collect(),
-        )),
-        ReflectRef::Array(a) => Some(Dynamic::from_array(
-            a.iter().filter_map(dynamic_from_reflect).collect(),
-        )),
-        ReflectRef::Tuple(t) => Some(Dynamic::from_array(
-            t.iter_fields().filter_map(dynamic_from_reflect).collect(),
-        )),
-        ReflectRef::TupleStruct(ts) if ts.field_len() == 1 => {
-            ts.field(0).and_then(dynamic_from_reflect)
-        }
-        ReflectRef::TupleStruct(ts) => Some(Dynamic::from_array(
-            ts.iter_fields().filter_map(dynamic_from_reflect).collect(),
-        )),
-        ReflectRef::Struct(s) => {
-            let mut m = Map::new();
-            for i in 0..s.field_len() {
-                if let (Some(name), Some(field)) = (s.name_at(i), s.field_at(i)) {
-                    if let Some(d) = dynamic_from_reflect(field) {
-                        m.insert(name.into(), d);
-                    }
-                }
-            }
-            Some(Dynamic::from_map(m))
-        }
-        _ => Some(Dynamic::from(format!("{value:?}"))),
-    }
 }
 
 // ── Persistent per-entity scenario runtime (P2) ────────────────────────────
@@ -795,7 +377,7 @@ fn call_event_hook(
     ast: &AST,
     self_id: i64,
     this: &mut Dynamic,
-    evt: Map,
+    evt: Dynamic,
 ) -> Option<(String, rhai::Position)> {
     let present = ast
         .iter_functions()
@@ -803,7 +385,7 @@ fn call_event_hook(
     if !present {
         return None;
     }
-    let mut args = [Dynamic::from_int(self_id), Dynamic::from_map(evt)];
+    let mut args = [Dynamic::from_int(self_id), evt];
     match engine.call_fn_raw(scope, ast, false, false, "on_event", Some(this), &mut args) {
         Ok(_) => None,
         Err(e) => {
@@ -870,7 +452,7 @@ pub fn tick_rhai_models(world: &mut World) {
     let mut diag_updates: Vec<(u64, Option<Vec<Diagnostic>>)> = Vec::new();
 
     world.resource_scope(|world, mut runtime: Mut<RhaiModelRuntime>| {
-        let _scope = WorldScope::enter(world);
+        let _scope = bridge_core::WorldScope::enter(world);
         // Hot-reload tool libraries if any were (re)registered since last tick.
         let cur_tool_gen = crate::tool_libs::generation();
         if runtime.tool_gen != cur_tool_gen {
@@ -945,7 +527,7 @@ pub fn tick_rhai_models(world: &mut World) {
                         ast,
                         gid,
                         &mut state.this,
-                        event_to_map(ev),
+                        bridge_core::build_event(&RhaiBuilder, ev),
                     ) {
                         runtime_error.get_or_insert_with(|| rhai_diagnostic(msg, pos));
                     }
@@ -1048,7 +630,7 @@ pub fn eval_with_world(world: &mut World, code: &str) -> Result<String, String> 
         }
     });
 
-    let _scope = WorldScope::enter(world);
+    let _scope = bridge_core::WorldScope::enter(world);
     let result = engine.eval::<Dynamic>(code).map_err(|e| e.to_string())?;
 
     let mut captured = out
@@ -1073,14 +655,14 @@ mod tests {
     fn get_returns_vectors_as_arrays() {
         use bevy::math::{Quat, Vec3};
         // Vec3 → [x,y,z]
-        let d = super::dynamic_from_reflect(&Vec3::new(1.0, 2.0, 3.0)).unwrap();
+        let d = crate::bridge_core::build_from_reflect(&super::RhaiBuilder, &Vec3::new(1.0, 2.0, 3.0)).unwrap();
         let a = d.into_array().expect("Vec3 should become a rhai array");
         assert_eq!(a.len(), 3);
         assert_eq!(a[0].as_float().unwrap(), 1.0);
         assert_eq!(a[2].as_float().unwrap(), 3.0);
 
         // Quat → [x,y,z,w]
-        let q = super::dynamic_from_reflect(&Quat::from_xyzw(0.0, 0.0, 0.0, 1.0))
+        let q = crate::bridge_core::build_from_reflect(&super::RhaiBuilder, &Quat::from_xyzw(0.0, 0.0, 0.0, 1.0))
             .unwrap()
             .into_array()
             .expect("Quat should become a rhai array");
@@ -1088,7 +670,7 @@ mod tests {
         assert_eq!(q[3].as_float().unwrap(), 1.0);
 
         // scalar stays scalar
-        let s = super::dynamic_from_reflect(&7.5_f64).unwrap();
+        let s = crate::bridge_core::build_from_reflect(&super::RhaiBuilder, &7.5_f64).unwrap();
         assert_eq!(s.as_float().unwrap(), 7.5);
     }
 
@@ -1159,7 +741,7 @@ mod tests {
             .trim()
             .parse()
             .unwrap();
-        assert!((dt - super::SECS_PER_TICK).abs() < 1e-12, "dt() was {dt}");
+        assert!((dt - lunco_core::SECS_PER_TICK).abs() < 1e-12, "dt() was {dt}");
     }
 
     #[test]
