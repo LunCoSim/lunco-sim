@@ -118,7 +118,10 @@ pub enum ModelicaChange {
 }
 
 /// The op type for [`crate::document::ModelicaDocument`].
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Derives `Serialize`/`Deserialize` so the canonical Twin journal records the
+/// **real op** (lossless, replayable) via `record_op` — see [`crate::journal`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum ModelicaOp {
     /// Replace the entire source buffer.
@@ -367,4 +370,30 @@ pub enum FreshAst {
     Mutated(std::sync::Arc<rumoca_compile::parsing::ast::StoredDefinition>),
     /// Raw text edit — no fresh AST.
     TextEdit,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pretty::{ComponentDecl, Placement};
+
+    /// A2: structured ops serialize **losslessly** — `serde_json` round-trips
+    /// an `AddComponent` (nested `ComponentDecl` + `Placement`) back to an
+    /// equal op, so the canonical Twin journal records replayable entries
+    /// instead of the old lossy summaries.
+    #[test]
+    fn modelica_op_serde_round_trips_losslessly() {
+        let op = ModelicaOp::AddComponent {
+            class: "Circuit".to_string(),
+            decl: ComponentDecl {
+                type_name: "Resistor".to_string(),
+                name: "R1".to_string(),
+                modifications: vec![("R".to_string(), "100".to_string())],
+                placement: Some(Placement::at(10.0, -20.0)),
+            },
+        };
+        let json = serde_json::to_value(&op).expect("serialize");
+        let back: ModelicaOp = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(op, back);
+    }
 }

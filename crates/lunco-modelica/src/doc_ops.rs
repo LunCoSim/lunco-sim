@@ -73,19 +73,22 @@ pub(crate) fn apply_one_op_kernel(
     op: ModelicaOp,
 ) -> (
     Result<lunco_doc::Ack, lunco_doc::Reject>,
-    Option<(serde_json::Value, serde_json::Value)>,
+    Option<(ModelicaOp, ModelicaOp)>,
 ) {
     debug_assert!(
         !op_needs_fresh_ast_pre_apply(&op) || !host.document().syntax_is_stale(),
         "apply_one_op_kernel: op {:?} requires fresh AST but syntax cache is stale — caller must defer through PendingStructuralOps",
         std::mem::discriminant(&op),
     );
-    let forward = crate::journal::summarize_op(&op);
+    let forward = op.clone();
     let result = host.apply(op);
+    // Capture the (forward, inverse) op pair losslessly — both are real
+    // `ModelicaOp`s the journal serializes via `record_op`, replacing the old
+    // lossy `summarize_op` JSON summaries.
     let pair = if result.is_ok() {
         host.document_mut().waive_ast_debounce();
         host.last_applied_inverse()
-            .map(crate::journal::summarize_op)
+            .cloned()
             .map(|backward| (forward, backward))
     } else {
         None
@@ -184,19 +187,16 @@ pub(crate) fn record_journal_entry(
     world: &World,
     doc_id: lunco_doc::DocumentId,
     author: lunco_twin_journal::AuthorTag,
-    forward: serde_json::Value,
-    backward: serde_json::Value,
+    forward: &ModelicaOp,
+    backward: &ModelicaOp,
 ) {
     if let Some(journal) = world.get_resource::<lunco_doc_bevy::JournalResource>() {
         journal.with_write(|j| {
-            j.record_op_value(
-                author,
-                doc_id,
-                lunco_twin_journal::DomainKind::Modelica,
-                forward,
-                backward,
-                None,
-            );
+            // Typed, lossless record — `ModelicaOp: OpPayload` (see
+            // `crate::journal`). Mirrors the USD apply funnel.
+            if let Err(err) = j.record_op(author, doc_id, forward, backward, None) {
+                bevy::log::warn!("[doc_ops] journal record failed for {doc_id:?}: {err}");
+            }
         });
     }
 }
@@ -269,7 +269,7 @@ pub fn apply_one_op_as(
     };
 
     if let Some((forward, backward)) = pair {
-        record_journal_entry(world, doc_id, author, forward, backward);
+        record_journal_entry(world, doc_id, author, &forward, &backward);
     }
     result
 }
@@ -338,7 +338,7 @@ pub fn apply_ops_as(
     let n = ops.len();
     let mut any_applied = false;
     let mut hit_read_only = false;
-    let mut journal_pairs: Vec<(serde_json::Value, serde_json::Value)> = Vec::new();
+    let mut journal_pairs: Vec<(ModelicaOp, ModelicaOp)> = Vec::new();
     {
         let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() else {
             bevy::log::warn!("[doc_ops] apply_ops: registry missing ({n} op(s))");
@@ -370,7 +370,7 @@ pub fn apply_ops_as(
 
     // Record captured op pairs into the canonical Twin journal (one lock).
     for (forward, backward) in journal_pairs {
-        record_journal_entry(world, doc_id, author.clone(), forward, backward);
+        record_journal_entry(world, doc_id, author.clone(), &forward, &backward);
     }
 
     if hit_read_only {

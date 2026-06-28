@@ -28,7 +28,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc_bevy::JournalResource;
 use lunco_settings::SettingsSection;
-use lunco_twin_journal::{EntryKind, JournalEntry, LifecycleKind};
+use lunco_twin_journal::{EntryCategory, JournalEntry};
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 use serde::{Deserialize, Serialize};
 
@@ -99,7 +99,7 @@ impl Panel for JournalPanel {
         let entries: Vec<DisplayRow> = match (active_doc, world.get_resource::<JournalResource>()) {
             (Some(doc), Some(journal)) => journal.with_read(|j| {
                 j.entries_for_doc(doc)
-                    .map(display_row)
+                    .map(|e| display_row(e, &theme))
                     .collect::<Vec<_>>()
             }),
             _ => Vec::new(),
@@ -199,37 +199,14 @@ struct DisplayRow {
     author: String,
 }
 
-fn display_row(entry: &JournalEntry) -> DisplayRow {
-    let (tag, summary, color) = match &entry.kind {
-        EntryKind::Op { op, .. } => summarize_op(op),
-        EntryKind::TextEdit { range, replacement, .. } => (
-            "TEXT".to_string(),
-            format!("{}..{} ← {} bytes", range.start, range.end, replacement.len()),
-            egui::Color32::from_rgb(180, 180, 180),
-        ),
-        EntryKind::Snapshot { source, .. } => (
-            "SNAP".to_string(),
-            format!("source snapshot ({} bytes)", source.len()),
-            egui::Color32::from_rgb(140, 140, 200),
-        ),
-        EntryKind::Lifecycle(kind) => match kind {
-            LifecycleKind::Opened { .. } => (
-                "OPEN".to_string(),
-                "document opened".to_string(),
-                egui::Color32::from_rgb(140, 200, 200),
-            ),
-            LifecycleKind::Saved => (
-                "SAVE".to_string(),
-                "document saved".to_string(),
-                egui::Color32::from_rgb(120, 200, 130),
-            ),
-            LifecycleKind::Closed => (
-                "CLOS".to_string(),
-                "document closed".to_string(),
-                egui::Color32::from_rgb(180, 130, 180),
-            ),
-        },
-    };
+fn display_row(entry: &JournalEntry, theme: &lunco_theme::Theme) -> DisplayRow {
+    // All summarization is headless logic in `lunco-twin-journal`
+    // ([`JournalEntry::summary`]); this panel is a thin renderer that only
+    // maps the semantic category to a theme colour (a pure visual choice).
+    let summary = entry.summary();
+    let tag = summary.tag;
+    let color = category_color(theme, summary.category);
+    let summary = summary.label;
 
     // Show author only when it differs from the default local user, to
     // keep single-user rows uncluttered.
@@ -251,155 +228,22 @@ fn display_row(entry: &JournalEntry) -> DisplayRow {
     }
 }
 
-/// Map an op summary (built by `crate::journal::summarize_op`) to a
-/// row tag + label + color. Reads the `kind` discriminant string and
-/// known field shapes; unknown kinds fall through to a generic display.
-fn summarize_op(payload: &serde_json::Value) -> (String, String, egui::Color32) {
-    let kind = payload.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
-    let class = payload
-        .get("class")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    let component = payload
-        .get("component")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let from = payload.get("from").and_then(|v| v.as_str()).unwrap_or("");
-    let to = payload.get("to").and_then(|v| v.as_str()).unwrap_or("");
-
-    let green = egui::Color32::from_rgb(120, 200, 130);
-    let red = egui::Color32::from_rgb(220, 120, 120);
-    let blue = egui::Color32::from_rgb(140, 180, 220);
-    let orange = egui::Color32::from_rgb(220, 160, 100);
-    let yellow = egui::Color32::from_rgb(220, 200, 120);
-    let neutral = egui::Color32::from_rgb(180, 180, 180);
-
-    match kind {
-        "AddComponent" => (
-            "ADD ".into(),
-            format!("{class} ← {name}"),
-            green,
-        ),
-        "RemoveComponent" => (
-            "DEL ".into(),
-            format!("{class} ✗ {name}"),
-            red,
-        ),
-        "AddConnection" => (
-            "WIRE".into(),
-            format!("{class}: {from} → {to}"),
-            blue,
-        ),
-        "RemoveConnection" => (
-            "UNWR".into(),
-            format!("{class}: {from} ⊘ {to}"),
-            orange,
-        ),
-        "SetPlacement" => (
-            "MOVE".into(),
-            format!("{class}.{name}"),
-            neutral,
-        ),
-        "SetParameter" => {
-            let param = payload.get("param").and_then(|v| v.as_str()).unwrap_or("");
-            let value = payload.get("value").and_then(|v| v.as_str()).unwrap_or("");
-            (
-                "PARM".into(),
-                format!("{class}.{component}.{param} = {value}"),
-                yellow,
-            )
-        }
-        "ReplaceSource" => (
-            "TEXT".into(),
-            "source replaced".into(),
-            neutral,
-        ),
-        "EditText" => {
-            let range = payload.get("range").and_then(|v| v.as_array());
-            let len = payload
-                .get("replacement_len")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let span = match range {
-                Some(arr) if arr.len() == 2 => {
-                    let s = arr[0].as_u64().unwrap_or(0);
-                    let e = arr[1].as_u64().unwrap_or(0);
-                    let removed = e.saturating_sub(s);
-                    if removed == 0 {
-                        format!("@{} ← {}b", s, len)
-                    } else if len == 0 {
-                        format!("@{}..{} ✗{}b", s, e, removed)
-                    } else {
-                        format!("@{}..{} ↺ {}b", s, e, len)
-                    }
-                }
-                _ => format!("{}b", len),
-            };
-            ("EDIT".into(), span, neutral)
-        }
-        "AddClass" => (
-            "CLAS".into(),
-            format!("{class}/{name}"),
-            green,
-        ),
-        "RemoveClass" => {
-            let qualified = payload
-                .get("qualified")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            (
-                "CLAS".into(),
-                format!("✗ {qualified}"),
-                red,
-            )
-        }
-        "AddShortClass" => (
-            "CLAS".into(),
-            format!("{class}/{name} (short)"),
-            green,
-        ),
-        "AddVariable" => (
-            "VAR ".into(),
-            format!("{class} ← {name}"),
-            green,
-        ),
-        "RemoveVariable" => (
-            "VAR ".into(),
-            format!("{class} ✗ {name}"),
-            red,
-        ),
-        "AddEquation" => (
-            "EQN ".into(),
-            format!("{class}"),
-            blue,
-        ),
-        "AddPlotNode" | "RemovePlotNode" | "SetPlotNodeExtent" | "SetPlotNodeTitle" => (
-            "PLOT".into(),
-            format!("{class}"),
-            neutral,
-        ),
-        "AddIconGraphic" | "AddDiagramGraphic" => (
-            "GFX ".into(),
-            format!("{class}"),
-            neutral,
-        ),
-        "SetDiagramTextExtent" | "SetDiagramTextString" | "RemoveDiagramText" => (
-            "TXT ".into(),
-            format!("{class}"),
-            neutral,
-        ),
-        "SetExperimentAnnotation" => (
-            "EXP ".into(),
-            format!("{class}"),
-            neutral,
-        ),
-        // Fallback for unknown / new variants.
-        _ => (
-            "EDIT".into(),
-            format!("{kind}"),
-            neutral,
-        ),
+/// Map a headless [`EntryCategory`] to a **theme** row colour. Colour is the
+/// *only* presentation decision left to the panel — tag and label text come
+/// from [`JournalEntry::summary`], and the palette → intent mapping lives in
+/// [`lunco_theme::JournalTokens`]. Theme authors retune there, not here.
+fn category_color(theme: &lunco_theme::Theme, category: EntryCategory) -> egui::Color32 {
+    let j = &theme.journal;
+    match category {
+        EntryCategory::Add => j.add,
+        EntryCategory::Remove => j.remove,
+        EntryCategory::Modify => j.modify,
+        EntryCategory::Wire => j.wire,
+        EntryCategory::Unwire => j.unwire,
+        EntryCategory::Text => j.text,
+        EntryCategory::Snapshot => j.snapshot,
+        EntryCategory::Lifecycle => j.lifecycle,
+        EntryCategory::Other => j.other,
     }
 }
 

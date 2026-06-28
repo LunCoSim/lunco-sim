@@ -269,6 +269,193 @@ pub enum LifecycleKind {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Headless entry summary — one-line tag/label for any log / audit surface
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Semantic category of a journal entry. A log/audit surface maps this to a
+/// colour or icon; the colour itself is a pure visual choice, so it stays out
+/// of this crate. Lets the egui panel (or a CLI, or the API) stay a thin
+/// renderer over headless logic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryCategory {
+    Add,
+    Remove,
+    Modify,
+    Wire,
+    Unwire,
+    Text,
+    Snapshot,
+    Lifecycle,
+    Other,
+}
+
+/// Headless one-line summary of a [`JournalEntry`]: a short gutter `tag`, a
+/// human `label`, and a semantic [`EntryCategory`]. UI-free — usable from a
+/// CLI, the API, or an egui panel. Generic over the recorded JSON, so it works
+/// for every domain (Modelica, USD, …) with no domain-specific code.
+#[derive(Debug, Clone)]
+pub struct EntrySummary {
+    pub tag: String,
+    pub label: String,
+    pub category: EntryCategory,
+}
+
+impl JournalEntry {
+    /// Build a one-line [`EntrySummary`] for this entry. See the type docs.
+    pub fn summary(&self) -> EntrySummary {
+        match &self.kind {
+            EntryKind::Lifecycle(LifecycleKind::Opened { .. }) => EntrySummary {
+                tag: "OPEN".into(),
+                label: "document opened".into(),
+                category: EntryCategory::Lifecycle,
+            },
+            EntryKind::Lifecycle(LifecycleKind::Saved) => EntrySummary {
+                tag: "SAVE".into(),
+                label: "document saved".into(),
+                category: EntryCategory::Lifecycle,
+            },
+            EntryKind::Lifecycle(LifecycleKind::Closed) => EntrySummary {
+                tag: "CLOS".into(),
+                label: "document closed".into(),
+                category: EntryCategory::Lifecycle,
+            },
+            EntryKind::Snapshot { source, .. } => EntrySummary {
+                tag: "SNAP".into(),
+                label: format!("source snapshot ({} bytes)", source.len()),
+                category: EntryCategory::Snapshot,
+            },
+            EntryKind::TextEdit { range, replacement, .. } => {
+                let removed = range.end.saturating_sub(range.start);
+                let len = replacement.len();
+                let label = if removed == 0 {
+                    format!("@{} ← {len}b", range.start)
+                } else if len == 0 {
+                    format!("@{}..{} ✗{removed}b", range.start, range.end)
+                } else {
+                    format!("@{}..{} ↺ {len}b", range.start, range.end)
+                };
+                EntrySummary { tag: "EDIT".into(), label, category: EntryCategory::Text }
+            }
+            EntryKind::Op { op, .. } => summarize_op_value(op),
+        }
+    }
+}
+
+/// Summarize a recorded op payload (externally-tagged enum JSON) generically.
+/// Reads the variant name plus a handful of common fields shared across the
+/// Modelica and USD op vocabularies (`class`/`parent`, `name`/`decl.name`,
+/// `from`/`to` ports, USD `path`). Lossless replay still uses the full JSON;
+/// this is display only.
+fn summarize_op_value(op: &serde_json::Value) -> EntrySummary {
+    // Externally-tagged enum: `{ "<Variant>": { ...fields } }`, or a bare
+    // string for a unit-like variant.
+    let (variant, fields) = match op {
+        serde_json::Value::Object(m) => m
+            .iter()
+            .next()
+            .map(|(k, v)| (k.as_str(), Some(v)))
+            .unwrap_or(("?", None)),
+        serde_json::Value::String(s) => (s.as_str(), None),
+        _ => ("?", None),
+    };
+    let field = |key: &str| -> String {
+        fields
+            .and_then(|f| f.get(key))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let nested = |a: &str, b: &str| -> String {
+        fields
+            .and_then(|f| f.get(a))
+            .and_then(|v| v.get(b))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    // Endpoint as "component.port"; may sit top-level or nested under `eq`.
+    let port = |key: &str| -> String {
+        let v = fields
+            .and_then(|f| f.get(key))
+            .or_else(|| fields.and_then(|f| f.get("eq")).and_then(|e| e.get(key)));
+        match v {
+            Some(p) => format!(
+                "{}.{}",
+                p.get("component").and_then(|x| x.as_str()).unwrap_or(""),
+                p.get("port").and_then(|x| x.as_str()).unwrap_or(""),
+            ),
+            None => String::new(),
+        }
+    };
+
+    // class lives under `class` for most ops, `parent` for class-authoring.
+    let class = {
+        let c = field("class");
+        if c.is_empty() { field("parent") } else { c }
+    };
+    // name is top-level for some ops, nested in `decl` for add-component/-variable.
+    let name = {
+        let n = field("name");
+        if n.is_empty() { nested("decl", "name") } else { n }
+    };
+
+    let category = if variant.starts_with("AddConnection") {
+        EntryCategory::Wire
+    } else if variant.starts_with("RemoveConnection") {
+        EntryCategory::Unwire
+    } else if variant.starts_with("Add") {
+        EntryCategory::Add
+    } else if variant.starts_with("Remove") {
+        EntryCategory::Remove
+    } else if variant == "ReplaceSource" || variant == "EditText" {
+        EntryCategory::Text
+    } else {
+        EntryCategory::Modify
+    };
+
+    let label = match variant {
+        "AddComponent" | "AddVariable" => format!("{class} ← {name}"),
+        "RemoveComponent" | "RemoveVariable" => format!("{class} ✗ {name}"),
+        "AddConnection" => format!("{class}: {} → {}", port("from"), port("to")),
+        "RemoveConnection" | "ReverseConnection" => {
+            format!("{class}: {} ⊘ {}", port("from"), port("to"))
+        }
+        "SetParameter" => format!(
+            "{class}.{}.{} = {}",
+            field("component"),
+            field("param"),
+            field("value")
+        ),
+        "SetPlacement" => format!("{class}.{name}"),
+        "AddClass" | "AddShortClass" => format!("{class}/{name}"),
+        "RemoveClass" => format!("✗ {}", field("qualified")),
+        "ReplaceSource" => "source replaced".to_string(),
+        // USD ops: path-keyed.
+        "AddPrim" => format!("{} ← {name}", field("parent_path")),
+        "RemovePrim" => format!("✗ {}", field("path")),
+        "SetTranslate" => format!("{} ⤧", field("path")),
+        "SetAttribute" => format!("{}.{}", field("path"), field("name")),
+        _ if !class.is_empty() => format!("{variant} {class}"),
+        _ => variant.to_string(),
+    };
+
+    let tag = match category {
+        EntryCategory::Add => "ADD ",
+        EntryCategory::Remove => "DEL ",
+        EntryCategory::Modify => "SET ",
+        EntryCategory::Wire => "WIRE",
+        EntryCategory::Unwire => "UNWR",
+        EntryCategory::Text => "TEXT",
+        EntryCategory::Snapshot => "SNAP",
+        EntryCategory::Lifecycle => "LIFE",
+        EntryCategory::Other => "EDIT",
+    }
+    .to_string();
+
+    EntrySummary { tag, label, category }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ChangeSet — optional atomic group of entries
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -955,6 +1142,49 @@ mod tests {
 
     fn new_journal() -> Journal {
         Journal::new(TwinId::new("test-twin"), AuthorId::local())
+    }
+
+    #[test]
+    fn summarize_op_value_reads_modelica_and_usd_shapes() {
+        use serde_json::json;
+
+        // Modelica AddComponent: class top-level, name nested under `decl`.
+        let m = json!({"AddComponent": {"class": "Circuit",
+            "decl": {"name": "R1", "type_name": "Resistor"}}});
+        let s = summarize_op_value(&m);
+        assert_eq!(s.category, EntryCategory::Add);
+        assert!(s.label.contains("Circuit") && s.label.contains("R1"), "label={}", s.label);
+
+        // Modelica AddConnection: PortRef endpoints nested under `eq`.
+        let c = json!({"AddConnection": {"class": "Circuit", "eq": {
+            "from": {"component": "R1", "port": "p"},
+            "to": {"component": "C1", "port": "n"}}}});
+        let s = summarize_op_value(&c);
+        assert_eq!(s.category, EntryCategory::Wire);
+        assert!(s.label.contains("R1.p") && s.label.contains("C1.n"), "label={}", s.label);
+
+        // USD AddPrim: path-keyed, cross-domain — same generic summarizer.
+        let u = json!({"AddPrim": {"parent_path": "/World", "name": "Rover",
+            "type_name": "Xform"}});
+        let s = summarize_op_value(&u);
+        assert_eq!(s.category, EntryCategory::Add);
+        assert!(s.label.contains("/World") && s.label.contains("Rover"), "label={}", s.label);
+
+        // ReplaceSource → Text category.
+        assert_eq!(
+            summarize_op_value(&json!({"ReplaceSource": {"text": "x"}})).category,
+            EntryCategory::Text
+        );
+    }
+
+    #[test]
+    fn journal_entry_summary_covers_lifecycle() {
+        let mut j = new_journal();
+        let doc = DocumentId::new(7);
+        j.record_lifecycle(AuthorTag::local_user(), doc, LifecycleKind::Saved);
+        let saved = j.entries_for_doc(doc).next().unwrap().summary();
+        assert_eq!(saved.category, EntryCategory::Lifecycle);
+        assert_eq!(saved.tag, "SAVE");
     }
 
     #[test]

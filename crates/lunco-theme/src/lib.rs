@@ -303,6 +303,52 @@ impl SchematicTokens {
     }
 }
 
+/// Semantic colours for the edit-journal / history log — one per
+/// edit-category intent (add / remove / modify / wire / …). The journal panel
+/// (and any CLI / API surface that colours rows) reads these as plain fields,
+/// mapping its `EntryCategory` onto them; the palette → intent mapping lives
+/// only in [`Self::from_palette`], like [`SchematicTokens`]. Kept domain-free
+/// (no `lunco-twin-journal` dependency) so the theme crate stays standalone.
+#[derive(Clone, Debug)]
+pub struct JournalTokens {
+    /// Additive ops (AddComponent, AddPrim, AddClass, …).
+    pub add: egui::Color32,
+    /// Destructive ops (Remove*, delete).
+    pub remove: egui::Color32,
+    /// In-place edits (Set*, Reverse*, parameter/placement changes).
+    pub modify: egui::Color32,
+    /// Connection added.
+    pub wire: egui::Color32,
+    /// Connection removed.
+    pub unwire: egui::Color32,
+    /// Text / source replacement edits.
+    pub text: egui::Color32,
+    /// Source snapshots / version baselines.
+    pub snapshot: egui::Color32,
+    /// Lifecycle events (open / save / close).
+    pub lifecycle: egui::Color32,
+    /// Anything else / unknown variant.
+    pub other: egui::Color32,
+}
+
+impl JournalTokens {
+    /// Map the raw palette to journal-row intents. The single mapping site —
+    /// theme authors retune by swapping palette entries here.
+    pub fn from_palette(p: &ColorPalette) -> Self {
+        Self {
+            add: p.green,
+            remove: p.red,
+            modify: p.yellow,
+            wire: p.blue,
+            unwire: p.peach,
+            text: p.subtext0,
+            snapshot: p.lavender,
+            lifecycle: p.teal,
+            other: p.overlay1,
+        }
+    }
+}
+
 /// Core design tokens — colors, spacing, and rounding.
 #[derive(Resource, Clone, Debug)]
 pub struct Theme {
@@ -315,6 +361,8 @@ pub struct Theme {
     /// typography). Shared by every block-diagram-style editor in
     /// the workspace.
     pub schematic: SchematicTokens,
+    /// Edit-journal / history-log row colours, keyed by edit category.
+    pub journal: JournalTokens,
     /// Anchor + invert rules for re-coloring authored Modelica icon
     /// primitives so MSL (designed for paper-white backgrounds) reads
     /// well under the active theme. Identity in light mode.
@@ -539,12 +587,14 @@ impl Theme {
         let colors = ColorPalette::from_catppuccin(catppuccin_egui::MOCHA);
         let tokens = DesignTokens::from_palette(&colors, ThemeMode::Dark);
         let schematic = SchematicTokens::from_palette(&colors);
+        let journal = JournalTokens::from_palette(&colors);
         let modelica_icons = ModelicaIconPalette::dark_default(&colors);
         Self {
             mode: ThemeMode::Dark,
             colors,
             tokens,
             schematic,
+            journal,
             modelica_icons,
             spacing: SpacingScale::default(),
             rounding: RoundingScale::default(),
@@ -556,11 +606,13 @@ impl Theme {
         let colors = ColorPalette::from_catppuccin(catppuccin_egui::LATTE);
         let tokens = DesignTokens::from_palette(&colors, ThemeMode::Light);
         let schematic = SchematicTokens::from_palette(&colors);
+        let journal = JournalTokens::from_palette(&colors);
         Self {
             mode: ThemeMode::Light,
             colors,
             tokens,
             schematic,
+            journal,
             modelica_icons: ModelicaIconPalette::identity(),
             spacing: SpacingScale::default(),
             rounding: RoundingScale::default(),
