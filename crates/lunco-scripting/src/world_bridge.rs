@@ -40,8 +40,8 @@ use big_space::prelude::*;
 use std::cell::Cell;
 
 use lunco_core::{
-    coords, Ack, CelestialClock, CommandResults, GlobalEntityId, OpId, Severity, SimTick,
-    TelemetryEvent, TelemetryValue, SECS_PER_TICK,
+    coords, Ack, CelestialBody, CelestialClock, CommandOutcome, CommandResults, GlobalEntityId,
+    OpId, RoverVessel, Severity, SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
 use lunco_api::executor::ApiCommandEvent;
 use lunco_api::registry::ApiEntityRegistry;
@@ -113,14 +113,17 @@ pub fn build_world_engine() -> Engine {
     engine.set_max_string_size(64 * 1024);
     engine.set_max_array_size(10_000);
 
-    // cmd(name, #{params}) -> i64 (the command id, for polling). Routes through
+    // cmd(name, #{params}) -> #{ id, ok, data, error }. Routes through
     // ApiCommandEvent so it inherits macro-reflected dispatch, GlobalEntityId
-    // resolution, and result recording. Returns -1 if no World is in scope.
-    engine.register_fn("cmd", |name: ImmutableString, params: Map| -> i64 {
+    // resolution, and result recording. The command runs SYNCHRONOUSLY (the
+    // bridge flushes), so `data` carries any values the handler assigned — a
+    // spawned entity's gid, an allocated name — enabling create-then-manipulate
+    // in one tick. `ok=false` + `error` on a handler error/rejection.
+    engine.register_fn("cmd", |name: ImmutableString, params: Map| -> Dynamic {
         cmd_impl(name.as_str(), Dynamic::from_map(params))
     });
-    // cmd(name) -> i64 — convenience for unit/all-defaulted commands.
-    engine.register_fn("cmd", |name: ImmutableString| -> i64 {
+    // cmd(name) -> #{...} — convenience for unit/all-defaulted commands.
+    engine.register_fn("cmd", |name: ImmutableString| -> Dynamic {
         cmd_impl(name.as_str(), Dynamic::from_map(Map::new()))
     });
 
@@ -243,29 +246,82 @@ pub fn build_world_engine() -> Engine {
         Err(e) => error!("[rhai] prelude compile failed: {e}"),
     }
 
+    // Register the importable tool libraries as static modules (callable as
+    // `libname::fn`). AFTER the prelude global module so their functions can
+    // resolve prelude helpers at run time.
+    crate::tool_libs::refresh(&mut engine);
+
     engine
 }
 
 // ── Verb implementations ───────────────────────────────────────────────────
 
-fn cmd_impl(name: &str, params: Dynamic) -> i64 {
+/// Build the `#{ id, ok, data, error }` result map a `cmd()` call returns from a
+/// recorded [`CommandOutcome`]. `Succeeded` surfaces the handler's `assigned`
+/// bag as `data` (the spawned gid / allocated name); `Failed`/`Rejected` set
+/// `ok=false` + `error`; `Pending`/`None` (fire-and-forget or async) are
+/// reported as accepted (`ok=true`, no `data`).
+fn command_result_map(id: u64, outcome: Option<&CommandOutcome>) -> Dynamic {
+    let mut m = Map::new();
+    m.insert("id".into(), Dynamic::from_int(id as i64));
+    match outcome {
+        Some(CommandOutcome::Succeeded(ack)) => {
+            m.insert("ok".into(), Dynamic::from_bool(true));
+            if !ack.assigned.is_null() {
+                m.insert(
+                    "data".into(),
+                    rhai::serde::to_dynamic(&ack.assigned).unwrap_or(Dynamic::UNIT),
+                );
+            }
+        }
+        Some(CommandOutcome::Failed(msg)) => {
+            m.insert("ok".into(), Dynamic::from_bool(false));
+            m.insert("error".into(), Dynamic::from(msg.clone()));
+        }
+        Some(CommandOutcome::Rejected(reject)) => {
+            m.insert("ok".into(), Dynamic::from_bool(false));
+            m.insert("error".into(), Dynamic::from(reject.to_string()));
+        }
+        // Accepted but no terminal outcome recorded: a fire-and-forget command
+        // (most, e.g. DriveRover) or an async one. Treat as success-no-data.
+        Some(CommandOutcome::Pending) | None => {
+            m.insert("ok".into(), Dynamic::from_bool(true));
+        }
+    }
+    Dynamic::from_map(m)
+}
+
+fn cmd_impl(name: &str, params: Dynamic) -> Dynamic {
     // rhai Map -> serde_json::Value (rhai `serde` feature drives Serialize).
     let params_json = rhai::serde::from_dynamic::<serde_json::Value>(&params)
         .unwrap_or(serde_json::Value::Null);
 
     let id = OpId::new().0;
-    let triggered = with_world(|world| {
+    with_world(|world| {
         world.trigger(ApiCommandEvent {
             command: name.to_string(),
             params: params_json,
             id,
         });
-    });
-    if triggered.is_some() {
-        id as i64
-    } else {
-        -1
-    }
+        // The dispatcher defers the real command trigger via `commands.queue`;
+        // flush so it runs NOW and any result-reporting handler records its Ack
+        // under `id` before we read it back. This synchronous round-trip is what
+        // lets `cmd()` return the handler's assigned data, not just an id.
+        world.flush();
+        let outcome = world
+            .get_resource::<CommandResults>()
+            .and_then(|r| r.get(id).cloned());
+        command_result_map(id, outcome.as_ref())
+    })
+    .unwrap_or_else(|| {
+        // No World in scope — only happens if a verb is called outside a script
+        // evaluation (shouldn't occur in practice).
+        let mut m = Map::new();
+        m.insert("id".into(), Dynamic::from_int(-1));
+        m.insert("ok".into(), Dynamic::from_bool(false));
+        m.insert("error".into(), Dynamic::from("no world in scope".to_string()));
+        Dynamic::from_map(m)
+    })
 }
 
 /// Invoke a registered [`ApiQueryProvider`](lunco_api::queries::ApiQueryProvider)
@@ -406,16 +462,41 @@ fn get_field_impl(gid: u64, path: &str) -> Option<Dynamic> {
 fn list_entities_impl() -> rhai::Array {
     with_world(|world| {
         let pairs = world.resource::<ApiEntityRegistry>().entities();
+        // One SystemState carries every per-entity read (float-origin pose
+        // hierarchy + name/kind) so the loop never re-borrows the World. Returns
+        // `#{ id, name, type, pos }` — enough for scripts to filter/score/select
+        // with idiomatic `list_entities().filter(...).reduce(...)` (the in-rhai
+        // selection toolkit in the prelude builds on exactly these fields).
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+            Query<(Option<&Name>, Option<&RoverVessel>, Option<&CelestialBody>)>,
+        )> = SystemState::new(world);
+        let (q_parents, q_grids, q_spatial, q_meta) = state.get(world);
         pairs
             .into_iter()
             .map(|(gid, entity)| {
                 let mut m = Map::new();
                 m.insert("id".into(), Dynamic::from_int(gid.get() as i64));
-                let name = world
-                    .get::<Name>(entity)
-                    .map(|n| n.as_str().to_string())
-                    .unwrap_or_default();
-                m.insert("name".into(), Dynamic::from(name));
+                let (name, rover, body) = q_meta.get(entity).unwrap_or((None, None, None));
+                m.insert(
+                    "name".into(),
+                    Dynamic::from(name.map(|n| n.as_str().to_string()).unwrap_or_default()),
+                );
+                // Same kind taxonomy the HTTP API's ListEntities uses.
+                let kind = if rover.is_some() {
+                    "rover"
+                } else if body.is_some() {
+                    "planet"
+                } else {
+                    "unknown"
+                };
+                m.insert("type".into(), Dynamic::from(kind.to_string()));
+                let pos = coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
+                    .map(|v| f64_array(&[v.x, v.y, v.z]))
+                    .unwrap_or(Dynamic::UNIT);
+                m.insert("pos".into(), pos);
                 Dynamic::from_map(m)
             })
             .collect()
@@ -582,6 +663,9 @@ struct ModelState {
 pub struct RhaiModelRuntime {
     engine: Engine,
     states: std::collections::HashMap<Entity, ModelState>,
+    /// Tool-library generation the `engine`'s static modules were built from; a
+    /// mismatch triggers a re-`refresh` so a `RegisterToolLibrary` hot-reloads.
+    tool_gen: u64,
 }
 
 impl Default for RhaiModelRuntime {
@@ -591,6 +675,8 @@ impl Default for RhaiModelRuntime {
         Self {
             engine,
             states: std::collections::HashMap::new(),
+            // build_world_engine already refreshed at the current generation.
+            tool_gen: crate::tool_libs::generation(),
         }
     }
 }
@@ -709,7 +795,15 @@ pub fn tick_rhai_models(world: &mut World) {
 
     world.resource_scope(|world, mut runtime: Mut<RhaiModelRuntime>| {
         let _scope = WorldScope::enter(world);
-        let RhaiModelRuntime { engine, states } = &mut *runtime;
+        // Hot-reload tool libraries if any were (re)registered since last tick.
+        let cur_tool_gen = crate::tool_libs::generation();
+        if runtime.tool_gen != cur_tool_gen {
+            crate::tool_libs::refresh(&mut runtime.engine);
+            runtime.tool_gen = cur_tool_gen;
+        }
+        let RhaiModelRuntime {
+            engine, states, ..
+        } = &mut *runtime;
 
         for (entity, gid, generation, source) in work {
             let state = states.entry(entity).or_insert_with(|| ModelState {
@@ -881,6 +975,10 @@ mod tests {
                 "mission_plan",
                 include_str!("../rhai/examples/mission_plan.rhai"),
             ),
+            (
+                "formation (tool lib)",
+                include_str!("../rhai/tools/formation.rhai"),
+            ),
         ] {
             engine
                 .compile(src)
@@ -929,6 +1027,23 @@ mod tests {
             .parse()
             .unwrap();
         assert!((dt - super::SECS_PER_TICK).abs() < 1e-12, "dt() was {dt}");
+    }
+
+    #[test]
+    fn selection_toolkit_closures_work_across_the_prelude_module() {
+        use bevy::prelude::World;
+        let mut world = World::new();
+        // min_by/max_by/count_where take rhai closures and `.call` them from
+        // inside the prelude global module — validate that boundary works.
+        let code = r#"
+            let xs = [#{id:1,v:5}, #{id:2,v:2}, #{id:3,v:9}];
+            let lo = min_by(xs, |e| e.v);
+            let hi = max_by(xs, |e| e.v);
+            let n  = count_where(xs, |e| e.v > 3);
+            [lo.id, hi.id, n]
+        "#;
+        let out = super::eval_with_world(&mut world, code).unwrap();
+        assert_eq!(out.trim(), "[2, 3, 2]", "got {out}");
     }
 
     #[test]

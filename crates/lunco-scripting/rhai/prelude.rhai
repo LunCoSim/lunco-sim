@@ -1,7 +1,10 @@
 // LunCo scripting prelude — ergonomic wrappers over the three host verbs.
 //
 // The host (Rust) exposes only the minimal, generic bridge:
-//   cmd(name, #{params}) -> i64   write: fire any #[Command] by name
+//   cmd(name, #{params})          write: fire any #[Command] by name; returns
+//                                        #{ id, ok, data, error } — `data` is the
+//                                        handler's assigned bag (spawned gid, …),
+//                                        so you can create-then-manipulate
 //   query(name, #{params})        read:  call any ApiQueryProvider (Raycast,
 //                                        Nearest, GroundHeight, …) — the read
 //                                        twin of cmd(); physics stays in its
@@ -11,7 +14,7 @@
 //   get(id, "Comp.field")         read:  reflected field; vectors/quats come
 //                                        back as arrays ([x,y,z]/[x,y,z,w]),
 //                                        structs as maps
-//   list_entities() -> [#{id,name}]
+//   list_entities() -> [#{id,name,type,pos}]  (type+pos enable in-rhai selection)
 //   find(name) -> id
 //   sim_tick() -> i64             time:  current fixed tick (integer)
 //   dt() -> f64                   time:  fixed-step delta in seconds (1/60)
@@ -128,6 +131,14 @@ fn load_scene(path)            { cmd("LoadScene", #{ path: path }) }
 fn clear_scene()               { cmd("ClearScene") }
 fn set_property(id, key, val)  { cmd("SetObjectProperty", #{ target: id, key: key, value: val }) }
 
+/// Fire a command and return JUST its assigned data (the `.data` bag), or () if
+/// it failed or reported none. The create-then-manipulate shortcut:
+///   let id = cmd_data("SpawnThing", #{...}); if id != () { set_property(id, ...) }
+fn cmd_data(name, params) {
+    let r = cmd(name, params);
+    if r.ok { r.data } else { () }
+}
+
 // ── Sensing (reads over get()/query() — gives scripts eyes, not just hands) ──
 //
 // get() now returns vectors as [x,y,z], so component reads feed the vector math
@@ -221,4 +232,68 @@ fn entered(evt, self_id) {
 /// True if `evt` is a contact END touching `self_id` (left a zone / separated).
 fn exited(evt, self_id) {
     evt.name == "COLLISION_END" && collision_other(evt, self_id) != ()
+}
+
+// ── Selection toolkit (write targeting/selection algorithms in rhai) ─────────
+//
+// list_entities() returns #{ id, name, type, pos } per entity, so selection is
+// idiomatic functional rhai over the built-in filter/map/reduce/sort_by. These
+// are the reusable PRIMITIVES — compose them or write your own; all are policy,
+// hot-reloadable, no Rust rebuild. Deeper per-entity reads use get(id, "Comp.f").
+// Pass closures as predicates/metrics, e.g.
+//   let weakest = min_by(all_of_type("rover"), |e| get(e.id, "Battery.charge"));
+
+/// Vector × scalar.
+fn vscale(a, s) { [a[0]*s, a[1]*s, a[2]*s] }
+
+/// True if entity `id` currently has component `name` (e.g. "RoverVessel",
+/// "LinearVelocity"). Built on get(), which returns () for an absent component.
+fn has_component(id, name) { get(id, name) != () }
+
+/// Kind tag for one entity ("rover"/"planet"/"unknown"), matching list_entities().type.
+fn kind(id) {
+    if has_component(id, "RoverVessel") { "rover" }
+    else if has_component(id, "CelestialBody") { "planet" }
+    else { "unknown" }
+}
+
+/// All entities of a kind, as list_entities() records (#{id,name,type,pos}).
+fn all_of_type(t) { list_entities().filter(|e| e.type == t) }
+
+/// The list element with the smallest `metric.call(e)`, or () if empty.
+fn min_by(list, metric) {
+    let best = ();
+    let best_v = ();
+    for e in list {
+        let v = metric.call(e);
+        if best == () || v < best_v { best = e; best_v = v; }
+    }
+    best
+}
+
+/// The list element with the largest `metric.call(e)`, or () if empty.
+fn max_by(list, metric) {
+    let best = ();
+    let best_v = ();
+    for e in list {
+        let v = metric.call(e);
+        if best == () || v > best_v { best = e; best_v = v; }
+    }
+    best
+}
+
+/// How many list elements satisfy `pred.call(e)`.
+fn count_where(list, pred) { list.filter(|e| pred.call(e)).len() }
+
+/// The entity record nearest to world point `point` matching `pred`, or () if
+/// none. Operates on list_entities() records (uses e.pos).
+fn nearest_where(point, pred) {
+    let cands = list_entities().filter(|e| e.pos != () && pred.call(e));
+    min_by(cands, |e| vlen(vsub(e.pos, point)))
+}
+
+/// The entity record farthest from `point` matching `pred`, or ().
+fn farthest_where(point, pred) {
+    let cands = list_entities().filter(|e| e.pos != () && pred.call(e));
+    max_by(cands, |e| vlen(vsub(e.pos, point)))
 }

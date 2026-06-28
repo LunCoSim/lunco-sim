@@ -10,6 +10,9 @@ pub mod source_asset;
 /// World-bound rhai execution (the `cmd`/`world_pos`/`get`/`find` bridge).
 #[cfg(feature = "rhai")]
 pub mod world_bridge;
+/// Importable rhai tool libraries (named `libname::fn` modules).
+#[cfg(feature = "rhai")]
+pub mod tool_libs;
 
 use std::collections::HashMap;
 use lunco_doc::{DocumentId, DocumentHost};
@@ -57,6 +60,10 @@ impl Plugin for LunCoScriptingPlugin {
         // can't hold `&mut World`); the drain records real stdout afterwards.
         #[cfg(feature = "rhai")]
         {
+            // Seed built-in tool libraries (formation + the native mathx example)
+            // BEFORE the runtime engine is built, so build_world_engine's refresh
+            // binds them immediately.
+            tool_libs::register_builtins();
             app.init_resource::<world_bridge::PendingWorldScripts>();
             app.init_resource::<world_bridge::RhaiModelRuntime>();
             // Mints document ids for scenarios attached via RunScenario.
@@ -65,6 +72,9 @@ impl Plugin for LunCoScriptingPlugin {
             // via this observer (frame-delayed into on_event hooks).
             app.init_resource::<world_bridge::ScriptEventInbox>();
             app.add_observer(world_bridge::collect_script_events);
+            // Tool-library discovery on the API (ListToolLibraries/GetToolLibrary);
+            // registration rides the RegisterToolLibrary command.
+            tool_libs::register_queries(app);
             app.add_systems(
                 FixedUpdate,
                 (

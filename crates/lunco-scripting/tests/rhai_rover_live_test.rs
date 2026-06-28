@@ -19,7 +19,8 @@ use bevy::prelude::*;
 use lunco_api::executor::api_command_dispatcher;
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_core::{
-    on_command, register_commands, ActiveCommandId, Command, GlobalEntityId, TelemetryEvent,
+    on_command, register_commands, Ack, ActiveCommandId, Command, GlobalEntityId, OpId,
+    TelemetryEvent,
 };
 use lunco_doc::{DocumentHost, DocumentId};
 use lunco_scripting::doc::{ScriptDocument, ScriptLanguage, ScriptedModel};
@@ -65,7 +66,37 @@ fn on_brake(_t: On<BrakeRover>, mut count: ResMut<BrakeCount>) {
     count.0 += 1;
 }
 
-register_commands!(on_drive, on_brake);
+// A result-reporting command that "spawns" something and reports the new gid
+// back via `Ack.assigned` — stands in for any create command (AddComponent,
+// spawn, name allocation) whose result a script needs.
+const SPAWNED_GID: i64 = 4242;
+
+#[Command(default)]
+struct SpawnThing {}
+
+#[on_command(SpawnThing)]
+fn on_spawn(_t: On<SpawnThing>) -> Result<Ack, String> {
+    let mut ack = Ack::new(OpId::new());
+    ack.assigned = serde_json::json!({ "gid": SPAWNED_GID });
+    Ok(ack)
+}
+
+// Records values fed back from a script — proves the script captured cmd() data
+// and threaded it into a follow-up command (create-then-manipulate).
+#[derive(Resource, Default)]
+struct CapturedData(Vec<i64>);
+
+#[Command(default)]
+struct Report {
+    value: i64,
+}
+
+#[on_command(Report)]
+fn on_report(_t: On<Report>, mut cap: ResMut<CapturedData>) {
+    cap.0.push(cmd.value);
+}
+
+register_commands!(on_drive, on_brake, on_spawn, on_report);
 
 fn spy_events(t: On<TelemetryEvent>, mut log: ResMut<EventLog>) {
     log.0.push(t.event().name.clone());
@@ -95,6 +126,7 @@ fn build_app() -> App {
     app.init_resource::<DriveLog>()
         .init_resource::<BrakeCount>()
         .init_resource::<EventLog>()
+        .init_resource::<CapturedData>()
         .add_observer(spy_events);
     register_all_commands(&mut app);
     app
@@ -117,6 +149,36 @@ fn spawn_rover(app: &mut App) -> Entity {
         .resource_mut::<ApiEntityRegistry>()
         .assign(rover, GlobalEntityId::from_raw(ROVER_GID));
     rover
+}
+
+/// Spawn a rover carrying `RoverVessel` (so `list_entities().type == "rover"` and
+/// the selection toolkit / formation tool library can find it) at world x = `x`.
+fn spawn_typed_rover(app: &mut App, gid: u64, x: f32) -> Entity {
+    let e = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(x, 0.0, 0.0),
+            GlobalTransform::from(Transform::from_xyz(x, 0.0, 0.0)),
+            GlobalEntityId::from_raw(gid),
+            lunco_core::RoverVessel,
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<ApiEntityRegistry>()
+        .assign(e, GlobalEntityId::from_raw(gid));
+    e
+}
+
+/// Attach/replace a scenario on `target_gid` through the real RunScenario command
+/// path (ApiCommandEvent → dispatch), as the API / MCP / UI would.
+fn run_scenario(app: &mut App, target_gid: u64, source: &str, id: u64) {
+    use lunco_api::executor::ApiCommandEvent;
+    app.world_mut().trigger(ApiCommandEvent {
+        command: "RunScenario".to_string(),
+        params: serde_json::json!({ "target": target_gid, "source": source }),
+        id,
+    });
+    app.world_mut().flush();
 }
 
 /// Full setup: app + rover with `source` attached directly as a ScriptDocument +
@@ -312,5 +374,93 @@ fn rhai_event_delivered_to_on_event_next_tick() {
     assert!(
         events.iter().any(|n| n == "GOT_PING"),
         "tick 2 on_event should have received PING and emitted GOT_PING; got {events:?}"
+    );
+}
+
+#[test]
+fn cmd_returns_data_enabling_create_then_manipulate() {
+    // #5: cmd() must return the handler's assigned data, not just an id, so a
+    // script can capture a spawned entity's gid and act on it in the SAME tick.
+    // on_start spawns (reports gid 4242), then feeds that gid into Report — the
+    // captured value proves the round-trip worked end-to-end through rhai.
+    let source = r#"
+        fn on_start(me) {
+            let r = cmd("SpawnThing");
+            // full-result form: r.ok / r.data
+            if r.ok { cmd("Report", #{ value: r.data.gid }); }
+            // convenience form: cmd_data returns the .data bag directly
+            let d = cmd_data("SpawnThing", #{});
+            cmd("Report", #{ value: d.gid });
+        }
+        fn on_tick(me) {}
+    "#;
+    let (mut app, _rover) = setup(source);
+
+    tick(&mut app);
+
+    let captured = &app.world().resource::<CapturedData>().0;
+    assert_eq!(
+        captured,
+        &vec![SPAWNED_GID, SPAWNED_GID],
+        "script should have captured the spawned gid from cmd() data (both the \
+         full-result and cmd_data forms) and threaded it into Report; got {captured:?}"
+    );
+}
+
+#[test]
+fn registered_tool_library_callable_from_a_hook() {
+    // #6/L3: a tool library registered via the RegisterToolLibrary command must
+    // become a static module callable as `name::fn(...)` from inside on_tick,
+    // and its functions must reach host verbs (cmd) across the module boundary.
+    // Also exercises hot-reload: the runtime engine picks up the new lib on the
+    // next tick.
+    use lunco_api::executor::ApiCommandEvent;
+    let mut app = build_app();
+    let _rover = spawn_rover(&mut app);
+
+    app.world_mut().trigger(ApiCommandEvent {
+        command: "RegisterToolLibrary".to_string(),
+        params: serde_json::json!({
+            "name": "drivelib",
+            "source": "fn drive_at(me, f) { cmd(\"DriveRover\", #{ target: me, forward: f, steer: 0.0, seq: 0, tick: 0 }); }",
+        }),
+        id: 1,
+    });
+    app.world_mut().flush();
+
+    run_scenario(&mut app, ROVER_GID, "fn on_tick(me) { drivelib::drive_at(me, 0.7); }", 2);
+    tick(&mut app);
+
+    let drives = &app.world().resource::<DriveLog>().0;
+    assert!(
+        drives.iter().any(|(f, _)| (*f - 0.7).abs() < 1e-9),
+        "drivelib::go should have driven the rover at forward=0.7; got {drives:?}"
+    );
+}
+
+#[test]
+fn builtin_formation_tool_library_drives_a_follower() {
+    // The shipped `formation` tool library (formation::nearest_rover +
+    // formation::hold_line) must work end-to-end: a follower scenario finds the
+    // other rover via the prelude selection toolkit (called from inside the
+    // library) and drives toward it.
+    const LEADER_GID: u64 = 8001;
+    let mut app = build_app();
+    let _follower = spawn_typed_rover(&mut app, ROVER_GID, 0.0); // at origin
+    let _leader = spawn_typed_rover(&mut app, LEADER_GID, 10.0); // 10 m ahead (+X)
+
+    let src = r#"
+        fn on_tick(me) {
+            let leader = formation::nearest_rover(me);
+            if leader != () { formation::hold_line(me, leader, 4.0, 1.0); }
+        }
+    "#;
+    run_scenario(&mut app, ROVER_GID, src, 1);
+    tick(&mut app);
+
+    let drives = &app.world().resource::<DriveLog>().0;
+    assert!(
+        !drives.is_empty(),
+        "formation tool library should have driven the follower toward the leader; got {drives:?}"
     );
 }

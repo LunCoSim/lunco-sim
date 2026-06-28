@@ -145,6 +145,35 @@ fn on_run_scenario(
     Ok(ack)
 }
 
+/// Register (or hot-replace) a named rhai **tool library** — a reusable bundle
+/// of selection / behaviour policy callable from any scenario as
+/// `name::fn(...)` (see [`crate::tool_libs`]). The scenario-authoring counterpart
+/// to RunScenario: RunScenario attaches a program to ONE entity; this publishes
+/// shared library code every scenario can call, with no Rust rebuild. Idempotent
+/// + hot-reload — re-registering a name replaces it and the runtime picks it up
+/// on the next tick.
+#[cfg(feature = "rhai")]
+#[Command(default)]
+pub struct RegisterToolLibrary {
+    pub name: String,
+    pub source: String,
+}
+
+#[cfg(feature = "rhai")]
+#[on_command(RegisterToolLibrary)]
+fn on_register_tool_library(_t: On<RegisterToolLibrary>) -> Result<Ack, String> {
+    if cmd.name.is_empty() {
+        return Err("RegisterToolLibrary: `name` must not be empty".to_string());
+    }
+    crate::tool_libs::register_tool_library(&cmd.name, &cmd.source);
+    let mut ack = Ack::new(OpId::new());
+    ack.assigned = serde_json::json!({
+        "name": cmd.name,
+        "libraries": crate::tool_libs::library_names(),
+    });
+    Ok(ack)
+}
+
 #[cfg(feature = "python")]
 #[Command(default)]
 pub struct RunPython {
@@ -167,9 +196,14 @@ fn on_run_python(_t: On<RunPython>, backends: Res<ScriptBackends>) -> Result<Ack
 // cfg-exclusive invocation per feature combo so exactly one
 // `register_all_commands` is emitted (covers the script-free build too).
 #[cfg(all(feature = "rhai", feature = "python"))]
-register_commands!(on_run_rhai, on_run_scenario, on_run_python);
+register_commands!(
+    on_run_rhai,
+    on_run_scenario,
+    on_register_tool_library,
+    on_run_python
+);
 #[cfg(all(feature = "rhai", not(feature = "python")))]
-register_commands!(on_run_rhai, on_run_scenario);
+register_commands!(on_run_rhai, on_run_scenario, on_register_tool_library);
 #[cfg(all(not(feature = "rhai"), feature = "python"))]
 register_commands!(on_run_python,);
 #[cfg(all(not(feature = "rhai"), not(feature = "python")))]

@@ -7223,6 +7223,8 @@ dependencies = [
  "lunco-api",
  "lunco-core",
  "lunco-doc",
+ "lunco-tools",
+ "lunco-tools-rhai",
  "pyo3",
  "rhai",
  "serde",
@@ -7281,6 +7283,18 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "lunco-tools"
+version = "0.1.0"
+
+[[package]]
+name = "lunco-tools-rhai"
+version = "0.1.0"
+dependencies = [
+ "lunco-tools",
+ "rhai",
 ]
 
 [[package]]
