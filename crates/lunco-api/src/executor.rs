@@ -68,13 +68,14 @@ pub fn api_request_observer(
     // of Avian's `Position` directly) to keep this crate free of an
     // avian3d dep.
     q_transforms: Query<&GlobalTransform>,
+    mut subscriptions: ResMut<crate::subscription::TelemetrySubscriptions>,
 ) {
     let req = trigger.event();
     let correlation_id = req.correlation_id;
 
     let maybe_response = {
         let type_reg = type_registry.read();
-        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &visibility, &type_reg, &cmd_results, &q_meta, &q_transforms, correlation_id)
+        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &visibility, &type_reg, &cmd_results, &q_meta, &q_transforms, &mut subscriptions, correlation_id)
     };
 
     // None means the response is deferred (e.g. waiting for ScreenshotCaptured).
@@ -416,6 +417,7 @@ fn execute_request(
     cmd_results: &lunco_core::CommandResults,
     q_meta: &Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
     q_transforms: &Query<&GlobalTransform>,
+    subscriptions: &mut crate::subscription::TelemetrySubscriptions,
     correlation_id: u64,
 ) -> Option<ApiResponse> {
     match request {
@@ -581,8 +583,12 @@ fn execute_request(
             let cmds = discover_commands(type_registry, Some(visibility));
             Some(ApiResponse::ok(serde_json::to_value(&ApiSchema { commands: cmds }).unwrap_or_default()))
         }
-        ApiRequest::SubscribeTelemetry { filter: _ } => {
-            Some(ApiResponse::ok(serde_json::json!({ "message": "Subscription created" })))
+        ApiRequest::SubscribeTelemetry { filter } => {
+            // Register the subscription so the telemetry_event_observer actually
+            // streams matching events (incl. script `emit()`s) back to this
+            // client. Previously a no-op that lied "Subscription created".
+            let id = subscriptions.subscribe(filter.clone());
+            Some(ApiResponse::ok(serde_json::json!({ "subscription_id": id })))
         }
         ApiRequest::QueryCommandResult { id } => {
             // `outcome: null` means no result recorded for this id — either a
@@ -626,6 +632,9 @@ impl Plugin for ApiExecutorPlugin {
             // self-contained (the executor reads CommandResults as a Res).
             .init_resource::<lunco_core::CommandResults>()
             .init_resource::<lunco_core::ActiveCommandId>()
+            // SubscribeTelemetry registers into this; init here so the executor
+            // is self-contained even if ApiTelemetryPlugin isn't added.
+            .init_resource::<crate::subscription::TelemetrySubscriptions>()
             .add_observer(api_request_observer)
             .add_observer(api_command_dispatcher);
 

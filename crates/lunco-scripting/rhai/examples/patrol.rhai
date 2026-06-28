@@ -26,10 +26,10 @@ fn on_start(me) {
 fn on_tick(me) {
     let wp = WAYPOINTS[this.idx];
 
-    // goto() = pure-rhai closed-loop steering (heading error -> steer), built
+    // nav_to() = pure-rhai closed-loop steering (heading error -> steer), built
     // from the world_pos/world_forward reads + DriveRover. Returns true on
     // arrival, where we advance to the next waypoint.
-    if goto(me, wp, 1.0, ARRIVE_RADIUS) {
+    if nav_to(me, wp, 1.0, ARRIVE_RADIUS) {
         // Announce arrival on the shared bus. Any other script (or the API /
         // YAMCS / ROS2 bridge) can react — see examples/mission.rhai.
         emit("WAYPOINT_REACHED", this.idx);

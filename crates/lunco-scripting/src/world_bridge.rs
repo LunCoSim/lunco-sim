@@ -695,3 +695,39 @@ pub fn eval_with_world(world: &mut World, code: &str) -> Result<String, String> 
     }
     Ok(captured)
 }
+
+#[cfg(test)]
+mod tests {
+    //! Syntax-validate the embedded prelude + shipped example scenarios. Rust's
+    //! `cargo check` can't see inside the `.rhai` files (they're `include_str!`),
+    //! so a parse error would otherwise only surface at runtime as a logged
+    //! "prelude compile failed". `compile` checks syntax (unresolved function
+    //! calls resolve at runtime, so calling prelude verbs here is fine).
+
+    #[test]
+    fn prelude_and_examples_parse() {
+        let engine = rhai::Engine::new();
+        engine
+            .compile(super::PRELUDE)
+            .expect("prelude.rhai must parse");
+
+        for (name, src) in [
+            ("patrol", include_str!("../rhai/examples/patrol.rhai")),
+            ("mission", include_str!("../rhai/examples/mission.rhai")),
+            (
+                "mission_plan",
+                include_str!("../rhai/examples/mission_plan.rhai"),
+            ),
+        ] {
+            engine
+                .compile(src)
+                .unwrap_or_else(|e| panic!("{name}.rhai failed to parse: {e}"));
+        }
+    }
+
+    #[test]
+    fn prelude_loads_as_module() {
+        // The full build path: verbs + prelude-as-global-module must succeed.
+        let _engine = super::build_world_engine();
+    }
+}

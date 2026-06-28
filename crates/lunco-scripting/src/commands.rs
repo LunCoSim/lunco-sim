@@ -26,6 +26,36 @@ use lunco_core::{on_command, Ack, Command, OpId};
 use lunco_core::ActiveCommandId;
 #[cfg(feature = "rhai")]
 use crate::world_bridge::PendingWorldScripts;
+#[cfg(feature = "rhai")]
+use crate::{
+    doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
+    ScriptRegistry,
+};
+#[cfg(feature = "rhai")]
+use lunco_doc::{DocumentHost, DocumentId};
+
+/// Mints unique `ScriptDocument` ids for scenarios attached via [`RunScenario`].
+/// Based high (1<<40) so it never collides with hand-authored document ids
+/// (tests, fixtures) in the same `ScriptRegistry`.
+#[cfg(feature = "rhai")]
+#[derive(Resource)]
+pub struct ScenarioDocAllocator(u64);
+
+#[cfg(feature = "rhai")]
+impl Default for ScenarioDocAllocator {
+    fn default() -> Self {
+        Self(1 << 40)
+    }
+}
+
+#[cfg(feature = "rhai")]
+impl ScenarioDocAllocator {
+    fn next(&mut self) -> u64 {
+        let id = self.0;
+        self.0 += 1;
+        id
+    }
+}
 
 #[cfg(feature = "rhai")]
 #[Command(default)]
@@ -51,6 +81,70 @@ fn on_run_rhai(
     Ok(ack)
 }
 
+/// Attach a persistent rhai scenario to an entity — the scenario-loading entry
+/// point for the API / MCP / UI / ROS2. Registers the source as a
+/// `ScriptDocument` and attaches a `ScriptedModel { Rhai }` to `target`, so the
+/// per-entity runtime starts calling its `on_start`/`on_tick`/`on_event` hooks.
+///
+/// Idempotent + HOT-RELOAD: re-running on an entity that already has a scenario
+/// reuses its document id and bumps the generation, so `tick_rhai_models`
+/// recompiles in place (state reset) instead of leaking documents.
+#[cfg(feature = "rhai")]
+#[Command]
+pub struct RunScenario {
+    #[authz_target]
+    pub target: Entity,
+    pub source: String,
+}
+
+#[cfg(feature = "rhai")]
+#[on_command(RunScenario)]
+fn on_run_scenario(
+    _t: On<RunScenario>,
+    mut registry: ResMut<ScriptRegistry>,
+    mut alloc: ResMut<ScenarioDocAllocator>,
+    q_existing: Query<&ScriptedModel>,
+    mut commands: Commands,
+) -> Result<Ack, String> {
+    let target = cmd.target;
+
+    // Reuse the doc id if a scenario is already attached (hot-reload), else mint.
+    let existing = q_existing.get(target).ok().and_then(|m| m.document_id);
+    let (doc_id_raw, generation) = match existing {
+        Some(id) => {
+            let next_gen = registry
+                .documents
+                .get(&DocumentId::new(id))
+                .map(|h| h.document().generation + 1)
+                .unwrap_or(0);
+            (id, next_gen)
+        }
+        None => (alloc.next(), 0),
+    };
+
+    let doc = ScriptDocument {
+        id: doc_id_raw,
+        generation,
+        language: ScriptLanguage::Rhai,
+        source: cmd.source.clone(),
+        inputs: vec![],
+        outputs: vec![],
+    };
+    registry
+        .documents
+        .insert(DocumentId::new(doc_id_raw), DocumentHost::new(doc));
+
+    commands.entity(target).insert(ScriptedModel {
+        document_id: Some(doc_id_raw),
+        language: Some(ScriptLanguage::Rhai),
+        ..default()
+    });
+
+    let mut ack = Ack::new(OpId::new());
+    ack.assigned = serde_json::json!({ "document_id": doc_id_raw, "generation": generation });
+    Ok(ack)
+}
+
 #[cfg(feature = "python")]
 #[Command(default)]
 pub struct RunPython {
@@ -73,9 +167,9 @@ fn on_run_python(_t: On<RunPython>, backends: Res<ScriptBackends>) -> Result<Ack
 // cfg-exclusive invocation per feature combo so exactly one
 // `register_all_commands` is emitted (covers the script-free build too).
 #[cfg(all(feature = "rhai", feature = "python"))]
-register_commands!(on_run_rhai, on_run_python);
+register_commands!(on_run_rhai, on_run_scenario, on_run_python);
 #[cfg(all(feature = "rhai", not(feature = "python")))]
-register_commands!(on_run_rhai,);
+register_commands!(on_run_rhai, on_run_scenario);
 #[cfg(all(not(feature = "rhai"), feature = "python"))]
 register_commands!(on_run_python,);
 #[cfg(all(not(feature = "rhai"), not(feature = "python")))]

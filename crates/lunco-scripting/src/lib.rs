@@ -59,6 +59,8 @@ impl Plugin for LunCoScriptingPlugin {
         {
             app.init_resource::<world_bridge::PendingWorldScripts>();
             app.init_resource::<world_bridge::RhaiModelRuntime>();
+            // Mints document ids for scenarios attached via RunScenario.
+            app.init_resource::<commands::ScenarioDocAllocator>();
             // Event channel: scripts subscribe to the existing TelemetryEvent bus
             // via this observer (frame-delayed into on_event hooks).
             app.init_resource::<world_bridge::ScriptEventInbox>();
