@@ -746,28 +746,52 @@ impl JournalSink for BevyJournalSink {
 pub struct JournalOpRecorder {
     journal: JournalResource,
     doc: DocumentId,
-    author: AuthorTag,
+    /// Provenance for the *next* edit, set one-shot by the domain apply
+    /// funnel via [`set_next_author`](lunco_doc::OpRecorder::set_next_author)
+    /// and consumed by [`record`](#impl-OpRecorder). `None` ⇒ attribute to
+    /// the local user. Interior-mutable because `OpRecorder` records through
+    /// `&self`; ops apply sequentially on the ECS thread, so the brief lock
+    /// is uncontended.
+    next_author: Mutex<Option<AuthorTag>>,
 }
 
 impl JournalOpRecorder {
-    /// Record into `journal` under document `doc`. Author defaults to the
-    /// local user; richer attribution (API tool tags, remote peers via
-    /// origin) lands with the replication phase.
+    /// Record into `journal` under document `doc`. Each edit is attributed
+    /// to the local user unless the apply funnel set a one-shot author via
+    /// [`set_next_author`](lunco_doc::OpRecorder::set_next_author) first.
     pub fn new(journal: JournalResource, doc: DocumentId) -> Self {
         Self {
             journal,
             doc,
-            author: AuthorTag::local_user(),
+            next_author: Mutex::new(None),
         }
     }
 }
 
 impl<O: lunco_twin_journal::OpPayload> lunco_doc::OpRecorder<O> for JournalOpRecorder {
     fn record(&self, forward: &O, inverse: &O) {
+        // Consume the one-shot author; absent one, the edit is the local
+        // user's (manual edits, undo/redo).
+        let author = self
+            .next_author
+            .lock()
+            .expect("journal author lock poisoned")
+            .take()
+            .unwrap_or_else(AuthorTag::local_user);
         self.journal.with_write(|j| {
-            if let Err(err) = j.record_op(self.author.clone(), self.doc, forward, inverse, None) {
+            if let Err(err) = j.record_op(author, self.doc, forward, inverse, None) {
                 warn!("[journal] record_op failed for doc {:?}: {err}", self.doc);
             }
+        });
+    }
+
+    fn set_next_author(&self, user: &str, tool: &str) {
+        *self
+            .next_author
+            .lock()
+            .expect("journal author lock poisoned") = Some(AuthorTag {
+            user: user.to_string(),
+            tool: tool.to_string(),
         });
     }
 }

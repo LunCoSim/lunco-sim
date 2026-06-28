@@ -1106,9 +1106,13 @@ fn apply_standard_material(
 /// `defaultPrim`. The metadata lives on the pseudo-root spec at the
 /// absolute root path.
 pub fn stage_default_prim(reader: &UsdData) -> Option<String> {
+    // `defaultPrim` is authored as `Value::Token` (see compose.rs), and on
+    // openusd `main` `String::try_from(Value::Token)` is an error — only the
+    // `String` variant converts. `as_str` coerces `Token`/`String`/`AssetPath`
+    // uniformly, so it is the correct reader here.
     let val = reader.field(&SdfPath::abs_root(), "defaultPrim")?;
-    let name = String::try_from(val.clone()).ok()?;
-    (!name.is_empty()).then_some(name)
+    let name = val.as_str()?;
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// True if the prim at `path` applies the named API schema, by exact

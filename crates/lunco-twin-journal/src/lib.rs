@@ -708,6 +708,14 @@ impl Journal {
         &self.twin
     }
 
+    /// Re-stamp the Twin this journal belongs to. Used by the persistence
+    /// layer to bind a journal to a Twin's stable identity when it loads it
+    /// from that Twin's folder — normalising journals written before the
+    /// Twin had a stable id, so save/load routing keys off the right Twin.
+    pub fn set_twin(&mut self, twin: TwinId) {
+        self.twin = twin;
+    }
+
     pub fn local_author(&self) -> &AuthorId {
         &self.local_author
     }
@@ -828,24 +836,6 @@ impl Journal {
             inverse: serde_json::to_value(inverse)?,
         };
         Ok(self.append_local(author, doc, kind, change_set))
-    }
-
-    /// Record an op whose payload is already a `serde_json::Value`.
-    ///
-    /// Used by domains that haven't yet derived `Serialize` on their op
-    /// type — they build a structured summary by hand and record it.
-    /// Equivalent to [`crate::Journal::record_op`] minus the typed serialize step.
-    pub fn record_op_value(
-        &mut self,
-        author: AuthorTag,
-        doc: DocumentId,
-        domain: DomainKind,
-        op: serde_json::Value,
-        inverse: serde_json::Value,
-        change_set: Option<ChangeSetId>,
-    ) -> EntryId {
-        let kind = EntryKind::Op { domain, op, inverse };
-        self.append_local(author, doc, kind, change_set)
     }
 
     /// Convenience: record a raw byte-range text edit.

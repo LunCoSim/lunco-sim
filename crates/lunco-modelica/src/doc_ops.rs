@@ -71,12 +71,16 @@ pub(crate) fn op_needs_fresh_ast_pre_apply(op: &ModelicaOp) -> bool {
 pub(crate) fn apply_one_op_kernel(
     host: &mut lunco_doc::DocumentHost<crate::document::ModelicaDocument>,
     op: ModelicaOp,
+    author: &lunco_twin_journal::AuthorTag,
 ) -> Result<lunco_doc::Ack, lunco_doc::Reject> {
     debug_assert!(
         !op_needs_fresh_ast_pre_apply(&op) || !host.document().syntax_is_stale(),
         "apply_one_op_kernel: op {:?} requires fresh AST but syntax cache is stale — caller must defer through PendingStructuralOps",
         std::mem::discriminant(&op),
     );
+    // Attribute this edit to its real origin (API tool, code-editor, reload,
+    // …) before the host's recorder journals it — one-shot, consumed on apply.
+    host.set_next_edit_author(&author.user, &author.tool);
     let result = host.apply(op);
     if result.is_ok() {
         host.document_mut().waive_ast_debounce();
@@ -248,7 +252,7 @@ pub fn apply_one_op_as(
     };
     // Recording is automatic via the host's recorder (A3); we only mark the
     // registry changed on success.
-    let result = apply_one_op_kernel(host, op);
+    let result = apply_one_op_kernel(host, op, &author);
     if result.is_ok() {
         registry.mark_changed(doc_id);
     }
@@ -328,9 +332,10 @@ pub fn apply_ops_as(
             bevy::log::warn!("[doc_ops] apply_ops: doc {doc_id:?} not in registry ({n} op(s))");
             return false;
         };
-        // Each `host.apply` journals itself via the host recorder (A3).
+        // Each `host.apply` journals itself via the host recorder (A3), under
+        // this batch's author (set one-shot per op inside the kernel).
         for op in ops {
-            match apply_one_op_kernel(host, op) {
+            match apply_one_op_kernel(host, op, &author) {
                 Ok(_) => any_applied = true,
                 // Document layer rejects mutations on read-only origins (MSL
                 // drill-in, bundled library) — surface ONE banner per batch.

@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use lunco_doc_bevy::{DocumentSaved, JournalResource};
 use lunco_storage::{Storage, StorageHandle};
-use lunco_twin_journal::Journal as CanonicalJournal;
+use lunco_twin_journal::{AuthorId, Journal as CanonicalJournal, TwinId as JournalTwinId};
 
 use crate::session::TwinAdded;
 use crate::{TwinId, WorkspaceResource};
@@ -42,6 +42,30 @@ fn journal_path(twin_root: &Path) -> PathBuf {
 /// On-disk folder of `twin`, if it's a known Twin in the workspace.
 fn twin_root(workspace: &WorkspaceResource, twin: TwinId) -> Option<PathBuf> {
     workspace.twin(twin).map(|t| t.root.clone())
+}
+
+/// The journal's **stable, cross-session** Twin identity, derived from the
+/// Twin's on-disk root.
+///
+/// The journal file lives *under* this root, so the root is the natural
+/// durable key — it moves with the folder, unlike the workspace's ephemeral
+/// `TwinId(u64)` handle, which is re-minted every session and would point a
+/// reloaded journal at the wrong Twin. This is what a journal is stamped with
+/// and what save/load routing keys off, so a journal is always persisted to
+/// the folder it actually belongs to (never to whichever Twin happens to be
+/// active — the bug this fixes).
+fn journal_twin_id(root: &Path) -> JournalTwinId {
+    JournalTwinId::new(root.to_string_lossy())
+}
+
+/// Resolve a journal's stable id back to the on-disk root of the open Twin it
+/// belongs to, or `None` when no currently-open Twin matches (e.g. its Twin
+/// was closed). Routing through the *open* set means a stale journal can never
+/// write into an unrelated Twin's folder.
+fn root_for_journal_id(workspace: &WorkspaceResource, id: &JournalTwinId) -> Option<PathBuf> {
+    workspace
+        .twins()
+        .find_map(|(_, t)| (journal_twin_id(&t.root) == *id).then(|| t.root.clone()))
 }
 
 /// Read the persisted journal bytes for `twin_root`, or `None` when there is
@@ -78,8 +102,20 @@ fn write_journal_bytes(twin_root: &Path, bytes: &[u8]) -> lunco_storage::Storage
     }
 }
 
-/// Load the persisted journal for a newly-opened Twin into the live
-/// [`JournalResource`], replacing the in-memory journal in place.
+/// Bind the in-memory [`JournalResource`] to a newly-opened Twin: flush the
+/// outgoing Twin's journal to disk first (so opening a second Twin never drops
+/// the first's history), then load this Twin's journal — stamping it with the
+/// Twin's stable id — and swap it in.
+///
+/// The swap is in place to keep the shared `Arc`: recorders on document hosts
+/// hold clones of this resource and must observe the bound journal.
+///
+/// > **Single-active-Twin scope.** There is one global journal, so this binds
+/// > whichever Twin most recently opened. Two Twins with concurrently-recording
+/// > documents would still share one in-memory journal; per-Twin in-memory
+/// > isolation is the `HashMap<TwinId, JournalResource>` work tracked for the
+/// > multi-Twin phase. This observer makes *persistence* correct regardless:
+/// > each journal is always flushed/saved to the folder it belongs to.
 pub(crate) fn on_twin_added_load_journal(
     trigger: On<TwinAdded>,
     workspace: Res<WorkspaceResource>,
@@ -87,42 +123,78 @@ pub(crate) fn on_twin_added_load_journal(
 ) {
     let Some(journal) = journal else { return };
     let Some(root) = twin_root(&workspace, trigger.event().twin) else { return };
-    let Some(bytes) = read_journal_bytes(&root) else { return };
-    match CanonicalJournal::from_bytes(&bytes) {
-        Ok(loaded) => {
-            let n = loaded.len();
-            // Swap in place to keep the shared `Arc`: recorders on document
-            // hosts hold clones of this resource and must see the loaded journal.
-            journal.with_write(|j| *j = loaded);
-            info!(
-                "[journal] loaded {n} entr{} from {}",
-                if n == 1 { "y" } else { "ies" },
-                journal_path(&root).display(),
-            );
+    let target_id = journal_twin_id(&root);
+
+    // 1. Flush the outgoing journal to *its own* Twin's folder before clobber,
+    //    so its entries are never lost when a different Twin opens.
+    let outgoing = journal.with_read(|j| {
+        (j.twin() != &target_id && !j.is_empty()).then(|| (j.twin().clone(), j.to_bytes()))
+    });
+    if let Some((old_id, bytes)) = outgoing {
+        match (root_for_journal_id(&workspace, &old_id), bytes) {
+            (Some(old_root), Ok(bytes)) => {
+                if let Err(err) = write_journal_bytes(&old_root, &bytes) {
+                    warn!("[journal] flush of outgoing twin {} failed: {err}", old_id.0);
+                }
+            }
+            (None, _) => {} // its Twin is no longer open — nothing to flush to.
+            (_, Err(err)) => warn!("[journal] serialize of outgoing twin failed: {err}"),
         }
-        Err(err) => warn!(
-            "[journal] could not parse {} — starting fresh: {err}",
-            journal_path(&root).display(),
-        ),
     }
+
+    // 2. Load this Twin's journal (or start fresh), bound to its stable id.
+    //    Re-stamping normalises journals written before the Twin had a stable
+    //    id, so subsequent saves route back to this same folder.
+    let loaded = match read_journal_bytes(&root) {
+        Some(bytes) => match CanonicalJournal::from_bytes(&bytes) {
+            Ok(mut j) => {
+                j.set_twin(target_id.clone());
+                j
+            }
+            Err(err) => {
+                warn!(
+                    "[journal] could not parse {} — starting fresh: {err}",
+                    journal_path(&root).display(),
+                );
+                CanonicalJournal::new(target_id.clone(), AuthorId::local())
+            }
+        },
+        None => CanonicalJournal::new(target_id.clone(), AuthorId::local()),
+    };
+    let n = loaded.len();
+    journal.with_write(|j| *j = loaded);
+    info!(
+        "[journal] bound twin {} ({n} entr{}) from {}",
+        target_id.0,
+        if n == 1 { "y" } else { "ies" },
+        journal_path(&root).display(),
+    );
 }
 
-/// Persist the journal to the active Twin's folder whenever a document is saved.
+/// Persist the journal to the folder of **the Twin it belongs to** whenever a
+/// document is saved — resolved from the journal's own stable id, never from
+/// the active Twin. Routing by the active Twin is the A1 corruption bug: saving
+/// a doc while a *different* Twin is active would overwrite that Twin's
+/// `journal.json` with the wrong history.
 pub(crate) fn on_document_saved_persist_journal(
     _trigger: On<DocumentSaved>,
     workspace: Res<WorkspaceResource>,
     journal: Option<Res<JournalResource>>,
 ) {
     let Some(journal) = journal else { return };
-    // No active Twin (a loose / untitled doc) → nowhere twin-scoped to save.
-    let Some(twin) = workspace.active_twin else { return };
-    let Some(root) = twin_root(&workspace, twin) else { return };
-    let bytes = match journal.with_read(|j| j.to_bytes()) {
+    let (id, bytes) = journal.with_read(|j| (j.twin().clone(), j.to_bytes()));
+    let bytes = match bytes {
         Ok(b) => b,
         Err(err) => {
             warn!("[journal] serialize failed: {err}");
             return;
         }
+    };
+    // Route by the journal's own identity. No matching open Twin (a loose /
+    // untitled doc whose journal is still the default) → nothing twin-scoped
+    // to persist.
+    let Some(root) = root_for_journal_id(&workspace, &id) else {
+        return;
     };
     if let Err(err) = write_journal_bytes(&root, &bytes) {
         warn!(
@@ -166,5 +238,55 @@ mod tests {
     fn missing_journal_reads_as_none() {
         let dir = tempfile::tempdir().unwrap();
         assert!(read_journal_bytes(dir.path()).is_none());
+    }
+
+    #[test]
+    fn journal_twin_id_is_stable_and_distinct_per_root() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        assert_eq!(journal_twin_id(a.path()), journal_twin_id(a.path()));
+        assert_ne!(journal_twin_id(a.path()), journal_twin_id(b.path()));
+    }
+
+    #[test]
+    fn save_routes_by_journal_identity_not_active_twin() {
+        // Two open Twins, A and B; B is the active one.
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        let open = |p: &Path| match lunco_twin::TwinMode::open(p).unwrap() {
+            lunco_twin::TwinMode::Twin(t) | lunco_twin::TwinMode::Folder(t) => t,
+            lunco_twin::TwinMode::Orphan(_) => panic!("expected a folder"),
+        };
+        let mut ws = WorkspaceResource::new();
+        let _a = ws.add_twin(open(dir_a.path()));
+        let b = ws.add_twin(open(dir_b.path()));
+        ws.active_twin = Some(b); // B active, but the journal belongs to A
+
+        // A journal bound to A's identity (as `on_twin_added_load_journal` would
+        // stamp it) with one entry.
+        let mut j = CanonicalJournal::new(journal_twin_id(dir_a.path()), AuthorId::local());
+        j.record_lifecycle(AuthorTag::local_user(), DocumentId::new(1), LifecycleKind::Saved);
+
+        // Routing resolves A's folder from the journal's own id, *not* `active_twin`.
+        let root =
+            root_for_journal_id(&ws, j.twin()).expect("journal id resolves to its open twin");
+        assert_eq!(root, dir_a.path());
+        write_journal_bytes(&root, &j.to_bytes().unwrap()).unwrap();
+
+        // A got the journal; B's folder is untouched (the corruption A1 fixed).
+        assert!(journal_path(dir_a.path()).exists());
+        assert!(!journal_path(dir_b.path()).exists());
+    }
+
+    #[test]
+    fn set_twin_rebinds_legacy_journal_to_stable_id() {
+        // A journal written before stable ids existed carries a placeholder id.
+        let dir = tempfile::tempdir().unwrap();
+        let mut legacy = CanonicalJournal::new(JournalTwinId::new("local-twin"), AuthorId::local());
+        legacy.record_lifecycle(AuthorTag::local_user(), DocumentId::new(1), LifecycleKind::Saved);
+
+        // Loading it for `dir` re-stamps it so future saves route back here.
+        legacy.set_twin(journal_twin_id(dir.path()));
+        assert_eq!(legacy.twin(), &journal_twin_id(dir.path()));
     }
 }

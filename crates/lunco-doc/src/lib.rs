@@ -470,6 +470,21 @@ pub trait OpRecorder<O>: Send + Sync {
     /// [`Document::apply`]). Undo and redo are themselves edits, so they are
     /// recorded too — the recorder cannot tell them apart, by design.
     fn record(&self, forward: &O, inverse: &O);
+
+    /// Set the provenance for the *next* recorded edit (one shot — the
+    /// recorder consumes it on the following [`record`](Self::record) and
+    /// reverts to its default). Provenance is two plain strings — a `user`
+    /// and a `tool` — so `lunco-doc` stays free of any journal/author type;
+    /// the concrete recorder maps them onto its own author representation.
+    ///
+    /// Default is a no-op so recorders that don't track provenance, and the
+    /// no-recorder path, pay nothing. Domain apply funnels call this (via
+    /// [`DocumentHost::set_next_edit_author`]) right before each forward
+    /// apply so API-, tool-, and reload-originated edits are attributed
+    /// correctly instead of all collapsing to the local user.
+    fn set_next_author(&self, user: &str, tool: &str) {
+        let _ = (user, tool);
+    }
 }
 
 /// Manager for a [`Document`] that provides undo/redo and change tracking.
@@ -529,6 +544,17 @@ impl<D: Document> DocumentHost<D> {
     /// external history. See [`OpRecorder`]. Replaces any prior recorder.
     pub fn set_recorder(&mut self, recorder: Arc<dyn OpRecorder<D::Op>>) {
         self.recorder = Some(recorder);
+    }
+
+    /// Attribute the *next* applied edit to `(user, tool)`. One shot: the
+    /// recorder consumes it on the next apply and reverts to its default
+    /// author. No-op when no recorder is installed. Domain apply funnels
+    /// call this immediately before each forward `apply` so API / tool /
+    /// reload edits are journaled under their real provenance.
+    pub fn set_next_edit_author(&self, user: &str, tool: &str) {
+        if let Some(rec) = &self.recorder {
+            rec.set_next_author(user, tool);
+        }
     }
 
     /// Whether a recorder is installed. Lets the ECS layer attach one exactly
@@ -673,15 +699,6 @@ impl<D: Document> DocumentHost<D> {
     /// Consume the host and return the underlying document.
     pub fn into_document(self) -> D {
         self.document
-    }
-
-    /// Inverse of the most recently-applied op, if any.
-    ///
-    /// Equal to `undo_stack.last()` — exposed so journal sinks can record
-    /// the (forward, inverse) pair after a successful [`apply`](Self::apply)
-    /// without DocumentHost itself depending on the journal crate.
-    pub fn last_applied_inverse(&self) -> Option<&D::Op> {
-        self.undo_stack.last()
     }
 }
 
