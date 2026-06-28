@@ -732,6 +732,60 @@ impl JournalSink for BevyJournalSink {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// JournalOpRecorder — auto-bridge DocumentHost edits into the journal
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// [`lunco_doc::OpRecorder`] that mirrors every apply / undo / redo on a
+/// [`lunco_doc::DocumentHost`] into a [`JournalResource`], losslessly via
+/// [`record_op`](CanonicalJournal::record_op).
+///
+/// This is the **A3 auto-bridge**: installed once per host by
+/// [`attach_journal_recorder`], it removes all per-op recording code from the
+/// domains — and, crucially, journals **undo/redo** too, which previously
+/// bypassed every domain's record path entirely.
+pub struct JournalOpRecorder {
+    journal: JournalResource,
+    doc: DocumentId,
+    author: AuthorTag,
+}
+
+impl JournalOpRecorder {
+    /// Record into `journal` under document `doc`. Author defaults to the
+    /// local user; richer attribution (API tool tags, remote peers via
+    /// origin) lands with the replication phase.
+    pub fn new(journal: JournalResource, doc: DocumentId) -> Self {
+        Self {
+            journal,
+            doc,
+            author: AuthorTag::local_user(),
+        }
+    }
+}
+
+impl<O: lunco_twin_journal::OpPayload> lunco_doc::OpRecorder<O> for JournalOpRecorder {
+    fn record(&self, forward: &O, inverse: &O) {
+        self.journal.with_write(|j| {
+            if let Err(err) = j.record_op(self.author.clone(), self.doc, forward, inverse, None) {
+                warn!("[journal] record_op failed for doc {:?}: {err}", self.doc);
+            }
+        });
+    }
+}
+
+/// Install a [`JournalOpRecorder`] on `host` so its future edits journal
+/// automatically. Generic over the domain — the host supplies its own
+/// [`DocumentId`], so one helper serves USD, Modelica, and any future domain.
+/// Call once per host (guard with [`lunco_doc::DocumentHost::has_recorder`]).
+pub fn attach_journal_recorder<D>(host: &mut lunco_doc::DocumentHost<D>, journal: &JournalResource)
+where
+    D: lunco_doc::Document,
+    D::Op: lunco_twin_journal::OpPayload,
+{
+    let doc = host.document().id();
+    host.set_recorder(Arc::new(JournalOpRecorder::new(journal.clone(), doc)));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Plugin
 // ─────────────────────────────────────────────────────────────────────────────
 

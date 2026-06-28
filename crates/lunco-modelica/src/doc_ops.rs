@@ -60,40 +60,28 @@ pub(crate) fn op_needs_fresh_ast_pre_apply(op: &ModelicaOp) -> bool {
 /// structural op against stale syntax — the apply would mutate a
 /// stale tree and emit a wrong patch.
 ///
-/// Both [`apply_one_op_as`] and `apply_ops` funnel through here so
-/// the journal-pair shape can't drift between single-op and batch
-/// paths.
+/// Both [`apply_one_op_as`] and `apply_ops` funnel through here so the
+/// apply behaviour can't drift between single-op and batch paths.
 ///
-/// Returns `(host.apply result, optional (forward, backward) journal
-/// summaries)`. Caller is responsible for journal-record +
-/// `mark_changed` on the registry — those need access to the
-/// registry / world that the kernel doesn't hold.
+/// Journaling is **automatic** (A3): the host carries a
+/// [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder) installed by the
+/// registry, so `host.apply` records the lossless `(forward, inverse)` pair
+/// itself — the kernel and its callers no longer touch the journal. Caller is
+/// still responsible for `registry.mark_changed(doc)` (it needs the registry).
 pub(crate) fn apply_one_op_kernel(
     host: &mut lunco_doc::DocumentHost<crate::document::ModelicaDocument>,
     op: ModelicaOp,
-) -> (
-    Result<lunco_doc::Ack, lunco_doc::Reject>,
-    Option<(ModelicaOp, ModelicaOp)>,
-) {
+) -> Result<lunco_doc::Ack, lunco_doc::Reject> {
     debug_assert!(
         !op_needs_fresh_ast_pre_apply(&op) || !host.document().syntax_is_stale(),
         "apply_one_op_kernel: op {:?} requires fresh AST but syntax cache is stale — caller must defer through PendingStructuralOps",
         std::mem::discriminant(&op),
     );
-    let forward = op.clone();
     let result = host.apply(op);
-    // Capture the (forward, inverse) op pair losslessly — both are real
-    // `ModelicaOp`s the journal serializes via `record_op`, replacing the old
-    // lossy `summarize_op` JSON summaries.
-    let pair = if result.is_ok() {
+    if result.is_ok() {
         host.document_mut().waive_ast_debounce();
-        host.last_applied_inverse()
-            .cloned()
-            .map(|backward| (forward, backward))
-    } else {
-        None
-    };
-    (result, pair)
+    }
+    result
 }
 
 /// Queue of structural ops that arrived while their target doc had
@@ -178,41 +166,39 @@ pub fn drain_pending_structural_ops(world: &mut bevy::prelude::World) {
     }
 }
 
-/// Record one (forward, inverse) op pair into the canonical Twin
-/// journal. Caller drops the registry borrow before invoking — the
-/// journal resource lives on `&World`, not `&mut`. Single source of
-/// truth so the recording shape doesn't drift between single-op and
-/// batch paths either.
-pub(crate) fn record_journal_entry(
-    world: &World,
-    doc_id: lunco_doc::DocumentId,
-    author: lunco_twin_journal::AuthorTag,
-    forward: &ModelicaOp,
-    backward: &ModelicaOp,
+/// A3 auto-bridge: hand the [`JournalResource`](lunco_doc_bevy::JournalResource)
+/// to the Modelica registry the moment it appears, so it fits a
+/// [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder) onto existing and
+/// future hosts. Every apply — and **undo/redo** — then records losslessly
+/// with no per-op code in the funnels.
+///
+/// Reactive, not per-frame: gated by `resource_added`, it runs once. `resource_added`
+/// is true on the system's first run even if the journal was inserted earlier,
+/// so plugin order doesn't matter.
+pub(crate) fn wire_modelica_journal_handle(
+    mut registry: ResMut<ModelicaDocumentRegistry>,
+    journal: Res<lunco_doc_bevy::JournalResource>,
 ) {
-    if let Some(journal) = world.get_resource::<lunco_doc_bevy::JournalResource>() {
-        journal.with_write(|j| {
-            // Typed, lossless record — `ModelicaOp: OpPayload` (see
-            // `crate::journal`). Mirrors the USD apply funnel.
-            if let Err(err) = j.record_op(author, doc_id, forward, backward, None) {
-                bevy::log::warn!("[doc_ops] journal record failed for {doc_id:?}: {err}");
-            }
-        });
-    }
+    registry.set_journal(journal.clone());
 }
 
-/// Apply a single op through `host.apply` AND record the (forward,
-/// inverse) pair to the canonical Twin journal in one funnel.
+/// Apply a single op through the registry host in one funnel.
 ///
-/// Replaces the direct-`host.apply` pattern that several API command
-/// observers used to bypass the journal-recording path. Returns the
-/// `host.apply` result so callers can branch on success/failure
-/// exactly as before.
+/// Journaling is automatic (A3 auto-bridge): the host's
+/// [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder) records the
+/// lossless `(forward, inverse)` pair on every `host.apply` — so this funnel
+/// no longer records by hand and `apply_one_op_kernel` no longer returns a
+/// pair. Returns the `host.apply` result so callers branch on
+/// success/failure exactly as before.
+///
+/// `author` is still threaded (it rides the deferral queue) but no longer
+/// drives journaling — the recorder labels edits as the local user for now;
+/// per-author/origin attribution lands with the replication phase.
 ///
 /// Side effects on success — guaranteed by [`apply_one_op_kernel`]:
 /// - `waive_ast_debounce()` so `drive_engine_sync` reparses promptly.
 /// - `registry.mark_changed(doc)` (queues a `DocumentChanged` event).
-/// - One canonical journal entry recorded with the supplied `author`.
+/// - One canonical journal entry recorded automatically by the host recorder.
 ///
 /// Deferral: when `op` needs a fresh AST to apply (see
 /// [`op_needs_fresh_ast_pre_apply`]) and the doc's syntax cache is
@@ -250,26 +236,21 @@ pub fn apply_one_op_as(
         }
     }
 
-    let (result, pair) = {
-        let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() else {
-            return Err(lunco_doc::Reject::InvalidOp(
-                "ModelicaDocumentRegistry resource missing".into(),
-            ));
-        };
-        let Some(host) = registry.host_mut(doc_id) else {
-            return Err(lunco_doc::Reject::InvalidOp(format!(
-                "doc {doc_id:?} not in registry"
-            )));
-        };
-        let (result, pair) = apply_one_op_kernel(host, op);
-        if result.is_ok() {
-            registry.mark_changed(doc_id);
-        }
-        (result, pair)
+    let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() else {
+        return Err(lunco_doc::Reject::InvalidOp(
+            "ModelicaDocumentRegistry resource missing".into(),
+        ));
     };
-
-    if let Some((forward, backward)) = pair {
-        record_journal_entry(world, doc_id, author, &forward, &backward);
+    let Some(host) = registry.host_mut(doc_id) else {
+        return Err(lunco_doc::Reject::InvalidOp(format!(
+            "doc {doc_id:?} not in registry"
+        )));
+    };
+    // Recording is automatic via the host's recorder (A3); we only mark the
+    // registry changed on success.
+    let result = apply_one_op_kernel(host, op);
+    if result.is_ok() {
+        registry.mark_changed(doc_id);
     }
     result
 }
@@ -338,7 +319,6 @@ pub fn apply_ops_as(
     let n = ops.len();
     let mut any_applied = false;
     let mut hit_read_only = false;
-    let mut journal_pairs: Vec<(ModelicaOp, ModelicaOp)> = Vec::new();
     {
         let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() else {
             bevy::log::warn!("[doc_ops] apply_ops: registry missing ({n} op(s))");
@@ -348,15 +328,10 @@ pub fn apply_ops_as(
             bevy::log::warn!("[doc_ops] apply_ops: doc {doc_id:?} not in registry ({n} op(s))");
             return false;
         };
+        // Each `host.apply` journals itself via the host recorder (A3).
         for op in ops {
-            let (result, pair) = apply_one_op_kernel(host, op);
-            match result {
-                Ok(_) => {
-                    any_applied = true;
-                    if let Some(p) = pair {
-                        journal_pairs.push(p);
-                    }
-                }
+            match apply_one_op_kernel(host, op) {
+                Ok(_) => any_applied = true,
                 // Document layer rejects mutations on read-only origins (MSL
                 // drill-in, bundled library) — surface ONE banner per batch.
                 Err(lunco_doc::Reject::ReadOnly) => hit_read_only = true,
@@ -366,11 +341,6 @@ pub fn apply_ops_as(
         if any_applied {
             registry.mark_changed(doc_id);
         }
-    }
-
-    // Record captured op pairs into the canonical Twin journal (one lock).
-    for (forward, backward) in journal_pairs {
-        record_journal_entry(world, doc_id, author.clone(), &forward, &backward);
     }
 
     if hit_read_only {

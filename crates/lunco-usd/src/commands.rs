@@ -93,6 +93,14 @@ impl Plugin for UsdCommandsPlugin {
         app.add_systems(Update, drain_pending_usd_file_loads);
 
         app.add_systems(Update, drain_usd_pending_events);
+        // A3 auto-bridge: when the journal appears, hand it to the registry
+        // once (reactive — `resource_added`, not per-frame). Headless builds
+        // without a journal never run it.
+        app.add_systems(
+            Update,
+            wire_usd_journal_handle
+                .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
+        );
         // Workbench-only: the empty-viewport placeholder lives in the egui
         // shell; headless / sandbox / server bins don't add it.
         #[cfg(feature = "ui")]
@@ -459,59 +467,37 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
     let doc = trigger.event().doc;
     let op = trigger.event().op.clone();
     commands.queue(move |world: &mut World| {
-        // Apply through the registry funnel, then capture the inverse for the
-        // canonical Twin journal. The inverse is read from the host's undo
-        // stack after a successful apply; the registry borrow is dropped
-        // before touching the `JournalResource` (which lives on `&World`).
-        let inverse = {
-            let mut registry = world.resource_mut::<UsdDocumentRegistry>();
-            match registry.apply(doc, op.clone()) {
-                Ok(ack) => {
-                    bevy::log::debug!(
-                        "[ApplyUsdOp] {} → gen {}",
-                        doc,
-                        ack.new_gen.unwrap_or(0)
-                    );
-                    registry
-                        .host(doc)
-                        .and_then(|h| h.last_applied_inverse())
-                        .cloned()
-                }
-                Err(reject) => {
-                    bevy::log::warn!("[ApplyUsdOp] {} rejected: {:?}", doc, reject);
-                    None
-                }
+        // Apply through the registry funnel. Journaling is automatic (A3):
+        // the host carries a `JournalOpRecorder` installed by
+        // `wire_usd_journal_recorders`, so a successful `apply` records the
+        // lossless (forward, inverse) pair — no per-op recording code here,
+        // and the same seam journals undo/redo too.
+        let mut registry = world.resource_mut::<UsdDocumentRegistry>();
+        match registry.apply(doc, op) {
+            Ok(ack) => {
+                bevy::log::debug!("[ApplyUsdOp] {} → gen {}", doc, ack.new_gen.unwrap_or(0));
             }
-        };
-        if let Some(inverse) = inverse {
-            record_usd_journal_entry(world, doc, &op, &inverse);
+            Err(reject) => {
+                bevy::log::warn!("[ApplyUsdOp] {} rejected: {:?}", doc, reject);
+            }
         }
     });
 }
 
-/// Record one (forward, inverse) [`UsdOp`] pair into the canonical Twin
-/// journal, **lossless** — both ops serialize through `record_op` (`UsdOp`
-/// derives `Serialize`), so the entry is fully replayable, unlike the
-/// hand-written summaries `lunco-modelica` still records.
+/// A3 auto-bridge: hand the [`JournalResource`](lunco_doc_bevy::JournalResource)
+/// to the USD registry the moment it appears, so it fits a
+/// [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder) onto existing and
+/// future hosts. Edits — **including undo/redo** — then record losslessly with
+/// no per-op code.
 ///
-/// No-op when the [`JournalResource`](lunco_doc_bevy::JournalResource) isn't
-/// installed (e.g. a headless build without `TwinJournalPlugin`). Mirrors
-/// `lunco-modelica`'s `record_journal_entry`, but typed instead of summarized.
-fn record_usd_journal_entry(world: &World, doc: DocumentId, forward: &UsdOp, inverse: &UsdOp) {
-    let Some(journal) = world.get_resource::<lunco_doc_bevy::JournalResource>() else {
-        return;
-    };
-    journal.with_write(|j| {
-        if let Err(err) = j.record_op(
-            lunco_twin_journal::AuthorTag::local_user(),
-            doc,
-            forward,
-            inverse,
-            None,
-        ) {
-            bevy::log::warn!("[ApplyUsdOp] journal record failed for {doc}: {err}");
-        }
-    });
+/// Reactive, not per-frame: gated by `resource_added`, so it runs once (the
+/// frame the journal is installed) and never again. Headless builds without a
+/// journal never run it.
+fn wire_usd_journal_handle(
+    mut registry: ResMut<UsdDocumentRegistry>,
+    journal: Res<lunco_doc_bevy::JournalResource>,
+) {
+    registry.set_journal(journal.clone());
 }
 
 // ─────────────────────────────────────────────────────────────────────

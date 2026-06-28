@@ -27,6 +27,12 @@ use crate::document::UsdDocument;
 #[derive(Resource, Default)]
 pub struct UsdDocumentRegistry {
     hosts: HashMap<DocumentId, DocumentHost<UsdDocument>>,
+    /// Twin-journal handle, wired once the [`JournalResource`] appears (see
+    /// `wire_usd_journal_handle`). When set, every host gets a
+    /// [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder) so edits —
+    /// including undo/redo — auto-record (A3). `None` in headless-without-
+    /// journal builds → no recording.
+    journal: Option<lunco_doc_bevy::JournalResource>,
     next_doc_id: u64,
     /// Docs that were just added — drained into
     /// [`DocumentOpened`](lunco_doc_bevy::DocumentOpened) triggers.
@@ -49,11 +55,40 @@ impl UsdDocumentRegistry {
         let id = DocumentId::new(self.next_doc_id);
         let doc = UsdDocument::with_origin(id, source, origin);
         self.hosts.insert(id, DocumentHost::new(doc));
+        // A3: fit the journal recorder at creation (reactive to the open),
+        // so the very first edit is journaled. No-op if the journal isn't
+        // wired yet — `set_journal` retro-fits when it appears.
+        self.attach_recorder(id);
         // One Opened (lifecycle) + one Changed (initial-source seed)
         // — same shape as `ModelicaDocumentRegistry::allocate_with_origin`.
         self.pending_opened.push(id);
         self.pending_changes.push(id);
         id
+    }
+
+    /// Wire the Twin-journal handle and retro-fit a recorder onto every
+    /// existing host. Called once, reactively, the frame the
+    /// [`JournalResource`](lunco_doc_bevy::JournalResource) first appears.
+    /// Hosts opened afterwards get their recorder at [`allocate`](Self::allocate).
+    pub fn set_journal(&mut self, journal: lunco_doc_bevy::JournalResource) {
+        self.journal = Some(journal);
+        let ids: Vec<_> = self.hosts.keys().copied().collect();
+        for id in ids {
+            self.attach_recorder(id);
+        }
+    }
+
+    /// Attach a [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder) to
+    /// `id`'s host when a journal is wired and the host lacks one. The A3
+    /// auto-bridge seam — replaces all per-op recording.
+    fn attach_recorder(&mut self, id: DocumentId) {
+        if let Some(journal) = &self.journal {
+            if let Some(host) = self.hosts.get_mut(&id) {
+                if !host.has_recorder() {
+                    lunco_doc_bevy::attach_journal_recorder(host, journal);
+                }
+            }
+        }
     }
 
     /// Borrow the host for `doc`, or `None` if unknown.

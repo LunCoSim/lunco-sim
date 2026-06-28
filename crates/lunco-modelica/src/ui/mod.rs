@@ -787,6 +787,14 @@ impl Plugin for ModelicaUiPlugin {
             .add_observer(panels::package_browser::on_msl_became_ready)
             .add_systems(Update, cleanup_removed_documents)
             .add_systems(Update, drain_document_changes)
+            // A3 auto-bridge: hand the journal to the registry once it exists,
+            // so every host records edits (incl. undo/redo) automatically.
+            // Reactive (`resource_added`) — runs once, never polls.
+            .add_systems(
+                Update,
+                crate::doc_ops::wire_modelica_journal_handle
+                    .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
+            )
             .add_systems(Update, commands::drain_open_file_results)
             // Mirror the active document's volatile fields (source,
             // detected_name) into the registry-by-doc lookup

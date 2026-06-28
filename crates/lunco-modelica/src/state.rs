@@ -350,6 +350,11 @@ world
 pub struct ModelicaDocumentRegistry {
     hosts: HashMap<DocumentId, DocumentHost<ModelicaDocument>>,
     by_entity: HashMap<Entity, DocumentId>,
+    /// Twin-journal handle, wired once the [`JournalResource`](lunco_doc_bevy::JournalResource)
+    /// appears (see `wire_modelica_journal_handle`). When set, every host gets
+    /// a [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder) so edits —
+    /// including undo/redo — auto-record (A3). `None` → no recording.
+    journal: Option<lunco_doc_bevy::JournalResource>,
     next_doc_id: u64,
     /// Docs that were just added via `allocate*`. Drained into
     /// [`lunco_doc_bevy::DocumentOpened`] triggers each frame.
@@ -378,6 +383,7 @@ impl ModelicaDocumentRegistry {
         let origin = DocumentOrigin::untitled(format!("Untitled-{}", id.raw()));
         let doc = ModelicaDocument::with_origin(id, source, origin);
         self.hosts.insert(id, DocumentHost::new(doc));
+        self.attach_recorder(id);
         self.pending_opened.push(id);
         self.pending_changes.push(id);
         id
@@ -395,6 +401,7 @@ impl ModelicaDocumentRegistry {
         let id = DocumentId::new(self.next_doc_id);
         let doc = ModelicaDocument::with_origin(id, source, origin);
         self.hosts.insert(id, DocumentHost::new(doc));
+        self.attach_recorder(id);
         // One `Opened` for the lifecycle, then one `Changed` so any
         // subscriber that only listens to changes (diagram re-parse,
         // plot variable-list refresh, …) still sees the initial source.
@@ -423,8 +430,35 @@ impl ModelicaDocumentRegistry {
     /// on the UI thread.
     pub fn install_prebuilt(&mut self, id: DocumentId, doc: ModelicaDocument) {
         self.hosts.insert(id, DocumentHost::new(doc));
+        self.attach_recorder(id);
         self.pending_opened.push(id);
         self.pending_changes.push(id);
+    }
+
+    /// Wire the Twin-journal handle and retro-fit a recorder onto every
+    /// existing host. Called once, reactively, the frame the
+    /// [`JournalResource`](lunco_doc_bevy::JournalResource) first appears.
+    /// Hosts created afterwards get their recorder at allocation time.
+    pub fn set_journal(&mut self, journal: lunco_doc_bevy::JournalResource) {
+        self.journal = Some(journal);
+        let ids: Vec<_> = self.hosts.keys().copied().collect();
+        for id in ids {
+            self.attach_recorder(id);
+        }
+    }
+
+    /// Attach a [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder) to
+    /// `id`'s host when a journal is wired and the host lacks one. The A3
+    /// auto-bridge seam — every apply/undo/redo records losslessly with no
+    /// per-op code in the funnels.
+    fn attach_recorder(&mut self, id: DocumentId) {
+        if let Some(journal) = &self.journal {
+            if let Some(host) = self.hosts.get_mut(&id) {
+                if !host.has_recorder() {
+                    lunco_doc_bevy::attach_journal_recorder(host, journal);
+                }
+            }
+        }
     }
 
     /// Link `entity` to `doc`. Replaces any prior link for `entity`.
