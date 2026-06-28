@@ -7315,6 +7315,7 @@ dependencies = [
  "lunco-storage",
  "lunco-theme",
  "lunco-twin",
+ "lunco-twin-journal",
  "lunco-ui",
  "lunco-usd-avian",
  "lunco-usd-bevy",

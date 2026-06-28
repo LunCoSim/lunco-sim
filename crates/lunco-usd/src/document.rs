@@ -210,6 +210,21 @@ impl Default for UsdOp {
 
 impl DocumentOp for UsdOp {}
 
+/// Participation in the canonical Twin journal ([`lunco_twin_journal`]).
+///
+/// `UsdOp` derives `Serialize`, so the journal records the **real op**
+/// (lossless) via `record_op` — no hand-written summary like the Modelica
+/// adapter still needs. `referenced_entities` stays the default empty set
+/// for now: every variant knows the prim path it touches, but an
+/// [`EntityRef`](lunco_twin_journal::EntityRef) also needs the owning
+/// `DocumentId`, which the op alone doesn't carry. The conflict-detection
+/// enrichment lands with the multi-user replication path.
+impl lunco_twin_journal::OpPayload for UsdOp {
+    fn domain(&self) -> lunco_twin_journal::DomainKind {
+        lunco_twin_journal::DomainKind::Usd
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // UsdDocument
 // ─────────────────────────────────────────────────────────────────────

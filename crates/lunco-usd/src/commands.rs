@@ -459,18 +459,57 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
     let doc = trigger.event().doc;
     let op = trigger.event().op.clone();
     commands.queue(move |world: &mut World| {
-        let mut registry = world.resource_mut::<UsdDocumentRegistry>();
-        match registry.apply(doc, op) {
-            Ok(ack) => {
-                bevy::log::debug!(
-                    "[ApplyUsdOp] {} → gen {}",
-                    doc,
-                    ack.new_gen.unwrap_or(0)
-                );
+        // Apply through the registry funnel, then capture the inverse for the
+        // canonical Twin journal. The inverse is read from the host's undo
+        // stack after a successful apply; the registry borrow is dropped
+        // before touching the `JournalResource` (which lives on `&World`).
+        let inverse = {
+            let mut registry = world.resource_mut::<UsdDocumentRegistry>();
+            match registry.apply(doc, op.clone()) {
+                Ok(ack) => {
+                    bevy::log::debug!(
+                        "[ApplyUsdOp] {} → gen {}",
+                        doc,
+                        ack.new_gen.unwrap_or(0)
+                    );
+                    registry
+                        .host(doc)
+                        .and_then(|h| h.last_applied_inverse())
+                        .cloned()
+                }
+                Err(reject) => {
+                    bevy::log::warn!("[ApplyUsdOp] {} rejected: {:?}", doc, reject);
+                    None
+                }
             }
-            Err(reject) => {
-                bevy::log::warn!("[ApplyUsdOp] {} rejected: {:?}", doc, reject);
-            }
+        };
+        if let Some(inverse) = inverse {
+            record_usd_journal_entry(world, doc, &op, &inverse);
+        }
+    });
+}
+
+/// Record one (forward, inverse) [`UsdOp`] pair into the canonical Twin
+/// journal, **lossless** — both ops serialize through `record_op` (`UsdOp`
+/// derives `Serialize`), so the entry is fully replayable, unlike the
+/// hand-written summaries `lunco-modelica` still records.
+///
+/// No-op when the [`JournalResource`](lunco_doc_bevy::JournalResource) isn't
+/// installed (e.g. a headless build without `TwinJournalPlugin`). Mirrors
+/// `lunco-modelica`'s `record_journal_entry`, but typed instead of summarized.
+fn record_usd_journal_entry(world: &World, doc: DocumentId, forward: &UsdOp, inverse: &UsdOp) {
+    let Some(journal) = world.get_resource::<lunco_doc_bevy::JournalResource>() else {
+        return;
+    };
+    journal.with_write(|j| {
+        if let Err(err) = j.record_op(
+            lunco_twin_journal::AuthorTag::local_user(),
+            doc,
+            forward,
+            inverse,
+            None,
+        ) {
+            bevy::log::warn!("[ApplyUsdOp] journal record failed for {doc}: {err}");
         }
     });
 }
@@ -667,6 +706,77 @@ mod tests {
         assert!(src.contains("xformOp:translate = (1, 0, 1)"));
         // Generation advanced once per op.
         assert_eq!(host.document().generation(), 4);
+    }
+
+    /// Phase A1: every `ApplyUsdOp` that lands records one **lossless**
+    /// `EntryKind::Op` into the canonical Twin journal — the recorded op
+    /// deserializes back to the exact `UsdOp` (not a hand summary), and a
+    /// real `UsdOp` inverse rides alongside it.
+    #[test]
+    fn apply_usd_op_records_lossless_journal_entries() {
+        use crate::document::{LayerId, UsdOp};
+        use lunco_twin_journal::{DomainKind, EntryKind};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(UsdCommandsPlugin);
+        // The Twin-journal plugin isn't part of `UsdCommandsPlugin`; install
+        // the resource directly so the apply funnel has somewhere to record.
+        app.insert_resource(lunco_doc_bevy::JournalResource::default());
+        app.update();
+
+        let doc_id = {
+            let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
+            reg.allocate(
+                "#usda 1.0\n".to_string(),
+                DocumentOrigin::untitled("UntitledJournal.usda".to_string()),
+            )
+        };
+        app.update();
+
+        let forward_ops = [
+            UsdOp::AddPrim {
+                edit_target: LayerId::root(),
+                parent_path: "/".into(),
+                name: "Rover".into(),
+                type_name: Some("Xform".into()),
+            },
+            UsdOp::SetTranslate {
+                edit_target: LayerId::root(),
+                path: "/Rover".into(),
+                value: [2.0, 0.0, 5.0],
+            },
+        ];
+        for op in forward_ops.clone() {
+            app.world_mut().trigger(ApplyUsdOp { doc: doc_id, op });
+            app.update();
+        }
+        app.update();
+
+        let journal = app.world().resource::<lunco_doc_bevy::JournalResource>();
+        journal.with_read(|j| {
+            let ops: Vec<_> = j
+                .entries_for_doc(doc_id)
+                .filter_map(|e| match &e.kind {
+                    EntryKind::Op { domain, op, inverse } => {
+                        Some((domain.clone(), op.clone(), inverse.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(ops.len(), 2, "one Op entry recorded per applied UsdOp");
+            for (i, (domain, op_val, inv_val)) in ops.iter().enumerate() {
+                assert_eq!(*domain, DomainKind::Usd);
+                // Lossless: the recorded op deserializes back to the exact UsdOp.
+                let decoded: UsdOp = serde_json::from_value(op_val.clone())
+                    .expect("recorded op round-trips to UsdOp");
+                assert_eq!(format!("{decoded:?}"), format!("{:?}", forward_ops[i]));
+                // The inverse is a real UsdOp too (whole-buffer ReplaceSource today).
+                let inv: UsdOp = serde_json::from_value(inv_val.clone())
+                    .expect("recorded inverse round-trips to UsdOp");
+                assert!(matches!(inv, UsdOp::ReplaceSource { .. }));
+            }
+        });
     }
 
     /// What the twin-open observer decided to do with the viewport.
