@@ -22,9 +22,9 @@
 //! Adding a new consumer needs no special handling — the ordering guarantees it.
 
 use bevy::prelude::*;
-use lunco_usd_bevy::{get_attribute_as_vec3, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
+use lunco_usd_bevy::usd_data::UsdDataExt;
+use lunco_usd_bevy::{get_attribute_as_vec3, UsdData, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
 use openusd::sdf::Path as SdfPath;
-use openusd::usda::TextReader;
 use lunco_materials::{apply_param, ShaderMaterial};
 
 /// Marks a prim whose `ShaderMaterial` authoring has been evaluated, so the
@@ -104,7 +104,7 @@ pub fn apply_usd_shader_materials(
 /// A prim's attributes are child specs at `<prim>.<attr>`, so we enumerate the
 /// reader's specs and keep the ones directly under this prim (split on the USD
 /// `.` property separator) — no hardcoded parameter names.
-fn read_authored_params(reader: &TextReader, sdf_path: &SdfPath, m: &mut ShaderMaterial) {
+fn read_authored_params(reader: &UsdData, sdf_path: &SdfPath, m: &mut ShaderMaterial) {
     let prefix = format!("{}.", sdf_path.as_str());
     let attr_names: Vec<String> = reader
         .iter()

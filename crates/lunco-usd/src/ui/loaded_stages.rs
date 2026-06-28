@@ -25,7 +25,7 @@ use bevy_egui::egui;
 use lunco_doc::{Document, DocumentId};
 use lunco_workbench::BrowserCtx;
 use openusd::sdf;
-use openusd::usda::TextReader;
+use lunco_usd_bevy::usd_data::UsdDataExt;
 
 use crate::commands::ApplyUsdOp;
 use crate::document::UsdOp;
@@ -140,7 +140,7 @@ struct ParsedStage {
     generation: u64,
     /// Parsed reader. `Arc` so future viewport / property-inspector
     /// consumers can share without re-parsing.
-    reader: Arc<TextReader>,
+    reader: Arc<openusd::sdf::Data>,
 }
 
 impl WorkspaceStage {
@@ -166,12 +166,11 @@ impl WorkspaceStage {
         if self.parsed.as_ref().map(|p| p.generation) == Some(generation) {
             return;
         }
-        let mut parser = openusd::usda::parser::Parser::new(source);
-        match parser.parse() {
+        match openusd::usda::parse(source) {
             Ok(data) => {
                 self.parsed = Some(ParsedStage {
                     generation,
-                    reader: Arc::new(TextReader::from_data(data)),
+                    reader: Arc::new(data),
                 });
                 self.parse_error = None;
             }
@@ -333,14 +332,14 @@ impl LoadedStage for WorkspaceStage {
 /// layer, which is the source-of-truth most edits target.
 fn render_prim(
     ui: &mut egui::Ui,
-    reader: &TextReader,
+    reader: &sdf::Data,
     path: &sdf::Path,
     salt: &str,
     pending_ops: &mut Vec<UsdOp>,
     clicked: &mut bool,
 ) {
     let name = path.name().unwrap_or("(root)").to_string();
-    let type_name = prim_type_name(reader, path);
+    let type_name = reader.prim_type_name(path);
     let label = match &type_name {
         Some(ty) => format!("{} ({})", name, ty),
         None => name,
@@ -390,22 +389,6 @@ fn render_prim(
     }
 
     let _ = pending_ops;
-}
-
-/// Read the `typeName` field on a prim spec (e.g. `"Xform"`,
-/// `"Mesh"`, `"Camera"`). Returns `None` for the pseudo-root or for
-/// prims authored without an explicit type.
-fn prim_type_name(reader: &TextReader, path: &sdf::Path) -> Option<String> {
-    use openusd::sdf::Value;
-    for (p, spec) in reader.iter() {
-        if p == path {
-            if let Some(Value::Token(t) | Value::String(t)) = spec.get("typeName") {
-                return Some(t.clone());
-            }
-            return None;
-        }
-    }
-    None
 }
 
 #[cfg(test)]

@@ -34,8 +34,9 @@
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
 use lunco_render::LunarSunShadow;
-use openusd::sdf::{AbstractData, Path as SdfPath, Value};
-use openusd::usda::TextReader;
+use openusd::sdf::{Data, Path as SdfPath, Value};
+
+use crate::usd_data::UsdDataExt;
 
 /// Tag for a binary's built-in default sun — defined in `lunco-core` (so
 /// non-USD crates can tag their lights too), re-exported here where the
@@ -57,10 +58,10 @@ pub struct UsdAuthoredLight;
 pub(crate) struct UsdDomeAmbient(pub(crate) f32);
 
 /// Scalar attribute reader tolerant of `float`/`double`/`int` authoring.
-pub(crate) fn get_attribute_as_f32(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<f32> {
+pub(crate) fn get_attribute_as_f32(reader: &Data, path: &SdfPath, attr: &str) -> Option<f32> {
     let attr_path = path.append_property(attr).ok()?;
-    let val = reader.try_get(&attr_path, "default").ok().flatten()?;
-    match &*val {
+    let val = reader.field(&attr_path, "default")?;
+    match val {
         Value::Float(f) => Some(*f),
         Value::Double(d) => Some(*d as f32),
         Value::Int(i) => Some(*i as f32),
@@ -74,7 +75,7 @@ pub(crate) fn get_attribute_as_f32(reader: &TextReader, path: &SdfPath, attr: &s
 /// component (lux for `DirectionalLight`, candela for `Point`/`SpotLight`),
 /// but the photometric conversion is identical, so it lives here once.
 pub(crate) fn read_intensity_with_exposure(
-    reader: &TextReader,
+    reader: &Data,
     path: &SdfPath,
     default_intensity: f32,
 ) -> f32 {
@@ -85,13 +86,13 @@ pub(crate) fn read_intensity_with_exposure(
 
 /// Bool attribute reader (also accepts `int` 0/1 authoring).
 pub(crate) fn get_attribute_as_bool(
-    reader: &TextReader,
+    reader: &Data,
     path: &SdfPath,
     attr: &str,
 ) -> Option<bool> {
     let attr_path = path.append_property(attr).ok()?;
-    let val = reader.try_get(&attr_path, "default").ok().flatten()?;
-    match &*val {
+    let val = reader.field(&attr_path, "default")?;
+    match val {
         Value::Bool(b) => Some(*b),
         Value::Int(i) => Some(*i != 0),
         _ => None,
@@ -103,7 +104,7 @@ pub(crate) fn get_attribute_as_bool(
 /// `instantiate_usd_prim`; the prim's transform/visibility are applied by
 /// the shared path there.
 pub(crate) fn instantiate_light_prim(
-    reader: &TextReader,
+    reader: &Data,
     sdf_path: &SdfPath,
     prim_type: Option<&str>,
     commands: &mut Commands,

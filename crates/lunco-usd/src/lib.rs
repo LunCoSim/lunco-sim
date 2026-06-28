@@ -28,6 +28,12 @@ pub mod commands;
 pub mod document;
 pub mod registry;
 pub mod text_edit;
+// C1 spike (Phase C): proves openusd 0.5.0's `EditTarget`/`edit_context` give us
+// non-destructive layer routing — base layer untouched while the composed stage
+// reflects an override authored into a separate layer. Test-only; isolated so it
+// can be deleted once C2 lands the real Stage-backed authoring.
+#[cfg(test)]
+mod edit_target_spike;
 #[cfg(feature = "ui")]
 pub mod ui;
 

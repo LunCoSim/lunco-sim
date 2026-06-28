@@ -42,8 +42,9 @@ use lunco_scripting::{
     ScriptRegistry,
 };
 use lunco_doc::DocumentHost;
-use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
-use openusd::sdf::{AbstractData, Path as SdfPath, Value};
+use lunco_usd_bevy::usd_data::UsdDataExt;
+use lunco_usd_bevy::{UsdData, UsdPrimPath, UsdStageAsset};
+use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -552,13 +553,13 @@ pub fn process_usd_cosim_wires(
 /// stores rels under the `targetPaths` field (not `default`) as a
 /// `PathListOp`. Returns the first contributing target.
 fn read_rel_target(
-    reader: &openusd::usda::TextReader,
+    reader: &UsdData,
     prim: &SdfPath,
     name: &str,
 ) -> Option<SdfPath> {
     let prop_path = prim.append_property(name).ok()?;
-    let val = reader.get(&prop_path, "targetPaths").ok()?;
-    match val.as_ref() {
+    let val = reader.field(&prop_path, "targetPaths")?;
+    match val {
         Value::PathListOp(list_op) => list_op.iter().next().cloned(),
         _ => None,
     }

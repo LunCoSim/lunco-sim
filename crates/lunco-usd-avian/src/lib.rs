@@ -52,8 +52,9 @@ use lunco_usd_bevy::{
     ShapeDims, UsdVisualSynced,
 };
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
-use openusd::sdf::{AbstractData, Path as SdfPath, Value};
-use openusd::usda::TextReader;
+use openusd::sdf::Path as SdfPath;
+use lunco_usd_bevy::usd_data::UsdDataExt;
+use lunco_usd_bevy::UsdData;
 
 /// Bevy plugin for USD physics mapping.
 ///
@@ -125,7 +126,7 @@ pub struct PendingUsdJoint {
 ///
 /// Returns a list of `(Position, Rotation, Collider)` tuples for `Collider::compound()`.
 fn collect_child_colliders_from_usd(
-    reader: &TextReader,
+    reader: &UsdData,
     parent_path: &SdfPath,
 ) -> Vec<(Position, Rotation, Collider)> {
     let mut shapes = Vec::new();
@@ -153,14 +154,12 @@ fn collect_child_colliders_from_usd(
         // child's compound-local rotation so the Y-axis collider lines
         // up with the authored axis (mirrors what lunco-usd-bevy does
         // for the entity Transform — same canonical `usd_axis_to_quat`).
-        if let Ok(val) = reader.get(&child_path, "typeName") {
-            if let Value::Token(ty) = &*val {
-                if matches!(ty.as_str(), "Cylinder" | "Cone" | "Capsule" | "Plane") {
-                    let axis_tok = read_token_attribute(reader, &child_path, "axis")
-                        .unwrap_or_else(|| "Z".to_string());
-                    if let Some(q) = usd_axis_to_quat(&axis_tok) {
-                        child_tf.rotation = child_tf.rotation * q;
-                    }
+        if let Some(ty) = reader.prim_type_name(&child_path) {
+            if matches!(ty.as_str(), "Cylinder" | "Cone" | "Capsule" | "Plane") {
+                let axis_tok = read_token_attribute(reader, &child_path, "axis")
+                    .unwrap_or_else(|| "Z".to_string());
+                if let Some(q) = usd_axis_to_quat(&axis_tok) {
+                    child_tf.rotation = child_tf.rotation * q;
                 }
             }
         }
@@ -211,9 +210,8 @@ fn collect_child_colliders_from_usd(
 ///
 /// **Legacy fallback for `Cube`**: `width`/`height`/`depth` still accepted so
 /// unmigrated `.usda` files keep working (those author full dims at scale=1).
-fn build_collider_from_usd(reader: &TextReader, sdf_path: &SdfPath) -> Option<Collider> {
-    let Ok(val) = reader.get(sdf_path, "typeName") else { return None; };
-    let Value::Token(ty) = &*val else { return None; };
+fn build_collider_from_usd(reader: &UsdData, sdf_path: &SdfPath) -> Option<Collider> {
+    let ty = reader.prim_type_name(sdf_path)?;
 
     // Dimensions (+ their magic defaults) come from the canonical
     // `read_shape_dims` shared with usd-bevy's mesh builder, so the
@@ -264,7 +262,7 @@ fn build_collider_from_usd(reader: &TextReader, sdf_path: &SdfPath) -> Option<Co
 /// `set_scale` with the authored count (overriding Avian's `10` only for scaled
 /// round shapes). Blocked on Avian: while it hardcodes `10`, any runtime scale
 /// edit re-clobbers our value, so a clean realtime story needs Avian's knob first.
-fn apply_collider_scale(mut collider: Collider, reader: &TextReader, sdf_path: &SdfPath) -> Collider {
+fn apply_collider_scale(mut collider: Collider, reader: &UsdData, sdf_path: &SdfPath) -> Collider {
     let scale = read_vec3_attribute(reader, sdf_path, "xformOp:scale")
         .map(|v| (v.x, v.y, v.z))
         .unwrap_or((1.0, 1.0, 1.0));
@@ -276,7 +274,7 @@ fn apply_collider_scale(mut collider: Collider, reader: &TextReader, sdf_path: &
 fn add_collider_from_usd(
     commands: &mut Commands,
     entity: Entity,
-    reader: &TextReader,
+    reader: &UsdData,
     sdf_path: &SdfPath,
 ) {
     if let Some(collider) = build_collider_from_usd(reader, sdf_path) {
@@ -433,7 +431,7 @@ fn process_usd_avian_prims(
         let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
 
-        // Borrow — `stage.reader` is `Arc<TextReader>`; deep-cloning it copies
+        // Borrow — `stage.reader` is `Arc<UsdData>`; deep-cloning it copies
         // the whole stage `HashMap`. Every read here is `&self`.
         let reader = &*stage.reader;
 
@@ -581,7 +579,7 @@ fn on_add_usd_prim(
     let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
     let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
 
-    // Borrow, not deep-clone the `Arc<TextReader>` (whole-stage copy).
+    // Borrow, not deep-clone the `Arc<UsdData>` (whole-stage copy).
     let reader = &*stage.reader;
 
     // Skip wheel prims — the sim plugin handles those (raycast wheels don't need physical bodies)
@@ -590,9 +588,8 @@ fn on_add_usd_prim(
     }
 
     // --- Detect Physics Joint Prims (PhysicsPrismaticJoint, PhysicsRevoluteJoint, etc.) ---
-    if let Ok(val) = reader.get(&sdf_path, "typeName") {
-        if let Value::Token(type_name) = &*val {
-            if type_name.starts_with("Physics") && type_name.ends_with("Joint") {
+    if let Some(type_name) = reader.prim_type_name(&sdf_path) {
+        if type_name.starts_with("Physics") && type_name.ends_with("Joint") {
                 let body0 = read_rel_target(reader, &sdf_path, "physics:body0");
                 let body1 = read_rel_target(reader, &sdf_path, "physics:body1");
 
@@ -661,7 +658,6 @@ fn on_add_usd_prim(
                     }
                 }
             }
-        }
     }
 
     // Note: Physics mapping (RigidBody, Mass, Collider, Damping) is handled by
@@ -749,7 +745,7 @@ fn build_usd_physics_joints(
 ///
 /// Thin delegate to the canonical [`lunco_usd_bevy::read_token`] — the
 /// single home for token/string parsing shared with usd-bevy.
-fn read_token_attribute(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<String> {
+fn read_token_attribute(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<String> {
     lunco_usd_bevy::read_token(reader, path, attr)
 }
 
@@ -760,6 +756,6 @@ fn read_token_attribute(reader: &TextReader, path: &SdfPath, attr: &str) -> Opti
 /// (the 4-branch `[f32;3]→[f64;3]→Vec<f32>→Vec<f64>` ladder). Keeping the
 /// reader f64 end-to-end is what avoids the documented silent-`None`
 /// "bodies launched into orbit" bug for `physics:localPos*` anchors.
-fn read_vec3_attribute(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<DVec3> {
+fn read_vec3_attribute(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<DVec3> {
     lunco_usd_bevy::read_vec3_f64(reader, path, attr).map(|v| DVec3::new(v[0], v[1], v[2]))
 }

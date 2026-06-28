@@ -13,6 +13,8 @@ use std::marker::PhantomData;
 use uuid::Uuid;
 
 use openusd::sdf::Path as SdfPath;
+use lunco_usd_bevy::usd_data::UsdDataExt;
+use lunco_usd_bevy::UsdData;
 
 /// Asset path of the blueprint shader, relative to the `assets/` root. Used on
 /// native so editing the `.wgsl` hot-reloads.
@@ -161,7 +163,7 @@ fn apply_blueprint_material(
 
 /// Creates a BlueprintMaterial from USD primvars attributes.
 fn create_blueprint_material(
-    reader: &openusd::usda::TextReader,
+    reader: &UsdData,
     sdf_path: &SdfPath,
     materials: &mut ResMut<Assets<BlueprintMaterial>>,
 ) -> Handle<BlueprintMaterial> {

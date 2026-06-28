@@ -174,7 +174,12 @@ impl Plugin for WorkspacePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorkspaceResource>()
             .add_observer(on_register_document)
-            .add_observer(on_unregister_document);
+            .add_observer(on_unregister_document)
+            // B1: load the Twin's edit-journal on open, persist it on save.
+            // Both no-op without a `JournalResource`, so headless / journal-
+            // free builds are unaffected.
+            .add_observer(crate::journal_persistence::on_twin_added_load_journal)
+            .add_observer(crate::journal_persistence::on_document_saved_persist_journal);
     }
 }
 

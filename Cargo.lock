@@ -7438,8 +7438,10 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-doc",
+ "lunco-doc-bevy",
  "lunco-storage",
  "lunco-twin",
+ "lunco-twin-journal",
  "serde",
  "serde_json",
  "tempfile",
@@ -8567,8 +8569,6 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 [[package]]
 name = "openusd"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e1a1dbd1d410cf2842168311f6eff125481f3b98a0f37b1547e4926cbd01c2f"
 dependencies = [
  "anyhow",
  "bitflags 2.11.1",
