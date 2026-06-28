@@ -2,11 +2,19 @@
 //
 // The host (Rust) exposes only the minimal, generic bridge:
 //   cmd(name, #{params}) -> i64   write: fire any #[Command] by name
+//   query(name, #{params})        read:  call any ApiQueryProvider (Raycast,
+//                                        Nearest, GroundHeight, …) — the read
+//                                        twin of cmd(); physics stays in its
+//                                        owning crate, not in scripting
 //   world_pos(id) -> [x,y,z]      read:  float-origin-correct world position
-//   get(id, "Comp.field")         read:  generic reflected component field
+//   world_forward(id) -> [x,y,z]  read:  world heading
+//   get(id, "Comp.field")         read:  reflected field; vectors/quats come
+//                                        back as arrays ([x,y,z]/[x,y,z,w]),
+//                                        structs as maps
 //   list_entities() -> [#{id,name}]
 //   find(name) -> id
 //   sim_tick() -> i64
+//   emit(name, value)             event: fire a TelemetryEvent
 //
 // Everything below is POLICY, authored here (hot-reloadable), never compiled
 // into core. Add helpers freely — no Rust rebuild required.
@@ -115,3 +123,53 @@ fn brake(rover) {
 fn load_scene(path)            { cmd("LoadScene", #{ path: path }) }
 fn clear_scene()               { cmd("ClearScene") }
 fn set_property(id, key, val)  { cmd("SetObjectProperty", #{ target: id, key: key, value: val }) }
+
+// ── Sensing (reads over get()/query() — gives scripts eyes, not just hands) ──
+//
+// get() now returns vectors as [x,y,z], so component reads feed the vector math
+// above directly. query() reaches the spatial providers (avian-backed Raycast /
+// GroundHeight live in lunco-mobility; Nearest / EntitiesInRadius in lunco-api).
+
+/// Linear velocity [vx,vy,vz] of an entity (Avian `LinearVelocity`), or () if
+/// the entity has no velocity component.
+fn velocity(id) { get(id, "LinearVelocity") }
+
+/// Speed in m/s (0.0 if no velocity).
+fn speed(id) { let v = velocity(id); if v == () { 0.0 } else { vlen(v) } }
+
+/// Cast a world-space ray. Returns #{hit, entity, distance, point, normal};
+/// `hit` is false when nothing is struck.
+fn raycast(origin, dir, max) { query("Raycast", #{ origin: origin, dir: dir, max: max }) }
+
+/// True if a collider is within `dist` straight ahead of `entity` — the basic
+/// obstacle-avoidance probe.
+fn obstacle_ahead(entity, dist) {
+    let p = world_pos(entity);
+    let f = world_forward(entity);
+    if p == () || f == () { return false; }
+    let r = raycast(p, f, dist);
+    if r == () { return false; }
+    r.hit == true
+}
+
+/// Ground/terrain height (world Y) under a world (x,z), or () if nothing below.
+fn ground_height(x, z) {
+    let r = query("GroundHeight", #{ x: x, z: z });
+    if r == () { return (); }
+    r.height
+}
+
+/// Nearest registered entity id to a world point, or () if none. Pass `me` as
+/// `self_id` to exclude yourself.
+fn nearest(point, self_id) {
+    let r = query("Nearest", #{ point: point, exclude: self_id });
+    if r == () || r.id == () { return (); }
+    r.id
+}
+
+/// Ids of every registered entity within `radius` of a world point.
+fn entities_in_radius(point, radius) {
+    let r = query("EntitiesInRadius", #{ point: point, radius: radius });
+    if r == () { return []; }
+    r.ids
+}

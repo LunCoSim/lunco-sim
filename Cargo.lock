@@ -6987,9 +6987,11 @@ version = "0.6.0-dev"
 dependencies = [
  "avian3d 0.6.1",
  "bevy",
+ "lunco-api",
  "lunco-core",
  "lunco-fsw",
  "lunco-hardware",
+ "serde_json",
 ]
 
 [[package]]

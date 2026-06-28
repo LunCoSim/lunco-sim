@@ -74,8 +74,8 @@ const STATIC_TOOLS = [
       type: 'object',
       properties: {
         id: {
-          type: 'string',
-          description: 'The entity ID (ULID format, e.g. "01ARNS3G...")',
+          type: 'integer',
+          description: 'The entity api_id (numeric, as returned by list_entities).',
         },
       },
       required: ['id'],

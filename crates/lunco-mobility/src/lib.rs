@@ -31,6 +31,7 @@ use lunco_core::RoverVessel;
 use lunco_core::{Command, on_command, register_commands};
 use lunco_fsw::FlightSoftware;
 
+mod sensing;
 mod wheel_spin;
 use wheel_spin::update_wheel_spin;
 
@@ -64,6 +65,10 @@ pub struct LunCoMobilityPlugin;
 
 impl Plugin for LunCoMobilityPlugin {
     fn build(&self, app: &mut App) {
+        // Expose physics-backed spatial queries (Raycast, GroundHeight) so the
+        // API / MCP / rhai `query()` can sense geometry without depending on avian.
+        sensing::register_physics_queries(app);
+
         app.register_type::<Suspension>()
            .register_type::<DifferentialDrive>()
            .register_type::<AckermannSteer>()

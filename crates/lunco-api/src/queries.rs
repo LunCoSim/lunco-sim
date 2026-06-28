@@ -122,6 +122,120 @@ impl Plugin for ApiQueryRegistryPlugin {
     }
 }
 
+// ─── Built-in spatial entity queries (transform-only; no physics dep) ──
+//
+// These answer "what's near point P" using only `GlobalTransform` + the
+// entity registry — no avian. Physics-backed queries (Raycast, GroundHeight)
+// live in the physics-owning crate and register the same way. Scripts reach
+// all of them generically via the rhai `query(name, #{params})` verb.
+
+use crate::registry::ApiEntityRegistry;
+use crate::schema::ApiErrorCode;
+
+/// Parse a `[x, y, z]` JSON array under `key` into a world point.
+fn parse_point(params: &serde_json::Value, key: &str) -> Option<bevy::math::DVec3> {
+    let a = params.get(key)?.as_array()?;
+    if a.len() < 3 {
+        return None;
+    }
+    Some(bevy::math::DVec3::new(
+        a[0].as_f64()?,
+        a[1].as_f64()?,
+        a[2].as_f64()?,
+    ))
+}
+
+/// `Nearest` — closest registered entity to a world point.
+/// params: `{ point:[x,y,z], max?:f64, exclude?:u64 }` ·
+/// returns: `{ id, distance, point:[x,y,z] }`, or `{ id: null }` if none.
+pub struct NearestProvider;
+impl ApiQueryProvider for NearestProvider {
+    fn name(&self) -> &'static str {
+        "Nearest"
+    }
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+        let Some(point) = parse_point(params, "point") else {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "Nearest: `point` [x,y,z] required".to_string(),
+            );
+        };
+        let max = params.get("max").and_then(serde_json::Value::as_f64);
+        let exclude = params.get("exclude").and_then(serde_json::Value::as_u64);
+
+        let entities = world.resource::<ApiEntityRegistry>().entities();
+        let mut best: Option<(u64, f64, bevy::math::DVec3)> = None;
+        for (gid, e) in entities {
+            if exclude == Some(gid.get()) {
+                continue;
+            }
+            let Some(gt) = world.get::<GlobalTransform>(e) else {
+                continue;
+            };
+            let p = gt.translation().as_dvec3();
+            let d = p.distance(point);
+            if max.is_some_and(|m| d > m) {
+                continue;
+            }
+            if best.as_ref().is_none_or(|b| d < b.1) {
+                best = Some((gid.get(), d, p));
+            }
+        }
+        match best {
+            Some((id, d, p)) => ApiResponse::ok(serde_json::json!({
+                "id": id, "distance": d, "point": [p.x, p.y, p.z]
+            })),
+            None => ApiResponse::ok(serde_json::json!({ "id": serde_json::Value::Null })),
+        }
+    }
+}
+
+/// `EntitiesInRadius` — every registered entity within `radius` of a point.
+/// params: `{ point:[x,y,z], radius:f64, exclude?:u64 }` ·
+/// returns: `{ ids:[..], count }`.
+pub struct EntitiesInRadiusProvider;
+impl ApiQueryProvider for EntitiesInRadiusProvider {
+    fn name(&self) -> &'static str {
+        "EntitiesInRadius"
+    }
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+        let Some(point) = parse_point(params, "point") else {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "EntitiesInRadius: `point` [x,y,z] required".to_string(),
+            );
+        };
+        let radius = params
+            .get("radius")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0);
+        let exclude = params.get("exclude").and_then(serde_json::Value::as_u64);
+
+        let entities = world.resource::<ApiEntityRegistry>().entities();
+        let mut ids: Vec<u64> = Vec::new();
+        for (gid, e) in entities {
+            if exclude == Some(gid.get()) {
+                continue;
+            }
+            let Some(gt) = world.get::<GlobalTransform>(e) else {
+                continue;
+            };
+            if gt.translation().as_dvec3().distance(point) <= radius {
+                ids.push(gid.get());
+            }
+        }
+        let count = ids.len();
+        ApiResponse::ok(serde_json::json!({ "ids": ids, "count": count }))
+    }
+}
+
+/// Register the built-in transform-only spatial providers (`Nearest`,
+/// `EntitiesInRadius`). Called by [`crate::LunCoApiPlugin`].
+pub fn register_builtin_spatial_queries(registry: &mut ApiQueryRegistry) {
+    registry.register(NearestProvider);
+    registry.register(EntitiesInRadiusProvider);
+}
+
 // ─── ApiVisibility ─────────────────────────────────────────────────────
 
 /// Filter for which Reflect-registered commands are exposed via the

@@ -47,7 +47,10 @@ pub struct ApiRequestUnified {
     pub type_field: Option<String>,
     pub command: Option<String>,
     pub params: Option<serde_json::Value>,
-    pub id: Option<String>,
+    /// Entity / command id. Always a JSON **number** — `GlobalEntityId` is
+    /// ≤53-bit so it round-trips through a JSON number without precision loss
+    /// (the one and only id form; `ListEntities` emits the same).
+    pub id: Option<u64>,
     pub language: Option<String>,
     pub code: Option<String>,
     pub filter: Option<serde_json::Value>,
@@ -67,17 +70,13 @@ impl From<ApiRequestUnified> for ApiRequest {
             Some("DiscoverSchema") => ApiRequest::DiscoverSchema,
             Some("ListEntities") => ApiRequest::ListEntities,
             Some("QueryEntity") => ApiRequest::QueryEntity {
-                // No/invalid id → a non-resolving sentinel (id 0 is never in the
+                // No id → a non-resolving sentinel (id 0 is never in the
                 // registry). Mirrors the prior behavior, where the removed
                 // `Default` minted a fresh — equally non-matching — id.
-                id: env
-                    .id
-                    .unwrap_or_default()
-                    .parse()
-                    .unwrap_or(lunco_core::GlobalEntityId::from_raw(0)),
+                id: lunco_core::GlobalEntityId::from_raw(env.id.unwrap_or(0)),
             },
             Some("QueryCommandResult") => ApiRequest::QueryCommandResult {
-                id: env.id.unwrap_or_default().parse().unwrap_or(0),
+                id: env.id.unwrap_or(0),
             },
             Some("SubscribeTelemetry") => ApiRequest::SubscribeTelemetry {
                 filter: env.filter.and_then(|v| serde_json::from_value(v).ok()),
@@ -109,6 +108,42 @@ impl From<ApiRequestUnified> for ApiRequest {
                     params,
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(json: &str) -> ApiRequest {
+        serde_json::from_str::<ApiRequestUnified>(json).unwrap().into()
+    }
+
+    #[test]
+    fn query_entity_id_is_a_number() {
+        // One id form on the wire: a JSON number (GlobalEntityId is ≤53-bit).
+        match parse(r#"{"type":"QueryEntity","id":98466552102768}"#) {
+            ApiRequest::QueryEntity { id } => assert_eq!(id.get(), 98466552102768),
+            other => panic!("expected QueryEntity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn query_entity_string_id_is_rejected() {
+        // No legacy string-id form — a stringified id must NOT silently parse.
+        assert!(
+            serde_json::from_str::<ApiRequestUnified>(r#"{"type":"QueryEntity","id":"98466552102768"}"#)
+                .is_err(),
+            "string ids should be rejected; ids are numbers"
+        );
+    }
+
+    #[test]
+    fn query_command_result_id_is_a_number() {
+        match parse(r#"{"type":"QueryCommandResult","id":42}"#) {
+            ApiRequest::QueryCommandResult { id } => assert_eq!(id, 42),
+            other => panic!("expected QueryCommandResult, got {other:?}"),
         }
     }
 }

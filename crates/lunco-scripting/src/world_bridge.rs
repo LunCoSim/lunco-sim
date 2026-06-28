@@ -45,6 +45,8 @@ use lunco_core::{
 };
 use lunco_api::executor::ApiCommandEvent;
 use lunco_api::registry::ApiEntityRegistry;
+use lunco_api::queries::ApiQueryRegistry;
+use lunco_api::schema::ApiResponse;
 
 use rhai::{Dynamic, Engine, ImmutableString, Map, AST};
 
@@ -164,6 +166,19 @@ pub fn build_world_engine() -> Engine {
     // list_entities() -> [#{ id, name }] for every registered GlobalEntityId.
     engine.register_fn("list_entities", list_entities_impl);
 
+    // query(name, #{params}) -> Dynamic — the READ twin of cmd(): invoke any
+    // registered `ApiQueryProvider` by name (Raycast, Nearest, GroundHeight,
+    // CosimStatus, …) and get its data back as rhai values. Spatial/physics
+    // providers live in their owning crates (e.g. avian-backed Raycast in
+    // lunco-mobility); scripting reaches them generically here without taking a
+    // physics dependency. Returns () if the provider is missing or errors.
+    engine.register_fn("query", |name: ImmutableString, params: Map| -> Dynamic {
+        query_impl(name.as_str(), Dynamic::from_map(params))
+    });
+    engine.register_fn("query", |name: ImmutableString| -> Dynamic {
+        query_impl(name.as_str(), Dynamic::UNIT)
+    });
+
     // find(name) -> id (i64), or -1 if no entity has that Name.
     engine.register_fn("find", |name: ImmutableString| -> i64 {
         find_impl(name.as_str())
@@ -224,6 +239,35 @@ fn cmd_impl(name: &str, params: Dynamic) -> i64 {
     } else {
         -1
     }
+}
+
+/// Invoke a registered [`ApiQueryProvider`](lunco_api::queries::ApiQueryProvider)
+/// by name and return its data as rhai values. The read-side counterpart to
+/// [`cmd_impl`]: scripting consumes the internal query API generically, so
+/// physics/spatial providers (avian-backed Raycast, etc.) stay in their owning
+/// crates and never become a scripting dependency. `()` on missing/errored.
+fn query_impl(name: &str, params: Dynamic) -> Dynamic {
+    let params_json = if params.is_unit() {
+        serde_json::Value::Null
+    } else {
+        rhai::serde::from_dynamic::<serde_json::Value>(&params).unwrap_or(serde_json::Value::Null)
+    };
+
+    with_world(|world| {
+        let Some(provider) = world
+            .get_resource::<ApiQueryRegistry>()
+            .and_then(|reg| reg.get(name))
+        else {
+            return Dynamic::UNIT;
+        };
+        match provider.execute(world, &params_json) {
+            ApiResponse::Ok {
+                data: Some(data), ..
+            } => rhai::serde::to_dynamic(&data).unwrap_or(Dynamic::UNIT),
+            _ => Dynamic::UNIT,
+        }
+    })
+    .unwrap_or(Dynamic::UNIT)
 }
 
 /// Map a rhai value to the engine-wide [`TelemetryValue`] (the YAMCS-aligned
@@ -376,33 +420,102 @@ fn resolve_entity(world: &World, gid: u64) -> Option<Entity> {
 /// Best-effort conversion of a reflected scalar into a rhai [`Dynamic`].
 /// Covers the common numeric / bool / string leaf types; anything else falls
 /// back to its `Debug` string so the script at least sees a value.
+/// Build a rhai array from f64 components (vectors/quats → `[x,y,z]`).
+fn f64_array(xs: &[f64]) -> Dynamic {
+    Dynamic::from_array(xs.iter().copied().map(Dynamic::from_float).collect())
+}
+
+/// Convert a reflected value to a rhai [`Dynamic`].
+///
+/// Beyond scalars, glam vectors/quats become rhai arrays (`Vec3` → `[x,y,z]`,
+/// `Quat` → `[x,y,z,w]`) so `get()` returns values the prelude vector math
+/// (`vsub`/`vlen`/…) operates on directly — e.g. `get(id, "LinearVelocity")`
+/// or `get(id, "Transform.translation")`. Newtype components (e.g.
+/// `LinearVelocity(Vec3)`) unwrap to their inner value; structs become rhai
+/// object-maps; lists/arrays/tuples become rhai arrays. Anything still
+/// unconvertible (enums, opaque) falls back to its Debug string.
 fn dynamic_from_reflect(value: &dyn bevy::reflect::PartialReflect) -> Option<Dynamic> {
-    let any = value.try_as_reflect()?.as_any();
-    if let Some(v) = any.downcast_ref::<f64>() {
-        return Some(Dynamic::from_float(*v));
+    use bevy::math::{DQuat, DVec2, Quat, Vec2, Vec3};
+    use bevy::reflect::ReflectRef;
+
+    if let Some(reflected) = value.try_as_reflect() {
+        let any = reflected.as_any();
+        // glam vectors / quats → rhai arrays (the common component-read case).
+        if let Some(v) = any.downcast_ref::<Vec3>() {
+            return Some(f64_array(&[v.x as f64, v.y as f64, v.z as f64]));
+        }
+        if let Some(v) = any.downcast_ref::<DVec3>() {
+            return Some(f64_array(&[v.x, v.y, v.z]));
+        }
+        if let Some(v) = any.downcast_ref::<Vec2>() {
+            return Some(f64_array(&[v.x as f64, v.y as f64]));
+        }
+        if let Some(v) = any.downcast_ref::<DVec2>() {
+            return Some(f64_array(&[v.x, v.y]));
+        }
+        if let Some(v) = any.downcast_ref::<Quat>() {
+            return Some(f64_array(&[v.x as f64, v.y as f64, v.z as f64, v.w as f64]));
+        }
+        if let Some(v) = any.downcast_ref::<DQuat>() {
+            return Some(f64_array(&[v.x, v.y, v.z, v.w]));
+        }
+        // scalars
+        if let Some(v) = any.downcast_ref::<f64>() {
+            return Some(Dynamic::from_float(*v));
+        }
+        if let Some(v) = any.downcast_ref::<f32>() {
+            return Some(Dynamic::from_float(*v as f64));
+        }
+        if let Some(v) = any.downcast_ref::<i64>() {
+            return Some(Dynamic::from_int(*v));
+        }
+        if let Some(v) = any.downcast_ref::<i32>() {
+            return Some(Dynamic::from_int(*v as i64));
+        }
+        if let Some(v) = any.downcast_ref::<u32>() {
+            return Some(Dynamic::from_int(*v as i64));
+        }
+        if let Some(v) = any.downcast_ref::<u64>() {
+            return Some(Dynamic::from_int(*v as i64));
+        }
+        if let Some(v) = any.downcast_ref::<bool>() {
+            return Some(Dynamic::from_bool(*v));
+        }
+        if let Some(v) = any.downcast_ref::<String>() {
+            return Some(Dynamic::from(v.clone()));
+        }
     }
-    if let Some(v) = any.downcast_ref::<f32>() {
-        return Some(Dynamic::from_float(*v as f64));
+
+    // Structural fallback: containers → arrays, newtypes unwrap, structs → maps.
+    match value.reflect_ref() {
+        ReflectRef::List(l) => Some(Dynamic::from_array(
+            l.iter().filter_map(dynamic_from_reflect).collect(),
+        )),
+        ReflectRef::Array(a) => Some(Dynamic::from_array(
+            a.iter().filter_map(dynamic_from_reflect).collect(),
+        )),
+        ReflectRef::Tuple(t) => Some(Dynamic::from_array(
+            t.iter_fields().filter_map(dynamic_from_reflect).collect(),
+        )),
+        ReflectRef::TupleStruct(ts) if ts.field_len() == 1 => {
+            ts.field(0).and_then(dynamic_from_reflect)
+        }
+        ReflectRef::TupleStruct(ts) => Some(Dynamic::from_array(
+            ts.iter_fields().filter_map(dynamic_from_reflect).collect(),
+        )),
+        ReflectRef::Struct(s) => {
+            let mut m = Map::new();
+            for i in 0..s.field_len() {
+                if let (Some(name), Some(field)) = (s.name_at(i), s.field_at(i)) {
+                    if let Some(d) = dynamic_from_reflect(field) {
+                        m.insert(name.into(), d);
+                    }
+                }
+            }
+            Some(Dynamic::from_map(m))
+        }
+        _ => Some(Dynamic::from(format!("{value:?}"))),
     }
-    if let Some(v) = any.downcast_ref::<i64>() {
-        return Some(Dynamic::from_int(*v));
-    }
-    if let Some(v) = any.downcast_ref::<i32>() {
-        return Some(Dynamic::from_int(*v as i64));
-    }
-    if let Some(v) = any.downcast_ref::<u32>() {
-        return Some(Dynamic::from_int(*v as i64));
-    }
-    if let Some(v) = any.downcast_ref::<u64>() {
-        return Some(Dynamic::from_int(*v as i64));
-    }
-    if let Some(v) = any.downcast_ref::<bool>() {
-        return Some(Dynamic::from_bool(*v));
-    }
-    if let Some(v) = any.downcast_ref::<String>() {
-        return Some(Dynamic::from(v.clone()));
-    }
-    Some(Dynamic::from(format!("{value:?}")))
 }
 
 // ── Persistent per-entity scenario runtime (P2) ────────────────────────────
@@ -703,6 +816,29 @@ mod tests {
     //! so a parse error would otherwise only surface at runtime as a logged
     //! "prelude compile failed". `compile` checks syntax (unresolved function
     //! calls resolve at runtime, so calling prelude verbs here is fine).
+
+    #[test]
+    fn get_returns_vectors_as_arrays() {
+        use bevy::math::{Quat, Vec3};
+        // Vec3 → [x,y,z]
+        let d = super::dynamic_from_reflect(&Vec3::new(1.0, 2.0, 3.0)).unwrap();
+        let a = d.into_array().expect("Vec3 should become a rhai array");
+        assert_eq!(a.len(), 3);
+        assert_eq!(a[0].as_float().unwrap(), 1.0);
+        assert_eq!(a[2].as_float().unwrap(), 3.0);
+
+        // Quat → [x,y,z,w]
+        let q = super::dynamic_from_reflect(&Quat::from_xyzw(0.0, 0.0, 0.0, 1.0))
+            .unwrap()
+            .into_array()
+            .expect("Quat should become a rhai array");
+        assert_eq!(q.len(), 4);
+        assert_eq!(q[3].as_float().unwrap(), 1.0);
+
+        // scalar stays scalar
+        let s = super::dynamic_from_reflect(&7.5_f64).unwrap();
+        assert_eq!(s.as_float().unwrap(), 7.5);
+    }
 
     #[test]
     fn prelude_and_examples_parse() {

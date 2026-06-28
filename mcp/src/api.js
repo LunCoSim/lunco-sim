@@ -63,13 +63,15 @@ export async function listEntities() {
 
 /**
  * Query a specific entity by API ID.
- * @param {string} apiId - The entity's API ID (ULID format)
+ * @param {number} apiId - The entity's API ID (numeric, from list_entities)
  * @returns {Promise<Object>} Entity details
  */
 export async function queryEntity(apiId) {
   return apiRequest({
     type: 'QueryEntity',
-    id: apiId,
+    // Ids are numbers on the wire (GlobalEntityId is ≤53-bit, JSON-number-safe).
+    // Coerce in case a tool arg arrives as a string.
+    id: Number(apiId),
   });
 }
 
