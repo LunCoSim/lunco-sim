@@ -1489,7 +1489,20 @@ impl ExperimentsPanel {
                                 // collides between rows that start with the
                                 // same empty buffer and the cell silently
                                 // rejects input.
-                                let cell_id = egui::Id::new(("override_cell", p.name.as_str()));
+                                //
+                                // Keyed by (doc, model, param) — NOT the bare
+                                // leaf name. The latch lives in shared egui
+                                // temp memory, so a name-only key leaks an
+                                // in-progress string between two models that
+                                // share a leaf parameter name (or across a
+                                // pin/tab switch), committing a value typed
+                                // for a different row.
+                                let cell_id = egui::Id::new((
+                                    "override_cell",
+                                    doc.raw(),
+                                    model_name.as_str(),
+                                    p.name.as_str(),
+                                ));
                                 // Latched draft: keeps typed characters
                                 // alive across frames. Without this the
                                 // local `text` re-initializes from the

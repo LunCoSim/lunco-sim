@@ -531,6 +531,35 @@ fn cleanup_removed_documents(
     }
 }
 
+/// Link any freshly-spawned `ModelicaModel` into the
+/// [`ModelicaDocumentRegistry`] doc→entity map. The mirror image of
+/// [`cleanup_removed_documents`]: removal is centralised via
+/// `RemovedComponents`, so addition is too. The Interactive Live row,
+/// [`crate::state::simulator_for`], and every doc-scoped panel resolve their
+/// entity through this map, so a spawn path that forgets the explicit
+/// `registry.link()` would silently drop the live sim from those surfaces —
+/// this closes that gap structurally. Idempotent with the explicit links the
+/// compile / lunica spawn sites still perform (re-linking the same
+/// entity→doc pair is a no-op).
+fn link_added_simulators(
+    added: Query<(Entity, &ModelicaModel), Added<ModelicaModel>>,
+    registry: Option<ResMut<ModelicaDocumentRegistry>>,
+) {
+    let Some(mut registry) = registry else { return };
+    for (entity, model) in &added {
+        // `DocumentId::default()` (0) means "no document assigned yet"
+        // (reflect-deserialised / placeholder entities); a later assignment
+        // plus its own explicit link covers those. Only link once the host
+        // exists, so a transient pre-allocation spawn can't trip `link`'s
+        // unknown-id debug assertion.
+        if model.document != lunco_doc::DocumentId::default()
+            && registry.host(model.document).is_some()
+        {
+            registry.link(entity, model.document);
+        }
+    }
+}
+
 /// The Modelica workbench's default workspace preset.
 ///
 /// Mirrors the "Analyze — Modelica deep dive" slot map from the workbench
@@ -811,6 +840,7 @@ impl Plugin for ModelicaUiPlugin {
             // and never recovered).
             .add_observer(panels::package_browser::on_msl_became_ready)
             .add_systems(Update, cleanup_removed_documents)
+            .add_systems(Update, link_added_simulators)
             .add_systems(Update, drain_document_changes)
             .add_systems(Update, commands::drain_open_file_results)
             // Mirror the active document's volatile fields (source,
