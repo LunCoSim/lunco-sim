@@ -1357,7 +1357,8 @@ fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entit
                     ParamValue::U32(x) => ("uint", format!("{}", x)),
                     ParamValue::Vec2(arr) => ("float2", format!("({}, {})", arr[0], arr[1])),
                     ParamValue::Vec3(arr) => {
-                        let t = if name.to_lowercase().contains("color") || name.to_lowercase().contains("colour") {
+                        let name_lc = name.to_lowercase();
+                        let t = if name_lc.contains("color") || name_lc.contains("colour") {
                             "color3f"
                         } else {
                             "float3"

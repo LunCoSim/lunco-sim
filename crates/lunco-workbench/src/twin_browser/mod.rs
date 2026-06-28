@@ -407,8 +407,11 @@ impl Panel for TwinBrowserPanel {
         // by default) for users who want the files view in its own
         // dock tab. `BrowserScope` is kept for grouping/filtering
         // semantics elsewhere; it no longer gates visibility here.
-        let mut visible: Vec<usize> = registry.iter().enumerate().map(|(i, _)| i).collect();
-        visible.sort_by_key(|&i| (registry.iter().nth(i).unwrap().order(), i));
+        // Precompute each section's `order()` in a single walk; sorting by
+        // an `nth(i)` re-walk inside the comparator was O(n²) per frame.
+        let orders: Vec<_> = registry.iter().map(|s| s.order()).collect();
+        let mut visible: Vec<usize> = (0..orders.len()).collect();
+        visible.sort_by_key(|&i| (orders[i], i));
 
         if visible.is_empty() {
             ui.label(

@@ -211,6 +211,47 @@ fn is_top_level_example(c: &crate::index::ClassEntry) -> bool {
     matches!(parts.next(), Some("Examples"))
 }
 
+/// Memoized top-level-example subset of the MSL library, plus the
+/// per-domain counts the Browse-all chips show. The MSL library is
+/// immutable once loaded ([`msl_class_library`] is a `&'static` cache),
+/// so this filter+tally — previously rebuilt **every frame**, even with
+/// the Browse-all section collapsed, just to show the header count
+/// (CQ-208) — runs once and is read thereafter.
+///
+/// Returns empty until the MSL bundle has loaded (the cache is only set
+/// once the library is non-empty, so an early call on wasm doesn't
+/// poison it). `domain_counts` is sorted by count desc, then name.
+struct WelcomeCatalog {
+    examples: Vec<&'static crate::index::ClassEntry>,
+    domain_counts: Vec<(String, usize)>,
+}
+
+fn welcome_catalog() -> &'static WelcomeCatalog {
+    static CACHE: std::sync::OnceLock<WelcomeCatalog> = std::sync::OnceLock::new();
+    static EMPTY: WelcomeCatalog =
+        WelcomeCatalog { examples: Vec::new(), domain_counts: Vec::new() };
+    if let Some(c) = CACHE.get() {
+        return c;
+    }
+    let lib = msl_class_library();
+    if lib.is_empty() {
+        // Not loaded yet — return the shared empty catalog and retry next
+        // call, exactly as `msl_class_library` retries its own load.
+        return &EMPTY;
+    }
+    let examples: Vec<&'static crate::index::ClassEntry> =
+        lib.iter().filter(|c| is_top_level_example(c)).collect();
+    let mut counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for c in &examples {
+        *counts.entry(c.domain().to_string()).or_default() += 1;
+    }
+    let mut domain_counts: Vec<(String, usize)> = counts.into_iter().collect();
+    domain_counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let _ = CACHE.set(WelcomeCatalog { examples, domain_counts });
+    CACHE.get().unwrap_or(&EMPTY)
+}
+
 
 fn card_subtitle(c: &crate::index::ClassEntry) -> String {
     if !c.description.is_empty() {
@@ -696,9 +737,8 @@ impl Panel for WelcomePanel {
                 // left edge doesn't clip under the dock rail.
                 let w = ui.available_width().min(760.0);
                 ui.set_max_width(w);
-                let lib = msl_class_library();
-                let examples: Vec<&crate::index::ClassEntry> =
-                    lib.iter().filter(|c| is_top_level_example(c)).collect();
+                let catalog = welcome_catalog();
+                let examples = &catalog.examples;
 
                 egui::CollapsingHeader::new(
                     egui::RichText::new(format!(
@@ -740,19 +780,8 @@ impl Panel for WelcomePanel {
 
                     ui.add_space(6.0);
 
-                    // Domain chips — same as before but compact.
-                    let mut domain_counts: Vec<(String, usize)> = {
-                        let mut map: std::collections::HashMap<
-                            String,
-                            usize,
-                        > = std::collections::HashMap::new();
-                        for c in &examples {
-                            *map.entry(c.domain().to_string()).or_default() += 1;
-                        }
-                        map.into_iter().collect()
-                    };
-                    domain_counts
-                        .sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                    // Domain chips — read the precomputed per-domain tally.
+                    let domain_counts = &catalog.domain_counts;
 
                     ui.horizontal_wrapped(|ui| {
                         let chip =
@@ -788,7 +817,7 @@ impl Panel for WelcomePanel {
                         {
                             wstate.browse_domain.clear();
                         }
-                        for (domain, count) in &domain_counts {
+                        for (domain, count) in domain_counts {
                             let label = format!(
                                 "{} {} ({})",
                                 domain_icon(domain),

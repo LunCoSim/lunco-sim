@@ -125,6 +125,54 @@ pub(crate) fn is_instantiable(c: &crate::index::ClassEntry) -> bool {
     )
 }
 
+/// Memoized, instantiable subset of the MSL library plus the
+/// no-query per-category tally. The MSL library is immutable once
+/// loaded ([`msl_class_library`] is a `&'static` cache), so the
+/// instantiable filter + the default chip counts — previously rebuilt
+/// **every frame** over the whole ~700-class library just to render the
+/// palette header and chips (CQ-208) — run once and are read thereafter.
+/// Only the *query-filtered* counts stay per-frame, and only while the
+/// user is actually typing a search.
+struct PaletteCatalog {
+    /// Instantiable classes (connectors/partials dropped), in library order.
+    lib: Vec<&'static crate::index::ClassEntry>,
+    /// Per-category counts with no search query active (the default chips).
+    cat_counts_all: std::collections::HashMap<&'static str, usize>,
+    /// `lib.len()` — total instantiable component count.
+    total: usize,
+}
+
+fn palette_catalog() -> &'static PaletteCatalog {
+    static CACHE: std::sync::OnceLock<PaletteCatalog> = std::sync::OnceLock::new();
+    static EMPTY: std::sync::OnceLock<PaletteCatalog> = std::sync::OnceLock::new();
+    let empty = || {
+        EMPTY.get_or_init(|| PaletteCatalog {
+            lib: Vec::new(),
+            cat_counts_all: std::collections::HashMap::new(),
+            total: 0,
+        })
+    };
+    if let Some(c) = CACHE.get() {
+        return c;
+    }
+    let lib_all = msl_class_library();
+    if lib_all.is_empty() {
+        // MSL not loaded yet — return the shared empty catalog and retry
+        // next call (mirrors `msl_class_library`'s own load retry).
+        return empty();
+    }
+    let lib: Vec<&'static crate::index::ClassEntry> =
+        lib_all.iter().filter(|c| is_instantiable(c)).collect();
+    let mut cat_counts_all: std::collections::HashMap<&'static str, usize> =
+        std::collections::HashMap::new();
+    for c in &lib {
+        *cat_counts_all.entry(category_of(&c.name)).or_insert(0) += 1;
+    }
+    let total = lib.len();
+    let _ = CACHE.set(PaletteCatalog { lib, cat_counts_all, total });
+    CACHE.get().unwrap_or_else(|| empty())
+}
+
 /// Match a component's MSL path to one of our display categories.
 fn category_of(msl_path: &str) -> &'static str {
     // Strip "Modelica." prefix if present, then take the first
@@ -208,23 +256,31 @@ impl Panel for ComponentPalettePanel {
         // Pre-filter: drop connectors / Interfaces / Internal entries
         // before any scoring or counting so they don't pollute totals,
         // chip counts, or the search results.
-        let lib_all = msl_class_library();
-        let lib: Vec<&crate::index::ClassEntry> = lib_all.iter().filter(|c| is_instantiable(c)).collect();
-        let mut cat_counts: std::collections::HashMap<&'static str, usize> =
-            std::collections::HashMap::new();
-        let pre_filter_total = lib.len();
-        let mut pre_filter_matches = 0usize;
-        for c in &lib {
-            let matches = if query_lc.is_empty() {
-                true
-            } else {
-                score_component(c, &query_lc) > 0.0
-            };
-            if matches {
-                pre_filter_matches += 1;
-                *cat_counts.entry(category_of(&c.name)).or_insert(0) += 1;
+        // Instantiable base list + default chip counts come from the
+        // memoized catalog (immutable MSL — built once, not per frame).
+        let catalog = palette_catalog();
+        let lib = &catalog.lib;
+        let pre_filter_total = catalog.total;
+        // With no query the chip counts are the static per-category totals;
+        // only an active search needs a per-frame re-tally (and only while
+        // the search box is non-empty).
+        let (cat_counts, pre_filter_matches): (
+            std::collections::HashMap<&'static str, usize>,
+            usize,
+        ) = if query_lc.is_empty() {
+            (catalog.cat_counts_all.clone(), pre_filter_total)
+        } else {
+            let mut counts: std::collections::HashMap<&'static str, usize> =
+                std::collections::HashMap::new();
+            let mut matches = 0usize;
+            for c in lib.iter() {
+                if score_component(c, &query_lc) > 0.0 {
+                    matches += 1;
+                    *counts.entry(category_of(&c.name)).or_insert(0) += 1;
+                }
             }
-        }
+            (counts, matches)
+        };
 
         // ── Category chips ──
         // `All` + one chip per known category. Chips with zero matches
