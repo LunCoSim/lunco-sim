@@ -15,7 +15,6 @@ use bevy::render::render_resource::PrimitiveTopology;
 use bevy_mesh::Indices;
 use big_space::prelude::CellCoord;
 use lunco_core::{ArticulatedVehicle, GridAnchor, WorldGrid, Command, on_command, register_commands};
-use lunco_terrain::TerrainTile;
 
 use crate::assets::{bucket_index, bucket_sizes};
 use crate::field::{build_height_grid, HeightGrid};
@@ -113,13 +112,15 @@ impl Plugin for ObstacleFieldPlugin {
             .add_systems(Startup, trigger_initial)
             .add_systems(
                 Update,
-                (
-                    // Chained so a rebuild → re-seat bodies → freeze all happen
-                    // the same frame, before next frame's physics step.
-                    (regenerate_obstacle_field, reseat_bodies, manage_physics_hold).chain(),
-                    remove_legacy_ground,
-                ),
+                // Chained so a rebuild → re-seat bodies → freeze all happen
+                // the same frame, before next frame's physics step.
+                (regenerate_obstacle_field, reseat_bodies, manage_physics_hold).chain(),
             );
+        // NOTE: removing the legacy USD-authored `Ground` prim once a field exists
+        // is owned by `lunco-sandbox-edit` (`remove_legacy_ground_prim`), which has
+        // USD-stage access and authors a `RemovePrim` op so the Twin stays in sync.
+        // This crate is a pure generator (core + terrain only) and never edits the
+        // stage.
         register_all_commands(app);
     }
 }
@@ -139,27 +140,6 @@ fn manage_physics_hold(mut hold: ResMut<PhysicsHold>, mut vtime: ResMut<Time<Vir
     if hold.frames_left == 0 && hold.paused_by_us {
         vtime.unpause();
         hold.paused_by_us = false;
-    }
-}
-
-/// Replace the flat Cube ground: once a field exists, despawn the USD-authored
-/// `Ground` (it loads a few frames after startup). The USD loader names entities
-/// by full prim path (e.g. `/SandboxScene/Ground`), so match the leaf segment.
-/// Matched by name + `TerrainTile` so our generated heightfield — which carries
-/// neither — is never touched.
-fn remove_legacy_ground(
-    mut commands: Commands,
-    field: Query<(), With<ObstacleFieldRoot>>,
-    ground: Query<(Entity, &Name), With<TerrainTile>>,
-) {
-    if field.is_empty() {
-        return;
-    }
-    for (e, name) in &ground {
-        let leaf = name.as_str().rsplit('/').next().unwrap_or("");
-        if leaf == "Ground" {
-            commands.entity(e).despawn();
-        }
     }
 }
 

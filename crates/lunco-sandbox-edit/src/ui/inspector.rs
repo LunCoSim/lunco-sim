@@ -17,7 +17,7 @@ use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::registry::UsdDocumentRegistry;
 use lunco_usd::ui::viewport::UsdViewportState;
 use lunco_doc::DocumentOrigin;
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, SdfPath, resolve_bound_shader};
 
 /// Inspector panel — editable entity parameters.
 pub struct Inspector;
@@ -1181,52 +1181,52 @@ fn material_pbr_section(
             }
         }
 
-        // Propagate changes to USD
-        if world.get::<UsdPrimPath>(part).is_some() {
+        // Propagate changes to USD. A bound shader prim (resolved via the same
+        // material:binding → outputs:surface walk the renderer uses) receives the
+        // edits as `inputs:*`; otherwise they're written as `primvars:*` directly
+        // on the geometry prim. Only the destination differs per channel, so a
+        // single `write` dispatcher keeps the two paths from drifting.
+        if let Some(prim) = world.get::<UsdPrimPath>(part).cloned() {
+            let shader_path = world
+                .get_resource::<Assets<UsdStageAsset>>()
+                .and_then(|stages| stages.get(&prim.stage_handle))
+                .and_then(|stage| {
+                    let mesh_sdf = SdfPath::new(&prim.path).ok()?;
+                    resolve_bound_shader(&stage.reader, &mesh_sdf)
+                })
+                .map(|p| p.to_string());
+
+            let mut write = |attr: &str, ty: &str, value: String| match &shader_path {
+                Some(sp) => apply_usd_path_attribute_change(world, part, sp.clone(), attr, ty, value),
+                None => apply_usd_attribute_change(world, part, attr, ty, value),
+            };
+
+            // displayColor lives directly on the geometry as an array primvar;
+            // a shader carries it as the scalar `inputs:diffuseColor`.
             if base_changed {
-                apply_usd_attribute_change(
-                    world,
-                    part,
-                    "primvars:displayColor",
-                    "color3f[]",
-                    format!("[({}, {}, {})]", base[0], base[1], base[2]),
-                );
+                let value = format!("({}, {}, {})", base[0], base[1], base[2]);
+                if shader_path.is_some() {
+                    write("inputs:diffuseColor", "color3f", value);
+                } else {
+                    write(
+                        "primvars:displayColor",
+                        "color3f[]",
+                        format!("[({}, {}, {})]", base[0], base[1], base[2]),
+                    );
+                }
             }
             if emissive_changed {
-                apply_usd_attribute_change(
-                    world,
-                    part,
-                    "primvars:emissiveColor",
-                    "color3f",
-                    format!("({}, {}, {})", emissive[0], emissive[1], emissive[2]),
-                );
+                let attr = if shader_path.is_some() { "inputs:emissiveColor" } else { "primvars:emissiveColor" };
+                write(attr, "color3f", format!("({}, {}, {})", emissive[0], emissive[1], emissive[2]));
             }
             if metallic_changed {
-                apply_usd_attribute_change(
-                    world,
-                    part,
-                    "inputs:metallic",
-                    "float",
-                    format!("{:.3}", metallic),
-                );
+                write("inputs:metallic", "float", format!("{:.3}", metallic));
             }
             if roughness_changed {
-                apply_usd_attribute_change(
-                    world,
-                    part,
-                    "inputs:roughness",
-                    "float",
-                    format!("{:.3}", roughness),
-                );
+                write("inputs:roughness", "float", format!("{:.3}", roughness));
             }
             if reflectance_changed {
-                apply_usd_attribute_change(
-                    world,
-                    part,
-                    "inputs:reflectance",
-                    "float",
-                    format!("{:.3}", reflectance),
-                );
+                write("inputs:reflectance", "float", format!("{:.3}", reflectance));
             }
         }
     }
@@ -1503,10 +1503,11 @@ fn modelica_parameters_section(
     }
 }
 
-/// Dispatch a `UsdOp::SetAttribute` command to write changes back to the USD document.
-fn apply_usd_attribute_change(
+/// Dispatch a `UsdOp::SetAttribute` command to write changes back to the USD document for a specific prim path.
+fn apply_usd_path_attribute_change(
     world: &mut World,
     entity: Entity,
+    prim_path: String,
     name: &str,
     type_name: &str,
     value: String,
@@ -1547,11 +1548,24 @@ fn apply_usd_attribute_change(
     if let Some(doc) = doc_id {
         let op = UsdOp::SetAttribute {
             edit_target: LayerId::root(),
-            path: prim.path.clone(),
+            path: prim_path,
             name: name.to_string(),
             type_name: type_name.to_string(),
             value,
         };
         world.trigger(ApplyUsdOp { doc, op });
+    }
+}
+
+/// Dispatch a `UsdOp::SetAttribute` command to write changes back to the USD document.
+fn apply_usd_attribute_change(
+    world: &mut World,
+    entity: Entity,
+    name: &str,
+    type_name: &str,
+    value: String,
+) {
+    if let Some(prim) = world.get::<UsdPrimPath>(entity).cloned() {
+        apply_usd_path_attribute_change(world, entity, prim.path, name, type_name, value);
     }
 }

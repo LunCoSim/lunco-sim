@@ -75,7 +75,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, T
 use bevy::camera::visibility::RenderLayers;
 use bevy_egui::egui;
 use bevy_egui::{EguiTextureHandle, EguiUserTextures};
-use lunco_doc::DocumentId;
+use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened};
 use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
 use lunco_core::{Command, on_command, register_commands};
@@ -225,6 +225,7 @@ pub struct UsdViewportState {
     light: Option<Entity>,
     current_handle: Option<Handle<UsdStageAsset>>,
     active_doc: Option<DocumentId>,
+    last_rebuilt_generation: Option<u64>,
     /// Pointer-driven orbit pose. Pushed onto the camera each input
     /// frame the panel receives drag / scroll input.
     pub orbit: OrbitCamera,
@@ -609,6 +610,10 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
     let Some(scene_root) = world.resource::<UsdViewportState>().scene_root else {
         return;
     };
+    let doc_generation = world
+        .resource::<UsdDocumentRegistry>()
+        .host(doc)
+        .map(|h| h.document().generation());
     let Some(source) = world
         .resource::<UsdDocumentRegistry>()
         .host(doc)
@@ -628,16 +633,17 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
         .resource_mut::<Assets<UsdStageAsset>>()
         .add(asset);
     if let Ok(mut entity) = world.get_entity_mut(scene_root) {
+        entity.remove::<UsdVisualSynced>();
+        entity.despawn_related::<Children>();
         entity.insert(UsdPrimPath {
             stage_handle: handle.clone(),
             path: "/".to_string(),
         });
-        entity.remove::<UsdVisualSynced>();
-        entity.despawn_related::<Children>();
     }
     let mut state = world.resource_mut::<UsdViewportState>();
     state.active_doc = Some(doc);
     state.current_handle = Some(handle);
+    state.last_rebuilt_generation = doc_generation;
 }
 
 /// Rebuild the active stage from its document's current source,
@@ -650,6 +656,17 @@ fn rebuild_active_asset(world: &mut World) {
             _ => return,
         }
     };
+    let doc_generation = world
+        .resource::<UsdDocumentRegistry>()
+        .host(doc)
+        .map(|h| h.document().generation());
+    
+    // Check if the viewport is already displaying this generation to avoid redundant rebuilds
+    // and command-queue conflicts on initial ticks.
+    if world.resource::<UsdViewportState>().last_rebuilt_generation == doc_generation {
+        return;
+    }
+
     let Some(source) = world
         .resource::<UsdDocumentRegistry>()
         .host(doc)
@@ -672,8 +689,14 @@ fn rebuild_active_asset(world: &mut World) {
         if let Ok(mut entity) = world.get_entity_mut(scene_root) {
             entity.remove::<UsdVisualSynced>();
             entity.despawn_related::<Children>();
+            // Re-insert UsdPrimPath to trigger the observer on_usd_prim_added
+            if let Some(prim_path) = entity.take::<UsdPrimPath>() {
+                entity.insert(prim_path);
+            }
         }
     }
+    let mut state = world.resource_mut::<UsdViewportState>();
+    state.last_rebuilt_generation = doc_generation;
 }
 
 /// Parse a `.usda` source string into a `TextReader`. When `base_dir`

@@ -14,6 +14,12 @@ use avian3d::prelude::{AngularVelocity, LinearVelocity, PhysicsSystems, RigidBod
 use avian3d::physics_transform::{Position, Rotation};
 use big_space::prelude::Grid;
 use lunco_core::Command;
+use lunco_obstacle_field::ObstacleFieldRoot;
+use lunco_usd::commands::ApplyUsdOp;
+use lunco_usd::document::{UsdOp, LayerId};
+use lunco_usd::registry::UsdDocumentRegistry;
+use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
+use lunco_doc::{DocumentId, DocumentOrigin};
 use std::collections::{HashMap, VecDeque};
 use crate::catalog::{SpawnCatalog, spawn_usd_entry};
 
@@ -1218,7 +1224,6 @@ pub fn reconcile_predicted_dynamic(
         Option<&mut LinearVelocity>,
         Option<&mut AngularVelocity>,
         Option<&mut PendingCorrection>,
-        Has<lunco_core::RoverVessel>,
     )>,
     mut commands: Commands,
 ) {
@@ -1241,7 +1246,7 @@ pub fn reconcile_predicted_dynamic(
         let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(g)) else {
             continue;
         };
-        let Ok((pos, rot, lin, ang, off, is_rover)) = q.get_mut(e) else {
+        let Ok((pos, rot, lin, ang, off)) = q.get_mut(e) else {
             continue;
         };
         // Dynamic bodies always carry avian `Position`/`Rotation` (absolute, f64).
@@ -1283,26 +1288,27 @@ pub fn reconcile_predicted_dynamic(
             if let Some(mut pc) = off {
                 *pc = PendingCorrection::default();
             }
-        } else {
-            // Feed-forward authoritative velocity to remote rovers so they dead-reckon
-            // smoothly between snapshots instead of sitting still (0 local velocity)
-            // and jumping/teleporting when the distance error exceeds the threshold.
-            if is_rover {
+        } else if dist > RECONCILE_EPS_POS || angle > RECONCILE_EPS_ROT {
+                // OUT of the in-sync dead-zone but not far enough to snap.
+                //
+                // Feed-forward authoritative velocity to ALL predicted bodies here so
+                // they dead-reckon smoothly between snapshots instead of sitting still
+                // (0 local velocity) and drifting until they cross RECONCILE_SNAP_DIST
+                // and teleport. This applies to free props (host-launched debris, a
+                // ball mid-flight) just as much as to driven rovers — gating it on
+                // `is_rover` left non-rover bodies stationary and snapping. A
+                // host-moved prop leaves the dead-zone immediately, so it reaches this
+                // branch and tracks authority velocity.
                 if let Some(mut l) = lin {
                     l.0 = lv;
                 }
                 if let Some(mut a) = ang {
                     a.0 = av;
                 }
-            }
 
-            if dist > RECONCILE_EPS_POS || angle > RECONCILE_EPS_ROT {
                 // Soft CONTINUOUS spring (every fixed tick): SET the residual to the
                 // freshly-measured error; `drain_pending_corrections` eases a bounded bit
                 // per tick into Position/Rotation (smooth, never a Transform write).
-                // Velocity is LEFT to local physics so contacts/your push produce real,
-                // crisp response — the dead-zone above is the yield budget. This is what
-                // makes a remote body both stay synced AND interact.
                 let dpos = err.as_vec3();
                 match off {
                     Some(mut pc) => {
@@ -1315,7 +1321,6 @@ pub fn reconcile_predicted_dynamic(
                             .insert(PendingCorrection { pos: dpos, rot: rot_err });
                     }
                 }
-            }
         }
         // else: within tolerance — leave the body entirely to local physics; any
         // residual `PendingCorrection` finishes draining and removes itself.
@@ -2379,9 +2384,78 @@ pub fn on_delete_shader(
 /// observers and the kinematic-pulse cleanup + twin shader auto-scan systems.
 pub struct SpawnCommandPlugin;
 
+/// Replace the flat USD-authored ground once an obstacle field exists: author a
+/// `RemovePrim` op so the `Ground` prim leaves the active stage (the Twin document
+/// stays consistent — a reload won't re-spawn it), and despawn its ECS projection
+/// immediately so the generated heightfield is the only ground collider (also on
+/// the headless server, where no viewport rebuild fires from the doc edit).
+///
+/// Lives here (not in the pure `lunco-obstacle-field` generator) because authoring
+/// stage ops needs USD access. Change-driven via [`obstacle_field_scene_changed`]:
+/// it scans only on frames where a field or a USD prim was just added, never
+/// per-frame for the app lifetime.
+fn remove_legacy_ground_prim(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    registry: Res<UsdDocumentRegistry>,
+    ground: Query<(Entity, &UsdPrimPath)>,
+) {
+    for (entity, prim) in &ground {
+        // The USD loader names entities by full prim path (e.g.
+        // `/SandboxScene/Ground`); match the leaf. Generated terrain carries no
+        // `UsdPrimPath`, so it can never match here.
+        if prim.path.rsplit('/').next() != Some("Ground") {
+            continue;
+        }
+        if let Some(doc) = doc_for_stage(&prim.stage_handle, &asset_server, &registry) {
+            commands.trigger(ApplyUsdOp {
+                doc,
+                op: UsdOp::RemovePrim {
+                    edit_target: LayerId::root(),
+                    path: prim.path.clone(),
+                },
+            });
+        }
+        commands.entity(entity).despawn();
+    }
+}
+
+/// Run condition for [`remove_legacy_ground_prim`]: a field exists and either it
+/// or a USD prim was just added this frame. Handles both spawn orderings (field
+/// before ground, ground before field) while keeping the system off every other
+/// frame.
+fn obstacle_field_scene_changed(
+    fields_now: Query<(), With<ObstacleFieldRoot>>,
+    fields_added: Query<(), Added<ObstacleFieldRoot>>,
+    prims_added: Query<(), Added<UsdPrimPath>>,
+) -> bool {
+    !fields_now.is_empty() && (!fields_added.is_empty() || !prims_added.is_empty())
+}
+
+/// Resolve the open document that owns `stage_handle` by matching the stage asset
+/// path against the registry (headless-safe — no viewport dependency).
+fn doc_for_stage(
+    stage_handle: &Handle<UsdStageAsset>,
+    asset_server: &AssetServer,
+    registry: &UsdDocumentRegistry,
+) -> Option<DocumentId> {
+    let asset_path = asset_server.get_path(stage_handle.id())?;
+    let path_str = asset_path.path().to_string_lossy().into_owned();
+    registry.ids().find(|id| {
+        registry.host(*id).is_some_and(|h| match h.document().origin() {
+            DocumentOrigin::File { path, .. } => path.to_string_lossy().ends_with(&path_str),
+            _ => false,
+        })
+    })
+}
+
 impl Plugin for SpawnCommandPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_spawn_entity_command);
+        app.add_systems(
+            Update,
+            remove_legacy_ground_prim.run_if(obstacle_field_scene_changed),
+        );
         app.add_observer(on_move_entity_command);
         app.add_observer(on_rescan_spawn_catalog);
         app.add_observer(on_set_object_property);
@@ -2829,6 +2903,10 @@ mod pose_write_tests {
     fn predicted_dynamic_snaps_far_body_and_seats_velocity() {
         let mut world = World::new();
         world.init_resource::<InterpBuffers>();
+        // reconcile only runs as a connected Client; the clock is the render instant.
+        world.insert_resource(lunco_core::NetworkRole::Client);
+        world.insert_resource(lunco_core::NetStatus { connected: true, ..Default::default() });
+        world.insert_resource(ProxyPlaybackClock { t: 0.5, init: true });
 
         let gid = 0x00BB_0001u64;
         let e = world
@@ -2861,7 +2939,9 @@ mod pose_write_tests {
 
         world.run_system_once(reconcile_predicted_dynamic).unwrap();
 
-        let p = world.entity(e).get::<Transform>().unwrap().translation;
+        // The snap branch seats avian `Position` (the physics truth — never
+        // `Transform`, which writeback derives) and the authoritative velocity.
+        let p = world.entity(e).get::<Position>().unwrap().0;
         let v = world.entity(e).get::<LinearVelocity>().unwrap().0;
         assert!((p.x - 50.0).abs() < 1e-4, "should snap to authority, got {p:?}");
         assert!((v.x - 2.0).abs() < 1e-4, "velocity must be seated to authority, got {v:?}");
@@ -2875,6 +2955,9 @@ mod pose_write_tests {
     fn predicted_dynamic_in_sync_is_left_untouched() {
         let mut world = World::new();
         world.init_resource::<InterpBuffers>();
+        world.insert_resource(lunco_core::NetworkRole::Client);
+        world.insert_resource(lunco_core::NetStatus { connected: true, ..Default::default() });
+        world.insert_resource(ProxyPlaybackClock { t: 0.5, init: true });
 
         let gid = 0x00BB_0002u64;
         let local_vel = DVec3::new(5.0, 0.0, 0.0); // the prop's own local velocity

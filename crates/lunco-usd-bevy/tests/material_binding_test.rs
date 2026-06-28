@@ -1,0 +1,235 @@
+use bevy::prelude::*;
+use lunco_usd_bevy::*;
+use std::sync::Arc;
+use openusd::usda::TextReader;
+
+#[test]
+fn test_usd_material_binding_parsing() {
+    let mut app = App::new();
+    
+    // Core Bevy plugins
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(AssetPlugin::default());
+    
+    // Register assets manually to avoid full render plugin dependencies
+    app.init_asset::<UsdStageAsset>();
+    app.init_asset::<Mesh>();
+    app.init_asset::<StandardMaterial>();
+    app.init_asset::<Image>();
+    
+    app.add_plugins(UsdBevyPlugin);
+
+    // Setup a mock USD stage with a Material, Shader and a bound Cube Mesh
+    let usda_content = r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+
+def Xform "World"
+{
+    def Material "MyMaterial"
+    {
+        token outputs:surface.connect = </World/MyMaterial/PbrShader.outputs:surface>
+
+        def Shader "PbrShader"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (1.0, 0.5, 0.25)
+            float inputs:roughness = 0.75
+            float inputs:metallic = 0.25
+            color3f inputs:emissiveColor = (0.1, 0.2, 0.3)
+            token outputs:surface
+        }
+    }
+
+    def Cube "MeshWithMaterial" (
+        apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </World/MyMaterial>
+        double size = 2.0
+    }
+}
+"#;
+
+    let mut parser = openusd::usda::parser::Parser::new(usda_content);
+    let data_map = parser.parse().expect("Failed to parse USDA");
+    let reader = Arc::new(TextReader::from_data(data_map));
+
+    let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
+    let stage_handle = stages.add(UsdStageAsset { reader });
+
+    // Spawn the MeshWithMaterial entity representing the USD prim
+    let test_entity = app.world_mut().spawn((
+        Name::new("MeshWithMaterial"),
+        UsdPrimPath {
+            stage_handle: stage_handle.clone(),
+            path: "/World/MeshWithMaterial".to_string(),
+        },
+    )).id();
+
+    // Run the systems to trigger visual synchronization
+    app.update();
+
+    // Check if the entity was processed and has visual sync
+    assert!(app.world().get::<UsdVisualSynced>(test_entity).is_some());
+
+    // Verify standard material component exists
+    let material_h = app.world().get::<MeshMaterial3d<StandardMaterial>>(test_entity)
+        .expect("Entity should have a StandardMaterial component");
+
+    let materials = app.world().resource::<Assets<StandardMaterial>>();
+    let mat = materials.get(&material_h.0).expect("Material should be registered in assets");
+    println!("Parsed material: base_color={:?}, roughness={}, metallic={}, emissive={:?}", mat.base_color.to_linear().to_vec4(), mat.perceptual_roughness, mat.metallic, mat.emissive);
+
+    // Assert PBR properties parsed from shader network matches expectation
+    assert!((mat.base_color.to_linear().to_vec4()[0] - 1.0).abs() < 1e-4);
+    assert!((mat.base_color.to_linear().to_vec4()[1] - 0.5).abs() < 1e-4);
+    assert!((mat.base_color.to_linear().to_vec4()[2] - 0.25).abs() < 1e-4);
+
+    assert!((mat.perceptual_roughness - 0.75).abs() < 1e-4);
+    assert!((mat.metallic - 0.25).abs() < 1e-4);
+
+    let emissive = mat.emissive;
+    assert!((emissive.red - 0.1).abs() < 1e-4);
+    assert!((emissive.green - 0.2).abs() < 1e-4);
+    assert!((emissive.blue - 0.3).abs() < 1e-4);
+}
+
+#[test]
+fn test_usd_material_modification() {
+    let mut app = App::new();
+    
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(AssetPlugin::default());
+    
+    app.init_asset::<UsdStageAsset>();
+    app.init_asset::<Mesh>();
+    app.init_asset::<StandardMaterial>();
+    app.init_asset::<Image>();
+    
+    app.add_plugins(UsdBevyPlugin);
+
+    // Initial USDA content
+    let usda_content = r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+
+def Xform "World"
+{
+    def Material "MyMaterial"
+    {
+        token outputs:surface.connect = </World/MyMaterial/PbrShader.outputs:surface>
+
+        def Shader "PbrShader"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (1.0, 0.5, 0.25)
+            float inputs:roughness = 0.75
+            float inputs:metallic = 0.25
+            token outputs:surface
+        }
+    }
+
+    def Cube "MeshWithMaterial" (
+        apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </World/MyMaterial>
+        double size = 2.0
+    }
+}
+"#;
+
+    let mut parser = openusd::usda::parser::Parser::new(usda_content);
+    let data_map = parser.parse().expect("Failed to parse USDA");
+    let reader = Arc::new(TextReader::from_data(data_map));
+
+    let stage_handle = {
+        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
+        stages.add(UsdStageAsset { reader })
+    };
+
+    let test_entity = app.world_mut().spawn((
+        Name::new("MeshWithMaterial"),
+        UsdPrimPath {
+            stage_handle: stage_handle.clone(),
+            path: "/World/MeshWithMaterial".to_string(),
+        },
+    )).id();
+
+    app.update();
+
+    // Verify initial values
+    let material_h = app.world().get::<MeshMaterial3d<StandardMaterial>>(test_entity)
+        .expect("Entity should have standard material");
+    let materials = app.world().resource::<Assets<StandardMaterial>>();
+    let mat = materials.get(&material_h.0).expect("Material should be registered");
+    assert!((mat.base_color.to_linear().to_vec4()[0] - 1.0).abs() < 1e-4);
+    assert!((mat.perceptual_roughness - 0.75).abs() < 1e-4);
+
+    // Now simulate updating the USD document
+    let updated_usda_content = r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+
+def Xform "World"
+{
+    def Material "MyMaterial"
+    {
+        token outputs:surface.connect = </World/MyMaterial/PbrShader.outputs:surface>
+
+        def Shader "PbrShader"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.0, 0.0, 1.0)
+            float inputs:roughness = 0.1
+            float inputs:metallic = 0.9
+            token outputs:surface
+        }
+    }
+
+    def Cube "MeshWithMaterial" (
+        apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </World/MyMaterial>
+        double size = 2.0
+    }
+}
+"#;
+
+    let mut parser = openusd::usda::parser::Parser::new(updated_usda_content);
+    let data_map = parser.parse().expect("Failed to parse updated USDA");
+    let updated_reader = Arc::new(TextReader::from_data(data_map));
+
+    // Update the reader inside the asset in-place
+    {
+        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
+        let asset = stages.get_mut(&stage_handle).unwrap();
+        asset.reader = updated_reader;
+    }
+
+    // Trigger visual sync again on the entity by removing UsdVisualSynced and triggering UsdPrimPath addition
+    app.world_mut().entity_mut(test_entity).remove::<UsdVisualSynced>();
+    let prim_path = app.world_mut().entity_mut(test_entity).take::<UsdPrimPath>().unwrap();
+    app.world_mut().entity_mut(test_entity).insert(prim_path);
+
+    app.update();
+
+    // Verify updated values
+    let material_h2 = app.world().get::<MeshMaterial3d<StandardMaterial>>(test_entity)
+        .expect("Entity should still have standard material");
+    let materials2 = app.world().resource::<Assets<StandardMaterial>>();
+    let mat2 = materials2.get(&material_h2.0).expect("Material should be registered");
+
+    // base color should now be blue (0.0, 0.0, 1.0)
+    assert!((mat2.base_color.to_linear().to_vec4()[0] - 0.0).abs() < 1e-4);
+    assert!((mat2.base_color.to_linear().to_vec4()[1] - 0.0).abs() < 1e-4);
+    assert!((mat2.base_color.to_linear().to_vec4()[2] - 1.0).abs() < 1e-4);
+
+    assert!((mat2.perceptual_roughness - 0.1).abs() < 1e-4);
+    assert!((mat2.metallic - 0.9).abs() < 1e-4);
+}
