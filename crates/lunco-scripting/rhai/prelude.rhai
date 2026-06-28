@@ -16,6 +16,17 @@
 fn vsub(a, b) { [a[0]-b[0], a[1]-b[1], a[2]-b[2]] }
 fn vadd(a, b) { [a[0]+b[0], a[1]+b[1], a[2]+b[2]] }
 fn vlen(a)    { (a[0]*a[0] + a[1]*a[1] + a[2]*a[2]).sqrt() }
+fn vdot(a, b) { a[0]*b[0] + a[1]*b[1] + a[2]*b[2] }
+fn vcross(a, b) {
+    [ a[1]*b[2] - a[2]*b[1],
+      a[2]*b[0] - a[0]*b[2],
+      a[0]*b[1] - a[1]*b[0] ]
+}
+fn vnorm(a) {
+    let l = vlen(a);
+    if l <= 0.0 { a } else { [a[0]/l, a[1]/l, a[2]/l] }
+}
+fn clamp(x, lo, hi) { if x < lo { lo } else if x > hi { hi } else { x } }
 
 /// Distance between two entities in metres, or -1.0 if either lacks a position.
 fn distance(a, b) {
@@ -30,6 +41,34 @@ fn arrived(entity, target, radius) {
     let p = world_pos(entity);
     if p == () { return false; }
     vlen(vsub(p, target)) <= radius
+}
+
+// ── Navigation (PURE rhai policy over the world_pos/world_forward reads) ─────
+//
+// All steering math lives here — Rust only exposes the raw position/heading
+// reads + the DriveRover command. Tune or replace freely; no Rust rebuild.
+
+/// Signed steer command in [-1, 1] that turns `entity` toward world point
+/// `target`. Sign from the yaw-plane (up = +Y) cross product of heading × goal.
+fn steer_to(entity, target) {
+    let p = world_pos(entity);
+    let f = world_forward(entity);
+    if p == () || f == () { return 0.0; }
+    let to  = vnorm(vsub(target, p));
+    let fwd = vnorm(f);
+    let cross = vcross(fwd, to);
+    clamp(cross[1], -1.0, 1.0)   // +Y component = left/right yaw error
+}
+
+/// Drive `entity` toward world point `target` at `speed`. Returns true once
+/// within `radius` (and brakes). The core per-tick navigation primitive.
+fn goto(entity, target, speed, radius) {
+    if arrived(entity, target, radius) {
+        brake(entity);
+        return true;
+    }
+    drive(entity, speed, steer_to(entity, target));
+    false
 }
 
 // ── Rover control (re-emit every tick: DriveRover has no persistent setpoint) ──

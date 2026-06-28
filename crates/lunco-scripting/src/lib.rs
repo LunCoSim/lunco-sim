@@ -58,7 +58,19 @@ impl Plugin for LunCoScriptingPlugin {
         #[cfg(feature = "rhai")]
         {
             app.init_resource::<world_bridge::PendingWorldScripts>();
-            app.add_systems(FixedUpdate, world_bridge::drain_world_scripts);
+            app.init_resource::<world_bridge::RhaiModelRuntime>();
+            // Event channel: scripts subscribe to the existing TelemetryEvent bus
+            // via this observer (frame-delayed into on_event hooks).
+            app.init_resource::<world_bridge::ScriptEventInbox>();
+            app.add_observer(world_bridge::collect_script_events);
+            app.add_systems(
+                FixedUpdate,
+                (
+                    world_bridge::drain_world_scripts,
+                    // Persistent per-entity scenario hooks (on_start/on_tick).
+                    world_bridge::tick_rhai_models,
+                ),
+            );
         }
 
         // Pluggable script backends — one per language, per cargo feature.
