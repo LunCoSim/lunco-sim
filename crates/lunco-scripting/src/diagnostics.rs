@@ -13,8 +13,8 @@ use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_core::GlobalEntityId;
-use lunco_doc::DocumentId;
-use lunco_doc_bevy::{status_json, DocumentDiagnostics};
+use lunco_doc::{status_json, DocumentId};
+use lunco_doc_bevy::DocumentDiagnostics;
 
 use crate::doc::ScriptedModel;
 

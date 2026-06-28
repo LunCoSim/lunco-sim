@@ -15,12 +15,6 @@ lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
 # Canonical Twin-scoped op journal (Lamport-ordered, CRDT-shapable schema).
 lunco-twin-journal = { path = "../lunco-twin-journal" }
-# Status serialisation for the shared diagnostics store (one JSON shape every
-# domain's status query returns).
-serde_json = { workspace = true }
-# wasm-safe monotonic clock for compile-timing ("compiled in N ms") in the
-# shared diagnostics store.
-web-time = { workspace = true }
 
 [features]
 default = ["ui"]

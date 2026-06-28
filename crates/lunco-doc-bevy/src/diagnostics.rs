@@ -1,63 +1,38 @@
-//! Unified per-document diagnostics store.
+//! The ECS half of the unified diagnostics substrate.
 //!
-//! Every domain that compiles documents — Modelica, rhai scripting, and any
-//! future language — reports through this ONE resource instead of rolling its
-//! own. A producer pushes [`lunco_doc::Diagnostic`]s under a
-//! [`lunco_doc::DocumentId`]; consumers (an egui panel, an API status query,
-//! the MCP) read the same store and the same [`status_json`] shape.
-//!
-//! Diagnostics carry their location as a byte range (LSP-precise,
-//! source-independent); [`status_json`] converts to 1-based line/col for
-//! display when given the document source.
+//! The diagnostic types and the per-document [`DocDiagnostics`] snapshot are
+//! pure data in `lunco-doc`; this module adds only the Bevy `Resource` that
+//! stores them per [`DocumentId`], plus compile-timing bookkeeping. Every domain
+//! that compiles documents — Modelica, rhai scripting, future languages —
+//! reports through this ONE resource and reads back via [`lunco_doc::status_json`].
 
 use std::collections::HashMap;
 use std::time::Duration;
 
+use bevy::platform::time::Instant;
 use bevy::prelude::*;
-use lunco_doc::{CompileState, Diagnostic, DiagnosticSeverity, DocumentId};
-
-/// One document's compile state plus its diagnostics.
-#[derive(Default, Clone)]
-pub struct DocDiagnostics {
-    /// Current compile lifecycle state.
-    pub state: CompileState,
-    /// All diagnostics from the last compile (errors, warnings, …).
-    pub diagnostics: Vec<Diagnostic>,
-    /// When the in-flight compile started (set by `mark_started`, consumed by
-    /// `mark_finished` to report elapsed). `None` outside a compile.
-    started_at: Option<web_time::Instant>,
-}
-
-impl DocDiagnostics {
-    /// Whether the document currently has any error-severity diagnostic.
-    pub fn has_errors(&self) -> bool {
-        self.diagnostics
-            .iter()
-            .any(|d| d.severity == DiagnosticSeverity::Error)
-    }
-
-    /// The first error-severity diagnostic's message, if any.
-    pub fn error_message(&self) -> Option<&str> {
-        self.diagnostics
-            .iter()
-            .find(|d| d.severity == DiagnosticSeverity::Error)
-            .map(|d| d.message.as_str())
-    }
-}
+use lunco_doc::{CompileState, Diagnostic, DocDiagnostics, DocumentId};
 
 /// Process-wide store of document diagnostics, keyed by [`DocumentId`].
 ///
 /// This is the shared substrate: `init_resource` it once (idempotent — whichever
-/// plugin runs first wins) and every domain writes here.
+/// plugin runs first wins) and every domain writes here. The diagnostic data
+/// itself ([`DocDiagnostics`]) lives in `lunco-doc`; this resource adds the ECS
+/// store plus per-document compile-timing (the runtime concern that doesn't
+/// belong in the pure-data layer).
 #[derive(Resource, Default)]
 pub struct DocumentDiagnostics {
     by_doc: HashMap<DocumentId, DocDiagnostics>,
+    /// When each in-flight compile started — set by `mark_started`, consumed by
+    /// `mark_finished` to report elapsed. Kept out of `DocDiagnostics` so that
+    /// type stays pure data. Uses Bevy's portable `Instant` (std on native,
+    /// web-time on wasm) — no extra clock dependency.
+    started: HashMap<DocumentId, Instant>,
 }
 
 impl DocumentDiagnostics {
     /// Mark a document as compiling (clears stale diagnostics) WITHOUT stamping
-    /// a start time. Prefer [`mark_started`](Self::mark_started) when you want
-    /// elapsed-time reporting.
+    /// a start time. Prefer [`mark_started`](Self::mark_started) for elapsed.
     pub fn mark_compiling(&mut self, id: DocumentId) {
         let e = self.by_doc.entry(id).or_default();
         e.state = CompileState::Compiling;
@@ -70,7 +45,7 @@ impl DocumentDiagnostics {
         let e = self.by_doc.entry(id).or_default();
         e.state = CompileState::Compiling;
         e.diagnostics.clear();
-        e.started_at = Some(web_time::Instant::now());
+        self.started.insert(id, Instant::now());
     }
 
     /// Transition to a terminal `state`, returning elapsed since the matching
@@ -78,9 +53,8 @@ impl DocumentDiagnostics {
     /// diagnostics — set those via [`set_error`](Self::set_error) /
     /// [`set_ok`](Self::set_ok).
     pub fn mark_finished(&mut self, id: DocumentId, state: CompileState) -> Option<Duration> {
-        let e = self.by_doc.entry(id).or_default();
-        e.state = state;
-        e.started_at.take().map(|t| t.elapsed())
+        self.by_doc.entry(id).or_default().state = state;
+        self.started.remove(&id).map(|t| t.elapsed())
     }
 
     /// True when a compile is currently in flight for `id`.
@@ -93,7 +67,7 @@ impl DocumentDiagnostics {
         let e = self.by_doc.entry(id).or_default();
         e.state = CompileState::Ready;
         e.diagnostics.clear();
-        e.started_at = None;
+        self.started.remove(&id);
     }
 
     /// Record a failed compile/run — state `Error`, with the given diagnostics.
@@ -101,7 +75,7 @@ impl DocumentDiagnostics {
         let e = self.by_doc.entry(id).or_default();
         e.state = CompileState::Error;
         e.diagnostics = diagnostics;
-        e.started_at = None;
+        self.started.remove(&id);
     }
 
     /// Convenience: record an error from a single flat message (no location).
@@ -120,11 +94,12 @@ impl DocumentDiagnostics {
     /// Drop everything tracked for a document (e.g. on close).
     pub fn clear(&mut self, id: DocumentId) {
         self.by_doc.remove(&id);
+        self.started.remove(&id);
     }
 
     /// Alias of [`clear`](Self::clear) — drop all state for a removed document.
     pub fn remove(&mut self, id: DocumentId) {
-        self.by_doc.remove(&id);
+        self.clear(id);
     }
 
     /// The tracked entry for a document, if any.
@@ -153,35 +128,4 @@ impl DocumentDiagnostics {
             .map(|e| e.diagnostics.as_slice())
             .unwrap_or(&[])
     }
-}
-
-/// The canonical status JSON every domain's status query returns:
-/// `{ state, ok, diagnostics: [{ severity, message, line, col }] }`
-/// (`line`/`col` 1-based, null when the diagnostic is unlocated).
-pub fn status_json(entry: Option<&DocDiagnostics>) -> serde_json::Value {
-    let state = entry.map(|e| e.state).unwrap_or(CompileState::Idle);
-    let diags: Vec<serde_json::Value> = entry
-        .map(|e| e.diagnostics.iter().map(diagnostic_json).collect())
-        .unwrap_or_default();
-    serde_json::json!({
-        "state": state.as_str(),
-        "ok": state == CompileState::Ready,
-        "diagnostics": diags,
-    })
-}
-
-/// Serialise one diagnostic.
-fn diagnostic_json(d: &Diagnostic) -> serde_json::Value {
-    let severity = match d.severity {
-        DiagnosticSeverity::Error => "error",
-        DiagnosticSeverity::Warning => "warning",
-        DiagnosticSeverity::Info => "info",
-        DiagnosticSeverity::Hint => "hint",
-    };
-    serde_json::json!({
-        "severity": severity,
-        "message": d.message,
-        "line": d.line,
-        "col": d.col,
-    })
 }

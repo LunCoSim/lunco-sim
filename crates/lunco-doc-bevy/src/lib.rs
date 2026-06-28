@@ -56,7 +56,10 @@
 #![warn(missing_docs)]
 
 pub mod diagnostics;
-pub use diagnostics::{status_json, DocDiagnostics, DocumentDiagnostics};
+pub use diagnostics::DocumentDiagnostics;
+// The pure-data half lives in lunco-doc; re-export for convenience so callers
+// can reach the whole diagnostics surface from one place.
+pub use lunco_doc::{status_json, DocDiagnostics};
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
