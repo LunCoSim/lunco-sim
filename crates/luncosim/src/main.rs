@@ -157,10 +157,13 @@ fn auto_focus_earth_once(
     mut did_focus: Local<bool>,
 ) {
     if *did_focus { return; }
-    *did_focus = true;
 
     let Some((camera_entity, cam_tf)) = q_cameras.iter().next() else { return };
     let Some((earth_entity, earth_body)) = q_bodies.iter().find(|(_, body)| body.ephemeris_id == 399) else { return };
+    // Arm the run-once latch only once both entities exist and we're
+    // committed to inserting the camera (CQ-506): setting it on frame 1
+    // before the spawn check meant auto-focus never ran.
+    *did_focus = true;
 
     // Preserve current camera orientation.
     let (yaw, pitch, _) = cam_tf.rotation.to_euler(bevy::prelude::EulerRot::YXZ);

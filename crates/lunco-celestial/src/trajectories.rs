@@ -425,8 +425,7 @@ pub fn trajectory_alpha_update_system(
                             let fade_days = (total_sampling_days * 0.1).clamp(1.0, 20.0);
                             let a = 1.0 - (days_past / fade_days);
                             // With additive blending at 15x brightness, we need alpha to approach zero, not 0.05!
-                            a.max(0.001) as f32; // Gentle curve drop-off
-                            0.05
+                            a.max(0.001) as f32 // Gentle curve drop-off
                         } else {
                             1.0
                         };

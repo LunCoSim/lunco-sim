@@ -45,8 +45,9 @@ fn on_set_theme(
         _ => None,
     };
     match explicit {
-        Some(m) if m != theme.mode => theme.toggle_mode(),
-        Some(_) => {}
+        // CQ-519: apply the requested mode directly instead of toggling
+        // (a toggle only lands on the right value for a 2-state enum).
+        Some(m) => theme.set_mode(m),
         None => theme.toggle_mode(),
     }
     if pref.mode != theme.mode {
@@ -68,9 +69,7 @@ fn sync_pref_from_theme(theme: Res<Theme>, mut pref: ResMut<ThemePreference>) {
 /// already-loaded `Theme` (default Dark on first run), this is a
 /// no-op.
 fn apply_pref_to_theme(pref: Res<ThemePreference>, mut theme: ResMut<Theme>) {
-    if pref.mode != theme.mode {
-        theme.toggle_mode();
-    }
+    theme.set_mode(pref.mode);
 }
 
 register_commands!(on_set_theme,);

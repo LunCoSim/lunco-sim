@@ -1283,7 +1283,10 @@ pub fn run_stepping_loop(
         all_times.push(t);
         let current_values = stepper.state().values;
         for (i, name) in names.iter().enumerate() {
-            let val = current_values.get(name).copied().unwrap_or(0.0);
+            // CQ-522: a missing variable is an honest gap, not 0.0 — match
+            // the batch path (`f64::NAN`) so plots don't show a fabricated
+            // zero where the stepper had no value.
+            let val = current_values.get(name).copied().unwrap_or(f64::NAN);
             all_series[i].push(val);
         }
         // Advance the grid cursor past the sample we just stored so the next

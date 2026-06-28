@@ -587,12 +587,23 @@ impl Theme {
             ThemeMode::Dark => ThemeMode::Light,
             ThemeMode::Light => ThemeMode::Dark,
         };
-        
-        let mut new_theme = match new_mode {
+        self.set_mode(new_mode);
+    }
+
+    /// Apply an explicit [`ThemeMode`], preserving registered overrides.
+    ///
+    /// Prefer this over [`Self::toggle_mode`] when a caller knows the
+    /// target mode: toggling only happens to land on the right value for
+    /// a 2-state enum and silently breaks the moment a third mode (e.g.
+    /// System) is added (CQ-519).
+    pub fn set_mode(&mut self, mode: ThemeMode) {
+        if self.mode == mode {
+            return;
+        }
+        let mut new_theme = match mode {
             ThemeMode::Dark => Self::dark(),
             ThemeMode::Light => Self::light(),
         };
-        
         // Preserve overrides
         new_theme.overrides = self.overrides.clone();
         *self = new_theme;

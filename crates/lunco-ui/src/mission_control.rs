@@ -412,8 +412,10 @@ pub fn populate_mission_control_view(
 
 fn jd_to_utc_string(jd: f64) -> String {
     let j2000 = 2451545.0;
-    let days_since_j2000 = (jd - j2000) as i64;
+    // CQ-512: carry the fractional day through to the clock. Truncating to
+    // whole days pinned the time-of-day at J2000's 12:00:00 epoch forever.
+    let secs_since_j2000 = ((jd - j2000) * 86400.0).round() as i64;
     let base = chrono::Utc.with_ymd_and_hms(2000, 1, 1, 12, 0, 0).unwrap()
-        + chrono::Duration::days(days_since_j2000);
+        + chrono::Duration::seconds(secs_since_j2000);
     base.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
