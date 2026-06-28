@@ -47,6 +47,7 @@ use std::sync::Arc;
 mod resolver;
 mod compose;
 mod light;
+pub mod author;
 pub mod usd_data;
 use usd_data::UsdDataExt;
 pub use compose::compose_native_fs;

@@ -1,0 +1,237 @@
+//! Path-addressed USD authoring for the document layer (Phase C2/C3).
+//!
+//! The document layer used to mutate its canonical `.usda` **source text** by
+//! splicing byte ranges (`lunco-usd::text_edit`). That is the CQ-503 nested-child
+//! corruption class: editing `/World/Box.radius` could clobber
+//! `/World/Box/Inner.radius` because the two share an attribute name and the
+//! splicer reasons about text, not structure.
+//!
+//! This module routes every edit through openusd's authoring engine instead.
+//! The document's canonical representation is a Send-safe [`sdf::Data`] holding
+//! the **root layer's own authored specs** (references, payloads, sublayers and
+//! all — composition is NOT flattened in, so the data still round-trips
+//! losslessly with external USD tools). To apply an edit we:
+//!
+//!   1. Serialize the current data back to USDA text and re-open it as the root
+//!      layer of a transient [`Stage`] through a stub resolver (every external
+//!      arc resolves to an empty layer — we never traverse the composition, so
+//!      missing referenced files don't matter).
+//!   2. Author the edit by **SDF path** (`define_prim`, `create_attribute`,
+//!      `remove_prim`) into that root layer. Path-addressed authoring cannot
+//!      touch a sibling or nested prim that happens to share a name.
+//!   3. Extract the root layer's authored specs back out as a fresh
+//!      [`sdf::Data`] ([`extract_root_layer_data`]) — references untouched,
+//!      because the edit only added/removed opinions on the root layer.
+//!
+//! `Stage` is `!Send` (`Rc`-backed), so it never escapes a synchronous call; the
+//! `sdf::Data` in and out is the Send-safe handoff the rest of the stack uses.
+
+use anyhow::{anyhow, Result};
+use openusd::ar::{self, ResolvedPath};
+use openusd::sdf::{self, Path as SdfPath, Value};
+use openusd::usd::Stage;
+use openusd::usda;
+
+/// Synthetic identifier for a document's in-memory root layer. Ends in `.usda`
+/// so openusd parses it as text.
+const DOC_ROOT_ID: &str = "lunco://__lunco_document_root__.usda";
+
+const EMPTY_USDA: &[u8] = b"#usda 1.0\n";
+
+/// Resolver that serves the document's root layer from memory and routes every
+/// other arc (sublayers, references, payloads) to an empty stub. The document
+/// authoring path never traverses the composed stage — it only reads back the
+/// root layer's own specs — so stubbing external arcs is lossless: the root's
+/// authored `references`/`payload`/`subLayers` opinions survive in
+/// [`extract_root_layer_data`]; only their *resolution* is skipped.
+struct DocResolver {
+    root_bytes: Vec<u8>,
+}
+
+impl ar::Resolver for DocResolver {
+    fn create_identifier(&self, asset_path: &str, _anchor: Option<&ResolvedPath>) -> String {
+        // Every non-root arc collapses to the same stub id; the root keeps its
+        // own. No anchoring needed — stub bytes are identical everywhere.
+        asset_path.to_string()
+    }
+
+    fn resolve(&self, asset_path: &str) -> Option<ResolvedPath> {
+        Some(ResolvedPath::new(asset_path))
+    }
+
+    fn resolve_for_new_asset(&self, asset_path: &str) -> Option<ResolvedPath> {
+        Some(ResolvedPath::new(asset_path))
+    }
+
+    fn open_asset(&self, resolved_path: &ResolvedPath) -> std::io::Result<Box<dyn ar::Asset>> {
+        let key = resolved_path.to_str().unwrap_or_default();
+        if key == DOC_ROOT_ID {
+            Ok(Box::new(std::io::Cursor::new(self.root_bytes.clone())))
+        } else {
+            Ok(Box::new(std::io::Cursor::new(EMPTY_USDA.to_vec())))
+        }
+    }
+
+    fn get_modification_timestamp(
+        &self,
+        _asset_path: &str,
+        _resolved_path: &ResolvedPath,
+    ) -> Option<std::time::SystemTime> {
+        None
+    }
+}
+
+/// Serialize `data` to USDA text. The canonical round-trip used both for
+/// authoring (re-open as a stage) and for saving the document to disk.
+pub fn data_to_usda(data: &sdf::Data) -> Result<String> {
+    usda::TextWriter::write_to_string(data).map_err(|e| anyhow!("serialize layer to USDA: {e}"))
+}
+
+/// Parse USDA `text` into a single root layer's [`sdf::Data`] (no composition).
+/// Inverse of [`data_to_usda`]; used to load a document and to apply a
+/// full-source replacement.
+pub fn usda_to_data(text: &str) -> Result<sdf::Data> {
+    usda::parse(text).map_err(|e| anyhow!("USD parse error: {e}"))
+}
+
+/// Open `data` as the root layer of a transient, writable [`Stage`]. Authoring
+/// calls (`stage.define_prim`, `stage.create_attribute`, `stage.remove_prim`)
+/// target the root layer by default, so callers author directly on the returned
+/// stage and then pass it to [`extract_root_layer_data`].
+///
+/// `Stage` is `!Send`; keep it on the stack of one synchronous edit.
+pub fn open_doc_stage(data: &sdf::Data) -> Result<Stage> {
+    let text = data_to_usda(data)?;
+    let resolver = DocResolver {
+        root_bytes: text.into_bytes(),
+    };
+    Stage::builder()
+        .resolver(resolver)
+        .open(DOC_ROOT_ID)
+        .map_err(|e| anyhow!("open document stage: {e}"))
+}
+
+/// Extract the **root layer's** authored specs from `stage` as a fresh
+/// [`sdf::Data`]. This is the document's new canonical representation after an
+/// edit — references/payloads/sublayers are preserved verbatim because the edit
+/// only altered opinions on the root layer; the composition is never flattened
+/// in.
+pub fn extract_root_layer_data(stage: &Stage) -> Result<sdf::Data> {
+    sdf::Data::from_abstract(stage.root_layer().data())
+        .map_err(|e| anyhow!("extract root layer data: {e}"))
+}
+
+/// Parse a single attribute value literal (e.g. `"(1, 0, 0)"`, `"0.5"`,
+/// `"(0.2, 0.2, 0.8)"`) of the given USD `type_name` into an [`sdf::Value`], by
+/// embedding it in a throwaway USDA snippet and letting openusd's own parser do
+/// the typing. General over every value type the parser understands, so the
+/// document op layer doesn't reimplement USD value literal parsing.
+pub fn parse_attribute_value(type_name: &str, literal: &str) -> Result<Value> {
+    let snippet = format!(
+        "#usda 1.0\ndef \"_v\"\n{{\n    {type_name} _a = {literal}\n}}\n"
+    );
+    let data = usda_to_data(&snippet)?;
+    let attr = SdfPath::new("/_v._a").map_err(|e| anyhow!("attr path: {e}"))?;
+    data.spec(&attr)
+        .and_then(|s| s.get("default"))
+        .cloned()
+        .ok_or_else(|| anyhow!("could not parse `{type_name} = {literal}` into a USD value"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::usd_data::UsdDataExt;
+
+    const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\ndef Xform \"World\"\n{\n    def Sphere \"Box\"\n    {\n        double radius = 1\n        def Sphere \"Inner\"\n        {\n            double radius = 9\n        }\n    }\n}\n";
+
+    /// THE load-bearing property: a resolver-opened root layer is writable,
+    /// path-addressed authoring lands in it, and `extract_root_layer_data`
+    /// reflects the change — proving the whole C2/C3 mechanic.
+    #[test]
+    fn author_round_trips_through_stage() {
+        let data = usda_to_data(SCENE).unwrap();
+        let stage = open_doc_stage(&data).unwrap();
+
+        // Author a brand-new prim by SDF path.
+        stage.define_prim("/World/Rover").unwrap().set_type_name("Xform").unwrap();
+        let out = extract_root_layer_data(&stage).unwrap();
+
+        assert_eq!(
+            out.prim_type_name(&SdfPath::new("/World/Rover").unwrap()).as_deref(),
+            Some("Xform"),
+            "newly authored prim must appear in the extracted root layer data"
+        );
+        // Pre-existing structure survives.
+        assert_eq!(
+            out.prim_type_name(&SdfPath::new("/World/Box").unwrap()).as_deref(),
+            Some("Sphere")
+        );
+    }
+
+    /// CQ-503 anti-corruption property: setting the PARENT's `radius` must not
+    /// touch the nested CHILD's same-named `radius`. This is exactly what text
+    /// splicing could not guarantee.
+    #[test]
+    fn parent_attribute_edit_does_not_clobber_nested_child() {
+        let data = usda_to_data(SCENE).unwrap();
+        let stage = open_doc_stage(&data).unwrap();
+
+        let val = parse_attribute_value("double", "2").unwrap();
+        stage.create_attribute("/World/Box.radius", "double").unwrap().set(val).unwrap();
+        let out = extract_root_layer_data(&stage).unwrap();
+
+        assert_eq!(
+            out.prim_attribute_value::<f64>(&SdfPath::new("/World/Box").unwrap(), "radius"),
+            Some(2.0),
+            "parent radius override must win"
+        );
+        assert_eq!(
+            out.prim_attribute_value::<f64>(&SdfPath::new("/World/Box/Inner").unwrap(), "radius"),
+            Some(9.0),
+            "nested child's same-named radius must be untouched (CQ-503)"
+        );
+    }
+
+    /// References authored on the root layer must survive an edit — the doc
+    /// canonical is the root layer, NOT the flattened composition, so a
+    /// `references = @other.usda@` opinion is preserved even though the stub
+    /// resolver never resolves it.
+    #[test]
+    fn references_survive_authoring() {
+        let with_ref = "#usda 1.0\ndef Xform \"World\"\n{\n    def \"Vehicle\" (\n        references = @vessels/rover.usda@\n    )\n    {\n    }\n}\n";
+        let data = usda_to_data(with_ref).unwrap();
+        let stage = open_doc_stage(&data).unwrap();
+
+        stage.define_prim("/World/Light").unwrap().set_type_name("DistantLight").unwrap();
+        let out = extract_root_layer_data(&stage).unwrap();
+
+        let vehicle = SdfPath::new("/World/Vehicle").unwrap();
+        assert!(
+            out.spec(&vehicle).and_then(|s| s.get("references")).is_some(),
+            "root-layer reference opinion must survive an unrelated edit"
+        );
+        assert_eq!(
+            out.prim_type_name(&SdfPath::new("/World/Light").unwrap()).as_deref(),
+            Some("DistantLight")
+        );
+    }
+
+    /// `remove_prim` drops the whole subtree by path.
+    #[test]
+    fn remove_prim_drops_subtree() {
+        let data = usda_to_data(SCENE).unwrap();
+        let stage = open_doc_stage(&data).unwrap();
+
+        stage.remove_prim("/World/Box").unwrap();
+        let out = extract_root_layer_data(&stage).unwrap();
+
+        assert!(out.spec(&SdfPath::new("/World/Box").unwrap()).is_none());
+        assert!(out.spec(&SdfPath::new("/World/Box/Inner").unwrap()).is_none());
+        assert_eq!(
+            out.prim_type_name(&SdfPath::new("/World").unwrap()).as_deref(),
+            Some("Xform"),
+            "sibling structure survives"
+        );
+    }
+}

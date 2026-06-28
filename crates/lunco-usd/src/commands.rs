@@ -683,13 +683,20 @@ mod tests {
         // One more tick to flush any final queued world commands.
         app.update();
 
+        use lunco_usd_bevy::usd_data::UsdDataExt;
+        use openusd::sdf::Path as SdfPath;
         let reg = app.world().resource::<UsdDocumentRegistry>();
         let host = reg.host(doc_id).expect("doc still alive");
-        let src = host.document().source();
-        assert!(src.contains("def Xform \"Rover\""));
-        assert!(src.contains("def Cube \"Body\""));
-        assert!(src.contains("def Cube \"WheelFL\""));
-        assert!(src.contains("xformOp:translate = (1, 0, 1)"));
+        // Assert on the canonical data (the document is data-canonical now;
+        // exact serialized-text formatting is openusd's business, not ours).
+        let data = host.document().data();
+        assert_eq!(data.prim_type_name(&SdfPath::new("/Rover").unwrap()).as_deref(), Some("Xform"));
+        assert_eq!(data.prim_type_name(&SdfPath::new("/Rover/Body").unwrap()).as_deref(), Some("Cube"));
+        assert_eq!(data.prim_type_name(&SdfPath::new("/Rover/WheelFL").unwrap()).as_deref(), Some("Cube"));
+        assert_eq!(
+            data.prim_attribute_value::<[f64; 3]>(&SdfPath::new("/Rover/WheelFL").unwrap(), "xformOp:translate"),
+            Some([1.0, 0.0, 1.0])
+        );
         // Generation advanced once per op.
         assert_eq!(host.document().generation(), 4);
     }
@@ -757,10 +764,23 @@ mod tests {
                 let decoded: UsdOp = serde_json::from_value(op_val.clone())
                     .expect("recorded op round-trips to UsdOp");
                 assert_eq!(format!("{decoded:?}"), format!("{:?}", forward_ops[i]));
-                // The inverse is a real UsdOp too (whole-buffer ReplaceSource today).
+                // The inverse is a real UsdOp too. Phase C3 records TYPED
+                // inverses where exact: AddPrim of a brand-new prim inverts to
+                // a RemovePrim; SetTranslate that synthesizes `xformOpOrder`
+                // falls back to a coarse full-source ReplaceSource snapshot.
                 let inv: UsdOp = serde_json::from_value(inv_val.clone())
                     .expect("recorded inverse round-trips to UsdOp");
-                assert!(matches!(inv, UsdOp::ReplaceSource { .. }));
+                match i {
+                    0 => assert!(
+                        matches!(inv, UsdOp::RemovePrim { .. }),
+                        "AddPrim of a new prim inverts to a typed RemovePrim, got {inv:?}"
+                    ),
+                    1 => assert!(
+                        matches!(inv, UsdOp::ReplaceSource { .. }),
+                        "SetTranslate inverts to a coarse ReplaceSource, got {inv:?}"
+                    ),
+                    _ => unreachable!(),
+                }
             }
         });
     }

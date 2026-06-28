@@ -23,17 +23,13 @@ use bevy::prelude::*;
 // twin-scene resolver) — egui-free, so server / sandbox / networking bins get
 // the full USD document surface. Only the empty-viewport placeholder inside it
 // is `ui`-gated. `ui` (browser/viewport panels) is the egui + workbench-shell
-// layer. `document`/`registry`/`text_edit` are the egui-free USD doc model.
+// layer. `document`/`registry` are the egui-free USD doc model. Edits author
+// through openusd's Stage by SDF path (`lunco_usd_bevy::author`); the old
+// `text_edit` byte-splicer and the `edit_target_spike` proof are gone now that
+// Phase C2/C3 lands the real Stage-backed authoring.
 pub mod commands;
 pub mod document;
 pub mod registry;
-pub mod text_edit;
-// C1 spike (Phase C): proves openusd 0.5.0's `EditTarget`/`edit_context` give us
-// non-destructive layer routing — base layer untouched while the composed stage
-// reflects an override authored into a separate layer. Test-only; isolated so it
-// can be deleted once C2 lands the real Stage-backed authoring.
-#[cfg(test)]
-mod edit_target_spike;
 #[cfg(feature = "ui")]
 pub mod ui;
 
