@@ -127,21 +127,28 @@ impl ModelicaComponentBuilder {
             // (e.g. PID's u/y from `extends Modelica.Blocks.Interfaces.SISO`)
             // actually find a node to land on. Direct declarations win
             // on name collision (MLS §7 inheritance precedence).
-            let mut merged: Vec<(String, Component)> = class
+            // Borrow direct components in place; only the inherited set is
+            // owned (the `extends` walk rewrites type names, so those
+            // Components are freshly built). Deep-cloning every direct
+            // Component here was the hot-path stall on large package
+            // diagrams (CQ-203) — a single `merged` of references suffices.
+            let inherited = collect_inherited_components(class, Some(&target), &self.ast, 0);
+            let direct_names: std::collections::HashSet<&str> =
+                class.components.iter().map(|(n, _)| n.as_str()).collect();
+            let merged: Vec<(&str, &Component)> = class
                 .components
                 .iter()
-                .map(|(n, c)| (n.clone(), c.clone()))
+                .map(|(n, c)| (n.as_str(), c))
+                .chain(
+                    inherited
+                        .iter()
+                        .filter(|(n, _)| !direct_names.contains(n.as_str()))
+                        .map(|(n, c)| (n.as_str(), c)),
+                )
                 .collect();
-            let direct_names: std::collections::HashSet<String> =
-                merged.iter().map(|(n, _)| n.clone()).collect();
-            for (name, comp) in collect_inherited_components(class, Some(&target), &self.ast, 0) {
-                if !direct_names.contains(&name) {
-                    merged.push((name, comp));
-                }
-            }
 
             // Add components as nodes
-            for (comp_name, comp) in &merged {
+            for &(comp_name, comp) in &merged {
                 let ports = ports_for_component(
                     comp,
                     &target,
@@ -165,7 +172,7 @@ impl ModelicaComponentBuilder {
                     "type_name".to_string(),
                     comp.type_name.to_string(),
                 );
-                name_to_id.insert(comp_name.clone(), node_id);
+                name_to_id.insert(comp_name.to_string(), node_id);
             }
 
             // Add connections as edges
@@ -228,28 +235,30 @@ impl ModelicaComponentBuilder {
             // Track connector instances: "comp.port" → info
             let mut connector_registry: HashMap<String, ConnectorInfo> = HashMap::new();
 
-            // Same merge as block diagram — see `build_block_diagram` for
-            // the inheritance rationale.
-            let mut merged: Vec<(String, Component)> = class
+            // Same borrow-don't-clone merge as block diagram — see
+            // `build_block_diagram` for the inheritance + CQ-203 rationale.
+            let inherited = collect_inherited_components(class, Some(&target), &self.ast, 0);
+            let direct_names: std::collections::HashSet<&str> =
+                class.components.iter().map(|(n, _)| n.as_str()).collect();
+            let merged: Vec<(&str, &Component)> = class
                 .components
                 .iter()
-                .map(|(n, c)| (n.clone(), c.clone()))
+                .map(|(n, c)| (n.as_str(), c))
+                .chain(
+                    inherited
+                        .iter()
+                        .filter(|(n, _)| !direct_names.contains(n.as_str()))
+                        .map(|(n, c)| (n.as_str(), c)),
+                )
                 .collect();
-            let direct_names: std::collections::HashSet<String> =
-                merged.iter().map(|(n, _)| n.clone()).collect();
-            for (name, comp) in collect_inherited_components(class, Some(&target), &self.ast, 0) {
-                if !direct_names.contains(&name) {
-                    merged.push((name, comp));
-                }
-            }
 
             // First pass: identify all connector ports on components
-            for (comp_name, comp) in &merged {
+            for &(comp_name, comp) in &merged {
                 let conn_ports = get_connector_port_names(comp);
                 for conn_name in &conn_ports {
                     let key = format!("{}.{}", comp_name, conn_name);
                     connector_registry.entry(key.clone()).or_insert_with(|| ConnectorInfo {
-                        comp_name: comp_name.clone(),
+                        comp_name: comp_name.to_string(),
                         port_name: conn_name.clone(),
                         port_type: comp.type_name.to_string(),
                     });
@@ -257,7 +266,7 @@ impl ModelicaComponentBuilder {
             }
 
             // Add component nodes (only those with connector ports)
-            for (comp_name, comp) in &merged {
+            for &(comp_name, comp) in &merged {
                 let conn_ports = get_connector_port_names(comp);
                 let ports: Vec<ComponentPort> = conn_ports
                     .iter()
@@ -271,7 +280,7 @@ impl ModelicaComponentBuilder {
                         format!("{}.{}", target, comp_name),
                         ports,
                     );
-                    name_to_id.insert(comp_name.clone(), node_id);
+                    name_to_id.insert(comp_name.to_string(), node_id);
                 }
             }
 
@@ -593,6 +602,11 @@ pub(crate) fn collect_inherited_components_with(
         return out;
     }
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Recursion into a base's *own* extends chain resolves against the base's
+    // qualified path, not this file's AST, so an empty shim is the right
+    // second-arg. Allocate it once for the whole walk rather than per-`extends`
+    // (CQ-203 — `StoredDefinition::default()` is not free at this fan-out).
+    let shim = StoredDefinition::default();
     for ext in &class.extends {
         let raw = ext.base_name.to_string();
         if raw.is_empty() {
@@ -660,7 +674,6 @@ pub(crate) fn collect_inherited_components_with(
             }
             out.push((name.clone(), comp));
         }
-        let shim = StoredDefinition::default();
         for (name, comp) in collect_inherited_components_with(
             base,
             Some(&base_qpath),
@@ -734,23 +747,27 @@ fn ports_for_component(
     // and emit a port for each connector-typed sub-component. This
     // is what surfaces `u`/`y` on a `Gain` instance (Gain extends
     // SISO; SISO has `RealInput u`, `RealOutput y`).
-    let mut sub_components: Vec<(String, Component)> = type_class
+    // Borrow direct sub-components; only the inherited set is owned. Cloning
+    // the type class's whole component list on every port query was a CQ-203
+    // hot-path cost (this runs once per component node, per projection).
+    let inherited =
+        collect_inherited_components_with(type_class, Some(type_qpath), ast, 0, msl_mode);
+    let direct_names: std::collections::HashSet<&str> =
+        type_class.components.iter().map(|(n, _)| n.as_str()).collect();
+    let sub_components: Vec<(&str, &Component)> = type_class
         .components
         .iter()
-        .map(|(n, c)| (n.clone(), c.clone()))
+        .map(|(n, c)| (n.as_str(), c))
+        .chain(
+            inherited
+                .iter()
+                .filter(|(n, _)| !direct_names.contains(n.as_str()))
+                .map(|(n, c)| (n.as_str(), c)),
+        )
         .collect();
-    let direct_names: std::collections::HashSet<String> =
-        sub_components.iter().map(|(n, _)| n.clone()).collect();
-    for (name, sub) in
-        collect_inherited_components_with(type_class, Some(type_qpath), ast, 0, msl_mode)
-    {
-        if !direct_names.contains(&name) {
-            sub_components.push((name, sub));
-        }
-    }
 
     let mut ports = Vec::new();
-    for (sub_name, sub) in &sub_components {
+    for &(sub_name, sub) in &sub_components {
         let sub_type = sub.type_name.to_string();
         // Causality wins when present (input/output declarations are
         // unambiguously ports). Otherwise consult the type's class.
