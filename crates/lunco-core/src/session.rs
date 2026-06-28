@@ -730,24 +730,31 @@ mod tests {
         // ownership is the gate, not the Operator role. (A client connects as
         // Observer and may never send an UpdateProfile to be promoted.)
         let mut observer_rbac = SessionRbac::default();
-        observer_rbac.sessions.insert(A.0, UserSession {
+        for s in [A, B] {
+            observer_rbac.sessions.insert(s.0, UserSession {
+                session_id: s,
+                username: "Observer".to_string(),
+                role: AuthorityRole::Observer,
+                authenticated: true,
+                token: None,
+            });
+        }
+        // Owner-Observer A may drive what it owns, and possess/structural commands.
+        assert!(authorize(&reg, &observer_rbac, A, "DriveRover", Some(R1)).is_ok());
+        assert!(authorize(&reg, &observer_rbac, A, "PossessVessel", Some(R1)).is_ok());
+        // An authenticated non-owner is still rejected by the ownership gate.
+        assert!(authorize(&reg, &observer_rbac, B, "DriveRover", Some(R1)).is_err());
+
+        // The authenticated FLOOR remains: an UNauthenticated session is rejected
+        // even for an owned entity (RBAC infra stays wired, just not role-gated).
+        let mut unauth_rbac = SessionRbac::default();
+        unauth_rbac.sessions.insert(A.0, UserSession {
             session_id: A,
             username: "Player A".to_string(),
             role: AuthorityRole::Observer,
-            authenticated: true,
+            authenticated: false,
             token: None,
         });
-        observer_rbac.sessions.insert(B.0, UserSession {
-            session_id: B,
-            username: "Player B".to_string(),
-            role: AuthorityRole::Observer,
-            authenticated: true,
-            token: None,
-        });
-        assert!(authorize(&reg, &observer_rbac, A, "DriveRover", Some(R1)).is_ok());
-        // A non-owning Observer is rejected for control of a rover it does not own.
-        assert!(authorize(&reg, &observer_rbac, B, "DriveRover", Some(R1)).is_err());
-        // Observer/structural commands are always allowed.
-        assert!(authorize(&reg, &observer_rbac, A, "PossessVessel", Some(R1)).is_ok());
+        assert!(authorize(&reg, &unauth_rbac, A, "DriveRover", Some(R1)).is_err());
     }
 }

@@ -32,7 +32,15 @@ pub(crate) fn register_client_systems(app: &mut App) {
     // CmdChannel (see server.rs note).
     app.add_systems(
         Update,
-        (client_send_outbox, client_recv_inbox, update_client_netstatus),
+        (
+            // Mirror the host ferry order: recv → drain (SyncPlugin) → send, so an
+            // inbound snapshot/handshake is processed and any command captured this
+            // frame is sent the same frame. Intra-`Update` only (see the
+            // reliable-flush note in server.rs).
+            client_recv_inbox.before(crate::sync::drain_sync_inbox),
+            client_send_outbox.after(crate::sync::drain_sync_inbox),
+            update_client_netstatus,
+        ),
     );
     register_all_commands(app);
 }
@@ -184,6 +192,15 @@ fn on_client_disconnected(
     mut status: ResMut<NetStatus>,
 ) {
     local.0 = SessionId::LOCAL;
+    // Deliberately KEEP role == Client (and the Disconnected Client entity + the
+    // status endpoint) on an *involuntary* drop. The host-loss quiescence path
+    // `force_kinematic_proxies` (lunco-sandbox-edit) is gated on role == Client and
+    // re-pins proxies Kinematic so a Dynamic body re-inserted after host loss doesn't
+    // free-fall through the terrain (the "-195 km cosim ball" fix). Flipping to
+    // Standalone here makes that system no-op — so we don't. A clean user-initiated
+    // exit (`on_leave_server`) is what returns to Standalone + despawns the entity.
+    // Outbox growth meanwhile is bounded by `client_send_outbox` (clears when there's
+    // no live sender).
     status.connected = false;
     status.peers = 0;
     warn!("[net] host connection lost — client disconnected");
@@ -230,6 +247,10 @@ fn client_send_outbox(
         return;
     }
     let Some(mut sender) = q.iter_mut().next() else {
+        // No live Client sender (still connecting, or dropped before the role
+        // reset lands): drop the queued commands instead of letting `capture_command`
+        // grow the outbox unbounded while there's nothing to ferry them to.
+        outbox.0.clear();
         return;
     };
     for (channel, env) in outbox.0.drain(..) {

@@ -33,9 +33,13 @@ use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_core::{Command, on_command, register_commands};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
-use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened, SaveDocument};
+use lunco_doc_bevy::{
+    DocumentChanged, DocumentClosed, DocumentOpened, NewDocument, OpenFile, SaveDocument,
+};
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
-use lunco_workbench::file_ops::{NewDocument, OpenFile};
+// The empty-viewport placeholder is a workbench (egui shell) concept; the
+// document/file command surface below is headless-safe. Gate only this.
+#[cfg(feature = "ui")]
 use lunco_workbench::ViewportPlaceholder;
 use lunco_workspace::{TwinAdded, WorkspaceResource};
 use lunco_usd_bevy::UsdPrimPath;
@@ -89,6 +93,9 @@ impl Plugin for UsdCommandsPlugin {
         app.add_systems(Update, drain_pending_usd_file_loads);
 
         app.add_systems(Update, drain_usd_pending_events);
+        // Workbench-only: the empty-viewport placeholder lives in the egui
+        // shell; headless / sandbox / server bins don't add it.
+        #[cfg(feature = "ui")]
         app.add_systems(Update, update_viewport_placeholder);
         app.add_observer(open_usd_docs_on_twin_added);
         register_all_commands(app);
@@ -174,6 +181,7 @@ fn open_usd_docs_on_twin_added(
 /// folder — show an empty-state hint; otherwise clear it so the message
 /// vanishes the instant a scene mounts. No-op in headless binaries that
 /// don't add the workbench (the resource is absent).
+#[cfg(feature = "ui")]
 fn update_viewport_placeholder(
     scene: Query<(), With<UsdPrimPath>>,
     placeholder: Option<ResMut<ViewportPlaceholder>>,

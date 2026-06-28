@@ -185,6 +185,15 @@ pub struct SpawnReplicationMsg {
     pub position: [f32; 3],
 }
 
+/// Host → clients: the networked entity with this id was removed on the host;
+/// despawn its local proxy. The inverse of [`SpawnReplicationMsg`] — without it a
+/// host-side removal (Inspector delete, cosim teardown) leaves a frozen kinematic
+/// ghost proxy pinned at its last replicated pose on every client, forever.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DespawnReplicationMsg {
+    pub gid: u64,
+}
+
 /// Host → a freshly-connected client: your session id + the current tick.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HandshakeMsg {
@@ -367,6 +376,11 @@ pub enum SyncEnvelope {
     TutorStatus(TutorStatusMsg),
     StudentStatus(StudentStatusMsg),
     SharePerspective(SharePerspectiveMsg),
+    // Appended LAST on purpose: the bincode codec is positional, so inserting a
+    // variant mid-enum shifts every later discriminant and breaks a version-skewed
+    // peer (stale wasm bundle vs fresh host). Adding at the end leaves all existing
+    // variants' discriminants unchanged; only peers that know `Despawn` use it.
+    Despawn(DespawnReplicationMsg),
 }
 
 // ── Resources (the contract `lunco-networking` touches) ───────────────────────
@@ -515,9 +529,12 @@ fn capture_command<C: Event + Reflect + TypePath>(
         .copied()
         .unwrap_or(SyncChannel::CommandBus);
 
+    // One registry read guard across both reflect passes (serialize + id-globalize)
+    // — no need to drop and re-acquire the lock between them.
+    let type_reg = type_registry.read();
+
     // Serialize through the SAME reflect path the apply side deserializes with.
     let mut data = {
-        let type_reg = type_registry.read();
         let serializer = TypedReflectSerializer::new(cmd.as_partial_reflect(), &type_reg);
         match serde_json::to_value(&serializer) {
             Ok(v) => v,
@@ -532,15 +549,13 @@ fn capture_command<C: Event + Reflect + TypePath>(
     // `avatar`) are replaced with `Entity::PLACEHOLDER` inside the walker — a
     // local camera concern whose bits must never leak; wire control identity is
     // the session `origin`, not the avatar entity. No field-name special-casing.
-    {
-        let type_reg = type_registry.read();
-        globalize_command_ids(
-            &mut data,
-            std::any::TypeId::of::<C>(),
-            &type_reg,
-            &entity_registry,
-        );
-    }
+    globalize_command_ids(
+        &mut data,
+        std::any::TypeId::of::<C>(),
+        &type_reg,
+        &entity_registry,
+    );
+    drop(type_reg);
 
     // Serialize the (id-translated) Value to compact JSON text for the wire.
     let data = serde_json::to_string(&data).unwrap_or_else(|_| "null".to_string());
@@ -666,22 +681,36 @@ pub fn drain_sync_inbox(
     mut pending_spawns: ResMut<PendingReplicatedSpawns>,
     mut snapshots: ResMut<IncomingSnapshots>,
     mut registry: ResMut<SessionRegistry>,
+    // Host gates tutor/student/perspective relays on the sender's role (same bar
+    // as the other state-mutating commands) and binds their claimed session to the
+    // actual sender — these messages seize peers' avatar camera + input.
+    rbac: Res<lunco_core::session::SessionRbac>,
     mut profiles: ResMut<SessionProfiles>,
     mut presence: ResMut<Presence>,
     mut outbox: ResMut<SyncOutbox>,
     mut tutor_status: ResMut<TutorStatusResource>,
     mut tutorial_settings: ResMut<TutorialSettings>,
     time: Res<Time>,
+    // Resolves a replicated `Despawn`'s gid back to its local proxy entity (O(1)).
+    entities: Res<ApiEntityRegistry>,
 ) {
     if inbox.0.is_empty() {
         return;
     }
     let mut drained: Vec<(SessionId, SyncEnvelope)> = std::mem::take(&mut inbox.0);
     // Order within a frame: possession/structural commands BEFORE control commands.
-    drained.sort_by_key(|(_, env)| match env {
-        SyncEnvelope::Command(m) if is_control_command(&m.payload.type_name) => 1u8,
-        _ => 0,
+    // Only sort when a control command is actually present — otherwise every entry
+    // keys to 0 (the common case: a batch of snapshots/cursors) and the sort is pure
+    // overhead. The stable sort preserves arrival order among equal keys.
+    let has_control = drained.iter().any(|(_, env)| {
+        matches!(env, SyncEnvelope::Command(m) if is_control_command(&m.payload.type_name))
     });
+    if has_control {
+        drained.sort_by_key(|(_, env)| match env {
+            SyncEnvelope::Command(m) if is_control_command(&m.payload.type_name) => 1u8,
+            _ => 0,
+        });
+    }
     for (sender, env) in drained {
         match env {
             SyncEnvelope::Command(m) => {
@@ -731,6 +760,23 @@ pub fn drain_sync_inbox(
                     entry_id: spawn.entry_id,
                     position: Vec3::from_array(spawn.position),
                 });
+            }
+            SyncEnvelope::Despawn(d) => {
+                // Authority: only the host removes entities; clients apply. The
+                // host already despawned locally (that's what emitted this), so it
+                // ignores any inbound Despawn (a client can't despawn host state).
+                if !role.is_host() {
+                    // Cancel a still-queued spawn for this gid: a Spawn followed by a
+                    // Despawn that lands before `apply_replicated_spawns` instantiates
+                    // the proxy would otherwise be a no-op below and leave a permanent
+                    // ghost once the proxy is later created.
+                    pending_spawns.0.retain(|s| s.gid != d.gid);
+                    // O(1) gid→entity via the canonical registry (the same map the
+                    // render path resolves), not a linear scan of every gid'd entity.
+                    if let Some(proxy) = entities.resolve(&GlobalEntityId::from_raw(d.gid)) {
+                        commands.entity(proxy).despawn();
+                    }
+                }
             }
             SyncEnvelope::Handshake(h) => {
                 if !role.is_host() {
@@ -795,14 +841,31 @@ pub fn drain_sync_inbox(
                     ));
                 }
             }
-            SyncEnvelope::TutorStatus(msg) => {
+            SyncEnvelope::TutorStatus(mut msg) => {
+                // Host authorization + anti-spoof. Tutor mode seizes targeted peers'
+                // avatar camera and locks their input, so gate the relay at the same
+                // bar as the other state-mutating commands (`Operator` — a named,
+                // authenticated session) and bind the tutor identity to the actual
+                // sender (mirroring the `Cursor` arm) so a peer can't claim to be
+                // another session. Gate at `Observer` (any *authenticated* session) —
+                // NOT `Operator`: teaching is a UI toggle with no role requirement and
+                // a connecting client is only an Observer until it sets a name, so an
+                // Operator gate would silently drop an un-named client-tutor. The real
+                // protection here is the sender-stamp (anti-spoof) + authenticated
+                // gate; a dedicated Tutor role + per-target consent is a future stricter
+                // option needing a product decision on who grants it. Unauthenticated →
+                // dropped: not relayed, not consumed.
                 if role.is_host() {
+                    if !rbac.is_authorized(sender, lunco_core::session::AuthorityRole::Observer) {
+                        continue;
+                    }
+                    msg.tutor_session = sender.0;
                     outbox.0.push((
                         SyncChannel::ControlStream,
                         SyncEnvelope::TutorStatus(msg.clone()),
                     ));
                 }
-                
+
                 // Allow anyone (including host) to follow the teacher, except the teacher themselves
                 if msg.tutor_session != local.0 .0 {
                     tutor_status.active_doc = msg.active_doc;
@@ -853,12 +916,22 @@ pub fn drain_sync_inbox(
                     tutor_status.tutor_active = true;
                 }
             }
-            SyncEnvelope::StudentStatus(msg) => {
+            SyncEnvelope::StudentStatus(mut msg) => {
                 // Relay so a *client*-tutor receives it too (the host may not be the
                 // observer). Each peer's arm below filters by teach/observe/target, so a
                 // broadcast is safe — only the observing tutor consumes it. Without this,
                 // observe-mode silently works only when the tutor happens to be the host.
+                //
+                // Anti-spoof: bind the report to its actual sender so a peer can't
+                // impersonate another student and pollute the observing tutor's
+                // mirrored view. Students are Observers, so gate only on an
+                // authenticated session (not Operator) — else legitimate students
+                // can't report. Unauthenticated → dropped.
                 if role.is_host() {
+                    if !rbac.is_authorized(sender, lunco_core::session::AuthorityRole::Observer) {
+                        continue;
+                    }
+                    msg.student_session = sender.0;
                     outbox.0.push((
                         SyncChannel::ControlStream,
                         SyncEnvelope::StudentStatus(msg.clone()),
@@ -886,17 +959,26 @@ pub fn drain_sync_inbox(
                     });
                 }
             }
-            SyncEnvelope::SharePerspective(msg) => {
+            SyncEnvelope::SharePerspective(mut msg) => {
+                // Same authz + anti-spoof as TutorStatus: a SharePerspective snaps
+                // every targeted peer's avatar/camera to the sender's view. Gate at
+                // `Observer` (authenticated) — not `Operator`, which would silently
+                // drop an un-named client — and bind the identity to the sender.
+                // Unauthenticated → dropped, not relayed, not consumed.
                 if role.is_host() {
+                    if !rbac.is_authorized(sender, lunco_core::session::AuthorityRole::Observer) {
+                        continue;
+                    }
+                    msg.tutor_session = sender.0;
                     // Relay to other clients
                     outbox.0.push((
                         SyncChannel::CommandBus, // reliable
                         SyncEnvelope::SharePerspective(msg.clone()),
                     ));
                 }
-                
+
                 if msg.tutor_session != local.0 .0 {
-                    tutor_status.one_shot_snap_request = Some(msg.clone());
+                    tutor_status.one_shot_snap_request = Some(msg);
                 }
             }
         }
@@ -912,7 +994,9 @@ pub fn gather_snapshot(
     time: Res<Time>,
     tick: Res<SimTick>,
     mut acc: Local<f32>,
-    mut last_sent: Local<HashMap<u64, ([i32; 3], u32)>>,
+    mut last_sent: Local<HashMap<u64, ([i32; 3], u32, u32)>>,
+    // gids currently emitting a non-finite pose; warn once per gid, clear on recovery.
+    mut nonfinite_warned: Local<HashSet<u64>>,
     applied: Res<AppliedInputSeq>,
     q: Query<
         (
@@ -939,8 +1023,10 @@ pub fn gather_snapshot(
     *acc = 0.0;
 
     let mut entries = Vec::new();
+    let mut live: HashSet<u64> = HashSet::with_capacity(last_sent.len());
     for (gid, tf, lin, ang, position, rotation, _cell) in q.iter() {
         let key = gid.get();
+        live.insert(key);
         // Rotation on the wire is WORLD-space: prefer avian's world `Rotation`,
         // fall back to `Transform.rotation` for bodies without a physics Rotation.
         let rot = rotation.map(|r| r.0.as_quat()).unwrap_or(tf.rotation);
@@ -953,27 +1039,54 @@ pub fn gather_snapshot(
                 tf.translation.z as f64,
             )
         });
+        // A cosim blow-up emits a NaN/inf `Position` — or velocity, which integrates
+        // to inf a frame EARLIER than the pose does. `quantize_pos` maps NaN→0 via
+        // `as i32`, decoding to world origin (→ a perpetual snap-to-origin reconcile
+        // per the zeroed-authority warning in `drain_sync_inbox`); a non-finite lv/av
+        // poisons the client's dead-reckoning the same way (`pos += lv*dt` → ±inf).
+        // Check all four and drop the entry so the proxy latches its last good pose.
+        // Warn once per gid (cleared on recovery) to avoid per-tick spam.
+        let lv = lin.map(|v| v.0.as_vec3()).unwrap_or(Vec3::ZERO);
+        let av = ang.map(|v| v.0.as_vec3()).unwrap_or(Vec3::ZERO);
+        if !pos.is_finite() || !rot.is_finite() || !lv.is_finite() || !av.is_finite() {
+            if nonfinite_warned.insert(key) {
+                warn!("[sync] non-finite pose/velocity for gid {key}, skipping: pos={pos:?} rot={rot:?} lv={lv:?} av={av:?}");
+            }
+            continue;
+        }
+        nonfinite_warned.remove(&key);
         let pos_q = quantize_pos(pos);
         let rot_packed = encode_quat(rot);
+        // Fold the reconcile ack into the change key. An owned body that is
+        // quantize-stationary (pushing an obstacle, brake+throttle, steering in
+        // place) keeps advancing its applied input seq host-side, but the client's
+        // `reconcile_owned_prediction` only evaluates a correction on a *new* ack.
+        // Keying on `last_input_seq` too ships the ack even when the pose is
+        // unchanged, so client prediction can't silently diverge during the stall
+        // and then pop on motion resume.
+        let last_input_seq = applied.0.get(&key).copied().unwrap_or(0);
         if config.only_if_changed {
-            if let Some((lp, lr)) = last_sent.get(&key) {
-                if *lp == pos_q && *lr == rot_packed {
+            if let Some((lp, lr, ls)) = last_sent.get(&key) {
+                if *lp == pos_q && *lr == rot_packed && *ls == last_input_seq {
                     continue;
                 }
             }
         }
-        last_sent.insert(key, (pos_q, rot_packed));
-        let lv = lin.map(|v| v.0.as_vec3().to_array()).unwrap_or([0.0; 3]);
-        let av = ang.map(|v| v.0.as_vec3().to_array()).unwrap_or([0.0; 3]);
+        last_sent.insert(key, (pos_q, rot_packed, last_input_seq));
         entries.push(SnapshotEntry {
             gid: key,
             pos_q,
             rot_packed,
-            lv,
-            av,
-            last_input_seq: applied.0.get(&key).copied().unwrap_or(0),
+            lv: lv.to_array(),
+            av: av.to_array(),
+            last_input_seq,
         });
     }
+    // Prune diff-cache + warn-set entries for despawned gids (gids are never
+    // reused) so neither grows unbounded over a long-lived host with spawn/despawn
+    // churn (cosim balloons, transient props, rejoining rovers).
+    last_sent.retain(|k, _| live.contains(k));
+    nonfinite_warned.retain(|k| live.contains(k));
     if entries.is_empty() {
         return;
     }
@@ -1005,6 +1118,46 @@ pub fn broadcast_new_spawns(
                 position: spawn.position.to_array(),
             }),
         ));
+    }
+}
+
+/// Host: when a replicated entity is removed (Inspector delete, cosim teardown,
+/// despawn), replicate the removal so clients despawn their local proxy instead
+/// of leaving a frozen kinematic ghost pinned at its last replicated pose.
+///
+/// The inverse of [`broadcast_new_spawns`]. A removed entity can no longer be
+/// queried for its `GlobalEntityId`, so the gid is read from a per-entity cache
+/// refreshed each run from the live `NetReplicate` set — the entity is still in
+/// the cache (populated the prior frame) when its removal surfaces here. Rides
+/// the reliable `CommandBus`, same as `Spawn`, so a dropped despawn can't
+/// resurrect the ghost.
+pub fn broadcast_despawns(
+    role: Res<NetworkRole>,
+    mut removed: RemovedComponents<GlobalEntityId>,
+    mut known: Local<HashMap<Entity, u64>>,
+    q_added: Query<(Entity, &GlobalEntityId), Added<GlobalEntityId>>,
+    mut outbox: ResMut<SyncOutbox>,
+) {
+    if !role.is_host() {
+        return;
+    }
+    // Maintain the Entity→gid cache INCREMENTALLY (insert on spawn) rather than
+    // clearing + rebuilding it from a full query every frame: a removed entity can
+    // no longer be queried for its gid, so it must be cached from when it was alive.
+    // Driven by `Added<GlobalEntityId>` — the same trigger `broadcast_new_spawns`
+    // uses — so a Spawn and its later Despawn are emitted symmetrically. Kept
+    // self-contained (vs reusing ApiEntityRegistry) to avoid coupling to that
+    // registry's removal-cleanup ordering.
+    for (entity, gid) in q_added.iter() {
+        known.insert(entity, gid.get());
+    }
+    for entity in removed.read() {
+        if let Some(gid) = known.remove(&entity) {
+            outbox.0.push((
+                SyncChannel::CommandBus,
+                SyncEnvelope::Despawn(DespawnReplicationMsg { gid }),
+            ));
+        }
     }
 }
 
@@ -1064,6 +1217,7 @@ pub fn generate_user_color(session_id: u64) -> [u8; 3] {
 /// user explicitly saved (anything other than the shared default) is left untouched.
 /// Runs in `Update` rather than `Startup` so it lands after persisted settings load.
 fn seed_local_cursor_color(
+    role: Res<NetworkRole>,
     local: Option<Res<LocalSession>>,
     mut settings: ResMut<CursorSettings>,
     mut done: Local<bool>,
@@ -1074,6 +1228,21 @@ fn seed_local_cursor_color(
     let Some(local) = local else {
         return;
     };
+    // Only seed in a networked session. In Standalone (the default boot mode) the
+    // session is LOCAL(0) and there are no peers to disambiguate against; seeding —
+    // and latching `done` — there would leave a later Standalone→JoinServer client
+    // stuck on color(0) (mauve), colliding with the host. Returning WITHOUT setting
+    // `done` keeps the system armed for the eventual Join.
+    if !role.is_networked() {
+        return;
+    }
+    // A networked client's real session id arrives with the handshake (a few frames
+    // after Join); until then `LocalSession` is LOCAL(0). Seeding now would give
+    // every client color(0) — so wait. The host is authoritatively LOCAL and resolves
+    // immediately, so it seeds right away (its own color legitimately *is* color(0)).
+    if !role.is_host() && local.0 == SessionId::LOCAL {
+        return;
+    }
     *done = true;
     if settings.color == CursorSettings::default().color {
         settings.color = generate_user_color(local.0 .0);
@@ -1840,6 +2009,7 @@ impl Plugin for SyncPlugin {
             .add_systems(Update, (
                 drain_sync_inbox,
                 broadcast_new_spawns,
+                broadcast_despawns,
                 sync_presence_with_profiles,
                 seed_local_cursor_color,
                 send_local_cursor_updates,
@@ -1936,5 +2106,46 @@ mod codec_roundtrip {
             }
             _ => panic!("wrong variant after round-trip"),
         }
+    }
+
+    #[test]
+    fn despawn_envelope_roundtrips() {
+        // B5: the despawn-replication envelope must survive the wire codec.
+        let env = SyncEnvelope::Despawn(DespawnReplicationMsg { gid: 0x00AB_CDEF });
+        let back = deserialize_env(&serialize_env(&env).expect("serialize")).expect("deserialize");
+        match back {
+            SyncEnvelope::Despawn(d) => assert_eq!(d.gid, 0x00AB_CDEF),
+            _ => panic!("wrong variant after round-trip"),
+        }
+    }
+
+    #[test]
+    fn despawn_appended_last_keeps_discriminants_stable() {
+        // The bincode codec is positional (fixint u32 discriminant, LE). `Despawn`
+        // was deliberately appended LAST so it doesn't shift any pre-existing
+        // variant's discriminant (which would silently break a version-skewed peer).
+        // Lock that: Handshake stays at index 3, Despawn is index 11. If someone
+        // re-inserts a variant mid-enum, Handshake's discriminant shifts and this
+        // fails loudly.
+        let handshake = serialize_env(&SyncEnvelope::Handshake(HandshakeMsg { session: 1, tick: 2 }))
+            .expect("serialize");
+        assert_eq!(&handshake[..4], &[3, 0, 0, 0], "Handshake discriminant moved");
+        let despawn = serialize_env(&SyncEnvelope::Despawn(DespawnReplicationMsg { gid: 9 }))
+            .expect("serialize");
+        assert_eq!(&despawn[..4], &[11, 0, 0, 0], "Despawn must be the last variant");
+    }
+
+    #[test]
+    fn dedup_keys_on_origin_and_op_id() {
+        // B1: the dedup set is keyed on (origin, op_id), not op_id alone — two peers
+        // that independently mint the same op_id (the hardcoded-seed collision) must
+        // NOT clobber each other, while a true replay of the same (origin, op_id) is
+        // still dropped.
+        let mut dedup = SyncDedup::default();
+        let (a, b, op) = (SessionId(1), SessionId(2), OpId(42));
+        assert!(dedup.check_and_insert(a, op), "first (a,42) is new");
+        assert!(!dedup.check_and_insert(a, op), "replay of (a,42) is a duplicate");
+        assert!(dedup.check_and_insert(b, op), "same op_id from a DIFFERENT origin is NOT a dup");
+        assert!(!dedup.check_and_insert(b, op), "replay of (b,42) is a duplicate");
     }
 }

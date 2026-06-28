@@ -123,7 +123,6 @@ fn native_client_config(url: &str, cert_digest: String) -> Result<ClientConfig> 
     let config = if !cert_digest.is_empty() {
         // Dev: self-signed cert pinned by its SHA-256 digest (explicit override).
         info!("[net] connecting to {url} with pinned cert digest");
-        let mut hash = [0u8; 32];
         let bytes = from_hex(&cert_digest)?;
         // A SHA-256 digest is exactly 32 bytes; `from_hex` only guarantees even
         // length, so guard before `copy_from_slice` (which panics on a length
@@ -135,6 +134,7 @@ fn native_client_config(url: &str, cert_digest: String) -> Result<ClientConfig> 
             )
             .into());
         }
+        let mut hash = [0u8; 32];
         hash.copy_from_slice(&bytes);
         let digest = Sha256Digest::new(hash);
         config.with_server_certificate_hashes([digest])

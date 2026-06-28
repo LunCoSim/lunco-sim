@@ -60,43 +60,14 @@ pub struct ShowOpenFilePicker {}
 #[Command(default)]
 pub struct ShowOpenFolderPicker {}
 
-/// Create a new untitled document of the given kind.
-///
-/// `kind` is the registered [`DocumentKindId`] string (`"modelica"`,
-/// `"julia"`, `"usd"`, …). An **empty** `kind` is the "use the
-/// default" signal — the workbench-side observer looks up the
-/// registry, picks the first kind whose
-/// [`can_create_new`](DocumentKindMeta::can_create_new) is true, and
-/// re-fires this command with the resolved kind. That's how Ctrl+N
-/// reaches a sensible default without the keybind owner having to
-/// know which domain crates are loaded.
-///
-/// Domain crates add observers that gate on `cmd.kind == "<their_id>"`
-/// and create the actual document. The workbench's default observer
-/// only handles the empty-kind resolution.
-#[Command(default)]
-pub struct NewDocument {
-    /// Registered document kind id, or empty for "default".
-    pub kind: String,
-}
-
-/// Open a file at `path` into a new tab.
-///
-/// Empty `path` triggers a native Open-File picker (via
-/// [`crate::picker::PickHandle`]) and re-fires this command with the chosen
-/// path on success. A non-empty `path` skips the dialog — that's how
-/// HTTP automation, recents, and drag-drop reach the same code path.
-///
-/// The actual loading is domain-specific: `lunco-modelica` observes
-/// this and reads `.mo` files into its document registry. When more
-/// domains contribute, this evolves into a classifier-and-dispatch
-/// (`FileKind::classify` → fire the matching domain command).
-#[Command(default)]
-pub struct OpenFile {
-    /// Filesystem path or URI (`bundled://`, `mem://`). Empty triggers
-    /// the picker.
-    pub path: String,
-}
+// `NewDocument` and `OpenFile` are document-lifecycle verbs, not UI: they
+// moved to `lunco-doc-bevy` (the non-egui document layer) so headless /
+// sandbox / server binaries can dispatch them by `kind` / `path` without
+// pulling the workbench shell. Re-exported here so the workbench's picker
+// resolver + the File menu keep referring to them as `file_ops::{…}`, and
+// existing `lunco_workbench::file_ops::OpenFile` paths stay valid. Only the
+// **empty-path picker** dispatch (below) is genuinely workbench-bound.
+pub use lunco_doc_bevy::{NewDocument, OpenFile};
 
 /// Produce a shareable link for the active document and copy it to the
 /// clipboard.

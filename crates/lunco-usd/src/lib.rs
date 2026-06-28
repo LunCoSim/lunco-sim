@@ -18,10 +18,12 @@
 
 use bevy::prelude::*;
 
-// `commands` (document/file verbs) + `ui` (browser/viewport panels) are the
-// egui + workbench-shell layer — UI only. `document`/`registry`/`text_edit` are
-// egui-free (USD doc model + the core document-lifecycle events).
-#[cfg(feature = "ui")]
+// `commands` is the headless-safe document/file verb layer (ApplyUsdOp,
+// OpenFile/NewDocument/SaveDocument observers, the async load pipeline +
+// twin-scene resolver) — egui-free, so server / sandbox / networking bins get
+// the full USD document surface. Only the empty-viewport placeholder inside it
+// is `ui`-gated. `ui` (browser/viewport panels) is the egui + workbench-shell
+// layer. `document`/`registry`/`text_edit` are the egui-free USD doc model.
 pub mod commands;
 pub mod document;
 pub mod registry;
@@ -29,7 +31,6 @@ pub mod text_edit;
 #[cfg(feature = "ui")]
 pub mod ui;
 
-#[cfg(feature = "ui")]
 pub use commands::{ApplyUsdOp, UsdCommandsPlugin, USD_DOCUMENT_KIND};
 pub use document::{LayerId, UsdChange, UsdDocument, UsdOp};
 pub use registry::UsdDocumentRegistry;
@@ -60,11 +61,11 @@ impl Plugin for UsdPlugins {
             UsdAvianPlugin,
             UsdSimPlugin,
         ));
-        // Document/file commands (OpenFile/NewDocument/SaveDocument + the
-        // viewport-placeholder/twin-doc observers) pull the egui workbench —
-        // UI only. The server triggers `LoadScene` directly (handled by
-        // UsdSimPlugin), so it doesn't need these.
-        #[cfg(feature = "ui")]
+        // Document/file commands (ApplyUsdOp + OpenFile/NewDocument/SaveDocument
+        // observers + the async load pipeline + twin-scene resolver) are
+        // headless-safe domain-layer wiring — added unconditionally so server /
+        // sandbox / networking bins get the full USD document surface. Only the
+        // egui browser/viewport panels (`UsdUiPlugin`) stay behind `ui`.
         app.add_plugins(UsdCommandsPlugin);
     }
 }

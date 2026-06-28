@@ -286,6 +286,52 @@ pub struct CloseDocument {
     pub doc: DocumentId,
 }
 
+/// Create a new untitled document of the given kind.
+///
+/// `kind` is the registered `DocumentKindId` string (`"modelica"`,
+/// `"julia"`, `"usd"`, …). An **empty** `kind` is the "use the
+/// default" signal — the workbench-side observer looks up the registry,
+/// picks the first kind whose `can_create_new` is true, and re-fires
+/// this command with the resolved kind. That's how Ctrl+N reaches a
+/// sensible default without the keybind owner having to know which
+/// domain crates are loaded.
+///
+/// Domain crates add observers that gate on `cmd.kind == "<their_id>"`
+/// and create the actual document. The workbench's default observer only
+/// handles the empty-kind resolution.
+///
+/// Lives here (not in the egui workbench) so headless / sandbox / server
+/// binaries can dispatch document creation by `kind` without the UI
+/// shell — the picker-driven path is a workbench concern, the typed verb
+/// is a document-lifecycle concern.
+#[Command(default)]
+pub struct NewDocument {
+    /// Registered document kind id, or empty for "default".
+    pub kind: String,
+}
+
+/// Open a file at `path` into a new tab.
+///
+/// Empty `path` triggers a native Open-File picker (a workbench concern)
+/// and re-fires this command with the chosen path on success. A
+/// **non-empty** `path` skips the dialog — that's how HTTP automation,
+/// recents, drag-drop, and headless / server callers reach the same code
+/// path without any UI.
+///
+/// The actual loading is domain-specific: `lunco-modelica` observes this
+/// and reads `.mo` files; `lunco-usd` observes it for `.usd*`. Each
+/// domain's observer ignores paths it doesn't own, so they coexist.
+///
+/// Lives here (not in the egui workbench) so headless / sandbox / server
+/// binaries can open files by path; only the empty-path picker dispatch
+/// stays in the workbench.
+#[Command(default)]
+pub struct OpenFile {
+    /// Filesystem path or URI (`bundled://`, `mem://`). Empty triggers
+    /// the picker (workbench only).
+    pub path: String,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Intent layer — abstract user actions, rebindable, context-resolved
 // ─────────────────────────────────────────────────────────────────────────────
