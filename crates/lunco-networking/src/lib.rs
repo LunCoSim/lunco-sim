@@ -81,11 +81,9 @@ impl NetworkMode {
                 }
                 "--connect" => {
                     let raw = args.get(i + 1).cloned().unwrap_or_default();
-                    // Distinct per process so two clients get distinct sessions.
-                    let client_id = std::process::id() as u64;
                     return Some(NetworkMode::Connect {
                         server: normalize_addr(&raw),
-                        client_id,
+                        client_id: next_client_id(),
                     });
                 }
                 _ => {}
@@ -162,13 +160,9 @@ impl NetworkMode {
         if addr.trim().is_empty() {
             return None;
         }
-        #[cfg(target_family = "wasm")]
-        let client_id = browser_client_id();
-        #[cfg(not(target_family = "wasm"))]
-        let client_id = std::process::id() as u64;
         Some(NetworkMode::Connect {
             server: normalize_addr(addr),
-            client_id,
+            client_id: next_client_id(),
         })
     }
 }
@@ -186,9 +180,11 @@ pub(crate) fn normalize_addr(raw: &str) -> String {
     }
 }
 
-/// A distinct client id for a new connection: per-tab on wasm
-/// ([`browser_client_id`]), per-process on native. Used by `JoinServer` and the
-/// auto-connect path.
+/// A distinct **netcode connection id** for a new connection. This is only the
+/// transport-level peer handle — it no longer determines authority identity (the
+/// host assigns a server-side `SessionId` at connect; see
+/// `server::AssignedSessions`). Drawn from fresh entropy so two clients can't
+/// collide, fixing the old `std::process::id()` reuse across machines (review H5).
 pub(crate) fn next_client_id() -> u64 {
     #[cfg(target_family = "wasm")]
     {
@@ -196,7 +192,7 @@ pub(crate) fn next_client_id() -> u64 {
     }
     #[cfg(not(target_family = "wasm"))]
     {
-        std::process::id() as u64
+        lunco_core::ids::random_u64()
     }
 }
 

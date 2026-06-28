@@ -283,6 +283,16 @@ impl SessionRbac {
         if !session.authenticated {
             return false;
         }
+        // A trusted session must carry a **server-issued token**. The host mints one
+        // per connection (`on_server_connected`) and for its own Owner session
+        // (`setup_host_rbac`); a session that reached the map without a token (e.g. a
+        // name-only `UpdateProfile` from an origin the server never issued) is not
+        // authorized. This is what stops the token-less Observer→Operator
+        // self-promotion (review M2) — authority now requires a credential the
+        // server, not the client, created.
+        if session.token.is_none() {
+            return false;
+        }
         // Owner has access to everything
         if session.role == AuthorityRole::Owner {
             return true;
@@ -704,14 +714,14 @@ mod tests {
             username: "Player A".to_string(),
             role: AuthorityRole::Operator,
             authenticated: true,
-            token: None,
+            token: Some("srv-token-a".to_string()),
         });
         rbac.sessions.insert(B.0, UserSession {
             session_id: B,
             username: "Player B".to_string(),
             role: AuthorityRole::Operator,
             authenticated: true,
-            token: None,
+            token: Some("srv-token-b".to_string()),
         });
 
         // The owner may issue control commands.
@@ -736,7 +746,7 @@ mod tests {
                 username: "Observer".to_string(),
                 role: AuthorityRole::Observer,
                 authenticated: true,
-                token: None,
+                token: Some(format!("srv-token-{}", s.0)),
             });
         }
         // Owner-Observer A may drive what it owns, and possess/structural commands.
@@ -756,5 +766,20 @@ mod tests {
             token: None,
         });
         assert!(authorize(&reg, &unauth_rbac, A, "DriveRover", Some(R1)).is_err());
+
+        // M2: a session that is `authenticated` but carries NO server-issued token
+        // is rejected even for an entity it owns. This is the gate that stops a
+        // name-only `UpdateProfile` from minting authority — a credential the
+        // server (not the client) created is now required.
+        let mut tokenless_rbac = SessionRbac::default();
+        tokenless_rbac.sessions.insert(A.0, UserSession {
+            session_id: A,
+            username: "Player A".to_string(),
+            role: AuthorityRole::Operator,
+            authenticated: true,
+            token: None,
+        });
+        assert!(authorize(&reg, &tokenless_rbac, A, "DriveRover", Some(R1)).is_err());
+        assert!(authorize(&reg, &tokenless_rbac, A, "PossessVessel", Some(R1)).is_err());
     }
 }

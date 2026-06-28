@@ -171,10 +171,30 @@ fn register_settings_menu(world: &mut World) {
             });
         }
         
+        // Per-peer opt-in: consent to be locked by a tutor broadcasting to Everyone.
+        let mut follow_opt_in = tut_settings.follow_opt_in;
+        if ui.checkbox(&mut follow_opt_in, "🤝 Let a tutor lock my view (opt in)")
+            .on_hover_text(
+                "Allow a tutor broadcasting to 'Everyone' to lock your view and input. \
+                 Off by default — you are never force-locked without consent. A tutor \
+                 targeting you specifically can still lock you.",
+            )
+            .changed()
+        {
+            world.trigger(crate::sync::SetFollowOptIn { enabled: follow_opt_in });
+        }
+
+        // The tutor lock applies to me only if I'm explicitly targeted, or it's a
+        // broadcast and I opted in. Only then is the manual toggle disabled.
+        let local_session = world.resource::<lunco_core::LocalSession>().0 .0;
+        let locked_for_me = tutor_status.tutor_active
+            && !tutor_status.allow_free_movement
+            && (tutor_status.target_client == Some(local_session)
+                || (tutor_status.target_client.is_none() && tut_settings.follow_opt_in));
+
         let mut follow_mode = tut_settings.follow_mode;
-        let can_toggle_follow = !tutor_status.tutor_active || tutor_status.allow_free_movement;
-        ui.add_enabled_ui(can_toggle_follow, |ui| {
-            let label = if tutor_status.tutor_active && !tutor_status.allow_free_movement {
+        ui.add_enabled_ui(!locked_for_me, |ui| {
+            let label = if locked_for_me {
                 "📖 Follow Mode (Locked by Tutor)"
             } else {
                 "📖 Follow Mode (Mirror tutor)"

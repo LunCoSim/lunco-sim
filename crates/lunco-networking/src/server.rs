@@ -14,8 +14,38 @@ use crate::sync::{
     SpawnReplicationMsg, SyncEnvelope, SyncInbox, SyncOutbox,
 };
 use lunco_core::{
-    GlobalEntityId, NetReplicate, NetSpawn, NetStatus, SessionRegistry, SessionProfiles, SimTick, SyncChannel,
+    GlobalEntityId, NetReplicate, NetSpawn, NetStatus, SessionId, SessionRegistry, SessionProfiles, SimTick, SyncChannel,
 };
+
+/// Host-authoritative map: live connection (deterministic netcode peer key) →
+/// **server-assigned** [`SessionId`]. The authority id is drawn from server
+/// entropy at connect (`lunco_core::ids::random_session_id`), NOT derived from the
+/// client-chosen netcode id, so a client can neither pick nor guess its own
+/// identity (review H4) and two clients cannot collide (H5). Every authority
+/// decision — RBAC, ownership, and the inbound-sender binding in `host_recv_inbox`
+/// — keys off this value; the client only learns its id from the handshake. The
+/// peer key (a deterministic function of the connection) is just the lookup
+/// handle; it never becomes the authority id.
+#[derive(Resource, Default)]
+struct AssignedSessions {
+    by_peer: std::collections::HashMap<u64, SessionId>,
+}
+
+impl AssignedSessions {
+    /// Allocate (or return the existing) server session for a connection key.
+    fn assign(&mut self, peer_key: u64) -> SessionId {
+        *self
+            .by_peer
+            .entry(peer_key)
+            .or_insert_with(|| SessionId(lunco_core::ids::random_session_id()))
+    }
+    fn get(&self, peer_key: u64) -> Option<SessionId> {
+        self.by_peer.get(&peer_key).copied()
+    }
+    fn remove(&mut self, peer_key: u64) -> Option<SessionId> {
+        self.by_peer.remove(&peer_key)
+    }
+}
 
 use crate::protocol::{CmdChannel, Frame, SnapChannel};
 use crate::shared::{deserialize_env, peer_to_session, serialize_env, PRIVATE_KEY, PROTOCOL_ID};
@@ -217,6 +247,7 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     app.add_systems(Startup, move |mut commands: Commands| {
         commands.trigger(Start { entity: server });
     });
+    app.init_resource::<AssignedSessions>();
     app.add_observer(on_server_connected);
     app.add_observer(on_server_disconnected);
     // NOTE: these MUST stay in `Update` (the lightyear message ferry). Moving them
@@ -322,27 +353,33 @@ fn on_server_connected(
     tick: Res<SimTick>,
     mut sender: ServerMultiMessageSender,
     mut rbac: ResMut<lunco_core::session::SessionRbac>,
+    mut assigned: ResMut<AssignedSessions>,
 ) {
     let Ok(remote) = q_client.get(trigger.entity) else {
         return;
     };
     let peer = remote.0;
-    let session = peer_to_session(peer);
+    // Server-assigned identity: allocate a fresh, entropy-drawn SessionId for this
+    // connection rather than trusting the client-chosen netcode id. `peer_to_session`
+    // is used only as the deterministic per-connection *lookup key*, never as the
+    // authority id (review H4/H5).
+    let peer_key = peer_to_session(peer).0;
+    let session = assigned.assign(peer_key);
+    let token = lunco_core::ids::random_token();
 
-    // Initialize client session in RBAC registry as an *authenticated* Observer.
-    // Observer-authorized-by-default: read-only telemetry plus possession/structural
-    // commands (which `authorize` gates at Observer) work immediately on connect — no
-    // profile-name round-trip required. The session is promoted to Operator (gaining
-    // DriveRover/BrakeRover) when it sets a name via `on_update_profile_rbac`. Inserting
-    // as unauthenticated here would default-deny *every* command until the first
-    // UpdateProfile lands, re-breaking possession (the MVP "structural always allowed"
-    // policy) for the whole connect→name window.
+    // Initialize client session in RBAC registry as an *authenticated* Observer with
+    // its server-issued token. Observer-authorized-by-default: read-only telemetry
+    // plus possession/structural commands (which `authorize` gates at Observer) work
+    // immediately on connect — no profile-name round-trip required. The session is
+    // promoted to Operator (gaining DriveRover/BrakeRover) when it sets a name via
+    // `on_update_profile_rbac`. The token makes the session a server-issued credential
+    // (`is_authorized` requires one), closing the name-only self-promotion of M2.
     rbac.sessions.insert(session.0, lunco_core::session::UserSession {
         session_id: session,
         username: format!("Player {}", session.0),
         role: lunco_core::session::AuthorityRole::Observer,
         authenticated: true,
-        token: None,
+        token: Some(token.clone()),
     });
     let server = server.into_inner();
     let target = NetworkTarget::Single(peer);
@@ -355,6 +392,7 @@ fn on_server_connected(
         &SyncEnvelope::Handshake(HandshakeMsg {
             session: session.0,
             tick: tick.0,
+            token,
         }),
     );
     for (gid, spawn) in q_spawns.iter() {
@@ -441,9 +479,15 @@ fn on_server_disconnected(
     mut profiles: ResMut<SessionProfiles>,
     mut rbac: ResMut<lunco_core::session::SessionRbac>,
     mut dedup: ResMut<crate::sync::SyncDedup>,
+    mut assigned: ResMut<AssignedSessions>,
 ) {
     if let Ok(remote) = q_client.get(trigger.entity) {
-        let session = peer_to_session(remote.0);
+        let peer_key = peer_to_session(remote.0).0;
+        // Resolve via the server-assigned map (same id authority used everywhere),
+        // then drop the mapping so a reconnecting peer key gets a fresh session.
+        let Some(session) = assigned.remove(peer_key) else {
+            return;
+        };
         let freed = registry.release_session(session);
         profiles.profiles.remove(&session.0);
         rbac.sessions.remove(&session.0);
@@ -509,9 +553,19 @@ fn host_send_outbox(
 fn host_recv_inbox(
     mut q: Query<(&RemoteId, &mut MessageReceiver<Frame>), With<ClientOf>>,
     mut inbox: ResMut<SyncInbox>,
+    assigned: Res<AssignedSessions>,
 ) {
     for (remote, mut receiver) in q.iter_mut() {
-        let session = peer_to_session(remote.0);
+        // Bind every inbound envelope to the SERVER-ASSIGNED session for this
+        // connection — the unforgeable trusted origin. A peer cannot spoof another
+        // session: the id comes from the connection, not the wire (review H4). A
+        // connection with no assignment yet (pre-`on_server_connected`) is skipped.
+        let peer_key = peer_to_session(remote.0).0;
+        let Some(session) = assigned.get(peer_key) else {
+            // Drain so the receiver buffer doesn't grow while we wait for assignment.
+            for _ in receiver.receive() {}
+            continue;
+        };
         for frame in receiver.receive() {
             if let Some(env) = deserialize_env(&frame.0) {
                 inbox.0.push((session, env));
