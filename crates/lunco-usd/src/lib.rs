@@ -30,6 +30,7 @@ use bevy::prelude::*;
 pub mod commands;
 pub mod document;
 pub mod registry;
+pub mod runtime_persistence;
 #[cfg(feature = "ui")]
 pub mod ui;
 

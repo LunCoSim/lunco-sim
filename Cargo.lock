@@ -7326,6 +7326,7 @@ dependencies = [
  "openusd",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

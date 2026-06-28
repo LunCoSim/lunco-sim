@@ -106,6 +106,10 @@ impl Plugin for UsdCommandsPlugin {
         #[cfg(feature = "ui")]
         app.add_systems(Update, update_viewport_placeholder);
         app.add_observer(open_usd_docs_on_twin_added);
+        // C5-A: persist/reload the runtime overlay (C4b spawns + moves) to
+        // `<twin>/.lunco/runtime/<scene>.usda`, parallel to the journal.
+        app.add_observer(crate::runtime_persistence::on_doc_opened_load_runtime);
+        app.add_observer(crate::runtime_persistence::on_doc_changed_save_runtime);
         register_all_commands(app);
     }
 }

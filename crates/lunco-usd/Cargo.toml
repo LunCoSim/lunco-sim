@@ -52,6 +52,7 @@ lunco-fsw = { path = "../lunco-fsw" }
 # entity-pipeline tests must register `Assets<ShaderMaterial>` or
 # `process_usd_sim_prims` defers every wheel forever (no WheelRaycast).
 lunco-materials = { path = "../lunco-materials" }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

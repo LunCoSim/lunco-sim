@@ -397,6 +397,21 @@ impl UsdDocument {
         })
     }
 
+    /// Replace the entire **runtime** layer with `data` — a session-restore
+    /// load (the persisted `.lunco` runtime overlay), NOT an edit. Bumps the
+    /// generation and records a [`UsdChange::FullReload`] so the viewport
+    /// rebuilds, but routes through neither the op layer nor the journal: it
+    /// *reconstructs* runtime state that was authored (and journaled) in a prior
+    /// session, rather than authoring it anew. Preserves the base dirty flag, so
+    /// reloading runtime state never makes a clean scene look unsaved.
+    pub fn restore_runtime(&mut self, data: sdf::Data) {
+        let was_dirty = self.is_dirty();
+        self.commit(TargetLayer::Runtime, data, UsdChange::FullReload);
+        if !was_dirty {
+            self.last_saved_generation = Some(self.generation);
+        }
+    }
+
     /// Where this document came from (drives save behaviour, tab
     /// title, read-only badge).
     pub fn origin(&self) -> &DocumentOrigin {
