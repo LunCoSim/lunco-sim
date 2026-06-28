@@ -36,8 +36,9 @@
 
 use bevy::prelude::*;
 use bevy::asset::{AssetLoader, LoadContext, io::Reader};
-use openusd::usda::TextReader;
-use openusd::sdf::{AbstractData, Path as SdfPath, Value};
+pub use openusd::sdf::Path as SdfPath;
+pub use openusd::usda::TextReader;
+use openusd::sdf::{AbstractData, Value};
 use big_space::prelude::CellCoord;
 use std::sync::Arc;
 
@@ -437,12 +438,12 @@ fn instantiate_usd_prim(
         {
             let mut cfg = lunco_core::HorizonShadowTerrain::default();
             if let Some(r) =
-                light::get_attribute_as_f32(reader, &sdf_path, "lunco:terrain:horizonMapResolution")
+                get_attribute_as_f32(reader, &sdf_path, "lunco:terrain:horizonMapResolution")
             {
                 cfg.resolution = (r as u32).clamp(64, 4096);
             }
             if let Some(a) =
-                light::get_attribute_as_f32(reader, &sdf_path, "lunco:terrain:horizonMapAzimuths")
+                get_attribute_as_f32(reader, &sdf_path, "lunco:terrain:horizonMapAzimuths")
             {
                 cfg.azimuths = (a as u32).clamp(4, 64);
             }
@@ -576,7 +577,15 @@ fn instantiate_usd_prim(
 
         // Apply standard PBR material with USD color
         if let Some(ref m) = mesh_handle {
-            apply_standard_material(reader, &sdf_path, m, materials, &mut commands.entity(entity));
+            apply_standard_material(
+                reader,
+                &sdf_path,
+                m,
+                materials,
+                &mut commands.entity(entity),
+                asset_server,
+                prim_path.stage_handle.id(),
+            );
         }
 
         // glTF / external-mesh branch.
@@ -616,6 +625,8 @@ fn instantiate_usd_prim(
                         &mesh_h,
                         materials,
                         &mut commands.entity(entity),
+                        asset_server,
+                        prim_path.stage_handle.id(),
                     );
                 }
                 _ => {
@@ -959,44 +970,166 @@ fn resolve_usd_instance_identities(
     }
 }
 
-/// Applies a standard PBR material to an entity, using USD prim attributes.
+/// Resolves a USD texture asset path relative to the stage it belongs to.
+fn resolve_texture_path(
+    asset_server: &AssetServer,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    asset_path: &str,
+) -> Option<String> {
+    if asset_path.contains("://") {
+        return Some(asset_path.to_string());
+    }
+    let stage_path = asset_server.get_path(stage_id)?;
+    let parent = stage_path.path().parent()?;
+    let resolved_path = parent.join(asset_path);
+    
+    match stage_path.source() {
+        bevy::asset::io::AssetSourceId::Name(name) => {
+            Some(format!("{}://{}", name, resolved_path.to_string_lossy()))
+        }
+        bevy::asset::io::AssetSourceId::Default => {
+            Some(resolved_path.to_string_lossy().into_owned())
+        }
+    }
+}
+
+/// Extractor for parent prim path from property connection target (e.g. `/World/Material/Shader.output` -> `/World/Material/Shader`)
+///
+/// Delegates to openusd's `SdfPath::prim_path()` so namespaced render contexts
+/// and variant selections (e.g. `/World/Mat/Shader{lod=hi}.outputs:surface`)
+/// resolve to the correct owning prim rather than being mis-split on the first `.`.
+pub fn parent_prim_path(target: &str) -> Option<SdfPath> {
+    Some(SdfPath::new(target).ok()?.prim_path())
+}
+
+/// Resolves the surface shader prim bound to a geometry prim, following
+/// `material:binding` → the material's `outputs:surface` connection → the
+/// owning shader prim. Returns `None` if the geometry has no bound material or
+/// the material authors no surface output.
+///
+/// Single source of truth for the bind→shader walk shared by the renderer
+/// ([`apply_standard_material`]) and the inspector's material editor.
+pub fn resolve_bound_shader(reader: &TextReader, mesh_path: &SdfPath) -> Option<SdfPath> {
+    let mat_path_str = read_rel_target(reader, mesh_path, "material:binding")?;
+    let mat_path = SdfPath::new(&mat_path_str).ok()?;
+    let surf_conn = read_rel_target(reader, &mat_path, "outputs:surface")?;
+    parent_prim_path(&surf_conn)
+}
+
+/// Applies a standard PBR material to an entity, resolving material bindings
+/// and shader networks if present, or falling back to direct prim attributes.
 fn apply_standard_material(
     reader: &TextReader,
     sdf_path: &SdfPath,
     mesh_handle: &Handle<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     entity_cmd: &mut EntityCommands,
+    asset_server: &AssetServer,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
 ) {
-    // Get color from primvars:displayColor attribute
-    let color = get_attribute_as_vec3(reader, sdf_path, "primvars:displayColor")
-        .map(|v| Color::srgb(v.x, v.y, v.z))
+    let mut base_color_texture = None;
+    let mut emissive_texture = None;
+    let mut metallic_roughness_texture = None;
+    let mut normal_map_texture = None;
+    let mut occlusion_texture = None;
+
+    // Direct geometry attributes form the baseline. USD `color3f` values are
+    // linear scene-referred, and the inspector writes `displayColor` from
+    // `base_color.to_linear()`, so read them back as linear (not sRGB) to keep
+    // the edit/save/reload round-trip stable.
+    let mut base_color = get_attribute_as_vec3(reader, sdf_path, "primvars:displayColor")
+        .map(|v| Color::linear_rgb(v.x, v.y, v.z))
         .unwrap_or(Color::WHITE);
 
-    let emissive = get_attribute_as_vec3(reader, sdf_path, "primvars:emissiveColor")
+    let mut emissive = get_attribute_as_vec3(reader, sdf_path, "primvars:emissiveColor")
         .or_else(|| get_attribute_as_vec3(reader, sdf_path, "emissiveColor"))
         .map(|v| LinearRgba::new(v.x, v.y, v.z, 1.0))
         .unwrap_or(LinearRgba::BLACK);
 
-    let metallic = light::get_attribute_as_f32(reader, sdf_path, "inputs:metallic")
-        .or_else(|| light::get_attribute_as_f32(reader, sdf_path, "metallic"))
+    let mut metallic = get_attribute_as_f32(reader, sdf_path, "inputs:metallic")
+        .or_else(|| get_attribute_as_f32(reader, sdf_path, "metallic"))
         .unwrap_or(0.0);
 
-    let roughness = light::get_attribute_as_f32(reader, sdf_path, "inputs:roughness")
-        .or_else(|| light::get_attribute_as_f32(reader, sdf_path, "roughness"))
-        .or_else(|| light::get_attribute_as_f32(reader, sdf_path, "inputs:perceptual_roughness"))
+    let mut roughness = get_attribute_as_f32(reader, sdf_path, "inputs:roughness")
+        .or_else(|| get_attribute_as_f32(reader, sdf_path, "roughness"))
+        .or_else(|| get_attribute_as_f32(reader, sdf_path, "inputs:perceptual_roughness"))
         .unwrap_or(0.5);
 
-    let reflectance = light::get_attribute_as_f32(reader, sdf_path, "inputs:reflectance")
-        .or_else(|| light::get_attribute_as_f32(reader, sdf_path, "reflectance"))
+    let mut reflectance = get_attribute_as_f32(reader, sdf_path, "inputs:reflectance")
+        .or_else(|| get_attribute_as_f32(reader, sdf_path, "reflectance"))
         .unwrap_or(0.5);
+
+    // A bound material shader network overrides individual channels where it
+    // authors them. Channels the shader omits — or whose texture connection
+    // fails to resolve — keep the geometry baseline above rather than reverting
+    // to a flat-white default.
+    if let Some(shader_path) = resolve_bound_shader(reader, sdf_path) {
+        // Resolve a shader input's connected texture to a loadable image handle,
+        // or `None` if it has no connection / file / resolvable path.
+        let load_tex = |input: &str| -> Option<Handle<Image>> {
+            let conn = read_rel_target(reader, &shader_path, input)?;
+            let texture_path = parent_prim_path(&conn)?;
+            let asset_path = get_attribute_as_string(reader, &texture_path, "inputs:file")?;
+            let resolved = resolve_texture_path(asset_server, stage_id, &asset_path)?;
+            Some(asset_server.load(resolved))
+        };
+
+        // diffuseColor: texture, else authored value, else geometry baseline.
+        base_color_texture = load_tex("inputs:diffuseColor");
+        if base_color_texture.is_none() {
+            if let Some(c) = get_attribute_as_vec3(reader, &shader_path, "inputs:diffuseColor") {
+                base_color = Color::linear_rgb(c.x, c.y, c.z);
+            }
+        }
+
+        // emissiveColor
+        emissive_texture = load_tex("inputs:emissiveColor");
+        if emissive_texture.is_none() {
+            if let Some(c) = get_attribute_as_vec3(reader, &shader_path, "inputs:emissiveColor") {
+                emissive = LinearRgba::new(c.x, c.y, c.z, 1.0);
+            }
+        }
+
+        // metallic
+        let metallic_texture = load_tex("inputs:metallic");
+        if metallic_texture.is_none() {
+            if let Some(m) = get_attribute_as_f32(reader, &shader_path, "inputs:metallic") {
+                metallic = m;
+            }
+        }
+
+        // roughness
+        let roughness_texture = load_tex("inputs:roughness");
+        if roughness_texture.is_none() {
+            if let Some(r) = get_attribute_as_f32(reader, &shader_path, "inputs:roughness")
+                .or_else(|| get_attribute_as_f32(reader, &shader_path, "inputs:perceptual_roughness"))
+            {
+                roughness = r;
+            }
+        }
+
+        metallic_roughness_texture = roughness_texture.or(metallic_texture);
+
+        normal_map_texture = load_tex("inputs:normal");
+        occlusion_texture = load_tex("inputs:occlusion");
+
+        if let Some(r) = get_attribute_as_f32(reader, &shader_path, "inputs:reflectance") {
+            reflectance = r;
+        }
+    }
 
     entity_cmd.insert((
         Mesh3d(mesh_handle.clone()),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: color,
+            base_color,
+            base_color_texture,
             emissive,
+            emissive_texture,
             metallic,
             perceptual_roughness: roughness,
+            metallic_roughness_texture,
+            normal_map_texture,
+            occlusion_texture,
             reflectance,
             ..default()
         }))
@@ -1075,16 +1208,18 @@ pub fn read_rel_target(reader: &TextReader, prim_path: &SdfPath, rel_name: &str)
     let Ok(rel_sdf) = SdfPath::new(&rel_path_str) else {
         return None;
     };
-    if let Ok(Some(val)) = reader.try_get(&rel_sdf, "targetPaths") {
-        if let Value::PathListOp(op) = &*val {
-            if let Some(target) = op
-                .explicit_items
-                .first()
-                .or_else(|| op.prepended_items.first())
-                .or_else(|| op.appended_items.first())
-                .or_else(|| op.added_items.first())
-            {
-                return Some(target.as_str().to_string());
+    for field in &["targetPaths", "connectionPaths"] {
+        if let Ok(Some(val)) = reader.try_get(&rel_sdf, field) {
+            if let Value::PathListOp(op) = &*val {
+                if let Some(target) = op
+                    .explicit_items
+                    .first()
+                    .or_else(|| op.prepended_items.first())
+                    .or_else(|| op.appended_items.first())
+                    .or_else(|| op.added_items.first())
+                {
+                    return Some(target.as_str().to_string());
+                }
             }
         }
     }
@@ -1121,6 +1256,21 @@ pub fn get_attribute_as_vec3(reader: &TextReader, path: &SdfPath, attr: &str) ->
         if v.len() >= 3 { return Some(Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32)); }
     }
     None
+}
+
+/// Reads a float-like attribute (`float` / `double` / `int`) from a USD prim.
+/// Falls back to the metadata-based "default" key if not found (needed for dome/light attributes).
+pub fn get_attribute_as_f32(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<f32> {
+    if let Some(v) = reader.prim_attribute_value::<f32>(path, attr) {
+        return Some(v);
+    }
+    if let Some(v) = reader.prim_attribute_value::<f64>(path, attr) {
+        return Some(v as f32);
+    }
+    if let Some(v) = reader.prim_attribute_value::<i32>(path, attr) {
+        return Some(v as f32);
+    }
+    light::get_attribute_as_f32(reader, path, attr)
 }
 
 /// Marker inserted on prim entities that own both a primitive Cube

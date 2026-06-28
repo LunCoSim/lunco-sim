@@ -562,8 +562,17 @@ pub fn authorize(
     target_gid: Option<u64>,
 ) -> Result<(), Reject> {
     // RBAC validation: check if the session has sufficient privileges.
+    //
+    // `DriveRover`/`BrakeRover` are gated by *ownership* of the target (enforced
+    // in the match below) — that is the MVP policy. An authenticated session that
+    // owns the rover may therefore drive it regardless of role, so it needs only
+    // Observer here. The elevated Operator role is demanded only for control of a
+    // rover the session does *not* own (which the ownership check then rejects
+    // anyway). Requiring Operator unconditionally would deny legitimate owners
+    // that connect as Observer and never send an `UpdateProfile` (e.g. net_smoke).
+    let owns_target = target_gid.is_some_and(|gid| reg.owns(origin, gid));
     let required_role = match type_name {
-        "DriveRover" | "BrakeRover" => AuthorityRole::Operator,
+        "DriveRover" | "BrakeRover" if !owns_target => AuthorityRole::Operator,
         _ => AuthorityRole::Observer,
     };
 
@@ -717,7 +726,9 @@ mod tests {
         assert!(authorize(&reg, &rbac, B, "PossessVessel", Some(R1)).is_ok());
         assert!(authorize(&reg, &rbac, B, "SpawnEntity", None).is_ok());
 
-        // An unauthenticated/unauthorized observer should be rejected for Operator command
+        // An authenticated Observer that *owns* the rover may still drive it:
+        // ownership is the gate, not the Operator role. (A client connects as
+        // Observer and may never send an UpdateProfile to be promoted.)
         let mut observer_rbac = SessionRbac::default();
         observer_rbac.sessions.insert(A.0, UserSession {
             session_id: A,
@@ -726,8 +737,17 @@ mod tests {
             authenticated: true,
             token: None,
         });
-        assert!(authorize(&reg, &observer_rbac, A, "DriveRover", Some(R1)).is_err());
-        // But allowed for observer/structural commands
+        observer_rbac.sessions.insert(B.0, UserSession {
+            session_id: B,
+            username: "Player B".to_string(),
+            role: AuthorityRole::Observer,
+            authenticated: true,
+            token: None,
+        });
+        assert!(authorize(&reg, &observer_rbac, A, "DriveRover", Some(R1)).is_ok());
+        // A non-owning Observer is rejected for control of a rover it does not own.
+        assert!(authorize(&reg, &observer_rbac, B, "DriveRover", Some(R1)).is_err());
+        // Observer/structural commands are always allowed.
         assert!(authorize(&reg, &observer_rbac, A, "PossessVessel", Some(R1)).is_ok());
     }
 }

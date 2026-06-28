@@ -25,5 +25,5 @@ pub mod rock;
 pub mod sampler;
 pub mod spec;
 
-pub use plugin::{ObstacleFieldPlugin, RegenerateField};
+pub use plugin::{ObstacleFieldPlugin, ObstacleFieldRoot, RegenerateField};
 pub use spec::{ObstacleFieldSpec, Pattern};

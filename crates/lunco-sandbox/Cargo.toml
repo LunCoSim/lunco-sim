@@ -169,7 +169,7 @@ sandbox = []
 # server comes from `lunco-api/transport-http` (added to `default` above);
 # the wasm build (`build_web.sh --features lunco-api`) gets the
 # `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
-lunco-api = ["dep:lunco-api"]
+lunco-api = ["dep:lunco-api", "lunco-modelica/lunco-api"]
 # Multiplayer over WebTransport (lightyear). Pulls in the real networking
 # adapter; the wire substrate (lunco-api) is required.
 networking = ["dep:lunco-networking", "lunco-networking/networking", "lunco-api"]
