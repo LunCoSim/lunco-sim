@@ -366,6 +366,32 @@ impl UsdDocument {
         &self.runtime
     }
 
+    /// The **composed** view: the runtime overlay merged over the base layer
+    /// (runtime opinions win, runtime-only prims included). This is what the
+    /// viewport renders — base authored content plus generated runtime state —
+    /// whereas [`source`](Self::source) (Save) stays base-only. References
+    /// survive as opinions; this is an sdf layer-stack merge, not render-time
+    /// PCP composition.
+    pub fn composed(&self) -> sdf::Data {
+        author::compose_layers(&self.base, &self.runtime)
+    }
+
+    /// The composed view serialized to USDA text — the source the viewport
+    /// re-parses so runtime-layer state becomes visible. Falls back to the raw
+    /// (base) source when the base is un-parseable.
+    pub fn composed_source(&self) -> String {
+        if let Some(raw) = &self.parse_error {
+            return raw.clone();
+        }
+        author::data_to_usda(&self.composed()).unwrap_or_else(|e| {
+            warn!(
+                "[usd] failed to serialize composed document {}: {e}",
+                self.id.raw()
+            );
+            EMPTY_USDA.to_string()
+        })
+    }
+
     /// Where this document came from (drives save behaviour, tab
     /// title, read-only badge).
     pub fn origin(&self) -> &DocumentOrigin {
@@ -1082,6 +1108,32 @@ mod tests {
         host.undo().unwrap();
         assert!(!runtime_prim_exists(host.document(), "/World/Obstacle"));
         assert!(prim_exists(host.document(), "/World"), "base layer intact across runtime undo");
+    }
+
+    #[test]
+    fn composed_view_includes_runtime_but_source_excludes_it() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(34),
+            TINY_USDA,
+            DocumentOrigin::writable_file("/tmp/r.usda"),
+        );
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/World".into(),
+            name: "Obstacle".into(),
+            type_name: Some("Sphere".into()),
+        })
+        .unwrap();
+
+        // The composed view (what the viewport renders) sees the runtime prim.
+        let composed = doc.composed();
+        assert_eq!(
+            composed.prim_type_name(&SdfPath::new("/World/Obstacle").unwrap()).as_deref(),
+            Some("Sphere")
+        );
+        assert!(doc.composed_source().contains("Obstacle"));
+        // The saved source (base) does not.
+        assert!(!doc.source().contains("Obstacle"));
     }
 
     #[test]

@@ -7177,6 +7177,7 @@ dependencies = [
  "lunco-usd-bevy",
  "lunco-usd-sim",
  "lunco-workbench",
+ "lunco-workspace",
  "transform-gizmo-bevy",
 ]
 

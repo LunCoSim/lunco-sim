@@ -616,7 +616,7 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
     let Some(source) = world
         .resource::<UsdDocumentRegistry>()
         .host(doc)
-        .map(|h| h.document().source().to_string())
+        .map(|h| h.document().composed_source())
     else {
         return;
     };
@@ -669,7 +669,7 @@ fn rebuild_active_asset(world: &mut World) {
     let Some(source) = world
         .resource::<UsdDocumentRegistry>()
         .host(doc)
-        .map(|h| h.document().source().to_string())
+        .map(|h| h.document().composed_source())
     else {
         return;
     };

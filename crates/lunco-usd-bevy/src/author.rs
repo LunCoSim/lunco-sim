@@ -28,7 +28,7 @@
 
 use anyhow::{anyhow, Result};
 use openusd::ar::{self, ResolvedPath};
-use openusd::sdf::{self, Path as SdfPath, Value};
+use openusd::sdf::{self, Path as SdfPath, SpecData, Value};
 use openusd::usd::Stage;
 use openusd::usda;
 
@@ -138,6 +138,64 @@ pub fn parse_attribute_value(type_name: &str, literal: &str) -> Result<Value> {
         .ok_or_else(|| anyhow!("could not parse `{type_name} = {literal}` into a USD value"))
 }
 
+/// Overlay the `runtime` layer's opinions onto `base` as an **sdf layer-stack
+/// merge** and return the composed [`sdf::Data`]: runtime fields win per spec,
+/// runtime-only specs are added, and `primChildren` lists are unioned so the
+/// merged prim tree lists children authored in either layer.
+///
+/// This is the sdf-level layer composition openusd does **not** expose. Its
+/// only flatten (`compose::flatten_stage`) runs full PCP — it resolves
+/// references/payloads/variants, which is exactly wrong for an *authored*
+/// composed view: a base `references = @asset.usda@` opinion must survive as an
+/// opinion, not be pulled in. References/payloads ride along untouched here
+/// because they are just fields on the base spec. This is NOT a substitute for
+/// render-time PCP composition (that is [`compose_native_fs`] /
+/// `compose::compose_to_data`); it is the document's own two-layer (base +
+/// runtime) merge.
+pub fn compose_layers(base: &sdf::Data, runtime: &sdf::Data) -> sdf::Data {
+    let mut out = base.clone();
+    for (path, rspec) in runtime.iter() {
+        match out.spec_mut(path) {
+            Some(bspec) => {
+                for (key, value) in &rspec.fields {
+                    if key == "primChildren" {
+                        union_prim_children(bspec, value);
+                    } else {
+                        // Runtime opinion wins (stronger layer). `add` upserts
+                        // in place, preserving field order.
+                        bspec.add(key, value.clone());
+                    }
+                }
+            }
+            None => {
+                // Runtime-only spec: copy it in wholesale.
+                *out.create_spec(path.clone(), rspec.ty) = rspec.clone();
+            }
+        }
+    }
+    out
+}
+
+/// Union a runtime `primChildren` token list into the base spec's, preserving
+/// base order and appending only names base doesn't already list — so a runtime
+/// `over` that adds one child doesn't drop the base's siblings.
+fn union_prim_children(bspec: &mut SpecData, rval: &Value) {
+    let Value::TokenVec(rkids) = rval else {
+        bspec.add("primChildren", rval.clone());
+        return;
+    };
+    match bspec.get_mut("primChildren") {
+        Some(Value::TokenVec(bkids)) => {
+            for k in rkids {
+                if !bkids.iter().any(|x| x == k) {
+                    bkids.push(k.clone());
+                }
+            }
+        }
+        _ => bspec.add("primChildren", rval.clone()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,6 +272,57 @@ mod tests {
         assert_eq!(
             out.prim_type_name(&SdfPath::new("/World/Light").unwrap()).as_deref(),
             Some("DistantLight")
+        );
+    }
+
+    /// `compose_layers` overlays runtime onto base: runtime-only prims appear,
+    /// runtime attribute opinions win, base structure (incl. unrelated children)
+    /// survives, and base references are preserved as opinions (not resolved).
+    #[test]
+    fn compose_layers_overlays_runtime_onto_base() {
+        let base = usda_to_data(SCENE).unwrap(); // /World/Box(radius=1)/Inner(radius=9)
+        // Runtime: override Box.radius and add a new sibling prim under /World.
+        let runtime = usda_to_data(
+            "#usda 1.0\nover \"World\"\n{\n    over \"Box\"\n    {\n        double radius = 7\n    }\n    def Sphere \"Obstacle\"\n    {\n    }\n}\n",
+        )
+        .unwrap();
+
+        let composed = compose_layers(&base, &runtime);
+
+        // Runtime attribute opinion wins.
+        assert_eq!(
+            composed.prim_attribute_value::<f64>(&SdfPath::new("/World/Box").unwrap(), "radius"),
+            Some(7.0)
+        );
+        // Base-only nested child survives untouched.
+        assert_eq!(
+            composed.prim_attribute_value::<f64>(&SdfPath::new("/World/Box/Inner").unwrap(), "radius"),
+            Some(9.0)
+        );
+        // Runtime-only prim is present in the composed tree...
+        assert_eq!(
+            composed.prim_type_name(&SdfPath::new("/World/Obstacle").unwrap()).as_deref(),
+            Some("Sphere")
+        );
+        // ...and `prim_children` of /World lists BOTH the base Box and the runtime Obstacle.
+        let kids: Vec<String> = composed
+            .prim_children(&SdfPath::new("/World").unwrap())
+            .iter()
+            .map(|p| p.name().unwrap_or_default().to_string())
+            .collect();
+        assert!(kids.contains(&"Box".to_string()), "base child survives: {kids:?}");
+        assert!(kids.contains(&"Obstacle".to_string()), "runtime child added: {kids:?}");
+    }
+
+    /// An empty runtime layer composes to exactly the base.
+    #[test]
+    fn compose_layers_empty_runtime_is_base() {
+        let base = usda_to_data(SCENE).unwrap();
+        let empty = usda_to_data("#usda 1.0\n").unwrap();
+        let composed = compose_layers(&base, &empty);
+        assert_eq!(
+            composed.prim_type_name(&SdfPath::new("/World/Box").unwrap()).as_deref(),
+            Some("Sphere")
         );
     }
 
