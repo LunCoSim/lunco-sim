@@ -1542,7 +1542,7 @@ fn apply_usd_path_attribute_change(
     let doc_id = doc_id.or_else(|| {
         world
             .get_resource::<UsdViewportState>()
-            .and_then(|v| v.active_doc())
+            .and_then(|v| v.mounted_doc())
     });
 
     if let Some(doc) = doc_id {

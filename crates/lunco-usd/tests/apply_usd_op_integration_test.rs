@@ -176,5 +176,5 @@ def Xform "World"
 
     // 8. Confirm viewport state has been updated
     let state = app.world().resource::<UsdViewportState>();
-    assert_eq!(state.active_doc(), Some(doc_id));
+    assert_eq!(state.mounted_doc(), Some(doc_id));
 }

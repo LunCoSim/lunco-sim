@@ -223,7 +223,14 @@ pub struct UsdViewportState {
     camera: Option<Entity>,
     light: Option<Entity>,
     current_handle: Option<Handle<UsdStageAsset>>,
-    active_doc: Option<DocumentId>,
+    /// The doc whose stage is currently **mounted on `scene_root`** (paired
+    /// with `current_handle` / `last_rebuilt_generation`). This is viewport-
+    /// render state — *not* the app-wide focused document. The unified
+    /// "active document" lives in `workspace.active_document`, which this
+    /// viewport *publishes into* on mount (`install_active_doc`). The two
+    /// usually coincide but diverge when focus moves to another workbench
+    /// while this stage stays mounted (so generation rebuilds keep working).
+    mounted_doc: Option<DocumentId>,
     last_rebuilt_generation: Option<u64>,
     /// Pointer-driven orbit pose. Pushed onto the camera each input
     /// frame the panel receives drag / scroll input.
@@ -231,9 +238,11 @@ pub struct UsdViewportState {
 }
 
 impl UsdViewportState {
-    /// The doc currently surfaced in the viewport, if any.
-    pub fn active_doc(&self) -> Option<DocumentId> {
-        self.active_doc
+    /// The doc whose stage is currently mounted on the viewport's `scene_root`,
+    /// if any. This is the *render-mount* target — distinct from the app-wide
+    /// `workspace.active_document` (which this viewport publishes into on mount).
+    pub fn mounted_doc(&self) -> Option<DocumentId> {
+        self.mounted_doc
     }
 }
 
@@ -517,7 +526,7 @@ fn on_set_active_usd_viewport(
         if !world.resource::<UsdDocumentRegistry>().contains(doc) {
             return;
         }
-        if world.resource::<UsdViewportState>().active_doc == Some(doc) {
+        if world.resource::<UsdViewportState>().mounted_doc == Some(doc) {
             return;
         }
         bootstrap(world);
@@ -554,7 +563,7 @@ fn on_doc_opened_for_viewport(
         // Make this the active doc if nothing else is showing. The
         // user can switch later by clicking a different row in the
         // browser (which fires `SetActiveUsdViewport`).
-        if world.resource::<UsdViewportState>().active_doc.is_none() {
+        if world.resource::<UsdViewportState>().mounted_doc.is_none() {
             bootstrap(world);
             install_active_doc(world, doc);
         }
@@ -567,7 +576,7 @@ fn on_doc_changed_for_viewport(
 ) {
     let doc = trigger.event().doc;
     commands.queue(move |world: &mut World| {
-        if world.resource::<UsdViewportState>().active_doc != Some(doc) {
+        if world.resource::<UsdViewportState>().mounted_doc != Some(doc) {
             return;
         }
         rebuild_active_asset(world);
@@ -581,10 +590,10 @@ fn on_doc_closed_for_viewport(
     let doc = trigger.event().doc;
     commands.queue(move |world: &mut World| {
         let mut state = world.resource_mut::<UsdViewportState>();
-        if state.active_doc != Some(doc) {
+        if state.mounted_doc != Some(doc) {
             return;
         }
-        state.active_doc = None;
+        state.mounted_doc = None;
         state.current_handle = None;
         let scene_root = state.scene_root;
         drop(state);
@@ -640,9 +649,21 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
         });
     }
     let mut state = world.resource_mut::<UsdViewportState>();
-    state.active_doc = Some(doc);
+    state.mounted_doc = Some(doc);
     state.current_handle = Some(handle);
     state.last_rebuilt_generation = doc_generation;
+
+    // Publish into the unified, cross-workbench active-document pointer so USD
+    // participates in the same protocol Modelica does (it publishes on
+    // open/focus). `UsdViewportState.mounted_doc` above is the *render-mount*
+    // marker (which stage is on `scene_root`, for generation rebuilds);
+    // `workspace.active_document` is the app-wide *focused doc* every consumer
+    // reads — Save, and the C4b runtime-move producer that journals gizmo/API
+    // moves into the active doc's runtime layer. Without this write USD docs
+    // were invisible to it (last-writer Modelica/None), so the producer no-oped.
+    if let Some(mut ws) = world.get_resource_mut::<lunco_workspace::WorkspaceResource>() {
+        ws.0.active_document = Some(doc);
+    }
 }
 
 /// Rebuild the active stage from its document's current source,
@@ -650,7 +671,7 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
 fn rebuild_active_asset(world: &mut World) {
     let (handle, doc) = {
         let state = world.resource::<UsdViewportState>();
-        match (state.current_handle.clone(), state.active_doc) {
+        match (state.current_handle.clone(), state.mounted_doc) {
             (Some(h), Some(d)) => (h, d),
             _ => return,
         }
@@ -769,7 +790,7 @@ impl Panel for UsdViewportPanel {
             let state = world.resource::<UsdViewportState>();
             let tex_id = state.tex_id;
             let name = state
-                .active_doc
+                .mounted_doc
                 .and_then(|d| {
                     world
                         .get_resource::<UsdDocumentRegistry>()
@@ -873,7 +894,54 @@ mod tests {
         assert!(!state.bootstrapped);
         assert!(state.image.is_none());
         assert!(state.tex_id.is_none());
-        // active_doc gates on bootstrap so we don't half-attach.
-        assert!(state.active_doc.is_none());
+        // mounted_doc gates on bootstrap so we don't half-attach.
+        assert!(state.mounted_doc.is_none());
+    }
+
+    /// Activating a doc in a bootstrapped viewport publishes it into the
+    /// unified `workspace.active_document` pointer — the regression guard for
+    /// the C4b bug where USD never participated in that protocol (so the
+    /// runtime-move producer, which reads it, always no-oped). `Assets<Image>`
+    /// is enough for `bootstrap` to establish `scene_root`; the spawned
+    /// camera/light are inert ECS components without a renderer.
+    #[test]
+    fn install_publishes_active_doc_to_workspace() {
+        use lunco_usd_bevy::UsdStageAsset;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(AssetPlugin::default());
+        app.init_asset::<Image>();
+        app.init_asset::<UsdStageAsset>();
+        app.add_plugins(UsdCommandsPlugin);
+        app.add_plugins(UsdViewportPlugin);
+        app.insert_resource(lunco_workspace::WorkspaceResource(
+            lunco_workspace::Workspace::default(),
+        ));
+        app.update();
+
+        let doc = {
+            let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
+            reg.allocate(
+                "#usda 1.0\ndef Xform \"World\" {}\n".into(),
+                DocumentOrigin::writable_file("/tmp/x.usda"),
+            )
+        };
+        // Drain: DocumentOpened → on_doc_opened_for_viewport → bootstrap +
+        // install_active_doc (queued command applied next update).
+        app.update();
+        app.update();
+
+        // Render-mount marker set...
+        let state = app.world().resource::<UsdViewportState>();
+        assert!(state.bootstrapped, "Assets<Image> present → bootstrap ran");
+        assert_eq!(state.mounted_doc(), Some(doc), "stage mounted on scene_root");
+        // ...AND published into the unified, cross-workbench pointer.
+        let ws = app.world().resource::<lunco_workspace::WorkspaceResource>();
+        assert_eq!(
+            ws.0.active_document,
+            Some(doc),
+            "viewport publishes its mounted doc into workspace.active_document"
+        );
     }
 }
