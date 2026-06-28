@@ -1,6 +1,5 @@
-//! Compose a USD stage with openusd 0.5.0, then bake the composed result back
-//! into a flat [`TextReader`] for the downstream visual / physics / cosim
-//! readers.
+//! Compose a USD stage with openusd, then bake the composed result back into a
+//! flat [`sdf::Data`] for the downstream visual / physics / cosim readers.
 //!
 //! Pipeline:
 //!  1. **Pre-fetch BFS** — discover every transitively-referenced `.usda` and
@@ -249,6 +248,30 @@ pub fn compose_native_fs(source: &str, base_dir: &std::path::Path) -> Option<sdf
 #[cfg(target_arch = "wasm32")]
 pub fn compose_native_fs(_source: &str, _base_dir: &std::path::Path) -> Option<sdf::Data> {
     None
+}
+
+/// Compose a USD layer **from disk** through the real openusd PCP engine
+/// ([`Stage::open`], backed by [`openusd::ar::DefaultResolver`]) and flatten the
+/// composed result to [`sdf::Data`]. Native + synchronous: for tests and tools
+/// that load a real on-disk `.usda` with every reference resolved — distinct
+/// from the async `AssetServer`-driven loader ([`compose_to_data`]) and the
+/// in-memory-root viewport shim ([`compose_native_fs`]). `DefaultResolver`
+/// anchors each relative reference to its own layer's directory, so the on-disk
+/// reference tree resolves exactly as authored.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn compose_file(path: &std::path::Path) -> Result<sdf::Data> {
+    let id = path
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF8 USD path: {path:?}"))?;
+    let stage = Stage::open(id).map_err(|e| anyhow!("USD composition error for {id}: {e}"))?;
+    // Surface root-layer binary-asset arcs (glTF/…) as `lunco:resolvedAsset`,
+    // matching the async loader; anchored at the root file's own directory.
+    let binary = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|src| usda::parse(&src).ok())
+        .map(|data| discover_arcs(&data, &ResolvedPath::new(id)).1)
+        .unwrap_or_default();
+    flatten_stage(&stage, &binary)
 }
 
 /// Resolver for the native-fs viewport path: the root layer is held in memory;

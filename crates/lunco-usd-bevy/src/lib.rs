@@ -51,6 +51,8 @@ pub mod author;
 pub mod usd_data;
 use usd_data::UsdDataExt;
 pub use compose::compose_native_fs;
+#[cfg(not(target_arch = "wasm32"))]
+pub use compose::compose_file;
 pub use light::{FallbackSceneLight, UsdAuthoredLight};
 
 /// Bevy plugin for USD visual synchronization.

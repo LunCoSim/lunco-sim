@@ -37,7 +37,7 @@ fn chassis_child(app: &App, rover: Entity, label: impl std::fmt::Display) -> Ent
         .find(|&c| app.world().get::<Name>(c).map(|n| n.as_str().contains("Chassis")).unwrap_or(false))
         .unwrap_or_else(|| panic!("{label}: rover has no Chassis child"))
 }
-use openusd::usda::TextReader;
+use lunco_usd_bevy::usd_data::UsdDataExt;
 use openusd::sdf::{AbstractData, Path as SdfPath};
 use avian3d::prelude::*;
 use big_space::prelude::CellCoord;
@@ -48,13 +48,11 @@ use std::path::Path;
 // Helper: compose asset using EXACT same logic as runtime loader
 // ============================================================
 
-fn compose_asset_from_file(file_path: &Path) -> TextReader {
-    let raw = std::fs::read_to_string(file_path)
-        .unwrap_or_else(|e| panic!("Missing file: {}\n{}", file_path.display(), e));
-    // Use the file's parent directory as base for resolving relative references.
-    let base_dir = file_path.parent().unwrap_or(Path::new("."));
-    compose_native_fs(&raw, base_dir)
-        .unwrap_or_else(|| panic!("Composition failed for {}", file_path.display()))
+fn compose_asset_from_file(file_path: &Path) -> UsdData {
+    // Real openusd PCP composition from disk (`Stage::open` + `DefaultResolver`),
+    // resolving relative references anchored at the file's own directory.
+    compose_file(file_path)
+        .unwrap_or_else(|e| panic!("Composition failed for {}: {e}", file_path.display()))
 }
 
 // ============================================================
@@ -297,9 +295,7 @@ fn test_wheel_mesh_dimensions_after_composition() {
         let p = Path::new("../../assets/").join(f);
         let label = f;
 
-        let raw = std::fs::read_to_string(&p).unwrap();
-        let composed = compose_native_fs(&raw, p.parent().unwrap())
-            .unwrap_or_else(|| panic!("{label} composition failed"));
+        let composed = compose_file(&p).unwrap_or_else(|e| panic!("{label} composition failed: {e}"));
 
         for w_name in &["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
             let wp = SdfPath::new(&format!("/{}/{}", rover_name, w_name)).unwrap();
@@ -337,9 +333,7 @@ fn test_rover_sim_processing_after_async_load() {
         let p = Path::new("../../assets/").join(f);
         let label = f;
 
-        let raw = std::fs::read_to_string(&p).unwrap();
-        let composed = compose_native_fs(&raw, p.parent().unwrap())
-            .unwrap_or_else(|| panic!("{label} composition failed"));
+        let composed = compose_file(&p).unwrap_or_else(|e| panic!("{label} composition failed: {e}"));
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -418,9 +412,7 @@ fn test_rover_schema_detection_after_composition() {
         let p = Path::new("../../assets/").join(f);
         let label = f;
 
-        let raw = std::fs::read_to_string(&p).unwrap();
-        let composed = compose_native_fs(&raw, p.parent().unwrap())
-            .unwrap_or_else(|| panic!("{label} composition failed"));
+        let composed = compose_file(&p).unwrap_or_else(|e| panic!("{label} composition failed: {e}"));
 
         let rover_path = SdfPath::new(&format!("/{}", rover_name)).unwrap();
         assert!(composed.has_spec(&rover_path), "{label}: /{} must exist", rover_name);
@@ -447,16 +439,18 @@ fn test_rover_files_have_no_baked_position() {
         let p = Path::new("../../assets/").join(f);
         let label = f;
 
+        // Single-layer parse (uncomposed): this checks the rover file ITSELF
+        // has no baked root transform, so it must not pull in references.
         let raw = std::fs::read_to_string(&p).unwrap();
-        let mut parser = openusd::usda::parser::Parser::new(&raw);
-        let data = parser.parse().unwrap();
-        let reader = TextReader::from_data(data);
+        let reader = openusd::usda::parse(&raw).unwrap();
 
         let rover_path = SdfPath::new(&format!("/{}", rover_name)).unwrap();
         assert!(reader.has_spec(&rover_path), "{label}: /{} must exist", rover_name);
 
-        // Rover root must NOT have xformOp:translate (position set by Rust at runtime)
-        let root_pos: Option<Vec<f64>> = reader.prim_attribute_value(&rover_path, "xformOp:translate");
+        // Rover root must NOT have xformOp:translate (position set by Rust at runtime).
+        // `double3` decodes to `[f64; 3]` — a `Vec<f64>` would never match, so a
+        // baked translate would slip past the guard.
+        let root_pos: Option<[f64; 3]> = reader.prim_attribute_value(&rover_path, "xformOp:translate");
         assert!(root_pos.is_none(),
             "{label}: /{} must NOT have xformOp:translate (position set by Rust), got: {:?}", rover_name, root_pos);
     }

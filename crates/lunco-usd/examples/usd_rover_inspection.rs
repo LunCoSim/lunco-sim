@@ -5,7 +5,6 @@ use lunco_usd_sim::*;
 use avian3d::prelude::*;
 use lunco_mobility::WheelRaycast;
 use std::sync::Arc;
-use openusd::usda::TextReader;
 
 fn main() {
     let mut app = App::new();
@@ -26,13 +25,12 @@ fn main() {
     
     println!("\n--- Loading Rucheyok Rover Physics ---");
 
-    // Load file manually to avoid async AssetServer wait in simple example
+    // Compose from disk (synchronous, no async AssetServer) so the referenced
+    // wheel / panel attributes the physics mapping reads are resolved.
     let path = "assets/vessels/rovers/rucheyok/rucheyok.usda";
-    let usda_content = std::fs::read_to_string(path).expect("Failed to read rucheyok.usda");
-    
-    let mut parser = openusd::usda::parser::Parser::new(&usda_content);
-    let data_map = parser.parse().unwrap();
-    let reader = Arc::new(TextReader::from_data(data_map));
+    let reader = Arc::new(
+        compose_file(std::path::Path::new(path)).expect("Failed to compose rucheyok.usda"),
+    );
 
     let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
     let stage_handle = stages.add(UsdStageAsset { reader });

@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 use lunco_usd_bevy::*;
 use std::sync::Arc;
-use openusd::usda::TextReader;
 
 #[test]
 fn test_usd_material_binding_parsing() {
@@ -52,9 +51,7 @@ def Xform "World"
 }
 "#;
 
-    let mut parser = openusd::usda::parser::Parser::new(usda_content);
-    let data_map = parser.parse().expect("Failed to parse USDA");
-    let reader = Arc::new(TextReader::from_data(data_map));
+    let reader = Arc::new(openusd::usda::parse(usda_content).expect("parse USDA"));
 
     let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
     let stage_handle = stages.add(UsdStageAsset { reader });
@@ -142,9 +139,7 @@ def Xform "World"
 }
 "#;
 
-    let mut parser = openusd::usda::parser::Parser::new(usda_content);
-    let data_map = parser.parse().expect("Failed to parse USDA");
-    let reader = Arc::new(TextReader::from_data(data_map));
+    let reader = Arc::new(openusd::usda::parse(usda_content).expect("parse USDA"));
 
     let stage_handle = {
         let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
@@ -201,9 +196,7 @@ def Xform "World"
 }
 "#;
 
-    let mut parser = openusd::usda::parser::Parser::new(updated_usda_content);
-    let data_map = parser.parse().expect("Failed to parse updated USDA");
-    let updated_reader = Arc::new(TextReader::from_data(data_map));
+    let updated_reader = Arc::new(openusd::usda::parse(updated_usda_content).expect("parse updated USDA"));
 
     // Update the reader inside the asset in-place
     {

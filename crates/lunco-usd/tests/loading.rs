@@ -5,7 +5,6 @@ use lunco_usd_sim::*;
 use avian3d::prelude::*;
 use lunco_mobility::WheelRaycast;
 use std::sync::Arc;
-use openusd::usda::TextReader;
 
 #[test]
 fn test_rover_loading_physics() {
@@ -44,9 +43,8 @@ def Xform "Rover" {
 }
 "#;
 
-    let mut parser = openusd::usda::parser::Parser::new(usda_content);
-    let data_map = parser.parse().unwrap();
-    let reader = Arc::new(TextReader::from_data(data_map));
+    // Synthetic single-layer stage (no external references) → parse directly.
+    let reader = Arc::new(openusd::usda::parse(usda_content).expect("parse test USDA"));
 
     let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
     let stage_handle = stages.add(UsdStageAsset { reader });
