@@ -214,6 +214,37 @@ pub fn cache_dir() -> PathBuf {
     }
 }
 
+/// Cross-platform temp directory for short-lived scratch files (panic
+/// logs, intermediate transcode output, extraction staging).
+///
+/// Resolution: `LUNCOSIM_TEMP` env override → OS temp dir
+/// ([`std::env::temp_dir`]) under a `lunco/` subdir so our scratch
+/// files don't litter the shared root. Never hardcode `/tmp`: that
+/// path doesn't exist on Windows.
+///
+/// - Linux:   `$TMPDIR`/`/tmp` → `…/lunco/`
+/// - macOS:   `$TMPDIR` → `…/lunco/`
+/// - Windows: `%TEMP%` → `…\lunco\`
+///
+/// The directory is created (best-effort) before returning, so callers
+/// can `join(name)` and write immediately.
+pub fn temp_dir() -> PathBuf {
+    // wasm32 has no filesystem; return a nominal path and let any write
+    // surface a clean Err rather than panicking in `temp_dir()`.
+    #[cfg(target_arch = "wasm32")]
+    {
+        return PathBuf::from(".tmp");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let base = std::env::var_os("LUNCOSIM_TEMP")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("lunco"));
+        let _ = std::fs::create_dir_all(&base);
+        base
+    }
+}
+
 /// Returns the subdirectory within the cache for a specific asset category.
 ///
 /// Creates the directory if it doesn't exist.

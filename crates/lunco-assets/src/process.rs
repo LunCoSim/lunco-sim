@@ -167,23 +167,27 @@ pub fn process_texture(
 fn process_gltf(source: &Path, output: &Path) -> std::io::Result<()> {
     use std::process::Command;
 
-    if which::which("npx").is_err() {
-        return Err(std::io::Error::new(
+    // Resolve the absolute path once, rather than spawning the bare name
+    // `npx`. On Windows the executable is `npx.cmd` (a batch shim), which
+    // `Command::new("npx")` won't find — `which` honors `PATHEXT` and
+    // returns the real `npx.cmd`, which modern std launches via cmd.exe.
+    let npx = which::which("npx").map_err(|_| {
+        std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "gltf process step requires Node.js / `npx` on PATH (install Node 18+, then re-run)",
-        ));
-    }
+        )
+    })?;
 
     // Stage 1 → temp file. We deliberately use a temp intermediate
     // rather than rewriting `source` so a failed second stage doesn't
     // leave the source corrupted, and so re-running `process` is
     // idempotent (the source is the immutable Assets.toml-pinned blob).
-    let tmp = std::env::temp_dir().join(format!(
-        "lunco_gltf_decoded_{}.glb",
+    let tmp = crate::temp_dir().join(format!(
+        "gltf_decoded_{}.glb",
         std::process::id()
     ));
 
-    let s1 = Command::new("npx")
+    let s1 = Command::new(&npx)
         .args(["--yes", "@gltf-transform/cli", "copy"])
         .arg(source)
         .arg(&tmp)
@@ -195,7 +199,7 @@ fn process_gltf(source: &Path, output: &Path) -> std::io::Result<()> {
         )));
     }
 
-    let s2 = Command::new("npx")
+    let s2 = Command::new(&npx)
         .args(["--yes", "@gltf-transform/cli", "png"])
         .arg(&tmp)
         .arg(output)

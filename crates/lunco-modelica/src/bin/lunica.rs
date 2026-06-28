@@ -326,8 +326,9 @@ fn headless_log() -> bevy::log::LogPlugin {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn install_panic_hook() {
-    let log_path = std::env::var("LUNICA_PANIC_LOG")
-        .unwrap_or_else(|_| "/tmp/lunica_panic.log".to_string());
+    let log_path = std::env::var_os("LUNICA_PANIC_LOG")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| lunco_assets::temp_dir().join("lunica_panic.log"));
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let backtrace = std::backtrace::Backtrace::force_capture();

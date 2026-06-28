@@ -66,9 +66,11 @@ fn resolve_cert_paths() -> Option<(String, String)> {
             return Some((format!("{cert}/fullchain.pem"), format!("{cert}/privkey.pem")));
         }
         let key = cli_key.filter(|s| !s.is_empty()).unwrap_or_else(|| {
-            // Sibling privkey.pem next to the cert file.
-            match cert.rfind('/') {
-                Some(slash) => format!("{}/privkey.pem", &cert[..slash]),
+            // Sibling privkey.pem next to the cert file. Accept either
+            // separator so Windows paths (`C:\certs\fullchain.pem`) resolve
+            // the sibling correctly too.
+            match cert.rfind(['/', '\\']) {
+                Some(sep) => format!("{}{}privkey.pem", &cert[..sep], &cert[sep..=sep]),
                 None => "privkey.pem".to_string(),
             }
         });
