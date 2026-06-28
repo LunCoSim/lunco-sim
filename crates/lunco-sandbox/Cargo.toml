@@ -78,6 +78,8 @@ lunco-scripting = { path = "../lunco-scripting" }
 # USD core (scene load + collider build) is always needed; its Twin-browser /
 # viewport egui UI rides `lunco-usd/ui`, re-enabled below by the `ui` feature.
 lunco-usd = { path = "../lunco-usd", default-features = false }
+# USD→DEM bridge: read `lunco:terrain:demSource` off authored terrain prims.
+openusd = { workspace = true }
 # `lunco-sandbox-edit` is NOT optional: the headless server needs its
 # `commands::SpawnCommandPlugin` (runtime spawn/move + `NetReplicate` tagging).
 # The gizmo/selection/physics-viz halves are gated behind `feature = "ui"` in
@@ -153,6 +155,10 @@ ui = [
     "bevy/x11",
     "bevy/wayland",
     "bevy/webgl2",
+    # Runtime PNG decode for `bevy_image`'s ImageLoader — terrain colour/layer
+    # maps (the twin's `color.png`) load through the asset server. The workspace
+    # bevy baseline ships no image codecs; render builds opt in per-consumer.
+    "bevy/png",
     "bevy/bevy_picking",
     "bevy/mesh_picking",
     "bevy/bevy_post_process",

@@ -53,6 +53,6 @@ pub use dem::{decode_geotiff_f64, height_grid_from_geotiff, DemError, DemMetadat
 pub use plugin::{TerrainStreamingConfig, TerrainStreamingPlugin};
 pub use quadtree::{QuadCoord, Quadtree, Selected, Square};
 pub use source::{AnalyticHeightSource, HeightSource};
-pub use terrain::{DemTerrainRoot, DemTerrainSurface, SpawnDemTerrain};
+pub use terrain::{DemTerrainRequest, DemTerrainSurface, SpawnDemTerrain};
 pub use tile::{TileCoord, TileGrid};
 pub use tile_mesh::{bake_tile_mesh, TileMesh};

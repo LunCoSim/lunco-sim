@@ -76,6 +76,33 @@ pub struct ShaderMaterial {
     /// binding are unaffected.
     #[texture(1, sample_type = "float", filterable = false)]
     pub height_map: Option<Handle<Image>>,
+    /// **Layer maps** (terrain layered pipeline, `terrain_layered.wgsl`). All
+    /// `Option` + filterable float; `None` binds Bevy's fallback image, and a
+    /// shader that doesn't declare the binding is unaffected (same contract as
+    /// `height_map`). Sampled by planar UV (`in.uv`), `has_*`-guarded so a
+    /// missing map falls back to the procedural look rather than erroring.
+    ///
+    /// Albedo/colour layer — a real raster (e.g. the NASA lunar colour mosaic
+    /// downloaded via `Assets.toml`) blended over the procedural regolith.
+    #[texture(2)]
+    #[sampler(3)]
+    pub albedo_map: Option<Handle<Image>>,
+    /// Mineral/classification layer — a class-id or composition raster tinted
+    /// through a palette LUT in the shader (also serves science-zone overlays).
+    #[texture(4)]
+    #[sampler(5)]
+    pub mineral_map: Option<Handle<Image>>,
+    /// Packed scalar data layers in one RGBA to stay under WebGPU binding
+    /// limits: **R=roughness G=ambient-occlusion B=rock-density A=hazard**.
+    /// Channel routing lives in the layer stack (`ChannelMap`).
+    #[texture(6)]
+    #[sampler(7)]
+    pub surface_map: Option<Handle<Image>>,
+    /// Tangent/world-space normal layer — perturbs the procedural bump normal
+    /// (meso-scale relief the FBM can't carry). Typically DEM-derived (Sobel).
+    #[texture(8)]
+    #[sampler(9)]
+    pub normal_map: Option<Handle<Image>>,
     /// Per-instance fragment shader. **Not** a bind-group resource — it drives
     /// pipeline specialization (see [`ShaderMaterial::specialize`]) and is kept
     /// as a strong handle so the asset stays loaded.
@@ -106,6 +133,10 @@ impl Default for ShaderMaterial {
         Self {
             raw: [Vec4::ZERO; dyn_params::BLOCK_VEC4S],
             height_map: None,
+            albedo_map: None,
+            mineral_map: None,
+            surface_map: None,
+            normal_map: None,
             shader: Handle::default(),
             schema: empty_schema_arc(),
             values: BTreeMap::new(),

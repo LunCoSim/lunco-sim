@@ -1,0 +1,29 @@
+# lunco-terrain-streaming Assets
+#
+# External rasters for the terrain COLOUR/layer pipeline (design
+# `docs/terrain-layered-pipeline-design.md` Part C; tracker
+# `docs/terrain-layered-pipeline-IMPL.md`). Fetched + preprocessed by the shared
+# asset pipeline — runtime never hits the network:
+#
+#   cargo run -p lunco-assets -- download     # fetch (ureq, sha256 skip-if-present)
+#   cargo run -p lunco-assets -- process      # resize/convert (image crate)
+#
+# This is the "define data to download via assets" surface: add a [<name>] table
+# (url/dest/sha256) + optional [<name>.process] to pull another real raster.
+
+# Real lunar surface colour — NASA CGI Moon Kit (LROC-derived global colour,
+# 16-bit sRGB). Same source the celestial sim uses, so the content-addressed
+# cache dedupes the actual download. Used as a base albedo/detail TINT sampled by
+# the terrain's planar UV (the south-pole window is near-uniform highland grey in
+# the global equirect map → a realistic tint, not pixel-accurate site detail).
+# Site-accurate polar albedo (LOLA 1064 nm reflectance / LROC polar mosaic,
+# reprojected to the DEM window) is a deferred upgrade — see the IMPL doc.
+[lunar_color]
+name = "Moon Color Map (NASA CGI Moon Kit) — terrain albedo tint"
+url = "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_16bit_srgb_4k.tif"
+dest = "textures/lunar_color_source.tif"
+sha256 = "9731fa8af425b6c2f88f277ecca82bf8c603f3743894f64ed7b25c5bfefa22ff"
+
+[lunar_color.process]
+target_resolution = [2048, 1024]
+output = "textures/terrain_albedo.png"

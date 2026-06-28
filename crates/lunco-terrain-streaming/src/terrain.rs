@@ -36,22 +36,28 @@ const DEFAULT_WINDOW_M: f32 = 4096.0;
 /// detail at that scale belongs to tiled streaming (M7), not one mesh.
 const HEAVY_TILE_RES: usize = 2048;
 
-/// Root of a spawned DEM terrain (anchored into the world grid).
-#[derive(Component)]
-pub struct DemTerrainRoot;
-
-/// The driveable DEM surface (heightfield collider + optional visual mesh).
+/// The driveable DEM surface: the bake fills **this** entity with a heightfield
+/// collider (+ visual mesh when rendering). Put on a command-spawned entity by
+/// [`SpawnDemTerrain`], or on a USD terrain prim by the USD→DEM bridge so the
+/// universal `materialType="shader"` path supplies the material.
 #[derive(Component)]
 pub struct DemTerrainSurface;
 
-/// Pending request entity: carries the build parameters until the async task is
-/// attached.
+/// A request to build a DEM tile **onto the entity carrying this component**.
+/// [`start_dem_builds`] kicks the off-thread bake; [`finish_dem_builds`] inserts
+/// `Mesh3d` + `Collider` onto the same entity. Public so the USD→DEM bridge (in
+/// `lunco-sandbox`) can place it on an authored terrain prim.
 #[derive(Component)]
-struct DemTerrainRequest {
-    uri: String,
+pub struct DemTerrainRequest {
+    /// DEM site directory (contains `metadata.yaml` + `materials/textures/heightmap.tif`).
+    pub uri: String,
     /// Half side length (metres) of the centred region to realize at native
     /// resolution. `f64::INFINITY` = the whole DEM.
-    half_window: f64,
+    pub half_window: f64,
+    /// Apply a plain `StandardMaterial` when the bake finishes. `true` for the
+    /// standalone command path; `false` for the USD path, where the prim's
+    /// `materialType` authors the material (don't clobber it).
+    pub with_default_material: bool,
 }
 
 /// Build a DEM terrain from a site directory at **native resolution**. `uri`
@@ -69,7 +75,11 @@ pub struct SpawnDemTerrain {
 }
 
 #[on_command(SpawnDemTerrain)]
-fn on_spawn_dem_terrain(trigger: On<SpawnDemTerrain>, mut commands: Commands) {
+fn on_spawn_dem_terrain(
+    trigger: On<SpawnDemTerrain>,
+    grids: Query<Entity, With<WorldGrid>>,
+    mut commands: Commands,
+) {
     let ev = trigger.event();
     if ev.uri.is_empty() {
         warn!("[dem-terrain] SpawnDemTerrain with empty uri ignored");
@@ -80,7 +90,19 @@ fn on_spawn_dem_terrain(trigger: On<SpawnDemTerrain>, mut commands: Commands) {
         w if w < 0.0 => (DEFAULT_WINDOW_M * 0.5) as f64,
         w => (w * 0.5) as f64,
     };
-    commands.spawn(DemTerrainRequest { uri: ev.uri.clone(), half_window });
+    // Standalone entity, anchored into the world grid at the origin cell (when it
+    // exists). The USD path instead places `DemTerrainRequest` on the prim entity,
+    // which already carries its USD transform + grid parentage.
+    let mut e = commands.spawn((
+        DemTerrainSurface,
+        Name::new("DemTerrain"),
+        DemTerrainRequest { uri: ev.uri.clone(), half_window, with_default_material: true },
+        Transform::IDENTITY,
+        Visibility::Inherited,
+    ));
+    if let Ok(grid) = grids.single() {
+        e.insert((CellCoord::default(), GridAnchor, ChildOf(grid)));
+    }
     info!("[dem-terrain] queued build for {} (window {} m)", ev.uri, ev.window_m);
 }
 
@@ -170,33 +192,26 @@ fn terrain_mesh(data: MeshData) -> Mesh {
     mesh
 }
 
-/// Collect finished builds and spawn the terrain entity.
+/// Collect finished builds and fill the requesting entity with the heightfield
+/// collider (+ visual mesh when rendering).
 fn finish_dem_builds(
     mut commands: Commands,
-    grids: Query<Entity, With<WorldGrid>>,
-    mut tasks: Query<(Entity, &mut DemBuildTask)>,
+    mut tasks: Query<(Entity, &mut DemBuildTask, &DemTerrainRequest)>,
     // Optional so the headless server (no render assets) still builds colliders.
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
     use bevy::tasks::futures_lite::future;
 
-    if tasks.is_empty() {
-        return;
-    }
-    // Defer until the big_space world grid exists.
-    let Ok(grid_entity) = grids.single() else {
-        return;
-    };
-
     let mut meshes = meshes;
     let mut materials = materials;
 
-    for (request_entity, mut task) in &mut tasks {
+    for (entity, mut task, req) in &mut tasks {
         let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
-        commands.entity(request_entity).despawn(); // consume the request
+        // Request consumed — drop the task + request marker either way.
+        commands.entity(entity).remove::<(DemBuildTask, DemTerrainRequest)>();
 
         let built = match result {
             Ok(b) => b,
@@ -217,37 +232,24 @@ fn finish_dem_builds(
         let h = built.half_extent as f64;
         let collider =
             Collider::heightfield(built.collider_heights, DVec3::new(2.0 * h, 1.0, 2.0 * h));
-
-        let root = commands
-            .spawn((
-                DemTerrainRoot,
-                Name::new(format!("DemTerrain/{}", built.site)),
-                CellCoord::default(),
-                GridAnchor,
-                ChildOf(grid_entity),
-                Transform::IDENTITY,
-                Visibility::Inherited,
-            ))
-            .id();
-
-        let mut surface = commands.spawn((
-            DemTerrainSurface,
-            Name::new("DemTerrain/Surface"),
-            ChildOf(root),
-            Transform::IDENTITY,
-            RigidBody::Static,
-            collider,
-        ));
-        if let (Some(meshes), Some(materials)) = (meshes.as_mut(), materials.as_mut()) {
-            let mesh = meshes.add(terrain_mesh(built.mesh));
-            let material = materials.add(StandardMaterial {
-                base_color: Color::srgb(0.30, 0.29, 0.27),
-                perceptual_roughness: 1.0,
-                ..default()
-            });
-            surface.insert((Mesh3d(mesh), MeshMaterial3d(material)));
+        // Heightfield collider always; mesh only when render assets exist.
+        let mut e = commands.entity(entity);
+        e.insert((RigidBody::Static, collider));
+        if let Some(meshes) = meshes.as_mut() {
+            e.insert(Mesh3d(meshes.add(terrain_mesh(built.mesh))));
+            // Default material only for the standalone command path; the USD path
+            // authors its own via `materialType` (don't clobber it).
+            if req.with_default_material {
+                if let Some(materials) = materials.as_mut() {
+                    e.insert(MeshMaterial3d(materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.30, 0.29, 0.27),
+                        perceptual_roughness: 1.0,
+                        ..default()
+                    })));
+                }
+            }
         }
-        info!("[dem-terrain] spawned '{}' ({}² native, ±{:.0} m)", built.site, built.res, h);
+        info!("[dem-terrain] built '{}' ({}² native, ±{:.0} m)", built.site, built.res, h);
     }
 }
 

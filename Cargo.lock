@@ -6978,6 +6978,7 @@ dependencies = [
  "lunco-web",
  "lunco-workbench",
  "mimalloc",
+ "openusd",
  "wasm-bindgen",
  "web-sys",
 ]
