@@ -231,11 +231,17 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     app.add_systems(
         Update,
         (
-            host_send_outbox,
-            host_recv_inbox,
+            // Ferry order within the frame: recv → drain (the shared SyncPlugin
+            // system) → host-authoritative pushes → send, so a client command or a
+            // relay processed this frame is also SENT this frame, not next (up to
+            // ~200 ms later when the host's `Update` is render-throttled while
+            // unfocused). Intra-`Update` ordering only — the systems stay in
+            // `Update` as the reliable-flush note above requires.
+            host_recv_inbox.before(crate::sync::drain_sync_inbox),
             update_host_netstatus,
-            broadcast_ownership,
-            broadcast_profiles,
+            (broadcast_ownership, broadcast_profiles, host_send_outbox)
+                .chain()
+                .after(crate::sync::drain_sync_inbox),
         ),
     );
 }

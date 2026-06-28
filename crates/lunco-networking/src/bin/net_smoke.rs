@@ -48,6 +48,12 @@ const RUN_SECS: f32 = 25.0;
 const G1_GID: u64 = 0x00AB_C001;
 /// Free rover id (claimed by the client after the handshake).
 const G2_GID: u64 = 0x00AB_C002;
+/// Despawn-test rover id: host spawns it (replicated), then despawns it mid-run;
+/// the client must remove its proxy in response (B5 despawn replication).
+const G3_GID: u64 = 0x00AB_C003;
+/// When (seconds) the host despawns G3 — after the handshake + proxy
+/// registration, well before `RUN_SECS` so the client observes the removal.
+const G3_DESPAWN_AT: f32 = 10.0;
 
 #[derive(Component)]
 struct TestRover;
@@ -66,6 +72,7 @@ struct DriveVel(f32);
 struct Rovers {
     g1: Entity,
     g2: Entity,
+    g3: Entity,
 }
 
 /// Client: furthest x each proxy reached (the PASS metric).
@@ -74,6 +81,12 @@ struct MaxProxyX {
     g1: f32,
     g2: f32,
 }
+
+/// Latches the handshake-assigned session id the first time it is non-zero, so the
+/// end-of-run verdict survives the disconnect that resets `LocalSession` back to 0
+/// when the host exits a moment before the client.
+#[derive(Resource, Default)]
+struct MySession(u64);
 
 fn main() {
     let Some(mode) = NetworkMode::from_args() else {
@@ -85,6 +98,16 @@ fn main() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::log::LogPlugin::default());
+    // The SyncPlugin's tutor-mode input-blocking systems (`block_bevy_inputs`,
+    // `block_perspective_inputs`) take `ResMut<ButtonInput<…>>`; `MinimalPlugins`
+    // omits those resources (no window), so seed empty ones here to keep the systems
+    // from panicking on a missing resource. Cheaper than a full `InputPlugin`.
+    app.init_resource::<ButtonInput<KeyCode>>();
+    app.init_resource::<ButtonInput<MouseButton>>();
+    // `apply_tutorial_mirroring` takes `ResMut<WorkspaceResource>` (non-optional);
+    // the full app provides it via the workspace plugin, absent here — seed an empty.
+    app.init_resource::<lunco_workspace::WorkspaceResource>();
+    app.init_resource::<MySession>();
     app.add_plugins(lunco_core::LunCoCorePlugin);
     app.add_plugins(lunco_api::LunCoApiPlugin::default());
     app.add_plugins(LunCoNetworkingPlugin { mode: Some(mode) });
@@ -98,7 +121,7 @@ fn main() {
         app.add_systems(Startup, host_spawn_rovers);
         app.add_observer(host_on_possess);
         app.add_observer(host_on_drive);
-        app.add_systems(Update, (host_integrate, host_report));
+        app.add_systems(Update, (host_integrate, host_report, host_despawn_g3));
     } else {
         app.init_resource::<MaxProxyX>();
         app.add_systems(Startup, client_spawn_proxies);
@@ -128,7 +151,8 @@ fn host_spawn_rovers(mut commands: Commands) {
     };
     let g1 = spawn(&mut commands, "HostRover_G1", G1_GID);
     let g2 = spawn(&mut commands, "HostRover_G2", G2_GID);
-    commands.insert_resource(Rovers { g1, g2 });
+    let g3 = spawn(&mut commands, "HostRover_G3", G3_GID);
+    commands.insert_resource(Rovers { g1, g2, g3 });
 
     // The host claims its own rover (G1) through the real possession observer.
     // `guard` is None here → the claim is attributed to the host's `LocalSession`
@@ -168,6 +192,26 @@ fn host_on_drive(trigger: On<lunco_mobility::DriveRover>, mut q: Query<&mut Driv
     let cmd = trigger.event();
     if let Ok(mut v) = q.get_mut(cmd.target) {
         v.0 = cmd.forward as f32;
+    }
+}
+
+/// Despawn the replicated G3 rover mid-run. `broadcast_despawns` should emit a
+/// `Despawn(G3_GID)` over the wire, which the client's `drain_sync_inbox` Despawn
+/// arm resolves (via `ApiEntityRegistry`) and uses to remove its G3 proxy. This is
+/// the end-to-end exercise of B5 despawn replication.
+fn host_despawn_g3(
+    time: Res<Time>,
+    rovers: Option<Res<Rovers>>,
+    mut commands: Commands,
+    mut done: Local<bool>,
+) {
+    if *done || time.elapsed_secs() < G3_DESPAWN_AT {
+        return;
+    }
+    if let Some(rovers) = rovers {
+        commands.entity(rovers.g3).despawn();
+        *done = true;
+        info!("[test] host despawned G3 ({G3_GID:#x}) — expect client proxy removal");
     }
 }
 
@@ -211,8 +255,9 @@ fn client_spawn_proxies(mut commands: Commands) {
     };
     let g1 = spawn(&mut commands, "ClientProxy_G1", G1_GID);
     let g2 = spawn(&mut commands, "ClientProxy_G2", G2_GID);
-    commands.insert_resource(Rovers { g1, g2 });
-    info!("[test] client proxies spawned g1={G1_GID:#x} g2={G2_GID:#x}");
+    let g3 = spawn(&mut commands, "ClientProxy_G3", G3_GID);
+    commands.insert_resource(Rovers { g1, g2, g3 });
+    info!("[test] client proxies spawned g1={G1_GID:#x} g2={G2_GID:#x} g3={G3_GID:#x}");
 }
 
 /// After the handshake lands (LocalSession non-zero): possess G2 (free → should
@@ -291,8 +336,15 @@ fn client_report(
 
 // ── Shared ────────────────────────────────────────────────────────────────────
 
-fn report_session(local: Res<lunco_core::LocalSession>, mut last: Local<u64>) {
+fn report_session(
+    local: Res<lunco_core::LocalSession>,
+    mut mine: ResMut<MySession>,
+    mut last: Local<u64>,
+) {
     let cur = local.0 .0;
+    if cur != 0 {
+        mine.0 = cur; // latch the assigned id; never overwrite with a disconnect's 0
+    }
     if cur != *last {
         *last = cur;
         info!("[smoke] LocalSession now = {cur}");
@@ -303,8 +355,9 @@ fn exit_after_timeout(
     time: Res<Time>,
     mut exit: MessageWriter<AppExit>,
     maxx: Option<Res<MaxProxyX>>,
-    local: Res<lunco_core::LocalSession>,
+    mine: Res<MySession>,
     registry: Option<Res<lunco_core::SessionRegistry>>,
+    q_proxies: Query<&RoverGid, With<TestRover>>,
 ) {
     if time.elapsed_secs() <= RUN_SECS {
         return;
@@ -312,7 +365,7 @@ fn exit_after_timeout(
     // Only the client renders a verdict (it's the peer that observes both the
     // snapshot result and the synced ownership table).
     if let (Some(m), Some(reg)) = (maxx, registry) {
-        let me = local.0;
+        let me = SessionId(mine.0);
         let g2_owner = reg.owner_of(G2_GID);
         let g1_owner = reg.owner_of(G1_GID);
 
@@ -320,15 +373,18 @@ fn exit_after_timeout(
         let g1_still = m.g1 < 0.1; // unauthorized drive rejected → no motion
         let g2_mine = g2_owner == Some(me); // ownership broadcast adopted
         let g1_host = g1_owner == Some(SessionId::LOCAL); // host kept its rover
+        // B5: the host despawned G3 mid-run; its proxy must be gone on the client.
+        let g3_despawned = !q_proxies.iter().any(|g| g.0 == G3_GID);
 
         info!(
             "[test] checks: g2_moved={g2_moved} (x={:.2})  g1_still={g1_still} (x={:.2})  \
-             g2_mine={g2_mine} (owner={g2_owner:?}, me={me})  g1_host={g1_host} (owner={g1_owner:?})",
+             g2_mine={g2_mine} (owner={g2_owner:?}, me={me})  g1_host={g1_host} (owner={g1_owner:?})  \
+             g3_despawned={g3_despawned}",
             m.g2, m.g1
         );
 
-        if g2_moved && g1_still && g2_mine && g1_host {
-            info!("[test] RESULT: PASS — exclusive possession + ownership-gated drive + sync all hold");
+        if g2_moved && g1_still && g2_mine && g1_host && g3_despawned {
+            info!("[test] RESULT: PASS — exclusive possession + ownership-gated drive + sync + despawn-repl all hold");
         } else {
             warn!("[test] RESULT: FAIL — see checks above");
         }

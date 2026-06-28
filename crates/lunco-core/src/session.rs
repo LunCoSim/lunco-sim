@@ -561,11 +561,13 @@ pub fn authorize(
     type_name: &str,
     target_gid: Option<u64>,
 ) -> Result<(), Reject> {
-    // RBAC validation: check if the session has sufficient privileges.
-    let required_role = match type_name {
-        "DriveRover" | "BrakeRover" => AuthorityRole::Operator,
-        _ => AuthorityRole::Observer,
-    };
+    // RBAC is permissive by default (simplicity): every command requires only
+    // `Observer` — the role every authenticated session already holds on connect —
+    // so a fresh, un-named client is never blocked by role. The role hierarchy and
+    // `is_authorized` stay wired for future opt-in (raise this per-command when a
+    // capability should be gated), but today only OWNERSHIP gates state-mutating
+    // commands (enforced below: you may only drive what you possess).
+    let required_role = AuthorityRole::Observer;
 
     if !rbac.is_authorized(origin, required_role) {
         return Err(Reject::InvalidOp(format!(
@@ -717,17 +719,34 @@ mod tests {
         assert!(authorize(&reg, &rbac, B, "PossessVessel", Some(R1)).is_ok());
         assert!(authorize(&reg, &rbac, B, "SpawnEntity", None).is_ok());
 
-        // An unauthenticated/unauthorized observer should be rejected for Operator command
+        // RBAC is permissive by role: an authenticated Observer is NOT blocked by
+        // role — owning the target is what authorizes a control command.
         let mut observer_rbac = SessionRbac::default();
-        observer_rbac.sessions.insert(A.0, UserSession {
+        for s in [A, B] {
+            observer_rbac.sessions.insert(s.0, UserSession {
+                session_id: s,
+                username: "Observer".to_string(),
+                role: AuthorityRole::Observer,
+                authenticated: true,
+                token: None,
+            });
+        }
+        // Owner-Observer A may drive what it owns, and possess/structural commands.
+        assert!(authorize(&reg, &observer_rbac, A, "DriveRover", Some(R1)).is_ok());
+        assert!(authorize(&reg, &observer_rbac, A, "PossessVessel", Some(R1)).is_ok());
+        // An authenticated non-owner is still rejected by the ownership gate.
+        assert!(authorize(&reg, &observer_rbac, B, "DriveRover", Some(R1)).is_err());
+
+        // The authenticated FLOOR remains: an UNauthenticated session is rejected
+        // even for an owned entity (RBAC infra stays wired, just not role-gated).
+        let mut unauth_rbac = SessionRbac::default();
+        unauth_rbac.sessions.insert(A.0, UserSession {
             session_id: A,
             username: "Player A".to_string(),
             role: AuthorityRole::Observer,
-            authenticated: true,
+            authenticated: false,
             token: None,
         });
-        assert!(authorize(&reg, &observer_rbac, A, "DriveRover", Some(R1)).is_err());
-        // But allowed for observer/structural commands
-        assert!(authorize(&reg, &observer_rbac, A, "PossessVessel", Some(R1)).is_ok());
+        assert!(authorize(&reg, &unauth_rbac, A, "DriveRover", Some(R1)).is_err());
     }
 }
