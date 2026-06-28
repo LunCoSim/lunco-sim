@@ -122,7 +122,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
         ui.label(format!("ID: {entity:?}"));
 
         // Name (read-only)
-        if let Ok(name) = world.query::<&Name>().get(world, entity) {
+        if let Some(name) = world.get::<Name>(entity) {
             ui.label(format!("Name: {}", name.as_str()));
         }
 
@@ -131,12 +131,12 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
         // ── Transform component ──────────────────────────────────────
         // First component: open by default — most users want to nudge
         // position immediately. Other components start collapsed.
-        if world.query::<&Transform>().get(world, entity).is_ok() {
+        if world.get::<Transform>(entity).is_some() {
             egui::CollapsingHeader::new("Transform")
                 .default_open(true)
                 .show(ui, |ui| {
                     if let Some((old_tf, new_vals)) =
-                        world.query::<&Transform>().get(world, entity).ok().map(|tf| {
+                        world.get::<Transform>(entity).map(|tf| {
                             (
                                 (tf.translation, tf.rotation),
                                 (tf.translation.x, tf.translation.y, tf.translation.z),
@@ -157,7 +157,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
                                     old_rotation: old_tf.1,
                                 });
                             }
-                            if let Ok(mut tf) = world.query::<&mut Transform>().get_mut(world, entity) {
+                            if let Some(mut tf) = world.get_mut::<Transform>(entity) {
                                 tf.translation = Vec3::new(x, y, z);
                             }
                         }
@@ -166,37 +166,37 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
         }
 
         // ── Physics component ────────────────────────────────────────
-        let has_physics = world.query::<&avian3d::prelude::RigidBody>().get(world, entity).is_ok()
-            || world.query::<&avian3d::prelude::Mass>().get(world, entity).is_ok()
-            || world.query::<&avian3d::prelude::LinearDamping>().get(world, entity).is_ok()
-            || world.query::<&avian3d::prelude::AngularDamping>().get(world, entity).is_ok();
+        let has_physics = world.get::<avian3d::prelude::RigidBody>(entity).is_some()
+            || world.get::<avian3d::prelude::Mass>(entity).is_some()
+            || world.get::<avian3d::prelude::LinearDamping>(entity).is_some()
+            || world.get::<avian3d::prelude::AngularDamping>(entity).is_some();
         if has_physics {
             egui::CollapsingHeader::new("Physics")
                 .default_open(false)
                 .show(ui, |ui| {
-                    if let Ok(rb) = world.query::<&avian3d::prelude::RigidBody>().get(world, entity) {
+                    if let Some(rb) = world.get::<avian3d::prelude::RigidBody>(entity) {
                         ui.label(format!("Type: {rb:?}"));
                     }
-                    if let Ok(current) = world.query::<&avian3d::prelude::Mass>().get(world, entity) {
+                    if let Some(current) = world.get::<avian3d::prelude::Mass>(entity) {
                         let mut m = current.0;
                         if ui.add(egui::Slider::new(&mut m, 0.1..=100000.0).text("Mass (kg)").logarithmic(true)).changed() {
-                            if let Ok(mut mass) = world.query::<&mut avian3d::prelude::Mass>().get_mut(world, entity) {
+                            if let Some(mut mass) = world.get_mut::<avian3d::prelude::Mass>(entity) {
                                 mass.0 = m;
                             }
                         }
                     }
-                    if let Ok(current) = world.query::<&avian3d::prelude::LinearDamping>().get(world, entity) {
+                    if let Some(current) = world.get::<avian3d::prelude::LinearDamping>(entity) {
                         let mut d = current.0 as f32;
                         if ui.add(egui::Slider::new(&mut d, 0.0..=10.0).text("Linear Damping")).changed() {
-                            if let Ok(mut damp) = world.query::<&mut avian3d::prelude::LinearDamping>().get_mut(world, entity) {
+                            if let Some(mut damp) = world.get_mut::<avian3d::prelude::LinearDamping>(entity) {
                                 damp.0 = d as f64;
                             }
                         }
                     }
-                    if let Ok(current) = world.query::<&avian3d::prelude::AngularDamping>().get(world, entity) {
+                    if let Some(current) = world.get::<avian3d::prelude::AngularDamping>(entity) {
                         let mut d = current.0 as f32;
                         if ui.add(egui::Slider::new(&mut d, 0.0..=10.0).text("Angular Damping")).changed() {
-                            if let Ok(mut damp) = world.query::<&mut avian3d::prelude::AngularDamping>().get_mut(world, entity) {
+                            if let Some(mut damp) = world.get_mut::<avian3d::prelude::AngularDamping>(entity) {
                                 damp.0 = d as f64;
                             }
                         }
@@ -205,11 +205,11 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
         }
 
         // ── Wheel (Raycast) component ────────────────────────────────
-        if world.query::<&WheelRaycast>().get(world, entity).is_ok() {
+        if world.get::<WheelRaycast>(entity).is_some() {
             egui::CollapsingHeader::new("Wheel (Raycast)")
                 .default_open(false)
                 .show(ui, |ui| {
-                    if let Ok(current) = world.query::<&WheelRaycast>().get(world, entity) {
+                    if let Some(current) = world.get::<WheelRaycast>(entity) {
                         let mut rest = current.rest_length as f32;
                         let mut k = current.spring_k as f32;
                         let mut d = current.damping_c as f32;
@@ -221,7 +221,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
                         let r_changed = ui.add(egui::Slider::new(&mut radius, 0.1..=2.0).text("Wheel Radius (m)")).changed();
 
                         if rest_changed || k_changed || d_changed || r_changed {
-                            if let Ok(mut wheel) = world.query::<&mut WheelRaycast>().get_mut(world, entity) {
+                            if let Some(mut wheel) = world.get_mut::<WheelRaycast>(entity) {
                                 if rest_changed { wheel.rest_length = rest as f64; }
                                 if k_changed { wheel.spring_k = k as f64; }
                                 if d_changed { wheel.damping_c = d as f64; }
@@ -293,10 +293,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
         // canonical op pipeline (span-patch + AST refresh + index
         // patch + journal) and fire `UpdateParameters` at the worker,
         // which recompiles and reseeds the stepper.
-        let has_modelica = world
-            .query::<&lunco_modelica::ModelicaModel>()
-            .get(world, entity)
-            .is_ok();
+        let has_modelica = world.get::<lunco_modelica::ModelicaModel>(entity).is_some();
         if has_modelica {
             egui::CollapsingHeader::new("Modelica Parameters")
                 .default_open(true)
@@ -691,13 +688,12 @@ fn obstacle_field_section(ui: &mut egui::Ui, world: &mut World) {
 /// entities while selection targets the logical root, so the material sections
 /// search this whole set.
 fn subtree(world: &mut World, root: Entity) -> Vec<Entity> {
-    let mut q = world.query::<&Children>();
     let mut out = vec![root];
     let mut i = 0;
     while i < out.len() {
         let e = out[i];
         i += 1;
-        if let Ok(children) = q.get(world, e) {
+        if let Some(children) = world.get::<Children>(e) {
             out.extend(children.iter());
         }
     }
@@ -751,10 +747,9 @@ fn joint_control_section(ui: &mut egui::Ui, world: &mut World, holder: Entity) {
 /// asset id), so editing recolors every part at once.
 fn collect_std_handles(world: &mut World, root: Entity) -> Vec<Handle<StandardMaterial>> {
     let ents = subtree(world, root);
-    let mut q = world.query::<&MeshMaterial3d<StandardMaterial>>();
     let mut handles: Vec<Handle<StandardMaterial>> = Vec::new();
     for e in ents {
-        if let Ok(m) = q.get(world, e) {
+        if let Some(m) = world.get::<MeshMaterial3d<StandardMaterial>>(e) {
             if !handles.iter().any(|h| h.id() == m.0.id()) {
                 handles.push(m.0.clone());
             }
@@ -766,8 +761,8 @@ fn collect_std_handles(world: &mut World, root: Entity) -> Vec<Handle<StandardMa
 /// First entity in `root`'s subtree carrying a [`ShaderMaterial`], if any.
 fn first_shader_holder(world: &mut World, root: Entity) -> Option<Entity> {
     let ents = subtree(world, root);
-    let mut q = world.query::<&MeshMaterial3d<lunco_materials::ShaderMaterial>>();
-    ents.into_iter().find(|e| q.get(world, *e).is_ok())
+    ents.into_iter()
+        .find(|e| world.get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(*e).is_some())
 }
 
 /// Material-bearing parts of `root`'s subtree — every entity carrying a
@@ -777,15 +772,14 @@ fn first_shader_holder(world: &mut World, root: Entity) -> Option<Entity> {
 /// component. Subtree (root-first) order; a single-mesh prop yields one entry.
 fn editable_parts(world: &mut World, root: Entity) -> Vec<(Entity, String)> {
     let ents = subtree(world, root);
-    let mut shaderq = world.query::<&MeshMaterial3d<lunco_materials::ShaderMaterial>>();
-    let mut stdq = world.query::<&MeshMaterial3d<StandardMaterial>>();
-    let mut nameq = world.query::<&Name>();
     let mut out = Vec::new();
     for e in ents {
-        if shaderq.get(world, e).is_ok() || stdq.get(world, e).is_ok() {
-            let label = nameq
-                .get(world, e)
-                .ok()
+        let has_shader =
+            world.get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(e).is_some();
+        let has_std = world.get::<MeshMaterial3d<StandardMaterial>>(e).is_some();
+        if has_shader || has_std {
+            let label = world
+                .get::<Name>(e)
                 .map(|n| n.as_str().rsplit(['/', '\\']).next().unwrap_or(n.as_str()).to_string())
                 .unwrap_or_else(|| format!("{e:?}"));
             out.push((e, label));
@@ -799,11 +793,10 @@ fn editable_parts(world: &mut World, root: Entity) -> Vec<(Entity, String)> {
 /// "Add shader" picker rather than surfacing a wheel's shader. Falls back to
 /// the first part when every part already has a shader.
 fn default_part(world: &mut World, parts: &[(Entity, String)]) -> Option<Entity> {
-    let mut shq = world.query::<&MeshMaterial3d<lunco_materials::ShaderMaterial>>();
     parts
         .iter()
         .map(|(e, _)| *e)
-        .find(|e| shq.get(world, *e).is_err())
+        .find(|e| world.get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(*e).is_none())
         .or_else(|| parts.first().map(|(e, _)| *e))
 }
 
@@ -852,9 +845,7 @@ fn shader_picker_for_part(ui: &mut egui::Ui, world: &mut World, part: Entity) {
     }
     // Current shader path of this part, if it already uses a ShaderMaterial.
     let cur_path: Option<String> = world
-        .query::<&MeshMaterial3d<lunco_materials::ShaderMaterial>>()
-        .get(world, part)
-        .ok()
+        .get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(part)
         .map(|m| m.0.clone())
         .and_then(|h| {
             world
@@ -898,9 +889,7 @@ fn shader_picker_for_part(ui: &mut egui::Ui, world: &mut World, part: Entity) {
 fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
     use lunco_materials::ShaderMaterial;
     let template = world
-        .query::<&MeshMaterial3d<ShaderMaterial>>()
-        .get(world, part)
-        .ok()
+        .get::<MeshMaterial3d<ShaderMaterial>>(part)
         .map(|m| m.0.clone())
         .and_then(|h| world.resource::<Assets<ShaderMaterial>>().get(&h).cloned())
         .unwrap_or_default();
@@ -937,9 +926,7 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
 /// (incl. any `twin://` source), or `None` if it isn't using one.
 fn current_shader_path(world: &mut World, part: Entity) -> Option<String> {
     let h = world
-        .query::<&MeshMaterial3d<lunco_materials::ShaderMaterial>>()
-        .get(world, part)
-        .ok()
+        .get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(part)
         .map(|m| m.0.clone())?;
     let sid = world
         .resource::<Assets<lunco_materials::ShaderMaterial>>()
@@ -1245,9 +1232,8 @@ fn material_pbr_section(
 fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entity) {
     use lunco_materials::{ParamType, ParamValue, ShaderMaterial, UiKind};
 
-    let Ok(handle) = world
-        .query::<&MeshMaterial3d<ShaderMaterial>>()
-        .get(world, entity)
+    let Some(handle) = world
+        .get::<MeshMaterial3d<ShaderMaterial>>(entity)
         .map(|m| m.0.clone())
     else {
         return;
@@ -1407,9 +1393,9 @@ fn modelica_parameters_section(
 
     // Snapshot the current params so we can render stable sliders
     // without holding a mutable borrow across the UI.
-    let (params, model_name) = match world.query::<&ModelicaModel>().get(world, entity) {
-        Ok(m) => (m.parameters.clone(), m.model_name.clone()),
-        Err(_) => return,
+    let (params, model_name) = match world.get::<ModelicaModel>(entity) {
+        Some(m) => (m.parameters.clone(), m.model_name.clone()),
+        None => return,
     };
     if params.is_empty() {
         ui.label(egui::RichText::new("(no tunable parameters)").weak().small());
@@ -1445,7 +1431,7 @@ fn modelica_parameters_section(
     // bump session id so the worker treats this as a fresh stepping
     // generation.
     let mut session_id = 0u64;
-    if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
+    if let Some(mut m) = world.get_mut::<ModelicaModel>(entity) {
         if let Some(slot) = m.parameters.get_mut(&changed_key) {
             *slot = new_value;
         }

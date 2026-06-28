@@ -1377,160 +1377,70 @@ pub struct DetectedInput {
     pub type_name: String,
 }
 
-/// Find top-level `input <Type> <name>;` declarations in a model
-/// source. Used by the Setup dialog to render an Inputs section, and
-/// by the runner to substitute values into the source pre-compile.
-pub fn detect_top_level_inputs(source: &str) -> Vec<DetectedInput> {
-    let re = regex::Regex::new(
-        r"(?m)\binput\b\s+([A-Za-z_][A-Za-z0-9_.\[\]]*)\s+([A-Za-z_][A-Za-z0-9_]*)\b",
-    )
-    .expect("regex");
-    let mut out = Vec::new();
-    for cap in re.captures_iter(source) {
-        let type_name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
-        let name = cap.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
-        if name.is_empty() {
-            continue;
-        }
-        out.push(DetectedInput { name, type_name });
-    }
-    out
-}
-
-/// Detect top-level `parameter` declarations in a Modelica source
-/// string. v1: scans the textual source only (no AST traversal),
-/// matches the same patterns `replace_param_literal` accepts. Used by
-/// the override editor UI.
+/// Top-level `input` declarations of `class`, read from the **parsed
+/// AST** — no source regex, no reparse. Used by the Setup dialog to
+/// render an Inputs section and by the runner to pin input values.
 ///
-/// Inherited parameters (declared in a base class extends) are NOT
-/// detected — they don't appear in the model's own source. Surface
-/// them as unsupported in v2 once we lift detection to the AST.
-pub fn detect_top_level_literal_parameters(source: &str) -> Vec<DetectedParam> {
-    // Pattern: `parameter [final] [each] <Type> <name> [(modifiers)] [= <rhs>] ;`
-    // We capture name, type, optional rhs literal. To stay robust
-    // against modifier clauses, the regex is loose and a follow-up
-    // scan classifies the rhs literal vs expression.
-    let re = regex::Regex::new(
-        r"(?m)\bparameter\b\s+(?:final\s+|each\s+)*([A-Za-z_][A-Za-z0-9_.\[\]]*)\s+([A-Za-z_][A-Za-z0-9_]*)\b",
-    )
-    .expect("regex");
-    let mut out = Vec::new();
-    for cap in re.captures_iter(source) {
-        let type_name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
-        let name = cap.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
-        if name.is_empty() {
-            continue;
-        }
-        // Find the `=` for this declaration up to next `;` (top-level).
-        let after = cap.get(0).unwrap().end();
-        let tail = &source[after..];
-        let mut depth: i32 = 0;
-        let mut eq_pos: Option<usize> = None;
-        let mut end_pos: Option<usize> = None;
-        for (i, ch) in tail.char_indices() {
-            match ch {
-                '{' | '(' | '[' => depth += 1,
-                '}' | ')' | ']' => depth -= 1,
-                '=' if depth == 0 && eq_pos.is_none() => eq_pos = Some(i),
-                ';' if depth == 0 => {
-                    end_pos = Some(i);
-                    break;
-                }
-                _ => {}
-            }
-        }
-        // Trailing Modelica description-comment: `... "Gravity";`.
-        // Capture the last quoted string before the terminating `;` so
-        // the override editor can show it as hover help. (For a
-        // bare String default with no comment this picks up the value
-        // instead — a benign edge case; String params aren't override-
-        // supportable in v1 anyway.)
-        let description = end_pos.and_then(|end| {
-            let decl = &tail[..end];
-            let close = decl.rfind('"')?;
-            let open = decl[..close].rfind('"')?;
-            let s = &decl[open + 1..close];
-            if s.is_empty() {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        });
-        let (default_literal, supportable, reason) = match (eq_pos, end_pos) {
-            (Some(eq), Some(end)) if end > eq + 1 => {
-                // Modelica allows a trailing description string after
-                // the binding: `parameter Real g = 9.81 "Gravity";`.
-                // Strip it before classifying — otherwise the whole
-                // `9.81 "Gravity"` blob fails `looks_like_literal` and
-                // the override editor disables the row.
-                let raw_rhs = tail[eq + 1..end].trim();
-                let rhs = match raw_rhs.find('"') {
-                    Some(q) => raw_rhs[..q].trim_end(),
-                    None => raw_rhs,
-                };
-                if rhs.is_empty() {
-                    (None, false, Some("no default value".to_string()))
-                } else if looks_like_literal(rhs) {
-                    (Some(rhs.to_string()), true, None)
-                } else {
-                    (
-                        Some(rhs.to_string()),
-                        false,
-                        Some("complex binding — override unsupported in v1".to_string()),
-                    )
-                }
-            }
-            _ => (
-                None,
-                false,
-                Some("no literal default — override unsupported in v1".to_string()),
-            ),
-        };
-        out.push(DetectedParam {
-            name,
-            type_name,
-            default_literal,
-            supportable,
-            reason,
-            description,
-        });
-    }
-    // Dedupe by parameter name. The scan is regex-based over the
-    // whole file and picks up `parameter Real g` in every class
-    // (RocketStage AND Airframe both declare `g`, for example). The
-    // override path rewrites only the first occurrence in source —
-    // surfacing duplicates here just produces conflicting widget ids
-    // in the UI and confuses users about which row their edit
-    // targets. Keep the first occurrence (matches the source order
-    // the rewriter touches).
-    let mut seen: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-    out.retain(|p| seen.insert(p.name.clone()));
-    out
+/// Sourced via [`crate::ast_extract::extract_typed_inputs_for_class`],
+/// which classifies by the parser's `causality` and additionally
+/// catches connector-typed inputs (`RealInput`/`IntegerInput`/…) that
+/// the old textual `\binput\b` scan silently missed.
+pub fn detect_top_level_inputs(
+    class: &rumoca_compile::parsing::ast::ClassDef,
+) -> Vec<DetectedInput> {
+    crate::ast_extract::extract_typed_inputs_for_class(class)
+        .into_iter()
+        .map(|c| DetectedInput { name: c.name, type_name: c.type_name })
+        .collect()
 }
 
-fn looks_like_literal(rhs: &str) -> bool {
-    let s = rhs.trim();
-    if s.is_empty() {
-        return false;
-    }
-    // Real / Int / signed numbers, scientific notation.
-    if s.parse::<f64>().is_ok() {
-        return true;
-    }
-    if s.parse::<i64>().is_ok() {
-        return true;
-    }
-    if s == "true" || s == "false" {
-        return true;
-    }
-    // Quoted string literal, no string-concat / function calls.
-    if s.starts_with('"') && s.ends_with('"') && !s[1..s.len() - 1].contains('"') {
-        return true;
-    }
-    // Fall through: identifier / expression / function call / array
-    // literal — v1 doesn't substitute these via regex.
-    false
+/// Top-level `parameter` declarations of `class`, read from the
+/// **parsed AST** — no source regex, no reparse. Drives the override
+/// editor's table.
+///
+/// Sourced via [`crate::ast_extract::extract_typed_parameters_for_class`]
+/// (filters on the parser's `variability == Parameter`), which gives the
+/// declared default and the Modelica description-comment directly, so the
+/// editor no longer textually re-scans the file every frame.
+///
+/// **Supportability** reflects the actual injection path: run values are
+/// applied by [`apply_value_bindings_to_dae`], which rebinds a DAE
+/// parameter's `start` to a scalar literal. Every top-level *scalar*
+/// parameter is therefore overridable — default-bound or not, literal or
+/// computed. Only array/record parameters (which can't be rebound to a
+/// scalar) are greyed out. This is strictly more capable than the old
+/// textual heuristic, which refused any parameter whose default wasn't a
+/// bare literal.
+///
+/// Inherited parameters (declared in an `extends` base) are not yet
+/// surfaced — they don't live in this class's own component list.
+pub fn detect_top_level_literal_parameters(
+    class: &rumoca_compile::parsing::ast::ClassDef,
+) -> Vec<DetectedParam> {
+    crate::ast_extract::extract_typed_parameters_for_class(class)
+        .into_iter()
+        .map(|c| {
+            // Arrays/records can't be rebound to a scalar literal by the
+            // DAE value-binding path, so grey those rows; bracket in the
+            // type name is the cheap, reliable array signal.
+            let is_array = c.type_name.contains('[');
+            DetectedParam {
+                name: c.name,
+                type_name: c.type_name,
+                // `default` carries the numeric literal binding (or `start`)
+                // straight from the AST; non-numeric defaults show as "—"
+                // but are still overridable.
+                default_literal: c.default.map(|x| format!("{x}")),
+                supportable: !is_array,
+                reason: is_array
+                    .then(|| "array/record parameters can't be overridden".to_string()),
+                description: {
+                    let d = c.description.trim();
+                    if d.is_empty() { None } else { Some(d.to_string()) }
+                },
+            }
+        })
+        .collect()
 }
 
 /// Per-(document, model) parameter override + bounds draft state.

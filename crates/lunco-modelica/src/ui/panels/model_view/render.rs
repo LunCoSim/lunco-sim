@@ -464,8 +464,19 @@ fn render_unified_toolbar(
             // annotation → fallback).
             let bounds = crate::ui::commands::compile::resolve_setup_bounds(world, doc, &model_ref);
             let overrides_count = world.get_resource::<crate::experiments_runner::ExperimentDrafts>().and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len())).unwrap_or(0);
-            let source_text = world.get_resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(doc)).map(|h| h.document().source().to_string()).unwrap_or_default();
-            let detected = crate::experiments_runner::detect_top_level_inputs(&source_text);
+            // Inputs from the parsed AST of the resolved model class — no
+            // source scan (WP-8 / CQ-205).
+            let detected = world
+                .get_resource::<ModelicaDocumentRegistry>()
+                .and_then(|r| r.host(doc))
+                .and_then(|h| {
+                    crate::ast_extract::find_class_by_short_name(
+                        h.document().syntax().ast(),
+                        crate::ast_extract::short_name(&model_ref.0),
+                    )
+                    .map(crate::experiments_runner::detect_top_level_inputs)
+                })
+                .unwrap_or_default();
             let prefilled = world.get_resource::<crate::experiments_runner::ExperimentDrafts>().and_then(|d| d.get(doc, &model_ref).map(|dr| dr.inputs.clone())).unwrap_or_default();
             let inputs: Vec<crate::ui::commands::FastRunInput> = detected.into_iter().map(|d| {
                     let value_text = prefilled.get(&lunco_experiments::ParamPath(d.name.clone())).map(|v| match v {

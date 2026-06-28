@@ -814,7 +814,7 @@ impl ExperimentsPanel {
         else {
             return;
         };
-        let (model_name, source, candidates) = match world
+        let (model_name, candidates) = match world
             .get_resource::<crate::state::ModelicaDocumentRegistry>()
             .and_then(|r| r.host(doc))
         {
@@ -829,7 +829,7 @@ impl ExperimentsPanel {
                 // precedence; see `default_simulation_class`). Keeps this
                 // Setup form in lock-step with the Fast Run popup.
                 match crate::sim_default::default_simulation_class(world, doc) {
-                    Some(c) => (c, document.source().to_string(), candidates),
+                    Some(c) => (c, candidates),
                     None => return,
                 }
             }
@@ -844,8 +844,19 @@ impl ExperimentsPanel {
             crate::ui::commands::compile::resolve_setup_bounds(world, doc, &model_ref);
         let mut bounds_changed = false;
 
-        let detected_inputs =
-            crate::experiments_runner::detect_top_level_inputs(&source);
+        // Inputs come from the parsed AST of the resolved model class —
+        // no per-frame source scan (WP-8 / CQ-205).
+        let detected_inputs = world
+            .get_resource::<crate::state::ModelicaDocumentRegistry>()
+            .and_then(|r| r.host(doc))
+            .and_then(|h| {
+                crate::ast_extract::find_class_by_short_name(
+                    h.document().syntax().ast(),
+                    crate::ast_extract::short_name(&model_name),
+                )
+                .map(crate::experiments_runner::detect_top_level_inputs)
+            })
+            .unwrap_or_default();
         let prefilled_inputs: BTreeMap<lunco_experiments::ParamPath, lunco_experiments::ParamValue> =
             world
                 .get_resource::<crate::experiments_runner::ExperimentDrafts>()
@@ -1326,7 +1337,6 @@ impl ExperimentsPanel {
             None => return,
         };
         let document = host.document();
-        let source = document.source().to_string();
 
         // Resolve the model class via the same path the Setup section
         // uses (drilled class → first non-package fallback) so this
@@ -1346,8 +1356,14 @@ impl ExperimentsPanel {
         };
         let model_ref = lunco_experiments::ModelRef(model_name.clone());
 
-        let detected =
-            crate::experiments_runner::detect_top_level_literal_parameters(&source);
+        // Parameters come from the parsed AST of the resolved model class
+        // (no per-frame source regex — WP-8 / CQ-205).
+        let detected = crate::ast_extract::find_class_by_short_name(
+            document.syntax().ast(),
+            crate::ast_extract::short_name(&model_name),
+        )
+        .map(crate::experiments_runner::detect_top_level_literal_parameters)
+        .unwrap_or_default();
         if detected.is_empty() {
             return;
         }

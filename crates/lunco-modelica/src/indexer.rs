@@ -347,6 +347,15 @@ fn collect_documentation(
     }
 }
 
+/// HTML-tag and whitespace-collapse patterns for [`clean_info_text`].
+/// Compiled once (not per class) — `clean_info_text` runs once for each
+/// of the ~2700 MSL classes during an index build, and recompiling these
+/// every call dominated that pass.
+static TAG_RE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"<[^>]*>").expect("tag regex"));
+static WS_RE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"\s+").expect("ws regex"));
+
 /// Turn a raw Modelica `info="…"` string into UI-ready plain text.
 /// Unescapes Modelica string escapes, strips HTML tags and common
 /// entities, collapses whitespace, and keeps only the first
@@ -382,10 +391,8 @@ fn clean_info_text(raw: &str) -> String {
         s.truncate(idx);
     }
 
-    // Strip tags + entities. Regex cost here is tiny (called once
-    // per class at index time, never at runtime).
-    let tag_re = regex::Regex::new(r"<[^>]*>").expect("tag regex");
-    let no_tags = tag_re.replace_all(&s, " ");
+    // Strip tags + entities using the module-level compiled patterns.
+    let no_tags = TAG_RE.replace_all(&s, " ");
     let decoded = no_tags
         .replace("&nbsp;", " ")
         .replace("&amp;", "&")
@@ -393,8 +400,7 @@ fn clean_info_text(raw: &str) -> String {
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&apos;", "'");
-    let ws_re = regex::Regex::new(r"\s+").expect("ws regex");
-    ws_re.replace_all(&decoded, " ").trim().to_string()
+    WS_RE.replace_all(&decoded, " ").trim().to_string()
 }
 
 /// Top-level MSL domain for grouping (`Modelica.Electrical.Analog.*`
