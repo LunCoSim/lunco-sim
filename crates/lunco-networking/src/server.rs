@@ -440,12 +440,14 @@ fn on_server_disconnected(
     mut registry: ResMut<SessionRegistry>,
     mut profiles: ResMut<SessionProfiles>,
     mut rbac: ResMut<lunco_core::session::SessionRbac>,
+    mut dedup: ResMut<crate::sync::SyncDedup>,
 ) {
     if let Ok(remote) = q_client.get(trigger.entity) {
         let session = peer_to_session(remote.0);
         let freed = registry.release_session(session);
         profiles.profiles.remove(&session.0);
         rbac.sessions.remove(&session.0);
+        dedup.forget(session);
         info!(
             "[net] client disconnected: session={} freed {} entities, profiles updated",
             session.0,

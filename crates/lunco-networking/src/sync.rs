@@ -428,16 +428,26 @@ pub struct SyncChannelRegistry(pub HashMap<String, SyncChannel>);
 /// command from client B as a "duplicate" of client A's — silent data loss.
 #[derive(Resource)]
 pub struct SyncDedup {
-    seen: HashSet<(u64, u64)>,
-    order: VecDeque<(u64, u64)>,
+    /// One replay window **per origin**. A single shared FIFO would let one chatty
+    /// peer evict another peer's recent `op_id`s, shrinking each peer's effective
+    /// replay protection to ~`cap`/N. A per-origin window gives every peer the full
+    /// `cap` regardless of others' traffic. Memory tracks live sessions: the host
+    /// drops a window via [`forget`](Self::forget) on disconnect.
+    per_origin: HashMap<u64, PeerWindow>,
     cap: usize,
+}
+
+/// Bounded FIFO of seen `op_id`s for a single origin.
+#[derive(Default)]
+struct PeerWindow {
+    seen: HashSet<u64>,
+    order: VecDeque<u64>,
 }
 
 impl Default for SyncDedup {
     fn default() -> Self {
         Self {
-            seen: HashSet::new(),
-            order: VecDeque::new(),
+            per_origin: HashMap::new(),
             cap: 8192,
         }
     }
@@ -447,17 +457,25 @@ impl SyncDedup {
     /// `true` if `(origin, op)` is new (apply it); `false` if already seen
     /// (drop). The same `op` from two different origins is **not** a duplicate.
     pub fn check_and_insert(&mut self, origin: SessionId, op: OpId) -> bool {
-        let key = (origin.0, op.0);
-        if !self.seen.insert(key) {
+        let cap = self.cap;
+        let w = self.per_origin.entry(origin.0).or_default();
+        if !w.seen.insert(op.0) {
             return false;
         }
-        self.order.push_back(key);
-        if self.order.len() > self.cap {
-            if let Some(old) = self.order.pop_front() {
-                self.seen.remove(&old);
+        w.order.push_back(op.0);
+        if w.order.len() > cap {
+            if let Some(old) = w.order.pop_front() {
+                w.seen.remove(&old);
             }
         }
         true
+    }
+
+    /// Drop a disconnected origin's window so tracked memory follows live sessions
+    /// (called by the host on client disconnect). A reconnecting session gets a
+    /// fresh window; its `op_id`s restart from the new process's entropy anyway.
+    pub fn forget(&mut self, origin: SessionId) {
+        self.per_origin.remove(&origin.0);
     }
 }
 
@@ -662,7 +680,11 @@ pub fn apply_sync_command(
             return;
         }
         // Guard set → the capture observer for this command suppresses the echo,
-        // and possession skips local camera-bind for a remote origin.
+        // and possession skips local camera-bind for a remote origin. Set/clear is
+        // balanced without RAII: every early `return` above happens *before* the set,
+        // and the only step between set and clear is `trigger` itself — whose sole
+        // panic source (`FromReflect`) is pre-checked above, and any panic in Bevy's
+        // command queue aborts the process anyway, so a stuck guard can't outlive it.
         world.resource_mut::<SyncApplyGuard>().0 = Some(origin);
         reflect_event.trigger(world, reflected.as_ref(), &type_reg);
         world.resource_mut::<SyncApplyGuard>().0 = None;
@@ -670,6 +692,30 @@ pub fn apply_sync_command(
 }
 
 // ── Inbox drain (commands / snapshots / spawns / handshake) ───────────────────
+
+/// Host relay gate for avatar-control envelopes (`TutorStatus`/`StudentStatus`/
+/// `SharePerspective`). These seize or redirect targeted peers' avatar camera +
+/// input, so the host must drop them from an *unauthenticated* sender (and the
+/// caller stamps the sender identity to prevent impersonation). Single chokepoint
+/// for that policy — change the required role here, not in each arm.
+///
+/// Returns whether the arm should keep processing:
+/// - non-host peer → `true` (clients never gate; they trust the host-stamped relay),
+/// - host + authenticated sender → `true` (caller stamps + relays + consumes),
+/// - host + unauthenticated sender → `false` (caller `continue`s: not relayed, not consumed).
+///
+/// Gated at `Observer` (any authenticated session), **not** `Operator`: teaching is
+/// a UI toggle and a fresh client is only an Observer until it sets a name, so an
+/// Operator gate would silently drop an un-named client-tutor. The real protection
+/// is the sender-stamp + authenticated floor.
+#[inline]
+fn authed_for_avatar_relay(
+    role: &NetworkRole,
+    rbac: &lunco_core::session::SessionRbac,
+    sender: SessionId,
+) -> bool {
+    !role.is_host() || rbac.is_authorized(sender, lunco_core::session::AuthorityRole::Observer)
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn drain_sync_inbox(
@@ -842,23 +888,14 @@ pub fn drain_sync_inbox(
                 }
             }
             SyncEnvelope::TutorStatus(mut msg) => {
-                // Host authorization + anti-spoof. Tutor mode seizes targeted peers'
-                // avatar camera and locks their input, so gate the relay at the same
-                // bar as the other state-mutating commands (`Operator` — a named,
-                // authenticated session) and bind the tutor identity to the actual
-                // sender (mirroring the `Cursor` arm) so a peer can't claim to be
-                // another session. Gate at `Observer` (any *authenticated* session) —
-                // NOT `Operator`: teaching is a UI toggle with no role requirement and
-                // a connecting client is only an Observer until it sets a name, so an
-                // Operator gate would silently drop an un-named client-tutor. The real
-                // protection here is the sender-stamp (anti-spoof) + authenticated
-                // gate; a dedicated Tutor role + per-target consent is a future stricter
-                // option needing a product decision on who grants it. Unauthenticated →
-                // dropped: not relayed, not consumed.
+                // Host authz + anti-spoof: tutor mode seizes targeted peers' avatar
+                // camera and locks their input. Gate (one chokepoint) then bind the
+                // tutor identity to the actual sender (mirroring the `Cursor` arm) so a
+                // peer can't claim to be another session. See [`authed_for_avatar_relay`].
+                if !authed_for_avatar_relay(&role, &rbac, sender) {
+                    continue;
+                }
                 if role.is_host() {
-                    if !rbac.is_authorized(sender, lunco_core::session::AuthorityRole::Observer) {
-                        continue;
-                    }
                     msg.tutor_session = sender.0;
                     outbox.0.push((
                         SyncChannel::ControlStream,
@@ -924,13 +961,11 @@ pub fn drain_sync_inbox(
                 //
                 // Anti-spoof: bind the report to its actual sender so a peer can't
                 // impersonate another student and pollute the observing tutor's
-                // mirrored view. Students are Observers, so gate only on an
-                // authenticated session (not Operator) — else legitimate students
-                // can't report. Unauthenticated → dropped.
+                // mirrored view. See [`authed_for_avatar_relay`].
+                if !authed_for_avatar_relay(&role, &rbac, sender) {
+                    continue;
+                }
                 if role.is_host() {
-                    if !rbac.is_authorized(sender, lunco_core::session::AuthorityRole::Observer) {
-                        continue;
-                    }
                     msg.student_session = sender.0;
                     outbox.0.push((
                         SyncChannel::ControlStream,
@@ -961,14 +996,12 @@ pub fn drain_sync_inbox(
             }
             SyncEnvelope::SharePerspective(mut msg) => {
                 // Same authz + anti-spoof as TutorStatus: a SharePerspective snaps
-                // every targeted peer's avatar/camera to the sender's view. Gate at
-                // `Observer` (authenticated) — not `Operator`, which would silently
-                // drop an un-named client — and bind the identity to the sender.
-                // Unauthenticated → dropped, not relayed, not consumed.
+                // every targeted peer's avatar/camera to the sender's view. See
+                // [`authed_for_avatar_relay`].
+                if !authed_for_avatar_relay(&role, &rbac, sender) {
+                    continue;
+                }
                 if role.is_host() {
-                    if !rbac.is_authorized(sender, lunco_core::session::AuthorityRole::Observer) {
-                        continue;
-                    }
                     msg.tutor_session = sender.0;
                     // Relay to other clients
                     outbox.0.push((
@@ -2147,5 +2180,34 @@ mod codec_roundtrip {
         assert!(!dedup.check_and_insert(a, op), "replay of (a,42) is a duplicate");
         assert!(dedup.check_and_insert(b, op), "same op_id from a DIFFERENT origin is NOT a dup");
         assert!(!dedup.check_and_insert(b, op), "replay of (b,42) is a duplicate");
+    }
+
+    #[test]
+    fn dedup_window_is_per_peer_isolated() {
+        // Per-peer windows: a chatty peer flooding op_ids must NOT evict another
+        // peer's recent op from the dedup window (the global-FIFO bug). `b`'s op
+        // survives `a` overflowing its own window many times over.
+        let mut dedup = SyncDedup { per_origin: HashMap::new(), cap: 8 };
+        let (a, b) = (SessionId(1), SessionId(2));
+        assert!(dedup.check_and_insert(b, OpId(7)), "b's op is new");
+        for i in 0..1000 {
+            dedup.check_and_insert(a, OpId(i)); // a floods, evicting only a's own window
+        }
+        assert!(
+            !dedup.check_and_insert(b, OpId(7)),
+            "b's op still remembered despite a flooding — windows are independent"
+        );
+    }
+
+    #[test]
+    fn dedup_forget_drops_origin_window() {
+        // On disconnect the host forgets a session's window; a same-id reconnect
+        // therefore starts fresh (and its op_ids restart from new entropy anyway).
+        let mut dedup = SyncDedup::default();
+        let (a, op) = (SessionId(1), OpId(42));
+        assert!(dedup.check_and_insert(a, op));
+        assert!(!dedup.check_and_insert(a, op), "still a dup before forget");
+        dedup.forget(a);
+        assert!(dedup.check_and_insert(a, op), "fresh window after forget");
     }
 }
