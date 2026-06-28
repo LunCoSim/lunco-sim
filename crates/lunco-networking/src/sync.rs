@@ -240,6 +240,49 @@ pub struct ProfilesMsg {
     pub entries: Vec<(u64, String, [u8; 3])>,
 }
 
+/// Avatar pose as it crosses the wire: position, rotation, big-space cell, and
+/// optional ephemeris id.
+pub type WireAvatarState = ([f32; 3], [f32; 4], [i64; 3], Option<i32>);
+/// Decoded avatar pose (as held in [`TutorStatusResource`]).
+pub type AvatarState = (Vec3, Quat, CellCoord, Option<i32>);
+
+/// Pack an avatar pose for the wire. One definition shared by the tutor, student,
+/// and share-perspective senders so the field order can't drift between them.
+fn encode_avatar_state(transform: &Transform, cell: &CellCoord, ephem_id: Option<i32>) -> WireAvatarState {
+    (
+        transform.translation.to_array(),
+        transform.rotation.to_array(),
+        [cell.x, cell.y, cell.z],
+        ephem_id,
+    )
+}
+
+/// Inverse of [`encode_avatar_state`]: decode a wire avatar pose for local use.
+fn decode_avatar_state(w: WireAvatarState) -> AvatarState {
+    let (pos, rot, cell, ephem_id) = w;
+    (
+        Vec3::from_array(pos),
+        Quat::from_array(rot),
+        CellCoord { x: cell[0], y: cell[1], z: cell[2] },
+        ephem_id,
+    )
+}
+
+/// Build the `(session, name, color)` wire rows for a [`ProfilesMsg`] from the
+/// authoritative [`SessionProfiles`], filling a deterministic per-session color
+/// for any session that has no explicit one. Shared by the periodic broadcast and
+/// the connect-time replay so the two can't drift.
+pub(crate) fn profile_wire_entries(profiles: &SessionProfiles) -> Vec<(u64, String, [u8; 3])> {
+    profiles
+        .profiles
+        .iter()
+        .map(|(&s, n)| {
+            let color = profiles.colors.get(&s).copied().unwrap_or_else(|| generate_user_color(s));
+            (s, n.clone(), color)
+        })
+        .collect()
+}
+
 /// Host/client update for mouse cursor positions.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CursorUpdateMsg {
@@ -970,18 +1013,7 @@ pub fn drain_sync_inbox(
                     tutor_status.active_perspective = msg.active_perspective.clone();
                     tutor_status.target_client = msg.target_client;
                     tutor_status.observe_mode = msg.observe_mode;
-                    tutor_status.avatar_state = msg.avatar_state.map(|(pos, rot, cell, ephem_id)| {
-                        (
-                            Vec3::from_array(pos),
-                            Quat::from_array(rot),
-                            CellCoord {
-                                x: cell[0],
-                                y: cell[1],
-                                z: cell[2],
-                            },
-                            ephem_id,
-                        )
-                    });
+                    tutor_status.avatar_state = msg.avatar_state.map(decode_avatar_state);
 
                     // Update timestamp and active status
                     let elapsed = ctx.time.elapsed_secs_f64();
@@ -1050,18 +1082,7 @@ pub fn drain_sync_inbox(
                 {
                     tutor_status.observed_student_doc = msg.active_doc;
                     tutor_status.observed_student_perspective = msg.active_perspective.clone();
-                    tutor_status.observed_student_avatar_state = msg.avatar_state.map(|(pos, rot, cell, ephem_id)| {
-                        (
-                            Vec3::from_array(pos),
-                            Quat::from_array(rot),
-                            CellCoord {
-                                x: cell[0],
-                                y: cell[1],
-                                z: cell[2],
-                            },
-                            ephem_id,
-                        )
-                    });
+                    tutor_status.observed_student_avatar_state = msg.avatar_state.map(decode_avatar_state);
                 }
             }
             SyncEnvelope::SharePerspective(mut msg) => {
@@ -1498,12 +1519,7 @@ pub fn send_tutor_status_updates(
     };
     let avatar_state = q_avatar.iter().next().map(|(transform, cell, child_of)| {
         let ephem_id = q_reference_frames.get(child_of.0).ok().map(|rf| rf.ephemeris_id);
-        (
-            transform.translation.to_array(),
-            transform.rotation.to_array(),
-            [cell.x, cell.y, cell.z],
-            ephem_id,
-        )
+        encode_avatar_state(transform, cell, ephem_id)
     });
 
     outbox.0.push((
@@ -1562,12 +1578,7 @@ pub fn send_student_status_updates(
     };
     let avatar_state = q_avatar.iter().next().map(|(transform, cell, child_of)| {
         let ephem_id = q_reference_frames.get(child_of.0).ok().map(|rf| rf.ephemeris_id);
-        (
-            transform.translation.to_array(),
-            transform.rotation.to_array(),
-            [cell.x, cell.y, cell.z],
-            ephem_id,
-        )
+        encode_avatar_state(transform, cell, ephem_id)
     });
 
     outbox.0.push((
@@ -2045,12 +2056,7 @@ fn on_share_perspective(
     };
     let avatar_state = q_avatar.iter().next().map(|(transform, cell, child_of)| {
         let ephem_id = q_reference_frames.get(child_of.0).ok().map(|rf| rf.ephemeris_id);
-        (
-            transform.translation.to_array(),
-            transform.rotation.to_array(),
-            [cell.x, cell.y, cell.z],
-            ephem_id,
-        )
+        encode_avatar_state(transform, cell, ephem_id)
     });
 
     outbox.0.push((

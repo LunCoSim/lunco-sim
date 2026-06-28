@@ -298,14 +298,10 @@ fn broadcast_profiles(profiles: Res<SessionProfiles>, mut outbox: ResMut<SyncOut
     if !profiles.is_changed() {
         return;
     }
-    let entries = profiles.profiles.iter().map(|(&s, n)| {
-        let color = profiles.colors.get(&s).copied().unwrap_or_else(|| crate::sync::generate_user_color(s));
-        (s, n.clone(), color)
-    }).collect();
     outbox.0.push((
         SyncChannel::CommandBus,
         SyncEnvelope::Profiles(ProfilesMsg {
-            entries,
+            entries: crate::sync::profile_wire_entries(&profiles),
         }),
     ));
 }
@@ -455,17 +451,13 @@ fn on_server_connected(
             entries: registry.snapshot(),
         }),
     );
-    let entries = profiles.profiles.iter().map(|(&s, n)| {
-        let color = profiles.colors.get(&s).copied().unwrap_or_else(|| crate::sync::generate_user_color(s));
-        (s, n.clone(), color)
-    }).collect();
     server_send(
         &mut sender,
         server,
         &target,
         SyncChannel::CommandBus,
         &SyncEnvelope::Profiles(ProfilesMsg {
-            entries,
+            entries: crate::sync::profile_wire_entries(&profiles),
         }),
     );
     info!("[net] client connected: peer={peer:?} session={}", session.0);

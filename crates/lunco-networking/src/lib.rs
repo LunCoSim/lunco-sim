@@ -16,8 +16,6 @@
 //! With the feature off the plugin is a no-op and single-player is unaffected.
 
 use bevy::prelude::*;
-#[cfg(not(target_family = "wasm"))]
-use std::net::SocketAddr;
 
 #[cfg(feature = "networking")]
 mod protocol;
@@ -194,21 +192,6 @@ pub(crate) fn next_client_id() -> u64 {
     {
         lunco_core::ids::random_u64()
     }
-}
-
-/// Resolve a `host:port` string to a [`SocketAddr`] for the **native** netcode
-/// path (hostnames resolve via DNS). Falls back to `127.0.0.1:5888`. Browsers
-/// never call this — they dial the hostname URL directly.
-#[cfg(not(target_family = "wasm"))]
-pub(crate) fn resolve_socket_addr(server: &str) -> SocketAddr {
-    use std::net::ToSocketAddrs;
-    server
-        .to_socket_addrs()
-        .ok()
-        .and_then(|mut it| it.next())
-        .unwrap_or_else(|| {
-            SocketAddr::from(([127, 0, 0, 1], lunco_core::session::DEFAULT_HOST_PORT))
-        })
 }
 
 /// The address the in-sim *Connect* button should default to: the page origin
