@@ -12,6 +12,7 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_core::{CelestialClock, Severity, TelemetryEvent, TelemetryValue};
 
 /// Parse a `[x, y, z]` JSON array under `key`.
 fn parse_vec3(params: &serde_json::Value, key: &str) -> Option<DVec3> {
@@ -130,4 +131,132 @@ pub fn register_physics_queries(app: &mut App) {
     let mut reg = app.world_mut().resource_mut::<ApiQueryRegistry>();
     reg.register(RaycastProvider);
     reg.register(GroundHeightProvider);
+}
+
+// ── Collision / trigger-volume events → the telemetry bus ───────────────────
+//
+// avian's `CollisionStart` / `CollisionEnd` are the physics-truth for "two
+// colliders started/stopped touching". We mirror them onto the engine-wide
+// `TelemetryEvent` bus so a rhai scenario's `on_event` hook can REACT to
+// contact (entered a trigger zone, hit an obstacle) instead of polling
+// `distance()` every tick. Scripting never sees avian — it just receives a
+// `COLLISION_START` / `COLLISION_END` telemetry pulse like any other event.
+//
+// avian only emits these for entities carrying `CollisionEventsEnabled`, so
+// there is NO firehose by default: a wheel resting on terrain is silent. Sensor
+// (trigger-volume) entities get the marker auto-added below for zero-config
+// zone triggers; solid bodies that want collision callbacks must carry it
+// explicitly (authored in USD / spawn code).
+
+/// The `GlobalEntityId` (as `u64`) for a contact side: the collider's own id if
+/// it's registered, else its rigid body's id. `None` when neither is registered
+/// (nothing a script could name).
+fn contact_gid(reg: &ApiEntityRegistry, collider: Entity, body: Option<Entity>) -> Option<u64> {
+    reg.api_id_for(collider)
+        .or_else(|| body.and_then(|b| reg.api_id_for(b)))
+        .map(|g| g.get())
+}
+
+/// `"a:b"` gid pair for a contact, or `None` if neither side is a registered
+/// entity. An unregistered side is reported as `0` (e.g. rover hits unregistered
+/// terrain → `"42:0"`), so a script still learns it touched *something*.
+fn contact_pair(
+    reg: &ApiEntityRegistry,
+    c1: Entity,
+    b1: Option<Entity>,
+    c2: Entity,
+    b2: Option<Entity>,
+) -> Option<String> {
+    let a = contact_gid(reg, c1, b1).unwrap_or(0);
+    let b = contact_gid(reg, c2, b2).unwrap_or(0);
+    if a == 0 && b == 0 {
+        return None;
+    }
+    Some(format!("{a}:{b}"))
+}
+
+/// Bridge `CollisionStart`/`CollisionEnd` → `TelemetryEvent` (`COLLISION_START`
+/// / `COLLISION_END`, payload `"gidA:gidB"`). Triggered events reach the script
+/// inbox observer and are delivered to `on_event` next tick (the same
+/// frame-delayed actor model `emit` uses), so a one-tick latency is expected.
+fn bridge_collision_events(
+    mut starts: MessageReader<CollisionStart>,
+    mut ends: MessageReader<CollisionEnd>,
+    registry: Res<ApiEntityRegistry>,
+    clock: Option<Res<CelestialClock>>,
+    mut commands: Commands,
+) {
+    let timestamp = clock.map(|c| c.epoch).unwrap_or(0.0);
+    let mut fire = |name: &str, pair: String, commands: &mut Commands| {
+        commands.trigger(TelemetryEvent {
+            name: name.to_string(),
+            severity: Severity::Info,
+            data: TelemetryValue::String(pair),
+            timestamp,
+        });
+    };
+    for ev in starts.read() {
+        if let Some(p) = contact_pair(&registry, ev.collider1, ev.body1, ev.collider2, ev.body2) {
+            fire("COLLISION_START", p, &mut commands);
+        }
+    }
+    for ev in ends.read() {
+        if let Some(p) = contact_pair(&registry, ev.collider1, ev.body1, ev.collider2, ev.body2) {
+            fire("COLLISION_END", p, &mut commands);
+        }
+    }
+}
+
+/// Auto-arm collision events on trigger volumes: any `Sensor` without the
+/// `CollisionEventsEnabled` marker gets it, so authoring a sensor zone in USD is
+/// enough to receive `COLLISION_START`/`COLLISION_END` in a script — no extra
+/// component plumbing. The `Without` filter makes this a no-op once armed.
+fn arm_sensor_collision_events(
+    q: Query<Entity, (With<Sensor>, Without<CollisionEventsEnabled>)>,
+    mut commands: Commands,
+) {
+    for e in &q {
+        commands.entity(e).insert(CollisionEventsEnabled);
+    }
+}
+
+/// Wire the collision → telemetry bridge + sensor auto-arming. Kept separate
+/// from [`register_physics_queries`] (the read-side provider seam) since this is
+/// the event-side bridge.
+pub fn register_collision_event_bridge(app: &mut App) {
+    app.add_systems(Update, arm_sensor_collision_events);
+    app.add_systems(FixedUpdate, bridge_collision_events);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_core::GlobalEntityId;
+
+    #[test]
+    fn contact_pair_uses_body_fallback_and_marks_unregistered_zero() {
+        let mut world = World::new();
+        let rover = world.spawn_empty().id();
+        let wheel = world.spawn_empty().id(); // a collider child, not itself registered
+        let obstacle = world.spawn_empty().id();
+        let unreg = world.spawn_empty().id();
+
+        let mut reg = ApiEntityRegistry::default();
+        reg.assign(rover, GlobalEntityId::from_raw(42));
+        reg.assign(obstacle, GlobalEntityId::from_raw(7));
+
+        // collider1 is the unregistered wheel, but its body is the registered
+        // rover → resolves to 42 via the body fallback; collider2 = obstacle(7).
+        assert_eq!(
+            contact_pair(&reg, wheel, Some(rover), obstacle, None),
+            Some("42:7".to_string())
+        );
+        // Registered rover vs. unregistered terrain → "42:0" (still reported).
+        assert_eq!(
+            contact_pair(&reg, rover, None, unreg, None),
+            Some("42:0".to_string())
+        );
+        // Neither side registered → None (nothing a script could name).
+        assert_eq!(contact_pair(&reg, wheel, None, unreg, None), None);
+    }
 }

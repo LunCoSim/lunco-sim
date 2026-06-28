@@ -68,6 +68,9 @@ impl Plugin for LunCoMobilityPlugin {
         // Expose physics-backed spatial queries (Raycast, GroundHeight) so the
         // API / MCP / rhai `query()` can sense geometry without depending on avian.
         sensing::register_physics_queries(app);
+        // Bridge avian collision / trigger-volume events onto the telemetry bus
+        // so scripts can react via `on_event` instead of polling distance().
+        sensing::register_collision_event_bridge(app);
 
         app.register_type::<Suspension>()
            .register_type::<DifferentialDrive>()

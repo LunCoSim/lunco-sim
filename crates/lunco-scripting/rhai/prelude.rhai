@@ -13,8 +13,12 @@
 //                                        structs as maps
 //   list_entities() -> [#{id,name}]
 //   find(name) -> id
-//   sim_tick() -> i64
+//   sim_tick() -> i64             time:  current fixed tick (integer)
+//   dt() -> f64                   time:  fixed-step delta in seconds (1/60)
+//   elapsed_seconds() -> f64      time:  monotonic sim seconds since startup
 //   emit(name, value)             event: fire a TelemetryEvent
+//   on_event(self, evt)           event: receives emit()s AND physics
+//                                        COLLISION_START / COLLISION_END pulses
 //
 // Everything below is POLICY, authored here (hot-reloadable), never compiled
 // into core. Add helpers freely — no Rust rebuild required.
@@ -172,4 +176,49 @@ fn entities_in_radius(point, radius) {
     let r = query("EntitiesInRadius", #{ point: point, radius: radius });
     if r == () { return []; }
     r.ids
+}
+
+// ── Collision / trigger events (react in on_event, no polling) ───────────────
+//
+// The mobility crate mirrors avian `CollisionStart`/`CollisionEnd` onto the
+// telemetry bus as `COLLISION_START` / `COLLISION_END` events whose value is the
+// gid pair "a:b" (a = avian event target, 0 = unregistered collider). They land
+// in `on_event(self, evt)` one tick after contact (same actor-model delay as
+// emit). avian only fires for entities with collision events enabled — trigger
+// volumes (Sensors) are auto-armed; solid bodies opt in via CollisionEventsEnabled.
+//
+//   fn on_event(self, evt) {
+//       let other = collision_other(evt, self);
+//       if other != () { /* touched `other` — react */ }
+//   }
+
+/// `[gidA, gidB]` of a collision `evt` (0 = unregistered side), or () if `evt`
+/// isn't a COLLISION_START/COLLISION_END pulse.
+fn collision_pair(evt) {
+    if evt.name != "COLLISION_START" && evt.name != "COLLISION_END" { return (); }
+    let parts = evt.value.split(":");
+    if parts.len() < 2 { return (); }
+    [parse_int(parts[0]), parse_int(parts[1])]
+}
+
+/// The OTHER entity in a collision `evt` involving `self_id`, or () if `evt`
+/// isn't a collision touching `self_id`. The basic contact probe. A return of
+/// `0` means you touched an unregistered collider (e.g. raw terrain).
+fn collision_other(evt, self_id) {
+    let p = collision_pair(evt);
+    if p == () { return (); }
+    if p[0] == self_id { p[1] }
+    else if p[1] == self_id { p[0] }
+    else { () }
+}
+
+/// True if `evt` is a contact START touching `self_id` (entered a zone / hit
+/// something). Use inside on_event.
+fn entered(evt, self_id) {
+    evt.name == "COLLISION_START" && collision_other(evt, self_id) != ()
+}
+
+/// True if `evt` is a contact END touching `self_id` (left a zone / separated).
+fn exited(evt, self_id) {
+    evt.name == "COLLISION_END" && collision_other(evt, self_id) != ()
 }

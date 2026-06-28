@@ -41,7 +41,7 @@ use std::cell::Cell;
 
 use lunco_core::{
     coords, Ack, CelestialClock, CommandResults, GlobalEntityId, OpId, Severity, SimTick,
-    TelemetryEvent, TelemetryValue,
+    TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
 use lunco_api::executor::ApiCommandEvent;
 use lunco_api::registry::ApiEntityRegistry;
@@ -201,6 +201,33 @@ pub fn build_world_engine() -> Engine {
         with_world(|w| w.get_resource::<SimTick>().map(|t| t.0 as i64))
             .flatten()
             .unwrap_or(0)
+    });
+
+    // dt() -> f64 — the fixed-step integration delta in seconds (1/FIXED_HZ).
+    // The per-tick `dt` an on_tick hook should multiply rates by for
+    // frame-rate-independent integration. Falls back to the canonical
+    // SECS_PER_TICK if no `Time<Fixed>` is in scope (e.g. a bare test world).
+    engine.register_fn("dt", || -> f64 {
+        with_world(|w| {
+            w.get_resource::<Time<bevy::time::Fixed>>()
+                .map(|t| t.delta_secs_f64())
+        })
+        .flatten()
+        .filter(|d| *d > 0.0)
+        .unwrap_or(SECS_PER_TICK)
+    });
+
+    // elapsed_seconds() -> f64 — monotonic simulation seconds since startup, for
+    // second-based timeouts / rate limits (`this.t0`-relative dwell, etc.). Uses
+    // the fixed clock's elapsed time (advances only while the sim steps), 0.0 if
+    // unavailable.
+    engine.register_fn("elapsed_seconds", || -> f64 {
+        with_world(|w| {
+            w.get_resource::<Time<bevy::time::Fixed>>()
+                .map(|t| t.elapsed_secs_f64())
+        })
+        .flatten()
+        .unwrap_or(0.0)
     });
 
     // Load the embedded prelude as a global module so its helpers are callable
@@ -865,5 +892,59 @@ mod tests {
     fn prelude_loads_as_module() {
         // The full build path: verbs + prelude-as-global-module must succeed.
         let _engine = super::build_world_engine();
+    }
+
+    #[test]
+    fn dt_and_elapsed_read_the_fixed_clock() {
+        use bevy::prelude::*;
+        use bevy::time::{Fixed, Time};
+        let mut world = World::new();
+        let mut t: Time<Fixed> = Default::default();
+        // Directly advance the fixed clock one step so delta/elapsed are set.
+        t.advance_by(std::time::Duration::from_secs_f64(1.0 / 60.0));
+        world.insert_resource(t);
+
+        let dt: f64 = super::eval_with_world(&mut world, "dt()")
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!((dt - 1.0 / 60.0).abs() < 1e-9, "dt() was {dt}");
+
+        let el: f64 = super::eval_with_world(&mut world, "elapsed_seconds()")
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!((el - 1.0 / 60.0).abs() < 1e-9, "elapsed_seconds() was {el}");
+    }
+
+    #[test]
+    fn dt_falls_back_to_secs_per_tick_without_a_clock() {
+        use bevy::prelude::World;
+        let mut world = World::new();
+        let dt: f64 = super::eval_with_world(&mut world, "dt()")
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!((dt - super::SECS_PER_TICK).abs() < 1e-12, "dt() was {dt}");
+    }
+
+    #[test]
+    fn collision_helpers_resolve_the_other_party() {
+        use bevy::prelude::World;
+        let mut world = World::new();
+        // A COLLISION_START between gid 10 and gid 20: from 10's view, the other
+        // party is 20; `entered` is true for a START, `exited` false.
+        let code = r#"
+            let evt = #{ name: "COLLISION_START", value: "10:20" };
+            [ collision_other(evt, 10), collision_other(evt, 20),
+              entered(evt, 10), exited(evt, 10),
+              collision_other(evt, 99) == () ]
+        "#;
+        let out = super::eval_with_world(&mut world, code).unwrap();
+        // rhai prints the array as [20, 10, true, false, true]
+        assert_eq!(out.trim(), "[20, 10, true, false, true]", "got {out}");
     }
 }
