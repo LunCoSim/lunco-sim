@@ -15,13 +15,25 @@ libloading = { version = "0.8", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true, optional = true }
 anyhow = { workspace = true }
+# Default scripting backend: pure-Rust, wasm-clean, sandboxed. Optional so the
+# crate (and any binary) can be built with no interpreter at all.
+rhai = { workspace = true, optional = true }
 
 [features]
-default = []
+# rhai on by default — the browser-capable backend. Turn it off
+# (`--no-default-features`) for a script-free build.
+default = ["rhai"]
+rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom"]
 python = ["dep:pyo3", "dep:libloading", "dep:serde_json"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 crossbeam-channel = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# rhai → ahash/const-random pull getrandom 0.3, which on wasm needs BOTH the
+# `wasm_js` feature (here) and `--cfg getrandom_backend="wasm_js"` (RUSTFLAGS,
+# already set by scripts/build_web.sh). Mirrors luncosim/lunco-sandbox/modelica.
+getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
 
 [lints]
 workspace = true

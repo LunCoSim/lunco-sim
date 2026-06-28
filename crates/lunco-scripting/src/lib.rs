@@ -55,11 +55,13 @@ impl Plugin for LunCoScriptingPlugin {
         // the only backend today.
         #[allow(unused_mut)]
         let mut backends = backend::ScriptBackends::default();
+        // Rhai (pure Rust, wasm-clean) — the default backend, on by default.
+        #[cfg(feature = "rhai")]
+        backends.insert(doc::ScriptLanguage::Rhai, Box::new(backend::RhaiBackend));
         #[cfg(feature = "python")]
         backends.insert(doc::ScriptLanguage::Python, Box::new(backend::PythonBackend));
         app.insert_resource(backends);
 
-        #[cfg(feature = "python")]
         commands::register_all_commands(app);
     }
 }

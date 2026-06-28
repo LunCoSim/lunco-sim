@@ -8,6 +8,8 @@ use std::collections::HashMap;
 pub enum ScriptLanguage {
     Python,
     Lua,
+    /// Pure-Rust embedded engine (rhai). The default browser-capable backend.
+    Rhai,
 }
 
 /// A canonical document representing a script in the Digital Twin.

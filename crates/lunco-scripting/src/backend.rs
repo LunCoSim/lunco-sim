@@ -34,6 +34,48 @@ impl ScriptBackends {
     }
 }
 
+/// Pure-Rust backend (rhai). The default, browser-capable runtime: compiles to
+/// `wasm32-unknown-unknown`, sandboxed (op/depth/size caps), deterministic.
+/// Gated on the `rhai` feature (on by default).
+#[cfg(feature = "rhai")]
+pub struct RhaiBackend;
+
+#[cfg(feature = "rhai")]
+impl ScriptBackend for RhaiBackend {
+    fn eval(&self, code: &str) -> Result<String, String> {
+        use std::sync::{Arc, Mutex};
+
+        let mut engine = rhai::Engine::new();
+
+        // Sandbox caps — defend against runaway / oversized untrusted scripts.
+        engine.set_max_operations(1_000_000);
+        engine.set_max_call_levels(64);
+        engine.set_max_string_size(64 * 1024);
+        engine.set_max_array_size(10_000);
+
+        // Capture `print(...)` output so callers get script stdout, mirroring
+        // the Python backend's StringIO redirect.
+        let out = Arc::new(Mutex::new(String::new()));
+        let sink = out.clone();
+        engine.on_print(move |s| {
+            if let Ok(mut buf) = sink.lock() {
+                buf.push_str(s);
+                buf.push('\n');
+            }
+        });
+
+        let result = engine
+            .eval::<rhai::Dynamic>(code)
+            .map_err(|e| e.to_string())?;
+
+        let mut captured = out.lock().map_err(|_| "print buffer poisoned".to_string())?.clone();
+        if !result.is_unit() {
+            captured.push_str(&result.to_string());
+        }
+        Ok(captured)
+    }
+}
+
 /// CPython backend (via pyo3). Captures stdout so callers get script output.
 #[cfg(feature = "python")]
 pub struct PythonBackend;
