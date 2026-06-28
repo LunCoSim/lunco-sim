@@ -12,6 +12,9 @@ serde_json = { workspace = true }
 lunco-command-macro = { path = "../lunco-command-macro" }
 # `std::time::SystemTime::now()` panics on wasm32-unknown-unknown.
 web-time = { workspace = true }
+# Real entropy for the per-process id seed (`ids.rs`). The workspace pin enables
+# getrandom's `js` feature so this also works on wasm32 (crypto.getRandomValues).
+getrandom_02 = { workspace = true }
 
 [lints]
 workspace = true

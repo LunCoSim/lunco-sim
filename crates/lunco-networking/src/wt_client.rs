@@ -125,6 +125,16 @@ fn native_client_config(url: &str, cert_digest: String) -> Result<ClientConfig> 
         info!("[net] connecting to {url} with pinned cert digest");
         let mut hash = [0u8; 32];
         let bytes = from_hex(&cert_digest)?;
+        // A SHA-256 digest is exactly 32 bytes; `from_hex` only guarantees even
+        // length, so guard before `copy_from_slice` (which panics on a length
+        // mismatch) and fail gracefully on a malformed `LUNCO_CERT_DIGEST`.
+        if bytes.len() != 32 {
+            return Err(format!(
+                "cert digest must be 32 bytes (64 hex chars), got {} bytes: {cert_digest}",
+                bytes.len()
+            )
+            .into());
+        }
         hash.copy_from_slice(&bytes);
         let digest = Sha256Digest::new(hash);
         config.with_server_certificate_hashes([digest])

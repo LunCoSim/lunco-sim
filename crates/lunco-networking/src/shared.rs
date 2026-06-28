@@ -60,11 +60,19 @@ pub(crate) fn deserialize_env(bytes: &[u8]) -> Option<SyncEnvelope> {
 
 /// Deterministic, collision-free `PeerId` → `SessionId`. Netcode peers carry a
 /// distinct `u64`, so sessions are unique per connection without a side table.
+/// `Raw` peers carry a `SocketAddr` instead of a `u64`; hashing its address
+/// keeps distinct raw peers distinct (a fixed sentinel collapsed them all to one
+/// session, breaking per-peer ownership/authority for raw connections).
 pub(crate) fn peer_to_session(peer: PeerId) -> SessionId {
     let raw = match peer {
         PeerId::Netcode(n) | PeerId::Local(n) | PeerId::Entity(n) | PeerId::Steam(n) => n,
         PeerId::Server => 0,
-        PeerId::Raw(_) => u64::MAX,
+        PeerId::Raw(addr) => {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            addr.hash(&mut h);
+            h.finish()
+        }
     };
     SessionId(raw)
 }

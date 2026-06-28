@@ -406,11 +406,16 @@ impl Default for NetworkConfig {
 #[derive(Resource, Default)]
 pub struct SyncChannelRegistry(pub HashMap<String, SyncChannel>);
 
-/// Bounded set of recently-applied `OpId`s for idempotent replay rejection.
+/// Bounded set of recently-applied `(origin, OpId)` pairs for idempotent replay
+/// rejection. Keying on `origin` (the source [`SessionId`]) as well as the raw
+/// [`OpId`] is load-bearing: two distinct processes can legitimately mint the
+/// same `OpId` value (the id generator is only disjoint *across* processes, not
+/// globally collision-proof), so keying on `OpId` alone would drop a real
+/// command from client B as a "duplicate" of client A's — silent data loss.
 #[derive(Resource)]
 pub struct SyncDedup {
-    seen: HashSet<u64>,
-    order: VecDeque<u64>,
+    seen: HashSet<(u64, u64)>,
+    order: VecDeque<(u64, u64)>,
     cap: usize,
 }
 
@@ -425,12 +430,14 @@ impl Default for SyncDedup {
 }
 
 impl SyncDedup {
-    /// `true` if `op` is new (apply it); `false` if already seen (drop).
-    pub fn check_and_insert(&mut self, op: OpId) -> bool {
-        if !self.seen.insert(op.0) {
+    /// `true` if `(origin, op)` is new (apply it); `false` if already seen
+    /// (drop). The same `op` from two different origins is **not** a duplicate.
+    pub fn check_and_insert(&mut self, origin: SessionId, op: OpId) -> bool {
+        let key = (origin.0, op.0);
+        if !self.seen.insert(key) {
             return false;
         }
-        self.order.push_back(op.0);
+        self.order.push_back(key);
         if self.order.len() > self.cap {
             if let Some(old) = self.order.pop_front() {
                 self.seen.remove(&old);
@@ -564,7 +571,7 @@ pub fn apply_sync_command(
     mut dedup: ResMut<SyncDedup>,
 ) {
     let ev = trigger.event();
-    if !dedup.check_and_insert(ev.op_id) {
+    if !dedup.check_and_insert(ev.origin, ev.op_id) {
         return; // duplicate (Reject::Duplicate, silently absorbed)
     }
     // Host authorizes against ownership; a client trusts the host.
