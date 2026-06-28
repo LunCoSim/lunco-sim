@@ -40,6 +40,32 @@ use rumoca_compile::parsing::ClassType;
 // `crate::sim_default::drilled_class_for_doc`.
 use crate::state::ModelicaDocumentRegistry;
 
+/// `BrowserCtx` reader mirroring
+/// [`crate::sim_default::drilled_class_for_doc_ctx`]. `BrowserCtx` is
+/// not a `PanelCtx`, so the `_ctx` helper can't be reused — we read the
+/// same resources (`TabRenderContext`, `ModelTabs`) through the browser
+/// context directly.
+fn drilled_class_for_doc_bctx(
+    ctx: &BrowserCtx<'_, '_>,
+    doc: DocumentId,
+) -> Option<String> {
+    use crate::model_tabs::ModelTabs;
+    use crate::model_tabs_types::TabRenderContext;
+    if let Some(tc) = ctx.resource::<TabRenderContext>() {
+        if let Some(tab_id) = tc.tab_id {
+            if let Some(tabs) = ctx.resource::<ModelTabs>() {
+                if let Some(state) = tabs.get(tab_id) {
+                    if state.doc == doc {
+                        return state.drilled_class.clone();
+                    }
+                }
+            }
+        }
+    }
+    ctx.resource::<ModelTabs>()
+        .and_then(|t| t.drilled_class_for_doc(doc))
+}
+
 /// One Modelica class entry rendered in the tree.
 #[derive(Debug, Clone)]
 struct ClassEntry {
@@ -77,7 +103,7 @@ impl BrowserSection for ModelicaSection {
         100
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_>) {
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_, '_>) {
         // OMEdit-style flat list — system libraries on top, then
         // writable workspace documents. Both source-of-truth reads:
         //   * libraries come from `PackageTreeCache::roots` (the
@@ -91,23 +117,23 @@ impl BrowserSection for ModelicaSection {
         // Pull `(id, name)` pairs first so we can re-borrow `world`
         // mutably inside `render_root_subtree` without overlapping
         // an immutable cache borrow.
-        let library_rows: Vec<(String, String)> = {
-            let cache = ctx
-                .world
-                .resource::<crate::package_tree::PackageTreeCache>();
-            cache
-                .roots
-                .iter()
-                .filter_map(|root| match root {
-                    crate::package_tree::PackageNode::Category {
-                        id,
-                        name,
-                        ..
-                    } => Some((id.clone(), name.clone())),
-                    _ => None,
-                })
-                .collect()
-        };
+        let library_rows: Vec<(String, String)> = ctx
+            .resource::<crate::package_tree::PackageTreeCache>()
+            .map(|cache| {
+                cache
+                    .roots
+                    .iter()
+                    .filter_map(|root| match root {
+                        crate::package_tree::PackageNode::Category {
+                            id,
+                            name,
+                            ..
+                        } => Some((id.clone(), name.clone())),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         for (root_id, root_name) in &library_rows {
             // All libraries start collapsed; user expands the ones
@@ -119,7 +145,7 @@ impl BrowserSection for ModelicaSection {
                 .default_open(false)
                 .show(ui, |ui| {
                     crate::ui::panels::package_browser::render_root_subtree(
-                        ctx.world, ui, root_id,
+                        ui, ctx, root_id,
                     );
                 });
             resp.header_response
@@ -133,8 +159,9 @@ impl BrowserSection for ModelicaSection {
         // showing a different label in the browser is just confusing.
         // Falls back to the origin slug while no class exists yet
         // (mid-parse, empty draft).
-        let workspace_docs: Vec<(DocumentId, String)> = {
-            let registry = ctx.world.resource::<ModelicaDocumentRegistry>();
+        let workspace_docs: Vec<(DocumentId, String)> = ctx
+            .resource::<ModelicaDocumentRegistry>()
+            .map(|registry| {
             registry
                 .iter()
                 .filter_map(|(doc_id, host)| {
@@ -148,11 +175,12 @@ impl BrowserSection for ModelicaSection {
                     // docs). The inner class name is rendered as the
                     // M-badge child row, so the two stay decoupled —
                     // renaming the doc row doesn't rewrite source.
-                    let label = origin.display_name();
+                    let label: String = origin.display_name();
                     Some((doc_id, label))
                 })
                 .collect()
-        };
+            })
+            .unwrap_or_default();
 
         if library_rows.is_empty() && workspace_docs.is_empty() {
             ui.label(
@@ -192,13 +220,12 @@ pub struct DocRenameState {
 /// alongside the class rename).
 fn render_workspace_doc_row(
     ui: &mut egui::Ui,
-    ctx: &mut BrowserCtx<'_>,
+    ctx: &mut BrowserCtx<'_, '_>,
     doc_id: DocumentId,
     doc_name: &str,
 ) {
     let editing = ctx
-        .world
-        .get_resource::<DocRenameState>()
+        .resource::<DocRenameState>()
         .and_then(|s| s.editing.clone())
         .filter(|(d, _)| *d == doc_id);
 
@@ -223,15 +250,16 @@ fn render_workspace_doc_row(
             // rename began. Calling `request_focus()` every frame
             // re-steals focus and prevents click-away from working.
             if ctx
-                .world
-                .get_resource::<DocRenameState>()
+                .resource::<DocRenameState>()
                 .map(|s| s.needs_focus)
                 .unwrap_or(false)
             {
                 resp.request_focus();
-                if let Some(mut s) = ctx.world.get_resource_mut::<DocRenameState>() {
-                    s.needs_focus = false;
-                }
+                ctx.defer(|world| {
+                    if let Some(mut s) = world.get_resource_mut::<DocRenameState>() {
+                        s.needs_focus = false;
+                    }
+                });
             }
             let enter = resp.lost_focus()
                 && resp.ctx.input(|i| i.key_pressed(egui::Key::Enter));
@@ -260,8 +288,7 @@ fn render_workspace_doc_row(
         // the origin once before the header so we don't re-borrow
         // the registry inside the closure.
         let icon: &'static str = ctx
-            .world
-            .get_resource::<ModelicaDocumentRegistry>()
+            .resource::<ModelicaDocumentRegistry>()
             .and_then(|r| r.host(doc_id))
             .map(|h| {
                 if h.document().origin().is_untitled() {
@@ -338,16 +365,19 @@ fn render_workspace_doc_row(
             None,
         }
         let target = {
-            let registry = ctx.world.resource::<ModelicaDocumentRegistry>();
-            let host = registry.host(doc_id);
-            let origin = host.map(|h| h.document().origin().clone());
+            let origin = ctx
+                .resource::<ModelicaDocumentRegistry>()
+                .and_then(|r| r.host(doc_id))
+                .map(|h| h.document().origin().clone());
             match origin {
                 Some(lunco_doc::DocumentOrigin::File { path, writable: true }) => {
-                    let ws = ctx.world.resource::<lunco_workspace::WorkspaceResource>();
-                    let twin_root = ws
-                        .active_twin
-                        .and_then(|id| ws.twin(id))
-                        .map(|t| t.root.clone());
+                    let twin_root = ctx
+                        .resource::<lunco_workspace::WorkspaceResource>()
+                        .and_then(|ws| {
+                            ws.active_twin
+                                .and_then(|id| ws.twin(id))
+                                .map(|t| t.root.clone())
+                        });
                     if let Some(root) = twin_root {
                         if let Ok(rel) = path.strip_prefix(&root) {
                             RenameTarget::File {
@@ -383,45 +413,54 @@ fn render_workspace_doc_row(
                         new_name.clone()
                     }
                 };
-                ctx.world
-                    .commands()
-                    .trigger(lunco_workbench::file_ops::RenameTwinEntry {
-                        twin_root,
-                        relative_path,
-                        new_name: new_file_name,
-                    });
+                ctx.trigger(lunco_workbench::file_ops::RenameTwinEntry {
+                    twin_root,
+                    relative_path,
+                    new_name: new_file_name,
+                });
             }
             RenameTarget::UntitledOrigin => {
                 if !new_name.is_empty() {
-                    if let Some(mut registry) =
-                        ctx.world.get_resource_mut::<ModelicaDocumentRegistry>()
-                    {
-                        if let Some(host) = registry.host_mut(doc_id) {
-                            host.document_mut().set_origin(
-                                lunco_doc::DocumentOrigin::untitled(new_name.clone()),
-                            );
+                    let new_name = new_name.clone();
+                    ctx.defer(move |world| {
+                        if let Some(mut registry) =
+                            world.get_resource_mut::<ModelicaDocumentRegistry>()
+                        {
+                            if let Some(host) = registry.host_mut(doc_id) {
+                                host.document_mut().set_origin(
+                                    lunco_doc::DocumentOrigin::untitled(new_name.clone()),
+                                );
+                            }
                         }
-                    }
+                    });
                 }
             }
             RenameTarget::None => {}
         }
-        if let Some(mut s) = ctx.world.get_resource_mut::<DocRenameState>() {
-            s.editing = None;
-        }
+        ctx.defer(move |world| {
+            if let Some(mut s) = world.get_resource_mut::<DocRenameState>() {
+                s.editing = None;
+            }
+        });
     } else if cancel_rename {
-        if let Some(mut s) = ctx.world.get_resource_mut::<DocRenameState>() {
-            s.editing = None;
-        }
+        ctx.defer(move |world| {
+            if let Some(mut s) = world.get_resource_mut::<DocRenameState>() {
+                s.editing = None;
+            }
+        });
     } else if let Some(initial) = start_rename {
-        if let Some(mut s) = ctx.world.get_resource_mut::<DocRenameState>() {
-            s.editing = Some((doc_id, initial));
-            s.needs_focus = true;
-        }
+        ctx.defer(move |world| {
+            if let Some(mut s) = world.get_resource_mut::<DocRenameState>() {
+                s.editing = Some((doc_id, initial));
+                s.needs_focus = true;
+            }
+        });
     } else if let Some(draft) = update_draft {
-        if let Some(mut s) = ctx.world.get_resource_mut::<DocRenameState>() {
-            s.editing = Some((doc_id, draft));
-        }
+        ctx.defer(move |world| {
+            if let Some(mut s) = world.get_resource_mut::<DocRenameState>() {
+                s.editing = Some((doc_id, draft));
+            }
+        });
     }
 }
 
@@ -435,12 +474,11 @@ fn render_workspace_doc_row(
 /// off-thread refresh + per-op optimistic patches keep the Index current.
 pub(crate) fn render_workspace_doc(
     ui: &mut egui::Ui,
-    ctx: &mut BrowserCtx<'_>,
+    ctx: &mut BrowserCtx<'_, '_>,
     doc_id: DocumentId,
 ) {
     let (classes, has_parse_errors) = match ctx
-        .world
-        .get_resource::<ModelicaDocumentRegistry>()
+        .resource::<ModelicaDocumentRegistry>()
         .and_then(|reg| reg.host(doc_id))
         .map(|host| classes_from_index(host.document().index()))
     {
@@ -456,17 +494,15 @@ pub(crate) fn render_workspace_doc(
     };
 
     let theme = ctx
-        .world
-        .get_resource::<lunco_theme::Theme>()
+        .resource::<lunco_theme::Theme>()
         .cloned()
         .unwrap_or_else(lunco_theme::Theme::dark);
 
     let active_doc: Option<DocumentId> = ctx
-        .world
-        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
     let active_qualified: Option<String> = active_doc.and_then(|d| {
-        crate::sim_default::drilled_class_for_doc(ctx.world, d)
+        drilled_class_for_doc_bctx(ctx, d)
     });
 
     // Collapse the redundant wrapper when the document holds a
@@ -479,8 +515,7 @@ pub(crate) fn render_workspace_doc(
     // classes (Airframe, Engine, FluidPort, …) sit directly under
     // the doc header.
     let doc_display_name: Option<String> = ctx
-        .world
-        .get_resource::<ModelicaDocumentRegistry>()
+        .resource::<ModelicaDocumentRegistry>()
         .and_then(|reg| reg.host(doc_id))
         .map(|host| host.document().origin().display_name());
     let classes: Vec<ClassEntry> = if classes.len() == 1
@@ -671,7 +706,7 @@ fn render_class_row(
     active_doc: Option<DocumentId>,
     active_qualified: Option<&str>,
     theme: &lunco_theme::Theme,
-    ctx: &mut BrowserCtx<'_>,
+    ctx: &mut BrowserCtx<'_, '_>,
 ) {
     use crate::ui::theme::ModelicaThemeExt;
     let badge = type_badge(&class.kind, theme);

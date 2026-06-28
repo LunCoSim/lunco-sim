@@ -22,7 +22,7 @@ use std::collections::VecDeque;
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::ui::panels::log::{render_log_view, LogEntry, LogLevel};
 use crate::state::ModelicaDocumentRegistry;
@@ -99,16 +99,15 @@ impl Panel for DiagnosticsPanel {
         PanelSlot::Bottom
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        if world.get_resource::<DiagnosticsLog>().is_none() {
-            world.insert_resource(DiagnosticsLog::default());
-        }
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // Snapshot so the scroll area doesn't hold a long world borrow.
-        let snapshot: VecDeque<LogEntry> =
-            world.resource::<DiagnosticsLog>().entries.clone();
+        let snapshot: VecDeque<LogEntry> = ctx
+            .resource::<DiagnosticsLog>()
+            .map(|d| d.entries.clone())
+            .unwrap_or_default();
 
-        let theme = world
-            .get_resource::<lunco_theme::Theme>()
+        let theme = ctx
+            .resource::<lunco_theme::Theme>()
             .cloned()
             .unwrap_or_else(lunco_theme::Theme::dark);
         let muted = theme.tokens.text_subdued;
@@ -122,18 +121,24 @@ impl Panel for DiagnosticsPanel {
             &theme,
         );
         if clear_requested {
-            world.resource_mut::<DiagnosticsLog>().clear();
+            ctx.defer(|world| {
+                if let Some(mut log) = world.get_resource_mut::<DiagnosticsLog>() {
+                    log.clear();
+                }
+            });
         }
         // A located diagnostic was clicked — ask the code editor to
         // jump to it. The target is the currently active document
         // (lint runs on the bound doc, so it's already the open tab).
         if let Some(loc) = jump {
-            let doc = world
-                .get_resource::<lunco_workspace::WorkspaceResource>()
+            let doc = ctx
+                .resource::<lunco_workspace::WorkspaceResource>()
                 .and_then(|ws| ws.active_document);
-            world
-                .get_resource_or_insert_with(crate::ui::panels::code_editor::EditorJumpRequest::default)
-                .request(doc, loc);
+            ctx.defer(move |world| {
+                world
+                    .get_resource_or_insert_with(crate::ui::panels::code_editor::EditorJumpRequest::default)
+                    .request(doc, loc);
+            });
         }
     }
 }

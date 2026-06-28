@@ -11,36 +11,36 @@ use super::interaction::{handle_context_menu, handle_drag_and_drop, handle_node_
 pub(crate) fn render_diagram_canvas(
     _panel: &super::CanvasDiagramPanel,
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut lunco_workbench::PanelCtx,
+    state: &mut CanvasDiagramState,
 ) {
     let _frame_t0 = web_time::Instant::now();
-    let render_tab_id = world.resource::<TabRenderContext>().tab_id;
+    let render_tab_id = ctx.resource::<TabRenderContext>().and_then(|c| c.tab_id);
     let trace_phases = std::env::var_os("RENDER_CANVAS_TRACE").is_some();
     let mut phase_t = web_time::Instant::now();
     let mut phase_log = Vec::new();
 
-    let (doc_id, editing_class) = ops::resolve_doc_context(world);
+    let (doc_id, editing_class) = ops::resolve_doc_context(ctx);
     mark("resolve_doc_context", &mut phase_t, &mut phase_log);
 
     let active_doc = doc_id;
-    let tab_read_only = active_doc.map(|d| crate::state::read_only_for(world, d)).unwrap_or(false);
+    let tab_read_only = active_doc.map(|d| crate::state::read_only_for_ctx(ctx, d)).unwrap_or(false);
 
-    let snap_settings = world.get_resource::<CanvasSnapSettings>().filter(|s| s.enabled).map(|s| lunco_canvas::SnapSettings { step: s.step });
+    let snap_settings = ctx.resource::<CanvasSnapSettings>().filter(|s| s.enabled).map(|s| lunco_canvas::SnapSettings { step: s.step });
 
     {
         // Publish the active theme once per frame. Every egui paint
         // helper (canvas built-in layers, node/edge painters, icon
         // remap) reads it back via `lunco_theme::active(ctx)` — one
         // theme, one transport, no per-consumer projection caches.
-        let theme = world.get_resource::<lunco_theme::Theme>().cloned().unwrap_or_else(lunco_theme::Theme::dark);
+        let theme = ctx.resource::<lunco_theme::Theme>().cloned().unwrap_or_else(lunco_theme::Theme::dark);
         lunco_theme::store_active(ui.ctx(), &theme);
     }
 
-    stash_snapshots(ui.ctx(), world, doc_id);
+    stash_snapshots(ui.ctx(), ctx, doc_id);
     mark("snapshots+sigreg", &mut phase_t, &mut phase_log);
 
     let (response, events) = {
-        let mut state = world.resource_mut::<CanvasDiagramState>();
         let docstate = match (render_tab_id, active_doc) { (Some(t), Some(d)) => state.get_mut_for_tab(t, d), _ => state.get_mut(active_doc) };
         docstate.canvas.read_only = tab_read_only;
         docstate.canvas.snap = snap_settings;
@@ -48,9 +48,12 @@ pub(crate) fn render_diagram_canvas(
     };
     mark("canvas.ui (scene render)", &mut phase_t, &mut phase_log);
 
-    if let Some(mut active) = world.get_resource_mut::<crate::ui::wasm_autosave::IsGestureActive>() {
-        active.canvas = response.is_pointer_button_down_on();
-    }
+    let gesture_down = response.is_pointer_button_down_on();
+    ctx.defer(move |world| {
+        if let Some(mut active) = world.get_resource_mut::<crate::ui::wasm_autosave::IsGestureActive>() {
+            active.canvas = gesture_down;
+        }
+    });
 
     // ─── Overlays ───
     //
@@ -66,28 +69,25 @@ pub(crate) fn render_diagram_canvas(
     // never momentarily empty mid-flight, so the overlay needs no
     // local fallback predicates.
     {
-        let theme = world.get_resource::<lunco_theme::Theme>().cloned().unwrap_or_else(lunco_theme::Theme::dark);
+        let theme = ctx.resource::<lunco_theme::Theme>().cloned().unwrap_or_else(lunco_theme::Theme::dark);
         let drilled_class = render_tab_id
             .and_then(|tid| {
-                let tabs = world.resource::<crate::model_tabs::ModelTabs>();
-                tabs.get(tid).and_then(|t| t.drilled_class.clone())
+                ctx.resource::<crate::model_tabs::ModelTabs>()
+                    .and_then(|tabs| tabs.get(tid).and_then(|t| t.drilled_class.clone()))
             })
             .unwrap_or_default();
         let lifecycle = {
-            let state = world.resource::<CanvasDiagramState>();
             let docstate = match render_tab_id { Some(t) => state.get_for_tab(t), None => state.get(active_doc) };
             let has_content = docstate.canvas.scene.node_count() > 0;
-            let bus = world.resource::<lunco_workbench::status_bus::StatusBus>();
             active_doc
-                .map(|d| bus.lifecycle(lunco_workbench::status_bus::BusyScope::Document(d.0), has_content))
+                .and_then(|d| ctx.resource::<lunco_workbench::status_bus::StatusBus>().map(|bus| bus.lifecycle(lunco_workbench::status_bus::BusyScope::Document(d.0), has_content)))
                 .unwrap_or(lunco_workbench::status_bus::LifecycleState::Empty)
         };
 
         use lunco_workbench::status_bus::LifecycleState;
         match lifecycle {
             LifecycleState::Loading => {
-                let bus = world.resource::<lunco_workbench::status_bus::StatusBus>();
-                if let Some(doc_id) = active_doc {
+                if let (Some(doc_id), Some(bus)) = (active_doc, ctx.resource::<lunco_workbench::status_bus::StatusBus>()) {
                     lunco_ui::busy::LoadingIndicator::for_scope(lunco_workbench::status_bus::BusyScope::Document(doc_id.0))
                         .overlay_on(ui, response.rect, bus, &theme);
                 }
@@ -97,7 +97,7 @@ pub(crate) fn render_diagram_canvas(
                 overlays::render_drill_in_error_overlay(ui, response.rect, &drilled_class, &msg, &theme);
             }
             LifecycleState::Empty => {
-                overlays::render_empty_diagram_overlay(ui, response.rect, world);
+                overlays::render_empty_diagram_overlay(ui, response.rect, ctx);
             }
             LifecycleState::Content => {}
         }
@@ -125,7 +125,7 @@ pub(crate) fn render_diagram_canvas(
     // `request_reproject_all` (the MSL-ready handler), so it stays
     // MSL-specific.
     {
-        let msl_state = world.get_resource::<lunco_assets::msl::MslLoadState>();
+        let msl_state = ctx.resource::<lunco_assets::msl::MslLoadState>();
         let msl_pending = msl_state.map(|s| s.is_pending()).unwrap_or(true);
         // Live load detail (phase + %) while the bundle is still arriving,
         // so the diagram shows *why* the icons are gray and how far along
@@ -139,7 +139,6 @@ pub(crate) fn render_diagram_canvas(
             _ => None,
         });
         let (has_content, reproject_pending) = {
-            let state = world.resource::<CanvasDiagramState>();
             let docstate = match render_tab_id {
                 Some(t) => state.get_for_tab(t),
                 None => state.get(active_doc),
@@ -164,17 +163,17 @@ pub(crate) fn render_diagram_canvas(
             // queued thing is what the user just clicked.
             let compile_pending = active_doc
                 .and_then(|d| {
-                    world
-                        .get_resource::<crate::state::CompileStates>()
+                    ctx
+                        .resource::<crate::state::CompileStates>()
                         .map(|cs| cs.is_compiling(d))
                 })
                 .unwrap_or(false);
-            let run_pending = world
-                .get_resource::<crate::ModelicaRunnerResource>()
+            let run_pending = ctx
+                .resource::<crate::ModelicaRunnerResource>()
                 .map(|r| r.0.in_flight_count() > 0 || r.0.queued_count() > 0)
                 .unwrap_or(false);
-            let color = world
-                .get_resource::<lunco_theme::Theme>()
+            let color = ctx
+                .resource::<lunco_theme::Theme>()
                 .map(|t| t.tokens.warning)
                 .unwrap_or_else(|| lunco_theme::Theme::dark().tokens.warning);
             let painter = ui
@@ -224,18 +223,20 @@ pub(crate) fn render_diagram_canvas(
     }
     mark("overlays", &mut phase_t, &mut phase_log);
 
-    handle_drag_and_drop(ui, world, &response, active_doc, render_tab_id, tab_read_only, editing_class.clone());
-    let menu_ops = handle_context_menu(ui, world, &response, active_doc, render_tab_id, tab_read_only, editing_class.as_deref());
-    handle_node_double_click(world, &events, active_doc);
+    handle_drag_and_drop(ui, ctx, state, &response, active_doc, render_tab_id, tab_read_only, editing_class.clone());
+    let menu_ops = handle_context_menu(ui, ctx, state, &response, active_doc, render_tab_id, tab_read_only, editing_class.as_deref());
+    handle_node_double_click(ctx, state, &events, active_doc);
 
     if let (Some(doc_id), Some(class)) = (doc_id, editing_class.as_ref()) {
-        let mut all_ops = ops::build_ops_from_events(world, &events, class);
+        let mut all_ops = ops::build_ops_from_events(ctx, state, &events, class);
         all_ops.extend(menu_ops);
         if !all_ops.is_empty() {
-            #[cfg(feature = "lunco-api")]
-            crate::api::trigger_apply_ops(world, doc_id, all_ops);
-            #[cfg(not(feature = "lunco-api"))]
-            super::super::ops::apply_ops_public(world, doc_id, all_ops);
+            ctx.defer(move |world| {
+                #[cfg(feature = "lunco-api")]
+                crate::api::trigger_apply_ops(world, doc_id, all_ops);
+                #[cfg(not(feature = "lunco-api"))]
+                super::super::ops::apply_ops_public(world, doc_id, all_ops);
+            });
         }
     }
 
@@ -247,16 +248,18 @@ pub(crate) fn render_diagram_canvas(
     if let Some(doc_id) = active_doc {
         let writes = lunco_viz::kinds::canvas_plot_node::drain_input_writes(ui.ctx());
         for (name, value) in writes {
-            if let Err(err) = crate::ui::commands::sim::apply_set_model_input(
-                world, doc_id, &name, value,
-            ) {
-                bevy::log::warn!(
-                    "[CanvasDiagram] in-canvas input write failed: name={name} value={value} err={err:?}"
-                );
-            }
+            ctx.defer(move |world| {
+                if let Err(err) = crate::ui::commands::sim::apply_set_model_input(
+                    world, doc_id, &name, value,
+                ) {
+                    bevy::log::warn!(
+                        "[CanvasDiagram] in-canvas input write failed: name={name} value={value} err={err:?}"
+                    );
+                }
+            });
         }
     }
-    
+
     mark("tail (events/menu/fit)", &mut phase_t, &mut phase_log);
     let frame_ms = _frame_t0.elapsed().as_secs_f64() * 1000.0;
     log_frame_times(frame_ms, 0.0);

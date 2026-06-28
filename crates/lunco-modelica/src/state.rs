@@ -299,6 +299,35 @@ pub fn detected_name_for(world: &bevy::prelude::World, doc: DocumentId) -> Optio
     crate::sim_default::default_simulation_class(world, doc)
 }
 
+/// `PanelCtx` sibling of [`detected_name_for`].
+#[cfg(feature = "ui")]
+pub fn detected_name_for_ctx(
+    ctx: &lunco_workbench::PanelCtx,
+    doc: DocumentId,
+) -> Option<String> {
+    crate::sim_default::default_simulation_class_ctx(ctx, doc)
+}
+
+/// `PanelCtx` sibling of [`read_only_for`].
+#[cfg(feature = "ui")]
+pub fn read_only_for_ctx(ctx: &lunco_workbench::PanelCtx, doc: DocumentId) -> bool {
+    ctx.resource::<ModelicaDocumentRegistry>()
+        .and_then(|r| r.host(doc))
+        .map(|h| h.document().is_read_only())
+        .unwrap_or(false)
+}
+
+/// `PanelCtx` sibling of [`display_name_for`].
+#[cfg(feature = "ui")]
+pub fn display_name_for_ctx(
+    ctx: &lunco_workbench::PanelCtx,
+    doc: DocumentId,
+) -> Option<String> {
+    ctx.resource::<ModelicaDocumentRegistry>()
+        .and_then(|r| r.host(doc))
+        .map(|h| h.document().origin().display_name())
+}
+
 /// Read-only flag for `doc`. Replaces `open_model.read_only`.
 pub fn read_only_for(world: &bevy::prelude::World, doc: DocumentId) -> bool {
 world
@@ -520,6 +549,19 @@ impl ModelicaDocumentRegistry {
 pub fn simulator_for(world: &World, doc: DocumentId) -> Option<Entity> {
     world
         .get_resource::<ModelicaDocumentRegistry>()
+        .and_then(|r| r.simulator_for(doc))
+}
+
+/// `PanelCtx` sibling of [`simulator_for`]. Reads
+/// [`ModelicaDocumentRegistry`] through the capability-narrowed panel
+/// context so ported panels can resolve their doc's simulator entity
+/// during paint without `&World`.
+#[cfg(feature = "ui")]
+pub fn simulator_for_ctx(
+    ctx: &lunco_workbench::PanelCtx,
+    doc: DocumentId,
+) -> Option<Entity> {
+    ctx.resource::<ModelicaDocumentRegistry>()
         .and_then(|r| r.simulator_for(doc))
 }
 

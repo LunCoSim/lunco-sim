@@ -14,7 +14,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_sandbox_edit::catalog::{BalloonModelMarker, PythonBalloonMarker};
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 /// Which model the user has selected to attach next.
 #[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
@@ -61,25 +61,27 @@ impl Panel for ModelsPalette {
     fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
     fn transparent_background(&self) -> bool { true }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        let (mantle, tokens) = {
-            let theme = world.resource::<lunco_theme::Theme>();
-            (theme.colors.mantle, theme.tokens.clone())
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let Some((mantle, tokens)) = ctx
+            .resource::<lunco_theme::Theme>()
+            .map(|t| (t.colors.mantle, t.tokens.clone()))
+        else {
+            return;
         };
         egui::Frame::new()
             .fill(mantle)
             .inner_margin(8.0)
             .corner_radius(4)
-            .show(ui, |ui| models_palette_content(ui, world, &tokens));
+            .show(ui, |ui| models_palette_content(ui, ctx, &tokens));
     }
 }
 
-fn models_palette_content(ui: &mut egui::Ui, world: &mut World, tokens: &lunco_theme::DesignTokens) {
+fn models_palette_content(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_theme::DesignTokens) {
     ui.heading("Models");
 
     // Current attach state (for highlighting selected row + status banner).
-    let pending = world
-        .get_resource::<AttachState>()
+    let pending = ctx
+        .resource::<AttachState>()
         .map(|s| match s {
             AttachState::Pending(p) => Some(*p),
             AttachState::Idle => None,
@@ -91,9 +93,11 @@ fn models_palette_content(ui: &mut egui::Ui, world: &mut World, tokens: &lunco_t
             ui.label(egui::RichText::new("Attach:").color(tokens.success_subdued.linear_multiply(2.0))); // A bit brighter than background
             ui.label(egui::RichText::new(p.title()).strong());
             if ui.button("Cancel").clicked() {
-                if let Some(mut s) = world.get_resource_mut::<AttachState>() {
-                    *s = AttachState::Idle;
-                }
+                ctx.defer(|world| {
+                    if let Some(mut s) = world.get_resource_mut::<AttachState>() {
+                        *s = AttachState::Idle;
+                    }
+                });
             }
         });
         ui.label(
@@ -119,13 +123,16 @@ fn models_palette_content(ui: &mut egui::Ui, world: &mut World, tokens: &lunco_t
 
         let button = egui::Button::new(label).selected(is_selected).min_size(egui::vec2(ui.available_width(), 24.0));
         if ui.add_enabled(enabled, button).clicked() {
-            if let Some(mut s) = world.get_resource_mut::<AttachState>() {
-                *s = if is_selected {
-                    AttachState::Idle
-                } else {
-                    AttachState::Pending(item)
-                };
-            }
+            let new_state = if is_selected {
+                AttachState::Idle
+            } else {
+                AttachState::Pending(item)
+            };
+            ctx.defer(move |world| {
+                if let Some(mut s) = world.get_resource_mut::<AttachState>() {
+                    *s = new_state;
+                }
+            });
         }
     }
 

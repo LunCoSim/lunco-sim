@@ -42,7 +42,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::panel::{Panel, PanelId, PanelSlot};
+use crate::panel::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub mod files_section;
 
@@ -301,22 +301,48 @@ impl BrowserActions {
 /// `BrowserActions`, or `WorkspaceResource` — those are extracted by
 /// the panel for the duration of the render and inserting them here
 /// would break the take-and-restore protocol.
-pub struct BrowserCtx<'a> {
-    /// The currently-active Twin, or `None` if no Twin is open. Use
-    /// this when a section only needs to act on the focused folder
-    /// (commands, drill-in, etc.). Sections that want to render the
-    /// whole workspace (Files multi-root tree) read [`twins`] instead.
-    pub twin: Option<&'a lunco_twin::Twin>,
-    /// Every folder/twin-mode Twin currently registered in the
-    /// Workspace, in registration order. Sections that visualise the
-    /// workspace as a whole (Files section's multi-root tree) iterate
-    /// this; sections that act on a single focused folder use
-    /// [`twin`] instead.
-    pub twins: Vec<&'a lunco_twin::Twin>,
+pub struct BrowserCtx<'a, 'w> {
     /// Outbox the section pushes user actions into.
     pub actions: &'a mut BrowserActions,
-    /// Full ECS world for sections that need domain resources.
-    pub world: &'a mut bevy::prelude::World,
+    /// Capability-narrowed world access (reads + deferred mutations).
+    /// Sections read domain state via [`resource`](Self::resource) /
+    /// [`get`](Self::get) (e.g. the active Twin from `WorkspaceResource`)
+    /// and emit changes via [`defer`](Self::defer) / [`trigger`](Self::trigger).
+    panel: &'a mut PanelCtx<'w>,
+}
+
+impl<'a, 'w> BrowserCtx<'a, 'w> {
+    /// Build a section render context from the action outbox and the
+    /// narrowed [`PanelCtx`]. Used by sibling panels (e.g.
+    /// [`crate::FilesPanel`]) that drive the section registry from
+    /// outside this module, where the `panel` field isn't visible.
+    pub fn new(actions: &'a mut BrowserActions, panel: &'a mut PanelCtx<'w>) -> Self {
+        Self { actions, panel }
+    }
+
+    /// O(1) read of a resource (e.g. `WorkspaceResource` for the active
+    /// Twin / twin list, or any domain view-model).
+    pub fn resource<T: Resource>(&self) -> Option<&T> {
+        self.panel.resource::<T>()
+    }
+
+    /// O(1) read of one entity's component.
+    pub fn get<T: Component>(&self, entity: Entity) -> Option<&T> {
+        self.panel.get::<T>(entity)
+    }
+
+    /// Queue a world mutation to apply after the egui pass.
+    pub fn defer(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
+        self.panel.defer(f);
+    }
+
+    /// Emit an event after the egui pass.
+    pub fn trigger<E: bevy::ecs::event::Event>(&mut self, event: E)
+    where
+        for<'t> <E as bevy::ecs::event::Event>::Trigger<'t>: Default,
+    {
+        self.panel.trigger(event);
+    }
 }
 
 /// One pluggable section in the Twin Browser.
@@ -359,7 +385,7 @@ pub trait BrowserSection: Send + Sync + 'static {
     }
 
     /// Paint the section body.
-    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx);
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_, '_>);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -384,84 +410,62 @@ impl Panel for TwinBrowserPanel {
         PanelSlot::SideBrowser
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        // Take registry + actions + WorkspaceResource out of the
-        // world so sections can borrow `world` mutably during render
-        // without conflicting with the active-Twin read. Restored
-        // after.
-        let Some(mut registry) = world.remove_resource::<BrowserSectionRegistry>() else {
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        // Scope the section registry + action outbox out of the world for
+        // the duration of the render (the narrow, structural way to get
+        // `&mut` to the registry's trait objects — no raw `&mut World`).
+        // Sections read domain state (the active Twin via
+        // `WorkspaceResource`, …) through `BrowserCtx::resource` and emit
+        // changes via `defer`/`actions`.
+        let present = ctx.resource_scope::<BrowserSectionRegistry, _>(|ctx, registry| {
+            // Precompute each section's `order()` in a single walk; sorting
+            // by an `nth(i)` re-walk inside the comparator was O(n²)/frame.
+            let orders: Vec<_> = registry.iter().map(|s| s.order()).collect();
+            let mut visible: Vec<usize> = (0..orders.len()).collect();
+            visible.sort_by_key(|&i| (orders[i], i));
+
+            if visible.is_empty() {
+                ui.label(
+                    egui::RichText::new("No Twin sections registered.")
+                        .weak()
+                        .italics(),
+                );
+                return;
+            }
+
+            ctx.resource_scope::<BrowserActions, _>(|ctx, actions| {
+                // ScrollArea wraps every section so a fully-expanded MSL
+                // tree (~2500 entries) doesn't push later sections off
+                // screen. `auto_shrink=[false; 2]` fills the panel rect.
+                egui::ScrollArea::vertical()
+                    .id_salt("twin_panel_scroll")
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        for &i in &visible {
+                            let section = registry.section_mut(i);
+                            let header = egui::CollapsingHeader::new(section.title())
+                                .id_salt(("twin_panel_section", section.id()))
+                                .default_open(section.default_open());
+                            let resp = header.show(ui, |ui| {
+                                let mut bctx = BrowserCtx {
+                                    actions: &mut *actions,
+                                    panel: &mut *ctx,
+                                };
+                                section.render(ui, &mut bctx);
+                            });
+                            resp.header_response
+                                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        }
+                    });
+            });
+        });
+
+        if present.is_none() {
             ui.colored_label(
                 egui::Color32::LIGHT_RED,
                 "BrowserSectionRegistry resource missing",
             );
-            return;
-        };
-        let mut actions = world
-            .remove_resource::<BrowserActions>()
-            .unwrap_or_default();
-        let workspace = world.remove_resource::<crate::WorkspaceResource>();
-
-        // Single-panel model: every registered section renders in this
-        // panel, ordered by `BrowserSection::order()`. The standalone
-        // [`crate::FilesPanel`] still exists (registered floating, off
-        // by default) for users who want the files view in its own
-        // dock tab. `BrowserScope` is kept for grouping/filtering
-        // semantics elsewhere; it no longer gates visibility here.
-        // Precompute each section's `order()` in a single walk; sorting by
-        // an `nth(i)` re-walk inside the comparator was O(n²) per frame.
-        let orders: Vec<_> = registry.iter().map(|s| s.order()).collect();
-        let mut visible: Vec<usize> = (0..orders.len()).collect();
-        visible.sort_by_key(|&i| (orders[i], i));
-
-        if visible.is_empty() {
-            ui.label(
-                egui::RichText::new("No Twin sections registered.")
-                    .weak()
-                    .italics(),
-            );
-        } else {
-            // ScrollArea wraps every section so a fully-expanded MSL
-            // tree (~2500 entries) doesn't push later sections (or
-            // the panel itself) off-screen. `auto_shrink=[false; 2]`
-            // forces the viewport to fill the panel rect — without
-            // it egui would shrink the viewport to content and clip
-            // the last items if content grew mid-frame.
-            egui::ScrollArea::vertical()
-                .id_salt("twin_panel_scroll")
-                .auto_shrink([false; 2])
-                .show(ui, |ui| {
-                    for &i in &visible {
-                        let section = registry.section_mut(i);
-                        let header = egui::CollapsingHeader::new(section.title())
-                            .id_salt(("twin_panel_section", section.id()))
-                            .default_open(section.default_open());
-                        let resp = header.show(ui, |ui| {
-                            let twin_ref = workspace
-                                .as_ref()
-                                .and_then(|ws| ws.active_twin.and_then(|id| ws.twin(id)));
-                            let all_twins: Vec<&lunco_twin::Twin> = workspace
-                                .as_ref()
-                                .map(|ws| ws.twins().map(|(_, t)| t).collect())
-                                .unwrap_or_default();
-                            let mut ctx = BrowserCtx {
-                                twin: twin_ref,
-                                twins: all_twins,
-                                actions: &mut actions,
-                                world,
-                            };
-                            section.render(ui, &mut ctx);
-                        });
-                        resp.header_response
-                            .on_hover_cursor(egui::CursorIcon::PointingHand);
-                    }
-                });
         }
-
-        if let Some(w) = workspace {
-            world.insert_resource(w);
-        }
-        world.insert_resource(actions);
-        world.insert_resource(registry);
     }
 }
 
@@ -483,7 +487,7 @@ mod tests {
         fn title(&self) -> &str {
             "Counter"
         }
-        fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut BrowserCtx<'_>) {
+        fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut BrowserCtx<'_, '_>) {
             self.render_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }

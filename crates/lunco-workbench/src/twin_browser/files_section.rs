@@ -163,7 +163,7 @@ impl BrowserSection for FilesSection {
         200
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx) {
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_, '_>) {
         // Render workspace documents (saved + unsaved) so the list
         // stays stable across Save — a Save shouldn't make a doc
         // disappear from the user's view of "what am I working on."
@@ -172,11 +172,13 @@ impl BrowserSection for FilesSection {
         // are intentionally omitted — file extensions in the display
         // name carry that information for the user.
         let docs: Vec<super::UnsavedDocEntry> = ctx
-            .world
-            .get_resource::<super::UnsavedDocs>()
+            .resource::<super::UnsavedDocs>()
             .map(|r| r.entries.clone())
             .unwrap_or_default();
-        let warning = ctx.world.resource::<lunco_theme::Theme>().tokens.warning;
+        let warning = ctx
+            .resource::<lunco_theme::Theme>()
+            .map(|t| t.tokens.warning)
+            .unwrap_or(egui::Color32::YELLOW);
         // Dirty marker is intentionally subtle — same hue as warning
         // but small and semi-transparent so it reads as a hint, not a
         // siren. The full-strength warning colour is for actual
@@ -307,12 +309,10 @@ impl BrowserSection for FilesSection {
             self.rename_doc = None;
             let new_name = new_name.trim().to_string();
             if !new_name.is_empty() {
-                ctx.world
-                    .commands()
-                    .trigger(super::super::file_ops::RenameOpenDocument {
-                        doc,
-                        new_name,
-                    });
+                ctx.trigger(super::super::file_ops::RenameOpenDocument {
+                    doc,
+                    new_name,
+                });
             }
         }
         if doc_cancel {
@@ -326,11 +326,15 @@ impl BrowserSection for FilesSection {
             ctx.actions.push(BrowserAction::CloseDoc { doc });
         }
 
-        // Collect twins out of ctx so we can re-borrow ctx.actions
-        // inside each per-twin render without fighting the borrow
-        // checker. Twin refs are cheap (just &Twin); the Vec is the
-        // outer ctx.twins clone-of-refs.
-        let twins: Vec<&lunco_twin::Twin> = ctx.twins.clone();
+        // Read every open Twin from the workspace resource. These are
+        // `&Twin` borrowed from `ctx` for the duration of the render
+        // loop below; the borrow ends before the post-loop dispatch
+        // (which re-borrows `ctx` mutably via `actions`/`trigger`), so
+        // NLL keeps both happy. Twin refs are cheap (just `&Twin`).
+        let twins: Vec<&lunco_twin::Twin> = ctx
+            .resource::<crate::WorkspaceResource>()
+            .map(|ws| ws.twins().map(|(_, t)| t).collect())
+            .unwrap_or_default();
 
         if twins.is_empty() {
             if docs.is_empty() {
@@ -438,16 +442,14 @@ impl BrowserSection for FilesSection {
                 .unwrap_or_default();
             let new_name = req.buffer.trim().to_string();
             if !new_name.is_empty() && new_name != old_leaf {
-                ctx.world
-                    .commands()
-                    .trigger(super::super::file_ops::RenameTwinEntry {
-                        twin_root: req.twin_root.to_string_lossy().into_owned(),
-                        relative_path: req
-                            .relative_path
-                            .to_string_lossy()
-                            .into_owned(),
-                        new_name,
-                    });
+                ctx.trigger(super::super::file_ops::RenameTwinEntry {
+                    twin_root: req.twin_root.to_string_lossy().into_owned(),
+                    relative_path: req
+                        .relative_path
+                        .to_string_lossy()
+                        .into_owned(),
+                    new_name,
+                });
             }
         }
         if cancel_rename {

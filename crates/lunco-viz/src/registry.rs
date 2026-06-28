@@ -70,6 +70,13 @@ impl VizFitRequests {
     pub fn request(&mut self, id: VizId) {
         self.pending.insert(id);
     }
+    /// Read-only peek: is a fit pending for `id`? Lets a panel decide
+    /// during its read-only paint whether to reset the plot this frame,
+    /// then clear the request via a deferred mutation ([`take`](Self::take))
+    /// — no `&mut` access needed inside render.
+    pub fn is_pending(&self, id: VizId) -> bool {
+        self.pending.contains(&id)
+    }
     /// Returns true and consumes the entry if a fit was requested
     /// for `id`. Idempotent on subsequent renders within the same
     /// frame.

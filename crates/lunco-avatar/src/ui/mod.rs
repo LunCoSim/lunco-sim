@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use bevy_egui::{egui, EguiContexts};
-use lunco_workbench::{Panel, PanelId, PanelSlot, WorkbenchAppExt};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt};
 
 use lunco_core::{Avatar, GlobalEntityId, SessionProfiles, SessionRegistry};
 use crate::RoverNameTagSettings;
@@ -11,6 +11,72 @@ use lunco_celestial::{CelestialBody, LocalGravityField, LeaveSurface};
 use big_space::prelude::{CellCoord, Grid};
 
 use crate::{SpringArmCamera, OrbitCamera, FreeFlightCamera, FrameBlend};
+
+/// Semantic colour bucket for the camera-mode label.
+///
+/// The view-model can't carry an `egui::Color32` derived from the theme
+/// (the theme is a render-time concern and may be absent headless), so the
+/// producer records *which* palette slot the mode maps to and the panel
+/// resolves it against the live [`lunco_theme::Theme`] at paint.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum ModeColor {
+    Yellow,
+    Maroon,
+    Blue,
+    Peach,
+    #[default]
+    Text,
+}
+
+impl ModeColor {
+    /// Resolve to a concrete colour from the active palette, or
+    /// `PLACEHOLDER` (egui's default text colour) when headless / no theme.
+    fn resolve(self, palette: Option<&lunco_theme::ColorPalette>) -> egui::Color32 {
+        let Some(p) = palette else { return egui::Color32::PLACEHOLDER };
+        match self {
+            ModeColor::Yellow => p.yellow,
+            ModeColor::Maroon => p.maroon,
+            ModeColor::Blue => p.blue,
+            ModeColor::Peach => p.peach,
+            ModeColor::Text => p.text,
+        }
+    }
+}
+
+/// Surface-mode readout for the avatar's current body.
+#[derive(Clone, Default)]
+struct SurfaceInfo {
+    /// The celestial body the avatar is on (for the `LeaveSurface` target).
+    body: Option<Entity>,
+    /// Local surface gravity, m/s².
+    surface_g: f64,
+    /// Geodetic lat (°), lon (°), altitude (m) — `None` until derivable.
+    lat_lon_height: Option<(f64, f64, f64)>,
+}
+
+/// Change-driven view-model for [`AvatarStatusPanel`] (WP-8).
+///
+/// `AvatarStatusPanel::render` formerly ran ~8 world scans per frame
+/// (avatar lookup, gravity field, lat/lon/height derivation across
+/// `Transform`/`CellCoord`/`ChildOf`/`Grid`/`CelestialBody`, and four
+/// camera-mode `single()` queries). [`populate_avatar_status_view`]
+/// flattens all of that into derived data here; the panel becomes a thin
+/// reader + deferred-action emitter. The readout is inherently live
+/// (it tracks the avatar as it moves), so the producer runs every
+/// `Update` — a deliberate 1-frame lag, no scans in paint.
+#[derive(Resource, Default)]
+pub struct AvatarStatusView {
+    /// The avatar entity, if spawned (target of `LeaveSurface`).
+    avatar: Option<Entity>,
+    /// Surface readout, present only when on a body.
+    surface: Option<SurfaceInfo>,
+    /// Camera-mode palette slot.
+    mode_color: ModeColor,
+    /// Camera-mode label, e.g. `"SPRING ARM"`.
+    mode_label: String,
+    /// Secondary mode detail, e.g. `"Distance: 12.0 m"` (empty if none).
+    mode_detail: String,
+}
 
 /// Avatar status panel — camera mode and surface coordinates.
 pub struct AvatarStatusPanel;
@@ -20,12 +86,12 @@ impl Panel for AvatarStatusPanel {
     fn title(&self) -> String { "Telemetry".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // Capture the palette up front: semantic status colours for this
         // panel come from the active Theme (falls back to plain white when
         // headless / no theme registered).
-        let palette = world.get_resource::<lunco_theme::Theme>().map(|t| t.colors.clone());
-        if let Some(theme) = world.get_resource::<lunco_theme::Theme>() {
+        let palette = ctx.resource::<lunco_theme::Theme>().map(|t| t.colors.clone());
+        if let Some(theme) = ctx.resource::<lunco_theme::Theme>() {
             let raised = theme.tokens.surface_raised;
             ui.style_mut().visuals.widgets.inactive.weak_bg_fill = raised;
             ui.style_mut().visuals.widgets.inactive.bg_fill = raised;
@@ -39,26 +105,23 @@ impl Panel for AvatarStatusPanel {
         ui.heading("Avatar Status");
         ui.separator();
 
-        let avatar_ent = {
-            let mut q = world.query_filtered::<Entity, With<Avatar>>();
-            q.iter(world).next()
-        };
+        // The panel is a pure reader of the change-driven view-model; if it
+        // hasn't been produced yet there's nothing to draw.
+        let Some(view) = ctx.resource::<AvatarStatusView>() else { return };
 
         // ── Surface Mode Info ──
-        let gf = world.get_resource::<LocalGravityField>().map(|gf| (gf.body_entity, gf.surface_g));
-        if let Some(gf) = &gf {
-            if let Some(body) = gf.0 {
+        // `leave_target` defers the `LeaveSurface` trigger until after the
+        // `view` borrow ends, so `ctx.defer` is free to take `&mut`.
+        let mut leave_target: Option<Entity> = None;
+        if let Some(surface) = &view.surface {
+            if let Some(body) = surface.body {
                 ui.horizontal(|ui| {
                     ui.label("Surface Mode — Body:");
                     ui.colored_label(body_color, format!("{:?}", body));
                 });
-                ui.label(format!("Gravity: {:.3} m/s²", gf.1));
+                ui.label(format!("Gravity: {:.3} m/s²", surface.surface_g));
 
-                let lat_lon_height = if let Some(avatar_ent) = avatar_ent {
-                    compute_lat_lon_height(world, avatar_ent, body)
-                } else { None };
-
-                if let Some((lat, lon, height)) = lat_lon_height {
+                if let Some((lat, lon, height)) = surface.lat_lon_height {
                     ui.separator();
                     ui.heading("Position");
                     let lat_dir = if lat >= 0.0 { "N" } else { "S" };
@@ -70,22 +133,30 @@ impl Panel for AvatarStatusPanel {
 
                 ui.separator();
                 if ui.button("🏠 Return to Orbit").clicked() {
-                    if let Some(avatar_ent) = avatar_ent {
-                        world.commands().trigger(LeaveSurface { target: avatar_ent });
-                    }
+                    leave_target = view.avatar;
                 }
                 ui.separator();
             }
         }
 
         // ── Camera Mode ──
-        let mode_info = get_camera_mode_info(world);
+        let mode_color = view.mode_color.resolve(palette.as_ref());
+        let mode_label = view.mode_label.clone();
+        let mode_detail = view.mode_detail.clone();
         ui.horizontal(|ui| {
             ui.label("Mode:");
-            ui.colored_label(mode_info.0, &mode_info.1);
+            ui.colored_label(mode_color, &mode_label);
         });
-        if !mode_info.2.is_empty() {
-            ui.label(&mode_info.2);
+        if !mode_detail.is_empty() {
+            ui.label(&mode_detail);
+        }
+
+        // `view` borrow released above (its data was cloned out); emit the
+        // deferred surface-leave intent now.
+        if let Some(target) = leave_target {
+            ctx.defer(move |world| {
+                world.trigger(LeaveSurface { target });
+            });
         }
 
         ui.separator();
@@ -98,28 +169,80 @@ impl Panel for AvatarStatusPanel {
     }
 }
 
-fn compute_lat_lon_height(world: &mut World, avatar_ent: Entity, body: Entity) -> Option<(f64, f64, f64)> {
-    let avatar_data: Option<(DVec3, CellCoord, Entity)> = {
-        let mut q = world.query::<(&Transform, &CellCoord, &ChildOf)>();
-        q.get(world, avatar_ent).ok().map(|(tf, cell, child_of)| {
-            (tf.translation.as_dvec3(), *cell, child_of.0)
-        })
-    };
-    let (tf_pos, cell, parent) = avatar_data?;
+/// Producer for [`AvatarStatusView`]. Runs every `Update`: the surface
+/// readout tracks the avatar's live position, so unlike a static browser
+/// list there is no useful change-gate — but all reads are O(1)
+/// single-entity lookups (or a `single()` on the camera), not the
+/// per-frame scans the old in-paint code did.
+pub fn populate_avatar_status_view(
+    mut view: ResMut<AvatarStatusView>,
+    palette: Option<Res<lunco_theme::Theme>>,
+    gravity: Option<Res<LocalGravityField>>,
+    avatars: Query<Entity, With<Avatar>>,
+    avatar_pos: Query<(&Transform, &CellCoord, &ChildOf)>,
+    grids: Query<&Grid>,
+    bodies: Query<&CelestialBody>,
+    blends: Query<&FrameBlend>,
+    spring: Query<&SpringArmCamera>,
+    orbit: Query<&OrbitCamera>,
+    free_flight: Query<&FreeFlightCamera>,
+) {
+    let _ = &palette; // colours resolved at paint; producer only records slots.
+    let avatar_ent = avatars.iter().next();
+    view.avatar = avatar_ent;
 
-    let grid_data: Option<DVec3> = {
-        let mut grid_q = world.query::<&Grid>();
-        grid_q.get(world, parent).ok().map(|grid| {
-            let dummy_tf = Transform::from_translation(tf_pos.as_vec3());
-            grid.grid_position_double(&cell, &dummy_tf)
+    // ── Surface readout ──
+    view.surface = gravity.as_ref().and_then(|gf| {
+        let body = gf.body_entity?;
+        let lat_lon_height = avatar_ent.and_then(|ae| {
+            compute_lat_lon_height(ae, body, &avatar_pos, &grids, &bodies)
+        });
+        Some(SurfaceInfo {
+            body: Some(body),
+            surface_g: gf.surface_g,
+            lat_lon_height,
         })
+    });
+
+    // ── Camera mode ──
+    let (color, label, detail) = if let Ok(blend) = blends.single() {
+        let progress = (blend.t / blend.duration * 100.0).min(100.0) as i32;
+        (ModeColor::Yellow, format!("TRANSITION ({}%)", progress), String::new())
+    } else if let Ok(arm) = spring.single() {
+        (ModeColor::Maroon, "SPRING ARM".to_string(), format!("Distance: {:.1} m", arm.distance))
+    } else if let Ok(o) = orbit.single() {
+        (ModeColor::Blue, "ORBIT".to_string(), format!("Distance: {:.1} m", o.distance))
+    } else if free_flight.single().is_ok() {
+        (ModeColor::Peach, "FREE FLIGHT".to_string(), String::new())
+    } else {
+        (ModeColor::Text, "UNKNOWN".to_string(), String::new())
     };
-    let body_local = grid_data?;
+    view.mode_color = color;
+    view.mode_label = label;
+    view.mode_detail = detail;
+}
+
+/// Derive geodetic lat (°), lon (°), and altitude (m) for `avatar_ent` on
+/// `body`, in the body's surface grid frame. Returns `None` when any of
+/// the avatar's positional components, the parent grid, or the body's
+/// `CelestialBody` are missing.
+fn compute_lat_lon_height(
+    avatar_ent: Entity,
+    body: Entity,
+    avatar_pos: &Query<(&Transform, &CellCoord, &ChildOf)>,
+    grids: &Query<&Grid>,
+    bodies: &Query<&CelestialBody>,
+) -> Option<(f64, f64, f64)> {
+    let (tf, cell, child_of) = avatar_pos.get(avatar_ent).ok()?;
+    let tf_pos = tf.translation.as_dvec3();
+    let parent = child_of.0;
+
+    let grid = grids.get(parent).ok()?;
+    let dummy_tf = Transform::from_translation(tf_pos.as_vec3());
+    let body_local = grid.grid_position_double(cell, &dummy_tf);
     let dist = body_local.length();
 
-    let mut body_q = world.query::<&CelestialBody>();
-    let Ok(body_comp) = body_q.get(world, body) else { return None };
-
+    let body_comp = bodies.get(body).ok()?;
     let height = dist - body_comp.radius_m;
     let body_local_norm = if dist > 1e-6 { body_local / dist } else { DVec3::Y };
     let lat = body_local_norm.y.asin().to_degrees();
@@ -127,44 +250,13 @@ fn compute_lat_lon_height(world: &mut World, avatar_ent: Entity, body: Entity) -
     Some((lat, lon, height))
 }
 
-fn get_camera_mode_info(world: &mut World) -> (egui::Color32, String, String) {
-    // Status colours come from the active Theme palette; fall back to the
-    // original literals when headless / no theme registered.
-    let palette = world.get_resource::<lunco_theme::Theme>().map(|t| t.colors.clone());
-    // No theme (headless) → PLACEHOLDER lets egui use its default text colour.
-    let c = |pick: fn(&lunco_theme::ColorPalette) -> egui::Color32| {
-        palette.as_ref().map(pick).unwrap_or(egui::Color32::PLACEHOLDER)
-    };
-
-    let mut blend_q = world.query::<&FrameBlend>();
-    if let Ok(blend) = blend_q.single(world) {
-        let progress = (blend.t / blend.duration * 100.0).min(100.0) as i32;
-        return (c(|p| p.yellow), format!("TRANSITION ({}%)", progress), String::new());
-    }
-
-    let mut spring_q = world.query::<&SpringArmCamera>();
-    if let Ok(arm) = spring_q.single(world) {
-        return (c(|p| p.maroon), "SPRING ARM".to_string(), format!("Distance: {:.1} m", arm.distance));
-    }
-
-    let mut orbit_q = world.query::<&OrbitCamera>();
-    if let Ok(orbit) = orbit_q.single(world) {
-        return (c(|p| p.blue), "ORBIT".to_string(), format!("Distance: {:.1} m", orbit.distance));
-    }
-
-    let mut ff_q = world.query::<&FreeFlightCamera>();
-    if ff_q.single(world).is_ok() {
-        return (c(|p| p.peach), "FREE FLIGHT".to_string(), String::new());
-    }
-
-    (c(|p| p.text), "UNKNOWN".to_string(), String::new())
-}
-
 /// Plugin that registers avatar UI panels.
 pub struct AvatarUiPlugin;
 
 impl Plugin for AvatarUiPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<AvatarStatusView>();
+        app.add_systems(Update, populate_avatar_status_view);
         app.register_panel(AvatarStatusPanel);
     }
 }

@@ -1,8 +1,8 @@
 //! User interaction handlers: menus, DND, and clicks.
 
-use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_canvas::{Pos as CanvasPos, Rect as CanvasRect};
+use lunco_workbench::PanelCtx;
 use crate::document::ModelicaOp;
 use crate::state::{ModelicaDocumentRegistry};
 use super::super::{CanvasDiagramState, ContextMenuTarget, PendingContextMenu, ICON_W, ops, menus};
@@ -10,7 +10,8 @@ use super::super::loads::drill_into_class;
 
 pub(crate) fn handle_context_menu(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
+    state: &mut CanvasDiagramState,
     response: &egui::Response,
     doc_id: Option<lunco_doc::DocumentId>,
     render_tab_id: Option<crate::model_tabs_types::TabId>,
@@ -26,34 +27,36 @@ pub(crate) fn handle_context_menu(
     let mut suppress_menu = tab_read_only;
 
     if tab_read_only {
-        let our_menu_cached = world.resource::<CanvasDiagramState>().get(active_doc).context_menu.is_some();
+        let our_menu_cached = state.get(active_doc).context_menu.is_some();
         if our_menu_cached {
             egui::Popup::close_all(ui.ctx());
-            world.resource_mut::<CanvasDiagramState>().get_mut(active_doc).context_menu = None;
+            state.get_mut(active_doc).context_menu = None;
         }
     }
 
     if !tab_read_only && response.secondary_clicked() {
         let press = ui.ctx().input(|i| i.pointer.press_origin());
         if let Some(p) = press.or_else(|| response.interact_pointer_pos()) {
-            let our_menu_open = popup_was_open_before && world.resource::<CanvasDiagramState>().get(active_doc).context_menu.is_some();
+            let our_menu_open = popup_was_open_before && state.get(active_doc).context_menu.is_some();
             if our_menu_open {
-                world.resource_mut::<CanvasDiagramState>().get_mut(active_doc).context_menu = None;
+                state.get_mut(active_doc).context_menu = None;
                 egui::Popup::close_all(ui.ctx());
                 suppress_menu = true;
             } else {
                 if popup_was_open_before { egui::Popup::close_all(ui.ctx()); }
-                let state = world.resource::<CanvasDiagramState>();
-                let docstate = match render_tab_id { Some(t) => state.get_for_tab(t), None => state.get(active_doc) };
-                let world_pos = docstate.canvas.viewport.screen_to_world(CanvasPos::new(p.x, p.y), screen_rect);
-                let hit_node = docstate.canvas.scene.hit_node(world_pos, 6.0);
-                let hit_edge = docstate.canvas.scene.hit_edge_kind(world_pos, 4.0, true, 5.0);
-                let target = match (hit_node, hit_edge) {
-                    (Some((id, _)), _) => ContextMenuTarget::Node(id),
-                    (_, Some((id, kind))) => ContextMenuTarget::Edge(id, kind),
-                    _ => ContextMenuTarget::Empty,
+                let (world_pos, target) = {
+                    let docstate = match render_tab_id { Some(t) => state.get_for_tab(t), None => state.get(active_doc) };
+                    let world_pos = docstate.canvas.viewport.screen_to_world(CanvasPos::new(p.x, p.y), screen_rect);
+                    let hit_node = docstate.canvas.scene.hit_node(world_pos, 6.0);
+                    let hit_edge = docstate.canvas.scene.hit_edge_kind(world_pos, 4.0, true, 5.0);
+                    let target = match (hit_node, hit_edge) {
+                        (Some((id, _)), _) => ContextMenuTarget::Node(id),
+                        (_, Some((id, kind))) => ContextMenuTarget::Edge(id, kind),
+                        _ => ContextMenuTarget::Empty,
+                    };
+                    (world_pos, target)
                 };
-                world.resource_mut::<CanvasDiagramState>().get_mut(active_doc).context_menu = Some(PendingContextMenu {
+                state.get_mut(active_doc).context_menu = Some(PendingContextMenu {
                     screen_pos: p,
                     world_pos,
                     target,
@@ -66,7 +69,7 @@ pub(crate) fn handle_context_menu(
         Vec::new()
     } else {
         let mut collected = Vec::new();
-        let cached = world.resource::<CanvasDiagramState>().get(active_doc).context_menu.clone();
+        let cached = state.get(active_doc).context_menu.clone();
         response.context_menu(|ui| {
             let Some(menu) = cached.as_ref() else {
                 ui.label("(no click target)");
@@ -74,20 +77,20 @@ pub(crate) fn handle_context_menu(
             };
             match &menu.target {
                 ContextMenuTarget::Node(id) => {
-                    menus::render_node_menu(ui, world, *id, editing_class, &mut collected);
+                    menus::render_node_menu(ui, ctx, state, *id, editing_class, &mut collected);
                 }
                 ContextMenuTarget::Edge(id, kind) => {
-                    menus::render_edge_menu(ui, world, *id, *kind, menu.world_pos, editing_class, &mut collected);
+                    menus::render_edge_menu(ui, ctx, state, *id, *kind, menu.world_pos, editing_class, &mut collected);
                 }
                 ContextMenuTarget::Empty => {
-                    menus::render_empty_menu(ui, world, menu.world_pos, editing_class, &mut collected);
+                    menus::render_empty_menu(ui, ctx, state, menu.world_pos, editing_class, &mut collected);
                 }
             }
         });
-        
+
         let popup_open_now = egui::Popup::is_any_open(ui.ctx());
-        if !popup_open_now && world.resource::<CanvasDiagramState>().get(active_doc).context_menu.is_some() {
-            world.resource_mut::<CanvasDiagramState>().get_mut(active_doc).context_menu = None;
+        if !popup_open_now && state.get(active_doc).context_menu.is_some() {
+            state.get_mut(active_doc).context_menu = None;
         }
         collected
     }
@@ -95,7 +98,8 @@ pub(crate) fn handle_context_menu(
 
 pub(crate) fn handle_drag_and_drop(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
+    state: &mut CanvasDiagramState,
     response: &egui::Response,
     doc_id: Option<lunco_doc::DocumentId>,
     render_tab_id: Option<crate::model_tabs_types::TabId>,
@@ -103,12 +107,12 @@ pub(crate) fn handle_drag_and_drop(
     editing_class: Option<String>,
 ) {
     let active_doc = doc_id;
-    let drag_payload_def = world.get_resource::<crate::ui::panels::palette::ComponentDragPayload>().and_then(|p| p.def.clone());
+    let drag_payload_def = ctx.resource::<crate::ui::panels::palette::ComponentDragPayload>().and_then(|p| p.def.clone());
     if let Some(def) = drag_payload_def {
         let hover_pos = response.hover_pos();
         if let Some(p) = hover_pos {
             let painter = ui.painter_at(response.rect);
-            let zoom = world.resource::<CanvasDiagramState>().get(active_doc).canvas.viewport.zoom;
+            let zoom = state.get(active_doc).canvas.viewport.zoom;
             let half = (ICON_W * zoom * 0.5).max(12.0);
             let ghost_rect = egui::Rect::from_center_size(p, egui::vec2(half * 2.0, half * 2.0));
             let accent = egui::Color32::from_rgb(120, 180, 255);
@@ -126,12 +130,12 @@ pub(crate) fn handle_drag_and_drop(
                         CanvasPos::new(response.rect.min.x, response.rect.min.y),
                         CanvasPos::new(response.rect.max.x, response.rect.max.y),
                     );
-                    let click_world = world.resource::<CanvasDiagramState>().get(active_doc).canvas.viewport.screen_to_world(CanvasPos::new(p.x, p.y), screen_rect);
+                    let click_world = state.get(active_doc).canvas.viewport.screen_to_world(CanvasPos::new(p.x, p.y), screen_rect);
                     let class = editing_class.unwrap_or_else(|| {
-                        world.get_resource::<crate::model_tabs::ModelTabs>()
+                        ctx.resource::<crate::model_tabs::ModelTabs>()
                             .and_then(|t| t.drilled_class_for_doc(doc_id))
                             .or_else(|| {
-                                let registry = world.resource::<ModelicaDocumentRegistry>();
+                                let registry = ctx.resource::<ModelicaDocumentRegistry>()?;
                                 let host = registry.host(doc_id)?;
                                 let ast = host.document().strict_ast()?;
                                 crate::ast_extract::extract_model_name_from_ast(&ast)
@@ -140,37 +144,38 @@ pub(crate) fn handle_drag_and_drop(
                     });
                     if !class.is_empty() {
                         let instance_name = {
-                            let state = world.resource::<CanvasDiagramState>();
                             ops::pick_add_instance_name(&def, &match render_tab_id { Some(t) => state.get_for_tab(t), None => state.get(Some(doc_id)) }.canvas.scene)
                         };
                         let op = ops::op_add_component_with_name(&def, &instance_name, click_world, &class);
-                        super::super::ops::apply_ops_public(world, doc_id, vec![op]);
+                        ctx.defer(move |world| super::super::ops::apply_ops_public(world, doc_id, vec![op]));
                         ui.ctx().request_repaint();
                     }
                 }
             }
-            if let Some(mut payload) = world.get_resource_mut::<crate::ui::panels::palette::ComponentDragPayload>() {
-                payload.def = None;
-            }
+            ctx.defer(|world| {
+                if let Some(mut payload) = world.get_resource_mut::<crate::ui::panels::palette::ComponentDragPayload>() {
+                    payload.def = None;
+                }
+            });
         }
     }
 }
 
 pub(crate) fn handle_node_double_click(
-    world: &mut World,
+    ctx: &mut PanelCtx,
+    state: &CanvasDiagramState,
     events: &[lunco_canvas::SceneEvent],
     doc_id: Option<lunco_doc::DocumentId>,
 ) {
     for ev in events {
         if let lunco_canvas::SceneEvent::NodeDoubleClicked { id } = ev {
             let type_name = {
-                let state = world.resource::<CanvasDiagramState>();
                 state.get(doc_id).canvas.scene.node(*id)
                     .and_then(|n| n.data.downcast_ref::<super::super::node::IconNodeData>())
                     .map(|d| d.qualified_type.clone())
             };
             if let Some(qualified) = type_name {
-                drill_into_class(world, &qualified);
+                ctx.defer(move |world| drill_into_class(world, &qualified));
             }
         }
     }

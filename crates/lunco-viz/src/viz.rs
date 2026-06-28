@@ -161,7 +161,7 @@ pub trait Visualization: Send + Sync + 'static {
 
     /// Render into a 2D panel. Default: no-op. Implement if your viz
     /// declares `ViewKind::Panel2D` compatibility.
-    fn render_panel_2d(&self, _ctx: &mut Panel2DCtx, _config: &VisualizationConfig) {}
+    fn render_panel_2d(&self, _ctx: &mut Panel2DCtx<'_, '_>, _config: &VisualizationConfig) {}
 
     // Future:
     // fn render_viewport_3d(&self, ctx: &mut Viewport3DCtx, config: &...) {}

@@ -5,14 +5,14 @@
 //! the off-thread projector building a Scene, or an empty/missing
 //! diagram (no graphics in the AST yet).
 
-use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_theme::ColorAlpha;
+use lunco_workbench::PanelCtx;
 
 use crate::state::ModelicaDocumentRegistry;
 use crate::ui::theme::ModelicaThemeExt;
 
-use super::active_doc_from_world;
+use super::active_doc_from_world_ctx;
 // `crate::sim_default::drilled_class_for_doc`.
 
 // `render_drill_in_loading_overlay` and `render_projecting_overlay`
@@ -113,17 +113,17 @@ pub(super) fn render_drill_in_error_overlay(
 pub(super) fn render_empty_diagram_overlay(
     ui: &mut egui::Ui,
     canvas_rect: egui::Rect,
-    world: &mut World,
+    ctx: &PanelCtx,
 ) {
-    let active = world
-        .get_resource::<lunco_workspace::WorkspaceResource>()
+    let active = ctx
+        .resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
     let Some(doc) = active else { return };
-    let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
+    let Some(registry) = ctx.resource::<crate::state::ModelicaDocumentRegistry>() else { return };
     let Some(host) = registry.host(doc) else { return };
     let document = host.document();
-    let theme = world
-        .get_resource::<lunco_theme::Theme>()
+    let theme = ctx
+        .resource::<lunco_theme::Theme>()
         .cloned()
         .unwrap_or_else(lunco_theme::Theme::dark);
     let class_name = document
@@ -135,11 +135,11 @@ pub(super) fn render_empty_diagram_overlay(
     // when the document hasn't installed yet (e.g. drill-in tab still
     // loading) or the active class isn't in the index.
     let counts = {
-        let active_doc = active_doc_from_world(world);
+        let active_doc = active_doc_from_world_ctx(ctx);
         let drilled = active_doc.and_then(|doc| {
-            crate::sim_default::drilled_class_for_doc(world, doc)
+            crate::sim_default::drilled_class_for_doc_ctx(ctx, doc)
         });
-        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let registry = match ctx.resource::<ModelicaDocumentRegistry>() { Some(r) => r, None => return };
         active_doc
             .and_then(|doc| registry.host(doc))
             .and_then(|host| {
@@ -162,9 +162,9 @@ pub(super) fn render_empty_diagram_overlay(
     // can show real symbol names + (when authored) the class's own
     // `Icon` graphics. This is the same AST the canvas projector
     // already holds, so we don't pay a re-parse.
-    let active_doc = active_doc_from_world(world);
+    let active_doc = active_doc_from_world_ctx(ctx);
     let (icon, class_type, description, param_names, input_names, output_names) =
-        empty_overlay_class_info(world, active_doc, &class_name);
+        empty_overlay_class_info(ctx, active_doc, &class_name);
 
     // Clamp the card to the visible canvas so it never overflows the
     // clip rect and gets its edges cut off — the canvas viewport is
@@ -278,7 +278,7 @@ pub(super) fn render_empty_diagram_overlay(
 /// few parameter / input / output names. Falls back to `None`/empty
 /// vectors silently when the registry doesn't have the doc.
 pub(super) fn empty_overlay_class_info(
-    world: &mut World,
+    ctx: &PanelCtx,
     doc_id: Option<lunco_doc::DocumentId>,
     class_name: &str,
 ) -> (
@@ -292,7 +292,9 @@ pub(super) fn empty_overlay_class_info(
     let Some(doc) = doc_id else {
         return (None, None, None, vec![], vec![], vec![]);
     };
-    let registry = world.resource::<ModelicaDocumentRegistry>();
+    let Some(registry) = ctx.resource::<ModelicaDocumentRegistry>() else {
+        return (None, None, None, vec![], vec![], vec![]);
+    };
     let Some(host) = registry.host(doc) else {
         return (None, None, None, vec![], vec![], vec![]);
     };
@@ -335,8 +337,8 @@ pub(super) fn empty_overlay_class_info(
         None => class_name.to_string(),
     };
     // Engine owns icon resolution (cached, AST-aware).
-    let icon = world
-        .get_resource::<crate::engine_resource::ModelicaEngineHandle>()
+    let icon = ctx
+        .resource::<crate::engine_resource::ModelicaEngineHandle>()
         .and_then(|handle| handle.lock().icon_for(&class_context));
     let class_type = match class.class_type {
         ClassType::Model => Some("model"),

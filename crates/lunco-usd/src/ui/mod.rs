@@ -32,7 +32,9 @@ pub mod session_codec;
 pub mod viewport;
 
 pub use browser_section::UsdSceneSection;
-pub use loaded_stages::{LoadedStage, LoadedUsdStages, WorkspaceStage};
+pub use loaded_stages::{
+    produce_usd_browser_view, LoadedStage, LoadedUsdStages, UsdBrowserView, WorkspaceStage,
+};
 pub use viewport::{
     SetActiveUsdViewport, UsdViewportPanel, UsdViewportPlugin, UsdViewportState,
     USD_VIEWPORT_PANEL_ID,
@@ -45,6 +47,11 @@ pub struct UsdUiPlugin;
 impl Plugin for UsdUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LoadedUsdStages>();
+        // Change-gated view-model the `UsdSceneSection` reads each frame.
+        // The producer refreshes parse caches + flattens stages into it
+        // only when the (id, generation) signature changes.
+        app.init_resource::<UsdBrowserView>();
+        app.add_systems(Update, produce_usd_browser_view);
 
         // Register the section with the workbench's registry.
         // `init_resource` is defensive: the workbench plugin owns the

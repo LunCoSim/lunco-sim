@@ -14,7 +14,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{InstancePanel, PanelId, PanelSlot};
+use lunco_workbench::{InstancePanel, PanelCtx, PanelId, PanelSlot};
 
 use crate::registry::{VisualizationRegistry, VizKindCatalog};
 use crate::view::{Panel2DCtx, ViewTarget};
@@ -48,13 +48,13 @@ impl InstancePanel for VizPanel {
             .unwrap_or_else(|| format!("📈 Plot #{instance}"))
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World, instance: u64) {
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, instance: u64) {
         let id = VizId(instance);
 
-        // Pull the needed data off the world eagerly so we don't
-        // hold conflicting borrows while rendering.
+        // Pull the needed data off the world eagerly (O(1) resource
+        // reads) so we don't hold conflicting borrows while rendering.
         let (config, viz) = {
-            let registry = match world.get_resource::<VisualizationRegistry>() {
+            let registry = match ctx.resource::<VisualizationRegistry>() {
                 Some(r) => r,
                 None => {
                     ui.label("VisualizationRegistry not installed.");
@@ -65,7 +65,7 @@ impl InstancePanel for VizPanel {
                 ui.label(format!("No visualization #{instance}."));
                 return;
             };
-            let catalog = match world.get_resource::<VizKindCatalog>() {
+            let catalog = match ctx.resource::<VizKindCatalog>() {
                 Some(c) => c,
                 None => {
                     ui.label("VizKindCatalog not installed.");
@@ -82,15 +82,15 @@ impl InstancePanel for VizPanel {
             (cfg, viz)
         };
 
-        let muted = world
-            .get_resource::<lunco_theme::Theme>()
+        let muted = ctx
+            .resource::<lunco_theme::Theme>()
             .map(|t| t.tokens.text_subdued)
             .unwrap_or(egui::Color32::GRAY);
 
         match config.view {
             ViewTarget::Panel2D => {
-                let mut ctx = Panel2DCtx { ui, world };
-                viz.render_panel_2d(&mut ctx, &config);
+                let mut ctx2d = Panel2DCtx { ui, wb: ctx };
+                viz.render_panel_2d(&mut ctx2d, &config);
             }
             ViewTarget::Viewport3D => {
                 // Hosted by the primary 3D viewport, not by this

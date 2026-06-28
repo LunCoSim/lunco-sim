@@ -17,7 +17,7 @@ use lunco_modelica::state::ModelicaDocumentRegistry;
 use lunco_sandbox_edit::SelectedEntities;
 use lunco_scripting::ScriptRegistry;
 use lunco_scripting::doc::ScriptedModel;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub(crate) struct CodePanel;
 
@@ -27,21 +27,24 @@ impl Panel for CodePanel {
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
     fn transparent_background(&self) -> bool { true }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        let mantle = world.resource::<lunco_theme::Theme>().colors.mantle;
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let mantle = ctx
+            .resource::<lunco_theme::Theme>()
+            .map(|t| t.colors.mantle)
+            .unwrap_or(egui::Color32::from_rgb(24, 24, 37));
         egui::Frame::new()
             .fill(mantle)
             .inner_margin(8.0)
             .corner_radius(4)
-            .show(ui, |ui| code_panel_content(ui, world));
+            .show(ui, |ui| code_panel_content(ui, ctx));
     }
 }
 
-fn code_panel_content(ui: &mut egui::Ui, world: &mut World) {
+fn code_panel_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     ui.heading("Code");
 
-    let Some(entity) = world
-        .get_resource::<SelectedEntities>()
+    let Some(entity) = ctx
+        .resource::<SelectedEntities>()
         .and_then(|s| s.primary())
     else {
         ui.label("No entity selected.");
@@ -50,8 +53,8 @@ fn code_panel_content(ui: &mut egui::Ui, world: &mut World) {
     };
 
     // Try Modelica first — resolve entity → DocumentId → source.
-    let modelica = world
-        .get_resource::<ModelicaDocumentRegistry>()
+    let modelica = ctx
+        .resource::<ModelicaDocumentRegistry>()
         .and_then(|r| {
             let doc = r.document_of(entity)?;
             r.host(doc).map(|h| h.document().source().to_string())
@@ -65,15 +68,13 @@ fn code_panel_content(ui: &mut egui::Ui, world: &mut World) {
     }
 
     // Otherwise look for a ScriptedModel component → ScriptRegistry.
-    let script_doc_id = world
-        .query::<&ScriptedModel>()
-        .get(world, entity)
-        .ok()
+    let script_doc_id = ctx
+        .get::<ScriptedModel>(entity)
         .and_then(|m| m.document_id);
 
     if let Some(doc_id) = script_doc_id {
-        let script_source = world
-            .get_resource::<ScriptRegistry>()
+        let script_source = ctx
+            .resource::<ScriptRegistry>()
             .and_then(|r| {
                 r.documents
                     .get(&DocumentId::new(doc_id))

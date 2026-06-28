@@ -349,12 +349,13 @@ impl Panel for CodeEditorPanel {
     fn default_slot(&self) -> PanelSlot { PanelSlot::Center }
     fn closable(&self) -> bool { false }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        // ── Ensure persistent buffer exists ──
-        if world.get_resource::<EditorBufferState>().is_none() {
-            world.insert_resource(EditorBufferState::default());
-        }
-
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut lunco_workbench::PanelCtx) {
+        // Whole render runs with `EditorBufferState` scoped out of the
+        // world so the live editor fields (read into the TextEdit,
+        // edited, committed back) can be mutated in one paint frame
+        // without raw `&mut World`. Returns `None` when the resource
+        // doesn't exist yet → init it deferred and skip this frame.
+        let present = ctx.resource_scope::<EditorBufferState, _>(|ctx, buf| {
         // ── Determine what model to show ──
         // Resolve *this tab's* doc via the per-render
         // [`TabRenderContext`] — splits each render in the same
@@ -362,19 +363,19 @@ impl Panel for CodeEditorPanel {
         // would mirror whichever tab rendered last. Fall back to the
         // workspace-wide active doc for non-tab render paths
         // (welcome screen, no tab open).
-        let tab_target: Option<lunco_doc::DocumentId> = world
-            .get_resource::<crate::model_tabs_types::TabRenderContext>()
+        let tab_target: Option<lunco_doc::DocumentId> = ctx
+            .resource::<crate::model_tabs_types::TabRenderContext>()
             .and_then(|c| c.doc)
             .or_else(|| {
-                world
-                    .get_resource::<lunco_workspace::WorkspaceResource>()
+                ctx
+                    .resource::<lunco_workspace::WorkspaceResource>()
                     .and_then(|ws| ws.active_document)
             });
         // Pull display fields from the registry directly — this
         // bypasses the the registry-by-doc lookup snapshot which is
         // a singleton stamped by whichever tab rendered last.
         let (display_name, is_read_only, source_len) = match tab_target
-            .and_then(|d| world.resource::<ModelicaDocumentRegistry>().host(d))
+            .and_then(|d| ctx.resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(d)))
         {
             Some(host) => {
                 let document = host.document();
@@ -388,8 +389,7 @@ impl Panel for CodeEditorPanel {
             None => (None, false, 0),
         };
         let (compilation_error, selected_entity, is_loading) = {
-            let state = world.resource::<WorkbenchState>();
-            let entity = state.selected_entity;
+            let entity = ctx.resource::<WorkbenchState>().and_then(|s| s.selected_entity);
             // Any in-flight stage on the bus for this doc — covers
             // file-load, drill-in, duplicate, reparse. Same predicate
             // the canvas overlay uses; no per-panel loading-state
@@ -397,23 +397,23 @@ impl Panel for CodeEditorPanel {
             let loading = source_len == 0
                 && tab_target
                     .map(|d| {
-                        world
-                            .get_resource::<lunco_workbench::status_bus::StatusBus>()
+                        ctx
+                            .resource::<lunco_workbench::status_bus::StatusBus>()
                             .map(|bus| bus.is_busy(lunco_workbench::status_bus::BusyScope::Document(d.0)))
                             .unwrap_or(false)
                     })
                     .unwrap_or(false);
             let err = tab_target.and_then(|d| {
-                world
-                    .get_resource::<crate::state::CompileStates>()
+                ctx
+                    .resource::<crate::state::CompileStates>()
                     .and_then(|cs| cs.error_for(d).map(str::to_string))
             });
             (err, entity, loading)
         };
 
         if is_loading {
-            let muted = world
-                .get_resource::<lunco_theme::Theme>()
+            let muted = ctx
+                .resource::<lunco_theme::Theme>()
                 .map(|t| t.tokens.text_subdued)
                 .unwrap_or(egui::Color32::GRAY);
             ui.vertical_centered(|ui| {
@@ -439,31 +439,49 @@ impl Panel for CodeEditorPanel {
         // tabs.
         let mut model_switched = false;
         if let Some(doc) = tab_target {
-            let doc_changed = world.resource::<EditorBufferState>().bound_doc != Some(doc);
+            let doc_changed = buf.bound_doc != Some(doc);
             model_switched = doc_changed;
 
             if doc_changed {
-                let mut buf_state = world.resource_mut::<EditorBufferState>();
-                buf_state.snapshot_current();
-                let restored = buf_state.restore_snapshot(doc);
-                drop(buf_state);
+                buf.snapshot_current();
+                let restored = buf.restore_snapshot(doc);
                 // Restored snapshots may be stale if the doc was
                 // mutated while this tab was hidden — the observer
                 // only updates the *bound* tab. Compare against the
                 // registry and fall through to a fresh pull when
                 // they diverge. New-tab path falls straight through
                 // to the same sync.
-                let stale = {
-                    let buf_gen = world.resource::<EditorBufferState>().generation;
-                    let external_gen = world
-                        .resource::<ModelicaDocumentRegistry>()
-                        .host(doc)
-                        .map(|h| h.generation())
-                        .unwrap_or(0);
-                    buf_gen != external_gen
-                };
+                let external_gen = ctx
+                    .resource::<ModelicaDocumentRegistry>()
+                    .and_then(|r| r.host(doc))
+                    .map(|h| h.generation())
+                    .unwrap_or(0);
+                let stale = buf.generation != external_gen;
                 if !restored || stale {
-                    sync_buffer_from_registry(world, doc);
+                    // Inline sync-from-registry (no `&mut World` to call
+                    // `sync_buffer_from_registry`): read the doc source +
+                    // detected name through `ctx` and write into `buf`.
+                    if let Some((source, detected, generation)) = ctx
+                        .resource::<ModelicaDocumentRegistry>()
+                        .and_then(|r| r.host(doc))
+                        .map(|host| {
+                            let document = host.document();
+                            let detected = document
+                                .index()
+                                .classes
+                                .values()
+                                .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
+                                .map(|c| c.name.clone());
+                            (document.source().to_string(), detected, host.generation())
+                        })
+                    {
+                        buf.text = source;
+                        buf.bound_doc = Some(doc);
+                        buf.generation = generation;
+                        buf.detected_name = detected;
+                        buf.cached_galley = None;
+                        buf.pending_commit_at = None;
+                    }
                 }
             }
         }
@@ -497,7 +515,7 @@ impl Panel for CodeEditorPanel {
         // split-Text edit commits into the right document.
         let doc_id = tab_target.or_else(|| {
             selected_entity
-                .and_then(|e| world.resource::<ModelicaDocumentRegistry>().document_of(e))
+                .and_then(|e| ctx.resource::<ModelicaDocumentRegistry>().and_then(|r| r.document_of(e)))
         });
 
         // ── Settings menu (gear button) ──
@@ -518,10 +536,7 @@ impl Panel for CodeEditorPanel {
         // Editor prefs (word wrap, auto indent) live in the app-wide
         // Settings menu — see `register_settings_menu` in `ui/mod.rs`.
         // Here we just read the current values.
-        let (word_wrap, auto_indent) = {
-            let buf = world.resource::<EditorBufferState>();
-            (buf.word_wrap, buf.auto_indent)
-        };
+        let (word_wrap, auto_indent) = (buf.word_wrap, buf.auto_indent);
 
         // ── Editor area ──
         //
@@ -545,14 +560,11 @@ impl Panel for CodeEditorPanel {
         // Snapshot `old_text` before the TextEdit runs so the
         // auto-indent pass below can diff the pre/post buffer and
         // detect single-char newline insertions.
-        let (mut text, galley_cache, old_text) = {
-            let buf_state = world.resource::<EditorBufferState>();
-            (
-                buf_state.text.clone(),
-                buf_state.cached_galley.clone(),
-                buf_state.text.clone(),
-            )
-        };
+        let (mut text, galley_cache, old_text) = (
+            buf.text.clone(),
+            buf.cached_galley.clone(),
+            buf.text.clone(),
+        );
         let is_ro = is_read_only;
         let editor_width = avail.x.max(100.0);
         let editor_height = avail.y.max(200.0);
@@ -647,13 +659,13 @@ impl Panel for CodeEditorPanel {
         // menu and the toolbar share the exact same downstream code
         // path. Resource is initialised lazily — first menu click
         // creates it, which is fine because we only consume here.
-        if let Some(mut req) = world.get_resource_mut::<CodeEditorMenuRequest>() {
+        ctx.resource_scope::<CodeEditorMenuRequest, _>(|_ctx, req| {
             tb_copy |= req.copy;
             tb_cut |= req.cut;
             tb_paste |= req.paste;
             tb_select_all |= req.select_all;
             *req = CodeEditorMenuRequest::default();
-        }
+        });
         ui.separator();
         // When word-wrap is off we need the TextEdit widget's rect to
         // be AT LEAST as wide as the longest line — otherwise egui's
@@ -818,10 +830,10 @@ impl Panel for CodeEditorPanel {
         // the line into view. Applied only when the request targets the
         // document this tab is showing, so a stale request can't scroll
         // the wrong file. The request is one-shot — `take` drains it.
-        if let Some((jump_doc, loc)) = world
-            .get_resource_mut::<EditorJumpRequest>()
-            .and_then(|mut r| r.take())
-        {
+        let jump = ctx
+            .resource_scope::<EditorJumpRequest, _>(|_ctx, r| r.take())
+            .flatten();
+        if let Some((jump_doc, loc)) = jump {
             if jump_doc.is_none() || jump_doc == tab_target {
                 let offset = line_col_to_char_offset(&text, loc.line, loc.column);
                 if let Some(mut state) =
@@ -1042,7 +1054,7 @@ impl Panel for CodeEditorPanel {
         let now = ui.ctx().input(|i| i.time);
 
         if buffer_changed {
-            let mut buf_state = world.resource_mut::<EditorBufferState>();
+            let buf_state = &mut *buf;
             buf_state.text = new_text.clone();
             // NOTE: do NOT call `extract_model_name(&buf_state.text)`
             // here. That function runs a full rumoca parse which
@@ -1062,11 +1074,14 @@ impl Panel for CodeEditorPanel {
             // into a single checkpoint at the end.
             buf_state.pending_commit_at = Some(now);
 
-            if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
-                if state.editor_buffer != new_text {
-                    state.editor_buffer = new_text;
+            let workbench_buffer = new_text.clone();
+            ctx.defer(move |world| {
+                if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
+                    if state.editor_buffer != workbench_buffer {
+                        state.editor_buffer = workbench_buffer;
+                    }
                 }
-            }
+            });
 
             // Egui doesn't repaint a stationary UI on its own. When
             // the user stops typing we still want the debounce timer
@@ -1088,19 +1103,29 @@ impl Panel for CodeEditorPanel {
         //
         // `checkpoint_source` is idempotent when the content hasn't
         // changed, so duplicate triggers are safe.
-        let should_flush = {
-            let buf = world.resource::<EditorBufferState>();
-            match (buffer_commit, buf.pending_commit_at) {
-                (true, _) => buf.pending_commit_at.is_some(),
-                (false, Some(t)) => now - t >= EDIT_DEBOUNCE_SEC,
-                (false, None) => false,
-            }
+        let should_flush = match (buffer_commit, buf.pending_commit_at) {
+            (true, _) => buf.pending_commit_at.is_some(),
+            (false, Some(t)) => now - t >= EDIT_DEBOUNCE_SEC,
+            (false, None) => false,
         };
 
         if should_flush && !is_read_only {
             if let Some(doc) = doc_id {
-                commit_pending_buffer(world, doc);
+                // `buf` (with the latest text + pending_commit_at) is
+                // reinserted when this scope returns, BEFORE deferred
+                // closures run — so the deferred commit re-reads the
+                // up-to-date `EditorBufferState` from the world.
+                ctx.defer(move |world| {
+                    crate::ui::panels::code_editor::commit_pending_buffer(world, doc);
+                });
             }
+        }
+        });
+
+        if present.is_none() {
+            ctx.defer(|w| {
+                w.init_resource::<EditorBufferState>();
+            });
         }
     }
 }

@@ -227,12 +227,20 @@ impl WorkspaceState {
     /// Atomically write this state for its `twin_root` (tmp + rename so a
     /// kill mid-write can't corrupt the file).
     pub fn save(&self) -> std::io::Result<()> {
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        self.save_serialized(&json)
+    }
+
+    /// Write an already-serialized state to disk. The per-frame persist
+    /// path serializes the state once for its change-compare; this lets it
+    /// reuse that exact string instead of `save()` re-serializing the same
+    /// value a second time per write (CQ-209).
+    pub fn save_serialized(&self, json: &str) -> std::io::Result<()> {
         let path = workspace_state_path(&self.twin_root);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let tmp = path.with_extension("json.tmp");
         // Write through lunco-storage (clippy-banned `std::fs::write`,
         // wasm-incompatible); `rename` isn't on the ban list, so the
@@ -412,13 +420,11 @@ fn gate_value(world: &mut World) -> u64 {
     // Fold the dock arrangement (split sizes + tab layout + active leaf)
     // so a drag re-fires the save. Only when 5a is on — otherwise the
     // dock isn't persisted and folding it would re-save needlessly.
+    // Uses a direct structural hash, NOT JSON: this gate runs every
+    // frame, and serializing the dock to JSON just to hash it churned a
+    // `Value` tree + `String` per frame for no good reason (CQ-209).
     let dock = if RESTORE_DOCK_ARRANGEMENT {
-        world
-            .resource::<WorkbenchLayout>()
-            .dock_json()
-            .and_then(|v| serde_json::to_string(&v).ok())
-            .map(|s| fnv1a64(s.as_bytes()))
-            .unwrap_or(0)
+        world.resource::<WorkbenchLayout>().dock_layout_hash()
     } else {
         0
     };
@@ -698,7 +704,9 @@ fn persist_workspace_state(world: &mut World) {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if let Err(e) = state.save() {
+        // Reuse the string we just serialized for the change-compare —
+        // `save()` would otherwise serialize the same state again (CQ-209).
+        if let Err(e) = state.save_serialized(&current) {
             warn!("[WorkspaceState] save failed: {e}");
             return;
         }

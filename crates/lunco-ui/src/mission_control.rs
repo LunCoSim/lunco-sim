@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use chrono::TimeZone;
 
 use lunco_core::{Avatar, RoverVessel, Spacecraft, CelestialClock};
@@ -18,241 +18,396 @@ impl Panel for MissionControl {
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
     fn transparent_background(&self) -> bool { true }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        let theme = world.resource::<lunco_theme::Theme>().clone();
-        ui.style_mut().visuals = theme.to_visuals();
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        // ── Snapshot all derived/resource state up front so every `ctx`
+        //    read borrow ends before any `ctx.defer` below. The panel reads
+        //    the change-gated `MissionControlView` (no per-frame scans) plus
+        //    O(1) networking resources.
+        let theme = ctx.resource::<lunco_theme::Theme>().cloned();
 
-        egui::Frame::new()
-            .fill(theme.colors.mantle)
+        let avatar_ent;
+        let clock_state;
+        let bodies: Vec<(Entity, String, String)>;
+        let spacecraft: Vec<(Entity, String)>;
+        let rovers_display: Vec<(Entity, String, bool, bool, Option<u64>)>;
+        let on_surface;
+        let gravity_body;
+        let networked;
+        let is_host;
+        let policy;
+        {
+            let view = ctx.resource::<MissionControlView>();
+            avatar_ent = view.and_then(|v| v.avatar);
+            bodies = view
+                .map(|v| {
+                    v.bodies
+                        .iter()
+                        .map(|r| (r.entity, r.name.clone(), r.label.clone()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            spacecraft = view
+                .map(|v| v.spacecraft.iter().map(|r| (r.entity, r.name.clone())).collect())
+                .unwrap_or_default();
+            on_surface = view.map(|v| v.on_surface).unwrap_or(false);
+            gravity_body = view.and_then(|v| v.gravity_body);
+
+            clock_state = ctx
+                .resource::<CelestialClock>()
+                .map(|c| (c.epoch, c.paused, c.speed_multiplier));
+
+            // Networking context, read from the always-on substrate. In
+            // single-player (Standalone, empty registry) `networked` is false
+            // so the ownership UI stays hidden and rovers behave as before.
+            let local_session = ctx.resource::<lunco_core::LocalSession>().map(|l| l.0);
+            let role = ctx.resource::<lunco_core::NetworkRole>();
+            networked = role.map(|r| r.is_networked()).unwrap_or(false);
+            is_host = role.map(|r| r.is_host()).unwrap_or(false);
+            let reg = ctx.resource::<lunco_core::SessionRegistry>();
+            policy = reg.map(|r| r.policy()).unwrap_or_default();
+
+            rovers_display = view
+                .map(|v| {
+                    v.rovers
+                        .iter()
+                        .map(|r| {
+                            let owner = r.gid.and_then(|g| reg.and_then(|reg| reg.owner_of(g)));
+                            let mine = matches!(
+                                (owner, local_session),
+                                (Some(o), Some(l)) if o == l
+                            );
+                            let taken_by_other = owner.is_some() && !mine;
+                            (r.entity, r.name.clone(), mine, taken_by_other, owner.map(|s| s.0))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
+
+        if let Some(t) = &theme {
+            ui.style_mut().visuals = t.to_visuals();
+        }
+
+        // ── Intents collected during paint, emitted via `ctx.defer` after. ──
+        let mut focus: Option<Entity> = None;
+        let mut teleport_body_bits: Option<u64> = None;
+        let mut possess: Option<Entity> = None;
+        let mut release = false;
+        let mut leave_surface = false;
+        let mut toggle_pause = false;
+        let mut set_speed: Option<f64> = None;
+        let mut set_policy: Option<lunco_core::PossessionPolicy> = None;
+
+        let frame = egui::Frame::new()
+            .fill(theme.as_ref().map(|t| t.colors.mantle).unwrap_or(egui::Color32::TRANSPARENT))
             .inner_margin(8.0)
-            .corner_radius(4)
-            .show(ui, |ui| {
-                self.render_content(ui, world);
+            .corner_radius(4);
+
+        frame.show(ui, |ui| {
+            // ── Time Control ──
+            ui.heading("Time Control");
+            if let Some((epoch, _, _)) = clock_state {
+                ui.label(format!("JD: {:.4}", epoch));
+                ui.label(format!("UTC: {}", jd_to_utc_string(epoch)));
+            }
+            if let Some((_, paused, speed)) = clock_state {
+                ui.horizontal(|ui| {
+                    if ui.button(if paused { "▶ Play" } else { "⏸ Pause" }).clicked() {
+                        toggle_pause = true;
+                    }
+                });
+                egui::Grid::new("time_multipliers")
+                    .num_columns(4)
+                    .spacing([4.0, 4.0])
+                    .show(ui, |ui| {
+                        let multipliers =
+                            [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0];
+                        for (i, &m) in multipliers.iter().enumerate() {
+                            if ui.selectable_label(speed == m, format!("{}x", m)).clicked() {
+                                set_speed = Some(m);
+                            }
+                            if (i + 1) % 4 == 0 {
+                                ui.end_row();
+                            }
+                        }
+                    });
+            }
+            ui.separator();
+
+            // ── Celestial Bodies ──
+            ui.collapsing("Celestial Bodies", |ui| {
+                for (entity, name, radius) in &bodies {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} ({})", name, radius));
+                        if ui.small_button("Focus").clicked() {
+                            focus = Some(*entity);
+                        }
+                        if ui.small_button("🌕 Surface").clicked() {
+                            teleport_body_bits = Some(entity.to_bits());
+                        }
+                    });
+                }
             });
+
+            // ── Spacecraft ──
+            ui.collapsing("Spacecraft", |ui| {
+                for (entity, name) in &spacecraft {
+                    ui.horizontal(|ui| {
+                        ui.label(name);
+                        if ui.small_button("Focus").clicked() {
+                            focus = Some(*entity);
+                        }
+                    });
+                }
+            });
+
+            // ── Rovers ──
+            ui.collapsing("Rovers", |ui| {
+                // Possession policy selector (host-authoritative — only the
+                // host's choice governs `claim`). Default `Exclusive` = "one each".
+                if networked {
+                    let mut chosen = policy;
+                    ui.horizontal(|ui| {
+                        ui.label("Control:");
+                        ui.add_enabled_ui(is_host, |ui| {
+                            ui.selectable_value(
+                                &mut chosen,
+                                lunco_core::PossessionPolicy::Exclusive,
+                                "One each",
+                            );
+                            ui.selectable_value(
+                                &mut chosen,
+                                lunco_core::PossessionPolicy::LastWins,
+                                "Anyone",
+                            );
+                        });
+                    });
+                    if chosen != policy && is_host {
+                        set_policy = Some(chosen);
+                    }
+                }
+
+                for (entity, name, mine, taken_by_other, owner_sess) in &rovers_display {
+                    ui.horizontal(|ui| {
+                        // Ownership chip (only meaningful with the wire live).
+                        if networked {
+                            if *mine {
+                                ui.colored_label(egui::Color32::from_rgb(0x4c, 0xff, 0x88), "●")
+                                    .on_hover_text("You control this rover");
+                            } else if *taken_by_other {
+                                ui.colored_label(egui::Color32::from_rgb(0xff, 0x6b, 0x4c), "🔒")
+                                    .on_hover_text(format!(
+                                        "Controlled by session {}",
+                                        owner_sess.unwrap_or(0)
+                                    ));
+                            } else {
+                                ui.weak("○").on_hover_text("Free to possess");
+                            }
+                        }
+                        ui.label(name);
+                        if ui.small_button("Focus").clicked() {
+                            focus = Some(*entity);
+                        }
+                        if *mine {
+                            if ui.small_button("🚪 Release").clicked() {
+                                release = true;
+                            }
+                        } else {
+                            // Under `Exclusive` a rover held by another is locked;
+                            // under `LastWins` anyone can take it.
+                            let locked = *taken_by_other
+                                && matches!(policy, lunco_core::PossessionPolicy::Exclusive);
+                            let resp =
+                                ui.add_enabled(!locked, egui::Button::new("🚗 Possess").small());
+                            if locked {
+                                resp.on_disabled_hover_text(
+                                    "Controlled by another player (One-each policy)",
+                                );
+                            } else if resp.clicked() {
+                                possess = Some(*entity);
+                            }
+                        }
+                    });
+                }
+            });
+
+            // ── Quick Actions ──
+            ui.separator();
+            ui.heading("Quick Actions");
+            if avatar_ent.is_some() {
+                if ui.button("🚀 Release (Free Fly)").clicked() {
+                    release = true;
+                }
+                // Return to Orbit — show when avatar is in surface mode.
+                if on_surface && ui.button("🏠 Return to Orbit").clicked() {
+                    leave_surface = true;
+                }
+            }
+
+            ui.separator();
+            ui.label("Double-click entities in Inspector to focus.");
+            ui.label("WASD: move  |  QE: Up/Down");
+            ui.label("Right-Click: rotate  |  SPACE: pause");
+        });
+
+        // ── Emit collected intent after paint (read borrows released). ──
+        if let Some(av) = avatar_ent {
+            if let Some(target) = focus {
+                ctx.defer(move |world| {
+                    world.trigger(FocusTarget { avatar: Some(av), target });
+                });
+            }
+            if let Some(body_entity) = teleport_body_bits {
+                ctx.defer(move |world| {
+                    world.trigger(TeleportToSurface { target: av, body_entity });
+                });
+            }
+            if let Some(target) = possess {
+                ctx.defer(move |world| {
+                    world.trigger(PossessVessel { avatar: Some(av), target });
+                });
+            }
+            if release {
+                ctx.defer(move |world| {
+                    world.trigger(ReleaseVessel { target: av });
+                });
+            }
+            if leave_surface && gravity_body.is_some() {
+                ctx.defer(move |world| {
+                    world.trigger(LeaveSurface { target: av });
+                });
+            }
+        }
+
+        if toggle_pause {
+            let cur = clock_state.map(|(_, p, _)| p).unwrap_or(false);
+            ctx.defer(move |world| {
+                if let Some(mut clock) = world.get_resource_mut::<CelestialClock>() {
+                    clock.paused = !cur;
+                }
+            });
+        }
+        if let Some(m) = set_speed {
+            ctx.defer(move |world| {
+                if let Some(mut clock) = world.get_resource_mut::<CelestialClock>() {
+                    clock.speed_multiplier = m;
+                }
+            });
+        }
+        if let Some(p) = set_policy {
+            ctx.defer(move |world| {
+                if let Some(mut reg) = world.get_resource_mut::<lunco_core::SessionRegistry>() {
+                    reg.set_policy(p);
+                }
+            });
+        }
     }
 }
 
-impl MissionControl {
-    fn render_content(&mut self, ui: &mut egui::Ui, world: &mut World) {
+// ─────────────────────────────────────────────────────────────────────
+// View-model (WP-8) — change-gated derived data for the panel.
+// ─────────────────────────────────────────────────────────────────────
 
-        let avatar_ent = {
-            let mut q = world.query_filtered::<Entity, With<Avatar>>();
-            q.iter(world).next()
-        };
+/// Change-gated view-model for [`MissionControl`].
+///
+/// The panel used to run ~5 world scans per frame (avatar, bodies,
+/// spacecraft, rovers, surface-camera). None depend on per-frame UI state,
+/// so [`populate_mission_control_view`] flattens them into this resource —
+/// rebuilt only when the relevant components change / despawn or the avatar,
+/// surface mode, or gravity body change — and the panel reads it via
+/// `ctx.resource`. Ownership (which session holds each rover) stays in the
+/// panel as O(1) `SessionRegistry` lookups since it changes per network tick.
+#[derive(Resource, Default)]
+pub struct MissionControlView {
+    avatar: Option<Entity>,
+    bodies: Vec<EntityRow>,
+    spacecraft: Vec<EntityRow>,
+    rovers: Vec<RoverRow>,
+    on_surface: bool,
+    gravity_body: Option<Entity>,
+}
 
-        // ── Time Control ──
-        ui.heading("Time Control");
-        if let Some(clock) = world.get_resource::<CelestialClock>() {
-            ui.label(format!("JD: {:.4}", clock.epoch));
-            ui.label(format!("UTC: {}", jd_to_utc_string(clock.epoch)));
-        }
-        if let Some(mut clock) = world.get_resource_mut::<CelestialClock>() {
-            ui.horizontal(|ui| {
-                if ui.button(if clock.paused { "▶ Play" } else { "⏸ Pause" }).clicked() {
-                    clock.paused = !clock.paused;
-                }
-            });
-            egui::Grid::new("time_multipliers")
-                .num_columns(4)
-                .spacing([4.0, 4.0])
-                .show(ui, |ui| {
-                    let multipliers = [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0];
-                    for (i, &m) in multipliers.iter().enumerate() {
-                        if ui.selectable_label(clock.speed_multiplier == m, format!("{}x", m)).clicked() {
-                            clock.speed_multiplier = m;
-                        }
-                        if (i + 1) % 4 == 0 {
-                            ui.end_row();
-                        }
-                    }
-                });
-        }
-        ui.separator();
+/// A focusable entity row (body or spacecraft).
+struct EntityRow {
+    entity: Entity,
+    name: String,
+    /// Pre-formatted secondary label (e.g. radius); empty when unused.
+    label: String,
+}
 
-        // ── Celestial Bodies ──
-        ui.collapsing("Celestial Bodies", |ui| {
-            let mut body_q = world.query::<(Entity, &Name, &CelestialBody)>();
-            let bodies: Vec<(Entity, String, String)> = body_q.iter(world)
-                .map(|(e, n, body)| (e, n.as_str().to_string(), format!("{:.0} km", body.radius_m / 1000.0)))
-                .collect();
-            for (entity, name, radius) in &bodies {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{} ({})", name, radius));
-                    if ui.small_button("Focus").clicked() {
-                        if let Some(av) = avatar_ent {
-                            world.commands().trigger(FocusTarget { avatar: Some(av), target: *entity });
-                        }
-                    }
-                    if ui.small_button("🌕 Surface").clicked() {
-                        if let Some(av) = avatar_ent {
-                            world.commands().trigger(TeleportToSurface {
-                                target: av,
-                                body_entity: entity.to_bits(),
-                            });
-                        }
-                    }
-                });
-            }
-        });
+/// A rover row. `gid` is the stable global id used for ownership lookup.
+struct RoverRow {
+    entity: Entity,
+    name: String,
+    gid: Option<u64>,
+}
 
-        // ── Spacecraft ──
-        ui.collapsing("Spacecraft", |ui| {
-            let mut sc_q = world.query::<(Entity, &Name)>();
-            let scs: Vec<(Entity, String)> = sc_q.iter(world)
-                .filter(|(e, _)| world.get::<Spacecraft>(*e).is_some())
-                .map(|(e, n)| (e, n.as_str().to_string()))
-                .collect();
-            for (entity, name) in &scs {
-                ui.horizontal(|ui| {
-                    ui.label(name);
-                    if ui.small_button("Focus").clicked() {
-                        if let Some(av) = avatar_ent {
-                            world.commands().trigger(FocusTarget { avatar: Some(av), target: *entity });
-                        }
-                    }
-                });
-            }
-        });
+/// Producer for [`MissionControlView`]. Steady state is a handful of
+/// `is_empty`/scalar checks; the scans only run on a relevant change.
+pub fn populate_mission_control_view(
+    mut view: ResMut<MissionControlView>,
+    avatar: Query<Entity, With<Avatar>>,
+    bodies: Query<(Entity, &Name, &CelestialBody)>,
+    spacecraft: Query<(Entity, &Name), With<Spacecraft>>,
+    rovers: Query<(Entity, &Name, Option<&lunco_core::GlobalEntityId>), With<RoverVessel>>,
+    surface: Query<(), With<lunco_avatar::SurfaceCamera>>,
+    gravity: Option<Res<lunco_celestial::LocalGravityField>>,
+    changed: Query<
+        (),
+        Or<(
+            Changed<CelestialBody>,
+            Changed<Spacecraft>,
+            Changed<RoverVessel>,
+            Changed<Name>,
+            Changed<lunco_core::GlobalEntityId>,
+        )>,
+    >,
+    mut removed_body: RemovedComponents<CelestialBody>,
+    mut removed_sc: RemovedComponents<Spacecraft>,
+    mut removed_rover: RemovedComponents<RoverVessel>,
+) {
+    let avatar_ent = avatar.iter().next();
+    let on_surface = !surface.is_empty();
+    let gravity_body = gravity.and_then(|g| g.body_entity);
 
-        // ── Rovers ──
-        ui.collapsing("Rovers", |ui| {
-            // Networking context, read from the always-on substrate. In
-            // single-player (Standalone, empty registry) `networked` is false so
-            // the ownership UI stays hidden and rovers behave as before.
-            let local_session = world.get_resource::<lunco_core::LocalSession>().map(|l| l.0);
-            let (networked, is_host) = world
-                .get_resource::<lunco_core::NetworkRole>()
-                .map(|r| (r.is_networked(), r.is_host()))
-                .unwrap_or((false, false));
-
-            // Possession policy selector (host-authoritative — only the host's
-            // choice governs `claim`). Default `Exclusive` = "one each".
-            let policy = world
-                .get_resource::<lunco_core::SessionRegistry>()
-                .map(|r| r.policy())
-                .unwrap_or_default();
-            if networked {
-                let mut chosen = policy;
-                ui.horizontal(|ui| {
-                    ui.label("Control:");
-                    ui.add_enabled_ui(is_host, |ui| {
-                        ui.selectable_value(
-                            &mut chosen,
-                            lunco_core::PossessionPolicy::Exclusive,
-                            "One each",
-                        );
-                        ui.selectable_value(
-                            &mut chosen,
-                            lunco_core::PossessionPolicy::LastWins,
-                            "Anyone",
-                        );
-                    });
-                });
-                if chosen != policy && is_host {
-                    if let Some(mut reg) = world.get_resource_mut::<lunco_core::SessionRegistry>() {
-                        reg.set_policy(chosen);
-                    }
-                }
-            }
-
-            let mut rover_q = world.query::<(Entity, &Name)>();
-            let rovers: Vec<(Entity, String, Option<u64>)> = rover_q.iter(world)
-                .filter(|(e, _)| world.get::<RoverVessel>(*e).is_some())
-                .map(|(e, n)| {
-                    (e, n.as_str().to_string(),
-                     world.get::<lunco_core::GlobalEntityId>(e).map(|g| g.get()))
-                })
-                .collect();
-
-            // Resolve owner per rover (registry borrow kept out of the query iter).
-            let owners: Vec<Option<lunco_core::SessionId>> = {
-                let reg = world.get_resource::<lunco_core::SessionRegistry>();
-                rovers.iter()
-                    .map(|(_, _, gid)| gid.and_then(|g| reg.and_then(|r| r.owner_of(g))))
-                    .collect()
-            };
-
-            for ((entity, name, _gid), owner) in rovers.iter().zip(owners.iter()) {
-                let mine = matches!((owner, local_session), (Some(o), Some(l)) if *o == l);
-                let taken_by_other = owner.is_some() && !mine;
-                ui.horizontal(|ui| {
-                    // Ownership chip (only meaningful with the wire live).
-                    if networked {
-                        if mine {
-                            ui.colored_label(egui::Color32::from_rgb(0x4c, 0xff, 0x88), "●")
-                                .on_hover_text("You control this rover");
-                        } else if taken_by_other {
-                            ui.colored_label(egui::Color32::from_rgb(0xff, 0x6b, 0x4c), "🔒")
-                                .on_hover_text(format!(
-                                    "Controlled by session {}",
-                                    owner.map(|s| s.0).unwrap_or(0)
-                                ));
-                        } else {
-                            ui.weak("○").on_hover_text("Free to possess");
-                        }
-                    }
-                    ui.label(name);
-                    if ui.small_button("Focus").clicked() {
-                        if let Some(av) = avatar_ent {
-                            world.commands().trigger(FocusTarget { avatar: Some(av), target: *entity });
-                        }
-                    }
-                    if mine {
-                        if ui.small_button("🚪 Release").clicked() {
-                            if let Some(av) = avatar_ent {
-                                world.commands().trigger(ReleaseVessel { target: av });
-                            }
-                        }
-                    } else {
-                        // Under `Exclusive` a rover held by another is locked;
-                        // under `LastWins` anyone can take it (button stays live).
-                        let locked = taken_by_other
-                            && matches!(policy, lunco_core::PossessionPolicy::Exclusive);
-                        let resp =
-                            ui.add_enabled(!locked, egui::Button::new("🚗 Possess").small());
-                        if locked {
-                            resp.on_disabled_hover_text(
-                                "Controlled by another player (One-each policy)",
-                            );
-                        } else if resp.clicked() {
-                            if let Some(av) = avatar_ent {
-                                world.commands().trigger(PossessVessel { avatar: Some(av), target: *entity });
-                            }
-                        }
-                    }
-                });
-            }
-        });
-
-        // ── Quick Actions ──
-        ui.separator();
-        ui.heading("Quick Actions");
-        if let Some(av) = avatar_ent {
-            if ui.button("🚀 Release (Free Fly)").clicked() {
-                world.commands().trigger(ReleaseVessel { target: av });
-            }
-
-            // Return to Orbit — show when avatar is in surface mode
-            let on_surface = {
-                let mut q = world.query::<&lunco_avatar::SurfaceCamera>();
-                q.iter(world).next().is_some()
-            };
-            if on_surface {
-                if ui.button("🏠 Return to Orbit").clicked() {
-                    let target = world.get_resource::<lunco_celestial::LocalGravityField>()
-                        .and_then(|gf| gf.body_entity);
-                    if target.is_some() {
-                        world.commands().trigger(LeaveSurface { target: av });
-                    }
-                }
-            }
-        }
-
-        ui.separator();
-        ui.label("Double-click entities in Inspector to focus.");
-        ui.label("WASD: move  |  QE: Up/Down");
-        ui.label("Right-Click: rotate  |  SPACE: pause");
+    let dirty = !changed.is_empty()
+        || removed_body.read().next().is_some()
+        || removed_sc.read().next().is_some()
+        || removed_rover.read().next().is_some()
+        || view.avatar != avatar_ent
+        || view.on_surface != on_surface
+        || view.gravity_body != gravity_body;
+    if !dirty {
+        return;
     }
+
+    view.avatar = avatar_ent;
+    view.on_surface = on_surface;
+    view.gravity_body = gravity_body;
+    view.bodies = bodies
+        .iter()
+        .map(|(e, n, b)| EntityRow {
+            entity: e,
+            name: n.as_str().to_string(),
+            label: format!("{:.0} km", b.radius_m / 1000.0),
+        })
+        .collect();
+    view.spacecraft = spacecraft
+        .iter()
+        .map(|(e, n)| EntityRow {
+            entity: e,
+            name: n.as_str().to_string(),
+            label: String::new(),
+        })
+        .collect();
+    view.rovers = rovers
+        .iter()
+        .map(|(e, n, g)| RoverRow {
+            entity: e,
+            name: n.as_str().to_string(),
+            gid: g.map(|g| g.get()),
+        })
+        .collect();
 }
 
 fn jd_to_utc_string(jd: f64) -> String {

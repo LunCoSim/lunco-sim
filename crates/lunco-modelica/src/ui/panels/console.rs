@@ -25,7 +25,7 @@ static SESSION_START: OnceLock<Instant> = OnceLock::new();
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 /// Maximum buffered console messages. Oldest pruned when exceeded.
 const MAX_MESSAGES: usize = 2000;
@@ -129,20 +129,27 @@ impl Panel for ConsolePanel {
         PanelSlot::Bottom
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        if world.get_resource::<ConsoleLog>().is_none() {
-            world.insert_resource(ConsoleLog::default());
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        if ctx.resource::<ConsoleLog>().is_none() {
+            ctx.defer(|world| {
+                if world.get_resource::<ConsoleLog>().is_none() {
+                    world.insert_resource(ConsoleLog::default());
+                }
+            });
         }
 
-        let theme = world
-            .get_resource::<lunco_theme::Theme>()
+        let theme = ctx
+            .resource::<lunco_theme::Theme>()
             .cloned()
             .unwrap_or_else(lunco_theme::Theme::dark);
         let muted = theme.tokens.text_subdued;
 
         // Header row: message count + Clear button.
         let mut clear_requested = false;
-        let count = world.resource::<ConsoleLog>().messages.len();
+        let count = ctx
+            .resource::<ConsoleLog>()
+            .map(|c| c.messages.len())
+            .unwrap_or(0);
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(format!("{count} messages"))
@@ -165,12 +172,16 @@ impl Panel for ConsolePanel {
                     .on_hover_text("Copy all console messages to the clipboard")
                     .clicked()
             {
+                let msgs: Vec<ConsoleMessage> = ctx
+                    .resource::<ConsoleLog>()
+                    .map(|c| c.messages.iter().cloned().collect())
+                    .unwrap_or_default();
                 let session_start = SESSION_START
                     .get()
                     .copied()
-                    .or_else(|| world.resource::<ConsoleLog>().messages.front().map(|m| m.at));
+                    .or_else(|| msgs.first().map(|m| m.at));
                 let mut text = String::new();
-                for msg in &world.resource::<ConsoleLog>().messages {
+                for msg in &msgs {
                     let offset = session_start
                         .and_then(|s| msg.at.checked_duration_since(s))
                         .map(|d| d.as_secs_f32())
@@ -189,12 +200,10 @@ impl Panel for ConsolePanel {
 
         // Snapshot messages so the scroll-area render doesn't hold
         // a long borrow on the world while egui walks the list.
-        let snapshot: Vec<ConsoleMessage> = world
+        let snapshot: Vec<ConsoleMessage> = ctx
             .resource::<ConsoleLog>()
-            .messages
-            .iter()
-            .cloned()
-            .collect();
+            .map(|c| c.messages.iter().cloned().collect())
+            .unwrap_or_default();
 
         if snapshot.is_empty() {
             ui.vertical_centered(|ui| {
@@ -253,7 +262,11 @@ impl Panel for ConsolePanel {
         }
 
         if clear_requested {
-            world.resource_mut::<ConsoleLog>().clear();
+            ctx.defer(|world| {
+                if let Some(mut log) = world.get_resource_mut::<ConsoleLog>() {
+                    log.clear();
+                }
+            });
         }
     }
 }

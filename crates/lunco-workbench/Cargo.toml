@@ -6,7 +6,15 @@ build = "build.rs"
 description = "LunCoSim's own workbench shell — activity bar, side browsers, central viewport, right inspector, bottom dock, status bar. Native replacement for bevy_workbench."
 
 [dependencies]
-bevy = { workspace = true }
+# `bevy_render` facade feature: `render_robustness.rs` names
+# `bevy::render::{RenderApp, RenderDevice, WgpuSettings, RenderStartup}`
+# directly. The workspace baseline is render-free; this crate genuinely
+# needs the render facade (it installs the wgpu error handler), so it
+# opts in here per the documented pattern (render crates pull bevy_render
+# via their own feature list). Without it `cargo check -p lunco-workbench`
+# fails to resolve `bevy::render` even though full binaries enable it
+# transitively.
+bevy = { workspace = true, features = ["bevy_render"] }
 bevy_egui = { workspace = true }
 # Needed only to name `wgpu::Error` in the uncaptured-error handler
 # (`render_robustness.rs`). No version unification risk: `27` resolves to the

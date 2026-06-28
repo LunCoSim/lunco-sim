@@ -6,14 +6,14 @@
 //! and emit `ModelicaOp` writes through `apply_ops_public` from the
 //! parent module.
 
-use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_workbench::PanelCtx;
 
 use crate::document::ModelicaOp;
 
 use super::ops::{component_headers, op_remove_component, op_remove_edge};
 use super::palette::{self, PaletteSettings};
-use super::{CanvasDiagramState, active_doc_from_world};
+use super::{CanvasDiagramState, active_doc_from_world_ctx};
 use crate::model_tabs_types::TabRenderContext;
 
 /// Build a `SetConnectionLine` op from the current edge's waypoints
@@ -22,14 +22,14 @@ use crate::model_tabs_types::TabRenderContext;
 /// if the edge or its endpoints can't be resolved. Used by the
 /// right-click bend insert/delete entries.
 fn op_modify_waypoints(
-    world: &mut World,
+    ctx: &PanelCtx,
+    state: &CanvasDiagramState,
     edge_id: lunco_canvas::EdgeId,
     class: &str,
     mutate: impl FnOnce(&mut Vec<lunco_canvas::Pos>),
 ) -> Option<ModelicaOp> {
-    let active_doc = active_doc_from_world(world);
-    let tab = render_tab_id(world);
-    let state = world.resource::<CanvasDiagramState>();
+    let active_doc = active_doc_from_world_ctx(ctx);
+    let tab = render_tab_id(ctx);
     let scene = &state.get_for_render(tab, active_doc).canvas.scene;
     let edge = scene.edge(edge_id)?;
     let from_node = scene.node(edge.from.node)?;
@@ -52,15 +52,16 @@ fn op_modify_waypoints(
 /// outside a panel render call (observers, off-render systems);
 /// callers fall back to first-tab semantics in that case via
 /// `CanvasDiagramState::get_for_render`.
-fn render_tab_id(world: &World) -> Option<crate::model_tabs_types::TabId> {
-    world
-        .get_resource::<TabRenderContext>()
+fn render_tab_id(ctx: &PanelCtx) -> Option<crate::model_tabs_types::TabId> {
+    ctx
+        .resource::<TabRenderContext>()
         .and_then(|c| c.tab_id)
 }
 
 pub(super) fn render_node_menu(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
+    state: &mut CanvasDiagramState,
     id: lunco_canvas::NodeId,
     editing_class: Option<&str>,
     out: &mut Vec<ModelicaOp>,
@@ -69,9 +70,8 @@ pub(super) fn render_node_menu(
     // signal-binding submenu and a Delete entry, skip the component-
     // specific actions (Open class, Parameters, Duplicate).
     let node_kind: Option<String> = {
-        let active_doc = active_doc_from_world(world);
-        let tab = render_tab_id(world);
-        let state = world.resource::<CanvasDiagramState>();
+        let active_doc = active_doc_from_world_ctx(ctx);
+        let tab = render_tab_id(ctx);
         state
             .get_for_render(tab, active_doc)
             .canvas
@@ -82,10 +82,10 @@ pub(super) fn render_node_menu(
     if node_kind.as_deref()
         == Some(lunco_viz::kinds::canvas_plot_node::PLOT_NODE_KIND)
     {
-        render_plot_node_menu(ui, world, id);
+        render_plot_node_menu(ui, ctx, state, id);
         return;
     }
-    let (instance, type_name) = component_headers(world, id);
+    let (instance, type_name) = component_headers(ctx, state, id);
     ui.label(egui::RichText::new(&instance).strong());
     if !type_name.is_empty() {
         ui.label(egui::RichText::new(&type_name).weak().small());
@@ -93,14 +93,13 @@ pub(super) fn render_node_menu(
     ui.separator();
     if ui.button("✂ Delete").on_hover_text("Remove this component from the diagram").clicked() {
         if let Some(class) = editing_class {
-            if let Some(op) = op_remove_component(world, id, class) {
+            if let Some(op) = op_remove_component(ctx, state, id, class) {
                 out.push(op);
                 // Optimistic scene mutation — `apply_ops` will then
                 // bump `canvas_acked_gen` and the project gate skips
                 // the redundant reproject.
-                let active_doc = active_doc_from_world(world);
-                let tab = render_tab_id(world);
-                let mut state = world.resource_mut::<CanvasDiagramState>();
+                let active_doc = active_doc_from_world_ctx(ctx);
+                let tab = render_tab_id(ctx);
                 let docstate = state.get_mut_for_render(tab, active_doc);
                 docstate.canvas.scene.remove_node(id);
             }
@@ -126,7 +125,7 @@ pub(super) fn render_node_menu(
 /// causality on each `ComponentEntry`), so this is a free lookup —
 /// no DAE introspection or runtime variance heuristic required.
 fn collect_varying_signals(
-    world: &mut World,
+    ctx: &PanelCtx,
 ) -> Vec<(bevy::prelude::Entity, String)> {
     use bevy::prelude::Entity;
     // A document's variables are registered in `SignalRegistry` under TWO
@@ -138,22 +137,22 @@ fn collect_varying_signals(
     // (`snapshots::stash_snapshots` doc→entity: the registry sim entity, lowest
     // bits, wins; else the playback entity), then read only that entity's
     // signals so the picker matches exactly what a doc-bound plot will show.
-    let bound_entity: Option<Entity> = active_doc_from_world(world).and_then(|d| {
-        let live = world
-            .get_resource::<crate::state::ModelicaDocumentRegistry>()
+    let bound_entity: Option<Entity> = active_doc_from_world_ctx(ctx).and_then(|d| {
+        let live = ctx
+            .resource::<crate::state::ModelicaDocumentRegistry>()
             .and_then(|reg| {
                 reg.iter_doc_for_entity()
                     .filter(|(_, dd)| *dd == d)
                     .map(|(e, _)| e)
                     .min_by_key(|e| e.to_bits())
             });
-        let playback = world
-            .get_resource::<crate::experiments_runner::PlaybackEntities>()
+        let playback = ctx
+            .resource::<crate::experiments_runner::PlaybackEntities>()
             .and_then(|p| p.0.get(&d).copied());
         live.or(playback)
     });
-    let signals: Vec<(Entity, String)> = world
-        .get_resource::<lunco_viz::SignalRegistry>()
+    let signals: Vec<(Entity, String)> = ctx
+        .resource::<lunco_viz::SignalRegistry>()
         .map(|r| {
             r.iter_scalar()
                 .filter(|(s, _)| bound_entity.map_or(true, |be| s.entity == be))
@@ -164,7 +163,7 @@ fn collect_varying_signals(
     let mut v: Vec<_> = signals
         .into_iter()
         .filter(|(entity, path)| {
-            world
+            ctx
                 .get::<crate::ModelicaModel>(*entity)
                 .map(|m| !m.parameters.contains_key(path) && !m.inputs.contains_key(path))
                 .unwrap_or(true)
@@ -176,15 +175,15 @@ fn collect_varying_signals(
 
 pub(super) fn render_plot_node_menu(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
+    state: &mut CanvasDiagramState,
     id: lunco_canvas::NodeId,
 ) {
     use lunco_viz::kinds::canvas_plot_node::PlotNodeData;
 
     let current: PlotNodeData = {
-        let active_doc = active_doc_from_world(world);
-        let tab = render_tab_id(world);
-        let state = world.resource::<CanvasDiagramState>();
+        let active_doc = active_doc_from_world_ctx(ctx);
+        let tab = render_tab_id(ctx);
         state
             .get_for_render(tab, active_doc)
             .canvas
@@ -210,7 +209,7 @@ pub(super) fn render_plot_node_menu(
     }
     ui.separator();
 
-    let sigs = collect_varying_signals(world);
+    let sigs = collect_varying_signals(ctx);
 
     ui.menu_button("🔗 Bind signal", |ui| {
         if sigs.is_empty() {
@@ -230,7 +229,7 @@ pub(super) fn render_plot_node_menu(
                     let is_current = current.binding.pinned_entity() == Some(entity.to_bits())
                         && path == &current.signal_path;
                     if ui.selectable_label(is_current, path).clicked() {
-                        rebind_plot_node(world, id, entity.to_bits(), path);
+                        rebind_plot_node(ctx, state, id, entity.to_bits(), path);
                         ui.close();
                     }
                 }
@@ -240,14 +239,13 @@ pub(super) fn render_plot_node_menu(
     if !current.signal_path.is_empty()
         && ui.button("Unbind").on_hover_text("Clear this plot's signal binding").clicked()
     {
-        rebind_plot_node(world, id, 0, "");
+        rebind_plot_node(ctx, state, id, 0, "");
         ui.close();
     }
     ui.separator();
     if ui.button("✂ Delete").on_hover_text("Remove this plot node from the diagram").clicked() {
-        let active_doc = active_doc_from_world(world);
-        let tab = render_tab_id(world);
-        let mut state = world.resource_mut::<CanvasDiagramState>();
+        let active_doc = active_doc_from_world_ctx(ctx);
+        let tab = render_tab_id(ctx);
         let docstate = state.get_mut_for_render(tab, active_doc);
         docstate.canvas.scene.remove_node(id);
         ui.close();
@@ -255,7 +253,8 @@ pub(super) fn render_plot_node_menu(
 }
 
 pub(super) fn rebind_plot_node(
-    world: &mut World,
+    ctx: &PanelCtx,
+    state: &mut CanvasDiagramState,
     id: lunco_canvas::NodeId,
     entity_bits: u64,
     signal_path: &str,
@@ -269,9 +268,8 @@ pub(super) fn rebind_plot_node(
         title: String::new(),
     };
     let data: lunco_canvas::NodeData = std::sync::Arc::new(payload);
-    let active_doc = active_doc_from_world(world);
-    let tab = render_tab_id(world);
-    let mut state = world.resource_mut::<CanvasDiagramState>();
+    let active_doc = active_doc_from_world_ctx(ctx);
+    let tab = render_tab_id(ctx);
     let docstate = state.get_mut_for_render(tab, active_doc);
     if let Some(node) = docstate.canvas.scene.node_mut(id) {
         node.data = data;
@@ -280,7 +278,8 @@ pub(super) fn rebind_plot_node(
 
 pub(super) fn render_edge_menu(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
+    state: &mut CanvasDiagramState,
     id: lunco_canvas::EdgeId,
     hit: lunco_canvas::EdgeHitKind,
     click_world: lunco_canvas::Pos,
@@ -295,7 +294,8 @@ pub(super) fn render_edge_menu(
             lunco_canvas::EdgeHitKind::Corner(idx) => {
                 if ui.button("✕ Delete bend").on_hover_text("Remove this waypoint from the connection").clicked() {
                     if let Some(op) = op_modify_waypoints(
-                        world,
+                        ctx,
+                        state,
                         id,
                         class,
                         |pts| {
@@ -312,7 +312,8 @@ pub(super) fn render_edge_menu(
             lunco_canvas::EdgeHitKind::Segment(seg_idx) => {
                 if ui.button("➕ Add bend here").on_hover_text("Insert a waypoint at the clicked point").clicked() {
                     if let Some(op) = op_modify_waypoints(
-                        world,
+                        ctx,
+                        state,
                         id,
                         class,
                         |pts| {
@@ -339,11 +340,10 @@ pub(super) fn render_edge_menu(
     }
     if ui.button("✂ Delete").on_hover_text("Remove this connection from the diagram").clicked() {
         if let Some(class) = editing_class {
-            if let Some(op) = op_remove_edge(world, id, class) {
+            if let Some(op) = op_remove_edge(ctx, state, id, class) {
                 out.push(op);
-                let active_doc = active_doc_from_world(world);
-                let tab = render_tab_id(world);
-                let mut state = world.resource_mut::<CanvasDiagramState>();
+                let active_doc = active_doc_from_world_ctx(ctx);
+                let tab = render_tab_id(ctx);
                 let docstate = state.get_mut_for_render(tab, active_doc);
                 docstate.canvas.scene.remove_edge(id);
             }
@@ -352,9 +352,8 @@ pub(super) fn render_edge_menu(
     }
     if ui.button("↺ Reverse direction").on_hover_text("Swap the connection's start and end ports").clicked() {
         if let Some(class) = editing_class {
-            let active_doc = active_doc_from_world(world);
-            let tab = render_tab_id(world);
-            let state = world.resource::<CanvasDiagramState>();
+            let active_doc = active_doc_from_world_ctx(ctx);
+            let tab = render_tab_id(ctx);
             let scene = &state.get_for_render(tab, active_doc).canvas.scene;
             if let Some(edge) = scene.edge(id) {
                 if let (Some(from_node), Some(to_node)) = (
@@ -388,10 +387,9 @@ pub(super) fn render_edge_menu(
     // surgical update only touches the field the user actually
     // changed (`Phase D` infrastructure handles preservation).
     let Some(class) = editing_class else { return };
-    let active_doc = active_doc_from_world(world);
-    let tab = render_tab_id(world);
-    let scene_state = world.resource::<CanvasDiagramState>();
-    let scene = &scene_state.get_for_render(tab, active_doc).canvas.scene;
+    let active_doc = active_doc_from_world_ctx(ctx);
+    let tab = render_tab_id(ctx);
+    let scene = &state.get_for_render(tab, active_doc).canvas.scene;
     let Some(edge) = scene.edge(id) else { return };
     let Some(from_node) = scene.node(edge.from.node) else { return };
     let Some(to_node) = scene.node(edge.to.node) else { return };
@@ -469,7 +467,8 @@ pub(super) fn render_edge_menu(
 
 pub(super) fn render_empty_menu(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
+    state: &mut CanvasDiagramState,
     click_world: lunco_canvas::Pos,
     editing_class: Option<&str>,
     out: &mut Vec<ModelicaOp>,
@@ -482,14 +481,15 @@ pub(super) fn render_empty_menu(
     // Basic → Resistor). Matches how OMEdit and Dymola present
     // the library: user drills down by package instead of
     // scanning a flat list. Tree is built once, cached.
-    let show_icons = world
-        .get_resource::<PaletteSettings>()
+    let show_icons = ctx
+        .resource::<PaletteSettings>()
         .map(|s| s.show_icon_only_classes)
         .unwrap_or(false);
-    let active_doc = active_doc_from_world(world);
+    let active_doc = active_doc_from_world_ctx(ctx);
     palette::render_msl_package_menu(
         ui,
-        world,
+        ctx,
+        state,
         active_doc,
         palette::msl_package_tree(),
         click_world,
@@ -505,7 +505,7 @@ pub(super) fn render_empty_menu(
     // run; signal entries appear once the active sim has populated
     // `SignalRegistry`. An empty plot can be bound later via the
     // inspector.
-    let sigs = collect_varying_signals(world);
+    let sigs = collect_varying_signals(ctx);
     ui.menu_button("📊 Add Plot here", |ui| {
         // TODO(menu-height): the height is "so-so" — sometimes
         // collapses to 3 rows. Match how the Modelica
@@ -522,7 +522,7 @@ pub(super) fn render_empty_menu(
         let wanted = ((sigs.len() + 3) as f32 * ROW_PX).min(max_h);
         ui.set_min_height(wanted);
         if ui.button("Empty plot (bind later)").on_hover_text("Add a blank plot node — bind a signal to it later").clicked() {
-            insert_plot_node(world, click_world, 0, "");
+            insert_plot_node(ctx, state, click_world, 0, "");
             ui.close();
         }
         ui.separator();
@@ -546,7 +546,7 @@ pub(super) fn render_empty_menu(
             .show(ui, |ui| {
                 for (entity, path) in &sigs {
                     if ui.button(path).clicked() {
-                        insert_plot_node(world, click_world, entity.to_bits(), path);
+                        insert_plot_node(ctx, state, click_world, entity.to_bits(), path);
                         ui.close();
                     }
                 }
@@ -554,9 +554,8 @@ pub(super) fn render_empty_menu(
     });
     ui.separator();
     if ui.button("⎚ Fit all (F)").on_hover_text("Zoom and pan to fit the whole diagram in view").clicked() {
-        let active_doc = active_doc_from_world(world);
-        let tab = render_tab_id(world);
-        let mut state = world.resource_mut::<CanvasDiagramState>();
+        let active_doc = active_doc_from_world_ctx(ctx);
+        let tab = render_tab_id(ctx);
         let docstate = state.get_mut_for_render(tab, active_doc);
         if let Some(bounds) = docstate.canvas.scene.bounds() {
             let sr = lunco_canvas::Rect::from_min_max(
@@ -569,9 +568,8 @@ pub(super) fn render_empty_menu(
         ui.close();
     }
     if ui.button("⟲ Reset zoom").on_hover_text("Return to 100% zoom").clicked() {
-        let active_doc = active_doc_from_world(world);
-        let tab = render_tab_id(world);
-        let mut state = world.resource_mut::<CanvasDiagramState>();
+        let active_doc = active_doc_from_world_ctx(ctx);
+        let tab = render_tab_id(ctx);
         let docstate = state.get_mut_for_render(tab, active_doc);
         let c = docstate.canvas.viewport.center;
         docstate.canvas.viewport.set_target(c, 1.0);
@@ -580,7 +578,8 @@ pub(super) fn render_empty_menu(
 }
 
 pub(super) fn insert_plot_node(
-    world: &mut World,
+    ctx: &PanelCtx,
+    state: &mut CanvasDiagramState,
     click_world: lunco_canvas::Pos,
     entity_bits: u64,
     signal_path: &str,
@@ -593,9 +592,8 @@ pub(super) fn insert_plot_node(
         title: String::new(),
     };
     let data: lunco_canvas::NodeData = std::sync::Arc::new(payload);
-    let active_doc = active_doc_from_world(world);
-    let tab = render_tab_id(world);
-    let mut state = world.resource_mut::<CanvasDiagramState>();
+    let active_doc = active_doc_from_world_ctx(ctx);
+    let tab = render_tab_id(ctx);
     let docstate = state.get_mut_for_render(tab, active_doc);
     let scene = &mut docstate.canvas.scene;
     let id = scene.alloc_node_id();

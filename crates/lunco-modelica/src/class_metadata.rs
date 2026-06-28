@@ -105,7 +105,29 @@ pub fn resolve_metadata_for_doc(
     let registry = world
         .get_resource::<crate::state::ModelicaDocumentRegistry>()?;
     let host = registry.host(doc_id)?;
-    let index = host.document().index();
+    resolve_metadata_from_index(host.document().index(), drilled)
+}
+
+/// `PanelCtx` sibling of [`resolve_metadata_for_doc`] — same
+/// index-driven resolution reading the registry via `ctx`.
+#[cfg(feature = "ui")]
+pub fn resolve_metadata_for_doc_ctx(
+    ctx: &lunco_workbench::PanelCtx,
+    doc_id: lunco_doc::DocumentId,
+    drilled: Option<&str>,
+) -> Option<ClassMetadata> {
+    let registry = ctx.resource::<crate::state::ModelicaDocumentRegistry>()?;
+    let host = registry.host(doc_id)?;
+    resolve_metadata_from_index(host.document().index(), drilled)
+}
+
+/// Index-driven core of [`resolve_metadata_for_doc`]: resolve the
+/// drilled class (with within-tolerance + leaf fallback) or fall back
+/// to the first non-package class.
+fn resolve_metadata_from_index(
+    index: &crate::index::ModelicaIndex,
+    drilled: Option<&str>,
+) -> Option<ClassMetadata> {
     if let Some(q) = drilled {
         let mut found = index.classes.get(q);
         if found.is_none() {

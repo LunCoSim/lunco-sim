@@ -159,58 +159,48 @@ fn find_and_update_node(nodes: &mut [PackageNode], parent_id: &str, children: Ve
 /// inside the Twin panel's per-library section. Lazily kicks off the
 /// first scan if the root hasn't been populated yet; subsequent
 /// renders walk the cached tree.
-pub fn render_root_subtree(world: &mut World, ui: &mut egui::Ui, root_id: &str) {
-    use bevy::tasks::AsyncComputeTaskPool;
-
-    let active_path_str = world
-        .get_resource::<lunco_workspace::WorkspaceResource>()
-        .and_then(|ws| ws.active_document)
-        .and_then(|d| crate::state::display_name_for(world, d));
+pub fn render_root_subtree(
+    ui: &mut egui::Ui,
+    ctx: &mut lunco_workbench::BrowserCtx<'_, '_>,
+    root_id: &str,
+) {
+    let active_doc = ctx
+        .resource::<lunco_workspace::WorkspaceResource>()
+        .and_then(|ws| ws.active_document);
+    let active_path_str = active_doc.and_then(|d| {
+        ctx.resource::<ModelicaDocumentRegistry>()
+            .and_then(|r| r.host(d))
+            .map(|h| h.document().origin().display_name())
+    });
     let active_path = active_path_str.as_deref();
-    let theme = world
-        .get_resource::<lunco_theme::Theme>()
+    let theme = ctx
+        .resource::<lunco_theme::Theme>()
         .cloned()
         .unwrap_or_else(lunco_theme::Theme::dark);
 
+    // Read-only render: read the cache, render the root's children, and
+    // collect (1) any user action and (2) lazy-scan requests. Both are
+    // dispatched via `ctx.defer` AFTER the read borrow ends (NLL).
     let mut action: Option<render::PackageAction> = None;
-    {
-        let mut cache = world.resource_mut::<PackageTreeCache>();
-        let cache = &mut *cache;
-        let Some(root) = cache
+    let mut load_out: Vec<(String, String)> = Vec::new();
+    if let Some(cache) = ctx.resource::<PackageTreeCache>() {
+        if let Some(PackageNode::Category { children, .. }) = cache
             .roots
-            .iter_mut()
+            .iter()
             .find(|r| matches!(r, PackageNode::Category { id, .. } if id == root_id))
-        else {
-            return;
-        };
-        if let PackageNode::Category {
-            id, package_path, children, is_loading, ..
-        } = root
         {
             ui.set_max_width(ui.available_width());
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
             if let Some(kids) = children {
-                for kid in kids.iter_mut() {
-                    if let Some(a) = render::render_node_single(
-                        kid, ui, active_path, None, 0, &mut cache.tasks, &theme,
+                for kid in kids.iter() {
+                    if let Some(a) = render::render_node_single_ro(
+                        kid, ui, active_path, None, 0, &mut load_out, &theme,
                     ) {
                         action = Some(a);
                     }
                 }
-            } else if !*is_loading {
-                *is_loading = true;
-                let pool = AsyncComputeTaskPool::get();
-                let parent_id = id.clone();
-                let pkg_path = package_path.clone();
-                let task = pool.spawn(async move {
-                    let children =
-                        crate::package_tree::library_tree::library_tree()
-                            .children(&pkg_path);
-                    crate::package_tree::cache::ScanResult { parent_id, children }
-                });
-                cache.tasks.push(task);
-            }
-            if *is_loading {
+            } else {
+                load_out.push((root_id.to_string(), root_id.to_string()));
                 ui.horizontal(|ui| {
                     ui.add_space(20.0);
                     ui.label(
@@ -221,26 +211,90 @@ pub fn render_root_subtree(world: &mut World, ui: &mut egui::Ui, root_id: &str) 
                     );
                 });
             }
+        } else {
+            return;
         }
     }
 
+    // Spawn lazy scans for the categories that were requested this frame.
+    // Replicates `render_node_single`'s in-place scan, but deferred so it
+    // runs with `&mut World` after the egui pass. `find_category_path` →
+    // resolve by id; only spawns when still unscanned & not already
+    // loading. The existing scan-task poller integrates `ScanResult` on a
+    // later frame (one-frame delay is fine).
+    for (id, pkg_path) in load_out {
+        ctx.defer(move |world| {
+            use bevy::tasks::AsyncComputeTaskPool;
+            let Some(mut cache) = world.get_resource_mut::<PackageTreeCache>() else { return };
+            // Resolve the package_path for `id` from the live tree (the
+            // read-only renderer only had the id for nested categories).
+            if let Some((children, is_loading, package_path)) =
+                find_category_scan_target(&mut cache.roots, &id)
+            {
+                if children.is_none() && !*is_loading {
+                    *is_loading = true;
+                    let pool = AsyncComputeTaskPool::get();
+                    let parent_id = id.clone();
+                    // Prefer the live package_path; fall back to the id-as-path
+                    // hint passed from the read-only renderer for root rows.
+                    let pp = if package_path.is_empty() { pkg_path.clone() } else { package_path };
+                    let task = pool.spawn(async move {
+                        let children =
+                            crate::package_tree::library_tree::library_tree()
+                                .children(&pp);
+                        crate::package_tree::cache::ScanResult { parent_id, children }
+                    });
+                    cache.tasks.push(task);
+                }
+            }
+        });
+    }
+
     if let Some(render::PackageAction::Open(id, _name, _lib, pinned)) = action {
-        if let Some(class) = ClassRef::parse_tree_id(&id) {
-            open_class(world, class, pinned);
-        } else if let Some(class) = resolve_mem_id(world, &id) {
-            open_class(world, class, pinned);
-        } else {
-            bevy::log::warn!("[PackageBrowser] unparseable tree id `{id}`");
-        }
+        ctx.defer(move |world| {
+            if let Some(class) = ClassRef::parse_tree_id(&id) {
+                open_class(world, class, pinned);
+            } else if let Some(class) = resolve_mem_id(world, &id) {
+                open_class(world, class, pinned);
+            } else {
+                bevy::log::warn!("[PackageBrowser] unparseable tree id `{id}`");
+            }
+        });
     } else if let Some(render::PackageAction::DragStart { msl_path }) = action {
-        if let Some(def) = crate::visual_diagram::msl_class_by_path(&msl_path) {
-            world
-                .get_resource_or_insert_with::<crate::ui::panels::palette::ComponentDragPayload>(
-                    Default::default,
-                )
-                .def = Some(def);
+        ctx.defer(move |world| {
+            if let Some(def) = crate::visual_diagram::msl_class_by_path(&msl_path) {
+                world
+                    .get_resource_or_insert_with::<crate::ui::panels::palette::ComponentDragPayload>(
+                        Default::default,
+                    )
+                    .def = Some(def);
+            }
+        });
+    }
+}
+
+/// Find the Category node identified by `id` anywhere in `nodes`,
+/// returning mutable access to its `children`/`is_loading` plus its
+/// `package_path`. Used by the deferred lazy-scan spawn in
+/// [`render_root_subtree`].
+fn find_category_scan_target<'a>(
+    nodes: &'a mut [PackageNode],
+    id: &str,
+) -> Option<(&'a mut Option<Vec<PackageNode>>, &'a mut bool, String)> {
+    for node in nodes {
+        if let PackageNode::Category { id: node_id, package_path, children, is_loading, .. } = node {
+            if node_id == id {
+                let pp = package_path.clone();
+                return Some((children, is_loading, pp));
+            }
+            if let Some(kids) = children {
+                if let Some(found) = find_category_scan_target(kids, id) {
+                    return Some(found);
+                }
+            }
         }
     }
+    None
 }
 
 /// Single entry point for "open a Modelica class in the workbench".

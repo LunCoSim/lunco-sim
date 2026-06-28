@@ -78,7 +78,7 @@ use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened};
 use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
 use lunco_core::{Command, on_command, register_commands};
-use lunco_workbench::{Panel, PanelId, PanelRects, PanelSlot, WorkbenchAppExt};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelRects, PanelSlot, WorkbenchAppExt};
 use openusd::usda::TextReader;
 
 use crate::registry::UsdDocumentRegistry;
@@ -725,30 +725,31 @@ impl Panel for UsdViewportPanel {
         false
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // Record the panel's screen rect into `PanelRects` so
         // `resize_viewport_image` can match the offscreen Image's
-        // pixel dimensions to it next tick. Recorded *before* any
-        // widgets draw so the rect reflects the full panel body, not
-        // whatever's left after the header / separator below.
-        if let Some(mut rects) = world.get_resource_mut::<PanelRects>() {
-            rects.record_from_ui(USD_VIEWPORT_PANEL_ID, ui);
-        }
+        // pixel dimensions to it next tick. Measured here from the
+        // read-only `ui` (before any widgets draw, so the rect reflects
+        // the full panel body) and written after paint via `defer` —
+        // the panel has no `&mut World`.
+        let panel_rect = PanelRects::panel_rect_from_ui(ui);
+        ctx.defer(move |world| {
+            if let Some(mut rects) = world.get_resource_mut::<PanelRects>() {
+                rects.record(USD_VIEWPORT_PANEL_ID, panel_rect);
+            }
+        });
 
-        let (tex_id, name) = {
-            let state = world.resource::<UsdViewportState>();
-            let tex_id = state.tex_id;
-            let name = state
-                .active_doc
-                .and_then(|d| {
-                    world
-                        .get_resource::<UsdDocumentRegistry>()
-                        .and_then(|r| r.host(d))
-                        .map(|h| h.document().origin().display_name())
-                })
-                .unwrap_or_else(|| "(no stage)".to_string());
-            (tex_id, name)
-        };
+        let (tex_id, active_doc) = ctx
+            .resource::<UsdViewportState>()
+            .map(|s| (s.tex_id, s.active_doc))
+            .unwrap_or((None, None));
+        let name = active_doc
+            .and_then(|d| {
+                ctx.resource::<UsdDocumentRegistry>()
+                    .and_then(|r| r.host(d))
+                    .map(|h| h.document().origin().display_name())
+            })
+            .unwrap_or_else(|| "(no stage)".to_string());
 
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&name).strong());
@@ -788,23 +789,27 @@ impl Panel for UsdViewportPanel {
             0.0
         };
         if drag != egui::Vec2::ZERO || scroll_y != 0.0 {
-            let (camera_entity, transform) = {
-                let mut state = world.resource_mut::<UsdViewportState>();
-                if drag != egui::Vec2::ZERO {
-                    state.orbit.apply_drag(drag);
-                }
-                if scroll_y != 0.0 {
-                    state.orbit.apply_zoom(scroll_y);
-                }
-                (state.camera, state.orbit.transform())
-            };
-            if let Some(cam) = camera_entity {
-                if let Ok(mut entity) = world.get_entity_mut(cam) {
-                    if let Some(mut tf) = entity.get_mut::<Transform>() {
-                        *tf = transform;
+            // Apply the orbit input after the egui pass — mutation needs
+            // `&mut World`, which the panel never holds during paint.
+            ctx.defer(move |world| {
+                let (camera_entity, transform) = {
+                    let mut state = world.resource_mut::<UsdViewportState>();
+                    if drag != egui::Vec2::ZERO {
+                        state.orbit.apply_drag(drag);
+                    }
+                    if scroll_y != 0.0 {
+                        state.orbit.apply_zoom(scroll_y);
+                    }
+                    (state.camera, state.orbit.transform())
+                };
+                if let Some(cam) = camera_entity {
+                    if let Ok(mut entity) = world.get_entity_mut(cam) {
+                        if let Some(mut tf) = entity.get_mut::<Transform>() {
+                            *tf = transform;
+                        }
                     }
                 }
-            }
+            });
         }
     }
 }

@@ -11,7 +11,6 @@
 //! can declare compatibility against a stable set; the render paths for
 //! them land in a later milestone.
 
-use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Concrete rendering target for one visualization.
@@ -54,10 +53,16 @@ impl ViewTarget {
     }
 }
 
-/// Context passed to a viz kind's 2D render path. Just the egui `Ui`
-/// for now; richer context (shared cursors, linked axes, theme) gets
-/// added here as features land.
-pub struct Panel2DCtx<'a> {
+/// Context passed to a viz kind's 2D render path.
+///
+/// Carries the egui `Ui` to paint into plus a capability-narrowed
+/// [`lunco_workbench::PanelCtx`] — the only world access a viz kind
+/// gets (WP-8). A viz reads view-model / signal resources through
+/// `wb.resource::<T>()` and queues mutations via `wb.defer(..)`; there
+/// is no raw `&mut World`, so per-frame scans / in-paint mutation are
+/// structurally impossible. `ui` and `wb` are separate fields so reads
+/// (`wb`) and painting (`ui`) borrow disjointly.
+pub struct Panel2DCtx<'a, 'w> {
     pub ui: &'a mut bevy_egui::egui::Ui,
-    pub world: &'a mut World,
+    pub wb: &'a mut lunco_workbench::PanelCtx<'w>,
 }

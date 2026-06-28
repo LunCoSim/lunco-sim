@@ -30,7 +30,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::models::bundled_models;
 use crate::ui::welcome_progress::ExampleProgress;
@@ -285,7 +285,7 @@ impl Panel for WelcomePanel {
         false
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let mut create_new = false;
         let mut open_folder = false;
         let mut open_file = false;
@@ -293,8 +293,8 @@ impl Panel for WelcomePanel {
         let mut open_bundled: Option<&'static str> = None;
 
         // Theme tokens.
-        let theme = world
-            .get_resource::<lunco_theme::Theme>()
+        let theme = ctx
+            .resource::<lunco_theme::Theme>()
             .cloned()
             .unwrap_or_else(lunco_theme::Theme::dark);
         // Use semantic tokens so cards stay "raised" (lighter than
@@ -314,8 +314,8 @@ impl Panel for WelcomePanel {
         // Progress ledger snapshot — cloned so the render closure
         // doesn't hold a live borrow of the Bevy resource across
         // the egui closures that fire command triggers.
-        let progress: ExampleProgress = world
-            .get_resource::<ExampleProgress>()
+        let progress: ExampleProgress = ctx
+            .resource::<ExampleProgress>()
             .cloned()
             .unwrap_or_default();
 
@@ -983,46 +983,40 @@ impl Panel for WelcomePanel {
 
         // ── Side effects ──────────────────────────────────
         if create_new {
-            world
-                .commands()
-                .trigger(crate::ui::commands::CreateNewScratchModel::default());
+            ctx.trigger(crate::ui::commands::CreateNewScratchModel::default());
         }
         if open_folder {
             // Native OpenFolder picker. Classified at the observer
             // level (twin.toml → OpenTwin, else Folder).
-            world
-                .commands()
-                .trigger(lunco_workbench::file_ops::ShowOpenFolderPicker {});
+            ctx.trigger(lunco_workbench::file_ops::ShowOpenFolderPicker {});
         }
         if open_file {
             // Native OpenFile picker. Web doesn't support folder
             // pickers yet, so we offer file picking instead.
-            world
-                .commands()
-                .trigger(lunco_workbench::file_ops::ShowOpenFilePicker {});
+            ctx.trigger(lunco_workbench::file_ops::ShowOpenFilePicker {});
         }
         if let Some(filename) = open_bundled {
             let stem = filename.strip_suffix(".mo").unwrap_or(filename).to_string();
             // Welcome card click is deliberate → pinned tab.
-            crate::ui::panels::package_browser::open_class(
-                world,
-                crate::class_ref::ClassRef::bundled([stem]),
-                true,
-            );
+            ctx.defer(move |world| {
+                crate::ui::panels::package_browser::open_class(
+                    world,
+                    crate::class_ref::ClassRef::bundled([stem]),
+                    true,
+                );
+            });
         }
         if let Some(qualified) = open_msl {
             // Welcome examples are "open as my copy to play with" —
             // dispatch as `Duplicate { name: "" }`, which lets the
             // handler derive the default `<short>Copy` name. Replaces
             // the old `OpenExampleInWorkspace` event.
-            world
-                .commands()
-                .trigger(crate::ui::commands::OpenClass {
-                    qualified,
-                    action: crate::ui::commands::ClassAction::Duplicate {
-                        name: String::new(),
-                    },
-                });
+            ctx.trigger(crate::ui::commands::OpenClass {
+                qualified,
+                action: crate::ui::commands::ClassAction::Duplicate {
+                    name: String::new(),
+                },
+            });
         }
     }
 }

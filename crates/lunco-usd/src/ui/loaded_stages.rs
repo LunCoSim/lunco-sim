@@ -7,6 +7,17 @@
 //! from. Workspace docs, future bundled stages, future Twin externals
 //! — all show up the same way.
 //!
+//! ## WP-8 view-model split
+//!
+//! Under the reactive-egui contract the Twin-browser `BrowserCtx` is
+//! capability-narrowed (no `&mut World`, no `remove_resource`), so the
+//! `UsdSceneSection` can no longer take `LoadedUsdStages` out of the
+//! world and parse inline during paint. Parsing + naming now run in a
+//! change-gated producer system ([`produce_usd_browser_view`]) that
+//! refreshes each entry's parse cache and flattens the result into the
+//! cloneable [`UsdBrowserView`] resource. The section reads that
+//! view-model immutably and only paints.
+//!
 //! ## Lifecycle
 //!
 //! - **Workspace stages** — one [`WorkspaceStage`] per writable / Untitled
@@ -21,14 +32,9 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use bevy_egui::egui;
 use lunco_doc::{Document, DocumentId};
-use lunco_workbench::BrowserCtx;
-use openusd::sdf;
 use openusd::usda::TextReader;
 
-use crate::commands::ApplyUsdOp;
-use crate::document::UsdOp;
 use crate::registry::UsdDocumentRegistry;
 
 /// A top-level USD stage loaded into the current session.
@@ -41,12 +47,6 @@ pub trait LoadedStage: Send + Sync + 'static {
     /// Stable id used as egui salt and for unregistration when the
     /// underlying source goes away (document closed, Twin closed).
     fn id(&self) -> &str;
-
-    /// Display name shown as the top-level row. Takes `&BrowserCtx`
-    /// for dynamic naming — workspace stages show their current
-    /// `Untitled-N.usda` or file-stem name; future system stages
-    /// return a constant.
-    fn name(&self, ctx: &BrowserCtx<'_>) -> String;
 
     /// Editable? Drives the row's writable badge. Read-only system
     /// libraries render a lock affordance; Save respects this
@@ -62,12 +62,6 @@ pub trait LoadedStage: Send + Sync + 'static {
         false
     }
 
-    /// Paint the stage's prim tree inline at the caller's egui cursor —
-    /// the caller has already drawn a `CollapsingHeader` for this entry.
-    /// Phase 3 paints a placeholder; Phase 4 walks the composed prim
-    /// hierarchy from `UsdComposer` output.
-    fn render_children(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_>);
-
     /// If this entry corresponds to an open document, return its id
     /// so the browser can offer "show in viewport" affordances. The
     /// default is `None` for non-document entries (system libraries
@@ -75,12 +69,19 @@ pub trait LoadedStage: Send + Sync + 'static {
     fn doc_id_for_viewport(&self) -> Option<DocumentId> {
         None
     }
+
+    /// Refresh this entry's internal parse cache against the registry
+    /// and flatten it into a cloneable [`UsdStageRow`]. Called by the
+    /// change-gated [`produce_usd_browser_view`] producer — never during
+    /// egui paint. Returns `None` when the backing source is gone (e.g.
+    /// the document closed between the gate check and the rebuild).
+    fn build_row(&mut self, registry: &UsdDocumentRegistry) -> Option<UsdStageRow>;
 }
 
-/// Live registry of [`crate::ui::loaded_stages::LoadedStage`] entries. Iterated by the
-/// [`UsdSceneSection`](crate::ui::browser_section::UsdSceneSection)
-/// each frame; mutated by the lifecycle observers in
-/// [`UsdUiPlugin`](crate::ui::UsdUiPlugin).
+/// Live registry of [`crate::ui::loaded_stages::LoadedStage`] entries.
+/// Maintained by the lifecycle observers in
+/// [`UsdUiPlugin`](crate::ui::UsdUiPlugin) and read by the
+/// [`produce_usd_browser_view`] producer (never directly by the panel).
 #[derive(Resource, Default)]
 pub struct LoadedUsdStages {
     /// Render order = registration order.
@@ -105,6 +106,83 @@ impl LoadedUsdStages {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// View-model — the cloneable render snapshot the section reads
+// ─────────────────────────────────────────────────────────────────────
+
+/// One stage's pre-derived render row. Cloneable so the section can
+/// snapshot the whole list out of `BrowserCtx` (immutable read) before
+/// painting, releasing the borrow ahead of any deferred dispatch.
+#[derive(Clone)]
+pub struct UsdStageRow {
+    /// Stable egui id salt (the entry's [`LoadedStage::id`]).
+    pub salt: String,
+    /// Backing document, if this row corresponds to an open doc.
+    pub doc_id: Option<DocumentId>,
+    /// Display name shown on the top-level row.
+    pub name: String,
+    /// Writable badge driver.
+    pub writable: bool,
+    /// First-render expand state.
+    pub default_open: bool,
+    /// Parsed reader for the prim-tree walk. `None` on parse failure
+    /// (see `parse_error`) or when the stage has no source yet. `Arc`
+    /// so cloning the row is cheap.
+    pub reader: Option<Arc<TextReader>>,
+    /// Stashed parse error from the most recent failed parse, surfaced
+    /// in the body so users see a malformed file instead of an empty
+    /// tree.
+    pub parse_error: Option<String>,
+}
+
+/// Change-gated view-model the [`UsdSceneSection`](crate::ui::browser_section::UsdSceneSection)
+/// reads each frame. Rebuilt only when an entry is added/removed or a
+/// document's generation advances — see [`produce_usd_browser_view`].
+#[derive(Resource, Default)]
+pub struct UsdBrowserView {
+    /// One row per loaded stage, in registration order.
+    pub stages: Vec<UsdStageRow>,
+}
+
+/// Producer for [`UsdBrowserView`]. Re-derives the row list (and each
+/// entry's parse cache, via [`LoadedStage::build_row`]) only when the
+/// `(stage id, document generation)` signature changes — so a static
+/// scene costs one cheap signature walk per frame, no parsing and no
+/// string churn (`AGENTS.md` §7.1 frame discipline).
+pub fn produce_usd_browser_view(
+    mut loaded: ResMut<LoadedUsdStages>,
+    registry: Res<UsdDocumentRegistry>,
+    mut view: ResMut<UsdBrowserView>,
+    mut last_sig: Local<Vec<(String, u64)>>,
+) {
+    // Signature catches both structural changes (entries added/removed
+    // → ids differ) and edits (the doc generation bumps on every
+    // `ApplyUsdOp` / source change).
+    let sig: Vec<(String, u64)> = loaded
+        .entries
+        .iter()
+        .map(|e| {
+            let generation = e
+                .doc_id_for_viewport()
+                .and_then(|d| registry.host(d))
+                .map(|h| h.document().generation())
+                .unwrap_or(0);
+            (e.id().to_string(), generation)
+        })
+        .collect();
+
+    if *last_sig == sig {
+        return;
+    }
+    *last_sig = sig;
+
+    view.stages = loaded
+        .entries
+        .iter_mut()
+        .filter_map(|e| e.build_row(&registry))
+        .collect();
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -190,14 +268,6 @@ impl LoadedStage for WorkspaceStage {
         &self.cached_id
     }
 
-    fn name(&self, ctx: &BrowserCtx<'_>) -> String {
-        ctx.world
-            .get_resource::<UsdDocumentRegistry>()
-            .and_then(|reg| reg.host(self.doc_id))
-            .map(|host| host.document().origin().display_name())
-            .unwrap_or_else(|| "(closed)".to_string())
-    }
-
     fn writable(&self) -> bool {
         true
     }
@@ -212,206 +282,38 @@ impl LoadedStage for WorkspaceStage {
         Some(self.doc_id)
     }
 
-    fn render_children(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_>) {
-        // Snapshot source + generation so subsequent UI calls don't
-        // hold a registry borrow across the &mut World lifetime.
-        let snapshot = ctx
-            .world
-            .get_resource::<UsdDocumentRegistry>()
-            .and_then(|reg| reg.host(self.doc_id))
-            .map(|host| {
-                let doc = host.document();
-                (doc.source().to_string(), doc.generation())
-            });
-        let Some((source, generation)) = snapshot else {
-            ui.label(
-                egui::RichText::new("(document closed)")
-                    .weak()
-                    .italics(),
-            );
-            return;
+    fn build_row(&mut self, registry: &UsdDocumentRegistry) -> Option<UsdStageRow> {
+        // Snapshot source + generation + name; the host borrow ends
+        // before we mutate `self` (parse cache) below.
+        let (source, generation, name) = {
+            let host = registry.host(self.doc_id)?;
+            let doc = host.document();
+            (
+                doc.source().to_string(),
+                doc.generation(),
+                doc.origin().display_name(),
+            )
         };
 
         self.ensure_parsed(&source, generation);
 
-        let error_color = ctx
-            .world
-            .get_resource::<lunco_theme::Theme>()
-            .map(|t| t.tokens.error)
-            .unwrap_or(egui::Color32::LIGHT_RED);
-
-        if let Some(err) = &self.parse_error {
-            ui.colored_label(error_color, err);
-            return;
-        }
-        let Some(parsed) = &self.parsed else {
-            ui.label(egui::RichText::new("(no parse)").weak().italics());
-            return;
-        };
-
-        // Collect ops emitted by toolbar buttons during render. We
-        // can't trigger ApplyUsdOp inside render because dispatching
-        // would require &mut World mid-egui-paint; instead we batch
-        // and fire after the borrow ends.
-        let mut pending_ops: Vec<UsdOp> = Vec::new();
-
-        let root = match sdf::path("/") {
-            Ok(p) => p,
-            Err(e) => {
-                ui.colored_label(error_color, format!("root path: {e}"));
-                return;
-            }
-        };
-        // Collapse a redundant single-root-prim wrapper whose name
-        // matches the doc filename (case-insensitive). e.g. a stage
-        // `artemis_2.usda` with a single `def Xform "Artemis2"` is
-        // surfaced as `artemis_2 → Orion` instead of the confusing
-        // `artemis_2 → Artemis2 (Xform) → Orion`. Single-root prims
-        // with no children are kept (they ARE the content).
-        let mut top_paths: Vec<sdf::Path> = parsed.reader.prim_children(&root);
-        if top_paths.len() == 1 {
-            let only = &top_paths[0];
-            let grand = parsed.reader.prim_children(only);
-            if !grand.is_empty() {
-                top_paths = grand;
-            }
-        }
-
-        let mut clicked_prim = false;
-
-        if top_paths.is_empty() {
-            ui.label(
-                egui::RichText::new("(no prims)").weak().italics(),
-            );
-        } else {
-            for path in top_paths {
-                render_prim(
-                    ui,
-                    &parsed.reader,
-                    &path,
-                    &self.cached_id,
-                    &mut pending_ops,
-                    &mut clicked_prim,
-                );
-            }
-        }
-
-        // Now that egui's done drawing, fire the queued ops via the
-        // typed command bus so undo/redo and change notification go
-        // through the canonical path.
-        if !pending_ops.is_empty() {
-            let doc_id = self.doc_id;
-            for op in pending_ops {
-                ctx.world.commands().trigger(ApplyUsdOp { doc: doc_id, op });
-            }
-        }
-
-        // Clicking any internal prim row retargets the shared USD
-        // viewport at this doc. Same route as clicking the top-level
-        // stage row in browser_section.rs.
-        if clicked_prim {
-            let doc_id = self.doc_id;
-            ctx.world
-                .commands()
-                .trigger(crate::ui::viewport::SetActiveUsdViewport { doc: doc_id });
-            ctx.world.commands().trigger(lunco_workbench::FocusPanel {
-                id: crate::ui::viewport::USD_VIEWPORT_PANEL_ID.0.to_string(),
-            });
-        }
+        Some(UsdStageRow {
+            salt: self.cached_id.clone(),
+            doc_id: Some(self.doc_id),
+            name,
+            writable: true,
+            default_open: true,
+            reader: self.parsed.as_ref().map(|p| p.reader.clone()),
+            parse_error: self.parse_error.clone(),
+        })
     }
-}
-
-/// Recursive prim-tree walker. One `CollapsingHeader` per prim;
-/// children fetched via [`TextReader::prim_children`]. Per-prim
-/// toolbar buttons append [`UsdOp`]s into `pending_ops` instead of
-/// triggering directly, so dispatch happens once egui is done
-/// painting.
-///
-/// Composition arcs (sublayers, references, payloads) are **not**
-/// flattened — referenced prims show up only after a future
-/// `UsdComposer` integration. Today the walk reflects the raw root
-/// layer, which is the source-of-truth most edits target.
-fn render_prim(
-    ui: &mut egui::Ui,
-    reader: &TextReader,
-    path: &sdf::Path,
-    salt: &str,
-    pending_ops: &mut Vec<UsdOp>,
-    clicked: &mut bool,
-) {
-    let name = path.name().unwrap_or("(root)").to_string();
-    let type_name = prim_type_name(reader, path);
-    let label = match &type_name {
-        Some(ty) => format!("{} ({})", name, ty),
-        None => name,
-    };
-    let children = reader.prim_children(path);
-    let header_id = ui.make_persistent_id((salt, path.to_string()));
-
-    let row = |ui: &mut egui::Ui, clicked: &mut bool| {
-        let resp = ui
-            .add(egui::Label::new(&label).sense(egui::Sense::click()))
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        if resp.clicked() {
-            *clicked = true;
-        }
-    };
-
-    if children.is_empty() {
-        ui.indent(header_id, |ui| {
-            row(ui, clicked);
-        });
-    } else {
-        // Clicking the label both focuses the prim in the viewport
-        // *and* folds/unfolds the row — same as clicking the triangle.
-        // The click flag goes through a local so the header closure
-        // doesn't fight the body closure over `clicked`.
-        let mut row_clicked = false;
-        lunco_ui::helpers::collapsing_row(
-            ui,
-            header_id,
-            false,
-            |ui| {
-                let resp = ui
-                    .add(egui::Label::new(&label).sense(egui::Sense::click()))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                row_clicked = resp.clicked();
-                row_clicked
-            },
-            |ui| {
-                for child in children {
-                    render_prim(ui, reader, &child, salt, pending_ops, clicked);
-                }
-            },
-        );
-        if row_clicked {
-            *clicked = true;
-        }
-    }
-
-    let _ = pending_ops;
-}
-
-/// Read the `typeName` field on a prim spec (e.g. `"Xform"`,
-/// `"Mesh"`, `"Camera"`). Returns `None` for the pseudo-root or for
-/// prims authored without an explicit type.
-fn prim_type_name(reader: &TextReader, path: &sdf::Path) -> Option<String> {
-    use openusd::sdf::Value;
-    for (p, spec) in reader.iter() {
-        if p == path {
-            if let Some(Value::Token(t) | Value::String(t)) = spec.get("typeName") {
-                return Some(t.clone());
-            }
-            return None;
-        }
-    }
-    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use lunco_doc::DocumentId;
+    use openusd::sdf;
 
     /// `unregister` matches by id and reports whether anything was
     /// removed — small-but-load-bearing because lifecycle observers

@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_workbench::{InstancePanel, Panel, PanelId, PanelSlot};
+use lunco_workbench::{InstancePanel, Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::model_tabs_types::{ModelViewMode, TabId, TabRenderContext};
 use crate::ui::MODEL_VIEW_KIND;
@@ -47,43 +47,48 @@ impl InstancePanel for ModelViewPanel {
         if pinned { body } else { format!("‹ {body} ›") }
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World, instance: u64) {
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, instance: u64) {
         let tab_id: TabId = instance;
-        let Some((doc, drilled)) = world
+        let Some((doc, drilled)) = ctx
             .resource::<ModelTabs>()
-            .get(tab_id)
+            .and_then(|t| t.get(tab_id))
             .map(|s| (s.doc, s.drilled_class.clone()))
         else {
             return;
         };
 
-        sync_active_tab_to_doc(world, doc, drilled.as_deref());
+        let drilled_for_sync = drilled.clone();
+        ctx.defer(move |world| sync_active_tab_to_doc(world, doc, drilled_for_sync.as_deref()));
 
-        let view_mode = world
+        let view_mode = ctx
             .resource::<ModelTabs>()
-            .get(tab_id)
+            .and_then(|t| t.get(tab_id))
             .map(|s| s.view_mode)
             .unwrap_or_default();
 
-        let new_view_mode = render_unified_toolbar(doc, view_mode, ui, world);
+        let new_view_mode = render_unified_toolbar(doc, view_mode, ui, ctx);
         if new_view_mode != view_mode {
             if view_mode == ModelViewMode::Text {
-                let pending = world
-                    .get_resource::<EditorBufferState>()
+                let pending = ctx
+                    .resource::<EditorBufferState>()
                     .map(|b| b.pending_commit_at.is_some())
                     .unwrap_or(false);
                 if pending {
-                    crate::ui::panels::code_editor::commit_pending_buffer(world, doc);
+                    ctx.defer(move |world| {
+                        crate::ui::panels::code_editor::commit_pending_buffer(world, doc);
+                    });
                 }
             }
-            if let Some(state) = world.resource_mut::<ModelTabs>().get_mut(tab_id) {
-                state.view_mode = new_view_mode;
-            }
+            ctx.defer(move |world| {
+                if let Some(state) = world.resource_mut::<ModelTabs>().get_mut(tab_id) {
+                    state.view_mode = new_view_mode;
+                }
+            });
         }
 
         ui.separator();
 
-        let tab_read_only = crate::state::read_only_for(world, doc);
+        let tab_read_only = crate::state::read_only_for_ctx(ctx, doc);
         if tab_read_only {
             let mut banner_duplicate_clicked = false;
             egui::Frame::NONE
@@ -98,31 +103,37 @@ impl InstancePanel for ModelViewPanel {
                     });
                 });
             if banner_duplicate_clicked {
-                world.commands().trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc: doc });
+                ctx.trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc: doc });
             }
         }
 
-        let prev_ctx = world.resource::<TabRenderContext>().clone();
-        {
-            let mut ctx = world.resource_mut::<TabRenderContext>();
-            ctx.tab_id = Some(tab_id);
-            ctx.doc = Some(doc);
-            ctx.drilled_class = drilled.clone();
-        }
+        // Stamp `TabRenderContext` for the duration of the child body
+        // render so the per-tab canvas/code/icon/docs read the right
+        // doc/drill target, then restore the previous context after.
+        let prev_ctx = ctx.resource::<TabRenderContext>().cloned().unwrap_or_default();
+        let restore_ctx = prev_ctx.clone();
+        ctx.resource_scope::<TabRenderContext, _>(|_ctx, trc| {
+            trc.tab_id = Some(tab_id);
+            trc.doc = Some(doc);
+            trc.drilled_class = drilled.clone();
+        });
         match new_view_mode {
-            ModelViewMode::Text => self.code.render(ui, world),
-            ModelViewMode::Canvas => self.canvas.render(ui, world),
-            ModelViewMode::Icon => render_icon_view(ui, world),
-            ModelViewMode::Docs => render_docs_view(ui, world),
+            ModelViewMode::Text => self.code.render(ui, ctx),
+            ModelViewMode::Canvas => self.canvas.render(ui, ctx),
+            ModelViewMode::Icon => render_icon_view(ui, ctx),
+            ModelViewMode::Docs => render_docs_view(ui, ctx),
         }
-        *world.resource_mut::<TabRenderContext>() = prev_ctx;
+        ctx.resource_scope::<TabRenderContext, _>(|_ctx, trc| {
+            *trc = restore_ctx.clone();
+        });
+        let _ = prev_ctx;
     }
 
-    fn tab_context_menu(&mut self, ui: &mut egui::Ui, world: &mut World, instance: u64) {
+    fn tab_context_menu(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, instance: u64) {
         let tab_id: TabId = instance;
-        let (doc, drilled, pinned) = match world
+        let (doc, drilled, pinned) = match ctx
             .resource::<ModelTabs>()
-            .get(tab_id)
+            .and_then(|t| t.get(tab_id))
             .map(|s| (s.doc, s.drilled_class.clone(), s.pinned))
         {
             Some(t) => t,
@@ -130,17 +141,21 @@ impl InstancePanel for ModelViewPanel {
         };
 
         if ui.button(if pinned { "📌 Unpin" } else { "📌 Pin tab" }).clicked() {
-            if let Some(state) = world.resource_mut::<ModelTabs>().get_mut(tab_id) {
-                state.pinned = !pinned;
-            }
+            ctx.defer(move |world| {
+                if let Some(state) = world.resource_mut::<ModelTabs>().get_mut(tab_id) {
+                    state.pinned = !pinned;
+                }
+            });
             ui.close();
         }
 
         ui.separator();
 
         if ui.button("🪟 Open in new view").clicked() {
-            let new_id = world.resource_mut::<ModelTabs>().open_new(doc, drilled);
-            world.commands().trigger(lunco_workbench::OpenTab { kind: MODEL_VIEW_KIND, instance: new_id });
+            ctx.defer(move |world| {
+                let new_id = world.resource_mut::<ModelTabs>().open_new(doc, drilled);
+                world.trigger(lunco_workbench::OpenTab { kind: MODEL_VIEW_KIND, instance: new_id });
+            });
             ui.close();
         }
 
@@ -153,33 +168,43 @@ impl InstancePanel for ModelViewPanel {
         // prompt to Save before they vanish.
         use crate::ui::commands::TabCloseScope;
         if ui.button("Close").clicked() {
-            world
-                .resource_mut::<lunco_workbench::PendingTabCloses>()
-                .push(lunco_workbench::TabId::Instance { kind: MODEL_VIEW_KIND, instance });
+            ctx.defer(move |world| {
+                world
+                    .resource_mut::<lunco_workbench::PendingTabCloses>()
+                    .push(lunco_workbench::TabId::Instance { kind: MODEL_VIEW_KIND, instance });
+            });
             ui.close();
         }
         if ui.button("Close Others").clicked() {
-            world
-                .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
-                .push(instance, TabCloseScope::Others);
+            ctx.defer(move |world| {
+                world
+                    .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
+                    .push(instance, TabCloseScope::Others);
+            });
             ui.close();
         }
         if ui.button("Close to the Right").clicked() {
-            world
-                .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
-                .push(instance, TabCloseScope::Right);
+            ctx.defer(move |world| {
+                world
+                    .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
+                    .push(instance, TabCloseScope::Right);
+            });
             ui.close();
         }
         if ui.button("Close Saved").clicked() {
-            world
-                .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
-                .push(instance, TabCloseScope::Saved);
+            ctx.defer(move |world| {
+                world
+                    .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
+                    .push(instance, TabCloseScope::Saved);
+            });
             ui.close();
         }
         if ui.button("Close All").clicked() {
-            world
-                .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
-                .push(instance, TabCloseScope::All);
+            ctx.defer(move |world| {
+                world
+                    .resource_mut::<crate::ui::commands::PendingTabCloseScopes>()
+                    .push(instance, TabCloseScope::All);
+            });
             ui.close();
         }
     }
@@ -189,24 +214,22 @@ fn render_unified_toolbar(
     doc: DocumentId,
     view_mode: ModelViewMode,
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
 ) -> ModelViewMode {
-    let tokens = world
-        .get_resource::<lunco_theme::Theme>()
+    let tokens = ctx
+        .resource::<lunco_theme::Theme>()
         .map(|t| t.tokens.clone())
         .unwrap_or_else(|| lunco_theme::Theme::dark().tokens);
-    
-    let compile_state = world.resource::<CompileStates>().state_of(doc);
-    let is_read_only = crate::state::read_only_for(world, doc);
-    let compilation_error = world.get_resource::<CompileStates>().and_then(|cs| cs.error_for(doc).map(str::to_string));
-    let undo_redo = world.resource::<ModelicaDocumentRegistry>().host(doc).map(|h| (h.can_undo(), h.can_redo(), h.undo_depth(), h.redo_depth()));
 
-    let sim_state: Option<(bool, f64)> = world
+    let compile_state = ctx.resource::<CompileStates>().map(|cs| cs.state_of(doc)).unwrap_or(CompileState::Idle);
+    let is_read_only = crate::state::read_only_for_ctx(ctx, doc);
+    let compilation_error = ctx.resource::<CompileStates>().and_then(|cs| cs.error_for(doc).map(str::to_string));
+    let undo_redo = ctx.resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(doc)).map(|h| (h.can_undo(), h.can_redo(), h.undo_depth(), h.redo_depth()));
+
+    let sim_state: Option<(bool, f64)> = ctx
         .resource::<ModelicaDocumentRegistry>()
-        .entities_linked_to(doc)
-        .into_iter()
-        .next()
-        .and_then(|e| world.get::<crate::ModelicaModel>(e).map(|m| (m.paused, m.current_time)));
+        .and_then(|r| r.entities_linked_to(doc).into_iter().next())
+        .and_then(|e| ctx.get::<crate::ModelicaModel>(e).map(|m| (m.paused, m.current_time)));
 
     // Snapshot runner busy state up front so the status pill (rendered
     // before the action buttons) can surface "⏩ Running…" — the
@@ -216,8 +239,8 @@ fn render_unified_toolbar(
     // run active" — a single Fast Run with a 4-wide pool reads as
     // not-busy, which is why the toolbar showed "Idle" mid-run. For the
     // status pill we want "is anything running or queued?".
-    let (runner_running, runner_queued) = world
-        .get_resource::<crate::ModelicaRunnerResource>()
+    let (runner_running, runner_queued) = ctx
+        .resource::<crate::ModelicaRunnerResource>()
         .map(|r| (r.0.in_flight_count(), r.0.queued_count()))
         .unwrap_or((0, 0));
     let runner_busy = runner_running > 0 || runner_queued > 0;
@@ -230,8 +253,8 @@ fn render_unified_toolbar(
     // status pill report how far it has got — one run-status source in the
     // toolbar for both the live stepper and the experiment runner.
     let experiment_run_t: Option<f64> = {
-        let reg = world.get_resource::<lunco_experiments::ExperimentRegistry>();
-        let src = world.get_resource::<crate::experiments_runner::ExperimentSources>();
+        let reg = ctx.resource::<lunco_experiments::ExperimentRegistry>();
+        let src = ctx.resource::<crate::experiments_runner::ExperimentSources>();
         match (reg, src) {
             (Some(reg), Some(src)) => src
                 .0
@@ -285,9 +308,9 @@ fn render_unified_toolbar(
             .on_hover_text("Docs — view the model's documentation");
         if r_docs.clicked() { new_view_mode = ModelViewMode::Docs; }
         let toggles_rect = r_text.rect.union(r_docs.rect).union(r_canvas.rect).union(r_icon.rect);
-        if let Some(mut a) = world.get_resource_mut::<lunco_workbench::HelpAnchors>() {
+        ctx.resource_scope::<lunco_workbench::HelpAnchors, _>(|_ctx, a| {
             a.set("model_view.view_toggles", toggles_rect);
-        }
+        });
         ui.separator();
 
         // Status pill — single compact icon for every run/compile
@@ -317,7 +340,7 @@ fn render_unified_toolbar(
             resp.context_menu(|ui| {
                 if ui.button("Dismiss error").clicked() {
                     dismiss_error = true;
-                    ui.close_menu();
+                    ui.close();
                 }
             });
         } else if runner_busy {
@@ -399,9 +422,10 @@ fn render_unified_toolbar(
         // Publish a combined anchor over the three execution verbs
         // (🔨 Compile, ▶ Run, ⏩ Fast Run) so the help tour can spotlight
         // where simulation is launched.
-        if let Some(mut a) = world.get_resource_mut::<lunco_workbench::HelpAnchors>() {
-            a.set("model_view.compile_buttons", r_compile.rect.union(r_run.rect).union(r_fast.rect));
-        }
+        let compile_buttons_rect = r_compile.rect.union(r_run.rect).union(r_fast.rect);
+        ctx.resource_scope::<lunco_workbench::HelpAnchors, _>(|_ctx, a| {
+            a.set("model_view.compile_buttons", compile_buttons_rect);
+        });
 
         // Reset / Restart only make sense once a live sim exists. Distinct
         // *monochrome* glyphs — ⏮ rewind-to-start vs ↻ replay — replace the
@@ -427,11 +451,11 @@ fn render_unified_toolbar(
         }
     });
 
-    if dismiss_error { if let Some(mut cs) = world.get_resource_mut::<CompileStates>() { cs.clear_error(doc); } }
-    if focus_diagnostics { world.commands().trigger(lunco_workbench::FocusPanel { id: "modelica_diagnostics".into() }); }
-    if undo_clicked { world.commands().trigger(lunco_doc_bevy::UndoDocument { doc }); }
-    if redo_clicked { world.commands().trigger(lunco_doc_bevy::RedoDocument { doc }); }
-    if duplicate_clicked { world.commands().trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc: doc }); }
+    if dismiss_error { ctx.defer(move |world| { if let Some(mut cs) = world.get_resource_mut::<CompileStates>() { cs.clear_error(doc); } }); }
+    if focus_diagnostics { ctx.trigger(lunco_workbench::FocusPanel { id: "modelica_diagnostics".into() }); }
+    if undo_clicked { ctx.trigger(lunco_doc_bevy::UndoDocument { doc }); }
+    if redo_clicked { ctx.trigger(lunco_doc_bevy::RedoDocument { doc }); }
+    if duplicate_clicked { ctx.trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc: doc }); }
     if run_pause_clicked {
         // Run = compile-if-stale then play (RunActiveModel); Pause just
         // freezes stepping. The button is always visible now, so pre-sim
@@ -439,15 +463,20 @@ fn render_unified_toolbar(
         // stepping maps to Pause. RunActiveModel subsumes resume-without-
         // compile (it unpauses directly when already compiled & clean).
         let realtime_running = sim_state.map(|(p, _)| !p).unwrap_or(false);
-        if realtime_running { world.commands().trigger(crate::ui::commands::PauseActiveModel { doc }); }
-        else { world.commands().trigger(crate::ui::commands::RunActiveModel { doc, class: None }); }
+        if realtime_running { ctx.trigger(crate::ui::commands::PauseActiveModel { doc }); }
+        else { ctx.trigger(crate::ui::commands::RunActiveModel { doc, class: None }); }
     }
-    if reset_clicked { world.commands().trigger(crate::ui::commands::ResetActiveModel { doc }); }
+    if reset_clicked { ctx.trigger(crate::ui::commands::ResetActiveModel { doc }); }
     if restart_clicked {
-        world.commands().trigger(crate::ui::commands::RestartActiveModel { doc });
+        ctx.trigger(crate::ui::commands::RestartActiveModel { doc });
     }
-    if auto_arrange_clicked { world.commands().trigger(crate::ui::commands::AutoArrangeDiagram { doc }); }
+    if auto_arrange_clicked { ctx.trigger(crate::ui::commands::AutoArrangeDiagram { doc }); }
     if fast_run_clicked {
+      // The whole setup-resolution path reads + writes several resources
+      // and calls `&mut World` helpers (`resolve_setup_bounds`); defer it
+      // as one unit so it runs with full world access after paint. It
+      // only fires on a click, so the one-frame delay is invisible.
+      ctx.defer(move |world| {
         // Drilled-in pin → tier-ranked simulation root (shared precedence,
         // so the Fast Run popup never disagrees with the Experiments Setup
         // form about which class is the default runnable system).
@@ -494,17 +523,18 @@ fn render_unified_toolbar(
                 setup.0 = Some(crate::ui::commands::FastRunSetupEntry { doc, model_ref, candidates, bounds, overrides_count, inputs });
             }
         } else {
-            world.commands().trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
+            world.trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
         }
+      });
     }
     if compile_clicked {
-        world.commands().trigger(crate::ui::commands::CompileActiveModel { doc, class: String::new() });
+        ctx.trigger(crate::ui::commands::CompileActiveModel { doc, class: String::new() });
     }
     new_view_mode
 }
 
-fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
-    let doc_id = world.get_resource::<lunco_workspace::WorkspaceResource>().and_then(|ws| ws.active_document);
+fn render_docs_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+    let doc_id = ctx.resource::<lunco_workspace::WorkspaceResource>().and_then(|ws| ws.active_document);
     let Some(doc) = doc_id else {
         ui.centered_and_justified(|ui| { ui.label(egui::RichText::new("No model open").weak()); });
         return;
@@ -514,8 +544,8 @@ fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
     // within-prefix fallback chain so the docs view doesn't have to
     // re-derive it (and drift from the badge / inspector lookups).
     let (class_name, class_description, info, revisions) = {
-        let drilled = crate::sim_default::drilled_class_for_doc(world, doc);
-        crate::class_metadata::resolve_metadata_for_doc(world, doc, drilled.as_deref())
+        let drilled = crate::sim_default::drilled_class_for_doc_ctx(ctx, doc);
+        crate::class_metadata::resolve_metadata_for_doc_ctx(ctx, doc, drilled.as_deref())
             .map(|m| {
                 let (info, revs) = m.documentation;
                 (
@@ -538,7 +568,7 @@ fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
                 ui.add_space(12.0);
             }
             if let Some(html) = info.as_deref().filter(|s| !s.trim().is_empty()) {
-                render_html_as_markdown(ui, world, 760.0, html);
+                render_html_as_markdown(ui, ctx, 760.0, html);
             } else {
                 ui.label(egui::RichText::new("(no documentation)").italics().weak());
             }
@@ -548,13 +578,13 @@ fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Revisions").strong().size(15.0));
                 ui.add_space(6.0);
-                render_html_as_markdown(ui, world, 760.0, revs);
+                render_html_as_markdown(ui, ctx, 760.0, revs);
             }
         });
     });
 }
 
-fn render_html_as_markdown(ui: &mut egui::Ui, world: &mut World, target_width: f32, html: &str) {
+fn render_html_as_markdown(ui: &mut egui::Ui, ctx: &mut PanelCtx, target_width: f32, html: &str) {
     use std::sync::Mutex;
     static CACHE: std::sync::OnceLock<Mutex<egui_commonmark::CommonMarkCache>> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(egui_commonmark::CommonMarkCache::default()));
@@ -587,7 +617,7 @@ fn render_html_as_markdown(ui: &mut egui::Ui, world: &mut World, target_width: f
     }
 
     let intercepts: Vec<(usize, String, lunco_workbench::UriResolution)> = {
-        let registry = world.get_resource::<lunco_workbench::UriRegistry>();
+        let registry = ctx.resource::<lunco_workbench::UriRegistry>();
         ui.ctx().output_mut(|o| {
             o.commands.iter().enumerate().filter_map(|(idx, cmd)| {
                 if let egui::OutputCommand::OpenUrl(open) = cmd {
@@ -603,20 +633,20 @@ fn render_html_as_markdown(ui: &mut egui::Ui, world: &mut World, target_width: f
         for (idx, _, _) in intercepts.iter().rev() { if *idx < o.commands.len() { o.commands.remove(*idx); } }
     });
     for (_, url, resolution) in intercepts {
-        world.commands().trigger(lunco_workbench::UriClicked { uri: url, resolution });
+        ctx.trigger(lunco_workbench::UriClicked { uri: url, resolution });
     }
 }
 
-fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
-    let theme = world.get_resource::<lunco_theme::Theme>().cloned().unwrap_or_else(lunco_theme::Theme::dark);
-    let active = world.get_resource::<lunco_workspace::WorkspaceResource>().and_then(|ws| ws.active_document);
+fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+    let theme = ctx.resource::<lunco_theme::Theme>().cloned().unwrap_or_else(lunco_theme::Theme::dark);
+    let active = ctx.resource::<lunco_workspace::WorkspaceResource>().and_then(|ws| ws.active_document);
     let Some(doc) = active else {
         ui.centered_and_justified(|ui| { ui.label(egui::RichText::new("No model open").weak()); });
         return;
     };
-    
+
     let (qualified, authored_icon, parameters) = {
-        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let Some(registry) = ctx.resource::<ModelicaDocumentRegistry>() else { return; };
         let Some(host) = registry.host(doc) else { return; };
         let document = host.document();
         let display = document.origin().display_name();
@@ -632,7 +662,7 @@ fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
             }
         }
         
-        let (icon, params) = match world.get_resource::<crate::engine_resource::ModelicaEngineHandle>() {
+        let (icon, params) = match ctx.resource::<crate::engine_resource::ModelicaEngineHandle>() {
             Some(handle) => {
                 let mut engine = handle.lock();
                 let icon = crate::annotations::extract_icon_via_engine(&qpath, &mut engine);

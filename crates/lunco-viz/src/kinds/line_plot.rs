@@ -84,14 +84,17 @@ impl Visualization for LinePlot {
         // on the registry.
         let edit = render_toolbar(ctx, config);
         if let Some(edit) = edit {
-            apply_edit(ctx.world, config.id, edit);
+            // Queue the registry mutation for after the egui pass —
+            // render holds only read access to the world.
+            let id = config.id;
+            ctx.wb.defer(move |world| apply_edit(world, id, edit));
             // Don't render the body this frame — the config just
             // changed. Next frame picks up the new bindings.
             return;
         }
 
         let style = LinePlotStyle::load(config);
-        let registry = match ctx.world.get_resource::<SignalRegistry>() {
+        let registry = match ctx.wb.resource::<SignalRegistry>() {
             Some(r) => r,
             None => {
                 ctx.ui.label("SignalRegistry not installed.");
@@ -109,8 +112,8 @@ impl Visualization for LinePlot {
 
         if y_bindings.is_empty() {
             let (text, muted) = ctx
-                .world
-                .get_resource::<lunco_theme::Theme>()
+                .wb
+                .resource::<lunco_theme::Theme>()
                 .map(|t| (t.tokens.text, t.tokens.text_subdued))
                 .unwrap_or((egui::Color32::GRAY, egui::Color32::DARK_GRAY));
             ctx.ui.vertical_centered(|ui| {
@@ -192,11 +195,22 @@ impl Visualization for LinePlot {
         // pans or zooms, egui_plot remembers their view and ignores
         // a policy change. `Plot::reset()` forces the plot to
         // discard stored memory and re-fit to the data exactly once.
+        // Peek the pending fit now (read-only) so we can pass `.reset()`
+        // to the plot this frame; clear the request via a deferred
+        // mutation so render stays a pure read.
         let fit_requested = ctx
-            .world
-            .get_resource_mut::<VizFitRequests>()
-            .map(|mut r| r.take(config.id))
+            .wb
+            .resource::<VizFitRequests>()
+            .map(|r| r.is_pending(config.id))
             .unwrap_or(false);
+        if fit_requested {
+            let id = config.id;
+            ctx.wb.defer(move |world| {
+                if let Some(mut r) = world.get_resource_mut::<VizFitRequests>() {
+                    r.take(id);
+                }
+            });
+        }
 
         // Axis labels. Explicit user override → that; otherwise
         // derive from the signal (X = signal path / "time (s)"; Y =
@@ -269,7 +283,7 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
     // Snapshot available signals + current style so we can render
     // without holding a long-lived registry borrow.
     let (available, current_y_paths): (Vec<SignalRef>, std::collections::HashSet<SignalRef>) = {
-        let registry = ctx.world.get_resource::<SignalRegistry>();
+        let registry = ctx.wb.resource::<SignalRegistry>();
         let available: Vec<SignalRef> = registry
             .map(|r| {
                 r.iter_signals()
@@ -287,8 +301,8 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
     };
     let style = LinePlotStyle::load(config);
     let muted = ctx
-        .world
-        .get_resource::<lunco_theme::Theme>()
+        .wb
+        .resource::<lunco_theme::Theme>()
         .map(|t| t.tokens.text_subdued)
         .unwrap_or(egui::Color32::DARK_GRAY);
 

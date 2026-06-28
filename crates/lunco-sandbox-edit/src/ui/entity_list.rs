@@ -18,7 +18,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use std::collections::{HashMap, HashSet};
 
 /// Render-ready, flattened scene tree for the Entity list panel.
@@ -213,13 +213,16 @@ impl Panel for EntityList {
     fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
     fn transparent_background(&self) -> bool { true }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        let mantle = world.resource::<lunco_theme::Theme>().colors.mantle;
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let mantle = ctx
+            .resource::<lunco_theme::Theme>()
+            .map(|t| t.colors.mantle)
+            .unwrap_or(egui::Color32::from_rgb(30, 30, 46));
         egui::Frame::new()
             .fill(mantle)
             .inner_margin(8.0)
             .corner_radius(4)
-            .show(ui, |ui| entity_list_content(ui, world));
+            .show(ui, |ui| entity_list_content(ui, ctx));
     }
 }
 
@@ -285,13 +288,13 @@ fn select_label(
     }
 }
 
-fn entity_list_content(ui: &mut egui::Ui, world: &mut World) {
+fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     ui.label("Click to select. Expand ▸ to reach sub-parts (wheels, body).");
     ui.separator();
 
     // Authoritative selection — read directly (small, cheap); never shadowed.
-    let selected = world
-        .get_resource::<crate::SelectedEntities>()
+    let selected = ctx
+        .resource::<crate::SelectedEntities>()
         .cloned()
         .unwrap_or_default();
 
@@ -299,9 +302,9 @@ fn entity_list_content(ui: &mut egui::Ui, world: &mut World) {
     let mut to_focus: Option<Entity> = None;
 
     // Borrow the precomputed view for the duration of painting only, then drop
-    // it so the world is free for the selection/focus mutations below.
+    // it so `ctx` is free for the selection/focus mutations below.
     {
-        let Some(view) = world.get_resource::<EntityTreeView>() else {
+        let Some(view) = ctx.resource::<EntityTreeView>() else {
             return;
         };
 
@@ -332,29 +335,33 @@ fn entity_list_content(ui: &mut egui::Ui, world: &mut World) {
     // + toggle (multi-select), plain click = replace. The Inspector reads the
     // updated `SelectedEntities` later in this same egui pass.
     if let Some((entity, shift_held)) = to_select {
-        let old: Vec<Entity> = world
-            .query_filtered::<Entity, With<crate::selection::Selected>>()
-            .iter(world)
-            .collect();
-        world.resource_scope(|world, mut selected: Mut<crate::SelectedEntities>| {
-            let mut commands = world.commands();
-            crate::selection::apply_selection(
-                &mut commands, &mut selected, old, entity, shift_held, shift_held,
-            );
+        ctx.defer(move |world| {
+            let old: Vec<Entity> = world
+                .query_filtered::<Entity, With<crate::selection::Selected>>()
+                .iter(world)
+                .collect();
+            world.resource_scope(|world, mut selected: Mut<crate::SelectedEntities>| {
+                let mut commands = world.commands();
+                crate::selection::apply_selection(
+                    &mut commands, &mut selected, old, entity, shift_held, shift_held,
+                );
+            });
+            world.flush();
         });
-        world.flush();
     }
 
     // Double-click flies the camera to the entity via the same `FocusEntityById`
     // command the API exposes. Works for anything with an API id — no collider
     // required (this is list-driven, not a viewport raycast).
     if let Some(entity) = to_focus {
-        if let Some(id) = world
-            .get_resource::<lunco_api::registry::ApiEntityRegistry>()
-            .and_then(|r| r.api_id_for(entity))
-            .map(|g| g.get())
-        {
-            world.trigger(crate::commands::FocusEntityById { entity_id: id, distance: 0.0 });
-        }
+        ctx.defer(move |world| {
+            if let Some(id) = world
+                .get_resource::<lunco_api::registry::ApiEntityRegistry>()
+                .and_then(|r| r.api_id_for(entity))
+                .map(|g| g.get())
+            {
+                world.trigger(crate::commands::FocusEntityById { entity_id: id, distance: 0.0 });
+            }
+        });
     }
 }

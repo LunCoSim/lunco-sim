@@ -21,7 +21,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_theme::ColorAlpha;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::visual_diagram::msl_class_library;
 
@@ -209,12 +209,12 @@ impl Panel for ComponentPalettePanel {
         true
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // Snapshot the theme at the top so every chip / row pulls
         // its colour from the same source. Category tints map to
         // schematic-wire tokens; secondary text uses `text_subdued`.
-        let theme = world
-            .get_resource::<lunco_theme::Theme>()
+        let theme = ctx
+            .resource::<lunco_theme::Theme>()
             .cloned()
             .unwrap_or_else(lunco_theme::Theme::dark);
         let all_chip_color = theme.tokens.text_subdued;
@@ -222,15 +222,19 @@ impl Panel for ComponentPalettePanel {
 
         // Ensure the per-frame state resource exists (panels are
         // instantiated once; the resource may or may not be present).
-        if world.get_resource::<PaletteState>().is_none() {
-            world.insert_resource(PaletteState::default());
+        if ctx.resource::<PaletteState>().is_none() {
+            ctx.defer(|world| {
+                if world.get_resource::<PaletteState>().is_none() {
+                    world.insert_resource(PaletteState::default());
+                }
+            });
         }
 
         // Snapshot the query + selected category up front.
-        let state = world.resource::<PaletteState>();
-        let query = state.query.clone();
+        let state = ctx.resource::<PaletteState>();
+        let query = state.map(|s| s.query.clone()).unwrap_or_default();
         let query_lc = query.to_lowercase();
-        let selected_category: Option<&'static str> = state.category;
+        let selected_category: Option<&'static str> = state.and_then(|s| s.category);
 
         // Render the search box; capture any edit.
         let mut new_query = query.clone();
@@ -342,16 +346,23 @@ impl Panel for ComponentPalettePanel {
 
         // Write back state changes.
         if clear_all {
-            let mut s = world.resource_mut::<PaletteState>();
-            s.query.clear();
-            s.category = None;
+            ctx.defer(|world| {
+                if let Some(mut s) = world.get_resource_mut::<PaletteState>() {
+                    s.query.clear();
+                    s.category = None;
+                }
+            });
             // Skip subsequent rendering with stale query.
             return;
         }
         if new_query != query || new_category != selected_category {
-            let mut s = world.resource_mut::<PaletteState>();
-            s.query = new_query.clone();
-            s.category = new_category;
+            let nq = new_query.clone();
+            ctx.defer(move |world| {
+                if let Some(mut s) = world.get_resource_mut::<PaletteState>() {
+                    s.query = nq;
+                    s.category = new_category;
+                }
+            });
         }
         let query_lc = new_query.to_lowercase();
         let selected_category = new_category;
@@ -407,8 +418,8 @@ impl Panel for ComponentPalettePanel {
         let mut drag_started_def: Option<crate::index::ClassEntry> = None;
         // Snapshot the currently-dragged def name so render_component_row
         // can dim the source row.
-        let dragging_path: Option<String> = world
-            .get_resource::<ComponentDragPayload>()
+        let dragging_path: Option<String> = ctx
+            .resource::<ComponentDragPayload>()
             .and_then(|p| p.def.as_ref().map(|d| d.name.clone()));
         let is_searching = !query_lc.is_empty() || selected_category.is_some();
 
@@ -502,16 +513,18 @@ impl Panel for ComponentPalettePanel {
         // successive clicks don't all land on top of each other. The
         // canvas's auto-arrange button lets users tidy after.
         if let Some(def) = clicked {
-            place_component(world, &def, None, None);
+            ctx.defer(move |world| place_component(world, &def, None, None));
         }
 
         // Stash drag payload for the canvas drop handler. Overwrites
         // any previous payload — only one drag can be active at a
         // time. The canvas clears it on drop (hit or miss).
         if let Some(def) = drag_started_def {
-            world
-                .get_resource_or_insert_with::<ComponentDragPayload>(Default::default)
-                .def = Some(def);
+            ctx.defer(move |world| {
+                world
+                    .get_resource_or_insert_with::<ComponentDragPayload>(Default::default)
+                    .def = Some(def);
+            });
         }
     }
 }

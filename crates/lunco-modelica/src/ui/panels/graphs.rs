@@ -27,7 +27,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{InstancePanel, PanelId, PanelSlot};
+use lunco_workbench::{InstancePanel, PanelCtx, PanelId, PanelSlot};
 use lunco_viz::{
     kinds::line_plot::LinePlot, view::Panel2DCtx, viz::Visualization,
     viz::VizId, SignalRegistry, VisualizationRegistry, VizFitRequests,
@@ -62,8 +62,8 @@ impl InstancePanel for ModelicaPlotPanel {
             .unwrap_or_else(|| format!("📈 Plot #{instance}"))
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World, instance: u64) {
-        render_modelica_plot(ui, world, VizId(instance));
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, instance: u64) {
+        render_modelica_plot(ui, ctx, VizId(instance));
     }
 }
 
@@ -72,69 +72,74 @@ impl InstancePanel for ModelicaPlotPanel {
 /// Reads the per-VizId `VisualizationConfig` (live-signal bindings),
 /// renders the polished toolbar (live-summary / Fit / CSV / new-plot),
 /// then dispatches to the experiments overlay + LinePlot kind.
-fn render_modelica_plot(ui: &mut egui::Ui, world: &mut World, viz_id: VizId) {
+fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     // Mark this plot as the active one for global readers (canvas
     // overlay, telemetry, runner auto-pick). Hover wins over
     // render-order: with two plot panels visible side-by-side, the
     // pointer's panel is the "active" one, not whichever rendered
     // last. Falls back to render-order when there's no pointer
     // (boot, headless, key-only navigation) so a fresh tab gets
-    // promoted on first frame.
+    // promoted on first frame. The write is pure global-state intent
+    // (this panel never reads ActivePlot back this frame), so it is
+    // deferred to run after paint.
     let panel_rect = ui.max_rect();
     let hovered_here = ui.rect_contains_pointer(panel_rect);
-    if let Some(mut active) =
-        world.get_resource_mut::<crate::ui::panels::experiments::ActivePlot>()
-    {
-        if active.0.is_none() || hovered_here {
-            active.0 = Some(viz_id);
+    ctx.defer(move |world| {
+        if let Some(mut active) =
+            world.get_resource_mut::<crate::ui::panels::experiments::ActivePlot>()
+        {
+            if active.0.is_none() || hovered_here {
+                active.0 = Some(viz_id);
+            }
         }
-    }
+    });
     // Bootstrap the registry entry for the default graph the first
     // time the panel renders. Other VizIds were created by
     // `NewPlotPanel` and already exist; this branch is a no-op for
-    // them.
-    let bound_count = {
-        let Some(mut registry) = world.get_resource_mut::<VisualizationRegistry>() else {
+    // them. The bootstrap mutates the registry and we need the
+    // resulting binding count *this* frame to pick the body, so this
+    // is a mutate-then-read — use `resource_scope`.
+    let bound_count = match ctx.resource_scope::<VisualizationRegistry, _>(|_ctx, registry| {
+        if viz_id == DEFAULT_MODELICA_GRAPH {
+            Some(ensure_default_modelica_graph(registry).inputs.len())
+        } else {
+            registry.get(viz_id).map(|cfg| cfg.inputs.len())
+        }
+    }) {
+        None => {
             ui.label("lunco-viz not installed.");
             return;
-        };
-        let cfg_opt = if viz_id == DEFAULT_MODELICA_GRAPH {
-            Some(ensure_default_modelica_graph(&mut registry).clone())
-        } else {
-            registry.get(viz_id).cloned()
-        };
-        let Some(cfg) = cfg_opt else {
-            drop(registry);
+        }
+        Some(None) => {
             ui.label(format!("Plot #{} not found.", viz_id.0));
             return;
-        };
-        cfg.inputs.len()
+        }
+        Some(Some(n)) => n,
     };
     // Per-plot experiment overlay: each tab has its own picked-vars
     // and scrub cursor, so every plot can render the experiments
-    // overlay independently.
-    let exp_summary =
-        crate::ui::panels::experiments::experiments_plot_summary(world, viz_id);
+    // overlay independently. We only need "are there runs?" to pick the
+    // body — the experiments render recomputes its own counts (CQ-207).
     let has_live = bound_count > 0;
-    let has_exp = exp_summary.total_runs > 0;
+    let has_exp = crate::ui::panels::experiments::has_experiment_runs(ctx);
 
     if has_live && !has_exp {
         // Pure live mode keeps its own one-line action header above the
         // dedicated LinePlot (which owns the X/Y/+add binding picker and
         // its own log-Y toggle).
-        render_plot_header(ui, world, viz_id);
-        render_line_plot(ui, world, viz_id);
+        render_plot_header(ui, ctx, viz_id);
+        render_line_plot(ui, ctx, viz_id);
     } else {
         // The experiments body draws the action buttons (New / Dup / Fit /
         // CSV) and the log-Y toggle inline on its Variables/Runs row, so
         // the whole toolbar is a single line — no separate header here.
         let extras = if has_live {
-            collect_live_extras(world, viz_id)
+            collect_live_extras(ctx, viz_id)
         } else {
             Vec::new()
         };
         crate::ui::panels::experiments::render_experiments_plot_with_extras(
-            ui, world, viz_id, &extras,
+            ui, ctx, viz_id, &extras,
         );
     }
 }
@@ -142,10 +147,10 @@ fn render_modelica_plot(ui: &mut egui::Ui, world: &mut World, viz_id: VizId) {
 /// The pure-live action header: a single right-aligned button row above
 /// the dedicated LinePlot. The experiments body doesn't use this — it
 /// renders [`plot_action_buttons`] inline on its own pickers row.
-fn render_plot_header(ui: &mut egui::Ui, world: &mut World, viz_id: VizId) {
+fn render_plot_header(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            plot_action_buttons(ui, world, viz_id);
+            plot_action_buttons(ui, ctx, viz_id);
         });
     });
     ui.separator();
@@ -159,7 +164,7 @@ fn render_plot_header(ui: &mut egui::Ui, world: &mut World, viz_id: VizId) {
 /// direction (the callers use right-to-left, so `➕` lands rightmost).
 pub(crate) fn plot_action_buttons(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
     viz_id: VizId,
 ) {
     let mut new_plot = false;
@@ -198,24 +203,33 @@ pub(crate) fn plot_action_buttons(
         csv = true;
     }
 
+    // All four actions are user-intent mutations (trigger / resource
+    // write / file IO) that don't affect this frame's paint, so defer
+    // them to run after the UI is drawn.
     if new_plot {
-        world
-            .commands()
-            .trigger(crate::ui::commands::NewPlotPanel::default());
+        ctx.defer(move |world| {
+            world
+                .commands()
+                .trigger(crate::ui::commands::NewPlotPanel::default());
+        });
     }
     if dup {
-        world.commands().trigger(crate::ui::commands::NewPlotPanel {
-            source: viz_id.0,
-            ..Default::default()
+        ctx.defer(move |world| {
+            world.commands().trigger(crate::ui::commands::NewPlotPanel {
+                source: viz_id.0,
+                ..Default::default()
+            });
         });
     }
     if fit {
-        if let Some(mut reqs) = world.get_resource_mut::<VizFitRequests>() {
-            reqs.request(viz_id);
-        }
+        ctx.defer(move |world| {
+            if let Some(mut reqs) = world.get_resource_mut::<VizFitRequests>() {
+                reqs.request(viz_id);
+            }
+        });
     }
     if csv {
-        export_graph_to_csv(world, viz_id);
+        ctx.defer(move |world| export_graph_to_csv(world, viz_id));
     }
 }
 
@@ -226,16 +240,16 @@ pub(crate) fn plot_action_buttons(
 /// label, visibility — minus the X/Y picker UI, which only the
 /// LinePlot toolbar exposes).
 fn collect_live_extras(
-    world: &World,
+    ctx: &PanelCtx,
     viz_id: VizId,
 ) -> Vec<crate::ui::panels::experiments::PlotExtraLine> {
-    let Some(reg) = world.get_resource::<VisualizationRegistry>() else {
+    let Some(reg) = ctx.resource::<VisualizationRegistry>() else {
         return Vec::new();
     };
     let Some(cfg) = reg.get(viz_id) else {
         return Vec::new();
     };
-    let Some(sigs) = world.get_resource::<SignalRegistry>() else {
+    let Some(sigs) = ctx.resource::<SignalRegistry>() else {
         return Vec::new();
     };
     cfg.inputs
@@ -260,14 +274,14 @@ fn collect_live_extras(
         .collect()
 }
 
-fn render_line_plot(ui: &mut egui::Ui, world: &mut World, viz_id: VizId) {
-    let config = match world.resource::<VisualizationRegistry>().get(viz_id) {
+fn render_line_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
+    let config = match ctx.resource::<VisualizationRegistry>().and_then(|r| r.get(viz_id)) {
         Some(c) => c.clone(),
         None => return,
     };
     let viz = LinePlot;
-    let mut ctx = Panel2DCtx { ui, world };
-    viz.render_panel_2d(&mut ctx, &config);
+    let mut p2d = Panel2DCtx { ui, wb: ctx };
+    viz.render_panel_2d(&mut p2d, &config);
 }
 
 /// Gather the plot's bound signals, pop a native save-file picker,

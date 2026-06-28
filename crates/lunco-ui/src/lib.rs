@@ -78,6 +78,10 @@ pub struct LuncoUiPlugin;
 impl Plugin for LuncoUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UiSelection>();
+        // WP-8 view-model for Mission Control — collapses the panel's
+        // per-frame world scans into one change-gated producer.
+        app.init_resource::<mission_control::MissionControlView>()
+            .add_systems(Update, mission_control::populate_mission_control_view);
         // Modal host: single-source-of-truth for dialogs. Panels never
         // call `egui::Window::show` directly; they push to ModalQueue
         // and the host renders the head with `egui::Modal`. Registered

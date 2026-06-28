@@ -8,6 +8,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_workbench::PanelCtx;
 
 use crate::document::ModelicaOp;
 
@@ -169,7 +170,8 @@ pub(super) fn finalize_tree(node: &mut MslPackageNode) {
 /// exactly as the flat menu did.
 pub(super) fn render_msl_package_menu(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
+    state: &mut CanvasDiagramState,
     doc_id: Option<lunco_doc::DocumentId>,
     node: &MslPackageNode,
     click_world: lunco_canvas::Pos,
@@ -187,7 +189,7 @@ pub(super) fn render_msl_package_menu(
         }
         ui.menu_button(name, |ui| {
             render_msl_package_menu(
-                ui, world, doc_id, child, click_world, editing_class, show_icons, out,
+                ui, ctx, state, doc_id, child, click_world, editing_class, show_icons, out,
             );
         });
     }
@@ -231,10 +233,9 @@ pub(super) fn render_msl_package_menu(
                     // is in scope. Outside render (no TabRenderContext)
                     // falls back to the first-tab path — unchanged
                     // behaviour for non-render callers.
-                    let tab = world
-                        .get_resource::<crate::model_tabs_types::TabRenderContext>()
+                    let tab = ctx
+                        .resource::<crate::model_tabs_types::TabRenderContext>()
                         .and_then(|c| c.tab_id);
-                    let state = world.resource::<CanvasDiagramState>();
                     pick_add_instance_name(
                         comp,
                         &state.get_for_render(tab, doc_id).canvas.scene,

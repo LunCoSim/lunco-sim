@@ -20,7 +20,7 @@ use lunco_experiments::{
     ExperimentId, ExperimentRegistry, RunStatus,
 };
 use lunco_viz::viz::VizId;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub const EXPERIMENTS_PANEL_ID: PanelId = PanelId("modelica_experiments");
 
@@ -245,18 +245,18 @@ impl Panel for ExperimentsPanel {
         PanelSlot::Bottom
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // Pin header — follow active tab, or 📌 to lock the
         // experiments view to a specific model.
         crate::ui::doc_pin::render_pin_header(
             ui,
-            world,
+            ctx,
             crate::ui::doc_pin::PinKind::Experiments,
         );
         // Scope this panel to the doc-pin-resolved document. Each
         // open doc has its own run history (`twin_id_for_doc`), so
         // switching tabs flips the list automatically.
-        let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc(world)
+        let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx)
         else {
             ui.label("No active document.");
             return;
@@ -265,10 +265,17 @@ impl Panel for ExperimentsPanel {
         // Semantic colours from the theme. ThemePlugin is mandatory
         // (installed by WorkbenchPlugin), so this resource is always
         // present.
-        let (col_success, col_warning, col_error, col_subdued) = {
-            let t = world.resource::<lunco_theme::Theme>();
-            (t.tokens.success, t.tokens.warning, t.tokens.error, t.tokens.text_subdued)
-        };
+        let (col_success, col_warning, col_error, col_subdued) = ctx
+            .resource::<lunco_theme::Theme>()
+            .map(|t| {
+                (t.tokens.success, t.tokens.warning, t.tokens.error, t.tokens.text_subdued)
+            })
+            .unwrap_or((
+                egui::Color32::from_rgb(0, 200, 0),
+                egui::Color32::from_rgb(240, 180, 0),
+                egui::Color32::from_rgb(220, 60, 60),
+                egui::Color32::from_rgb(140, 140, 160),
+            ));
 
         // One outer ScrollArea wraps Setup + Parameter overrides +
         // experiments table + empty-state copy so the user can reach
@@ -277,14 +284,14 @@ impl Panel for ExperimentsPanel {
             .id_salt("experiments_panel_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-        self.render_setup_section(ui, world);
+        self.render_setup_section(ui, ctx);
         ui.separator();
-        self.render_override_editor(ui, world);
+        self.render_override_editor(ui, ctx);
         ui.separator();
 
         // Snapshot for rendering — avoids holding the registry borrow
         // across egui calls.
-        let mut rows: Vec<Row> = match world.get_resource::<ExperimentRegistry>() {
+        let mut rows: Vec<Row> = match ctx.resource::<ExperimentRegistry>() {
             Some(reg) => reg
                 .list_for_twin(&twin)
                 .iter()
@@ -340,11 +347,12 @@ impl Panel for ExperimentsPanel {
         };
 
         // Add the "Interactive Live" row if an interactive simulation
-        // is active for the current document.
-        let live_model = world
-            .query::<&crate::worker::ModelicaModel>()
-            .iter(world)
-            .find(|m| m.document == doc_id);
+        // is active for the current document. Resolve the doc's
+        // simulator entity through the registry (O(1)) and read its
+        // `ModelicaModel` directly — no per-frame entity scan (WP-8).
+        let live_model = crate::state::simulator_for_ctx(ctx, doc_id)
+            .and_then(|e| ctx.get::<crate::worker::ModelicaModel>(e))
+            .filter(|m| m.document == doc_id);
         if let Some(m) = live_model {
             rows.insert(
                 0,
@@ -375,13 +383,13 @@ impl Panel for ExperimentsPanel {
             // this, the panel says "Press ⏩ Run above" even when
             // ⏩ Run was hidden by `render_setup_section` (no doc /
             // no class), leaving the user pointing at empty space.
-            let active_doc = world
-                .get_resource::<lunco_workspace::WorkspaceResource>()
+            let active_doc = ctx
+                .resource::<lunco_workspace::WorkspaceResource>()
                 .and_then(|w| w.active_document);
             let has_class = active_doc
                 .and_then(|doc| {
-                    world
-                        .get_resource::<crate::state::ModelicaDocumentRegistry>()
+                    ctx
+                        .resource::<crate::state::ModelicaDocumentRegistry>()
                         .and_then(|r| r.host(doc))
                         .map(|h| {
                             h.document().index().classes.values().any(|c| {
@@ -486,8 +494,8 @@ impl Panel for ExperimentsPanel {
         let mut start_rename: Option<(ExperimentId, String)> = None;
         let mut commit_rename: Option<(ExperimentId, String)> = None;
         let mut cancel_rename = false;
-        let editing_now = world
-            .get_resource::<ExperimentVisibility>()
+        let editing_now = ctx
+            .resource::<ExperimentVisibility>()
             .and_then(|v| v.editing_name.clone());
 
         // Table grid renders directly; the outer panel ScrollArea
@@ -516,19 +524,19 @@ impl Panel for ExperimentsPanel {
                     // visibility lets each Plot Window show a
                     // different subset of runs — OMEdit / Dymola style.
                     let target_viz = {
-                        let pinned = world
-                            .get_resource::<ExperimentVisibility>()
+                        let pinned = ctx
+                            .resource::<ExperimentVisibility>()
                             .and_then(|v| v.target_plot);
                         pinned.unwrap_or_else(|| {
-                            world
-                                .get_resource::<ActivePlot>()
+                            ctx
+                                .resource::<ActivePlot>()
                                 .copied()
                                 .unwrap_or_default()
                                 .or_default()
                         })
                     };
-                    let visibility_snapshot: std::collections::HashSet<ExperimentId> = world
-                        .get_resource::<PlotPanelStates>()
+                    let visibility_snapshot: std::collections::HashSet<ExperimentId> = ctx
+                        .resource::<PlotPanelStates>()
                         .map(|s| s.visible(target_viz))
                         .unwrap_or_default();
 
@@ -702,92 +710,107 @@ impl Panel for ExperimentsPanel {
             // Route the registry mutation through the typed command so the
             // panel doesn't mutate `ExperimentRegistry` inline (R3) and the
             // rename is reachable via API/MCP too.
-            world.trigger(crate::ui::commands::compile::RenameExperiment {
-                experiment_id: id.0.to_string(),
-                name: new_name,
+            ctx.defer(move |world| {
+                world.trigger(crate::ui::commands::compile::RenameExperiment {
+                    experiment_id: id.0.to_string(),
+                    name: new_name,
+                });
+                if let Some(mut v) = world.get_resource_mut::<ExperimentVisibility>() {
+                    v.editing_name = None;
+                }
             });
-            if let Some(mut v) = world.get_resource_mut::<ExperimentVisibility>() {
-                v.editing_name = None;
-            }
         } else if cancel_rename {
-            if let Some(mut v) = world.get_resource_mut::<ExperimentVisibility>() {
-                v.editing_name = None;
-            }
+            ctx.defer(|world| {
+                if let Some(mut v) = world.get_resource_mut::<ExperimentVisibility>() {
+                    v.editing_name = None;
+                }
+            });
         } else if let Some(state) = start_rename {
-            if let Some(mut v) = world.get_resource_mut::<ExperimentVisibility>() {
-                v.editing_name = Some(state);
-            }
+            ctx.defer(move |world| {
+                if let Some(mut v) = world.get_resource_mut::<ExperimentVisibility>() {
+                    v.editing_name = Some(state);
+                }
+            });
         }
 
         if let Some(id) = toggle {
             // Toggle visibility on whichever plot is currently active /
-            // pinned. Each plot tab keeps its own visible set.
+            // pinned. Each plot tab keeps its own visible set. Resolve the
+            // target plot during paint (read-only), then defer the mutation.
             let target_viz = {
-                let pinned = world
-                    .get_resource::<ExperimentVisibility>()
+                let pinned = ctx
+                    .resource::<ExperimentVisibility>()
                     .and_then(|v| v.target_plot);
                 pinned.unwrap_or_else(|| {
-                    world
-                        .get_resource::<ActivePlot>()
+                    ctx
+                        .resource::<ActivePlot>()
                         .copied()
                         .unwrap_or_default()
                         .or_default()
                 })
             };
-            if let Some(mut s) = world.get_resource_mut::<PlotPanelStates>() {
-                s.toggle_visible(target_viz, id);
-            }
+            ctx.defer(move |world| {
+                if let Some(mut s) = world.get_resource_mut::<PlotPanelStates>() {
+                    s.toggle_visible(target_viz, id);
+                }
+            });
         }
         if let Some(id) = delete {
             // Route through the typed `DeleteExperiment` command — its
             // observer deletes from the registry AND purges doc-mapping +
             // per-plot visibility in lockstep, so the panel no longer
             // mutates the registry inline (R3) or duplicates the purge.
-            world.trigger(crate::ui::commands::compile::DeleteExperiment {
-                experiment_id: Some(id.0.to_string()),
-                doc: None,
-                all: false,
+            ctx.defer(move |world| {
+                world.trigger(crate::ui::commands::compile::DeleteExperiment {
+                    experiment_id: Some(id.0.to_string()),
+                    doc: None,
+                    all: false,
+                });
             });
         }
         if let Some(id) = cancel {
             // Best-effort cancel via the runner's RunHandle. The
             // PendingHandles drain system will see the resulting
             // RunUpdate::Cancelled and update registry status.
-            if let Some(handles) = world
-                .get_resource::<crate::experiments_runner::PendingHandles>()
-            {
-                for h in &handles.0 {
-                    if h.run_id == id {
-                        h.cancel();
-                        break;
+            ctx.defer(move |world| {
+                if let Some(handles) = world
+                    .get_resource::<crate::experiments_runner::PendingHandles>()
+                {
+                    for h in &handles.0 {
+                        if h.run_id == id {
+                            h.cancel();
+                            break;
+                        }
                     }
                 }
-            }
+            });
         }
         if let Some(id) = load_into_draft {
-            load_run_into_draft(world, id);
+            ctx.defer(move |world| load_run_into_draft(world, id));
         }
         if let Some(id) = export_csv {
-            export_experiment_csv(world, id);
+            ctx.defer(move |world| export_experiment_csv(world, id));
         }
         if let Some(id) = rerun {
             // Load setup, then dispatch a new Fast Run with it.
             // Resolving the originating doc keeps diagnostics routed
             // back to the right tab.
-            load_run_into_draft(world, id);
-            if let Some(doc) = world
-                .get_resource::<crate::experiments_runner::ExperimentSources>()
-                .and_then(|s| s.0.get(&id).copied())
-                .or_else(|| {
+            ctx.defer(move |world| {
+                load_run_into_draft(world, id);
+                if let Some(doc) = world
+                    .get_resource::<crate::experiments_runner::ExperimentSources>()
+                    .and_then(|s| s.0.get(&id).copied())
+                    .or_else(|| {
+                        world
+                            .get_resource::<lunco_workspace::WorkspaceResource>()
+                            .and_then(|ws| ws.active_document)
+                    })
+                {
                     world
-                        .get_resource::<lunco_workspace::WorkspaceResource>()
-                        .and_then(|ws| ws.active_document)
-                })
-            {
-                world
-                    .commands()
-                    .trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
-            }
+                        .commands()
+                        .trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
+                }
+            });
         }
 
         // Plot + variable picker now live in the Graphs panel — this
@@ -802,20 +825,23 @@ impl ExperimentsPanel {
     /// Compact bounds + inputs + Run button. Edits persist into the
     /// per-`ModelRef` draft; the toolbar's ⏩ Fast button reads the
     /// same draft, so changes here are visible there immediately.
-    fn render_setup_section(&self, ui: &mut egui::Ui, world: &mut World) {
-        let (col_error, col_accent) = {
-            let t = world.resource::<lunco_theme::Theme>();
-            (t.tokens.error, t.tokens.accent)
-        };
+    fn render_setup_section(&self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let (col_error, col_accent) = ctx
+            .resource::<lunco_theme::Theme>()
+            .map(|t| (t.tokens.error, t.tokens.accent))
+            .unwrap_or((
+                egui::Color32::from_rgb(220, 60, 60),
+                egui::Color32::from_rgb(90, 150, 240),
+            ));
         // Resolve target doc + model class. Honor the experiments
         // pin so a pinned panel keeps its setup form while the user
         // edits a different tab.
-        let Some(doc) = crate::ui::doc_pin::resolved_experiments_doc(world)
+        let Some(doc) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx)
         else {
             return;
         };
-        let (model_name, candidates) = match world
-            .get_resource::<crate::state::ModelicaDocumentRegistry>()
+        let (model_name, candidates) = match ctx
+            .resource::<crate::state::ModelicaDocumentRegistry>()
             .and_then(|r| r.host(doc))
         {
             Some(h) => {
@@ -828,7 +854,7 @@ impl ExperimentsPanel {
                 // Drilled-in pin → tier-ranked simulation root (shared
                 // precedence; see `default_simulation_class`). Keeps this
                 // Setup form in lock-step with the Fast Run popup.
-                match crate::sim_default::default_simulation_class(world, doc) {
+                match crate::sim_default::default_simulation_class_ctx(ctx, doc) {
                     Some(c) => (c, candidates),
                     None => return,
                 }
@@ -837,17 +863,41 @@ impl ExperimentsPanel {
         };
         let model_ref = lunco_experiments::ModelRef(model_name.clone());
 
-        // Resolve via the SAME path the Fast Run popup uses, so the two
-        // setup surfaces never disagree (draft → runner cache → AST
-        // `experiment(...)` annotation → fallback).
-        let mut bounds =
-            crate::ui::commands::compile::resolve_setup_bounds(world, doc, &model_ref);
+        // Resolve via the SAME precedence the Fast Run popup uses, so the
+        // two setup surfaces never disagree (draft → AST `experiment(...)`
+        // annotation → runner cache → fallback). Inlined here because the
+        // canonical `resolve_setup_bounds` takes `&World`; the reads below
+        // mirror it exactly through `ctx.resource`.
+        let mut bounds = {
+            use lunco_experiments::ExperimentRunner;
+            let draft = ctx
+                .resource::<crate::experiments_runner::ExperimentDrafts>()
+                .and_then(|d| {
+                    d.get(doc, &model_ref).and_then(|dr| dr.bounds_override.clone())
+                });
+            let annotation = ctx
+                .resource::<crate::state::ModelicaDocumentRegistry>()
+                .and_then(|reg| reg.host(doc))
+                .and_then(|host| {
+                    let index = host.document().index();
+                    index
+                        .classes
+                        .get(&model_ref.0)
+                        .or_else(|| index.classes.values().find(|c| c.name == model_ref.0))
+                        .and_then(|c| c.experiment.as_ref())
+                        .and_then(crate::sim_target::bounds_from_experiment)
+                });
+            let runner_cached = ctx
+                .resource::<crate::ModelicaRunnerResource>()
+                .and_then(|r| r.0.default_bounds(&model_ref));
+            crate::sim_target::resolve_bounds(draft, annotation, runner_cached)
+        };
         let mut bounds_changed = false;
 
         // Inputs come from the parsed AST of the resolved model class —
         // no per-frame source scan (WP-8 / CQ-205).
-        let detected_inputs = world
-            .get_resource::<crate::state::ModelicaDocumentRegistry>()
+        let detected_inputs = ctx
+            .resource::<crate::state::ModelicaDocumentRegistry>()
             .and_then(|r| r.host(doc))
             .and_then(|h| {
                 crate::ast_extract::find_class_by_short_name(
@@ -858,8 +908,8 @@ impl ExperimentsPanel {
             })
             .unwrap_or_default();
         let prefilled_inputs: BTreeMap<lunco_experiments::ParamPath, lunco_experiments::ParamValue> =
-            world
-                .get_resource::<crate::experiments_runner::ExperimentDrafts>()
+            ctx
+                .resource::<crate::experiments_runner::ExperimentDrafts>()
                 .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.inputs.clone()))
                 .unwrap_or_default();
         // Maintain editable text per input row across frames via a
@@ -891,8 +941,8 @@ impl ExperimentsPanel {
         // queued behind the concurrency cap. Drives the "N running · M
         // queued" chip and means the Run button queues (rather than being
         // disabled) when the runner is saturated.
-        let (running_now, queued_now, max_par) = world
-            .get_resource::<crate::ModelicaRunnerResource>()
+        let (running_now, queued_now, max_par) = ctx
+            .resource::<crate::ModelicaRunnerResource>()
             .map(|r| (r.0.in_flight_count(), r.0.queued_count(), r.0.max_parallel()))
             .unwrap_or((0, 0, 1));
         let any_in_flight = running_now > 0;
@@ -904,8 +954,8 @@ impl ExperimentsPanel {
         // (see worker_transport.rs `MslReady` flush). Gate a user-facing
         // notice on `MslLoadState::is_pending()` (false at boot on native,
         // false post-decode on web) so the run doesn't look stuck.
-        let msl_pending = world
-            .get_resource::<lunco_assets::msl::MslLoadState>()
+        let msl_pending = ctx
+            .resource::<lunco_assets::msl::MslLoadState>()
             .map(|s| s.is_pending())
             .unwrap_or(true);
         // If the MSL load *failed*, a run that depends on the standard
@@ -913,15 +963,15 @@ impl ExperimentsPanel {
         // the queued command is never flushed). `msl_pending` is false in
         // that state, so without this the panel would just show a normal
         // "▶ running" chip on a permanently-stuck run with no explanation.
-        let msl_error = match world.get_resource::<lunco_assets::msl::MslLoadState>() {
+        let msl_error = match ctx.resource::<lunco_assets::msl::MslLoadState>() {
             Some(lunco_assets::msl::MslLoadState::Failed(msg)) => Some(msg.clone()),
             _ => None,
         };
 
         // Annotation-default reference for "is this what the model
         // says?" tagging next to the bounds inputs.
-        let annotation_defaults = world
-            .get_resource::<crate::ModelicaRunnerResource>()
+        let annotation_defaults = ctx
+            .resource::<crate::ModelicaRunnerResource>()
             .and_then(|r| {
                 use lunco_experiments::ExperimentRunner;
                 r.0.default_bounds(&model_ref)
@@ -1019,7 +1069,9 @@ impl ExperimentsPanel {
         // frame default_simulation_class — and the whole Setup form /
         // override editor — resolve to it, without moving the canvas view.
         if let Some(cls) = pick_class {
-            crate::sim_default::set_run_target_for_doc(world, doc, &cls);
+            ctx.defer(move |world| {
+                crate::sim_default::set_run_target_for_doc(world, doc, &cls);
+            });
         }
         if bounds.t_end <= bounds.t_start {
             ui.label(
@@ -1263,22 +1315,27 @@ impl ExperimentsPanel {
         // Wire the inline ⊘ Cancel button to the runner.
         if cancel_active {
             // Latest in-flight handle.
-            if let Some(handles) = world
-                .get_resource::<crate::experiments_runner::PendingHandles>()
-            {
-                if let Some(h) = handles.0.last() {
-                    h.cancel();
+            ctx.defer(|world| {
+                if let Some(handles) = world
+                    .get_resource::<crate::experiments_runner::PendingHandles>()
+                {
+                    if let Some(h) = handles.0.last() {
+                        h.cancel();
+                    }
                 }
-            }
+            });
         }
 
         // Persist edits.
         if bounds_changed {
-            if let Some(mut drafts) = world
-                .get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
-            {
-                drafts.entry(doc, model_ref.clone()).bounds_override = Some(bounds);
-            }
+            let model_ref_b = model_ref.clone();
+            ctx.defer(move |world| {
+                if let Some(mut drafts) = world
+                    .get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
+                {
+                    drafts.entry(doc, model_ref_b).bounds_override = Some(bounds);
+                }
+            });
         }
         if inputs_changed {
             // Build a new BTreeMap from edited text.
@@ -1303,19 +1360,24 @@ impl ExperimentsPanel {
                     map.insert(lunco_experiments::ParamPath(name.clone()), v);
                 }
             }
-            if let Some(mut drafts) = world
-                .get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
-            {
-                drafts.entry(doc, model_ref).inputs = map;
-            }
+            ctx.defer(move |world| {
+                if let Some(mut drafts) = world
+                    .get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
+                {
+                    drafts.entry(doc, model_ref).inputs = map;
+                }
+            });
         }
         if run_clicked {
             // Pass the resolved class explicitly so dispatch never opens the
             // disambiguation modal — the dropdown above already chose the
             // target. Setup (bounds/inputs/overrides) is already in the draft.
-            world
-                .commands()
-                .trigger(crate::ui::commands::FastRunActiveModel { doc, class: Some(model_name.clone()), t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
+            let class = model_name.clone();
+            ctx.defer(move |world| {
+                world
+                    .commands()
+                    .trigger(crate::ui::commands::FastRunActiveModel { doc, class: Some(class), t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
+            });
         }
     }
 
@@ -1323,12 +1385,12 @@ impl ExperimentsPanel {
     /// top-level model. Detects literal `parameter` declarations in
     /// the source and shows them as an editable table; non-literal
     /// params appear greyed with a tooltip.
-    fn render_override_editor(&self, ui: &mut egui::Ui, world: &mut World) {
-        let Some(doc) = crate::ui::doc_pin::resolved_experiments_doc(world)
+    fn render_override_editor(&self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let Some(doc) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx)
         else {
             return;
         };
-        let registry = match world.get_resource::<crate::state::ModelicaDocumentRegistry>() {
+        let registry = match ctx.resource::<crate::state::ModelicaDocumentRegistry>() {
             Some(r) => r,
             None => return,
         };
@@ -1342,9 +1404,7 @@ impl ExperimentsPanel {
         // uses (drilled class → first non-package fallback) so this
         // section stays visible even when `strict_ast()` returns None
         // because of a recoverable parse warning.
-        let drilled = world
-            .get_resource::<crate::model_tabs::ModelTabs>()
-            .and_then(|t| t.drilled_class_for_doc(doc));
+        let drilled = crate::sim_default::drilled_class_for_doc_ctx(ctx, doc);
         let first_non_pkg = document
             .index()
             .classes
@@ -1378,8 +1438,8 @@ impl ExperimentsPanel {
                 use lunco_experiments::{ParamPath, ParamValue};
 
                 // Parameter overrides
-                let current_overrides: BTreeMap<ParamPath, ParamValue> = world
-                    .get_resource::<crate::experiments_runner::ExperimentDrafts>()
+                let current_overrides: BTreeMap<ParamPath, ParamValue> = ctx
+                    .resource::<crate::experiments_runner::ExperimentDrafts>()
                     .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.clone()))
                     .unwrap_or_default();
 
@@ -1536,21 +1596,23 @@ impl ExperimentsPanel {
                     });
 
                 if !updates.is_empty() {
-                    if let Some(mut drafts) = world
-                        .get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
-                    {
-                        let entry = drafts.entry(doc, model_ref);
-                        for (path, v) in updates {
-                            match v {
-                                Some(value) => {
-                                    entry.overrides.insert(path, value);
-                                }
-                                None => {
-                                    entry.overrides.remove(&path);
+                    ctx.defer(move |world| {
+                        if let Some(mut drafts) = world
+                            .get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
+                        {
+                            let entry = drafts.entry(doc, model_ref);
+                            for (path, v) in updates {
+                                match v {
+                                    Some(value) => {
+                                        entry.overrides.insert(path, value);
+                                    }
+                                    None => {
+                                        entry.overrides.remove(&path);
+                                    }
                                 }
                             }
                         }
-                    }
+                    });
                 }
             });
     }
@@ -1592,10 +1654,114 @@ fn parse_override(type_name: &str, text: &str) -> Option<lunco_experiments::Para
 struct PlotSeries {
     label: String,
     color: (u8, u8, u8),
-    points: Vec<[f64; 2]>,
+    /// Shared time-value samples, borrowed from [`ExperimentsViewModel`].
+    /// `Arc` so building a frame's series list is pointer-bumps, not a
+    /// re-zip of every run's `times`×`values` columns (CQ-207).
+    points: std::sync::Arc<[[f64; 2]]>,
     /// Stroke pattern that distinguishes runs sharing the same
     /// variable color. `0 = solid, 1 = dashed, 2 = dotted, 3 = dash-dot`.
     style_idx: u8,
+}
+
+/// Change-gated view-model for the experiments plot (CQ-207).
+///
+/// The plot used to **re-zip every run's `times`×`values` columns into a
+/// fresh `Vec<[f64;2]>` every frame** (once to build the series, again at
+/// render), and re-walk the registry to collect the variable catalog —
+/// all per frame, for every visible run × picked variable. None of that
+/// depends on the per-frame UI state (which runs are visible, which vars
+/// are picked, colours); only *which* precomputed series to draw does.
+///
+/// [`populate_experiments_view_model`] builds the shared `Arc<[[f64;2]]>`
+/// point arrays (keyed by run + variable) and the variable catalog once
+/// per registry change; the plot then assembles its per-frame series by
+/// cloning `Arc`s (pointer bumps) and reads the catalog directly.
+#[derive(Resource, Default)]
+pub struct ExperimentsViewModel {
+    /// `(twin, sample-count signature, run count)` the cache was built
+    /// for. The signature grows as runs stream/complete, so a changed
+    /// total re-derives; an unchanged one skips the whole rebuild.
+    built_for: Option<(lunco_experiments::TwinId, u64, u64)>,
+    /// Shared time-value samples per `(run, variable)`.
+    points: std::collections::HashMap<
+        (lunco_experiments::ExperimentId, String),
+        std::sync::Arc<[[f64; 2]]>,
+    >,
+    /// Every variable name across the twin's runs (the picker catalog).
+    all_vars: std::collections::BTreeSet<String>,
+}
+
+/// Producer for [`ExperimentsViewModel`]. Runs in `Update` before the
+/// egui pass; rebuilds only when the active twin's run set or sample
+/// totals change. Exclusive because it resolves the active doc/twin from
+/// several resources.
+pub fn populate_experiments_view_model(world: &mut World) {
+    let clear = |world: &mut World| {
+        let mut vm = world.resource_mut::<ExperimentsViewModel>();
+        if vm.built_for.is_some() {
+            vm.built_for = None;
+            vm.points.clear();
+            vm.all_vars.clear();
+        }
+    };
+
+    let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc(world) else {
+        clear(world);
+        return;
+    };
+    let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
+
+    let (sig, run_count) = {
+        let Some(reg) = world.get_resource::<ExperimentRegistry>() else {
+            clear(world);
+            return;
+        };
+        let runs = reg.list_for_twin(&twin);
+        let sig: u64 = runs
+            .iter()
+            .map(|e| {
+                e.result
+                    .as_ref()
+                    .map(|r| (r.times.len() + r.series.len()) as u64)
+                    .unwrap_or(0)
+            })
+            .sum();
+        (sig, runs.len() as u64)
+    };
+
+    let key = (twin.clone(), sig, run_count);
+    if world.resource::<ExperimentsViewModel>().built_for.as_ref() == Some(&key) {
+        return; // run set + sample totals unchanged — skip the re-zip.
+    }
+
+    let (points, all_vars) = {
+        let reg = world.resource::<ExperimentRegistry>();
+        let mut points: std::collections::HashMap<
+            (lunco_experiments::ExperimentId, String),
+            std::sync::Arc<[[f64; 2]]>,
+        > = std::collections::HashMap::new();
+        let mut all_vars: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+        for exp in reg.list_for_twin(&twin) {
+            let Some(result) = &exp.result else { continue };
+            for (var, values) in &result.series {
+                all_vars.insert(var.clone());
+                let pts: std::sync::Arc<[[f64; 2]]> = result
+                    .times
+                    .iter()
+                    .zip(values.iter())
+                    .map(|(t, y)| [*t, *y])
+                    .collect();
+                points.insert((exp.id, var.clone()), pts);
+            }
+        }
+        (points, all_vars)
+    };
+
+    let mut vm = world.resource_mut::<ExperimentsViewModel>();
+    vm.points = points;
+    vm.all_vars = all_vars;
+    vm.built_for = Some(key);
 }
 
 /// Render the experiments multi-series plot. Picker lives in
@@ -1639,24 +1805,24 @@ fn render_empty_plot_frame(ui: &mut egui::Ui, extras: &[PlotExtraLine]) {
 
 pub fn render_experiments_plot(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
     viz_id: VizId,
 ) -> ExpPlotSummary {
-    render_experiments_plot_inner(ui, world, viz_id, &[])
+    render_experiments_plot_inner(ui, ctx, viz_id, &[])
 }
 
 pub fn render_experiments_plot_with_extras(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
     viz_id: VizId,
     extras: &[PlotExtraLine],
 ) -> ExpPlotSummary {
-    render_experiments_plot_inner(ui, world, viz_id, extras)
+    render_experiments_plot_inner(ui, ctx, viz_id, extras)
 }
 
 fn render_experiments_plot_inner(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
     viz_id: VizId,
     extras: &[PlotExtraLine],
 ) -> ExpPlotSummary {
@@ -1665,12 +1831,15 @@ fn render_experiments_plot_inner(
     // resolved yet (boot, welcome screen, no model open) we still
     // render an empty plot widget plus any live overlays so the
     // Graphs tab never collapses to a blank panel.
-    let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc(world)
+    let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx)
     else {
         // No doc resolved yet — draw just the doc badge. Action
         // buttons (New / Dup / Fit / CSV) live in the Graphs panel's
         // shared header, rendered above this body in every state.
-        let col_muted = world.resource::<lunco_theme::Theme>().tokens.text_subdued;
+        let col_muted = ctx
+            .resource::<lunco_theme::Theme>()
+            .map(|t| t.tokens.text_subdued)
+            .unwrap_or(egui::Color32::from_rgb(140, 140, 160));
         ui.label(
             egui::RichText::new("📈 (no model)  ·  0 vars")
                 .color(col_muted)
@@ -1680,39 +1849,47 @@ fn render_experiments_plot_inner(
         return ExpPlotSummary::default();
     };
     let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
-    let (col_warning, col_accent, col_muted) = {
-        let t = world.resource::<lunco_theme::Theme>();
-        (t.tokens.warning, t.tokens.accent, t.tokens.text_subdued)
-    };
+    let (col_warning, col_accent, col_muted) = ctx
+        .resource::<lunco_theme::Theme>()
+        .map(|t| (t.tokens.warning, t.tokens.accent, t.tokens.text_subdued))
+        .unwrap_or((
+            egui::Color32::from_rgb(240, 180, 0),
+            egui::Color32::from_rgb(90, 150, 240),
+            egui::Color32::from_rgb(140, 140, 160),
+        ));
 
+    // PlotPanelStates is both read AND written across this single frame:
+    // `sync_twin` mutates it up front and the result must be visible to
+    // every read below (visible / picked / scrub / log-Y / auto-show).
+    // `resource_scope` removes it from the world, hands back `&mut states`
+    // plus a still-usable `ctx` (with other resources intact), then
+    // reinserts it — so all PlotPanelStates access goes through `states`
+    // while everything else keeps reading via `ctx`.
+    ctx.resource_scope::<PlotPanelStates, _>(|ctx, states| {
     // Doc switch → archive the previous twin's picks / visibility
     // and restore any prior stash for the new twin, so returning to
     // a tab brings back its plot selections instead of dropping them.
-    if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
-        states.sync_twin(viz_id, &twin);
-    }
+    states.sync_twin(viz_id, &twin);
 
     // Doc badge so the user can tell which model's runs are
     // plotted (this plot inherits the Experiments panel's pin /
     // active-doc resolution; there's no per-plot pin).
-    let doc_label = crate::ui::doc_pin::doc_display_name(world, doc_id);
-    let run_count = world
-        .get_resource::<ExperimentRegistry>()
+    let doc_label = crate::ui::doc_pin::doc_display_name_ctx(ctx, doc_id);
+    let run_count = ctx
+        .resource::<ExperimentRegistry>()
         .map(|r| r.list_for_twin(&twin).len())
         .unwrap_or(0);
 
-    let (visible, picked_vars) = world
-        .get_resource::<PlotPanelStates>()
-        .map(|s| (s.visible(viz_id), s.picked(viz_id)))
-        .unwrap_or_default();
-    let color_by_run = world
-        .get_resource::<PlotPanelStates>()
-        .and_then(|s| s.by_viz.get(&viz_id))
+    let (visible, picked_vars) = (states.visible(viz_id), states.picked(viz_id));
+    let color_by_run = states
+        .by_viz
+        .get(&viz_id)
         .map(|st| st.color_by_run)
         .unwrap_or(false);
 
     // Build var -> unit map from the active doc index.
-    let units: std::collections::HashMap<String, String> = active_doc_units(world, viz_id);
+    let units: std::collections::HashMap<String, String> =
+        active_doc_units(ctx, &picked_vars);
 
     let mut series: Vec<PlotSeries> = Vec::new();
     let mut total_runs = 0usize;
@@ -1727,78 +1904,67 @@ fn render_experiments_plot_inner(
         sorted.sort();
         sorted.into_iter().enumerate().map(|(i, s)| (s.clone(), i)).collect()
     };
-    if let Some(reg) = world.get_resource::<ExperimentRegistry>() {
+    let exp_vm = ctx.resource::<ExperimentsViewModel>();
+    if let Some(reg) = ctx.resource::<ExperimentRegistry>() {
         for exp in reg.list_for_twin(&twin) {
             total_runs += 1;
-            let Some(result) = &exp.result else { continue };
+            if exp.result.is_none() {
+                continue;
+            }
             if !visible.contains(&exp.id) {
                 continue;
             }
             visible_runs += 1;
             for var in &picked_vars {
-                if let Some(values) = result.series.get(var) {
-                    let unit = units.get(var).cloned();
-                    // Track shared-unit-across-series for the y-axis
-                    // label; flip to None on first mismatch.
-                    if !shared_unit_init {
-                        shared_unit = unit.clone();
-                        shared_unit_init = true;
-                    } else if shared_unit != unit {
-                        shared_unit = None;
-                    }
-                    // Truncate long dotted paths to keep the legend
-                    // readable when nested components are picked.
-                    // Keep the leaf + previous segment; collapse the
-                    // rest as `…`.
-                    let var_short = {
-                        let parts: Vec<&str> = var.split('.').collect();
-                        if parts.len() <= 2 {
-                            var.clone()
-                        } else {
-                            format!("…{}.{}", parts[parts.len() - 2], parts[parts.len() - 1])
-                        }
-                    };
-                    let label = match &unit {
-                        Some(u) if !u.is_empty() => {
-                            format!("{} · {} [{}]", exp.name, var_short, u)
-                        }
-                        _ => format!("{} · {}", exp.name, var_short),
-                    };
-                    let pts: Vec<[f64; 2]> = result
-                        .times
-                        .iter()
-                        .zip(values.iter())
-                        .map(|(t, y)| [*t, *y])
-                        .collect();
-                    // Two encodings, user-selectable via `color_by_run`:
-                    //   default  → colour = variable, style = run.
-                    //     `airframe.altitude` is always blue; Run 1 =
-                    //     solid, Run 2 = dashed… Tracks one variable
-                    //     across sweeps without legend hopping.
-                    //   by-run   → colour = run, style = variable.
-                    //     Each run gets a distinct colour so a single
-                    //     variable across many runs is legible (the
-                    //     dash-only distinction breaks down past ~3).
-                    let v_idx = var_idx.get(var).copied().unwrap_or(0) as u8;
-                    let (color, style_idx) = if color_by_run {
-                        (palette_color(exp.color_hint), v_idx % 4)
-                    } else {
-                        (palette_color(v_idx), exp.color_hint % 4)
-                    };
-                    series.push(PlotSeries {
-                        label,
-                        color,
-                        points: pts,
-                        style_idx,
-                    });
+                // Shared samples are precomputed in `ExperimentsViewModel`
+                // (CQ-207) — a pointer-bump clone, not a per-frame re-zip.
+                // Absence means this run has no data for `var`.
+                let Some(pts) =
+                    exp_vm.and_then(|vm| vm.points.get(&(exp.id, var.clone())).cloned())
+                else {
+                    continue;
+                };
+                let unit = units.get(var).cloned();
+                // Track shared-unit-across-series for the y-axis
+                // label; flip to None on first mismatch.
+                if !shared_unit_init {
+                    shared_unit = unit.clone();
+                    shared_unit_init = true;
+                } else if shared_unit != unit {
+                    shared_unit = None;
                 }
+                // Truncate long dotted paths to keep the legend
+                // readable when nested components are picked.
+                // Keep the leaf + previous segment; collapse the rest as `…`.
+                let var_short = {
+                    let parts: Vec<&str> = var.split('.').collect();
+                    if parts.len() <= 2 {
+                        var.clone()
+                    } else {
+                        format!("…{}.{}", parts[parts.len() - 2], parts[parts.len() - 1])
+                    }
+                };
+                let label = match &unit {
+                    Some(u) if !u.is_empty() => {
+                        format!("{} · {} [{}]", exp.name, var_short, u)
+                    }
+                    _ => format!("{} · {}", exp.name, var_short),
+                };
+                // Two encodings, user-selectable via `color_by_run`:
+                //   default  → colour = variable, style = run.
+                //   by-run   → colour = run, style = variable.
+                let v_idx = var_idx.get(var).copied().unwrap_or(0) as u8;
+                let (color, style_idx) = if color_by_run {
+                    (palette_color(exp.color_hint), v_idx % 4)
+                } else {
+                    (palette_color(v_idx), exp.color_hint % 4)
+                };
+                series.push(PlotSeries { label, color, points: pts, style_idx });
             }
         }
     }
 
-    let scrub_time = world
-        .get_resource::<PlotPanelStates>()
-        .and_then(|s| s.scrub(viz_id));
+    let scrub_time = states.scrub(viz_id);
 
     let mut new_scrub: Option<Option<f64>> = None;
 
@@ -1807,16 +1973,14 @@ fn render_experiments_plot_inner(
     // need to hunt the Telemetry panel just to swap out a series.
     // Renders even when nothing is plotted yet so a fresh run lands
     // with an obvious "tick a chip" affordance.
-    let mut all_vars: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    if let Some(reg) = world.get_resource::<ExperimentRegistry>() {
-        for exp in reg.list_for_twin(&twin) {
-            if let Some(r) = &exp.result {
-                for k in r.series.keys() {
-                    all_vars.insert(k.clone());
-                }
-            }
-        }
-    }
+    // The variable catalog is precomputed in `ExperimentsViewModel`
+    // (CQ-207) — read it instead of re-walking every run's series keys
+    // each frame. Cloned (a small set of names) so the world is free for
+    // the picker's mutations below.
+    let all_vars: std::collections::BTreeSet<String> = ctx
+        .resource::<ExperimentsViewModel>()
+        .map(|vm| vm.all_vars.clone())
+        .unwrap_or_default();
     // Variable picker — Dymola / OMEdit-style component tree.
     // Variables group by their first dotted segment (the component
     // name). Each group is a CollapsingHeader; leaves are
@@ -1838,8 +2002,8 @@ fn render_experiments_plot_inner(
     // Completed runs for this twin: (id, name, visible?, colour_hint).
     // Drives the "▾ Runs" dropdown so the user picks overlays right on
     // the graph instead of leaving for the Experiments table.
-    let runs_info: Vec<(ExperimentId, String, bool, u8)> = world
-        .get_resource::<ExperimentRegistry>()
+    let runs_info: Vec<(ExperimentId, String, bool, u8)> = ctx
+        .resource::<ExperimentRegistry>()
         .map(|reg| {
             reg.list_for_twin(&twin)
                 .iter()
@@ -1852,8 +2016,8 @@ fn render_experiments_plot_inner(
     // resource (read into a local for the popup, written back after).
     // A blank filter shows the whole tree; a non-empty one force-opens
     // every surviving group so matches are visible without a click.
-    let mut var_filter = world
-        .get_resource::<ExperimentVisibility>()
+    let mut var_filter = ctx
+        .resource::<ExperimentVisibility>()
         .map(|v| v.var_filter.clone())
         .unwrap_or_default();
     // Header — doc badge + var picker chips. Plot action buttons
@@ -1873,9 +2037,9 @@ fn render_experiments_plot_inner(
     // Current log-Y state for the inline toggle button on this row.
     // Reflects the stored value; the auto-default (mixed units) is
     // persisted further down, so it shows pressed from the next frame.
-    let log_y_now = world
-        .get_resource::<PlotPanelStates>()
-        .and_then(|s| s.by_viz.get(&viz_id))
+    let log_y_now = states
+        .by_viz
+        .get(&viz_id)
         .map(|st| st.log_y)
         .unwrap_or(false);
     let mut log_y_toggle: Option<bool> = None;
@@ -2044,7 +2208,7 @@ fn render_experiments_plot_inner(
             // Action buttons (New / Dup / Fit / CSV) land rightmost, so the
             // whole toolbar — pickers on the left, actions + log-Y on the
             // right — sits on this single line.
-            crate::ui::panels::graphs::plot_action_buttons(ui, world, viz_id);
+            crate::ui::panels::graphs::plot_action_buttons(ui, ctx, viz_id);
             // log-Y toggle, styled as a button (framed even when off) and
             // grouped on the same row as the Variables/Runs pickers.
             if ui
@@ -2084,34 +2248,35 @@ fn render_experiments_plot_inner(
         });
     });
     if let Some(v) = toggle_var {
-        if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
-            states.toggle_var(viz_id, v);
-        }
+        states.toggle_var(viz_id, v);
     }
     if let Some(v) = log_y_toggle {
-        if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
-            let e = states.entry(viz_id);
-            e.log_y = v;
-            e.log_y_user_set = true;
-        }
+        let e = states.entry(viz_id);
+        e.log_y = v;
+        e.log_y_user_set = true;
     }
     // Persist the popup's filter text back onto the shared resource so
-    // it survives across frames (the menu rebuilds every frame).
-    if let Some(mut vis) = world.get_resource_mut::<ExperimentVisibility>() {
-        if vis.var_filter != var_filter {
-            vis.var_filter = var_filter;
+    // it survives across frames (the menu rebuilds every frame). The
+    // write lands after paint via defer.
+    {
+        let current = ctx
+            .resource::<ExperimentVisibility>()
+            .map(|v| v.var_filter.clone())
+            .unwrap_or_default();
+        if current != var_filter {
+            ctx.defer(move |world| {
+                if let Some(mut vis) = world.get_resource_mut::<ExperimentVisibility>() {
+                    vis.var_filter = var_filter;
+                }
+            });
         }
     }
     // Apply deferred run-comparison actions from the Runs dropdown.
-    if toggle_run.is_some() || set_color_by_run.is_some() {
-        if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
-            if let Some(id) = toggle_run {
-                states.toggle_visible(viz_id, id);
-            }
-            if let Some(v) = set_color_by_run {
-                states.entry(viz_id).color_by_run = v;
-            }
-        }
+    if let Some(id) = toggle_run {
+        states.toggle_visible(viz_id, id);
+    }
+    if let Some(v) = set_color_by_run {
+        states.entry(viz_id).color_by_run = v;
     }
 
     // Auto-plot — every completed run becomes visible exactly once,
@@ -2122,13 +2287,13 @@ fn render_experiments_plot_inner(
     // just when the plot is empty.
     let _ = run_count;
     let pending_auto: Vec<ExperimentId> = {
-        let already = world
-            .get_resource::<PlotPanelStates>()
-            .and_then(|s| s.by_viz.get(&viz_id))
+        let already = states
+            .by_viz
+            .get(&viz_id)
             .map(|st| st.auto_shown.clone())
             .unwrap_or_default();
-        world
-            .get_resource::<ExperimentRegistry>()
+        ctx
+            .resource::<ExperimentRegistry>()
             .map(|reg| {
                 reg.list_for_twin(&twin)
                     .iter()
@@ -2142,11 +2307,19 @@ fn render_experiments_plot_inner(
     // Drain any one-shot Fit request for this plot. The Graphs
     // panel's shared header queues it via `VizFitRequests`; the
     // LinePlot body drains the same resource, so Fit behaves
-    // identically in both plot modes.
-    let fit_requested = world
-        .get_resource_mut::<lunco_viz::VizFitRequests>()
-        .map(|mut r| r.take(viz_id))
+    // identically in both plot modes. Read-only peek during paint,
+    // then clear via a deferred mutation.
+    let fit_requested = ctx
+        .resource::<lunco_viz::VizFitRequests>()
+        .map(|r| r.is_pending(viz_id))
         .unwrap_or(false);
+    if fit_requested {
+        ctx.defer(move |world| {
+            if let Some(mut r) = world.get_resource_mut::<lunco_viz::VizFitRequests>() {
+                r.take(viz_id);
+            }
+        });
+    }
 
     // Auto-default to log-Y when the plot mixes units (a strong proxy
     // for wide magnitude spread — e.g. E_night_kWh ~1e6 next to Isp=360,
@@ -2157,18 +2330,16 @@ fn render_experiments_plot_inner(
         shared_unit.is_none() && !series.is_empty() && picked_vars.len() > 1;
     let all_positive = !series.is_empty()
         && series.iter().all(|s| s.points.iter().all(|p| p[1] > 0.0));
-    let (stored_log_y, log_y_user_set) = world
-        .get_resource::<PlotPanelStates>()
-        .and_then(|s| s.by_viz.get(&viz_id))
+    let (stored_log_y, log_y_user_set) = states
+        .by_viz
+        .get(&viz_id)
         .map(|st| (st.log_y, st.log_y_user_set))
         .unwrap_or((false, false));
     let auto_log = mixed_units && all_positive && !log_y_user_set;
     // Persist the auto choice so the toggle below reflects it and the
     // setting survives across frames / tab switches.
     if auto_log && !stored_log_y {
-        if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
-            states.entry(viz_id).log_y = true;
-        }
+        states.entry(viz_id).log_y = true;
     }
     let log_y = stored_log_y || auto_log;
     // The log-Y toggle UI now lives in the shared Graphs header
@@ -2216,7 +2387,9 @@ fn render_experiments_plot_inner(
                 let pts = if log_y {
                     lunco_viz::plot_fmt::log_y_points(&s.points)
                 } else {
-                    s.points.clone()
+                    // egui_plot wants an owned `Vec`; copy the shared
+                    // samples out once (the per-frame re-zip is gone).
+                    s.points.to_vec()
                 };
                 let line = Line::new(s.label.clone(), PlotPoints::from(pts))
                     .color(egui::Color32::from_rgb(r, g, b))
@@ -2263,16 +2436,14 @@ fn render_experiments_plot_inner(
     }
 
     if let Some(s) = new_scrub {
-        if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
-            states.set_scrub(viz_id, s);
-        }
+        states.set_scrub(viz_id, s);
     }
     if !pending_auto.is_empty() {
         // Auto-pick top-3 dynamic vars (by series variance) from the
         // most recently completed run, but only if the user hasn't
         // picked anything yet — mirrors the first-completion behavior.
-        let latest_result = world
-            .get_resource::<ExperimentRegistry>()
+        let latest_result = ctx
+            .resource::<ExperimentRegistry>()
             .and_then(|reg| {
                 reg.list_for_twin(&twin)
                     .into_iter()
@@ -2280,39 +2451,37 @@ fn render_experiments_plot_inner(
                     .find(|e| e.result.is_some())
                     .and_then(|e| e.result.clone())
             });
-        if let Some(mut states) = world.get_resource_mut::<PlotPanelStates>() {
-            let entry = states.entry(viz_id);
-            for id in &pending_auto {
-                entry.visible_experiments.insert(*id);
-                entry.auto_shown.insert(*id);
-            }
-            if !entry.auto_show_attempted && entry.picked_vars.is_empty() {
-                if let Some(result) = &latest_result {
-                    let mut by_var: Vec<(&String, f64)> = result
-                        .series
-                        .iter()
-                        .map(|(k, v)| {
-                            let n = v.len().max(1) as f64;
-                            let mean = v.iter().copied().sum::<f64>() / n;
-                            let var = v
-                                .iter()
-                                .map(|x| (x - mean) * (x - mean))
-                                .sum::<f64>()
-                                / n;
-                            (k, var)
-                        })
-                        .filter(|(_, v)| v.is_finite() && *v > 1e-12)
-                        .collect();
-                    by_var.sort_by(|a, b| {
-                        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                    for (k, _) in by_var.into_iter().take(3) {
-                        entry.picked_vars.insert(k.clone());
-                    }
+        let entry = states.entry(viz_id);
+        for id in &pending_auto {
+            entry.visible_experiments.insert(*id);
+            entry.auto_shown.insert(*id);
+        }
+        if !entry.auto_show_attempted && entry.picked_vars.is_empty() {
+            if let Some(result) = &latest_result {
+                let mut by_var: Vec<(&String, f64)> = result
+                    .series
+                    .iter()
+                    .map(|(k, v)| {
+                        let n = v.len().max(1) as f64;
+                        let mean = v.iter().copied().sum::<f64>() / n;
+                        let var = v
+                            .iter()
+                            .map(|x| (x - mean) * (x - mean))
+                            .sum::<f64>()
+                            / n;
+                        (k, var)
+                    })
+                    .filter(|(_, v)| v.is_finite() && *v > 1e-12)
+                    .collect();
+                by_var.sort_by(|a, b| {
+                    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                for (k, _) in by_var.into_iter().take(3) {
+                    entry.picked_vars.insert(k.clone());
                 }
             }
-            entry.auto_show_attempted = true;
         }
+        entry.auto_show_attempted = true;
     }
     ExpPlotSummary {
         total_runs,
@@ -2320,6 +2489,8 @@ fn render_experiments_plot_inner(
         series_drawn: series.len(),
         picked_vars: picked_vars.len(),
     }
+    })
+    .unwrap_or_default()
 }
 
 /// Write a completed experiment's full trajectory to a user-picked
@@ -2479,33 +2650,27 @@ fn load_run_into_draft(world: &mut World, id: ExperimentId) {
 /// collisions across classes — same trade-off the rest of the UI
 /// already makes.
 fn active_doc_units(
-    world: &World,
-    viz_id: VizId,
+    ctx: &lunco_workbench::PanelCtx,
+    picked: &std::collections::BTreeSet<String>,
 ) -> std::collections::HashMap<String, String> {
     let mut out: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
-    let Some(doc) = world
-        .get_resource::<lunco_workspace::WorkspaceResource>()
+    let Some(doc) = ctx
+        .resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document)
     else {
         return out;
     };
-    let Some(registry) = world.get_resource::<crate::state::ModelicaDocumentRegistry>()
+    let Some(registry) = ctx.resource::<crate::state::ModelicaDocumentRegistry>()
     else {
         return out;
     };
     let Some(host) = registry.host(doc) else {
         return out;
     };
-    let Some(picked) = world
-        .get_resource::<PlotPanelStates>()
-        .map(|s| s.picked(viz_id))
-    else {
-        return out;
-    };
     let document = host.document();
     let index = document.index();
-    for var in &picked {
+    for var in picked {
         if let Some(entry) = index.find_component_by_leaf(var) {
             if let Some(unit) = entry.modifications.get("unit") {
                 if !unit.is_empty() {
@@ -2528,57 +2693,32 @@ pub struct ExpPlotSummary {
     pub picked_vars: usize,
 }
 
-/// Compute an [`ExpPlotSummary`] without rendering. Lets the Graphs
-/// panel show counts in its top header row before drawing the plot.
-pub fn experiments_plot_summary(world: &mut World, viz_id: VizId) -> ExpPlotSummary {
-    let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc(world)
-    else {
-        return ExpPlotSummary::default();
+/// Cheap predicate: does the experiments-resolved twin have any runs
+/// (a recorded experiment or a live interactive model)?
+///
+/// The Graphs panel only needs "are there runs?" to choose between the
+/// experiments body and the pure-live LinePlot — it doesn't need the
+/// full [`ExpPlotSummary`] (which re-walked the registry counting
+/// per-variable series). The experiments body recomputes and returns its
+/// own [`ExpPlotSummary`] anyway, so the standalone summary walk was pure
+/// duplicate work (CQ-207). This is the equivalent of the old
+/// `total_runs > 0`: `live_exists || any registry run for the twin`.
+pub fn has_experiment_runs(ctx: &mut PanelCtx) -> bool {
+    let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx) else {
+        return false;
     };
-    let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
-    let (visible, picked_vars) = world
-        .get_resource::<PlotPanelStates>()
-        .map(|s| (s.visible(viz_id), s.picked(viz_id)))
-        .unwrap_or_default();
-    let mut total_runs = 0usize;
-    let mut visible_runs = 0usize;
-    let mut series_drawn = 0usize;
-
-    // Add "Interactive Live" run to counters if it exists.
-    let live_exists = world
-        .query::<&crate::worker::ModelicaModel>()
-        .iter(world)
-        .any(|m| m.document == doc_id);
+    // Live interactive sim → the doc has a compiled simulator entity.
+    // Resolve it through the registry (O(1)) rather than scanning every
+    // `ModelicaModel` entity (WP-8).
+    let live_exists = crate::state::simulator_for_ctx(ctx, doc_id).is_some();
     if live_exists {
-        total_runs += 1;
-        if visible.contains(&ExperimentId::live()) {
-            visible_runs += 1;
-            // Note: we don't count individual live series here as
-            // they are in `extras`, not the registry.
-        }
+        return true;
     }
-
-    if let Some(reg) = world.get_resource::<ExperimentRegistry>() {
-        for exp in reg.list_for_twin(&twin) {
-            total_runs += 1;
-            let Some(result) = &exp.result else { continue };
-            if !visible.contains(&exp.id) {
-                continue;
-            }
-            visible_runs += 1;
-            for var in &picked_vars {
-                if result.series.contains_key(var) {
-                    series_drawn += 1;
-                }
-            }
-        }
-    }
-    ExpPlotSummary {
-        total_runs,
-        visible_runs,
-        series_drawn,
-        picked_vars: picked_vars.len(),
-    }
+    let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
+    ctx
+        .resource::<ExperimentRegistry>()
+        .map(|reg| !reg.list_for_twin(&twin).is_empty())
+        .unwrap_or(false)
 }
 
 /// Collect every variable name across all completed experiments for
@@ -2601,6 +2741,25 @@ pub fn all_experiment_variables_for_doc(
     let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
     if let Some(reg) = world.get_resource::<ExperimentRegistry>() {
+        for exp in reg.list_for_twin(&twin) {
+            if let Some(result) = &exp.result {
+                for k in result.series.keys() {
+                    out.insert(k.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `PanelCtx` sibling of [`all_experiment_variables_for_doc`].
+pub fn all_experiment_variables_for_doc_ctx(
+    ctx: &lunco_workbench::PanelCtx,
+    doc_id: DocumentId,
+) -> std::collections::BTreeSet<String> {
+    let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
+    if let Some(reg) = ctx.resource::<ExperimentRegistry>() {
         for exp in reg.list_for_twin(&twin) {
             if let Some(result) = &exp.result {
                 for k in result.series.keys() {

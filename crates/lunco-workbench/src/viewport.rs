@@ -57,7 +57,7 @@ use bevy::prelude::*;
 use bevy::camera::{ClearColorConfig, RenderTarget, Viewport};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
 
-use crate::{Panel, PanelId, PanelSlot};
+use crate::{Panel, PanelCtx, PanelId, PanelSlot};
 
 /// Stable id for [`ViewportPanel`]. Use this in `Workspace::apply` to
 /// place the viewport in a slot without instantiating the panel.
@@ -140,6 +140,17 @@ impl PanelRects {
     /// chrome (also 1 px max) is harmless because egui paints over it
     /// at order > 3D-camera.
     pub fn record_from_ui(&mut self, panel: PanelId, ui: &egui::Ui) {
+        let rect = Self::panel_rect_from_ui(ui);
+        self.record(panel, rect);
+    }
+
+    /// Compute a [`PanelRect`] (physical pixels) from an egui `Ui`,
+    /// without touching the world. Lets a panel measure its rect during
+    /// the read-only paint and stash it via [`record`](Self::record)
+    /// inside a `PanelCtx::defer` closure (no `&mut World` in render).
+    /// Uses the same floor-origin / ceil-far-edge rounding as the old
+    /// inline `record_from_ui` body.
+    pub fn panel_rect_from_ui(ui: &egui::Ui) -> PanelRect {
         let rect = ui.available_rect_before_wrap();
         let ppp = ui.ctx().pixels_per_point();
         let origin = UVec2::new(
@@ -154,7 +165,14 @@ impl PanelRects {
             end.x.saturating_sub(origin.x).max(1),
             end.y.saturating_sub(origin.y).max(1),
         );
-        self.rects.insert(panel, PanelRect { origin, size });
+        PanelRect { origin, size }
+    }
+
+    /// Record a precomputed panel rect. Pairs with
+    /// [`panel_rect_from_ui`](Self::panel_rect_from_ui) for the
+    /// measure-then-defer pattern.
+    pub fn record(&mut self, panel: PanelId, rect: PanelRect) {
+        self.rects.insert(panel, rect);
     }
 
     /// Look up a panel's most-recently-recorded rect.
@@ -253,14 +271,20 @@ impl Panel for ViewportPanel {
         true
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // Record the live viewport rect so `apply_workbench_viewport` can confine
         // the 3D camera to it in DockArea mode. Scene-vs-chrome picking is handled
         // by bevy_picking (egui occlusion via bevy_egui's picking backend), so
         // there's no pointer gate to compute here anymore.
-        if let Some(mut rects) = world.get_resource_mut::<PanelRects>() {
-            rects.record_from_ui(VIEWPORT_PANEL_ID, ui);
-        }
+        //
+        // Measure the rect now (needs `ui`), then write it into `PanelRects`
+        // after the paint via `defer` — render has no `&mut World`.
+        let rect = PanelRects::panel_rect_from_ui(ui);
+        ctx.defer(move |world| {
+            if let Some(mut rects) = world.get_resource_mut::<PanelRects>() {
+                rects.record(VIEWPORT_PANEL_ID, rect);
+            }
+        });
         // Reserve the panel's space so egui_dock's layout accounts for
         // it; no widgets are drawn — the 3D camera paints here.
         ui.allocate_space(ui.available_size());

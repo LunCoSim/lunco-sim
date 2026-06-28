@@ -1,27 +1,27 @@
 //! Projection task management and polling.
 
-use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_canvas::Scene;
 use lunco_doc::Document;
+use lunco_workbench::PanelCtx;
 use crate::state::ModelicaDocumentRegistry;
 use crate::model_tabs::ModelTabs;
-use super::super::{CanvasDiagramState, DiagramProjectionLimits, ProjectionTask, active_doc_from_world, decorations, render_target};
+use super::super::{CanvasDiagramState, DiagramProjectionLimits, ProjectionTask, active_doc_from_world_ctx, decorations, render_target_ctx};
 use super::super::projection::{project_scene, projection_relevant_source_hash, recover_edges_from_ast};
 
 pub(crate) fn poll_and_swap_projection(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
+    state: &mut CanvasDiagramState,
     render_tab_id: Option<crate::model_tabs_types::TabId>,
 ) {
-    let active_doc = active_doc_from_world(world);
+    let active_doc = active_doc_from_world_ctx(ctx);
     let current_gen_for_deadline = active_doc.and_then(|d| {
-        world.get_resource::<ModelicaDocumentRegistry>()
+        ctx.resource::<ModelicaDocumentRegistry>()
             .and_then(|r| r.host(d))
             .map(|h| h.document().generation())
     });
-    
-    let mut state = world.resource_mut::<CanvasDiagramState>();
+
     let docstate = match (render_tab_id, active_doc) { (Some(t), Some(d)) => state.get_mut_for_tab(t, d), _ => state.get_mut(active_doc) };
     let is_initial_projection = docstate.last_seen_gen == 0;
 
@@ -124,16 +124,16 @@ pub(crate) fn poll_and_swap_projection(
 
 pub(crate) fn trigger_projection_if_needed(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
+    state: &mut CanvasDiagramState,
     render_tab_id: Option<crate::model_tabs_types::TabId>,
 ) {
-    let Some(doc_id) = active_doc_from_world(world) else { return; };
-    let gen = world.resource::<ModelicaDocumentRegistry>().host(doc_id).map(|h| h.document().generation()).unwrap_or(0);
-    
-    let current_source = world.resource::<ModelicaDocumentRegistry>().host(doc_id).map(|h| h.document().source_arc()).unwrap_or_else(|| std::sync::Arc::<str>::from(""));
+    let Some(doc_id) = active_doc_from_world_ctx(ctx) else { return; };
+    let gen = ctx.resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(doc_id)).map(|h| h.document().generation()).unwrap_or(0);
+
+    let current_source = ctx.resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(doc_id)).map(|h| h.document().source_arc()).unwrap_or_else(|| std::sync::Arc::<str>::from(""));
 
     let needs_project = {
-        let state = world.resource::<CanvasDiagramState>();
         let docstate = match render_tab_id { Some(t) => state.get_for_tab(t), None => state.get(Some(doc_id)) };
         // Don't respawn while a projection is already in flight —
         // otherwise every frame cancels and re-spawns the task,
@@ -141,19 +141,19 @@ pub(crate) fn trigger_projection_if_needed(
         let task_in_flight = docstate.projection_task.is_some();
         let first_render = !match render_tab_id { Some(t) => state.has_entry_for_tab(t), None => state.has_entry(doc_id) };
         let gen_advanced = gen != docstate.last_seen_gen && gen > docstate.canvas_acked_gen;
-        let live_target = render_target(world)
+        let live_target = render_target_ctx(ctx)
             .filter(|(d, _)| *d == doc_id)
             .and_then(|(_, drilled)| drilled)
             .or_else(|| {
-                world
-                    .get_resource::<ModelTabs>()
+                ctx
+                    .resource::<ModelTabs>()
                     .and_then(|t| t.drilled_class_for_doc(doc_id))
             })
             .or_else(|| {
-                crate::sim_default::default_simulation_class(world, doc_id)
+                crate::sim_default::default_simulation_class_ctx(ctx, doc_id)
             });
         let target_changed = live_target != docstate.last_seen_target;
-        let ast_stale = world.resource::<ModelicaDocumentRegistry>().host(doc_id).map(|h| h.document().ast_is_stale()).unwrap_or(false);
+        let ast_stale = ctx.resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(doc_id)).map(|h| h.document().ast_is_stale()).unwrap_or(false);
         if ast_stale { ui.ctx().request_repaint(); }
         // One-shot re-projection requested when MSL became resident — forces a
         // re-project so standard-library icons resolve, independent of gen/target.
@@ -166,10 +166,9 @@ pub(crate) fn trigger_projection_if_needed(
     };
 
     if needs_project {
-        spawn_projection_task(world, doc_id, gen, render_tab_id);
+        spawn_projection_task(ctx, state, doc_id, gen, render_tab_id);
     } else {
         let new_hash = projection_relevant_source_hash(&*current_source);
-        let mut state = world.resource_mut::<CanvasDiagramState>();
         let docstate = match render_tab_id { Some(t) => state.get_mut_for_tab(t, doc_id), None => state.get_mut(Some(doc_id)) };
         if gen != docstate.last_seen_gen && gen > docstate.canvas_acked_gen && new_hash == docstate.last_seen_source_hash {
              docstate.last_seen_gen = gen;
@@ -177,9 +176,9 @@ pub(crate) fn trigger_projection_if_needed(
     }
 }
 
-fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: u64, render_tab_id: Option<crate::model_tabs_types::TabId>) {
+fn spawn_projection_task(ctx: &mut PanelCtx, state: &mut CanvasDiagramState, doc_id: lunco_doc::DocumentId, gen: u64, render_tab_id: Option<crate::model_tabs_types::TabId>) {
     let resolved = {
-        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let registry = match ctx.resource::<ModelicaDocumentRegistry>() { Some(r) => r, None => return };
         registry
             .host(doc_id)
             // Reject a STALE AST. A freshly-opened doc starts life with a
@@ -211,7 +210,6 @@ fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: 
             // gated on gen/target change. Release the handoff so the
             // lifecycle falls through to Empty and re-projects once the AST
             // lands (the parse bumps the document generation → gen_advanced).
-            let mut state = world.resource_mut::<CanvasDiagramState>();
             state.complete_projection_handoff(doc_id);
             // Consume the one-shot MSL-ready reprojection request too. If we
             // leave `force_reproject` set, `trigger_projection_if_needed`
@@ -228,30 +226,31 @@ fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: 
             return;
         }
     };
-    let (max_nodes, max_duration) = world.get_resource::<DiagramProjectionLimits>().map(|l| (l.max_nodes, l.max_duration)).unwrap_or((crate::ui::panels::canvas_projection::DEFAULT_MAX_DIAGRAM_NODES, std::time::Duration::from_secs(60)));
-    let target_class = render_target(world)
+    let (max_nodes, max_duration) = ctx.resource::<DiagramProjectionLimits>().map(|l| (l.max_nodes, l.max_duration)).unwrap_or((crate::ui::panels::canvas_projection::DEFAULT_MAX_DIAGRAM_NODES, std::time::Duration::from_secs(60)));
+    let target_class = render_target_ctx(ctx)
         .filter(|(d, _)| *d == doc_id)
         .and_then(|(_, drilled)| drilled)
         .or_else(|| {
-            world
-                .get_resource::<ModelTabs>()
+            ctx
+                .resource::<ModelTabs>()
                 .and_then(|t| t.drilled_class_for_doc(doc_id))
         })
         .or_else(|| {
-            crate::sim_default::default_simulation_class(world, doc_id)
+            crate::sim_default::default_simulation_class_ctx(ctx, doc_id)
         });
-    let layout = world.get_resource::<crate::ui::panels::canvas_projection::DiagramAutoLayoutSettings>().cloned().unwrap_or_default();
-    
-    let mut state = world.resource_mut::<CanvasDiagramState>();
-    let docstate = match render_tab_id { Some(t) => state.get_mut_for_tab(t, doc_id), None => state.get_mut(Some(doc_id)) };
-    if docstate.last_seen_target != target_class { docstate.last_seen_gen = 0; }
-    
-    let bg_handle = docstate.background_diagram.clone();
-    let diag = decorations::diagram_annotation_for_target(ast_arc.as_ref(), target_class.as_deref());
-    if let Ok(mut guard) = bg_handle.write() { *guard = diag; }
-    
-    if let Some(t) = docstate.projection_task.as_ref() { if t.gen_at_spawn != gen { t.cancel.store(true, std::sync::atomic::Ordering::Relaxed); } }
-    docstate.projection_task = None;
+    let layout = ctx.resource::<crate::ui::panels::canvas_projection::DiagramAutoLayoutSettings>().cloned().unwrap_or_default();
+
+    {
+        let docstate = match render_tab_id { Some(t) => state.get_mut_for_tab(t, doc_id), None => state.get_mut(Some(doc_id)) };
+        if docstate.last_seen_target != target_class { docstate.last_seen_gen = 0; }
+
+        let bg_handle = docstate.background_diagram.clone();
+        let diag = decorations::diagram_annotation_for_target(ast_arc.as_ref(), target_class.as_deref());
+        if let Ok(mut guard) = bg_handle.write() { *guard = diag; }
+
+        if let Some(t) = docstate.projection_task.as_ref() { if t.gen_at_spawn != gen { t.cancel.store(true, std::sync::atomic::Ordering::Relaxed); } }
+        docstate.projection_task = None;
+    }
 
     let spawned_at = web_time::Instant::now();
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -260,15 +259,13 @@ fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: 
     let source_hash = projection_relevant_source_hash(&*source);
     let label = match &target_class { Some(t) => format!("Projecting {t}"), None => "Projecting…".to_string() };
 
-    // Release the `CanvasDiagramState` borrow before grabbing the bus —
-    // they are disjoint resources, but Bevy won't let us hold both
-    // simultaneously through `World`.
-    drop(state);
-
-    let task = {
-        let mut bus = world.resource_mut::<lunco_workbench::status_bus::StatusBus>();
+    // Grab `&mut StatusBus` via a nested `resource_scope` of a
+    // DIFFERENT resource (CanvasDiagramState is already scoped out at
+    // the panel level; we hold the threaded `state` directly). The bus
+    // and the canvas state are disjoint, so this is safe.
+    let task = ctx.resource_scope::<lunco_workbench::status_bus::StatusBus, _>(|_ctx, bus| {
         lunco_workbench::tracked_task::spawn_tracked_cancellable(
-            &mut bus,
+            bus,
             lunco_workbench::status_bus::BusyScope::Document(doc_id.0),
             "projection",
             label,
@@ -286,14 +283,14 @@ fn spawn_projection_task(world: &mut World, doc_id: lunco_doc::DocumentId, gen: 
                 scene
             },
         )
-    };
+    });
+    let Some(task) = task else { return };
 
     // Now that the "projection" entry is on the bus, complete any
     // parse→project handoff: drop the pending handle the driver
     // stashed when it resolved the parse. Bus stays continuously
     // busy for `Document(doc_id)` across the boundary because the
     // new entry was inserted before this drop fires.
-    let mut state = world.resource_mut::<CanvasDiagramState>();
     state.complete_projection_handoff(doc_id);
     let docstate = match render_tab_id { Some(t) => state.get_mut_for_tab(t, doc_id), None => state.get_mut(Some(doc_id)) };
 

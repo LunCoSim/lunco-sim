@@ -66,6 +66,53 @@ pub fn default_simulation_class(world: &World, doc: DocumentId) -> Option<String
     crate::sim_target::default_class(drilled.as_deref(), &candidates)
 }
 
+/// `PanelCtx` sibling of [`drilled_class_for_doc`] — same precedence,
+/// reading resources through the capability-narrowed panel context
+/// (`ctx.resource`) so ported panels can resolve the drilled class
+/// during paint without `&World`.
+#[cfg(feature = "ui")]
+pub fn drilled_class_for_doc_ctx(
+    ctx: &lunco_workbench::PanelCtx,
+    doc: DocumentId,
+) -> Option<String> {
+    if let Some(tc) = ctx.resource::<TabRenderContext>() {
+        if let Some(tab_id) = tc.tab_id {
+            if let Some(tabs) = ctx.resource::<ModelTabs>() {
+                if let Some(state) = tabs.get(tab_id) {
+                    if state.doc == doc {
+                        return state.drilled_class.clone();
+                    }
+                }
+            }
+        }
+    }
+    ctx.resource::<ModelTabs>()
+        .and_then(|t| t.drilled_class_for_doc(doc))
+}
+
+/// `PanelCtx` sibling of [`default_simulation_class`] — same precedence,
+/// reading resources through `ctx.resource`.
+#[cfg(feature = "ui")]
+pub fn default_simulation_class_ctx(
+    ctx: &lunco_workbench::PanelCtx,
+    doc: DocumentId,
+) -> Option<String> {
+    let candidates = ctx
+        .resource::<ModelicaDocumentRegistry>()
+        .and_then(|r| r.host(doc))
+        .map(|h| h.document().index().simulation_candidates())
+        .unwrap_or_default();
+    let override_cls = ctx
+        .resource::<RunTargetOverrides>()
+        .and_then(|o| o.0.get(&doc).cloned())
+        .filter(|c| candidates.iter().any(|x| x == c));
+    if let Some(c) = override_cls {
+        return Some(c);
+    }
+    let drilled = drilled_class_for_doc_ctx(ctx, doc);
+    crate::sim_target::default_class(drilled.as_deref(), &candidates)
+}
+
 /// Per-document explicit run target, set by the class dropdowns on the
 /// Experiments Setup form and the Fast Run modal. Read by
 /// [`default_simulation_class`] with top precedence. Kept separate from the

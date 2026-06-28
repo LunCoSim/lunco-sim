@@ -29,7 +29,7 @@ use bevy_egui::egui;
 use lunco_doc_bevy::JournalResource;
 use lunco_settings::SettingsSection;
 use lunco_twin_journal::{EntryKind, JournalEntry, LifecycleKind};
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use serde::{Deserialize, Serialize};
 
 /// Panel id.
@@ -74,29 +74,29 @@ impl Panel for JournalPanel {
         PanelSlot::Bottom
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        let theme = world
-            .get_resource::<lunco_theme::Theme>()
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let theme = ctx
+            .resource::<lunco_theme::Theme>()
             .cloned()
             .unwrap_or_else(lunco_theme::Theme::dark);
         let muted = theme.tokens.text_subdued;
 
-        let active_doc = world
-            .get_resource::<lunco_workspace::WorkspaceResource>()
+        let active_doc = ctx
+            .resource::<lunco_workspace::WorkspaceResource>()
             .and_then(|ws| ws.active_document);
 
         // Tunability: the row cap comes from `lunco-settings`. Falls
         // back to the type's default if the section hasn't been
         // registered (headless tests, unit-only setups).
-        let max_rows = world
-            .get_resource::<JournalPanelSettings>()
+        let max_rows = ctx
+            .resource::<JournalPanelSettings>()
             .copied()
             .unwrap_or_default()
             .max_visible_rows;
 
         // Snapshot the journal slice for the active doc. Brief lock,
         // bounded copy — render path holds nothing across egui calls.
-        let entries: Vec<DisplayRow> = match (active_doc, world.get_resource::<JournalResource>()) {
+        let entries: Vec<DisplayRow> = match (active_doc, ctx.resource::<JournalResource>()) {
             (Some(doc), Some(journal)) => journal.with_read(|j| {
                 j.entries_for_doc(doc)
                     .map(display_row)

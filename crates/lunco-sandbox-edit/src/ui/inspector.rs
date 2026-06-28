@@ -2,12 +2,20 @@
 //!
 //! Migrates the old standalone egui window to use bevy_workbench docking.
 //! Provides editable sliders for transform, physics, and wheel parameters.
+//!
+//! **WP-8 reactive shape:** `render` takes a capability-narrowed
+//! [`PanelCtx`] — no raw `&mut World`. Reads go through
+//! [`PanelCtx::resource`]/[`PanelCtx::get`] (and, for query-derived data
+//! like the scene sun / camera / joint, the change-driven
+//! [`InspectorView`] view-model produced by [`populate_inspector_view`]);
+//! every mutation is queued through [`PanelCtx::defer`] and applied after
+//! the egui pass.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_mobility::WheelRaycast;
-use lunco_cosim::{joint_angle_holder, read_input_port, read_output_port, JOINT_ANGLE_PORT};
+use lunco_cosim::{joint_angle_holder, read_input_port, read_output_port, write_port, JOINT_ANGLE_PORT};
 
 use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
 
@@ -19,6 +27,153 @@ use lunco_usd::ui::viewport::UsdViewportState;
 use lunco_doc::DocumentOrigin;
 use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, SdfPath, resolve_bound_shader};
 
+// ─────────────────────────────────────────────────────────────────────
+// View-model (WP-8) — query-derived inspector state.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Live scene-sun readout for the Environment section.
+#[derive(Clone)]
+pub struct SunReadout {
+    pub name: String,
+    pub yaw_deg: f32,
+    pub pitch_deg: f32,
+    pub illuminance: f32,
+    pub shadows_enabled: bool,
+    pub rgb: [f32; 3],
+    pub shadow_first: Option<f32>,
+    pub shadow_max: Option<f32>,
+}
+
+/// Live joint readout for the selected entity's `angle` port.
+#[derive(Clone, Copy)]
+pub struct JointReadout {
+    pub holder: Entity,
+    pub measured: f64,
+    pub commanded: f64,
+    pub wired: bool,
+}
+
+/// Change-driven view-model for the Inspector (WP-8). The Environment,
+/// Camera, and Joint sections read query-derived world state that
+/// [`PanelCtx`] deliberately can't gather during paint (no `query`, no
+/// `&World`); [`populate_inspector_view`] flattens it here each frame and
+/// the panel reads it via `ctx.resource`.
+#[derive(Resource, Default)]
+pub struct InspectorView {
+    /// First scene sun (directional light), if any.
+    pub sun: Option<SunReadout>,
+    /// Global ambient brightness, if the resource exists.
+    pub ambient_brightness: Option<f32>,
+    /// Earthshine fill-light illuminance, if present.
+    pub earthshine_lux: Option<f32>,
+    /// First camera's exposure EV100, if any.
+    pub exposure_ev100: Option<f32>,
+    /// First camera's bloom intensity, if any.
+    pub bloom_intensity: Option<f32>,
+    /// Joint readout for the primary-selected entity, if it drives one.
+    pub joint: Option<JointReadout>,
+}
+
+/// Producer for [`InspectorView`]. Exclusive (needs `&mut World` for the
+/// scans + `joint_angle_holder`); runs in `Update` before the egui pass.
+/// All reads are bounded single-entity lookups or small scans the panel
+/// used to do in-paint.
+pub fn populate_inspector_view(world: &mut World) {
+    use bevy::camera::Exposure;
+    use bevy::camera::visibility::RenderLayers;
+    use bevy::light::{CascadeShadowConfig, DirectionalLight, GlobalAmbientLight};
+    use bevy::post_process::bloom::Bloom;
+
+    // ── Scene sun (skip preview / earthshine lights, same rule as the
+    // horizon system's pick_sun).
+    let suns: Vec<Entity> = world
+        .query_filtered::<Entity, (
+            With<DirectionalLight>,
+            Without<RenderLayers>,
+            Without<lunco_environment::Earthshine>,
+        )>()
+        .iter(world)
+        .collect();
+    let sun = suns.first().copied().map(|e| {
+        let name = world
+            .get::<Name>(e)
+            .map(|n| n.as_str().to_string())
+            .unwrap_or_default();
+        let (yaw_deg, pitch_deg) = world
+            .get::<Transform>(e)
+            .map(|tf| {
+                let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+                (yaw.to_degrees(), pitch.to_degrees())
+            })
+            .unwrap_or((0.0, 0.0));
+        let (illuminance, shadows_enabled, rgb) = world
+            .get::<DirectionalLight>(e)
+            .map(|l| {
+                let lin = l.color.to_linear();
+                (l.illuminance, l.shadows_enabled, [lin.red, lin.green, lin.blue])
+            })
+            .unwrap_or((0.0, false, [1.0, 1.0, 1.0]));
+        let (shadow_first, shadow_max) = world
+            .get::<CascadeShadowConfig>(e)
+            .map(|cfg| {
+                (
+                    Some(cfg.bounds.first().copied().unwrap_or(40.0)),
+                    Some(cfg.bounds.last().copied().unwrap_or(1500.0)),
+                )
+            })
+            .unwrap_or((None, None));
+        SunReadout {
+            name,
+            yaw_deg,
+            pitch_deg,
+            illuminance,
+            shadows_enabled,
+            rgb,
+            shadow_first,
+            shadow_max,
+        }
+    });
+
+    let ambient_brightness = world.get_resource::<GlobalAmbientLight>().map(|a| a.brightness);
+    let earthshine_lux = world
+        .query_filtered::<&DirectionalLight, With<lunco_environment::Earthshine>>()
+        .iter(world)
+        .next()
+        .map(|l| l.illuminance);
+
+    // ── Camera.
+    let exposure_ev100 = world.query::<&Exposure>().iter(world).next().map(|e| e.ev100);
+    let bloom_intensity = world.query::<&Bloom>().iter(world).next().map(|b| b.intensity);
+
+    // ── Joint for the primary-selected entity.
+    let selected = world
+        .get_resource::<SelectedEntities>()
+        .and_then(|s| s.primary());
+    let joint = if let Some(entity) = selected {
+        if let Some(holder) = joint_angle_holder(world, entity) {
+            let measured = read_output_port(world, holder, JOINT_ANGLE_PORT).unwrap_or(0.0);
+            let commanded = read_input_port(world, holder, JOINT_ANGLE_PORT).unwrap_or(0.0);
+            let mut cq = world.query::<&lunco_cosim::SimConnection>();
+            let wired = cq
+                .iter(world)
+                .any(|c| c.end_element == holder && c.end_connector == JOINT_ANGLE_PORT);
+            Some(JointReadout { holder, measured, commanded, wired })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let mut view = world.resource_mut::<InspectorView>();
+    view.sun = sun;
+    view.ambient_brightness = ambient_brightness;
+    view.earthshine_lux = earthshine_lux;
+    view.exposure_ev100 = exposure_ev100;
+    view.bloom_intensity = bloom_intensity;
+    view.joint = joint;
+}
+
 /// Inspector panel — editable entity parameters.
 pub struct Inspector;
 
@@ -28,92 +183,74 @@ impl Panel for Inspector {
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
     fn transparent_background(&self) -> bool { true }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        let theme = world.resource::<lunco_theme::Theme>();
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let mantle = ctx
+            .resource::<lunco_theme::Theme>()
+            .map(|t| t.colors.mantle)
+            .unwrap_or(egui::Color32::from_rgb(30, 30, 46));
         egui::Frame::new()
-            .fill(theme.colors.mantle)
+            .fill(mantle)
             .inner_margin(8.0)
             .corner_radius(4)
             .show(ui, |ui| {
                 // The Inspector stacks many sections (Environment, Transform,
                 // Physics, Wheel, Shader, Material, Modelica) and can exceed the
                 // panel height — scroll so the lower sections stay reachable.
-                // Shrink VERTICALLY to the content (`auto_shrink` y = true) so a
-                // short selection doesn't paint an opaque full-height band of
-                // unused panel; the area below then falls through to the
-                // transparent panel background (the 3D scene). Keep full WIDTH
-                // (x = false) so sliders/labels use the whole column.
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, true])
-                    .show(ui, |ui| inspector_content(self, ui, world));
+                    .show(ui, |ui| inspector_content(self, ui, ctx));
             });
     }
 }
 
-fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut World) {
+fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 
         // Delete hotkey
         if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
-            let primary = world.get_resource::<SelectedEntities>().and_then(|s| s.primary());
+            let primary = ctx
+                .resource::<SelectedEntities>()
+                .and_then(|s| s.primary());
             if let Some(entity) = primary {
-                if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
-                    undo.push(UndoAction::Spawned { entity });
-                }
-                if world.get_entity(entity).is_ok() {
-                    world.commands().entity(entity).despawn();
-                }
-                if let Some(mut selected) = world.get_resource_mut::<SelectedEntities>() {
-                    selected.entities.retain(|e| *e != entity);
-                }
+                ctx.defer(move |world| {
+                    if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
+                        undo.push(UndoAction::Spawned { entity });
+                    }
+                    if world.get_entity(entity).is_ok() {
+                        world.despawn(entity);
+                    }
+                    if let Some(mut selected) = world.get_resource_mut::<SelectedEntities>() {
+                        selected.entities.retain(|e| *e != entity);
+                    }
+                });
                 return;
             }
         }
 
         // Esc / Backspace deselection lives in the Bevy `handle_entity_selection`
-        // system (the single mutation path), not here — mutating the World
-        // mid-egui-render fought the next frame's selection + shader swap.
+        // system (the single mutation path), not here.
 
         ui.heading("Inspector");
 
         // ── Environment (sun + ambient) ──────────────────────────────
-        // Always reachable — a directional light has no clickable geometry, so
-        // click-selection can never reach it. Collapsed by default so it doesn't
-        // crowd the top of the panel (and can't be mistaken for the selected
-        // object's controls). Edits write the LIVE light components/resources
-        // directly; they are session-transient (persisting back into the scene
-        // layer is the save-scene workstream).
         egui::CollapsingHeader::new("Environment (Sun & Ambient)")
             .default_open(false)
-            .show(ui, |ui| environment_section(ui, world));
+            .show(ui, |ui| environment_section(ui, ctx));
         ui.separator();
 
         // ── Camera (exposure + post-process) ─────────────────────────
-        // Physical exposure and bloom live on the camera, not the lights, so
-        // they get their own section. Same live, session-transient editing as
-        // Environment; dispatched through the same `SetEnvironmentLight` path.
         egui::CollapsingHeader::new("Camera")
             .default_open(false)
-            .show(ui, |ui| camera_section(ui, world));
+            .show(ui, |ui| camera_section(ui, ctx));
         ui.separator();
 
         // ── Obstacle Field (procedural craters + rocks) ──────────────
-        // Global generator controls (a Resource, not a selected entity), so it
-        // sits alongside Environment/Camera. Sliders edit the spec live; the
-        // field only rebuilds on release / button (regen is one synchronous
-        // pass — a brief hitch — so we don't rebuild every drag frame).
         egui::CollapsingHeader::new("Obstacle Field (Craters & Rocks)")
             .default_open(true)
-            .show(ui, |ui| obstacle_field_section(ui, world));
+            .show(ui, |ui| obstacle_field_section(ui, ctx));
         ui.separator();
 
-        // The terrain shader is NO LONGER an always-on section: the ground is
-        // click-selectable, so its shader params appear (like any object's) only
-        // when it's the selected entity. This stops the old always-on terrain
-        // controls — which sat at the very top — from being edited by mistake
-        // while a different object was selected.
-
         // Get current selection
-        let Some(entity) = world.get_resource::<SelectedEntities>().and_then(|s| s.primary()) else {
+        let Some(entity) = ctx.resource::<SelectedEntities>().and_then(|s| s.primary()) else {
             ui.label("No entity selected.");
             ui.label("Press Shift+Left-click on an object to select it.");
             return;
@@ -122,21 +259,19 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
         ui.label(format!("ID: {entity:?}"));
 
         // Name (read-only)
-        if let Some(name) = world.get::<Name>(entity) {
-            ui.label(format!("Name: {}", name.as_str()));
+        if let Some(name) = ctx.get::<Name>(entity).map(|n| n.as_str().to_string()) {
+            ui.label(format!("Name: {name}"));
         }
 
         ui.separator();
 
         // ── Transform component ──────────────────────────────────────
-        // First component: open by default — most users want to nudge
-        // position immediately. Other components start collapsed.
-        if world.get::<Transform>(entity).is_some() {
+        if ctx.get::<Transform>(entity).is_some() {
             egui::CollapsingHeader::new("Transform")
                 .default_open(true)
                 .show(ui, |ui| {
                     if let Some((old_tf, new_vals)) =
-                        world.get::<Transform>(entity).map(|tf| {
+                        ctx.get::<Transform>(entity).map(|tf| {
                             (
                                 (tf.translation, tf.rotation),
                                 (tf.translation.x, tf.translation.y, tf.translation.z),
@@ -150,70 +285,86 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
                             | ui.add(egui::Slider::new(&mut y, -1000.0..=1000.0).text("Y")).changed()
                             | ui.add(egui::Slider::new(&mut z, -1000.0..=1000.0).text("Z")).changed();
                         if changed {
-                            if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
-                                undo.push(UndoAction::TransformChanged {
-                                    entity,
-                                    old_translation: old_tf.0,
-                                    old_rotation: old_tf.1,
-                                });
-                            }
-                            if let Some(mut tf) = world.get_mut::<Transform>(entity) {
-                                tf.translation = Vec3::new(x, y, z);
-                            }
+                            let (old_t, old_r) = old_tf;
+                            ctx.defer(move |world| {
+                                if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
+                                    undo.push(UndoAction::TransformChanged {
+                                        entity,
+                                        old_translation: old_t,
+                                        old_rotation: old_r,
+                                    });
+                                }
+                                if let Some(mut tf) = world.get_mut::<Transform>(entity) {
+                                    tf.translation = Vec3::new(x, y, z);
+                                }
+                            });
                         }
                     }
                 });
         }
 
         // ── Physics component ────────────────────────────────────────
-        let has_physics = world.get::<avian3d::prelude::RigidBody>(entity).is_some()
-            || world.get::<avian3d::prelude::Mass>(entity).is_some()
-            || world.get::<avian3d::prelude::LinearDamping>(entity).is_some()
-            || world.get::<avian3d::prelude::AngularDamping>(entity).is_some();
+        let has_physics = ctx.get::<avian3d::prelude::RigidBody>(entity).is_some()
+            || ctx.get::<avian3d::prelude::Mass>(entity).is_some()
+            || ctx.get::<avian3d::prelude::LinearDamping>(entity).is_some()
+            || ctx.get::<avian3d::prelude::AngularDamping>(entity).is_some();
         if has_physics {
             egui::CollapsingHeader::new("Physics")
                 .default_open(false)
                 .show(ui, |ui| {
-                    if let Some(rb) = world.get::<avian3d::prelude::RigidBody>(entity) {
-                        ui.label(format!("Type: {rb:?}"));
+                    if let Some(rb) = ctx.get::<avian3d::prelude::RigidBody>(entity).map(|rb| format!("{rb:?}")) {
+                        ui.label(format!("Type: {rb}"));
                     }
-                    if let Some(current) = world.get::<avian3d::prelude::Mass>(entity) {
-                        let mut m = current.0;
+                    if let Some(cur) = ctx.get::<avian3d::prelude::Mass>(entity).map(|c| c.0) {
+                        let mut m = cur;
                         if ui.add(egui::Slider::new(&mut m, 0.1..=100000.0).text("Mass (kg)").logarithmic(true)).changed() {
-                            if let Some(mut mass) = world.get_mut::<avian3d::prelude::Mass>(entity) {
-                                mass.0 = m;
-                            }
+                            ctx.defer(move |world| {
+                                if let Some(mut mass) = world.get_mut::<avian3d::prelude::Mass>(entity) {
+                                    mass.0 = m;
+                                }
+                            });
                         }
                     }
-                    if let Some(current) = world.get::<avian3d::prelude::LinearDamping>(entity) {
-                        let mut d = current.0 as f32;
+                    if let Some(cur) = ctx.get::<avian3d::prelude::LinearDamping>(entity).map(|c| c.0 as f32) {
+                        let mut d = cur;
                         if ui.add(egui::Slider::new(&mut d, 0.0..=10.0).text("Linear Damping")).changed() {
-                            if let Some(mut damp) = world.get_mut::<avian3d::prelude::LinearDamping>(entity) {
-                                damp.0 = d as f64;
-                            }
+                            ctx.defer(move |world| {
+                                if let Some(mut damp) = world.get_mut::<avian3d::prelude::LinearDamping>(entity) {
+                                    damp.0 = d as f64;
+                                }
+                            });
                         }
                     }
-                    if let Some(current) = world.get::<avian3d::prelude::AngularDamping>(entity) {
-                        let mut d = current.0 as f32;
+                    if let Some(cur) = ctx.get::<avian3d::prelude::AngularDamping>(entity).map(|c| c.0 as f32) {
+                        let mut d = cur;
                         if ui.add(egui::Slider::new(&mut d, 0.0..=10.0).text("Angular Damping")).changed() {
-                            if let Some(mut damp) = world.get_mut::<avian3d::prelude::AngularDamping>(entity) {
-                                damp.0 = d as f64;
-                            }
+                            ctx.defer(move |world| {
+                                if let Some(mut damp) = world.get_mut::<avian3d::prelude::AngularDamping>(entity) {
+                                    damp.0 = d as f64;
+                                }
+                            });
                         }
                     }
                 });
         }
 
         // ── Wheel (Raycast) component ────────────────────────────────
-        if world.get::<WheelRaycast>(entity).is_some() {
+        if ctx.get::<WheelRaycast>(entity).is_some() {
             egui::CollapsingHeader::new("Wheel (Raycast)")
                 .default_open(false)
                 .show(ui, |ui| {
-                    if let Some(current) = world.get::<WheelRaycast>(entity) {
-                        let mut rest = current.rest_length as f32;
-                        let mut k = current.spring_k as f32;
-                        let mut d = current.damping_c as f32;
-                        let mut radius = current.wheel_radius as f32;
+                    if let Some((rest0, k0, d0, r0)) = ctx.get::<WheelRaycast>(entity).map(|w| {
+                        (
+                            w.rest_length as f32,
+                            w.spring_k as f32,
+                            w.damping_c as f32,
+                            w.wheel_radius as f32,
+                        )
+                    }) {
+                        let mut rest = rest0;
+                        let mut k = k0;
+                        let mut d = d0;
+                        let mut radius = r0;
 
                         let rest_changed = ui.add(egui::Slider::new(&mut rest, 0.1..=2.0).text("Rest Length (m)")).changed();
                         let k_changed = ui.add(egui::Slider::new(&mut k, 100.0..=100000.0).text("Spring K (N/m)").logarithmic(true)).changed();
@@ -221,215 +372,168 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
                         let r_changed = ui.add(egui::Slider::new(&mut radius, 0.1..=2.0).text("Wheel Radius (m)")).changed();
 
                         if rest_changed || k_changed || d_changed || r_changed {
-                            if let Some(mut wheel) = world.get_mut::<WheelRaycast>(entity) {
-                                if rest_changed { wheel.rest_length = rest as f64; }
-                                if k_changed { wheel.spring_k = k as f64; }
-                                if d_changed { wheel.damping_c = d as f64; }
-                                if r_changed { wheel.wheel_radius = radius as f64; }
-                            }
+                            ctx.defer(move |world| {
+                                if let Some(mut wheel) = world.get_mut::<WheelRaycast>(entity) {
+                                    if rest_changed { wheel.rest_length = rest as f64; }
+                                    if k_changed { wheel.spring_k = k as f64; }
+                                    if d_changed { wheel.damping_c = d as f64; }
+                                    if r_changed { wheel.wheel_radius = radius as f64; }
+                                }
+                            });
                         }
                     }
                 });
         }
 
         // ── Materials ────────────────────────────────────────────────
-        // A material lives on the leaf MESH entities (wheel visuals, body
-        // mesh), never on the logical ROOT a click selects — so the Inspector
-        // always edits ONE concrete part, chosen by the *Part* dropdown or a
-        // viewport drill-click (clicking a sub-part of the selected object).
-        // There is no "whole object" aggregate: showing a wheel's shader as if
-        // it were the rover's was misleading. The default part is the first one
-        // WITHOUT a shader (the PBR body) so a rover, which has no shader of its
-        // own, opens on its body with an "Add shader" picker front-and-centre.
-        let parts = editable_parts(world, entity);
+        let parts = editable_parts(ctx, entity);
         if !parts.is_empty() {
-            // Resolve the target part. A stale stored target (from a prior
-            // selection) is ignored; the default is persisted so it can't flip
-            // to another part after you, e.g., add a shader to the body.
-            let stored = world
+            let stored = ctx
                 .resource::<crate::InspectorTarget>()
-                .part
+                .and_then(|t| t.part)
                 .filter(|p| parts.iter().any(|(e, _)| e == p));
-            let mut target = stored.or_else(|| default_part(world, &parts));
+            let mut target = stored.or_else(|| default_part(ctx, &parts));
             if stored.is_none() {
                 if let Some(t) = target {
-                    world.resource_mut::<crate::InspectorTarget>().part = Some(t);
+                    ctx.defer(move |world| {
+                        world.resource_mut::<crate::InspectorTarget>().part = Some(t);
+                    });
                 }
             }
             // Multi-part object → a dropdown to switch parts (may retarget).
             if parts.len() > 1 {
-                target = parts_selector(ui, world, &parts, target);
+                target = parts_selector(ui, ctx, &parts, target);
             }
 
             if let Some(part) = target {
-                // Shader picker — ADD a shader to this part (converting a PBR
-                // part) or swap an existing one. Always shown, so a part with no
-                // shader yet gets an "Add shader" affordance; after adding, the
-                // Shader Parameters below become editable.
-                shader_picker_for_part(ui, world, part);
-                shader_tools_ui(ui, world, part);
+                shader_picker_for_part(ui, ctx, part);
+                shader_tools_ui(ui, ctx, part);
 
-                if let Some(holder) = first_shader_holder(world, part) {
+                if let Some(holder) = first_shader_holder(ctx, part) {
                     egui::CollapsingHeader::new("Shader Parameters")
                         .default_open(true)
                         .show(ui, |ui| {
-                            shader_parameters_section(ui, world, holder);
+                            shader_parameters_section(ui, ctx, holder);
                         });
                 }
-                let std_handles = collect_std_handles(world, part);
+                let std_handles = collect_std_handles(ctx, part);
                 if !std_handles.is_empty() {
                     egui::CollapsingHeader::new("Material (PBR)")
                         .default_open(true)
                         .show(ui, |ui| {
-                            material_pbr_section(ui, world, part, &std_handles);
+                            material_pbr_section(ui, ctx, part, &std_handles);
                         });
                 }
             }
         }
 
         // ── Modelica parameters component ───────────────────────────
-        // Tunable Real parameters from the entity's Modelica model.
-        // Edits dispatch a `ModelicaOp::SetParameter` through the
-        // canonical op pipeline (span-patch + AST refresh + index
-        // patch + journal) and fire `UpdateParameters` at the worker,
-        // which recompiles and reseeds the stepper.
-        let has_modelica = world.get::<lunco_modelica::ModelicaModel>(entity).is_some();
+        let has_modelica = ctx.get::<lunco_modelica::ModelicaModel>(entity).is_some();
         if has_modelica {
             egui::CollapsingHeader::new("Modelica Parameters")
                 .default_open(true)
                 .show(ui, |ui| {
-                    modelica_parameters_section(ui, world, entity);
+                    modelica_parameters_section(ui, ctx, entity);
                 });
         }
 
         // ── Joint control ───────────────────────────────────────────
-        // If this entity (or a child — the joint prim is usually nested,
-        // e.g. /SolarTower/Hinge) carries a revolute joint (auto-exposed as the
-        // `angle` co-sim port), expose it: the live measured angle, plus a
-        // setpoint slider that writes the commanded `angle` input. This is the
-        // "control the used model, particularly the joint" surface.
-        if let Some(holder) = joint_angle_holder(world, entity) {
+        let joint = ctx.resource::<InspectorView>().and_then(|v| v.joint);
+        if let Some(j) = joint {
             egui::CollapsingHeader::new("Joint")
                 .default_open(true)
                 .show(ui, |ui| {
-                    joint_control_section(ui, world, holder);
+                    joint_control_section(ui, ctx, j);
                 });
         }
 
         // Delete button
         ui.separator();
         if ui.button("🗑 Delete Entity (Del)").clicked() {
-            if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
-                undo.push(UndoAction::Spawned { entity });
-            }
-            if world.get_entity(entity).is_ok() {
-                world.commands().entity(entity).despawn();
-            }
-            if let Some(mut selected) = world.get_resource_mut::<SelectedEntities>() {
-                selected.entities.retain(|e| *e != entity);
-            }
+            ctx.defer(move |world| {
+                if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
+                    undo.push(UndoAction::Spawned { entity });
+                }
+                if world.get_entity(entity).is_ok() {
+                    world.despawn(entity);
+                }
+                if let Some(mut selected) = world.get_resource_mut::<SelectedEntities>() {
+                    selected.entities.retain(|e| *e != entity);
+                }
+            });
         }
     }
 
-/// Live sun + ambient controls. Works on whatever directional light is
-/// currently in the world — the binary's fallback sun or a scene-authored
-/// UsdLux `DistantLight` — so it doubles as the runtime tuning surface for
-/// values that will later be written back into the `.usda`.
-///
-/// The widgets only READ component state; every edit dispatches a
-/// [`SetEnvironmentLight`] command, the same single mutation path the
-/// HTTP/MCP API uses. UI, API, and scripts therefore can't drift apart in
-/// behaviour — there is exactly one observer that writes lighting.
-fn environment_section(ui: &mut egui::Ui, world: &mut World) {
-    use bevy::light::{CascadeShadowConfig, DirectionalLight, GlobalAmbientLight};
+/// Live sun + ambient controls. Reads the change-driven [`InspectorView`]
+/// snapshot and dispatches every edit through a single
+/// [`SetEnvironmentLight`](lunco_environment::SetEnvironmentLight) command
+/// — the same mutation path the HTTP/MCP API uses.
+fn environment_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     use lunco_environment::SetEnvironmentLight;
 
-    // Skip render-layer-scoped lights (the USD preview viewport's sun) —
-    // same rule as the horizon system's pick_sun; otherwise the panel shows
-    // the preview light's state instead of the scene sun's. Also exclude the
-    // earthshine fill (`Without<Earthshine>`), or the panel would bind to it
-    // and the sun controls would edit the wrong light.
-    let suns: Vec<Entity> = world
-        .query_filtered::<Entity, (
-            With<DirectionalLight>,
-            Without<bevy::camera::visibility::RenderLayers>,
-            Without<lunco_environment::Earthshine>,
-        )>()
-        .iter(world)
-        .collect();
-    if suns.is_empty() && world.get_resource::<GlobalAmbientLight>().is_none() {
+    let sun = ctx.resource::<InspectorView>().and_then(|v| v.sun.clone());
+    let ambient = ctx.resource::<InspectorView>().and_then(|v| v.ambient_brightness);
+    let earthshine = ctx.resource::<InspectorView>().and_then(|v| v.earthshine_lux);
+    if sun.is_none() && ambient.is_none() && earthshine.is_none() {
         return;
     }
 
-    // Accumulate one command from whatever widgets changed this frame;
-    // `None` fields keep their current value in the observer.
     let mut cmd = SetEnvironmentLight::default();
     let mut any_change = false;
 
     egui::CollapsingHeader::new("Environment")
         .default_open(true)
         .show(ui, |ui| {
-            // The command applies to every directional light; render the
-            // controls off the first sun's live state.
-            if let Some(&entity) = suns.first() {
-                if let Some(name) = world.get::<Name>(entity) {
-                    ui.label(egui::RichText::new(name.as_str().to_string()).strong());
+            if let Some(s) = &sun {
+                if !s.name.is_empty() {
+                    ui.label(egui::RichText::new(&s.name).strong());
                 }
 
-                if let Some(tf) = world.get::<Transform>(entity) {
-                    let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
-                    let mut yaw_deg = yaw.to_degrees();
-                    let mut pitch_deg = pitch.to_degrees();
-                    let yaw_changed = ui
-                        .add(egui::Slider::new(&mut yaw_deg, -180.0..=180.0).text("Yaw (°)"))
-                        .changed();
-                    let pitch_changed = ui
-                        .add(egui::Slider::new(&mut pitch_deg, -90.0..=90.0).text("Pitch (°)"))
-                        .changed();
-                    if yaw_changed {
-                        cmd.sun_yaw = Some(yaw_deg.to_radians());
-                    }
-                    if pitch_changed {
-                        cmd.sun_pitch = Some(pitch_deg.to_radians());
-                    }
-                    any_change |= yaw_changed || pitch_changed;
+                let mut yaw_deg = s.yaw_deg;
+                let mut pitch_deg = s.pitch_deg;
+                let yaw_changed = ui
+                    .add(egui::Slider::new(&mut yaw_deg, -180.0..=180.0).text("Yaw (°)"))
+                    .changed();
+                let pitch_changed = ui
+                    .add(egui::Slider::new(&mut pitch_deg, -90.0..=90.0).text("Pitch (°)"))
+                    .changed();
+                if yaw_changed {
+                    cmd.sun_yaw = Some(yaw_deg.to_radians());
                 }
+                if pitch_changed {
+                    cmd.sun_pitch = Some(pitch_deg.to_radians());
+                }
+                any_change |= yaw_changed || pitch_changed;
 
-                if let Some(light) = world.get::<DirectionalLight>(entity) {
-                    let mut lux = light.illuminance;
-                    let mut shadows = light.shadows_enabled;
-                    let lin = light.color.to_linear();
-                    let mut rgb = [lin.red, lin.green, lin.blue];
-                    if ui
-                        .add(
-                            egui::Slider::new(&mut lux, 100.0..=200_000.0)
-                                .text("Illuminance (lx)")
-                                .logarithmic(true),
-                        )
-                        .changed()
-                    {
-                        cmd.illuminance = Some(lux);
+                let mut lux = s.illuminance;
+                let mut shadows = s.shadows_enabled;
+                let mut rgb = s.rgb;
+                if ui
+                    .add(
+                        egui::Slider::new(&mut lux, 100.0..=200_000.0)
+                            .text("Illuminance (lx)")
+                            .logarithmic(true),
+                    )
+                    .changed()
+                {
+                    cmd.illuminance = Some(lux);
+                    any_change = true;
+                }
+                ui.horizontal(|ui| {
+                    if ui.color_edit_button_rgb(&mut rgb).changed() {
+                        cmd.sun_color = Some(rgb);
                         any_change = true;
                     }
-                    ui.horizontal(|ui| {
-                        if ui.color_edit_button_rgb(&mut rgb).changed() {
-                            cmd.sun_color = Some(rgb);
-                            any_change = true;
-                        }
-                        ui.label("Color");
-                    });
-                    if ui.checkbox(&mut shadows, "Cast shadows").changed() {
-                        cmd.shadows_enabled = Some(shadows);
-                        any_change = true;
-                    }
+                    ui.label("Color");
+                });
+                if ui.checkbox(&mut shadows, "Cast shadows").changed() {
+                    cmd.shadows_enabled = Some(shadows);
+                    any_change = true;
                 }
 
-                // Shadow range. bounds[0] is the first cascade's far bound
-                // (near-field sharpness), bounds.last() the total shadow
-                // distance — smaller max ⇒ denser texels ⇒ crisper shadows.
-                if let Some(cfg) = world.get::<CascadeShadowConfig>(entity) {
-                    let mut first = cfg.bounds.first().copied().unwrap_or(40.0);
-                    let mut max = cfg.bounds.last().copied().unwrap_or(1500.0);
+                if let (Some(f0), Some(m0)) = (s.shadow_first, s.shadow_max) {
+                    let mut first = f0;
+                    let mut max = m0;
                     if ui
                         .add(
                             egui::Slider::new(&mut first, 5.0..=200.0)
@@ -456,8 +560,8 @@ fn environment_section(ui: &mut egui::Ui, world: &mut World) {
                 ui.separator();
             }
 
-            if let Some(ambient) = world.get_resource::<GlobalAmbientLight>() {
-                let mut b = ambient.brightness;
+            if let Some(b0) = ambient {
+                let mut b = b0;
                 if ui
                     .add(egui::Slider::new(&mut b, 0.0..=400.0).text("Ambient (cd/m²)"))
                     .changed()
@@ -467,15 +571,8 @@ fn environment_section(ui: &mut egui::Ui, world: &mut World) {
                 }
             }
 
-            // Earthshine fill (the cool-blue shadowless light) — read off the
-            // single earthshine entity. It is a fill light, so it belongs with
-            // the environment lighting rather than the Camera section.
-            let es_lux = world
-                .query_filtered::<&DirectionalLight, With<lunco_environment::Earthshine>>()
-                .iter(world)
-                .next()
-                .map(|l| l.illuminance);
-            if let Some(mut lux) = es_lux {
+            if let Some(es0) = earthshine {
+                let mut lux = es0;
                 if ui
                     .add(egui::Slider::new(&mut lux, 0.0..=60.0).text("Earthshine (lx)"))
                     .changed()
@@ -487,31 +584,26 @@ fn environment_section(ui: &mut egui::Ui, world: &mut World) {
         });
 
     if any_change {
-        world.trigger(cmd);
+        ctx.defer(move |world| {
+            world.trigger(cmd);
+        });
     }
 }
 
-/// Camera section — physical exposure and bloom. These live on the camera, not
-/// the lights, so they are separated from [`environment_section`]. Mutates via
-/// the same [`SetEnvironmentLight`] command (its handler carries the camera
-/// arms), so all environment/camera edits share one mutation path.
-fn camera_section(ui: &mut egui::Ui, world: &mut World) {
-    use bevy::camera::Exposure;
-    use bevy::post_process::bloom::Bloom;
+/// Camera section — physical exposure and bloom. Reads the
+/// [`InspectorView`] snapshot; mutates via the same
+/// [`SetEnvironmentLight`](lunco_environment::SetEnvironmentLight) command.
+fn camera_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     use lunco_environment::SetEnvironmentLight;
+
+    let exposure = ctx.resource::<InspectorView>().and_then(|v| v.exposure_ev100);
+    let bloom = ctx.resource::<InspectorView>().and_then(|v| v.bloom_intensity);
 
     let mut cmd = SetEnvironmentLight::default();
     let mut any_change = false;
 
-    // Exposure (EV100): the physical counterpart to sun illuminance. Lower EV
-    // ⇒ brighter image; ~15 = sunlit, 9.7 = Blender default. Read off the first
-    // camera that carries an Exposure component.
-    let cam_ev = world
-        .query::<&Exposure>()
-        .iter(world)
-        .next()
-        .map(|e| e.ev100);
-    if let Some(mut ev) = cam_ev {
+    if let Some(ev0) = exposure {
+        let mut ev = ev0;
         if ui
             .add(egui::Slider::new(&mut ev, 5.0..=18.0).text("Exposure (EV100)"))
             .changed()
@@ -523,13 +615,8 @@ fn camera_section(ui: &mut egui::Ui, world: &mut World) {
         ui.label("No camera Exposure component.");
     }
 
-    // Bloom intensity (cameras with a Bloom component; airless ⇒ low).
-    let cam_bloom = world
-        .query::<&Bloom>()
-        .iter(world)
-        .next()
-        .map(|b| b.intensity);
-    if let Some(mut i) = cam_bloom {
+    if let Some(i0) = bloom {
+        let mut i = i0;
         if ui
             .add(egui::Slider::new(&mut i, 0.0..=1.0).text("Bloom intensity"))
             .changed()
@@ -540,27 +627,25 @@ fn camera_section(ui: &mut egui::Ui, world: &mut World) {
     }
 
     if any_change {
-        world.trigger(cmd);
+        ctx.defer(move |world| {
+            world.trigger(cmd);
+        });
     }
 }
 
-/// Live tuning for the procedural obstacle field. Sliders edit the
-/// `ObstacleFieldSpec` resource directly; the field rebuilds only on slider
-/// release / button press (a regen is one synchronous pass — backgrounding it is
-/// the next phase), so dragging stays smooth.
-fn obstacle_field_section(ui: &mut egui::Ui, world: &mut World) {
-    let mut regen = false;
+/// Live tuning for the procedural obstacle field. Edits the
+/// `ObstacleFieldSpec` resource via [`PanelCtx::resource_scope`] (the
+/// narrow mutate-during-paint surface); the field rebuilds only on slider
+/// release / button press.
+fn obstacle_field_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+    let mut regen_spec: Option<ObstacleFieldSpec> = None;
 
-    {
-        let Some(mut spec) = world.get_resource_mut::<ObstacleFieldSpec>() else {
-            ui.label("Obstacle field plugin not active.");
-            return;
-        };
+    let had = ctx.resource_scope(|_ctx, spec: &mut ObstacleFieldSpec| {
+        let mut regen = false;
 
         ui.horizontal(|ui| {
             ui.label(format!("Seed {:#x}", spec.seed));
             if ui.button("🎲 Reseed").clicked() {
-                // SplitMix64 step → a fresh, well-distributed seed.
                 spec.seed = spec
                     .seed
                     .wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -631,8 +716,6 @@ fn obstacle_field_section(ui: &mut egui::Ui, world: &mut World) {
         }
 
         egui::CollapsingHeader::new("Craters").default_open(true).show(ui, |ui| {
-            // Reborrow into a plain &mut so the disjoint field borrows below are
-            // allowed (ResMut's DerefMut would otherwise re-borrow the whole spec).
             let s = &mut *spec;
             if ui.checkbox(&mut s.craters.enabled, "Enabled").changed() {
                 regen = true;
@@ -674,51 +757,46 @@ fn obstacle_field_section(ui: &mut egui::Ui, world: &mut World) {
             regen = true;
         }
         ui.label(egui::RichText::new("Field rebuilds on slider release.").small().weak());
+
+        if regen {
+            regen_spec = Some(spec.clone());
+        }
+    });
+
+    if had.is_none() {
+        ui.label("Obstacle field plugin not active.");
+        return;
     }
 
-    if regen {
-        if let Some(spec) = world.get_resource::<ObstacleFieldSpec>() {
-            let spec_cloned = spec.clone();
-            world.trigger(UpdateObstacleFieldSpec { spec: spec_cloned });
-        }
+    if let Some(spec) = regen_spec {
+        ctx.defer(move |world| {
+            world.trigger(UpdateObstacleFieldSpec { spec });
+        });
     }
 }
 
-/// The selected entity plus all of its descendants. Materials live on leaf mesh
-/// entities while selection targets the logical root, so the material sections
-/// search this whole set.
-fn subtree(world: &mut World, root: Entity) -> Vec<Entity> {
+/// The selected entity plus all of its descendants (subtree walk via
+/// [`PanelCtx::get`]).
+fn subtree(ctx: &PanelCtx, root: Entity) -> Vec<Entity> {
     let mut out = vec![root];
     let mut i = 0;
     while i < out.len() {
         let e = out[i];
         i += 1;
-        if let Some(children) = world.get::<Children>(e) {
+        if let Some(children) = ctx.get::<Children>(e) {
             out.extend(children.iter());
         }
     }
     out
 }
 
-/// Joint control over a revolute joint's `angle` port. Shows the live measured
-/// angle (the joint twist, read through [`read_output_port`]) and a setpoint
-/// slider that writes the commanded angle (the motor target, read through
-/// [`read_input_port`]) via [`lunco_cosim::write_port`] — the same port the
-/// angular motor chases.
-///
-/// Note: when a live wire drives this joint (e.g. the sun tracker's
-/// `yaw -> angle`), `propagate_connections` rewrites the motor target every
-/// tick, so a hand-set value is transient — it nudges the joint for one tick
-/// and the wire reclaims it. For an *un-wired* joint the slider holds. A
-/// latching hand-override (latest-wins until released) is the pending
-/// `SetPort` ControlStream hold (see `lunco-cosim/src/ports.rs`).
-fn joint_control_section(ui: &mut egui::Ui, world: &mut World, holder: Entity) {
-    let measured = read_output_port(world, holder, JOINT_ANGLE_PORT).unwrap_or(0.0);
-    let mut commanded = read_input_port(world, holder, JOINT_ANGLE_PORT).unwrap_or(0.0);
-    let mut cq = world.query::<&lunco_cosim::SimConnection>();
-    let wired = cq
-        .iter(world)
-        .any(|c| c.end_element == holder && c.end_connector == JOINT_ANGLE_PORT);
+/// Joint control over a revolute joint's `angle` port. Reads the
+/// [`InspectorView`] snapshot; the setpoint write is deferred through
+/// [`lunco_cosim::write_port`].
+fn joint_control_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, j: JointReadout) {
+    let measured = j.measured;
+    let mut commanded = j.commanded;
+    let holder = j.holder;
 
     ui.label(format!(
         "measured: {:.3} rad  ({:.1}°)",
@@ -732,9 +810,11 @@ fn joint_control_section(ui: &mut egui::Ui, world: &mut World, holder: Entity) {
     );
     ui.label(format!("{:.1}°", commanded.to_degrees()));
     if r.changed() {
-        lunco_cosim::write_port(world, holder, JOINT_ANGLE_PORT, commanded);
+        ctx.defer(move |world| {
+            write_port(world, holder, JOINT_ANGLE_PORT, commanded);
+        });
     }
-    if wired {
+    if j.wired {
         ui.label(
             egui::RichText::new("⚠ driven by a wire — setpoint is transient")
                 .small()
@@ -743,13 +823,12 @@ fn joint_control_section(ui: &mut egui::Ui, world: &mut World, holder: Entity) {
     }
 }
 
-/// Distinct `StandardMaterial` handles anywhere in `root`'s subtree (deduped by
-/// asset id), so editing recolors every part at once.
-fn collect_std_handles(world: &mut World, root: Entity) -> Vec<Handle<StandardMaterial>> {
-    let ents = subtree(world, root);
+/// Distinct `StandardMaterial` handles anywhere in `root`'s subtree.
+fn collect_std_handles(ctx: &PanelCtx, root: Entity) -> Vec<Handle<StandardMaterial>> {
+    let ents = subtree(ctx, root);
     let mut handles: Vec<Handle<StandardMaterial>> = Vec::new();
     for e in ents {
-        if let Some(m) = world.get::<MeshMaterial3d<StandardMaterial>>(e) {
+        if let Some(m) = ctx.get::<MeshMaterial3d<StandardMaterial>>(e) {
             if !handles.iter().any(|h| h.id() == m.0.id()) {
                 handles.push(m.0.clone());
             }
@@ -759,26 +838,22 @@ fn collect_std_handles(world: &mut World, root: Entity) -> Vec<Handle<StandardMa
 }
 
 /// First entity in `root`'s subtree carrying a [`ShaderMaterial`], if any.
-fn first_shader_holder(world: &mut World, root: Entity) -> Option<Entity> {
-    let ents = subtree(world, root);
+fn first_shader_holder(ctx: &PanelCtx, root: Entity) -> Option<Entity> {
+    let ents = subtree(ctx, root);
     ents.into_iter()
-        .find(|e| world.get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(*e).is_some())
+        .find(|e| ctx.get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(*e).is_some())
 }
 
-/// Material-bearing parts of `root`'s subtree — every entity carrying a
-/// `ShaderMaterial` or `StandardMaterial` — each labelled by its leaf name
-/// (`…/Wheel_FL` → `Wheel_FL`). The Inspector lists these in its *Parts*
-/// selector so editing can be aimed at one wheel/body rather than the whole
-/// component. Subtree (root-first) order; a single-mesh prop yields one entry.
-fn editable_parts(world: &mut World, root: Entity) -> Vec<(Entity, String)> {
-    let ents = subtree(world, root);
+/// Material-bearing parts of `root`'s subtree, each labelled by its leaf name.
+fn editable_parts(ctx: &PanelCtx, root: Entity) -> Vec<(Entity, String)> {
+    let ents = subtree(ctx, root);
     let mut out = Vec::new();
     for e in ents {
         let has_shader =
-            world.get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(e).is_some();
-        let has_std = world.get::<MeshMaterial3d<StandardMaterial>>(e).is_some();
+            ctx.get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(e).is_some();
+        let has_std = ctx.get::<MeshMaterial3d<StandardMaterial>>(e).is_some();
         if has_shader || has_std {
-            let label = world
+            let label = ctx
                 .get::<Name>(e)
                 .map(|n| n.as_str().rsplit(['/', '\\']).next().unwrap_or(n.as_str()).to_string())
                 .unwrap_or_else(|| format!("{e:?}"));
@@ -788,24 +863,21 @@ fn editable_parts(world: &mut World, root: Entity) -> Vec<(Entity, String)> {
     out
 }
 
-/// Default part to edit when nothing is explicitly targeted: the first part
-/// WITHOUT a shader — i.e. the PBR body — so a rover opens on its body with an
-/// "Add shader" picker rather than surfacing a wheel's shader. Falls back to
-/// the first part when every part already has a shader.
-fn default_part(world: &mut World, parts: &[(Entity, String)]) -> Option<Entity> {
+/// Default part to edit: the first part WITHOUT a shader (the PBR body).
+fn default_part(ctx: &PanelCtx, parts: &[(Entity, String)]) -> Option<Entity> {
     parts
         .iter()
         .map(|(e, _)| *e)
-        .find(|e| world.get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(*e).is_none())
+        .find(|e| ctx.get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(*e).is_none())
         .or_else(|| parts.first().map(|(e, _)| *e))
 }
 
-/// *Part* dropdown for a multi-part component: lists each [`editable_parts`]
-/// entry (no aggregate), writes the choice into [`InspectorTarget`], and
-/// returns the new target. `current` is the part shown when nothing is clicked.
+/// *Part* dropdown for a multi-part component. Writes the choice into
+/// [`InspectorTarget`](crate::InspectorTarget) (deferred) and returns the
+/// new target.
 fn parts_selector(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
     parts: &[(Entity, String)],
     current: Option<Entity>,
 ) -> Option<Entity> {
@@ -824,40 +896,25 @@ fn parts_selector(
             }
         });
     if let Some(c) = chosen {
-        world.resource_mut::<crate::InspectorTarget>().part = Some(c);
+        ctx.defer(move |world| {
+            world.resource_mut::<crate::InspectorTarget>().part = Some(c);
+        });
         return Some(c);
     }
     current
 }
 
-/// Shader picker for a single part. Lists the [`ShaderCatalog`] entries and, on
-/// pick, swaps the `.wgsl` on `part` directly — works by `Entity` (sub-parts
-/// have no API id) and, on a plain `StandardMaterial` part, CONVERTS it to a
-/// `ShaderMaterial` (so you can put a shader on a rover body). Uniform-
-/// preserving when the part already has a `ShaderMaterial`.
-fn shader_picker_for_part(ui: &mut egui::Ui, world: &mut World, part: Entity) {
-    let entries = world
-        .get_resource::<lunco_materials::ShaderCatalog>()
+/// Shader picker for a single part. Lists the [`ShaderCatalog`] entries and,
+/// on pick, defers a `.wgsl` swap on `part`.
+fn shader_picker_for_part(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
+    let entries = ctx
+        .resource::<lunco_materials::ShaderCatalog>()
         .map(|c| c.entries.clone())
         .unwrap_or_default();
     if entries.is_empty() {
         return;
     }
-    // Current shader path of this part, if it already uses a ShaderMaterial.
-    let cur_path: Option<String> = world
-        .get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(part)
-        .map(|m| m.0.clone())
-        .and_then(|h| {
-            world
-                .resource::<Assets<lunco_materials::ShaderMaterial>>()
-                .get(&h)
-                .map(|m| m.shader.id())
-        })
-        .and_then(|id| world.resource::<AssetServer>().get_path(id))
-        // Full `AssetPath` string (incl. `twin://name/` source) so twin shaders
-        // match their catalog entry, not just the bare `path()`.
-        .map(|p| p.to_string());
-    let cur = cur_path.unwrap_or_default();
+    let cur = current_shader_path(ctx, part).unwrap_or_default();
     let cur_label = entries
         .iter()
         .find(|e| e.path == cur)
@@ -876,16 +933,14 @@ fn shader_picker_for_part(ui: &mut egui::Ui, world: &mut World, part: Entity) {
         });
     if let Some(path) = chosen {
         if path != cur {
-            swap_shader_on_entity(world, part, &path);
+            ctx.defer(move |world| swap_shader_on_entity(world, part, &path));
         }
     }
 }
 
-/// Bind shader `path` to `part`, building a fresh [`ShaderMaterial`] (carrying
-/// over the previous one's uniforms if it had any) and removing the part's
-/// `StandardMaterial` — the same uniform-preserving swap the
-/// `SetObjectProperty { property: "shader" }` command performs, but addressed
-/// by `Entity` so it reaches sub-parts that have no API id.
+/// Bind shader `path` to `part`, building a fresh [`ShaderMaterial`]
+/// (carrying over the previous one's uniforms) and removing the part's
+/// `StandardMaterial`. Runs inside a deferred closure (`&mut World`).
 fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
     use lunco_materials::ShaderMaterial;
     let template = world
@@ -923,26 +978,23 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
 }
 
 /// The full asset-path string of `part`'s current `ShaderMaterial` shader
-/// (incl. any `twin://` source), or `None` if it isn't using one.
-fn current_shader_path(world: &mut World, part: Entity) -> Option<String> {
-    let h = world
+/// (read via [`PanelCtx`]), or `None` if it isn't using one.
+fn current_shader_path(ctx: &PanelCtx, part: Entity) -> Option<String> {
+    let h = ctx
         .get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(part)
         .map(|m| m.0.clone())?;
-    let sid = world
-        .resource::<Assets<lunco_materials::ShaderMaterial>>()
+    let sid = ctx
+        .resource::<Assets<lunco_materials::ShaderMaterial>>()?
         .get(&h)
         .map(|m| m.shader.id())?;
-    let p = world.resource::<AssetServer>().get_path(sid)?;
+    let p = ctx.resource::<AssetServer>()?.get_path(sid)?;
     Some(p.to_string())
 }
 
-/// "Shader Tools" — GUI front-end for the live shader-authoring commands
-/// ([`crate::commands::CreateShader`] / `ImportShader` / `RescanShaders` /
-/// `DeleteShader`). Create and Import additionally apply the result to `part`
-/// **by `Entity`** (so it reaches sub-parts that have no API id). Commands are
-/// fired with `world.trigger`, which runs their observers synchronously, so the
-/// new catalog entry is visible the moment we go to apply it.
-fn shader_tools_ui(ui: &mut egui::Ui, world: &mut World, part: Entity) {
+/// "Shader Tools" — GUI front-end for the live shader-authoring commands.
+/// Create / Import apply the result to `part` by `Entity`. Commands are
+/// deferred (they run their observers via `world.trigger`).
+fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
     egui::CollapsingHeader::new("Shader Tools")
         .default_open(false)
         .show(ui, |ui| {
@@ -988,7 +1040,9 @@ fn shader_tools_ui(ui: &mut egui::Ui, world: &mut World, part: Entity) {
                 )
                 .clicked()
             {
-                create_and_apply(world, part, &st.name, &st.template);
+                let name = st.name.clone();
+                let template = st.template.clone();
+                ctx.defer(move |world| create_and_apply(world, part, &name, &template));
                 st.name.clear();
             }
 
@@ -1007,7 +1061,8 @@ fn shader_tools_ui(ui: &mut egui::Ui, world: &mut World, part: Entity) {
                 )
                 .clicked()
             {
-                import_and_apply(world, part, st.import.trim());
+                let src = st.import.trim().to_string();
+                ctx.defer(move |world| import_and_apply(world, part, &src));
             }
 
             ui.separator();
@@ -1017,15 +1072,19 @@ fn shader_tools_ui(ui: &mut egui::Ui, world: &mut World, part: Entity) {
                     .on_hover_text("Register any .wgsl dropped into the twin's shaders/ folder")
                     .clicked()
                 {
-                    world.trigger(crate::commands::RescanShaders {});
+                    ctx.defer(|world| {
+                        world.trigger(crate::commands::RescanShaders {});
+                    });
                 }
-                if let Some(path) = current_shader_path(world, part) {
+                if let Some(path) = current_shader_path(ctx, part) {
                     if ui
                         .button("Delete current")
                         .on_hover_text(format!("Remove {path} (file + picker)"))
                         .clicked()
                     {
-                        world.trigger(crate::commands::DeleteShader { path });
+                        ctx.defer(move |world| {
+                            world.trigger(crate::commands::DeleteShader { path });
+                        });
                     }
                 }
             });
@@ -1034,9 +1093,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, world: &mut World, part: Entity) {
         });
 }
 
-/// Create a shader from `template` (registers it), then bind it to `part` by
-/// `Entity`. Only applies if the command actually produced the catalog entry
-/// (a rejected/invalid create leaves the part untouched).
+/// Create a shader from `template` (registers it), then bind it to `part`.
 fn create_and_apply(world: &mut World, part: Entity, name: &str, template: &str) {
     world.trigger(crate::commands::CreateShader {
         name: name.to_string(),
@@ -1048,8 +1105,7 @@ fn create_and_apply(world: &mut World, part: Entity, name: &str, template: &str)
     apply_if_registered(world, part, &stem);
 }
 
-/// Import an external `.wgsl` (registers it), then bind it to `part`. Skips the
-/// apply if the import was rejected (e.g. not a prop-pickable shader).
+/// Import an external `.wgsl` (registers it), then bind it to `part`.
 fn import_and_apply(world: &mut World, part: Entity, src_path: &str) {
     world.trigger(crate::commands::ImportShader {
         source_path: src_path.to_string(),
@@ -1066,8 +1122,7 @@ fn import_and_apply(world: &mut World, part: Entity, src_path: &str) {
     }
 }
 
-/// If a shader for `stem` is now registered (its predicted asset path is in the
-/// catalog), swap `part` onto it.
+/// If a shader for `stem` is now registered, swap `part` onto it.
 fn apply_if_registered(world: &mut World, part: Entity, stem: &str) {
     let path = {
         let tr = world.get_resource::<lunco_assets::twin_source::TwinRoots>();
@@ -1083,15 +1138,11 @@ fn apply_if_registered(world: &mut World, part: Entity, stem: &str) {
     }
 }
 
-/// Editable PBR controls for the selected object's `StandardMaterial`s — the
-/// default bevy material props/rovers carry unless a custom `ShaderMaterial`
-/// was authored. Reads the first handle, applies edits to **all** of them
-/// (so one slider recolors the whole rover). Mutates the live assets in place
-/// for immediate feedback. Full photometric control: base color, alpha,
-/// emissive, metallic, roughness, reflectance, unlit, double-sided.
+/// Editable PBR controls for the selected object's `StandardMaterial`s.
+/// Reads a snapshot via [`PanelCtx`]; the asset + USD writes are deferred.
 fn material_pbr_section(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
     part: Entity,
     handles: &[Handle<StandardMaterial>],
 ) {
@@ -1101,7 +1152,10 @@ fn material_pbr_section(
 
     // Snapshot current values — no world borrow held while drawing widgets.
     let snap = {
-        let mats = world.resource::<Assets<StandardMaterial>>();
+        let Some(mats) = ctx.resource::<Assets<StandardMaterial>>() else {
+            ui.label("Material still loading…");
+            return;
+        };
         let Some(m) = mats.get(&handle) else {
             ui.label("Material still loading…");
             return;
@@ -1153,95 +1207,82 @@ fn material_pbr_section(
     }
 
     if changed {
-        if let Some(mut mats) = world.get_resource_mut::<Assets<StandardMaterial>>() {
-            for handle in handles {
-                let Some(m) = mats.get_mut(handle) else { continue };
-                m.base_color = Color::LinearRgba(LinearRgba::new(base[0], base[1], base[2], alpha));
-                m.emissive = LinearRgba::new(emissive[0], emissive[1], emissive[2], 1.0);
-                m.metallic = metallic;
-                m.perceptual_roughness = roughness;
-                m.reflectance = reflectance;
-                m.unlit = unlit;
-                m.double_sided = double_sided;
-                m.alpha_mode = if alpha >= 1.0 { AlphaMode::Opaque } else { AlphaMode::Blend };
-                m.cull_mode = if double_sided { None } else { Some(bevy::render::render_resource::Face::Back) };
-            }
-        }
-
-        // Propagate changes to USD. A bound shader prim (resolved via the same
-        // material:binding → outputs:surface walk the renderer uses) receives the
-        // edits as `inputs:*`; otherwise they're written as `primvars:*` directly
-        // on the geometry prim. Only the destination differs per channel, so a
-        // single `write` dispatcher keeps the two paths from drifting.
-        if let Some(prim) = world.get::<UsdPrimPath>(part).cloned() {
-            let shader_path = world
-                .get_resource::<Assets<UsdStageAsset>>()
-                .and_then(|stages| stages.get(&prim.stage_handle))
-                .and_then(|stage| {
-                    let mesh_sdf = SdfPath::new(&prim.path).ok()?;
-                    resolve_bound_shader(&stage.reader, &mesh_sdf)
-                })
-                .map(|p| p.to_string());
-
-            let mut write = |attr: &str, ty: &str, value: String| match &shader_path {
-                Some(sp) => apply_usd_path_attribute_change(world, part, sp.clone(), attr, ty, value),
-                None => apply_usd_attribute_change(world, part, attr, ty, value),
-            };
-
-            // displayColor lives directly on the geometry as an array primvar;
-            // a shader carries it as the scalar `inputs:diffuseColor`.
-            if base_changed {
-                let value = format!("({}, {}, {})", base[0], base[1], base[2]);
-                if shader_path.is_some() {
-                    write("inputs:diffuseColor", "color3f", value);
-                } else {
-                    write(
-                        "primvars:displayColor",
-                        "color3f[]",
-                        format!("[({}, {}, {})]", base[0], base[1], base[2]),
-                    );
+        let handles = handles.to_vec();
+        ctx.defer(move |world| {
+            if let Some(mut mats) = world.get_resource_mut::<Assets<StandardMaterial>>() {
+                for handle in &handles {
+                    let Some(m) = mats.get_mut(handle) else { continue };
+                    m.base_color = Color::LinearRgba(LinearRgba::new(base[0], base[1], base[2], alpha));
+                    m.emissive = LinearRgba::new(emissive[0], emissive[1], emissive[2], 1.0);
+                    m.metallic = metallic;
+                    m.perceptual_roughness = roughness;
+                    m.reflectance = reflectance;
+                    m.unlit = unlit;
+                    m.double_sided = double_sided;
+                    m.alpha_mode = if alpha >= 1.0 { AlphaMode::Opaque } else { AlphaMode::Blend };
+                    m.cull_mode = if double_sided { None } else { Some(bevy::render::render_resource::Face::Back) };
                 }
             }
-            if emissive_changed {
-                let attr = if shader_path.is_some() { "inputs:emissiveColor" } else { "primvars:emissiveColor" };
-                write(attr, "color3f", format!("({}, {}, {})", emissive[0], emissive[1], emissive[2]));
+
+            // Propagate changes to USD.
+            if let Some(prim) = world.get::<UsdPrimPath>(part).cloned() {
+                let shader_path = world
+                    .get_resource::<Assets<UsdStageAsset>>()
+                    .and_then(|stages| stages.get(&prim.stage_handle))
+                    .and_then(|stage| {
+                        let mesh_sdf = SdfPath::new(&prim.path).ok()?;
+                        resolve_bound_shader(&stage.reader, &mesh_sdf)
+                    })
+                    .map(|p| p.to_string());
+
+                let mut write = |attr: &str, ty: &str, value: String| match &shader_path {
+                    Some(sp) => apply_usd_path_attribute_change(world, part, sp.clone(), attr, ty, value),
+                    None => apply_usd_attribute_change(world, part, attr, ty, value),
+                };
+
+                if base_changed {
+                    let value = format!("({}, {}, {})", base[0], base[1], base[2]);
+                    if shader_path.is_some() {
+                        write("inputs:diffuseColor", "color3f", value);
+                    } else {
+                        write(
+                            "primvars:displayColor",
+                            "color3f[]",
+                            format!("[({}, {}, {})]", base[0], base[1], base[2]),
+                        );
+                    }
+                }
+                if emissive_changed {
+                    let attr = if shader_path.is_some() { "inputs:emissiveColor" } else { "primvars:emissiveColor" };
+                    write(attr, "color3f", format!("({}, {}, {})", emissive[0], emissive[1], emissive[2]));
+                }
+                if metallic_changed {
+                    write("inputs:metallic", "float", format!("{:.3}", metallic));
+                }
+                if roughness_changed {
+                    write("inputs:roughness", "float", format!("{:.3}", roughness));
+                }
+                if reflectance_changed {
+                    write("inputs:reflectance", "float", format!("{:.3}", reflectance));
+                }
             }
-            if metallic_changed {
-                write("inputs:metallic", "float", format!("{:.3}", metallic));
-            }
-            if roughness_changed {
-                write("inputs:roughness", "float", format!("{:.3}", roughness));
-            }
-            if reflectance_changed {
-                write("inputs:reflectance", "float", format!("{:.3}", reflectance));
-            }
-        }
+        });
     }
 }
 
 /// Render named, range-bounded controls for the selected entity's
 /// [`ShaderMaterial`](lunco_materials::ShaderMaterial) generic uniforms.
-///
-/// Labels, ranges, and defaults come from the manifest in `lunco-materials`
-/// (keyed by the shader's file name), so this stays in sync with each
-/// `.wgsl` header and needs no per-shader code here. A stored uniform of 0
-/// means "unset" — the control shows the manifest default (matching the
-/// shader's own fallback) until the user moves it. Edits mutate the live
-/// material asset in place for immediate feedback, the same path the
-/// Transform/Physics sections use.
-fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entity) {
+/// Reads a snapshot via [`PanelCtx`]; the live-asset + USD writes deferred.
+fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
     use lunco_materials::{ParamType, ParamValue, ShaderMaterial, UiKind};
 
-    let Some(handle) = world
+    let Some(handle) = ctx
         .get::<MeshMaterial3d<ShaderMaterial>>(entity)
         .map(|m| m.0.clone())
     else {
         return;
     };
 
-    // Snapshot the reflected schema + each field's current display value.
-    // Engine-filled fields are hidden. `mat.get` already falls back to the
-    // field's reflected default.
     struct Row {
         name: String,
         label: String,
@@ -1252,7 +1293,10 @@ fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entit
         color: [f32; 3],
     }
     let rows: Vec<Row> = {
-        let mats = world.resource::<Assets<ShaderMaterial>>();
+        let Some(mats) = ctx.resource::<Assets<ShaderMaterial>>() else {
+            ui.label("Material still loading…");
+            return;
+        };
         let Some(mat) = mats.get(&handle) else {
             ui.label("Material still loading…");
             return;
@@ -1280,16 +1324,11 @@ fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entit
             .collect()
     };
 
-    // (The shader picker lives in `shader_picker_for_part`, rendered above this
-    // section so it works on any targeted part — including converting a PBR
-    // part — not just entities with an API id.)
     if rows.is_empty() {
         ui.label("No editable parameters.");
         return;
     }
 
-    // Draw; collect edits as typed values (matching each field's WGSL type so
-    // packing writes the right width). No world borrow held while drawing.
     let mut edits: Vec<(String, ParamValue)> = Vec::new();
     for mut row in rows {
         match row.ui {
@@ -1332,69 +1371,60 @@ fn shader_parameters_section(ui: &mut egui::Ui, world: &mut World, entity: Entit
         }
     }
 
-    // Apply to the live material asset (one re-upload).
     if !edits.is_empty() {
-        let usd_prim_exists = world.get::<UsdPrimPath>(entity).is_some();
-        if let Some(mut mats) = world.get_resource_mut::<Assets<ShaderMaterial>>() {
-            if let Some(mat) = mats.get_mut(&handle) {
-                for (name, v) in edits.iter() {
-                    mat.set(name, *v);
+        let usd_prim_exists = ctx.get::<UsdPrimPath>(entity).is_some();
+        ctx.defer(move |world| {
+            if let Some(mut mats) = world.get_resource_mut::<Assets<ShaderMaterial>>() {
+                if let Some(mat) = mats.get_mut(&handle) {
+                    for (name, v) in edits.iter() {
+                        mat.set(name, *v);
+                    }
                 }
             }
-        }
 
-        // Propagate changes to USD
-        if usd_prim_exists {
-            for (name, v) in edits {
-                let usd_name = if name.starts_with("primvars:") {
-                    name.clone()
-                } else {
-                    format!("primvars:{}", name)
-                };
-                let (type_name, value_str) = match v {
-                    ParamValue::F32(x) => ("float", format!("{:.3}", x)),
-                    ParamValue::I32(x) => ("int", format!("{}", x)),
-                    ParamValue::U32(x) => ("uint", format!("{}", x)),
-                    ParamValue::Vec2(arr) => ("float2", format!("({}, {})", arr[0], arr[1])),
-                    ParamValue::Vec3(arr) => {
-                        let name_lc = name.to_lowercase();
-                        let t = if name_lc.contains("color") || name_lc.contains("colour") {
-                            "color3f"
-                        } else {
-                            "float3"
-                        };
-                        (t, format!("({}, {}, {})", arr[0], arr[1], arr[2]))
-                    }
-                    ParamValue::Vec4(arr) => ("float4", format!("({}, {}, {}, {})", arr[0], arr[1], arr[2], arr[3])),
-                };
-                apply_usd_attribute_change(world, entity, &usd_name, type_name, value_str);
+            // Propagate changes to USD
+            if usd_prim_exists {
+                for (name, v) in edits {
+                    let usd_name = if name.starts_with("primvars:") {
+                        name.clone()
+                    } else {
+                        format!("primvars:{}", name)
+                    };
+                    let (type_name, value_str) = match v {
+                        ParamValue::F32(x) => ("float", format!("{:.3}", x)),
+                        ParamValue::I32(x) => ("int", format!("{}", x)),
+                        ParamValue::U32(x) => ("uint", format!("{}", x)),
+                        ParamValue::Vec2(arr) => ("float2", format!("({}, {})", arr[0], arr[1])),
+                        ParamValue::Vec3(arr) => {
+                            let name_lc = name.to_lowercase();
+                            let t = if name_lc.contains("color") || name_lc.contains("colour") {
+                                "color3f"
+                            } else {
+                                "float3"
+                            };
+                            (t, format!("({}, {}, {})", arr[0], arr[1], arr[2]))
+                        }
+                        ParamValue::Vec4(arr) => ("float4", format!("({}, {}, {}, {})", arr[0], arr[1], arr[2], arr[3])),
+                    };
+                    apply_usd_attribute_change(world, entity, &usd_name, type_name, value_str);
+                }
             }
-        }
+        });
     }
 }
 
 /// Render editable sliders for every tunable `parameter Real` in the
-/// entity's Modelica model. On any change, dispatch a
-/// [`ModelicaOp::SetParameter`] through the canonical op pipeline
-/// (which span-patches the source, refreshes the AST cache, patches
-/// the index, and journals) and signal the worker to recompile.
+/// entity's Modelica model. Reads params via [`PanelCtx::get`]; the op
+/// dispatch + recompile signal run in a deferred `&mut World` closure.
 fn modelica_parameters_section(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
     entity: Entity,
 ) {
-    use lunco_modelica::state::ModelicaDocumentRegistry;
-    // Use the canvas_diagram-level re-export, not the private `ops`
-    // submodule path. Submodules of canvas_diagram (ops, projection,
-    // panel, …) are crate-private encapsulation; the public surface
-    // is the items re-exported at canvas_diagram's mod root.
-    use lunco_modelica::ui::panels::canvas_diagram::apply_ops_public;
-    use lunco_modelica::document::ModelicaOp;
-    use lunco_modelica::{ModelicaChannels, ModelicaCommand, ModelicaModel};
+    use lunco_modelica::ModelicaModel;
 
-    // Snapshot the current params so we can render stable sliders
-    // without holding a mutable borrow across the UI.
-    let (params, model_name) = match world.get::<ModelicaModel>(entity) {
+    // Snapshot the current params so we can render stable sliders.
+    let (params, model_name) = match ctx.get::<ModelicaModel>(entity) {
         Some(m) => (m.parameters.clone(), m.model_name.clone()),
         None => return,
     };
@@ -1403,7 +1433,6 @@ fn modelica_parameters_section(
         return;
     }
 
-    // Sorted keys for a stable display order.
     let mut keys: Vec<String> = params.keys().cloned().collect();
     keys.sort();
 
@@ -1428,69 +1457,69 @@ fn modelica_parameters_section(
 
     let Some((changed_key, new_value)) = changed_pair else { return };
 
-    // Mirror the new value into ECS state for instant slider feedback;
-    // bump session id so the worker treats this as a fresh stepping
-    // generation.
-    let mut session_id = 0u64;
-    if let Some(mut m) = world.get_mut::<ModelicaModel>(entity) {
-        if let Some(slot) = m.parameters.get_mut(&changed_key) {
-            *slot = new_value;
+    ctx.defer(move |world| {
+        use lunco_modelica::state::ModelicaDocumentRegistry;
+        use lunco_modelica::ui::panels::canvas_diagram::apply_ops_public;
+        use lunco_modelica::document::ModelicaOp;
+        use lunco_modelica::{ModelicaChannels, ModelicaCommand, ModelicaModel};
+
+        // Mirror the new value into ECS state for instant slider feedback;
+        // bump session id so the worker treats this as a fresh generation.
+        let mut session_id = 0u64;
+        if let Some(mut m) = world.get_mut::<ModelicaModel>(entity) {
+            if let Some(slot) = m.parameters.get_mut(&changed_key) {
+                *slot = new_value;
+            }
+            m.session_id += 1;
+            session_id = m.session_id;
+            m.is_stepping = true;
         }
-        m.session_id += 1;
-        session_id = m.session_id;
-        m.is_stepping = true;
-    }
 
-    // Resolve doc id + root class from the registry.
-    let (doc_id, class_name) = {
-        let registry = world.resource::<ModelicaDocumentRegistry>();
-        let doc = registry.document_of(entity);
-        let class = doc
-            .and_then(|d| registry.host(d))
-            .and_then(|h| {
-                lunco_modelica::ast_extract::extract_model_name_from_ast(
-                    h.document().syntax().ast(),
-                )
+        // Resolve doc id + root class from the registry.
+        let (doc_id, class_name) = {
+            let registry = world.resource::<ModelicaDocumentRegistry>();
+            let doc = registry.document_of(entity);
+            let class = doc
+                .and_then(|d| registry.host(d))
+                .and_then(|h| {
+                    lunco_modelica::ast_extract::extract_model_name_from_ast(
+                        h.document().syntax().ast(),
+                    )
+                });
+            (doc, class)
+        };
+        let (Some(doc_id), Some(class_name)) = (doc_id, class_name) else { return };
+
+        apply_ops_public(
+            world,
+            doc_id,
+            vec![ModelicaOp::SetParameter {
+                class: class_name,
+                component: changed_key,
+                param: String::new(),
+                value: format!("{new_value}"),
+            }],
+        );
+
+        let new_source = world
+            .resource::<ModelicaDocumentRegistry>()
+            .host(doc_id)
+            .map(|h| h.document().source().to_string());
+        if let (Some(new_source), Some(channels)) =
+            (new_source, world.get_resource::<ModelicaChannels>())
+        {
+            let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
+                entity,
+                session_id,
+                model_name,
+                source: new_source,
             });
-        (doc, class)
-    };
-    let (Some(doc_id), Some(class_name)) = (doc_id, class_name) else { return };
-
-    // Dispatch through the canonical op pipeline. `param: ""` is the
-    // sentinel for the component's primary binding (the `= expr` after
-    // the name), which is what top-level `parameter Real k = 5;`
-    // declarations need.
-    apply_ops_public(
-        world,
-        doc_id,
-        vec![ModelicaOp::SetParameter {
-            class: class_name,
-            component: changed_key,
-            param: String::new(),
-            value: format!("{new_value}"),
-        }],
-    );
-
-    // Pull the freshly-patched source back out and signal the worker
-    // to recompile. The op pipeline already updated the source +
-    // generation; this just hands the worker the new bytes.
-    let new_source = world
-        .resource::<ModelicaDocumentRegistry>()
-        .host(doc_id)
-        .map(|h| h.document().source().to_string());
-    if let (Some(new_source), Some(channels)) =
-        (new_source, world.get_resource::<ModelicaChannels>())
-    {
-        let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
-            entity,
-            session_id,
-            model_name,
-            source: new_source,
-        });
-    }
+        }
+    });
 }
 
-/// Dispatch a `UsdOp::SetAttribute` command to write changes back to the USD document for a specific prim path.
+/// Dispatch a `UsdOp::SetAttribute` for a specific prim path. Runs inside a
+/// deferred `&mut World` closure.
 fn apply_usd_path_attribute_change(
     world: &mut World,
     entity: Entity,
@@ -1544,7 +1573,8 @@ fn apply_usd_path_attribute_change(
     }
 }
 
-/// Dispatch a `UsdOp::SetAttribute` command to write changes back to the USD document.
+/// Dispatch a `UsdOp::SetAttribute` to write changes back to the USD
+/// document. Runs inside a deferred `&mut World` closure.
 fn apply_usd_attribute_change(
     world: &mut World,
     entity: Entity,

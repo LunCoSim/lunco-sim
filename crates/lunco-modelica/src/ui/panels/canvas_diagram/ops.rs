@@ -14,30 +14,31 @@ use crate::state::ModelicaDocumentRegistry;
 
 use super::coords::{ModelicaPos, canvas_to_modelica};
 use super::projection::projection_relevant_source_hash;
-use super::{CanvasDiagramState, IconNodeData, active_doc_from_world};
+use super::{CanvasDiagramState, IconNodeData, active_doc_from_world, active_doc_from_world_ctx};
 use crate::model_tabs_types::TabRenderContext;
 
 /// Read the active tab id from `TabRenderContext`. `None` outside a
 /// panel render call (observers, off-render systems); call sites that
 /// pair this with `get_for_render` correctly fall back to first-tab
 /// semantics in that case.
-fn render_tab_id(world: &World) -> Option<crate::model_tabs_types::TabId> {
-    world
-        .get_resource::<TabRenderContext>()
+#[cfg(feature = "ui")]
+fn render_tab_id_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<crate::model_tabs_types::TabId> {
+    ctx
+        .resource::<TabRenderContext>()
         .and_then(|c| c.tab_id)
 }
 
 /// Resolve `(document id, editing class name)` for the current tab.
-/// Used by the canvas + neighbours so they target the same class when
-/// `open_model` is bound.
-pub(super) fn resolve_doc_context(world: &World) -> (Option<lunco_doc::DocumentId>, Option<String>) {
+/// `PanelCtx` reader used by the canvas render path.
+#[cfg(feature = "ui")]
+pub(super) fn resolve_doc_context(ctx: &lunco_workbench::PanelCtx) -> (Option<lunco_doc::DocumentId>, Option<String>) {
     // Active doc from the Workspace session; the per-doc Index
     // is read as a display-cache fallback when the registry AST hasn't
     // caught up yet. Both paths are optional — the caller tolerates
     // `(None, None)` by deferring.
-    let Some(doc_id) = world
+    let Some(doc_id) = ctx
         .resource::<lunco_workspace::WorkspaceResource>()
-        .active_document
+        .and_then(|w| w.active_document)
     else {
         return (None, None);
     };
@@ -54,19 +55,19 @@ pub(super) fn resolve_doc_context(world: &World) -> (Option<lunco_doc::DocumentI
     // wrapper. Adding a component to a package corrupts the file —
     // packages can only contain classes, not components.
     let drilled_in =
-        crate::sim_default::drilled_class_for_doc(world, doc_id);
+        crate::sim_default::drilled_class_for_doc_ctx(ctx, doc_id);
     let class = drilled_in
         .or_else(|| {
-            world
+            ctx
                 .resource::<ModelicaDocumentRegistry>()
-                .host(doc_id)
+                .and_then(|r| r.host(doc_id))
                 .and_then(|h| {
                     h.document()
                         .strict_ast()
                         .and_then(|ast| crate::ast_extract::extract_model_name_from_ast(&ast))
                 })
         })
-        .or_else(|| crate::state::detected_name_for(world, doc_id));
+        .or_else(|| crate::state::detected_name_for_ctx(ctx, doc_id));
     (Some(doc_id), class)
 }
 
@@ -76,15 +77,16 @@ pub(super) fn resolve_doc_context(world: &World) -> (Option<lunco_doc::DocumentI
 /// Translate canvas scene events into ModelicaOps. Needs a brief
 /// read-only borrow of the scene (to look up edge endpoints); the
 /// caller runs it inside its own borrow scope.
+#[cfg(feature = "ui")]
 pub(super) fn build_ops_from_events(
-    world: &mut World,
+    ctx: &lunco_workbench::PanelCtx,
+    state: &CanvasDiagramState,
     events: &[lunco_canvas::SceneEvent],
     class: &str,
 ) -> Vec<ModelicaOp> {
     use lunco_canvas::SceneEvent;
-    let active_doc = active_doc_from_world(world);
-    let tab = render_tab_id(world);
-    let state = world.resource::<CanvasDiagramState>();
+    let active_doc = active_doc_from_world_ctx(ctx);
+    let tab = render_tab_id_ctx(ctx);
     let scene = &state.get_for_render(tab, active_doc).canvas.scene;
     let mut ops: Vec<ModelicaOp> = Vec::new();
 
@@ -391,13 +393,14 @@ pub(super) fn build_ops_from_events(
 
 /// `(instance_name, type_label)` for a node, pulled from the scene's
 /// `label` + `data.type`. Empty strings when the node is gone.
+#[cfg(feature = "ui")]
 pub(super) fn component_headers(
-    world: &World,
+    ctx: &lunco_workbench::PanelCtx,
+    state: &CanvasDiagramState,
     id: lunco_canvas::NodeId,
 ) -> (String, String) {
-    let active_doc = active_doc_from_world(world);
-    let tab = render_tab_id(world);
-    let state = world.resource::<CanvasDiagramState>();
+    let active_doc = active_doc_from_world_ctx(ctx);
+    let tab = render_tab_id_ctx(ctx);
     let Some(node) = state.get_for_render(tab, active_doc).canvas.scene.node(id) else {
         return (String::new(), String::new());
     };
@@ -474,14 +477,15 @@ pub(super) fn op_add_component_with_name(
 // could disagree on port layout / icon rendering until the projector
 // caught up.
 
+#[cfg(feature = "ui")]
 pub(super) fn op_remove_component(
-    world: &mut World,
+    ctx: &lunco_workbench::PanelCtx,
+    state: &CanvasDiagramState,
     id: lunco_canvas::NodeId,
     class: &str,
 ) -> Option<ModelicaOp> {
-    let active_doc = active_doc_from_world(world);
-    let tab = render_tab_id(world);
-    let state = world.resource::<CanvasDiagramState>();
+    let active_doc = active_doc_from_world_ctx(ctx);
+    let tab = render_tab_id_ctx(ctx);
     op_remove_node_inner(
         &state.get_for_render(tab, active_doc).canvas.scene,
         id,
@@ -489,14 +493,15 @@ pub(super) fn op_remove_component(
     )
 }
 
+#[cfg(feature = "ui")]
 pub(super) fn op_remove_edge(
-    world: &mut World,
+    ctx: &lunco_workbench::PanelCtx,
+    state: &CanvasDiagramState,
     id: lunco_canvas::EdgeId,
     class: &str,
 ) -> Option<ModelicaOp> {
-    let active_doc = active_doc_from_world(world);
-    let tab = render_tab_id(world);
-    let state = world.resource::<CanvasDiagramState>();
+    let active_doc = active_doc_from_world_ctx(ctx);
+    let tab = render_tab_id_ctx(ctx);
     op_remove_edge_inner(
         &state.get_for_render(tab, active_doc).canvas.scene,
         id,
@@ -874,4 +879,16 @@ pub fn active_class_for_doc(world: &mut World, doc_id: lunco_doc::DocumentId) ->
         return Some(c);
     }
     crate::state::detected_name_for(world, doc_id)
+}
+
+/// `PanelCtx` sibling of [`active_class_for_doc`] — same precedence,
+/// reading resources through the capability-narrowed panel context.
+pub fn active_class_for_doc_ctx(
+    ctx: &lunco_workbench::PanelCtx,
+    doc_id: lunco_doc::DocumentId,
+) -> Option<String> {
+    if let Some(c) = crate::sim_default::drilled_class_for_doc_ctx(ctx, doc_id) {
+        return Some(c);
+    }
+    crate::state::detected_name_for_ctx(ctx, doc_id)
 }

@@ -57,7 +57,7 @@ mod panel;
 pub use theme::CanvasThemeSnapshot;
 pub use panel::CanvasDiagramPanel;
 pub(crate) use panel::invalidate_port_icon_cache;
-pub use ops::{active_class_for_doc, apply_ops_public, on_auto_arrange_diagram};
+pub use ops::{active_class_for_doc, active_class_for_doc_ctx, apply_ops_public, on_auto_arrange_diagram};
 // Op-application core moved to the egui-free `crate::doc_ops` module.
 pub use crate::doc_ops::{apply_one_op_as, drain_pending_structural_ops, PendingStructuralOps};
 // API-feedback queue data moved to the egui-free `crate::canvas_feedback`.
@@ -835,6 +835,21 @@ pub fn active_doc_from_world(world: &World) -> Option<lunco_doc::DocumentId> {
         .active_document
 }
 
+/// `PanelCtx` sibling of [`active_doc_from_world`] — same precedence,
+/// reading resources through the capability-narrowed panel context.
+pub fn active_doc_from_world_ctx(
+    ctx: &lunco_workbench::PanelCtx,
+) -> Option<lunco_doc::DocumentId> {
+    if let Some((doc, _)) = ctx
+        .resource::<crate::model_tabs_types::TabRenderContext>()
+        .and_then(|c| c.current())
+    {
+        return Some(doc);
+    }
+    ctx.resource::<lunco_workspace::WorkspaceResource>()
+        .and_then(|w| w.active_document)
+}
+
 /// `(doc, drilled_class)` for the currently-rendering tab body.
 /// Falls back to `(active_document, DrilledInClassNames[doc])` when
 /// no tab body is rendering — preserves legacy semantics for
@@ -853,6 +868,24 @@ pub(super) fn render_target(
         .resource::<lunco_workspace::WorkspaceResource>()
         .active_document?;
     let drilled = crate::sim_default::drilled_class_for_doc(world, doc);
+    Some((doc, drilled))
+}
+
+/// `PanelCtx` sibling of [`render_target`] — same `(doc, drilled_class)`
+/// resolution reading through the capability-narrowed panel context.
+#[cfg(feature = "ui")]
+pub(super) fn render_target_ctx(
+    ctx: &lunco_workbench::PanelCtx,
+) -> Option<(lunco_doc::DocumentId, Option<String>)> {
+    if let Some(tc) = ctx.resource::<crate::model_tabs_types::TabRenderContext>() {
+        if let Some(doc) = tc.doc {
+            return Some((doc, tc.drilled_class.clone()));
+        }
+    }
+    let doc = ctx
+        .resource::<lunco_workspace::WorkspaceResource>()
+        .and_then(|w| w.active_document)?;
+    let drilled = crate::sim_default::drilled_class_for_doc_ctx(ctx, doc);
     Some((doc, drilled))
 }
 

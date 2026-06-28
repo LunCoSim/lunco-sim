@@ -395,17 +395,31 @@ fn sync_workspace_on_doc_saved(
 /// docs, this currently shows `P` (the first top-level class). Once
 /// drilled-in tracking is per-doc-tab (it's per-canvas today), the
 /// derived title should become `P.<drilled>` to match Dymola.
+/// Per-doc index generation the title was last derived for (CQ-209).
+/// The derived title is a pure function of the doc's index (+ origin),
+/// so an unchanged generation can't change it — gating on this skips the
+/// `derive_title_from_doc` String allocation on the (overwhelmingly
+/// common) no-change frame.
+#[derive(Resource, Default)]
+struct DocTitleGenCache(std::collections::HashMap<lunco_doc::DocumentId, u64>);
+
 fn derive_doc_title(
     registry: Res<ModelicaDocumentRegistry>,
     mut ws: ResMut<lunco_workspace::WorkspaceResource>,
+    mut cache: ResMut<DocTitleGenCache>,
 ) {
-    // Cheap when nothing changed: each iteration is a HashMap lookup +
-    // a string compare, write only on diff. No per-doc generation
-    // tracking yet — add one if profiling shows this in a hot frame.
     for (doc_id, host) in registry.docs() {
         let document = host.document();
+        let generation = document.index().generation;
+        // Skip docs whose index hasn't changed since we last derived —
+        // no String alloc, no workspace write.
+        if cache.0.get(&doc_id) == Some(&generation) {
+            continue;
+        }
         let derived = derive_title_from_doc(document);
         let Some(entry) = ws.document_mut(doc_id) else {
+            // Not in the workspace yet — retry next frame; don't cache,
+            // or we'd never set the title once it appears.
             continue;
         };
         if entry.title != derived {
@@ -418,6 +432,7 @@ fn derive_doc_title(
                 entry.origin = lunco_doc::DocumentOrigin::untitled(derived);
             }
         }
+        cache.0.insert(doc_id, generation);
     }
 }
 
@@ -773,6 +788,16 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<panels::canvas_projection::DiagramAutoLayoutSettings>()
             .init_resource::<panels::palette::PaletteState>()
             .init_resource::<panels::palette::ComponentDragPayload>()
+            // WP-8 / CQ-208: the Telemetry panel's active-class parameter
+            // list is a pure view over `TelemetryViewModel`, re-flattened
+            // only when the active doc / class / index generation changes.
+            .init_resource::<panels::telemetry::TelemetryViewModel>()
+            .add_systems(Update, panels::telemetry::populate_telemetry_view_model)
+            // WP-8 / CQ-207: the experiments plot reads shared `Arc` sample
+            // arrays + the variable catalog from `ExperimentsViewModel`,
+            // rebuilt only when the twin's run set / sample totals change.
+            .init_resource::<panels::experiments::ExperimentsViewModel>()
+            .add_systems(Update, panels::experiments::populate_experiments_view_model)
             .insert_resource(crate::package_tree::PackageTreeCache::new())
             .add_systems(Update, browser_dispatch::drain_browser_actions)
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
@@ -826,6 +851,7 @@ impl Plugin for ModelicaUiPlugin {
                 Update,
                 panels::canvas_diagram::drain_pending_structural_ops,
             )
+            .init_resource::<DocTitleGenCache>()
             .add_systems(Update, derive_doc_title)
             // Twin panel reads docs directly from `ModelicaDocumentRegistry`
             // now (PR4); no separate `LoadedModelicaClasses` registry +
@@ -1274,12 +1300,28 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
     render_optional_libraries(ui, world);
 }
 
+/// Parse the bundled `Assets.toml` exactly once. The source is a
+/// compile-time `const &str`, so the parse result is immutable — doing it
+/// every frame `render_optional_libraries` runs (CQ-216) was pure waste.
+#[cfg(not(target_arch = "wasm32"))]
+fn bundled_asset_manifest() -> &'static Result<lunco_assets::download::AssetManifest, String> {
+    use lunco_assets::download::AssetManifest;
+    static CACHE: std::sync::OnceLock<Result<AssetManifest, String>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        AssetManifest::from_str(crate::msl_remote::BUNDLED_ASSETS_TOML).map_err(|e| e.to_string())
+    })
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn render_optional_libraries(ui: &mut bevy_egui::egui::Ui, _world: &mut World) {
     use bevy_egui::egui;
-    use lunco_assets::download::AssetManifest;
 
-    let manifest = match AssetManifest::from_str(crate::msl_remote::BUNDLED_ASSETS_TOML) {
+    // NOTE(CQ-216): the per-entry `dest.exists()` + `read_dir` below is
+    // still blocking I/O on the render frame. The install state only
+    // changes when a download completes, so the principled fix is a
+    // reactive refresh gated on a download-completion signal (no such
+    // event is exposed here yet) — not a per-frame stat or a poll/throttle.
+    let manifest = match bundled_asset_manifest() {
         Ok(m) => m,
         Err(e) => {
             ui.colored_label(

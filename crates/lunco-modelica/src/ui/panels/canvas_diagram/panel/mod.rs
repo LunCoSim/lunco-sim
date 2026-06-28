@@ -6,13 +6,12 @@ pub(crate) mod interaction;
 pub(crate) mod projection_sync;
 pub(crate) mod render;
 
-use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_canvas::Scene;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::model_tabs_types::TabRenderContext;
-use super::{CANVAS_DIAGRAM_PANEL_ID, CanvasDiagramState, active_doc_from_world};
+use super::{CANVAS_DIAGRAM_PANEL_ID, CanvasDiagramState, active_doc_from_world_ctx};
 use projection_sync::{trigger_projection_if_needed, poll_and_swap_projection};
 use render::render_diagram_canvas;
 
@@ -25,29 +24,41 @@ impl Panel for CanvasDiagramPanel {
     fn title(&self) -> String { "🧩 Canvas Diagram".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::Center }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        if world.get_resource::<CanvasDiagramState>().is_none() {
-            world.insert_resource(CanvasDiagramState::default());
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        // Scope `CanvasDiagramState` out for the whole body so the
+        // entire canvas subtree threads `&mut CanvasDiagramState`
+        // (no raw `&mut World`). Reinserted after paint.
+        let present = ctx.resource_scope::<CanvasDiagramState, _>(|ctx, state| {
+            let render_tab_id = ctx.resource::<TabRenderContext>().and_then(|c| c.tab_id);
+            let active_doc = active_doc_from_world_ctx(ctx);
+
+            if active_doc.is_none() {
+                state.get_mut(None).canvas.scene = Scene::new();
+                self.render_canvas(ui, ctx, state);
+                return;
+            }
+
+            trigger_projection_if_needed(ui, ctx, state, render_tab_id);
+            poll_and_swap_projection(ui, ctx, state, render_tab_id);
+
+            self.render_canvas(ui, ctx, state);
+        });
+
+        if present.is_none() {
+            ctx.defer(|w| {
+                w.init_resource::<CanvasDiagramState>();
+            });
         }
-
-        let render_tab_id = world.resource::<TabRenderContext>().tab_id;
-        let active_doc = active_doc_from_world(world);
-
-        if active_doc.is_none() {
-            world.resource_mut::<CanvasDiagramState>().get_mut(None).canvas.scene = Scene::new();
-            self.render_canvas(ui, world);
-            return;
-        }
-
-        trigger_projection_if_needed(ui, world, render_tab_id);
-        poll_and_swap_projection(ui, world, render_tab_id);
-
-        self.render_canvas(ui, world);
     }
 }
 
 impl CanvasDiagramPanel {
-    pub(crate) fn render_canvas(&self, ui: &mut egui::Ui, world: &mut World) {
-        render_diagram_canvas(self, ui, world);
+    pub(crate) fn render_canvas(
+        &self,
+        ui: &mut egui::Ui,
+        ctx: &mut PanelCtx,
+        state: &mut CanvasDiagramState,
+    ) {
+        render_diagram_canvas(self, ui, ctx, state);
     }
 }

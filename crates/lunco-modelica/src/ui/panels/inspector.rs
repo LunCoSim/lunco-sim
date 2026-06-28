@@ -29,7 +29,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_canvas::SelectItem;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::api::{ApiOp, ApplyModelicaOps};
 
@@ -48,9 +48,9 @@ impl Panel for InspectorPanel {
         PanelSlot::RightInspector
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        let (warning, muted) = world
-            .get_resource::<lunco_theme::Theme>()
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let (warning, muted) = ctx
+            .resource::<lunco_theme::Theme>()
             .map(|t| (t.tokens.warning, t.tokens.text_subdued))
             .unwrap_or((egui::Color32::from_rgb(180, 150, 90), egui::Color32::GRAY));
         // ── Resolve target doc ───────────────────────────────────
@@ -59,10 +59,10 @@ impl Panel for InspectorPanel {
         // user toggle.
         crate::ui::doc_pin::render_pin_header(
             ui,
-            world,
+            ctx,
             crate::ui::doc_pin::PinKind::Inspector,
         );
-        let Some(doc_id) = crate::ui::doc_pin::resolved_inspector_doc(world) else {
+        let Some(doc_id) = crate::ui::doc_pin::resolved_inspector_doc_ctx(ctx) else {
             placeholder(ui, "No active document.");
             return;
         };
@@ -73,13 +73,11 @@ impl Panel for InspectorPanel {
         // editors) — even if a stray edit slipped through, the doc
         // would reject it. The defensive guard before firing
         // `ApplyModelicaOps` is a belt-and-braces gesture.
-        let read_only = {
-            let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
-            registry
-                .host(doc_id)
-                .map(|h| h.document().is_read_only())
-                .unwrap_or(false)
-        };
+        let read_only = ctx
+            .resource::<crate::state::ModelicaDocumentRegistry>()
+            .and_then(|registry| registry.host(doc_id))
+            .map(|h| h.document().is_read_only())
+            .unwrap_or(false);
 
         // ── Resolve the selected node ──────────────────────────
         //
@@ -88,8 +86,8 @@ impl Panel for InspectorPanel {
         // binding editor (see `render_plot_node_editor`); component
         // nodes go through the AST-driven modifications path below.
         let mut selection_kind = "none";
-        let primary = world
-            .get_resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
+        let primary = ctx
+            .resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
             .and_then(|cs| {
                 let docstate = cs.get(Some(doc_id));
                 let primary = docstate.canvas.selection.primary()?;
@@ -115,11 +113,11 @@ impl Panel for InspectorPanel {
         };
 
         if node_kind.as_str() == lunco_viz::kinds::canvas_plot_node::PLOT_NODE_KIND {
-            render_plot_node_editor(ui, world, doc_id, node_id);
+            render_plot_node_editor(ui, ctx, doc_id, node_id);
             return;
         }
         if node_kind.as_str() == crate::ui::text_node::TEXT_NODE_KIND {
-            render_text_node_editor(ui, world, doc_id, node_id);
+            render_text_node_editor(ui, ctx, doc_id, node_id);
             return;
         }
 
@@ -135,8 +133,8 @@ impl Panel for InspectorPanel {
         // default simulation class (which prefers `experiment()` 
         // annotated models).
         let target_class =
-            crate::sim_default::drilled_class_for_doc(world, doc_id)
-                .or_else(|| crate::sim_default::default_simulation_class(world, doc_id));
+            crate::sim_default::drilled_class_for_doc_ctx(ctx, doc_id)
+                .or_else(|| crate::sim_default::default_simulation_class_ctx(ctx, doc_id));
 
         // Resolve the target class + component via the per-document
         // [`crate::index::ModelicaIndex`]. The Index is patched
@@ -144,7 +142,12 @@ impl Panel for InspectorPanel {
         // `ModelicaDocument::apply_patch`) so this read sees fresh
         // state even during the 2.5 s AST-reparse debounce.
         let (component_info, class, param_desc) = {
-            let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
+            let Some(registry) =
+                ctx.resource::<crate::state::ModelicaDocumentRegistry>()
+            else {
+                placeholder(ui, "Document not in registry.");
+                return;
+            };
             let Some(host) = registry.host(doc_id) else {
                 placeholder(ui, "Document not in registry.");
                 return;
@@ -295,9 +298,8 @@ impl Panel for InspectorPanel {
                     value,
                 })
                 .collect();
-            world.commands().trigger(ApplyModelicaOps {
-                doc: doc_id,
-                ops,
+            ctx.defer(move |world| {
+                world.trigger(ApplyModelicaOps { doc: doc_id, ops });
             });
         }
     }
@@ -322,14 +324,14 @@ fn placeholder(ui: &mut egui::Ui, msg: &str) {
 /// shows a short hint instead of a blank panel.
 fn render_plot_node_editor(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
     doc_id: lunco_doc::DocumentId,
     node_id: lunco_canvas::NodeId,
 ) {
     use lunco_viz::kinds::canvas_plot_node::PlotNodeData;
 
-    let current: PlotNodeData = world
-        .get_resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
+    let current: PlotNodeData = ctx
+        .resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
         .and_then(|cs| {
             cs.get(Some(doc_id))
                 .canvas
@@ -355,7 +357,7 @@ fn render_plot_node_editor(
                 .small(),
         );
         if ui.button("Unbind").clicked() {
-            apply_plot_binding(world, doc_id, node_id, 0, "");
+            ctx.defer(move |world| apply_plot_binding(world, doc_id, node_id, 0, ""));
         }
         // Title editor — writes back to source as the
         // `LunCoAnnotations.PlotNode(title="…")` field. Buffer per node
@@ -381,14 +383,15 @@ fn render_plot_node_editor(
             ui.memory_mut(|m| m.data.insert_temp(buf_id, buf.clone()));
         }
         if committed && buf != current.title {
-            apply_plot_title(world, doc_id, node_id, &buf);
+            let title = buf.clone();
+            ctx.defer(move |world| apply_plot_title(world, doc_id, node_id, &title));
             ui.memory_mut(|m| m.data.remove::<String>(buf_id));
         }
     }
     ui.separator();
 
-    let sigs: Vec<(bevy::prelude::Entity, String)> = world
-        .get_resource::<lunco_viz::SignalRegistry>()
+    let sigs: Vec<(bevy::prelude::Entity, String)> = ctx
+        .resource::<lunco_viz::SignalRegistry>()
         .map(|r| {
             let mut v: Vec<_> = r
                 .iter_scalar()
@@ -418,7 +421,11 @@ fn render_plot_node_editor(
                     && path == &current.signal_path;
                 let resp = ui.selectable_label(is_current, path);
                 if resp.clicked() && !is_current {
-                    apply_plot_binding(world, doc_id, node_id, entity.to_bits(), path);
+                    let bits = entity.to_bits();
+                    let path = path.clone();
+                    ctx.defer(move |world| {
+                        apply_plot_binding(world, doc_id, node_id, bits, &path)
+                    });
                 }
             }
         });
@@ -596,15 +603,18 @@ fn apply_plot_binding(
 /// per-keystroke flush would stall the UI.
 fn render_text_node_editor(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
     doc_id: lunco_doc::DocumentId,
     node_id: lunco_canvas::NodeId,
 ) {
     use crate::ui::text_node::TextNodeData;
 
     let (current_text, idx_opt) = {
-        let state = world
-            .resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
+        let Some(state) =
+            ctx.resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
+        else {
+            return;
+        };
         let scene = &state.get(Some(doc_id)).canvas.scene;
         let Some(node) = scene.node(node_id) else { return };
         let text = node
@@ -645,7 +655,10 @@ fn render_text_node_editor(
     let committed = (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
         || (resp.lost_focus() && !resp.has_focus());
     if committed && buf != current_text {
-        apply_diagram_text_string(world, doc_id, node_id, idx, &buf);
+        let text = buf.clone();
+        ctx.defer(move |world| {
+            apply_diagram_text_string(world, doc_id, node_id, idx, &text)
+        });
         ui.memory_mut(|m| m.data.remove::<String>(buf_id));
     }
 }

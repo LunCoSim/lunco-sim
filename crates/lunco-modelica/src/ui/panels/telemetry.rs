@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::state::WorkbenchState;
 use crate::ui::viz::{is_signal_plotted, set_signal_plotted};
@@ -84,11 +84,11 @@ impl Panel for TelemetryPanel {
     fn title(&self) -> String { "📊 Telemetry".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // Fix selection leakage
         ui.style_mut().interaction.selectable_labels = false;
-        let muted = world
-            .get_resource::<lunco_theme::Theme>()
+        let muted = ctx
+            .resource::<lunco_theme::Theme>()
             .map(|t| t.tokens.text_subdued)
             .unwrap_or(egui::Color32::from_rgb(140, 140, 160));
 
@@ -97,7 +97,7 @@ impl Panel for TelemetryPanel {
         // put while the user edits another tab.
         crate::ui::doc_pin::render_pin_header(
             ui,
-            world,
+            ctx,
             crate::ui::doc_pin::PinKind::Telemetry,
         );
 
@@ -106,17 +106,17 @@ impl Panel for TelemetryPanel {
         // user edit them. Works pre- and post-compile; edits go
         // through the same `SetParameter` op the canvas drag flow
         // uses, so undo / re-projection / journaling stay consistent.
-        render_selected_components_inspector(ui, world, muted);
-        render_active_class_parameters(ui, world, muted);
+        render_selected_components_inspector(ui, ctx, muted);
+        render_active_class_parameters(ui, ctx, muted);
 
         // Resolve the document and entity to display. Telemetry follows
         // its own pin or the active document.
-        let doc_id = crate::ui::doc_pin::resolved_telemetry_doc(world);
+        let doc_id = crate::ui::doc_pin::resolved_telemetry_doc_ctx(ctx);
         let Some(doc_id) = doc_id else {
             render_runtime_hint(
                 ui,
                 muted,
-                world,
+                ctx,
                 "No document active.",
             );
             return;
@@ -125,13 +125,13 @@ impl Panel for TelemetryPanel {
         // Resolve the entity to display: explicit pin (`selected_entity`)
         // wins, otherwise follow the resolved document.
         let (entity, has_data) = {
-            let pinned_entity = world
-                .get_resource::<WorkbenchState>()
+            let pinned_entity = ctx
+                .resource::<WorkbenchState>()
                 .and_then(|s| s.selected_entity);
-            let resolved = crate::state::simulator_for(world, doc_id)
+            let resolved = crate::state::simulator_for_ctx(ctx, doc_id)
                 .or(pinned_entity);
             let has = resolved
-                .map(|e| world.get::<ModelicaModel>(e).is_some())
+                .map(|e| ctx.get::<ModelicaModel>(e).is_some())
                 .unwrap_or(false);
             (resolved, has)
         };
@@ -141,7 +141,7 @@ impl Panel for TelemetryPanel {
             // `render_selected_components_inspector` (op-pipeline based);
             // the panel only reads runtime values here.
             let (is_paused, current_time, inputs) = {
-                if let Some(model) = world.get::<ModelicaModel>(entity) {
+                if let Some(model) = ctx.get::<ModelicaModel>(entity) {
                     (model.paused, model.current_time, model.inputs.clone())
                 } else {
                     (true, 0.0, std::collections::HashMap::new())
@@ -154,7 +154,7 @@ impl Panel for TelemetryPanel {
             let input_rows: Vec<InputRow> = {
                 let mut sorted: Vec<(String, f64)> = inputs.into_iter().collect();
                 sorted.sort_by(|a, b| a.0.cmp(&b.0));
-                let registry = world.get_resource::<crate::state::ModelicaDocumentRegistry>();
+                let registry = ctx.resource::<crate::state::ModelicaDocumentRegistry>();
                 let index_ref = registry
                     .and_then(|r| r.host(doc_id))
                     .map(|h| h.document().index());
@@ -184,26 +184,48 @@ impl Panel for TelemetryPanel {
             // `ModelicaChannels` directly. One control vocabulary for the live
             // run, so this panel and the toolbar can't drift (▶ here also
             // compiles-if-stale, matching the toolbar's ▶ Run).
+            let mut run_clicked = false;
+            let mut pause_clicked = false;
+            let mut reset_clicked = false;
             ui.horizontal(|ui| {
                 if is_paused {
                     if ui.button("▶ Play").clicked() {
-                        world.commands().trigger(crate::ui::commands::RunActiveModel { doc: doc_id, class: None });
+                        run_clicked = true;
                     }
                 } else if ui.button("⏸ Pause").clicked() {
-                    world.commands().trigger(crate::ui::commands::PauseActiveModel { doc: doc_id });
+                    pause_clicked = true;
                 }
                 ui.label(format!("Time: {current_time:.4} s"));
 
                 ui.add_space(ui.available_width() - 70.0);
                 if ui.button("🔄 Reset").clicked() {
-                    world.commands().trigger(crate::ui::commands::ResetActiveModel { doc: doc_id });
+                    reset_clicked = true;
                 }
             });
+            if run_clicked {
+                ctx.defer(move |world| {
+                    world.trigger(crate::ui::commands::RunActiveModel { doc: doc_id, class: None });
+                });
+            }
+            if pause_clicked {
+                ctx.defer(move |world| {
+                    world.trigger(crate::ui::commands::PauseActiveModel { doc: doc_id });
+                });
+            }
+            if reset_clicked {
+                ctx.defer(move |world| {
+                    world.trigger(crate::ui::commands::ResetActiveModel { doc: doc_id });
+                });
+            }
             ui.separator();
 
             // Inputs
             if !input_rows.is_empty() {
                 ui.label("Inputs (Real-time):");
+                // Collect changed inputs during paint; the actual
+                // `ModelicaModel` write is a query+mutation, so it must
+                // be deferred until after the egui pass.
+                let mut input_changes: Vec<(String, f64)> = Vec::new();
                 resizable_v_section(ui, "inputs_height", 120.0, |ui| {
                     egui::ScrollArea::vertical().id_salt("inputs_scroll").auto_shrink([false, false]).show(ui, |ui| {
                         egui::Grid::new("inputs_grid")
@@ -235,14 +257,23 @@ impl Panel for TelemetryPanel {
                                     }
                                     ui.end_row();
                                     if (v - row.value).abs() > 1e-10 {
-                                        if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
-                                            if let Some(inp) = m.inputs.get_mut(&row.name) { *inp = v; }
-                                        }
+                                        input_changes.push((row.name.clone(), v));
                                     }
                                 }
                             });
                     });
                 });
+                for (name, v) in input_changes {
+                    ctx.defer(move |world| {
+                        if let Ok(mut m) =
+                            world.query::<&mut ModelicaModel>().get_mut(world, entity)
+                        {
+                            if let Some(inp) = m.inputs.get_mut(&name) {
+                                *inp = v;
+                            }
+                        }
+                    });
+                }
             }
         } else {
             // Pre-compile state OR post-Reset. Show a hint and Compile
@@ -250,7 +281,7 @@ impl Panel for TelemetryPanel {
             render_runtime_hint(
                 ui,
                 muted,
-                world,
+                ctx,
                 if !has_data && entity.is_some() {
                     "Stepper went away — recompile to restore live telemetry."
                 } else {
@@ -281,8 +312,8 @@ impl Panel for TelemetryPanel {
 
         // Filter input lives on ExperimentVisibility — same resource
         // that already holds `picked_vars`, no new state.
-        let mut filter_text = world
-            .get_resource::<crate::ui::panels::experiments::ExperimentVisibility>()
+        let mut filter_text = ctx
+            .resource::<crate::ui::panels::experiments::ExperimentVisibility>()
             .map(|v| v.var_filter.clone())
             .unwrap_or_default();
         let mut filter_changed = false;
@@ -302,11 +333,14 @@ impl Panel for TelemetryPanel {
             }
         });
         if filter_changed {
-            if let Some(mut vis) = world
-                .get_resource_mut::<crate::ui::panels::experiments::ExperimentVisibility>()
-            {
-                vis.var_filter = filter_text.clone();
-            }
+            let new_filter = filter_text.clone();
+            ctx.defer(move |world| {
+                if let Some(mut vis) = world
+                    .get_resource_mut::<crate::ui::panels::experiments::ExperimentVisibility>()
+                {
+                    vis.var_filter = new_filter;
+                }
+            });
         }
         let filter_lower = filter_text.to_ascii_lowercase();
 
@@ -315,8 +349,8 @@ impl Panel for TelemetryPanel {
         // window" behaviour). Snapshot the open plots up front; the
         // dropdown re-resolves on next frame after target changes.
         let plot_options: Vec<(lunco_viz::viz::VizId, String)> = {
-            let mut opts: Vec<_> = world
-                .get_resource::<lunco_viz::VisualizationRegistry>()
+            let mut opts: Vec<_> = ctx
+                .resource::<lunco_viz::VisualizationRegistry>()
                 .map(|r| {
                     r.iter()
                         .map(|(id, cfg)| (*id, cfg.title.clone()))
@@ -326,8 +360,8 @@ impl Panel for TelemetryPanel {
             opts.sort_by_key(|(id, _)| id.0);
             opts
         };
-        let pinned = world
-            .get_resource::<crate::ui::panels::experiments::ExperimentVisibility>()
+        let pinned = ctx
+            .resource::<crate::ui::panels::experiments::ExperimentVisibility>()
             .and_then(|v| v.target_plot);
         let mut new_target: Option<Option<lunco_viz::viz::VizId>> = None;
         ui.horizontal(|ui| {
@@ -365,13 +399,30 @@ impl Panel for TelemetryPanel {
                 });
         });
         if let Some(t) = new_target {
-            if let Some(mut vis) = world
-                .get_resource_mut::<crate::ui::panels::experiments::ExperimentVisibility>()
-            {
-                vis.target_plot = t;
-            }
+            ctx.defer(move |world| {
+                if let Some(mut vis) = world
+                    .get_resource_mut::<crate::ui::panels::experiments::ExperimentVisibility>()
+                {
+                    vis.target_plot = t;
+                }
+            });
         }
 
+        // Picked-for-experiments set, snapshotted once. Routes
+        // through the "Plot in" target — pinned plot if set,
+        // else the active plot. Same VizId used for the toggle
+        // writes below so reads and writes always agree.
+        let active_plot = ctx
+            .resource::<crate::ui::panels::experiments::ActivePlot>()
+            .copied()
+            .unwrap_or_default()
+            .or_default();
+        let target_plot = pinned.unwrap_or(active_plot);
+
+        // Variable-plot toggles collected while painting; the actual
+        // resource writes (viz registry + plot panel states) are
+        // deferred until after the egui pass.
+        let mut toggles: Vec<(String, bool)> = Vec::new();
         egui::ScrollArea::vertical()
             .id_salt("telemetry_scroll")
             // Fill the panel's full width instead of shrinking to the
@@ -380,7 +431,7 @@ impl Panel for TelemetryPanel {
             .auto_shrink([false, true])
             .show(ui, |ui| {
             let (model_vars, model_inputs) = if let Some(e) = entity {
-                if let Some(m) = world.get::<ModelicaModel>(e) {
+                if let Some(m) = ctx.get::<ModelicaModel>(e) {
                     (m.variables.keys().cloned().collect::<Vec<_>>(),
                      m.inputs.keys().cloned().collect::<Vec<_>>())
                 } else {
@@ -390,22 +441,11 @@ impl Panel for TelemetryPanel {
                 (Vec::new(), Vec::new())
             };
 
-            // Picked-for-experiments set, snapshotted once. Routes
-            // through the "Plot in" target — pinned plot if set,
-            // else the active plot. Same VizId used for the toggle
-            // writes below so reads and writes always agree.
-            let active_plot = world
-                .get_resource::<crate::ui::panels::experiments::ActivePlot>()
-                .copied()
-                .unwrap_or_default()
-                .or_default();
-            let target_plot = pinned.unwrap_or(active_plot);
-
             // Read plotted-set from the viz registry for the target plot.
             // Clone once so we don't reborrow the resource inside the loop.
             let plotted: std::collections::HashSet<String> = if let Some(e) = entity {
-                world
-                    .get_resource::<lunco_viz::VisualizationRegistry>()
+                ctx
+                    .resource::<lunco_viz::VisualizationRegistry>()
                     .and_then(|r| r.get(target_plot))
                     .map(|cfg| {
                         cfg.inputs
@@ -419,15 +459,15 @@ impl Panel for TelemetryPanel {
                 std::collections::HashSet::new()
             };
 
-            let picked_exp: std::collections::BTreeSet<String> = world
-                .get_resource::<crate::ui::panels::experiments::PlotPanelStates>()
+            let picked_exp: std::collections::BTreeSet<String> = ctx
+                .resource::<crate::ui::panels::experiments::PlotPanelStates>()
                 .map(|s| s.picked(target_plot))
                 .unwrap_or_default();
 
             // Variables sourced from completed experiments — surface
             // them even when there's no live cosim entity yet.
             let exp_vars: std::collections::BTreeSet<String> =
-                crate::ui::panels::experiments::all_experiment_variables_for_doc(world, doc_id);
+                crate::ui::panels::experiments::all_experiment_variables_for_doc_ctx(ctx, doc_id);
 
             let mut all_names: Vec<_> = model_vars;
             all_names.extend(model_inputs);
@@ -435,7 +475,7 @@ impl Panel for TelemetryPanel {
             
             // Proactively pull names from the document index if we're
             // looking at a model that hasn't run yet.
-            let registry = world.get_resource::<crate::state::ModelicaDocumentRegistry>();
+            let registry = ctx.resource::<crate::state::ModelicaDocumentRegistry>();
             let index_ref = registry
                 .and_then(|r| r.host(doc_id))
                 .map(|h| h.document().index());
@@ -492,7 +532,6 @@ impl Panel for TelemetryPanel {
                 groups.entry(head).or_default().push(name);
             }
 
-            let mut toggles: Vec<(String, bool)> = Vec::new();
             for (group_name, names) in &groups {
                 let picked_in_group = names
                     .iter()
@@ -540,32 +579,35 @@ impl Panel for TelemetryPanel {
             if groups.is_empty() {
                 ui.weak("No variables match the filter.");
             }
-
-            // Apply toggles after the loop — avoids reborrowing
-            // resources mid-iteration. Each toggle writes to BOTH the
-            // viz registry (live cosim) and ExperimentVisibility
-            // (Fast Run) so the user picks once.
-            for (name, on) in toggles {
-                if let Some(e) = entity {
-                    if let Some(mut reg) =
-                        world.get_resource_mut::<lunco_viz::VisualizationRegistry>()
-                    {
-                        set_signal_plotted(
-                            &mut reg,
-                            target_plot,
-                            lunco_viz::SignalRef::new(e, name.clone()),
-                            on,
-                        );
-                    }
-                }
-                if let Some(mut states) = world
-                    .get_resource_mut::<crate::ui::panels::experiments::PlotPanelStates>()
-                {
-                    states.set_var(target_plot, name, on);
-                }
-            }
             let _ = is_signal_plotted; // re-export available for future UIs
         });
+
+        // Apply toggles after the paint — each toggle writes to BOTH the
+        // viz registry (live cosim) and PlotPanelStates (Fast Run) so the
+        // user picks once. Deferred because both are resource mutations.
+        if !toggles.is_empty() {
+            ctx.defer(move |world| {
+                for (name, on) in toggles {
+                    if let Some(e) = entity {
+                        if let Some(mut reg) =
+                            world.get_resource_mut::<lunco_viz::VisualizationRegistry>()
+                        {
+                            set_signal_plotted(
+                                &mut reg,
+                                target_plot,
+                                lunco_viz::SignalRef::new(e, name.clone()),
+                                on,
+                            );
+                        }
+                    }
+                    if let Some(mut states) = world
+                        .get_resource_mut::<crate::ui::panels::experiments::PlotPanelStates>()
+                    {
+                        states.set_var(target_plot, name, on);
+                    }
+                }
+            });
+        }
 
         // Auto-Fit button was here but moved to the Graphs panel's own
         // toolbar — users couldn't find it buried at the bottom of
@@ -583,12 +625,13 @@ impl Panel for TelemetryPanel {
 fn render_runtime_hint(
     ui: &mut egui::Ui,
     muted: egui::Color32,
-    world: &mut World,
+    ctx: &mut PanelCtx,
     msg: &str,
 ) {
-    let active_doc = world
-        .get_resource::<lunco_workspace::WorkspaceResource>()
+    let active_doc = ctx
+        .resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|w| w.active_document);
+    let mut compile_doc: Option<lunco_doc::DocumentId> = None;
     ui.horizontal_wrapped(|ui| {
         ui.label(egui::RichText::new(msg).color(muted).size(11.0));
         if let Some(doc) = active_doc {
@@ -597,15 +640,18 @@ fn render_runtime_hint(
                 .on_hover_text("Compile the active model and start the stepper (F5)")
                 .clicked()
             {
-                world
-                    .commands()
-                    .trigger(crate::ui::commands::CompileActiveModel {
-                        doc,
-                        class: String::new(),
-                    });
+                compile_doc = Some(doc);
             }
         }
     });
+    if let Some(doc) = compile_doc {
+        ctx.defer(move |world| {
+            world.trigger(crate::ui::commands::CompileActiveModel {
+                doc,
+                class: String::new(),
+            });
+        });
+    }
 }
 
 /// Render the parameter inspector for component nodes selected on
@@ -616,16 +662,16 @@ fn render_runtime_hint(
 /// — once compiled — the simulator.
 fn render_selected_components_inspector(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
     muted: egui::Color32,
 ) {
     use crate::document::ModelicaOp;
     use crate::ui::panels::canvas_diagram::{
-        active_class_for_doc, active_doc_from_world, apply_ops_public,
+        active_class_for_doc_ctx, active_doc_from_world_ctx, apply_ops_public,
         CanvasDiagramState, IconNodeData,
     };
 
-    let Some(doc_id) = active_doc_from_world(world) else { return };
+    let Some(doc_id) = active_doc_from_world_ctx(ctx) else { return };
     // Snapshot the selected nodes' (id, instance, class, params) up
     // front so we can release the canvas-state borrow before issuing
     // commands.queue / apply_ops_public mutations.
@@ -638,7 +684,7 @@ fn render_selected_components_inspector(
         param_desc: std::collections::HashMap<String, String>,
     }
     let mut rows: Vec<NodeRow> = {
-        let Some(state) = world.get_resource::<CanvasDiagramState>() else {
+        let Some(state) = ctx.resource::<CanvasDiagramState>() else {
             return;
         };
         let docstate = state.get(Some(doc_id));
@@ -668,17 +714,23 @@ fn render_selected_components_inspector(
     // type's parameter description-comments from the index for hover
     // help on the rows below.
     {
-        let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
-        if let Some(host) = registry.host(doc_id) {
-            let index = host.document().index();
-            for row in &mut rows {
-                row.param_desc = type_param_descriptions(index, &row.qualified_type);
+        if let Some(registry) =
+            ctx.resource::<crate::state::ModelicaDocumentRegistry>()
+        {
+            if let Some(host) = registry.host(doc_id) {
+                let index = host.document().index();
+                for row in &mut rows {
+                    row.param_desc = type_param_descriptions(index, &row.qualified_type);
+                }
             }
         }
     }
 
-    let editing_class = active_class_for_doc(world, doc_id);
+    let editing_class = active_class_for_doc_ctx(ctx, doc_id);
 
+    // Collect SetParameter ops while painting; apply via the canvas
+    // pipeline (needs `&mut World`) deferred after the egui pass.
+    let mut collected_ops: Vec<ModelicaOp> = Vec::new();
     egui::CollapsingHeader::new(format!(
         "🧩 Selected components ({})",
         rows.len()
@@ -756,20 +808,19 @@ fn render_selected_components_inspector(
                     });
                 }
                 for (param, value) in edits {
-                    apply_ops_public(
-                        world,
-                        doc_id,
-                        vec![ModelicaOp::SetParameter {
-                            class: class.clone(),
-                            component: row.instance.clone(),
-                            param,
-                            value,
-                        }],
-                    );
+                    collected_ops.push(ModelicaOp::SetParameter {
+                        class: class.clone(),
+                        component: row.instance.clone(),
+                        param,
+                        value,
+                    });
                 }
             });
         }
     });
+    if !collected_ops.is_empty() {
+        ctx.defer(move |world| apply_ops_public(world, doc_id, collected_ops));
+    }
     ui.separator();
 }
 
@@ -871,6 +922,75 @@ fn type_param_descriptions(
         }
     }
     out
+}
+
+/// Change-gated view-model for the active class's flattened parameter
+/// list (CQ-208). [`flatten_class_parameters`] walks the document index
+/// recursively; it used to run **every frame** the Telemetry panel was
+/// visible, even though the result only changes when the active document,
+/// the active class, or the index generation changes.
+/// [`populate_telemetry_view_model`] rebuilds `rows` only on such a
+/// change, and [`render_active_class_parameters`] reads them — it never
+/// walks the index while painting.
+#[derive(Resource, Default)]
+pub struct TelemetryViewModel {
+    /// `(doc, active class, index generation)` the rows were built for.
+    built_for: Option<(lunco_doc::DocumentId, String, u64)>,
+    /// Flattened parameter rows for the active class, in flatten order.
+    rows: Vec<FlatParam>,
+    /// Active document is read-only (bundled/locked) → edits disabled.
+    read_only: bool,
+}
+
+/// Producer for [`TelemetryViewModel`]. Exclusive (needs `&mut World` for
+/// `active_class_for_doc`); runs in `Update`, before the egui pass. Cheap
+/// on the common no-change frame: it resolves the active doc / class /
+/// index generation and early-returns when they match the last build,
+/// re-flattening only on an actual change.
+pub fn populate_telemetry_view_model(world: &mut World) {
+    use crate::ui::panels::canvas_diagram::{active_class_for_doc, active_doc_from_world};
+
+    let clear = |world: &mut World| {
+        let mut vm = world.resource_mut::<TelemetryViewModel>();
+        if vm.built_for.is_some() {
+            vm.built_for = None;
+            vm.rows.clear();
+        }
+    };
+
+    let Some(doc_id) = active_doc_from_world(world) else {
+        clear(world);
+        return;
+    };
+    let Some(active) = active_class_for_doc(world, doc_id) else {
+        clear(world);
+        return;
+    };
+    let Some(generation) = world
+        .get_resource::<crate::state::ModelicaDocumentRegistry>()
+        .and_then(|r| r.host(doc_id))
+        .map(|h| h.document().index().generation)
+    else {
+        clear(world);
+        return;
+    };
+
+    let key = (doc_id, active, generation);
+    if world.resource::<TelemetryViewModel>().built_for.as_ref() == Some(&key) {
+        return; // unchanged — skip the recursive flatten entirely.
+    }
+
+    let (rows, read_only) = {
+        let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
+        let Some(host) = registry.host(doc_id) else { return };
+        let doc = host.document();
+        (flatten_class_parameters(doc.index(), &key.1), doc.is_read_only())
+    };
+
+    let mut vm = world.resource_mut::<TelemetryViewModel>();
+    vm.rows = rows;
+    vm.read_only = read_only;
+    vm.built_for = Some(key);
 }
 
 fn flatten_class_parameters(
@@ -1075,49 +1195,47 @@ fn format_param_value(raw: &str) -> String {
 
 fn render_active_class_parameters(
     ui: &mut egui::Ui,
-    world: &mut World,
+    ctx: &mut PanelCtx,
     muted: egui::Color32,
 ) {
     use crate::document::ModelicaOp;
-    use crate::ui::panels::canvas_diagram::{
-        active_class_for_doc, active_doc_from_world, apply_ops_public,
+    use crate::ui::panels::canvas_diagram::{active_doc_from_world_ctx, apply_ops_public};
+
+    let Some(doc_id) = active_doc_from_world_ctx(ctx) else { return };
+
+    // Rows are precomputed by `populate_telemetry_view_model` (gated on
+    // doc / active-class / index-generation), so this never walks the
+    // index while painting. `active` + `read_only` come from the same
+    // view-model so the edit path stays in lock-step with the rows.
+    let (active, read_only) = {
+        let Some(vm) = ctx.resource::<TelemetryViewModel>() else { return };
+        match vm.built_for.as_ref() {
+            Some((d, class, _)) if *d == doc_id && !vm.rows.is_empty() => {
+                (class.clone(), vm.read_only)
+            }
+            _ => return,
+        }
     };
 
-    let Some(doc_id) = active_doc_from_world(world) else { return };
-    let Some(active) = active_class_for_doc(world, doc_id) else { return };
-
-    // Flatten using only the local AST index — synchronous with the
-    // latest parse, no engine session dependency, no async lag.
-    // Also snapshot the doc's read-only state so we can disable
-    // editing on bundled / locked-source documents (otherwise the
-    // user types into a field that silently rejects the write).
-    let (rows, read_only): (Vec<FlatParam>, bool) = {
-        let Some(registry) = world.get_resource::<crate::state::ModelicaDocumentRegistry>() else {
-            return;
-        };
-        let Some(host) = registry.host(doc_id) else { return };
-        let doc = host.document();
-        (
-            flatten_class_parameters(doc.index(), &active),
-            doc.is_read_only(),
-        )
-    };
-    if rows.is_empty() {
-        return;
-    }
-
-    egui::CollapsingHeader::new(format!("⚙ Parameters ({})", rows.len()))
-        .id_salt("active_class_parameters")
-        .default_open(true)
-        .show(ui, |ui| {
+    // Collect edits while painting (borrowing the view-model's rows), then
+    // apply them after the borrow is released — `apply_ops_public` needs
+    // `&mut World`, which we can't hold during the paint.
+    let mut edits: Vec<(String, String, String)> = Vec::new();
+    {
+        let Some(vm) = ctx.resource::<TelemetryViewModel>() else { return };
+        let rows = &vm.rows;
+        egui::CollapsingHeader::new(format!("⚙ Parameters ({})", rows.len()))
+            .id_salt("active_class_parameters")
+            .default_open(true)
+            .show(ui, |ui| {
             // Editable rows are depth ≤ 1 — direct parameters of the
             // active class (`SetParameter { component, param: "" }`)
             // and one-level component modifications
             // (`SetParameter { component, param }`). `ast_mut::set_parameter`
             // doesn't yet walk dotted component paths, so deeper rows
             // render read-only with the muted style. Two-pass: collect
-            // edits, apply after the borrow on `rows` is released.
-            let mut edits: Vec<(String, String, String)> = Vec::new(); // (component, param, value)
+            // edits into the outer `edits` (declared above the borrow),
+            // apply after the view-model borrow is released.
             // Bound the list height so a model with dozens of parameters
             // (40+ here) scrolls within its own region instead of pushing
             // the rest of the Telemetry panel off-screen — this section
@@ -1134,7 +1252,7 @@ fn render_active_class_parameters(
                 .num_columns(2)
                 .spacing([8.0, 4.0])
                 .show(ui, |ui| {
-            for row in &rows {
+            for row in rows {
                 // Read-only docs (bundled examples) can't accept any
                 // edits — fall back to the muted display path for
                 // every row.
@@ -1247,19 +1365,21 @@ fn render_active_class_parameters(
             }
                 }); // end parameter grid
             }); // end bounded parameter-list scroll
-            if edits.is_empty() {
-                return;
-            }
-            let ops: Vec<ModelicaOp> = edits
-                .into_iter()
-                .map(|(component, param, value)| ModelicaOp::SetParameter {
-                    class: active.clone(),
-                    component,
-                    param,
-                    value,
-                })
-                .collect();
-            apply_ops_public(world, doc_id, ops);
-        });
+        }); // end ⚙ Parameters CollapsingHeader
+    } // end TelemetryViewModel borrow
+
+    if edits.is_empty() {
+        return;
+    }
+    let ops: Vec<ModelicaOp> = edits
+        .into_iter()
+        .map(|(component, param, value)| ModelicaOp::SetParameter {
+            class: active.clone(),
+            component,
+            param,
+            value,
+        })
+        .collect();
+    ctx.defer(move |world| apply_ops_public(world, doc_id, ops));
     ui.separator();
 }

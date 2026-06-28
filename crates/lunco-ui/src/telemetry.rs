@@ -3,9 +3,8 @@
 //! Shows avatar status, surface mode info, lat/lon/alt, camera mode,
 //! and navigation buttons (Return to Orbit).
 
-use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 /// Telemetry panel — shows avatar status and surface coordinates.
 pub struct TelemetryPanel;
@@ -15,9 +14,10 @@ impl Panel for TelemetryPanel {
     fn title(&self) -> String { "Telemetry".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        let theme = world.resource::<lunco_theme::Theme>();
-        ui.style_mut().visuals = theme.to_visuals();
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        if let Some(theme) = ctx.resource::<lunco_theme::Theme>() {
+            ui.style_mut().visuals = theme.to_visuals();
+        }
 
         ui.label("Telemetry moved to Avatar Status panel.");
     }

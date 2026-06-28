@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::state::{ModelLibrary};
 use crate::package_tree::types::{PackageNode, TwinNode};
@@ -21,15 +21,15 @@ impl Panel for PackageBrowserPanel {
     fn title(&self) -> String { "📚 Package Browser".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
 
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        let active_path_str = world
-            .get_resource::<lunco_workspace::WorkspaceResource>()
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let active_path_str = ctx
+            .resource::<lunco_workspace::WorkspaceResource>()
             .and_then(|ws| ws.active_document)
-            .and_then(|d| crate::state::display_name_for(world, d));
+            .and_then(|d| crate::state::display_name_for_ctx(ctx, d));
         let active_path = active_path_str.as_deref();
-        
-        let theme = world
-            .get_resource::<lunco_theme::Theme>()
+
+        let theme = ctx
+            .resource::<lunco_theme::Theme>()
             .cloned()
             .unwrap_or_else(lunco_theme::Theme::dark);
 
@@ -39,8 +39,7 @@ impl Panel for PackageBrowserPanel {
         let mut open_twin_picker = false;
         let mut close_twin = false;
 
-        {
-            let mut tree_cache = world.resource_mut::<PackageTreeCache>();
+        ctx.resource_scope::<PackageTreeCache, _>(|_ctx, tree_cache| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
@@ -90,25 +89,35 @@ impl Panel for PackageBrowserPanel {
                     }
                 }
             });
-        }
+        });
 
         if create_new {
-            world.commands().trigger(crate::ui::commands::CreateNewScratchModel::default());
+            ctx.defer(|world| {
+                world.trigger(crate::ui::commands::CreateNewScratchModel::default());
+            });
         }
         if open_twin_picker {
-            world.commands().trigger(lunco_workbench::picker::PickHandle {
-                mode: lunco_workbench::picker::PickMode::OpenFolder,
-                on_resolved: lunco_workbench::picker::PickFollowUp::OpenTwin,
+            ctx.defer(|world| {
+                world.trigger(lunco_workbench::picker::PickHandle {
+                    mode: lunco_workbench::picker::PickMode::OpenFolder,
+                    on_resolved: lunco_workbench::picker::PickFollowUp::OpenTwin,
+                });
             });
         }
         if close_twin {
-            world.resource_mut::<PackageTreeCache>().twin = None;
+            ctx.defer(|world| {
+                if let Some(mut cache) = world.get_resource_mut::<PackageTreeCache>() {
+                    cache.twin = None;
+                }
+            });
         }
         if let Some(id) = reopen_in_memory {
-            world.commands().trigger(lunco_workbench::file_ops::OpenFile { path: id });
+            ctx.defer(move |world| {
+                world.trigger(lunco_workbench::file_ops::OpenFile { path: id });
+            });
         }
         if let Some(a) = action {
-            match a {
+            ctx.defer(move |world| match a {
                 PackageAction::Open(id, _name, _lib, pinned) => {
                     if let Some(class) = crate::class_ref::ClassRef::parse_tree_id(&id) {
                         super::open_class(world, class, pinned);
@@ -123,7 +132,7 @@ impl Panel for PackageBrowserPanel {
                         world.get_resource_or_insert_with::<crate::ui::panels::palette::ComponentDragPayload>(Default::default).def = Some(def);
                     }
                 }
-            }
+            });
         }
     }
 }
@@ -169,6 +178,89 @@ fn render_twin_node(
             });
         action
     }
+}
+
+/// Read-only sibling of [`render_node_single`] for callers that hold a
+/// `&PackageTreeCache` (no `&mut`) — e.g. the Twin Browser's
+/// [`BrowserCtx`](lunco_workbench::BrowserCtx), which can't take the
+/// cache mutably. Instead of mutating `is_loading` / pushing scan
+/// tasks in place, an unscanned Category pushes its `(id, package_path)`
+/// into `load_out`; the caller spawns the scan via `ctx.defer`. Egui
+/// owns the expand/collapse state (CollapsingHeader id_salt), so the
+/// read-only render still expands correctly.
+pub(crate) fn render_node_single_ro(
+    node: &PackageNode,
+    ui: &mut egui::Ui,
+    active_path: Option<&str>,
+    active_drill: Option<&str>,
+    depth: usize,
+    load_out: &mut Vec<(String, String)>,
+    theme: &lunco_theme::Theme,
+) -> Option<PackageAction> {
+    let mut action = None;
+    match node {
+        PackageNode::Category { id, name, package_path, fs_path: _, children, is_loading } => {
+            let header_resp = egui::CollapsingHeader::new(format!("📁 {}", name))
+                .id_salt(id.as_str())
+                .show(ui, |ui| {
+                    if let Some(kids) = children {
+                        for kid in kids {
+                            if let Some(a) = render_node_single_ro(kid, ui, active_path, active_drill, depth + 1, load_out, theme) {
+                                action = Some(a);
+                            }
+                        }
+                    } else {
+                        // Unscanned: request a lazy scan (the caller
+                        // defers the AsyncComputeTaskPool spawn) and show
+                        // a loading row until the `ScanResult` lands.
+                        load_out.push((id.clone(), package_path.clone()));
+                    }
+                    if children.is_none() || *is_loading {
+                        ui.horizontal(|ui| {
+                            ui.add_space(20.0);
+                            ui.label("⌛ Loading...");
+                        });
+                    }
+                });
+            let _ = header_resp;
+        }
+        PackageNode::Model { id, name, library, class_kind } => {
+            let is_active = active_path == Some(name.as_str());
+            let row = ui.horizontal(|ui| {
+                if let Some(kind) = *class_kind {
+                    let badge = crate::ui::browser_section::type_badge_for_kind(kind, theme);
+                    crate::ui::browser_section::paint_badge(ui, badge, theme);
+                } else {
+                    let icon = match library {
+                        crate::state::ModelLibrary::MSL => "?",
+                        crate::state::ModelLibrary::Bundled => "📦",
+                        crate::state::ModelLibrary::User => "📁",
+                        crate::state::ModelLibrary::InMemory => "💾",
+                    };
+                    ui.label(egui::RichText::new(icon).size(11.0));
+                }
+                let mut label = egui::RichText::new(name.as_str());
+                if is_active {
+                    label = label.strong().color(theme.tokens.accent);
+                }
+                ui.add(egui::Label::new(label).selectable(false).sense(egui::Sense::click()))
+            });
+            let mut resp = row.inner;
+            if resp.clicked() {
+                action = Some(PackageAction::Open(id.clone(), name.clone(), library.clone(), ui.input(|i| i.modifiers.command)));
+            }
+            if let Some(kind) = class_kind {
+                resp = resp.on_hover_text(format!("Kind: {}", kind.as_keyword()));
+            }
+            if matches!(library, crate::state::ModelLibrary::MSL) {
+                let msl_path = id.strip_prefix("msl_path:").unwrap_or(id).to_string();
+                if ui.rect_contains_pointer(resp.rect) && ui.input(|i| i.pointer.any_down()) {
+                    action = Some(PackageAction::DragStart { msl_path });
+                }
+            }
+        }
+    }
+    action
 }
 
 pub(crate) fn render_node_single(

@@ -103,7 +103,7 @@ pub use workspace_state::{
 };
 pub use render_robustness::preferred_wgpu_settings;
 
-pub use panel::{InstancePanel, Panel, PanelId, PanelSlot, TabId};
+pub use panel::{InstancePanel, Panel, PanelCtx, PanelId, PanelSlot, TabId};
 
 /// SystemSet that runs the main workbench egui pass. Use
 /// `.after(WorkbenchRenderSet)` for systems that need to read
@@ -1041,6 +1041,49 @@ impl WorkbenchLayout {
         serde_json::to_value(&self.dock).ok()
     }
 
+    /// Cheap structural hash of the dock layout for in-memory change
+    /// detection — folds tab arrangement, focus, split fractions and
+    /// collapse state straight into a `u64` with no serialization.
+    ///
+    /// The workspace hot-exit gate runs every frame; it previously
+    /// serialized the whole dock to a `serde_json::Value` + `String`
+    /// purely to fold into this number — JSON is an I/O-boundary tool, not
+    /// the right hammer for an internal change signal (CQ-209). This walks
+    /// the live `DockState` nodes with a `Hasher` instead: zero
+    /// allocations, and it deliberately ignores node `rect`s — those are
+    /// recomputed from the window each layout pass and aren't persisted
+    /// intent, so hashing them (as the JSON did) re-fired the save on every
+    /// window resize.
+    pub(crate) fn dock_layout_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for node in self.dock.iter_nodes() {
+            match node {
+                egui_dock::Node::Empty => 0u8.hash(&mut h),
+                egui_dock::Node::Leaf(leaf) => {
+                    1u8.hash(&mut h);
+                    leaf.tabs.len().hash(&mut h);
+                    for tab in &leaf.tabs {
+                        tab.hash(&mut h);
+                    }
+                    leaf.active.0.hash(&mut h);
+                    leaf.collapsed.hash(&mut h);
+                }
+                egui_dock::Node::Vertical(s) => {
+                    2u8.hash(&mut h);
+                    s.fraction.to_bits().hash(&mut h);
+                    s.fully_collapsed.hash(&mut h);
+                }
+                egui_dock::Node::Horizontal(s) => {
+                    3u8.hash(&mut h);
+                    s.fraction.to_bits().hash(&mut h);
+                    s.fully_collapsed.hash(&mut h);
+                }
+            }
+        }
+        h.finish()
+    }
+
     /// Replace the dock tree from a previously [`dock_json`](Self::dock_json)
     /// snapshot, reconciling it against *this* app's live state:
     ///
@@ -1761,8 +1804,16 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                 // Take-and-return pattern so the panel can itself borrow
                 // other panels' metadata via the layout (future-proof).
                 if let Some(mut panel) = self.panels.remove(&id) {
-                    panel.render(ui, self.world);
+                    // Capability-narrowed context (no raw &mut World).
+                    // Mutations the panel emits are queued and applied
+                    // after paint (WP-8 structural prevention).
+                    let mut ctx = PanelCtx::new(self.world);
+                    panel.render(ui, &mut ctx);
+                    let deferred = ctx.into_deferred();
                     self.panels.insert(id, panel);
+                    for f in deferred {
+                        f(self.world);
+                    }
                 } else {
                     ui.colored_label(
                         egui::Color32::LIGHT_RED,
@@ -1772,8 +1823,13 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             }
             TabId::Instance { kind, instance } => {
                 if let Some(mut panel) = self.instance_panels.remove(&kind) {
-                    panel.render(ui, self.world, instance);
+                    let mut ctx = PanelCtx::new(self.world);
+                    panel.render(ui, &mut ctx, instance);
+                    let deferred = ctx.into_deferred();
                     self.instance_panels.insert(kind, panel);
+                    for f in deferred {
+                        f(self.world);
+                    }
                 } else {
                     ui.colored_label(
                         egui::Color32::LIGHT_RED,
@@ -1864,8 +1920,13 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             // how `tab_ui` swaps panels in/out for render to dodge the
             // self-borrow conflict.
             if let Some(mut panel) = self.instance_panels.remove(&kind) {
-                panel.tab_context_menu(ui, self.world, instance);
+                let mut ctx = PanelCtx::new(self.world);
+                panel.tab_context_menu(ui, &mut ctx, instance);
+                let deferred = ctx.into_deferred();
                 self.instance_panels.insert(kind, panel);
+                for f in deferred {
+                    f(self.world);
+                }
             }
         }
     }
@@ -3175,8 +3236,13 @@ fn render_panel_solo(
         ui.separator();
     }
     if let Some(mut panel) = layout.panels.remove(id) {
-        panel.render(ui, world);
+        let mut ctx = PanelCtx::new(world);
+        panel.render(ui, &mut ctx);
+        let deferred = ctx.into_deferred();
         layout.panels.insert(*id, panel);
+        for f in deferred {
+            f(world);
+        }
     } else {
         ui.colored_label(
             egui::Color32::LIGHT_RED,

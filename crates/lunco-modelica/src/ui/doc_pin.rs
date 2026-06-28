@@ -81,6 +81,47 @@ pub fn resolved_experiments_doc(world: &World) -> Option<DocumentId> {
     pin.or_else(|| active_doc(world))
 }
 
+/// `PanelCtx` sibling of [`active_doc`].
+pub fn active_doc_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<DocumentId> {
+    ctx.resource::<lunco_workspace::WorkspaceResource>()?
+        .active_document
+}
+
+/// `PanelCtx` sibling of [`resolved_telemetry_doc`].
+pub fn resolved_telemetry_doc_ctx(
+    ctx: &lunco_workbench::PanelCtx,
+) -> Option<DocumentId> {
+    let pin = ctx.resource::<DocPinState>().and_then(|s| s.telemetry);
+    pin.or_else(|| active_doc_ctx(ctx))
+}
+
+/// `PanelCtx` sibling of [`resolved_inspector_doc`].
+pub fn resolved_inspector_doc_ctx(
+    ctx: &lunco_workbench::PanelCtx,
+) -> Option<DocumentId> {
+    let pin = ctx.resource::<DocPinState>().and_then(|s| s.inspector);
+    pin.or_else(|| active_doc_ctx(ctx))
+}
+
+/// `PanelCtx` sibling of [`resolved_experiments_doc`].
+pub fn resolved_experiments_doc_ctx(
+    ctx: &lunco_workbench::PanelCtx,
+) -> Option<DocumentId> {
+    let pin = ctx.resource::<DocPinState>().and_then(|s| s.experiments);
+    pin.or_else(|| active_doc_ctx(ctx))
+}
+
+/// `PanelCtx` sibling of [`doc_display_name`].
+pub fn doc_display_name_ctx(
+    ctx: &lunco_workbench::PanelCtx,
+    doc: DocumentId,
+) -> String {
+    ctx.resource::<crate::state::ModelicaDocumentRegistry>()
+        .and_then(|reg| reg.host(doc))
+        .map(|host| host.document().origin().display_name())
+        .unwrap_or_else(|| format!("doc#{:?}", doc))
+}
+
 /// Which slot of [`DocPinState`] a header widget toggles.
 #[derive(Copy, Clone, Debug)]
 pub enum PinKind {
@@ -94,28 +135,28 @@ pub enum PinKind {
 /// the panel onto the currently-active doc; click again to release.
 pub fn render_pin_header(
     ui: &mut bevy_egui::egui::Ui,
-    world: &mut World,
+    ctx: &mut lunco_workbench::PanelCtx,
     kind: PinKind,
 ) {
     use bevy_egui::egui;
 
-    let current_pin = world
-        .get_resource::<DocPinState>()
+    let current_pin = ctx
+        .resource::<DocPinState>()
         .map(|s| match kind {
             PinKind::Telemetry => s.telemetry,
             PinKind::Inspector => s.inspector,
             PinKind::Experiments => s.experiments,
         })
         .unwrap_or(None);
-    let active = active_doc(world);
+    let active = active_doc_ctx(ctx);
     let target = current_pin.or(active);
-    let muted = world
-        .get_resource::<lunco_theme::Theme>()
+    let muted = ctx
+        .resource::<lunco_theme::Theme>()
         .map(|t| t.tokens.text_subdued)
         .unwrap_or(egui::Color32::from_rgb(140, 140, 160));
 
     let label = match target {
-        Some(doc) => doc_display_name(world, doc),
+        Some(doc) => doc_display_name_ctx(ctx, doc),
         None => "no document".to_string(),
     };
     let (icon, hover) = match current_pin {
@@ -131,8 +172,8 @@ pub fn render_pin_header(
     // Visual accent when pinned — the 📍 / 📌 distinction alone is
     // too subtle in some fonts. A coloured PIN badge reads at a
     // glance and matches Dymola's "Current model" indicator.
-    let accent = world
-        .get_resource::<lunco_theme::Theme>()
+    let accent = ctx
+        .resource::<lunco_theme::Theme>()
         .map(|t| t.tokens.accent)
         .unwrap_or(egui::Color32::from_rgb(110, 170, 230));
 
@@ -156,17 +197,19 @@ pub fn render_pin_header(
         ui.label(text);
     });
     if toggle {
-        if let Some(mut state) = world.get_resource_mut::<DocPinState>() {
-            let slot = match kind {
-                PinKind::Telemetry => &mut state.telemetry,
-                PinKind::Inspector => &mut state.inspector,
-                PinKind::Experiments => &mut state.experiments,
-            };
-            *slot = match *slot {
-                Some(_) => None,
-                None => active,
-            };
-        }
+        ctx.defer(move |world| {
+            if let Some(mut state) = world.get_resource_mut::<DocPinState>() {
+                let slot = match kind {
+                    PinKind::Telemetry => &mut state.telemetry,
+                    PinKind::Inspector => &mut state.inspector,
+                    PinKind::Experiments => &mut state.experiments,
+                };
+                *slot = match *slot {
+                    Some(_) => None,
+                    None => active,
+                };
+            }
+        });
     }
 }
 

@@ -89,6 +89,98 @@ pub enum PanelSlot {
 /// worker channels, …). Keeping the signature uniform avoids the
 /// `ui` / `ui_world` split we inherited from `bevy_workbench`, which
 /// forced every nontrivial panel into the `ui_world` branch anyway.
+/// Capability-narrowed render context handed to every panel (WP-8
+/// structural prevention — see `docs/wp8-reactive-egui-design.md`).
+///
+/// The whole point: a panel's `render` must be **incapable** of the
+/// per-frame anti-patterns (full-world scans, blocking I/O, serialize-for-
+/// internal-logic, in-paint mutation), not merely discouraged from them.
+/// So a ported panel only gets:
+/// - [`resource`](Self::resource) — O(1) read of a (view-model) resource,
+/// - [`get`](Self::get) — O(1) read of one entity's component,
+/// - [`defer`](Self::defer) / [`trigger`](Self::trigger) — emit intent,
+///   applied to the `World` *after* the egui pass.
+///
+/// There is deliberately **no** `query`, no `resource_mut`, no `&World`
+/// scan surface. Derivation belongs in change-gated `ViewModelSet`
+/// producer systems whose output a panel reads here; mutation belongs in
+/// the deferred/command path. The egui `Ui` is passed to `render`
+/// separately so reads and painting don't alias-borrow the context.
+///
+pub struct PanelCtx<'w> {
+    world: &'w mut World,
+    /// Mutations emitted during paint, applied (in order) after render.
+    deferred: Vec<Box<dyn FnOnce(&mut World) + Send>>,
+}
+
+impl<'w> PanelCtx<'w> {
+    /// Wrap the live `World` for one panel's render. Internal to the
+    /// workbench dispatch.
+    pub(crate) fn new(world: &'w mut World) -> Self {
+        Self { world, deferred: Vec::new() }
+    }
+
+    /// Consume the context and return its queued mutations, releasing the
+    /// borrow on `World` so the dispatch can apply them. Called after the
+    /// panel paints.
+    pub(crate) fn into_deferred(self) -> Vec<Box<dyn FnOnce(&mut World) + Send>> {
+        self.deferred
+    }
+
+    /// O(1) read of a resource — typically a change-gated view-model.
+    pub fn resource<T: Resource>(&self) -> Option<&T> {
+        self.world.get_resource::<T>()
+    }
+
+    /// O(1) read of one entity's component (e.g. the selected entity).
+    /// This is a direct hash lookup, not a scan.
+    pub fn get<T: Component>(&self, entity: Entity) -> Option<&T> {
+        self.world.get::<T>(entity)
+    }
+
+    /// Queue a world mutation to run after the egui pass. User intent
+    /// (button clicks, edits) becomes a deferred change instead of an
+    /// in-paint mutation — no mid-render borrow juggling, and the paint
+    /// stays a pure read.
+    pub fn defer(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
+        self.deferred.push(Box::new(f));
+    }
+
+    /// Emit an event after the egui pass (sugar over [`defer`](Self::defer)).
+    ///
+    /// The `Trigger` bound mirrors `World::trigger`'s own signature in
+    /// bevy 0.18 (`E: Event<Trigger<'a>: Default>`): observer events
+    /// must have a default-constructible trigger context. Concrete
+    /// `#[derive(Event)]` types satisfy it automatically.
+    pub fn trigger<E: bevy::ecs::event::Event>(&mut self, event: E)
+    where
+        for<'a> <E as bevy::ecs::event::Event>::Trigger<'a>: Default,
+    {
+        self.defer(move |world| {
+            world.trigger(event);
+        });
+    }
+
+    /// Temporarily take one resource out of the world for the duration of
+    /// `f`, handing back `&mut R` plus a still-usable `PanelCtx` (with `R`
+    /// removed), then re-insert it. Mirrors Bevy's `World::resource_scope`.
+    ///
+    /// This is the *narrow* way for a panel that owns a sub-registry of
+    /// `&mut`-rendered widgets (e.g. the Twin Browser's `BrowserSection`
+    /// list) to dispatch into them: it grants exclusive access to that one
+    /// resource only — never raw `&mut World`, never query/scan/fs — so the
+    /// structural guarantee holds. Returns `None` if `R` isn't present.
+    pub fn resource_scope<R: Resource, T>(
+        &mut self,
+        f: impl FnOnce(&mut PanelCtx, &mut R) -> T,
+    ) -> Option<T> {
+        let mut r = self.world.remove_resource::<R>()?;
+        let result = f(self, &mut r);
+        self.world.insert_resource(r);
+        Some(result)
+    }
+}
+
 pub trait Panel: Send + Sync + 'static {
     /// Stable ID for this panel (used as a layout key).
     fn id(&self) -> PanelId;
@@ -128,9 +220,12 @@ pub trait Panel: Send + Sync + 'static {
         false
     }
 
-    /// Render the panel contents. Panels own their reads and writes to
-    /// the world; the workbench shell only provides the `&mut egui::Ui`.
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World);
+    /// Render the panel contents. The panel reads precomputed state via
+    /// [`PanelCtx`] (view-model resources, selected-entity components) and
+    /// emits user intent through [`PanelCtx::defer`]/[`PanelCtx::trigger`];
+    /// it has no raw `&mut World`, so per-frame scans / blocking I/O /
+    /// in-paint mutation are structurally impossible.
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -174,8 +269,9 @@ pub trait InstancePanel: Send + Sync + 'static {
         false
     }
 
-    /// Render one tab instance.
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World, instance: u64);
+    /// Render one tab instance. See [`Panel::render`] — same `PanelCtx`
+    /// contract, plus the tab's `instance` discriminant.
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, instance: u64);
 
     /// Optional right-click context menu shown when the user
     /// secondary-clicks the tab header. Default is a no-op (egui_dock
@@ -186,7 +282,7 @@ pub trait InstancePanel: Send + Sync + 'static {
     fn tab_context_menu(
         &mut self,
         _ui: &mut egui::Ui,
-        _world: &mut World,
+        _ctx: &mut PanelCtx,
         _instance: u64,
     ) {
     }

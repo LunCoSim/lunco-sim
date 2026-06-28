@@ -104,6 +104,14 @@ impl Plugin for SandboxEditUiPlugin {
                 .in_set(ViewModelSet)
                 .run_if(entity_list::scene_topology_changed),
         );
+
+        // WP-8: the Inspector reads query-derived sun / camera / joint state
+        // (which `PanelCtx` can't gather in paint) from `InspectorView`,
+        // produced each frame by an exclusive system before the egui pass.
+        app.init_resource::<inspector::InspectorView>().add_systems(
+            Update,
+            inspector::populate_inspector_view.in_set(ViewModelSet),
+        );
     }
 }
 
