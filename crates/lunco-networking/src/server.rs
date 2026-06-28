@@ -440,12 +440,14 @@ fn on_server_disconnected(
     mut registry: ResMut<SessionRegistry>,
     mut profiles: ResMut<SessionProfiles>,
     mut rbac: ResMut<lunco_core::session::SessionRbac>,
+    mut dedup: ResMut<crate::sync::SyncDedup>,
 ) {
     if let Ok(remote) = q_client.get(trigger.entity) {
         let session = peer_to_session(remote.0);
         let freed = registry.release_session(session);
         profiles.profiles.remove(&session.0);
         rbac.sessions.remove(&session.0);
+        dedup.forget(session);
         info!(
             "[net] client disconnected: session={} freed {} entities, profiles updated",
             session.0,
@@ -455,6 +457,37 @@ fn on_server_disconnected(
 }
 
 /// Drain outgoing envelopes (snapshots, spawn replication) to all clients.
+///
+/// TODO(B4 — interest management): this fans EVERY envelope to
+/// `NetworkTarget::All`, and `gather_snapshot` builds a single `SnapshotMsg`
+/// shared by all peers. Cost is O(moving entities × peers): every client
+/// receives every entity's update regardless of relevance. Acceptable at the
+/// current handful-of-peers scale; it does not scale.
+///
+/// This is deliberately left as a TODO and NOT a quick AOI/cell-distance filter,
+/// because a correct fix is a substantial *simulation-aware* distribution system,
+/// not a transport tweak. It must account for:
+///   - **What the sim produces, not just where bodies are.** Relevance is per
+///     data stream (rigid-body pose, joint/articulation state, wheel/cosim
+///     telemetry, predicted vs authoritative tracks), each with its own rate and
+///     priority — a distant-but-owned/possessed vehicle, or one a client is
+///     predicting, can't be culled by raw distance alone.
+///   - **Floating-origin / big_space frames.** "Distance" for an AOI test is
+///     cell-relative; the same CQ-201 frame-mix that bit wheel kinematics applies
+///     to any naive position-difference culling (see
+///     `lunco-mobility::wheel_kinematics`). Compare in one (avian cell-local) frame.
+///   - **Prediction/reconciliation coupling.** A client predicting a Dynamic body
+///     needs a baseline + correction cadence even when "out of view"; dropping its
+///     stream silently desyncs it (cf. the predicted-Dynamic drift TODO).
+///   - **Per-target batching + lifecycle.** Spawn/despawn replication must still
+///     reach a peer the instant an entity enters/leaves its interest set, with
+///     `NetworkTarget::Single` sub-batches replacing the blanket `All` — without
+///     racing the dedup/op-id replay window (`SyncDedup` is per-origin).
+///
+/// Plumbing is ready when we build it: `server_send` already takes a
+/// `&NetworkTarget`, and `on_server_connected` does targeted single-client replay
+/// via `ServerMultiMessageSender`. Until then, broadcast-to-all is the correct,
+/// simple behaviour.
 fn host_send_outbox(
     mut outbox: ResMut<SyncOutbox>,
     server: Single<&Server>,
@@ -465,6 +498,8 @@ fn host_send_outbox(
     }
     let server = server.into_inner();
     for (channel, env) in outbox.0.drain(..) {
+        // B4: blanket fan-out — see the function doc for why per-client interest
+        // management is intentionally deferred to a sim-aware distribution system.
         server_send(&mut sender, server, &NetworkTarget::All, channel, &env);
     }
 }

@@ -11,6 +11,7 @@ use avian3d::prelude::*;
 use lunco_core::RoverVessel;
 use lunco_fsw::FlightSoftware;
 
+use crate::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity};
 use crate::WheelRaycast;
 
 /// Torque that would exactly arrest a spin of `w` rad/s in one step `dt`
@@ -53,6 +54,7 @@ pub(crate) fn update_wheel_spin(
         &LinearVelocity,
         &AngularVelocity,
         &Position,
+        &Rotation,
         Option<&FlightSoftware>,
         &RigidBody,
         // Client proxies are Kinematic with avian velocity zeroed; their real
@@ -88,7 +90,7 @@ pub(crate) fn update_wheel_spin(
         // wheel's forward axis. Pulled from the parent chassis rigid body.
         let mut v_long = 0.0;
         let mut braking = false;
-        if let Ok((lin, ang, pos, fsw, body, motion)) = q_chassis.get(parent.parent()) {
+        if let Ok((lin, ang, pos, rot, fsw, body, motion)) = q_chassis.get(parent.parent()) {
             braking = fsw.map(|f| f.brake_active).unwrap_or(false);
             // Source the chassis velocity from wherever this peer's chassis
             // actually gets its motion: live avian velocity on a Dynamic body
@@ -103,8 +105,20 @@ pub(crate) fn update_wheel_spin(
             } else {
                 (lin.0, ang.0)
             };
-            let hub_world = global_tf.translation().as_dvec3();
-            let hub_vel = vlin + vang.cross(hub_world - pos.0);
+            // Reconstruct the hub in the AVIAN cell-local frame from the chassis
+            // body pose + the wheel's chassis-local transform (the wheel is a
+            // `ChildOf` the chassis, so `local_tf` *is* that transform). Reading
+            // `global_tf.translation()` here mixed the big_space render frame into
+            // the lever arm `hub − pos.0` and drifted the slip term once the rover
+            // drove away from the floating origin (CQ-201). Rotation is frame-safe
+            // (big_space only translates), so `forward` can keep using `global_tf`.
+            let (hub_pos, _) = wheel_hub_pose(
+                pos.0,
+                rot.0,
+                local_tf.translation.as_dvec3(),
+                local_tf.rotation.as_dquat(),
+            );
+            let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, pos.0);
             let forward = global_tf.rotation().mul_vec3(Vec3::NEG_Z).as_dvec3();
             v_long = hub_vel.dot(forward);
         }
@@ -162,5 +176,119 @@ pub(crate) fn update_wheel_spin(
                 visual_tf.rotation = (steer * wheel.spin_quat() * base).normalize();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::update_wheel_spin;
+    use crate::WheelRaycast;
+    use avian3d::prelude::*;
+    use bevy::math::DVec3;
+    use bevy::prelude::*;
+    use bevy::time::Time;
+    use lunco_core::RoverVessel;
+    use std::time::Duration;
+
+    /// Drive `update_wheel_spin` one tick on a single grounded raycast wheel and
+    /// return the resulting axle `spin_velocity`.
+    ///
+    /// The chassis is a Dynamic body at avian `Position`/`Rotation` = origin/identity
+    /// with angular velocity `ang`. The wheel is a `ChildOf` the chassis with
+    /// chassis-local transform `wheel_local`; its **`GlobalTransform.translation`** is
+    /// `wheel_gtf_translation` — the value big_space rebases away from the floating
+    /// origin. Pre-fix the integrator built the contact-slip lever as
+    /// `wheel_gtf − chassis_pos` (render-frame minus avian-frame), so the spin depended
+    /// on `wheel_gtf_translation`; post-fix it reconstructs the hub from the chassis
+    /// pose (`pos + rot·wheel_local`, pure avian), so spin is invariant to it.
+    fn run_raycast_spin(ang: DVec3, wheel_local: Vec3, wheel_gtf_translation: Vec3) -> f64 {
+        let mut app = App::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_secs_f64(0.1));
+        app.insert_resource(time);
+
+        // Port with no `PhysicalPort` → throttle reads 0 (free-rolling, so the spin
+        // is driven purely by ground speed / the lever arm under test).
+        let port = app.world_mut().spawn_empty().id();
+        let chassis = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Position(DVec3::ZERO),
+                Rotation::default(),
+                LinearVelocity(DVec3::ZERO),
+                AngularVelocity(ang),
+                RoverVessel,
+            ))
+            .id();
+        let visual = app.world_mut().spawn(Transform::default()).id();
+        app.world_mut().spawn((
+            WheelRaycast {
+                suspension_port: port,
+                drive_port: port,
+                steer_port: port,
+                rest_length: 1.0,
+                spring_k: 1000.0,
+                damping_c: 100.0,
+                wheel_radius: 0.5,
+                ray_origin_y: 0.0,
+                visual_entity: Some(visual),
+                last_normal_force: 100.0, // ≥1 ⇒ on_ground (with a hit present)
+                spin_angle: 0.0,
+                spin_velocity: 0.0,
+                mass: 8.0,
+                moment_of_inertia: 1.0, // overrides ½mr² ⇒ inertia = 1.0 (clean)
+                drive_torque_max: 0.0,
+                bearing_damping: 0.0,
+                friction_mu: 1.0,
+                slip_stiffness: 1000.0,
+                contact_grip_stiffness: 1000.0,
+                brake_torque_max: 0.0,
+            },
+            Transform::from_translation(wheel_local),
+            GlobalTransform::from(Transform::from_translation(wheel_gtf_translation)),
+            // One hit ⇒ the wheel is on the ground (the integrator only checks
+            // presence, not distance/normal, for the grip path).
+            RayHits(vec![RayHitData { entity: chassis, distance: 0.5, normal: DVec3::Y }]),
+            ChildOf(chassis),
+        ));
+
+        app.add_systems(Update, update_wheel_spin);
+        app.update();
+
+        app.world_mut()
+            .query::<&WheelRaycast>()
+            .iter(app.world())
+            .next()
+            .unwrap()
+            .spin_velocity
+    }
+
+    #[test]
+    fn raycast_spin_is_floating_origin_invariant() {
+        // CQ-201 regression for the authoritative (raycast) rover. Chassis yaws
+        // about +Y at 1 rad/s; the hub sits 1 m out along +X, so the lever arm
+        // feeds the contact slip and thus the gripped axle rate. The ONLY change
+        // between runs is the wheel's GlobalTransform translation: "near origin"
+        // (true world hub pos) vs "≈1 km away" along the sensitive axis (a big_space
+        // rebase). A frame-correct integrator gives the SAME spin; the old
+        // `gtf − pos.0` lever gave a wildly different one (the bug, invisible near
+        // origin).
+        let ang = DVec3::Y;
+        let mount = Vec3::new(1.0, 0.0, 0.0);
+
+        let near = run_raycast_spin(ang, mount, mount);
+        let far = run_raycast_spin(ang, mount, mount - Vec3::new(1000.0, 0.0, 0.0));
+
+        assert!(
+            (near - far).abs() < 1e-6,
+            "raycast spin must be floating-origin invariant: near={near} far={far} (Δ={})",
+            (near - far).abs()
+        );
+        // And physically correct, not just self-consistent. v_long = 1 m/s (as in
+        // the proxy test); the implicit grip solve with inertia/dt=10, k_slip·r²=250
+        // gives ω = (k_slip·r·v_long)/(inertia/dt + k_slip·r²) = 500/260 ≈ 1.923,
+        // and |f_slip|≈38 < μN=100 so the tire grips (no saturation).
+        assert!((near - 1.9231).abs() < 1e-2, "expected gripped ω≈1.923, got {near}");
     }
 }
