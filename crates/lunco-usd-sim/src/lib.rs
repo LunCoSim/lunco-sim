@@ -56,6 +56,7 @@ pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
 use lunco_usd_bevy::{has_api_schema, read_rel_target};
 use openusd::sdf::{Path as SdfPath, AbstractData, Value};
 use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
+use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel_roll_rate};
 use lunco_fsw::FlightSoftware;
 use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
 use lunco_hardware::{MotorActuator, SteeringActuator};
@@ -1393,7 +1394,7 @@ fn animate_proxy_physical_wheels(
         Without<lunco_core::NetReplicate>,
     >,
     q_chassis: Query<
-        (&RigidBody, &Position, Option<&lunco_core::ReplicatedChassisMotion>),
+        (&RigidBody, &Position, &Rotation, Option<&lunco_core::ReplicatedChassisMotion>),
         With<RoverVessel>,
     >,
     mut q_visual: Query<&mut Transform, Without<PhysicalWheel>>,
@@ -1411,7 +1412,7 @@ fn animate_proxy_physical_wheels(
     }
 
     for (mut wheel, gtf, wheel_of) in q_wheels.iter_mut() {
-        let Ok((body, pos, motion)) = q_chassis.get(wheel_of.0) else { continue };
+        let Ok((body, pos, rot, motion)) = q_chassis.get(wheel_of.0) else { continue };
         // Display proxies only; the host/owned rover spins the body via the joint.
         if !matches!(body, RigidBody::Kinematic) {
             continue;
@@ -1422,12 +1423,18 @@ fn animate_proxy_physical_wheels(
         let (vlin, vang) = motion
             .map(|m| (m.lin, m.ang))
             .unwrap_or((DVec3::ZERO, DVec3::ZERO));
-        let hub_world = gtf.translation().as_dvec3();
-        let hub_vel = vlin + vang.cross(hub_world - pos.0);
+        // Reconstruct the hub in the AVIAN cell-local frame from the chassis pose +
+        // the authored `mount_local` offset (the rigid axle), exactly as
+        // `proxy_wheel_pose`/`reconstruct_proxy_wheels` do. The old code read
+        // `gtf.translation()` (big_space render frame) against `pos.0` (avian) — the
+        // same CQ-201 frame-mix as the raycast spin integrator, which drifted the
+        // rolling rate once the proxy drove ~km from the floating origin. Rotation is
+        // frame-safe, so `forward` keeps using `gtf` (it already carries the steer).
+        let (hub_pos, _) = wheel_hub_pose(pos.0, rot.0, wheel.mount_local.as_dvec3(), DQuat::IDENTITY);
+        let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, pos.0);
         let forward = gtf.rotation().mul_vec3(Vec3::NEG_Z).as_dvec3();
-        let v_long = hub_vel.dot(forward);
         let r = (wheel.wheel_radius as f64).max(1e-3);
-        let w = v_long / r;
+        let w = wheel_roll_rate(hub_vel, forward, r);
 
         let angle = (wheel.spin_angle as f64 + ROLL_SIGN * w * dt).rem_euclid(TAU);
         wheel.spin_angle = angle as f32;
@@ -1559,6 +1566,10 @@ mod proxy_wheel_tests {
             .spawn((
                 chassis_body,
                 Position(DVec3::ZERO),
+                // avian auto-adds `Rotation` to every RigidBody in the real app; the
+                // hand-built test entity must carry it too now that the spin system
+                // reconstructs the hub from the chassis pose (CQ-201 fix).
+                Rotation::default(),
                 lunco_core::ReplicatedChassisMotion {
                     lin: DVec3::new(0.0, 0.0, -2.0), // 2 m/s along chassis forward (−Z)
                     ang: DVec3::ZERO,
@@ -1633,6 +1644,7 @@ mod proxy_wheel_tests {
             .spawn((
                 RigidBody::Kinematic,
                 Position(DVec3::ZERO),
+                Rotation::default(),
                 lunco_core::ReplicatedChassisMotion {
                     lin: DVec3::new(0.0, 0.0, -2.0),
                     ang: DVec3::ZERO,
@@ -1670,6 +1682,87 @@ mod proxy_wheel_tests {
         let rot = app.world().entity(visual).get::<Transform>().unwrap().rotation;
         assert_eq!(spin, 0.0, "replicated wheel must be a no-op, got spin {spin}");
         assert_eq!(rot, Quat::IDENTITY, "replicated wheel visual must be untouched");
+    }
+
+    /// Run the proxy spin one tick with an explicit chassis angular velocity, a
+    /// non-zero wheel mount offset, and an arbitrary wheel `GlobalTransform`
+    /// translation — returns the resulting `spin_angle`.
+    ///
+    /// The chassis pose is read from avian `Position`/`Rotation` (identity here);
+    /// the wheel's `GlobalTransform.translation` is what big_space rebases away
+    /// from the origin. Pre-fix the spin integrator built the lever arm as
+    /// `wheel_gtf − chassis_pos` (render-frame minus avian-frame), so the returned
+    /// spin depended on `wheel_gtf_translation`. Post-fix it reconstructs the hub
+    /// from `chassis_pos + chassis_rot · mount_local` (pure avian), so the spin is
+    /// **independent** of `wheel_gtf_translation` — which is what this drives.
+    fn run_spin_with(ang: DVec3, mount_local: Vec3, wheel_gtf_translation: Vec3) -> f32 {
+        let mut app = App::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_secs_f64(0.1));
+        app.insert_resource(time);
+
+        let chassis = app
+            .world_mut()
+            .spawn((
+                RigidBody::Kinematic,
+                Position(DVec3::ZERO),
+                Rotation::default(),
+                lunco_core::ReplicatedChassisMotion { lin: DVec3::ZERO, ang },
+                RoverVessel,
+            ))
+            .id();
+        let visual = app.world_mut().spawn(Transform::default()).id();
+        app.world_mut().spawn((
+            PhysicalWheel {
+                visual_entity: Some(visual),
+                wheel_radius: 0.5,
+                axis_rot: Quat::IDENTITY,
+                spin_angle: 0.0,
+                mount_local,
+                steers: false,
+                wheelbase: 0.0,
+            },
+            GlobalTransform::from(Transform::from_translation(wheel_gtf_translation)),
+            WheelOf(chassis),
+        ));
+
+        app.add_systems(Update, animate_proxy_physical_wheels);
+        app.update();
+        app.world_mut()
+            .query::<&PhysicalWheel>()
+            .iter(app.world())
+            .next()
+            .unwrap()
+            .spin_angle
+    }
+
+    #[test]
+    fn proxy_spin_is_floating_origin_invariant() {
+        // CQ-201 regression. Chassis yaws about +Y at 1 rad/s; the hub sits 1 m out
+        // along +X, so the lever arm feeds the hub velocity (ω × r) and thus the
+        // rolling rate. The ONLY difference between the two runs is the wheel's
+        // `GlobalTransform` translation — "near origin" (the true world hub pos) vs
+        // "≈1 km away" (rebased by a big_space origin offset). A frame-correct
+        // integrator must give the SAME spin for both; the old `gtf − pos.0` lever
+        // gave wildly different answers (that was the bug, invisible near origin).
+        let ang = DVec3::Y; // yaw 1 rad/s about +Y
+        let mount = Vec3::new(1.0, 0.0, 0.0);
+
+        let near = run_spin_with(ang, mount, /* true hub world pos */ mount);
+        let far = run_spin_with(ang, mount, /* rebased 1 km along the sensitive axis */ mount - Vec3::new(1000.0, 0.0, 0.0));
+
+        assert!(
+            (near - far).abs() < 1e-6,
+            "spin must be floating-origin invariant: near={near} far={far} (Δ={})",
+            (near - far).abs()
+        );
+
+        // And it must be the physically-correct value, not just self-consistent:
+        // lever=(1,0,0), ω×r=(0,1,0)×(1,0,0)=(0,0,−1) ⇒ v_long=(0,0,−1)·(0,0,−1)=1;
+        // rate ω=v_long/r=1/0.5=2; one 0.1 s tick with ROLL_SIGN=−1 ⇒ Δθ=−0.2.
+        let wrapped = near.rem_euclid(std::f32::consts::TAU);
+        let circ = wrapped.min(std::f32::consts::TAU - wrapped);
+        assert!((circ - 0.2).abs() < 1e-3, "expected |Δθ|≈0.2, got {near} (circ {circ})");
     }
 
     #[test]

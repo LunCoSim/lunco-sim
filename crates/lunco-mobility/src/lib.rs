@@ -34,6 +34,9 @@ use lunco_fsw::FlightSoftware;
 mod wheel_spin;
 use wheel_spin::update_wheel_spin;
 
+pub mod wheel_kinematics;
+use wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity};
+
 /// Drive-actuation chain diagnostic logging — see the `drive-diag` feature in
 /// `Cargo.toml`. Expands to `info!` when the feature is on, and to nothing
 /// (args not evaluated) when off, so it's zero-cost in normal builds. A single
@@ -321,7 +324,12 @@ fn apply_wheel_suspension(
             // what lets a proxy's wheels rest on the terrain and report `on_ground`
             // to the spin model instead of floating at their authored rest offset.
             let apply_force = !matches!(body, RigidBody::Kinematic);
-            let world_pos = forces.position().0 + forces.rotation().0 * wheel_tf.translation.as_dvec3();
+            let (world_pos, _) = wheel_hub_pose(
+                forces.position().0,
+                forces.rotation().0,
+                wheel_tf.translation.as_dvec3(),
+                wheel_tf.rotation.as_dquat(),
+            );
 
             if let Some(hit) = hits.iter_sorted().next() {
                 let distance = hit.distance;
@@ -334,7 +342,8 @@ fn apply_wheel_suspension(
                     let ray_dir_world = forces.rotation().0 * Vec3::NEG_Y.as_dvec3();
                     let lin_vel = forces.linear_velocity();
                     let ang_vel = forces.angular_velocity();
-                    let velocity_at_wheel = lin_vel + ang_vel.cross(world_pos - forces.position().0);
+                    let velocity_at_wheel =
+                        wheel_hub_velocity(lin_vel, ang_vel, world_pos, forces.position().0);
                     let relative_vel = velocity_at_wheel.dot(ray_dir_world);
 
                     let total_force_mag = suspension_force_mag(
@@ -434,9 +443,12 @@ fn apply_wheel_drive(
                     // `wheel_tf.rotation` carries the steer angle (set in
                     // `apply_wheel_steering`); roll-spin lives on the child visual, so the
                     // drive direction stays correct.
-                    let wheel_world_rot = forces.rotation().0 * wheel_tf.rotation.as_dquat();
-                    let hub_pos_world =
-                        forces.position().0 + forces.rotation().0 * wheel_tf.translation.as_dvec3();
+                    let (hub_pos_world, wheel_world_rot) = wheel_hub_pose(
+                        forces.position().0,
+                        forces.rotation().0,
+                        wheel_tf.translation.as_dvec3(),
+                        wheel_tf.rotation.as_dquat(),
+                    );
                     let forward: DVec3 = wheel_world_rot * DVec3::NEG_Z;
                     let right: DVec3 = wheel_world_rot * DVec3::X;
 
@@ -451,7 +463,8 @@ fn apply_wheel_drive(
                     let max_friction = wheel.friction_mu * normal_force;
                     let chassis_vel = forces.linear_velocity();
                     let chassis_ang_vel = forces.angular_velocity();
-                    let hub_vel = chassis_vel + chassis_ang_vel.cross(hub_pos_world - forces.position().0);
+                    let hub_vel =
+                        wheel_hub_velocity(chassis_vel, chassis_ang_vel, hub_pos_world, forces.position().0);
                     let long_vel = hub_vel.dot(forward); // longitudinal slip
                     let lat_vel = hub_vel.dot(right); // lateral slip
                     let slip_vec = long_vel * forward + lat_vel * right;
