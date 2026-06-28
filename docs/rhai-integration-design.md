@@ -1,11 +1,99 @@
 # Rhai Integration Design — scripting & scenarios
 
-Status: design (2026-06-28, `luau-integration` worktree). Spike proven: rhai 1.25.1
-links on `wasm32-unknown-unknown`, native, and `--no-default-features`.
+Status: **IMPLEMENTED (P1–P4)** + design rationale. 2026-06-28, `luau-integration`
+worktree. Builds green native (default), `--no-default-features` (script-free),
+and `wasm32-unknown-unknown`. Verified by `crates/lunco-scripting/tests/rhai_rover_live_test.rs`
+(4 live end-to-end tests). Sections 0–8 below are the design rationale; this
+header is the as-built reference.
 
-Goal: drive scenarios from rhai — *"rover moves along a path via checkpoints,
-loads next goals"* — and, more broadly, **manipulate every object in the sim
-(Twin, USD, Modelica, cosim, scene, vehicles) from script.**
+Goal (met): drive scenarios from rhai — *"rover moves along a path via
+checkpoints, loads next goals"* — and, more broadly, **manipulate every object in
+the sim (Twin, USD, Modelica, cosim, scene, vehicles) from script.**
+
+---
+
+## STATUS — what's shipped (as-built reference)
+
+**Principle held:** core = mechanism, rhai = ALL policy (objectives, navigation,
+behavior trees, sequencing live in hot-reloadable `.rhai`, never compiled in).
+
+### How to load & run a scenario
+
+A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
+
+- **API / MCP / scripts:** the `RunScenario { target, source }` command
+  (`crates/lunco-scripting/src/commands.rs`). MCP tool: **`run_scenario`**
+  (`mcp/src/index.js`). HTTP: `{"command":"RunScenario","params":{"target":<gid>,"source":"<rhai>"}}`.
+  Idempotent + **hot-reload**: re-running on the same entity recompiles in place
+  (bumps `ScriptDocument.generation`).
+- **One-shot eval (no attach):** the `RunRhai { code }` command — runs once with
+  full World access; stdout returned via `QueryCommandResult`.
+- **Direct (code/tests):** insert a `ScriptDocument` into `ScriptRegistry` +
+  attach `ScriptedModel { language: Rhai, document_id }`.
+
+### Lifecycle hooks (per-entity runtime, `world_bridge.rs` `tick_rhai_models`)
+
+```rhai
+fn on_start(me) { ... }        // once after (re)compile; `me` = host entity gid
+fn on_tick(me)  { ... }        // every FixedUpdate
+fn on_event(me, evt) { ... }   // evt = #{name, value, severity, timestamp}; frame-delayed
+```
+
+State rule (rhai-specific, important): script `fn`s are **pure** — they cannot
+see top-level `let`s; only `const` globals are visible. Persistent per-tick state
+lives on **`this`** (a per-entity object map: `this.idx = 0`). `this` is bound
+ONLY in the hook the engine calls directly — **NOT** in helper functions it
+calls, so prelude/library helpers must be stateless (take+return state).
+
+### Host verbs (the entire Rust-exposed vocabulary — `world_bridge.rs`)
+
+| verb | channel | purpose |
+|------|---------|---------|
+| `cmd(name, #{params})` | write | fire ANY registered `#[Command]` by name (reflect dispatch via `ApiCommandEvent`); behind networking RBAC; host-authoritative |
+| `world_pos(id)` → `[x,y,z]` | read | float-origin-correct world position |
+| `world_forward(id)` → `[x,y,z]` | read | world heading (only read rhai can't derive itself) |
+| `get(id, "Comp.field")` | read | generic reflected component-field read |
+| `find(name)` / `list_entities()` | read | entity lookup by `Name` / enumerate |
+| `sim_tick()` | read | current FixedUpdate tick |
+| `emit(name, value)` | event | fire a `TelemetryEvent` on the shared bus |
+
+Everything else is **policy in rhai** — see the embedded prelude
+`crates/lunco-scripting/rhai/prelude.rhai`: vector math, `distance`/`arrived`,
+`steer_to`/`nav_to` (closed-loop steering), `run_plan` (declarative waypoint/
+objective executor), `drive`/`brake`/`load_scene` wrappers. The prelude is
+`include_str!`-embedded and registered as a global module (wasm-safe, no IO).
+NB: `goto` is a reserved word in rhai — the nav helper is `nav_to`.
+
+### Events / pub-sub
+
+`emit()` reuses the existing **`TelemetryEvent`** bus (observer-dispatched; YAMCS
+mnemonic in `name`) — no new event type. External clients receive script events
+via `SubscribeTelemetry` (now functional — `lunco-api` `executor.rs` +
+`subscription.rs`). Scripts receive events via `on_event` (frame-delayed: emit on
+tick N → deliver tick N+1 → deterministic actor model). Inter-script interaction
+is bus-only (isolated VMs); see §7f.
+
+### Examples
+
+`crates/lunco-scripting/rhai/examples/`: `patrol.rhai` (waypoint loop, emits
+checkpoints), `mission.rhai` (coordinator reacting via `on_event`),
+`mission_plan.rhai` (declarative `run_plan` mission).
+
+### Build notes / gotchas
+
+- rhai is a **default-on optional feature** (`default = ["rhai"]`); removable for
+  a script-free build.
+- `lunco-api` dep MUST be `default-features = false` (its default `transport-http`
+  pulls tokio→mio and breaks wasm).
+- wasm needs `--cfg getrandom_backend="wasm_js"` (set by `build_web.sh`).
+- A `Result`-returning `#[on_command]` records to `CommandResults` — that resource
+  must exist.
+
+### Deferred (design-only / separate scope)
+
+- ROS2 bridge (needs an `rclrs` transport crate) — seam ready, see §7d.
+- Inspector/editor params UI (exposing `ScriptedModel` + doc source).
+- Avian sensor-volume checkpoint auto-emit (rhai `arrived()` polling already covers it).
 
 ---
 

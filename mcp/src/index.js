@@ -326,6 +326,19 @@ const STATIC_TOOLS = [
       required: ['avatar', 'target'],
     },
   },
+  // ── Scripting ────────────────────────────────────────────────────────
+  {
+    name: 'run_scenario',
+    description: 'Attach a persistent rhai scenario to an entity at runtime — the scenario-loading entry point. Registers `source` as a ScriptDocument and attaches a `ScriptedModel{Rhai}` to `target`, so the per-entity runtime starts calling the script\'s `on_start(self)`/`on_tick(self)`/`on_event(self,evt)` hooks every FixedUpdate (`self` is the host entity api_id). The script can READ world state (`world_pos(id)`, `world_forward(id)`, `get(id,"Comp.field")`, `find(name)`, `sim_tick()`), DRIVE the sim via the generic `cmd("CommandName", #{...})` bridge over every registered command (or prelude helpers `drive`/`brake`/`nav_to`/`run_plan`), and EMIT/RECEIVE events (`emit(name,value)` → TelemetryEvent bus; `on_event` receives them next tick). Idempotent + HOT-RELOAD: re-running on the same entity recompiles in place (bumps the document generation), so this also serves as live scenario editing. Returns `{document_id, generation}`. Pass entity IDs from `list_entities`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Entity api_id to attach the scenario to (from list_entities).' },
+        source: { type: 'string', description: 'rhai scenario source. Define `fn on_tick(me) { ... }` (optionally `on_start`/`on_event`). Prelude helpers available: nav_to, run_plan, drive, brake, distance, arrived, emit, plus the host verbs cmd/world_pos/world_forward/get/find/sim_tick.' },
+      },
+      required: ['target', 'source'],
+    },
+  },
 ];
 
 // Dynamic tools cache (built from schema)
@@ -785,6 +798,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: 'text', text: 'Error: `path` is required' }], isError: true };
         }
         const result = await executeCommand('LoadScene', { path, root_prim });
+        if (result.error) {
+          return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case 'run_scenario': {
+        const { target, source } = args ?? {};
+        if (!target || !source) {
+          return { content: [{ type: 'text', text: 'Error: `target` and `source` are both required' }], isError: true };
+        }
+        const result = await executeCommand('RunScenario', { target, source });
         if (result.error) {
           return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
         }
