@@ -142,7 +142,9 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
                 let server = server.clone();
                 let client_id = *client_id;
                 app.add_systems(Startup, move |mut commands: Commands| {
-                    crate::client::spawn_client(&mut commands, &server, client_id);
+                    // Empty digest ⇒ ambient source: env on native, URL `#hash`
+                    // on wasm (the `?connect=host:port#digest` deep-link path).
+                    crate::client::spawn_client(&mut commands, &server, client_id, "");
                 });
             } else {
                 // Idle local sandbox — single-player until `JoinServer`.

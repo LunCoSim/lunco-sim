@@ -59,6 +59,10 @@ use lunco_modelica::ModelicaSet;
 
 #[cfg(feature = "ui")]
 mod ui;
+/// OS `luncosim://` scheme registration (desktop integration). Native + the
+/// networking feature only — there's nothing to dial without the wire.
+#[cfg(all(feature = "networking", not(target_family = "wasm")))]
+mod url_scheme;
 
 /// Run the sandbox, choosing GUI vs. headless from the build + flags: headless
 /// when the `ui` feature is absent, or `--no-ui` / `LUNCO_NO_UI` is set;
@@ -84,7 +88,30 @@ pub fn run_headless() {
 /// or the headless runner. Nothing UI-specific lives here beyond selecting the
 /// windowing backend in [`default_plugins`].
 fn run_with_mode(headless: bool) {
+    // Native deep-link single-instance gate (GUI only). Register the
+    // `luncosim://` scheme handler (desktop integration, this crate), then decide
+    // whether THIS process is the app or just a courier forwarding a clicked link
+    // to an already-running instance. Must happen before building the app so a
+    // forward exits without opening a window. The returned inbox is inserted
+    // below; a Bevy system drains it into the confirm prompt. Headless skips it.
+    #[cfg(all(feature = "networking", not(target_family = "wasm")))]
+    let deeplink_inbox = if !headless {
+        use lunco_networking::single_instance::{acquire, LaunchOutcome};
+        url_scheme::register_best_effort();
+        match acquire() {
+            LaunchOutcome::Forwarded => return,
+            LaunchOutcome::Primary(inbox) => Some(inbox),
+        }
+    } else {
+        None
+    };
+
     let mut app = App::new();
+
+    #[cfg(all(feature = "networking", not(target_family = "wasm")))]
+    if let Some(inbox) = deeplink_inbox {
+        app.insert_resource(inbox);
+    }
 
     // Register every LunCo asset source (lunco://, lunco-lib://, twin://,
     // cached_textures://) + the shared `TwinRoots` resource in ONE shared place

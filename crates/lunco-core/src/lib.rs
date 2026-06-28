@@ -64,7 +64,7 @@ pub use session::{
     authorize, AppliedInputSeq, ArticulatedLink, ArticulatedVehicle, IncomingSnapshots, InputFrame,
     LocalSession,
     NetConnectRequest, NetDisconnectRequest,
-    NetExcluded, NetReplicate, NetSpawn,
+    NetExcluded, NetReplicate, NetSpawn, PendingConnect, PendingConnectRequest,
     NetStatus, NetworkRole, NotPredictable, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns,
     PossessionPolicy,
     PredictedDynamic, ReplicatedChassisMotion, ReplicatedSpawn, SessionRegistry, SessionProfiles, SkipContentStamp,
@@ -461,6 +461,7 @@ pub(crate) fn register_core_resources(app: &mut App) {
         .init_resource::<session::LocalSession>()
         .init_resource::<session::SyncApplyGuard>()
         .init_resource::<session::NetStatus>()
+        .init_resource::<session::PendingConnect>()
         .init_resource::<session::SessionRegistry>()
         .init_resource::<session::SessionProfiles>()
         .init_resource::<session::SessionRbac>()

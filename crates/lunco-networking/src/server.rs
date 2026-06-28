@@ -133,7 +133,11 @@ fn resolve_cert_paths() -> Option<(String, String)> {
 /// untrusted cert (connection refused) with no obvious server-side cause — a
 /// misconfiguration that looks like a network fault. Crashing surfaces it
 /// immediately in the service logs / exit code.
-fn resolve_identity() -> Identity {
+/// Whether a cert was specified ⇒ likely a real CA cert ⇒ guests need no digest.
+/// Returns `(identity, bare_hex_digest)`; the digest is empty when a CA cert is
+/// served (guests validate the chain) and non-empty for the dev self-signed cert
+/// so the invite link can pin it.
+fn resolve_identity() -> (Identity, String) {
     if let Some((cert_path, key_path)) = resolve_cert_paths() {
         let identity = load_pem_identity(&cert_path, &key_path).unwrap_or_else(|e| {
             panic!(
@@ -149,8 +153,8 @@ fn resolve_identity() -> Identity {
         // publish the digest here too. This is the supported way to get a STABLE
         // digest across host restarts: point at a persisted self-signed cert
         // instead of minting a fresh one each launch. See announce_digest.
-        announce_digest(&identity);
-        return identity;
+        let digest = announce_digest(&identity);
+        return (identity, digest);
     }
 
     // ECDSA-P256 self-signed cert — fresh each launch (→ a new digest every
@@ -158,15 +162,16 @@ fn resolve_identity() -> Identity {
     // browser clients can pin it in the connect URL (`#<digest>`).
     let identity = Identity::self_signed(vec!["localhost".to_string(), "127.0.0.1".to_string()])
         .expect("self-signed certificate");
-    announce_digest(&identity);
-    identity
+    let digest = announce_digest(&identity);
+    (identity, digest)
 }
 
 /// Compute the cert's DER-SHA256 digest, log it, and write it to
 /// `lunco_cert_digest.txt` so browser clients can hash-pin it (`#<digest>`).
 /// Called on BOTH identity paths so a persisted self-signed cert (loaded via
-/// the env vars) yields a stable digest across restarts.
-fn announce_digest(identity: &Identity) {
+/// the env vars) yields a stable digest across restarts. Returns the **bare
+/// lowercase hex** form (colons stripped) for embedding in an invite link.
+fn announce_digest(identity: &Identity) -> String {
     let digest = format!("{}", identity.certificate_chain().as_slice()[0].hash());
     info!("🔐 WebTransport cert digest: {digest}");
     let digest_path = std::env::temp_dir().join("lunco_cert_digest.txt");
@@ -177,6 +182,21 @@ fn announce_digest(identity: &Identity) {
     {
         info!("🔐 digest written to {}", digest_path.display());
     }
+    digest
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// Best-guess primary LAN IPv4 for the invite-link prefill: open a UDP socket
+/// "to" a routable address (no packets are sent — `connect` only sets the route)
+/// and read back which local interface would be used. Returns `None` with no
+/// default route. Std-only, no dependency.
+fn primary_lan_ip() -> Option<std::net::IpAddr> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    sock.local_addr().ok().map(|a| a.ip())
 }
 
 /// Build an [`Identity`] from PEM cert-chain + private-key files. Reads route
@@ -218,7 +238,19 @@ fn load_pem_identity(cert_path: &str, key_path: &str) -> Result<Identity, String
 /// Spawn the server entity (WebTransport cert via [`resolve_identity`]), trigger
 /// `Start`, and register the lifecycle observers + ferry systems.
 pub(crate) fn setup_host(app: &mut App, port: u16) {
-    let identity = resolve_identity();
+    let (identity, digest) = resolve_identity();
+
+    // Seed the *Copy invite link* prefill (LAN IP:port) + the cert digest a
+    // browser guest must pin, onto the always-on NetStatus seam so the workbench
+    // menu can offer them with no networking dependency.
+    {
+        let mut status = app.world_mut().resource_mut::<NetStatus>();
+        if let Some(ip) = primary_lan_ip() {
+            status.invite_hint = format!("{ip}:{port}");
+            info!("[net] invite hint (LAN): {}", status.invite_hint);
+        }
+        status.invite_digest = digest;
+    }
 
     let server_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
     let server = app

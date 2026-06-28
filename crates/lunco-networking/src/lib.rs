@@ -17,6 +17,12 @@
 
 use bevy::prelude::*;
 
+/// Connect deep-link URL format (`luncosim://connect?address=…&digest=…` and the
+/// web `?connect=…#digest` form) — pure, always compiled so the host's invite
+/// link builder and the native arg parser work regardless of the `networking`
+/// feature.
+pub mod connect_link;
+
 #[cfg(feature = "networking")]
 mod protocol;
 #[cfg(feature = "networking")]
@@ -29,6 +35,12 @@ pub mod sync;
 mod server;
 #[cfg(feature = "networking")]
 mod client;
+/// Native single-instance deep-link forwarding: route a clicked `luncosim://`
+/// link into the already-running app over a local socket (else become primary).
+/// (OS *scheme registration* is a desktop-integration concern and lives in the
+/// app crate `lunco-sandbox`, not here — this crate only parses + dials.)
+#[cfg(all(feature = "networking", not(target_family = "wasm")))]
+pub mod single_instance;
 /// Browser-only WebTransport client IO that dials a **hostname URL**
 /// (`https://lunica.lunco.space:5888`) so a real CA cert validates with no
 /// digest — lightyear's built-in `WebTransportClientIo` only dials
