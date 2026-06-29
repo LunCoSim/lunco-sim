@@ -171,7 +171,11 @@ pub fn drain_pending_structural_ops(world: &mut bevy::prelude::World) {
     // Phase 3: re-enter the public apply path. With a fresh cache,
     // the deferred gate will pass and the kernel applies normally.
     for (doc, op, author) in ready {
-        let _ = apply_one_op_as(world, doc, op, author);
+        if let Err(reject) = apply_one_op_as(world, doc, op, author) {
+            // A deferred op that fails on replay used to vanish silently,
+            // leaving the document in a half-applied state with no trace.
+            warn!("[modelica] deferred op for {doc:?} rejected on replay: {reject:?}");
+        }
     }
 }
 

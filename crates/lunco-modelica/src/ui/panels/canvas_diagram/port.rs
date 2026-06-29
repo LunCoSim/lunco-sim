@@ -146,7 +146,7 @@ pub(super) fn paint_input_control_widget(
             egui::vec2(strip_width, h),
         );
 
-        lunco_canvas::canvas::push_canvas_widget_rect(ui.ctx(), strip_rect);
+        lunco_canvas::canvas::push_canvas_widget_rect(ui, strip_rect);
 
         let trough_color = egui::Color32::from_rgba_unmultiplied(28, 30, 38, 220);
         let radius = (strip_width * 0.45).min(5.0);

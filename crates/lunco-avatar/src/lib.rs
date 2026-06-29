@@ -36,6 +36,18 @@ pub use recording::*;
 
 mod intents;
 
+/// Upper bound on parent-chain walks when resolving an entity's owning Grid
+/// or nearest clickable root. The scene hierarchies here are shallow (a few
+/// levels); this cap purely guards the loop against running away on a
+/// malformed/cyclic hierarchy — it does not encode a real structural depth.
+/// (Unifies the former ad-hoc `0..10` / `MAX_DEPTH = 8` bounds.)
+const MAX_HIERARCHY_WALK_DEPTH: usize = 16;
+
+/// Fallback body radius (Earth mean radius, metres) used when a target
+/// `CelestialBody` is missing — keeps altitude math finite instead of
+/// collapsing distances to zero.
+const EARTH_RADIUS_M_FALLBACK: f64 = 6_371_000.0;
+
 /// UI panels for avatar status, camera mode, and surface coordinates.
 #[cfg(feature = "ui")]
 pub mod ui;
@@ -886,7 +898,7 @@ fn orbit_system(
 
         // Find the target's grid.
         let mut target_grid = orbit.target;
-        for _ in 0..10 {
+        for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
             if q_grids.contains(target_grid) { break; }
             if let Ok(parent) = q_parents.get(target_grid) {
                 target_grid = parent.parent();
@@ -1252,8 +1264,7 @@ fn find_clickable_from_hit(
     q_selectable: &Query<Entity, With<lunco_core::SelectableRoot>>,
     q_ground: &Query<Entity, With<lunco_core::Ground>>,
 ) -> Option<Entity> {
-    const MAX_DEPTH: usize = 8;
-    for _ in 0..MAX_DEPTH {
+    for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
         if q_ground.get(entity).is_ok() { return None; }
         if q_selectable.get(entity).is_ok() { return Some(entity); }
         if let Ok(parent) = q_parents.get(entity) {
@@ -1916,7 +1927,7 @@ fn on_surface_teleport_command(
     let body_entity = Entity::from_bits(cmd.body_entity);
 
     let (body_entity, body_radius) = if let Ok((e, b)) = q_bodies.get(body_entity) {
-        warn!("TELEPORT: found body {:?} radius={:.0}m", e, b.radius_m);
+        debug!("TELEPORT: found body {:?} radius={:.0}m", e, b.radius_m);
         (e, b.radius_m)
     } else {
         warn!("TELEPORT: body entity {:?} not found in q_bodies", body_entity);
@@ -1928,7 +1939,7 @@ fn on_surface_teleport_command(
         return;
     }
 
-    warn!("TELEPORT: triggered for avatar {:?}", avatar_ent);
+    debug!("TELEPORT: triggered for avatar {:?}", avatar_ent);
 
     // Get camera cell for position lookup
     let Some((_, cam_tf, _cam_cell, _cam_child_of)) = q_avatar.iter().next() else { return };
@@ -1943,7 +1954,7 @@ fn on_surface_teleport_command(
         warn!("TELEPORT: body {:?} has no Grid parent", body_entity);
         return;
     };
-    warn!("TELEPORT: parenting camera to grid {:?}", grid_entity);
+    debug!("TELEPORT: parenting camera to grid {:?}", grid_entity);
 
     // Compute surface position: use camera look direction projected onto body.
     let (surface_local_pos, surface_normal) = {
@@ -1999,7 +2010,7 @@ fn on_surface_teleport_command(
         field.surface_g = surface_g;
         field.up = surface_normal;
 
-        warn!("TELEPORT: done — camera now on grid {:?} at alt ~50m", grid_entity);
+        debug!("TELEPORT: done — camera now on grid {:?} at alt ~50m", grid_entity);
     } else {
         warn!("TELEPORT: grid entity {:?} not found", grid_entity);
     }
@@ -2029,7 +2040,7 @@ fn on_leave_surface_command(
 
     let body_radius = q_bodies.get(body_entity)
         .map(|(_, b)| b.radius_m)
-        .unwrap_or(6_371_000.0); // fallback: Earth radius
+        .unwrap_or(EARTH_RADIUS_M_FALLBACK);
 
     // Find EMB Grid (the star-fixed orbit frame)
     let Some(emb_grid) = q_emb.iter().next() else { return; };

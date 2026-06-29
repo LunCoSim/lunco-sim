@@ -169,6 +169,9 @@ impl Plugin for LunCoApiPlugin {
             if let Some(proxy) = app.world().get_resource::<bevy::winit::EventLoopProxyWrapper>() {
                 let proxy = (**proxy).clone();
                 bridge = bridge.with_waker(std::sync::Arc::new(move || {
+                    // Ignored by design: a send error means the winit event loop
+                    // has already exited (app shutting down), so there is nothing
+                    // left to wake — warning here would just spam at teardown.
                     let _ = proxy.send_event(bevy::winit::WinitUserEvent::WakeUp);
                 }));
             }
@@ -238,6 +241,9 @@ pub fn http_response_observer(
 ) {
     let event = trigger.event();
     if let Some(sender) = pending.0.remove(&event.correlation_id) {
+        // Ignored by design: a send error means the receiver was dropped — the
+        // HTTP client disconnected or timed out before the response was ready.
+        // Nothing to do; the pending entry is already removed.
         let _ = sender.send(event.response.clone());
     }
 }

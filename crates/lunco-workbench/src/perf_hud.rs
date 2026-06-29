@@ -150,15 +150,11 @@ fn register_settings_menu(world: &mut World) {
 /// pref via `lunco-settings`), the [`TogglePerfHud`] command, Bevy's
 /// frame-time diagnostics, and the Settings-menu row. Idempotent.
 ///
-/// `FrameTimeDiagnosticsPlugin` and the per-frame samplers are only
-/// registered when the HUD is enabled in the persisted settings —
-/// they have non-trivial cost (smoothing buffers, change-tick
-/// allocations, command flushes around diagnostic registration) and
-/// the spike profile showed them as a meaningful contributor when
-/// the user wasn't even looking at the HUD. Toggling the HUD on at
-/// runtime requires a restart to pick up the diagnostic plugin; this
-/// matches the typical flow ("turn it on while debugging perf, then
-/// off and forget").
+/// `FrameTimeDiagnosticsPlugin` and the per-frame sampler are registered
+/// unconditionally — they cost only a few µs/frame and the sampler
+/// (`sample_frame_time`) early-bails when the HUD pref is off, so leaving
+/// them on means toggling the HUD at runtime works immediately (no restart)
+/// because the diagnostic data is already being collected.
 pub struct PerfHudPlugin;
 
 impl Plugin for PerfHudPlugin {

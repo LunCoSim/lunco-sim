@@ -198,21 +198,49 @@ fn path_is_under(p: &Path, root: &Path) -> bool {
 // Picker parameter types (`OpenFilter`/`SaveHint`) moved to the workbench's
 // picker with the dialog itself — see the note on the `Storage` trait below.
 
-/// Atomically persist `bytes` to a native file `path` **through the
-/// [`Storage`] API** (CQ-107).
+/// Persist `bytes` to a file `path` **through the [`Storage`] API** (CQ-107).
 ///
-/// A thin path-convenience over
-/// `FileStorage::new().write_sync(&StorageHandle::File(path), bytes)` —
-/// so the actual write goes through the backend (`FileStorage::write`,
-/// which does the tmp+rename atomic replace), NOT a parallel `std::fs`
-/// path. This is the one call config-file writers should use; it keeps
-/// the storage backend the single I/O chokepoint instead of each crate
-/// reaching for `std::fs::write` + a hand-rolled `rename`.
+/// A thin, cross-target path-convenience that routes through whichever backend
+/// owns `StorageHandle::File` on this platform — so callers persisting a
+/// config/session file get correct behaviour on both targets from one call,
+/// and the storage backend stays the single I/O chokepoint instead of each
+/// crate reaching for `std::fs::write` + a hand-rolled `rename`:
 ///
-/// A crash mid-write leaves the prior file intact, never a truncated one.
+/// - **native** → [`FileStorage`]: `FileStorage::write`'s tmp+rename atomic
+///   replace; a crash mid-write leaves the prior file intact, never truncated.
+/// - **wasm** → [`WebStorage`]: maps the path onto a `localStorage` key.
+///
+/// (Before this was wasm-aware, a wasm caller that invoked it failed to
+/// *compile* — the fn was `#[cfg(not(wasm32))]`-gated — which is why
+/// `recents.rs` / `workspace_state.rs` broke the wasm build.)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file_sync(path: &Path, bytes: &[u8]) -> StorageResult<()> {
     FileStorage::new().write_sync(&StorageHandle::File(path.to_path_buf()), bytes)
+}
+
+/// Wasm counterpart of [`write_file_sync`] — see that fn's docs. Routes the
+/// `File` handle through [`WebStorage`] (`localStorage`) so the same call site
+/// persists on the web without a `#[cfg]` at every caller.
+#[cfg(target_arch = "wasm32")]
+pub fn write_file_sync(path: &Path, bytes: &[u8]) -> StorageResult<()> {
+    WebStorage::new().write_sync(&StorageHandle::File(path.to_path_buf()), bytes)
+}
+
+/// Read a file `path` **through the [`Storage`] API** — the read counterpart of
+/// [`write_file_sync`]. Routes to whichever backend owns `StorageHandle::File`
+/// on this platform, so a caller loading a config/session file uses one call on
+/// both targets (native [`FileStorage`] / wasm [`WebStorage`]). Returns
+/// [`StorageError::NotFound`] when the file / localStorage key is absent.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_file_sync(path: &Path) -> StorageResult<Vec<u8>> {
+    FileStorage::new().read_sync(&StorageHandle::File(path.to_path_buf()))
+}
+
+/// Wasm counterpart of [`read_file_sync`] — routes the `File` handle through
+/// [`WebStorage`] (`localStorage`).
+#[cfg(target_arch = "wasm32")]
+pub fn read_file_sync(path: &Path) -> StorageResult<Vec<u8>> {
+    WebStorage::new().read_sync(&StorageHandle::File(path.to_path_buf()))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

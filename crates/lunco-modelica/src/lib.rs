@@ -471,31 +471,19 @@ impl ModelicaCompiler {
     /// ready yet (wasm before the chunked parse finishes, or native before
     /// the indexer has written `parsed-msl.bin`).
     fn install_parsed_msl(session: &mut Session, id: &str) -> Option<(usize, usize)> {
-        // TIMING-PROBE (temporary): split the MSL "semantic install" into its
-        // three real costs so we can see where balloon's ~5s actually goes:
-        // (1) decode parsed-msl.bin, (2) deep-clone the ~165MB AST set off the
-        // Arc, (3) insert+invalidate in the session. Remove once measured.
-        let t_decode = web_time::Instant::now();
+        // The three real costs here are: decode `parsed-msl.bin`, deep-clone
+        // the (~165MB) AST set off the Arc, and insert+invalidate in the
+        // session. The clone dominates — see CQ-213 for eliminating it.
         let parsed = msl_remote::parsed_msl_bundle()?;
-        let decode_s = t_decode.elapsed().as_secs_f64();
-
-        let t_clone = web_time::Instant::now();
         let docs = (**parsed).clone();
-        let clone_s = t_clone.elapsed().as_secs_f64();
         let total = docs.len();
-
-        let t_insert = web_time::Instant::now();
         let inserted = session.replace_parsed_source_set(
             id,
             rumoca_compile::compile::SourceRootKind::DurableExternal,
             docs,
             None,
         );
-        let insert_s = t_insert.elapsed().as_secs_f64();
-        log::info!(
-            "[TIMING install_parsed_msl] decode={decode_s:.2}s clone={clone_s:.2}s \
-             insert={insert_s:.2}s ({total} docs, {inserted} inserted)"
-        );
+        log::debug!("[install_parsed_msl] {total} docs, {inserted} inserted");
         Some((total, inserted))
     }
 

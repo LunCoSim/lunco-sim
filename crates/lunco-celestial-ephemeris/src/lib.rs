@@ -367,10 +367,18 @@ fn poll_ephemeris_fetches(mut fetch: ResMut<EphemerisFetch>) {
         match block_on(future::poll_once(&mut task)) {
             None => still_pending.push((target_id, csv_path, task)),
             Some(Some(clean_csv)) => {
+                // Best-effort cache write: a failure here only means the next
+                // launch re-fetches, so it's non-fatal — but it should not be
+                // invisible. (TODO CQ-701: route through `lunco_storage` once
+                // this crate takes the dep, for atomic write + wasm parity.)
                 if let Some(parent) = csv_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        warn!("[ephemeris] could not create cache dir {}: {e}", parent.display());
+                    }
                 }
-                let _ = std::fs::write(&csv_path, &clean_csv);
+                if let Err(e) = std::fs::write(&csv_path, &clean_csv) {
+                    warn!("[ephemeris] could not write CSV cache {}: {e}", csv_path.display());
+                }
                 let points = parse_ephemeris_csv(&clean_csv);
                 if points.is_empty() {
                     warn!("[ephemeris] NAIF {} fetch returned no usable vectors", target_id);

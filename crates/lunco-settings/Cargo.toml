@@ -9,16 +9,11 @@ bevy = { workspace = true, default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
 lunco-assets = { path = "../lunco-assets" }
-# Native settings I/O routes through the storage abstraction rather than
-# raw `std::fs` (clippy-banned, wasm-incompatible).
+# All settings I/O — native files AND the wasm `localStorage` mirror —
+# routes through the storage abstraction (`read_file_sync`/`write_file_sync`),
+# never raw `std::fs` (clippy-banned, wasm-incompatible) or `web_sys`. The
+# wasm `localStorage` access lives behind `lunco_storage::WebStorage`.
 lunco-storage = { path = "../lunco-storage" }
-
-# Wasm-only: persist settings to `localStorage` instead of disk
-# (`std::fs::write` panics on `wasm32-unknown-unknown` for relative
-# paths and silently no-ops for absolute ones). Same JSON shape on
-# both sides — see `wasm_storage_read`/`wasm_storage_write` in lib.rs.
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { workspace = true, features = ["Window", "Storage"] }
 
 [lints]
 workspace = true

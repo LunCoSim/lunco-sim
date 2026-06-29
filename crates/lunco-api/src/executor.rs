@@ -17,6 +17,7 @@ use crate::{
     queries::{ApiQueryRegistry, ApiVisibility},
     schema::{ApiErrorCode, ApiRequest, ApiResponse, ApiSchema},
     discovery::discover_commands,
+    subscription::TelemetrySubscriptions,
 };
 
 /// Events that transport adapters send to request API operations.
@@ -62,6 +63,7 @@ pub fn api_request_observer(
     visibility: Res<ApiVisibility>,
     type_registry: Res<AppTypeRegistry>,
     cmd_results: Res<lunco_core::CommandResults>,
+    mut subscriptions: ResMut<TelemetrySubscriptions>,
     q_meta: Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
     // World pose for QueryEntity / future telemetry. `GlobalTransform`
     // mirrors Avian's `Position` post-writeback — we read it (instead
@@ -74,7 +76,7 @@ pub fn api_request_observer(
 
     let maybe_response = {
         let type_reg = type_registry.read();
-        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &visibility, &type_reg, &cmd_results, &q_meta, &q_transforms, correlation_id)
+        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &visibility, &type_reg, &cmd_results, &mut subscriptions, &q_meta, &q_transforms, correlation_id)
     };
 
     // None means the response is deferred (e.g. waiting for ScreenshotCaptured).
@@ -414,6 +416,7 @@ fn execute_request(
     visibility: &ApiVisibility,
     type_registry: &TypeRegistry,
     cmd_results: &lunco_core::CommandResults,
+    subscriptions: &mut TelemetrySubscriptions,
     q_meta: &Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
     q_transforms: &Query<&GlobalTransform>,
     correlation_id: u64,
@@ -581,8 +584,15 @@ fn execute_request(
             let cmds = discover_commands(type_registry, Some(visibility));
             Some(ApiResponse::ok(serde_json::to_value(&ApiSchema { commands: cmds }).unwrap_or_default()))
         }
-        ApiRequest::SubscribeTelemetry { filter: _ } => {
-            Some(ApiResponse::ok(serde_json::json!({ "message": "Subscription created" })))
+        ApiRequest::SubscribeTelemetry { filter } => {
+            // Actually register the subscription so the telemetry observers
+            // start broadcasting matching events (previously this returned
+            // "created" but never touched the registry → silent no-op).
+            let id = subscriptions.subscribe(filter.clone());
+            Some(ApiResponse::ok(serde_json::json!({
+                "message": "Subscription created",
+                "subscription_id": id,
+            })))
         }
         ApiRequest::QueryCommandResult { id } => {
             // `outcome: null` means no result recorded for this id — either a
@@ -626,6 +636,11 @@ impl Plugin for ApiExecutorPlugin {
             // self-contained (the executor reads CommandResults as a Res).
             .init_resource::<lunco_core::CommandResults>()
             .init_resource::<lunco_core::ActiveCommandId>()
+            // The request observer takes `ResMut<TelemetrySubscriptions>` to
+            // wire `SubscribeTelemetry`. Init here too (idempotent with
+            // ApiTelemetryPlugin) so the executor is self-contained even when
+            // the telemetry plugin isn't added.
+            .init_resource::<TelemetrySubscriptions>()
             .add_observer(api_request_observer)
             .add_observer(api_command_dispatcher);
 

@@ -34,9 +34,9 @@ use bevy::prelude::*;
 #[cfg(feature = "ui")]
 use lunco_modelica::ModelicaWorkbenchPlugin;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "ui"))]
 use std::path::PathBuf;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "ui"))]
 use lunco_modelica::{models::bundled_models, ModelicaModel};
 
 fn main() {
@@ -105,7 +105,7 @@ fn main() {
     // a bare `/` we land on Welcome and let `wasm_autosave`'s restore
     // path reopen whatever the user had last. Unknown names warn and fall
     // back to the first bundled model so a stale bookmark doesn't break.
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", feature = "ui"))]
     let chosen: Option<lunco_modelica::models::BundledModel> = {
         let models = bundled_models();
         let fallback = models.first().expect("at least one bundled model");
@@ -214,8 +214,12 @@ fn main() {
     }
 
     // wasm-only boot wiring: auto-open the chosen bundled model, and hide
-    // the HTML loader once the first egui frame has painted.
-    #[cfg(target_arch = "wasm32")]
+    // the HTML loader once the first egui frame has painted. The whole
+    // web-workbench wiring depends on the `ui` feature (it touches
+    // `lunco_modelica::ui` / `lunco_workbench`), so it's gated on it too —
+    // otherwise a `--no-default-features` wasm build (the check_wasm gate)
+    // fails to compile.
+    #[cfg(all(target_arch = "wasm32", feature = "ui"))]
     {
         if let Some(model) = chosen {
             app.insert_resource(BundledModelInfo {
@@ -357,7 +361,7 @@ fn install_panic_hook() {
 // ─────────────────────────────────────────────────────────────────────
 
 /// Resource holding the default model info passed to the startup system.
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "ui"))]
 #[derive(Resource)]
 struct BundledModelInfo {
     default_filename: String,
@@ -365,13 +369,13 @@ struct BundledModelInfo {
 }
 
 /// Marker component for the initial workbench entity.
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "ui"))]
 #[derive(Component)]
 struct WebWorkbench;
 
 /// Spawns the initial Modelica document tab with the bundled model named
 /// by `?example=`. Only registered when such a model was chosen.
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "ui"))]
 fn setup_web_workbench(
     mut commands: Commands,
     channels: Res<lunco_modelica::ModelicaChannels>,

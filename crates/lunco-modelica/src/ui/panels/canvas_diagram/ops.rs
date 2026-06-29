@@ -743,7 +743,7 @@ pub(super) fn apply_ops(
     }
     let repaint_ms = t_repaint_start.elapsed().as_secs_f64() * 1000.0;
 
-    bevy::log::info!(
+    bevy::log::debug!(
         "[CanvasDiagram] apply_ops timing: mirror={:.1}ms repaint={:.1}ms total={:.1}ms",
         mirror_ms,
         repaint_ms,

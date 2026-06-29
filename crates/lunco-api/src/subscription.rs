@@ -6,6 +6,15 @@ use crate::{
     schema::{ApiResponse, TelemetryFilter, TelemetryResponse},
 };
 
+/// Telemetry events ride the same `ApiResponseEvent` channel as HTTP
+/// request/response, but they are server-pushed packets, not replies to a
+/// request. The HTTP router mints request correlation ids from a `Local<u64>`
+/// counting up from 1; if telemetry reused that space, a telemetry packet
+/// whose id happened to match a pending request would resolve (and steal)
+/// that request's oneshot in `http_response_observer`. Setting the top bit
+/// carves out a disjoint id space so the two can never collide. CQ-509.
+const TELEMETRY_CORRELATION_FLAG: u64 = 1 << 63;
+
 /// Active telemetry subscription.
 #[derive(Debug)]
 pub struct TelemetrySubscription {
@@ -56,7 +65,7 @@ impl TelemetrySubscriptions {
     fn next_correlation_id(&mut self) -> u64 {
         let id = self.next_correlation_id;
         self.next_correlation_id += 1;
-        id
+        id | TELEMETRY_CORRELATION_FLAG
     }
 }
 
@@ -130,6 +139,18 @@ mod tests {
         assert!(!subs.should_broadcast("alert", Some(lunco_core::Severity::Debug)));
         assert!(subs.should_broadcast("alert", Some(lunco_core::Severity::Warning)));
         assert!(subs.should_broadcast("alert", Some(lunco_core::Severity::Critical)));
+    }
+
+    #[test]
+    fn test_telemetry_correlation_ids_are_disjoint_from_http() {
+        let mut subs = TelemetrySubscriptions::default();
+        // HTTP correlation ids count up from 1 in the low (u32) range; a
+        // telemetry id landing there would steal a pending request's reply.
+        for _ in 0..1000 {
+            let cid = subs.next_correlation_id();
+            assert!(cid & TELEMETRY_CORRELATION_FLAG != 0, "telemetry id {cid} lacks disjoint flag");
+            assert!(cid > u32::MAX as u64, "telemetry id {cid} collides with HTTP low-id range");
+        }
     }
 
     #[test]

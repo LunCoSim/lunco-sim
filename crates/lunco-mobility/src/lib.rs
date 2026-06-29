@@ -107,6 +107,16 @@ const DEFAULT_DRIVE_FORCE_PER_NORMAL: f64 = 2.0;
 /// author `lunco:contactGripStiffness`.
 const DEFAULT_CONTACT_GRIP_STIFFNESS: f64 = 50.0;
 
+/// Upper clamp on the suspension force magnitude (N) applied per spring.
+/// Bounds the spring+damping sum so a deeply-compressed strut or a numerical
+/// velocity spike can't inject an explosive impulse that launches the rover.
+const MAX_SUSPENSION_FORCE_N: f64 = 100_000.0;
+
+/// Full-scale magnitude of a [`DigitalPort`] `raw_value` drive command:
+/// `±DIGITAL_PORT_FULL_SCALE` maps to ±100% actuator authority (symmetric i16
+/// range, leaving −32768 unused so + and − have equal span).
+const DIGITAL_PORT_FULL_SCALE: i16 = 32767;
+
 // ── Pure force laws (unit-tested; the numerically-sensitive bits live here) ─────
 
 /// Per-wheel drive force magnitude from a normalized throttle, clamped to
@@ -601,7 +611,7 @@ fn suspension_system(
             // force), negative when extending (reduces force). Clamp total to
             // zero minimum so we never pull bodies together.
             let damping_force_mag: f64 = rel_vel * susp.damping_c;
-            let total_force_mag: f64 = (spring_force_mag + damping_force_mag).clamp(0.0, 100_000.0);
+            let total_force_mag: f64 = (spring_force_mag + damping_force_mag).clamp(0.0, MAX_SUSPENSION_FORCE_N);
 
             if !total_force_mag.is_finite() { continue; }
 
@@ -672,7 +682,8 @@ fn skid_mix(forward: f64, steer: f64) -> (i16, i16) {
     let l = drive + steer;
     let r = drive - steer;
     let m = l.abs().max(r.abs()).max(1.0);
-    let to_i16 = |v: f64| (v / m * 32767.0).round().clamp(-32767.0, 32767.0) as i16;
+    let full = DIGITAL_PORT_FULL_SCALE as f64;
+    let to_i16 = |v: f64| (v / m * full).round().clamp(-full, full) as i16;
     (to_i16(l), to_i16(r))
 }
 
@@ -717,7 +728,7 @@ fn on_drive_rover(
         // front tires' grip redirects the rover into an arc. Because the turn
         // needs forward motion for the tires to bite, an Ackermann rover cannot
         // pivot in place — the defining difference from the skid branch above.
-        let to_i16 = |v: f64| (v.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        let to_i16 = |v: f64| (v.clamp(-1.0, 1.0) * DIGITAL_PORT_FULL_SCALE as f64).round() as i16;
         let drive = to_i16(cmd.forward);
         let steer_val = to_i16(cmd.steer);
         if let Some(&port_l) = fsw.port_map.get(&ack.drive_left_port) {
@@ -742,7 +753,7 @@ fn on_brake_rover(
     let Ok(mut fsw) = q_rovers.get_mut(cmd.target) else { return };
 
     fsw.brake_active = cmd.intensity > 0.5;
-    let port_val = if fsw.brake_active { 32767 } else { 0 };
+    let port_val = if fsw.brake_active { DIGITAL_PORT_FULL_SCALE } else { 0 };
 
     if let Some(&port_b) = fsw.port_map.get("brake") {
         if let Ok(mut p) = q_digital_ports.get_mut(port_b) { p.raw_value = port_val; }

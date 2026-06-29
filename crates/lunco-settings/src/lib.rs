@@ -77,30 +77,17 @@ pub fn settings_path() -> PathBuf {
 /// runtime won't retro-actively register/unregister plugins; that
 /// requires an app restart.
 pub fn load_section_from_disk<S: SettingsSection>() -> S {
-    // Same blob the App-built `Settings` resource loads, read before the
-    // App exists. Native: `<config>/settings.json` via lunco-storage. Wasm:
-    // the `localStorage` mirror — mirrors `Settings::load_from_disk`. The
-    // storage-crate `FileStorage` has no wasm `File` backend, so without
-    // this branch every pre-App read on wasm fell back to `S::default()`
-    // and a persisted value was silently ignored at boot.
-    #[cfg(target_arch = "wasm32")]
-    let text = match wasm_storage_read() {
-        Some(s) => s,
-        None => return S::default(),
+    // Same blob the App-built `Settings` resource loads, read before the App
+    // exists — through the Storage API on both targets (native
+    // `<config>/settings.json`; wasm the `localStorage` mirror via
+    // `WebStorage`). Missing key / unreadable / bad UTF-8 / bad JSON all fall
+    // back to `S::default()`. Mirrors `Settings::load_from_disk`.
+    let Ok(bytes) = lunco_storage::read_file_sync(&settings_path()) else {
+        return S::default();
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    let text = {
-        use lunco_storage::Storage;
-        let path = settings_path();
-        let Ok(bytes) = lunco_storage::FileStorage::new()
-            .read_sync(&lunco_storage::StorageHandle::File(path))
-        else {
-            return S::default();
-        };
-        match String::from_utf8(bytes) {
-            Ok(s) => s,
-            Err(_) => return S::default(),
-        }
+    let text = match String::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return S::default(),
     };
     let raw: BTreeMap<String, serde_json::Value> = match serde_json::from_str(&text) {
         Ok(v) => v,
@@ -135,37 +122,37 @@ impl Settings {
     }
 
     fn load_from_disk() -> Self {
-        // On native, read `<config>/settings.json` from disk.
-        // On wasm there is no filesystem; instead the same JSON blob
-        // lives under `localStorage["lunco_settings"]`. Same shape on
-        // both sides so every `SettingsSection` (Theme, panel layout,
-        // perf HUD, …) round-trips identically across reloads.
-        #[cfg(target_arch = "wasm32")]
-        {
-            let text = match wasm_storage_read() {
-                Some(s) => s,
-                None => return Self::default(),
-            };
-            let raw: BTreeMap<String, serde_json::Value> =
-                serde_json::from_str(&text).unwrap_or_default();
-            return Self { raw, dirty: false };
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            use lunco_storage::Storage;
-            let path = settings_path();
-            let text = match lunco_storage::FileStorage::new()
-                .read_sync(&lunco_storage::StorageHandle::File(path))
-            {
-                Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(s) => s,
-                    Err(_) => return Self::default(),
-                },
+        // One path for native and wasm: read the settings blob through the
+        // Storage API. Native resolves `<config>/settings.json` on the local
+        // filesystem; wasm maps the same path onto a `localStorage` key via
+        // `WebStorage`. Same shape on both sides so every `SettingsSection`
+        // (Theme, panel layout, perf HUD, …) round-trips identically.
+        let path = settings_path();
+        let text = match lunco_storage::read_file_sync(&path) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(s) => s,
                 Err(_) => return Self::default(),
-            };
-            let raw: BTreeMap<String, serde_json::Value> =
-                serde_json::from_str(&text).unwrap_or_default();
-            Self { raw, dirty: false }
+            },
+            Err(_) => return Self::default(),
+        };
+        match serde_json::from_str(&text) {
+            Ok(raw) => Self { raw, dirty: false },
+            Err(e) => {
+                // A corrupt/hand-mistyped settings blob used to be parsed to an
+                // empty map and then silently overwritten on the next flush —
+                // vaporising the user's prefs. Preserve it as `settings.json.bad`
+                // (through the Storage API, so it works on both targets) before
+                // falling back to defaults.
+                let bad = path.with_extension("json.bad");
+                warn!(
+                    "[Settings] {} is not valid JSON ({e}); preserving as {} and starting fresh",
+                    path.display(), bad.display()
+                );
+                if let Err(e) = lunco_storage::write_file_sync(&bad, text.as_bytes()) {
+                    warn!("[Settings] could not preserve corrupt settings to {}: {e}", bad.display());
+                }
+                Self::default()
+            }
         }
     }
 
@@ -173,69 +160,28 @@ impl Settings {
         if !self.dirty {
             return;
         }
-        // Serialise once; backends differ.
         let json = match serde_json::to_string_pretty(&self.raw) {
             Ok(s) => s,
             Err(e) => {
                 warn!("[Settings] serialise failed: {e}");
+                // Serialising the same `raw` will fail identically next frame —
+                // clear the dirty bit so we don't retry (and re-warn) forever.
+                self.dirty = false;
                 return;
             }
         };
-        #[cfg(target_arch = "wasm32")]
-        {
-            // localStorage write is synchronous + small; quota is per
-            // origin (~5 MB) and our settings JSON is on the order of
-            // 100 bytes. Failure is logged once; the dirty bit clears
-            // either way so we don't spam the console.
-            if let Err(e) = wasm_storage_write(&json) {
-                warn!("[Settings] localStorage write failed: {e}");
-            }
-            self.dirty = false;
+        // One path for native and wasm: persist through the Storage API
+        // (CQ-107/CQ-701). Native gets an atomic tmp+rename (no zero-byte file
+        // on a mid-write crash) + parent-dir creation; wasm writes the
+        // `localStorage` mirror via `WebStorage`. No raw `std::fs` / `web_sys`.
+        let path = settings_path();
+        if let Err(e) = lunco_storage::write_file_sync(&path, json.as_bytes()) {
+            warn!("[Settings] write {} failed: {e}", path.display());
             return;
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let path = settings_path();
-            // CQ-107: persist through the Storage API (atomic tmp+rename,
-            // creates parent dirs). A truncating `std::fs::write` would leave
-            // a zero-byte settings file if the process were killed mid-write.
-            if let Err(e) = lunco_storage::write_file_sync(&path, json.as_bytes()) {
-                warn!("[Settings] write {} failed: {e}", path.display());
-                return;
-            }
-            self.dirty = false;
-        }
+        self.dirty = false;
     }
 }
-
-/// Wasm-only: read the settings JSON blob from `localStorage`.
-/// Returns `None` if there is no `window`, no `localStorage` (private
-/// browsing), or the key is unset.
-#[cfg(target_arch = "wasm32")]
-fn wasm_storage_read() -> Option<String> {
-    let win = web_sys::window()?;
-    let storage = win.local_storage().ok().flatten()?;
-    storage.get_item(WASM_STORAGE_KEY).ok().flatten()
-}
-
-/// Wasm-only: write the settings JSON blob into `localStorage`.
-#[cfg(target_arch = "wasm32")]
-fn wasm_storage_write(json: &str) -> Result<(), String> {
-    let win = web_sys::window().ok_or("no window")?;
-    let storage = win
-        .local_storage()
-        .map_err(|e| format!("local_storage(): {e:?}"))?
-        .ok_or("local_storage is null (private browsing?)")?;
-    storage
-        .set_item(WASM_STORAGE_KEY, json)
-        .map_err(|e| format!("setItem: {e:?}"))
-}
-
-/// Wasm-only: namespace key for the persisted settings JSON.
-/// Mirrors the `KEY_PREFIX` convention in `wasm_autosave.rs` so all
-/// our localStorage entries share an obvious prefix.
-#[cfg(target_arch = "wasm32")]
-const WASM_STORAGE_KEY: &str = "lunco_modelica/settings.json";
 
 /// Adds the [`Settings`] resource (loaded from disk) and the central
 /// flush system. Idempotent.

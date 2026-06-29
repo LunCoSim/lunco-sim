@@ -186,7 +186,7 @@ impl Canvas {
         // or lag behind the initial press.
         let pointer_now = ui.ctx().input(|i| i.pointer.hover_pos());
         let pointer_in_widget = pointer_now
-            .map(|p| pointer_is_over_canvas_widget(ui.ctx(), p))
+            .map(|p| pointer_is_over_canvas_widget(ui, p))
             .unwrap_or(false);
         if (response.hovered() || response.contains_pointer()) && !pointer_in_widget {
             let (primary_pressed, primary_down, primary_released, pointer) = ui.ctx().input(|i| {
@@ -454,7 +454,7 @@ impl Canvas {
         // to the user (the node's slider has to be visible for at
         // least a frame before it can be interacted with, which
         // it always is).
-        clear_canvas_widget_rects(ui.ctx());
+        clear_canvas_widget_rects(ui);
 
         {
             // Pass the active tool's preview (ghost edge during a
@@ -538,14 +538,18 @@ impl Canvas {
 // suppress input this frame — widgets re-publish every frame they
 // render.
 
-pub fn push_canvas_widget_rect(ctx: &egui::Context, rect: egui::Rect) {
+pub fn push_canvas_widget_rect(ui: &egui::Ui, rect: egui::Rect) {
     use std::sync::{Arc, Mutex};
-    let list: Arc<Mutex<Vec<egui::Rect>>> = ctx.data_mut(|d| {
-        if let Some(existing) = d.get_temp(canvas_widget_rects_id()) {
+    let id = canvas_widget_rects_id(ui);
+    // `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>` because egui's temp-data
+    // store requires `Clone + Send + Sync`; egui runs single-threaded here so
+    // the lock is uncontended (it exists only to satisfy that bound).
+    let list: Arc<Mutex<Vec<egui::Rect>>> = ui.ctx().data_mut(|d| {
+        if let Some(existing) = d.get_temp(id) {
             existing
         } else {
             let fresh: Arc<Mutex<Vec<egui::Rect>>> = Arc::new(Mutex::new(Vec::new()));
-            d.insert_temp(canvas_widget_rects_id(), fresh.clone());
+            d.insert_temp(id, fresh.clone());
             fresh
         }
     });
@@ -554,19 +558,19 @@ pub fn push_canvas_widget_rect(ctx: &egui::Context, rect: egui::Rect) {
     };
 }
 
-pub(crate) fn pointer_is_over_canvas_widget(ctx: &egui::Context, pos: egui::Pos2) -> bool {
+pub(crate) fn pointer_is_over_canvas_widget(ui: &egui::Ui, pos: egui::Pos2) -> bool {
     use std::sync::{Arc, Mutex};
     let list: Option<Arc<Mutex<Vec<egui::Rect>>>> =
-        ctx.data(|d| d.get_temp(canvas_widget_rects_id()));
+        ui.ctx().data(|d| d.get_temp(canvas_widget_rects_id(ui)));
     let Some(list) = list else { return false };
     let Ok(guard) = list.lock() else { return false };
     guard.iter().any(|r| r.contains(pos))
 }
 
-pub(crate) fn clear_canvas_widget_rects(ctx: &egui::Context) {
+pub(crate) fn clear_canvas_widget_rects(ui: &egui::Ui) {
     use std::sync::{Arc, Mutex};
     let list: Option<Arc<Mutex<Vec<egui::Rect>>>> =
-        ctx.data(|d| d.get_temp(canvas_widget_rects_id()));
+        ui.ctx().data(|d| d.get_temp(canvas_widget_rects_id(ui)));
     if let Some(list) = list {
         if let Ok(mut guard) = list.lock() {
             guard.clear();
@@ -574,6 +578,20 @@ pub(crate) fn clear_canvas_widget_rects(ctx: &egui::Context) {
     }
 }
 
-fn canvas_widget_rects_id() -> egui::Id {
-    egui::Id::new("lunco_canvas_widget_rects")
+/// Per-canvas key for the widget-rect reservation list. Keyed by the canvas's
+/// clip rect — each canvas clips painting to its own allocated rect (set, and
+/// re-applied, every frame in [`Canvas::ui`]) — so two canvases visible at once
+/// (e.g. docked side-by-side) get independent lists instead of clobbering one
+/// global one. The clip rect is identical at every call site within a single
+/// canvas's `ui()` scope (publish in node draw, check at input dispatch, clear
+/// before scene draw), so the derived keys agree.
+fn canvas_widget_rects_id(ui: &egui::Ui) -> egui::Id {
+    let c = ui.clip_rect();
+    egui::Id::new((
+        "lunco_canvas_widget_rects",
+        c.min.x as i32,
+        c.min.y as i32,
+        c.max.x as i32,
+        c.max.y as i32,
+    ))
 }

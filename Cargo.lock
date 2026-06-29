@@ -7041,7 +7041,6 @@ dependencies = [
  "lunco-storage",
  "serde",
  "serde_json",
- "web-sys",
 ]
 
 [[package]]

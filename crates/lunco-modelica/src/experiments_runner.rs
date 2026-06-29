@@ -17,14 +17,15 @@
 //!
 //! ## Compile-once parameter sweeps
 //! Overrides are applied at the *DAE* level, not by reflattening per run.
-//! `run_inner` compiles the input-substituted source ONCE, caches the
-//! resulting `Dae` keyed by source hash (`dae_cache`), and for each sweep
-//! point rebinds the target parameters' `start` to literals via
-//! [`apply_overrides_to_dae`]. This relies on rumoca's
+//! `run_inner` compiles the source ONCE, caches the resulting `Dae` keyed by
+//! a hash of the model source (`dae_cache`; see [`dae_cache_key`]), and for
+//! each sweep point rebinds the target variables' `start` to literals via
+//! [`apply_value_bindings_to_dae`]. This relies on rumoca's
 //! `preserve_overridable_param_starts` fold (commit 6a849ac) keeping computed
-//! derived params symbolic so they recompute at `SimStepper::new` time. If an
-//! override can't be set at the DAE level (non-top-level param, array/enum
-//! value), it falls back to the legacy string-injection recompile.
+//! derived params symbolic so they recompute at `SimStepper::new` time. There
+//! is **no** string-injection / source-rewriting fallback: an override that
+//! can't be applied at the DAE level (non-top-level param/input, or a
+//! non-scalar value) is a hard error, not a silent recompile.
 
 use crate::lock_ext::LockExt;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -1381,9 +1382,10 @@ pub struct DetectedParam {
     /// `"foo"`, `true`). `None` if the parameter has no literal
     /// default (e.g. expression-bound, inherited).
     pub default_literal: Option<String>,
-    /// Whether v1's string-injection override path can mutate this
-    /// declaration. False for non-literal RHS (expression bindings),
-    /// for arrays / records, and for params not found at the top level.
+    /// Whether the DAE-level value-binding override path can rebind this
+    /// declaration's `start`. False for non-literal RHS (expression
+    /// bindings), for arrays / records, and for params not found at the
+    /// top level.
     pub supportable: bool,
     /// Reason override is unsupported, when `!supportable`. Surfaced
     /// in the editor as a tooltip.

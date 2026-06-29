@@ -258,7 +258,7 @@ pub fn editor_on_doc_changed(
     let doc = trigger.event().doc;
     let bound = buf_state.bound_doc;
     if bound != Some(doc) {
-        bevy::log::info!(
+        bevy::log::debug!(
             "[editor-obs] skip: doc={} bound={:?}",
             doc.raw(),
             bound.map(|d| d.raw())
@@ -269,7 +269,7 @@ pub fn editor_on_doc_changed(
     let current_gen = host.generation();
     let buf_gen = buf_state.generation;
     let pending = buf_state.pending_commit_at;
-    bevy::log::info!(
+    bevy::log::debug!(
         "[editor-obs] fire: doc={} current_gen={} buf_gen={} pending={:?}",
         doc.raw(),
         current_gen,
@@ -285,7 +285,7 @@ pub fn editor_on_doc_changed(
         return;
     }
 
-    bevy::log::warn!(
+    bevy::log::debug!(
         "[editor-obs] RESYNC: doc={} buf_gen={} → current_gen={} — buf.text will be overwritten with doc.source",
         doc.raw(),
         buf_gen,
@@ -1151,7 +1151,7 @@ pub fn commit_pending_buffer(world: &mut World, doc: lunco_doc::DocumentId) -> b
         if let Some((range, replacement)) =
             crate::text_diff::diff_to_edit(&prior, &committed)
         {
-            bevy::log::info!(
+            bevy::log::debug!(
                 "[editor-flush] doc={} EditText {:?} replace_len={} prior_len={} committed_len={}",
                 doc.raw(),
                 range,
@@ -1165,11 +1165,14 @@ pub fn commit_pending_buffer(world: &mut World, doc: lunco_doc::DocumentId) -> b
                 crate::document::ModelicaOp::EditText { range, replacement },
                 lunco_twin_journal::AuthorTag::for_tool("code-editor"),
             );
-            bevy::log::info!(
-                "[editor-flush] doc={} apply result: {}",
-                doc.raw(),
-                if result.is_ok() { "Ok" } else { "Err" },
-            );
+            // Surface the actual rejection reason on failure (was logged as a
+            // bare "Err"); the success path is routine, so log it at debug.
+            match &result {
+                Ok(_) => bevy::log::debug!("[editor-flush] doc={} apply Ok", doc.raw()),
+                Err(reject) => bevy::log::warn!(
+                    "[editor-flush] doc={} apply rejected: {reject:?}", doc.raw()
+                ),
+            }
             if result.is_ok() {
                 // Self-edit landed: pull the doc's new generation
                 // forward into our buffer state so the next frame's

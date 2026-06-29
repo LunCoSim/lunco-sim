@@ -253,6 +253,27 @@ pub enum AuthorityRole {
     AiAgent,
 }
 
+impl AuthorityRole {
+    /// Does holding `self` satisfy a requirement for `required`?
+    ///
+    /// This is a small **lattice**, not a linear rank: `Owner` satisfies
+    /// everything; `Operator` and `AiAgent` each satisfy their own role plus
+    /// the read-only `Observer` floor, but are **incomparable** to each other
+    /// (an Operator is not an AiAgent, nor vice-versa). `Observer` satisfies
+    /// only `Observer`. Centralising the rule here (an exhaustive match on
+    /// `self`) means adding a new role is a compile error until its privileges
+    /// are stated — it can't silently inherit a permissive tuple arm.
+    pub fn satisfies(self, required: AuthorityRole) -> bool {
+        use AuthorityRole::*;
+        match self {
+            Owner => true,
+            Operator => matches!(required, Operator | Observer),
+            AiAgent => matches!(required, AiAgent | Observer),
+            Observer => matches!(required, Observer),
+        }
+    }
+}
+
 /// Information representing a user's active session, ready for Authn/Authz.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct UserSession {
@@ -283,19 +304,10 @@ impl SessionRbac {
         if !session.authenticated {
             return false;
         }
-        // Owner has access to everything
-        if session.role == AuthorityRole::Owner {
-            return true;
-        }
-        // Simple role hierarchy evaluation
-        match (session.role, required_role) {
-            (AuthorityRole::Operator, AuthorityRole::Operator) => true,
-            (AuthorityRole::Operator, AuthorityRole::Observer) => true,
-            (AuthorityRole::AiAgent, AuthorityRole::AiAgent) => true,
-            (AuthorityRole::AiAgent, AuthorityRole::Observer) => true,
-            (AuthorityRole::Observer, AuthorityRole::Observer) => true,
-            _ => false,
-        }
+        // Role-lattice check lives on `AuthorityRole::satisfies` (Owner ⊇ all;
+        // Operator/AiAgent ⊇ Observer but mutually incomparable) so the policy
+        // is defined once on the type, not hand-rolled per call site.
+        session.role.satisfies(required_role)
     }
 }
 
@@ -571,9 +583,10 @@ pub fn authorize(
     // anyway). Requiring Operator unconditionally would deny legitimate owners
     // that connect as Observer and never send an `UpdateProfile` (e.g. net_smoke).
     let owns_target = target_gid.is_some_and(|gid| reg.owns(origin, gid));
-    let required_role = match type_name {
-        "DriveRover" | "BrakeRover" if !owns_target => AuthorityRole::Operator,
-        _ => AuthorityRole::Observer,
+    let required_role = if is_ownership_gated_control(type_name) && !owns_target {
+        AuthorityRole::Operator
+    } else {
+        AuthorityRole::Observer
     };
 
     if !rbac.is_authorized(origin, required_role) {
@@ -582,16 +595,35 @@ pub fn authorize(
         )));
     }
 
-    match type_name {
-        "DriveRover" | "BrakeRover" => match target_gid {
+    // Ownership gate. Non-control commands (possession claims, spawns,
+    // structural edits) are intentionally allowed at the authenticated-Observer
+    // floor above — their arbitration happens in the handler (e.g.
+    // [`SessionRegistry::claim`]) — so they pass here.
+    if is_ownership_gated_control(type_name) {
+        match target_gid {
             Some(gid) if reg.owns(origin, gid) => Ok(()),
             Some(_) => Err(Reject::InvalidOp(format!(
                 "session {origin} is not authorized to {type_name} that entity"
             ))),
             None => Err(Reject::InvalidOp(format!("{type_name} has no target"))),
-        },
-        _ => Ok(()),
+        }
+    } else {
+        Ok(())
     }
+}
+
+/// State-producing **control** commands: gated by *ownership* of the target,
+/// not merely by role. This is the single source of truth — listing a command
+/// here makes both the role requirement and the ownership check in
+/// [`authorize`] apply to it, so a new direct-control command is one edit and
+/// can't accidentally fall through to the permissive non-control default.
+///
+/// NOTE (CQ-705): the longer-term fix is to carry this requirement on the
+/// command type itself (e.g. via the `#[Command]` derive) rather than matching
+/// stringly-typed names here; until then this predicate keeps the policy in one
+/// place.
+fn is_ownership_gated_control(type_name: &str) -> bool {
+    matches!(type_name, "DriveRover" | "BrakeRover")
 }
 
 #[cfg(test)]
@@ -607,6 +639,30 @@ mod tests {
     #[test]
     fn default_policy_is_exclusive() {
         assert_eq!(SessionRegistry::default().policy(), PossessionPolicy::Exclusive);
+    }
+
+    #[test]
+    fn authority_role_lattice() {
+        use AuthorityRole::*;
+        // Owner satisfies everything.
+        for r in [Owner, Operator, Observer, AiAgent] {
+            assert!(Owner.satisfies(r), "Owner should satisfy {r:?}");
+        }
+        // Operator and AiAgent each satisfy themselves + the Observer floor…
+        assert!(Operator.satisfies(Operator));
+        assert!(Operator.satisfies(Observer));
+        assert!(AiAgent.satisfies(AiAgent));
+        assert!(AiAgent.satisfies(Observer));
+        // …but are incomparable to each other and never grant Owner.
+        assert!(!Operator.satisfies(AiAgent));
+        assert!(!AiAgent.satisfies(Operator));
+        assert!(!Operator.satisfies(Owner));
+        assert!(!AiAgent.satisfies(Owner));
+        // Observer is the floor: only satisfies Observer.
+        assert!(Observer.satisfies(Observer));
+        assert!(!Observer.satisfies(Operator));
+        assert!(!Observer.satisfies(AiAgent));
+        assert!(!Observer.satisfies(Owner));
     }
 
     #[test]
