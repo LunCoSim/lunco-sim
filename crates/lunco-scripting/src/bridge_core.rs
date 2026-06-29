@@ -443,6 +443,46 @@ pub fn query<B: ValueBuilder>(b: &B, name: &str, params: serde_json::Value) -> B
     }
 }
 
+// ── Verbs: ports ──────────────────────────────────────────────────────────────
+//
+// The co-sim **port registry** ([`lunco_core::ports::PortRegistry`]) is the one
+// surface every participant exchanges scalars through — the wire engine, the API
+// (`GetPort`/`SetPort`), the inspector, and (here) scripts. A script reaches
+// Modelica variables, avian rigid-body state (`mass`, `inertia_*`, `com_*`,
+// `force_*`, `quat_*`, …), joint angles, and hardware ports by the SAME path the
+// simulation uses — language-neutral, so rhai and python share it.
+
+/// Read a co-sim port value on entity `gid`. `None` if no such port — which is
+/// what lets the scripting `get` verb fall back here only after generic
+/// reflection misses.
+pub fn read_port(gid: u64, name: &str) -> Option<f64> {
+    with_world(|world| {
+        let entity = resolve_entity(world, gid)?;
+        let registry = world.get_resource::<lunco_core::ports::PortRegistry>()?;
+        registry.read_port(world, entity, name)
+    })
+    .flatten()
+}
+
+/// Write a co-sim port input on entity `gid` — the same path `SetPort` and wires
+/// use. `true` if a writable input port of that name existed. Strict: never
+/// creates a port (an unknown name returns `false`).
+pub fn write_port(gid: u64, name: &str, value: f64) -> bool {
+    with_world(|world| {
+        let Some(entity) = resolve_entity(world, gid) else {
+            return false;
+        };
+        let Some(registry) = world
+            .get_resource::<lunco_core::ports::PortRegistry>()
+            .cloned()
+        else {
+            return false;
+        };
+        registry.write_port(world, entity, name, value)
+    })
+    .unwrap_or(false)
+}
+
 // ── Verbs: reads ────────────────────────────────────────────────────────────
 
 /// `world_pos(id)` — absolute (big_space) world position, or `None`.

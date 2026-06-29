@@ -76,15 +76,36 @@ or an RCS thruster all need **body-frame force** and **torque**.
   `init_asset`'d in `TerrainSurfacePlugin`. Use the `sandbox-server` bin for headless,
   not `sandbox --no-ui` (the latter keeps `ui` systems compiled without a GPU).
 
-### G2 — Inertia tensor + center of mass from USD  **[HIGH — accuracy for both]**
-Only scalar `physics:mass` + `friction` are read. Real attitude dynamics need
-`physics:diagonalInertia`, `physics:principalAxes`, `physics:centerOfMass`.
-Read in `lunco-usd-avian` → Avian `AngularInertia` / `CenterOfMass`.
-Without this, a lander tumbles wrong and a rover's CG is geometric, not real.
+### G1b — Attitude + body-rate output ports  **[DONE]**
+The rigid-body port group exposed only the *translational* half of state
+(`position_*`, `velocity_*`). A spacecraft controller is blind without orientation.
+- **Shipped:** `quat_w/x/y/z` (canonical attitude), `yaw`/`pitch`/`roll` (euler
+  convenience, `YXZ` = yaw-pitch-roll for a Y-up world), and `angvel_x/y/z` (body
+  rates) added to `RIGID_BODY_GROUP` as read-only outputs from Avian `Rotation` /
+  `AngularVelocity`. Pairs with the `torque_*` inputs to close an attitude loop —
+  read attitude+rates → compute corrective torque → write `torque_*`. Compiles clean.
 
-### G3 — Variable mass port  **[MED — lander realism]**
-`RocketEngine.mo` integrates `der(m_prop) = -m_dot`, but Avian `Mass` is static.
-Add a writable `mass` port so propellant burn feeds back. (COM shift on burn ties to G2.)
+### G2b/G3 — Live mass-properties ports (mass + inertia + COM)  **[DONE]**
+The triple moves together (propellant burn lightens mass, shifts COM, shrinks
+inertia), so they're exposed as one read+write set on `RIGID_BODY_GROUP`: `mass`,
+`inertia_xx/yy/zz`, `com_x/y/z` — reachable by wires, API, rhai, python, inspector
+through the unified **`PortRegistry`** (see doc below / `project_port_registry_substrate`).
+
+**The write mechanism** (the real subtlety): Avian splits user *overrides*
+(`Mass`/`AngularInertia`/`CenterOfMass`) from the engine `Computed*` the integrator
+reads. **Reads** return `Computed*` (the effective value). **Writes** set the
+*override* — avian recomputes `Computed*` from it, and an override takes precedence
+over collider-derived mass, so **no `NoAuto*` marker is needed**. (Writing `Computed*`
+directly is wrong: `lunco-usd-avian` inserts a `Mass` override from `physics:mass`,
+and avian recomputes `Computed*` from it each step, clobbering the direct write — this
+was found and fixed during verification.) Overrides are `f32`; principal (diagonal)
+inertia only — off-diagonal left to static USD authoring. Verified: `SetPort
+mass/inertia_xx/com_y` all stick on read-back while the lander keeps hovering.
+
+**Remaining G2 (load-time):** read `physics:diagonalInertia` / `physics:principalAxes`
+/ `physics:centerOfMass` in `lunco-usd-avian` → Avian override components, so an
+*authored* inertia/COM is honoured at spawn (today only scalar `physics:mass` is read).
+The runtime ports above already let a model *drive* them. `gravity_accel` is auto-injected into models.
 
 ### G4 — Arbitrary actuator port topology authored in USD  **[MED-HIGH — rover extraction]**
 The drive port set is **hardcoded to 4 names** (`drive_left/right/steering/brake`,

@@ -295,7 +295,16 @@ pub fn build_world_engine() -> Engine {
     // get(id, "Component.field") -> Dynamic (f64/i64/bool/string/array/map) or ().
     // The generic reflection read — built native (reflect → Dynamic, one hop).
     engine.register_fn("get", |id: i64, path: ImmutableString| -> Dynamic {
-        bridge_core::get_field(&RhaiBuilder, id as u64, path.as_str()).unwrap_or(Dynamic::UNIT)
+        if let Some(v) = bridge_core::get_field(&RhaiBuilder, id as u64, path.as_str()) {
+            return v;
+        }
+        // Reflection missed — fall back to the co-sim port registry (Modelica
+        // vars, avian state, joint angles, hardware ports). Same surface the
+        // wire engine and the API read, so a script sees what the sim exchanges.
+        match bridge_core::read_port(id as u64, path.as_str()) {
+            Some(p) => Dynamic::from_float(p),
+            None => Dynamic::UNIT,
+        }
     });
 
     // set(id, "Component.field", value) -> bool — the WRITE twin of get(). Applies
@@ -308,6 +317,15 @@ pub fn build_world_engine() -> Engine {
         match bridge_core::set_component_field(id as u64, path.as_str(), |f| apply_dynamic(f, &value)) {
             Ok(()) => true,
             Err(e) => {
+                // Reflection missed — fall back to the co-sim port registry (the
+                // same path wires and `SetPort` use). Ports are scalar, so coerce
+                // the value to f64; a non-numeric set genuinely failed.
+                let scalar = value.as_float().ok().or_else(|| value.as_int().ok().map(|i| i as f64));
+                if let Some(v) = scalar {
+                    if bridge_core::write_port(id as u64, path.as_str(), v) {
+                        return true;
+                    }
+                }
                 warn!("[rhai] set({id}, \"{path}\") failed: {e}");
                 false
             }

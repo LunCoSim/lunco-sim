@@ -610,7 +610,7 @@ fn port_kind_str(t: lunco_cosim::PortType) -> &'static str {
     }
 }
 
-fn port_to_json(p: &lunco_cosim::PortRef) -> serde_json::Value {
+fn port_to_json(p: &lunco_core::ports::PortRef) -> serde_json::Value {
     serde_json::json!({
         "name": p.name,
         "direction": port_dir_str(p.direction),
@@ -640,9 +640,11 @@ pub struct ListPortsProvider;
 impl lunco_api::ApiQueryProvider for ListPortsProvider {
     fn name(&self) -> &'static str { "ListPorts" }
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
+        let ports_reg = world.resource::<lunco_core::ports::PortRegistry>().clone();
         // Single-entity form.
         if let Some(e) = resolve_param_entity(world, params) {
-            let ports: Vec<_> = lunco_cosim::entity_ports(world, e)
+            let ports: Vec<_> = ports_reg
+                .entity_ports(world, e)
                 .iter()
                 .map(port_to_json)
                 .collect();
@@ -656,7 +658,7 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
         let entries = reg.entities();
         let mut rows = Vec::new();
         for (api_id, e) in entries {
-            let ports = lunco_cosim::entity_ports(world, e);
+            let ports = ports_reg.entity_ports(world, e);
             if ports.is_empty() {
                 continue;
             }
@@ -690,7 +692,8 @@ impl lunco_api::ApiQueryProvider for GetPortProvider {
                 "GetPort requires a `name`",
             );
         };
-        match lunco_cosim::read_port(world, e, name) {
+        let ports_reg = world.resource::<lunco_core::ports::PortRegistry>().clone();
+        match ports_reg.read_port(world, e, name) {
             Some(value) => lunco_api::ApiResponse::ok(serde_json::json!({ "name": name, "value": value })),
             None => lunco_api::ApiResponse::error(
                 lunco_api::ApiErrorCode::DeserializationError,
@@ -704,10 +707,9 @@ impl lunco_api::ApiQueryProvider for GetPortProvider {
 ///
 /// `curl … {"command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2}}`
 ///
-/// TODO(ports): this writes the input slot once via [`lunco_cosim::write_port`];
+/// TODO(ports): this writes the input slot once via [`lunco_core::ports::PortRegistry::write_port`];
 /// per decision 2 it must become a ControlStream **hold** (latest-wins,
-/// `hold_last(timeout)`, overriding a live wire until released). See
-/// `lunco-cosim/src/ports.rs::write_port`.
+/// `hold_last(timeout)`, overriding a live wire until released).
 pub struct SetPortProvider;
 
 impl lunco_api::ApiQueryProvider for SetPortProvider {
@@ -731,7 +733,8 @@ impl lunco_api::ApiQueryProvider for SetPortProvider {
                 "SetPort requires a numeric `value`",
             );
         };
-        if lunco_cosim::write_port(world, e, name, value) {
+        let ports_reg = world.resource::<lunco_core::ports::PortRegistry>().clone();
+        if ports_reg.write_port(world, e, name, value) {
             lunco_api::ApiResponse::ok(serde_json::json!({ "name": name, "value": value }))
         } else {
             lunco_api::ApiResponse::error(

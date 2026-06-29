@@ -75,6 +75,19 @@ impl Plugin for CoSimPlugin {
             .register_type::<PendingForces>()
             .register_type::<SimConnection>();
 
+        // The shared port substrate (in `lunco-core`, below every participant).
+        // The cosim engine owns the avian/joint/Modelica/hardware backends and
+        // registers them here; wires, the API, the inspector, and scripts all
+        // read/write through this one registry. Registration order = resolution
+        // precedence (Modelica, avian, then single-value hardware ports).
+        app.init_resource::<lunco_core::ports::PortRegistry>();
+        {
+            let mut registry = app
+                .world_mut()
+                .resource_mut::<lunco_core::ports::PortRegistry>();
+            ports::register_builtin_port_backends(&mut registry);
+        }
+
         // No per-kind observers: avian rigid bodies and joints are detected by
         // component presence through the `AVIAN` spec table (backend in this
         // crate, `crates/lunco-cosim`; original design in git history).

@@ -8,33 +8,10 @@
 
 use bevy::prelude::*;
 
-/// Direction of a simulation port.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
-pub enum PortDirection {
-    /// Port receives values from connections.
-    In,
-    /// Port provides values to connections.
-    Out,
-    /// Port can both receive and provide values.
-    InOut,
-}
-
-/// Physical domain of a simulation port.
-///
-/// Used for validation: connections should only link ports of the same type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
-pub enum PortType {
-    /// Mechanical force/torque.
-    Force,
-    /// Position, velocity, acceleration.
-    Kinematic,
-    /// Voltage, current.
-    Electrical,
-    /// Temperature, heat flow.
-    Thermal,
-    /// Dimensionless or mixed-domain signal.
-    Signal,
-}
+// Port causality/domain enums live in the neutral substrate so every participant
+// (engine, API, scripting) shares one definition; re-exported here because this
+// crate's `SimPort` and the avian backends address them as `connection::Port*`.
+pub use lunco_core::ports::{PortDirection, PortType};
 
 /// A named interface point on a simulation entity.
 ///

@@ -6,6 +6,7 @@
 
 pub mod architecture;
 pub mod mocks;
+pub mod ports;
 pub mod telemetry;
 pub mod coords;
 pub mod log;

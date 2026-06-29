@@ -15,7 +15,8 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_mobility::WheelRaycast;
-use lunco_cosim::{joint_angle_holder, read_input_port, read_output_port, write_port, JOINT_ANGLE_PORT};
+use lunco_cosim::{joint_angle_holder, JOINT_ANGLE_PORT};
+use lunco_core::ports::PortRegistry;
 
 use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
 
@@ -152,8 +153,9 @@ pub fn populate_inspector_view(world: &mut World) {
         .and_then(|s| s.primary());
     let joint = if let Some(entity) = selected {
         if let Some(holder) = joint_angle_holder(world, entity) {
-            let measured = read_output_port(world, holder, JOINT_ANGLE_PORT).unwrap_or(0.0);
-            let commanded = read_input_port(world, holder, JOINT_ANGLE_PORT).unwrap_or(0.0);
+            let registry = world.resource::<PortRegistry>().clone();
+            let measured = registry.read_output_port(world, holder, JOINT_ANGLE_PORT).unwrap_or(0.0);
+            let commanded = registry.read_input_port(world, holder, JOINT_ANGLE_PORT).unwrap_or(0.0);
             let mut cq = world.query::<&lunco_cosim::SimConnection>();
             let wired = cq
                 .iter(world)
@@ -878,7 +880,8 @@ fn joint_control_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, j: JointReadout)
     ui.label(format!("{:.1}°", commanded.to_degrees()));
     if r.changed() {
         ctx.defer(move |world| {
-            write_port(world, holder, JOINT_ANGLE_PORT, commanded);
+            let registry = world.resource::<PortRegistry>().clone();
+            registry.write_port(world, holder, JOINT_ANGLE_PORT, commanded);
         });
     }
     if j.wired {

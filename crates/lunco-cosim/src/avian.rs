@@ -3,10 +3,12 @@
 //!
 //! Avian's components are foreign types we don't own, so they are exposed
 //! through a declarative port spec ([`crate::ports::AvianGroup`]) rather than a
-//! mirror component per kind. A rigid body publishes its position/velocity as
-//! read-only outputs and accepts forces as inputs — all addressing avian's own
-//! `Position`/`LinearVelocity`/`Forces` directly, with no `HashMap` mirror and
-//! no per-tick sync system to keep a copy in step.
+//! mirror component per kind. A rigid body publishes its full kinematic state —
+//! position, linear velocity, attitude (`quat_*` + `yaw`/`pitch`/`roll`), and
+//! body rates (`angvel_*`) — as read-only outputs, and accepts world/body-frame
+//! forces and torques as inputs. All address avian's own `Position` /
+//! `Rotation` / `LinearVelocity` / `AngularVelocity` / `Forces` directly, with
+//! no `HashMap` mirror and no per-tick sync system to keep a copy in step.
 //!
 //! Force inputs are an **additive sink**: the wire write lands in
 //! [`PendingForces`] (the propagation master has already summed all wires into
@@ -14,7 +16,10 @@
 //! applies it through avian's query-shaped `Forces` API and clears it each tick.
 //! That one system is the only per-tick avian system left.
 
-use avian3d::prelude::{Forces, LinearVelocity, Position, RigidBody, WriteRigidBodyForces};
+use avian3d::prelude::{
+    AngularInertia, AngularVelocity, CenterOfMass, ComputedAngularInertia, ComputedCenterOfMass,
+    ComputedMass, Forces, LinearVelocity, Mass, Position, RigidBody, Rotation, WriteRigidBodyForces,
+};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -114,6 +119,89 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.z)),
             write: None,
         },
+        // Attitude as a quaternion (canonical, gimbal-safe). Avian's `Rotation`
+        // wraps a `DQuat` in the f64 build. Read-only — write attitude via torque.
+        AvianPort {
+            name: "quat_w",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.w)),
+            write: None,
+        },
+        AvianPort {
+            name: "quat_x",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.x)),
+            write: None,
+        },
+        AvianPort {
+            name: "quat_y",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.y)),
+            write: None,
+        },
+        AvianPort {
+            name: "quat_z",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.z)),
+            write: None,
+        },
+        // Euler convenience (radians). Order `YXZ` → (yaw, pitch, roll) for a
+        // Y-up world: yaw about world Y, then pitch about X, then roll about Z.
+        // Derived from `Rotation`; control laws that want body rates read `angvel_*`.
+        AvianPort {
+            name: "yaw",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| {
+                w.get::<Rotation>(e).map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).0)
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "pitch",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| {
+                w.get::<Rotation>(e).map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).1)
+            }),
+            write: None,
+        },
+        AvianPort {
+            name: "roll",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| {
+                w.get::<Rotation>(e).map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).2)
+            }),
+            write: None,
+        },
+        // Body rates (world-frame angular velocity, rad/s). Pairs with the
+        // `torque_*` inputs to close an attitude/spin-damping loop.
+        AvianPort {
+            name: "angvel_x",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| v.0.x)),
+            write: None,
+        },
+        AvianPort {
+            name: "angvel_y",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| v.0.y)),
+            write: None,
+        },
+        AvianPort {
+            name: "angvel_z",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| v.0.z)),
+            write: None,
+        },
         // Force inputs: additive sink into `PendingForces`. Reading returns the
         // value pending this tick (0 once applied/cleared).
         AvianPort {
@@ -182,8 +270,134 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.torque.z))),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.torque.z = v)),
         },
+        // Mass properties (read+write). The triple moves together — propellant
+        // burn lightens mass, shifts COM, and shrinks inertia — so a Modelica
+        // tank model (or a script, or a wire) can keep all three consistent
+        // through the one port surface. See [`write_mass`] for the avian write
+        // contract (`NoAuto*` markers + `Computed*`).
+        AvianPort {
+            name: "mass",
+            dir: PortDirection::InOut,
+            port_type: PortType::Signal,
+            read: Some(read_mass),
+            write: Some(write_mass),
+        },
+        AvianPort {
+            name: "inertia_xx",
+            dir: PortDirection::InOut,
+            port_type: PortType::Signal,
+            read: Some(|w, e| inertia_diagonal(w, e).map(|d| d.x)),
+            write: Some(|w, e, v| write_inertia_axis(w, e, 0, v)),
+        },
+        AvianPort {
+            name: "inertia_yy",
+            dir: PortDirection::InOut,
+            port_type: PortType::Signal,
+            read: Some(|w, e| inertia_diagonal(w, e).map(|d| d.y)),
+            write: Some(|w, e, v| write_inertia_axis(w, e, 1, v)),
+        },
+        AvianPort {
+            name: "inertia_zz",
+            dir: PortDirection::InOut,
+            port_type: PortType::Signal,
+            read: Some(|w, e| inertia_diagonal(w, e).map(|d| d.z)),
+            write: Some(|w, e, v| write_inertia_axis(w, e, 2, v)),
+        },
+        AvianPort {
+            name: "com_x",
+            dir: PortDirection::InOut,
+            port_type: PortType::Signal,
+            read: Some(|w, e| center_of_mass(w, e).map(|c| c.x)),
+            write: Some(|w, e, v| write_com_axis(w, e, 0, v)),
+        },
+        AvianPort {
+            name: "com_y",
+            dir: PortDirection::InOut,
+            port_type: PortType::Signal,
+            read: Some(|w, e| center_of_mass(w, e).map(|c| c.y)),
+            write: Some(|w, e, v| write_com_axis(w, e, 1, v)),
+        },
+        AvianPort {
+            name: "com_z",
+            dir: PortDirection::InOut,
+            port_type: PortType::Signal,
+            read: Some(|w, e| center_of_mass(w, e).map(|c| c.z)),
+            write: Some(|w, e, v| write_com_axis(w, e, 2, v)),
+        },
     ],
 };
+
+// ── Mass-property read/write helpers ────────────────────────────────────────
+//
+// Avian splits user *overrides* (`Mass`/`AngularInertia`/`CenterOfMass`) from the
+// `Computed*` components the integrator actually reads. **Reads** return the
+// effective `Computed*` value (what the solver uses). **Writes** set the
+// *override* component — avian then recomputes `Computed*` from it (an override
+// takes precedence over collider-derived mass, so no `NoAuto*` marker is needed;
+// writing `Computed*` directly would be clobbered by that recompute, as the
+// authored `physics:mass` override on a USD body demonstrates). Overrides are
+// `f32`; we model the principal (diagonal) inertia only — off-diagonal
+// cross-terms are left to static USD authoring. A body with no `Computed*` yet
+// simply doesn't list the port.
+
+fn read_mass(w: &World, e: Entity) -> Option<f64> {
+    w.get::<ComputedMass>(e).map(|m| m.value())
+}
+
+fn write_mass(w: &mut World, e: Entity, v: f64) -> bool {
+    if w.get::<RigidBody>(e).is_none() {
+        return false;
+    }
+    w.entity_mut(e).insert(Mass(v as f32));
+    true
+}
+
+fn inertia_diagonal(w: &World, e: Entity) -> Option<DVec3> {
+    w.get::<ComputedAngularInertia>(e).map(|i| i.value().diagonal())
+}
+
+fn write_inertia_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
+    if w.get::<RigidBody>(e).is_none() {
+        return false;
+    }
+    // Start from the current override if present, else the effective computed
+    // diagonal — so writing one axis preserves the others (and the local frame).
+    let (mut principal, local_frame) = match w.get::<AngularInertia>(e) {
+        Some(ai) => (ai.principal, ai.local_frame),
+        None => (
+            inertia_diagonal(w, e).unwrap_or(DVec3::ZERO).as_vec3(),
+            Quat::IDENTITY,
+        ),
+    };
+    match axis {
+        0 => principal.x = v as f32,
+        1 => principal.y = v as f32,
+        _ => principal.z = v as f32,
+    }
+    w.entity_mut(e).insert(AngularInertia { principal, local_frame });
+    true
+}
+
+fn center_of_mass(w: &World, e: Entity) -> Option<DVec3> {
+    w.get::<ComputedCenterOfMass>(e).map(|c| c.0)
+}
+
+fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
+    if w.get::<RigidBody>(e).is_none() {
+        return false;
+    }
+    let mut c = match w.get::<CenterOfMass>(e) {
+        Some(com) => com.0,
+        None => center_of_mass(w, e).unwrap_or(DVec3::ZERO).as_vec3(),
+    };
+    match axis {
+        0 => c.x = v as f32,
+        1 => c.y = v as f32,
+        _ => c.z = v as f32,
+    }
+    w.entity_mut(e).insert(CenterOfMass(c));
+    true
+}
 
 /// Apply each entity's accumulated [`PendingForces`] into avian, then clear it.
 ///

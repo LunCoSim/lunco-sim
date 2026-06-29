@@ -19,7 +19,8 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use crate::ports::{read_output_port, write_port};
+use lunco_core::ports::PortRegistry;
+
 use crate::SimConnection;
 
 /// System sets for co-simulation propagation.
@@ -76,6 +77,11 @@ pub fn propagate_connections(
         return;
     }
 
+    // Resolve every endpoint through the shared port registry. Cloned out of the
+    // world (a `Vec` of `Copy` backend fn-pointers) so phase 3 can take `&mut
+    // World` without holding a resource borrow.
+    let registry = world.resource::<PortRegistry>().clone();
+
     // Phase 2: accumulate. Seed every driven target to 0 so summing is clean
     // and a target with a missing source resets rather than holding stale data.
     acc.clear();
@@ -83,7 +89,7 @@ pub fn propagate_connections(
         acc.entry((*end_element, end_connector.clone())).or_insert(0.0);
     }
     for (start_element, start_connector, end_element, end_connector, scale, offset) in conns.iter() {
-        let Some(src) = read_output_port(world, *start_element, start_connector) else {
+        let Some(src) = registry.read_output_port(world, *start_element, start_connector) else {
             continue; // source output absent — contributes nothing this tick
         };
         if let Some(slot) = acc.get_mut(&(*end_element, end_connector.clone())) {
@@ -93,7 +99,7 @@ pub fn propagate_connections(
 
     // Phase 3: write each target once through the resolver.
     for ((entity, name), value) in acc.iter() {
-        if !write_port(world, *entity, name, *value) {
+        if !registry.write_port(world, *entity, name, *value) {
             warn_once!(
                 "[cosim] connection targets unknown input port '{}' on {:?} — value dropped \
                  (declare the port or fix the wire)",

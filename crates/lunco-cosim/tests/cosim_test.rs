@@ -7,6 +7,16 @@ use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_cosim::*;
+use lunco_core::ports::PortRegistry;
+
+/// A standalone port registry carrying the engine's builtin backends, so a test
+/// can list/read/write ports without standing up a full `CoSimPlugin`. Mirrors
+/// what `CoSimPlugin` registers into the world's `PortRegistry`.
+fn ports() -> PortRegistry {
+    let mut r = PortRegistry::default();
+    register_builtin_port_backends(&mut r);
+    r
+}
 
 /// Build a minimal test App with CoSimPlugin and Avian physics.
 fn build_test_app() -> App {
@@ -61,7 +71,7 @@ fn test_avian_body_ports_listed() {
         ))
         .id();
 
-    let names: Vec<String> = entity_ports(app.world(), e)
+    let names: Vec<String> = ports().entity_ports(app.world(), e)
         .into_iter()
         .map(|p| p.name)
         .collect();
@@ -87,10 +97,10 @@ fn test_avian_body_ports_read_live_state() {
         .id();
 
     let w = app.world();
-    assert_eq!(read_output_port(w, e, "position_x"), Some(100.0));
-    assert_eq!(read_output_port(w, e, "position_y"), Some(1200.0));
-    assert_eq!(read_output_port(w, e, "height"), Some(1200.0)); // alias
-    assert_eq!(read_output_port(w, e, "velocity_y"), Some(3.2));
+    assert_eq!(ports().read_output_port(w, e, "position_x"), Some(100.0));
+    assert_eq!(ports().read_output_port(w, e, "position_y"), Some(1200.0));
+    assert_eq!(ports().read_output_port(w, e, "height"), Some(1200.0)); // alias
+    assert_eq!(ports().read_output_port(w, e, "velocity_y"), Some(3.2));
 }
 
 // ---------------------------------------------------------------------------
@@ -232,7 +242,7 @@ fn test_rigid_body_exposes_ports_by_presence() {
 
     let plain = app.world_mut().spawn_empty().id();
     assert!(
-        read_output_port(app.world(), plain, "height").is_none(),
+        ports().read_output_port(app.world(), plain, "height").is_none(),
         "a non-body entity exposes no avian ports"
     );
 
@@ -241,7 +251,7 @@ fn test_rigid_body_exposes_ports_by_presence() {
         .spawn((RigidBody::Dynamic, Position(DVec3::new(0.0, 7.0, 0.0))))
         .id();
     assert_eq!(
-        read_output_port(app.world(), body, "height"),
+        ports().read_output_port(app.world(), body, "height"),
         Some(7.0),
         "a RigidBody+Position entity exposes the height port"
     );
@@ -292,7 +302,7 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
     ).unwrap();
 
     assert_eq!(
-        read_input_port(app.world(), target, "force_y"),
+        ports().read_input_port(app.world(), target, "force_y"),
         Some(50.0),
         "forces should accumulate: 30 + 20 = 50"
     );
@@ -304,7 +314,7 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
     ).unwrap();
 
     assert_eq!(
-        read_input_port(app.world(), target, "force_y"),
+        ports().read_input_port(app.world(), target, "force_y"),
         Some(0.0),
         "apply_pending_forces should drain force_y to 0"
     );
