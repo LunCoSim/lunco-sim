@@ -307,8 +307,9 @@ pub use perspective::{Perspective, PerspectiveId};
 // `session` here is just the workbench-side recents persistence.
 use lunco_workspace::WorkspaceResource;
 pub use viewport::{
-    PanelRect, PanelRects, ViewportPanel, ViewportPlaceholder, WorkbenchEguiHost,
-    WorkbenchSceneCamera, WorkbenchViewportCamera, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
+    auto_tag_workbench_3d_cameras, PanelRect, PanelRects, ViewportPanel, ViewportPlaceholder,
+    WorkbenchEguiHost, WorkbenchSceneCamera, WorkbenchViewportCamera, WorkbenchViewportPlugin,
+    VIEWPORT_PANEL_ID,
 };
 
 /// Get the backdrop colour from the active theme.

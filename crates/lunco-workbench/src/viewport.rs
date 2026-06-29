@@ -451,6 +451,37 @@ pub fn check_camera_invariants(
     }
 }
 
+/// Opt-in system — tag freshly-added window-targeting `Camera3d`
+/// entities with [`WorkbenchViewportCamera`] so [`apply_workbench_viewport`]
+/// manages their `is_active`/viewport and they stop tripping
+/// [`check_camera_invariants`].
+///
+/// This is **opt-in** rather than part of [`WorkbenchViewportPlugin`]:
+/// tooling binaries (`model_viewer`, `joint_minimal`) deliberately want a
+/// bare full-window 3D camera and never register a [`ViewportPanel`], so
+/// auto-tagging is the host app's choice. Workbench apps that DO show the
+/// 3D scene inside a [`ViewportPanel`] (sandbox, luncosim) add this in
+/// `Update` so avatar-/USD-spawned cameras — which land async, long after
+/// `Startup` — get the marker the moment they appear.
+///
+/// RTT cameras (`RenderTarget::Image`) are skipped: they paint into their
+/// own offscreen Image (USD preview, vello diagrams) and must not have a
+/// window-scoped viewport written to them.
+pub fn auto_tag_workbench_3d_cameras(
+    mut commands: Commands,
+    new_cams: Query<
+        (Entity, Option<&RenderTarget>),
+        (Added<Camera3d>, Without<WorkbenchViewportCamera>),
+    >,
+) {
+    for (entity, target) in &new_cams {
+        let targets_window = matches!(target, None | Some(RenderTarget::Window(_)));
+        if targets_window {
+            commands.entity(entity).insert(WorkbenchViewportCamera);
+        }
+    }
+}
+
 /// Sentinel — runs once a couple of seconds after startup and verifies
 /// there's exactly one `PrimaryEguiContext` in the world.
 ///
