@@ -18,7 +18,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::camera::visibility::NoFrustumCulling;
 use big_space::prelude::*;
@@ -48,6 +47,25 @@ pub struct GlobeLod {
 #[derive(Component, Default)]
 pub struct GlobeTiles(pub HashMap<TileCoord, Entity>);
 
+// TODO(globe-invisible): In luncosim's dev `cargo run`, the globe is NOT
+// visible — the viewport renders black even though this system spawns the
+// correct tile entities (verified via list_entities: f0-f5 L0 + L1 refinements
+// for Earth & Moon, camera auto-focused Earth at 3x radius). The viewport CHROME
+// is fixed (ViewportPanel + auto_tag → Camera3d active, black clear) and the
+// 2x-radius tile placement bug is fixed (tiles now built centre-relative). But
+// nothing renders. Prior notes say spacecraft glTFs were also invisible, so the
+// remaining cause is likely GLOBAL, not tile-specific. Suspects to investigate:
+//   - avatar camera clip planes: `update_avatar_clip_planes_system`
+//     (lunco-avatar) only adapts near/far for cameras WITH AdaptiveNearPlane +
+//     CellCoord + ChildOf(Grid). If the Observer Camera misses one, projection
+//     stays default (far≈1000 m) → everything at orbital distance is clipped.
+//   - blueprint.wgsl ShaderMaterial actually producing visible output for the
+//     globe tiles (backface winding / cull mode / `transition` mode).
+//   - big_space GlobalTransform propagation for tiles under the surface grid.
+// NOTE: luncosim screenshots (MCP + HTTP CaptureScreenshot) render the viewport
+// WHITE — they do not composite the Camera3d pass — so this must be verified in
+// the real window, not via screenshot. See memory
+// project_luncosim_viewport_and_globe_fix.
 /// Per-frame: stream each body's cube-sphere tile set against the camera.
 pub fn update_globe_lod(
     mut commands: Commands,
@@ -105,8 +123,17 @@ pub fn update_globe_lod(
             let tile_center_dir = cube_to_sphere(coord.face, u, v);
             let tile_body_local = tile_center_dir * lod.radius_m;
             let (tile_cell, tile_local_pos) = sg_grid.translation_to_grid(tile_body_local);
+            // Build the mesh RELATIVE to the tile centre (pass `tile_body_local`,
+            // not `DVec3::ZERO`): the entity is placed at the tile centre via the
+            // grid, so the mesh must carry only the small offset of each vertex
+            // FROM that centre. Passing ZERO leaves vertices at full body-local
+            // magnitude (~radius) which then *adds* to the entity's ~radius
+            // placement → every tile rendered at ≈2× radius, a broken offset
+            // shell (the long-standing "globe invisible" bug). Centre-relative
+            // coords also keep vertex magnitudes small (≪ radius), avoiding f32
+            // precision loss at 6.4e6 m.
             let mesh = create_quadsphere_tile_mesh(
-                body_ent, coord.face, coord.level, coord.i, coord.j, lod.radius_m, lod.res, DVec3::ZERO,
+                body_ent, coord.face, coord.level, coord.i, coord.j, lod.radius_m, lod.res, tile_body_local,
             );
             let ent = commands
                 .spawn((
