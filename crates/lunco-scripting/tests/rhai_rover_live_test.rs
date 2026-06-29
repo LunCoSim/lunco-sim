@@ -98,6 +98,27 @@ fn on_report(_t: On<Report>, mut cap: ResMut<CapturedData>) {
 
 register_commands!(on_drive, on_brake, on_spawn, on_report);
 
+// ── Reflect targets for the native get/set verbs ──────────────────────────────
+// A component and a resource, both reflect-registered, exercise the symmetric
+// `set`/`get` (component) and `set_setting`/`get_setting` (resource) verbs across
+// scalar, vector, bool and string fields — the native read/write path, no JSON.
+
+#[derive(Component, Reflect, Default)]
+#[reflect(Component)]
+struct Knob {
+    gain: f64,
+    dir: Vec3,
+    armed: bool,
+    label: String,
+}
+
+#[derive(Resource, Reflect, Default)]
+#[reflect(Resource)]
+struct SimConfig {
+    speed: f64,
+    steps: i64,
+}
+
 fn spy_events(t: On<TelemetryEvent>, mut log: ResMut<EventLog>) {
     log.0.push(t.event().name.clone());
 }
@@ -129,6 +150,11 @@ fn build_app() -> App {
         .init_resource::<CapturedData>()
         .add_observer(spy_events);
     register_all_commands(&mut app);
+
+    // Reflect targets for the get/set verbs (component + resource).
+    app.register_type::<Knob>()
+        .register_type::<SimConfig>()
+        .init_resource::<SimConfig>();
     app
 }
 
@@ -983,4 +1009,80 @@ fn usd_embedded_scenario_attaches_and_runs() {
         app.world().entity(rover).get::<lunco_core::EmbeddedScenarioSource>().is_none(),
         "marker should be removed after attach"
     );
+}
+
+// ── Native get/set verbs: tune any reflected field/setting from a scenario ───
+
+/// `set(id, "Comp.field", value)` writes straight onto the live component across
+/// scalar / vector / bool / string fields (native → reflect, no JSON), coercing
+/// an int literal into an f64 field. The edit lands in ECS, readable in Rust.
+#[test]
+fn set_verb_writes_component_fields() {
+    let source = r#"
+        fn on_start(me) {
+            set(me, "Knob.gain", 3);          // int literal → f64 field (coerced)
+            set(me, "Knob.dir", [1.0, 2.0, 3.0]);
+            set(me, "Knob.armed", true);
+            set(me, "Knob.label", "go");
+        }
+    "#;
+    let (mut app, rover) = setup(source);
+    app.world_mut().entity_mut(rover).insert(Knob::default());
+
+    tick(&mut app);
+
+    let knob = app.world().entity(rover).get::<Knob>().expect("Knob present");
+    assert_eq!(knob.gain, 3.0, "int literal should coerce into the f64 field");
+    assert_eq!(knob.dir, Vec3::new(1.0, 2.0, 3.0), "array should become a Vec3");
+    assert!(knob.armed, "bool field should be set");
+    assert_eq!(knob.label, "go", "string field should be set");
+}
+
+/// `set_setting`/`get_setting` reach a global `Resource` — the resource twin of
+/// `set`/`get`. The write lands in the resource, and the read returns the same
+/// native value (round-tripped back through a command), proving both halves.
+#[test]
+fn setting_verbs_read_and_write_resources() {
+    let source = r#"
+        fn on_start(me) {
+            set_setting("SimConfig.speed", 9.5);
+            set_setting("SimConfig.steps", 7);
+            // read it straight back natively and feed it to a command
+            cmd("Report", #{ value: get_setting("SimConfig.steps") });
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+
+    tick(&mut app);
+
+    let cfg = app.world().resource::<SimConfig>();
+    assert_eq!(cfg.speed, 9.5, "set_setting should write the f64 resource field");
+    assert_eq!(cfg.steps, 7, "set_setting should write the i64 resource field");
+    assert_eq!(
+        app.world().resource::<CapturedData>().0,
+        vec![7],
+        "get_setting should read back the value just written (native round-trip)"
+    );
+}
+
+/// A bad path/type returns `false` (logged, not a panic), so a scenario can
+/// branch on the result, and the target stays untouched.
+#[test]
+fn set_verb_reports_failure_and_leaves_target_unchanged() {
+    let source = r#"
+        fn on_start(me) {
+            if !set(me, "Knob.nope", 1.0) { emit("SET_FAILED"); }
+            if !set_setting("Nonexistent.x", 1.0) { emit("SETTING_FAILED"); }
+        }
+    "#;
+    let (mut app, rover) = setup(source);
+    app.world_mut().entity_mut(rover).insert(Knob::default());
+
+    tick(&mut app);
+
+    let events = &app.world().resource::<EventLog>().0;
+    assert!(events.iter().any(|e| e == "SET_FAILED"), "missing field → false; got {events:?}");
+    assert!(events.iter().any(|e| e == "SETTING_FAILED"), "missing resource → false; got {events:?}");
+    let knob = app.world().entity(rover).get::<Knob>().expect("Knob present");
+    assert_eq!(knob.gain, 0.0, "a failed set must not mutate the component");
 }

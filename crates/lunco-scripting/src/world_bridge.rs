@@ -138,6 +138,85 @@ fn dynamic_to_value<B: ValueBuilder>(b: &B, d: &Dynamic) -> B::Value {
     }
 }
 
+// ── Native write: Dynamic → reflect ────────────────────────────────────────
+
+/// A rhai [`Dynamic`] as `f64` (ints widen); error if it isn't a number.
+fn dyn_f64(v: &Dynamic) -> Result<f64, String> {
+    v.as_float()
+        .or_else(|_| v.as_int().map(|i| i as f64))
+        .map_err(|_| "expected a number".to_string())
+}
+
+/// A rhai [`Dynamic`] as `i64` (floats truncate); error if it isn't a number.
+fn dyn_i64(v: &Dynamic) -> Result<i64, String> {
+    v.as_int()
+        .or_else(|_| v.as_float().map(|f| f as i64))
+        .map_err(|_| "expected an integer".to_string())
+}
+
+/// A rhai array of exactly `n` numbers as `f64`s — for glam vec/quat fields.
+fn dyn_f64s(v: &Dynamic, n: usize) -> Result<Vec<f64>, String> {
+    let arr = v
+        .clone()
+        .try_cast::<rhai::Array>()
+        .ok_or_else(|| format!("expected an array of {n} numbers"))?;
+    if arr.len() != n {
+        return Err(format!("expected {n} numbers, got {}", arr.len()));
+    }
+    arr.iter().map(dyn_f64).collect()
+}
+
+/// Write a rhai [`Dynamic`] straight onto a reflected field — the inverse of
+/// [`build_from_reflect`](bridge_core::build_from_reflect)'s read. The field's
+/// concrete type drives the coercion (scalars widen/truncate as needed; arrays
+/// become glam vectors/quats), so `native → reflect` happens in one hop with no
+/// JSON. Unsupported field types return an error the script verb surfaces.
+fn apply_dynamic(field: &mut dyn bevy::reflect::PartialReflect, value: &Dynamic) -> Result<(), String> {
+    use bevy::math::{DVec2, DVec3, Quat, Vec2, Vec3};
+    let any = field
+        .try_as_reflect_mut()
+        .ok_or_else(|| "field is not concretely reflectable".to_string())?
+        .as_any_mut();
+
+    if let Some(s) = any.downcast_mut::<f64>() {
+        *s = dyn_f64(value)?;
+    } else if let Some(s) = any.downcast_mut::<f32>() {
+        *s = dyn_f64(value)? as f32;
+    } else if let Some(s) = any.downcast_mut::<i64>() {
+        *s = dyn_i64(value)?;
+    } else if let Some(s) = any.downcast_mut::<i32>() {
+        *s = dyn_i64(value)? as i32;
+    } else if let Some(s) = any.downcast_mut::<u64>() {
+        *s = dyn_i64(value)? as u64;
+    } else if let Some(s) = any.downcast_mut::<u32>() {
+        *s = dyn_i64(value)? as u32;
+    } else if let Some(s) = any.downcast_mut::<usize>() {
+        *s = dyn_i64(value)? as usize;
+    } else if let Some(s) = any.downcast_mut::<bool>() {
+        *s = value.as_bool().map_err(|_| "expected a bool".to_string())?;
+    } else if let Some(s) = any.downcast_mut::<String>() {
+        *s = value.clone().into_string().map_err(|_| "expected a string".to_string())?;
+    } else if let Some(v) = any.downcast_mut::<Vec3>() {
+        let a = dyn_f64s(value, 3)?;
+        *v = Vec3::new(a[0] as f32, a[1] as f32, a[2] as f32);
+    } else if let Some(v) = any.downcast_mut::<Vec2>() {
+        let a = dyn_f64s(value, 2)?;
+        *v = Vec2::new(a[0] as f32, a[1] as f32);
+    } else if let Some(v) = any.downcast_mut::<Quat>() {
+        let a = dyn_f64s(value, 4)?;
+        *v = Quat::from_xyzw(a[0] as f32, a[1] as f32, a[2] as f32, a[3] as f32);
+    } else if let Some(v) = any.downcast_mut::<DVec3>() {
+        let a = dyn_f64s(value, 3)?;
+        *v = DVec3::new(a[0], a[1], a[2]);
+    } else if let Some(v) = any.downcast_mut::<DVec2>() {
+        let a = dyn_f64s(value, 2)?;
+        *v = DVec2::new(a[0], a[1]);
+    } else {
+        return Err(format!("set: unsupported field type '{}'", field.reflect_type_path()));
+    }
+    Ok(())
+}
+
 // ── Engine construction ────────────────────────────────────────────────────
 
 /// Ergonomic policy wrappers (drive/distance/arrived/...), authored in rhai and
@@ -201,6 +280,42 @@ pub fn build_world_engine() -> Engine {
     // The generic reflection read — built native (reflect → Dynamic, one hop).
     engine.register_fn("get", |id: i64, path: ImmutableString| -> Dynamic {
         bridge_core::get_field(&RhaiBuilder, id as u64, path.as_str()).unwrap_or(Dynamic::UNIT)
+    });
+
+    // set(id, "Component.field", value) -> bool — the WRITE twin of get(). Applies
+    // `value` straight onto the reflected field (native → reflect, no JSON), the
+    // mirror of the read path. Coerces by the field's type (scalars widen, arrays
+    // → glam vec/quat). Host-only, so it's authoritative; the change replicates
+    // via normal component sync. Returns false (and logs why) on a bad
+    // entity/path/type — so a scenario can branch on the result.
+    engine.register_fn("set", |id: i64, path: ImmutableString, value: Dynamic| -> bool {
+        match bridge_core::set_component_field(id as u64, path.as_str(), |f| apply_dynamic(f, &value)) {
+            Ok(()) => true,
+            Err(e) => {
+                warn!("[rhai] set({id}, \"{path}\") failed: {e}");
+                false
+            }
+        }
+    });
+
+    // get_setting("Resource.field") -> Dynamic — read a GLOBAL setting (the
+    // resource twin of get()). Settings/config live in resources, not components;
+    // this reaches any reflect-registered `Resource`. () if missing.
+    engine.register_fn("get_setting", |path: ImmutableString| -> Dynamic {
+        bridge_core::get_resource_field(&RhaiBuilder, path.as_str()).unwrap_or(Dynamic::UNIT)
+    });
+
+    // set_setting("Resource.field", value) -> bool — write a GLOBAL setting (the
+    // resource twin of set()). Makes every reflect-registered resource field
+    // tunable from a scenario with no per-setting command. Host-authoritative.
+    engine.register_fn("set_setting", |path: ImmutableString, value: Dynamic| -> bool {
+        match bridge_core::set_resource_field(path.as_str(), |f| apply_dynamic(f, &value)) {
+            Ok(()) => true,
+            Err(e) => {
+                warn!("[rhai] set_setting(\"{path}\") failed: {e}");
+                false
+            }
+        }
     });
 
     // list_entities() -> [#{ id, name, type, pos }] for every registered entity.

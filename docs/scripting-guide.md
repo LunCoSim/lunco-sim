@@ -53,7 +53,10 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 |---|---|---|
 | `cmd(name, #{params})` | `#{ id, ok, data, error }` | **WRITE** — fire any `#[Command]` by name (synchronous; `data` carries assigned values like a spawned gid) |
 | `query(name, #{params})` | value \| `()` | **READ** — call any query provider (Raycast, Nearest, GroundHeight, …) |
-| `get(id, "Comp.field")` | value \| `()` | reflected component read (vectors → `[x,y,z]`, quats → `[x,y,z,w]`, structs → maps) |
+| `get(id, "Comp.field")` | value \| `()` | reflected component **read** (vectors → `[x,y,z]`, quats → `[x,y,z,w]`, structs → maps) |
+| `set(id, "Comp.field", value)` | bool | reflected component **write** — the mirror of `get`; coerces by field type (int→float, `[x,y,z]`→`Vec3`); `false` on bad path/type |
+| `get_setting("Res.field")` | value \| `()` | reflected **resource read** — global settings/config live in resources, not components |
+| `set_setting("Res.field", value)` | bool | reflected **resource write** — tune any registered setting; `false` on bad path/type |
 | `world_pos(id)` | `[x,y,z]` \| `()` | float-origin-correct world position |
 | `world_forward(id)` | `[x,y,z]` \| `()` | world heading |
 | `find(name)` | id (`-1` if none) | entity id by `Name` |
@@ -64,7 +67,17 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | i64 / f64 / f64 | the fixed simulation clock |
 
 JSON appears **only** at the `cmd`/`query` params seam (that's the API's own
-contract); every read builds native rhai values directly.
+contract). Both directions are native: `get`/`get_setting` build rhai values
+straight from reflect, and `set`/`set_setting` write rhai values straight back —
+no JSON round-trip on the read or write path.
+
+> **`set` vs `cmd`.** Use `set`/`set_setting` to tune a *value* (a field, a
+> config knob) — it's a direct reflected write, host-authoritative because
+> scenarios run host-only, and the change replicates through normal component
+> sync. Use `cmd` for an *operation* with side effects beyond a field write
+> (spawning, swapping a material, anything an observer must react to). Settings
+> are only reachable if their type is `register_type`'d with
+> `#[reflect(Component)]` / `#[reflect(Resource)]`.
 
 ## 4. Prelude helpers
 

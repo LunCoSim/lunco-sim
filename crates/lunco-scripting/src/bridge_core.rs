@@ -30,7 +30,7 @@
 //! only for the duration of one evaluation. Single-threaded (FixedUpdate / wasm)
 //! and never re-entrant while a borrow is outstanding, so no aliasing occurs.
 
-use bevy::ecs::reflect::ReflectComponent;
+use bevy::ecs::reflect::{ReflectComponent, ReflectResource};
 use bevy::ecs::system::SystemState;
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -383,14 +383,18 @@ pub fn world_forward(gid: u64) -> Option<DVec3> {
     .flatten()
 }
 
+/// Split `"Type.field.sub"` into the type's short name and a reflect sub-path
+/// (`".field.sub"`). A bare `"Type"` yields an empty sub-path (the whole value).
+fn split_type_path(path: &str) -> (&str, String) {
+    match path.split_once('.') {
+        Some((ty, rest)) => (ty, format!(".{rest}")),
+        None => (path, String::new()),
+    }
+}
+
 /// `get(id, "Component.field")` — generic reflection read as a native value.
 pub fn get_field<B: ValueBuilder>(b: &B, gid: u64, path: &str) -> Option<B::Value> {
-    // Split "Component.field.sub" into the component short name and reflect
-    // sub-path (".field.sub"). A bare "Component" reads the whole component.
-    let (comp, sub) = match path.split_once('.') {
-        Some((c, rest)) => (c, format!(".{rest}")),
-        None => (path, String::new()),
-    };
+    let (comp, sub) = split_type_path(path);
 
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
@@ -409,6 +413,105 @@ pub fn get_field<B: ValueBuilder>(b: &B, gid: u64, path: &str) -> Option<B::Valu
         build_from_reflect(b, field)
     })
     .flatten()
+}
+
+/// `get_setting("Resource.field")` — generic reflection read of a global
+/// `Resource` field (the resource twin of [`get_field`]). Settings/config live in
+/// resources, not components, so this is how a script reaches them. `None` if the
+/// type isn't a registered reflect `Resource`, isn't present, or the path misses.
+pub fn get_resource_field<B: ValueBuilder>(b: &B, path: &str) -> Option<B::Value> {
+    let (res, sub) = split_type_path(path);
+
+    with_world(|world| {
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let reg = registry.read();
+        let registration = reg.get_with_short_type_path(res)?;
+        let reflect_resource = registration.data::<ReflectResource>()?;
+        let reflected = reflect_resource.reflect(world).ok()?;
+
+        let field: &dyn bevy::reflect::PartialReflect = if sub.is_empty() {
+            reflected.as_partial_reflect()
+        } else {
+            reflected.reflect_path(sub.as_str()).ok()?
+        };
+        build_from_reflect(b, field)
+    })
+    .flatten()
+}
+
+/// `set(id, "Component.field", value)` — generic reflection WRITE, the mirror of
+/// [`get_field`]. Navigates to the live reflected field and hands a `&mut` to
+/// `apply`, which writes the backend-native value straight in (`native → reflect`,
+/// no JSON) — symmetric with the `reflect → native` read path. The `reflect_mut`
+/// borrow trips Bevy change-detection, so the edit replicates / re-runs dependent
+/// systems normally. Host-authoritative by construction (scripts run host-only).
+pub fn set_component_field(
+    gid: u64,
+    path: &str,
+    apply: impl FnOnce(&mut dyn bevy::reflect::PartialReflect) -> Result<(), String>,
+) -> Result<(), String> {
+    let (comp, sub) = split_type_path(path);
+
+    with_world(|world| -> Result<(), String> {
+        let entity = resolve_entity(world, gid).ok_or_else(|| format!("unknown entity {gid}"))?;
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let reg = registry.read();
+        let registration = reg
+            .get_with_short_type_path(comp)
+            .ok_or_else(|| format!("unknown type '{comp}'"))?;
+        let reflect_component = registration
+            .data::<ReflectComponent>()
+            .ok_or_else(|| format!("'{comp}' is not a Component"))?;
+        let entity_mut = world
+            .get_entity_mut(entity)
+            .map_err(|_| format!("entity {gid} despawned"))?;
+        let mut reflected = reflect_component
+            .reflect_mut(entity_mut)
+            .ok_or_else(|| format!("entity {gid} has no {comp}"))?;
+        let field: &mut dyn bevy::reflect::PartialReflect = if sub.is_empty() {
+            reflected.as_partial_reflect_mut()
+        } else {
+            reflected
+                .reflect_path_mut(sub.as_str())
+                .map_err(|e| format!("no field '{comp}{sub}': {e}"))?
+        };
+        apply(field)
+    })
+    .unwrap_or_else(|| Err("no world in scope".into()))
+}
+
+/// `set_setting("Resource.field", value)` — generic reflection WRITE to a global
+/// `Resource` field (the resource twin of [`set_component_field`]). Same native →
+/// reflect application; makes every reflect-registered setting tunable from a
+/// script with no per-setting command.
+pub fn set_resource_field(
+    path: &str,
+    apply: impl FnOnce(&mut dyn bevy::reflect::PartialReflect) -> Result<(), String>,
+) -> Result<(), String> {
+    let (res, sub) = split_type_path(path);
+
+    with_world(|world| -> Result<(), String> {
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let reg = registry.read();
+        let registration = reg
+            .get_with_short_type_path(res)
+            .ok_or_else(|| format!("unknown type '{res}'"))?;
+        let reflect_resource = registration
+            .data::<ReflectResource>()
+            .ok_or_else(|| format!("'{res}' is not a Resource"))?;
+        let mut reflected = reflect_resource
+            .reflect_mut(world)
+            .map_err(|_| format!("resource '{res}' not present"))?;
+        let field: &mut dyn bevy::reflect::PartialReflect = if sub.is_empty() {
+            reflected.as_partial_reflect_mut()
+        } else {
+            reflected
+                .reflect_path_mut(sub.as_str())
+                .map_err(|e| format!("no field '{res}{sub}': {e}"))?
+        };
+        apply(field)
+    })
+    .unwrap_or_else(|| Err("no world in scope".into()))
 }
 
 /// `list_entities()` — `[{ id, name, type, pos }]` for every registered entity.
