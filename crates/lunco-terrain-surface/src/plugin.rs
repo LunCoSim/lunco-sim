@@ -46,6 +46,10 @@ impl Plugin for TerrainSurfacePlugin {
         app.init_resource::<TerrainSurfaceConfig>();
         app.register_type::<crate::georef::TerrainGeoref>();
         app.register_type::<crate::stream_viz::TerrainShaderMode>();
+        // Runtime-tunable LOD knobs (Inspector → "Terrain LOD") + the tile-mesh cache.
+        app.init_resource::<crate::stream_viz::TerrainLodConfig>();
+        app.register_type::<crate::stream_viz::TerrainLodConfig>();
+        app.init_resource::<crate::stream_viz::LodMeshCache>();
         // M3: spawn a static DEM terrain (mesh + heightfield collider) on the
         // `SpawnDemTerrain` command. See `crate::terrain`.
         crate::terrain::register(app);

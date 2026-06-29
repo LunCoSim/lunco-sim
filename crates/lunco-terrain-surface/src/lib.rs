@@ -64,6 +64,6 @@ pub use derived_layers::DerivedLayersBuilt;
 pub use georef::TerrainGeoref;
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use collider_ring::{ColliderTiles, TerrainColliderRing};
-pub use stream_viz::{DemHeightField, LodTiles, TerrainLodViz, TerrainShaderMode};
+pub use stream_viz::{DemHeightField, LodTiles, TerrainLodConfig, TerrainLodViz, TerrainShaderMode};
 pub use terrain::{DemTerrainRequest, DemTerrainSurface, SpawnDemTerrain};
 pub use tile_mesh::{bake_tile_mesh, TileMesh};

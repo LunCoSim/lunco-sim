@@ -296,6 +296,12 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
             .show(ui, |ui| obstacle_field_section(ui, ctx));
         ui.separator();
 
+        // ── Terrain LOD (runtime streaming knobs) ────────────────────
+        egui::CollapsingHeader::new("Terrain LOD")
+            .default_open(true)
+            .show(ui, |ui| terrain_lod_section(ui, ctx));
+        ui.separator();
+
         // Get current selection
         let Some(entity) = ctx.resource::<SelectedEntities>().and_then(|s| s.primary()) else {
             ui.label("No entity selected.");
@@ -735,6 +741,24 @@ fn camera_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 /// `ObstacleFieldSpec` resource via [`PanelCtx::resource_scope`] (the
 /// narrow mutate-during-paint surface); the field rebuilds only on slider
 /// release / button press.
+/// Runtime LOD knobs for streamed DEM terrain — detail-vs-distance + load
+/// smoothness, applied live (no rebuild). Edits the global `TerrainLodConfig`.
+fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+    use lunco_terrain_surface::TerrainLodConfig;
+    if ctx.resource::<TerrainLodConfig>().is_none() {
+        ui.label("No streaming terrain in this scene.");
+        return;
+    }
+    ctx.resource_scope(|_ctx, cfg: &mut TerrainLodConfig| {
+        ui.add(egui::Slider::new(&mut cfg.range_factor, 0.5..=12.0).text("Detail range ×"))
+            .on_hover_text("Higher = finer tiles persist farther out (more detail at distance, more tiles).");
+        ui.add(egui::Slider::new(&mut cfg.max_depth, 1u8..=9).text("Max LOD depth"))
+            .on_hover_text("Deepest refinement = closest-up detail.");
+        ui.add(egui::Slider::new(&mut cfg.bakes_per_frame, 1usize..=32).text("Bakes / frame"))
+            .on_hover_text("1 = smoothest frame-time, slowest fill. Higher = faster load, bigger spikes.");
+    });
+}
+
 fn obstacle_field_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     let mut regen_spec: Option<ObstacleFieldSpec> = None;
 

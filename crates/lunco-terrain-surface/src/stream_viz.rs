@@ -28,7 +28,7 @@ use lunco_obstacle_field::field::HeightGrid;
 use lunco_obstacle_field::grid_mesh;
 use lunco_materials::{ParamValue, ShaderMaterial, ATTRIBUTE_MORPH_TARGET};
 
-use crate::quadtree::{QuadCoord, Quadtree};
+use crate::quadtree::{QuadCoord, Quadtree, Selected, Square};
 use crate::tile_mesh::bake_tile_mesh;
 
 /// Vertices per tile side (so each tile is `TILE_RES²` verts). 33 → 32² quads.
@@ -125,6 +125,39 @@ pub struct LodTileOf(pub Entity);
 #[derive(Resource, Default)]
 pub struct LodMaterials(HashMap<(TerrainShaderMode, u32), Handle<ShaderMaterial>>);
 
+/// Runtime-tunable LOD knobs (Inspector → "Terrain LOD"). Global across terrains.
+/// Changing these re-selects tiles live so you can dial detail-vs-distance and the
+/// load smoothness without a rebuild.
+#[derive(Resource, Clone, Copy, Reflect)]
+#[reflect(Resource)]
+pub struct TerrainLodConfig {
+    /// `refine_range(d) = range_factor · geometric_error(d)`. Larger → finer tiles
+    /// persist farther from the camera (more detail at distance, more tiles).
+    pub range_factor: f64,
+    /// Deepest quadtree level the streamer refines to (caps closest-up detail).
+    pub max_depth: u8,
+    /// Tiles BAKED per frame across all terrains. 1 = smoothest frame-time but
+    /// slowest fill; raise for a faster initial load at the cost of bigger spikes.
+    pub bakes_per_frame: usize,
+}
+
+impl Default for TerrainLodConfig {
+    fn default() -> Self {
+        TerrainLodConfig { range_factor: RANGE_FACTOR, max_depth: MAX_DEPTH, bakes_per_frame: MAX_TILE_BAKES_PER_FRAME }
+    }
+}
+
+/// Cache of baked tile meshes keyed by quadtree node. A tile's geometry is a pure
+/// function of its `QuadCoord` (deterministic DEM sampling), so a despawned tile
+/// re-selected later (LOD-boundary oscillation, revisiting an area) reuses its mesh
+/// handle instead of re-baking + re-uploading — the "tile caching" that was missing.
+/// Bounded: trimmed to currently-resident tiles when it grows past `CACHE_CAP`.
+#[derive(Resource, Default)]
+pub struct LodMeshCache(HashMap<QuadCoord, Handle<Mesh>>);
+
+/// Soft cap on cached tile meshes before non-resident entries are trimmed.
+const CACHE_CAP: usize = 1024;
+
 /// Build a tile `ShaderMaterial` for a `(mode, depth)` with its morph band. The
 /// geomorph vertex stage is shared; the fragment + colour come from the mode.
 fn build_tile_material(
@@ -176,6 +209,8 @@ pub fn update_lod_tiles(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ShaderMaterial>>,
     mut lod_mats: ResMut<LodMaterials>,
+    mut mesh_cache: ResMut<LodMeshCache>,
+    cfg: Res<TerrainLodConfig>,
     asset_server: Res<AssetServer>,
 ) {
     // Use the first 3D camera as the focus. (Multiple cameras → the viz follows
@@ -186,7 +221,7 @@ pub fn update_lod_tiles(
     let Ok((grid_entity, grid)) = grids.single() else { return };
 
     // Per-frame bake budget shared across all terrains (amortise scale changes).
-    let mut bake_budget = MAX_TILE_BAKES_PER_FRAME;
+    let mut bake_budget = cfg.bakes_per_frame.max(1);
 
     for (terrain, t_gt, hf, viz, mut tiles, mode_opt) in &mut terrains {
         let mode = mode_opt.copied().unwrap_or_default();
@@ -236,18 +271,18 @@ pub fn update_lod_tiles(
         // the ground below (true distance), instead of refining it as XZ-only would.
         let ground = dem.height_at(local.x, local.z) as f64;
         let eye_height = (local.y as f64 - ground).max(0.0);
-        let qt = Quadtree::new(h, viz.max_depth, RANGE_FACTOR, h);
-        let sel = qt.select_3d(focus, eye_height);
+        // Runtime LOD knobs (Inspector) drive detail-vs-distance live; tile_res stays
+        // per-terrain (changing it would invalidate the mesh cache).
+        let qt = Quadtree::new(h, cfg.max_depth.max(1), cfg.range_factor.max(0.1), h);
+        let mut sel = qt.select_3d(focus, eye_height);
         let wanted: HashSet<QuadCoord> = sel.iter().map(|s| s.coord).collect();
 
-        // Despawn tiles no longer selected.
-        tiles.0.retain(|coord, ent| {
-            let keep = wanted.contains(coord);
-            if !keep {
-                commands.entity(*ent).despawn();
-            }
-            keep
-        });
+        // Intelligent baking: nearest tiles first, so the per-frame budget fills the
+        // surface in from under the camera outward ("start closer, then extend").
+        let dist2 = |s: &Selected| -> f64 {
+            (s.region.center[0] - focus[0]).powi(2) + (s.region.center[1] - focus[1]).powi(2)
+        };
+        sel.sort_by(|a, b| dist2(a).partial_cmp(&dist2(b)).unwrap_or(std::cmp::Ordering::Equal));
 
         // Spawn newly-selected tiles (real DEM-sampled geometry, tinted by depth).
         // Each tile anchors to its OWN big_space `CellCoord` (computed from its
@@ -259,19 +294,26 @@ pub fn update_lod_tiles(
             if tiles.0.contains_key(&s.coord) {
                 continue;
             }
-            // Amortise: stop baking once this frame's budget is spent; the missing
-            // tiles are re-selected next frame and bake then (no hitch).
-            if bake_budget == 0 {
-                break;
-            }
-            bake_budget -= 1;
             let center = s.region.center;
-            let tm = bake_tile_mesh(dem, s.region, viz.tile_res, h, center);
-            // Build the grid mesh and attach the CDLOD parent-lattice positions as
-            // the morph-target attribute the geomorph vertex shader lerps toward.
-            let mut mesh = grid_mesh(tm.positions, tm.normals, tm.uvs, tm.indices);
-            mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tm.morph_targets);
-            let mesh = meshes.add(mesh);
+            // Reuse the cached mesh if this node was baked before; only a true bake
+            // (cache miss) spends the per-frame budget. Amortise: once spent, stop —
+            // the remaining tiles re-select next frame (no hitch).
+            let mesh = if let Some(cached) = mesh_cache.0.get(&s.coord) {
+                cached.clone()
+            } else {
+                if bake_budget == 0 {
+                    break;
+                }
+                bake_budget -= 1;
+                let tm = bake_tile_mesh(dem, s.region, viz.tile_res, h, center);
+                // Build the grid mesh and attach the CDLOD parent-lattice positions as
+                // the morph-target attribute the geomorph vertex shader lerps toward.
+                let mut mesh = grid_mesh(tm.positions, tm.normals, tm.uvs, tm.indices);
+                mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tm.morph_targets);
+                let handle = meshes.add(mesh);
+                mesh_cache.0.insert(s.coord, handle.clone());
+                handle
+            };
             let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], 0.0, center[1]));
             let depth = s.coord.depth as u32;
             // Per-depth morph band (distances): finite for sub-root nodes, "never"
@@ -302,7 +344,45 @@ pub fn update_lod_tiles(
                 .id();
             tiles.0.insert(s.coord, ent);
         }
+
+        // Despawn no-longer-wanted tiles, but KEEP an old tile while it still covers
+        // a wanted tile that hasn't baked yet — otherwise the despawn opens a hole
+        // that shows the black sky through ("black squares", worse at 1 bake/frame).
+        // Once a region's replacement is in, the old tile no longer overlaps any
+        // missing wanted region and is reaped — so this also bounds growth while the
+        // camera moves continuously (tiles left behind stop covering holes).
+        let missing: Vec<Square> = sel
+            .iter()
+            .filter(|s| !tiles.0.contains_key(&s.coord))
+            .map(|s| s.region)
+            .collect();
+        tiles.0.retain(|coord, ent| {
+            if wanted.contains(coord) {
+                return true;
+            }
+            let region = qt.region(*coord);
+            let covers_hole = missing.iter().any(|m| squares_overlap(region, *m));
+            if !covers_hole {
+                commands.entity(*ent).despawn();
+            }
+            covers_hole
+        });
+
+        // Bound the mesh cache: when it grows past the cap, keep only meshes for
+        // currently-resident tiles (deterministic geometry → dropped ones re-bake on
+        // demand). Single-terrain scenes are the norm; with several terrains this may
+        // drop another's cached meshes, which is harmless (they re-bake).
+        if mesh_cache.0.len() > CACHE_CAP {
+            let resident: HashSet<QuadCoord> = tiles.0.keys().copied().collect();
+            mesh_cache.0.retain(|c, _| resident.contains(c));
+        }
     }
+}
+
+/// AABB overlap of two axis-aligned [`Square`] regions (XZ).
+fn squares_overlap(a: Square, b: Square) -> bool {
+    (a.center[0] - b.center[0]).abs() < a.half + b.half
+        && (a.center[1] - b.center[1]).abs() < a.half + b.half
 }
 
 /// Reap LOD tiles whose owning terrain no longer exists (or no longer streams) —
