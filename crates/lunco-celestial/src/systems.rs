@@ -122,25 +122,6 @@ pub fn tile_rotation_sync_system(
     // Intentionally empty — tiles stay at identity rotation in Grid frame.
 }
 
-pub fn update_sun_light_system(
-    mut q_light: Query<&mut Transform, With<DirectionalLight>>,
-    mut first_run: Local<bool>,
-) {
-    if !*first_run {
-        *first_run = true;
-        warn!("SUN_LIGHT: system running");
-    }
-
-    // Point sun light along +Z axis (toward Earth at current epoch).
-    // This is a fixed direction that illuminates the Earth-Moon system.
-    // The exact direction varies with Earth's orbit, but +Z is a reasonable
-    // approximation that keeps the Moon illuminated from most viewing angles.
-    let dir = bevy::math::Vec3::NEG_Z;
-    if let Ok(mut light_tf) = q_light.single_mut() {
-        light_tf.look_to(dir, bevy::math::Vec3::Y);
-    }
-}
-
 pub fn celestial_telemetry_system(
     clock: Res<crate::clock::CelestialClock>,
     q_earth: Query<(&Transform, &big_space::prelude::CellCoord), With<EarthRoot>>,

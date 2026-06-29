@@ -141,14 +141,16 @@ impl Plugin for CelestialPlugin {
         // Terrain spawning is now handled by lunco-terrain plugin
         // Systems like terrain_spawn_system run in that crate
 
-        // Sun light runs in PostUpdate AFTER big_space propagates GlobalTransform,
-        // so the camera world position is correct for light direction.
-        app.add_systems(
-            PostUpdate,
-            update_sun_light_system
-                .after(bevy::transform::TransformSystems::Propagate)
-                .after(big_space::prelude::BigSpaceSystems::PropagateHighPrecision),
-        );
+        // NOTE: the sun's *direction* is owned by its spawn transform
+        // (`big_space_setup`) and edited at runtime via
+        // `lunco_environment::SetEnvironmentLight` (the Inspector / web sun
+        // control). There is intentionally no per-frame system forcing it: the
+        // old `update_sun_light_system` hardcoded `look_to(NEG_Z)` every frame,
+        // which clobbered `SetEnvironmentLight` on web builds (where the lone
+        // `DirectionalLight` made its `single_mut()` succeed, unlike native
+        // where the earthshine fill made it a silent no-op). A future
+        // ephemeris-driven sun would write the transform from the sim clock,
+        // not pin it to a constant.
     }
 }
 
