@@ -1872,7 +1872,9 @@ pub fn send_tutor_status_updates(
     role: Res<NetworkRole>,
     local: Res<LocalSession>,
     settings: Res<TutorialSettings>,
-    workspace: Res<lunco_workspace::WorkspaceResource>,
+    // Optional: a headless (`--no-ui`) host has no workspace UI, so the
+    // resource is absent. Tutor status simply reports no active document then.
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_avatar: Query<(&Transform, &CellCoord, &ChildOf), With<LocalAvatar>>,
     q_reference_frames: Query<&CelestialReferenceFrame>,
     mut timer: Local<f32>,
@@ -1895,7 +1897,7 @@ pub fn send_tutor_status_updates(
     }
     *timer = 0.0;
 
-    let active_doc = workspace.active_document;
+    let active_doc = workspace.as_ref().and_then(|w| w.active_document);
     let active_perspective = {
         #[cfg(feature = "workbench")]
         {
@@ -1927,7 +1929,8 @@ pub fn send_student_status_updates(
     role: Res<NetworkRole>,
     local: Res<LocalSession>,
     tutor_status: Res<TutorStatusResource>,
-    workspace: Res<lunco_workspace::WorkspaceResource>,
+    // Optional for headless hosts (see `send_tutor_status_updates`).
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_avatar: Query<(&Transform, &CellCoord, &ChildOf), With<LocalAvatar>>,
     q_reference_frames: Query<&CelestialReferenceFrame>,
     mut timer: Local<f32>,
@@ -1951,7 +1954,7 @@ pub fn send_student_status_updates(
     }
     *timer = 0.0;
 
-    let active_doc = workspace.active_document;
+    let active_doc = workspace.as_ref().and_then(|w| w.active_document);
     let active_perspective = {
         #[cfg(feature = "workbench")]
         {
@@ -2096,7 +2099,8 @@ pub fn apply_tutorial_mirroring(
     settings: Res<TutorialSettings>,
     mut tutor_status: ResMut<TutorStatusResource>,
     local: Option<Res<LocalSession>>,
-    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
+    // Optional for headless hosts (see `send_tutor_status_updates`).
+    mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
     mut q_avatar: Query<
         (
             Entity,
@@ -2125,9 +2129,11 @@ pub fn apply_tutorial_mirroring(
             || local.as_ref().map_or(false, |loc| tutor_status.target_client == Some(loc.0.0));
 
         if is_targeted {
-            // Mirror active document
-            if workspace.active_document != tutor_status.active_doc {
-                workspace.active_document = tutor_status.active_doc;
+            // Mirror active document (no-op on a headless host with no workspace)
+            if let Some(ws) = workspace.as_mut() {
+                if ws.active_document != tutor_status.active_doc {
+                    ws.active_document = tutor_status.active_doc;
+                }
             }
 
             // Mirror active perspective
@@ -2160,8 +2166,10 @@ pub fn apply_tutorial_mirroring(
     if settings.teach_mode && settings.observe_mode {
         if settings.target_client.is_some() {
             // Mirror active document from the observed student
-            if workspace.active_document != tutor_status.observed_student_doc {
-                workspace.active_document = tutor_status.observed_student_doc;
+            if let Some(ws) = workspace.as_mut() {
+                if ws.active_document != tutor_status.observed_student_doc {
+                    ws.active_document = tutor_status.observed_student_doc;
+                }
             }
 
             // Mirror active perspective from the observed student
@@ -2193,8 +2201,10 @@ pub fn apply_tutorial_mirroring(
     // Case 3: One-shot perspective snap request (Look-At)
     if let Some(msg) = tutor_status.one_shot_snap_request.take() {
         // Snap active document
-        if workspace.active_document != msg.active_doc {
-            workspace.active_document = msg.active_doc;
+        if let Some(ws) = workspace.as_mut() {
+            if ws.active_document != msg.active_doc {
+                ws.active_document = msg.active_doc;
+            }
         }
 
         // Snap active perspective

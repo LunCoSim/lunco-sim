@@ -54,6 +54,12 @@ impl Plugin for TerrainSurfacePlugin {
         // S3 (visual-only): opt-in camera-driven CDLOD tile streaming for SEEING
         // LODs. Inert unless a DEM is built with `lod_viz`. Physics still rides the
         // static heightfield collider. See `crate::stream_viz`.
+        // Ensure the `ShaderMaterial` asset store exists even in the lean
+        // headless server, where the render-gated `MaterialPlugin::<ShaderMaterial>`
+        // is absent: `update_lod_tiles` holds `ResMut<Assets<ShaderMaterial>>` and
+        // would panic on a missing store. `init_asset` is idempotent, so the GUI's
+        // `MaterialPlugin` reuses this same store.
+        bevy::asset::AssetApp::init_asset::<lunco_materials::ShaderMaterial>(app);
         app.init_resource::<crate::stream_viz::LodMaterials>().add_systems(
             Update,
             (

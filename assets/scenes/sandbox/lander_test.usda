@@ -1,0 +1,145 @@
+#usda 1.0
+(
+    defaultPrim = "LanderTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Self-contained powered-descent lander cosim scene.
+#
+# The chain is entirely the unified cosim wiring fabric — no bespoke Rust:
+#
+#   Avian body  ──(out height)──────► Lander.mo  altitude
+#               ──(out velocity_y)──► Lander.mo  descent_rate
+#                                         │  PID hover/descent law
+#                                         ▼  output `thrust`
+#   self-wire  thrust ─────► force_local_y  (BODY-FRAME thrust port, gap G1)
+#
+# Gravity is applied by lunco-environment (sandbox default 9.81 NEG_Y); the
+# model must NOT re-apply it. Body-frame thrust means the engine fires along
+# the lander's own +Y, so it follows attitude (validates the new force_local_*
+# ports without needing a separate gimbal demo yet).
+#
+# Verify (HTTP API, sandbox running):
+#   - lander starts at y=12, falls, the engine arrests it and it settles ~6 m.
+#   - `CosimStatus` → Lander `thrust` ≈ vehicle_mass*9.81 (~14.7 kN) at hover.
+#   - `QueryEntity`/`GetPort` height → converges to target_altitude (6.0).
+#
+#   sandbox --scene scenes/sandbox/lander_test.usda
+
+def Xform "LanderTest"
+{
+    custom bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.4, 0.4, 0.45)
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        float lunco:cameraYaw = -0.4
+        float lunco:cameraPitch = -0.1
+        double3 xformOp:translate = (14.0, 8.0, 16.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 10000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    # ── The powered-descent lander ──────────────────────────────────────────
+    # The descent body: a cylindrical tank. Its cylinder is the collider; legs
+    # and nozzle are visual-only children. Starts at 12 m and falls under
+    # gravity; Lander.mo throttles the engine to arrest the descent and hover.
+    def Cylinder "Lander" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.2
+        double height = 2.0
+        double3 xformOp:translate = (0, 12.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.8, 0.78, 0.7)
+
+        bool physics:rigidBodyEnabled = true
+        bool physics:collisionEnabled = true
+        float physics:mass = 1500.0
+        float physics:linearDamping = 0.05
+
+        # Cosim: bind Lander.mo and self-wire its I/O.
+        #   height       → altitude       (sense)
+        #   velocity_y    → descent_rate   (sense)
+        #   thrust        → force_local_y  (actuate, body-frame — gap G1)
+        string lunco:modelicaModel = "models/Lander.mo"
+        string lunco:simWires = "height:altitude,velocity_y:descent_rate,thrust:force_local_y"
+
+        # ── Visual-only structure ──
+        def Cylinder "Nozzle"
+        {
+            uniform token axis = "Y"
+            double radius = 0.45
+            double height = 0.8
+            double3 xformOp:translate = (0, -1.3, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.25, 0.22, 0.2)
+            bool physics:collisionEnabled = false
+        }
+
+        def Cube "LegPX"
+        {
+            double size = 1.0
+            double3 xformOp:translate = (1.4, -1.0, 0)
+            double3 xformOp:rotateXYZ = (0, 0, -25.0)
+            double3 xformOp:scale = (0.1, 2.0, 0.1)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f primvars:displayColor = (0.5, 0.5, 0.52)
+            bool physics:collisionEnabled = false
+        }
+        def Cube "LegNX"
+        {
+            double size = 1.0
+            double3 xformOp:translate = (-1.4, -1.0, 0)
+            double3 xformOp:rotateXYZ = (0, 0, 25.0)
+            double3 xformOp:scale = (0.1, 2.0, 0.1)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f primvars:displayColor = (0.5, 0.5, 0.52)
+            bool physics:collisionEnabled = false
+        }
+        def Cube "LegPZ"
+        {
+            double size = 1.0
+            double3 xformOp:translate = (0, -1.0, 1.4)
+            double3 xformOp:rotateXYZ = (25.0, 0, 0)
+            double3 xformOp:scale = (0.1, 2.0, 0.1)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f primvars:displayColor = (0.5, 0.5, 0.52)
+            bool physics:collisionEnabled = false
+        }
+        def Cube "LegNZ"
+        {
+            double size = 1.0
+            double3 xformOp:translate = (0, -1.0, -1.4)
+            double3 xformOp:rotateXYZ = (-25.0, 0, 0)
+            double3 xformOp:scale = (0.1, 2.0, 0.1)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f primvars:displayColor = (0.5, 0.5, 0.52)
+            bool physics:collisionEnabled = false
+        }
+    }
+}

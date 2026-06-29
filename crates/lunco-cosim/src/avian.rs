@@ -33,6 +33,13 @@ use crate::ports::{AvianGroup, AvianPort};
 pub struct PendingForces {
     /// World-space linear force (N) to apply this tick.
     pub f: DVec3,
+    /// Body-frame linear force (N): rotated into world by avian's
+    /// `apply_local_force` at apply time. Use for thrust that follows the
+    /// vehicle's attitude (gimbaled engine, RCS, body-fixed thruster).
+    pub f_local: DVec3,
+    /// World-space torque (N·m) to apply this tick (e.g. reaction wheel,
+    /// thrust-vector moment expressed in world frame).
+    pub torque: DVec3,
 }
 
 /// Ensure `entity` carries [`PendingForces`], then mutate it. The `force_*`
@@ -130,6 +137,51 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f.z))),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.f.z = v)),
         },
+        // Body-frame force inputs: rotated into world by the body's attitude at
+        // apply time (`apply_local_force`). Thrust along the vehicle's own axes.
+        AvianPort {
+            name: "force_local_x",
+            dir: PortDirection::In,
+            port_type: PortType::Force,
+            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f_local.x))),
+            write: Some(|w, e, v| with_pending(w, e, |pf| pf.f_local.x = v)),
+        },
+        AvianPort {
+            name: "force_local_y",
+            dir: PortDirection::In,
+            port_type: PortType::Force,
+            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f_local.y))),
+            write: Some(|w, e, v| with_pending(w, e, |pf| pf.f_local.y = v)),
+        },
+        AvianPort {
+            name: "force_local_z",
+            dir: PortDirection::In,
+            port_type: PortType::Force,
+            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f_local.z))),
+            write: Some(|w, e, v| with_pending(w, e, |pf| pf.f_local.z = v)),
+        },
+        // World-space torque inputs (N·m): reaction wheels, thrust-vector moment.
+        AvianPort {
+            name: "torque_x",
+            dir: PortDirection::In,
+            port_type: PortType::Force,
+            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.torque.x))),
+            write: Some(|w, e, v| with_pending(w, e, |pf| pf.torque.x = v)),
+        },
+        AvianPort {
+            name: "torque_y",
+            dir: PortDirection::In,
+            port_type: PortType::Force,
+            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.torque.y))),
+            write: Some(|w, e, v| with_pending(w, e, |pf| pf.torque.y = v)),
+        },
+        AvianPort {
+            name: "torque_z",
+            dir: PortDirection::In,
+            port_type: PortType::Force,
+            read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.torque.z))),
+            write: Some(|w, e, v| with_pending(w, e, |pf| pf.torque.z = v)),
+        },
     ],
 };
 
@@ -145,11 +197,22 @@ pub fn apply_pending_forces(
     mut forces: Query<Forces>,
 ) {
     for (e, mut pf) in &mut q_pending {
-        if pf.f != DVec3::ZERO {
+        if pf.f != DVec3::ZERO || pf.f_local != DVec3::ZERO || pf.torque != DVec3::ZERO {
             if let Ok(mut f) = forces.get_mut(e) {
-                f.apply_force(pf.f);
+                if pf.f != DVec3::ZERO {
+                    f.apply_force(pf.f);
+                }
+                if pf.f_local != DVec3::ZERO {
+                    // Avian rotates this into world by the body's attitude.
+                    f.apply_local_force(pf.f_local);
+                }
+                if pf.torque != DVec3::ZERO {
+                    f.apply_torque(pf.torque);
+                }
             }
         }
         pf.f = DVec3::ZERO;
+        pf.f_local = DVec3::ZERO;
+        pf.torque = DVec3::ZERO;
     }
 }
