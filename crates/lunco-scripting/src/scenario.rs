@@ -359,6 +359,25 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
 }
 
 // ── Event inbox (neutral) ───────────────────────────────────────────────────
+//
+// TODO(multi-agent coordination): the inbox below is untyped *broadcast* pub/sub
+// (every scenario sees every TelemetryEvent next tick). Two follow-ups, only one
+// of which is a scripting feature:
+//   1. Shared BLACKBOARD (the real coordination primitive): a neutral
+//      `Blackboard` resource (`HashMap<String, Value>`) + verbs `bb_set`/`bb_get`/
+//      `bb_delete`/`bb_keys`, plus ONE atomic `bb_claim(key, gid) -> bool`
+//      (compare-and-set — the only part scripts can't do race-free themselves) for
+//      task allocation / resource claiming / formations. Tension to decide:
+//      deterministic double-buffering (write N, visible N+1) vs immediate
+//      visibility (which `bb_claim` needs). Build only when a scenario actually
+//      needs agents to claim/share state — speculative until then.
+//   2. ADDRESSED messaging is NOT a new channel: a `send(to_gid, name, value)` is
+//      just `emit` with the recipient encoded + a filter in `on_event` on the
+//      bus that already exists. Do NOT widen `TelemetryEvent` (the YAMCS sample
+//      type) with routing fields. Sugar at best — skip until fan-out cost matters.
+// Separately, REALISTIC inter-agent comms (latency / range / line-of-sight /
+// relay) is a SIMULATION subsystem, not this substrate — scripts would send/recv
+// over it via the command/query API and get real delays/dropouts back.
 
 /// Frame-delayed inbox of `TelemetryEvent`s destined for scenario `on_event`
 /// hooks. An observer ([`collect_script_events`]) clones every fired event here;

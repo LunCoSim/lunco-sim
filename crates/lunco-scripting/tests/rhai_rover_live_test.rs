@@ -780,6 +780,48 @@ fn run_stored_timeline_unknown_name_errors() {
     );
 }
 
+// ── Networking: scripts are host-authoritative (client-gated) ────────────────
+
+/// A networked `Client` must NOT run scripts — scripted behavior reaches it via
+/// replication of the resulting entity state, not local re-execution (which would
+/// double-fire `cmd()`/`emit()` into the client world and advance a per-entity
+/// `this` that lives outside the replicated/reconciled set, diverging freely).
+/// `Host` and single-player (`Standalone` / absent role) run normally.
+#[test]
+fn client_role_gates_script_execution() {
+    use lunco_core::NetworkRole;
+    // The shipped mission drives toward its first (far) waypoint on tick 1 — a
+    // reliable "did the script run?" probe (cf. rhai_scenario_drives_real_rover).
+    let src = include_str!("../rhai/examples/mission_plan.rhai");
+
+    // Client → gated off: on_tick never issues a DriveRover.
+    let (mut app, _r) = setup(src);
+    app.world_mut().insert_resource(NetworkRole::Client);
+    tick(&mut app);
+    assert!(
+        app.world().resource::<DriveLog>().0.is_empty(),
+        "a networked Client must not run scripts"
+    );
+
+    // Host → runs.
+    let (mut app2, _r2) = setup(src);
+    app2.world_mut().insert_resource(NetworkRole::Host);
+    tick(&mut app2);
+    assert!(
+        !app2.world().resource::<DriveLog>().0.is_empty(),
+        "a Host must run scripts"
+    );
+
+    // Standalone (the default single-player role) → runs.
+    let (mut app3, _r3) = setup(src);
+    app3.world_mut().insert_resource(NetworkRole::Standalone);
+    tick(&mut app3);
+    assert!(
+        !app3.world().resource::<DriveLog>().0.is_empty(),
+        "Standalone must run scripts"
+    );
+}
+
 // ── Lifecycle completeness: on_stop teardown + pause/resume ──────────────────
 
 /// `on_stop` runs when the scripted entity despawns (the teardown prune in

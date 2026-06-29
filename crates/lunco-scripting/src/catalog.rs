@@ -13,6 +13,17 @@
 //!   - `tools`   — registered `name::fn` tool libraries (incl. file-loaded ones).
 //!   - `commands`— every reflected `#[Command]` (the `cmd("…")` targets) + fields.
 //!   - `queries` — every registered `ApiQueryProvider` (the `query("…")` targets).
+//!
+//! TODO(autocomplete): build the completion *engine* on top of this — a
+//! `ScriptComplete { prefix, limit? }` query that filters + ranks this surface
+//! into kind-tagged candidates (`{ label, kind, detail }`) so every editor shares
+//! one correct, testable matcher instead of re-filtering the raw catalog.
+//! Candidate sources are already here (VERBS/HOOKS consts, the prelude AST walk,
+//! `lunco_tools::index`, `discover_commands`, the query registry). The egui popup
+//! UI is a further, separate consumer — and note the Modelica editor found egui
+//! `TextEdit`-overlapping popups fight upstream focus/selection bugs
+//! (`lunco-modelica/.../code_editor.rs`), so an external/LSP editor is the better
+//! first client. There is currently NO in-app rhai editor at all.
 
 #![cfg(feature = "rhai")]
 

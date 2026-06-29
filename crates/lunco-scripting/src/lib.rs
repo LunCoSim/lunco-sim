@@ -73,7 +73,9 @@ impl Plugin for LunCoScriptingPlugin {
 
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, repl::process_repl_commands);
-        app.add_systems(FixedUpdate, run_scripted_models);
+        // Host-authoritative: scripts run on the host + single-player, NOT on a
+        // networked client (see `scripts_run_here`).
+        app.add_systems(FixedUpdate, run_scripted_models.run_if(scripts_run_here));
 
         // World-bound rhai: a queue of (command_id, code) drained by an
         // exclusive system so scripts can `cmd()`/read the live `&mut World`.
@@ -132,7 +134,10 @@ impl Plugin for LunCoScriptingPlugin {
                     // Persistent per-entity scenario lifecycle (neutral driver,
                     // rhai backend).
                     world_bridge::tick_rhai_scenarios,
-                ),
+                )
+                    // Same host-authoritative gate as the python path above — a
+                    // predicting client must not run scripts (see `scripts_run_here`).
+                    .run_if(scripts_run_here),
             );
         }
 
@@ -152,6 +157,24 @@ impl Plugin for LunCoScriptingPlugin {
 
         commands::register_all_commands(app);
     }
+}
+
+/// Run condition: may scenario/script systems execute in THIS process?
+///
+/// Scripts are **host-authoritative** — they are the authoritative decision-maker
+/// for a scripted entity. They run on the `Host` and in single-player /
+/// headless (`Standalone`, or no role at all), but NOT on a networked `Client`.
+///
+/// The netcode is forward predict-and-smooth (no rewind/resimulate), so a client
+/// runs each `FixedUpdate` tick exactly once — but if scripts ran there they'd
+/// independently re-decide behavior the host already decided: double-firing
+/// `cmd()` commands and `emit()` telemetry into the client world, and advancing a
+/// per-entity `this` state that lives OUTSIDE the replicated / reconciled set and
+/// so would diverge from the host with nothing to correct it. A client must
+/// instead receive scripted behavior purely via replication of the resulting
+/// entity state. Mirrors cosim's identical gate (`lunco-cosim/src/lib.rs`).
+fn scripts_run_here(role: Option<Res<lunco_core::NetworkRole>>) -> bool {
+    !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client))
 }
 
 fn run_scripted_models(
