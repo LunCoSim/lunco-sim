@@ -187,6 +187,52 @@ fn seq_note_event(cur, evt) {
     cur
 }
 
+// ── Tasks: a BUILT-IN auto-advanced sequence (no on_tick/on_event needed) ─────
+//
+// The sequencer above needs three hooks wired by hand (on_start seeds the cursor,
+// on_tick calls run_steps, on_event calls seq_note_event). A *task* removes all
+// of that: declare it ONCE by assigning `this.task` in on_start, and the engine
+// advances it every tick and feeds it events automatically — the runtime calls
+// the `__run_task` / `__note_task_event` drivers below for you. This is the
+// built-in "do X, wait until Y, then Z" capability available to every script:
+//
+//   fn on_start(me) {
+//       this.task = seq([
+//           once(|m| drive_to(m, CP1)),         // run an action, advance
+//           wait_until(|m| arrived(m, CP1)),    // suspend until true
+//           wait(3.0),                          // suspend 3 sim-seconds
+//           wait_for("GO"),                     // suspend until event "GO"
+//           once(|m| drive_to(m, CP2)),
+//       ]);
+//   }
+//   // no on_tick, no on_event — the task drives itself. Step closures take the
+//   // host gid `m` (the cursor calls them as `act.call(me)`).
+//
+// rhai has no real coroutines (and wasm can't stack-switch), so a task is a
+// COOPERATIVE cursor advanced once per tick, not a suspended call stack — the
+// right model for a deterministic, replicated sim. Steps reuse the Layer-1
+// vocabulary (once/wait/wait_until/wait_for/step). A user on_tick/on_event still
+// runs if defined (for logic beyond the task).
+
+/// A runnable task from a step list — assign to `this.task` in on_start to have
+/// the engine advance it automatically. Sugar: `seq([...])` over the cursor model.
+fn seq(steps) { #{ steps: steps, cur: seq_init() } }
+
+/// True once task `t` has completed every step (`()` task → false).
+fn task_done(t) { t != () && t.cur.step >= t.steps.len() }
+
+/// Engine driver — advances `this.task` one tick. Called by the runtime after
+/// on_tick; not for direct use. No-op when no task was declared.
+fn __run_task(me) {
+    if this.task != () { this.task.cur = run_steps(me, this.task.steps, this.task.cur); }
+}
+
+/// Engine driver — feeds an event into `this.task`. Called by the runtime on each
+/// delivered event; not for direct use. No-op when no task was declared.
+fn __note_task_event(me, evt) {
+    if this.task != () { this.task.cur = seq_note_event(this.task.cur, evt); }
+}
+
 // ── Timeline (Layer 2: a mission as DATA, interpreted onto Layer 1) ──────────
 //
 // Layer 1 steps carry rhai CLOSURES; a TIMELINE step is pure DATA (a map of

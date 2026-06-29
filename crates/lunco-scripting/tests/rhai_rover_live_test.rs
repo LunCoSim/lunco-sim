@@ -368,6 +368,67 @@ fn run_scenario_command_attaches_and_runs() {
 }
 
 #[test]
+fn builtin_task_advances_with_no_on_tick() {
+    // The built-in task: declare `this.task = seq([...])` in on_start and the
+    // engine advances it every tick — NO on_tick hook. step0 emits A and
+    // advances; step1 is a wait_until(true) that clears in one tick; step2 emits B.
+    let source = r#"
+        fn on_start(me) {
+            this.task = seq([
+                once(|m| emit("A", 1)),
+                wait_until(|m| true),
+                once(|m| emit("B", 2)),
+            ]);
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+
+    tick(&mut app); // step0 → emit A, advance
+    tick(&mut app); // step1 wait_until(true) → advance
+    tick(&mut app); // step2 → emit B
+
+    let events = &app.world().resource::<EventLog>().0;
+    assert!(events.iter().any(|n| n == "A"), "task step0 should emit A; got {events:?}");
+    assert!(
+        events.iter().any(|n| n == "B"),
+        "task should self-advance (no on_tick) and emit B; got {events:?}"
+    );
+}
+
+#[test]
+fn builtin_task_waits_for_event_with_no_on_event() {
+    // A task's wait_for(name) step completes from a delivered event even though
+    // the script defines NO on_event — the engine feeds events into the task.
+    // on_tick only PRODUCES the event; receiving it is the built-in's job.
+    let source = r#"
+        fn on_start(me) {
+            this.sent = false;
+            this.task = seq([
+                wait_for("GO"),
+                once(|m| emit("DONE", 1)),
+            ]);
+        }
+        fn on_tick(me) {
+            if !this.sent { emit("GO", 1); this.sent = true; }
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+
+    tick(&mut app); // emits GO (into inbox); task still on wait_for
+    assert!(
+        !app.world().resource::<EventLog>().0.iter().any(|n| n == "DONE"),
+        "task must hold on wait_for(GO) before the event arrives"
+    );
+    tick(&mut app); // GO delivered → task feed advances past wait_for
+    tick(&mut app); // next step runs → emit DONE
+
+    assert!(
+        app.world().resource::<EventLog>().0.iter().any(|n| n == "DONE"),
+        "task should advance past wait_for(GO) via the engine event-feed (no on_event) and emit DONE"
+    );
+}
+
+#[test]
 fn rhai_event_delivered_to_on_event_next_tick() {
     // P3 frame-delayed event delivery: tick 1 emits PING, tick 2 the on_event
     // hook receives it and records a marker via emit("GOT_PING").

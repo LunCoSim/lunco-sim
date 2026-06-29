@@ -516,6 +516,13 @@ struct RhaiScenarioState {
 pub struct RhaiScenarioRuntime {
     engine: Engine,
     states: std::collections::HashMap<Entity, RhaiScenarioState>,
+    /// The prelude compiled to an `AST`, merged into every scenario's AST so its
+    /// helpers — including the engine-driven `__run_task` / `__note_task_event`
+    /// drivers — are resolvable by `call_fn` (which searches the AST, NOT the
+    /// engine's registered global modules). The prelude stays registered as a
+    /// global module too, for the runtime-resolution path used while a script's
+    /// own body executes.
+    prelude_ast: AST,
     /// Tool-library generation the engine's static modules were built from; a
     /// mismatch triggers a re-`refresh` so a `RegisterToolLibrary` hot-reloads.
     tool_gen: u64,
@@ -525,9 +532,13 @@ impl Default for RhaiScenarioRuntime {
     fn default() -> Self {
         let mut engine = build_world_engine();
         engine.on_print(|s| info!("[rhai] {s}"));
+        let prelude_ast = engine
+            .compile(PRELUDE)
+            .unwrap_or_else(|e| panic!("prelude.rhai must compile: {e}"));
         Self {
             engine,
             states: std::collections::HashMap::new(),
+            prelude_ast,
             // build_world_engine already refreshed at the current generation.
             tool_gen: crate::tool_libs::generation(),
         }
@@ -544,6 +555,13 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         use crate::scenario::CompileOutcome;
         match self.engine.compile(source) {
             Ok(ast) => {
+                // Merge the prelude's functions into the scenario AST so the
+                // engine-driven `__run_task`/`__note_task_event` (and every other
+                // prelude helper) are resolvable by `call_fn`. Merging prelude←user
+                // lets a user function win on any name/arity clash; the prelude has
+                // no top-level body, so the seed-run below still executes only the
+                // user's top level.
+                let ast = self.prelude_ast.merge(&ast);
                 let mut scope = rhai::Scope::new();
                 // Expose scenario parameters as a read-only `params` constant
                 // (native JSON→Dynamic, one hop). Empty / bad JSON → empty map,
@@ -594,8 +612,23 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         };
         // Seed the deterministic RNG for this hook: (entity, tick, hook).
         bridge_core::rng_begin(self_gid as u64, bridge_core::sim_tick() as u64, salt);
-        call_hook(&self.engine, &mut st.scope, &st.ast, name, self_gid, &mut st.this)
-            .map(|(msg, pos)| rhai_diagnostic(msg, pos))
+        let user = call_hook(&self.engine, &mut st.scope, &st.ast, name, self_gid, &mut st.this);
+        // After on_tick, advance the BUILT-IN task (the prelude `__run_task`
+        // driver) so a `this.task = seq([...])` declared in on_start runs itself
+        // with no on_tick boilerplate. No-op when the script declared no task.
+        let task = if matches!(hook, ScenarioHook::Tick) {
+            call_prelude_driver(
+                &self.engine,
+                &mut st.scope,
+                &st.ast,
+                "__run_task",
+                &mut st.this,
+                vec![Dynamic::from_int(self_gid)],
+            )
+        } else {
+            None
+        };
+        user.or(task).map(|(msg, pos)| rhai_diagnostic(msg, pos))
     }
 
     fn deliver_event(
@@ -614,8 +647,19 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             bridge_core::hash_str(&event.name),
         );
         let st = self.states.get_mut(&entity)?;
-        call_event_hook(&self.engine, &mut st.scope, &st.ast, self_gid, &mut st.this, evt)
-            .map(|(msg, pos)| rhai_diagnostic(msg, pos))
+        let user =
+            call_event_hook(&self.engine, &mut st.scope, &st.ast, self_gid, &mut st.this, evt.clone());
+        // Feed the event into the BUILT-IN task too, so `wait_for(name)` steps in a
+        // `this.task` complete without a hand-written on_event. No-op if no task.
+        let task = call_prelude_driver(
+            &self.engine,
+            &mut st.scope,
+            &st.ast,
+            "__note_task_event",
+            &mut st.this,
+            vec![Dynamic::from_int(self_gid), evt],
+        );
+        user.or(task).map(|(msg, pos)| rhai_diagnostic(msg, pos))
     }
 
     fn forget(&mut self, entity: Entity) {
@@ -729,6 +773,32 @@ fn call_event_hook(
     }
 }
 
+
+/// Call a built-in PRELUDE driver function `name` (a global-module fn, NOT in the
+/// user's AST) with `this` bound — for engine-driven hooks like task auto-advance
+/// that live in the prelude, so the AST-presence gate in [`call_hook`] would skip
+/// them. A missing function (a custom prelude without the driver) is benign.
+fn call_prelude_driver(
+    engine: &Engine,
+    scope: &mut rhai::Scope,
+    ast: &AST,
+    name: &str,
+    this: &mut Dynamic,
+    args: Vec<Dynamic>,
+) -> Option<(String, rhai::Position)> {
+    let options = rhai::CallFnOptions::new()
+        .eval_ast(false)
+        .rewind_scope(false)
+        .bind_this_ptr(this);
+    match engine.call_fn_with_options::<Dynamic>(options, scope, ast, name, args) {
+        Ok(_) => None,
+        Err(e) if matches!(*e, rhai::EvalAltResult::ErrorFunctionNotFound(..)) => None,
+        Err(e) => {
+            error!("[rhai] {name}() failed: {e}");
+            Some((e.to_string(), e.position()))
+        }
+    }
+}
 
 /// Build an error [`Diagnostic`] from a rhai error message + [`rhai::Position`]
 /// (line/col map straight across — no source needed).
