@@ -17,7 +17,7 @@ required-features = ["networking"]
 default = []
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
-networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode"]
+networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess"]
 # Client-prediction diagnostics (render-jitter / velocity / correction census in
 # `diagnostics.rs`). OFF by default → not compiled into normal/shipping builds.
 # Build with it when chasing netcode jitter; once compiled it's active unless
@@ -101,6 +101,10 @@ lightyear = { version = "0.26.4", default-features = false, optional = true, fea
 lunco-storage = { path = "../lunco-storage" }
 wtransport = "0.6.1"
 rustls-pemfile = "2"
+# Single-instance IPC for `luncosim://` deep-links: forward a clicked link to the
+# already-running app over a local socket (Unix domain socket / Windows named
+# pipe). Optional — only the full networking build needs it.
+interprocess = { version = "2", optional = true }
 
 # Browser (wasm): client-only WebTransport. Cert digest comes from the URL hash.
 [target.'cfg(target_family = "wasm")'.dependencies]

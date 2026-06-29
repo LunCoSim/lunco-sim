@@ -43,6 +43,49 @@ pub(crate) fn register_client_systems(app: &mut App) {
         ),
     );
     register_all_commands(app);
+
+    // Native deep-link plumbing. A clicked `luncosim://connect?…` link is always
+    // *staged for confirmation* (never auto-dialed) — a planted link must not
+    // silently redirect the session. Two sources feed the same `PendingConnect`:
+    //   - the single-instance IPC inbox (forwarded links + the launch arg), when
+    //     the binary wired `single_instance::acquire`; and
+    //   - a fallback argv scan for builds that didn't wire the IPC.
+    // wasm's `?connect=` stays auto-connect (web is trusted by design).
+    #[cfg(not(target_family = "wasm"))]
+    app.add_systems(
+        Update,
+        (
+            crate::single_instance::drain_deep_link_inbox,
+            seed_pending_from_deep_link_arg,
+        ),
+    );
+}
+
+/// Fallback (no IPC wired): scan argv once for a `luncosim:` deep link and stage
+/// it in [`PendingConnect`]. Skipped when a [`DeepLinkInbox`](crate::single_instance::DeepLinkInbox)
+/// exists — the IPC path already carries the launch arg, so this avoids a double
+/// prompt. Runs every frame but guarded by a `done` latch + the inbox check.
+#[cfg(not(target_family = "wasm"))]
+fn seed_pending_from_deep_link_arg(
+    inbox: Option<Res<crate::single_instance::DeepLinkInbox>>,
+    mut pending: ResMut<lunco_core::session::PendingConnect>,
+    mut done: Local<bool>,
+) {
+    if *done || inbox.is_some() {
+        return;
+    }
+    *done = true;
+    let Some(link) = std::env::args()
+        .find(|a| a.starts_with(&format!("{}:", crate::connect_link::SCHEME)))
+        .and_then(|a| crate::connect_link::parse_native(&a))
+    else {
+        return;
+    };
+    info!("[net] deep link → pending connect to {} (awaiting confirm)", link.address);
+    pending.request = Some(lunco_core::session::PendingConnectRequest {
+        address: link.address,
+        digest: link.digest,
+    });
 }
 
 /// **Runtime**: spawn the lightyear client entity for `server` (a `host:port`
@@ -55,7 +98,12 @@ pub(crate) fn register_client_systems(app: &mut App) {
 /// `sandbox.lunco.space` validates correctly on native builds. Netcode never
 /// validates the transport address (the upstream check is disabled), so its
 /// `server_addr` is just token data — a placeholder carrying the right port.
-pub(crate) fn spawn_client(commands: &mut Commands, server: &str, client_id: u64) -> Entity {
+pub(crate) fn spawn_client(
+    commands: &mut Commands,
+    server: &str,
+    client_id: u64,
+    digest: &str,
+) -> Entity {
     // Netcode needs a `SocketAddr` for its token, but never validates it against
     // the transport — the real dial is done by `WtUrlClientIo` below.
     let server_addr = SocketAddr::from(([127, 0, 0, 1], port_of(server)));
@@ -86,9 +134,19 @@ pub(crate) fn spawn_client(commands: &mut Commands, server: &str, client_id: u64
         ));
         // Both native and wasm: dial the hostname URL so DNS resolves and SNI
         // carries the domain name — required for CA cert validation on native.
+        // An explicit UI/command-supplied digest (Connect panel "Cert digest"
+        // field) wins; empty ⇒ fall back to the ambient source (env on native,
+        // URL `#hash` on wasm). Normalized to bare lowercase hex so a pasted
+        // colon-separated host digest (`ab:cd:…`) decodes.
+        let normalized = normalize_digest(digest);
+        let certificate_digest = if normalized.is_empty() {
+            client_cert_digest()
+        } else {
+            normalized
+        };
         ent.insert(crate::wt_client::WtUrlClientIo {
             url: format!("https://{server}"),
-            certificate_digest: client_cert_digest(),
+            certificate_digest,
         });
         ent.id()
     };
@@ -104,6 +162,12 @@ pub(crate) fn spawn_client(commands: &mut Commands, server: &str, client_id: u64
 #[lunco_core::Command(default)]
 pub struct JoinServer {
     pub address: String,
+    /// Optional self-signed cert SHA-256 digest to pin (hex; colons/whitespace
+    /// tolerated). Empty ⇒ fall back to the ambient digest source
+    /// ([`client_cert_digest`]: `LUNCO_CERT_DIGEST` on native, the URL `#hash` on
+    /// wasm). A browser joining a self-signed LAN host by IP must supply this.
+    #[reflect(default)]
+    pub digest: String,
 }
 
 /// Leave the current session and return to single-player (local sandbox).
@@ -117,17 +181,24 @@ fn on_join_server(
     existing: Query<Entity, With<Client>>,
     mut role: ResMut<NetworkRole>,
     mut status: ResMut<NetStatus>,
+    mut local: ResMut<LocalSession>,
 ) {
     // Drop any current connection first, then dial the new address.
     for e in &existing {
         commands.entity(e).despawn();
     }
     let address = crate::normalize_addr(&cmd.address);
-    spawn_client(&mut commands, &address, crate::next_client_id());
+    spawn_client(&mut commands, &address, crate::next_client_id(), &cmd.digest);
     *role = NetworkRole::Client;
     status.role = NetworkRole::Client;
     status.endpoint = address;
     status.connected = false;
+    // Clear any session carried over from a prior connection. Until the new
+    // host's Handshake lands, this client has no authoritative identity —
+    // leaving the stale `LocalSession` in place makes `update_client_netstatus`
+    // report `connected` and lets prediction/proxy systems act under the old
+    // session during the connect window. `on_leave_server` does the same reset.
+    local.0 = SessionId::LOCAL;
 }
 
 #[lunco_core::on_command(LeaveServer)]
@@ -161,6 +232,16 @@ lunco_core::register_commands!(on_join_server, on_leave_server);
 /// Parse the port out of a `host:port` string for the netcode placeholder
 /// address (default `5888`). The host half is irrelevant — `WtUrlClientIo`
 /// dials the full hostname URL; this is only used for the netcode token.
+/// Strip a cert digest to bare lowercase hex. The host prints/logs it
+/// colon-separated (`ab:cd:…`); `wt_client::from_hex` needs the colons and any
+/// stray whitespace gone, so accept whatever the user pastes.
+fn normalize_digest(d: &str) -> String {
+    d.chars()
+        .filter(char::is_ascii_hexdigit)
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
 fn port_of(server: &str) -> u16 {
     server
         .rsplit(':')

@@ -35,7 +35,7 @@ impl Plugin for LunCoNetworkingUiPlugin {
             .add_observer(on_net_disconnect_request)
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                draw_collaborator_cursors,
+                (draw_collaborator_cursors, draw_pending_connect_prompt),
             );
 
         #[cfg(feature = "workbench")]
@@ -56,12 +56,67 @@ fn on_net_connect_request(trigger: On<NetConnectRequest>, mut commands: Commands
     if address.is_empty() {
         return;
     }
-    commands.trigger(JoinServer { address });
+    commands.trigger(JoinServer {
+        address,
+        digest: trigger.digest.trim().to_string(),
+    });
 }
 
 /// Menu *Disconnect* → dispatch the typed [`LeaveServer`] command.
 fn on_net_disconnect_request(_trigger: On<NetDisconnectRequest>, mut commands: Commands) {
     commands.trigger(LeaveServer {});
+}
+
+/// While a deep link is awaiting confirmation ([`PendingConnect`]), draw a modal
+/// "Connect to X? [Join] [Cancel]". *Join* dispatches [`JoinServer`] with the
+/// link's address + digest; either choice clears the pending request. Gating an
+/// unsolicited link behind an explicit click stops a planted `luncosim://` /
+/// `?connect=` link from silently redirecting the session.
+fn draw_pending_connect_prompt(
+    mut contexts: EguiContexts,
+    mut pending: ResMut<lunco_core::session::PendingConnect>,
+    mut commands: Commands,
+) {
+    let Some(req) = pending.request.clone() else {
+        return;
+    };
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+    let mut decision: Option<bool> = None; // Some(true)=join, Some(false)=cancel
+    egui::Window::new("Connect to server?")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.label("A link is asking to connect to:");
+            ui.add_space(4.0);
+            ui.strong(&req.address);
+            if !req.digest.is_empty() {
+                ui.add_space(2.0);
+                ui.weak(format!("pinned cert digest: {}…", &req.digest[..req.digest.len().min(16)]));
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Join").clicked() {
+                    decision = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    decision = Some(false);
+                }
+            });
+        });
+    match decision {
+        Some(true) => {
+            commands.trigger(JoinServer {
+                address: req.address,
+                digest: req.digest,
+            });
+            pending.request = None;
+        }
+        Some(false) => pending.request = None,
+        None => {}
+    }
 }
 
 #[cfg(feature = "workbench")]
@@ -171,10 +226,30 @@ fn register_settings_menu(world: &mut World) {
             });
         }
         
+        // Per-peer opt-in: consent to be locked by a tutor broadcasting to Everyone.
+        let mut follow_opt_in = tut_settings.follow_opt_in;
+        if ui.checkbox(&mut follow_opt_in, "🤝 Let a tutor lock my view (opt in)")
+            .on_hover_text(
+                "Allow a tutor broadcasting to 'Everyone' to lock your view and input. \
+                 Off by default — you are never force-locked without consent. A tutor \
+                 targeting you specifically can still lock you.",
+            )
+            .changed()
+        {
+            world.trigger(crate::sync::SetFollowOptIn { enabled: follow_opt_in });
+        }
+
+        // The tutor lock applies to me only if I'm explicitly targeted, or it's a
+        // broadcast and I opted in. Only then is the manual toggle disabled.
+        let local_session = world.resource::<lunco_core::LocalSession>().0 .0;
+        let locked_for_me = tutor_status.tutor_active
+            && !tutor_status.allow_free_movement
+            && (tutor_status.target_client == Some(local_session)
+                || (tutor_status.target_client.is_none() && tut_settings.follow_opt_in));
+
         let mut follow_mode = tut_settings.follow_mode;
-        let can_toggle_follow = !tutor_status.tutor_active || tutor_status.allow_free_movement;
-        ui.add_enabled_ui(can_toggle_follow, |ui| {
-            let label = if tutor_status.tutor_active && !tutor_status.allow_free_movement {
+        ui.add_enabled_ui(!locked_for_me, |ui| {
+            let label = if locked_for_me {
                 "📖 Follow Mode (Locked by Tutor)"
             } else {
                 "📖 Follow Mode (Mirror tutor)"

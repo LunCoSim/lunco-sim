@@ -71,6 +71,14 @@ pub struct NetStatus {
     /// the workbench's Network menu can offer a sensible default with **no**
     /// lunco-networking dependency. Empty until the adapter seeds it.
     pub connect_hint: String,
+    /// **Host only**: best-guess `LAN_IP:port` a guest on the same network should
+    /// dial, pre-filled into the *Copy invite link* address field. Seeded by the
+    /// host adapter (primary non-loopback IPv4). Empty on clients / off-LAN.
+    pub invite_hint: String,
+    /// **Host only**: this run's self-signed cert digest (bare hex), embedded in
+    /// the invite link's `#fragment` so a browser guest can pin a self-signed
+    /// host. Empty when serving a CA cert (guests need no digest then).
+    pub invite_digest: String,
 }
 
 /// UI → wire bridge: "dial this server". Fired by the workbench's **Network**
@@ -81,12 +89,41 @@ pub struct NetStatus {
 pub struct NetConnectRequest {
     /// `host:port` — a hostname (`lunica.lunco.space:5888`) or `ip:port`.
     pub address: String,
+    /// Optional self-signed cert SHA-256 digest to pin (hex; colons/whitespace
+    /// tolerated — paste the host's printed digest as-is). Empty ⇒ normal CA
+    /// validation. A **browser** dialing a self-signed LAN/dev host by IP needs
+    /// this (it can't skip TLS validation); native bare-IP dials skip validation
+    /// and ignore it. The adapter forwards it to `JoinServer`.
+    pub digest: String,
 }
 
 /// UI → wire bridge: "leave the current session" (return to single-player).
 /// Counterpart to [`NetConnectRequest`]; the adapter re-dispatches `LeaveServer`.
 #[derive(Event, Clone, Debug, Default)]
 pub struct NetDisconnectRequest;
+
+/// A connect request that arrived from an **untrusted deep link** (a clicked
+/// `luncosim://connect?…` link, or the web `?connect=…#digest`) and is awaiting
+/// the user's confirmation. Unlike the menu's [`NetConnectRequest`] (an explicit
+/// in-app click), a link could be planted by a third party to silently redirect
+/// the session, so the UI shows a "Connect to X? [Join] [Cancel]" prompt while
+/// this is `Some`; only on *Join* does it become a `JoinServer`. The networking
+/// adapter seeds it (native arg parse / wasm URL); the UI clears it on either
+/// choice. Always-on seam (D7) so the prompt UI carries no networking dep.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct PendingConnect {
+    /// The pending link, or `None` when nothing awaits confirmation.
+    pub request: Option<PendingConnectRequest>,
+}
+
+/// The address + optional cert digest a [`PendingConnect`] is asking to dial.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingConnectRequest {
+    /// `host:port` — hostname or `ip:port`.
+    pub address: String,
+    /// Self-signed cert digest to pin, or empty for CA validation.
+    pub digest: String,
+}
 
 /// This peer's own session id. [`SessionId::LOCAL`] until a client handshake
 /// replaces it. Stamped as `origin` on every outgoing mutation so the host can
@@ -302,6 +339,16 @@ impl SessionRbac {
             return false;
         };
         if !session.authenticated {
+            return false;
+        }
+        // A trusted session must carry a **server-issued token**. The host mints one
+        // per connection (`on_server_connected`) and for its own Owner session
+        // (`setup_host_rbac`); a session that reached the map without a token (e.g. a
+        // name-only `UpdateProfile` from an origin the server never issued) is not
+        // authorized. This is what stops the token-less Observer→Operator
+        // self-promotion (review M2) — authority now requires a credential the
+        // server, not the client, created.
+        if session.token.is_none() {
             return false;
         }
         // Role-lattice check lives on `AuthorityRole::satisfies` (Owner ⊇ all;
@@ -760,14 +807,14 @@ mod tests {
             username: "Player A".to_string(),
             role: AuthorityRole::Operator,
             authenticated: true,
-            token: None,
+            token: Some("srv-token-a".to_string()),
         });
         rbac.sessions.insert(B.0, UserSession {
             session_id: B,
             username: "Player B".to_string(),
             role: AuthorityRole::Operator,
             authenticated: true,
-            token: None,
+            token: Some("srv-token-b".to_string()),
         });
 
         // The owner may issue control commands.
@@ -792,7 +839,7 @@ mod tests {
                 username: "Observer".to_string(),
                 role: AuthorityRole::Observer,
                 authenticated: true,
-                token: None,
+                token: Some(format!("srv-token-{}", s.0)),
             });
         }
         // Owner-Observer A may drive what it owns, and possess/structural commands.
@@ -812,5 +859,20 @@ mod tests {
             token: None,
         });
         assert!(authorize(&reg, &unauth_rbac, A, "DriveRover", Some(R1)).is_err());
+
+        // M2: a session that is `authenticated` but carries NO server-issued token
+        // is rejected even for an entity it owns. This is the gate that stops a
+        // name-only `UpdateProfile` from minting authority — a credential the
+        // server (not the client) created is now required.
+        let mut tokenless_rbac = SessionRbac::default();
+        tokenless_rbac.sessions.insert(A.0, UserSession {
+            session_id: A,
+            username: "Player A".to_string(),
+            role: AuthorityRole::Operator,
+            authenticated: true,
+            token: None,
+        });
+        assert!(authorize(&reg, &tokenless_rbac, A, "DriveRover", Some(R1)).is_err());
+        assert!(authorize(&reg, &tokenless_rbac, A, "PossessVessel", Some(R1)).is_err());
     }
 }

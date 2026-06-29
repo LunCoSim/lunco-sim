@@ -16,8 +16,12 @@
 //! With the feature off the plugin is a no-op and single-player is unaffected.
 
 use bevy::prelude::*;
-#[cfg(not(target_family = "wasm"))]
-use std::net::SocketAddr;
+
+/// Connect deep-link URL format (`luncosim://connect?address=…&digest=…` and the
+/// web `?connect=…#digest` form) — pure, always compiled so the host's invite
+/// link builder and the native arg parser work regardless of the `networking`
+/// feature.
+pub mod connect_link;
 
 #[cfg(feature = "networking")]
 mod protocol;
@@ -31,6 +35,12 @@ pub mod sync;
 mod server;
 #[cfg(feature = "networking")]
 mod client;
+/// Native single-instance deep-link forwarding: route a clicked `luncosim://`
+/// link into the already-running app over a local socket (else become primary).
+/// (OS *scheme registration* is a desktop-integration concern and lives in the
+/// app crate `lunco-sandbox`, not here — this crate only parses + dials.)
+#[cfg(all(feature = "networking", not(target_family = "wasm")))]
+pub mod single_instance;
 /// Browser-only WebTransport client IO that dials a **hostname URL**
 /// (`https://lunica.lunco.space:5888`) so a real CA cert validates with no
 /// digest — lightyear's built-in `WebTransportClientIo` only dials
@@ -81,11 +91,9 @@ impl NetworkMode {
                 }
                 "--connect" => {
                     let raw = args.get(i + 1).cloned().unwrap_or_default();
-                    // Distinct per process so two clients get distinct sessions.
-                    let client_id = std::process::id() as u64;
                     return Some(NetworkMode::Connect {
                         server: normalize_addr(&raw),
-                        client_id,
+                        client_id: next_client_id(),
                     });
                 }
                 _ => {}
@@ -162,13 +170,9 @@ impl NetworkMode {
         if addr.trim().is_empty() {
             return None;
         }
-        #[cfg(target_family = "wasm")]
-        let client_id = browser_client_id();
-        #[cfg(not(target_family = "wasm"))]
-        let client_id = std::process::id() as u64;
         Some(NetworkMode::Connect {
             server: normalize_addr(addr),
-            client_id,
+            client_id: next_client_id(),
         })
     }
 }
@@ -186,9 +190,11 @@ pub(crate) fn normalize_addr(raw: &str) -> String {
     }
 }
 
-/// A distinct client id for a new connection: per-tab on wasm
-/// ([`browser_client_id`]), per-process on native. Used by `JoinServer` and the
-/// auto-connect path.
+/// A distinct **netcode connection id** for a new connection. This is only the
+/// transport-level peer handle — it no longer determines authority identity (the
+/// host assigns a server-side `SessionId` at connect; see
+/// `server::AssignedSessions`). Drawn from fresh entropy so two clients can't
+/// collide, fixing the old `std::process::id()` reuse across machines (review H5).
 pub(crate) fn next_client_id() -> u64 {
     #[cfg(target_family = "wasm")]
     {
@@ -196,23 +202,8 @@ pub(crate) fn next_client_id() -> u64 {
     }
     #[cfg(not(target_family = "wasm"))]
     {
-        std::process::id() as u64
+        lunco_core::ids::random_u64()
     }
-}
-
-/// Resolve a `host:port` string to a [`SocketAddr`] for the **native** netcode
-/// path (hostnames resolve via DNS). Falls back to `127.0.0.1:5888`. Browsers
-/// never call this — they dial the hostname URL directly.
-#[cfg(not(target_family = "wasm"))]
-pub(crate) fn resolve_socket_addr(server: &str) -> SocketAddr {
-    use std::net::ToSocketAddrs;
-    server
-        .to_socket_addrs()
-        .ok()
-        .and_then(|mut it| it.next())
-        .unwrap_or_else(|| {
-            SocketAddr::from(([127, 0, 0, 1], lunco_core::session::DEFAULT_HOST_PORT))
-        })
 }
 
 /// The address the in-sim *Connect* button should default to: the page origin

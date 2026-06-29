@@ -194,11 +194,32 @@ pub struct DespawnReplicationMsg {
     pub gid: u64,
 }
 
-/// Host → a freshly-connected client: your session id + the current tick.
+/// Host → a freshly-connected client: your **server-assigned** session id, the
+/// current tick, and a server-issued auth token. The session id is allocated from
+/// server entropy (the client cannot pick or guess it — review H4/H5); the token
+/// is the credential the client holds to prove it owns this session (review M2).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HandshakeMsg {
     pub session: u64,
     pub tick: u64,
+    pub token: String,
+}
+
+/// Client-side store for the server-issued auth token received in the handshake.
+/// Empty on host/standalone. Held as proof-of-possession of the server-assigned
+/// session for a future challenge/elevation path (review M2).
+#[derive(Resource, Default, Clone, Debug)]
+pub struct SessionCredential {
+    pub token: Option<String>,
+}
+
+/// Two low-use resources bundled so [`drain_sync_inbox`] stays within Bevy's
+/// 16-param ceiling: the client's session-credential store (handshake) and the
+/// clock (tutor-status timestamps).
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct InboundClientCtx<'w> {
+    credential: ResMut<'w, SessionCredential>,
+    time: Res<'w, Time>,
 }
 
 /// Host → clients: the authoritative who-owns-what map (`gid → session`).
@@ -217,6 +238,49 @@ pub struct OwnershipMsg {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProfilesMsg {
     pub entries: Vec<(u64, String, [u8; 3])>,
+}
+
+/// Avatar pose as it crosses the wire: position, rotation, big-space cell, and
+/// optional ephemeris id.
+pub type WireAvatarState = ([f32; 3], [f32; 4], [i64; 3], Option<i32>);
+/// Decoded avatar pose (as held in [`TutorStatusResource`]).
+pub type AvatarState = (Vec3, Quat, CellCoord, Option<i32>);
+
+/// Pack an avatar pose for the wire. One definition shared by the tutor, student,
+/// and share-perspective senders so the field order can't drift between them.
+fn encode_avatar_state(transform: &Transform, cell: &CellCoord, ephem_id: Option<i32>) -> WireAvatarState {
+    (
+        transform.translation.to_array(),
+        transform.rotation.to_array(),
+        [cell.x, cell.y, cell.z],
+        ephem_id,
+    )
+}
+
+/// Inverse of [`encode_avatar_state`]: decode a wire avatar pose for local use.
+fn decode_avatar_state(w: WireAvatarState) -> AvatarState {
+    let (pos, rot, cell, ephem_id) = w;
+    (
+        Vec3::from_array(pos),
+        Quat::from_array(rot),
+        CellCoord { x: cell[0], y: cell[1], z: cell[2] },
+        ephem_id,
+    )
+}
+
+/// Build the `(session, name, color)` wire rows for a [`ProfilesMsg`] from the
+/// authoritative [`SessionProfiles`], filling a deterministic per-session color
+/// for any session that has no explicit one. Shared by the periodic broadcast and
+/// the connect-time replay so the two can't drift.
+pub(crate) fn profile_wire_entries(profiles: &SessionProfiles) -> Vec<(u64, String, [u8; 3])> {
+    profiles
+        .profiles
+        .iter()
+        .map(|(&s, n)| {
+            let color = profiles.colors.get(&s).copied().unwrap_or_else(|| generate_user_color(s));
+            (s, n.clone(), color)
+        })
+        .collect()
 }
 
 /// Host/client update for mouse cursor positions.
@@ -323,6 +387,13 @@ pub struct TutorialSettings {
     /// Whether the tutor allows students/followers to move freely (disables continuous follow lock).
     #[serde(skip)]
     pub allow_free_movement: bool,
+    /// Local consent: whether *this* user allows a **broadcasting** tutor (one that
+    /// targets Everyone) to lock its view. Opt-in, default `false` — a broadcast
+    /// `TutorStatus` can no longer freeze a peer that hasn't agreed to follow. An
+    /// explicitly-targeted student (`target_client == me`) is a deliberate 1:1
+    /// selection and is honored regardless of this flag. Session-transient (`skip`).
+    #[serde(skip)]
+    pub follow_opt_in: bool,
 }
 
 impl Default for TutorialSettings {
@@ -336,6 +407,9 @@ impl Default for TutorialSettings {
             // targeted clients auto-enter follow mode (`follow_mode =
             // !allow_free_movement`). The tutor can opt into free movement.
             allow_free_movement: false,
+            // Opt-out by default: a broadcast tutor must not seize a peer that
+            // hasn't consented. See `follow_opt_in`.
+            follow_opt_in: false,
         }
     }
 }
@@ -701,20 +775,30 @@ pub fn apply_sync_command(
 ///
 /// Returns whether the arm should keep processing:
 /// - non-host peer → `true` (clients never gate; they trust the host-stamped relay),
-/// - host + authenticated sender → `true` (caller stamps + relays + consumes),
-/// - host + unauthenticated sender → `false` (caller `continue`s: not relayed, not consumed).
+/// - host + `Operator`-or-higher sender → `true` (caller stamps + relays + consumes),
+/// - host + Observer/unauthenticated sender → `false` (caller `continue`s: not relayed, not consumed).
 ///
-/// Gated at `Observer` (any authenticated session), **not** `Operator`: teaching is
-/// a UI toggle and a fresh client is only an Observer until it sets a name, so an
-/// Operator gate would silently drop an un-named client-tutor. The real protection
-/// is the sender-stamp + authenticated floor.
+/// Gated at **`Operator`**, not `Observer`. Every raw connection is auto-inserted as
+/// an authenticated `Observer` (`server.rs`), so an Observer floor is no gate at all:
+/// any peer could emit `TutorStatus { allow_free_movement: false }` and freeze every
+/// other peer's input + seize their camera. `Operator` is the same bar the control
+/// commands use, and a client reaches it only by sending an `UpdateProfile`
+/// (`on_update_profile_rbac`) — an intentional act, not a side effect of connecting.
+/// A legitimate tutor sets a profile before teaching, so this does not drop real
+/// tutors; it drops the passive/auto Observer that the threat relies on.
+///
+/// This closes the unprivileged-floor hole. It does NOT make teaching fully safe:
+/// `Operator` promotion is still token-less self-promotion (see `on_update_profile_rbac`),
+/// and a broadcast `TutorStatus` still locks *all* peers rather than only opted-in
+/// followers. Real fixes — verified-token auth and per-peer follow opt-in — are
+/// tracked separately (review H4/M2 and target opt-in).
 #[inline]
 fn authed_for_avatar_relay(
     role: &NetworkRole,
     rbac: &lunco_core::session::SessionRbac,
     sender: SessionId,
 ) -> bool {
-    !role.is_host() || rbac.is_authorized(sender, lunco_core::session::AuthorityRole::Observer)
+    !role.is_host() || rbac.is_authorized(sender, lunco_core::session::AuthorityRole::Operator)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -723,6 +807,7 @@ pub fn drain_sync_inbox(
     mut commands: Commands,
     role: Res<NetworkRole>,
     mut local: ResMut<LocalSession>,
+    mut ctx: InboundClientCtx,
     mut tick: ResMut<SimTick>,
     mut pending_spawns: ResMut<PendingReplicatedSpawns>,
     mut snapshots: ResMut<IncomingSnapshots>,
@@ -736,7 +821,6 @@ pub fn drain_sync_inbox(
     mut outbox: ResMut<SyncOutbox>,
     mut tutor_status: ResMut<TutorStatusResource>,
     mut tutorial_settings: ResMut<TutorialSettings>,
-    time: Res<Time>,
     // Resolves a replicated `Despawn`'s gid back to its local proxy entity (O(1)).
     entities: Res<ApiEntityRegistry>,
 ) {
@@ -770,12 +854,17 @@ pub fn drain_sync_inbox(
                 });
             }
             SyncEnvelope::Snapshot(s) => {
+                // Authority: only the host produces snapshots; clients adopt them.
+                // The host must never ingest a client-sent Snapshot into its own
+                // `IncomingSnapshots` (it would let a client move host-authoritative
+                // bodies). Same guard the Despawn arm enforces.
+                if role.is_host() {
+                    continue;
+                }
                 // Adopt host simulation clock (keeps remote interpolation in sync).
-                if !role.is_host() {
-                    let host_tick = s.tick;
-                    if tick.0 < host_tick {
-                        tick.0 = host_tick;
-                    }
+                let host_tick = s.tick;
+                if tick.0 < host_tick {
+                    tick.0 = host_tick;
                 }
                 for entry in s.entries {
                     // Dequantize once; reuse for both the f32 render-space `t`
@@ -801,6 +890,14 @@ pub fn drain_sync_inbox(
                 }
             }
             SyncEnvelope::Spawn(spawn) => {
+                // Authority: only the host spawns replicated entities; clients apply.
+                // Without this guard any client could push an arbitrary catalog spawn
+                // pinned to an attacker-chosen gid (`apply_replicated_spawns` is not
+                // role-gated), colliding with an existing GlobalEntityId and corrupting
+                // registry resolution / snapshot routing / despawn. Mirror Despawn.
+                if role.is_host() {
+                    continue;
+                }
                 pending_spawns.0.push(ReplicatedSpawn {
                     gid: spawn.gid,
                     entry_id: spawn.entry_id,
@@ -828,6 +925,13 @@ pub fn drain_sync_inbox(
                 if !role.is_host() {
                     local.0 = SessionId(h.session);
                     tick.0 = h.tick;
+                    // Hold the server-issued token. The host already binds this
+                    // client's authority to its connection (the inbound sender is the
+                    // server-assigned session, never a value from the wire), so the
+                    // token is the client's proof-of-possession for a future
+                    // challenge/elevation path — stored now so the handshake field is
+                    // load-bearing rather than dead.
+                    ctx.credential.token = Some(h.token);
                     info!("[net] handshake accepted: assigned session={}", h.session);
                 }
             }
@@ -912,29 +1016,38 @@ pub fn drain_sync_inbox(
                     tutor_status.avatar_state = msg.avatar_state.map(decode_avatar_state);
 
                     // Update timestamp and active status
-                    let elapsed = time.elapsed_secs_f64();
+                    let elapsed = ctx.time.elapsed_secs_f64();
                     tutor_status.last_received_time = Some(elapsed);
 
-                    let is_targeted = msg.target_client.is_none()
-                        || msg.target_client == Some(local.0.0);
+                    // Per-peer follow opt-in. The network may force *this* peer's
+                    // follow lock only when the peer consents:
+                    //   - explicit target (`target_client == me`) → deliberate 1:1
+                    //     selection, always honored;
+                    //   - broadcast (`target_client == None`) → only locks peers that
+                    //     opted in (`follow_opt_in`).
+                    // A non-consenting peer's `follow_mode` is left untouched (its own
+                    // manual choice stands), so one broadcast can no longer freeze every
+                    // peer in the session — the residual half of review H2.
+                    let is_explicitly_targeted = msg.target_client == Some(local.0.0);
+                    let is_broadcast = msg.target_client.is_none();
+                    let consented = is_explicitly_targeted
+                        || (is_broadcast && tutorial_settings.follow_opt_in);
 
-                    // If tutor was previously inactive and client is targeted, initialize follow mode
-                    if !tutor_status.tutor_active {
-                        if is_targeted {
+                    if consented {
+                        if !tutor_status.tutor_active {
+                            // First status from this tutor: enter follow unless the
+                            // tutor allows free movement.
                             tutorial_settings.follow_mode = !msg.allow_free_movement;
-                        }
-                    } else {
-                        // If tutor settings changed from locked to free movement, release follow mode
-                        let was_locked = !tutor_status.allow_free_movement;
-                        if was_locked && msg.allow_free_movement {
-                            tutorial_settings.follow_mode = false;
-                        }
-                        // If tutor settings changed from free movement to locked, force follow mode
-                        if !msg.allow_free_movement {
-                            if is_targeted {
-                                tutorial_settings.follow_mode = true;
-                            } else {
+                        } else {
+                            let was_locked = !tutor_status.allow_free_movement;
+                            // Tutor flipped locked → free: release the lock (the peer
+                            // may still re-follow voluntarily).
+                            if was_locked && msg.allow_free_movement {
                                 tutorial_settings.follow_mode = false;
+                            }
+                            // Tutor flipped free → locked: re-engage the lock.
+                            if !msg.allow_free_movement {
+                                tutorial_settings.follow_mode = true;
                             }
                         }
                     }
@@ -969,8 +1082,7 @@ pub fn drain_sync_inbox(
                 {
                     tutor_status.observed_student_doc = msg.active_doc;
                     tutor_status.observed_student_perspective = msg.active_perspective.clone();
-                    tutor_status.observed_student_avatar_state =
-                        msg.avatar_state.map(decode_avatar_state);
+                    tutor_status.observed_student_avatar_state = msg.avatar_state.map(decode_avatar_state);
                 }
             }
             SyncEnvelope::SharePerspective(mut msg) => {
@@ -1485,37 +1597,11 @@ pub fn send_student_status_updates(
 fn capture_avatar_state(
     q_avatar: &Query<(&Transform, &CellCoord, &ChildOf), With<LocalAvatar>>,
     q_reference_frames: &Query<&CelestialReferenceFrame>,
-) -> Option<([f32; 3], [f32; 4], [i64; 3], Option<i32>)> {
+) -> Option<WireAvatarState> {
     q_avatar.iter().next().map(|(transform, cell, child_of)| {
         let ephem_id = q_reference_frames.get(child_of.0).ok().map(|rf| rf.ephemeris_id);
-        (
-            transform.translation.to_array(),
-            transform.rotation.to_array(),
-            [cell.x, cell.y, cell.z],
-            ephem_id,
-        )
+        encode_avatar_state(transform, cell, ephem_id)
     })
-}
-
-/// Decode the positional avatar wire tuple into engine types
-/// (`Vec3`/`Quat`/`CellCoord`). Inverse of [`capture_avatar_state`] — same field
-/// order: position, rotation, cell, ephemeris id.
-///
-/// CQ-112: was duplicated in the `TutorStatus`/`StudentStatus` receive arms and
-/// the one-shot look-at snap.
-fn decode_avatar_state(
-    (pos, rot, cell, ephem_id): ([f32; 3], [f32; 4], [i64; 3], Option<i32>),
-) -> (Vec3, Quat, CellCoord, Option<i32>) {
-    (
-        Vec3::from_array(pos),
-        Quat::from_array(rot),
-        CellCoord {
-            x: cell[0],
-            y: cell[1],
-            z: cell[2],
-        },
-        ephem_id,
-    )
 }
 
 /// Snap every `LocalAvatar` to a target pose, migrating to the grid that owns
@@ -1820,10 +1906,9 @@ fn setup_host_rbac(
         username: "Host".to_string(),
         role: lunco_core::session::AuthorityRole::Owner,
         authenticated: true,
-        // No token: `is_authorized` does not verify tokens yet. Carrying a fake
-        // constant here only made the auth look stronger than it is. Populate this
-        // (and check it) when real authentication lands.
-        token: None,
+        // The host issues its own credential — `is_authorized` now requires a
+        // server-issued token (review M2), and the host trivially holds one.
+        token: Some(lunco_core::ids::random_token()),
     });
 }
 
@@ -1837,21 +1922,24 @@ fn on_update_profile_rbac(
     let origin = guard.0.unwrap_or(local.0);
     let username = trigger.event().name.clone();
 
-    let session = rbac.sessions.entry(origin.0).or_insert_with(|| {
-        lunco_core::session::UserSession {
-            session_id: origin,
-            username: username.clone(),
-            role: lunco_core::session::AuthorityRole::Operator, // Promote to Operator on name set
-            authenticated: true, // Mark authenticated!
-            token: None, // Tokens are not verified yet; see `setup_host_rbac`.
-        }
-    });
-    session.username = username;
-    session.authenticated = true;
-    if session.role == lunco_core::session::AuthorityRole::Observer {
-        session.role = lunco_core::session::AuthorityRole::Operator; // Promote observers to operators on name set
+    // Promote only a session the SERVER already issued (it carries a server token
+    // from `on_server_connected`/`setup_host_rbac`). A name alone no longer mints an
+    // authenticated session — that was the token-less self-promotion of review M2.
+    // An origin not in the map (or tokenless) is a profile update from a source the
+    // server never authenticated; ignore it rather than fabricate authority.
+    let Some(session) = rbac.sessions.get_mut(&origin.0) else {
+        debug!("[net] RBAC: UpdateProfile from non-issued session {} ignored", origin.0);
+        return;
+    };
+    if session.token.is_none() {
+        warn!("[net] RBAC: session {} has no server token; refusing promotion", origin.0);
+        return;
     }
-    info!("[net] RBAC: session {} authenticated as '{}' with role {:?}", origin.0, session.username, session.role);
+    session.username = username;
+    if session.role == lunco_core::session::AuthorityRole::Observer {
+        session.role = lunco_core::session::AuthorityRole::Operator; // setting a name grants Operator
+    }
+    info!("[net] RBAC: session {} set name '{}' (role {:?})", origin.0, session.username, session.role);
 }
 
 /// Set Teach Mode command.
@@ -1932,6 +2020,27 @@ fn on_set_allow_free_movement(
     info!("[net] Command: Allow Free Movement set to {}", settings.allow_free_movement);
 }
 
+/// Set Follow Opt-In command: local consent to be locked by a broadcasting tutor.
+#[lunco_core::Command(default)]
+pub struct SetFollowOptIn {
+    pub enabled: bool,
+}
+
+#[lunco_core::on_command(SetFollowOptIn)]
+fn on_set_follow_opt_in(
+    trigger: On<SetFollowOptIn>,
+    mut settings: ResMut<TutorialSettings>,
+) {
+    settings.follow_opt_in = trigger.event().enabled;
+    // Opting out while currently following a broadcast releases the lock now,
+    // rather than waiting for the tutor to flip free-movement. An explicitly
+    // targeted lock is unaffected (it doesn't depend on this flag).
+    if !settings.follow_opt_in {
+        settings.follow_mode = false;
+    }
+    info!("[net] Command: Follow Opt-In set to {}", settings.follow_opt_in);
+}
+
 /// Share Perspective command (Look-At).
 #[lunco_core::Command(default)]
 pub struct SharePerspective {}
@@ -1979,6 +2088,7 @@ lunco_core::register_commands!(
     on_set_observe_mode,
     on_share_perspective,
     on_set_allow_free_movement,
+    on_set_follow_opt_in,
 );
 
 /// Host: when ObstacleFieldSpec is updated, broadcast UpdateObstacleFieldSpec command to all clients.
@@ -2031,6 +2141,7 @@ impl Plugin for SyncPlugin {
             .init_resource::<CursorSettings>()
             .init_resource::<TutorialSettings>()
             .init_resource::<TutorStatusResource>()
+            .init_resource::<SessionCredential>()
             .init_resource::<Presence>()
             .register_settings_section::<CursorSettings>()
             .register_settings_section::<TutorialSettings>()
@@ -2160,7 +2271,7 @@ mod codec_roundtrip {
         // Lock that: Handshake stays at index 3, Despawn is index 11. If someone
         // re-inserts a variant mid-enum, Handshake's discriminant shifts and this
         // fails loudly.
-        let handshake = serialize_env(&SyncEnvelope::Handshake(HandshakeMsg { session: 1, tick: 2 }))
+        let handshake = serialize_env(&SyncEnvelope::Handshake(HandshakeMsg { session: 1, tick: 2, token: String::new() }))
             .expect("serialize");
         assert_eq!(&handshake[..4], &[3, 0, 0, 0], "Handshake discriminant moved");
         let despawn = serialize_env(&SyncEnvelope::Despawn(DespawnReplicationMsg { gid: 9 }))

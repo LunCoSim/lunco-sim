@@ -2546,6 +2546,60 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 match status.role {
                     NetworkRole::Host => {
                         ui.label(format!("Hosting · {}", status.endpoint));
+                        ui.separator();
+                        // Copy invite link. The address a guest should dial isn't
+                        // knowable from the host side (which interface?), so it's
+                        // editable — prefilled with the best-guess LAN IP:port the
+                        // adapter detected (`invite_hint`). The link carries the
+                        // self-signed cert digest in its `#fragment` so a browser
+                        // guest can pin it. Built inline (workbench keeps no
+                        // networking dep, D7); the canonical format lives in
+                        // `lunco_networking::connect_link`.
+                        let addr_id =
+                            ui.make_persistent_id("lunco_network_invite_address");
+                        let mut invite_addr = ui.data_mut(|d| {
+                            d.get_temp::<String>(addr_id)
+                                .unwrap_or_else(|| status.invite_hint.clone())
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Guest dials:");
+                            ui.text_edit_singleline(&mut invite_addr);
+                        });
+                        let digest = status.invite_digest.trim();
+                        let frag = if digest.is_empty() {
+                            String::new()
+                        } else {
+                            format!("#{digest}")
+                        };
+                        let a = invite_addr.trim();
+                        let enabled = !a.is_empty();
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(enabled, egui::Button::new("Copy web link"))
+                                .on_hover_text("https://lunica.lunco.space/?connect=… — opens in a browser")
+                                .clicked()
+                            {
+                                let link = format!(
+                                    "https://lunica.lunco.space/?connect={a}{frag}"
+                                );
+                                ui.ctx().copy_text(link);
+                            }
+                            let app_q = if digest.is_empty() {
+                                String::new()
+                            } else {
+                                format!("&digest={digest}")
+                            };
+                            if ui
+                                .add_enabled(enabled, egui::Button::new("Copy app link"))
+                                .on_hover_text("luncosim://connect?… — opens the desktop app")
+                                .clicked()
+                            {
+                                let link =
+                                    format!("luncosim://connect?address={a}{app_q}");
+                                ui.ctx().copy_text(link);
+                            }
+                        });
+                        ui.data_mut(|d| d.insert_temp(addr_id, invite_addr));
                     }
                     NetworkRole::Client => {
                         let state = if status.connected {
@@ -2582,6 +2636,23 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                             ui.label("Server:");
                             ui.text_edit_singleline(&mut address);
                         });
+                        // Optional self-signed cert digest to pin. A browser
+                        // joining a self-signed LAN/dev host by IP needs this
+                        // (it can't skip TLS validation); paste the digest the
+                        // host prints (`🔐 WebTransport cert digest: …`). Leave
+                        // blank for a CA-cert host or a native bare-IP dial.
+                        let digest_id =
+                            ui.make_persistent_id("lunco_network_menu_digest");
+                        let mut digest = ui
+                            .data_mut(|d| d.get_temp::<String>(digest_id))
+                            .unwrap_or_default();
+                        ui.horizontal(|ui| {
+                            ui.label("Cert digest:");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut digest)
+                                    .hint_text("optional — self-signed host"),
+                            );
+                        });
                         let enabled = !address.trim().is_empty();
                         if ui
                             .add_enabled(enabled, egui::Button::new("Connect"))
@@ -2589,10 +2660,12 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                         {
                             world.trigger(NetConnectRequest {
                                 address: address.clone(),
+                                digest: digest.clone(),
                             });
                             ui.close();
                         }
                         ui.data_mut(|d| d.insert_temp(id, address));
+                        ui.data_mut(|d| d.insert_temp(digest_id, digest));
                     }
                 }
             });

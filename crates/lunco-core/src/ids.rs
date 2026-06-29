@@ -52,6 +52,37 @@ pub fn make_id_53() -> u64 {
     }
 }
 
+/// Fresh 64 bits of unpredictable OS/browser entropy (not the time-sorted,
+/// sequential [`make_id_53`]). For security-sensitive or collision-sensitive
+/// values — netcode connection ids, server-assigned session ids, auth tokens —
+/// where guessability or process-id reuse matters.
+pub fn random_u64() -> u64 {
+    rand_entropy()
+}
+
+/// A server-assigned **session id** drawn from fresh OS/browser entropy — *not*
+/// the time-sorted, sequential [`make_id_53`]. The host allocates one of these per
+/// connection so a client can neither pick nor guess its own authority identity
+/// (review H4/H5); masked to the 53-bit JS-safe range (session ids travel through
+/// JSON to the web/MCP clients) and never `0`, which is reserved for the
+/// local/host session ([`crate::SessionId::LOCAL`]).
+pub fn random_session_id() -> u64 {
+    let v = rand_entropy() & 0x1F_FFFF_FFFF_FFFF;
+    if v == 0 {
+        1
+    } else {
+        v
+    }
+}
+
+/// A 128-bit unpredictable authentication token as lowercase hex. The host mints
+/// one per session at connect and hands it to the client in the handshake; it is
+/// the server-issued credential that makes [`crate::session::SessionRbac`]
+/// authority load-bearing instead of name-only (review M2).
+pub fn random_token() -> String {
+    format!("{:016x}{:016x}", rand_entropy(), rand_entropy())
+}
+
 /// Fresh instance entropy for [`make_id_53`]. This is the load-bearing fix for
 /// cross-process id uniqueness: a fixed constant made two freshly-started
 /// processes mint identical first-of-the-second ids, which the networking dedup
