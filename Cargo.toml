@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/lunco-core",
+    "crates/lunco-time",
     "crates/lunco-obc",
     "crates/lunco-fsw",
     "crates/lunco-controller",

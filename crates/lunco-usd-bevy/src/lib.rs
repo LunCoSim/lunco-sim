@@ -63,6 +63,15 @@ pub struct UsdBevyPlugin;
 
 impl Plugin for UsdBevyPlugin {
     fn build(&self, app: &mut App) {
+        // The mission-time spine provides `WorldTime` (the world animation clock)
+        // for `sample_usd_animation`. Guarded so a context that also adds it via
+        // `CelestialPlugin` is fine; where neither celestial nor a real clock UI
+        // runs, the spine still advances the world at the default 1× transport so
+        // authored USD animation plays.
+        if !app.is_plugin_added::<lunco_time::TimePlugin>() {
+            app.add_plugins(lunco_time::TimePlugin);
+        }
+
         // Core glTF/USD scene component types. The workspace runs bevy with
         // `default-features = false`, so bevy's `reflect_auto_register` is OFF
         // and these are NOT auto-registered. Any glTF `SceneRoot` we spawn (USD
@@ -105,6 +114,7 @@ impl Plugin for UsdBevyPlugin {
             .init_asset::<UsdSourceText>()
             .register_asset_loader(UsdSourceTextLoader)
             .register_type::<UsdPrimPath>()
+            .register_type::<UsdAnimated>()
             .init_resource::<DiagnosticLabelFont>()
             .init_resource::<DiagnosticLabelConfig>()
             .add_systems(Startup, load_diagnostic_label_font)
@@ -127,6 +137,14 @@ impl Plugin for UsdBevyPlugin {
                     reveal_placeholder_on_failure,
                     bake_pending_labels,
                 ),
+            )
+            // Per-frame USD animation: drive `UsdAnimated` transforms from authored
+            // `timeSamples` at each entity's resolved domain time. After the domain
+            // resolve so playheads/derived chains are current this frame; cheap
+            // (query is empty without animated prims).
+            .add_systems(
+                Update,
+                sample_usd_animation.after(lunco_time::DomainResolveSet),
             );
     }
 }
@@ -264,6 +282,19 @@ impl Default for UsdPrimPath {
 /// Prevents the system from re-processing the same entity on subsequent frames.
 #[derive(Component)]
 pub struct UsdVisualSynced;
+
+/// Marker: this entity's local `Transform` is driven by USD `timeSamples` on its
+/// xform ops (`xformOp:translate` / `xformOp:rotateXYZ` / `xformOp:scale`).
+///
+/// Stamped at instantiation (see [`prim_has_xform_time_samples`]) so the
+/// per-frame [`sample_usd_animation`] sampler iterates **only** animated entities
+/// (cheap query) rather than re-reading every prim. This is the entity half of
+/// the doc-19 animation funnel; the time source is the `lunco-time` `WorldTime`
+/// (world domain). Per-object / per-selection domains (a `TimeBinding` to a
+/// driven `TimeDomain`) layer on top of this later (doc 19 — T5).
+#[derive(Component, Reflect, Debug, Clone, Copy, Default)]
+#[reflect(Component)]
+pub struct UsdAnimated;
 
 /// Marker placed on a USD scene root that exists purely to render a
 /// preview thumbnail. Plugins that activate simulation side-effects on
@@ -739,6 +770,12 @@ fn instantiate_usd_prim(
             InheritedVisibility::default(),
             ViewVisibility::default(),
         ));
+
+        // Tag entities whose xform ops carry `timeSamples` so the per-frame
+        // `sample_usd_animation` sampler drives their `Transform` (doc 19).
+        if prim_has_xform_time_samples(reader, &sdf_path) {
+            commands.entity(entity).insert(UsdAnimated);
+        }
 
         // Spawn children with their transforms pre-populated so physics sees them correctly.
         // This is critical for wheel positions — they must be at the correct offsets from
@@ -1373,6 +1410,105 @@ pub fn read_vec3_f64(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<[f6
         if v.len() >= 3 { return Some([v[0], v[1], v[2]]); }
     }
     None
+}
+
+/// Time-sampled twin of [`read_vec3_f64`]: evaluates the attribute's
+/// `timeSamples` at `time` (held/linear via `openusd::usd::evaluate`), falling
+/// back to `default` when there are no samples. Same value-type coverage
+/// (`[f32;3]`/`[f64;3]` and the `Vec<f32>`/`Vec<f64>` forms).
+pub fn read_vec3_f64_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<[f64; 3]> {
+    if let Some(v) = reader.prim_attribute_value_at::<[f32; 3]>(path, attr, time) {
+        return Some([v[0] as f64, v[1] as f64, v[2] as f64]);
+    }
+    if let Some(v) = reader.prim_attribute_value_at::<[f64; 3]>(path, attr, time) {
+        return Some([v[0], v[1], v[2]]);
+    }
+    if let Some(v) = reader.prim_attribute_value_at::<Vec<f32>>(path, attr, time) {
+        if v.len() >= 3 { return Some([v[0] as f64, v[1] as f64, v[2] as f64]); }
+    }
+    if let Some(v) = reader.prim_attribute_value_at::<Vec<f64>>(path, attr, time) {
+        if v.len() >= 3 { return Some([v[0], v[1], v[2]]); }
+    }
+    None
+}
+
+/// True iff `attr` on `path` actually carries `timeSamples` (not just a
+/// `default`). The sampler uses this per-channel so it writes **only** animated
+/// channels — a static `xformOp:rotateXYZ` is left exactly as instantiated.
+pub fn attr_has_time_samples(reader: &UsdData, path: &SdfPath, attr: &str) -> bool {
+    path.append_property(attr)
+        .ok()
+        .and_then(|ap| reader.field(&ap, "timeSamples"))
+        .is_some_and(|v| matches!(v, Value::TimeSamples(_)))
+}
+
+/// The xform ops the animation sampler drives, in compose order (T, R, S).
+pub const ANIMATED_XFORM_OPS: [&str; 3] =
+    ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"];
+
+/// True iff any of the entity's xform ops carries `timeSamples` — i.e. the prim
+/// is animated and the entity should get the [`UsdAnimated`] marker.
+pub fn prim_has_xform_time_samples(reader: &UsdData, path: &SdfPath) -> bool {
+    ANIMATED_XFORM_OPS
+        .iter()
+        .any(|op| attr_has_time_samples(reader, path, op))
+}
+
+/// Sample one xform-op channel **only if it is animated** (has `timeSamples`),
+/// evaluated at `time`. Returns `None` for static channels so the caller leaves
+/// the instantiated value untouched.
+fn sample_animated_vec3(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<[f64; 3]> {
+    if !attr_has_time_samples(reader, path, attr) {
+        return None;
+    }
+    read_vec3_f64_at(reader, path, attr, time)
+}
+
+/// Per-frame USD animation sampler (doc 19 — the animation funnel / T5).
+///
+/// For every [`UsdAnimated`] entity, resolve its clock — the [`TimeBinding`]'d
+/// `TimeDomain` (per-object / per-selection / per-project / factory-scaled) via
+/// [`ResolvedDomains`], or the world clock when unbound — then evaluate its
+/// animated xform-op channels at that `local_t` and write the result to the
+/// entity's local `Transform`. Only channels carrying `timeSamples` are written;
+/// static channels keep their instantiated value. Runs in `Update` after the
+/// domain resolve ([`lunco_time::DomainResolveSet`]) and before the `PostUpdate`
+/// transform propagation (incl. big_space), so the pose is current before it
+/// propagates.
+///
+/// Time convention: authored `timeSample` times are interpreted in **seconds**
+/// (the sim's natural unit, `timeCodesPerSecond = 1`). Reading the stage's
+/// `timeCodesPerSecond` to scale `local_t`, the `overstep_fraction` for
+/// render-rate smoothing, and `RigidBody::Kinematic` enforcement for animated
+/// bodies are documented T5 follow-ups.
+pub fn sample_usd_animation(
+    world: Res<lunco_time::WorldTime>,
+    resolved: Res<lunco_time::ResolvedDomains>,
+    stages: Res<Assets<UsdStageAsset>>,
+    mut q: Query<
+        (&UsdPrimPath, &mut Transform, Option<&lunco_time::TimeBinding>),
+        With<UsdAnimated>,
+    >,
+) {
+    for (prim, mut tf, binding) in &mut q {
+        let Some(stage) = stages.get(&prim.stage_handle) else { continue };
+        let reader = &*stage.reader;
+        let Ok(sdf_path) = SdfPath::new(prim.path.as_str()) else { continue };
+
+        // Resolve this entity's clock: its bound `TimeDomain` (per-object /
+        // selection / project / factory), or the world clock when unbound.
+        let time = lunco_time::domain_time(&resolved, binding, &world);
+
+        if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:translate", time) {
+            tf.translation = Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
+        }
+        if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:rotateXYZ", time) {
+            tf.rotation = euler_xyz_deg_to_quat(Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32));
+        }
+        if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:scale", time) {
+            tf.scale = Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
+        }
+    }
 }
 
 /// Reads a 3-component vector attribute (`color3f` / `double3` / `float3`
@@ -2330,3 +2466,86 @@ mod wrap_tests {
     }
 }
 
+
+#[cfg(test)]
+mod animation_tests {
+    //! The USD animation sampler read path: `timeSamples` detection, time-aware
+    //! vec3 evaluation, and per-channel "animated only" sampling (doc 19).
+    use super::*;
+    use openusd::sdf::Path as SdfPath;
+
+    fn parse(usda: &str) -> UsdData {
+        openusd::usda::parse(usda).expect("parse USDA")
+    }
+
+    /// translate is keyframed (animated); rotateXYZ has only a default (static);
+    /// scale is absent.
+    const SCENE: &str = r#"#usda 1.0
+
+def Xform "Mover"
+{
+    double3 xformOp:translate.timeSamples = {
+        0: (0, 0, 0),
+        2: (20, 0, 0),
+    }
+    double3 xformOp:rotateXYZ = (0, 90, 0)
+}
+
+def Xform "Static"
+{
+    double3 xformOp:translate = (5, 0, 0)
+}
+"#;
+
+    #[test]
+    fn detects_animated_prims_by_xform_time_samples() {
+        let reader = parse(SCENE);
+        let mover = SdfPath::new("/Mover").unwrap();
+        let stat = SdfPath::new("/Static").unwrap();
+        assert!(prim_has_xform_time_samples(&reader, &mover));
+        assert!(!prim_has_xform_time_samples(&reader, &stat));
+        // Per-channel: translate animated, rotateXYZ not.
+        assert!(attr_has_time_samples(&reader, &mover, "xformOp:translate"));
+        assert!(!attr_has_time_samples(&reader, &mover, "xformOp:rotateXYZ"));
+    }
+
+    #[test]
+    fn samples_animated_channel_and_leaves_static_untouched() {
+        let reader = parse(SCENE);
+        let mover = SdfPath::new("/Mover").unwrap();
+
+        // Animated translate interpolates linearly: t=1.0 → halfway (10,0,0).
+        assert_eq!(
+            sample_animated_vec3(&reader, &mover, "xformOp:translate", 1.0),
+            Some([10.0, 0.0, 0.0])
+        );
+        // On a key.
+        assert_eq!(
+            sample_animated_vec3(&reader, &mover, "xformOp:translate", 2.0),
+            Some([20.0, 0.0, 0.0])
+        );
+        // Held past the last key (USD semantics).
+        assert_eq!(
+            sample_animated_vec3(&reader, &mover, "xformOp:translate", 99.0),
+            Some([20.0, 0.0, 0.0])
+        );
+        // rotateXYZ has only a default → the sampler must NOT touch it (None),
+        // so its instantiated pose is preserved.
+        assert_eq!(
+            sample_animated_vec3(&reader, &mover, "xformOp:rotateXYZ", 1.0),
+            None
+        );
+    }
+
+    #[test]
+    fn read_vec3_f64_at_falls_back_to_default_for_static() {
+        let reader = parse(SCENE);
+        let stat = SdfPath::new("/Static").unwrap();
+        // The raw time-aware reader returns the default at any time (value
+        // resolution), even though `sample_animated_vec3` gates it out.
+        assert_eq!(
+            read_vec3_f64_at(&reader, &stat, "xformOp:translate", 7.0),
+            Some([5.0, 0.0, 0.0])
+        );
+    }
+}

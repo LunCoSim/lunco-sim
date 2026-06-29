@@ -6692,6 +6692,7 @@ dependencies = [
  "lunco-storage",
  "lunco-terrain-globe",
  "lunco-theme",
+ "lunco-time",
  "lunco-workbench",
  "serde",
  "serde_json",
@@ -7166,6 +7167,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-time"
+version = "0.6.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-core",
+]
+
+[[package]]
 name = "lunco-tools"
 version = "0.1.0"
 
@@ -7272,6 +7281,7 @@ dependencies = [
  "lunco-assets",
  "lunco-core",
  "lunco-render",
+ "lunco-time",
  "openusd",
 ]
 

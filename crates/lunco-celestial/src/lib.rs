@@ -77,6 +77,15 @@ impl Plugin for CelestialPlugin {
 
         app.insert_resource(get_default_celestial_clock());
         app.init_resource::<TimeWarpState>();
+
+        // The unified mission-time spine (doc 19 — T1): MissionClock + transport +
+        // the derived `WorldTime` view. Guarded so a context that also adds it via
+        // another plugin (e.g. `UsdBevyPlugin` for the animation sampler) is fine.
+        if !app.is_plugin_added::<lunco_time::TimePlugin>() {
+            app.add_plugins(lunco_time::TimePlugin);
+        }
+        // Seed the spine's mission origin from the wall-seeded celestial epoch.
+        app.add_systems(Startup, seed_mission_clock_from_celestial);
         app.init_resource::<TerrainMapRegistry>();
         app.insert_resource(Gravity::surface());
         app.register_type::<TrajectoryView>();
@@ -119,15 +128,25 @@ impl Plugin for CelestialPlugin {
         // System ordering is critical:
         // 1. big_space propagation runs first (default PreUpdate ordering)
         // 2. Our systems run AFTER to override GlobalTransform with body rotation
+        // Compat-in: mirror the legacy `CelestialClock` knobs onto the transport
+        // authority *before* the spine steps.
+        app.add_systems(
+            PreUpdate,
+            sync_transport_from_celestial.before(lunco_time::TimeSpineSet),
+        );
+        // The spine (`advance_world_clock`, in `TimeSpineSet`) runs here; then the
+        // celestial chain consumes the derived epoch. `sync_celestial_from_world`
+        // copies the derived epoch back onto `CelestialClock.epoch` so
+        // `ephemeris_update_system` (and downstream) read the fresh value.
         app.add_systems(PreUpdate, (
-            celestial_clock_tick_system,
+            sync_celestial_from_world,
             ephemeris_update_system,
             body_rotation_system,
             tile_rotation_sync_system
                 .after(bevy::transform::TransformSystems::Propagate)
                 .after(big_space::prelude::BigSpaceSystems::PropagateHighPrecision),
             soi_transition_system,
-        ).chain());
+        ).chain().after(lunco_time::TimeSpineSet));
 
         app.add_systems(Update, (
             celestial_telemetry_system,
