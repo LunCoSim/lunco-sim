@@ -276,7 +276,7 @@ build_wasm() {
     # lunco-theme) and lightyear's netcode RNG pull getrandom 0.3, which refuses
     # to compile for wasm32-unknown-unknown unless a backend is named. The
     # browser-crypto backend is correct here; the `wasm_js` *feature* is enabled
-    # on getrandom in lunco-client's wasm deps (cfg + feature are both required).
+    # on getrandom in lunco-sandbox's wasm deps (cfg + feature are both required).
     # `${wasm_features:+--features ...}` omits the flag entirely when empty
     # (luncosim builds with no extra features).
     RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis --cfg=getrandom_backend=\"wasm_js\"" \

@@ -66,7 +66,7 @@ build_one() {
 
 # Build both wasm binaries. Failure short-circuits via `set -e`.
 build_one lunica        lunco-modelica
-build_one sandbox  lunco-client
+build_one sandbox       lunco-sandbox
 # The companion worker bundle for lunica. Off-thread Modelica compile
 # can break in different ways than the main UI bundle (different deps
 # active, different cfg gates), so build it explicitly.

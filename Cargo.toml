@@ -105,7 +105,7 @@ bevy = { version = "0.18.1", default-features = false, features = [
     # meshes, post-processing, mesh picking) is *not* in this list —
     # crates that need 3D opt in via their own Cargo.toml so the
     # Lunica (LunCoSim Modelica Workbench) web binary doesn't carry them. See
-    # `crates/lunco-client/Cargo.toml` for the opt-in pattern.
+    # `crates/lunco-sandbox/Cargo.toml` for the opt-in pattern.
     # SUBSTRATE ONLY (ECS / app / log / state / color — no GPU, window, winit,
     # egui). This baseline reaches every `bevy = { workspace = true }` crate, so
     # render-free crates (lunco-core, lunco-cosim, lunco-networking, …) and the
