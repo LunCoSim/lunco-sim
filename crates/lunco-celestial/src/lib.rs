@@ -17,6 +17,7 @@ mod clock;
 pub mod ephemeris;
 pub mod registry;
 mod big_space_setup;
+mod globe_lod;
 mod systems;
 mod coords;
 mod gravity;
@@ -132,6 +133,10 @@ impl Plugin for CelestialPlugin {
             celestial_telemetry_system,
             celestial_visuals_system,
         ).chain());
+
+        // Camera-driven cube-sphere LOD: streams each body's tiles (replaces the
+        // old fixed 24-tile shell). See `crate::globe_lod`.
+        app.add_systems(Update, globe_lod::update_globe_lod);
 
         // Terrain spawning is now handled by lunco-terrain plugin
         // Systems like terrain_spawn_system run in that crate

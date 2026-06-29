@@ -299,38 +299,24 @@ pub fn setup_big_space_hierarchy(
         Name::new("Earth Surface Grid"),
     )).set_parent_in_place(earth_grid).id();
 
-    // Earth terrain tiles — spawned with CellCoord, parented to Earth Surface Grid.
-    // big_space's propagate_high_precision inherits Grid rotation to all children.
-    let earth_grid_ref = Grid::new(1_000.0, 1.0e30);
+    // Earth terrain: camera-driven cube-sphere LOD (replaces the old fixed 24-tile
+    // shell). `update_globe_lod` streams tiles parented to the Earth Surface Grid.
     let earth_blueprint = blueprint_tile_material(
         blueprint_shader.clone(), earth_texture.clone(),
         [1.0, 1.0, 1.0], [0.0, 0.5, 1.0], [36.0, 18.0], 1.0, 0.5,
         &mut shader_materials,
     );
-    for face in 0..6 {
-        for i in 0..2 {
-            for j in 0..2 {
-                let (u, v) = lunco_terrain_globe::quad_sphere::tile_center_uv(face, 1, i, j);
-                let tile_center_dir = lunco_terrain_globe::quad_sphere::cube_to_sphere(face, u, v);
-                let tile_body_local = tile_center_dir * 6371.0e3;
-                let (tile_cell, tile_local_pos) = earth_grid_ref.translation_to_grid(tile_body_local);
-
-                commands.spawn((
-                    Mesh3d(meshes.add(lunco_terrain_globe::create_quadsphere_tile_mesh(
-                        earth_body, face, 1, i, j, 6371.0e3, 32, DVec3::ZERO
-                    ))),
-                    MeshMaterial3d(earth_blueprint.clone()),
-                    tile_cell,
-                    Transform::from_translation(tile_local_pos),
-                    GlobalTransform::default(),
-                    Visibility::Visible,
-                    InheritedVisibility::default(),
-                    NoFrustumCulling,
-                    Name::new(format!("Earth Tile f{} i{} j{}", face, i, j)),
-                )).set_parent_in_place(earth_surface_grid);
-            }
-        }
-    }
+    commands.entity(earth_body).insert((
+        crate::globe_lod::GlobeLod {
+            radius_m: 6371.0e3,
+            surface_grid: earth_surface_grid,
+            material: earth_blueprint,
+            res: 32,
+            max_lod: 8,
+            lod_distance_factor: 2.0,
+        },
+        crate::globe_lod::GlobeTiles::default(),
+    ));
 
     // ── Moon Inertial Grid (positioned by ephemeris) ───────────────────────
     let moon_grid = commands.spawn((
@@ -387,37 +373,23 @@ pub fn setup_big_space_hierarchy(
         Name::new("Moon Surface Grid"),
     )).set_parent_in_place(moon_grid).id();
 
-    // Moon terrain tiles — spawned with CellCoord, parented to Moon Surface Grid.
-    let moon_grid_ref = Grid::new(1_000.0, 1.0e30);
+    // Moon terrain: camera-driven cube-sphere LOD (replaces the fixed 24-tile shell).
     let moon_blueprint = blueprint_tile_material(
         blueprint_shader.clone(), moon_texture.clone(),
         [0.5, 0.5, 0.5], [0.6, 0.6, 0.6], [24.0, 12.0], 2.0, 0.9,
         &mut shader_materials,
     );
-    for face in 0..6 {
-        for i in 0..2 {
-            for j in 0..2 {
-                let (u, v) = lunco_terrain_globe::quad_sphere::tile_center_uv(face, 1, i, j);
-                let tile_center_dir = lunco_terrain_globe::quad_sphere::cube_to_sphere(face, u, v);
-                let tile_body_local = tile_center_dir * 1737.0e3;
-                let (tile_cell, tile_local_pos) = moon_grid_ref.translation_to_grid(tile_body_local);
-
-                commands.spawn((
-                    Mesh3d(meshes.add(lunco_terrain_globe::create_quadsphere_tile_mesh(
-                        moon_body, face, 1, i, j, 1737.0e3, 32, DVec3::ZERO
-                    ))),
-                    MeshMaterial3d(moon_blueprint.clone()),
-                    tile_cell,
-                    Transform::from_translation(tile_local_pos),
-                    GlobalTransform::default(),
-                    Visibility::Visible,
-                    InheritedVisibility::default(),
-                    NoFrustumCulling,
-                    Name::new(format!("Moon Tile f{} i{} j{}", face, i, j)),
-                )).set_parent_in_place(moon_surface_grid);
-            }
-        }
-    }
+    commands.entity(moon_body).insert((
+        crate::globe_lod::GlobeLod {
+            radius_m: 1737.0e3,
+            surface_grid: moon_surface_grid,
+            material: moon_blueprint,
+            res: 32,
+            max_lod: 8,
+            lod_distance_factor: 2.0,
+        },
+        crate::globe_lod::GlobeTiles::default(),
+    ));
 
     // ── Observer Camera (on Earth Grid for close-up orbit view) ────────────
     // Camera stays on the Grid (star-fixed). For surface views, it uses
