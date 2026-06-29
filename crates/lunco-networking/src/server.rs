@@ -1,7 +1,6 @@
 //! Host (listen-server) adapter: WebTransport server + connection lifecycle +
 //! outbox→clients / clients→inbox ferry. Native only.
 
-use bevy::math::DVec3;
 use bevy::prelude::*;
 use lightyear::netcode::server_plugin::NetcodeConfig;
 use lightyear::netcode::NetcodeServer;
@@ -10,12 +9,11 @@ use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use crate::sync::{
-    encode_quat, quantize_pos, HandshakeMsg, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg,
-    ReplicationState, SnapshotEntry, SnapshotMsg, SpawnReplicationMsg, SyncEnvelope, SyncInbox,
-    SyncOutbox, ViewCenters, MAX_SNAPSHOT_ENTRIES,
+    HandshakeMsg, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg, ReplicationState,
+    SnapshotMsg, SyncEnvelope, SyncInbox, SyncOutbox, ViewCenters, MAX_SNAPSHOT_ENTRIES,
 };
 use lunco_core::{
-    GlobalEntityId, NetReplicate, NetSpawn, NetStatus, SessionId, SessionRegistry, SessionProfiles, SimTick, SyncChannel,
+    NetStatus, SessionId, SessionRegistry, SessionProfiles, SimTick, SyncChannel,
 };
 
 /// Host-authoritative map: live connection (deterministic netcode peer key) →
@@ -382,13 +380,19 @@ fn server_send(
     };
 }
 
-/// New client confirmed: hand it its session id + current tick, and replay
-/// existing networked spawns so late-joiners see current rovers.
+/// New client confirmed: hand it its session id + current tick, its session/ownership
+/// context, and let the per-peer assembler stream the entities it should see.
+///
+/// B4 Phase 2: this NO LONGER replays all spawns + a full-state baseline. A freshly
+/// connected peer has no view center yet, so `compute_interest_sets` fail-opens it to
+/// **all** gids at the first recompute (~200 ms), and `assemble_and_send_snapshots`
+/// then sends the scoped `Spawn`+baseline. Replaying here too would double-send every
+/// spawn (the assembler's per-peer `spawned` set starts empty and can't know what this
+/// one-shot already sent). Handshake/Ownership/Profiles stay — they're session context,
+/// not entity state, and the assembler doesn't carry them.
 fn on_server_connected(
     trigger: On<Add, Connected>,
     q_client: Query<&RemoteId, With<ClientOf>>,
-    q_spawns: Query<(&GlobalEntityId, &NetSpawn)>,
-    q_repl: Query<(&GlobalEntityId, &Transform), With<NetReplicate>>,
     registry: Res<SessionRegistry>,
     profiles: Res<SessionProfiles>,
     server: Single<&Server>,
@@ -437,60 +441,6 @@ fn on_server_connected(
             token,
         }),
     );
-    for (gid, spawn) in q_spawns.iter() {
-        server_send(
-            &mut sender,
-            server,
-            &target,
-            SyncChannel::CommandBus,
-            &SyncEnvelope::Spawn(SpawnReplicationMsg {
-                gid: gid.get(),
-                entry_id: spawn.entry_id.clone(),
-                position: spawn.position.to_array(),
-            }),
-        );
-    }
-    // Full state baseline: current pose of every replicated body (balloons,
-    // cosim targets, rovers) so the joiner sees them at the right place
-    // immediately — not just future spawns/changes. Applied by the client's
-    // snapshot ingest. L3: sent on the RELIABLE `CommandBus`, not the unreliable
-    // snapshot channel — a STATIC body emits no periodic diffs (`only_if_changed`),
-    // so if its one-shot baseline packet drops it stays invisible until it moves.
-    // The H3 monotonic tick gate still discards this baseline for a moving body if
-    // a newer periodic snapshot already landed, so reliability here is free of
-    // teleport-back risk.
-    let entries: Vec<SnapshotEntry> = q_repl
-        .iter()
-        .map(|(gid, tf)| SnapshotEntry {
-            gid: gid.get(),
-            // Baseline is a one-shot placement at connect; the f32 `Transform` as the
-            // absolute (quantized) position + velocity zero is fine — the next 20 Hz
-            // snapshot carries real velocity + the precise f64 pose within ~50 ms.
-            pos_q: quantize_pos(DVec3::new(
-                tf.translation.x as f64,
-                tf.translation.y as f64,
-                tf.translation.z as f64,
-            )),
-            rot_packed: encode_quat(tf.rotation),
-            lv: [0.0; 3],
-            av: [0.0; 3],
-            last_input_seq: 0,
-        })
-        .collect();
-    if !entries.is_empty() {
-        let n = entries.len();
-        server_send(
-            &mut sender,
-            server,
-            &target,
-            SyncChannel::CommandBus,
-            &SyncEnvelope::Snapshot(SnapshotMsg {
-                tick: tick.0,
-                entries,
-            }),
-        );
-        info!("[net] sent {n}-entity state baseline to new client");
-    }
     // Current ownership table, so the joiner immediately knows who owns what
     // (the periodic broadcast only fires on change).
     server_send(
@@ -613,6 +563,10 @@ fn assemble_and_send_snapshots(
     mut sent_last: Local<
         std::collections::HashMap<SessionId, std::collections::HashMap<u64, ([i32; 3], u32, u32)>>,
     >,
+    // Per-session set of gids the peer has been sent a `Spawn` for (scoped-spawn,
+    // Phase 2). Persists across AOI exit/re-entry (soft-exit keeps the proxy), so a
+    // body is spawned at most once per peer; pruned to the live set + connected peers.
+    mut spawned: Local<std::collections::HashMap<SessionId, std::collections::HashSet<u64>>>,
 ) {
     // Early-out: only diff once per gather generation (skip frames with no new pose).
     // `0` is the never-gathered sentinel.
@@ -629,23 +583,44 @@ fn assemble_and_send_snapshots(
             continue;
         };
         seen.insert(session);
-        // A peer with no interest computed yet (connected before the first recompute)
-        // fails open to every live body — never blind a fresh joiner.
-        let owned_set;
-        let set: &std::collections::HashSet<u64> = match interest.0.get(&session) {
-            Some(s) => s,
-            None => {
-                owned_set = repl.entries.keys().copied().collect();
-                &owned_set
-            }
+        // No interest computed yet (connected this frame, before the first recompute):
+        // skip — the peer gets its full set within one recompute interval (~200 ms). A
+        // centerless peer is NOT this case: `compute_interest_sets` fail-opens it to all
+        // gids, so it still receives everything until it possesses or reports a center.
+        let Some(set) = interest.0.get(&session) else {
+            continue;
         };
+        let target = NetworkTarget::Single(peer);
+
+        // B4 Phase 2 — scoped spawn: send a `Spawn` (reliable) for any NetSpawn body
+        // ENTERING this peer's interest for the first time, before its pose baseline.
+        // `spawned` tracks what the peer has been told to reconstruct; under soft-exit
+        // the proxy persists, so a body is spawned at most once per peer (no re-spawn
+        // when it leaves+re-enters interest). Pruned to the live set below.
+        let known = spawned.entry(session).or_default();
+        for &gid in set {
+            if known.insert(gid) {
+                if let Some(spawn) = repl.spawn_info.get(&gid) {
+                    server_send(
+                        &mut sender,
+                        server,
+                        &target,
+                        SyncChannel::CommandBus,
+                        &SyncEnvelope::Spawn(spawn.clone()),
+                    );
+                }
+            }
+        }
+        // Forget proxies the peer no longer holds (the body was truly despawned and left
+        // `spawn_info`/`entries`); gids are never reused, so this can't cause a re-spawn.
+        known.retain(|gid| repl.entries.contains_key(gid));
+
         let digest = sent_last.entry(session).or_default();
         let batch = crate::sync::diff_peer_batch(set, &repl.entries, digest);
 
         if batch.is_empty() {
             continue;
         }
-        let target = NetworkTarget::Single(peer);
         for chunk in batch.chunks(MAX_SNAPSHOT_ENTRIES) {
             server_send(
                 &mut sender,
@@ -661,6 +636,7 @@ fn assemble_and_send_snapshots(
     }
     // Drop per-session memory for peers no longer connected.
     sent_last.retain(|s, _| seen.contains(s));
+    spawned.retain(|s, _| seen.contains(s));
 }
 
 /// Pull inbound frames from each client link into the inbox, tagged with the

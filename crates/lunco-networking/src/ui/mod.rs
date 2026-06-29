@@ -242,8 +242,7 @@ fn register_settings_menu(world: &mut World) {
         // The tutor lock applies to me only if I'm explicitly targeted, or it's a
         // broadcast and I opted in. Only then is the manual toggle disabled.
         let local_session = world.resource::<lunco_core::LocalSession>().0 .0;
-        let locked_for_me = tutor_status.tutor_active
-            && !tutor_status.allow_free_movement
+        let locked_for_me = tutor_lock_active(&tutor_status)
             && (tutor_status.target_client == Some(local_session)
                 || (tutor_status.target_client.is_none() && tut_settings.follow_opt_in));
 
@@ -264,6 +263,54 @@ fn register_settings_menu(world: &mut World) {
     });
 }
 
+/// Whether a tutor currently holds the view/input lock (before per-peer targeting).
+/// The `tutor_active && !allow_free_movement` core was repeated across the Follow-Mode
+/// toggle's `locked_for_me`, the banner label, and the banner's exit gate.
+fn tutor_lock_active(t: &crate::sync::TutorStatusResource) -> bool {
+    t.tutor_active && !t.allow_free_movement
+}
+
+/// Draw one of the centered top-of-screen overlay banners (tutor / student / teaching)
+/// — they shared ~30 lines of identical chrome each. `scrim` adds the full-screen dark
+/// tint that also blocks clicks behind it (Follow Mode only); `add_contents` fills the
+/// inner row (label + optional button).
+#[allow(clippy::too_many_arguments)]
+fn draw_top_banner(
+    ctx: &egui::Context,
+    id: &str,
+    screen_rect: egui::Rect,
+    size: egui::Vec2,
+    stroke: egui::Stroke,
+    scrim: bool,
+    shrink: egui::Vec2,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    egui::Area::new(egui::Id::new(id))
+        .order(egui::Order::Foreground)
+        .fixed_pos(screen_rect.min)
+        .show(ctx, |ui| {
+            if scrim {
+                // Block clicks behind by allocating the full screen + a subtle dark tint.
+                let (rect, _response) =
+                    ui.allocate_at_least(screen_rect.size(), egui::Sense::click_and_drag());
+                ui.painter()
+                    .rect_filled(rect, 0.0, egui::Color32::from_black_alpha(20));
+            }
+            let banner_rect = egui::Rect::from_center_size(
+                egui::pos2(screen_rect.center().x, screen_rect.min.y + 40.0),
+                size,
+            );
+            ui.painter()
+                .rect_filled(banner_rect, 6.0, egui::Color32::from_rgb(30, 30, 46));
+            ui.painter()
+                .rect_stroke(banner_rect, 6.0, stroke, egui::StrokeKind::Outside);
+            let child_rect = banner_rect.shrink2(shrink);
+            let mut child_ui =
+                ui.child_ui(child_rect, egui::Layout::left_to_right(egui::Align::Center), None);
+            child_ui.horizontal(|ui| add_contents(ui));
+        });
+}
+
 /// Draw collaborator cursors on top of the screen in egui.
 pub fn draw_collaborator_cursors(
     mut egui_ctx: EguiContexts,
@@ -279,58 +326,34 @@ pub fn draw_collaborator_cursors(
 
     // 1. Draw Tutorial Mode Overlay if following
     if tutorial_settings.follow_mode {
-        egui::Area::new(egui::Id::new("tutorial_overlay"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(screen_rect.min)
-            .show(ctx, |ui| {
-                // Block clicks on everything behind by allocating screen_rect size
-                let (rect, _response) = ui.allocate_at_least(screen_rect.size(), egui::Sense::click_and_drag());
-                
-                // Draw a very subtle dark glassmorphism tint (scrim)
-                ui.painter().rect_filled(
-                    rect, 
-                    0.0, 
-                    egui::Color32::from_black_alpha(20),
-                );
-
-                // Draw a beautiful floating banner in the top center
-                let banner_width = 320.0;
-                let banner_height = 36.0;
-                let banner_rect = egui::Rect::from_center_size(
-                    egui::pos2(screen_rect.center().x, screen_rect.min.y + 40.0),
-                    egui::vec2(banner_width, banner_height),
-                );
-
-                let banner_bg = egui::Color32::from_rgb(30, 30, 46); // Catppuccin Crust/Base
-                let banner_stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(243, 139, 168)); // Peach/Red accent
-                ui.painter().rect_filled(banner_rect, 6.0, banner_bg);
-                ui.painter().rect_stroke(
-                    banner_rect, 
-                    6.0, 
-                    banner_stroke, 
-                    egui::StrokeKind::Outside
-                );
-
-                // Put exit button inside the banner
-                let child_rect = banner_rect.shrink2(egui::vec2(12.0, 4.0));
-                let mut child_ui = ui.child_ui(child_rect, egui::Layout::left_to_right(egui::Align::Center), None);
-                let can_exit = !tutor_status.tutor_active || tutor_status.allow_free_movement;
-                child_ui.horizontal(|ui| {
-                    let label = if tutor_status.tutor_active && !tutor_status.allow_free_movement {
-                        "📖 Tutorial Mode (Locked by Tutor)"
-                    } else {
-                        "📖 Tutorial Mode (Mirroring)"
-                    };
-                    ui.label(egui::RichText::new(label).color(egui::Color32::WHITE).strong());
-                    if can_exit {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button(egui::RichText::new("Exit").color(egui::Color32::from_rgb(243, 139, 168)).strong()).clicked() {
-                                commands.trigger(crate::sync::SetFollowMode { enabled: false });
-                            }
-                        });
-                    }
-                });
-            });
+        let can_exit = !tutor_lock_active(&tutor_status);
+        let label = if tutor_lock_active(&tutor_status) {
+            "📖 Tutorial Mode (Locked by Tutor)"
+        } else {
+            "📖 Tutorial Mode (Mirroring)"
+        };
+        draw_top_banner(
+            ctx,
+            "tutorial_overlay",
+            screen_rect,
+            egui::vec2(320.0, 36.0),
+            egui::Stroke::new(1.5, egui::Color32::from_rgb(243, 139, 168)), // Peach/Red accent
+            true,                       // scrim: block input behind the Follow-Mode lock
+            egui::vec2(12.0, 4.0),
+            |ui| {
+                ui.label(egui::RichText::new(label).color(egui::Color32::WHITE).strong());
+                if can_exit {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button(egui::RichText::new("Exit").color(egui::Color32::from_rgb(243, 139, 168)).strong())
+                            .clicked()
+                        {
+                            commands.trigger(crate::sync::SetFollowMode { enabled: false });
+                        }
+                    });
+                }
+            },
+        );
     }
 
     // 1b. Draw Student Mode indicator when a tutor is active and this client is
@@ -344,74 +367,47 @@ pub fn draw_collaborator_cursors(
         && !tutorial_settings.follow_mode
         && is_targeted;
     if is_active_student {
-        egui::Area::new(egui::Id::new("student_overlay"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(screen_rect.min)
-            .show(ctx, |ui| {
-                let banner_width = 260.0;
-                let banner_height = 32.0;
-                let banner_rect = egui::Rect::from_center_size(
-                    egui::pos2(screen_rect.center().x, screen_rect.min.y + 40.0),
-                    egui::vec2(banner_width, banner_height),
-                );
-
-                let banner_bg = egui::Color32::from_rgb(30, 30, 46);
-                let banner_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(137, 180, 250)); // Blue accent
-                ui.painter().rect_filled(banner_rect, 6.0, banner_bg);
-                ui.painter().rect_stroke(
-                    banner_rect,
-                    6.0,
-                    banner_stroke,
-                    egui::StrokeKind::Outside,
-                );
-
-                let label = if tutor_status.observe_mode {
-                    "👤 Student Mode (Tutor is observing you)"
-                } else {
-                    "👤 Student Mode (Selected by tutor)"
-                };
-                let child_rect = banner_rect.shrink2(egui::vec2(10.0, 2.0));
-                let mut child_ui = ui.child_ui(child_rect, egui::Layout::left_to_right(egui::Align::Center), None);
-                child_ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(label).color(egui::Color32::WHITE).small());
-                });
-            });
+        let label = if tutor_status.observe_mode {
+            "👤 Student Mode (Tutor is observing you)"
+        } else {
+            "👤 Student Mode (Selected by tutor)"
+        };
+        draw_top_banner(
+            ctx,
+            "student_overlay",
+            screen_rect,
+            egui::vec2(260.0, 32.0),
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(137, 180, 250)), // Blue accent
+            false,
+            egui::vec2(10.0, 2.0),
+            |ui| {
+                ui.label(egui::RichText::new(label).color(egui::Color32::WHITE).small());
+            },
+        );
     }
 
     // 2. Draw Tutor Mode Indicator if teaching
     if tutorial_settings.teach_mode {
-        egui::Area::new(egui::Id::new("tutor_overlay"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(screen_rect.min)
-            .show(ctx, |ui| {
-                let banner_width = 245.0;
-                let banner_height = 32.0;
-                let banner_rect = egui::Rect::from_center_size(
-                    egui::pos2(screen_rect.center().x, screen_rect.min.y + 40.0),
-                    egui::vec2(banner_width, banner_height),
-                );
-
-                let banner_bg = egui::Color32::from_rgb(30, 30, 46);
-                let banner_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(166, 227, 161)); // Green accent
-                ui.painter().rect_filled(banner_rect, 6.0, banner_bg);
-                ui.painter().rect_stroke(
-                    banner_rect, 
-                    6.0, 
-                    banner_stroke, 
-                    egui::StrokeKind::Outside
-                );
-
-                let child_rect = banner_rect.shrink2(egui::vec2(10.0, 2.0));
-                let mut child_ui = ui.child_ui(child_rect, egui::Layout::left_to_right(egui::Align::Center), None);
-                child_ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("🎓 Teaching Mode (Broadcasting)").color(egui::Color32::WHITE).small());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(egui::RichText::new("Stop").color(egui::Color32::from_rgb(166, 227, 161)).small()).clicked() {
-                            commands.trigger(crate::sync::SetTeachMode { enabled: false });
-                        }
-                    });
+        draw_top_banner(
+            ctx,
+            "tutor_overlay",
+            screen_rect,
+            egui::vec2(245.0, 32.0),
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(166, 227, 161)), // Green accent
+            false,
+            egui::vec2(10.0, 2.0),
+            |ui| {
+                ui.label(egui::RichText::new("🎓 Teaching Mode (Broadcasting)").color(egui::Color32::WHITE).small());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .button(egui::RichText::new("Stop").color(egui::Color32::from_rgb(166, 227, 161)).small())
+                        .clicked()
+                    {
+                        commands.trigger(crate::sync::SetTeachMode { enabled: false });
+                    }
                 });
-            });
+            },
+        );
     }
 
     // Foreground painter so it is on top of everything

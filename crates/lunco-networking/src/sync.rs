@@ -554,6 +554,12 @@ pub struct ReplicationState {
     /// gids whose `(pos, rot, ack)` changed this tick (the `only_if_changed` delta).
     /// Global observability only — per-peer send decisions live in the assembler.
     pub changed_this_tick: HashSet<u64>,
+    /// Spawn catalog (`entry_id` + position) per runtime-spawned `NetSpawn` gid, so the
+    /// per-peer assembler can send a `Spawn` the instant a body enters a peer's interest
+    /// (B4 Phase 2 — scoped spawn). Maintained by `track_spawn_info`, pruned on despawn.
+    /// Scene/Twin entities (no `NetSpawn`) are absent here — clients already hold them
+    /// via scene load — so they're pose-replicated but never wire-spawned.
+    pub spawn_info: HashMap<u64, SpawnReplicationMsg>,
     /// Sim tick of the latest generation (stamped onto each assembled `SnapshotMsg`).
     pub tick: u64,
     /// Bumped once per `gather_snapshot` run. The assembler runs in `Update` (the
@@ -1052,13 +1058,28 @@ pub fn drain_sync_inbox(
                     continue;
                 }
 
-                // Update presence info in `Presence` resource
+                // Update presence info in `Presence` resource. Create the entry if the
+                // peer has none yet — presence is normally seeded from `SessionProfiles`
+                // (`sync_presence_with_profiles`), so a just-connected peer that hasn't
+                // set a name would otherwise have its cursor silently dropped until it
+                // names itself. Falls back to its profile name / "Player <id>".
                 let uid = UserId(session_id.0);
-                if let Some(info) = presence.users.get_mut(&uid) {
-                    info.cursor = c.cursor;
-                    if let Some(color) = c.color {
-                        info.color = color;
-                    }
+                let info = presence.users.entry(uid).or_insert_with(|| PresenceInfo {
+                    display_name: profiles
+                        .profiles
+                        .get(&session_id.0)
+                        .cloned()
+                        .unwrap_or_else(|| format!("Player {}", session_id.0)),
+                    color: c
+                        .color
+                        .or_else(|| profiles.colors.get(&session_id.0).copied())
+                        .unwrap_or_else(|| generate_user_color(session_id.0)),
+                    active_doc: None,
+                    cursor: None,
+                });
+                info.cursor = c.cursor;
+                if let Some(color) = c.color {
+                    info.color = color;
                 }
 
                 // If we are host, we also need to broadcast this cursor update to all other clients.
@@ -1346,6 +1367,11 @@ pub fn gather_snapshot(
     last_sent.retain(|k, _| live.contains(k));
     nonfinite_warned.retain(|k| live.contains(k));
     repl.entries.retain(|k, _| live.contains(k));
+    // Phase 2: prune the spawn catalog the same way (gids are never reused). A
+    // despawned NetSpawn body leaving here means the assembler will re-`Spawn` it for
+    // a peer only if a NEW gid is later minted — correct, since the old proxy was
+    // already torn down via `broadcast_despawns`.
+    repl.spawn_info.retain(|k, _| live.contains(k));
 }
 
 /// Max `SnapshotEntry`s per `SnapshotMsg`. L2: cap so each serialized message fits in
@@ -1537,25 +1563,31 @@ pub fn recompute_interest(
     }
 }
 
-/// Host: when a runtime-spawned networked root gets its id minted, replicate the
-/// spawn to clients so they reconstruct the geometry locally pinned to that id.
-pub fn broadcast_new_spawns(
+/// Host: when a runtime-spawned networked root gets its id minted, record its spawn
+/// catalog (`entry_id` + position) in [`ReplicationState::spawn_info`] (B4 Phase 2).
+///
+/// This **no longer broadcasts** the `Spawn` to `All` — the per-peer assembler
+/// (`assemble_and_send_snapshots`) sends each peer a `Spawn` the instant the body
+/// enters its interest, so a cosim balloon / obstacle-field prop spawned far from a
+/// player never reaches that player. `spawn_info` is the catalog the assembler reads;
+/// it's pruned to the live set by `gather_snapshot`.
+pub fn track_spawn_info(
     role: Res<NetworkRole>,
     q: Query<(&GlobalEntityId, &NetSpawn), Added<GlobalEntityId>>,
-    mut outbox: ResMut<SyncOutbox>,
+    mut repl: ResMut<ReplicationState>,
 ) {
     if !role.is_host() {
         return;
     }
     for (gid, spawn) in q.iter() {
-        outbox.0.push((
-            SyncChannel::CommandBus,
-            SyncEnvelope::Spawn(SpawnReplicationMsg {
+        repl.spawn_info.insert(
+            gid.get(),
+            SpawnReplicationMsg {
                 gid: gid.get(),
                 entry_id: spawn.entry_id.clone(),
                 position: spawn.position.to_array(),
-            }),
-        ));
+            },
+        );
     }
 }
 
@@ -1563,12 +1595,12 @@ pub fn broadcast_new_spawns(
 /// despawn), replicate the removal so clients despawn their local proxy instead
 /// of leaving a frozen kinematic ghost pinned at its last replicated pose.
 ///
-/// The inverse of [`broadcast_new_spawns`]. A removed entity can no longer be
+/// The inverse of [`track_spawn_info`]'s catalog. A removed entity can no longer be
 /// queried for its `GlobalEntityId`, so the gid is read from a per-entity cache
 /// refreshed each run from the live `NetReplicate` set — the entity is still in
 /// the cache (populated the prior frame) when its removal surfaces here. Rides
-/// the reliable `CommandBus`, same as `Spawn`, so a dropped despawn can't
-/// resurrect the ghost.
+/// the reliable `CommandBus` to **all** peers (a despawn must reach anyone holding
+/// the proxy, in- or out-of-interest), so a dropped despawn can't resurrect the ghost.
 pub fn broadcast_despawns(
     role: Res<NetworkRole>,
     mut removed: RemovedComponents<GlobalEntityId>,
@@ -2516,7 +2548,7 @@ impl Plugin for SyncPlugin {
             .add_systems(PreUpdate, block_bevy_inputs)
             .add_systems(Update, (
                 drain_sync_inbox,
-                broadcast_new_spawns,
+                track_spawn_info,
                 broadcast_despawns,
                 sync_presence_with_profiles,
                 seed_local_cursor_color,
@@ -2895,6 +2927,7 @@ mod aoi {
             &HashMap::from([(1, pos_at(0.0))]),
             &HashSet::new(),
             &[(1u64, 10)],
+            &HashMap::new(),
             &HashMap::new(),
             R_ENTER,
             R_EXIT,
