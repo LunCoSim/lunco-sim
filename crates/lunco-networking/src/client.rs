@@ -117,7 +117,10 @@ pub(crate) fn spawn_client(
     let netcode = NetcodeClient::new(
         auth,
         NetcodeConfig {
-            client_timeout_secs: 5,
+            // Match the 30 s server/QUIC timeout. A short 5 s reaper raced the
+            // documented "don't race" rationale and killed a briefly-stalled
+            // host during scene-load / cosim-compile (review M5).
+            client_timeout_secs: 30,
             ..default()
         },
     )

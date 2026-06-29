@@ -491,6 +491,35 @@ pub fn ingest_snapshots(
     }
 }
 
+/// L1: free a despawned proxy's interpolation buffer. `ingest_snapshots` inserts a
+/// `VecDeque` per gid on first sight (`entry(gid).or_default()`), but the client
+/// Despawn arm (`lunco_networking::sync`) only despawns the entity + cleans the
+/// `ApiEntityRegistry` — it never touches `InterpBuffers`, which lives in this
+/// crate. Without this the map leaks one ring per ever-seen gid; worse, once
+/// interest-management churns proxies in/out, a gid that leaves then re-enters
+/// replays its STALE pre-exit samples — the H3 monotonic gate only blocks ticks
+/// older than `back()`, so old positions still bracket the fresh sample in
+/// `interpolate_proxies` → a visible teleport on the visual-only path (the
+/// `PROXY_SNAP_DIST` guard exists only on the physics `drive_kinematic_proxies`
+/// path). Pruning on despawn fixes both. `RemovedComponents<GlobalEntityId>` yields
+/// entities, not gids, and the despawned entity can no longer be queried, so cache
+/// Entity→gid from `Added` — the same incremental pattern `broadcast_despawns` uses.
+pub fn prune_interp_buffers_on_despawn(
+    mut removed: RemovedComponents<lunco_core::GlobalEntityId>,
+    q_added: Query<(Entity, &lunco_core::GlobalEntityId), Added<lunco_core::GlobalEntityId>>,
+    mut known: Local<HashMap<Entity, u64>>,
+    mut buffers: ResMut<InterpBuffers>,
+) {
+    for (entity, gid) in q_added.iter() {
+        known.insert(entity, gid.get());
+    }
+    for entity in removed.read() {
+        if let Some(gid) = known.remove(&entity) {
+            buffers.0.remove(&gid);
+        }
+    }
+}
+
 /// Client: render replicated proxies that have **no `RigidBody`** by writing their
 /// `Transform` straight from the interpolation curve, [`INTERP_DELAY`] in the past
 /// — turning 20 Hz snapshots into smooth per-frame motion for non-physics bodies
@@ -2697,6 +2726,10 @@ impl Plugin for SpawnCommandPlugin {
                 interpolate_proxies,
                 force_kinematic_proxies,
                 apply_net_replication,
+                // L1: drop the interp ring of any proxy despawned this frame so the
+                // map doesn't leak per gid and a re-entering gid can't replay stale
+                // pre-exit samples. RemovedComponents-driven, order-independent.
+                prune_interp_buffers_on_despawn,
             )
                 .chain(),
         );
