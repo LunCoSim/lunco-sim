@@ -514,6 +514,85 @@ pub fn set_resource_field(
     .unwrap_or_else(|| Err("no world in scope".into()))
 }
 
+// ── Verbs: structural mutation ──────────────────────────────────────────────
+//
+// The C/D of CRUD: `set`/`get` are the R/U of *fields*; these change an entity's
+// *structure* — add/remove a component, despawn an entity. Host-authoritative
+// (scripts run host-only). Replication follows the same rule as `set`: a change
+// reaches clients only if the affected component is in the replicated set, so
+// `ApiVisibility` curates what is safe to expose. NOTE: there is deliberately no
+// generic `spawn(components)` — runtime spawns replicate by catalog `entry_id`
+// (`NetSpawn`), so clients reconstruct from the catalog, not an arbitrary
+// component bag; use `cmd("SpawnEntity", …)` for a replicable spawn.
+
+/// `add(id, "Comp", #{fields})` — insert (or replace) a reflected component,
+/// constructed from its `ReflectDefault` then patched field-by-field by `build`
+/// (`native → reflect`, no JSON), the structural twin of [`set_component_field`].
+/// Requires the type to register `ReflectDefault` (`#[reflect(Component, Default)]`).
+pub fn add_component(
+    gid: u64,
+    comp: &str,
+    build: impl FnOnce(&mut dyn bevy::reflect::Reflect) -> Result<(), String>,
+) -> Result<(), String> {
+    use bevy::reflect::std_traits::ReflectDefault;
+
+    with_world(|world| -> Result<(), String> {
+        let entity = resolve_entity(world, gid).ok_or_else(|| format!("unknown entity {gid}"))?;
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let reg = registry.read();
+        let registration = reg
+            .get_with_short_type_path(comp)
+            .ok_or_else(|| format!("unknown type '{comp}'"))?;
+        let reflect_component = registration
+            .data::<ReflectComponent>()
+            .ok_or_else(|| format!("'{comp}' is not a Component"))?;
+        let reflect_default = registration
+            .data::<ReflectDefault>()
+            .ok_or_else(|| format!("'{comp}' has no ReflectDefault (add #[reflect(Default)])"))?;
+        let mut value = reflect_default.default();
+        build(&mut *value)?;
+        let mut entity_mut = world
+            .get_entity_mut(entity)
+            .map_err(|_| format!("entity {gid} despawned"))?;
+        reflect_component.insert(&mut entity_mut, value.as_partial_reflect(), &reg);
+        Ok(())
+    })
+    .unwrap_or_else(|| Err("no world in scope".into()))
+}
+
+/// `remove(id, "Comp")` — strip a reflected component from an entity.
+pub fn remove_component(gid: u64, comp: &str) -> Result<(), String> {
+    with_world(|world| -> Result<(), String> {
+        let entity = resolve_entity(world, gid).ok_or_else(|| format!("unknown entity {gid}"))?;
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let reg = registry.read();
+        let registration = reg
+            .get_with_short_type_path(comp)
+            .ok_or_else(|| format!("unknown type '{comp}'"))?;
+        let reflect_component = registration
+            .data::<ReflectComponent>()
+            .ok_or_else(|| format!("'{comp}' is not a Component"))?;
+        let mut entity_mut = world
+            .get_entity_mut(entity)
+            .map_err(|_| format!("entity {gid} despawned"))?;
+        reflect_component.remove(&mut entity_mut);
+        Ok(())
+    })
+    .unwrap_or_else(|| Err("no world in scope".into()))
+}
+
+/// `despawn(id)` — despawn an entity (and its children). On a networked host the
+/// removal replicates via `broadcast_despawns` (off `RemovedComponents<
+/// GlobalEntityId>`), so clients drop their proxy instead of leaving a ghost.
+pub fn despawn_entity(gid: u64) -> Result<(), String> {
+    with_world(|world| -> Result<(), String> {
+        let entity = resolve_entity(world, gid).ok_or_else(|| format!("unknown entity {gid}"))?;
+        world.despawn(entity);
+        Ok(())
+    })
+    .unwrap_or_else(|| Err("no world in scope".into()))
+}
+
 /// `list_entities()` — `[{ id, name, type, pos }]` for every registered entity.
 pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
     with_world(|world| {
@@ -640,6 +719,63 @@ pub fn elapsed_seconds() -> f64 {
     })
     .flatten()
     .unwrap_or(0.0)
+}
+
+// ── Deterministic RNG ───────────────────────────────────────────────────────
+//
+// Scripts WILL want randomness (scatter, jitter, exploration, retry backoff). A
+// wall-clock / OS source would diverge across host and clients and break replay,
+// so the bridge gives them a stream that is a pure function of stable inputs:
+// the entity's networked `GlobalEntityId`, the sim tick, and the call order
+// within the hook. Same entity + same tick + same call index → same number on
+// every peer and every re-run. The runtime calls `rng_begin` before each hook;
+// each `rng_next_*` advances the per-thread stream. Execution is single-threaded
+// (FixedUpdate / wasm), so the thread-local is sound and order is deterministic.
+
+thread_local! {
+    static RNG_STATE: Cell<u64> = const { Cell::new(0) };
+}
+
+/// SplitMix64 — advance `state`, return a well-diffused 64-bit value. Tiny,
+/// stateless-modulo-`state`, and identical on every platform.
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Seed the per-hook RNG stream from `(gid, tick, salt)`. `salt` decorrelates
+/// distinct hooks/events firing in the same tick on the same entity (so on_tick
+/// and on_event don't draw the identical sequence). Called by the scenario
+/// runtime before each hook invocation.
+pub fn rng_begin(gid: u64, tick: u64, salt: u64) {
+    let seed = gid
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ tick.wrapping_mul(0xD1B5_4A32_D192_ED03)
+        ^ salt.wrapping_mul(0xA0761_D6478_BD642F);
+    RNG_STATE.with(|c| c.set(seed));
+}
+
+/// Next uniform `f64` in `[0, 1)` from the seeded stream (53-bit mantissa).
+pub fn rng_next_f64() -> f64 {
+    RNG_STATE.with(|c| {
+        let mut s = c.get();
+        let r = splitmix64(&mut s);
+        c.set(s);
+        (r >> 11) as f64 / (1u64 << 53) as f64
+    })
+}
+
+/// A stable 64-bit hash of a string, for salting the RNG by event name. FNV-1a.
+pub fn hash_str(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
 }
 
 // ── Verbs: events ───────────────────────────────────────────────────────────

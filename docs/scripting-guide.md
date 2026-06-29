@@ -63,8 +63,12 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `name(id)` | string \| `()` | reverse of `find` |
 | `parent(id)` / `children(id)` | id \| `()` / `[id,…]` | hierarchy traversal |
 | `list_entities()` | `[#{id,name,type,pos}]` | every registered entity (filter/select in-script) |
+| `add(id, "Comp", #{fields})` | bool | **structural** — insert/replace a reflected component (built from default + fields); needs `#[reflect(Default)]` |
+| `remove(id, "Comp")` | bool | **structural** — strip a reflected component |
+| `despawn(id)` | bool | **structural** — despawn an entity (+children); replicates on a host. *Spawn:* use `cmd("SpawnEntity", #{entry_id, position})` (no generic spawn — clients reconstruct from the catalog) |
 | `emit(name, value?)` | bool | fire a `TelemetryEvent` (delivered to `on_event` next tick) |
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | i64 / f64 / f64 | the fixed simulation clock |
+| `rand()` / `rand_range(lo,hi)` / `rand_int(lo,hi)` | f64 / f64 / i64 | **deterministic** RNG — seeded per hook from `(entity, tick, hook)`, identical on every peer and replay |
 
 JSON appears **only** at the `cmd`/`query` params seam (that's the API's own
 contract). Both directions are native: `get`/`get_setting` build rhai values

@@ -217,6 +217,20 @@ fn apply_dynamic(field: &mut dyn bevy::reflect::PartialReflect, value: &Dynamic)
     Ok(())
 }
 
+/// Patch a default-constructed component with a rhai field map — each `key: val`
+/// is written onto the matching reflected field via [`apply_dynamic`]. Used by the
+/// `add` verb to build a component natively (no JSON).
+fn apply_dynamic_fields(component: &mut dyn bevy::reflect::Reflect, fields: &Map) -> Result<(), String> {
+    for (k, v) in fields.iter() {
+        let path = format!(".{k}");
+        let field = component
+            .reflect_path_mut(path.as_str())
+            .map_err(|e| format!("no field '{k}': {e}"))?;
+        apply_dynamic(field, v)?;
+    }
+    Ok(())
+}
+
 // ── Engine construction ────────────────────────────────────────────────────
 
 /// Ergonomic policy wrappers (drive/distance/arrived/...), authored in rhai and
@@ -323,6 +337,52 @@ pub fn build_world_engine() -> Engine {
         bridge_core::list_entities(&RhaiBuilder)
     });
 
+    // ── Structural mutation: the C/D twin of get/set's R/U ───────────────────
+    // add(id, "Comp", #{fields}) -> bool — insert/replace a reflected component
+    // built from its default + the field map (native → reflect). false on bad
+    // entity/type/field, or if the type has no ReflectDefault.
+    engine.register_fn("add", |id: i64, comp: ImmutableString, fields: Map| -> bool {
+        match bridge_core::add_component(id as u64, comp.as_str(), |c| apply_dynamic_fields(c, &fields)) {
+            Ok(()) => true,
+            Err(e) => {
+                warn!("[rhai] add({id}, \"{comp}\") failed: {e}");
+                false
+            }
+        }
+    });
+    // add(id, "Comp") -> bool — insert the default component (no field overrides).
+    engine.register_fn("add", |id: i64, comp: ImmutableString| -> bool {
+        match bridge_core::add_component(id as u64, comp.as_str(), |_| Ok(())) {
+            Ok(()) => true,
+            Err(e) => {
+                warn!("[rhai] add({id}, \"{comp}\") failed: {e}");
+                false
+            }
+        }
+    });
+    // remove(id, "Comp") -> bool — strip a reflected component. false if absent.
+    engine.register_fn("remove", |id: i64, comp: ImmutableString| -> bool {
+        match bridge_core::remove_component(id as u64, comp.as_str()) {
+            Ok(()) => true,
+            Err(e) => {
+                warn!("[rhai] remove({id}, \"{comp}\") failed: {e}");
+                false
+            }
+        }
+    });
+    // despawn(id) -> bool — despawn an entity (+ children); replicates on a host.
+    // Runtime SPAWN has no generic verb (clients reconstruct from a catalog
+    // entry_id, not a component bag) — use cmd("SpawnEntity", #{entry_id, position}).
+    engine.register_fn("despawn", |id: i64| -> bool {
+        match bridge_core::despawn_entity(id as u64) {
+            Ok(()) => true,
+            Err(e) => {
+                warn!("[rhai] despawn({id}) failed: {e}");
+                false
+            }
+        }
+    });
+
     // query(name, #{params}) -> Dynamic — the READ twin of cmd(): invoke any
     // registered `ApiQueryProvider` by name (Raycast, Nearest, GroundHeight,
     // CosimStatus, …) and get its data back as rhai values. Spatial/physics
@@ -392,6 +452,23 @@ pub fn build_world_engine() -> Engine {
     // the fixed clock's elapsed time (advances only while the sim steps), 0.0 if
     // unavailable.
     engine.register_fn("elapsed_seconds", || -> f64 { bridge_core::elapsed_seconds() });
+
+    // rand() -> f64 in [0,1) — DETERMINISTIC: seeded per hook from (entity, tick,
+    // hook), so it's identical on every networked peer and every re-run/replay.
+    // Use this, never a wall-clock/OS source, or scenarios desync.
+    engine.register_fn("rand", || -> f64 { bridge_core::rng_next_f64() });
+    // rand_range(lo, hi) -> f64 in [lo, hi).
+    engine.register_fn("rand_range", |lo: f64, hi: f64| -> f64 {
+        lo + (hi - lo) * bridge_core::rng_next_f64()
+    });
+    // rand_int(lo, hi) -> i64 in [lo, hi) (half-open). Returns lo if hi <= lo.
+    engine.register_fn("rand_int", |lo: i64, hi: i64| -> i64 {
+        if hi <= lo {
+            lo
+        } else {
+            lo + (bridge_core::rng_next_f64() * (hi - lo) as f64) as i64
+        }
+    });
 
     // Load the embedded prelude as a global module so its helpers are callable
     // unqualified (e.g. `drive(r, 1.0, 0.0)`). Compiled against the same engine
@@ -513,11 +590,13 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
     ) -> Option<Diagnostic> {
         use crate::scenario::ScenarioHook;
         let st = self.states.get_mut(&entity)?;
-        let name = match hook {
-            ScenarioHook::Start => "on_start",
-            ScenarioHook::Tick => "on_tick",
-            ScenarioHook::Stop => "on_stop",
+        let (name, salt) = match hook {
+            ScenarioHook::Start => ("on_start", 1),
+            ScenarioHook::Tick => ("on_tick", 2),
+            ScenarioHook::Stop => ("on_stop", 3),
         };
+        // Seed the deterministic RNG for this hook: (entity, tick, hook).
+        bridge_core::rng_begin(self_gid as u64, bridge_core::sim_tick() as u64, salt);
         call_hook(&self.engine, &mut st.scope, &st.ast, name, self_gid, &mut st.this)
             .map(|(msg, pos)| rhai_diagnostic(msg, pos))
     }
@@ -530,6 +609,13 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
     ) -> Option<Diagnostic> {
         // Build the native event value before borrowing per-entity state.
         let evt = bridge_core::build_event(&RhaiBuilder, event);
+        // Seed the deterministic RNG: (entity, tick, event-name) — distinct events
+        // in the same tick draw distinct streams.
+        bridge_core::rng_begin(
+            self_gid as u64,
+            bridge_core::sim_tick() as u64,
+            bridge_core::hash_str(&event.name),
+        );
         let st = self.states.get_mut(&entity)?;
         call_event_hook(&self.engine, &mut st.scope, &st.ast, self_gid, &mut st.this, evt)
             .map(|(msg, pos)| rhai_diagnostic(msg, pos))

@@ -104,7 +104,7 @@ register_commands!(on_drive, on_brake, on_spawn, on_report);
 // scalar, vector, bool and string fields — the native read/write path, no JSON.
 
 #[derive(Component, Reflect, Default)]
-#[reflect(Component)]
+#[reflect(Component, Default)]
 struct Knob {
     gain: f64,
     dir: Vec3,
@@ -1085,4 +1085,93 @@ fn set_verb_reports_failure_and_leaves_target_unchanged() {
     assert!(events.iter().any(|e| e == "SETTING_FAILED"), "missing resource → false; got {events:?}");
     let knob = app.world().entity(rover).get::<Knob>().expect("Knob present");
     assert_eq!(knob.gain, 0.0, "a failed set must not mutate the component");
+}
+
+// ── Structural mutation: add / remove components, despawn entities ───────────
+
+/// `add(id, "Comp", #{fields})` inserts a reflected component built from its
+/// default + the field map — the C of CRUD — on an entity that lacked it.
+#[test]
+fn add_verb_inserts_reflected_component() {
+    let source = r#"
+        fn on_start(me) {
+            add(me, "Knob", #{ gain: 5.0, armed: true, label: "live" });
+        }
+    "#;
+    let (mut app, rover) = setup(source);
+    assert!(app.world().entity(rover).get::<Knob>().is_none(), "rover starts without Knob");
+
+    tick(&mut app);
+
+    let knob = app.world().entity(rover).get::<Knob>().expect("add() should insert Knob");
+    assert_eq!(knob.gain, 5.0);
+    assert!(knob.armed);
+    assert_eq!(knob.label, "live");
+}
+
+/// `remove(id, "Comp")` strips a component the entity had.
+#[test]
+fn remove_verb_strips_component() {
+    let source = r#"fn on_start(me) { remove(me, "Knob"); }"#;
+    let (mut app, rover) = setup(source);
+    app.world_mut().entity_mut(rover).insert(Knob { gain: 1.0, ..default() });
+
+    tick(&mut app);
+
+    assert!(
+        app.world().entity(rover).get::<Knob>().is_none(),
+        "remove() should strip the Knob component"
+    );
+}
+
+/// `despawn(id)` removes another entity entirely — gone from the world.
+/// (Registry/replication cleanup is `sync_entity_registry` / `broadcast_despawns`'
+/// job off the `GlobalEntityId` removal, exercised in the api/networking suites,
+/// not wired into this minimal scripting harness.)
+#[test]
+fn despawn_verb_removes_entity() {
+    const VICTIM_GID: u64 = 8888;
+    let source = format!(r#"fn on_start(me) {{ despawn({VICTIM_GID}); }}"#);
+    let (mut app, _rover) = setup(&source);
+    let victim = spawn_typed_rover(&mut app, VICTIM_GID, 50.0);
+    assert!(app.world().get_entity(victim).is_ok(), "victim exists before tick");
+
+    tick(&mut app);
+
+    assert!(
+        app.world().get_entity(victim).is_err(),
+        "despawn() should remove the entity from the world"
+    );
+}
+
+// ── Deterministic RNG: rand() is a pure function of (entity, tick, call) ─────
+
+/// `rand()` is reproducible — the SAME entity at the SAME tick draws the SAME
+/// sequence across independent runs (networking-safe, replayable) — yet advances
+/// within a tick and varies across ticks.
+#[test]
+fn rand_is_deterministic_across_runs_and_advances() {
+    let source = r#"
+        fn on_tick(me) {
+            cmd("Report", #{ value: (rand() * 1000000.0).to_int() });
+            cmd("Report", #{ value: (rand() * 1000000.0).to_int() });
+        }
+    "#;
+
+    // One fresh app, pinned to `tick_val`, ticked once → the drawn ints.
+    let run_once = |tick_val: u64| -> Vec<i64> {
+        let (mut app, _rover) = setup(source);
+        app.world_mut().insert_resource(lunco_core::SimTick(tick_val));
+        tick(&mut app);
+        app.world().resource::<CapturedData>().0.clone()
+    };
+
+    let a_t1 = run_once(1);
+    let b_t1 = run_once(1); // independent run, same entity + tick
+    let a_t2 = run_once(2); // same entity, different tick
+
+    assert_eq!(a_t1.len(), 2, "two rand draws per tick");
+    assert_ne!(a_t1[0], a_t1[1], "rand() must advance within a tick");
+    assert_eq!(a_t1, b_t1, "same entity+tick → identical sequence across runs (deterministic)");
+    assert_ne!(a_t1, a_t2, "a different tick must draw a different stream");
 }

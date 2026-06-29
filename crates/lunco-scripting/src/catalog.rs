@@ -61,11 +61,21 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
      "Direct, registered child entity ids (empty if none)."),
     ("list_entities", "list_entities()", "[#{ id, name, type, pos }]",
      "Every registered entity with name/type/pos — filter/score/select in-script."),
+    ("add", "add(id, \"Comp\", #{fields})", "bool",
+     "STRUCTURAL. Insert/replace a reflected component, built from its default + the field map (native → reflect). The C of CRUD; requires the type to register ReflectDefault. false on bad entity/type/field."),
+    ("remove", "remove(id, \"Comp\")", "bool",
+     "STRUCTURAL. Strip a reflected component from an entity. false if absent."),
+    ("despawn", "despawn(id)", "bool",
+     "STRUCTURAL. Despawn an entity (+ children); replicates on a networked host. Runtime SPAWN has no generic verb — use cmd(\"SpawnEntity\", #{entry_id, position}) so clients can reconstruct from the catalog."),
     ("emit", "emit(name, value?)", "bool",
      "Fire a TelemetryEvent on the shared bus; delivered to on_event hooks next tick. `value` may be float/int/bool/string."),
     ("sim_tick", "sim_tick()", "i64", "Current FixedUpdate tick."),
     ("dt", "dt()", "f64", "Fixed-step integration delta in seconds — multiply rates by this."),
     ("elapsed_seconds", "elapsed_seconds()", "f64", "Monotonic simulation seconds since startup."),
+    ("rand", "rand()", "f64",
+     "Uniform [0,1). DETERMINISTIC — seeded per hook from (entity, tick, hook), so identical on every networked peer and every replay. Use this, never an OS/wall-clock source."),
+    ("rand_range", "rand_range(lo, hi)", "f64", "Deterministic uniform float in [lo, hi)."),
+    ("rand_int", "rand_int(lo, hi)", "i64", "Deterministic uniform integer in [lo, hi) (half-open)."),
 ];
 
 /// Lifecycle hooks a persistent scenario *defines* (not verbs it calls).
