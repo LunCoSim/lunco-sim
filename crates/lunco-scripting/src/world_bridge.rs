@@ -245,6 +245,11 @@ pub fn build_world_engine() -> Engine {
     engine.set_max_call_levels(64);
     engine.set_max_string_size(64 * 1024);
     engine.set_max_array_size(10_000);
+    // Above rhai's defaults (64 global / 32 in functions): the built-in task tree
+    // nests composites (e.g. par_all → seq → leaf), and the recursive `__tick`
+    // helpers walk that depth. Runtime stays bounded by the operations + call-level
+    // caps above; this only widens the structural nesting allowance.
+    engine.set_max_expr_depths(128, 128);
 
     // cmd(name, #{params}) -> #{ id, ok, data, error }. Routes through
     // ApiCommandEvent so it inherits macro-reflected dispatch, GlobalEntityId
@@ -613,21 +618,25 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // Seed the deterministic RNG for this hook: (entity, tick, hook).
         bridge_core::rng_begin(self_gid as u64, bridge_core::sim_tick() as u64, salt);
         let user = call_hook(&self.engine, &mut st.scope, &st.ast, name, self_gid, &mut st.this);
-        // After on_tick, advance the BUILT-IN task (the prelude `__run_task`
-        // driver) so a `this.task = seq([...])` declared in on_start runs itself
-        // with no on_tick boilerplate. No-op when the script declared no task.
-        let task = if matches!(hook, ScenarioHook::Tick) {
+        // Built-in task drivers (prelude fns, called regardless of what the user
+        // AST defines): after on_start seed `this.task` from a `task(me)` fn if
+        // present; after on_tick advance the declared task. Both no-op when the
+        // script uses neither — so a script with no task pays one cheap call.
+        let driver = match hook {
+            ScenarioHook::Start => Some("__init_task"),
+            ScenarioHook::Tick => Some("__run_task"),
+            ScenarioHook::Stop => None,
+        };
+        let task = driver.and_then(|name| {
             call_prelude_driver(
                 &self.engine,
                 &mut st.scope,
                 &st.ast,
-                "__run_task",
+                name,
                 &mut st.this,
                 vec![Dynamic::from_int(self_gid)],
             )
-        } else {
-            None
-        };
+        });
         user.or(task).map(|(msg, pos)| rhai_diagnostic(msg, pos))
     }
 

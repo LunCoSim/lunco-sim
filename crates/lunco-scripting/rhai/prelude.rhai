@@ -214,23 +214,139 @@ fn seq_note_event(cur, evt) {
 // vocabulary (once/wait/wait_until/wait_for/step). A user on_tick/on_event still
 // runs if defined (for logic beyond the task).
 
-/// A runnable task from a step list — assign to `this.task` in on_start to have
-/// the engine advance it automatically. Sugar: `seq([...])` over the cursor model.
-fn seq(steps) { #{ steps: steps, cur: seq_init() } }
+// A task is a TREE of nodes. Leaves are the Layer-1 step maps (once/wait/
+// wait_until/wait_for/step); composites nest other nodes:
+//   seq([a, b, c])      run in order, advance when each is done
+//   par_all([a, b])     run concurrently, done when ALL are done
+//   par_race([a, b])    run concurrently, done when ANY is done
+//   repeat(n, node)     run `node` to completion `n` times
+//   forever(node)       run `node` to completion, over and over (never done)
+// e.g. patrol two legs forever, braking 2s at each:
+//   this.task = forever(seq([
+//       once(|m| drive_to(m, A)), wait_until(|m| arrived(m, A)), wait(2.0),
+//       once(|m| drive_to(m, B)), wait_until(|m| arrived(m, B)), wait(2.0),
+//   ]));
+// The engine ticks the tree each frame (__tick) and feeds events into it.
 
-/// True once task `t` has completed every step (`()` task → false).
-fn task_done(t) { t != () && t.cur.step >= t.steps.len() }
+/// Composite node constructors (assign the root to `this.task` in on_start).
+fn seq(items)      { #{ k: "seq",  items: items, i: 0 } }
+fn par_all(items)  { #{ k: "all",  items: items, fin: items.map(|x| false) } }
+fn par_race(items) { #{ k: "race", items: items } }
+fn repeat(n, body) { #{ k: "repeat", n: n, body: body, cur: body, done_n: 0 } }
+fn forever(body)   { #{ k: "forever", body: body, cur: body } }
 
-/// Engine driver — advances `this.task` one tick. Called by the runtime after
-/// on_tick; not for direct use. No-op when no task was declared.
-fn __run_task(me) {
-    if this.task != () { this.task.cur = run_steps(me, this.task.steps, this.task.cur); }
+/// Tick ONE leaf step `s` (a once/wait/wait_until/wait_for/step map), tracking its
+/// own dwell start on `s._t0`. `ev` is this tick's event-name buffer. Returns
+/// `#{ n: <updated leaf>, d: <done?> }`. (Mirrors run_steps' step_done precedence.)
+fn __tick_leaf(me, s, now, ev) {
+    if s.act != () { s.act.call(me); }            // closed-loop action (once/step)
+    let d = true;                                  // bare/once → advance immediately
+    if s.done != () { d = s.done.call(me); }       // wait_until / step predicate
+    else if s.secs != () { if s._t0 == () { s._t0 = now; } d = (now - s._t0) >= s.secs; }
+    else if s.event != () { d = ev.some(|n| n == s.event); }   // wait_for
+    #{ n: s, d: d }
 }
 
-/// Engine driver — feeds an event into `this.task`. Called by the runtime on each
-/// delivered event; not for direct use. No-op when no task was declared.
+// Tick one task node (recursive). Each composite kind is a separate helper so no
+// single function nests past rhai's default expr-depth cap — the prelude parses
+// on a stock `Engine` (catalog / one-shot backend), not just the scenario engine.
+// Each returns `#{ n: <updated node>, d: <done?> }`.
+
+/// Dispatch by node kind; a node with no `k` is a leaf step.
+fn __tick(me, node, now, ev) {
+    let k = node.k;
+    if k == "seq"     { return __tick_seq(me, node, now, ev); }
+    if k == "all"     { return __tick_all(me, node, now, ev); }
+    if k == "race"    { return __tick_race(me, node, now, ev); }
+    if k == "repeat"  { return __tick_repeat(me, node, now, ev); }
+    if k == "forever" { return __tick_forever(me, node, now, ev); }
+    __tick_leaf(me, node, now, ev)
+}
+
+fn __tick_seq(me, node, now, ev) {
+    let n = node.items.len();
+    if node.i >= n { return #{ n: node, d: true }; }
+    let item = node.items[node.i];
+    let r = __tick(me, item, now, ev);
+    node.items[node.i] = r.n;
+    if r.d { node.i += 1; }
+    #{ n: node, d: node.i >= n }
+}
+
+fn __tick_all(me, node, now, ev) {
+    let all_done = true;
+    let n = node.items.len();
+    for j in 0..n {
+        if !node.fin[j] {
+            let item = node.items[j];
+            let r = __tick(me, item, now, ev);
+            node.items[j] = r.n;
+            node.fin[j] = r.d;
+        }
+        if !node.fin[j] { all_done = false; }
+    }
+    #{ n: node, d: all_done }
+}
+
+fn __tick_race(me, node, now, ev) {
+    let any_done = false;
+    let n = node.items.len();
+    for j in 0..n {
+        let item = node.items[j];
+        let r = __tick(me, item, now, ev);
+        node.items[j] = r.n;
+        if r.d { any_done = true; }
+    }
+    #{ n: node, d: any_done }
+}
+
+fn __tick_repeat(me, node, now, ev) {
+    if node.done_n >= node.n { return #{ n: node, d: true }; }
+    let r = __tick(me, node.cur, now, ev);
+    node.cur = r.n;
+    if r.d { node.done_n += 1; node.cur = node.body; }   // reset to a fresh body
+    #{ n: node, d: node.done_n >= node.n }
+}
+
+fn __tick_forever(me, node, now, ev) {
+    let r = __tick(me, node.cur, now, ev);
+    node.cur = r.n;
+    if r.d { node.cur = node.body; }
+    #{ n: node, d: false }
+}
+
+/// Engine driver — advance `this.task` one tick against this frame's event
+/// buffer, then clear it (events live one tick, the actor-model cadence). Called
+/// by the runtime after on_tick; no-op when no task was declared. Emits
+/// TASK_COMPLETE once when the root finishes.
+fn __run_task(me) {
+    if this.task == () { return; }
+    let ev = if this.__events == () { [] } else { this.__events };
+    let r = __tick(me, this.task, elapsed_seconds(), ev);
+    this.task = r.n;
+    this.__events = [];
+    if r.d && this.__task_done != true { this.__task_done = true; emit("TASK_COMPLETE", 0); }
+}
+
+/// Engine driver — buffer an event name for `this.task`'s `wait_for` leaves to
+/// consume on the next advance. Called by the runtime per delivered event.
 fn __note_task_event(me, evt) {
-    if this.task != () { this.task.cur = seq_note_event(this.task.cur, evt); }
+    if this.task == () { return; }
+    if this.__events == () { this.__events = []; }
+    if evt.name != () { this.__events.push(evt.name); }
+}
+
+/// SUGAR — define a `task(me)` function returning a node and the engine runs it
+/// automatically: no on_start, no `this.task = …`. The whole scenario can be:
+///
+///   fn task(me) {
+///       seq([ once(|m| drive_to(m, CP1)), wait_until(|m| arrived(m, CP1)), wait(3.0) ])
+///   }
+///
+/// Engine driver — called once after on_start; seeds `this.task` from a user
+/// `task(me)` if defined and not already set (an explicit `this.task =` wins).
+fn __init_task(me) {
+    if this.task == () && is_def_fn("task", 1) { this.task = task(me); }
 }
 
 // ── Timeline (Layer 2: a mission as DATA, interpreted onto Layer 1) ──────────

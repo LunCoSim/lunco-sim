@@ -428,6 +428,97 @@ fn builtin_task_waits_for_event_with_no_on_event() {
     );
 }
 
+/// Count how many times event `name` was emitted.
+fn event_count(app: &App, name: &str) -> usize {
+    app.world().resource::<EventLog>().0.iter().filter(|n| n.as_str() == name).count()
+}
+fn emitted(app: &App, name: &str) -> bool {
+    app.world().resource::<EventLog>().0.iter().any(|n| n == name)
+}
+
+#[test]
+fn builtin_task_fn_sugar_auto_inits_with_no_on_start() {
+    // Sugar: the whole scenario is one `fn task(me)` — no on_start, no
+    // `this.task = …`. The engine seeds it after Start and advances it each tick.
+    let source = r#"
+        fn task(me) {
+            seq([ once(|m| emit("X", 1)), once(|m| emit("Y", 1)) ])
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    tick(&mut app); // Start → __init_task seeds this.task; Tick → step0 emits X
+    tick(&mut app); // step1 emits Y
+    assert!(
+        emitted(&app, "X") && emitted(&app, "Y"),
+        "`fn task(me)` should auto-init and advance with no on_start; got {:?}",
+        app.world().resource::<EventLog>().0
+    );
+}
+
+#[test]
+fn builtin_task_par_all_waits_for_every_branch() {
+    // par_all is done only when ALL branches finish. Branch A finishes tick 1
+    // (a once); branch B is a 2-step seq that finishes tick 2 → the whole task
+    // completes on tick 2, not tick 1.
+    let source = r#"
+        fn on_start(me) {
+            this.task = par_all([
+                once(|m| emit("A", 1)),
+                seq([ once(|m| emit("B1", 1)), once(|m| emit("B2", 1)) ]),
+            ]);
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    tick(&mut app);
+    assert!(emitted(&app, "A") && emitted(&app, "B1"), "tick1 runs both branches' first step");
+    assert!(!emitted(&app, "TASK_COMPLETE"), "par_all must wait for branch B's 2nd step");
+    tick(&mut app);
+    assert!(emitted(&app, "B2"), "branch B advances on tick2");
+    assert!(emitted(&app, "TASK_COMPLETE"), "par_all completes once all branches finish");
+}
+
+#[test]
+fn builtin_task_par_race_completes_on_first_branch() {
+    // par_race is done as soon as ANY branch finishes. One branch never completes
+    // (wait_until false); the other finishes immediately → the task completes.
+    let source = r#"
+        fn on_start(me) {
+            this.task = par_race([
+                wait_until(|m| false),
+                once(|m| emit("WIN", 1)),
+            ]);
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    tick(&mut app);
+    assert!(emitted(&app, "WIN"), "the finishing branch ran");
+    assert!(emitted(&app, "TASK_COMPLETE"), "par_race completes on the first finished branch");
+}
+
+#[test]
+fn builtin_task_repeat_runs_body_n_times() {
+    // repeat(3, ...) runs its body to completion three times.
+    let source = r#"
+        fn on_start(me) { this.task = repeat(3, once(|m| emit("R", 1))); }
+    "#;
+    let (mut app, _rover) = setup(source);
+    for _ in 0..4 { tick(&mut app); }
+    assert_eq!(event_count(&app, "R"), 3, "repeat(3) should run the body exactly 3 times");
+    assert!(emitted(&app, "TASK_COMPLETE"), "repeat completes after the last iteration");
+}
+
+#[test]
+fn builtin_task_forever_never_completes() {
+    // forever re-runs its body and never reports done.
+    let source = r#"
+        fn on_start(me) { this.task = forever(once(|m| emit("F", 1))); }
+    "#;
+    let (mut app, _rover) = setup(source);
+    for _ in 0..3 { tick(&mut app); }
+    assert_eq!(event_count(&app, "F"), 3, "forever runs the body every tick");
+    assert!(!emitted(&app, "TASK_COMPLETE"), "forever must never complete");
+}
+
 #[test]
 fn rhai_event_delivered_to_on_event_next_tick() {
     // P3 frame-delayed event delivery: tick 1 emits PING, tick 2 the on_event
