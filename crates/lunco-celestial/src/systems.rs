@@ -8,7 +8,7 @@ use crate::ephemeris::EphemerisResource;
 use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
 use crate::coords::ecliptic_to_bevy;
 use crate::coords::world_position_seeded;
-use lunco_materials::BlueprintMaterial;
+use lunco_materials::{ParamValue, ShaderMaterial};
 
 /// Update body and frame positions based on ephemeris data.
 /// Optimized: Only re-computes if Epoch has changed significantly.
@@ -116,8 +116,8 @@ pub fn body_rotation_system(
 /// If body rotation needs to affect tiles in the future, tiles should be
 /// re-parented to Body or use a different coordinate scheme.
 pub fn tile_rotation_sync_system(
-    _q_bodies: Query<&Transform, (With<CelestialBody>, Without<lunco_terrain::TileCoord>)>,
-    _q_tiles: Query<(&mut Transform, &lunco_terrain::TileCoord)>,
+    _q_bodies: Query<&Transform, (With<CelestialBody>, Without<lunco_terrain_globe::TileCoord>)>,
+    _q_tiles: Query<(&mut Transform, &lunco_terrain_globe::TileCoord)>,
 ) {
     // Intentionally empty — tiles stay at identity rotation in Grid frame.
 }
@@ -159,10 +159,10 @@ pub fn celestial_telemetry_system(
 }
 
 pub fn celestial_visuals_system(
-    mut materials: ResMut<Assets<BlueprintMaterial>>,
+    mut materials: ResMut<Assets<ShaderMaterial>>,
     q_camera: Query<(Entity, &CellCoord, &Transform), (With<Camera>, With<lunco_core::Avatar>)>,
     q_bodies: Query<(Entity, &CellCoord, &Transform, &CelestialBody)>,
-    q_tiles: Query<(&MeshMaterial3d<BlueprintMaterial>, &lunco_terrain::TileCoord), With<lunco_terrain::TerrainTile>>,
+    q_tiles: Query<(&MeshMaterial3d<ShaderMaterial>, &lunco_terrain_globe::TileCoord), With<lunco_terrain_globe::TerrainTile>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -199,7 +199,7 @@ pub fn celestial_visuals_system(
     for (mat_handle, coord) in q_tiles.iter() {
         if coord.body == nearest_body {
             if let Some(mat) = materials.get_mut(mat_handle) {
-                mat.extension.transition = transition;
+                mat.set("transition", ParamValue::F32(transition));
             }
         }
     }

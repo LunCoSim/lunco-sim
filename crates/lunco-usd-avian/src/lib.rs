@@ -453,7 +453,7 @@ fn process_usd_avian_prims(
         if has_terrain_api {
             commands.entity(entity).insert((
                 RigidBody::Static,
-                lunco_terrain::TerrainTile,
+                lunco_terrain_globe::TerrainTile,
             ));
             // Primitive terrain (Cube/Sphere/Cylinder) → intrinsic collider.
             // Mesh terrain (a glTF DEM loaded via `lunco:assetMode = "mesh"`,

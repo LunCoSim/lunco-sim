@@ -8,6 +8,7 @@
 //! main thread with no raycasts.
 
 use bevy::math::Vec2;
+use lunco_terrain_core::HeightSource;
 
 use crate::sampler::Placement;
 use crate::spec::CraterLayer;
@@ -123,43 +124,78 @@ impl HeightGrid {
         out
     }
 
-    /// Build visual mesh vertex data (positions in metres, smooth normals from
-    /// central differences, UVs across the region).
+    /// Build visual mesh vertex data (positions in metres, smooth normals, UVs
+    /// across the region). Normals + indices come from the shared [`grid_normals`]
+    /// / [`grid_indices`] helpers so terrain meshes are built identically here and
+    /// in the terrain-streaming tile baker.
     pub fn to_mesh_data(&self) -> MeshData {
         let res = self.res;
         let mut positions = Vec::with_capacity(res * res);
-        let mut normals = Vec::with_capacity(res * res);
         let mut uvs = Vec::with_capacity(res * res);
-        let s = self.spacing();
-
         for iz in 0..res {
             for ix in 0..res {
                 let p = self.sample_pos(ix, iz);
                 let y = self.heights[self.idx(ix, iz)] as f32;
                 positions.push([p.x, y, p.y]);
                 uvs.push([ix as f32 / (res as f32 - 1.0), iz as f32 / (res as f32 - 1.0)]);
-
-                // Central-difference normal.
-                let hl = self.heights[self.idx(ix.saturating_sub(1), iz)] as f32;
-                let hr = self.heights[self.idx((ix + 1).min(res - 1), iz)] as f32;
-                let hd = self.heights[self.idx(ix, iz.saturating_sub(1))] as f32;
-                let hu = self.heights[self.idx(ix, (iz + 1).min(res - 1))] as f32;
-                let n = bevy::math::Vec3::new(hl - hr, 2.0 * s, hd - hu).normalize_or_zero();
-                normals.push([n.x, n.y, n.z]);
             }
         }
-
-        let mut indices = Vec::with_capacity((res - 1) * (res - 1) * 6);
-        for iz in 0..res - 1 {
-            for ix in 0..res - 1 {
-                let i = (iz * res + ix) as u32;
-                let r = i + res as u32;
-                indices.extend_from_slice(&[i, r, i + 1, i + 1, r, r + 1]);
-            }
-        }
-
+        let normals = grid_normals(&positions, res);
+        let indices = grid_indices(res);
         MeshData { positions, normals, uvs, indices }
     }
+}
+
+/// Smooth normals for a row-major `res×res` vertex grid via central differences
+/// over each vertex's **actual** XZ spacing (one-sided at the edges). Shared by
+/// [`HeightGrid::to_mesh_data`] and the terrain-streaming tile baker so terrain
+/// normals are computed identically everywhere.
+pub fn grid_normals(positions: &[[f32; 3]], res: usize) -> Vec<[f32; 3]> {
+    let idx = |x: usize, z: usize| z * res + x;
+    let mut normals = vec![[0.0, 1.0, 0.0]; res * res];
+    for z in 0..res {
+        for x in 0..res {
+            let xm = x.saturating_sub(1);
+            let xp = (x + 1).min(res - 1);
+            let zm = z.saturating_sub(1);
+            let zp = (z + 1).min(res - 1);
+            let hl = positions[idx(xm, z)][1];
+            let hr = positions[idx(xp, z)][1];
+            let hd = positions[idx(x, zm)][1];
+            let hu = positions[idx(x, zp)][1];
+            let dx = positions[idx(xp, z)][0] - positions[idx(xm, z)][0];
+            let dz = positions[idx(x, zp)][2] - positions[idx(x, zm)][2];
+            let nx = if dx != 0.0 { -(hr - hl) / dx } else { 0.0 };
+            let nz = if dz != 0.0 { -(hu - hd) / dz } else { 0.0 };
+            let len = (nx * nx + 1.0 + nz * nz).sqrt();
+            normals[idx(x, z)] = [nx / len, 1.0 / len, nz / len];
+        }
+    }
+    normals
+}
+
+/// A `HeightGrid` is a [`HeightSource`]: reuse its bilinear sampler, widening to
+/// the trait's `f64` interface. The impl lives here (with the type) so the
+/// foreign trait `lunco_terrain_core::HeightSource` is implemented for the local
+/// `HeightGrid` — satisfying the orphan rule — and the planar streamer + any
+/// other consumer can treat a loaded DEM as a generic height source.
+impl HeightSource for HeightGrid {
+    fn height_at(&self, x: f64, z: f64) -> f64 {
+        HeightGrid::height_at(self, x as f32, z as f32) as f64
+    }
+}
+
+/// Two CCW triangles per quad over a row-major `res×res` vertex grid.
+pub fn grid_indices(res: usize) -> Vec<u32> {
+    let mut indices = Vec::with_capacity((res - 1) * (res - 1) * 6);
+    let row = res as u32;
+    for iz in 0..(res as u32 - 1) {
+        for ix in 0..(res as u32 - 1) {
+            let i = iz * row + ix;
+            indices.extend_from_slice(&[i, i + row, i + 1, i + 1, i + row, i + row + 1]);
+        }
+    }
+    indices
 }
 
 /// Build the full height grid for a field: flat base + all craters stamped.

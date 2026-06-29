@@ -9,9 +9,6 @@
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
-#[cfg(not(target_arch = "wasm32"))]
-use bevy::asset::load_internal_asset;
-use bevy_shader::Shader;
 // Gravity *types* now live in lunco-environment; celestial owns only the
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
 use lunco_environment::{Gravity, GravityBody};
@@ -20,6 +17,7 @@ mod clock;
 pub mod ephemeris;
 pub mod registry;
 mod big_space_setup;
+mod globe_lod;
 mod systems;
 mod coords;
 mod gravity;
@@ -29,10 +27,10 @@ mod missions;
 mod embedded_assets;
 
 /// Re-export terrain types from lunco-terrain for backward compatibility.
-pub use lunco_terrain::*;
+pub use lunco_terrain_globe::*;
 
 // Re-export TerrainTileConfig explicitly since it's used by celestial code
-pub use lunco_terrain::TerrainTileConfig;
+pub use lunco_terrain_globe::TerrainTileConfig;
 
 /// UI panels for celestial time control and body browser.
 #[cfg(feature = "ui")]
@@ -50,9 +48,6 @@ pub use soi::*;
 pub use trajectories::*;
 pub use missions::*;
 pub use embedded_assets::*;
-
-// Re-export blueprint material types from lunco-materials (the canonical source).
-pub use lunco_materials::{BlueprintExtension, BlueprintMaterial, BlueprintMaterialPlugin, BLUEPRINT_SHADER_HANDLE};
 
 #[derive(Event, Debug, Clone, Copy)]
 pub struct SurfaceClickEvent {
@@ -73,20 +68,12 @@ impl Plugin for CelestialPlugin {
         // EmbeddedAssetsPlugin embeds shaders/textures/missions on wasm32, no-op on desktop
         app.add_plugins(embedded_assets::EmbeddedAssetsPlugin);
 
-        // Register blueprint shader only on desktop (wasm32 handled by EmbeddedAssetsPlugin).
+        // Trajectory shader is desktop-only (wasm32 embeds it via EmbeddedAssetsPlugin).
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            load_internal_asset!(
-                app,
-                BLUEPRINT_SHADER_HANDLE,
-                "../../../assets/shaders/blueprint_extension.wgsl",
-                Shader::from_wgsl
-            );
-            app.add_plugins(trajectories::TrajectoryShaderPlugin);
-        }
+        app.add_plugins(trajectories::TrajectoryShaderPlugin);
 
         // Terrain is now in lunco-terrain crate — register it here
-        app.add_plugins(lunco_terrain::TerrainPlugin);
+        app.add_plugins(lunco_terrain_globe::TerrainPlugin);
 
         app.insert_resource(get_default_celestial_clock());
         app.init_resource::<TimeWarpState>();
@@ -146,6 +133,10 @@ impl Plugin for CelestialPlugin {
             celestial_telemetry_system,
             celestial_visuals_system,
         ).chain());
+
+        // Camera-driven cube-sphere LOD: streams each body's tiles (replaces the
+        // old fixed 24-tile shell). See `crate::globe_lod`.
+        app.add_systems(Update, globe_lod::update_globe_lod);
 
         // Terrain spawning is now handled by lunco-terrain plugin
         // Systems like terrain_spawn_system run in that crate

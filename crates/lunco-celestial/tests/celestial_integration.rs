@@ -3,7 +3,7 @@ use big_space::prelude::*;
 use lunco_celestial::CelestialPlugin;
 use lunco_celestial::CelestialBody;
 use lunco_celestial::CelestialClock;
-use lunco_materials::BlueprintMaterial;
+use lunco_materials::ShaderMaterial;
 
 #[test]
 fn test_celestial_startup_and_movement() {
@@ -17,7 +17,7 @@ fn test_celestial_startup_and_movement() {
     app.init_resource::<Assets<Mesh>>();
     app.init_resource::<Assets<StandardMaterial>>();
     app.init_resource::<Assets<bevy_shader::Shader>>();
-    app.init_resource::<Assets<BlueprintMaterial>>();
+    app.init_resource::<Assets<ShaderMaterial>>();
     app.init_asset::<Image>();
     app.add_plugins(bevy::gizmos::GizmoPlugin);
     app.add_plugins(CelestialPlugin);

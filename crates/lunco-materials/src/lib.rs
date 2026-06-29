@@ -11,15 +11,13 @@
 //!   `ShaderMaterialPlugin` but not `UsdSimPlugin` registers the render pipeline
 //!   but performs no USD authoring — a `materialType="shader"` prim would render
 //!   with its plain `StandardMaterial`.
-//! - [`BlueprintMaterial`] — an `ExtendedMaterial<StandardMaterial, _>` that still
-//!   uses an `On<Add, UsdVisualSynced>` observer to self-apply. That's safe only
-//!   because nothing consumes it synchronously; prefer the `ShaderMaterial` pattern
-//!   for anything that downstream systems read in the same frame.
+//!
+//! There is no bespoke per-effect material type: the old `BlueprintMaterial`
+//! (a hand-rolled `ExtendedMaterial`) is gone — its grid look is now the
+//! self-describing `assets/shaders/blueprint.wgsl` applied via `ShaderMaterial`.
 
-mod blueprint;
 pub mod dyn_params;
 mod shader_material;
 
-pub use blueprint::*;
 pub use dyn_params::{ParamField, ParamSchema, ParamType, ParamValue, UiKind};
 pub use shader_material::*;

@@ -26,7 +26,8 @@ members = [
     "crates/lunco-materials",
     "crates/lunco-networking",
     "crates/lunco-command-macro",
-    "crates/lunco-terrain",
+    "crates/lunco-terrain-globe",
+    "crates/lunco-terrain-core",
     "crates/lunco-api",
     "crates/lunco-cosim",
     "crates/lunco-environment",
@@ -46,7 +47,8 @@ members = [
     "crates/lunco-settings",
     "crates/lunco-experiments",
     "crates/lunco-render",
-    "crates/lunco-obstacle-field"
+    "crates/lunco-obstacle-field",
+    "crates/lunco-terrain-surface"
 ]
 # Bare `cargo build`/`check`/`test` (no `-p`/`--workspace`) operates on just the
 # two app crates and their dependency closure. This skips workspace members that
@@ -161,7 +163,8 @@ web-time = { version = "1", features = ["serde"] }
 # getrandom 0.2 with js feature for wasm32 support (needed by rand, uuid, etc.)
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 lunco-api = { path = "crates/lunco-api" }
-lunco-terrain = { path = "crates/lunco-terrain" }
+lunco-terrain-globe = { path = "crates/lunco-terrain-globe" }
+lunco-terrain-core = { path = "crates/lunco-terrain-core" }
 lunco-cosim = { path = "crates/lunco-cosim" }
 lunco-environment = { path = "crates/lunco-environment" }
 lunco-theme = { path = "crates/lunco-theme" }

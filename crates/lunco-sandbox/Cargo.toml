@@ -68,8 +68,9 @@ lunco-render = { path = "../lunco-render" }
 # `default-features = false` drops celestial's egui inspector (`CelestialUiPlugin`,
 # not used by the sandbox bin). The `celestial` feature still pulls embed-assets.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
-lunco-terrain = { path = "../lunco-terrain" }
+lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-modelica = { path = "../lunco-modelica", default-features = false }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-environment = { path = "../lunco-environment" }
@@ -77,6 +78,8 @@ lunco-scripting = { path = "../lunco-scripting" }
 # USD core (scene load + collider build) is always needed; its Twin-browser /
 # viewport egui UI rides `lunco-usd/ui`, re-enabled below by the `ui` feature.
 lunco-usd = { path = "../lunco-usd", default-features = false }
+# USD→DEM bridge: read `lunco:terrain:demSource` off authored terrain prims.
+openusd = { workspace = true }
 # `lunco-sandbox-edit` is NOT optional: the headless server needs its
 # `commands::SpawnCommandPlugin` (runtime spawn/move + `NetReplicate` tagging).
 # The gizmo/selection/physics-viz halves are gated behind `feature = "ui"` in
@@ -156,6 +159,10 @@ ui = [
     "bevy/x11",
     "bevy/wayland",
     "bevy/webgl2",
+    # Runtime PNG decode for `bevy_image`'s ImageLoader — terrain colour/layer
+    # maps (the twin's `color.png`) load through the asset server. The workspace
+    # bevy baseline ships no image codecs; render builds opt in per-consumer.
+    "bevy/png",
     "bevy/bevy_picking",
     "bevy/mesh_picking",
     "bevy/bevy_post_process",

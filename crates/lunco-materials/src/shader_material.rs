@@ -42,15 +42,24 @@
 
 use bevy::prelude::*;
 use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey, MaterialPlugin};
-use bevy::mesh::MeshVertexBufferLayoutRef;
+use bevy::mesh::{MeshVertexAttribute, MeshVertexBufferLayoutRef};
 use bevy::render::render_resource::{
-    AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+    AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError, VertexFormat,
 };
 use bevy::shader::{Shader, Source as ShaderSource};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 use crate::dyn_params::{self, ParamSchema, ParamType, ParamValue};
+
+/// Custom vertex attribute: each vertex's CDLOD **parent-lattice position** (the
+/// morph target). A geomorph vertex shader lerps `POSITION → this` by camera
+/// distance so a tile collapses smoothly onto its coarser parent (no LOD pop).
+/// Only terrain LOD-tile meshes carry it; [`ShaderMaterial::specialize`] adds it
+/// to the vertex layout only when [`ShaderMaterial::vertex_shader`] is set, so the
+/// ordinary fragment-only path is untouched. Shader side: `@location(8)`.
+pub const ATTRIBUTE_MORPH_TARGET: MeshVertexAttribute =
+    MeshVertexAttribute::new("Lunco_MorphTarget", 0x4d_4f_52_50, VertexFormat::Float32x3);
 
 /// A general custom-shader material whose parameters are **dynamic**: each
 /// `.wgsl` declares its own `Material` uniform struct (real field names), the
@@ -76,10 +85,44 @@ pub struct ShaderMaterial {
     /// binding are unaffected.
     #[texture(1, sample_type = "float", filterable = false)]
     pub height_map: Option<Handle<Image>>,
+    /// **Layer maps** (terrain layered pipeline, `terrain_layered.wgsl`). All
+    /// `Option` + filterable float; `None` binds Bevy's fallback image, and a
+    /// shader that doesn't declare the binding is unaffected (same contract as
+    /// `height_map`). Sampled by planar UV (`in.uv`), `has_*`-guarded so a
+    /// missing map falls back to the procedural look rather than erroring.
+    ///
+    /// Albedo/colour layer — a real raster (e.g. the NASA lunar colour mosaic
+    /// downloaded via `Assets.toml`) blended over the procedural regolith.
+    #[texture(2)]
+    #[sampler(3)]
+    pub albedo_map: Option<Handle<Image>>,
+    /// Mineral/classification layer — a class-id or composition raster tinted
+    /// through a palette LUT in the shader (also serves science-zone overlays).
+    #[texture(4)]
+    #[sampler(5)]
+    pub mineral_map: Option<Handle<Image>>,
+    /// Packed scalar data layers in one RGBA to stay under WebGPU binding
+    /// limits: **R=roughness G=ambient-occlusion B=rock-density A=hazard**.
+    /// Channel routing lives in the layer stack (`ChannelMap`).
+    #[texture(6)]
+    #[sampler(7)]
+    pub surface_map: Option<Handle<Image>>,
+    /// Tangent/world-space normal layer — perturbs the procedural bump normal
+    /// (meso-scale relief the FBM can't carry). Typically DEM-derived (Sobel).
+    #[texture(8)]
+    #[sampler(9)]
+    pub normal_map: Option<Handle<Image>>,
     /// Per-instance fragment shader. **Not** a bind-group resource — it drives
     /// pipeline specialization (see [`ShaderMaterial::specialize`]) and is kept
     /// as a strong handle so the asset stays loaded.
     pub shader: Handle<Shader>,
+    /// Optional per-instance **vertex** shader (e.g. the CDLOD geomorph). Like
+    /// [`shader`](Self::shader) it drives pipeline specialization, not the bind
+    /// group. When `Some`, [`specialize`](Self::specialize) swaps
+    /// `descriptor.vertex.shader` and extends the vertex layout with
+    /// [`ATTRIBUTE_MORPH_TARGET`]. `None` (the common case) = Bevy's default mesh
+    /// vertex shader, so the fragment-only path is unchanged.
+    pub vertex_shader: Option<Handle<Shader>>,
     /// Reflected parameter layout for [`shader`](Self::shader). Defaults to the
     /// legacy fixed layout; the reflect system upgrades it once the shader
     /// source is available. Cheap shared `Arc`. Not a bind-group resource.
@@ -106,7 +149,12 @@ impl Default for ShaderMaterial {
         Self {
             raw: [Vec4::ZERO; dyn_params::BLOCK_VEC4S],
             height_map: None,
+            albedo_map: None,
+            mineral_map: None,
+            surface_map: None,
+            normal_map: None,
             shader: Handle::default(),
+            vertex_shader: None,
             schema: empty_schema_arc(),
             values: BTreeMap::new(),
         }
@@ -194,15 +242,17 @@ impl ShaderMaterial {
     }
 }
 
-/// Pipeline key carrying the per-instance shader handle into `specialize`.
+/// Pipeline key carrying the per-instance shader handles into `specialize`.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ShaderKey {
     shader: Handle<Shader>,
+    /// `Some` → swap the vertex stage too + bind the morph-target attribute.
+    vertex_shader: Option<Handle<Shader>>,
 }
 
 impl From<&ShaderMaterial> for ShaderKey {
     fn from(m: &ShaderMaterial) -> Self {
-        Self { shader: m.shader.clone() }
+        Self { shader: m.shader.clone(), vertex_shader: m.vertex_shader.clone() }
     }
 }
 
@@ -210,7 +260,7 @@ impl Material for ShaderMaterial {
     fn specialize(
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
-        _layout: &MeshVertexBufferLayoutRef,
+        layout: &MeshVertexBufferLayoutRef,
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         // `specialize` runs for *every* pass that uses this material, including
@@ -228,6 +278,23 @@ impl Material for ShaderMaterial {
         if !is_prepass {
             if let Some(fragment) = descriptor.fragment.as_mut() {
                 fragment.shader = key.bind_group_data.shader.clone();
+            }
+            // Per-instance VERTEX stage (CDLOD geomorph). Same non-prepass guard:
+            // our geomorph `.wgsl` defines only a main-pass `@vertex`, so the
+            // prepass keeps Bevy's default vertex shader (un-morphed depth — a
+            // sub-tile mismatch acceptable for the debug LOD view). When set, the
+            // mesh carries `ATTRIBUTE_MORPH_TARGET`, so rebuild the vertex layout to
+            // feed `@location(8)`. Meshes without it use the fragment-only path
+            // above and never reach here (`vertex_shader` is `None`).
+            if let Some(vertex) = &key.bind_group_data.vertex_shader {
+                descriptor.vertex.shader = vertex.clone();
+                let vertex_layout = layout.0.get_layout(&[
+                    Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
+                    Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
+                    Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
+                    ATTRIBUTE_MORPH_TARGET.at_shader_location(8),
+                ])?;
+                descriptor.vertex.buffers = vec![vertex_layout];
             }
         }
         Ok(())

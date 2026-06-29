@@ -13,12 +13,11 @@
 //! is now structurally identical to them.
 
 use bevy::prelude::*;
-use bevy::camera::RenderTarget;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use leafwing_input_manager::prelude::*;
 use big_space::prelude::*;
 
-use lunco_workbench::WorkbenchViewportCamera;
+use lunco_workbench::auto_tag_workbench_3d_cameras;
 use lunco_avatar::{IntentAnalogState, FreeFlightCamera, AdaptiveNearPlane, ProvisionalAvatarCamera};
 use lunco_core::{Avatar, LocalAvatar};
 use lunco_modelica::{ModelicaWorkbenchPlugin, ModelicaUiConfig};
@@ -73,7 +72,6 @@ impl Plugin for SandboxUiPlugin {
             .add_plugins(lunco_usd::ui::UsdViewportPlugin)
             .add_plugins(lunco_sandbox_edit::SandboxEditPlugin)
             .add_plugins(lunco_sandbox_edit::ui::SandboxEditUiPlugin)
-            .add_plugins(lunco_materials::BlueprintMaterialPlugin)
             .add_plugins(lunco_materials::ShaderMaterialPlugin)
             // Rover-specific panels and the attach-a-model click flow.
             .add_plugins(|app: &mut App| {
@@ -151,33 +149,6 @@ fn collect_scroll_input_gated(
         return;
     }
     scroll_res.delta += ctx.input(|i: &bevy_egui::egui::InputState| i.raw_scroll_delta.y);
-}
-
-/// Tag freshly-added window-targeting `Camera3d` entities with
-/// `WorkbenchViewportCamera` so the workbench's PostUpdate viewport
-/// sync confines them to the `ViewportPanel` rect.
-///
-/// RTT cameras (`RenderTarget::Image`) are skipped: they paint into
-/// their own offscreen Image (USD preview, vello diagrams) and must
-/// not have a window-scoped viewport written to them.
-///
-/// `Added<Camera3d>` fires once per entity, the same frame the
-/// component is inserted. USD scene-load and async Avatar spawning
-/// can both land Camera3d entities long after `Startup`; this catches
-/// each as it arrives.
-fn auto_tag_workbench_3d_cameras(
-    mut commands: Commands,
-    new_cams: Query<
-        (Entity, Option<&RenderTarget>),
-        (Added<Camera3d>, Without<WorkbenchViewportCamera>),
-    >,
-) {
-    for (entity, target) in &new_cams {
-        let targets_window = matches!(target, None | Some(RenderTarget::Window(_)));
-        if targets_window {
-            commands.entity(entity).insert(WorkbenchViewportCamera);
-        }
-    }
 }
 
 /// Inserts the sharpest shadow filter (`Hardware2x2`) on every 3D camera as it

@@ -19,7 +19,6 @@
 use bevy::prelude::*;
 use avian3d::prelude::PhysicsPlugins;
 
-use lunco_materials::BlueprintMaterial;
 use lunco_ui::LuncoUiPlugin;
 use lunco_workbench::WorkbenchAppExt;
 use bevy_egui::{EguiPrimaryContextPass, EguiContexts};
@@ -104,9 +103,20 @@ fn main() {
         .add_plugins(lunco_web::WebReadyPlugin)
         .add_systems(EguiPrimaryContextPass, collect_scroll_input);
 
-    // Register UI panels — Mission Control as the right inspector. The
-    // central region stays empty so the 3D world shows through.
+    // Register UI panels. The workbench's `ViewportPanel` holds the centre —
+    // it paints nothing (transparent) but records its screen rect so the 3D
+    // camera is confined to it and `apply_workbench_viewport` keeps that
+    // camera active. Without it the centre is an opaque dock area that paints
+    // over the full-window 3D camera (the "empty viewport" bug). Mission
+    // Control docks into the right inspector via its `default_slot`.
+    app.register_panel(lunco_workbench::ViewportPanel);
     app.register_panel(lunco_ui::MissionControl);
+
+    // Avatar-/USD-spawned `Camera3d` entities land async (long after Startup);
+    // tag each with `WorkbenchViewportCamera` as it appears so the workbench
+    // confines it to the viewport rect instead of letting it bleed full-window
+    // (and so it satisfies the camera-invariant sentinel). Mirrors sandbox.
+    app.add_systems(Update, lunco_workbench::auto_tag_workbench_3d_cameras);
 
     #[cfg(not(feature = "sandbox"))]
     {
@@ -118,7 +128,9 @@ fn main() {
         app.add_plugins(lunco_celestial_ephemeris::EphemerisPlugin);
     }
 
-    app.add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
+    // The dynamic ShaderMaterial pipeline (registers MaterialPlugin::<ShaderMaterial>
+    // + schema reflection). Celestial Earth/Moon tiles render with blueprint.wgsl.
+    app.add_plugins(lunco_materials::ShaderMaterialPlugin)
         .add_plugins(PhysicsPlugins::default())
         // 12 solver substeps (avian default 6): the rigid joint-rover wheel
         // hinge leaks wheel-contact + drive impulses into the chassis as

@@ -9,7 +9,7 @@ avian3d.workspace = true
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
-lunco-terrain = { path = "../lunco-terrain" }
+lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 
 [features]
 default = ["3d"]

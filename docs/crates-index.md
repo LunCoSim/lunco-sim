@@ -60,7 +60,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, and simulati
 | **`lunco-usd-avian`** | Physics bridge: maps `USDPhysics` schemas (RigidBody, Colliders) to Avian3D components. |
 | **`lunco-usd-sim`** | Intercepts specialized simulation schemas (e.g., PhysX Vehicles) and maps them to LunCo models. |
 | **`lunco-usd-composer`** | Handles USD asset path resolution and stage flattening for complex multi-file assets. |
-| **`lunco-materials`** | Self-contained procedural material plugins (SolarPanel, Blueprint) for the USD rendering pipeline. |
+| **`lunco-materials`** | The one general self-describing `ShaderMaterial` (any `.wgsl` per-instance; params reflected from the shader's `struct Material`) for the USD rendering pipeline. |
 
 ---
 
@@ -206,7 +206,7 @@ Specialized simulation metadata bridge. Intercepts complex industry-standard veh
 Handles USD asset path resolution and stage flattening. Resolves complex multi-file composition (references, sublayers) into a unified data map for the simulation stage loader, anchoring paths to the Bevy asset directory.
 
 **`lunco-materials`**
-Procedural material library for the USD pipeline. Provides self-contained plugins for specialized shaders (SolarPanel, Blueprint grid) that are automatically assigned to entities based on USD `primvars` metadata.
+Material library for the USD pipeline. Provides one general self-describing `ShaderMaterial`: any `.wgsl` runs per-instance, its parameters reflected from the shader's `struct Material` and authored from USD `primvars` (e.g. `solar_panel.wgsl`, `blueprint.wgsl`, `regolith.wgsl`). No bespoke Rust material type per look.
 
 ---
 

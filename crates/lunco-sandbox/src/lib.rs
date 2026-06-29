@@ -44,8 +44,9 @@ use lunco_hardware::LunCoHardwarePlugin;
 // USD core (scene load + collider build) is always needed; the Twin browser /
 // RTT viewport UI plugins are `ui`-only (added by `SandboxUiPlugin`).
 use lunco_usd::{LoadScene, UsdPlugins};
-use lunco_terrain::TerrainPlugin;
+use lunco_terrain_globe::TerrainPlugin;
 use lunco_obstacle_field::ObstacleFieldPlugin;
+use lunco_terrain_surface::TerrainSurfacePlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::LunCoAvatarPlugin;
 use lunco_celestial::GravityPlugin;
@@ -344,6 +345,10 @@ impl Plugin for SandboxCorePlugin {
             // ground for rover mobility testing). Server-authoritative colliders;
             // client adds visuals. See `project_obstacle_field_generator`.
             .add_plugins(ObstacleFieldPlugin)
+            // Streamed, dynamically-LOD'd terrain (DEM tiles + heightfield
+            // colliders). Inert at M0 (config only); see lunco-terrain-surface
+            // and docs/terrain-streaming-PLAN.md.
+            .add_plugins(TerrainSurfacePlugin)
             .add_plugins(LunCoHardwarePlugin)
             .add_plugins(LunCoMobilityPlugin)
             // USD scene load + avian collider build + cosim wiring —
@@ -398,11 +403,161 @@ impl Plugin for SandboxCorePlugin {
             app.add_plugins(lunco_networking::ui::LunCoNetworkingUiPlugin);
         }
 
+        // USD→DEM bridge: an authored terrain prim with `lunco:assetMode="dem"`
+        // gets a DEM heightfield built onto it; its `materialType` authors the
+        // material via the universal ShaderMaterial path. Core (not GUI-gated):
+        // the headless server needs the collider for deterministic physics.
+        app.add_systems(Update, bridge_usd_dem_terrain);
+        // Bind authored terrain colour/albedo layer maps onto the terrain's
+        // `ShaderMaterial`. GUI-only (materials are an `ui`-feature concern; the
+        // headless server has no render materials and needs only the collider).
+        #[cfg(feature = "ui")]
+        app.add_systems(Update, bind_terrain_color_layer);
+
         // LogDiagnosticsPlugin is loud (a multi-line summary every second) — gate
         // it on `--log-diag`.
         if args.iter().any(|a| a == "--log-diag") {
             app.add_plugins(bevy::diagnostic::LogDiagnosticsPlugin::default());
         }
+    }
+}
+
+/// Marks a USD prim already examined by the DEM bridge (one-shot per prim).
+#[derive(Component)]
+struct DemBridged;
+
+/// One-shot marker: the terrain's colour/layer maps have been bound (or the prim
+/// authors none), so [`bind_terrain_color_layer`] stops re-scanning it.
+#[cfg(feature = "ui")]
+#[derive(Component)]
+struct TerrainColorBound;
+
+/// GUI-only: bind authored terrain **colour layers** onto the terrain's
+/// `ShaderMaterial`. Reads `lunco:terrain:layer:albedo:map` (a path **relative to
+/// the open Twin**, e.g. `terrain/connecting_ridge/color.png`) off the terrain
+/// prim, loads it through the `twin://` asset source (so it travels with the
+/// Twin — no engine-global `lunco-lib://` link), and sets the material's
+/// `albedo_map` + `weight_albedo`. The map only renders when the prim's
+/// `shaderPath` is `terrain_layered.wgsl` (which declares the albedo binding);
+/// with `regolith.wgsl` the slot is simply ignored. One-shot per terrain.
+#[cfg(feature = "ui")]
+fn bind_terrain_color_layer(
+    q: Query<
+        (Entity, &lunco_usd::UsdPrimPath, &MeshMaterial3d<lunco_materials::ShaderMaterial>),
+        (With<lunco_terrain_surface::DemTerrainSurface>, Without<TerrainColorBound>),
+    >,
+    stages: Res<Assets<lunco_usd::UsdStageAsset>>,
+    twins: Res<lunco_assets::twin_source::TwinRoots>,
+    asset_server: Res<AssetServer>,
+    mut mats: ResMut<Assets<lunco_materials::ShaderMaterial>>,
+    mut commands: Commands,
+) {
+    use lunco_materials::ParamValue;
+    for (entity, prim_path, mat3d) in &q {
+        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
+        let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
+            commands.entity(entity).insert(TerrainColorBound);
+            continue;
+        };
+        let reader = &*stage.reader;
+        let Some(rel) =
+            reader.prim_attribute_value::<String>(&sdf, "lunco:terrain:layer:albedo:map")
+        else {
+            // No colour layer authored — stop re-scanning this terrain.
+            commands.entity(entity).insert(TerrainColorBound);
+            continue;
+        };
+        // Resolve relative to the open Twin via the `twin://<name>/<rel>` source.
+        let Some((twin_name, _)) = twins.primary() else { continue };
+        // Wait for the material to exist before binding (it's created async by the
+        // USD shader system); retry next frame until it does.
+        let Some(material) = mats.get_mut(&mat3d.0) else { continue };
+        let weight = reader
+            .prim_attribute_value::<f32>(&sdf, "lunco:terrain:layer:albedo:weight")
+            .unwrap_or(1.0);
+        let uri = format!("twin://{twin_name}/{rel}");
+        material.albedo_map = Some(asset_server.load(&uri));
+        material.set("weight_albedo", ParamValue::F32(weight));
+        commands.entity(entity).insert(TerrainColorBound);
+        info!("[usd-dem] bound terrain colour layer '{rel}' (weight {weight}) → {uri}");
+    }
+}
+
+/// USD→DEM bridge. For each USD prim authoring `lunco:assetMode = "dem"` +
+/// `lunco:terrain:demSource = "<rel path>"`, resolve the path against the open
+/// Twin root and put a `DemTerrainRequest` on the prim entity. `lunco-terrain-
+/// streaming` then builds the heightfield mesh + collider onto it, and the prim's
+/// `materialType` authors the material — so the whole path rides the universal
+/// USD material/settings system with no bespoke material code.
+fn bridge_usd_dem_terrain(
+    q: Query<(Entity, &lunco_usd::UsdPrimPath), Without<DemBridged>>,
+    stages: Res<Assets<lunco_usd::UsdStageAsset>>,
+    twins: Res<lunco_assets::twin_source::TwinRoots>,
+    mut commands: Commands,
+) {
+    for (entity, prim_path) in &q {
+        // Wait until the prim's stage asset is loaded (read attrs from it).
+        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
+        let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
+            commands.entity(entity).insert(DemBridged);
+            continue;
+        };
+        let reader = &*stage.reader;
+        commands.entity(entity).insert(DemBridged); // examined — don't re-scan
+
+        if reader.prim_attribute_value::<String>(&sdf, "lunco:assetMode").as_deref() != Some("dem") {
+            continue;
+        }
+        let Some(rel) = reader.prim_attribute_value::<String>(&sdf, "lunco:terrain:demSource") else {
+            warn!("[usd-dem] prim {} is assetMode=dem but has no lunco:terrain:demSource", prim_path.path);
+            continue;
+        };
+        let Some((_, root)) = twins.primary() else {
+            warn!("[usd-dem] no open Twin to resolve DEM source '{rel}'");
+            continue;
+        };
+        let uri = root.join(&rel).to_string_lossy().to_string();
+        // `lunco:terrain:windowM` = side length (m) realized at native 5 m res.
+        // Mirror `SpawnDemTerrain`: authored 0 = the whole map; >0 = half the side;
+        // absent/negative = a safe 4 km window (avoid an accidental full-map build).
+        let half_window = match reader.prim_attribute_value::<f32>(&sdf, "lunco:terrain:windowM") {
+            Some(w) if w == 0.0 => f64::INFINITY,
+            Some(w) if w > 0.0 => (w * 0.5) as f64,
+            _ => 2048.0,
+        };
+        // `lunco:terrain:targetRes` (int) = visual-quality downsample target,
+        // samples per side. Absent / ≤ 0 = native resolution (no decimation).
+        let target_res = reader
+            .prim_attribute_value::<i32>(&sdf, "lunco:terrain:targetRes")
+            .filter(|&r| r > 0)
+            .map(|r| r as usize)
+            .unwrap_or(0);
+        // `lunco:terrain:lodViz` (bool) = DEBUG view: stream camera-driven LOD
+        // tiles tinted by depth instead of one static mesh (physics unchanged).
+        let lod_viz = reader
+            .prim_attribute_value::<bool>(&sdf, "lunco:terrain:lodViz")
+            .unwrap_or(false);
+        // `lunco:terrain:colliderRing` (bool) = stream a per-rover canonical-res
+        // heightfield collider ring instead of one static full-DEM collider
+        // (replaces it; deterministic, decoupled from visual LOD).
+        let collider_ring = reader
+            .prim_attribute_value::<bool>(&sdf, "lunco:terrain:colliderRing")
+            .unwrap_or(false);
+        commands.entity(entity).insert((
+            lunco_terrain_surface::DemTerrainRequest {
+                uri,
+                half_window,
+                target_res,
+                lod_viz,
+                collider_ring,
+                with_default_material: false,
+            },
+            lunco_terrain_surface::DemTerrainSurface,
+        ));
+        info!(
+            "[usd-dem] bridged terrain prim {} → DEM '{rel}' (target_res {target_res}, lod_viz {lod_viz}, collider_ring {collider_ring})",
+            prim_path.path
+        );
     }
 }
 

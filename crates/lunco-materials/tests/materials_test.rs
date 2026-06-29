@@ -1,6 +1,6 @@
 //! Unit tests for lunco-materials crate.
 
-use lunco_materials::{BlueprintExtension, ParamSchema, ParamValue, ShaderMaterial};
+use lunco_materials::{ParamSchema, ParamType, ParamValue, ShaderMaterial};
 use std::sync::Arc;
 
 /// A fresh `ShaderMaterial` carries an empty schema and packs all-zero; once
@@ -31,18 +31,21 @@ fn test_shader_material_dynamic_packing() {
     assert_eq!(m.raw[0].w, 1.0);
 }
 
-/// Verifies BlueprintExtension has sensible default values
+/// The blueprint grid is now the self-describing `blueprint.wgsl` driven by
+/// `ShaderMaterial` (no bespoke `BlueprintExtension` type). Its `Material` struct
+/// must reflect so its grid knobs pack at the right std140 offsets.
 #[test]
-fn test_blueprint_extension_defaults() {
-    let ext = BlueprintExtension::default();
-
-    // Grid parameters
-    assert_eq!(ext.major_grid_spacing, 1.0);
-    assert_eq!(ext.minor_grid_spacing, 0.5);
-    assert_eq!(ext.major_line_width, 0.75);
-    assert_eq!(ext.minor_line_width, 0.4);
-    assert_eq!(ext.minor_line_fade, 0.3);
-
-    // Surface color is non-white
-    assert!(ext.surface_color.red < 0.5);
+fn test_blueprint_shader_schema_reflects() {
+    let wgsl = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/shaders/blueprint.wgsl"
+    ))
+    .expect("blueprint.wgsl present");
+    let schema = ParamSchema::parse(&wgsl).expect("blueprint Material struct reflects");
+    // A few representative fields must be present with the right types.
+    assert_eq!(schema.field("surface_color").map(|f| f.ty), Some(ParamType::Vec3));
+    assert_eq!(schema.field("transition").map(|f| f.ty), Some(ParamType::F32));
+    assert_eq!(schema.field("major_grid_spacing").map(|f| f.ty), Some(ParamType::F32));
+    // Whole block stays within the 256-byte uniform budget.
+    assert!(schema.size <= 256, "blueprint params overflow uniform block: {}", schema.size);
 }
