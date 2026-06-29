@@ -187,6 +187,282 @@ fn seq_note_event(cur, evt) {
     cur
 }
 
+// ── Tasks: a BUILT-IN auto-advanced sequence (no on_tick/on_event needed) ─────
+//
+// The sequencer above needs three hooks wired by hand (on_start seeds the cursor,
+// on_tick calls run_steps, on_event calls seq_note_event). A *task* removes all
+// of that: declare it ONCE by assigning `this.task` in on_start, and the engine
+// advances it every tick and feeds it events automatically — the runtime calls
+// the `__run_task` / `__note_task_event` drivers below for you. This is the
+// built-in "do X, wait until Y, then Z" capability available to every script:
+//
+//   fn on_start(me) {
+//       this.task = seq([
+//           once(|m| drive_to(m, CP1)),         // run an action, advance
+//           wait_until(|m| arrived(m, CP1)),    // suspend until true
+//           wait(3.0),                          // suspend 3 sim-seconds
+//           wait_for("GO"),                     // suspend until event "GO"
+//           once(|m| drive_to(m, CP2)),
+//       ]);
+//   }
+//   // no on_tick, no on_event — the task drives itself. Step closures take the
+//   // host gid `m` (the cursor calls them as `act.call(me)`).
+//
+// rhai has no real coroutines (and wasm can't stack-switch), so a task is a
+// COOPERATIVE cursor advanced once per tick, not a suspended call stack — the
+// right model for a deterministic, replicated sim. Steps reuse the Layer-1
+// vocabulary (once/wait/wait_until/wait_for/step). A user on_tick/on_event still
+// runs if defined (for logic beyond the task).
+
+// A task is a TREE of nodes. Leaves are the Layer-1 step maps (once/wait/
+// wait_until/wait_for/step); composites nest other nodes:
+//   seq([a, b, c])      run in order, advance when each is done
+//   par_all([a, b])     run concurrently, done when ALL are done
+//   par_race([a, b])    run concurrently, done when ANY is done
+//   repeat(n, node)     run `node` to completion `n` times
+//   forever(node)       run `node` to completion, over and over (never done)
+// e.g. patrol two legs forever, braking 2s at each:
+//   this.task = forever(seq([
+//       once(|m| drive_to(m, A)), wait_until(|m| arrived(m, A)), wait(2.0),
+//       once(|m| drive_to(m, B)), wait_until(|m| arrived(m, B)), wait(2.0),
+//   ]));
+// The engine ticks the tree each frame (__tick) and feeds events into it.
+
+/// Composite node constructors (assign the root to `this.task` in on_start).
+fn seq(items)      { #{ k: "seq",  items: items, i: 0 } }
+fn par_all(items)  { #{ k: "all",  items: items, fin: items.map(|x| false) } }
+fn par_race(items) { #{ k: "race", items: items } }
+fn repeat(n, body) { #{ k: "repeat", n: n, body: body, cur: body, done_n: 0 } }
+fn forever(body)   { #{ k: "forever", body: body, cur: body } }
+
+/// Tick ONE leaf step `s` (a once/wait/wait_until/wait_for/step map), tracking its
+/// own dwell start on `s._t0`. `ev` is this tick's event-name buffer. Returns
+/// `#{ n: <updated leaf>, d: <done?> }`. (Mirrors run_steps' step_done precedence.)
+fn __tick_leaf(me, s, now, ev) {
+    if s.act != () { s.act.call(me); }            // closed-loop action (once/step)
+    let d = true;                                  // bare/once → advance immediately
+    if s.done != () { d = s.done.call(me); }       // wait_until / step predicate
+    else if s.secs != () { if s._t0 == () { s._t0 = now; } d = (now - s._t0) >= s.secs; }
+    else if s.event != () { d = ev.some(|n| n == s.event); }   // wait_for
+    #{ n: s, d: d }
+}
+
+// Tick one task node (recursive). Each composite kind is a separate helper so no
+// single function nests past rhai's default expr-depth cap — the prelude parses
+// on a stock `Engine` (catalog / one-shot backend), not just the scenario engine.
+// Each returns `#{ n: <updated node>, d: <done?> }`.
+
+/// Dispatch by node kind; a node with no `k` is a leaf step.
+fn __tick(me, node, now, ev) {
+    let k = node.k;
+    if k == "seq"     { return __tick_seq(me, node, now, ev); }
+    if k == "all"     { return __tick_all(me, node, now, ev); }
+    if k == "race"    { return __tick_race(me, node, now, ev); }
+    if k == "repeat"  { return __tick_repeat(me, node, now, ev); }
+    if k == "forever" { return __tick_forever(me, node, now, ev); }
+    __tick_leaf(me, node, now, ev)
+}
+
+fn __tick_seq(me, node, now, ev) {
+    let n = node.items.len();
+    if node.i >= n { return #{ n: node, d: true }; }
+    let item = node.items[node.i];
+    let r = __tick(me, item, now, ev);
+    node.items[node.i] = r.n;
+    if r.d { node.i += 1; }
+    #{ n: node, d: node.i >= n }
+}
+
+fn __tick_all(me, node, now, ev) {
+    let all_done = true;
+    let n = node.items.len();
+    for j in 0..n {
+        if !node.fin[j] {
+            let item = node.items[j];
+            let r = __tick(me, item, now, ev);
+            node.items[j] = r.n;
+            node.fin[j] = r.d;
+        }
+        if !node.fin[j] { all_done = false; }
+    }
+    #{ n: node, d: all_done }
+}
+
+fn __tick_race(me, node, now, ev) {
+    let any_done = false;
+    let n = node.items.len();
+    for j in 0..n {
+        let item = node.items[j];
+        let r = __tick(me, item, now, ev);
+        node.items[j] = r.n;
+        if r.d { any_done = true; }
+    }
+    #{ n: node, d: any_done }
+}
+
+fn __tick_repeat(me, node, now, ev) {
+    if node.done_n >= node.n { return #{ n: node, d: true }; }
+    let r = __tick(me, node.cur, now, ev);
+    node.cur = r.n;
+    if r.d { node.done_n += 1; node.cur = node.body; }   // reset to a fresh body
+    #{ n: node, d: node.done_n >= node.n }
+}
+
+fn __tick_forever(me, node, now, ev) {
+    let r = __tick(me, node.cur, now, ev);
+    node.cur = r.n;
+    if r.d { node.cur = node.body; }
+    #{ n: node, d: false }
+}
+
+/// Engine driver — advance `this.task` one tick against this frame's event
+/// buffer, then clear it (events live one tick, the actor-model cadence). Called
+/// by the runtime after on_tick; no-op when no task was declared. Emits
+/// TASK_COMPLETE once when the root finishes.
+fn __run_task(me) {
+    if this.task == () { return; }
+    let ev = if this.__events == () { [] } else { this.__events };
+    let r = __tick(me, this.task, elapsed_seconds(), ev);
+    this.task = r.n;
+    this.__events = [];
+    if r.d && this.__task_done != true { this.__task_done = true; emit("TASK_COMPLETE", 0); }
+}
+
+/// Engine driver — buffer an event name for `this.task`'s `wait_for` leaves to
+/// consume on the next advance. Called by the runtime per delivered event.
+fn __note_task_event(me, evt) {
+    if this.task == () { return; }
+    if this.__events == () { this.__events = []; }
+    if evt.name != () { this.__events.push(evt.name); }
+}
+
+/// SUGAR — define a `task(me)` function returning a node and the engine runs it
+/// automatically: no on_start, no `this.task = …`. The whole scenario can be:
+///
+///   fn task(me) {
+///       seq([ once(|m| drive_to(m, CP1)), wait_until(|m| arrived(m, CP1)), wait(3.0) ])
+///   }
+///
+/// Engine driver — called once after on_start; seeds `this.task` from a user
+/// `task(me)` if defined and not already set (an explicit `this.task =` wins).
+fn __init_task(me) {
+    if this.task == () && is_def_fn("task", 1) { this.task = task(me); }
+}
+
+// ── Objectives: a DECLARATIVE mission (KSP-contract style) ────────────────────
+//
+// A task DOES things; a mission WATCHES — a set of objectives, each a completion
+// condition (not imperative steps), evaluated every tick. Objectives can require
+// others (branching/unlock), dwell (hold the condition N seconds), fail on a
+// condition, and fire on_complete. The engine emits OBJECTIVE_COMPLETE(id) /
+// OBJECTIVE_FAILED(id) and MISSION_COMPLETE / MISSION_FAILED. Declare by defining
+// `fn mission(me)` (sugar, auto-run) or assigning `this.mission` in on_start:
+//
+//   fn mission(me) {
+//       [
+//           objective("reach_base", #{ done: |m| arrived(m, BASE), dwell: 3.0,
+//                                      on_complete: |m| emit("AT_BASE", 1) }),
+//           objective("sample", #{ requires: ["reach_base"],
+//                                  done: |m| has_sample(m),
+//                                  fail: |m| get(m, "Battery.level") < 0.1 }),
+//       ]
+//   }
+// A scenario may run a `task` (behaviour) AND a `mission` (success tracking).
+
+/// One objective. `spec` keys (all optional but usually `done`): `done` (|m| bool
+/// completion), `dwell` (secs the condition must hold), `fail` (|m| bool failure),
+/// `requires` (array of objective ids that must complete first), `on_complete`
+/// (|m| side-effect when it completes).
+fn objective(id, spec) {
+    #{
+        id: id,
+        done: spec.done,
+        dwell: spec.dwell,
+        fail: spec.fail,
+        requires: if spec.requires != () { spec.requires } else { [] },
+        on_complete: spec.on_complete,
+        state: "pending",   // pending → active → complete | failed
+        t0: (),             // dwell entry time
+    }
+}
+
+/// State of objective `id` within mission list `m`, or () if absent.
+fn __obj_state(m, id) {
+    for o in m { if o.id == id { return o.state; } }
+    ()
+}
+
+/// True once every id in `requires` is complete.
+fn __obj_ready(m, requires) {
+    for rid in requires { if __obj_state(m, rid) != "complete" { return false; } }
+    true
+}
+
+/// Advance one ACTIVE objective: fail check → completion (with optional dwell).
+fn __advance_objective(me, o, now) {
+    if o.fail != () && o.fail.call(me) {
+        o.state = "failed";
+        emit("OBJECTIVE_FAILED", o.id);
+        return o;
+    }
+    let met = o.done == () || o.done.call(me);
+    if !met { o.t0 = (); return o; }          // condition broke → reset dwell
+    if o.dwell != () {
+        if o.t0 == () { o.t0 = now; }
+        if (now - o.t0) < o.dwell { return o; }
+    }
+    o.state = "complete";
+    emit("OBJECTIVE_COMPLETE", o.id);
+    if o.on_complete != () { o.on_complete.call(me); }
+    o
+}
+
+/// Tick one objective: unlock from pending when its requires are met, then
+/// advance if active. Returns the updated objective.
+fn __tick_objective(me, o, m, now) {
+    if o.state == "complete" || o.state == "failed" { return o; }
+    if o.state == "pending" && __obj_ready(m, o.requires) { o.state = "active"; }
+    if o.state == "active" { o = __advance_objective(me, o, now); }
+    o
+}
+
+/// Mission roll-up as `#{ all_done, any_failed }`. PURE (no `this`): the runtime
+/// binds `this` only in the directly-called driver, not in functions it calls, so
+/// the MISSION_COMPLETE/FAILED emit + one-shot guard live in `__run_mission`.
+fn __mission_status(m) {
+    let all_done = true;
+    let any_failed = false;
+    for o in m {
+        if o.state == "failed" { any_failed = true; }
+        if o.state != "complete" { all_done = false; }
+    }
+    #{ all_done: all_done, any_failed: any_failed }
+}
+
+/// Engine driver — evaluate `this.mission` one tick. Called by the runtime after
+/// on_tick; no-op when no mission was declared. Emits MISSION_COMPLETE /
+/// MISSION_FAILED once when the mission resolves.
+fn __run_mission(me) {
+    if this.mission == () { return; }
+    let now = elapsed_seconds();
+    let m = this.mission;
+    for i in 0..m.len() {
+        m[i] = __tick_objective(me, m[i], m, now);
+    }
+    this.mission = m;
+    let s = __mission_status(m);
+    if this.__mission_done != true {
+        if s.any_failed { this.__mission_done = true; emit("MISSION_FAILED", 0); }
+        else if s.all_done { this.__mission_done = true; emit("MISSION_COMPLETE", 0); }
+    }
+}
+
+/// Engine driver — called once after on_start; seeds `this.mission` from a user
+/// `mission(me)` if defined and not already set.
+fn __init_mission(me) {
+    if this.mission == () && is_def_fn("mission", 1) { this.mission = mission(me); }
+}
+
 // ── Timeline (Layer 2: a mission as DATA, interpreted onto Layer 1) ──────────
 //
 // Layer 1 steps carry rhai CLOSURES; a TIMELINE step is pure DATA (a map of
@@ -356,6 +632,32 @@ fn entered(evt, self_id) {
 fn exited(evt, self_id) {
     evt.name == "COLLISION_END" && collision_other(evt, self_id) != ()
 }
+
+// Named trigger volumes — a Sensor authored with a Name fires, IN ADDITION to
+// the generic COLLISION_START/END, an `enter:<name>` / `exit:<name>` pulse whose
+// value is the ENTERING entity's gid. So a scenario reacts to a zone by name,
+// not by reverse-mapping gids:
+//
+//   fn on_event(self, evt) {
+//       if entered_zone(evt, "pad_2") { possess(evt.value); }   // evt.value = who entered
+//       let z = zone_of(evt);                                   // or branch on the name
+//   }
+
+/// The trigger-zone name an `enter:`/`exit:` pulse carries, or () if `evt` isn't
+/// a zone pulse. `enter:pad_2` → "pad_2".
+fn zone_of(evt) {
+    if evt.name.starts_with("enter:") { evt.name.sub_string(6) }
+    else if evt.name.starts_with("exit:") { evt.name.sub_string(5) }
+    else { () }
+}
+
+/// True if `evt` is an ENTER pulse for trigger zone `name` (something entered it;
+/// `evt.value` is the entrant's gid).
+fn entered_zone(evt, name) { evt.name == "enter:" + name }
+
+/// True if `evt` is an EXIT pulse for trigger zone `name` (`evt.value` = the gid
+/// that left).
+fn exited_zone(evt, name) { evt.name == "exit:" + name }
 
 // ── Selection toolkit (write targeting/selection algorithms in rhai) ─────────
 //

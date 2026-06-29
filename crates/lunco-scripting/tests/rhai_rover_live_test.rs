@@ -368,6 +368,239 @@ fn run_scenario_command_attaches_and_runs() {
 }
 
 #[test]
+fn builtin_task_advances_with_no_on_tick() {
+    // The built-in task: declare `this.task = seq([...])` in on_start and the
+    // engine advances it every tick — NO on_tick hook. step0 emits A and
+    // advances; step1 is a wait_until(true) that clears in one tick; step2 emits B.
+    let source = r#"
+        fn on_start(me) {
+            this.task = seq([
+                once(|m| emit("A", 1)),
+                wait_until(|m| true),
+                once(|m| emit("B", 2)),
+            ]);
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+
+    tick(&mut app); // step0 → emit A, advance
+    tick(&mut app); // step1 wait_until(true) → advance
+    tick(&mut app); // step2 → emit B
+
+    let events = &app.world().resource::<EventLog>().0;
+    assert!(events.iter().any(|n| n == "A"), "task step0 should emit A; got {events:?}");
+    assert!(
+        events.iter().any(|n| n == "B"),
+        "task should self-advance (no on_tick) and emit B; got {events:?}"
+    );
+}
+
+#[test]
+fn builtin_task_waits_for_event_with_no_on_event() {
+    // A task's wait_for(name) step completes from a delivered event even though
+    // the script defines NO on_event — the engine feeds events into the task.
+    // on_tick only PRODUCES the event; receiving it is the built-in's job.
+    let source = r#"
+        fn on_start(me) {
+            this.sent = false;
+            this.task = seq([
+                wait_for("GO"),
+                once(|m| emit("DONE", 1)),
+            ]);
+        }
+        fn on_tick(me) {
+            if !this.sent { emit("GO", 1); this.sent = true; }
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+
+    tick(&mut app); // emits GO (into inbox); task still on wait_for
+    assert!(
+        !app.world().resource::<EventLog>().0.iter().any(|n| n == "DONE"),
+        "task must hold on wait_for(GO) before the event arrives"
+    );
+    tick(&mut app); // GO delivered → task feed advances past wait_for
+    tick(&mut app); // next step runs → emit DONE
+
+    assert!(
+        app.world().resource::<EventLog>().0.iter().any(|n| n == "DONE"),
+        "task should advance past wait_for(GO) via the engine event-feed (no on_event) and emit DONE"
+    );
+}
+
+/// Count how many times event `name` was emitted.
+fn event_count(app: &App, name: &str) -> usize {
+    app.world().resource::<EventLog>().0.iter().filter(|n| n.as_str() == name).count()
+}
+fn emitted(app: &App, name: &str) -> bool {
+    app.world().resource::<EventLog>().0.iter().any(|n| n == name)
+}
+
+#[test]
+fn builtin_task_fn_sugar_auto_inits_with_no_on_start() {
+    // Sugar: the whole scenario is one `fn task(me)` — no on_start, no
+    // `this.task = …`. The engine seeds it after Start and advances it each tick.
+    let source = r#"
+        fn task(me) {
+            seq([ once(|m| emit("X", 1)), once(|m| emit("Y", 1)) ])
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    tick(&mut app); // Start → __init_task seeds this.task; Tick → step0 emits X
+    tick(&mut app); // step1 emits Y
+    assert!(
+        emitted(&app, "X") && emitted(&app, "Y"),
+        "`fn task(me)` should auto-init and advance with no on_start; got {:?}",
+        app.world().resource::<EventLog>().0
+    );
+}
+
+#[test]
+fn builtin_task_par_all_waits_for_every_branch() {
+    // par_all is done only when ALL branches finish. Branch A finishes tick 1
+    // (a once); branch B is a 2-step seq that finishes tick 2 → the whole task
+    // completes on tick 2, not tick 1.
+    let source = r#"
+        fn on_start(me) {
+            this.task = par_all([
+                once(|m| emit("A", 1)),
+                seq([ once(|m| emit("B1", 1)), once(|m| emit("B2", 1)) ]),
+            ]);
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    tick(&mut app);
+    assert!(emitted(&app, "A") && emitted(&app, "B1"), "tick1 runs both branches' first step");
+    assert!(!emitted(&app, "TASK_COMPLETE"), "par_all must wait for branch B's 2nd step");
+    tick(&mut app);
+    assert!(emitted(&app, "B2"), "branch B advances on tick2");
+    assert!(emitted(&app, "TASK_COMPLETE"), "par_all completes once all branches finish");
+}
+
+#[test]
+fn builtin_task_par_race_completes_on_first_branch() {
+    // par_race is done as soon as ANY branch finishes. One branch never completes
+    // (wait_until false); the other finishes immediately → the task completes.
+    let source = r#"
+        fn on_start(me) {
+            this.task = par_race([
+                wait_until(|m| false),
+                once(|m| emit("WIN", 1)),
+            ]);
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    tick(&mut app);
+    assert!(emitted(&app, "WIN"), "the finishing branch ran");
+    assert!(emitted(&app, "TASK_COMPLETE"), "par_race completes on the first finished branch");
+}
+
+#[test]
+fn builtin_task_repeat_runs_body_n_times() {
+    // repeat(3, ...) runs its body to completion three times.
+    let source = r#"
+        fn on_start(me) { this.task = repeat(3, once(|m| emit("R", 1))); }
+    "#;
+    let (mut app, _rover) = setup(source);
+    for _ in 0..4 { tick(&mut app); }
+    assert_eq!(event_count(&app, "R"), 3, "repeat(3) should run the body exactly 3 times");
+    assert!(emitted(&app, "TASK_COMPLETE"), "repeat completes after the last iteration");
+}
+
+#[test]
+fn builtin_task_forever_never_completes() {
+    // forever re-runs its body and never reports done.
+    let source = r#"
+        fn on_start(me) { this.task = forever(once(|m| emit("F", 1))); }
+    "#;
+    let (mut app, _rover) = setup(source);
+    for _ in 0..3 { tick(&mut app); }
+    assert_eq!(event_count(&app, "F"), 3, "forever runs the body every tick");
+    assert!(!emitted(&app, "TASK_COMPLETE"), "forever must never complete");
+}
+
+#[test]
+fn builtin_mission_completes_and_emits() {
+    // A `fn mission(me)` is auto-run like `fn task`. One objective whose condition
+    // holds completes immediately → OBJECTIVE_COMPLETE + its on_complete + the
+    // one-shot MISSION_COMPLETE.
+    let source = r#"
+        fn mission(me) {
+            [ objective("reach", #{ done: |m| true, on_complete: |m| emit("REACHED", 1) }) ]
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    tick(&mut app);
+    assert!(emitted(&app, "REACHED"), "on_complete should fire");
+    assert!(emitted(&app, "MISSION_COMPLETE"), "a one-objective mission completes; got {:?}",
+        app.world().resource::<EventLog>().0);
+}
+
+#[test]
+fn builtin_mission_requires_gate_locked_objectives() {
+    // `b` requires `a`; `a`'s condition never holds → `a` stays active, `b` never
+    // unlocks → neither b's on_complete nor MISSION_COMPLETE fire.
+    let source = r#"
+        fn mission(me) {
+            [
+                objective("a", #{ done: |m| false }),
+                objective("b", #{ requires: ["a"], done: |m| true,
+                                  on_complete: |m| emit("B_DONE", 1) }),
+            ]
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    for _ in 0..3 { tick(&mut app); }
+    assert!(!emitted(&app, "B_DONE"), "b must stay locked until its prerequisite a completes");
+    assert!(!emitted(&app, "MISSION_COMPLETE"), "mission can't complete while a is unmet");
+}
+
+#[test]
+fn builtin_mission_fails_on_fail_condition() {
+    // An objective whose `fail` condition trips → OBJECTIVE_FAILED + MISSION_FAILED.
+    let source = r#"
+        fn mission(me) {
+            [ objective("survive", #{ done: |m| false, fail: |m| true }) ]
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    tick(&mut app);
+    assert!(emitted(&app, "MISSION_FAILED"), "a failed objective fails the mission; got {:?}",
+        app.world().resource::<EventLog>().0);
+    assert!(!emitted(&app, "MISSION_COMPLETE"), "a failed mission must not also report complete");
+}
+
+#[test]
+fn builtin_mission_dwell_holds_until_satisfied() {
+    // dwell requires the condition to hold for N sim-seconds. The test harness has
+    // no clock (elapsed_seconds()==0), so a 5s dwell never elapses → the objective
+    // stays active and the mission does not complete.
+    let source = r#"
+        fn mission(me) {
+            [ objective("hold", #{ done: |m| true, dwell: 5.0,
+                                   on_complete: |m| emit("HELD", 1) }) ]
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    for _ in 0..3 { tick(&mut app); }
+    assert!(!emitted(&app, "HELD"), "dwell must hold the condition before completing");
+    assert!(!emitted(&app, "MISSION_COMPLETE"), "mission waits on the dwelling objective");
+}
+
+#[test]
+fn builtin_task_and_mission_run_together() {
+    // A scenario can run a behaviour (task) AND track success (mission) at once.
+    let source = r#"
+        fn task(me) { seq([ once(|m| emit("ACTING", 1)) ]) }
+        fn mission(me) { [ objective("win", #{ done: |m| true, on_complete: |m| emit("WON", 1) }) ] }
+    "#;
+    let (mut app, _rover) = setup(source);
+    tick(&mut app);
+    assert!(emitted(&app, "ACTING"), "the task ran");
+    assert!(emitted(&app, "WON") && emitted(&app, "MISSION_COMPLETE"), "the mission resolved");
+}
+
+#[test]
 fn rhai_event_delivered_to_on_event_next_tick() {
     // P3 frame-delayed event delivery: tick 1 emits PING, tick 2 the on_event
     // hook receives it and records a marker via emit("GOT_PING").

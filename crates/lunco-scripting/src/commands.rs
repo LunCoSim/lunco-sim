@@ -82,9 +82,14 @@ fn on_run_rhai(
     _t: On<RunRhai>,
     active: Res<ActiveCommandId>,
     mut pending: ResMut<PendingWorldScripts>,
+    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
 ) -> Result<Ack, String> {
     let id = active.get().unwrap_or(0);
-    pending.queue.push((id, cmd.code.clone()));
+    // §3.4: gate the snippet's cmd()s against the submitting session. `Some`
+    // only when this RunRhai arrived from the wire (a remote peer); `None` for a
+    // local / host-issued snippet → host-trusted (ungated).
+    let authority = guard.and_then(|g| g.0);
+    pending.queue.push((id, cmd.code.clone(), authority));
     let mut ack = Ack::new(OpId::new());
     ack.assigned = serde_json::json!({ "status": "queued" });
     Ok(ack)
@@ -132,12 +137,14 @@ fn on_run_scenario(
     mut registry: ResMut<ScriptRegistry>,
     mut alloc: ResMut<ScenarioDocAllocator>,
     q_existing: Query<&ScriptedModel>,
+    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let (doc_id_raw, generation) = attach_rhai_scenario(
         cmd.target,
         cmd.source.clone(),
         cmd.params.clone(),
+        guard.and_then(|g| g.0),
         &mut registry,
         &mut alloc,
         &q_existing,
@@ -156,6 +163,7 @@ pub(crate) fn attach_rhai_scenario(
     target: Entity,
     source: String,
     params: String,
+    authority: Option<lunco_core::SessionId>,
     registry: &mut ScriptRegistry,
     alloc: &mut ScenarioDocAllocator,
     q_existing: &Query<&ScriptedModel>,
@@ -202,11 +210,16 @@ pub(crate) fn attach_rhai_scenario(
         .documents
         .insert(DocumentId::new(doc_id_raw), DocumentHost::new(doc));
 
-    commands.entity(target).insert(ScriptedModel {
-        document_id: Some(doc_id_raw),
-        language: Some(ScriptLanguage::Rhai),
-        ..default()
-    });
+    commands.entity(target).insert((
+        ScriptedModel {
+            document_id: Some(doc_id_raw),
+            language: Some(ScriptLanguage::Rhai),
+            ..default()
+        },
+        // §3.4: the session this scenario's cmd()s are gated against. Always
+        // (re)inserted so a hot-reload relaunch refreshes it; `None` = ungated.
+        crate::scenario::ScriptAuthority(authority),
+    ));
 
     (doc_id_raw, generation)
 }
@@ -230,6 +243,8 @@ pub fn attach_embedded_scenarios(
             entity,
             embedded.0.clone(),
             String::new(),
+            // Scene-authored (loaded by the host from USD) → host-trusted, ungated.
+            None,
             &mut registry,
             &mut alloc,
             &q_existing,
@@ -410,6 +425,7 @@ fn on_run_timeline(
     mut registry: ResMut<ScriptRegistry>,
     mut alloc: ResMut<ScenarioDocAllocator>,
     q_existing: Query<&ScriptedModel>,
+    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let (steps, step_count) =
@@ -420,6 +436,7 @@ fn on_run_timeline(
         source,
         // Timelines are pure data; the generated executor doesn't read `params`.
         String::new(),
+        guard.and_then(|g| g.0),
         &mut registry,
         &mut alloc,
         &q_existing,
@@ -499,6 +516,7 @@ fn on_run_stored_timeline(
     mut registry: ResMut<ScriptRegistry>,
     mut alloc: ResMut<ScenarioDocAllocator>,
     q_existing: Query<&ScriptedModel>,
+    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     // Own the JSON so the store borrow is released before we touch the registry.
@@ -513,6 +531,7 @@ fn on_run_stored_timeline(
         cmd.target,
         source,
         String::new(),
+        guard.and_then(|g| g.0),
         &mut registry,
         &mut alloc,
         &q_existing,
@@ -650,6 +669,16 @@ pub(crate) fn register_command_policies(app: &mut App) {
     // and is then rejected by the ownership check), mirroring `DriveRover`.
     reg.register("SetScenarioPaused", CommandPolicy::OWNED_CONTROL);
     reg.register("StopScenario", CommandPolicy::OWNED_CONTROL);
+
+    // The structural mutation verbs (`add`/`remove`/`despawn`) restructure a
+    // target entity directly via reflection rather than through a command, but
+    // are gated through this SAME registry under a well-known capability key
+    // (`bridge_core::capability::STRUCTURAL_MUTATE`): ownership-gated control, so
+    // a remote script may only restructure entities its launching session owns.
+    reg.register(
+        crate::bridge_core::capability::STRUCTURAL_MUTATE,
+        CommandPolicy::OWNED_CONTROL,
+    );
 }
 
 // Generates `register_all_commands` for the compiled-in script commands. One
@@ -757,6 +786,13 @@ mod tests {
         // Scenario lifecycle is ownership-gated control, like DriveRover.
         assert_eq!(reg.policy_for("SetScenarioPaused"), CommandPolicy::OWNED_CONTROL);
         assert_eq!(reg.policy_for("StopScenario"), CommandPolicy::OWNED_CONTROL);
+
+        // The structural mutation verbs share the registry under a capability key,
+        // ownership-gated so a remote script only restructures what it owns.
+        assert_eq!(
+            reg.policy_for(crate::bridge_core::capability::STRUCTURAL_MUTATE),
+            CommandPolicy::OWNED_CONTROL,
+        );
 
         // The baseline core entries survive our defensive init_resource.
         assert_eq!(reg.policy_for("DriveRover"), CommandPolicy::OWNED_CONTROL);

@@ -37,13 +37,14 @@ use bevy::prelude::*;
 use big_space::prelude::*;
 use std::cell::Cell;
 
-use lunco_api::executor::ApiCommandEvent;
+use lunco_api::executor::{authz_target_gid, ApiCommandEvent};
 use lunco_api::queries::ApiQueryRegistry;
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
+use lunco_core::session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
 use lunco_core::{
     coords, CelestialBody, CelestialClock, CommandOutcome, CommandResults, GlobalEntityId, OpId,
-    RoverVessel, Severity, SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
+    RoverVessel, Severity, SessionId, SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
 
 // ── Native value construction ──────────────────────────────────────────────
@@ -235,6 +236,15 @@ thread_local! {
     /// Raw pointer to the World currently being scripted. Non-null only while a
     /// [`WorldScope`] guard is alive.
     static WORLD_PTR: Cell<*mut World> = const { Cell::new(std::ptr::null_mut()) };
+
+    /// The session a running script acts on behalf of — the authority its
+    /// [`cmd`] calls are gated against (design §3.4). `Some` only for a script
+    /// launched by a *remote* networked session (captured at launch from the
+    /// wire origin); `None` for a local / host-trusted launch (single-player,
+    /// standalone, USD-embedded), where `cmd` stays ungated. Set per-entity by
+    /// the scenario driver and per-eval by the `RunRhai` drain; reset to `None`
+    /// whenever a [`WorldScope`] enters or drops, so it never leaks across evals.
+    static SCRIPT_AUTHORITY: Cell<Option<SessionId>> = const { Cell::new(None) };
 }
 
 /// RAII guard that publishes a `&mut World` to the thread-local for the lifetime
@@ -245,6 +255,7 @@ impl WorldScope {
     /// Publish `world` to the scoped thread-local for the guard's lifetime.
     pub fn enter(world: &mut World) -> Self {
         WORLD_PTR.with(|p| p.set(world as *mut World));
+        SCRIPT_AUTHORITY.with(|a| a.set(None));
         WorldScope
     }
 }
@@ -252,7 +263,75 @@ impl WorldScope {
 impl Drop for WorldScope {
     fn drop(&mut self) {
         WORLD_PTR.with(|p| p.set(std::ptr::null_mut()));
+        SCRIPT_AUTHORITY.with(|a| a.set(None));
     }
+}
+
+/// Set the session the current script acts on behalf of, for [`cmd`]
+/// authorization. `None` = host-trusted (no gate). The scenario driver sets this
+/// per-entity from its `ScriptAuthority`; the `RunRhai` drain sets it per-eval.
+pub fn set_script_authority(session: Option<SessionId>) {
+    SCRIPT_AUTHORITY.with(|a| a.set(session));
+}
+
+/// The session the current [`cmd`] is authorized against, if any.
+pub fn script_authority() -> Option<SessionId> {
+    SCRIPT_AUTHORITY.with(|a| a.get())
+}
+
+/// Well-known capability keys for script operations that are NOT a reflected
+/// command but are still authorized through the same [`CommandPolicyRegistry`]
+/// gate as commands — currently the structural mutation verbs (add/remove a
+/// component, despawn), which restructure a target entity directly via
+/// reflection rather than by dispatching a command. Mirrors the avatar-relay
+/// capability keys in `lunco_core::session::capability`.
+pub mod capability {
+    /// Structurally mutate a target entity from a script (`add` / `remove` a
+    /// component, `despawn`). Registered `OWNED_CONTROL` (see
+    /// `commands::register_command_policies`) so a remote script may only
+    /// restructure entities its launching session owns.
+    pub const STRUCTURAL_MUTATE: &str = "ScriptStructuralMutate";
+}
+
+/// The §3.4 authority gate, shared by [`cmd`] and the structural verbs so every
+/// authoritative script mutation flows through ONE path: authorize operation
+/// `op` on `target_gid` against the current [`script_authority`], exactly as the
+/// networked command gate does ([`authorize`]: role lattice + ownership, policy
+/// from [`CommandPolicyRegistry`]).
+///
+/// Returns `Ok` immediately when no authority is set (a local / host-trusted
+/// launch → ungated). Fails CLOSED if the session resources are absent: an
+/// authority is only ever set under active networking (a remote launch), so
+/// their absence is a misconfiguration we must not silently wave through.
+pub fn enforce_script_authority(
+    world: &World,
+    op: &str,
+    target_gid: Option<u64>,
+) -> Result<(), String> {
+    let Some(session) = script_authority() else {
+        return Ok(());
+    };
+    let (Some(reg), Some(rbac), Some(pol)) = (
+        world.get_resource::<SessionRegistry>(),
+        world.get_resource::<SessionRbac>(),
+        world.get_resource::<CommandPolicyRegistry>(),
+    ) else {
+        return Err(format!(
+            "'{op}' denied: script authority set but session registries are unavailable"
+        ));
+    };
+    authorize(reg, rbac, pol, session, op, target_gid).map_err(|r| r.to_string())
+}
+
+/// The `#[authz_target]` gid a command authorizes against, read from the
+/// (global-gid) script `params` via its reflect schema. `None` for a target-less
+/// command (or an unknown name).
+fn command_target_gid(world: &World, name: &str, params: &serde_json::Value) -> Option<u64> {
+    let app_reg = world.resource::<AppTypeRegistry>();
+    let type_reg = app_reg.read();
+    type_reg
+        .get_with_short_type_path(name)
+        .and_then(|r| authz_target_gid(params, r.type_id(), &type_reg))
 }
 
 /// Run `f` with the scoped World, or return `None` outside a script evaluation.
@@ -286,6 +365,17 @@ fn resolve_entity(world: &World, gid: u64) -> Option<Entity> {
 pub fn cmd_raw(name: &str, params: serde_json::Value) -> serde_json::Value {
     let id = OpId::new().0;
     with_world(|world| {
+        // §3.4: a script launched by a remote session must not exceed that
+        // session's authority. When an authority is set (remote launch),
+        // re-authorize through the SAME gate the networked command path uses; an
+        // unset authority (local / host-trusted launch) stays ungated (and skips
+        // the schema lookup on this per-tick hot path).
+        if script_authority().is_some() {
+            let target_gid = command_target_gid(world, name, &params);
+            if let Err(error) = enforce_script_authority(world, name, target_gid) {
+                return serde_json::json!({ "id": id, "ok": false, "error": error });
+            }
+        }
         world.trigger(ApiCommandEvent {
             command: name.to_string(),
             params,
@@ -538,6 +628,9 @@ pub fn add_component(
 
     with_world(|world| -> Result<(), String> {
         let entity = resolve_entity(world, gid).ok_or_else(|| format!("unknown entity {gid}"))?;
+        // §3.4: same authority gate as `cmd()` — a remote script may restructure
+        // only entities its launching session owns (ungated for local launches).
+        enforce_script_authority(world, capability::STRUCTURAL_MUTATE, Some(gid))?;
         let registry = world.resource::<AppTypeRegistry>().clone();
         let reg = registry.read();
         let registration = reg
@@ -564,6 +657,7 @@ pub fn add_component(
 pub fn remove_component(gid: u64, comp: &str) -> Result<(), String> {
     with_world(|world| -> Result<(), String> {
         let entity = resolve_entity(world, gid).ok_or_else(|| format!("unknown entity {gid}"))?;
+        enforce_script_authority(world, capability::STRUCTURAL_MUTATE, Some(gid))?;
         let registry = world.resource::<AppTypeRegistry>().clone();
         let reg = registry.read();
         let registration = reg
@@ -587,6 +681,7 @@ pub fn remove_component(gid: u64, comp: &str) -> Result<(), String> {
 pub fn despawn_entity(gid: u64) -> Result<(), String> {
     with_world(|world| -> Result<(), String> {
         let entity = resolve_entity(world, gid).ok_or_else(|| format!("unknown entity {gid}"))?;
+        enforce_script_authority(world, capability::STRUCTURAL_MUTATE, Some(gid))?;
         world.despawn(entity);
         Ok(())
     })
@@ -817,5 +912,101 @@ pub fn telemetry_value<B: ValueBuilder>(b: &B, v: &TelemetryValue) -> B::Value {
         TelemetryValue::I64(x) => b.int(*x),
         TelemetryValue::Bool(x) => b.bool(*x),
         TelemetryValue::String(x) => b.string(x),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_core::session::{AuthorityRole, CommandPolicy, UserSession};
+
+    /// §3.4: a `cmd()` from a script launched by a remote session is
+    /// re-authorized against that session (same gate as the networked path);
+    /// a local/host launch (`None` authority) stays ungated.
+    #[test]
+    fn scripted_cmd_gated_by_authority() {
+        let mut world = World::new();
+        world.init_resource::<AppTypeRegistry>();
+        world.init_resource::<SessionRegistry>();
+        world.init_resource::<SessionRbac>();
+        world.init_resource::<CommandPolicyRegistry>();
+        world.init_resource::<CommandResults>();
+
+        // An authenticated Observer (server-issued token) that owns nothing.
+        world.resource_mut::<SessionRbac>().sessions.insert(
+            7,
+            UserSession {
+                session_id: SessionId(7),
+                username: "tester".into(),
+                role: AuthorityRole::Observer,
+                authenticated: true,
+                token: Some("server-token".into()),
+            },
+        );
+
+        let _scope = WorldScope::enter(&mut world);
+
+        // (1) Local/host launch → ungated. No observer is registered for the
+        // command, so it dispatches as a fire-and-forget no-op and reports ok.
+        set_script_authority(None);
+        let r = cmd_raw("DriveRover", serde_json::json!({ "target": 1, "forward": 1.0 }));
+        assert_eq!(r["ok"], serde_json::json!(true), "local launch must be ungated");
+
+        // (2) Authenticated Observer + an OPEN command (not in the policy base)
+        // → allowed.
+        set_script_authority(Some(SessionId(7)));
+        let r = cmd_raw("SomeOpenCommand", serde_json::json!({}));
+        assert_eq!(r["ok"], serde_json::json!(true), "OPEN command passes for an authed session");
+
+        // (3) Same Observer + an OWNED_CONTROL command on a target it does NOT
+        // own → demands Operator → rejected BEFORE dispatch.
+        set_script_authority(Some(SessionId(7)));
+        let r = cmd_raw("DriveRover", serde_json::json!({ "target": 1, "forward": 1.0 }));
+        assert_eq!(r["ok"], serde_json::json!(false), "unowned OWNED_CONTROL must be rejected");
+        assert!(r["error"].is_string());
+
+        // (4) Unknown / unauthenticated session → denied even for an OPEN command.
+        set_script_authority(Some(SessionId(999)));
+        let r = cmd_raw("SomeOpenCommand", serde_json::json!({}));
+        assert_eq!(r["ok"], serde_json::json!(false), "unknown session denied even for OPEN");
+    }
+
+    /// The structural verbs (`add`/`remove`/`despawn`) route through the SAME
+    /// gate via [`enforce_script_authority`] under the `STRUCTURAL_MUTATE`
+    /// capability: ungated locally, ownership-gated for a remote session.
+    #[test]
+    fn structural_verbs_share_the_authority_gate() {
+        let mut world = World::new();
+        world.init_resource::<SessionRegistry>();
+        world.init_resource::<SessionRbac>();
+        // OWNED_CONTROL for the structural capability, as the plugin registers it.
+        let mut policies = CommandPolicyRegistry::default();
+        policies.register(capability::STRUCTURAL_MUTATE, CommandPolicy::OWNED_CONTROL);
+        world.insert_resource(policies);
+
+        // An authenticated Observer that owns entity gid 1 (but not gid 2).
+        world.resource_mut::<SessionRbac>().sessions.insert(
+            7,
+            UserSession {
+                session_id: SessionId(7),
+                username: "tester".into(),
+                role: AuthorityRole::Observer,
+                authenticated: true,
+                token: Some("server-token".into()),
+            },
+        );
+        let _ = world.resource_mut::<SessionRegistry>().claim(SessionId(7), 1);
+
+        let _scope = WorldScope::enter(&mut world);
+
+        // Local launch → ungated for any target.
+        set_script_authority(None);
+        assert!(enforce_script_authority(&world, capability::STRUCTURAL_MUTATE, Some(2)).is_ok());
+
+        // Remote owner may restructure the entity it owns (gid 1)…
+        set_script_authority(Some(SessionId(7)));
+        assert!(enforce_script_authority(&world, capability::STRUCTURAL_MUTATE, Some(1)).is_ok());
+        // …but NOT an entity it does not own (gid 2).
+        assert!(enforce_script_authority(&world, capability::STRUCTURAL_MUTATE, Some(2)).is_err());
     }
 }

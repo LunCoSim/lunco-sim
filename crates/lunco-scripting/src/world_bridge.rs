@@ -245,6 +245,11 @@ pub fn build_world_engine() -> Engine {
     engine.set_max_call_levels(64);
     engine.set_max_string_size(64 * 1024);
     engine.set_max_array_size(10_000);
+    // Above rhai's defaults (64 global / 32 in functions): the built-in task tree
+    // nests composites (e.g. par_all → seq → leaf), and the recursive `__tick`
+    // helpers walk that depth. Runtime stays bounded by the operations + call-level
+    // caps above; this only widens the structural nesting allowance.
+    engine.set_max_expr_depths(128, 128);
 
     // cmd(name, #{params}) -> #{ id, ok, data, error }. Routes through
     // ApiCommandEvent so it inherits macro-reflected dispatch, GlobalEntityId
@@ -516,6 +521,13 @@ struct RhaiScenarioState {
 pub struct RhaiScenarioRuntime {
     engine: Engine,
     states: std::collections::HashMap<Entity, RhaiScenarioState>,
+    /// The prelude compiled to an `AST`, merged into every scenario's AST so its
+    /// helpers — including the engine-driven `__run_task` / `__note_task_event`
+    /// drivers — are resolvable by `call_fn` (which searches the AST, NOT the
+    /// engine's registered global modules). The prelude stays registered as a
+    /// global module too, for the runtime-resolution path used while a script's
+    /// own body executes.
+    prelude_ast: AST,
     /// Tool-library generation the engine's static modules were built from; a
     /// mismatch triggers a re-`refresh` so a `RegisterToolLibrary` hot-reloads.
     tool_gen: u64,
@@ -525,9 +537,13 @@ impl Default for RhaiScenarioRuntime {
     fn default() -> Self {
         let mut engine = build_world_engine();
         engine.on_print(|s| info!("[rhai] {s}"));
+        let prelude_ast = engine
+            .compile(PRELUDE)
+            .unwrap_or_else(|e| panic!("prelude.rhai must compile: {e}"));
         Self {
             engine,
             states: std::collections::HashMap::new(),
+            prelude_ast,
             // build_world_engine already refreshed at the current generation.
             tool_gen: crate::tool_libs::generation(),
         }
@@ -544,6 +560,13 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         use crate::scenario::CompileOutcome;
         match self.engine.compile(source) {
             Ok(ast) => {
+                // Merge the prelude's functions into the scenario AST so the
+                // engine-driven `__run_task`/`__note_task_event` (and every other
+                // prelude helper) are resolvable by `call_fn`. Merging prelude←user
+                // lets a user function win on any name/arity clash; the prelude has
+                // no top-level body, so the seed-run below still executes only the
+                // user's top level.
+                let ast = self.prelude_ast.merge(&ast);
                 let mut scope = rhai::Scope::new();
                 // Expose scenario parameters as a read-only `params` constant
                 // (native JSON→Dynamic, one hop). Empty / bad JSON → empty map,
@@ -594,8 +617,30 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         };
         // Seed the deterministic RNG for this hook: (entity, tick, hook).
         bridge_core::rng_begin(self_gid as u64, bridge_core::sim_tick() as u64, salt);
-        call_hook(&self.engine, &mut st.scope, &st.ast, name, self_gid, &mut st.this)
-            .map(|(msg, pos)| rhai_diagnostic(msg, pos))
+        let user = call_hook(&self.engine, &mut st.scope, &st.ast, name, self_gid, &mut st.this);
+        // Built-in drivers (prelude fns, called regardless of what the user AST
+        // defines): after on_start, seed `this.task`/`this.mission` from `task(me)`
+        // / `mission(me)` fns if present; after on_tick, advance the declared task
+        // and evaluate the mission. Each no-ops when the script declared neither,
+        // so a plain scenario pays only a couple of cheap calls.
+        let drivers: &[&str] = match hook {
+            ScenarioHook::Start => &["__init_task", "__init_mission"],
+            ScenarioHook::Tick => &["__run_task", "__run_mission"],
+            ScenarioHook::Stop => &[],
+        };
+        let mut driver_err = None;
+        for name in drivers {
+            let e = call_prelude_driver(
+                &self.engine,
+                &mut st.scope,
+                &st.ast,
+                name,
+                &mut st.this,
+                vec![Dynamic::from_int(self_gid)],
+            );
+            driver_err = driver_err.or(e);
+        }
+        user.or(driver_err).map(|(msg, pos)| rhai_diagnostic(msg, pos))
     }
 
     fn deliver_event(
@@ -614,8 +659,19 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             bridge_core::hash_str(&event.name),
         );
         let st = self.states.get_mut(&entity)?;
-        call_event_hook(&self.engine, &mut st.scope, &st.ast, self_gid, &mut st.this, evt)
-            .map(|(msg, pos)| rhai_diagnostic(msg, pos))
+        let user =
+            call_event_hook(&self.engine, &mut st.scope, &st.ast, self_gid, &mut st.this, evt.clone());
+        // Feed the event into the BUILT-IN task too, so `wait_for(name)` steps in a
+        // `this.task` complete without a hand-written on_event. No-op if no task.
+        let task = call_prelude_driver(
+            &self.engine,
+            &mut st.scope,
+            &st.ast,
+            "__note_task_event",
+            &mut st.this,
+            vec![Dynamic::from_int(self_gid), evt],
+        );
+        user.or(task).map(|(msg, pos)| rhai_diagnostic(msg, pos))
     }
 
     fn forget(&mut self, entity: Entity) {
@@ -730,6 +786,32 @@ fn call_event_hook(
 }
 
 
+/// Call a built-in PRELUDE driver function `name` (a global-module fn, NOT in the
+/// user's AST) with `this` bound — for engine-driven hooks like task auto-advance
+/// that live in the prelude, so the AST-presence gate in [`call_hook`] would skip
+/// them. A missing function (a custom prelude without the driver) is benign.
+fn call_prelude_driver(
+    engine: &Engine,
+    scope: &mut rhai::Scope,
+    ast: &AST,
+    name: &str,
+    this: &mut Dynamic,
+    args: Vec<Dynamic>,
+) -> Option<(String, rhai::Position)> {
+    let options = rhai::CallFnOptions::new()
+        .eval_ast(false)
+        .rewind_scope(false)
+        .bind_this_ptr(this);
+    match engine.call_fn_with_options::<Dynamic>(options, scope, ast, name, args) {
+        Ok(_) => None,
+        Err(e) if matches!(*e, rhai::EvalAltResult::ErrorFunctionNotFound(..)) => None,
+        Err(e) => {
+            error!("[rhai] {name}() failed: {e}");
+            Some((e.to_string(), e.position()))
+        }
+    }
+}
+
 /// Build an error [`Diagnostic`] from a rhai error message + [`rhai::Position`]
 /// (line/col map straight across — no source needed).
 fn rhai_diagnostic(message: String, pos: rhai::Position) -> Diagnostic {
@@ -744,13 +826,15 @@ fn rhai_diagnostic(message: String, pos: rhai::Position) -> Diagnostic {
 
 // ── One-shot drain (RunRhai) ───────────────────────────────────────────────
 
-/// Queue of `(command_id, code)` snippets submitted by `RunRhai`, waiting to
-/// run inside the exclusive [`drain_world_scripts`] system where `&mut World`
-/// is available. The `command_id` is the request id so the outcome can be
-/// recorded in [`CommandResults`] for the caller to poll.
+/// Queue of `(command_id, code, authority)` snippets submitted by `RunRhai`,
+/// waiting to run inside the exclusive [`drain_world_scripts`] system where
+/// `&mut World` is available. The `command_id` is the request id so the outcome
+/// can be recorded in [`CommandResults`] for the caller to poll. `authority` is
+/// the submitting session (the wire origin captured by the handler) the
+/// snippet's `cmd()`s are gated against — `None` for a local/host launch (§3.4).
 #[derive(Resource, Default)]
 pub struct PendingWorldScripts {
-    pub queue: Vec<(u64, String)>,
+    pub queue: Vec<(u64, String, Option<lunco_core::SessionId>)>,
 }
 
 /// Exclusive system: run every queued snippet against the live World and record
@@ -761,8 +845,8 @@ pub fn drain_world_scripts(world: &mut World) {
     if pending.is_empty() {
         return;
     }
-    for (id, code) in pending {
-        let outcome = match eval_with_world(world, &code) {
+    for (id, code, authority) in pending {
+        let outcome = match eval_with_world_as(world, &code, authority) {
             Ok(stdout) => {
                 let mut ack = Ack::new(OpId::new());
                 ack.assigned = serde_json::json!({ "stdout": stdout });
@@ -780,8 +864,20 @@ pub fn drain_world_scripts(world: &mut World) {
 /// Evaluate `code` against `world`, capturing `print(...)` as stdout. The
 /// World is in scope (via [`WorldScope`]) for the whole evaluation, so the
 /// bridge verbs work. Returns captured output (plus the final expression's
-/// value if non-unit), or the error message.
+/// value if non-unit), or the error message. Runs host-trusted (no `cmd()`
+/// authority gate) — see [`eval_with_world_as`] to bind a submitting session.
 pub fn eval_with_world(world: &mut World, code: &str) -> Result<String, String> {
+    eval_with_world_as(world, code, None)
+}
+
+/// As [`eval_with_world`], but the snippet's `cmd()` calls are authorized against
+/// `authority` (the submitting session) per design §3.4. `None` = host-trusted
+/// (ungated), matching the open-by-default substrate.
+pub fn eval_with_world_as(
+    world: &mut World,
+    code: &str,
+    authority: Option<lunco_core::SessionId>,
+) -> Result<String, String> {
     use std::sync::{Arc, Mutex};
 
     // A fresh engine per call keeps state isolated; cheap relative to the work.
@@ -797,6 +893,8 @@ pub fn eval_with_world(world: &mut World, code: &str) -> Result<String, String> 
     });
 
     let _scope = bridge_core::WorldScope::enter(world);
+    // `enter` reset the authority to None; bind the submitter for this eval.
+    bridge_core::set_script_authority(authority);
     let result = engine.eval::<Dynamic>(code).map_err(|e| e.to_string())?;
 
     let mut captured = out
@@ -947,6 +1045,22 @@ mod tests {
         let out = super::eval_with_world(&mut world, code).unwrap();
         // rhai prints the array as [20, 10, true, false, true]
         assert_eq!(out.trim(), "[20, 10, true, false, true]", "got {out}");
+    }
+
+    #[test]
+    fn zone_helpers_match_named_trigger_volumes() {
+        use bevy::prelude::World;
+        let mut world = World::new();
+        // An `enter:pad_2` pulse: value is the entrant gid (42). zone_of strips
+        // the prefix; entered_zone/exited_zone match by name. (Assert bools only,
+        // so the check doesn't depend on how rhai quotes strings in an array.)
+        let code = r#"
+            let evt = #{ name: "enter:pad_2", value: 42 };
+            [ zone_of(evt) == "pad_2", entered_zone(evt, "pad_2"), entered_zone(evt, "bay"),
+              exited_zone(#{ name: "exit:bay" }, "bay"), zone_of(#{ name: "COLLISION_START" }) == () ]
+        "#;
+        let out = super::eval_with_world(&mut world, code).unwrap();
+        assert_eq!(out.trim(), "[true, true, false, true, true]", "got {out}");
     }
 
     #[test]
