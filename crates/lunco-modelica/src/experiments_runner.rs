@@ -1887,4 +1887,52 @@ mod tests {
         }
         assert!(settled, "scheduler should drain to empty after all runs end");
     }
+
+    /// CQ-525 regression: [`dae_cache_key`] MUST fold the model source body (and
+    /// extras), not just `(model_name, filename)`. Before CQ-525 an edit that
+    /// kept the model name produced an identical key, so the compile-once cache
+    /// served a *stale* DAE and correctness leaned entirely on an external
+    /// whole-cache clear. This pins that property so a future "simplification"
+    /// of the key back to identity-only fails loudly here instead of silently
+    /// resurrecting the stale-DAE bug.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dae_cache_key_folds_source_body_and_extras() {
+        let base = ModelSource {
+            model_name: "M".into(),
+            source: "model M Real x = 1; end M;".into(),
+            filename: "M.mo".into(),
+            extras: vec![],
+        };
+
+        // Identical input → identical key (the cache must still HIT on a re-run
+        // that changed nothing, e.g. a sweep varying only overrides).
+        assert_eq!(
+            dae_cache_key(&base),
+            dae_cache_key(&base.clone()),
+            "identical sources must yield the same key"
+        );
+
+        // Edited body, same name/filename → different key (the exact stale-DAE bug).
+        let edited = ModelSource {
+            source: "model M Real x = 2; end M;".into(),
+            ..base.clone()
+        };
+        assert_ne!(
+            dae_cache_key(&base),
+            dae_cache_key(&edited),
+            "editing the source body must change the DAE cache key (CQ-525)"
+        );
+
+        // A changed companion/extra source must also bust the key.
+        let with_extra = ModelSource {
+            extras: vec![("Lib".into(), "package Lib end Lib;".into())],
+            ..base.clone()
+        };
+        assert_ne!(
+            dae_cache_key(&base),
+            dae_cache_key(&with_extra),
+            "a changed extra source must change the key (CQ-525)"
+        );
+    }
 }

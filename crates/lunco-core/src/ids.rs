@@ -106,3 +106,59 @@ fn rand_entropy() -> u64 {
         .unwrap_or(0);
     nanos.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (nanos >> 29)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// Regression for the silent-multiplayer-data-loss bug: the instance
+    /// entropy that seeds the random low bits of [`make_id_53`] MUST be drawn
+    /// fresh, not from a fixed constant. With a fixed constant, two
+    /// freshly-started processes minted identical first-of-the-second ids,
+    /// which the networking dedup then dropped as duplicates. Sixteen draws
+    /// collapsing to a single value would mean the entropy source is dead — the
+    /// exact failure mode. (A genuine OS-RNG collision across 16 u64s is ~2^-60.)
+    #[test]
+    fn rand_entropy_is_not_a_fixed_constant() {
+        let seen: HashSet<u64> = (0..16).map(|_| rand_entropy()).collect();
+        assert!(
+            seen.len() > 1,
+            "instance entropy collapsed to a constant — cross-process ids would collide"
+        );
+    }
+
+    /// Ids are unique within a process and fit losslessly in a JS `Number`
+    /// (53 bits), so they survive the JSON trip to the web / MCP clients.
+    #[test]
+    fn make_id_53_is_unique_and_js_safe() {
+        const N: usize = 4096;
+        let mut ids = HashSet::with_capacity(N);
+        for _ in 0..N {
+            let id = make_id_53();
+            assert!(id < (1 << 53), "id {id} exceeds the 53-bit JS-safe range");
+            assert!(ids.insert(id), "make_id_53 produced a duplicate: {id}");
+        }
+    }
+
+    /// Session ids are JS-safe and never `0` (reserved for the local/host
+    /// session, `SessionId::LOCAL`).
+    #[test]
+    fn random_session_id_is_nonzero_and_js_safe() {
+        for _ in 0..1024 {
+            let s = random_session_id();
+            assert_ne!(s, 0, "session id 0 is reserved for the local/host session");
+            assert!(s < (1 << 53), "session id {s} exceeds the 53-bit JS-safe range");
+        }
+    }
+
+    /// Auth tokens are 128 bits of hex and don't repeat across mints.
+    #[test]
+    fn random_token_is_128_bit_hex_and_varies() {
+        let a = random_token();
+        let b = random_token();
+        assert_eq!(a.len(), 32, "token must be 128 bits = 32 hex chars");
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b, "two minted tokens must differ");
+    }
+}
