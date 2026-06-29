@@ -43,7 +43,9 @@ use lunco_scripting::{
 };
 use lunco_doc::DocumentHost;
 use lunco_usd_bevy::usd_data::UsdDataExt;
-use lunco_usd_bevy::{UsdData, UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy::{
+    LoadIntoGrid, UsdData, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdStageAsset,
+};
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -945,6 +947,158 @@ fn clear_scene_entities(
         "[scene] cleanup: {} entities despawned, {} Modelica steppers freed, {} Python docs freed",
         despawned, modelica_freed, scripts_freed,
     );
+}
+
+/// Despawn a single USD prim **subtree** (one runtime prim and its descendants)
+/// and free the worker-side state it referenced — the per-prim analogue of
+/// [`clear_scene_entities`], used by E2 incremental despawn
+/// ([`lunco_usd::live_consume`]) when a `Resync` reports a prim removed from the
+/// composed document. Unlike the whole-scene clear, this touches only the
+/// subtree under `root`, so sibling rovers / terrain stay live.
+///
+/// Worker cleanup mirrors [`clear_scene_entities`]: `ModelicaCommand::Despawn`
+/// for every `ModelicaModel` in the subtree (so the worker's stepper / cached
+/// model / sim-stream maps don't leak) and a `ScriptRegistry` document drop for
+/// every `ScriptedModel`. Resources are read optionally — a headless / test
+/// world without the cosim workers still despawns cleanly. Despawn is recursive
+/// (Bevy hierarchy-aware), so passing the subtree root frees the whole branch.
+pub fn despawn_usd_subtree(world: &mut World, root: Entity) {
+    if world.get_entity(root).is_err() {
+        return;
+    }
+    // Gather root + all descendants (BFS over the `Children` relationship) so we
+    // can free worker state for the whole branch before it is despawned.
+    let mut subtree = vec![root];
+    let mut idx = 0;
+    while idx < subtree.len() {
+        let e = subtree[idx];
+        if let Some(children) = world.get::<Children>(e) {
+            let kids: Vec<Entity> = children.iter().collect();
+            subtree.extend(kids);
+        }
+        idx += 1;
+    }
+
+    let mut modelica_entities = Vec::new();
+    let mut script_doc_ids = Vec::new();
+    for &e in &subtree {
+        if world.get::<ModelicaModel>(e).is_some() {
+            modelica_entities.push(e);
+        }
+        if let Some(sm) = world.get::<ScriptedModel>(e) {
+            if let Some(raw) = sm.document_id {
+                script_doc_ids.push(raw);
+            }
+        }
+    }
+    if !modelica_entities.is_empty() {
+        if let Some(channels) = world.get_resource::<ModelicaChannels>() {
+            for e in &modelica_entities {
+                let _ = channels.tx.send(ModelicaCommand::Despawn { entity: *e });
+            }
+        }
+    }
+    if !script_doc_ids.is_empty() {
+        if let Some(mut reg) = world.get_resource_mut::<ScriptRegistry>() {
+            for raw in &script_doc_ids {
+                reg.documents.remove(&DocumentId::new(*raw));
+            }
+        }
+    }
+    if let Ok(em) = world.get_entity_mut(root) {
+        em.despawn();
+    }
+    info!(
+        "[scene] incremental despawn: {} entities, {} Modelica steppers freed, {} Python docs freed",
+        subtree.len(),
+        modelica_entities.len(),
+        script_doc_ids.len(),
+    );
+}
+
+/// Spawn one new USD child prim into a live scene, mirroring the child branch of
+/// [`lunco_usd_bevy::instantiate_usd_prim`] — the per-prim analogue of a full
+/// scene-root mount, used by E2 incremental spawn ([`lunco_usd::live_consume`])
+/// when a `Resync` reports a prim added to the composed document.
+///
+/// `stage_handle_id` scopes the lookup to one scene; `reader` is the *fresh*
+/// composed stage (the asset store's current reader, so the `on_usd_prim_added`
+/// observer that fires on the new `UsdPrimPath` sees the prim). The parent live
+/// entity is found by composed path; the child is spawned with the same atomic
+/// `(UsdPrimPath, ChildOf, transform, instance-membership)` bundle the loader
+/// uses, so the observer instantiates its geometry + subtree in place without
+/// disturbing siblings. Returns `None` (no-op) if the parent isn't live yet or
+/// the prim is already spawned.
+pub fn spawn_usd_child(
+    world: &mut World,
+    stage_handle_id: bevy::asset::AssetId<UsdStageAsset>,
+    reader: &UsdData,
+    path: &str,
+) -> Option<Entity> {
+    // Parent path = `path` minus its final `/segment`.
+    let (parent_prefix, _name) = path.rsplit_once('/')?;
+    let parent_path = if parent_prefix.is_empty() { "/" } else { parent_prefix };
+
+    // Resolve the live parent entity (same scene) and bail if it isn't
+    // instantiated yet — a following full load / reconcile will cover it.
+    let parent_entity = {
+        let mut q = world.query::<(Entity, &UsdPrimPath)>();
+        q.iter(world)
+            .find(|(_, upp)| upp.stage_handle.id() == stage_handle_id && upp.path == parent_path)
+            .map(|(e, _)| e)
+    }?;
+    // Idempotent: never double-spawn a path that already has a live entity.
+    let already = {
+        let mut q = world.query::<&UsdPrimPath>();
+        q.iter(world)
+            .any(|upp| upp.stage_handle.id() == stage_handle_id && upp.path == path)
+    };
+    if already {
+        return None;
+    }
+
+    let stage_handle = world.get::<UsdPrimPath>(parent_entity)?.stage_handle.clone();
+
+    // Pre-populate the translate so physics sees the spawn offset before the
+    // observer refines the full transform (matches the loader's child branch).
+    let sdf_path = SdfPath::new(path).ok()?;
+    let tf = lunco_usd_bevy::get_attribute_as_vec3(reader, &sdf_path, "xformOp:translate")
+        .map(Transform::from_translation)
+        .unwrap_or_default();
+
+    // Inherit grid-anchoring + instance membership from the parent exactly as
+    // `instantiate_usd_prim` derives them for its children.
+    let load_into = world.get::<LoadIntoGrid>(parent_entity).cloned();
+    let parent_member = world.get::<UsdInstanceMember>(parent_entity).cloned();
+    let parent_is_root = world.get::<UsdInstanceRoot>(parent_entity).is_some();
+    let member = parent_member.or_else(|| {
+        parent_is_root.then(|| UsdInstanceMember {
+            root: parent_entity,
+            root_path: parent_path.to_string(),
+        })
+    });
+
+    let base = (
+        Name::new(path.to_string()),
+        UsdPrimPath { stage_handle, path: path.to_string() },
+        tf,
+        GlobalTransform::default(),
+        Visibility::Visible,
+        InheritedVisibility::VISIBLE,
+        ViewVisibility::default(),
+    );
+    let entity = match (load_into, member) {
+        (Some(LoadIntoGrid(grid)), Some(m)) => world
+            .spawn((base, CellCoord::default(), lunco_core::GridAnchor, ChildOf(grid), m))
+            .id(),
+        (Some(LoadIntoGrid(grid)), None) => world
+            .spawn((base, CellCoord::default(), lunco_core::GridAnchor, ChildOf(grid)))
+            .id(),
+        (None, Some(m)) => world.spawn((base, ChildOf(parent_entity), m)).id(),
+        (None, None) => world.spawn((base, ChildOf(parent_entity))).id(),
+    };
+    info!("[scene] incremental spawn: `{}` (entity {})", path, entity);
+    Some(entity)
 }
 
 /// Normalize a scene path to asset-server-relative form. Accepts an

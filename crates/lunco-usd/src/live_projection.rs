@@ -261,16 +261,38 @@ pub(crate) fn refresh_live_doc_scenes(world: &mut World) {
             }
         }
 
-        // Structural changes (or an unknown batch) still need the full in-place
-        // rebuild: mutate the asset, drop the synced marker + children, re-insert
-        // `UsdPrimPath` to fire `on_usd_prim_added` against the new stage.
+        // Structural changes. E2-2/E2-3: when we have the exact set of changed
+        // prim paths (a per-prim `Resync`, not a whole-source `FullReload` or a
+        // ring overflow), refresh the asset reader and reconcile just those
+        // subtrees — spawn the added, despawn the removed — leaving every
+        // sibling rover/terrain entity untouched. Only a `full_reload` (or an
+        // unknown batch) falls back to the whole-scene in-place rebuild.
         let needs_structural = batch.as_ref().map(|b| b.needs_structural).unwrap_or(true);
         if needs_structural {
+            let full = batch.as_ref().map(|b| b.full_reload).unwrap_or(true);
+            let resync = batch.as_ref().map(|b| b.resync_paths.clone()).unwrap_or_default();
             if let Some(reader) = composed_reader(world, doc) {
+                // Refresh the shared stage reader either way — both the reconcile
+                // observer and the full rebuild read it from the asset store.
                 if let Some(asset) = world.resource_mut::<Assets<UsdStageAsset>>().get_mut(&handle) {
                     asset.reader = Arc::new(reader);
                 }
-                if let Ok(mut em) = world.get_entity_mut(entity) {
+                if !full && !resync.is_empty() {
+                    // Incremental: diff only the changed prims against the fresh
+                    // reader (E2-4 — no whole-scene re-instantiation).
+                    if let Some(reader_arc) =
+                        world.resource::<Assets<UsdStageAsset>>().get(&handle).map(|a| a.reader.clone())
+                    {
+                        crate::live_consume::reconcile_structural(
+                            world,
+                            handle.id(),
+                            &reader_arc,
+                            &resync,
+                        );
+                    }
+                } else if let Ok(mut em) = world.get_entity_mut(entity) {
+                    // Coarse fallback: drop the synced marker + children and
+                    // re-insert `UsdPrimPath` to rebuild the whole subtree.
                     em.remove::<UsdVisualSynced>();
                     em.despawn_related::<Children>();
                     if let Some(pp) = em.take::<UsdPrimPath>() {

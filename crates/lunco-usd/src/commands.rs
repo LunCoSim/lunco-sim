@@ -125,6 +125,11 @@ impl Plugin for UsdCommandsPlugin {
         // source as a `twin://` byte-overlay (web-ready via the async loader).
         app.init_resource::<crate::twin_projection::PendingTwinDocs>();
         app.init_resource::<crate::twin_projection::DocBackedTwinScenes>();
+        // E2-2/E2-3: deferred structural reconcile for twin scenes — the async
+        // reload refreshes the `twin://`-resolved reader, then these apply the
+        // incremental spawn/despawn (or coarse rebuild) against it.
+        app.init_resource::<crate::twin_projection::PendingTwinReconciles>();
+        app.init_resource::<crate::twin_projection::ReloadedTwinAssets>();
         // Gated on the asset pipeline: these need `AssetServer` (reload) and the
         // `Assets<UsdSourceText>` store (UsdBevyPlugin's `init_asset`). Both are
         // absent in headless `MinimalPlugins` test apps — and a partial setup can
@@ -134,6 +139,9 @@ impl Plugin for UsdCommandsPlugin {
             (
                 crate::twin_projection::drain_pending_twin_docs,
                 crate::twin_projection::sync_twin_overlays,
+                // Buffer reloaded assets, then drain matured reconciles after.
+                crate::twin_projection::collect_reloaded_twin_assets,
+                crate::twin_projection::drain_twin_reconciles,
             )
                 .chain()
                 .run_if(resource_exists::<AssetServer>)

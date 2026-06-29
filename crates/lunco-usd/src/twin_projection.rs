@@ -31,10 +31,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use bevy::asset::AssetId;
 use bevy::prelude::*;
 use lunco_assets::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
-use lunco_usd_bevy::{UsdSourceText, UsdStageAsset};
+use lunco_usd_bevy::{UsdPrimPath, UsdSourceText, UsdStageAsset, UsdVisualSynced};
 
 use crate::registry::UsdDocumentRegistry;
 
@@ -79,6 +80,47 @@ struct TwinSceneRef {
 #[derive(Resource, Default)]
 pub struct DocBackedTwinScenes {
     map: HashMap<DocumentId, TwinSceneRef>,
+}
+
+/// A deferred structural reconcile for a twin scene, queued by
+/// [`sync_twin_overlays`] when the document moved structurally and the
+/// flattened reader is being refreshed **asynchronously** through the twin
+/// source. Consumed by [`drain_twin_reconciles`] once that reload lands (so the
+/// reconcile sees the fresh, `twin://`-resolved reader).
+struct TwinReconcile {
+    /// The reloaded scene asset this reconcile is waiting on.
+    handle_id: AssetId<UsdStageAsset>,
+    /// Changed prim paths to reconcile per-subtree (spawn added / despawn
+    /// removed). Empty + `full` means whole-scene rebuild.
+    resync_paths: Vec<String>,
+    /// Whole-scene rebuild rather than per-prim reconcile (FullReload / overflow
+    /// / a structural change with no concrete prim path to reconcile).
+    full: bool,
+}
+
+/// Structural reconciles waiting on their twin asset's async reload to land.
+/// Populated by [`sync_twin_overlays`], drained by [`drain_twin_reconciles`].
+#[derive(Resource, Default)]
+pub struct PendingTwinReconciles {
+    items: Vec<TwinReconcile>,
+}
+
+impl PendingTwinReconciles {
+    fn push(&mut self, handle_id: AssetId<UsdStageAsset>, resync_paths: Vec<String>, full: bool) {
+        // A structural change with no concrete prim path can't be reconciled
+        // per-prim — force the whole-scene rebuild.
+        let full = full || resync_paths.is_empty();
+        self.items.push(TwinReconcile { handle_id, resync_paths, full });
+    }
+}
+
+/// Twin scene assets whose async reload finished this frame — buffered by
+/// [`collect_reloaded_twin_assets`] (a cheap `MessageReader` system) so the
+/// exclusive [`drain_twin_reconciles`] can match them against
+/// [`PendingTwinReconciles`].
+#[derive(Resource, Default)]
+pub struct ReloadedTwinAssets {
+    ids: Vec<AssetId<UsdStageAsset>>,
 }
 
 /// Give up on a pending twin doc after this many frames without its source
@@ -203,14 +245,116 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             }
         }
 
-        // Structural changes still re-read the whole asset through the overlay.
+        // Structural changes refresh the flattened reader through the overlay
+        // (async — the twin loader resolves `twin://` / `lunco://` refs that a
+        // synchronous compose can't), then reconcile once that reload lands
+        // (`drain_twin_reconciles`): spawn the added subtrees, despawn the
+        // removed, leaving siblings untouched (E2-2/E2-3/E2-4).
+        //
+        // On the very first mount (`synced == None`) the reload *is* the initial
+        // build via `sync_usd_visuals`, so there's no baseline to diff — just
+        // reload, no reconcile queued.
         let needs_structural = batch.as_ref().map(|b| b.needs_structural).unwrap_or(true);
         if needs_structural {
+            if synced.is_some() {
+                let full = batch.as_ref().map(|b| b.full_reload).unwrap_or(true);
+                let resync = batch.as_ref().map(|b| b.resync_paths.clone()).unwrap_or_default();
+                world
+                    .resource_mut::<PendingTwinReconciles>()
+                    .push(handle.id(), resync, full);
+            }
             world.resource::<AssetServer>().reload(twin_path);
         }
 
         if let Some(s) = world.resource_mut::<DocBackedTwinScenes>().map.get_mut(&doc) {
             s.synced_generation = Some(cur_gen);
+        }
+    }
+}
+
+/// Buffer the ids of twin scene assets that finished (re)loading this frame, so
+/// the exclusive [`drain_twin_reconciles`] can match them against
+/// [`PendingTwinReconciles`]. Cheap `MessageReader` system — runs only on frames
+/// an asset event actually fires.
+pub(crate) fn collect_reloaded_twin_assets(
+    mut ev: MessageReader<AssetEvent<UsdStageAsset>>,
+    mut out: ResMut<ReloadedTwinAssets>,
+) {
+    for event in ev.read() {
+        if let AssetEvent::LoadedWithDependencies { id } = event {
+            out.ids.push(*id);
+        }
+    }
+}
+
+/// Run the structural reconciles whose twin asset reload has now landed: for a
+/// per-prim batch, [`reconcile_structural`](crate::live_consume::reconcile_structural)
+/// against the fresh reader; for a `full` batch, an in-place whole-scene
+/// rebuild. Reconciles whose reload hasn't arrived yet are retried next frame.
+pub(crate) fn drain_twin_reconciles(world: &mut World) {
+    let loaded = std::mem::take(&mut world.resource_mut::<ReloadedTwinAssets>().ids);
+    if loaded.is_empty() {
+        return;
+    }
+    if world.resource::<PendingTwinReconciles>().items.is_empty() {
+        return;
+    }
+    let pending = std::mem::take(&mut world.resource_mut::<PendingTwinReconciles>().items);
+    let mut still = Vec::new();
+    for item in pending {
+        if !loaded.contains(&item.handle_id) {
+            still.push(item);
+            continue;
+        }
+        // Fresh, fully-resolved reader from the asset store.
+        let reader = world
+            .resource::<Assets<UsdStageAsset>>()
+            .get(item.handle_id)
+            .map(|a| a.reader.clone());
+        let Some(reader) = reader else {
+            continue; // asset gone — drop the reconcile
+        };
+        if item.full {
+            full_rebuild_twin_scene(world, item.handle_id);
+        } else {
+            crate::live_consume::reconcile_structural(
+                world,
+                item.handle_id,
+                &reader,
+                &item.resync_paths,
+            );
+        }
+    }
+    world.resource_mut::<PendingTwinReconciles>().items.extend(still);
+}
+
+/// Whole-scene in-place rebuild for a twin scene (the coarse fallback): for each
+/// scene-root entity of `handle_id`, drop its `UsdVisualSynced` marker +
+/// children and re-insert `UsdPrimPath` so `on_usd_prim_added` re-instantiates
+/// the subtree against the freshly-reloaded reader. A scene root is an entity of
+/// this scene whose parent is *not* itself a prim of the same scene (i.e. it
+/// hangs off the world grid, not another USD prim).
+fn full_rebuild_twin_scene(world: &mut World, handle_id: AssetId<UsdStageAsset>) {
+    let scene: Vec<(Entity, Option<Entity>)> = {
+        let mut q = world.query::<(Entity, &UsdPrimPath, Option<&ChildOf>)>();
+        q.iter(world)
+            .filter(|(_, upp, _)| upp.stage_handle.id() == handle_id)
+            .map(|(e, _, parent)| (e, parent.map(|p| p.0)))
+            .collect()
+    };
+    let members: std::collections::HashSet<Entity> = scene.iter().map(|(e, _)| *e).collect();
+    let roots: Vec<Entity> = scene
+        .iter()
+        .filter(|(_, parent)| parent.map(|p| !members.contains(&p)).unwrap_or(true))
+        .map(|(e, _)| *e)
+        .collect();
+    for root in roots {
+        if let Ok(mut em) = world.get_entity_mut(root) {
+            em.remove::<UsdVisualSynced>();
+            em.despawn_related::<Children>();
+            if let Some(pp) = em.take::<UsdPrimPath>() {
+                em.insert(pp);
+            }
         }
     }
 }
