@@ -349,6 +349,120 @@ fn __init_task(me) {
     if this.task == () && is_def_fn("task", 1) { this.task = task(me); }
 }
 
+// ── Objectives: a DECLARATIVE mission (KSP-contract style) ────────────────────
+//
+// A task DOES things; a mission WATCHES — a set of objectives, each a completion
+// condition (not imperative steps), evaluated every tick. Objectives can require
+// others (branching/unlock), dwell (hold the condition N seconds), fail on a
+// condition, and fire on_complete. The engine emits OBJECTIVE_COMPLETE(id) /
+// OBJECTIVE_FAILED(id) and MISSION_COMPLETE / MISSION_FAILED. Declare by defining
+// `fn mission(me)` (sugar, auto-run) or assigning `this.mission` in on_start:
+//
+//   fn mission(me) {
+//       [
+//           objective("reach_base", #{ done: |m| arrived(m, BASE), dwell: 3.0,
+//                                      on_complete: |m| emit("AT_BASE", 1) }),
+//           objective("sample", #{ requires: ["reach_base"],
+//                                  done: |m| has_sample(m),
+//                                  fail: |m| get(m, "Battery.level") < 0.1 }),
+//       ]
+//   }
+// A scenario may run a `task` (behaviour) AND a `mission` (success tracking).
+
+/// One objective. `spec` keys (all optional but usually `done`): `done` (|m| bool
+/// completion), `dwell` (secs the condition must hold), `fail` (|m| bool failure),
+/// `requires` (array of objective ids that must complete first), `on_complete`
+/// (|m| side-effect when it completes).
+fn objective(id, spec) {
+    #{
+        id: id,
+        done: spec.done,
+        dwell: spec.dwell,
+        fail: spec.fail,
+        requires: if spec.requires != () { spec.requires } else { [] },
+        on_complete: spec.on_complete,
+        state: "pending",   // pending → active → complete | failed
+        t0: (),             // dwell entry time
+    }
+}
+
+/// State of objective `id` within mission list `m`, or () if absent.
+fn __obj_state(m, id) {
+    for o in m { if o.id == id { return o.state; } }
+    ()
+}
+
+/// True once every id in `requires` is complete.
+fn __obj_ready(m, requires) {
+    for rid in requires { if __obj_state(m, rid) != "complete" { return false; } }
+    true
+}
+
+/// Advance one ACTIVE objective: fail check → completion (with optional dwell).
+fn __advance_objective(me, o, now) {
+    if o.fail != () && o.fail.call(me) {
+        o.state = "failed";
+        emit("OBJECTIVE_FAILED", o.id);
+        return o;
+    }
+    let met = o.done == () || o.done.call(me);
+    if !met { o.t0 = (); return o; }          // condition broke → reset dwell
+    if o.dwell != () {
+        if o.t0 == () { o.t0 = now; }
+        if (now - o.t0) < o.dwell { return o; }
+    }
+    o.state = "complete";
+    emit("OBJECTIVE_COMPLETE", o.id);
+    if o.on_complete != () { o.on_complete.call(me); }
+    o
+}
+
+/// Tick one objective: unlock from pending when its requires are met, then
+/// advance if active. Returns the updated objective.
+fn __tick_objective(me, o, m, now) {
+    if o.state == "complete" || o.state == "failed" { return o; }
+    if o.state == "pending" && __obj_ready(m, o.requires) { o.state = "active"; }
+    if o.state == "active" { o = __advance_objective(me, o, now); }
+    o
+}
+
+/// Mission roll-up as `#{ all_done, any_failed }`. PURE (no `this`): the runtime
+/// binds `this` only in the directly-called driver, not in functions it calls, so
+/// the MISSION_COMPLETE/FAILED emit + one-shot guard live in `__run_mission`.
+fn __mission_status(m) {
+    let all_done = true;
+    let any_failed = false;
+    for o in m {
+        if o.state == "failed" { any_failed = true; }
+        if o.state != "complete" { all_done = false; }
+    }
+    #{ all_done: all_done, any_failed: any_failed }
+}
+
+/// Engine driver — evaluate `this.mission` one tick. Called by the runtime after
+/// on_tick; no-op when no mission was declared. Emits MISSION_COMPLETE /
+/// MISSION_FAILED once when the mission resolves.
+fn __run_mission(me) {
+    if this.mission == () { return; }
+    let now = elapsed_seconds();
+    let m = this.mission;
+    for i in 0..m.len() {
+        m[i] = __tick_objective(me, m[i], m, now);
+    }
+    this.mission = m;
+    let s = __mission_status(m);
+    if this.__mission_done != true {
+        if s.any_failed { this.__mission_done = true; emit("MISSION_FAILED", 0); }
+        else if s.all_done { this.__mission_done = true; emit("MISSION_COMPLETE", 0); }
+    }
+}
+
+/// Engine driver — called once after on_start; seeds `this.mission` from a user
+/// `mission(me)` if defined and not already set.
+fn __init_mission(me) {
+    if this.mission == () && is_def_fn("mission", 1) { this.mission = mission(me); }
+}
+
 // ── Timeline (Layer 2: a mission as DATA, interpreted onto Layer 1) ──────────
 //
 // Layer 1 steps carry rhai CLOSURES; a TIMELINE step is pure DATA (a map of

@@ -618,26 +618,29 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // Seed the deterministic RNG for this hook: (entity, tick, hook).
         bridge_core::rng_begin(self_gid as u64, bridge_core::sim_tick() as u64, salt);
         let user = call_hook(&self.engine, &mut st.scope, &st.ast, name, self_gid, &mut st.this);
-        // Built-in task drivers (prelude fns, called regardless of what the user
-        // AST defines): after on_start seed `this.task` from a `task(me)` fn if
-        // present; after on_tick advance the declared task. Both no-op when the
-        // script uses neither — so a script with no task pays one cheap call.
-        let driver = match hook {
-            ScenarioHook::Start => Some("__init_task"),
-            ScenarioHook::Tick => Some("__run_task"),
-            ScenarioHook::Stop => None,
+        // Built-in drivers (prelude fns, called regardless of what the user AST
+        // defines): after on_start, seed `this.task`/`this.mission` from `task(me)`
+        // / `mission(me)` fns if present; after on_tick, advance the declared task
+        // and evaluate the mission. Each no-ops when the script declared neither,
+        // so a plain scenario pays only a couple of cheap calls.
+        let drivers: &[&str] = match hook {
+            ScenarioHook::Start => &["__init_task", "__init_mission"],
+            ScenarioHook::Tick => &["__run_task", "__run_mission"],
+            ScenarioHook::Stop => &[],
         };
-        let task = driver.and_then(|name| {
-            call_prelude_driver(
+        let mut driver_err = None;
+        for name in drivers {
+            let e = call_prelude_driver(
                 &self.engine,
                 &mut st.scope,
                 &st.ast,
                 name,
                 &mut st.this,
                 vec![Dynamic::from_int(self_gid)],
-            )
-        });
-        user.or(task).map(|(msg, pos)| rhai_diagnostic(msg, pos))
+            );
+            driver_err = driver_err.or(e);
+        }
+        user.or(driver_err).map(|(msg, pos)| rhai_diagnostic(msg, pos))
     }
 
     fn deliver_event(

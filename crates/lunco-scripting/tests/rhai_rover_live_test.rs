@@ -520,6 +520,87 @@ fn builtin_task_forever_never_completes() {
 }
 
 #[test]
+fn builtin_mission_completes_and_emits() {
+    // A `fn mission(me)` is auto-run like `fn task`. One objective whose condition
+    // holds completes immediately → OBJECTIVE_COMPLETE + its on_complete + the
+    // one-shot MISSION_COMPLETE.
+    let source = r#"
+        fn mission(me) {
+            [ objective("reach", #{ done: |m| true, on_complete: |m| emit("REACHED", 1) }) ]
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    tick(&mut app);
+    assert!(emitted(&app, "REACHED"), "on_complete should fire");
+    assert!(emitted(&app, "MISSION_COMPLETE"), "a one-objective mission completes; got {:?}",
+        app.world().resource::<EventLog>().0);
+}
+
+#[test]
+fn builtin_mission_requires_gate_locked_objectives() {
+    // `b` requires `a`; `a`'s condition never holds → `a` stays active, `b` never
+    // unlocks → neither b's on_complete nor MISSION_COMPLETE fire.
+    let source = r#"
+        fn mission(me) {
+            [
+                objective("a", #{ done: |m| false }),
+                objective("b", #{ requires: ["a"], done: |m| true,
+                                  on_complete: |m| emit("B_DONE", 1) }),
+            ]
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    for _ in 0..3 { tick(&mut app); }
+    assert!(!emitted(&app, "B_DONE"), "b must stay locked until its prerequisite a completes");
+    assert!(!emitted(&app, "MISSION_COMPLETE"), "mission can't complete while a is unmet");
+}
+
+#[test]
+fn builtin_mission_fails_on_fail_condition() {
+    // An objective whose `fail` condition trips → OBJECTIVE_FAILED + MISSION_FAILED.
+    let source = r#"
+        fn mission(me) {
+            [ objective("survive", #{ done: |m| false, fail: |m| true }) ]
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    tick(&mut app);
+    assert!(emitted(&app, "MISSION_FAILED"), "a failed objective fails the mission; got {:?}",
+        app.world().resource::<EventLog>().0);
+    assert!(!emitted(&app, "MISSION_COMPLETE"), "a failed mission must not also report complete");
+}
+
+#[test]
+fn builtin_mission_dwell_holds_until_satisfied() {
+    // dwell requires the condition to hold for N sim-seconds. The test harness has
+    // no clock (elapsed_seconds()==0), so a 5s dwell never elapses → the objective
+    // stays active and the mission does not complete.
+    let source = r#"
+        fn mission(me) {
+            [ objective("hold", #{ done: |m| true, dwell: 5.0,
+                                   on_complete: |m| emit("HELD", 1) }) ]
+        }
+    "#;
+    let (mut app, _rover) = setup(source);
+    for _ in 0..3 { tick(&mut app); }
+    assert!(!emitted(&app, "HELD"), "dwell must hold the condition before completing");
+    assert!(!emitted(&app, "MISSION_COMPLETE"), "mission waits on the dwelling objective");
+}
+
+#[test]
+fn builtin_task_and_mission_run_together() {
+    // A scenario can run a behaviour (task) AND track success (mission) at once.
+    let source = r#"
+        fn task(me) { seq([ once(|m| emit("ACTING", 1)) ]) }
+        fn mission(me) { [ objective("win", #{ done: |m| true, on_complete: |m| emit("WON", 1) }) ] }
+    "#;
+    let (mut app, _rover) = setup(source);
+    tick(&mut app);
+    assert!(emitted(&app, "ACTING"), "the task ran");
+    assert!(emitted(&app, "WON") && emitted(&app, "MISSION_COMPLETE"), "the mission resolved");
+}
+
+#[test]
 fn rhai_event_delivered_to_on_event_next_tick() {
     // P3 frame-delayed event delivery: tick 1 emits PING, tick 2 the on_event
     // hook receives it and records a marker via emit("GOT_PING").
