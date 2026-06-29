@@ -151,17 +151,28 @@ impl Quadtree {
     /// root region is exact — every emitted region is disjoint and their union is the
     /// root (REPLACE refinement).
     pub fn select(&self, focus_xz: [f64; 2]) -> Vec<Selected> {
+        self.select_3d(focus_xz, 0.0)
+    }
+
+    /// Select using the **full 3D distance**: each node's horizontal distance is
+    /// combined with `eye_height` (the camera's height above the terrain surface)
+    /// as `sqrt(horizontal² + eye_height²)`. A camera high above the ground then
+    /// coarsens the tiles directly below it instead of refining them to max depth
+    /// as a purely-XZ metric would. `select(focus)` is the `eye_height = 0` case.
+    pub fn select_3d(&self, focus_xz: [f64; 2], eye_height: f64) -> Vec<Selected> {
         let mut out = Vec::new();
-        self.select_node(QuadCoord::ROOT, focus_xz, &mut out);
+        self.select_node(QuadCoord::ROOT, focus_xz, eye_height, &mut out);
         out
     }
 
-    fn select_node(&self, coord: QuadCoord, focus: [f64; 2], out: &mut Vec<Selected>) {
+    fn select_node(&self, coord: QuadCoord, focus: [f64; 2], eye_height: f64, out: &mut Vec<Selected>) {
         let region = self.region(coord);
-        let refine = coord.depth < self.max_depth && region.distance_to(focus) < self.refine_range(coord.depth);
+        let horizontal = region.distance_to(focus);
+        let dist = (horizontal * horizontal + eye_height * eye_height).sqrt();
+        let refine = coord.depth < self.max_depth && dist < self.refine_range(coord.depth);
         if refine {
             for child in coord.children() {
-                self.select_node(child, focus, out);
+                self.select_node(child, focus, eye_height, out);
             }
             return;
         }

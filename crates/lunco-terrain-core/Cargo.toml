@@ -1,0 +1,15 @@
+[package]
+name = "lunco-terrain-core"
+version = "0.1.0-dev"
+edition = "2021"
+description = "Projection-agnostic terrain LOD spine: quadtree-CDLOD selection, tile-grid math, and the HeightSource trait. Pure (std + serde only), no bevy/avian/DEM/sphere — shared by both the planar DEM streamer and the cube-sphere planetary tiler."
+
+[dependencies]
+# The whole point of this crate is to stay a pure leaf: std + serde, nothing else.
+# No bevy, no avian, no big_space, no DEM/GeoTIFF, no sphere projection — those
+# live in lunco-terrain-surface / lunco-terrain-globe (the two scales). That is
+# what keeps the LOD spine wasm-safe, fast to compile, and unit-testable in isolation.
+serde = { workspace = true }
+
+[lints]
+workspace = true

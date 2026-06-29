@@ -13,7 +13,7 @@
 //! Pure + Bevy-free → unit-tested and wasm-safe; the plugin runs it off-thread
 //! and assembles the attributes into a Bevy `Mesh`.
 
-use lunco_obstacle_field::field::HeightGrid;
+use lunco_obstacle_field::field::{grid_indices, grid_normals, HeightGrid};
 
 use crate::quadtree::Square;
 
@@ -35,13 +35,25 @@ pub struct TileMesh {
 /// vertices don't move and odd vertices collapse onto their even neighbour, the
 /// standard CDLOD vertex morph. UVs are DEM-global (`(world + H)/(2H)`) so layer
 /// maps align across tiles. `dem_half_extent` is the DEM's `half_extent`.
-pub fn bake_tile_mesh(dem: &HeightGrid, region: Square, res: usize, dem_half_extent: f64) -> TileMesh {
+///
+/// `origin_xz` is subtracted from vertex X/Z so positions are **relative to that
+/// anchor** (UVs stay DEM-global). Pass the tile's own world centre to keep
+/// vertices small and f32-precise when the tile is anchored to its own big_space
+/// `CellCoord`; pass `[0.0, 0.0]` for DEM-absolute positions.
+pub fn bake_tile_mesh(
+    dem: &HeightGrid,
+    region: Square,
+    res: usize,
+    dem_half_extent: f64,
+    origin_xz: [f64; 2],
+) -> TileMesh {
     let res = res.max(2);
     let n = res as f64;
     let step = region.side() / (n - 1.0);
     let x0 = region.center[0] - region.half;
     let z0 = region.center[1] - region.half;
     let inv_uv = 1.0 / (2.0 * dem_half_extent);
+    let (ox, oz) = (origin_xz[0], origin_xz[1]);
 
     let world = |ix: usize, iz: usize| -> (f64, f64) {
         (x0 + ix as f64 * step, z0 + iz as f64 * step)
@@ -54,58 +66,20 @@ pub fn bake_tile_mesh(dem: &HeightGrid, region: Square, res: usize, dem_half_ext
     for iz in 0..res {
         for ix in 0..res {
             let (wx, wz) = world(ix, iz);
-            positions.push([wx as f32, height(wx, wz), wz as f32]);
+            positions.push([(wx - ox) as f32, height(wx, wz), (wz - oz) as f32]);
 
             // Snap to the parent's even lattice and re-sample.
             let (sx, sz) = world(ix & !1, iz & !1);
-            morph_targets.push([sx as f32, height(sx, sz), sz as f32]);
+            morph_targets.push([(sx - ox) as f32, height(sx, sz), (sz - oz) as f32]);
 
             uvs.push([((wx + dem_half_extent) * inv_uv) as f32, ((wz + dem_half_extent) * inv_uv) as f32]);
         }
     }
 
+    // Normals + indices via the shared obstacle-field helpers (one grid-mesh impl).
     let normals = grid_normals(&positions, res);
     let indices = grid_indices(res);
     TileMesh { positions, morph_targets, normals, uvs, indices }
-}
-
-/// Smooth normals from central differences over the grid (own positions).
-fn grid_normals(positions: &[[f32; 3]], res: usize) -> Vec<[f32; 3]> {
-    let idx = |x: usize, z: usize| z * res + x;
-    let mut normals = vec![[0.0, 1.0, 0.0]; res * res];
-    for z in 0..res {
-        for x in 0..res {
-            let xm = x.saturating_sub(1);
-            let xp = (x + 1).min(res - 1);
-            let zm = z.saturating_sub(1);
-            let zp = (z + 1).min(res - 1);
-            let hl = positions[idx(xm, z)][1];
-            let hr = positions[idx(xp, z)][1];
-            let hd = positions[idx(x, zm)][1];
-            let hu = positions[idx(x, zp)][1];
-            let dx = positions[idx(xp, z)][0] - positions[idx(xm, z)][0];
-            let dz = positions[idx(x, zp)][2] - positions[idx(x, zm)][2];
-            // Gradient → normal (y up). Guard against zero spacing at edges.
-            let nx = if dx != 0.0 { -(hr - hl) / dx } else { 0.0 };
-            let nz = if dz != 0.0 { -(hu - hd) / dz } else { 0.0 };
-            let len = (nx * nx + 1.0 + nz * nz).sqrt();
-            normals[idx(x, z)] = [nx / len, 1.0 / len, nz / len];
-        }
-    }
-    normals
-}
-
-/// Two CCW triangles per quad over a `res × res` grid.
-fn grid_indices(res: usize) -> Vec<u32> {
-    let row = res as u32;
-    let mut indices = Vec::with_capacity((res - 1) * (res - 1) * 6);
-    for iz in 0..(res as u32 - 1) {
-        for ix in 0..(res as u32 - 1) {
-            let i = iz * row + ix;
-            indices.extend_from_slice(&[i, i + row, i + 1, i + 1, i + row, i + row + 1]);
-        }
-    }
-    indices
 }
 
 #[cfg(test)]
@@ -132,7 +106,7 @@ mod tests {
 
     #[test]
     fn flat_dem_bakes_flat_no_morph() {
-        let m = bake_tile_mesh(&flat_dem(), Square { center: [0.0, 0.0], half: 50.0 }, 5, 100.0);
+        let m = bake_tile_mesh(&flat_dem(), Square { center: [0.0, 0.0], half: 50.0 }, 5, 100.0, [0.0, 0.0]);
         assert_eq!(m.positions.len(), 25);
         assert_eq!(m.indices.len(), 4 * 4 * 6);
         assert!(m.positions.iter().all(|p| p[1] == 0.0));
@@ -145,7 +119,7 @@ mod tests {
         let dem = ramp_dem();
         let region = Square { center: [0.0, 0.0], half: 50.0 };
         let res = 5;
-        let m = bake_tile_mesh(&dem, region, res, 100.0);
+        let m = bake_tile_mesh(&dem, region, res, 100.0, [0.0, 0.0]);
         let step = region.side() / (res as f64 - 1.0);
         let x0 = region.center[0] - region.half;
         for iz in 0..res {
@@ -168,7 +142,7 @@ mod tests {
     #[test]
     fn positions_carry_dem_height() {
         let dem = ramp_dem();
-        let m = bake_tile_mesh(&dem, Square { center: [0.0, 0.0], half: 50.0 }, 5, 100.0);
+        let m = bake_tile_mesh(&dem, Square { center: [0.0, 0.0], half: 50.0 }, 5, 100.0, [0.0, 0.0]);
         // height == world x on this ramp.
         for p in &m.positions {
             assert!((p[1] - p[0]).abs() < 1e-2, "pos.y {} != world x {}", p[1], p[0]);

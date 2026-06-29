@@ -13,17 +13,14 @@
 //! `resample` bridge and this spawn path are what they build on.
 
 use avian3d::prelude::{Collider, RigidBody};
-use bevy::asset::RenderAssetUsages;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use bevy::render::render_resource::PrimitiveTopology;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
-use bevy_mesh::Indices;
 use big_space::prelude::CellCoord;
 use lunco_core::{on_command, register_commands, Command, GridAnchor, WorldGrid};
 use lunco_obstacle_field::field::{HeightGrid, MeshData};
 
-use crate::bake::crop_centered;
+use crate::bake::{crop_centered, resample};
 use crate::dem::{height_grid_from_geotiff, DemMetadata};
 
 /// Default realized region side length (metres) when `window_m` is 0… no — see
@@ -54,6 +51,19 @@ pub struct DemTerrainRequest {
     /// Half side length (metres) of the centred region to realize at native
     /// resolution. `f64::INFINITY` = the whole DEM.
     pub half_window: f64,
+    /// Visual-quality knob: if `> 0` and below the cropped native resolution, the
+    /// tile is **resampled** (lossy downsample, via [`crate::bake::resample`]) to
+    /// this many samples per side before meshing — so you can A/B different DEM
+    /// qualities (256² … native) on the same site. `0` = keep native (default).
+    /// NOTE: this coarsens the **whole** tile (mesh + collider together); the M7
+    /// streaming ring is what keeps the near-field collider native while only the
+    /// far visual LOD decimates.
+    pub target_res: usize,
+    /// Opt-in DEBUG view: suppress the static visual mesh and instead stream
+    /// camera-driven CDLOD tiles tinted by LOD depth (see [`crate::stream_viz`]).
+    /// The heightfield COLLIDER still spawns, so physics is unchanged. `false` =
+    /// the normal single static mesh.
+    pub lod_viz: bool,
     /// Apply a plain `StandardMaterial` when the bake finishes. `true` for the
     /// standalone command path; `false` for the USD path, where the prim's
     /// `materialType` authors the material (don't clobber it).
@@ -72,6 +82,13 @@ pub struct DemTerrainRequest {
 pub struct SpawnDemTerrain {
     pub uri: String,
     pub window_m: f32,
+    /// Visual-quality downsample target (samples per side). `0` = native (no
+    /// decimation). Re-issue the command with a different value to rebuild the
+    /// same site at another quality and compare.
+    pub target_res: u32,
+    /// Stream camera-driven LOD tiles tinted by depth instead of one static mesh
+    /// (DEBUG view of the CDLOD machinery; collider/physics unchanged).
+    pub lod_viz: bool,
 }
 
 #[on_command(SpawnDemTerrain)]
@@ -96,25 +113,39 @@ fn on_spawn_dem_terrain(
     let mut e = commands.spawn((
         DemTerrainSurface,
         Name::new("DemTerrain"),
-        DemTerrainRequest { uri: ev.uri.clone(), half_window, with_default_material: true },
+        DemTerrainRequest {
+            uri: ev.uri.clone(),
+            half_window,
+            target_res: ev.target_res as usize,
+            lod_viz: ev.lod_viz,
+            with_default_material: true,
+        },
         Transform::IDENTITY,
         Visibility::Inherited,
     ));
     if let Ok(grid) = grids.single() {
         e.insert((CellCoord::default(), GridAnchor, ChildOf(grid)));
     }
-    info!("[dem-terrain] queued build for {} (window {} m)", ev.uri, ev.window_m);
+    info!(
+        "[dem-terrain] queued build for {} (window {} m, target_res {})",
+        ev.uri, ev.window_m, ev.target_res
+    );
 }
 
 register_commands!(on_spawn_dem_terrain);
 
 /// What the off-thread build produces, ready to assemble into entities.
 struct DemBuild {
-    mesh: MeshData,
+    /// The static visual mesh — `None` in `lod_viz` mode (tiles draw instead).
+    mesh: Option<MeshData>,
     collider_heights: Vec<Vec<f64>>,
+    /// The realized tile grid, retained for `lod_viz` so LOD tiles can sample it.
+    grid: Option<std::sync::Arc<HeightGrid>>,
     half_extent: f32,
-    /// Native tile resolution actually realized (for logging / heavy-mesh warning).
+    /// Tile resolution actually meshed (= native crop res, or the resample target).
     res: usize,
+    /// Native crop resolution before any resample (for honest logging).
+    native_res: usize,
     site: String,
 }
 
@@ -156,6 +187,8 @@ fn start_dem_builds(
         let meta_path = dir.join("metadata.yaml");
         let tif_path = dir.join("materials/textures/heightmap.tif");
         let half_window = req.half_window;
+        let target_res = req.target_res;
+        let lod_viz = req.lod_viz;
 
         let task = AsyncComputeTaskPool::get().spawn(async move {
             let meta_bytes = read_bytes(meta_path).await?;
@@ -166,30 +199,38 @@ fn start_dem_builds(
             let tif = read_bytes(tif_path).await?;
             let grid = height_grid_from_geotiff(&tif, &meta).map_err(|e| e.to_string())?;
 
-            // Native resolution — crop the playable region, never decimate. The
-            // mesh and collider share this grid so visuals and contact agree.
+            // Crop the playable region at native resolution. The mesh and collider
+            // share this grid so visuals and contact agree.
             let tile = crop_centered(&grid, half_window);
+            let native_res = tile.res;
+            // Optional visual-quality downsample (lossy). 0 / ≥ native keeps native.
+            let tile = if target_res > 0 && target_res < native_res {
+                resample(&tile, tile.half_extent as f64, target_res)
+            } else {
+                tile
+            };
+            let half_extent = tile.half_extent;
+            let res = tile.res;
+            let collider_heights = tile.to_avian_heights();
+            // In lod_viz mode, retain the grid for tile baking and skip the static
+            // visual mesh; otherwise build the single static mesh as usual.
+            let (mesh, grid) = if lod_viz {
+                (None, Some(std::sync::Arc::new(tile)))
+            } else {
+                (Some(tile.to_mesh_data()), None)
+            };
             Ok(DemBuild {
-                collider_heights: tile.to_avian_heights(),
-                mesh: tile.to_mesh_data(),
-                half_extent: tile.half_extent,
-                res: tile.res,
+                collider_heights,
+                mesh,
+                grid,
+                half_extent,
+                res,
+                native_res,
                 site: meta.site_id,
             })
         });
         commands.entity(entity).insert(DemBuildTask(task));
     }
-}
-
-/// Build a Bevy mesh from raw height-grid vertex data (same shape as
-/// `lunco-obstacle-field`'s terrain mesh).
-fn terrain_mesh(data: MeshData) -> Mesh {
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, data.positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, data.normals);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, data.uvs);
-    mesh.insert_indices(Indices::U32(data.indices));
-    mesh
 }
 
 /// Collect finished builds and fill the requesting entity with the heightfield
@@ -235,8 +276,20 @@ fn finish_dem_builds(
         // Heightfield collider always; mesh only when render assets exist.
         let mut e = commands.entity(entity);
         e.insert((RigidBody::Static, collider));
-        if let Some(meshes) = meshes.as_mut() {
-            e.insert(Mesh3d(meshes.add(terrain_mesh(built.mesh))));
+        // `lod_viz`: retain the grid + mark for camera-driven LOD tile streaming
+        // (the static visual mesh is suppressed — `built.mesh` is None).
+        if let Some(grid) = built.grid {
+            e.insert((
+                crate::stream_viz::DemHeightField(grid),
+                crate::stream_viz::TerrainLodViz::default(),
+                crate::stream_viz::LodTiles::default(),
+            ));
+        }
+        if let (Some(meshes), Some(mesh)) = (meshes.as_mut(), built.mesh) {
+            let MeshData { positions, normals, uvs, indices } = mesh;
+            e.insert(Mesh3d(meshes.add(lunco_obstacle_field::grid_mesh(
+                positions, normals, uvs, indices,
+            ))));
             // Default material only for the standalone command path; the USD path
             // authors its own via `materialType` (don't clobber it).
             if req.with_default_material {
@@ -249,12 +302,20 @@ fn finish_dem_builds(
                 }
             }
         }
-        info!("[dem-terrain] built '{}' ({}² native, ±{:.0} m)", built.site, built.res, h);
+        let mode = if req.lod_viz { " [lod-viz: streaming tiles]" } else { "" };
+        if built.res == built.native_res {
+            info!("[dem-terrain] built '{}' ({}² native, ±{:.0} m){}", built.site, built.res, h, mode);
+        } else {
+            info!(
+                "[dem-terrain] built '{}' ({}² resampled from {}² native, ±{:.0} m){}",
+                built.site, built.res, built.native_res, h, mode
+            );
+        }
     }
 }
 
 /// Register the DEM-terrain command + spawn systems. Called from
-/// [`crate::plugin::TerrainStreamingPlugin`].
+/// [`crate::plugin::TerrainSurfacePlugin`].
 pub(crate) fn register(app: &mut App) {
     app.register_type::<SpawnDemTerrain>()
         .add_systems(Update, (start_dem_builds, finish_dem_builds));

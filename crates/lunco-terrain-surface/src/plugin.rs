@@ -1,7 +1,7 @@
 //! Bevy plugin for streamed terrain.
 //!
-//! **M0: inert.** This registers [`TerrainStreamingConfig`] only — no systems,
-//! no entities, no behaviour change — mirroring `lunco_terrain::TerrainPlugin`.
+//! **M0: inert.** This registers [`TerrainSurfaceConfig`] only — no systems,
+//! no entities, no behaviour change — mirroring `lunco_terrain_globe::TerrainPlugin`.
 //! It establishes the crate's seam in the app so the streaming systems (tile
 //! manager + mesh build in M2, collider rings in M3) can be added behind this
 //! config without touching the call site again. See `docs/terrain-streaming-PLAN.md`.
@@ -11,7 +11,7 @@ use bevy::prelude::*;
 /// Tunable streaming parameters. Edited live in the inspector later (M6); for now
 /// it is the inert anchor the streaming systems will read.
 #[derive(Resource, Debug, Clone, Copy)]
-pub struct TerrainStreamingConfig {
+pub struct TerrainSurfaceConfig {
     /// Tile edge in metres. MUST be ≤ the big_space cell edge so a tile never
     /// straddles a cell boundary (see crate docs / Part F.2).
     pub tile_size_m: f64,
@@ -25,7 +25,7 @@ pub struct TerrainStreamingConfig {
     pub lod_levels: u32,
 }
 
-impl Default for TerrainStreamingConfig {
+impl Default for TerrainSurfaceConfig {
     fn default() -> Self {
         Self {
             // 128 m ≪ the 2000 m world cell → tiles are plain children of one
@@ -39,15 +39,24 @@ impl Default for TerrainStreamingConfig {
 }
 
 /// Streamed-terrain plugin. Inert at M0 (config registration only).
-pub struct TerrainStreamingPlugin;
+pub struct TerrainSurfacePlugin;
 
-impl Plugin for TerrainStreamingPlugin {
+impl Plugin for TerrainSurfacePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TerrainStreamingConfig>();
+        app.init_resource::<TerrainSurfaceConfig>();
         // M3: spawn a static DEM terrain (mesh + heightfield collider) on the
         // `SpawnDemTerrain` command. See `crate::terrain`.
         crate::terrain::register(app);
-        // M7: tile manager (stream by FloatingOrigin) + LOD + per-rover
-        // canonical-res collider ring.
+        // S3 (visual-only): opt-in camera-driven CDLOD tile streaming for SEEING
+        // LODs. Inert unless a DEM is built with `lod_viz`. Physics still rides the
+        // static heightfield collider. See `crate::stream_viz`.
+        app.init_resource::<crate::stream_viz::LodMaterials>().add_systems(
+            Update,
+            (
+                crate::stream_viz::update_lod_tiles,
+                crate::stream_viz::despawn_orphaned_lod_tiles,
+            ),
+        );
+        // M7 (remaining): geomorph shader + per-rover canonical-res collider ring.
     }
 }

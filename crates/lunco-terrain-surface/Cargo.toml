@@ -1,14 +1,15 @@
 [package]
-name = "lunco-terrain-streaming"
+name = "lunco-terrain-surface"
 version = "0.1.0-dev"
 edition = "2021"
-description = "Streamed, dynamically-LOD'd lunar terrain (DEM tiles, clipmap/quadtree, heightfield colliders) for LunCoSim"
+description = "Local high-detail DEM ground terrain (surface scale): heightfield colliders, CDLOD tile streaming, big_space per-tile anchoring. The 'surface' projection of the terrain family; pairs with lunco-terrain-globe over the shared lunco-terrain-core LOD spine."
 
 [dependencies]
-# The pure-core modules (`tile`, `source`) touch only std + glam (Vec2/Vec3),
-# available at the substrate level. Render/physics features are added as the
-# plugin layer grows (M2 mesh build, M3 avian collider streaming) — kept out of
-# the M0/M1 core so it stays wasm-safe and fast to compile/test.
+# The projection-agnostic LOD spine (quadtree-CDLOD selection, tile-grid ring
+# math, the `HeightSource` trait) lives in the pure leaf `lunco-terrain-core`
+# (std + serde only), shared with the cube-sphere planetary tiler. This crate is
+# the PLANAR DEM adapter: it adds render/physics/big_space/DEM layers on top.
+lunco-terrain-core = { path = "../lunco-terrain-core" }
 bevy = { workspace = true, features = ["bevy_pbr", "bevy_mesh", "bevy_render", "bevy_light"] }
 bevy_mesh = { workspace = true }
 lunco-core = { path = "../lunco-core" }

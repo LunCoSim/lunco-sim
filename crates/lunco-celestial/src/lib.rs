@@ -29,10 +29,10 @@ mod missions;
 mod embedded_assets;
 
 /// Re-export terrain types from lunco-terrain for backward compatibility.
-pub use lunco_terrain::*;
+pub use lunco_terrain_globe::*;
 
 // Re-export TerrainTileConfig explicitly since it's used by celestial code
-pub use lunco_terrain::TerrainTileConfig;
+pub use lunco_terrain_globe::TerrainTileConfig;
 
 /// UI panels for celestial time control and body browser.
 #[cfg(feature = "ui")]
@@ -86,7 +86,7 @@ impl Plugin for CelestialPlugin {
         }
 
         // Terrain is now in lunco-terrain crate — register it here
-        app.add_plugins(lunco_terrain::TerrainPlugin);
+        app.add_plugins(lunco_terrain_globe::TerrainPlugin);
 
         app.insert_resource(get_default_celestial_clock());
         app.init_resource::<TimeWarpState>();

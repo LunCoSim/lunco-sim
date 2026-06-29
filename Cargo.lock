@@ -6650,7 +6650,7 @@ dependencies = [
  "lunco-materials",
  "lunco-render",
  "lunco-storage",
- "lunco-terrain",
+ "lunco-terrain-globe",
  "lunco-theme",
  "lunco-workbench",
  "serde",
@@ -6916,7 +6916,7 @@ dependencies = [
  "bevy_mesh",
  "big_space",
  "lunco-core",
- "lunco-terrain",
+ "lunco-terrain-core",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "serde",
@@ -6970,8 +6970,8 @@ dependencies = [
  "lunco-robotics",
  "lunco-sandbox-edit",
  "lunco-scripting",
- "lunco-terrain",
- "lunco-terrain-streaming",
+ "lunco-terrain-globe",
+ "lunco-terrain-surface",
  "lunco-theme",
  "lunco-ui",
  "lunco-usd",
@@ -7066,7 +7066,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-terrain"
+name = "lunco-terrain-core"
+version = "0.1.0-dev"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "lunco-terrain-globe"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
@@ -7074,7 +7081,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-terrain-streaming"
+name = "lunco-terrain-surface"
 version = "0.1.0-dev"
 dependencies = [
  "avian3d 0.6.1",
@@ -7084,6 +7091,7 @@ dependencies = [
  "lunco-core",
  "lunco-obstacle-field",
  "lunco-storage",
+ "lunco-terrain-core",
  "serde",
  "tiff",
 ]
@@ -7180,7 +7188,7 @@ dependencies = [
  "avian3d 0.6.1",
  "bevy",
  "lunco-core",
- "lunco-terrain",
+ "lunco-terrain-globe",
  "lunco-usd-bevy",
  "openusd",
 ]

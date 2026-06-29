@@ -68,9 +68,9 @@ lunco-render = { path = "../lunco-render" }
 # `default-features = false` drops celestial's egui inspector (`CelestialUiPlugin`,
 # not used by the sandbox bin). The `celestial` feature still pulls embed-assets.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
-lunco-terrain = { path = "../lunco-terrain" }
+lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
-lunco-terrain-streaming = { path = "../lunco-terrain-streaming" }
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-modelica = { path = "../lunco-modelica", default-features = false }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-environment = { path = "../lunco-environment" }

@@ -116,8 +116,8 @@ pub fn body_rotation_system(
 /// If body rotation needs to affect tiles in the future, tiles should be
 /// re-parented to Body or use a different coordinate scheme.
 pub fn tile_rotation_sync_system(
-    _q_bodies: Query<&Transform, (With<CelestialBody>, Without<lunco_terrain::TileCoord>)>,
-    _q_tiles: Query<(&mut Transform, &lunco_terrain::TileCoord)>,
+    _q_bodies: Query<&Transform, (With<CelestialBody>, Without<lunco_terrain_globe::TileCoord>)>,
+    _q_tiles: Query<(&mut Transform, &lunco_terrain_globe::TileCoord)>,
 ) {
     // Intentionally empty — tiles stay at identity rotation in Grid frame.
 }
@@ -162,7 +162,7 @@ pub fn celestial_visuals_system(
     mut materials: ResMut<Assets<BlueprintMaterial>>,
     q_camera: Query<(Entity, &CellCoord, &Transform), (With<Camera>, With<lunco_core::Avatar>)>,
     q_bodies: Query<(Entity, &CellCoord, &Transform, &CelestialBody)>,
-    q_tiles: Query<(&MeshMaterial3d<BlueprintMaterial>, &lunco_terrain::TileCoord), With<lunco_terrain::TerrainTile>>,
+    q_tiles: Query<(&MeshMaterial3d<BlueprintMaterial>, &lunco_terrain_globe::TileCoord), With<lunco_terrain_globe::TerrainTile>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,

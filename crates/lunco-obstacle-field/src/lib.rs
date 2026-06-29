@@ -25,5 +25,6 @@ pub mod rock;
 pub mod sampler;
 pub mod spec;
 
-pub use plugin::{ObstacleFieldPlugin, ObstacleFieldRoot, RegenerateField};
+pub use field::{grid_indices, grid_normals};
+pub use plugin::{grid_mesh, ObstacleFieldPlugin, ObstacleFieldRoot, RegenerateField};
 pub use spec::{ObstacleFieldSpec, Pattern};

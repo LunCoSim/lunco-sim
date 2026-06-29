@@ -147,13 +147,20 @@ fn trigger_initial(mut ev: MessageWriter<RegenerateField>) {
     ev.write(RegenerateField);
 }
 
-/// Build a Bevy `Mesh` from raw height-grid vertex data.
-fn terrain_mesh(data: crate::field::MeshData) -> Mesh {
+/// Build a Bevy `Mesh` from raw height-grid vertex arrays. The single
+/// `MeshData`/`TileMesh` → `Mesh` glue, shared by the obstacle field, the static
+/// DEM terrain, and the streaming LOD tiles (was duplicated in three places).
+pub fn grid_mesh(
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    uvs: Vec<[f32; 2]>,
+    indices: Vec<u32>,
+) -> Mesh {
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, data.positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, data.normals);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, data.uvs);
-    mesh.insert_indices(Indices::U32(data.indices));
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(Indices::U32(indices));
     mesh
 }
 
@@ -253,7 +260,8 @@ fn regenerate_obstacle_field(
         collider,
     ));
     if let (Some(meshes), Some(materials)) = (meshes.as_mut(), materials.as_mut()) {
-        let mesh = meshes.add(terrain_mesh(grid.to_mesh_data()));
+        let crate::field::MeshData { positions, normals, uvs, indices } = grid.to_mesh_data();
+        let mesh = meshes.add(grid_mesh(positions, normals, uvs, indices));
         let material = materials.add(StandardMaterial {
             base_color: Color::srgb(0.32, 0.30, 0.28),
             perceptual_roughness: 1.0,

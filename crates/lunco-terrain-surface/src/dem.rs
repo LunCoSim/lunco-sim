@@ -28,6 +28,9 @@ use std::io::Cursor;
 
 use lunco_obstacle_field::field::HeightGrid;
 
+// `HeightGrid: HeightSource` is now implemented in `lunco-obstacle-field` (with
+// the type, per the orphan rule); only the tests below name the trait directly.
+#[cfg(test)]
 use crate::source::HeightSource;
 
 /// Sidecar metadata emitted alongside the heightmap (`metadata.yaml`). Only the
@@ -170,15 +173,6 @@ pub fn height_grid_from_geotiff(
     // below the 5 m sample pitch and irrelevant to physics/visuals.
     let half_extent = (meta.size_x_m * 0.5) as f32;
     Ok(HeightGrid { res: w, half_extent, heights })
-}
-
-/// A loaded DEM is a [`HeightSource`]: reuse `HeightGrid`'s bilinear sampler,
-/// widening to the trait's `f64` interface. (Local trait on a foreign type —
-/// allowed; the inherent `f32` method is selected explicitly.)
-impl HeightSource for HeightGrid {
-    fn height_at(&self, x: f64, z: f64) -> f64 {
-        HeightGrid::height_at(self, x as f32, z as f32) as f64
-    }
 }
 
 /// Errors from loading a DEM terrain asset.

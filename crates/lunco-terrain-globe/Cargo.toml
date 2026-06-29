@@ -1,8 +1,8 @@
 [package]
-name = "lunco-terrain"
+name = "lunco-terrain-globe"
 version = "0.1.0-dev"
 edition = "2021"
-description = "Terrain generation, QuadSphere tiling, and collision for LunCoSim"
+description = "Whole-body cube-sphere terrain tiling (orbital/planetary scale) for LunCoSim. The 'globe' projection of the terrain family; pairs with lunco-terrain-surface (local DEM ground) over the shared lunco-terrain-core LOD spine."
 
 [dependencies]
 bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking"] }

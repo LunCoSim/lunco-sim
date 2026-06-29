@@ -44,9 +44,9 @@ use lunco_hardware::LunCoHardwarePlugin;
 // USD core (scene load + collider build) is always needed; the Twin browser /
 // RTT viewport UI plugins are `ui`-only (added by `SandboxUiPlugin`).
 use lunco_usd::{LoadScene, UsdPlugins};
-use lunco_terrain::TerrainPlugin;
+use lunco_terrain_globe::TerrainPlugin;
 use lunco_obstacle_field::ObstacleFieldPlugin;
-use lunco_terrain_streaming::TerrainStreamingPlugin;
+use lunco_terrain_surface::TerrainSurfacePlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::LunCoAvatarPlugin;
 use lunco_celestial::GravityPlugin;
@@ -319,9 +319,9 @@ impl Plugin for SandboxCorePlugin {
             // client adds visuals. See `project_obstacle_field_generator`.
             .add_plugins(ObstacleFieldPlugin)
             // Streamed, dynamically-LOD'd terrain (DEM tiles + heightfield
-            // colliders). Inert at M0 (config only); see lunco-terrain-streaming
+            // colliders). Inert at M0 (config only); see lunco-terrain-surface
             // and docs/terrain-streaming-PLAN.md.
-            .add_plugins(TerrainStreamingPlugin)
+            .add_plugins(TerrainSurfacePlugin)
             .add_plugins(LunCoHardwarePlugin)
             .add_plugins(LunCoMobilityPlugin)
             // USD scene load + avian collider build + cosim wiring —
@@ -417,7 +417,7 @@ struct TerrainColorBound;
 fn bind_terrain_color_layer(
     q: Query<
         (Entity, &lunco_usd::UsdPrimPath, &MeshMaterial3d<lunco_materials::ShaderMaterial>),
-        (With<lunco_terrain_streaming::DemTerrainSurface>, Without<TerrainColorBound>),
+        (With<lunco_terrain_surface::DemTerrainSurface>, Without<TerrainColorBound>),
     >,
     stages: Res<Assets<lunco_usd::UsdStageAsset>>,
     twins: Res<lunco_assets::twin_source::TwinRoots>,
@@ -498,11 +498,32 @@ fn bridge_usd_dem_terrain(
             Some(w) if w > 0.0 => (w * 0.5) as f64,
             _ => 2048.0,
         };
+        // `lunco:terrain:targetRes` (int) = visual-quality downsample target,
+        // samples per side. Absent / ≤ 0 = native resolution (no decimation).
+        let target_res = reader
+            .prim_attribute_value::<i32>(&sdf, "lunco:terrain:targetRes")
+            .filter(|&r| r > 0)
+            .map(|r| r as usize)
+            .unwrap_or(0);
+        // `lunco:terrain:lodViz` (bool) = DEBUG view: stream camera-driven LOD
+        // tiles tinted by depth instead of one static mesh (physics unchanged).
+        let lod_viz = reader
+            .prim_attribute_value::<bool>(&sdf, "lunco:terrain:lodViz")
+            .unwrap_or(false);
         commands.entity(entity).insert((
-            lunco_terrain_streaming::DemTerrainRequest { uri, half_window, with_default_material: false },
-            lunco_terrain_streaming::DemTerrainSurface,
+            lunco_terrain_surface::DemTerrainRequest {
+                uri,
+                half_window,
+                target_res,
+                lod_viz,
+                with_default_material: false,
+            },
+            lunco_terrain_surface::DemTerrainSurface,
         ));
-        info!("[usd-dem] bridged terrain prim {} → DEM '{rel}'", prim_path.path);
+        info!(
+            "[usd-dem] bridged terrain prim {} → DEM '{rel}' (target_res {target_res}, lod_viz {lod_viz})",
+            prim_path.path
+        );
     }
 }
 
