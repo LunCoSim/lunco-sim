@@ -530,6 +530,78 @@ fn script_status_reports_runtime_hook_errors() {
     assert!(!s["diagnostics"].as_array().unwrap().is_empty());
 }
 
+/// Poll the `ScriptInspect` query — the live runtime-state surface.
+fn script_inspect(app: &mut App, gid: u64) -> serde_json::Value {
+    use lunco_api::queries::ApiQueryRegistry;
+    use lunco_api::schema::ApiResponse;
+    let provider = app
+        .world()
+        .resource::<ApiQueryRegistry>()
+        .get("ScriptInspect")
+        .expect("ScriptInspect provider registered");
+    match provider.execute(app.world_mut(), &serde_json::json!({ "target": gid })) {
+        ApiResponse::Ok { data, .. } => data.expect("ScriptInspect returns data"),
+        other => panic!("ScriptInspect returned {other:?}"),
+    }
+}
+
+#[test]
+fn script_inspect_reports_live_state_hooks_and_health() {
+    // Runtime introspection end-to-end: a scenario that accumulates state in
+    // `this` is readable LIVE through ScriptInspect — its per-entity state
+    // object, the hooks it defines, the started/running flags, and a healthy
+    // status block, all in one call.
+    let mut app = build_app();
+    let _rover = spawn_rover(&mut app);
+
+    run_scenario(
+        &mut app,
+        ROVER_GID,
+        "fn on_start(me) { this.count = 0; } fn on_tick(me) { this.count += 1; }",
+        1,
+    );
+    tick(&mut app); // on_start + first on_tick
+    tick(&mut app); // second on_tick
+
+    let s = script_inspect(&mut app, ROVER_GID);
+    assert_eq!(s["scripted"], true, "rover has a scenario; got {s}");
+    assert_eq!(s["running"], true, "compiled+started+unpaused; got {s}");
+    assert_eq!(s["compiled"], true, "got {s}");
+    assert_eq!(s["started"], true, "got {s}");
+    assert_eq!(s["language"], "Rhai", "got {s}");
+    assert_eq!(s["paused"], false, "got {s}");
+
+    // Live `this` state is visible — count advanced with the ticks.
+    assert_eq!(
+        s["state"]["count"].as_i64(),
+        Some(2),
+        "live this.count should reflect the ticks; got {s}"
+    );
+
+    // The hooks the program defines are reported (and only those).
+    let names: Vec<&str> = s["hooks"]
+        .as_array()
+        .expect("hooks array")
+        .iter()
+        .filter_map(|h| h.as_str())
+        .collect();
+    assert!(names.contains(&"on_start"), "got {names:?}");
+    assert!(names.contains(&"on_tick"), "got {names:?}");
+    assert!(!names.contains(&"on_event"), "on_event undefined; got {names:?}");
+
+    // The unified health block rides along, ready (no errors).
+    assert_eq!(s["status"]["state"], "ready", "got {s}");
+}
+
+#[test]
+fn script_inspect_reports_unscripted_entity() {
+    // A bare entity with no scenario returns scripted:false — not an error.
+    let mut app = build_app();
+    let _rover = spawn_rover(&mut app);
+    let s = script_inspect(&mut app, ROVER_GID);
+    assert_eq!(s["scripted"], false, "got {s}");
+}
+
 #[test]
 fn run_timeline_lowers_data_to_a_running_scenario() {
     // Layer 2 end-to-end: fire RunTimeline with a pure-DATA timeline over the
@@ -606,5 +678,168 @@ fn run_timeline_arrives_advances_and_brakes() {
     assert!(
         events.iter().any(|n| n == "STEP_COMPLETE"),
         "completing the move_to step should emit STEP_COMPLETE; got {events:?}"
+    );
+}
+
+// ── Lifecycle completeness: on_stop teardown + pause/resume ──────────────────
+
+/// `on_stop` runs when the scripted entity despawns (the teardown prune in
+/// `tick_rhai_models`).
+#[test]
+fn on_stop_fires_on_despawn() {
+    let source = r#"
+        fn on_start(self) { emit("STARTED"); }
+        fn on_stop(self)  { emit("STOPPED"); }
+        fn on_tick(self)  { }
+    "#;
+    let (mut app, rover) = setup(source);
+    tick(&mut app); // on_start
+    assert!(
+        app.world().resource::<EventLog>().0.iter().any(|e| e == "STARTED"),
+        "on_start should run first"
+    );
+
+    // Despawn → next runtime tick has no live state for it → on_stop + prune.
+    app.world_mut().entity_mut(rover).despawn();
+    tick(&mut app);
+
+    let events = &app.world().resource::<EventLog>().0;
+    assert!(
+        events.iter().any(|e| e == "STOPPED"),
+        "on_stop should fire when the scripted entity despawns; got {events:?}"
+    );
+}
+
+/// Hot-reload (source/generation bump) tears down the OLD compile with `on_stop`
+/// before starting the new one.
+#[test]
+fn on_stop_fires_on_hot_reload() {
+    let v1 = r#"
+        fn on_start(self) { emit("START_V1"); }
+        fn on_stop(self)  { emit("STOP_V1"); }
+        fn on_tick(self)  { }
+    "#;
+    let (mut app, _rover) = setup(v1);
+    tick(&mut app); // start v1
+
+    // Bump the document (new source + generation) → hot-reload on next tick.
+    {
+        use lunco_scripting::doc::ScriptOp;
+        let mut reg = app.world_mut().resource_mut::<ScriptRegistry>();
+        let host = reg.documents.get_mut(&DocumentId::new(1)).unwrap();
+        host.apply(ScriptOp::SetSource(
+            r#"fn on_start(self){emit("START_V2");} fn on_stop(self){} fn on_tick(self){}"#
+                .to_string(),
+        ))
+        .expect("hot-reload edit applies");
+    }
+    tick(&mut app); // recompile: on_stop(v1) then on_start(v2)
+
+    let events = &app.world().resource::<EventLog>().0;
+    assert!(
+        events.iter().any(|e| e == "STOP_V1"),
+        "hot-reload should run the outgoing version's on_stop; got {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| e == "START_V2"),
+        "the new version should start after teardown; got {events:?}"
+    );
+}
+
+/// `SetScenarioPaused` halts `on_tick`; clearing it resumes.
+#[test]
+fn set_scenario_paused_halts_and_resumes_on_tick() {
+    use lunco_api::executor::ApiCommandEvent;
+
+    let source = r#"
+        fn on_start(self) { }
+        fn on_tick(self)  { emit("TICK"); }
+    "#;
+    let (mut app, _rover) = setup(source);
+    tick(&mut app);
+    let baseline = app.world().resource::<EventLog>().0.iter().filter(|e| *e == "TICK").count();
+    assert!(baseline >= 1, "on_tick should run before pausing");
+
+    // Pause via the command API.
+    let set_paused = |app: &mut App, paused: bool| {
+        app.world_mut().trigger(ApiCommandEvent {
+            command: "SetScenarioPaused".to_string(),
+            params: serde_json::json!({ "target": ROVER_GID, "paused": paused }),
+            id: 0,
+        });
+        app.world_mut().flush();
+    };
+
+    set_paused(&mut app, true);
+    tick(&mut app);
+    tick(&mut app);
+    let paused = app.world().resource::<EventLog>().0.iter().filter(|e| *e == "TICK").count();
+    assert_eq!(paused, baseline, "paused scenario must not run on_tick");
+
+    // Resume → on_tick fires again.
+    set_paused(&mut app, false);
+    tick(&mut app);
+    let resumed = app.world().resource::<EventLog>().0.iter().filter(|e| *e == "TICK").count();
+    assert!(resumed > paused, "resuming should run on_tick again");
+}
+
+// ── Scenario parameters: one source, reusable via `params` ──────────────────
+
+/// `RunScenario` with a `params` JSON object exposes it to the script as the
+/// `params` constant, readable in hooks (so the same source serves many
+/// entities). Also exercises the command deserialization WITH the new field.
+#[test]
+fn scenario_params_readable_in_hooks() {
+    use lunco_api::executor::ApiCommandEvent;
+
+    let mut app = build_app();
+    let _rover = spawn_rover(&mut app); // ROVER_GID
+    let source = r#"fn on_start(self) { emit("TAG:" + params.tag); }"#;
+    app.world_mut().trigger(ApiCommandEvent {
+        command: "RunScenario".to_string(),
+        params: serde_json::json!({
+            "target": ROVER_GID,
+            "source": source,
+            "params": r#"{"tag":"hello"}"#,
+        }),
+        id: 1,
+    });
+    app.world_mut().flush();
+    tick(&mut app);
+
+    let events = &app.world().resource::<EventLog>().0;
+    assert!(
+        events.iter().any(|e| e == "TAG:hello"),
+        "script should read params.tag from the injected params constant; got {events:?}"
+    );
+}
+
+// ── USD-embedded scenarios: scene-authored scenarios run on spawn ───────────
+
+/// An entity stamped with `EmbeddedScenarioSource` (what the USD loader does for
+/// a prim carrying `lunco:script`) is attached as a running scenario, and the
+/// marker is consumed.
+#[test]
+fn usd_embedded_scenario_attaches_and_runs() {
+    let mut app = build_app();
+    let rover = spawn_rover(&mut app);
+    // Simulate lunco-usd-bevy reading `lunco:script` off the prim.
+    app.world_mut().entity_mut(rover).insert(lunco_core::EmbeddedScenarioSource(
+        r#"fn on_start(self) { emit("EMBEDDED_RAN"); }"#.to_string(),
+    ));
+
+    tick(&mut app); // attach_embedded_scenarios → inserts ScriptedModel
+    tick(&mut app); // tick_rhai_scenarios → compile + on_start
+
+    let events = &app.world().resource::<EventLog>().0;
+    assert!(
+        events.iter().any(|e| e == "EMBEDDED_RAN"),
+        "embedded scenario should attach and run on spawn; got {events:?}"
+    );
+    // Attached as a scenario; the marker was consumed.
+    assert!(app.world().entity(rover).get::<ScriptedModel>().is_some());
+    assert!(
+        app.world().entity(rover).get::<lunco_core::EmbeddedScenarioSource>().is_none(),
+        "marker should be removed after attach"
     );
 }

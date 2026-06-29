@@ -108,6 +108,36 @@ fn map_to_json(params: Map) -> serde_json::Value {
         .unwrap_or(serde_json::Value::Null)
 }
 
+/// Walk a rhai [`Dynamic`] into a backend-native value via a [`ValueBuilder`], in
+/// one pass — the inverse of [`RhaiBuilder`], format-agnostic. Used for scenario
+/// introspection: the live `this` state is rebuilt into whatever the caller's
+/// builder targets (JSON at the API seam, or rhai itself for a script verb),
+/// keeping JSON out of the path unless that's the chosen output. Unknown/custom
+/// inner types fall back to their display string.
+fn dynamic_to_value<B: ValueBuilder>(b: &B, d: &Dynamic) -> B::Value {
+    if d.is_unit() {
+        b.unit()
+    } else if let Ok(x) = d.as_bool() {
+        b.bool(x)
+    } else if let Ok(i) = d.as_int() {
+        b.int(i)
+    } else if let Ok(f) = d.as_float() {
+        b.float(f)
+    } else if d.is_string() {
+        b.string(&d.clone().into_string().unwrap_or_default())
+    } else if let Some(arr) = d.clone().try_cast::<rhai::Array>() {
+        b.array(arr.iter().map(|x| dynamic_to_value(b, x)).collect())
+    } else if let Some(m) = d.clone().try_cast::<Map>() {
+        b.map(
+            m.into_iter()
+                .map(|(k, v)| (k.to_string(), dynamic_to_value(b, &v)))
+                .collect(),
+        )
+    } else {
+        b.string(&d.to_string())
+    }
+}
+
 // ── Engine construction ────────────────────────────────────────────────────
 
 /// Ergonomic policy wrappers (drive/distance/arrived/...), authored in rhai and
@@ -269,49 +299,40 @@ pub fn build_world_engine() -> Engine {
     engine
 }
 
-// ── Persistent per-entity scenario runtime (P2) ────────────────────────────
+// ── Persistent per-entity scenario runtime (rhai backend) ──────────────────
 //
-// A `ScriptedModel { language: Rhai }` runs its `ScriptDocument` as a
-// persistent program with lifecycle hooks, NOT a one-shot snippet:
-//
-//   on_start(self)   — called once after (re)compile; `self` is the host gid
-//   on_tick(self)    — called every FixedUpdate
-//
-// State persists between ticks in a per-entity `Scope` (top-level `let`s survive),
-// and the same compiled `AST` is reused until the document's `generation` bumps
-// (hot-reload). One shared `Engine` carries the World-bridge verbs, so a hook
-// can `cmd()` / `world_pos()` / `get()` exactly like a one-shot script.
+// A `ScriptedModel { language: Rhai }` runs its `ScriptDocument` as a persistent
+// program with lifecycle hooks (`on_start`/`on_tick`/`on_event`/`on_stop`), NOT
+// a one-shot snippet. The lifecycle POLICY (scheduling, hot-reload, pause,
+// teardown, diagnostics) is language-neutral and lives in
+// [`crate::scenario::ScenarioDriver`]. This is the rhai BACKEND: it implements
+// [`crate::scenario::ScenarioRuntime`], supplying only the mechanics — compile
+// source → `AST` (running top-level into a persistent `Scope` for `const`s), and
+// call a hook via `call_fn_raw`. Per-entity tick-to-tick state lives in a `this`
+// object-map (rhai functions are pure — they can't see top-level `let`s). One
+// shared `Engine` carries the world-bridge verbs, so a hook can `cmd()`/`get()`.
 
-/// Per-entity compiled program + live state.
-struct ModelState {
-    /// `None` if the last compile failed (kept so we don't recompile every tick).
-    ast: Option<AST>,
-    /// Holds top-level `const` globals (visible to hooks); populated by running
-    /// the AST body once at compile.
+/// Per-entity compiled rhai program + live state.
+struct RhaiScenarioState {
+    ast: AST,
+    /// Top-level `const` globals, populated by running the body once at compile.
     scope: rhai::Scope<'static>,
-    /// Per-entity mutable state, bound as `this` in every hook. rhai functions
-    /// are pure — they can't see top-level `let`s — so persistent tick-to-tick
-    /// state lives here as an object map (`this.foo = ...`), not in the scope.
+    /// Per-entity mutable state bound as `this` in every hook.
     this: Dynamic,
-    /// `ScriptDocument.generation` this state was compiled from; a mismatch
-    /// triggers recompile (hot-reload).
-    generation: u64,
-    /// Whether `on_start` has run for the current compile.
-    started: bool,
 }
 
-/// Shared rhai runtime for all scripted entities: one bridge-enabled engine +
-/// a per-entity [`ModelState`] cache.
-#[derive(Resource)]
-pub struct RhaiModelRuntime {
+/// The rhai [`ScenarioRuntime`](crate::scenario::ScenarioRuntime): one
+/// bridge-enabled engine + a per-entity program cache. Wrapped by
+/// `ScenarioDriver<RhaiScenarioRuntime>` (which owns the neutral lifecycle FSM).
+pub struct RhaiScenarioRuntime {
     engine: Engine,
-    states: std::collections::HashMap<Entity, ModelState>,
-    /// Tool-library generation the `engine`'s static modules were built from; a
+    states: std::collections::HashMap<Entity, RhaiScenarioState>,
+    /// Tool-library generation the engine's static modules were built from; a
     /// mismatch triggers a re-`refresh` so a `RegisterToolLibrary` hot-reloads.
     tool_gen: u64,
 }
 
-impl Default for RhaiModelRuntime {
+impl Default for RhaiScenarioRuntime {
     fn default() -> Self {
         let mut engine = build_world_engine();
         engine.on_print(|s| info!("[rhai] {s}"));
@@ -324,20 +345,126 @@ impl Default for RhaiModelRuntime {
     }
 }
 
-/// Frame-delayed inbox of TelemetryEvents destined for script `on_event`
-/// hooks. An observer ([`collect_script_events`]) clones every fired
-/// `TelemetryEvent` here; [`tick_rhai_models`] drains it at the start of the
-/// next tick, so an event emitted on tick N is delivered on tick N+1
-/// (deterministic actor model — order never depends on system scheduling).
-#[derive(Resource, Default)]
-pub struct ScriptEventInbox {
-    pub pending: Vec<TelemetryEvent>,
+impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
+    fn compile(
+        &mut self,
+        entity: Entity,
+        source: &str,
+        params: &str,
+    ) -> crate::scenario::CompileOutcome {
+        use crate::scenario::CompileOutcome;
+        match self.engine.compile(source) {
+            Ok(ast) => {
+                let mut scope = rhai::Scope::new();
+                // Expose scenario parameters as a read-only `params` constant
+                // (native JSON→Dynamic, one hop). Empty / bad JSON → empty map,
+                // so `params` is always a readable object.
+                let params_value = match (params.is_empty(), serde_json::from_str::<serde_json::Value>(params)) {
+                    (true, _) => RhaiBuilder.map(Vec::new()),
+                    (false, Ok(v)) => bridge_core::build_from_json(&RhaiBuilder, &v),
+                    (false, Err(e)) => {
+                        warn!("[rhai] entity {entity:?} ignoring bad params JSON: {e}");
+                        RhaiBuilder.map(Vec::new())
+                    }
+                };
+                scope.push_constant_dynamic("params", params_value);
+                // Run the top-level body once to seed `const` globals; a runtime
+                // error there is non-fatal (hooks still run) — surface it.
+                let top_level = match self.engine.run_ast_with_scope(&mut scope, &ast) {
+                    Ok(()) => None,
+                    Err(e) => {
+                        error!("[rhai] entity {entity:?} top-level failed: {e}");
+                        Some(rhai_diagnostic(e.to_string(), e.position()))
+                    }
+                };
+                self.states.insert(
+                    entity,
+                    RhaiScenarioState { ast, scope, this: Dynamic::from_map(Map::new()) },
+                );
+                CompileOutcome::Ready { top_level }
+            }
+            Err(e) => {
+                error!("[rhai] entity {entity:?} compile error: {e}");
+                CompileOutcome::Failed(rhai_diagnostic(e.to_string(), e.position()))
+            }
+        }
+    }
+
+    fn call_hook(
+        &mut self,
+        entity: Entity,
+        hook: crate::scenario::ScenarioHook,
+        self_gid: i64,
+    ) -> Option<Diagnostic> {
+        use crate::scenario::ScenarioHook;
+        let st = self.states.get_mut(&entity)?;
+        let name = match hook {
+            ScenarioHook::Start => "on_start",
+            ScenarioHook::Tick => "on_tick",
+            ScenarioHook::Stop => "on_stop",
+        };
+        call_hook(&self.engine, &mut st.scope, &st.ast, name, self_gid, &mut st.this)
+            .map(|(msg, pos)| rhai_diagnostic(msg, pos))
+    }
+
+    fn deliver_event(
+        &mut self,
+        entity: Entity,
+        self_gid: i64,
+        event: &TelemetryEvent,
+    ) -> Option<Diagnostic> {
+        // Build the native event value before borrowing per-entity state.
+        let evt = bridge_core::build_event(&RhaiBuilder, event);
+        let st = self.states.get_mut(&entity)?;
+        call_event_hook(&self.engine, &mut st.scope, &st.ast, self_gid, &mut st.this, evt)
+            .map(|(msg, pos)| rhai_diagnostic(msg, pos))
+    }
+
+    fn forget(&mut self, entity: Entity) {
+        self.states.remove(&entity);
+    }
+
+    fn snapshot<B: ValueBuilder>(
+        &self,
+        entity: Entity,
+        b: &B,
+    ) -> Option<crate::scenario::ScenarioSnapshot<B::Value>> {
+        let st = self.states.get(&entity)?;
+        // Walk the persistent `this` map straight into the caller's native value
+        // type — no serde_json intermediate. JSON only results if the caller
+        // passed a JsonBuilder (the API path); a script-facing inspect verb could
+        // pass RhaiBuilder and get a Dynamic back with zero conversion.
+        let state = dynamic_to_value(b, &st.this);
+        // Report only the lifecycle hooks the program actually defines (matched on
+        // name + arity, exactly as the driver dispatches them).
+        let hooks = st
+            .ast
+            .iter_functions()
+            .filter(|f| {
+                matches!(
+                    (f.name, f.params.len()),
+                    ("on_start", 1) | ("on_tick", 1) | ("on_stop", 1) | ("on_event", 2)
+                )
+            })
+            .map(|f| f.name.to_string())
+            .collect();
+        Some(crate::scenario::ScenarioSnapshot { state, hooks })
+    }
+
+    fn maintain(&mut self) {
+        // Hot-reload tool libraries if any were (re)registered since last pass.
+        let cur = crate::tool_libs::generation();
+        if self.tool_gen != cur {
+            crate::tool_libs::refresh(&mut self.engine);
+            self.tool_gen = cur;
+        }
+    }
 }
 
-/// Observer: mirror every fired `TelemetryEvent` into the script inbox. Reuses
-/// the existing telemetry bus — scripts are just another subscriber.
-pub fn collect_script_events(trigger: On<TelemetryEvent>, mut inbox: ResMut<ScriptEventInbox>) {
-    inbox.pending.push(trigger.event().clone());
+/// Exclusive system (FixedUpdate): drive every `ScriptedModel { Rhai }` through
+/// its lifecycle via the neutral [`crate::scenario::ScenarioDriver`].
+pub fn tick_rhai_scenarios(world: &mut World) {
+    crate::scenario::ScenarioDriver::<RhaiScenarioRuntime>::run(world, ScriptLanguage::Rhai);
 }
 
 /// Call a one-arg hook (`fn name(self)`) if the AST defines it, binding `this`
@@ -396,173 +523,6 @@ fn call_event_hook(
     }
 }
 
-/// Exclusive system (FixedUpdate): drive every `ScriptedModel{Rhai}` through its
-/// lifecycle hooks against the live World.
-pub fn tick_rhai_models(world: &mut World) {
-    // 1. Snapshot the rhai models (entity + doc id + gid + doc generation +
-    //    source), releasing every World borrow before we execute scripts.
-    let mut work: Vec<(Entity, u64, i64, u64, String)> = Vec::new();
-    {
-        let mut q = world.query::<(Entity, &ScriptedModel)>();
-        let models: Vec<(Entity, bool, Option<ScriptLanguage>, Option<u64>)> = q
-            .iter(world)
-            .map(|(e, m)| (e, m.paused, m.language, m.document_id))
-            .collect();
-
-        for (entity, paused, lang, doc_id) in models {
-            if paused || lang != Some(ScriptLanguage::Rhai) {
-                continue;
-            }
-            let Some(raw) = doc_id else { continue };
-            let (generation, source) = {
-                let registry = world.resource::<ScriptRegistry>();
-                let Some(host) = registry.documents.get(&DocumentId::new(raw)) else {
-                    continue;
-                };
-                let doc = host.document();
-                if doc.language != ScriptLanguage::Rhai {
-                    continue;
-                }
-                (doc.generation, doc.source.clone())
-            };
-            let gid = world
-                .resource::<ApiEntityRegistry>()
-                .api_id_for(entity)
-                .map(|g| g.get() as i64)
-                .unwrap_or(-1);
-            work.push((entity, raw, gid, generation, source));
-        }
-    }
-    if work.is_empty() {
-        return;
-    }
-
-    // 2. Run the hooks. `resource_scope` lets us hold the runtime (engine +
-    //    states) AND `&mut World` at once; `WorldScope` publishes the World so
-    //    the bridge verbs work inside the hooks.
-    // Snapshot the events fired since the last tick (frame-delayed delivery).
-    let events: Vec<TelemetryEvent> = world
-        .get_resource_mut::<ScriptEventInbox>()
-        .map(|mut inbox| std::mem::take(&mut inbox.pending))
-        .unwrap_or_default();
-
-    // Per-document status to publish AFTER the scope (avoids interleaving the
-    // runtime borrow with a `DocumentDiagnostics` borrow): None = compiled OK,
-    // Some(diags) = errored. Only (re)compiles and runtime errors record here.
-    let mut diag_updates: Vec<(u64, Option<Vec<Diagnostic>>)> = Vec::new();
-
-    world.resource_scope(|world, mut runtime: Mut<RhaiModelRuntime>| {
-        let _scope = bridge_core::WorldScope::enter(world);
-        // Hot-reload tool libraries if any were (re)registered since last tick.
-        let cur_tool_gen = crate::tool_libs::generation();
-        if runtime.tool_gen != cur_tool_gen {
-            crate::tool_libs::refresh(&mut runtime.engine);
-            runtime.tool_gen = cur_tool_gen;
-        }
-        let RhaiModelRuntime {
-            engine, states, ..
-        } = &mut *runtime;
-
-        for (entity, raw, gid, generation, source) in work {
-            let state = states.entry(entity).or_insert_with(|| ModelState {
-                ast: None,
-                scope: rhai::Scope::new(),
-                this: Dynamic::from_map(Map::new()),
-                generation: u64::MAX,
-                started: false,
-            });
-
-            let mut recompiled = false;
-            let mut compile_error: Option<Diagnostic> = None;
-
-            // (Re)compile on first sight or generation bump, then run top-level
-            // once to initialise the persistent scope (top-level `const`s).
-            if state.ast.is_none() || state.generation != generation {
-                recompiled = true;
-                state.generation = generation;
-                state.started = false;
-                state.scope = rhai::Scope::new();
-                state.this = Dynamic::from_map(Map::new());
-                match engine.compile(&source) {
-                    Ok(ast) => {
-                        if let Err(e) = engine.run_ast_with_scope(&mut state.scope, &ast) {
-                            error!("[rhai] entity {entity:?} top-level failed: {e}");
-                            compile_error =
-                                Some(rhai_diagnostic(e.to_string(), e.position()));
-                        }
-                        state.ast = Some(ast);
-                    }
-                    Err(e) => {
-                        error!("[rhai] entity {entity:?} compile error: {e}");
-                        diag_updates.push((
-                            raw,
-                            Some(vec![rhai_diagnostic(e.to_string(), e.position())]),
-                        ));
-                        state.ast = None;
-                        continue;
-                    }
-                }
-            }
-
-            let run_start = state.ast.is_some() && !state.started;
-            if run_start {
-                state.started = true;
-            }
-            // First runtime error from any hook this tick (compile error, if any,
-            // is reported alongside).
-            let mut runtime_error: Option<Diagnostic> = None;
-            if let Some(ast) = &state.ast {
-                if run_start {
-                    if let Some((msg, pos)) =
-                        call_hook(engine, &mut state.scope, ast, "on_start", gid, &mut state.this)
-                    {
-                        runtime_error.get_or_insert_with(|| rhai_diagnostic(msg, pos));
-                    }
-                }
-                // Deliver this tick's events, then advance the scenario.
-                for ev in &events {
-                    if let Some((msg, pos)) = call_event_hook(
-                        engine,
-                        &mut state.scope,
-                        ast,
-                        gid,
-                        &mut state.this,
-                        bridge_core::build_event(&RhaiBuilder, ev),
-                    ) {
-                        runtime_error.get_or_insert_with(|| rhai_diagnostic(msg, pos));
-                    }
-                }
-                if let Some((msg, pos)) =
-                    call_hook(engine, &mut state.scope, ast, "on_tick", gid, &mut state.this)
-                {
-                    runtime_error.get_or_insert_with(|| rhai_diagnostic(msg, pos));
-                }
-            }
-
-            // Publish status: any error(s) → Error; else mark OK only when we
-            // (re)compiled this tick (avoid rewriting the store every tick).
-            let mut diags = Vec::new();
-            diags.extend(compile_error);
-            diags.extend(runtime_error);
-            if !diags.is_empty() {
-                diag_updates.push((raw, Some(diags)));
-            } else if recompiled {
-                diag_updates.push((raw, None));
-            }
-        }
-    });
-
-    // Apply collected status to the shared diagnostics store.
-    if !diag_updates.is_empty() {
-        let mut store = world.resource_mut::<DocumentDiagnostics>();
-        for (raw, status) in diag_updates {
-            match status {
-                Some(diags) => store.set_error(DocumentId::new(raw), diags),
-                None => store.set_ok(DocumentId::new(raw)),
-            }
-        }
-    }
-}
 
 /// Build an error [`Diagnostic`] from a rhai error message + [`rhai::Position`]
 /// (line/col map straight across — no source needed).

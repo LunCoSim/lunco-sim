@@ -7,6 +7,10 @@ pub mod backend;
 /// features provide.
 #[cfg(any(feature = "rhai", feature = "python"))]
 pub mod bridge_core;
+/// Language-neutral scenario lifecycle driver (`on_start`/`on_tick`/`on_event`/
+/// `on_stop`, hot-reload, pause, teardown). Backends implement `ScenarioRuntime`.
+#[cfg(any(feature = "rhai", feature = "python"))]
+pub mod scenario;
 pub mod commands;
 pub mod python;
 #[cfg(not(target_arch = "wasm32"))]
@@ -82,13 +86,17 @@ impl Plugin for LunCoScriptingPlugin {
             // here and surface via the ScriptStatus query.
             app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>();
             app.init_resource::<world_bridge::PendingWorldScripts>();
-            app.init_resource::<world_bridge::RhaiModelRuntime>();
+            // The rhai scenario backend, wrapped in the language-neutral driver
+            // (owns the on_start/on_tick/on_event/on_stop + hot-reload + pause +
+            // teardown lifecycle; rhai supplies only the mechanics).
+            app.init_resource::<scenario::ScenarioDriver<world_bridge::RhaiScenarioRuntime>>();
             // Mints document ids for scenarios attached via RunScenario.
             app.init_resource::<commands::ScenarioDocAllocator>();
-            // Event channel: scripts subscribe to the existing TelemetryEvent bus
-            // via this observer (frame-delayed into on_event hooks).
-            app.init_resource::<world_bridge::ScriptEventInbox>();
-            app.add_observer(world_bridge::collect_script_events);
+            // Event channel: scenarios subscribe to the existing TelemetryEvent
+            // bus via this observer (frame-delayed into on_event hooks). Neutral —
+            // shared by every backend.
+            app.init_resource::<scenario::ScriptEventInbox>();
+            app.add_observer(scenario::collect_script_events);
             // Tool-library discovery on the API (ListToolLibraries/GetToolLibrary);
             // registration rides the RegisterToolLibrary command.
             tool_libs::register_queries(app);
@@ -106,8 +114,13 @@ impl Plugin for LunCoScriptingPlugin {
                 FixedUpdate,
                 (
                     world_bridge::drain_world_scripts,
-                    // Persistent per-entity scenario hooks (on_start/on_tick).
-                    world_bridge::tick_rhai_models,
+                    // USD-embedded scenarios: attach any the loader stamped with
+                    // EmbeddedScenarioSource (lunco:script on the prim) so scene-
+                    // authored scenarios run on spawn.
+                    commands::attach_embedded_scenarios,
+                    // Persistent per-entity scenario lifecycle (neutral driver,
+                    // rhai backend).
+                    world_bridge::tick_rhai_scenarios,
                 ),
             );
         }
@@ -145,17 +158,15 @@ fn run_scripted_models(
 
         // Execution logic for Python/Lua
         //
-        // TODO(python world-bridge): this runs Python with inputs/outputs dicts
-        // but NO World access — it's a non-exclusive system, so the bridge verbs
-        // (`lunco.cmd`/`get`/`query`/…) have no `bridge_core::WorldScope` and
-        // would no-op. To give Python the same world access rhai has, move this
-        // execution into an EXCLUSIVE system (`world: &mut World`) that mirrors
-        // `world_bridge::tick_rhai_models`: snapshot (entity, inputs, source)
-        // first, then `let _scope = bridge_core::WorldScope::enter(world);`
-        // around `py.run`, then write outputs back AFTER the scope. The verbs
-        // themselves are already language-neutral in `bridge_core`; only the
-        // `lunco` module registration (see python/mod.rs) + this scope wiring
-        // remain. Ref: project_world_bridge_runtime_agnostic memory.
+        // TODO(python scenarios): this ad-hoc input/output-dict path predates the
+        // neutral lifecycle. The proper fix is to DELETE it and implement
+        // `scenario::ScenarioRuntime` for a `PythonScenarioRuntime`, then register
+        // `ScenarioDriver<PythonScenarioRuntime>` + a `tick_python_scenarios`
+        // exclusive system (mirroring `world_bridge::tick_rhai_scenarios`). Python
+        // then gets on_start/on_tick/on_event/on_stop + hot-reload + pause +
+        // teardown FOR FREE from the driver, and the world verbs work because the
+        // driver enters `bridge_core::WorldScope`. Needs the `lunco` pymodule
+        // (python/mod.rs) too. See scenario.rs + project_world_bridge_runtime_agnostic.
         if doc.language == doc::ScriptLanguage::Python {
             #[cfg(feature = "python")]
             {

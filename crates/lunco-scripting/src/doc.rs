@@ -33,6 +33,13 @@ pub struct ScriptDocument {
     /// files loaded from the Twin carry a writable `File` origin.
     #[serde(default = "default_origin")]
     pub origin: DocumentOrigin,
+    /// Scenario parameters as a JSON object string (e.g. `{"speed":1.5}`), empty
+    /// for none. Injected into the runtime so the script reads them as a `params`
+    /// constant (`params.speed`) — lets one scenario be reused across entities /
+    /// missions without baking values into the source. Stored as text so this
+    /// (always-compiled) module needs no `serde_json` dep.
+    #[serde(default)]
+    pub params: String,
 }
 
 /// Serde fallback for documents persisted before `origin` existed.
@@ -52,6 +59,7 @@ impl ScriptDocument {
             inputs: Vec::new(),
             outputs: Vec::new(),
             origin: DocumentOrigin::untitled(format!("Untitled-{id}")),
+            params: String::new(),
         }
     }
 

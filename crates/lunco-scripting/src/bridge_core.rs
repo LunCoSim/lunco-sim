@@ -191,6 +191,44 @@ fn vec3_value<B: ValueBuilder>(b: &B, x: f64, y: f64, z: f64) -> B::Value {
     b.array(vec![b.float(x), b.float(y), b.float(z)])
 }
 
+/// The canonical *serialization* [`ValueBuilder`]: constructs `serde_json::Value`.
+///
+/// Native backends (`RhaiBuilder` → `Dynamic`, future `PyBuilder` → `PyObject`)
+/// build their own value types directly; this one is for *output* seams — the
+/// HTTP/MCP API, introspection queries — where JSON is the wire format. Building
+/// through it keeps the rule "JSON only at the serialization boundary": producers
+/// stay generic over `B::Value`, and JSON appears solely because the API layer
+/// hands them a `JsonBuilder`. Non-finite floats (NaN/±∞), which JSON can't
+/// represent, degrade to `null`.
+pub struct JsonBuilder;
+
+impl ValueBuilder for JsonBuilder {
+    type Value = serde_json::Value;
+    fn unit(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+    fn float(&self, f: f64) -> serde_json::Value {
+        serde_json::Number::from_f64(f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null)
+    }
+    fn int(&self, i: i64) -> serde_json::Value {
+        serde_json::Value::Number(i.into())
+    }
+    fn bool(&self, b: bool) -> serde_json::Value {
+        serde_json::Value::Bool(b)
+    }
+    fn string(&self, s: &str) -> serde_json::Value {
+        serde_json::Value::String(s.to_string())
+    }
+    fn array(&self, items: Vec<serde_json::Value>) -> serde_json::Value {
+        serde_json::Value::Array(items)
+    }
+    fn map(&self, entries: Vec<(String, serde_json::Value)>) -> serde_json::Value {
+        serde_json::Value::Object(entries.into_iter().collect())
+    }
+}
+
 // ── Scoped World access ─────────────────────────────────────────────────────
 
 thread_local! {

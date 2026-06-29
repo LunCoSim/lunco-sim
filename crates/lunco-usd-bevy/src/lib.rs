@@ -559,6 +559,18 @@ fn instantiate_usd_prim(
             );
         }
 
+        // Embedded per-entity scenario: a `custom string lunco:script` on the
+        // prim carries a rhai scenario. Stamp the lunco-core marker so
+        // `lunco-scripting` attaches + runs it (the two crates stay decoupled —
+        // neither depends on the other). Scenarios thus travel with the scene.
+        if let Some(src) = get_attribute_as_string(reader, &sdf_path, "lunco:script") {
+            if !src.trim().is_empty() {
+                commands
+                    .entity(entity)
+                    .insert(lunco_core::EmbeddedScenarioSource(src));
+            }
+        }
+
         // glTF / external-mesh branch.
         //
         // The composer writes `lunco:resolvedAsset` onto any prim whose

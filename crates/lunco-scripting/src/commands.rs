@@ -33,6 +33,11 @@ use crate::{
 };
 #[cfg(feature = "rhai")]
 use lunco_doc::{DocumentHost, DocumentId};
+// Pause/stop scenario commands are language-agnostic (`any(rhai, python)`) and
+// touch `ScriptedModel`; rhai already imports it above, so a python-only build
+// needs its own import.
+#[cfg(all(feature = "python", not(feature = "rhai")))]
+use crate::doc::ScriptedModel;
 
 /// Mints unique `ScriptDocument` ids for scenarios attached via [`RunScenario`].
 /// Based high (1<<40) so it never collides with hand-authored document ids
@@ -90,11 +95,30 @@ fn on_run_rhai(
 /// reuses its document id and bumps the generation, so `tick_rhai_models`
 /// recompiles in place (state reset) instead of leaking documents.
 #[cfg(feature = "rhai")]
-#[Command]
+// `reflect_default` registers `ReflectDefault` (+ the manual `Default` below) so
+// the reflect deserializer fills a MISSING `params` from the default — existing
+// `{target,source}` callers keep working when they omit the new field. (Can't use
+// `#[Command(default)]`: it *derives* Default, which `Entity` doesn't implement.)
+#[Command(reflect_default)]
 pub struct RunScenario {
     #[authz_target]
     pub target: Entity,
     pub source: String,
+    /// Optional scenario parameters as a JSON object string (e.g.
+    /// `{"speed":1.5,"target":"rover_b"}`), readable in the script as the
+    /// `params` constant. Omitted → none.
+    pub params: String,
+}
+
+#[cfg(feature = "rhai")]
+impl Default for RunScenario {
+    fn default() -> Self {
+        Self {
+            target: Entity::PLACEHOLDER,
+            source: String::new(),
+            params: String::new(),
+        }
+    }
 }
 
 #[cfg(feature = "rhai")]
@@ -109,6 +133,7 @@ fn on_run_scenario(
     let (doc_id_raw, generation) = attach_rhai_scenario(
         cmd.target,
         cmd.source.clone(),
+        cmd.params.clone(),
         &mut registry,
         &mut alloc,
         &q_existing,
@@ -123,9 +148,10 @@ fn on_run_scenario(
 /// `target`, reusing the doc id (hot-reload, generation bump) if one already
 /// exists. Shared by `RunScenario` and `RunTimeline`. Returns `(doc_id, generation)`.
 #[cfg(feature = "rhai")]
-fn attach_rhai_scenario(
+pub(crate) fn attach_rhai_scenario(
     target: Entity,
     source: String,
+    params: String,
     registry: &mut ScriptRegistry,
     alloc: &mut ScenarioDocAllocator,
     q_existing: &Query<&ScriptedModel>,
@@ -149,15 +175,18 @@ fn attach_rhai_scenario(
     // Hot-reload reuses the doc id and bumps generation; `new` resets it to 0,
     // so carry the computed generation through.
     doc.generation = generation;
-    // TODO(persistence #3 — USD-embedded per-entity scripts): a scenario attached
-    // here is `Untitled` (ephemeral). To persist it WITH its entity, author the
-    // source onto the entity's USD prim as `custom string lunco:script = '''…'''`
-    // (via UsdOp::SetAttribute) on Twin save, and on spawn read it back
-    // (get_attribute_as_string) + RunScenario it. Origin stays in-memory; the prim
-    // link (UsdPrimPath, lunco-usd-bevy) keys persistence by entity, not file. The
-    // file-based path for SHARED tool libraries is already done (tool_libs.rs).
-    // ⚠ splicer parent/child same-attr-name bug — namespace carefully.
-    // Ref: project_tools_architecture / project_world_bridge_runtime_agnostic memory.
+    // Scenario parameters (JSON object string) — the runtime exposes them to the
+    // script as a `params` constant, so the same source serves many entities.
+    doc.params = params;
+    // USD-embedded persistence: the LOAD half is done — a prim's `lunco:script`
+    // is read by lunco-usd-bevy into `EmbeddedScenarioSource` and attached by
+    // `attach_embedded_scenarios` below, so scene-authored scenarios run on
+    // spawn. TODO(save): author a live-edited scenario's source BACK onto its
+    // prim — `cmd("ApplyUsdOp", SetAttribute{path, "lunco:script", "string",
+    // <usd-escaped source>})` on Twin save. Needs the prim path (UsdPrimPath) +
+    // USD triple-quote string escaping; ⚠ the splicer's parent/child same-attr
+    // bug (text_edit.rs has a guard test now — verify). Ref:
+    // project_tools_architecture Phase 2.
     registry
         .documents
         .insert(DocumentId::new(doc_id_raw), DocumentHost::new(doc));
@@ -169,6 +198,36 @@ fn attach_rhai_scenario(
     });
 
     (doc_id_raw, generation)
+}
+
+/// LOAD half of USD-embedded scenario persistence: drain entities the USD loader
+/// stamped with [`lunco_core::EmbeddedScenarioSource`] (a `lunco:script`
+/// attribute on their prim), attaching each as a running rhai scenario and
+/// removing the marker. Attaches by `Entity` directly — no gid round-trip — so it
+/// works the instant the prim spawns. The loader (`lunco-usd-bevy`) and this
+/// runtime stay decoupled via the lunco-core marker.
+#[cfg(feature = "rhai")]
+pub fn attach_embedded_scenarios(
+    q: Query<(Entity, &lunco_core::EmbeddedScenarioSource), Without<ScriptedModel>>,
+    mut registry: ResMut<ScriptRegistry>,
+    mut alloc: ResMut<ScenarioDocAllocator>,
+    q_existing: Query<&ScriptedModel>,
+    mut commands: Commands,
+) {
+    for (entity, embedded) in q.iter() {
+        attach_rhai_scenario(
+            entity,
+            embedded.0.clone(),
+            String::new(),
+            &mut registry,
+            &mut alloc,
+            &q_existing,
+            &mut commands,
+        );
+        commands
+            .entity(entity)
+            .remove::<lunco_core::EmbeddedScenarioSource>();
+    }
 }
 
 /// Register (or hot-replace) a named rhai **tool library** — a reusable bundle
@@ -332,6 +391,8 @@ fn on_run_timeline(
     let (doc_id_raw, generation) = attach_rhai_scenario(
         cmd.target,
         source,
+        // Timelines are pure data; the generated executor doesn't read `params`.
+        String::new(),
         &mut registry,
         &mut alloc,
         &q_existing,
@@ -364,6 +425,58 @@ fn on_run_python(_t: On<RunPython>, backends: Res<ScriptBackends>) -> Result<Ack
     Ok(ack)
 }
 
+/// Pause or resume the scenario attached to `target` (sets `ScriptedModel.paused`).
+/// Paused scenarios skip `on_tick` (rhai) / execution (python) but keep their
+/// state — resume continues where they left off. The clean API form of toggling
+/// the `paused` field; language-agnostic.
+#[cfg(any(feature = "rhai", feature = "python"))]
+#[Command]
+pub struct SetScenarioPaused {
+    #[authz_target]
+    pub target: Entity,
+    pub paused: bool,
+}
+
+#[cfg(any(feature = "rhai", feature = "python"))]
+#[on_command(SetScenarioPaused)]
+fn on_set_scenario_paused(
+    _t: On<SetScenarioPaused>,
+    mut q: Query<&mut ScriptedModel>,
+) -> Result<Ack, String> {
+    let mut model = q
+        .get_mut(cmd.target)
+        .map_err(|_| "SetScenarioPaused: target has no ScriptedModel".to_string())?;
+    model.paused = cmd.paused;
+    let mut ack = Ack::new(OpId::new());
+    ack.assigned = serde_json::json!({ "paused": cmd.paused });
+    Ok(ack)
+}
+
+/// Stop & detach the scenario from `target` — removes its `ScriptedModel` so it
+/// stops ticking. A rhai scenario runs its `on_stop` teardown hook on the next
+/// runtime tick (the prune in `tick_rhai_models`). The `ScriptDocument` stays in
+/// the registry, so the scenario can be re-attached / re-run later.
+#[cfg(any(feature = "rhai", feature = "python"))]
+#[Command]
+pub struct StopScenario {
+    #[authz_target]
+    pub target: Entity,
+}
+
+#[cfg(any(feature = "rhai", feature = "python"))]
+#[on_command(StopScenario)]
+fn on_stop_scenario(
+    _t: On<StopScenario>,
+    mut commands: Commands,
+    q: Query<(), With<ScriptedModel>>,
+) -> Result<Ack, String> {
+    if q.get(cmd.target).is_err() {
+        return Err("StopScenario: target has no ScriptedModel".to_string());
+    }
+    commands.entity(cmd.target).remove::<ScriptedModel>();
+    Ok(Ack::new(OpId::new()))
+}
+
 // Generates `register_all_commands` for the compiled-in script commands. One
 // cfg-exclusive invocation per feature combo so exactly one
 // `register_all_commands` is emitted (covers the script-free build too).
@@ -373,17 +486,21 @@ register_commands!(
     on_run_scenario,
     on_run_timeline,
     on_register_tool_library,
-    on_run_python
+    on_run_python,
+    on_set_scenario_paused,
+    on_stop_scenario
 );
 #[cfg(all(feature = "rhai", not(feature = "python")))]
 register_commands!(
     on_run_rhai,
     on_run_scenario,
     on_run_timeline,
-    on_register_tool_library
+    on_register_tool_library,
+    on_set_scenario_paused,
+    on_stop_scenario
 );
 #[cfg(all(not(feature = "rhai"), feature = "python"))]
-register_commands!(on_run_python,);
+register_commands!(on_run_python, on_set_scenario_paused, on_stop_scenario);
 #[cfg(all(not(feature = "rhai"), not(feature = "python")))]
 register_commands!();
 

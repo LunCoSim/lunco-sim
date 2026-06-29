@@ -55,6 +55,7 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
 const HOOKS: &[(&str, &str)] = &[
     ("on_start", "fn on_start(self) — called once after (re)compile; `self` is the host entity id."),
     ("on_tick", "fn on_tick(self) — called every FixedUpdate."),
+    ("on_stop", "fn on_stop(self) — teardown: called before a hot-reload swaps in a new compile, and when the scenario is detached/despawned (StopScenario). Stop actuators / release here."),
     ("on_event", "fn on_event(self, evt) — a TelemetryEvent arrived; evt is #{ name, value, severity, timestamp }."),
 ];
 
