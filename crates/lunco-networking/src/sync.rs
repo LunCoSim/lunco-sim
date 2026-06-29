@@ -22,7 +22,7 @@
 //!   HZ; clients apply them in `drain_sync_inbox`. [`broadcast_new_spawns`]
 //!   replicates runtime spawns with the host-allocated id.
 
-use avian3d::prelude::{AngularVelocity, LinearVelocity, PhysicsSystems, Position, Rotation};
+use avian3d::prelude::{AngularVelocity, LinearVelocity, PhysicsSystems, Position, RigidBody, Rotation};
 use big_space::prelude::CellCoord;
 use bevy::ecs::reflect::ReflectEvent;
 use bevy::math::DVec3;
@@ -222,6 +222,10 @@ pub struct InboundClientCtx<'w> {
     credential: ResMut<'w, SessionCredential>,
     time: Res<'w, Time>,
     command_policies: Res<'w, lunco_core::session::CommandPolicyRegistry>,
+    // Host-side AOI view centers, updated from inbound `ViewCenter` reports (B4 Phase 1).
+    // Bundled here (vs a top-level param) to keep `drain_sync_inbox` within Bevy's
+    // 16-argument system limit.
+    view_centers: ResMut<'w, ViewCenters>,
 }
 
 /// Host → clients: the authoritative who-owns-what map (`gid → session`).
@@ -283,6 +287,21 @@ pub(crate) fn profile_wire_entries(profiles: &SessionProfiles) -> Vec<(u64, Stri
             (s, n.clone(), color)
         })
         .collect()
+}
+
+/// Client→host report of a peer's world-space view center (B4 Phase 1).
+///
+/// A peer that POSSESSES a vehicle has a host-derivable center (the vehicle's
+/// authoritative position), so this report is only load-bearing for a FREE
+/// observer flying the scene with no possession — the host has no other way to
+/// know where it is looking. The client emits it from its `LocalAvatar` position
+/// at `interest_hz` on the lossy `ControlStream` (a dropped report just reuses the
+/// last center for one recompute; AOI hysteresis tolerates the staleness).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ViewCenterMsg {
+    /// World-space position of the reporting peer's view (single-cell today; Phase 4
+    /// carries the `CellCoord` once big_space goes multi-cell).
+    pub pos: [f32; 3],
 }
 
 /// Host/client update for mouse cursor positions.
@@ -457,6 +476,8 @@ pub enum SyncEnvelope {
     // peer (stale wasm bundle vs fresh host). Adding at the end leaves all existing
     // variants' discriminants unchanged; only peers that know `Despawn` use it.
     Despawn(DespawnReplicationMsg),
+    // Same positional-codec rule: append after `Despawn`. Client→host only.
+    ViewCenter(ViewCenterMsg),
 }
 
 // ── Resources (the contract `lunco-networking` touches) ───────────────────────
@@ -480,6 +501,28 @@ pub struct NetworkConfig {
     pub only_if_changed: bool,
     /// Which channel snapshots ride (default best-effort `ControlStream`).
     pub snapshot_channel: SyncChannel,
+    /// Area-of-interest recompute rate (Hz). Interest changes slowly vs pose, so
+    /// this runs far below `replication_hz`.
+    pub interest_hz: f32,
+    /// AOI **enter** radius (world units) around a peer's view center: a body OUTSIDE
+    /// a peer's interest joins it once within this distance. Pair with `aoi_exit_radius`
+    /// (which must be strictly larger) for hysteresis — see that field.
+    pub aoi_radius: f32,
+    /// AOI **exit** radius (world units): a body already IN a peer's interest stays
+    /// until it recedes past this distance. The enter<exit band is hysteresis: it
+    /// stops a body hovering near the boundary from flapping in/out of interest every
+    /// recompute (each flap is a re-baseline). The band must clear the fastest a body
+    /// can travel between recomputes — `(exit − enter) ≥ v_max / interest_hz` — or a
+    /// fast body laps the band in one tick and flaps anyway.
+    pub aoi_exit_radius: f32,
+    /// Force-include radius for **predicted free Dynamic bodies**. A client locally
+    /// predicts nearby ownerless Dynamic bodies (pushed rocks, balloons, cosim
+    /// targets); dropping their authoritative stream silently desyncs the prediction
+    /// even when they sit outside the normal AOI. So any Dynamic, unowned body within
+    /// this (typically ≥ `aoi_exit_radius`) radius of a peer's center is force-kept in
+    /// its interest regardless of the enter/exit test. Owned bodies are force-included
+    /// separately (for their owner) via the ownership table.
+    pub predict_radius: f32,
 }
 
 impl Default for NetworkConfig {
@@ -488,9 +531,51 @@ impl Default for NetworkConfig {
             replication_hz: 20.0,
             only_if_changed: true,
             snapshot_channel: SyncChannel::ControlStream,
+            interest_hz: 5.0,
+            aoi_radius: 1000.0,
+            aoi_exit_radius: 1500.0,
+            predict_radius: 1500.0,
         }
     }
 }
+
+/// Host-side persistent replication state, populated by [`gather_snapshot`] and
+/// consumed by the per-peer snapshot assembler (`assemble_and_send_snapshots`, B4
+/// Phase 1). The key invariant is that `entries` holds the latest entry for
+/// **every** live gid — not just this tick's changes — so the assembler can diff it
+/// against each peer's last-sent digest (and seed a static-but-just-entered body with
+/// its current pose). The assembler does the relevance + change decision per peer; it
+/// does NOT consume `changed_this_tick` (kept only as a cheap global "moved this
+/// tick" delta for observability).
+#[derive(Resource, Default)]
+pub struct ReplicationState {
+    /// Latest snapshot entry per live gid (overwritten every tick, pruned on despawn).
+    pub entries: HashMap<u64, SnapshotEntry>,
+    /// gids whose `(pos, rot, ack)` changed this tick (the `only_if_changed` delta).
+    /// Global observability only — per-peer send decisions live in the assembler.
+    pub changed_this_tick: HashSet<u64>,
+    /// Sim tick of the latest generation (stamped onto each assembled `SnapshotMsg`).
+    pub tick: u64,
+    /// Bumped once per `gather_snapshot` run. The assembler runs in `Update` (the
+    /// ferry clock) while generation happens in `FixedPostUpdate`; edge-detecting on
+    /// this counter makes the assembler send exactly once per new generation and skip
+    /// the render-throttled frames in between (where `changed_this_tick` is stale).
+    pub generation: u64,
+}
+
+/// Per-session area-of-interest set: the gids the host replicates to each connected
+/// peer, computed by [`recompute_interest`] and consumed by the per-peer snapshot
+/// assembler (B4 Phase 1). A peer not present here (or whose set lacks a gid) simply
+/// receives no pose updates for that body — with soft-exit it freezes at its last
+/// pose rather than despawning.
+#[derive(Resource, Default)]
+pub struct PeerInterest(pub HashMap<SessionId, HashSet<u64>>);
+
+/// Host-side latest reported world-space view center per peer, from each client's
+/// [`ViewCenterMsg`]. Read by [`recompute_interest`] for FREE observers (possessing
+/// peers use their vehicle position instead). Pruned when a session disconnects.
+#[derive(Resource, Default)]
+pub struct ViewCenters(pub HashMap<SessionId, Vec3>);
 
 /// short type name → its declared [`SyncChannel`].
 #[derive(Resource, Default)]
@@ -998,6 +1083,15 @@ pub fn drain_sync_inbox(
                     ));
                 }
             }
+            SyncEnvelope::ViewCenter(vc) => {
+                // Host-only: record the peer's reported free-observer center keyed on
+                // the TRUSTED sender (the connection-bound session), so a peer can't
+                // report a center "as" another session. Clients ignore it (the host is
+                // the sole consumer — it never relays view centers).
+                if role.is_host() && sender != SessionId::LOCAL {
+                    ctx.view_centers.0.insert(sender, Vec3::from_array(vc.pos));
+                }
+            }
             SyncEnvelope::TutorStatus(mut msg) => {
                 // Host authz + anti-spoof: tutor mode seizes targeted peers' avatar
                 // camera and locks their input. Gate (one chokepoint) then bind the
@@ -1159,7 +1253,10 @@ pub fn gather_snapshot(
         ),
         With<NetReplicate>,
     >,
-    mut outbox: ResMut<SyncOutbox>,
+    // B4 Phase 1: persistent per-gid state + this-tick delta. The per-peer assembler
+    // (`assemble_and_send_snapshots`, in `server.rs`) reads this and does the actual
+    // targeted wire send — `gather_snapshot` no longer touches `SyncOutbox`/`All`.
+    mut repl: ResMut<ReplicationState>,
 ) {
     if !role.is_host() {
         return;
@@ -1170,8 +1267,12 @@ pub fn gather_snapshot(
         return;
     }
     *acc = 0.0;
+    repl.changed_this_tick.clear();
+    // Fresh generation: the assembler edge-detects this to send exactly once per
+    // gather, skipping the (render-throttled) `Update` frames where no new pose exists.
+    repl.generation = repl.generation.wrapping_add(1);
+    repl.tick = tick.0;
 
-    let mut entries = Vec::new();
     let mut live: HashSet<u64> = HashSet::with_capacity(last_sent.len());
     for (gid, tf, lin, ang, position, rotation, _cell) in q.iter() {
         let key = gid.get();
@@ -1214,48 +1315,225 @@ pub fn gather_snapshot(
         // unchanged, so client prediction can't silently diverge during the stall
         // and then pop on motion resume.
         let last_input_seq = applied.0.get(&key).copied().unwrap_or(0);
-        if config.only_if_changed {
-            if let Some((lp, lr, ls)) = last_sent.get(&key) {
-                if *lp == pos_q && *lr == rot_packed && *ls == last_input_seq {
-                    continue;
-                }
-            }
-        }
-        last_sent.insert(key, (pos_q, rot_packed, last_input_seq));
-        entries.push(SnapshotEntry {
+        let entry = SnapshotEntry {
             gid: key,
             pos_q,
             rot_packed,
             lv: lv.to_array(),
             av: av.to_array(),
             last_input_seq,
-        });
+        };
+        // Did this entity change since its last *sent* state? (the existing
+        // `only_if_changed` diff). Computed before we move `entry` into the
+        // persistent store below.
+        let changed = !config.only_if_changed
+            || last_sent
+                .get(&key)
+                .is_none_or(|&(lp, lr, ls)| lp != pos_q || lr != rot_packed || ls != last_input_seq);
+        if changed {
+            last_sent.insert(key, (pos_q, rot_packed, last_input_seq));
+            repl.changed_this_tick.insert(key);
+        }
+        // Persist the latest entry for EVERY live gid (not just changed ones), so the
+        // assembler can seed a body that's static-but-just-entered a peer's interest
+        // (the soft-enter baseline). Cheap (~52 B) and decoupled from the wire.
+        repl.entries.insert(key, entry);
     }
     // Prune diff-cache + warn-set entries for despawned gids (gids are never
     // reused) so neither grows unbounded over a long-lived host with spawn/despawn
-    // churn (cosim balloons, transient props, rejoining rovers).
+    // churn (cosim balloons, transient props, rejoining rovers). `ReplicationState`
+    // is pruned the same way so its persistent map tracks the live set.
     last_sent.retain(|k, _| live.contains(k));
     nonfinite_warned.retain(|k| live.contains(k));
-    if entries.is_empty() {
+    repl.entries.retain(|k, _| live.contains(k));
+}
+
+/// Max `SnapshotEntry`s per `SnapshotMsg`. L2: cap so each serialized message fits in
+/// ONE lightyear fragment (`FRAGMENT_SIZE` = 1180 B). A `SnapshotEntry` is ≈52 B, so
+/// ~22 fit; 20 leaves headroom for the enum tag + tick + Vec length prefix. The
+/// `SnapChannel` is `UnorderedUnreliable` with NO fragment retransmit, so a
+/// multi-fragment message is lost wholesale if any single fragment drops (delivery
+/// ≈ (1 − p_loss)^num_fragments — it gets WORSE as the scene grows). One lost datagram
+/// then costs ≤20 entities for one tick (interp hides it), not every body's update.
+/// The per-peer assembler (`assemble_and_send_snapshots`) chunks each peer's batch at
+/// this bound.
+pub const MAX_SNAPSHOT_ENTRIES: usize = 20;
+
+/// Pure AOI interest computation — the per-peer relevance rule of [`recompute_interest`],
+/// extracted so it's unit-testable without a Bevy `App`/`Time`/throttle. For each
+/// session in `sessions` (excluding `LOCAL`), returns its interest gid set:
+/// owned/possessed force-include ∪ spatial-with-hysteresis ∪ predicted-free-Dynamic.
+/// `radius`/`exit_radius`/`predict_radius` are world-unit distances (squared inside).
+/// `prev` is the last computed interest (drives hysteresis: a body already in a peer's
+/// set is kept until it passes `exit_radius`; otherwise it joins within `radius`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compute_interest_sets(
+    sessions: &[SessionId],
+    positions: &HashMap<u64, Vec3>,
+    dynamic: &HashSet<u64>,
+    table: &[(u64, u64)],
+    view_centers: &HashMap<SessionId, Vec3>,
+    prev: &HashMap<SessionId, HashSet<u64>>,
+    radius: f32,
+    exit_radius: f32,
+    predict_radius: f32,
+) -> HashMap<SessionId, HashSet<u64>> {
+    let r_enter2 = radius * radius;
+    let r_exit2 = exit_radius * exit_radius;
+    let r_pred2 = predict_radius * predict_radius;
+    let all: HashSet<u64> = positions.keys().copied().collect();
+
+    let mut next: HashMap<SessionId, HashSet<u64>> = HashMap::with_capacity(sessions.len());
+    for &session in sessions {
+        if session == SessionId::LOCAL {
+            continue; // the host itself isn't a remote peer
+        }
+        let owned: Vec<u64> = table
+            .iter()
+            .filter_map(|&(g, s)| (s == session.0).then_some(g))
+            .collect();
+        // Center: possessed vehicle first (host-derivable), else the reported
+        // free-observer center, else fail open to everything.
+        let center = owned
+            .iter()
+            .find_map(|g| positions.get(g).copied())
+            .or_else(|| view_centers.get(&session).copied());
+        let Some(c) = center else {
+            next.insert(session, all.clone()); // fail-open
+            continue;
+        };
+        let prev_set = prev.get(&session);
+        let mut set: HashSet<u64> = owned.iter().copied().collect(); // (1) force-include owned
+        for (&g, &p) in positions {
+            let d2 = p.distance_squared(c);
+            // (2) spatial with hysteresis: enter at `radius`, keep until past `exit_radius`.
+            let was_in = prev_set.is_some_and(|s| s.contains(&g));
+            let threshold = if was_in { r_exit2 } else { r_enter2 };
+            // (3) predicted free Dynamic: force-keep within the (wider) predict radius.
+            let predict_keep = dynamic.contains(&g) && d2 <= r_pred2;
+            if d2 <= threshold || predict_keep {
+                set.insert(g);
+            }
+        }
+        next.insert(session, set);
+    }
+    next
+}
+
+/// Pure per-peer snapshot diff — the send decision of `assemble_and_send_snapshots`,
+/// extracted for testability (no `ServerMultiMessageSender`). Given a peer's interest
+/// `set`, the latest `entries`, and that peer's `digest` of last-sent
+/// `(pos_q, rot_packed, last_input_seq)` per gid, returns the batch to send and
+/// updates `digest` in place: a body is sent if the peer lacks it (soft-enter
+/// baseline) or holds a stale pose/ack; out-of-interest gids are evicted so a later
+/// re-entry re-baselines (soft exit). Velocity is intentionally excluded from the key
+/// (matches `gather_snapshot`'s change test).
+pub(crate) fn diff_peer_batch(
+    set: &HashSet<u64>,
+    entries: &HashMap<u64, SnapshotEntry>,
+    digest: &mut HashMap<u64, ([i32; 3], u32, u32)>,
+) -> Vec<SnapshotEntry> {
+    let mut batch: Vec<SnapshotEntry> = Vec::new();
+    for &gid in set {
+        let Some(entry) = entries.get(&gid) else {
+            continue;
+        };
+        let key = (entry.pos_q, entry.rot_packed, entry.last_input_seq);
+        if digest.get(&gid) != Some(&key) {
+            batch.push(entry.clone());
+            digest.insert(gid, key);
+        }
+    }
+    digest.retain(|gid, _| set.contains(gid));
+    batch
+}
+
+/// Host: recompute each connected peer's area-of-interest set (B4 **Phase 1** — this
+/// now drives the wire: `assemble_and_send_snapshots` routes pose updates by it).
+///
+/// A peer's interest is the union of:
+///   1. **Owned/possessed** gids (the authoritative `SessionRegistry` table) —
+///      force-included regardless of distance, so an owner never loses its own
+///      far-flung vehicle.
+///   2. **Spatial** bodies within the AOI radius of the peer's view center, with
+///      hysteresis: a body OUTSIDE the set joins within `aoi_radius` (enter), a body
+///      ALREADY in the set stays until it recedes past `aoi_exit_radius` (exit). The
+///      enter<exit band stops boundary-hovering bodies from flapping (each flap is a
+///      re-baseline). Previous set comes from the last `interest.0` value.
+///   3. **Predicted free Dynamic** bodies within `predict_radius` — ownerless
+///      `RigidBody::Dynamic` the client locally predicts; their authoritative stream
+///      can't be culled by raw distance or the prediction silently desyncs.
+///
+/// View center = the peer's possessed vehicle (host-derivable) if it possesses one,
+/// else its last [`ViewCenterMsg`] report (free observer), else **fail open**
+/// (interested in everything) so the cull can never blind a client.
+pub fn recompute_interest(
+    role: Res<NetworkRole>,
+    config: Res<NetworkConfig>,
+    time: Res<Time>,
+    mut acc: Local<f32>,
+    mut diag_acc: Local<f32>,
+    registry: Res<SessionRegistry>,
+    rbac: Res<lunco_core::session::SessionRbac>,
+    view_centers: Res<ViewCenters>,
+    q: Query<(&GlobalEntityId, &Transform, Option<&RigidBody>), With<NetReplicate>>,
+    mut interest: ResMut<PeerInterest>,
+) {
+    if !role.is_host() {
         return;
     }
-    // L2: cap entries per message so each serialized `SnapshotMsg` fits in ONE
-    // lightyear fragment (`FRAGMENT_SIZE` = 1180 B). A `SnapshotEntry` is ≈52 B, so
-    // ~22 fit; 20 leaves headroom for the enum tag + tick + Vec length prefix. The
-    // `SnapChannel` is `UnorderedUnreliable` with NO fragment retransmit, so a
-    // multi-fragment message is lost wholesale if any single fragment drops
-    // (delivery ≈ (1 − p_loss)^num_fragments — it gets WORSE as the sim grows).
-    // Splitting into single-fragment messages makes one lost datagram cost ≤20
-    // entities for one tick (interp hides it) instead of every body's update.
-    const MAX_SNAPSHOT_ENTRIES: usize = 20;
-    for chunk in entries.chunks(MAX_SNAPSHOT_ENTRIES) {
-        outbox.0.push((
-            config.snapshot_channel,
-            SyncEnvelope::Snapshot(SnapshotMsg {
-                tick: tick.0,
-                entries: chunk.to_vec(),
-            }),
-        ));
+    *acc += time.delta_secs();
+    let interval = 1.0 / config.interest_hz.max(1.0);
+    if *acc < interval {
+        return;
+    }
+    *acc = 0.0;
+
+    // One pass over replicated bodies: world position per gid, the full live set, and
+    // the ownerless-Dynamic set (predict candidates). (Single-cell space today, so
+    // `Transform.translation` is the world position; Phase 4 makes this cell-relative
+    // once big_space goes multi-cell.)
+    let mut positions: HashMap<u64, Vec3> = HashMap::new();
+    let mut dynamic: HashSet<u64> = HashSet::new();
+    let table = registry.snapshot(); // hoist the ownership table once
+    let owned_any: HashSet<u64> = table.iter().map(|&(g, _)| g).collect();
+    for (gid, tf, rb) in q.iter() {
+        let key = gid.get();
+        positions.insert(key, tf.translation);
+        // Predict candidate = Dynamic AND ownerless (owned Dynamic bodies are already
+        // force-included for their owner; here we mean the free rocks/balloons every
+        // nearby client predicts).
+        if matches!(rb, Some(RigidBody::Dynamic)) && !owned_any.contains(&key) {
+            dynamic.insert(key);
+        }
+    }
+    let total = positions.len();
+    let sessions: Vec<SessionId> = rbac.sessions.keys().map(|&r| SessionId(r)).collect();
+    interest.0 = compute_interest_sets(
+        &sessions,
+        &positions,
+        &dynamic,
+        &table,
+        &view_centers.0,
+        &interest.0,
+        config.aoi_radius,
+        config.aoi_exit_radius,
+        config.predict_radius,
+    );
+
+    // Throttled diagnostic (~5 s): how much of the broadcast AOI culls in practice.
+    *diag_acc += interval;
+    if *diag_acc >= 5.0 && !interest.0.is_empty() {
+        *diag_acc = 0.0;
+        let bodies = total;
+        let total = total.max(1);
+        let peers = interest.0.len();
+        let avg = interest.0.values().map(|s| s.len()).sum::<usize>() as f32 / peers as f32;
+        info!(
+            "[net][aoi] {peers} peer(s), {bodies} replicated bodies; avg interest {avg:.0}/{total} \
+             (~{:.0}% of bodies replicated per peer)",
+            100.0 * avg / total as f32,
+        );
     }
 }
 
@@ -1512,6 +1790,49 @@ pub fn send_local_cursor_updates(
             }
         }
     }
+}
+
+/// Client → host: report this peer's world-space view center for AOI culling (B4
+/// Phase 1). Emitted from the `LocalAvatar` position at `interest_hz` on the lossy
+/// `ControlStream`. Only a remote client reports — the host computes its own interest
+/// directly (and skips itself as `SessionId::LOCAL`). A possessing peer's center is
+/// host-derivable from the vehicle, but reporting unconditionally is cheap (~12 B at
+/// 5 Hz) and lets the host uniformly fall back to the report when possession lapses.
+pub fn send_view_center_updates(
+    role: Res<NetworkRole>,
+    config: Res<NetworkConfig>,
+    q_avatar: Query<&Transform, With<LocalAvatar>>,
+    mut timer: Local<f32>,
+    mut last_sent: Local<Option<Vec3>>,
+    time: Res<Time>,
+    mut outbox: ResMut<SyncOutbox>,
+) {
+    // Host knows its own center; only a remote client needs to report.
+    if !role.is_networked() || role.is_host() {
+        return;
+    }
+    *timer += time.delta_secs();
+    let interval = 1.0 / config.interest_hz.max(1.0);
+    if *timer < interval {
+        return;
+    }
+    let Some(pos) = q_avatar.iter().next().map(|tf| tf.translation) else {
+        return;
+    };
+    // Delta gate: skip the send while the avatar is parked. 1 m floor — sub-meter
+    // drift can't change AOI membership at hundred-metre radii, and recompute reuses
+    // the last reported center, so a skipped report costs nothing.
+    if last_sent.is_some_and(|last| pos.distance_squared(last) < 1.0) {
+        return;
+    }
+    *timer = 0.0;
+    *last_sent = Some(pos);
+    outbox.0.push((
+        SyncChannel::ControlStream,
+        SyncEnvelope::ViewCenter(ViewCenterMsg {
+            pos: pos.to_array(),
+        }),
+    ));
 }
 
 /// Send tutor status updates when teach_mode is enabled.
@@ -2179,6 +2500,13 @@ impl Plugin for SyncPlugin {
             .init_resource::<TutorStatusResource>()
             .init_resource::<SessionCredential>()
             .init_resource::<Presence>()
+            // B4 interest management: persistent per-gid state (written by
+            // `gather_snapshot`) + per-peer interest sets (written by
+            // `recompute_interest`, consumed by the server-side per-peer assembler)
+            // + reported free-observer view centers (from inbound `ViewCenter`).
+            .init_resource::<ReplicationState>()
+            .init_resource::<PeerInterest>()
+            .init_resource::<ViewCenters>()
             .register_settings_section::<CursorSettings>()
             .register_settings_section::<TutorialSettings>()
             .init_resource::<SyncChannelRegistry>()
@@ -2193,12 +2521,17 @@ impl Plugin for SyncPlugin {
                 sync_presence_with_profiles,
                 seed_local_cursor_color,
                 send_local_cursor_updates,
+                send_view_center_updates,
                 send_tutor_status_updates,
                 send_student_status_updates,
                 apply_tutorial_mirroring,
                 update_tutor_lifecycle,
                 block_action_states,
                 sync_obstacle_field_spec,
+                // B4 Phase 1: compute per-peer AOI interest sets (host-only, throttled
+                // to `interest_hz`). The server-side `assemble_and_send_snapshots`
+                // routes pose updates by these sets.
+                recompute_interest,
             ))
             // `gather_snapshot` runs on the sim clock (`FixedPostUpdate`): it only
             // writes our `SyncOutbox` (never calls lightyear), so it's safe off the
@@ -2356,5 +2689,283 @@ mod codec_roundtrip {
         assert!(!dedup.check_and_insert(a, op), "still a dup before forget");
         dedup.forget(a);
         assert!(dedup.check_and_insert(a, op), "fresh window after forget");
+    }
+}
+
+/// B4 Phase 1 verification: the AOI interest rule (`compute_interest_sets`) and the
+/// per-peer snapshot diff (`diff_peer_batch`) — the two pure cores the routing flip
+/// rides on. Covers the three goals the routing change must not break: correct cull,
+/// owned/predict force-include surviving `R_exit`, and fail-open never blinding a peer.
+#[cfg(test)]
+mod aoi {
+    use super::*;
+
+    // Default radii: enter 1000, exit 1500, predict 1500 (the shipped `NetworkConfig`).
+    const R_ENTER: f32 = 1000.0;
+    const R_EXIT: f32 = 1500.0;
+    const R_PRED: f32 = 1500.0;
+
+    fn pos_at(x: f32) -> Vec3 {
+        Vec3::new(x, 0.0, 0.0)
+    }
+
+    /// Run `compute_interest_sets` for ONE session with the given world, no hysteresis
+    /// history. Returns that session's interest set.
+    fn interest_for(
+        session: SessionId,
+        positions: &HashMap<u64, Vec3>,
+        dynamic: &HashSet<u64>,
+        table: &[(u64, u64)],
+        view_centers: &HashMap<SessionId, Vec3>,
+        radius: f32,
+        exit_radius: f32,
+        predict_radius: f32,
+    ) -> HashSet<u64> {
+        compute_interest_sets(
+            &[session],
+            positions,
+            dynamic,
+            table,
+            view_centers,
+            &HashMap::new(),
+            radius,
+            exit_radius,
+            predict_radius,
+        )
+        .remove(&session)
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn culls_distant_keeps_near() {
+        // Peer possesses gid 1 at the origin (its view center). gid 2 sits inside the
+        // enter radius → relevant; gid 3 far outside the exit radius → culled.
+        let peer = SessionId(10);
+        let positions = HashMap::from([(1, pos_at(0.0)), (2, pos_at(500.0)), (3, pos_at(3000.0))]);
+        let table = [(1u64, peer.0)];
+        let set = interest_for(
+            peer,
+            &positions,
+            &HashSet::new(),
+            &table,
+            &HashMap::new(),
+            R_ENTER,
+            R_EXIT,
+            R_PRED,
+        );
+        assert!(set.contains(&1), "owned vehicle always in");
+        assert!(set.contains(&2), "near body within enter radius is in");
+        assert!(!set.contains(&3), "far body is culled");
+    }
+
+    #[test]
+    fn owned_force_included_past_exit_radius() {
+        // The peer owns TWO bodies: gid 1 at origin (becomes the center) and gid 2 far
+        // beyond R_exit. Owned bodies must be force-included regardless of distance, so
+        // a driver never loses its own vehicle (no reconciliation pop on return). An
+        // unowned body at the same far distance is still culled.
+        let peer = SessionId(10);
+        let positions =
+            HashMap::from([(1, pos_at(0.0)), (2, pos_at(9000.0)), (3, pos_at(9000.0))]);
+        let table = [(1u64, peer.0), (2u64, peer.0)];
+        let set = interest_for(
+            peer,
+            &positions,
+            &HashSet::new(),
+            &table,
+            &HashMap::new(),
+            R_ENTER,
+            R_EXIT,
+            R_PRED,
+        );
+        assert!(set.contains(&2), "owned-but-far body is force-included");
+        assert!(!set.contains(&3), "unowned far body is culled");
+    }
+
+    #[test]
+    fn hysteresis_band_depends_on_previous_membership() {
+        // A body in the enter<dist<exit band (1200, between 1000 and 1500): excluded
+        // when it wasn't already relevant (must cross the enter radius to join), kept
+        // when it was (stays until it passes the exit radius). This is the anti-flap
+        // hysteresis — the same position yields opposite membership by history.
+        let peer = SessionId(10);
+        let positions = HashMap::from([(1, pos_at(0.0)), (2, pos_at(1200.0))]);
+        let table = [(1u64, peer.0)];
+
+        // No history → gid 2 does not join (past enter radius 1000).
+        let cold = compute_interest_sets(
+            &[peer],
+            &positions,
+            &HashSet::new(),
+            &table,
+            &HashMap::new(),
+            &HashMap::new(),
+            R_ENTER,
+            R_EXIT,
+            R_PRED,
+        );
+        assert!(!cold[&peer].contains(&2), "outside enter radius, not previously in → excluded");
+
+        // gid 2 already relevant → kept (1200 < exit 1500).
+        let prev = HashMap::from([(peer, HashSet::from([2u64]))]);
+        let warm = compute_interest_sets(
+            &[peer],
+            &positions,
+            &HashSet::new(),
+            &table,
+            &HashMap::new(),
+            &prev,
+            R_ENTER,
+            R_EXIT,
+            R_PRED,
+        );
+        assert!(warm[&peer].contains(&2), "in-band body stays until it passes exit radius");
+    }
+
+    #[test]
+    fn predicted_free_dynamic_force_included() {
+        // Tight exit radius so the spatial test alone would cull gid 2 and 3 (both at
+        // 1400). gid 2 is an ownerless Dynamic body (predict candidate) within the
+        // predict radius → force-kept; gid 3 (non-dynamic) → culled.
+        let peer = SessionId(10);
+        let positions =
+            HashMap::from([(1, pos_at(0.0)), (2, pos_at(1400.0)), (3, pos_at(1400.0))]);
+        let table = [(1u64, peer.0)];
+        let dynamic = HashSet::from([2u64]);
+        let set = interest_for(
+            peer,
+            &positions,
+            &dynamic,
+            &table,
+            &HashMap::new(),
+            R_ENTER,
+            1100.0, // exit radius below 1400 so spatial can't keep these
+            R_PRED, // 1500 > 1400
+        );
+        assert!(set.contains(&2), "predicted free Dynamic within predict radius is force-kept");
+        assert!(!set.contains(&3), "non-dynamic body at same distance is culled");
+    }
+
+    #[test]
+    fn no_center_fails_open() {
+        // Peer owns nothing and never reported a view center → interested in EVERY live
+        // body (fail-open), so the cull can never blind a client.
+        let peer = SessionId(10);
+        let positions = HashMap::from([(1, pos_at(0.0)), (2, pos_at(9000.0)), (3, pos_at(50.0))]);
+        let set = interest_for(
+            peer,
+            &positions,
+            &HashSet::new(),
+            &[], // owns nothing
+            &HashMap::new(), // no report
+            R_ENTER,
+            R_EXIT,
+            R_PRED,
+        );
+        assert_eq!(set, positions.keys().copied().collect::<HashSet<_>>(), "fail-open = all bodies");
+    }
+
+    #[test]
+    fn reported_view_center_drives_cull_for_free_observer() {
+        // A non-possessing observer reports a view center at x=5000. Bodies are culled
+        // relative to THAT, not the origin: gid 2 near the report is in, gid 3 near the
+        // origin (far from the report) is out.
+        let peer = SessionId(10);
+        let positions = HashMap::from([(2, pos_at(5200.0)), (3, pos_at(0.0))]);
+        let view_centers = HashMap::from([(peer, pos_at(5000.0))]);
+        let set = interest_for(
+            peer,
+            &positions,
+            &HashSet::new(),
+            &[], // owns nothing → uses the report
+            &view_centers,
+            R_ENTER,
+            R_EXIT,
+            R_PRED,
+        );
+        assert!(set.contains(&2), "body near the reported center is relevant");
+        assert!(!set.contains(&3), "body far from the reported center is culled");
+    }
+
+    #[test]
+    fn local_session_excluded() {
+        // The host's own LOCAL session is never a remote peer and gets no interest set.
+        let out = compute_interest_sets(
+            &[SessionId::LOCAL, SessionId(10)],
+            &HashMap::from([(1, pos_at(0.0))]),
+            &HashSet::new(),
+            &[(1u64, 10)],
+            &HashMap::new(),
+            R_ENTER,
+            R_EXIT,
+            R_PRED,
+        );
+        assert!(!out.contains_key(&SessionId::LOCAL), "LOCAL is skipped");
+        assert!(out.contains_key(&SessionId(10)), "remote peer is present");
+    }
+
+    // ── diff_peer_batch (per-peer send decision) ──────────────────────────────
+
+    fn entry(gid: u64, x: i32, seq: u32) -> SnapshotEntry {
+        SnapshotEntry {
+            gid,
+            pos_q: [x, 0, 0],
+            rot_packed: 0,
+            lv: [0.0; 3],
+            av: [0.0; 3],
+            last_input_seq: seq,
+        }
+    }
+
+    #[test]
+    fn diff_sends_soft_enter_baseline_then_stays_quiet() {
+        let entries = HashMap::from([(1u64, entry(1, 10, 0)), (2u64, entry(2, 20, 0))]);
+        let set = HashSet::from([1u64, 2u64]);
+        let mut digest = HashMap::new();
+
+        // First assemble: peer has nothing → both sent (soft-enter baseline).
+        let first = diff_peer_batch(&set, &entries, &mut digest);
+        assert_eq!(first.len(), 2, "both bodies sent as baseline");
+
+        // Nothing changed → empty batch (no redundant resend).
+        let second = diff_peer_batch(&set, &entries, &mut digest);
+        assert!(second.is_empty(), "unchanged bodies are not re-sent");
+    }
+
+    #[test]
+    fn diff_resends_only_changed_pose_or_ack() {
+        let mut entries = HashMap::from([(1u64, entry(1, 10, 0)), (2u64, entry(2, 20, 0))]);
+        let set = HashSet::from([1u64, 2u64]);
+        let mut digest = HashMap::new();
+        let _ = diff_peer_batch(&set, &entries, &mut digest); // prime
+
+        // gid 1 moves; gid 2's ack advances while its pose is unchanged (stall ack).
+        entries.insert(1, entry(1, 11, 0));
+        entries.insert(2, entry(2, 20, 5));
+        let batch = diff_peer_batch(&set, &entries, &mut digest);
+        let gids: HashSet<u64> = batch.iter().map(|e| e.gid).collect();
+        assert_eq!(gids, HashSet::from([1, 2]), "moved body AND ack-advanced body both resent");
+
+        // Stable again → quiet.
+        assert!(diff_peer_batch(&set, &entries, &mut digest).is_empty());
+    }
+
+    #[test]
+    fn diff_soft_exit_evicts_then_re_enters_with_baseline() {
+        let entries = HashMap::from([(1u64, entry(1, 10, 0)), (2u64, entry(2, 20, 0))]);
+        let mut digest = HashMap::new();
+        let _ = diff_peer_batch(&HashSet::from([1u64, 2u64]), &entries, &mut digest); // both known
+
+        // gid 2 leaves interest → not sent, evicted from the digest (soft exit).
+        let only1 = HashSet::from([1u64]);
+        let exit_batch = diff_peer_batch(&only1, &entries, &mut digest);
+        assert!(exit_batch.is_empty(), "soft exit sends nothing");
+        assert!(!digest.contains_key(&2), "exited body evicted from digest");
+
+        // gid 2 re-enters (unchanged pose) → re-sent as a fresh baseline, NOT silently
+        // skipped (its client proxy was frozen and may need re-seeding).
+        let both = HashSet::from([1u64, 2u64]);
+        let reenter = diff_peer_batch(&both, &entries, &mut digest);
+        assert_eq!(reenter.iter().map(|e| e.gid).collect::<Vec<_>>(), vec![2], "re-entry re-baselines gid 2");
     }
 }
