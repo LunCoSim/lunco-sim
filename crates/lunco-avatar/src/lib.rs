@@ -1102,6 +1102,11 @@ fn avatar_universal_locomotion_system(
     ), With<Avatar>>,
     q_grids: Query<&Grid>,
     keys: Res<ButtonInput<KeyCode>>,
+    // Wall-clock time, not the default virtual `Time`: free-flight is a
+    // user-driven ghost camera that must keep moving — at a frame-rate-independent
+    // speed — even when the sim's virtual clock is paused or slowed (workbench
+    // pause / slow-motion both scale `Time<Virtual>`).
+    time: Res<Time<bevy::time::Real>>,
 ) {
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
 
@@ -1128,7 +1133,11 @@ fn avatar_universal_locomotion_system(
         move_vec += *tf.right() * analog.side;
         move_vec += up_dir * analog.elevation;
 
-        let next_pos = current_pos + move_vec.as_dvec3() * 23.1 * (1.0 / 60.0);
+        // 23.1 m/s base fly speed × the real frame delta. Was a hardcoded
+        // `1.0 / 60.0`, which made travel speed scale with frame rate (2× as
+        // fast at 120 fps, half at 30) — this system runs once per rendered
+        // frame in PostUpdate, not on a fixed timestep.
+        let next_pos = current_pos + move_vec.as_dvec3() * 23.1 * time.delta_secs_f64();
         let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
         *cell = new_cell;
         tf.translation = new_tf;
