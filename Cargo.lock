@@ -7142,6 +7142,7 @@ dependencies = [
  "bevy_mesh",
  "big_space",
  "lunco-api",
+ "lunco-assets",
  "lunco-core",
  "lunco-materials",
  "lunco-obstacle-field",

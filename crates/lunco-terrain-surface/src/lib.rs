@@ -42,6 +42,7 @@
 pub mod bake;
 pub mod collider_ring;
 pub mod dem;
+pub mod derived_layers;
 pub mod plugin;
 pub mod query;
 pub mod stream_viz;
@@ -58,6 +59,7 @@ pub use lunco_terrain_core::{
     AnalyticHeightSource, HeightSource, QuadCoord, Quadtree, Selected, Square, TileCoord, TileGrid,
 };
 pub use plugin::{TerrainSurfaceConfig, TerrainSurfacePlugin};
+pub use derived_layers::DerivedLayersBuilt;
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use collider_ring::{ColliderTiles, TerrainColliderRing};
 pub use stream_viz::{DemHeightField, LodTiles, TerrainLodViz};

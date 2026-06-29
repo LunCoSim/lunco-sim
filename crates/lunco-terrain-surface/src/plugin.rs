@@ -51,6 +51,10 @@ impl Plugin for TerrainSurfacePlugin {
         // `query("TerrainHeight", #{x, z})` — analytic height/normal/slope, no
         // raycast. See `crate::query`.
         crate::query::register_terrain_queries(app);
+        // P3b: bake DEM-derived surface (rough/AO/hazard) + normal layers off the
+        // main thread and bind them onto the terrain `ShaderMaterial`. Inert
+        // headless (gated on render assets existing). See `crate::derived_layers`.
+        crate::derived_layers::register(app);
         // S3 (visual-only): opt-in camera-driven CDLOD tile streaming for SEEING
         // LODs. Inert unless a DEM is built with `lod_viz`. Physics still rides the
         // static heightfield collider. See `crate::stream_viz`.

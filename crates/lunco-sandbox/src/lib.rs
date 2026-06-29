@@ -422,11 +422,12 @@ impl Plugin for SandboxCorePlugin {
         // material via the universal ShaderMaterial path. Core (not GUI-gated):
         // the headless server needs the collider for deterministic physics.
         app.add_systems(Update, bridge_usd_dem_terrain);
-        // Bind authored terrain colour/albedo layer maps onto the terrain's
-        // `ShaderMaterial`. GUI-only (materials are an `ui`-feature concern; the
-        // headless server has no render materials and needs only the collider).
+        // Bind authored terrain layer maps (albedo/mineral/surface/normal) onto
+        // the terrain's `ShaderMaterial`. GUI-only (materials are an `ui`-feature
+        // concern; the headless server has no render materials and needs only the
+        // collider).
         #[cfg(feature = "ui")]
-        app.add_systems(Update, bind_terrain_color_layer);
+        app.add_systems(Update, bind_terrain_layers);
 
         // LogDiagnosticsPlugin is loud (a multi-line summary every second) — gate
         // it on `--log-diag`.
@@ -440,25 +441,43 @@ impl Plugin for SandboxCorePlugin {
 #[derive(Component)]
 struct DemBridged;
 
-/// One-shot marker: the terrain's colour/layer maps have been bound (or the prim
-/// authors none), so [`bind_terrain_color_layer`] stops re-scanning it.
+/// One-shot marker: the terrain's layer maps have been bound (or the prim authors
+/// none), so [`bind_terrain_layers`] stops re-scanning it.
 #[cfg(feature = "ui")]
 #[derive(Component)]
-struct TerrainColorBound;
+struct TerrainLayersBound;
 
-/// GUI-only: bind authored terrain **colour layers** onto the terrain's
-/// `ShaderMaterial`. Reads `lunco:terrain:layer:albedo:map` (a path **relative to
-/// the open Twin**, e.g. `terrain/connecting_ridge/color.png`) off the terrain
-/// prim, loads it through the `twin://` asset source (so it travels with the
-/// Twin — no engine-global `lunco-lib://` link), and sets the material's
-/// `albedo_map` + `weight_albedo`. The map only renders when the prim's
-/// `shaderPath` is `terrain_layered.wgsl` (which declares the albedo binding);
-/// with `regolith.wgsl` the slot is simply ignored. One-shot per terrain.
+/// A bindable terrain layer role: the USD `lunco:terrain:layer:<name>:*`
+/// namespace, the `ShaderMaterial` texture slot it fills, and the reflected
+/// blend-weight param(s) it raises.
 #[cfg(feature = "ui")]
-fn bind_terrain_color_layer(
+struct LayerRole {
+    /// USD namespace segment + log label, e.g. `"albedo"`.
+    name: &'static str,
+    /// Sets the matching `Option<Handle<Image>>` slot on the material.
+    set_slot: fn(&mut lunco_materials::ShaderMaterial, Handle<Image>),
+    /// Reflected `weight_*` params raised to the authored weight (surface has two).
+    weights: &'static [&'static str],
+}
+
+/// GUI-only: bind authored terrain **layer maps** onto the terrain's
+/// `ShaderMaterial`. For each role below it reads
+/// `lunco:terrain:layer:<role>:map` (a path **relative to the open Twin**, e.g.
+/// `terrain/connecting_ridge/color.png`) + optional `:weight` (default `1.0`) off
+/// the terrain prim, loads the map through the `twin://` asset source (so it
+/// travels with the Twin — no engine-global `lunco-lib://` link), sets the
+/// matching slot, and raises the role's blend weight(s).
+///
+/// Roles: `albedo` (real colour), `mineral` (classification tint), `surface`
+/// (packed rough/AO/hazard — overrides the P3b derived bake), `normal`
+/// (meso normal — overrides the derived bake). Maps only render when the prim's
+/// `shaderPath` is `terrain_layered.wgsl` (which declares the bindings); with
+/// `regolith.wgsl` the slots are simply ignored. One-shot per terrain.
+#[cfg(feature = "ui")]
+fn bind_terrain_layers(
     q: Query<
         (Entity, &lunco_usd::UsdPrimPath, &MeshMaterial3d<lunco_materials::ShaderMaterial>),
-        (With<lunco_terrain_surface::DemTerrainSurface>, Without<TerrainColorBound>),
+        (With<lunco_terrain_surface::DemTerrainSurface>, Without<TerrainLayersBound>),
     >,
     stages: Res<Assets<lunco_usd::UsdStageAsset>>,
     twins: Res<lunco_assets::twin_source::TwinRoots>,
@@ -467,33 +486,56 @@ fn bind_terrain_color_layer(
     mut commands: Commands,
 ) {
     use lunco_materials::ParamValue;
+
+    const ROLES: &[LayerRole] = &[
+        LayerRole { name: "albedo", set_slot: |m, h| m.albedo_map = Some(h), weights: &["weight_albedo"] },
+        LayerRole { name: "mineral", set_slot: |m, h| m.mineral_map = Some(h), weights: &["weight_mineral"] },
+        LayerRole { name: "surface", set_slot: |m, h| m.surface_map = Some(h), weights: &["weight_rough", "weight_ao"] },
+        LayerRole { name: "normal", set_slot: |m, h| m.normal_map = Some(h), weights: &["weight_normal"] },
+    ];
+
     for (entity, prim_path, mat3d) in &q {
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
-            commands.entity(entity).insert(TerrainColorBound);
+            commands.entity(entity).insert(TerrainLayersBound);
             continue;
         };
         let reader = &*stage.reader;
-        let Some(rel) =
-            reader.prim_attribute_value::<String>(&sdf, "lunco:terrain:layer:albedo:map")
-        else {
-            // No colour layer authored — stop re-scanning this terrain.
-            commands.entity(entity).insert(TerrainColorBound);
+
+        // Collect the authored (role, rel-path, weight) before touching the
+        // material, so we can wait for the Twin + material without half-binding.
+        let authored: Vec<(&LayerRole, String, f32)> = ROLES
+            .iter()
+            .filter_map(|role| {
+                let map_attr = format!("lunco:terrain:layer:{}:map", role.name);
+                let rel = reader.prim_attribute_value::<String>(&sdf, &map_attr)?;
+                let weight = reader
+                    .prim_attribute_value::<f32>(&sdf, &format!("lunco:terrain:layer:{}:weight", role.name))
+                    .unwrap_or(1.0);
+                Some((role, rel, weight))
+            })
+            .collect();
+
+        if authored.is_empty() {
+            // No layer authored — stop re-scanning this terrain.
+            commands.entity(entity).insert(TerrainLayersBound);
             continue;
-        };
+        }
         // Resolve relative to the open Twin via the `twin://<name>/<rel>` source.
         let Some((twin_name, _)) = twins.primary() else { continue };
-        // Wait for the material to exist before binding (it's created async by the
-        // USD shader system); retry next frame until it does.
+        // Wait for the material to exist before binding (created async by the USD
+        // shader system); retry next frame until it does.
         let Some(material) = mats.get_mut(&mat3d.0) else { continue };
-        let weight = reader
-            .prim_attribute_value::<f32>(&sdf, "lunco:terrain:layer:albedo:weight")
-            .unwrap_or(1.0);
-        let uri = format!("twin://{twin_name}/{rel}");
-        material.albedo_map = Some(asset_server.load(&uri));
-        material.set("weight_albedo", ParamValue::F32(weight));
-        commands.entity(entity).insert(TerrainColorBound);
-        info!("[usd-dem] bound terrain colour layer '{rel}' (weight {weight}) → {uri}");
+
+        for (role, rel, weight) in authored {
+            let uri = format!("twin://{twin_name}/{rel}");
+            (role.set_slot)(material, asset_server.load(&uri));
+            for w in role.weights {
+                material.set(w, ParamValue::F32(weight));
+            }
+            info!("[usd-dem] bound terrain {} layer '{rel}' (weight {weight}) → {uri}", role.name);
+        }
+        commands.entity(entity).insert(TerrainLayersBound);
     }
 }
 
