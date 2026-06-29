@@ -88,7 +88,10 @@ fn resolve_cert_paths() -> Option<(String, String)> {
     if let Some(cert) = cli_cert.filter(|s| !s.is_empty()) {
         // Distinguish a cert FILE from a live DIRECTORY by extension alone — no
         // `std::fs` probe (raw fs is clippy-banned workspace-wide for wasm parity).
-        let is_file = [".pem", ".crt", ".cer", ".key"]
+        // `.key` is intentionally absent: a key is never a cert chain, so a
+        // private key passed as `--cert` must not be classified as a cert file
+        // and loaded into the chain slot (review M6). Cert extensions only.
+        let is_file = [".pem", ".crt", ".cer"]
             .iter()
             .any(|ext| cert.ends_with(ext));
         if !is_file {
