@@ -329,12 +329,13 @@ const STATIC_TOOLS = [
   // ── Scripting ────────────────────────────────────────────────────────
   {
     name: 'run_scenario',
-    description: 'Attach a persistent rhai scenario to an entity at runtime — the scenario-loading entry point. Registers `source` as a ScriptDocument and attaches a `ScriptedModel{Rhai}` to `target`, so the per-entity runtime starts calling the script\'s `on_start(self)`/`on_tick(self)`/`on_event(self,evt)` hooks every FixedUpdate (`self` is the host entity api_id). The script can READ world state (`world_pos(id)`, `world_forward(id)`, `get(id,"Comp.field")`, `find(name)`, `sim_tick()`), DRIVE the sim via the generic `cmd("CommandName", #{...})` bridge over every registered command (or prelude helpers `drive`/`brake`/`nav_to`/`run_plan`), and EMIT/RECEIVE events (`emit(name,value)` → TelemetryEvent bus; `on_event` receives them next tick). Idempotent + HOT-RELOAD: re-running on the same entity recompiles in place (bumps the document generation), so this also serves as live scenario editing. Returns `{document_id, generation}`. Pass entity IDs from `list_entities`.',
+    description: 'Attach a persistent rhai scenario to an entity at runtime — the scenario-loading entry point. Registers `source` as a ScriptDocument and attaches a `ScriptedModel{Rhai}` to `target`, so the per-entity runtime starts calling the script\'s `on_start(self)`/`on_tick(self)`/`on_event(self,evt)` hooks every FixedUpdate (`self` is the host entity api_id). The script can READ world state (`world_pos(id)`, `world_forward(id)`, `get(id,"Comp.field")`, `find(name)`, `sim_tick()`), DRIVE the sim via the generic `cmd("CommandName", #{...})` bridge over every registered command (or prelude helpers `drive`/`brake`/`nav_to`/`run_plan`), and EMIT/RECEIVE events (`emit(name,value)` → TelemetryEvent bus; `on_event` receives them next tick). Pass `params` (a JSON object) to parameterize a reusable scenario — the script reads it as the read-only `params` constant (e.g. `params.speed`), so one source serves many entities. Idempotent + HOT-RELOAD: re-running on the same entity recompiles in place (bumps the document generation), so this also serves as live scenario editing. Returns `{document_id, generation}`. Pass entity IDs from `list_entities`.',
     inputSchema: {
       type: 'object',
       properties: {
         target: { type: 'string', description: 'Entity api_id to attach the scenario to (from list_entities).' },
         source: { type: 'string', description: 'rhai scenario source. Define `fn on_tick(me) { ... }` (optionally `on_start`/`on_event`). Prelude helpers available: nav_to, run_plan, drive, brake, distance, arrived, emit, plus the host verbs cmd/world_pos/world_forward/get/find/sim_tick.' },
+        params: { type: 'object', description: 'Optional scenario parameters as a JSON object (e.g. {"speed":1.5}). Readable in-script as the read-only `params` constant (params.speed), so one source serves many entities/missions. Omit for none.' },
       },
       required: ['target', 'source'],
     },
@@ -805,11 +806,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'run_scenario': {
-        const { target, source } = args ?? {};
+        const { target, source, params } = args ?? {};
         if (!target || !source) {
           return { content: [{ type: 'text', text: 'Error: `target` and `source` are both required' }], isError: true };
         }
-        const result = await executeCommand('RunScenario', { target, source });
+        // RunScenario.params is a JSON-object STRING on the command; accept a
+        // structured object here (nicer for agents) and serialize it. Omitted →
+        // left unset (the command defaults it to none).
+        const scenarioArgs = { target, source };
+        if (params !== undefined && params !== null) {
+          scenarioArgs.params = typeof params === 'string' ? params : JSON.stringify(params);
+        }
+        const result = await executeCommand('RunScenario', scenarioArgs);
         if (result.error) {
           return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
         }

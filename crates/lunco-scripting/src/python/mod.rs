@@ -35,9 +35,11 @@ pub fn lunco(m: &Bound<'_, PyModule>) -> PyResult<()> {
     //      the inherent JSON seam) and Python scalar -> TelemetryValue (emit).
     //   4. `append_to_inittab!(lunco)` BEFORE `prepare_freethreaded_python()`
     //      (in `get_python_status`) so `import lunco` resolves in scripts.
-    //   5. World access requires a live `bridge_core::WorldScope` — see the TODO
-    //      in `lib.rs::run_scripted_models` (the python exec must move into an
-    //      exclusive system). Verbs return `()`/None outside a scope.
+    //   5. World access requires a live `bridge_core::WorldScope` — the python
+    //      exec must run in an EXCLUSIVE system (a `tick_python_scenarios` mirror
+    //      of `world_bridge::tick_rhai_scenarios`, entering the scope), NOT the
+    //      old non-exclusive dict path (now removed). Verbs return `()`/None
+    //      outside a scope. See `scenario.rs` for the lifecycle to plug into.
     // Ref: project_world_bridge_runtime_agnostic memory.
     Ok(())
 }

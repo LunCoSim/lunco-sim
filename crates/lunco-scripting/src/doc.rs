@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Supported scripting languages for Digital Twin integration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
@@ -22,10 +21,6 @@ pub struct ScriptDocument {
     pub generation: u64,
     pub language: ScriptLanguage,
     pub source: String,
-    /// Metadata about expected input pins (e.g., "battery_voltage").
-    pub inputs: Vec<String>,
-    /// Metadata about expected output pins (e.g., "motor_current").
-    pub outputs: Vec<String>,
     /// Where this script came from + whether it can be saved in place.
     /// Drives persistence (Twin save/load) and the read-only guard in
     /// [`apply`](Self::apply) — mirrors `ModelicaDocument`. Per-entity
@@ -56,8 +51,6 @@ impl ScriptDocument {
             generation: 0,
             language,
             source: source.into(),
-            inputs: Vec::new(),
-            outputs: Vec::new(),
             origin: DocumentOrigin::untitled(format!("Untitled-{id}")),
             params: String::new(),
         }
@@ -92,10 +85,6 @@ impl ScriptDocument {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ScriptOp {
     SetSource(String),
-    AddInput(String),
-    RemoveInput(String),
-    AddOutput(String),
-    RemoveOutput(String),
 }
 
 impl DocumentOp for ScriptOp {}
@@ -131,32 +120,6 @@ impl Document for ScriptDocument {
                 self.source = new_source;
                 ScriptOp::SetSource(old)
             }
-            ScriptOp::AddInput(name) => {
-                if self.inputs.contains(&name) {
-                    return Err(DocumentError::ValidationFailed(format!("Input '{}' already exists", name)));
-                }
-                self.inputs.push(name.clone());
-                ScriptOp::RemoveInput(name)
-            }
-            ScriptOp::RemoveInput(name) => {
-                let pos = self.inputs.iter().position(|x| x == &name)
-                    .ok_or_else(|| DocumentError::ValidationFailed(format!("Input '{}' not found", name)))?;
-                self.inputs.remove(pos);
-                ScriptOp::AddInput(name)
-            }
-            ScriptOp::AddOutput(name) => {
-                if self.outputs.contains(&name) {
-                    return Err(DocumentError::ValidationFailed(format!("Output '{}' already exists", name)));
-                }
-                self.outputs.push(name.clone());
-                ScriptOp::RemoveOutput(name)
-            }
-            ScriptOp::RemoveOutput(name) => {
-                let pos = self.outputs.iter().position(|x| x == &name)
-                    .ok_or_else(|| DocumentError::ValidationFailed(format!("Output '{}' not found", name)))?;
-                self.outputs.remove(pos);
-                ScriptOp::AddOutput(name)
-            }
         };
         self.generation += 1;
         Ok(inverse)
@@ -173,10 +136,6 @@ pub struct ScriptedModel {
     pub document_id: Option<u64>,
     pub language: Option<ScriptLanguage>,
     pub paused: bool,
-    /// Current input values synced from Bevy ECS to Script.
-    pub inputs: HashMap<String, f64>,
-    /// Current output values synced from Script to Bevy ECS.
-    pub outputs: HashMap<String, f64>,
 }
 
 impl Default for ScriptLanguage {

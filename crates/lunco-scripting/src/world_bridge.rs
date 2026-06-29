@@ -650,9 +650,14 @@ mod tests {
             ),
             ("sequence", include_str!("../rhai/examples/sequence.rhai")),
             ("timeline", include_str!("../rhai/examples/timeline.rhai")),
+            ("avoid", include_str!("../rhai/examples/avoid.rhai")),
             (
                 "formation (tool lib)",
                 include_str!("../rhai/tools/formation.rhai"),
+            ),
+            (
+                "survey (tool lib)",
+                include_str!("../rhai/tools/survey.rhai"),
             ),
         ] {
             engine

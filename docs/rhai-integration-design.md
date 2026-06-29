@@ -1,14 +1,41 @@
 # Rhai Integration Design — scripting & scenarios
 
-Status: **IMPLEMENTED (P1–P4)** + design rationale. 2026-06-28, `luau-integration`
+Status: **IMPLEMENTED** + design rationale. 2026-06-28, `luau-integration`
 worktree. Builds green native (default), `--no-default-features` (script-free),
-and `wasm32-unknown-unknown`. Verified by `crates/lunco-scripting/tests/rhai_rover_live_test.rs`
-(4 live end-to-end tests). Sections 0–8 below are the design rationale; this
-header is the as-built reference.
+`python`, and `wasm32-unknown-unknown`. Verified by
+`crates/lunco-scripting/tests/rhai_rover_live_test.rs` (21 live end-to-end tests)
++ lib tests. Sections 0–8 below are the original design rationale; this header is
+the as-built reference.
+
+> **Authoring a scenario?** Read the **[Scripting Guide](./scripting-guide.md)** —
+> a task-oriented how-to. This document is the design rationale + as-built notes.
 
 Goal (met): drive scenarios from rhai — *"rover moves along a path via
 checkpoints, loads next goals"* — and, more broadly, **manipulate every object in
 the sim (Twin, USD, Modelica, cosim, scene, vehicles) from script.**
+
+### Shipped since the original P1–P4 (2026-06-29)
+
+- **Scenario parameters** — `RunScenario { …, params }` (JSON object string) →
+  read in-script as the `params` constant; one source serves many entities.
+- **Lifecycle completeness** — `on_stop` teardown hook (hot-reload / detach /
+  despawn) + `SetScenarioPaused` / `StopScenario`. The whole lifecycle now lives
+  in a **language-neutral driver** (`scenario.rs`, `ScenarioRuntime` trait) over a
+  **native world bridge** (`bridge_core.rs`, `ValueBuilder` — no JSON on the read
+  path); rhai is one backend, Python can implement the same traits.
+- **Introspection** — `ScriptStatus` (compile/runtime health) + `ScriptInspect`
+  (live `this` state, defined hooks, generation, running/paused).
+- **Authoring catalog** — `ScriptingCatalog` aggregates the full callable surface
+  (verbs/hooks/prelude/tools/commands/queries).
+- **Timeline storage** — `RegisterTimeline` / `RunStoredTimeline` +
+  `ListTimelines` / `GetTimeline`, persisted to `<twin>/timelines/*.json`.
+- **USD-embedded scenarios (load)** — `custom string lunco:script` on a prim
+  auto-attaches + runs on spawn (writeback to the prim is not yet supported).
+- **Host-authoritative gate** — script systems run on Host / Standalone, never on
+  a networked Client (which receives behaviour via replication).
+- **Legacy removed** — the old Python `inputs`/`outputs` dict execution model
+  (`run_scripted_models`) and the `ScriptOp` I/O-pin variants are gone; Python
+  scenarios will come back via `PythonScenarioRuntime` (not the dict path).
 
 ---
 

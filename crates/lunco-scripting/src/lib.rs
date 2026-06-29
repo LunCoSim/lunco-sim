@@ -38,8 +38,6 @@ pub mod catalog;
 use std::collections::HashMap;
 use lunco_doc::{DocumentId, DocumentHost};
 use doc::{ScriptDocument, ScriptedModel};
-#[cfg(feature = "python")]
-use pyo3::types::{PyDictMethods, PyAnyMethods};
 
 #[derive(Resource, Default)]
 pub struct ScriptRegistry {
@@ -73,9 +71,6 @@ impl Plugin for LunCoScriptingPlugin {
 
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, repl::process_repl_commands);
-        // Host-authoritative: scripts run on the host + single-player, NOT on a
-        // networked client (see `scripts_run_here`).
-        app.add_systems(FixedUpdate, run_scripted_models.run_if(scripts_run_here));
 
         // World-bound rhai: a queue of (command_id, code) drained by an
         // exclusive system so scripts can `cmd()`/read the live `&mut World`.
@@ -173,84 +168,8 @@ impl Plugin for LunCoScriptingPlugin {
 /// so would diverge from the host with nothing to correct it. A client must
 /// instead receive scripted behavior purely via replication of the resulting
 /// entity state. Mirrors cosim's identical gate (`lunco-cosim/src/lib.rs`).
+#[cfg(feature = "rhai")]
 fn scripts_run_here(role: Option<Res<lunco_core::NetworkRole>>) -> bool {
     !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client))
-}
-
-fn run_scripted_models(
-    mut q_models: Query<&mut ScriptedModel>,
-    registry: Res<ScriptRegistry>,
-    python_status: Res<python::PythonStatus>,
-) {
-    for mut model in q_models.iter_mut() {
-        if model.paused { continue; }
-        
-        let Some(doc_id_raw) = model.document_id else { continue };
-        let doc_id = DocumentId::new(doc_id_raw);
-        let Some(host) = registry.documents.get(&doc_id) else { continue };
-        let doc = host.document();
-
-        // Execution logic for Python/Lua
-        //
-        // TODO(python scenarios): this ad-hoc input/output-dict path predates the
-        // neutral lifecycle. The proper fix is to DELETE it and implement
-        // `scenario::ScenarioRuntime` for a `PythonScenarioRuntime`, then register
-        // `ScenarioDriver<PythonScenarioRuntime>` + a `tick_python_scenarios`
-        // exclusive system (mirroring `world_bridge::tick_rhai_scenarios`). Python
-        // then gets on_start/on_tick/on_event/on_stop + hot-reload + pause +
-        // teardown FOR FREE from the driver, and the world verbs work because the
-        // driver enters `bridge_core::WorldScope`. Needs the `lunco` pymodule
-        // (python/mod.rs) too. See scenario.rs + project_world_bridge_runtime_agnostic.
-        if doc.language == doc::ScriptLanguage::Python {
-            #[cfg(feature = "python")]
-            {
-                if *python_status != python::PythonStatus::Available {
-                    error_once!("Python is not available on this system. Cannot run Python scripts.");
-                    continue;
-                }
-                pyo3::Python::with_gil(|py| {
-                    // 1. Prepare inputs
-                    let locals = pyo3::types::PyDict::new(py);
-                    let inputs_dict = pyo3::types::PyDict::new(py);
-                    for (k, v) in &model.inputs {
-                        let _ = inputs_dict.set_item(k, v);
-                    }
-                    let outputs_dict = pyo3::types::PyDict::new(py);
-                    for (k, v) in &model.outputs {
-                        let _ = outputs_dict.set_item(k, v);
-                    }
-                    let _ = locals.set_item("inputs", inputs_dict);
-                    let _ = locals.set_item("outputs", outputs_dict);
-
-                    // 2. Run source
-                    let c_str = match std::ffi::CString::new(doc.source.as_str()) {
-                        Ok(c) => c,
-                        Err(_) => {
-                            error!("ScriptedModel: source contains a NUL byte; skipping");
-                            return;
-                        }
-                    };
-                    if let Err(e) = py.run(&c_str, None, Some(&locals)) {
-                        error!("ScriptedModel Python Error: {}", e);
-                    } else {
-                        // 3. Extract outputs
-                        if let Ok(Some(outputs)) = locals.get_item("outputs") {
-                            if let Ok(dict) = outputs.downcast::<pyo3::types::PyDict>() {
-                                for (k, v) in dict.iter() {
-                                    if let (Ok(key), Ok(val)) = (k.extract::<String>(), v.extract::<f64>()) {
-                                        model.outputs.insert(key, val);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-            #[cfg(not(feature = "python"))]
-            {
-                error_once!("Python support was not compiled into this binary.");
-            }
-        }
-    }
 }
 

@@ -18,9 +18,10 @@
 //! functions via pyo3) and registering a `ScenarioDriver<PythonScenarioRuntime>`
 //! + a `tick_python_scenarios` exclusive system. Python then gets hot-reload,
 //! pause, on_stop teardown, and diagnostics FOR FREE from this driver — only the
-//! ~5 trait methods are new. (This replaces the current input/output-dict model
-//! in `lib.rs::run_scripted_models` with the same hook model rhai uses, so the
-//! `lunco.*` world verbs become the one way Python reads/writes the world.)
+//! ~5 trait methods are new. (The old input/output-dict execution path has been
+//! removed; this hook model — with the `lunco.*` world verbs as the one way
+//! Python reads/writes the world — is the only Python scenario model going
+//! forward. There is currently NO Python scenario execution until this lands.)
 
 #![cfg(any(feature = "rhai", feature = "python"))]
 
