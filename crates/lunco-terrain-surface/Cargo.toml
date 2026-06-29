@@ -13,6 +13,11 @@ lunco-terrain-core = { path = "../lunco-terrain-core" }
 bevy = { workspace = true, features = ["bevy_pbr", "bevy_mesh", "bevy_render", "bevy_light"] }
 bevy_mesh = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+# Read-side query seam: register a `TerrainHeight` provider into the shared
+# `ApiQueryRegistry` so scripts/HTTP/MCP can sample the DEM height field via
+# `query("TerrainHeight", #{x, z})` — no terrain dep leaks into lunco-api, the
+# same string-keyed pattern lunco-mobility uses for its physics queries.
+lunco-api = { path = "../lunco-api" }
 # Reuse the existing height-surface machinery instead of duplicating it: the DEM
 # loader fills `field::HeightGrid` (bilinear `height_at`, `to_mesh_data`,
 # `to_avian_heights` → `Collider::heightfield`) — the same grid the procedural
@@ -27,6 +32,8 @@ avian3d = { workspace = true }
 big_space = { workspace = true }
 lunco-storage = { path = "../lunco-storage" }
 serde = { workspace = true }
+# `ApiQueryProvider` speaks `serde_json::Value` for params/response.
+serde_json = { workspace = true }
 # Decodes the float32 GeoTIFF heightmaps emitted by `lunar_terrain_exporter`.
 # Already in the workspace tree via `image`'s `tiff` feature; pure-Rust (weezl,
 # no GDAL) so the DEM loader stays wasm-safe. The flat `metadata.yaml` sidecar is

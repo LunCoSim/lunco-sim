@@ -148,7 +148,8 @@ struct DemBuild {
     /// The static visual mesh — `None` in `lod_viz` mode (tiles draw instead).
     mesh: Option<MeshData>,
     collider_heights: Vec<Vec<f64>>,
-    /// The realized tile grid, retained for `lod_viz` so LOD tiles can sample it.
+    /// The realized tile grid, always retained as the shared `HeightSource` the
+    /// streaming consumers and the `TerrainHeight` query sample.
     grid: Option<std::sync::Arc<HeightGrid>>,
     half_extent: f32,
     /// Tile resolution actually meshed (= native crop res, or the resample target).
@@ -226,13 +227,12 @@ fn start_dem_builds(
             let collider_heights = if collider_ring { Vec::new() } else { tile.to_avian_heights() };
             // Static visual mesh unless lod_viz streams visual tiles instead.
             let mesh = if lod_viz { None } else { Some(tile.to_mesh_data()) };
-            // Retain the grid whenever something streams tiles from it — visual LOD
-            // (`lod_viz`) or the physics collider ring (`collider_ring`).
-            let grid = if lod_viz || collider_ring {
-                Some(std::sync::Arc::new(tile))
-            } else {
-                None
-            };
+            // Always retain the grid as a shared `HeightSource`. The streaming
+            // consumers (visual `lod_viz`, physics `collider_ring`) sample it, and
+            // so does the `TerrainHeight` API/scripting query — which must work on
+            // the plain static terrain too (see `crate::query`). Retaining is free:
+            // `to_avian_heights`/`to_mesh_data` only borrow, and the `Arc` is shared.
+            let grid = Some(std::sync::Arc::new(tile));
             Ok(DemBuild {
                 collider_heights,
                 mesh,

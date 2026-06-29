@@ -7141,12 +7141,14 @@ dependencies = [
  "bevy",
  "bevy_mesh",
  "big_space",
+ "lunco-api",
  "lunco-core",
  "lunco-materials",
  "lunco-obstacle-field",
  "lunco-storage",
  "lunco-terrain-core",
  "serde",
+ "serde_json",
  "tiff",
 ]
 
