@@ -16,7 +16,11 @@
 //! a backend in `backend.rs` + one line in the registration list.
 
 #[cfg(feature = "python")]
-use crate::{backend::ScriptBackends, doc::ScriptLanguage};
+use crate::backend::ScriptBackends;
+// Used by both backends (rhai scenario docs + the RunPython handler), so import
+// it once for either feature — importing under each cfg collides when both are on.
+#[cfg(any(feature = "rhai", feature = "python"))]
+use crate::doc::ScriptLanguage;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use bevy::prelude::*;
 use lunco_core::register_commands;
@@ -28,7 +32,7 @@ use lunco_core::ActiveCommandId;
 use crate::world_bridge::PendingWorldScripts;
 #[cfg(feature = "rhai")]
 use crate::{
-    doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
+    doc::{ScriptDocument, ScriptedModel},
     ScriptRegistry,
 };
 #[cfg(feature = "rhai")]
@@ -594,6 +598,60 @@ fn on_stop_scenario(
     Ok(Ack::new(OpId::new()))
 }
 
+/// Declare data-driven RBAC policies for the script-execution commands in the
+/// shared [`lunco_core::session::CommandPolicyRegistry`], so script submission is
+/// gated through the **same authorization seam** as every other command —
+/// instead of sitting at the registry's OPEN default while only the node-role
+/// [`crate::scripts_run_here`] condition (which decides *where* scripts run, not
+/// *who* may submit them) guards execution.
+///
+/// Rationale (design §3.4 "Security"): a script body reaches the *entire*
+/// `cmd()` surface and executes under host authority, so a script-executing
+/// command is a privilege amplifier — a networked `Observer` that may not
+/// `DriveRover` directly could otherwise submit a scenario that does. We
+/// therefore declare an **`Operator`** floor for the script-executing /
+/// disk-persisting commands, and ownership-gated control for scenario lifecycle
+/// (which acts on a single `#[authz_target]` entity, exactly like `DriveRover`).
+/// Deployments relax or tighten any of these at runtime via
+/// [`lunco_core::session::CommandPolicyRegistry::set_override`] with no recompile.
+///
+/// Scope: only *networked client* submissions reach [`lunco_core::session::authorize`]
+/// (the host gate in `lunco-networking`); local host / standalone API + MCP
+/// commands never do, so single-player and host-local tooling are unaffected.
+#[cfg(any(feature = "rhai", feature = "python"))]
+pub(crate) fn register_command_policies(app: &mut App) {
+    use lunco_core::session::{AuthorityRole, CommandPolicy, CommandPolicyRegistry};
+
+    // The registry is a `LunCoCorePlugin` resource; init defensively in case the
+    // scripting plugin is added first (`init_resource` is idempotent and keeps
+    // the existing instance + its baseline `DriveRover`/`BrakeRover` entries).
+    app.init_resource::<CommandPolicyRegistry>();
+    let mut reg = app.world_mut().resource_mut::<CommandPolicyRegistry>();
+
+    // Executes a script body (full `cmd()` reach under host authority) or
+    // persists an authoring artifact to the twin dir → `Operator` floor.
+    const EXEC: CommandPolicy =
+        CommandPolicy { min_role: AuthorityRole::Operator, ownership_gated: false };
+
+    #[cfg(feature = "rhai")]
+    {
+        reg.register("RunRhai", EXEC);
+        reg.register("RunScenario", EXEC);
+        reg.register("RunTimeline", EXEC);
+        reg.register("RegisterTimeline", EXEC);
+        reg.register("RunStoredTimeline", EXEC);
+        reg.register("RegisterToolLibrary", EXEC);
+    }
+    #[cfg(feature = "python")]
+    reg.register("RunPython", EXEC);
+
+    // Scenario lifecycle acts on one `#[authz_target]` entity → ownership-gated
+    // control (owner acts at the Observer floor; a non-owner needs `Operator`
+    // and is then rejected by the ownership check), mirroring `DriveRover`.
+    reg.register("SetScenarioPaused", CommandPolicy::OWNED_CONTROL);
+    reg.register("StopScenario", CommandPolicy::OWNED_CONTROL);
+}
+
 // Generates `register_all_commands` for the compiled-in script commands. One
 // cfg-exclusive invocation per feature combo so exactly one
 // `register_all_commands` is emitted (covers the script-free build too).
@@ -671,5 +729,38 @@ mod tests {
         rhai::Engine::new()
             .compile(&source)
             .expect("generated timeline literal must be valid rhai");
+    }
+
+    #[test]
+    fn script_commands_carry_rbac_policies() {
+        use bevy::prelude::*;
+        use lunco_core::session::{AuthorityRole, CommandPolicy, CommandPolicyRegistry};
+
+        let mut app = App::new();
+        super::register_command_policies(&mut app);
+        let reg = app.world().resource::<CommandPolicyRegistry>();
+
+        // Script-executing / disk-persisting commands carry an Operator floor:
+        // a body reaches the whole cmd() surface under host authority.
+        let exec = CommandPolicy { min_role: AuthorityRole::Operator, ownership_gated: false };
+        for c in [
+            "RunRhai",
+            "RunScenario",
+            "RunTimeline",
+            "RegisterTimeline",
+            "RunStoredTimeline",
+            "RegisterToolLibrary",
+        ] {
+            assert_eq!(reg.policy_for(c), exec, "{c} should require Operator");
+        }
+
+        // Scenario lifecycle is ownership-gated control, like DriveRover.
+        assert_eq!(reg.policy_for("SetScenarioPaused"), CommandPolicy::OWNED_CONTROL);
+        assert_eq!(reg.policy_for("StopScenario"), CommandPolicy::OWNED_CONTROL);
+
+        // The baseline core entries survive our defensive init_resource.
+        assert_eq!(reg.policy_for("DriveRover"), CommandPolicy::OWNED_CONTROL);
+        // An undeclared command stays OPEN (the RBAC-readiness invariant).
+        assert_eq!(reg.policy_for("SomeUngatedQuery"), CommandPolicy::OPEN);
     }
 }

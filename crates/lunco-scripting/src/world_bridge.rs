@@ -34,16 +34,13 @@
 
 use bevy::prelude::*;
 
-use lunco_api::registry::ApiEntityRegistry;
 use lunco_core::{Ack, CommandResults, OpId, TelemetryEvent, TelemetryValue};
 
 use rhai::{Dynamic, Engine, ImmutableString, Map, AST};
 
 use crate::bridge_core::{self, ValueBuilder};
-use crate::doc::{ScriptLanguage, ScriptedModel};
-use crate::ScriptRegistry;
-use lunco_doc::{Diagnostic, DocumentId};
-use lunco_doc_bevy::DocumentDiagnostics;
+use crate::doc::ScriptLanguage;
+use lunco_doc::Diagnostic;
 
 // ── Native value builder (rhai) ────────────────────────────────────────────
 //
@@ -686,8 +683,12 @@ fn call_hook(
     if !present {
         return None;
     }
-    let mut args = [Dynamic::from_int(self_id)];
-    match engine.call_fn_raw(scope, ast, false, false, name, Some(this), &mut args) {
+    let args = [Dynamic::from_int(self_id)];
+    let options = rhai::CallFnOptions::new()
+        .eval_ast(false)
+        .rewind_scope(false)
+        .bind_this_ptr(this);
+    match engine.call_fn_with_options::<Dynamic>(options, scope, ast, name, args) {
         Ok(_) => None,
         Err(e) => {
             error!("[rhai] {name}() failed: {e}");
@@ -713,8 +714,12 @@ fn call_event_hook(
     if !present {
         return None;
     }
-    let mut args = [Dynamic::from_int(self_id), evt];
-    match engine.call_fn_raw(scope, ast, false, false, "on_event", Some(this), &mut args) {
+    let args = [Dynamic::from_int(self_id), evt];
+    let options = rhai::CallFnOptions::new()
+        .eval_ast(false)
+        .rewind_scope(false)
+        .bind_this_ptr(this);
+    match engine.call_fn_with_options::<Dynamic>(options, scope, ast, "on_event", args) {
         Ok(_) => None,
         Err(e) => {
             error!("[rhai] on_event() failed: {e}");
