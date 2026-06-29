@@ -588,11 +588,14 @@ fn bridge_usd_dem_terrain(
             .filter(|&r| r > 0)
             .map(|r| r as usize)
             .unwrap_or(0);
-        // `lunco:terrain:lodViz` (bool) = DEBUG view: stream camera-driven LOD
-        // tiles tinted by depth instead of one static mesh (physics unchanged).
+        // `lunco:terrain:lodViz` (bool) = stream camera-driven CDLOD tiles
+        // (procedural-regolith geomorph) instead of one static mesh. **Default ON**
+        // — streaming is the production visual path; author `lodViz = false` to opt
+        // a prim back to the single static mesh. Physics is unchanged either way
+        // (the static heightfield collider still spawns unless `colliderRing`).
         let lod_viz = reader
             .prim_attribute_value::<bool>(&sdf, "lunco:terrain:lodViz")
-            .unwrap_or(false);
+            .unwrap_or(true);
         // `lunco:terrain:colliderRing` (bool) = stream a per-rover canonical-res
         // heightfield collider ring instead of one static full-DEM collider
         // (replaces it; deterministic, decoupled from visual LOD).
@@ -610,6 +613,36 @@ fn bridge_usd_dem_terrain(
             },
             lunco_terrain_surface::DemTerrainSurface,
         ));
+        // Georeference (#5): the `lunco:anchor:*` lat/lon/height anchor + the stage
+        // `metersPerUnit`. The terrain math is metres, so a non-1 `metersPerUnit`
+        // is recorded but flagged loudly (we don't rescale the DEM). Attach a
+        // `TerrainGeoref` whenever any of these are authored.
+        let anchor_lat = reader.prim_attribute_value::<f64>(&sdf, "lunco:anchor:lat");
+        let anchor_lon = reader.prim_attribute_value::<f64>(&sdf, "lunco:anchor:lon");
+        let anchor_height = reader.prim_attribute_value::<f64>(&sdf, "lunco:anchor:height");
+        let meters_per_unit = reader.prim_attribute_value::<f64>(&sdf, "metersPerUnit");
+        if let Some(mpu) = meters_per_unit {
+            if (mpu - 1.0).abs() >= 1e-6 {
+                warn!(
+                    "[usd-dem] prim {} authors metersPerUnit={mpu}; terrain assumes 1 m/unit — \
+                     heights/colliders are NOT rescaled",
+                    prim_path.path
+                );
+            }
+        }
+        if anchor_lat.is_some() || anchor_lon.is_some() || anchor_height.is_some() {
+            let georef = lunco_terrain_surface::TerrainGeoref {
+                center_lat_deg: anchor_lat.unwrap_or(0.0),
+                center_lon_deg: anchor_lon.unwrap_or(0.0),
+                anchor_height_m: anchor_height.unwrap_or(0.0),
+                meters_per_unit: meters_per_unit.unwrap_or(1.0),
+            };
+            commands.entity(entity).insert(georef);
+            info!(
+                "[usd-dem] georef: lat {:.4} lon {:.4} height {:.1} m (mpu {})",
+                georef.center_lat_deg, georef.center_lon_deg, georef.anchor_height_m, georef.meters_per_unit
+            );
+        }
         info!(
             "[usd-dem] bridged terrain prim {} → DEM '{rel}' (target_res {target_res}, lod_viz {lod_viz}, collider_ring {collider_ring})",
             prim_path.path

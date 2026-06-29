@@ -1638,6 +1638,75 @@ pub fn persist_move_to_runtime_layer(
     });
 }
 
+/// Persist a `SetObjectProperty` **shader-param tune** into the active USD
+/// document's **runtime overlay** (#4 — non-destructive layer tuning).
+///
+/// [`on_set_object_property`] mutates the live `ShaderMaterial` for immediate
+/// feedback but writes nothing back to USD, so a tweak (e.g. a terrain
+/// `weight_albedo`) is lost on reload. This decoupled observer authors the same
+/// edit as a `SetAttribute` into `LayerId::runtime()` — the session overlay that
+/// composes over the base layer and rides the Twin journal / `.lunco/runtime`
+/// sidecar, while **Save stays base-only** (the authored `.usda` is never
+/// dirtied). It mirrors [`persist_move_to_runtime_layer`]: same ownership guard,
+/// same runtime target, fully decoupled from the live-mutation handler.
+///
+/// Scope: **scalar** params (covers every layer `weight_*` and roughness knob) on
+/// entities backed by a `ShaderMaterial` whose prim the active document owns.
+/// Colors/vectors and PBR/`StandardMaterial` props stay live-only for now.
+pub fn persist_property_to_runtime_layer(
+    trigger: On<SetObjectProperty>,
+    api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    usd_registry: Res<UsdDocumentRegistry>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    q_prim: Query<&UsdPrimPath>,
+    q_shader: Query<(), With<MeshMaterial3d<lunco_materials::ShaderMaterial>>>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    // Structural props aren't USD attributes; skip them.
+    if matches!(cmd.property.as_str(), "shader" | "visible") {
+        return;
+    }
+    // Only scalar tunes persist (layer weights etc.); non-scalar values are live-only.
+    let Ok(scalar) = cmd.value.trim().parse::<f32>() else {
+        return;
+    };
+    let Some(workspace) = workspace else { return };
+    let Some(doc) = workspace.0.active_document else { return };
+    let Some(host) = usd_registry.host(doc) else { return };
+
+    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
+    let Some(target) = api_registry.resolve(&global_id) else { return };
+    // Only shader-material prims (the layer-tuning case) — not PBR/StandardMaterial.
+    if q_shader.get(target).is_err() {
+        return;
+    }
+    let Ok(prim) = q_prim.get(target) else { return };
+
+    // Ownership guard: only author for prims the active document actually holds
+    // (base or runtime), so palette/sim spawns never get stray opinions.
+    let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else { return };
+    let owned = host.document().data().spec(&prim_sdf).is_some()
+        || host.document().runtime_data().spec(&prim_sdf).is_some();
+    if !owned {
+        return;
+    }
+
+    // Author under `primvars:` with the snake_case field name — the same contract
+    // `read_authored_params` reads back (which now normalizes camelCase too).
+    let name = format!("primvars:{}", lunco_materials::to_snake_case(&cmd.property));
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::SetAttribute {
+            edit_target: LayerId::runtime(),
+            path: prim.path.clone(),
+            name,
+            type_name: "float".to_string(),
+            value: scalar.to_string(),
+        },
+    });
+}
+
 /// Persist a runtime **spawn** into the active USD document's runtime layer
 /// (Phase C4b producer). Observes `SpawnEntity` alongside the ECS spawn handler
 /// [`on_spawn_entity_command`] but is fully decoupled from it — it touches no
@@ -2606,6 +2675,10 @@ impl Plugin for SpawnCommandPlugin {
         app.add_observer(persist_spawn_to_runtime_layer);
         app.add_observer(on_rescan_spawn_catalog);
         app.add_observer(on_set_object_property);
+        // #4: persist scalar shader-param tunes into the active doc's runtime
+        // overlay (non-destructive; Save stays base-only). Decoupled from the
+        // live-mutation handler above, like the move/spawn persisters.
+        app.add_observer(persist_property_to_runtime_layer);
         app.add_observer(on_focus_entity_by_id);
         // NOTE: `SelectEntity`/`on_select_entity` are editor-only (they drive the
         // Inspector highlight + gizmo) and live in the `ui`-gated `selection`

@@ -44,6 +44,8 @@ pub struct TerrainSurfacePlugin;
 impl Plugin for TerrainSurfacePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TerrainSurfaceConfig>();
+        app.register_type::<crate::georef::TerrainGeoref>();
+        app.register_type::<crate::stream_viz::TerrainShaderMode>();
         // M3: spawn a static DEM terrain (mesh + heightfield collider) on the
         // `SpawnDemTerrain` command. See `crate::terrain`.
         crate::terrain::register(app);

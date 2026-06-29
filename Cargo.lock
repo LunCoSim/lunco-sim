@@ -7049,6 +7049,7 @@ dependencies = [
  "lunco-mobility",
  "lunco-modelica",
  "lunco-obstacle-field",
+ "lunco-terrain-surface",
  "lunco-theme",
  "lunco-usd",
  "lunco-usd-bevy",

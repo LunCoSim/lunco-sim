@@ -43,6 +43,7 @@ pub mod bake;
 pub mod collider_ring;
 pub mod dem;
 pub mod derived_layers;
+pub mod georef;
 pub mod plugin;
 pub mod query;
 pub mod stream_viz;
@@ -60,8 +61,9 @@ pub use lunco_terrain_core::{
 };
 pub use plugin::{TerrainSurfaceConfig, TerrainSurfacePlugin};
 pub use derived_layers::DerivedLayersBuilt;
+pub use georef::TerrainGeoref;
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use collider_ring::{ColliderTiles, TerrainColliderRing};
-pub use stream_viz::{DemHeightField, LodTiles, TerrainLodViz};
+pub use stream_viz::{DemHeightField, LodTiles, TerrainLodViz, TerrainShaderMode};
 pub use terrain::{DemTerrainRequest, DemTerrainSurface, SpawnDemTerrain};
 pub use tile_mesh::{bake_tile_mesh, TileMesh};

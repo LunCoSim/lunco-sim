@@ -59,10 +59,11 @@ pub struct DemTerrainRequest {
     /// streaming ring is what keeps the near-field collider native while only the
     /// far visual LOD decimates.
     pub target_res: usize,
-    /// Opt-in DEBUG view: suppress the static visual mesh and instead stream
-    /// camera-driven CDLOD tiles tinted by LOD depth (see [`crate::stream_viz`]).
-    /// The heightfield COLLIDER still spawns, so physics is unchanged. `false` =
-    /// the normal single static mesh.
+    /// Suppress the static visual mesh and instead stream camera-driven CDLOD
+    /// tiles (procedural-regolith geomorph; see [`crate::stream_viz`]). The
+    /// heightfield COLLIDER still spawns, so physics is unchanged. This is the
+    /// production visual path (default ON from the USD bridge); `false` = the
+    /// single static mesh.
     pub lod_viz: bool,
     /// Opt-in: stream a per-rover canonical-res heightfield collider ring instead
     /// of one static full-DEM collider (see [`crate::collider_ring`]). When `true`
@@ -91,8 +92,8 @@ pub struct SpawnDemTerrain {
     /// decimation). Re-issue the command with a different value to rebuild the
     /// same site at another quality and compare.
     pub target_res: u32,
-    /// Stream camera-driven LOD tiles tinted by depth instead of one static mesh
-    /// (DEBUG view of the CDLOD machinery; collider/physics unchanged).
+    /// Stream camera-driven CDLOD tiles (procedural-regolith geomorph) instead of
+    /// one static mesh; collider/physics unchanged. Production visual path.
     pub lod_viz: bool,
     /// Stream a per-rover canonical-res collider ring instead of one static
     /// full-DEM collider (replaces it — physics rides the streamed tiles).
@@ -302,6 +303,8 @@ fn finish_dem_builds(
                 e.insert((
                     crate::stream_viz::TerrainLodViz::default(),
                     crate::stream_viz::LodTiles::default(),
+                    // Default Lit; switchable live in the Inspector (Terrain Shader).
+                    crate::stream_viz::TerrainShaderMode::default(),
                 ));
             }
             if req.collider_ring {

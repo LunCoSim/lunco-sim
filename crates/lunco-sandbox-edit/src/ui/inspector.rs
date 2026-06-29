@@ -494,6 +494,37 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
             }
         }
 
+        // ── Terrain shader mode (streamed DEM terrain) ──────────────
+        if let Some(mode) = ctx.get::<lunco_terrain_surface::TerrainShaderMode>(entity).copied() {
+            use lunco_terrain_surface::TerrainShaderMode as M;
+            egui::CollapsingHeader::new("Terrain Shader")
+                .default_open(true)
+                .show(ui, |ui| {
+                    let label = |m: M| match m {
+                        M::Lit => "Lit (regolith)",
+                        M::DebugLod => "Debug LOD (colours)",
+                        M::Plain => "Plain (no shader)",
+                    };
+                    let mut sel = mode;
+                    egui::ComboBox::from_label("Mode")
+                        .selected_text(label(sel))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut sel, M::Lit, label(M::Lit));
+                            ui.selectable_value(&mut sel, M::DebugLod, label(M::DebugLod));
+                            ui.selectable_value(&mut sel, M::Plain, label(M::Plain));
+                        });
+                    if sel != mode {
+                        ctx.defer(move |world| {
+                            if let Some(mut m) =
+                                world.get_mut::<lunco_terrain_surface::TerrainShaderMode>(entity)
+                            {
+                                *m = sel;
+                            }
+                        });
+                    }
+                });
+        }
+
         // ── Modelica parameters component ───────────────────────────
         let has_modelica = ctx.get::<lunco_modelica::ModelicaModel>(entity).is_some();
         if has_modelica {
