@@ -147,6 +147,37 @@ pub fn author_reference(data: &mut sdf::Data, prim_path: &SdfPath, asset_path: &
     Ok(())
 }
 
+/// Remove the time sample at `time` from the attribute at `attr_path`, the
+/// symmetric counterpart of authoring one via openusd's `Attribute::set_at`.
+/// Returns the removed [`Value`] (so the op layer can build a typed inverse) or
+/// `None` if the attribute carried no sample at that exact time. When the last
+/// sample is removed the `timeSamples` field is cleared entirely, so the spec
+/// round-trips identically to one that never authored samples.
+///
+/// openusd's Stage `Attribute` API exposes sample *authoring* (`set_at`) but no
+/// per-sample erase, so this drops to the `sdf` spec level — the same level at
+/// which [`author_reference`] writes reference metadata.
+pub fn remove_time_sample(data: &mut sdf::Data, attr_path: &SdfPath, time: f64) -> Result<Option<Value>> {
+    let Some(spec) = data.spec_mut(attr_path) else {
+        return Ok(None);
+    };
+    let Some(Value::TimeSamples(mut map)) = spec.get("timeSamples").cloned() else {
+        return Ok(None);
+    };
+    // `total_cmp` matches the total ordering openusd's `set_time_sample` uses, so
+    // a sample authored at any `f64` (incl. signed zero / NaN) is locatable here.
+    let Some(idx) = map.iter().position(|(t, _)| t.total_cmp(&time).is_eq()) else {
+        return Ok(None);
+    };
+    let (_, removed) = map.remove(idx);
+    if map.is_empty() {
+        spec.remove("timeSamples");
+    } else {
+        spec.add("timeSamples", Value::TimeSamples(map));
+    }
+    Ok(Some(removed))
+}
+
 /// Parse a single attribute value literal (e.g. `"(1, 0, 0)"`, `"0.5"`,
 /// `"(0.2, 0.2, 0.8)"`) of the given USD `type_name` into an [`sdf::Value`], by
 /// embedding it in a throwaway USDA snippet and letting openusd's own parser do
