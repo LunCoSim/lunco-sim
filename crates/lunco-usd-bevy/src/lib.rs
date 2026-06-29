@@ -540,6 +540,11 @@ fn instantiate_usd_prim(
         // physics.
         let mesh_handle: Option<Handle<Mesh>> = if invisible {
             None
+        } else if prim_type.as_deref() == Some("Mesh") {
+            // Native UsdGeomMesh: decode points/faceVertexIndices/normals/st
+            // into a Bevy mesh. (Falls through to `None` — no fallback
+            // primitive — if the topology attrs are missing/malformed.)
+            build_usd_mesh(reader, &sdf_path).map(|m| meshes.add(m))
         } else {
             match prim_type.as_deref().and_then(|ty| read_shape_dims(reader, &sdf_path, ty)) {
                 Some(ShapeDims::Cube { size, legacy_extents }) => match legacy_extents {
@@ -1398,6 +1403,178 @@ pub fn read_shape_dims(reader: &UsdData, path: &SdfPath, type_name: &str) -> Opt
     Some(dims)
 }
 
+/// Reads an `int[]` / `int64[]` USD array attribute (`Value::IntVec` /
+/// `Int64Vec`) as `Vec<i32>`. The fixed-array `TryFrom<Value>` impls don't
+/// cover integer arrays, so mesh topology (`faceVertexCounts` /
+/// `faceVertexIndices`) is matched directly. `None` if absent or not an int
+/// array.
+fn read_int_array(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<Vec<i32>> {
+    let attr_path = path.append_property(attr).ok()?;
+    match reader.field(&attr_path, "default")? {
+        Value::IntVec(v) => Some(v.clone()),
+        Value::Int64Vec(v) => Some(v.iter().map(|&x| x as i32).collect()),
+        _ => None,
+    }
+}
+
+/// Triangulated topology of a native USD `Mesh` in the compact **indexed**
+/// form a physics trimesh wants: the raw `points` as vertices, plus
+/// fan-triangulated `faceVertexIndices` as triangle index triples.
+///
+/// This is the collider counterpart to [`build_usd_mesh`] (which expands to an
+/// *unindexed* soup so per-face-varying normals/uvs survive). Here we keep
+/// shared vertices — smaller, and exactly the `(Vec<vertex>, Vec<[u32;3]>)`
+/// shape `Collider::trimesh` consumes. Triangle winding is irrelevant for
+/// collision, so `orientation` is ignored. `None` if the topology attributes
+/// are absent/empty or an index is out of range (malformed mesh).
+pub fn read_usd_mesh_indexed(
+    reader: &UsdData,
+    path: &SdfPath,
+) -> Option<(Vec<[f32; 3]>, Vec<[u32; 3]>)> {
+    let points = reader.prim_attribute_value::<Vec<[f32; 3]>>(path, "points")?;
+    let counts = read_int_array(reader, path, "faceVertexCounts")?;
+    let indices = read_int_array(reader, path, "faceVertexIndices")?;
+    if points.is_empty() || counts.is_empty() || indices.is_empty() {
+        return None;
+    }
+    let n_points = points.len() as u32;
+    let n_corners = indices.len();
+    let mut tris: Vec<[u32; 3]> = Vec::new();
+    let mut base = 0usize;
+    for &count in &counts {
+        let count = count as usize;
+        if base + count > n_corners {
+            return None; // counts/indices disagree → malformed
+        }
+        for k in 1..count.saturating_sub(1) {
+            let tri = [
+                indices[base] as u32,
+                indices[base + k] as u32,
+                indices[base + k + 1] as u32,
+            ];
+            if tri[0] >= n_points || tri[1] >= n_points || tri[2] >= n_points {
+                return None; // index out of range → malformed
+            }
+            tris.push(tri);
+        }
+        base += count;
+    }
+    if tris.is_empty() {
+        return None;
+    }
+    Some((points, tris))
+}
+
+/// Build a Bevy [`Mesh`] from a native USD `Mesh` prim (UsdGeomMesh):
+/// `point3f[] points`, `int[] faceVertexCounts`, `int[] faceVertexIndices`,
+/// with optional `normal3f[] normals` and `texCoord2f[] primvars:st`.
+///
+/// Polygons are **fan-triangulated** into an *unindexed* triangle list — one
+/// vertex per face-corner — so per-face-varying normals/uvs need no welding
+/// and quads/n-gons render directly. Attribute interpolation is inferred by
+/// array length: `== points.len()` → per-vertex (indexed by point), `==
+/// faceVertexIndices.len()` → per-face-varying (indexed by corner); any other
+/// length is ignored. `orientation = "leftHanded"` flips the winding (USD
+/// default is right-handed = CCW, which matches Bevy). Missing `normals` are
+/// computed flat; missing `primvars:st` get a zeroed UV set so the standard /
+/// shader material paths don't choke.
+///
+/// Returns `None` if the required topology attributes are absent/empty or the
+/// indices reference out-of-range points (malformed mesh). Rendering only —
+/// native-mesh **colliders** are still the glTF side-channel's job
+/// (see `resolver.rs` `TODO(glb-composability)`).
+pub fn build_usd_mesh(reader: &UsdData, path: &SdfPath) -> Option<Mesh> {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::PrimitiveTopology;
+
+    let points = reader.prim_attribute_value::<Vec<[f32; 3]>>(path, "points")?;
+    let counts = read_int_array(reader, path, "faceVertexCounts")?;
+    let indices = read_int_array(reader, path, "faceVertexIndices")?;
+    if points.is_empty() || counts.is_empty() || indices.is_empty() {
+        return None;
+    }
+
+    // Optional vertex attributes. `primvars:st` is the de-facto UV channel;
+    // accept the bare `st`/`st0` spellings some exporters emit.
+    let normals = reader.prim_attribute_value::<Vec<[f32; 3]>>(path, "normals");
+    let uvs = reader
+        .prim_attribute_value::<Vec<[f32; 2]>>(path, "primvars:st")
+        .or_else(|| reader.prim_attribute_value::<Vec<[f32; 2]>>(path, "primvars:st0"))
+        .or_else(|| reader.prim_attribute_value::<Vec<[f32; 2]>>(path, "st"));
+
+    let n_corners = indices.len();
+    let normals_per_vertex = normals.as_ref().is_some_and(|n| n.len() == points.len());
+    let normals_per_corner = normals.as_ref().is_some_and(|n| n.len() == n_corners);
+    let uvs_per_vertex = uvs.as_ref().is_some_and(|u| u.len() == points.len());
+    let uvs_per_corner = uvs.as_ref().is_some_and(|u| u.len() == n_corners);
+
+    let left_handed =
+        read_token(reader, path, "orientation").as_deref() == Some("leftHanded");
+
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n_corners);
+    let mut out_normals: Vec<[f32; 3]> = Vec::new();
+    let mut out_uvs: Vec<[f32; 2]> = Vec::new();
+
+    // Walk faces; `base` is the running offset of the face's first corner into
+    // the flat `indices` (and per-corner attribute) arrays.
+    let mut base = 0usize;
+    for &count in &counts {
+        let count = count as usize;
+        if base + count > n_corners {
+            return None; // counts/indices disagree → malformed
+        }
+        if count >= 3 {
+            // Fan: triangle (0, k, k+1) for k in 1..count-1.
+            for k in 1..count - 1 {
+                let tri = if left_handed { [0, k + 1, k] } else { [0, k, k + 1] };
+                for local in tri {
+                    let corner = base + local;
+                    let vidx = indices[corner] as usize;
+                    if vidx >= points.len() {
+                        return None; // index out of range → malformed
+                    }
+                    positions.push(points[vidx]);
+                    if normals_per_vertex {
+                        out_normals.push(normals.as_ref().unwrap()[vidx]);
+                    } else if normals_per_corner {
+                        out_normals.push(normals.as_ref().unwrap()[corner]);
+                    }
+                    if uvs_per_vertex {
+                        out_uvs.push(uvs.as_ref().unwrap()[vidx]);
+                    } else if uvs_per_corner {
+                        out_uvs.push(uvs.as_ref().unwrap()[corner]);
+                    }
+                }
+            }
+        }
+        base += count;
+    }
+    if positions.is_empty() {
+        return None;
+    }
+
+    let have_normals = out_normals.len() == positions.len();
+    let have_uvs = out_uvs.len() == positions.len();
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    if have_normals {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, out_normals);
+    }
+    if have_uvs {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, out_uvs);
+    } else {
+        // ShaderMaterial / StandardMaterial both expect a UV channel.
+        let zero = vec![[0.0f32, 0.0]; mesh.count_vertices()];
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, zero);
+    }
+    if !have_normals {
+        // Unindexed triangle soup → flat per-face normals.
+        mesh.compute_flat_normals();
+    }
+    Some(mesh)
+}
+
 /// Reads a float-like attribute (`float` / `double` / `int`) from a USD prim.
 /// Falls back to the metadata-based "default" key if not found (needed for dome/light attributes).
 pub fn get_attribute_as_f32(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<f32> {
@@ -1938,6 +2115,101 @@ mod instance_identity_tests {
         // Still parked: no Derived stamped, membership retained for retry.
         assert!(app.world().get::<Provenance>(member).is_none());
         assert!(app.world().get::<UsdInstanceMember>(member).is_some());
+    }
+}
+
+#[cfg(test)]
+mod mesh_tests {
+    //! Native UsdGeomMesh → Bevy [`Mesh`] decode ([`build_usd_mesh`]).
+    use super::*;
+    use openusd::sdf::Path as SdfPath;
+
+    fn parse(usda: &str) -> UsdData {
+        openusd::usda::parse(usda).expect("parse USDA")
+    }
+
+    /// A single quad fan-triangulates to 2 tris (6 unindexed verts); per-vertex
+    /// `primvars:st` carries through and missing normals are computed.
+    #[test]
+    fn quad_triangulates_with_uvs_and_computed_normals() {
+        let reader = parse(
+            "#usda 1.0\n\
+             def Mesh \"Quad\"\n{\n\
+             point3f[] points = [(0,0,0),(1,0,0),(1,1,0),(0,1,0)]\n\
+             int[] faceVertexCounts = [4]\n\
+             int[] faceVertexIndices = [0,1,2,3]\n\
+             texCoord2f[] primvars:st = [(0,0),(1,0),(1,1),(0,1)]\n}\n",
+        );
+        let mesh = build_usd_mesh(&reader, &SdfPath::new("/Quad").unwrap()).expect("mesh built");
+        assert_eq!(mesh.count_vertices(), 6, "one quad → two triangles");
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some(), "st preserved");
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_NORMAL).is_some(), "normals computed");
+    }
+
+    /// Two triangles, no optional attrs → 6 verts, a zeroed UV set, flat normals.
+    #[test]
+    fn bare_triangles_get_default_uvs() {
+        let reader = parse(
+            "#usda 1.0\n\
+             def Mesh \"Tris\"\n{\n\
+             point3f[] points = [(0,0,0),(1,0,0),(0,1,0),(1,1,0)]\n\
+             int[] faceVertexCounts = [3,3]\n\
+             int[] faceVertexIndices = [0,1,2,1,3,2]\n}\n",
+        );
+        let mesh = build_usd_mesh(&reader, &SdfPath::new("/Tris").unwrap()).expect("mesh built");
+        assert_eq!(mesh.count_vertices(), 6);
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some(), "zeroed UVs inserted");
+    }
+
+    /// Missing topology attributes → `None` (caller falls back to no mesh).
+    #[test]
+    fn missing_topology_returns_none() {
+        let reader = parse("#usda 1.0\ndef Mesh \"Empty\"\n{\n}\n");
+        assert!(build_usd_mesh(&reader, &SdfPath::new("/Empty").unwrap()).is_none());
+    }
+
+    /// An index pointing past the end of `points` is rejected, not panicked on.
+    #[test]
+    fn out_of_range_index_is_rejected() {
+        let reader = parse(
+            "#usda 1.0\n\
+             def Mesh \"Bad\"\n{\n\
+             point3f[] points = [(0,0,0),(1,0,0),(1,1,0)]\n\
+             int[] faceVertexCounts = [3]\n\
+             int[] faceVertexIndices = [0,1,9]\n}\n",
+        );
+        assert!(build_usd_mesh(&reader, &SdfPath::new("/Bad").unwrap()).is_none());
+    }
+
+    /// The collider decode keeps the raw points (4) and fan-triangulates the
+    /// quad into two index triples — the form `Collider::trimesh` consumes.
+    #[test]
+    fn indexed_decode_keeps_points_and_fans_quad() {
+        let reader = parse(
+            "#usda 1.0\n\
+             def Mesh \"Quad\"\n{\n\
+             point3f[] points = [(0,0,0),(1,0,0),(1,1,0),(0,1,0)]\n\
+             int[] faceVertexCounts = [4]\n\
+             int[] faceVertexIndices = [0,1,2,3]\n}\n",
+        );
+        let (verts, tris) =
+            read_usd_mesh_indexed(&reader, &SdfPath::new("/Quad").unwrap()).expect("indexed mesh");
+        assert_eq!(verts.len(), 4, "raw points kept (shared verts)");
+        assert_eq!(tris, vec![[0, 1, 2], [0, 2, 3]], "fan (0,k,k+1)");
+    }
+
+    /// The collider decode rejects malformed topology the same as the render
+    /// path, so no bad trimesh reaches the physics engine.
+    #[test]
+    fn indexed_decode_rejects_bad_topology() {
+        let reader = parse(
+            "#usda 1.0\n\
+             def Mesh \"Bad\"\n{\n\
+             point3f[] points = [(0,0,0),(1,0,0),(1,1,0)]\n\
+             int[] faceVertexCounts = [3]\n\
+             int[] faceVertexIndices = [0,1,9]\n}\n",
+        );
+        assert!(read_usd_mesh_indexed(&reader, &SdfPath::new("/Bad").unwrap()).is_none());
     }
 }
 

@@ -48,8 +48,8 @@ use bevy::mesh::VertexAttributeValues;
 use avian3d::prelude::*;
 use avian3d::physics_transform::{Position, Rotation};
 use lunco_usd_bevy::{
-    has_api_schema, read_rel_target, read_shape_dims, read_transform_from_usd, usd_axis_to_quat,
-    ShapeDims, UsdVisualSynced,
+    has_api_schema, read_rel_target, read_shape_dims, read_transform_from_usd,
+    read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, UsdVisualSynced,
 };
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
@@ -212,6 +212,18 @@ fn collect_child_colliders_from_usd(
 /// unmigrated `.usda` files keep working (those author full dims at scale=1).
 fn build_collider_from_usd(reader: &UsdData, sdf_path: &SdfPath) -> Option<Collider> {
     let ty = reader.prim_type_name(sdf_path)?;
+
+    // Native UsdGeomMesh → static triangle-mesh collider, decoded from the
+    // SAME `points`/`faceVertexIndices` `lunco-usd-bevy` renders (one geometry
+    // source, so collider and visual can't drift). `set_scale` on a trimesh
+    // scales its vertices exactly (no convex-hull tessellation), so the shared
+    // scale tail applies unchanged.
+    if ty == "Mesh" {
+        let (verts, tris) = read_usd_mesh_indexed(reader, sdf_path)?;
+        let verts: Vec<DVec3> =
+            verts.into_iter().map(|v| DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64)).collect();
+        return Some(apply_collider_scale(Collider::trimesh(verts, tris), reader, sdf_path));
+    }
 
     // Dimensions (+ their magic defaults) come from the canonical
     // `read_shape_dims` shared with usd-bevy's mesh builder, so the
