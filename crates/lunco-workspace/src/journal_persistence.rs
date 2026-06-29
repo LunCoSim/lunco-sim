@@ -80,26 +80,15 @@ fn read_journal_bytes(twin_root: &Path) -> Option<Vec<u8>> {
     result.ok()
 }
 
-/// Write `bytes` to `twin_root`'s journal file. Native: write a `.tmp` sibling
-/// then atomically `rename` over the target (the established lunco pattern, see
-/// `recents.rs`). Wasm: a `localStorage` set is already atomic, so write
-/// directly.
+/// Write `bytes` to `twin_root`'s journal file through the Storage API.
+/// [`lunco_storage::write_file_sync`] is the single I/O chokepoint: on native it
+/// is an atomic tmp+`fsync`+`rename` replace that also creates parent dirs
+/// (CQ-107); on wasm it maps onto a `localStorage` set — both from one `#[cfg]`-free
+/// call. The previous native path hand-rolled a `.tmp` sibling + `std::fs::rename`,
+/// a redundant second rename on top of the backend's atomic write and a raw-`std::fs`
+/// bypass of the abstraction.
 fn write_journal_bytes(twin_root: &Path, bytes: &[u8]) -> lunco_storage::StorageResult<()> {
-    let path = journal_path(twin_root);
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let tmp = path.with_extension("json.tmp");
-        lunco_storage::FileStorage::new().write_sync(&StorageHandle::File(tmp.clone()), bytes)?;
-        std::fs::rename(&tmp, &path).map_err(lunco_storage::StorageError::Io)?;
-        Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        lunco_storage::WebStorage::new().write_sync(&StorageHandle::File(path), bytes)
-    }
+    lunco_storage::write_file_sync(&journal_path(twin_root), bytes)
 }
 
 /// Bind the in-memory [`JournalResource`] to a newly-opened Twin: flush the
