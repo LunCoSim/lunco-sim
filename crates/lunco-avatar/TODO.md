@@ -2,12 +2,9 @@
 
 ## Camera smoothing
 
-Current state (2026-06-09): camera follow uses frame-rate-stable exponential
-decay, `alpha = 1 - exp(-rate · (1 - damping) · dt)`. `rotation_rate` (60 Hz)
-and `position_rate` (30 Hz) live on `CameraDefaults`; per-camera `damping`
-scales them. Spring-arm + orbit smooth **arm length only** (angle is instant,
-1:1 with the mouse); length easing kicks in only when a collision forces the
-camera in. See `spring_arm_system` / `orbit_system` in `src/lib.rs`.
+Baseline (shipped): frame-rate-stable exponential-decay follow with per-camera
+`damping` — see `spring_arm_system` / `orbit_system` in `src/lib.rs`. Open work
+below builds on that.
 
 ### Follow-ups
 
