@@ -269,6 +269,193 @@ pub enum LifecycleKind {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Headless entry summary — one-line tag/label for any log / audit surface
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Semantic category of a journal entry. A log/audit surface maps this to a
+/// colour or icon; the colour itself is a pure visual choice, so it stays out
+/// of this crate. Lets the egui panel (or a CLI, or the API) stay a thin
+/// renderer over headless logic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryCategory {
+    Add,
+    Remove,
+    Modify,
+    Wire,
+    Unwire,
+    Text,
+    Snapshot,
+    Lifecycle,
+    Other,
+}
+
+/// Headless one-line summary of a [`JournalEntry`]: a short gutter `tag`, a
+/// human `label`, and a semantic [`EntryCategory`]. UI-free — usable from a
+/// CLI, the API, or an egui panel. Generic over the recorded JSON, so it works
+/// for every domain (Modelica, USD, …) with no domain-specific code.
+#[derive(Debug, Clone)]
+pub struct EntrySummary {
+    pub tag: String,
+    pub label: String,
+    pub category: EntryCategory,
+}
+
+impl JournalEntry {
+    /// Build a one-line [`EntrySummary`] for this entry. See the type docs.
+    pub fn summary(&self) -> EntrySummary {
+        match &self.kind {
+            EntryKind::Lifecycle(LifecycleKind::Opened { .. }) => EntrySummary {
+                tag: "OPEN".into(),
+                label: "document opened".into(),
+                category: EntryCategory::Lifecycle,
+            },
+            EntryKind::Lifecycle(LifecycleKind::Saved) => EntrySummary {
+                tag: "SAVE".into(),
+                label: "document saved".into(),
+                category: EntryCategory::Lifecycle,
+            },
+            EntryKind::Lifecycle(LifecycleKind::Closed) => EntrySummary {
+                tag: "CLOS".into(),
+                label: "document closed".into(),
+                category: EntryCategory::Lifecycle,
+            },
+            EntryKind::Snapshot { source, .. } => EntrySummary {
+                tag: "SNAP".into(),
+                label: format!("source snapshot ({} bytes)", source.len()),
+                category: EntryCategory::Snapshot,
+            },
+            EntryKind::TextEdit { range, replacement, .. } => {
+                let removed = range.end.saturating_sub(range.start);
+                let len = replacement.len();
+                let label = if removed == 0 {
+                    format!("@{} ← {len}b", range.start)
+                } else if len == 0 {
+                    format!("@{}..{} ✗{removed}b", range.start, range.end)
+                } else {
+                    format!("@{}..{} ↺ {len}b", range.start, range.end)
+                };
+                EntrySummary { tag: "EDIT".into(), label, category: EntryCategory::Text }
+            }
+            EntryKind::Op { op, .. } => summarize_op_value(op),
+        }
+    }
+}
+
+/// Summarize a recorded op payload (externally-tagged enum JSON) generically.
+/// Reads the variant name plus a handful of common fields shared across the
+/// Modelica and USD op vocabularies (`class`/`parent`, `name`/`decl.name`,
+/// `from`/`to` ports, USD `path`). Lossless replay still uses the full JSON;
+/// this is display only.
+fn summarize_op_value(op: &serde_json::Value) -> EntrySummary {
+    // Externally-tagged enum: `{ "<Variant>": { ...fields } }`, or a bare
+    // string for a unit-like variant.
+    let (variant, fields) = match op {
+        serde_json::Value::Object(m) => m
+            .iter()
+            .next()
+            .map(|(k, v)| (k.as_str(), Some(v)))
+            .unwrap_or(("?", None)),
+        serde_json::Value::String(s) => (s.as_str(), None),
+        _ => ("?", None),
+    };
+    let field = |key: &str| -> String {
+        fields
+            .and_then(|f| f.get(key))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let nested = |a: &str, b: &str| -> String {
+        fields
+            .and_then(|f| f.get(a))
+            .and_then(|v| v.get(b))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    // Endpoint as "component.port"; may sit top-level or nested under `eq`.
+    let port = |key: &str| -> String {
+        let v = fields
+            .and_then(|f| f.get(key))
+            .or_else(|| fields.and_then(|f| f.get("eq")).and_then(|e| e.get(key)));
+        match v {
+            Some(p) => format!(
+                "{}.{}",
+                p.get("component").and_then(|x| x.as_str()).unwrap_or(""),
+                p.get("port").and_then(|x| x.as_str()).unwrap_or(""),
+            ),
+            None => String::new(),
+        }
+    };
+
+    // class lives under `class` for most ops, `parent` for class-authoring.
+    let class = {
+        let c = field("class");
+        if c.is_empty() { field("parent") } else { c }
+    };
+    // name is top-level for some ops, nested in `decl` for add-component/-variable.
+    let name = {
+        let n = field("name");
+        if n.is_empty() { nested("decl", "name") } else { n }
+    };
+
+    let category = if variant.starts_with("AddConnection") {
+        EntryCategory::Wire
+    } else if variant.starts_with("RemoveConnection") {
+        EntryCategory::Unwire
+    } else if variant.starts_with("Add") {
+        EntryCategory::Add
+    } else if variant.starts_with("Remove") {
+        EntryCategory::Remove
+    } else if variant == "ReplaceSource" || variant == "EditText" {
+        EntryCategory::Text
+    } else {
+        EntryCategory::Modify
+    };
+
+    let label = match variant {
+        "AddComponent" | "AddVariable" => format!("{class} ← {name}"),
+        "RemoveComponent" | "RemoveVariable" => format!("{class} ✗ {name}"),
+        "AddConnection" => format!("{class}: {} → {}", port("from"), port("to")),
+        "RemoveConnection" | "ReverseConnection" => {
+            format!("{class}: {} ⊘ {}", port("from"), port("to"))
+        }
+        "SetParameter" => format!(
+            "{class}.{}.{} = {}",
+            field("component"),
+            field("param"),
+            field("value")
+        ),
+        "SetPlacement" => format!("{class}.{name}"),
+        "AddClass" | "AddShortClass" => format!("{class}/{name}"),
+        "RemoveClass" => format!("✗ {}", field("qualified")),
+        "ReplaceSource" => "source replaced".to_string(),
+        // USD ops: path-keyed.
+        "AddPrim" => format!("{} ← {name}", field("parent_path")),
+        "RemovePrim" => format!("✗ {}", field("path")),
+        "SetTranslate" => format!("{} ⤧", field("path")),
+        "SetAttribute" => format!("{}.{}", field("path"), field("name")),
+        _ if !class.is_empty() => format!("{variant} {class}"),
+        _ => variant.to_string(),
+    };
+
+    let tag = match category {
+        EntryCategory::Add => "ADD ",
+        EntryCategory::Remove => "DEL ",
+        EntryCategory::Modify => "SET ",
+        EntryCategory::Wire => "WIRE",
+        EntryCategory::Unwire => "UNWR",
+        EntryCategory::Text => "TEXT",
+        EntryCategory::Snapshot => "SNAP",
+        EntryCategory::Lifecycle => "LIFE",
+        EntryCategory::Other => "EDIT",
+    }
+    .to_string();
+
+    EntrySummary { tag, label, category }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ChangeSet — optional atomic group of entries
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -458,6 +645,31 @@ pub struct Journal {
     next_marker: u64,
 }
 
+/// Serializable snapshot of a [`Journal`] for persistence (B1).
+///
+/// `Journal` can't `#[derive(Serialize)]` directly: its `entries`,
+/// `change_sets`, and `markers` maps are keyed by non-string types
+/// (`EntryId`/`ChangeSetId`/`MarkerId`), which `serde_json` can't encode as
+/// object keys, and `LamportClock` wraps an `AtomicU64`. This DTO flattens the
+/// keyed maps to `Vec`s (rebuilt on load from each value's own id) and stores
+/// the clock as a plain `u64`. Entries ride in `entry_order`, the canonical
+/// insertion order, so a load round-trips order exactly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JournalDto {
+    twin: TwinId,
+    local_author: AuthorId,
+    /// `LamportClock::current()` — the high-water mark, re-observed on load.
+    clock: u64,
+    /// Entries in `entry_order`.
+    entries: Vec<JournalEntry>,
+    streams: Vec<Stream>,
+    branches: Vec<Branch>,
+    change_sets: Vec<ChangeSet>,
+    markers: Vec<Marker>,
+    next_change_set: u64,
+    next_marker: u64,
+}
+
 impl Journal {
     /// Create a new Journal scoped to one Twin, with a default `main`
     /// stream and `main` branch. The local author identity is used to
@@ -496,8 +708,75 @@ impl Journal {
         &self.twin
     }
 
+    /// Re-stamp the Twin this journal belongs to. Used by the persistence
+    /// layer to bind a journal to a Twin's stable identity when it loads it
+    /// from that Twin's folder — normalising journals written before the
+    /// Twin had a stable id, so save/load routing keys off the right Twin.
+    pub fn set_twin(&mut self, twin: TwinId) {
+        self.twin = twin;
+    }
+
     pub fn local_author(&self) -> &AuthorId {
         &self.local_author
+    }
+
+    // ── Persistence (B1) ─────────────────────────────────────────────────
+
+    /// Serialize the whole journal to pretty JSON bytes. Pure logic — file
+    /// I/O lives in the ECS/storage layer (see `lunco-workspace`'s journal
+    /// persistence). Round-trips via [`from_bytes`](Self::from_bytes).
+    pub fn to_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
+        serde_json::to_vec_pretty(&self.to_dto())
+    }
+
+    /// Reconstruct a journal from bytes written by [`to_bytes`](Self::to_bytes).
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, serde_json::Error> {
+        Ok(Self::from_dto(serde_json::from_slice(bytes)?))
+    }
+
+    fn to_dto(&self) -> JournalDto {
+        JournalDto {
+            twin: self.twin.clone(),
+            local_author: self.local_author.clone(),
+            clock: self.clock.current(),
+            // Canonical insertion order — skips any id in `entry_order` that
+            // somehow lacks an entry (shouldn't happen; defensive).
+            entries: self
+                .entry_order
+                .iter()
+                .filter_map(|id| self.entries.get(id).cloned())
+                .collect(),
+            streams: self.streams.values().cloned().collect(),
+            branches: self.branches.values().cloned().collect(),
+            change_sets: self.change_sets.values().cloned().collect(),
+            markers: self.markers.values().cloned().collect(),
+            next_change_set: self.next_change_set,
+            next_marker: self.next_marker,
+        }
+    }
+
+    fn from_dto(dto: JournalDto) -> Self {
+        let clock = LamportClock::new();
+        clock.observe(dto.clock); // lift the high-water mark so new ticks don't collide
+        let mut entries = HashMap::with_capacity(dto.entries.len());
+        let mut entry_order = Vec::with_capacity(dto.entries.len());
+        for e in dto.entries {
+            entry_order.push(e.id.clone());
+            entries.insert(e.id.clone(), e);
+        }
+        Self {
+            twin: dto.twin,
+            local_author: dto.local_author,
+            clock,
+            entries,
+            entry_order,
+            streams: dto.streams.into_iter().map(|s| (s.id.clone(), s)).collect(),
+            branches: dto.branches.into_iter().map(|b| (b.name.clone(), b)).collect(),
+            change_sets: dto.change_sets.into_iter().map(|c| (c.id, c)).collect(),
+            markers: dto.markers.into_iter().map(|m| (m.id, m)).collect(),
+            next_change_set: dto.next_change_set,
+            next_marker: dto.next_marker,
+        }
     }
 
     // ── Entry append ─────────────────────────────────────────────────────
@@ -557,24 +836,6 @@ impl Journal {
             inverse: serde_json::to_value(inverse)?,
         };
         Ok(self.append_local(author, doc, kind, change_set))
-    }
-
-    /// Record an op whose payload is already a `serde_json::Value`.
-    ///
-    /// Used by domains that haven't yet derived `Serialize` on their op
-    /// type — they build a structured summary by hand and record it.
-    /// Equivalent to [`crate::Journal::record_op`] minus the typed serialize step.
-    pub fn record_op_value(
-        &mut self,
-        author: AuthorTag,
-        doc: DocumentId,
-        domain: DomainKind,
-        op: serde_json::Value,
-        inverse: serde_json::Value,
-        change_set: Option<ChangeSetId>,
-    ) -> EntryId {
-        let kind = EntryKind::Op { domain, op, inverse };
-        self.append_local(author, doc, kind, change_set)
     }
 
     /// Convenience: record a raw byte-range text edit.
@@ -955,6 +1216,77 @@ mod tests {
 
     fn new_journal() -> Journal {
         Journal::new(TwinId::new("test-twin"), AuthorId::local())
+    }
+
+    #[test]
+    fn summarize_op_value_reads_modelica_and_usd_shapes() {
+        use serde_json::json;
+
+        // Modelica AddComponent: class top-level, name nested under `decl`.
+        let m = json!({"AddComponent": {"class": "Circuit",
+            "decl": {"name": "R1", "type_name": "Resistor"}}});
+        let s = summarize_op_value(&m);
+        assert_eq!(s.category, EntryCategory::Add);
+        assert!(s.label.contains("Circuit") && s.label.contains("R1"), "label={}", s.label);
+
+        // Modelica AddConnection: PortRef endpoints nested under `eq`.
+        let c = json!({"AddConnection": {"class": "Circuit", "eq": {
+            "from": {"component": "R1", "port": "p"},
+            "to": {"component": "C1", "port": "n"}}}});
+        let s = summarize_op_value(&c);
+        assert_eq!(s.category, EntryCategory::Wire);
+        assert!(s.label.contains("R1.p") && s.label.contains("C1.n"), "label={}", s.label);
+
+        // USD AddPrim: path-keyed, cross-domain — same generic summarizer.
+        let u = json!({"AddPrim": {"parent_path": "/World", "name": "Rover",
+            "type_name": "Xform"}});
+        let s = summarize_op_value(&u);
+        assert_eq!(s.category, EntryCategory::Add);
+        assert!(s.label.contains("/World") && s.label.contains("Rover"), "label={}", s.label);
+
+        // ReplaceSource → Text category.
+        assert_eq!(
+            summarize_op_value(&json!({"ReplaceSource": {"text": "x"}})).category,
+            EntryCategory::Text
+        );
+    }
+
+    #[test]
+    fn journal_entry_summary_covers_lifecycle() {
+        let mut j = new_journal();
+        let doc = DocumentId::new(7);
+        j.record_lifecycle(AuthorTag::local_user(), doc, LifecycleKind::Saved);
+        let saved = j.entries_for_doc(doc).next().unwrap().summary();
+        assert_eq!(saved.category, EntryCategory::Lifecycle);
+        assert_eq!(saved.tag, "SAVE");
+    }
+
+    /// B1: a journal round-trips losslessly through `to_bytes`/`from_bytes` —
+    /// entries, order, doc scoping, twin/author identity, and the lamport
+    /// high-water mark all survive, so a reloaded journal keeps appending with
+    /// non-colliding ids.
+    #[test]
+    fn journal_persists_and_reloads() {
+        let mut j = new_journal();
+        let doc = DocumentId::new(3);
+        let op = FakeOp { class: "Circuit".into(), name: "R1".into(), value: 1.0 };
+        let inv = FakeOp { class: "Circuit".into(), name: "R1".into(), value: 0.0 };
+        j.record_op(AuthorTag::local_user(), doc, &op, &inv, None).unwrap();
+        j.record_lifecycle(AuthorTag::local_user(), doc, LifecycleKind::Saved);
+        let before: Vec<_> = j.entries().map(|e| e.id.clone()).collect();
+        let clock_before = j.clock.current();
+
+        let bytes = j.to_bytes().expect("serialize");
+        let mut loaded = Journal::from_bytes(&bytes).expect("deserialize");
+
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded.entries().map(|e| e.id.clone()).collect::<Vec<_>>(), before);
+        assert_eq!(loaded.twin(), j.twin());
+        assert_eq!(loaded.entries_for_doc(doc).count(), 2);
+        // The reloaded clock keeps climbing — a fresh append gets a strictly
+        // higher lamport than anything persisted.
+        let new_id = loaded.record_lifecycle(AuthorTag::local_user(), doc, LifecycleKind::Closed);
+        assert!(new_id.lamport > clock_before);
     }
 
     #[test]

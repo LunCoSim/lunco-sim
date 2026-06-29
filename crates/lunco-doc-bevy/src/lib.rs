@@ -732,6 +732,84 @@ impl JournalSink for BevyJournalSink {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// JournalOpRecorder — auto-bridge DocumentHost edits into the journal
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// [`lunco_doc::OpRecorder`] that mirrors every apply / undo / redo on a
+/// [`lunco_doc::DocumentHost`] into a [`JournalResource`], losslessly via
+/// [`record_op`](CanonicalJournal::record_op).
+///
+/// This is the **A3 auto-bridge**: installed once per host by
+/// [`attach_journal_recorder`], it removes all per-op recording code from the
+/// domains — and, crucially, journals **undo/redo** too, which previously
+/// bypassed every domain's record path entirely.
+pub struct JournalOpRecorder {
+    journal: JournalResource,
+    doc: DocumentId,
+    /// Provenance for the *next* edit, set one-shot by the domain apply
+    /// funnel via [`set_next_author`](lunco_doc::OpRecorder::set_next_author)
+    /// and consumed by [`record`](#impl-OpRecorder). `None` ⇒ attribute to
+    /// the local user. Interior-mutable because `OpRecorder` records through
+    /// `&self`; ops apply sequentially on the ECS thread, so the brief lock
+    /// is uncontended.
+    next_author: Mutex<Option<AuthorTag>>,
+}
+
+impl JournalOpRecorder {
+    /// Record into `journal` under document `doc`. Each edit is attributed
+    /// to the local user unless the apply funnel set a one-shot author via
+    /// [`set_next_author`](lunco_doc::OpRecorder::set_next_author) first.
+    pub fn new(journal: JournalResource, doc: DocumentId) -> Self {
+        Self {
+            journal,
+            doc,
+            next_author: Mutex::new(None),
+        }
+    }
+}
+
+impl<O: lunco_twin_journal::OpPayload> lunco_doc::OpRecorder<O> for JournalOpRecorder {
+    fn record(&self, forward: &O, inverse: &O) {
+        // Consume the one-shot author; absent one, the edit is the local
+        // user's (manual edits, undo/redo).
+        let author = self
+            .next_author
+            .lock()
+            .expect("journal author lock poisoned")
+            .take()
+            .unwrap_or_else(AuthorTag::local_user);
+        self.journal.with_write(|j| {
+            if let Err(err) = j.record_op(author, self.doc, forward, inverse, None) {
+                warn!("[journal] record_op failed for doc {:?}: {err}", self.doc);
+            }
+        });
+    }
+
+    fn set_next_author(&self, user: &str, tool: &str) {
+        *self
+            .next_author
+            .lock()
+            .expect("journal author lock poisoned") = Some(AuthorTag {
+            user: user.to_string(),
+            tool: tool.to_string(),
+        });
+    }
+}
+
+/// Install a [`JournalOpRecorder`] on `host` so its future edits journal
+/// automatically. Generic over the domain — the host supplies its own
+/// [`DocumentId`], so one helper serves USD, Modelica, and any future domain.
+/// Call once per host (guard with [`lunco_doc::DocumentHost::has_recorder`]).
+pub fn attach_journal_recorder<D>(host: &mut lunco_doc::DocumentHost<D>, journal: &JournalResource)
+where
+    D: lunco_doc::Document,
+    D::Op: lunco_twin_journal::OpPayload,
+{
+    let doc = host.document().id();
+    host.set_recorder(Arc::new(JournalOpRecorder::new(journal.clone(), doc)));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Plugin
 // ─────────────────────────────────────────────────────────────────────────────
 

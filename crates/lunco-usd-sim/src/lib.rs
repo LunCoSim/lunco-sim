@@ -53,8 +53,8 @@ use bevy::math::{DQuat, DVec3};
 use avian3d::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
-use lunco_usd_bevy::{has_api_schema, read_rel_target};
-use openusd::sdf::{Path as SdfPath, AbstractData, Value};
+use lunco_usd_bevy::{has_api_schema, read_rel_target, usd_data::UsdDataExt};
+use openusd::sdf::Path as SdfPath;
 use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
 use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel_roll_rate};
 use lunco_fsw::FlightSoftware;
@@ -399,12 +399,7 @@ fn process_usd_sim_prims(
         // reads below (`iter`/`get`/`read_rel_target`) only need `&self`.
         let reader = &*stage.reader;
         for (path, _spec) in reader.iter() {
-            let Ok(val) = reader.get(path, "typeName") else { continue; };
-            let type_name = match &*val {
-                Value::Token(t) => Some(t.as_str().to_string()),
-                Value::String(s) => Some(s.clone()),
-                _ => None,
-            };
+            let type_name = reader.prim_type_name(path);
             if type_name.as_deref() == Some("PhysicsRevoluteJoint") {
                 if let Some(body1) = read_rel_target(reader, path, "physics:body1") {
                     debug!("USD joint dispatch: {} → wheel {}", path.as_str(), body1);

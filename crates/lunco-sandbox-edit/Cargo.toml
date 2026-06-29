@@ -33,6 +33,8 @@ lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-modelica = { path = "../lunco-modelica", default-features = false }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+# Active-document resolution for C4b runtime-layer persistence (ECS-only, no UI).
+lunco-workspace = { path = "../lunco-workspace" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-environment = { path = "../lunco-environment" }

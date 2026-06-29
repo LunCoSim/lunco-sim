@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 use lunco_doc::{Document, DocumentId};
-use openusd::usda::TextReader;
+use lunco_usd_bevy::{UsdData, usd_data::UsdDataExt};
 
 use crate::registry::UsdDocumentRegistry;
 
@@ -130,7 +130,7 @@ pub struct UsdStageRow {
     /// Parsed reader for the prim-tree walk. `None` on parse failure
     /// (see `parse_error`) or when the stage has no source yet. `Arc`
     /// so cloning the row is cheap.
-    pub reader: Option<Arc<TextReader>>,
+    pub reader: Option<Arc<UsdData>>,
     /// Stashed parse error from the most recent failed parse, surfaced
     /// in the body so users see a malformed file instead of an empty
     /// tree.
@@ -218,7 +218,7 @@ struct ParsedStage {
     generation: u64,
     /// Parsed reader. `Arc` so future viewport / property-inspector
     /// consumers can share without re-parsing.
-    reader: Arc<TextReader>,
+    reader: Arc<UsdData>,
 }
 
 impl WorkspaceStage {
@@ -244,12 +244,11 @@ impl WorkspaceStage {
         if self.parsed.as_ref().map(|p| p.generation) == Some(generation) {
             return;
         }
-        let mut parser = openusd::usda::parser::Parser::new(source);
-        match parser.parse() {
+        match openusd::usda::parse(source) {
             Ok(data) => {
                 self.parsed = Some(ParsedStage {
                     generation,
-                    reader: Arc::new(TextReader::from_data(data)),
+                    reader: Arc::new(data),
                 });
                 self.parse_error = None;
             }

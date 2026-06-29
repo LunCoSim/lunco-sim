@@ -1,6 +1,5 @@
-//! Compose a USD stage with openusd 0.5.0, then bake the composed result back
-//! into a flat [`TextReader`] for the downstream visual / physics / cosim
-//! readers.
+//! Compose a USD stage with openusd, then bake the composed result back into a
+//! flat [`sdf::Data`] for the downstream visual / physics / cosim readers.
 //!
 //! Pipeline:
 //!  1. **Pre-fetch BFS** — discover every transitively-referenced `.usda` and
@@ -29,9 +28,9 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Result};
 use bevy::asset::{AssetPath, LoadContext};
 use openusd::ar::ResolvedPath;
-use openusd::sdf::{Path as SdfPath, PathListOp, Spec, SpecType, Value};
+use openusd::sdf::{self, Path as SdfPath, PathListOp, SpecData, SpecType, Value};
 use openusd::usd::{PrimPredicate, Stage};
-use openusd::usda::{parser::Parser, TextReader};
+use openusd::usda;
 
 use crate::resolver::{canonicalize, is_binary_asset, resolve_binary_uri, LuncoUsdResolver};
 
@@ -39,11 +38,11 @@ use crate::resolver::{canonicalize, is_binary_asset, resolve_binary_uri, LuncoUs
 /// composed stage to a `TextReader`. `root_asset_path` is the asset-source
 /// relative path of the layer being loaded (e.g.
 /// `scenes/sandbox/sandbox_scene.usda`); `root_bytes` are its raw bytes.
-pub(crate) async fn compose_to_textreader(
+pub(crate) async fn compose_to_data(
     load_context: &mut LoadContext<'_>,
     root_asset_path: &str,
     root_bytes: Vec<u8>,
-) -> Result<TextReader> {
+) -> Result<sdf::Data> {
     let root_id = canonicalize(root_asset_path, None);
 
     // 1. Pre-fetch BFS — keyed by the SAME canonical id the resolver will use.
@@ -56,9 +55,7 @@ pub(crate) async fn compose_to_textreader(
     while let Some(id) = queue.pop() {
         let raw = bytes.get(&id).cloned().expect("queued id is present in map");
         let text = String::from_utf8(raw).map_err(|e| anyhow!("layer {id} is not UTF-8: {e}"))?;
-        let data = Parser::new(&text)
-            .parse()
-            .map_err(|e| anyhow!("USD parse error in {id}: {e}"))?;
+        let data = usda::parse(&text).map_err(|e| anyhow!("USD parse error in {id}: {e}"))?;
 
         let anchor = ResolvedPath::new(&id);
         let (refs, binaries) = discover_arcs(&data, &anchor);
@@ -99,17 +96,17 @@ pub(crate) async fn compose_to_textreader(
 /// (glTF/…) recorded as `(prim_path, load_uri)` for `lunco:resolvedAsset`
 /// synthesis. Iterating ALL specs (not just the live prim tree) catches
 /// references authored inside variant blocks (stored at decorated paths).
-fn discover_arcs(data: &HashMap<SdfPath, Spec>, anchor: &ResolvedPath) -> (Vec<String>, Vec<(SdfPath, String)>) {
+fn discover_arcs(data: &sdf::Data, anchor: &ResolvedPath) -> (Vec<String>, Vec<(SdfPath, String)>) {
     let mut fetch = Vec::new();
     let mut binary = Vec::new();
 
-    if let Some(root) = data.get(&SdfPath::abs_root()) {
+    if let Some(root) = data.spec(&SdfPath::abs_root()) {
         if let Some(Value::StringVec(subs)) = root.get("subLayers") {
             fetch.extend(subs.iter().filter(|s| !s.is_empty()).cloned());
         }
     }
 
-    for (path, spec) in data {
+    for (path, spec) in data.iter() {
         let mut arcs: Vec<String> = Vec::new();
         if let Some(Value::ReferenceListOp(op)) = spec.get("references") {
             arcs.extend(op.iter().filter(|r| !r.asset_path.is_empty()).map(|r| r.asset_path.clone()));
@@ -136,12 +133,12 @@ fn discover_arcs(data: &HashMap<SdfPath, Spec>, anchor: &ResolvedPath) -> (Vec<S
 /// Bake the composed stage into a flat `HashMap<Path, Spec>` → `TextReader`.
 /// `binary_assets` are `(prim_path, uri)` pairs to surface as
 /// `lunco:resolvedAsset` attributes.
-fn flatten_stage(stage: &Stage, binary_assets: &[(SdfPath, String)]) -> Result<TextReader> {
-    let mut data: HashMap<SdfPath, Spec> = HashMap::new();
+fn flatten_stage(stage: &Stage, binary_assets: &[(SdfPath, String)]) -> Result<sdf::Data> {
+    let mut data: HashMap<SdfPath, SpecData> = HashMap::new();
 
     // Pseudo-root: carries `defaultPrim` (deferred root-prim resolution) and the
     // top-level prim list.
-    let mut root_spec = Spec::new(SpecType::PseudoRoot);
+    let mut root_spec = SpecData::new(SpecType::PseudoRoot);
     if let Some(dp) = stage.default_prim() {
         root_spec.add("defaultPrim", Value::Token(dp));
     }
@@ -159,9 +156,9 @@ fn flatten_stage(stage: &Stage, binary_assets: &[(SdfPath, String)]) -> Result<T
         .map_err(|e| anyhow!("stage traversal failed: {e}"))?;
 
     for path in &paths {
-        let prim = stage.prim_at(path.clone());
+        let prim = stage.prim(path.clone());
 
-        let mut spec = Spec::new(SpecType::Prim);
+        let mut spec = SpecData::new(SpecType::Prim);
         if let Some(tn) = prim.type_name().map_err(|e| anyhow!("{path} typeName: {e}"))? {
             spec.add("typeName", Value::Token(tn));
         }
@@ -177,7 +174,7 @@ fn flatten_stage(stage: &Stage, binary_assets: &[(SdfPath, String)]) -> Result<T
         // `prim_attribute_value` reads them).
         for attr in prim.attributes().unwrap_or_default() {
             if let Some(v) = attr.get::<Value>().map_err(|e| anyhow!("{} default: {e}", attr.path()))? {
-                let mut a = Spec::new(SpecType::Attribute);
+                let mut a = SpecData::new(SpecType::Attribute);
                 a.add("default", v);
                 data.insert(attr.path().clone(), a);
             }
@@ -188,7 +185,7 @@ fn flatten_stage(stage: &Stage, binary_assets: &[(SdfPath, String)]) -> Result<T
         for rel in prim.relationships().unwrap_or_default() {
             let targets = rel.targets().unwrap_or_default();
             if !targets.is_empty() {
-                let mut r = Spec::new(SpecType::Relationship);
+                let mut r = SpecData::new(SpecType::Relationship);
                 r.add("targetPaths", Value::PathListOp(PathListOp::explicit(targets)));
                 data.insert(rel.path().clone(), r);
             }
@@ -204,14 +201,14 @@ fn flatten_stage(stage: &Stage, binary_assets: &[(SdfPath, String)]) -> Result<T
         }
         if let Ok(attr_path) = path.append_property("lunco:resolvedAsset") {
             data.entry(attr_path).or_insert_with(|| {
-                let mut a = Spec::new(SpecType::Attribute);
+                let mut a = SpecData::new(SpecType::Attribute);
                 a.add("default", Value::AssetPath(uri.clone().into()));
                 a
             });
         }
     }
 
-    Ok(TextReader::from_data(data))
+    Ok(sdf::Data::from_specs(data))
 }
 
 /// Synchronous, **native-filesystem** compose for the USD doc viewport preview:
@@ -224,7 +221,7 @@ fn flatten_stage(stage: &Stage, binary_assets: &[(SdfPath, String)]) -> Result<T
 /// `AssetServer`-driven path ([`compose_to_textreader`]) is what the actual
 /// asset loader uses on both platforms.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn compose_native_fs(source: &str, base_dir: &std::path::Path) -> Option<TextReader> {
+pub fn compose_native_fs(source: &str, base_dir: &std::path::Path) -> Option<sdf::Data> {
     use crate::resolver::normalize;
 
     // Synthetic absolute id for the in-memory root, placed under `base_dir` so
@@ -241,8 +238,7 @@ pub fn compose_native_fs(source: &str, base_dir: &std::path::Path) -> Option<Tex
     // Discover binary-asset arcs (glTF payloads/references) authored in the root
     // layer so their `lunco:resolvedAsset` URI is synthesized. Anchor is unused
     // for the `scheme://` URIs this surfaces.
-    let binary = Parser::new(source)
-        .parse()
+    let binary = usda::parse(source)
         .map(|data| discover_arcs(&data, &ResolvedPath::new("")).1)
         .unwrap_or_default();
 
@@ -250,8 +246,32 @@ pub fn compose_native_fs(source: &str, base_dir: &std::path::Path) -> Option<Tex
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn compose_native_fs(_source: &str, _base_dir: &std::path::Path) -> Option<TextReader> {
+pub fn compose_native_fs(_source: &str, _base_dir: &std::path::Path) -> Option<sdf::Data> {
     None
+}
+
+/// Compose a USD layer **from disk** through the real openusd PCP engine
+/// ([`Stage::open`], backed by [`openusd::ar::DefaultResolver`]) and flatten the
+/// composed result to [`sdf::Data`]. Native + synchronous: for tests and tools
+/// that load a real on-disk `.usda` with every reference resolved — distinct
+/// from the async `AssetServer`-driven loader ([`compose_to_data`]) and the
+/// in-memory-root viewport shim ([`compose_native_fs`]). `DefaultResolver`
+/// anchors each relative reference to its own layer's directory, so the on-disk
+/// reference tree resolves exactly as authored.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn compose_file(path: &std::path::Path) -> Result<sdf::Data> {
+    let id = path
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF8 USD path: {path:?}"))?;
+    let stage = Stage::open(id).map_err(|e| anyhow!("USD composition error for {id}: {e}"))?;
+    // Surface root-layer binary-asset arcs (glTF/…) as `lunco:resolvedAsset`,
+    // matching the async loader; anchored at the root file's own directory.
+    let binary = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|src| usda::parse(&src).ok())
+        .map(|data| discover_arcs(&data, &ResolvedPath::new(id)).1)
+        .unwrap_or_default();
+    flatten_stage(&stage, &binary)
 }
 
 /// Resolver for the native-fs viewport path: the root layer is held in memory;

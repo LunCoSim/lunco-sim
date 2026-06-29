@@ -13,7 +13,7 @@ use lunco_doc::DocumentId;
 use lunco_workbench::twin_browser::BrowserScope;
 use lunco_workbench::{BrowserCtx, BrowserSection};
 use openusd::sdf;
-use openusd::usda::TextReader;
+use lunco_usd_bevy::{UsdData, usd_data::UsdDataExt};
 
 use crate::ui::loaded_stages::{UsdBrowserView, UsdStageRow};
 use crate::ui::viewport::{SetActiveUsdViewport, USD_VIEWPORT_PANEL_ID};
@@ -198,13 +198,13 @@ fn render_stage_body(
 /// layer, which is the source-of-truth most edits target.
 fn render_prim(
     ui: &mut egui::Ui,
-    reader: &TextReader,
+    reader: &UsdData,
     path: &sdf::Path,
     salt: &str,
     clicked: &mut bool,
 ) {
     let name = path.name().unwrap_or("(root)").to_string();
-    let type_name = prim_type_name(reader, path);
+    let type_name = reader.prim_type_name(path);
     let label = match &type_name {
         Some(ty) => format!("{} ({})", name, ty),
         None => name,
@@ -248,20 +248,4 @@ fn render_prim(
             *clicked = true;
         }
     }
-}
-
-/// Read the `typeName` field on a prim spec (e.g. `"Xform"`,
-/// `"Mesh"`, `"Camera"`). Returns `None` for the pseudo-root or for
-/// prims authored without an explicit type.
-fn prim_type_name(reader: &TextReader, path: &sdf::Path) -> Option<String> {
-    use openusd::sdf::Value;
-    for (p, spec) in reader.iter() {
-        if p == path {
-            if let Some(Value::Token(t) | Value::String(t)) = spec.get("typeName") {
-                return Some(t.clone());
-            }
-            return None;
-        }
-    }
-    None
 }

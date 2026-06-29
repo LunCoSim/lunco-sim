@@ -23,18 +23,27 @@ use bevy::prelude::*;
 // twin-scene resolver) — egui-free, so server / sandbox / networking bins get
 // the full USD document surface. Only the empty-viewport placeholder inside it
 // is `ui`-gated. `ui` (browser/viewport panels) is the egui + workbench-shell
-// layer. `document`/`registry`/`text_edit` are the egui-free USD doc model.
+// layer. `document`/`registry` are the egui-free USD doc model. Edits author
+// through openusd's Stage by SDF path (`lunco_usd_bevy::author`); the old
+// `text_edit` byte-splicer and the `edit_target_spike` proof are gone now that
+// Phase C2/C3 lands the real Stage-backed authoring.
 pub mod commands;
 pub mod document;
+pub mod live_consume;
+pub mod live_projection;
 pub mod registry;
-pub mod text_edit;
+pub mod runtime_persistence;
+pub mod twin_projection;
 #[cfg(feature = "ui")]
 pub mod ui;
 
 pub use commands::{ApplyUsdOp, UsdCommandsPlugin, USD_DOCUMENT_KIND};
 pub use document::{LayerId, UsdChange, UsdDocument, UsdOp};
 pub use registry::UsdDocumentRegistry;
-pub use lunco_usd_bevy::{FallbackSceneLight, UsdAuthoredLight, UsdPrimPath, UsdStageAsset};
+pub use lunco_usd_bevy::{
+    FallbackSceneLight, UsdAuthoredLight, UsdData, UsdPrimPath, UsdStageAsset,
+    usd_data::UsdDataExt,
+};
 pub use lunco_usd_avian::UsdAvianPlugin;
 pub use lunco_usd_sim::UsdSimPlugin;
 pub use lunco_usd_sim::NoRenderVisuals;

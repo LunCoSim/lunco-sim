@@ -43,11 +43,8 @@ use std::sync::Arc;
 use std::path::Path;
 
 fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
-    let raw = std::fs::read_to_string(file_path)
-        .unwrap_or_else(|e| panic!("Missing file: {}\n{}", file_path.display(), e));
-    let base = file_path.parent().unwrap_or(Path::new("."));
-    let composed = compose_native_fs(&raw, base)
-        .unwrap_or_else(|| panic!("Composition failed for {}", file_path.display()));
+    let composed = compose_file(file_path)
+        .unwrap_or_else(|e| panic!("Composition failed for {}: {e}", file_path.display()));
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -93,10 +90,8 @@ fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
 #[test]
 fn headless_server_builds_wheel_physics_without_shader_material() {
     let file = Path::new("../../assets/vessels/rovers/skid_rover.usda");
-    let raw = std::fs::read_to_string(file)
-        .unwrap_or_else(|e| panic!("Missing {}: {e}", file.display()));
-    let composed = compose_native_fs(&raw, file.parent().unwrap())
-        .unwrap_or_else(|| panic!("Composition failed for {}", file.display()));
+    let composed = compose_file(file)
+        .unwrap_or_else(|e| panic!("Composition failed for {}: {e}", file.display()));
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);

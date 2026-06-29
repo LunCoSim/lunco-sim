@@ -18,6 +18,9 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
+# Canonical Twin edit journal. USD records its (forward, inverse) op pairs
+# here — lossless, since `UsdOp` derives `Serialize` (no hand summaries).
+lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-assets = { path = "../lunco-assets" }
 # Editor-session binding (WorkspaceResource + events). ECS-only, no UI — the
 # binding moved here from lunco-workbench so non-ui consumers can read it.
@@ -49,6 +52,7 @@ lunco-fsw = { path = "../lunco-fsw" }
 # entity-pipeline tests must register `Assets<ShaderMaterial>` or
 # `process_usd_sim_prims` defers every wheel forever (no WheelRaycast).
 lunco-materials = { path = "../lunco-materials" }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

@@ -44,6 +44,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod journal_persistence;
 pub mod recents;
 pub mod session;
 

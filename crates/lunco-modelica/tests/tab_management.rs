@@ -10,7 +10,8 @@
 //! depends on `ModelTabs` keeping its current contract.
 
 use lunco_doc::DocumentId;
-use lunco_modelica::ui::panels::model_view::{ModelTabs, ModelViewMode};
+use lunco_modelica::model_tabs::ModelTabs;
+use lunco_modelica::model_tabs_types::ModelViewMode;
 
 fn doc(n: u64) -> DocumentId {
     DocumentId::new(n)

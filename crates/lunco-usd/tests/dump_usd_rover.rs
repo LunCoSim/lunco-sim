@@ -18,8 +18,7 @@ fn test_dump_usd_rover_state() {
     let usd_path = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap()
         .join("assets/vessels/rovers/skid_rover.usda");
 
-    let raw = std::fs::read_to_string(&usd_path).unwrap();
-    let composed = compose_native_fs(&raw, usd_path.parent().unwrap()).expect("compose skid_rover");
+    let composed = compose_file(&usd_path).expect("compose skid_rover");
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);

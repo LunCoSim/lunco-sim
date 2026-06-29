@@ -43,7 +43,7 @@ use lunco_mobility::LunCoMobilityPlugin;
 use lunco_hardware::LunCoHardwarePlugin;
 // USD core (scene load + collider build) is always needed; the Twin browser /
 // RTT viewport UI plugins are `ui`-only (added by `SandboxUiPlugin`).
-use lunco_usd::{LoadScene, UsdPlugins};
+use lunco_usd::{LoadScene, UsdDataExt, UsdPlugins};
 use lunco_terrain_globe::TerrainPlugin;
 use lunco_obstacle_field::ObstacleFieldPlugin;
 use lunco_terrain_surface::TerrainSurfacePlugin;

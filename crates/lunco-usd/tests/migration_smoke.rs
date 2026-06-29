@@ -1,7 +1,7 @@
 //! Focused validation of the openusd 0.2 → 0.5 migration.
 //!
 //! Composes the REAL sandbox scene + rover assets through the new
-//! `compose_native_fs` path and asserts the migration-critical properties at
+//! `compose_file` path and asserts the migration-critical properties at
 //! their correct composed paths:
 //!   * reference composition (referenced rover geometry appears),
 //!   * `over` opinion composition (per-instance colour override),
@@ -12,8 +12,8 @@
 //! Pure-reader (no Bevy `App`), so it is immune to the `init_asset::<Scene>()`
 //! harness gap that the older entity-spawning tests hit.
 
-use openusd::sdf::{AbstractData, Path as SdfPath, Value};
-use openusd::usda::TextReader;
+use lunco_usd_bevy::usd_data::UsdDataExt;
+use openusd::sdf::{AbstractData, Data as SdfData, Path as SdfPath, Value};
 use std::path::PathBuf;
 
 fn assets_root() -> PathBuf {
@@ -25,19 +25,17 @@ fn assets_root() -> PathBuf {
         .join("assets")
 }
 
-fn compose(rel: &str) -> TextReader {
+fn compose(rel: &str) -> SdfData {
     let path = assets_root().join(rel);
-    let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    lunco_usd_bevy::compose_native_fs(&raw, path.parent().unwrap())
-        .unwrap_or_else(|| panic!("compose failed for {path:?}"))
+    lunco_usd_bevy::compose_file(&path).unwrap_or_else(|e| panic!("compose failed for {path:?}: {e}"))
 }
 
-fn field<'a>(reader: &'a TextReader, path_str: &str, field: &str) -> Option<Value> {
+fn field(reader: &SdfData, path_str: &str, field: &str) -> Option<Value> {
     let p = SdfPath::new(path_str).ok()?;
-    reader.try_get(&p, field).ok().flatten().map(|c| c.into_owned())
+    reader.spec(&p)?.get(field).cloned()
 }
 
-fn first_rel_target(reader: &TextReader, prop_path: &str) -> Option<String> {
+fn first_rel_target(reader: &SdfData, prop_path: &str) -> Option<String> {
     match field(reader, prop_path, "targetPaths")? {
         Value::PathListOp(op) => op
             .explicit_items
@@ -222,9 +220,10 @@ fn gltf_resolved_asset_synthesized() {
     let r = compose("scenes/sandbox/sandbox_scene.usda");
     let visual = SdfPath::new("/SandboxScene/Perseverance/Visual").unwrap();
     let attr = visual.append_property("lunco:resolvedAsset").unwrap();
-    let uri = match r.try_get(&attr, "default").ok().flatten().map(|c| c.into_owned()) {
+    let uri = match r.spec(&attr).and_then(|s| s.get("default").cloned()) {
         Some(Value::AssetPath(a)) => a.as_str().to_string(),
-        Some(Value::String(s)) | Some(Value::Token(s)) => s,
+        Some(Value::String(s)) => s,
+        Some(Value::Token(t)) => t.to_string(),
         other => panic!("Perseverance/Visual missing lunco:resolvedAsset, got {other:?}"),
     };
     assert!(uri.contains("perseverance.glb"), "resolved URI should be the glb, got {uri}");

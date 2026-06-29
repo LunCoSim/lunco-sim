@@ -3,22 +3,20 @@
 //! Verifies that all visual, physics, and electrical parameters
 //! are correctly extracted from rover USD files after composition.
 
-use openusd::sdf::{AbstractData, Path as SdfPath};
-use openusd::usda::TextReader;
+use lunco_usd_bevy::usd_data::UsdDataExt;
+use openusd::sdf::{AbstractData, Data as SdfData, Path as SdfPath};
 use std::path::PathBuf;
 
-/// Load the rover USD file with all references resolved.
-fn load_rover() -> TextReader {
+/// Load the rover USD file with all references resolved, composed through the
+/// real openusd PCP engine (`Stage::open` + `ar::DefaultResolver`) and flattened
+/// to `sdf::Data` — the same composed representation the asset loader produces.
+fn load_rover() -> SdfData {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let asset_root = manifest_dir.parent().unwrap().parent().unwrap();
     let usd_path = asset_root.join("assets/vessels/rovers/rucheyok/rucheyok.usda");
 
-    let raw = std::fs::read_to_string(&usd_path)
-        .unwrap_or_else(|e| panic!("Failed to load {:?}: {}", usd_path, e));
-
-    // Compose all references, anchored at the rover file's own directory.
-    let base_dir = usd_path.parent().expect("rover file has a parent dir");
-    lunco_usd_bevy::compose_native_fs(&raw, base_dir).expect("Failed to compose rover")
+    lunco_usd_bevy::compose_file(&usd_path)
+        .unwrap_or_else(|e| panic!("Failed to compose {usd_path:?}: {e}"))
 }
 
 #[test]
@@ -79,10 +77,12 @@ fn test_solar_panel_position() {
     let reader = load_rover();
     let path = SdfPath::new("/Rucheyok/SolarPanel").unwrap();
 
-    let translate: Vec<f64> = reader
+    // `double3` composes to `Value::Vec3d` — read as a fixed `[f64; 3]`, the
+    // variant the strict `TryFrom<Value>` decode matches (a `Vec<f64>` would
+    // only match a `double[]` array).
+    let translate: [f64; 3] = reader
         .prim_attribute_value(&path, "xformOp:translate")
         .expect("SolarPanel should have translate");
-    assert_eq!(translate.len(), 3);
     assert!((translate[0] - 0.0).abs() < 0.01, "SolarPanel X should be 0");
     assert!((translate[1] - 4.5).abs() < 0.01, "SolarPanel Y should be 4.5");
     assert!((translate[2] - 0.0).abs() < 0.01, "SolarPanel Z should be 0");
@@ -126,10 +126,9 @@ fn test_wheel_positions() {
         let path = SdfPath::new(wheel.path).unwrap();
         assert!(reader.has_spec(&path), "Wheel {path} should exist");
 
-        let translate: Vec<f64> = reader
+        let translate: [f64; 3] = reader
             .prim_attribute_value(&path, "xformOp:translate")
             .unwrap_or_else(|| panic!("Wheel {path} should have translate"));
-        assert_eq!(translate.len(), 3);
         assert!(
             (translate[0] - wheel.x).abs() < 0.01,
             "Wheel {path} X should be {}, got {}",
@@ -245,10 +244,10 @@ fn test_all_prims_have_color() {
 
     for prim_path in prims_with_color {
         let path = SdfPath::new(prim_path).unwrap();
-        let color: Vec<f32> = reader
+        // `color3f` composes to a scalar `Value::Vec3f` → read as `[f32; 3]`.
+        let _color: [f32; 3] = reader
             .prim_attribute_value(&path, "primvars:displayColor")
             .unwrap_or_else(|| panic!("Prim {prim_path} should have displayColor"));
-        assert_eq!(color.len(), 3, "Color should have 3 components");
     }
 }
 

@@ -37,15 +37,22 @@
 use bevy::prelude::*;
 use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 pub use openusd::sdf::Path as SdfPath;
-pub use openusd::usda::TextReader;
-use openusd::sdf::{AbstractData, Value};
+// openusd `main` removed `TextReader`. The composed stage is flattened to a
+// Send-safe `sdf::Data` (see `compose`), queried via the `usd_data` helpers.
+pub use openusd::sdf::Data as UsdData;
+use openusd::sdf::Value;
 use big_space::prelude::CellCoord;
 use std::sync::Arc;
 
 mod resolver;
 mod compose;
 mod light;
+pub mod author;
+pub mod usd_data;
+use usd_data::UsdDataExt;
 pub use compose::compose_native_fs;
+#[cfg(not(target_arch = "wasm32"))]
+pub use compose::compose_file;
 pub use light::{FallbackSceneLight, UsdAuthoredLight};
 
 /// Bevy plugin for USD visual synchronization.
@@ -93,6 +100,10 @@ impl Plugin for UsdBevyPlugin {
             .register_type::<bevy::gltf::GltfMaterialName>();
         app.init_asset::<UsdStageAsset>()
             .register_asset_loader(UsdLoader)
+            // E1b: raw-source asset so a scene document's base layer can be read
+            // through the same (web-ready) asset source the live world uses.
+            .init_asset::<UsdSourceText>()
+            .register_asset_loader(UsdSourceTextLoader)
             .register_type::<UsdPrimPath>()
             .init_resource::<DiagnosticLabelFont>()
             .init_resource::<DiagnosticLabelConfig>()
@@ -126,8 +137,9 @@ impl Plugin for UsdBevyPlugin {
 /// Created by the `UsdLoader` asset loader when a `.usda` file is loaded.
 #[derive(Asset, TypePath, Clone)]
 pub struct UsdStageAsset {
-    /// Flattened USD reader with all references resolved.
-    pub reader: Arc<TextReader>,
+    /// Flattened, composed scene data (all references resolved). Send-safe
+    /// `sdf::Data`; query it with the [`usd_data`] helpers.
+    pub reader: Arc<UsdData>,
 }
 
 #[derive(Default, TypePath)]
@@ -165,17 +177,55 @@ impl AssetLoader for UsdLoader {
             }
         };
 
-        // Compose with openusd 0.5.0's PCP engine — references, payloads,
-        // variant selection, and relationship-target translation — through our
-        // in-memory `LuncoUsdResolver` (filesystem-free, native + wasm), then
-        // flatten the composed stage back into a `TextReader` so the downstream
-        // visual / physics / cosim readers keep their existing flat interface.
-        let text_reader =
-            compose::compose_to_textreader(load_context, &root_asset_path, bytes).await?;
+        // Compose with openusd's PCP engine — references, payloads, variant
+        // selection, and relationship-target translation — through our in-memory
+        // `LuncoUsdResolver` (filesystem-free, native + wasm), then flatten the
+        // composed stage into a Send-safe `sdf::Data` for the downstream visual /
+        // physics / cosim readers (`Stage` is `!Send`, so it can't cross here).
+        let data = compose::compose_to_data(load_context, &root_asset_path, bytes).await?;
 
         Ok(UsdStageAsset {
-            reader: Arc::new(text_reader),
+            reader: Arc::new(data),
         })
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &["usda"]
+    }
+}
+
+/// A USD layer's **raw source text**, read through the `AssetServer` without
+/// composition.
+///
+/// Distinct from [`UsdStageAsset`], which is the *composed + flattened* stage:
+/// this is just the bytes of one `.usda` layer, decoded to a `String`. E1b uses
+/// it to open a scene document's base layer **through the same asset source the
+/// live world loads from** (e.g. `twin://`) — so the read is web-ready (it rides
+/// whatever the source supports) instead of going through native `std::fs`.
+#[derive(Asset, TypePath, Clone)]
+pub struct UsdSourceText(pub String);
+
+/// Loader producing [`UsdSourceText`] — reads bytes, decodes UTF-8, no
+/// composition. Shares the `.usda` extension with [`UsdLoader`]; the requested
+/// asset type (`load::<UsdSourceText>` vs `load::<UsdStageAsset>`) selects the
+/// loader.
+#[derive(Default, TypePath)]
+pub struct UsdSourceTextLoader;
+
+impl AssetLoader for UsdSourceTextLoader {
+    type Asset = UsdSourceText;
+    type Settings = ();
+    type Error = anyhow::Error;
+
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &Self::Settings,
+        _load_context: &mut LoadContext<'_>,
+    ) -> Result<Self::Asset, Self::Error> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await?;
+        Ok(UsdSourceText(String::from_utf8(bytes)?))
     }
 
     fn extensions(&self) -> &[&str] {
@@ -323,7 +373,7 @@ fn instantiate_usd_prim(
     {
         let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
 
-        // Borrow — `stage.reader` is `Arc<TextReader>`; deep-cloning it copies
+        // Borrow — `stage.reader` is `Arc<sdf::Data>`; deep-cloning it copies
         // the whole stage `HashMap`. Every read below is `&self`.
         let reader = &*stage.reader;
 
@@ -402,25 +452,13 @@ fn instantiate_usd_prim(
         });
 
         // Skip inactive prims
-        if let Ok(Some(val)) = reader.try_get(&sdf_path, "active") {
-            if let Value::Bool(active) = &*val {
-                if !*active {
-                    commands.entity(entity).insert(UsdVisualSynced);
-                    return;
-                }
-            }
+        if !reader.prim_is_active(&sdf_path) {
+            commands.entity(entity).insert(UsdVisualSynced);
+            return;
         }
 
         // Get prim type (Cube, Cylinder, Sphere, etc.)
-        let prim_type = if let Ok(Some(val)) = reader.try_get(&sdf_path, "typeName") {
-            if let Value::Token(ty) = &*val {
-                Some(ty.clone())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let prim_type = reader.prim_type_name(&sdf_path);
 
         // UsdLux light prims (`DistantLight` sun / `DomeLight` ambient —
         // see `light.rs`). A light produces no mesh; the shared transform
@@ -689,10 +727,8 @@ fn instantiate_usd_prim(
         // This is critical for wheel positions — they must be at the correct offsets from
         // the chassis center before the suspension system runs.
         for child_path in reader.prim_children(&sdf_path) {
-            if let Ok(Some(val)) = reader.try_get(&child_path, "active") {
-                if let Value::Bool(active) = &*val {
-                    if !*active { continue; }
-                }
+            if !reader.prim_is_active(&child_path) {
+                continue;
             }
 
             // Pre-read child transform from USD (canonical decoder).
@@ -956,7 +992,7 @@ pub fn parent_prim_path(target: &str) -> Option<SdfPath> {
 ///
 /// Single source of truth for the bind→shader walk shared by the renderer
 /// ([`apply_standard_material`]) and the inspector's material editor.
-pub fn resolve_bound_shader(reader: &TextReader, mesh_path: &SdfPath) -> Option<SdfPath> {
+pub fn resolve_bound_shader(reader: &UsdData, mesh_path: &SdfPath) -> Option<SdfPath> {
     let mat_path_str = read_rel_target(reader, mesh_path, "material:binding")?;
     let mat_path = SdfPath::new(&mat_path_str).ok()?;
     let surf_conn = read_rel_target(reader, &mat_path, "outputs:surface")?;
@@ -966,7 +1002,7 @@ pub fn resolve_bound_shader(reader: &TextReader, mesh_path: &SdfPath) -> Option<
 /// Applies a standard PBR material to an entity, resolving material bindings
 /// and shader networks if present, or falling back to direct prim attributes.
 fn apply_standard_material(
-    reader: &TextReader,
+    reader: &UsdData,
     sdf_path: &SdfPath,
     mesh_handle: &Handle<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -1115,10 +1151,14 @@ fn apply_standard_material(
 /// prim name (no leading slash), or `None` when the stage declares no
 /// `defaultPrim`. The metadata lives on the pseudo-root spec at the
 /// absolute root path.
-pub fn stage_default_prim(reader: &TextReader) -> Option<String> {
-    let val = reader.try_get(&SdfPath::abs_root(), "defaultPrim").ok().flatten()?;
-    let name = String::try_from(val.into_owned()).ok()?;
-    (!name.is_empty()).then_some(name)
+pub fn stage_default_prim(reader: &UsdData) -> Option<String> {
+    // `defaultPrim` is authored as `Value::Token` (see compose.rs), and on
+    // openusd `main` `String::try_from(Value::Token)` is an error — only the
+    // `String` variant converts. `as_str` coerces `Token`/`String`/`AssetPath`
+    // uniformly, so it is the correct reader here.
+    let val = reader.field(&SdfPath::abs_root(), "defaultPrim")?;
+    let name = val.as_str()?;
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// True if the prim at `path` applies the named API schema, by exact
@@ -1128,13 +1168,14 @@ pub fn stage_default_prim(reader: &TextReader) -> Option<String> {
 ///
 /// Handles every form `apiSchemas` can take: a single `Token`/`String`,
 /// a `TokenVec`, or a `TokenListOp` (explicit/prepended/appended/added).
-pub fn has_api_schema(reader: &TextReader, path: &SdfPath, schema_name: &str) -> bool {
-    let Ok(Some(val)) = reader.try_get(path, "apiSchemas") else {
+pub fn has_api_schema(reader: &UsdData, path: &SdfPath, schema_name: &str) -> bool {
+    let Some(val) = reader.field(path, "apiSchemas") else {
         return false;
     };
-    match &*val {
-        Value::Token(s) | Value::String(s) => s == schema_name,
-        Value::TokenVec(ss) => ss.iter().any(|s| s == schema_name),
+    match val {
+        Value::Token(s) => s.as_str() == schema_name,
+        Value::String(s) => s == schema_name,
+        Value::TokenVec(ss) => ss.iter().any(|s| s.as_str() == schema_name),
         Value::TokenListOp(op) => op
             .explicit_items
             .iter()
@@ -1150,14 +1191,14 @@ pub fn has_api_schema(reader: &TextReader, path: &SdfPath, schema_name: &str) ->
 /// string (`None` if the relationship is absent/empty). Canonical
 /// shared helper — replaces the byte-identical copies that lived in
 /// `lunco-usd-avian` and `lunco-usd-sim`.
-pub fn read_rel_target(reader: &TextReader, prim_path: &SdfPath, rel_name: &str) -> Option<String> {
+pub fn read_rel_target(reader: &UsdData, prim_path: &SdfPath, rel_name: &str) -> Option<String> {
     let rel_path_str = format!("{}.{}", prim_path.as_str(), rel_name);
     let Ok(rel_sdf) = SdfPath::new(&rel_path_str) else {
         return None;
     };
     for field in &["targetPaths", "connectionPaths"] {
-        if let Ok(Some(val)) = reader.try_get(&rel_sdf, field) {
-            if let Value::PathListOp(op) = &*val {
+        if let Some(val) = reader.field(&rel_sdf, field) {
+            if let Value::PathListOp(op) = val {
                 if let Some(target) = op
                     .explicit_items
                     .first()
@@ -1199,7 +1240,7 @@ pub fn read_rel_target(reader: &TextReader, prim_path: &SdfPath, rel_name: &str)
 /// documented silent-`None` "bodies launched into orbit" bug, where a
 /// `point3f` anchor (parsed as `[f32;3]`) read through a single-type
 /// path returned `None` and defaulted the joint anchor to zero.
-pub fn read_vec3_f64(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<[f64; 3]> {
+pub fn read_vec3_f64(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<[f64; 3]> {
     // Fixed-size array forms first (`point3f`/`float3` → `[f32;3]`,
     // `point3d`/`double3` → `[f64;3]`).
     if let Some(v) = reader.prim_attribute_value::<[f32; 3]>(path, attr) {
@@ -1223,7 +1264,7 @@ pub fn read_vec3_f64(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<
 /// `Vec3` (f32). Thin wrapper over [`read_vec3_f64`] — reused by
 /// downstream crates (e.g. `lunco-usd-sim`'s shader authoring) so there
 /// is one canonical vec3 reader. `None` if absent or unconvertible.
-pub fn get_attribute_as_vec3(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<Vec3> {
+pub fn get_attribute_as_vec3(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<Vec3> {
     read_vec3_f64(reader, path, attr).map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
 }
 
@@ -1231,11 +1272,12 @@ pub fn get_attribute_as_vec3(reader: &TextReader, path: &SdfPath, attr: &str) ->
 /// `default` value at `prim.attr` and returns it as a `String` for
 /// `token`, `string`, and `asset` value types. `None` if absent or a
 /// different type.
-pub fn read_token(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<String> {
+pub fn read_token(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<String> {
     let attr_path = path.append_property(attr).ok()?;
-    let val = reader.try_get(&attr_path, "default").ok().flatten()?;
-    match &*val {
-        Value::String(s) | Value::Token(s) => Some(s.clone()),
+    let val = reader.field(&attr_path, "default")?;
+    match val {
+        Value::String(s) => Some(s.clone()),
+        Value::Token(s) => Some(s.to_string()),
         Value::AssetPath(a) => Some(a.as_str().to_string()),
         _ => None,
     }
@@ -1243,7 +1285,7 @@ pub fn read_token(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<Str
 
 /// Back-compat alias for the string/asset call sites (visibility,
 /// `lunco:resolvedAsset`, …). Same impl as [`read_token`].
-fn get_attribute_as_string(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<String> {
+fn get_attribute_as_string(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<String> {
     read_token(reader, path, attr)
 }
 
@@ -1264,7 +1306,7 @@ pub fn euler_xyz_deg_to_quat(deg: Vec3) -> Quat {
 /// `xformOp:scale` compose it themselves; avian pre-applies scale onto
 /// the collider instead). Avian downcasts the resulting `Transform` to
 /// `DVec3`/`DQuat` at its call site.
-pub fn read_transform_from_usd(reader: &TextReader, path: &SdfPath) -> Transform {
+pub fn read_transform_from_usd(reader: &UsdData, path: &SdfPath) -> Transform {
     let translation =
         get_attribute_as_vec3(reader, path, "xformOp:translate").unwrap_or(Vec3::ZERO);
     let rotation = get_attribute_as_vec3(reader, path, "xformOp:rotateXYZ")
@@ -1306,7 +1348,7 @@ pub enum ShapeDims {
 /// an unsupported type. **The defaults here are the single source of
 /// truth** for both `lunco-usd-avian` (→ `Collider`) and this crate
 /// (→ `Mesh`); changing one here changes both, so they can't drift.
-pub fn read_shape_dims(reader: &TextReader, path: &SdfPath, type_name: &str) -> Option<ShapeDims> {
+pub fn read_shape_dims(reader: &UsdData, path: &SdfPath, type_name: &str) -> Option<ShapeDims> {
     let dims = match type_name {
         "Cube" => {
             let size = reader.prim_attribute_value::<f64>(path, "size").unwrap_or(2.0);
@@ -1346,7 +1388,7 @@ pub fn read_shape_dims(reader: &TextReader, path: &SdfPath, type_name: &str) -> 
 
 /// Reads a float-like attribute (`float` / `double` / `int`) from a USD prim.
 /// Falls back to the metadata-based "default" key if not found (needed for dome/light attributes).
-pub fn get_attribute_as_f32(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<f32> {
+pub fn get_attribute_as_f32(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<f32> {
     if let Some(v) = reader.prim_attribute_value::<f32>(path, attr) {
         return Some(v);
     }

@@ -79,7 +79,6 @@ use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened};
 use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
 use lunco_core::{Command, on_command, register_commands};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelRects, PanelSlot, WorkbenchAppExt};
-use openusd::usda::TextReader;
 
 use crate::registry::UsdDocumentRegistry;
 
@@ -666,14 +665,14 @@ fn rebuild_active_asset(world: &mut World) {
     state.last_rebuilt_generation = doc_generation;
 }
 
-/// Parse a `.usda` source string into a `TextReader`. When `base_dir`
-/// is provided, composition arcs (sublayers, references, payloads)
-/// are flattened via [`lunco_usd_bevy::compose_native_fs`] so
-/// referenced stages (`artemis_2.usda → orion.usda`) actually
+/// Parse a `.usda` source string into composed [`sdf::Data`]. When
+/// `base_dir` is provided, composition arcs (sublayers, references,
+/// payloads) are flattened via [`lunco_usd_bevy::compose_native_fs`]
+/// so referenced stages (`artemis_2.usda → orion.usda`) actually
 /// surface their geometry in the preview. Without a base dir
 /// (Untitled drafts, in-memory mem://) — or on wasm — flatten can't
 /// resolve paths so we fall back to the raw root layer.
-fn parse_reader(source: &str, base_dir: Option<&std::path::Path>) -> Option<TextReader> {
+fn parse_reader(source: &str, base_dir: Option<&std::path::Path>) -> Option<openusd::sdf::Data> {
     if let Some(dir) = base_dir {
         if let Some(flat) = lunco_usd_bevy::compose_native_fs(source, dir) {
             return Some(flat);
@@ -683,9 +682,7 @@ fn parse_reader(source: &str, base_dir: Option<&std::path::Path>) -> Option<Text
             dir
         );
     }
-    let mut parser = openusd::usda::parser::Parser::new(source);
-    let data = parser.parse().ok()?;
-    Some(TextReader::from_data(data))
+    openusd::usda::parse(source).ok()
 }
 
 /// Resolve the directory that composition arcs resolve relative to —

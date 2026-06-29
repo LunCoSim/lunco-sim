@@ -93,11 +93,60 @@ impl Plugin for UsdCommandsPlugin {
         app.add_systems(Update, drain_pending_usd_file_loads);
 
         app.add_systems(Update, drain_usd_pending_events);
+        // A3 auto-bridge: when the journal appears, hand it to the registry
+        // once (reactive — `resource_added`, not per-frame). Headless builds
+        // without a journal never run it.
+        app.add_systems(
+            Update,
+            wire_usd_journal_handle
+                .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
+        );
         // Workbench-only: the empty-viewport placeholder lives in the egui
         // shell; headless / sandbox / server bins don't add it.
         #[cfg(feature = "ui")]
         app.add_systems(Update, update_viewport_placeholder);
         app.add_observer(open_usd_docs_on_twin_added);
+        // C5-A: persist/reload the runtime overlay (C4b spawns + moves) to
+        // `<twin>/.lunco/runtime/<scene>.usda`, parallel to the journal.
+        app.add_observer(crate::runtime_persistence::on_doc_opened_load_runtime);
+        app.add_observer(crate::runtime_persistence::on_doc_changed_save_runtime);
+        // E1: project doc-backed scenes into the live world from their composed
+        // (base ⊕ runtime) stage, and keep them synced to later runtime edits.
+        app.init_resource::<crate::live_projection::PendingLiveImports>();
+        app.add_systems(
+            Update,
+            (
+                crate::live_projection::project_pending_live_imports,
+                crate::live_projection::refresh_live_doc_scenes,
+            )
+                .chain(),
+        );
+        // E1b: make the default twin scene doc-backed by serving its composed
+        // source as a `twin://` byte-overlay (web-ready via the async loader).
+        app.init_resource::<crate::twin_projection::PendingTwinDocs>();
+        app.init_resource::<crate::twin_projection::DocBackedTwinScenes>();
+        // E2-2/E2-3: deferred structural reconcile for twin scenes — the async
+        // reload refreshes the `twin://`-resolved reader, then these apply the
+        // incremental spawn/despawn (or coarse rebuild) against it.
+        app.init_resource::<crate::twin_projection::PendingTwinReconciles>();
+        app.init_resource::<crate::twin_projection::ReloadedTwinAssets>();
+        // Gated on the asset pipeline: these need `AssetServer` (reload) and the
+        // `Assets<UsdSourceText>` store (UsdBevyPlugin's `init_asset`). Both are
+        // absent in headless `MinimalPlugins` test apps — and a partial setup can
+        // have one without the other — so require both.
+        app.add_systems(
+            Update,
+            (
+                crate::twin_projection::drain_pending_twin_docs,
+                crate::twin_projection::sync_twin_overlays,
+                // Buffer reloaded assets, then drain matured reconciles after.
+                crate::twin_projection::collect_reloaded_twin_assets,
+                crate::twin_projection::drain_twin_reconciles,
+            )
+                .chain()
+                .run_if(resource_exists::<AssetServer>)
+                .run_if(resource_exists::<Assets<lunco_usd_bevy::UsdSourceText>>),
+        );
         register_all_commands(app);
     }
 }
@@ -126,6 +175,10 @@ fn open_usd_docs_on_twin_added(
     trigger: On<TwinAdded>,
     workspace: Res<WorkspaceResource>,
     twin_roots: Res<lunco_assets::twin_source::TwinRoots>,
+    // Optional: headless/test apps (MinimalPlugins) have no `AssetServer`. When
+    // absent, E1b's doc-open is skipped — `LoadScene` still mounts the scene.
+    asset_server: Option<Res<AssetServer>>,
+    mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
     mut commands: Commands,
 ) {
     let twin_id = trigger.event().twin;
@@ -164,6 +217,18 @@ fn open_usd_docs_on_twin_added(
                 path: format!("twin://{}/{}", twin_name, scene),
                 root_prim: String::new(),
             });
+            // E1b: also open the scene as a document and make it doc-backed. The
+            // `LoadScene` above mounts the file-backed stage immediately; once the
+            // document exists, `sync_twin_overlays` shadows the twin source with
+            // the composed (base ⊕ runtime) source and reloads, so persisted
+            // runtime spawns/moves appear live. Read the base text THROUGH the
+            // twin source (web-ready) rather than `std::fs`. Skipped in
+            // headless/test apps with no `AssetServer`.
+            if let Some(asset_server) = &asset_server {
+                let handle = asset_server
+                    .load::<lunco_usd_bevy::UsdSourceText>(format!("twin://{}/{}", twin_name, scene));
+                pending_twin.push(handle, twin_name.clone(), scene.to_string(), twin.root.join(scene));
+            }
         }
         None => {
             info!(
@@ -227,10 +292,27 @@ fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
     if !is_usd_path(&path) {
         return;
     }
+    // `mem://` / `bundled://` scenes never become a registered file document
+    // (`on_open_file_for_usd` skips them), so keep the legacy file-backed
+    // additive import for those — the helper no-ops on a repeated
+    // `(asset, root_prim)` and warns + skips files outside the asset root.
+    if path.is_empty() || path.starts_with("mem://") || path.starts_with("bundled://") {
+        commands.queue(move |world: &mut World| {
+            lunco_usd_sim::cosim::spawn_scene_root_world(world, &path, "");
+        });
+        return;
+    }
+    // E1: real file paths DO get a document (allocated asynchronously by
+    // `on_open_file_for_usd` → `drain_pending_usd_file_loads`). Defer the
+    // live-world mount to `live_projection`, which sources the scene root from
+    // that document's *composed* (base ⊕ runtime) stage once it exists — so
+    // persisted runtime spawns/moves show in the world, not just the file.
     commands.queue(move |world: &mut World| {
-        // Additive import. Helper no-ops on same `(asset, root_prim)`,
-        // and warns + skips for files outside the asset root.
-        lunco_usd_sim::cosim::spawn_scene_root_world(world, &path, "");
+        if let Some(mut pending) =
+            world.get_resource_mut::<crate::live_projection::PendingLiveImports>()
+        {
+            pending.push(path);
+        }
     });
 }
 
@@ -459,20 +541,37 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
     let doc = trigger.event().doc;
     let op = trigger.event().op.clone();
     commands.queue(move |world: &mut World| {
+        // Apply through the registry funnel. Journaling is automatic (A3):
+        // the host carries a `JournalOpRecorder` installed by
+        // `wire_usd_journal_recorders`, so a successful `apply` records the
+        // lossless (forward, inverse) pair — no per-op recording code here,
+        // and the same seam journals undo/redo too.
         let mut registry = world.resource_mut::<UsdDocumentRegistry>();
         match registry.apply(doc, op) {
             Ok(ack) => {
-                bevy::log::debug!(
-                    "[ApplyUsdOp] {} → gen {}",
-                    doc,
-                    ack.new_gen.unwrap_or(0)
-                );
+                bevy::log::debug!("[ApplyUsdOp] {} → gen {}", doc, ack.new_gen.unwrap_or(0));
             }
             Err(reject) => {
                 bevy::log::warn!("[ApplyUsdOp] {} rejected: {:?}", doc, reject);
             }
         }
     });
+}
+
+/// A3 auto-bridge: hand the [`JournalResource`](lunco_doc_bevy::JournalResource)
+/// to the USD registry the moment it appears, so it fits a
+/// [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder) onto existing and
+/// future hosts. Edits — **including undo/redo** — then record losslessly with
+/// no per-op code.
+///
+/// Reactive, not per-frame: gated by `resource_added`, so it runs once (the
+/// frame the journal is installed) and never again. Headless builds without a
+/// journal never run it.
+fn wire_usd_journal_handle(
+    mut registry: ResMut<UsdDocumentRegistry>,
+    journal: Res<lunco_doc_bevy::JournalResource>,
+) {
+    registry.set_journal(journal.clone());
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -632,18 +731,21 @@ mod tests {
                 parent_path: "/".into(),
                 name: "Rover".into(),
                 type_name: Some("Xform".into()),
+                reference: None,
             },
             UsdOp::AddPrim {
                 edit_target: LayerId::root(),
                 parent_path: "/Rover".into(),
                 name: "Body".into(),
                 type_name: Some("Cube".into()),
+                reference: None,
             },
             UsdOp::AddPrim {
                 edit_target: LayerId::root(),
                 parent_path: "/Rover".into(),
                 name: "WheelFL".into(),
                 type_name: Some("Cube".into()),
+                reference: None,
             },
             UsdOp::SetTranslate {
                 edit_target: LayerId::root(),
@@ -658,15 +760,107 @@ mod tests {
         // One more tick to flush any final queued world commands.
         app.update();
 
+        use lunco_usd_bevy::usd_data::UsdDataExt;
+        use openusd::sdf::Path as SdfPath;
         let reg = app.world().resource::<UsdDocumentRegistry>();
         let host = reg.host(doc_id).expect("doc still alive");
-        let src = host.document().source();
-        assert!(src.contains("def Xform \"Rover\""));
-        assert!(src.contains("def Cube \"Body\""));
-        assert!(src.contains("def Cube \"WheelFL\""));
-        assert!(src.contains("xformOp:translate = (1, 0, 1)"));
+        // Assert on the canonical data (the document is data-canonical now;
+        // exact serialized-text formatting is openusd's business, not ours).
+        let data = host.document().data();
+        assert_eq!(data.prim_type_name(&SdfPath::new("/Rover").unwrap()).as_deref(), Some("Xform"));
+        assert_eq!(data.prim_type_name(&SdfPath::new("/Rover/Body").unwrap()).as_deref(), Some("Cube"));
+        assert_eq!(data.prim_type_name(&SdfPath::new("/Rover/WheelFL").unwrap()).as_deref(), Some("Cube"));
+        assert_eq!(
+            data.prim_attribute_value::<[f64; 3]>(&SdfPath::new("/Rover/WheelFL").unwrap(), "xformOp:translate"),
+            Some([1.0, 0.0, 1.0])
+        );
         // Generation advanced once per op.
         assert_eq!(host.document().generation(), 4);
+    }
+
+    /// Phase A1: every `ApplyUsdOp` that lands records one **lossless**
+    /// `EntryKind::Op` into the canonical Twin journal — the recorded op
+    /// deserializes back to the exact `UsdOp` (not a hand summary), and a
+    /// real `UsdOp` inverse rides alongside it.
+    #[test]
+    fn apply_usd_op_records_lossless_journal_entries() {
+        use crate::document::{LayerId, UsdOp};
+        use lunco_twin_journal::{DomainKind, EntryKind};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(UsdCommandsPlugin);
+        // The Twin-journal plugin isn't part of `UsdCommandsPlugin`; install
+        // the resource directly so the apply funnel has somewhere to record.
+        app.insert_resource(lunco_doc_bevy::JournalResource::default());
+        app.update();
+
+        let doc_id = {
+            let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
+            reg.allocate(
+                "#usda 1.0\n".to_string(),
+                DocumentOrigin::untitled("UntitledJournal.usda".to_string()),
+            )
+        };
+        app.update();
+
+        let forward_ops = [
+            UsdOp::AddPrim {
+                edit_target: LayerId::root(),
+                parent_path: "/".into(),
+                name: "Rover".into(),
+                type_name: Some("Xform".into()),
+                reference: None,
+            },
+            UsdOp::SetTranslate {
+                edit_target: LayerId::root(),
+                path: "/Rover".into(),
+                value: [2.0, 0.0, 5.0],
+            },
+        ];
+        for op in forward_ops.clone() {
+            app.world_mut().trigger(ApplyUsdOp { doc: doc_id, op });
+            app.update();
+        }
+        app.update();
+
+        let journal = app.world().resource::<lunco_doc_bevy::JournalResource>();
+        journal.with_read(|j| {
+            let ops: Vec<_> = j
+                .entries_for_doc(doc_id)
+                .filter_map(|e| match &e.kind {
+                    EntryKind::Op { domain, op, inverse } => {
+                        Some((domain.clone(), op.clone(), inverse.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(ops.len(), 2, "one Op entry recorded per applied UsdOp");
+            for (i, (domain, op_val, inv_val)) in ops.iter().enumerate() {
+                assert_eq!(*domain, DomainKind::Usd);
+                // Lossless: the recorded op deserializes back to the exact UsdOp.
+                let decoded: UsdOp = serde_json::from_value(op_val.clone())
+                    .expect("recorded op round-trips to UsdOp");
+                assert_eq!(format!("{decoded:?}"), format!("{:?}", forward_ops[i]));
+                // The inverse is a real UsdOp too. Phase C3 records TYPED
+                // inverses where exact: AddPrim of a brand-new prim inverts to
+                // a RemovePrim; SetTranslate that synthesizes `xformOpOrder`
+                // falls back to a coarse full-source ReplaceSource snapshot.
+                let inv: UsdOp = serde_json::from_value(inv_val.clone())
+                    .expect("recorded inverse round-trips to UsdOp");
+                match i {
+                    0 => assert!(
+                        matches!(inv, UsdOp::RemovePrim { .. }),
+                        "AddPrim of a new prim inverts to a typed RemovePrim, got {inv:?}"
+                    ),
+                    1 => assert!(
+                        matches!(inv, UsdOp::ReplaceSource { .. }),
+                        "SetTranslate inverts to a coarse ReplaceSource, got {inv:?}"
+                    ),
+                    _ => unreachable!(),
+                }
+            }
+        });
     }
 
     /// What the twin-open observer decided to do with the viewport.

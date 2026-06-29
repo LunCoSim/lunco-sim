@@ -58,6 +58,7 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub use lunco_core::{Ack, Mutation, OpId, Reject, SessionId};
 
@@ -452,6 +453,40 @@ pub trait Document: Send + Sync + 'static {
 // DocumentHost
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Sink for the `(forward, inverse)` op pair of every successful
+/// [`apply`](DocumentHost::apply) / [`undo`](DocumentHost::undo) /
+/// [`redo`](DocumentHost::redo) on a [`DocumentHost`].
+///
+/// This is the **auto-bridge** seam: a host with a recorder installed records
+/// *every* state change — including undo and redo — with no per-domain or
+/// per-call wiring. `lunco-doc` stays journal-free; the concrete recorder
+/// (e.g. one that writes into the Twin journal) lives in the ECS layer and is
+/// injected via [`DocumentHost::set_recorder`]. Recording is best-effort: the
+/// edit has already committed to the document by the time `record` is called,
+/// so a recorder must not be able to fail the edit (hence no return value).
+pub trait OpRecorder<O>: Send + Sync {
+    /// Record one applied edit. `forward` is the op that was applied;
+    /// `inverse` is the op that would undo it (as returned by
+    /// [`Document::apply`]). Undo and redo are themselves edits, so they are
+    /// recorded too — the recorder cannot tell them apart, by design.
+    fn record(&self, forward: &O, inverse: &O);
+
+    /// Set the provenance for the *next* recorded edit (one shot — the
+    /// recorder consumes it on the following [`record`](Self::record) and
+    /// reverts to its default). Provenance is two plain strings — a `user`
+    /// and a `tool` — so `lunco-doc` stays free of any journal/author type;
+    /// the concrete recorder maps them onto its own author representation.
+    ///
+    /// Default is a no-op so recorders that don't track provenance, and the
+    /// no-recorder path, pay nothing. Domain apply funnels call this (via
+    /// [`DocumentHost::set_next_edit_author`]) right before each forward
+    /// apply so API-, tool-, and reload-originated edits are attributed
+    /// correctly instead of all collapsing to the local user.
+    fn set_next_author(&self, user: &str, tool: &str) {
+        let _ = (user, tool);
+    }
+}
+
 /// Manager for a [`Document`] that provides undo/redo and change tracking.
 ///
 /// Applications typically do not hold documents directly; they hold
@@ -480,6 +515,11 @@ pub struct DocumentHost<D: Document> {
     /// of 256 is enough to absorb realistic retry windows without
     /// growing unbounded; older ids age out.
     seen_ops: VecDeque<OpId>,
+    /// Optional sink that records every applied/undone/redone op pair into an
+    /// external history (the Twin journal). See [`OpRecorder`]. `None` (the
+    /// default) = no recording, so headless tests and journal-free apps pay
+    /// nothing.
+    recorder: Option<Arc<dyn OpRecorder<D::Op>>>,
 }
 
 /// How many recent op-ids the dedupe ring keeps. 256 covers one to
@@ -496,7 +536,31 @@ impl<D: Document> DocumentHost<D> {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             seen_ops: VecDeque::with_capacity(SEEN_OPS_CAP),
+            recorder: None,
         }
+    }
+
+    /// Install the op recorder that mirrors every apply/undo/redo into an
+    /// external history. See [`OpRecorder`]. Replaces any prior recorder.
+    pub fn set_recorder(&mut self, recorder: Arc<dyn OpRecorder<D::Op>>) {
+        self.recorder = Some(recorder);
+    }
+
+    /// Attribute the *next* applied edit to `(user, tool)`. One shot: the
+    /// recorder consumes it on the next apply and reverts to its default
+    /// author. No-op when no recorder is installed. Domain apply funnels
+    /// call this immediately before each forward `apply` so API / tool /
+    /// reload edits are journaled under their real provenance.
+    pub fn set_next_edit_author(&self, user: &str, tool: &str) {
+        if let Some(rec) = &self.recorder {
+            rec.set_next_author(user, tool);
+        }
+    }
+
+    /// Whether a recorder is installed. Lets the ECS layer attach one exactly
+    /// once per host without re-wrapping.
+    pub fn has_recorder(&self) -> bool {
+        self.recorder.is_some()
     }
 
     /// Access the wrapped document immutably. Views read through here.
@@ -558,12 +622,19 @@ impl<D: Document> DocumentHost<D> {
                 });
             }
         }
+        // Clone the forward op for the recorder *before* it's consumed by
+        // `document.apply` — but only when a recorder is installed, so the
+        // common (no-journal) path pays nothing.
+        let forward_for_record = self.recorder.as_ref().map(|_| mutation.payload.clone());
         let inverse = match self.document.apply(mutation.payload) {
             Ok(inv) => inv,
             Err(DocumentError::ReadOnly) => return Err(Reject::ReadOnly),
             Err(DocumentError::ValidationFailed(msg)) => return Err(Reject::InvalidOp(msg)),
             Err(DocumentError::Internal(msg)) => return Err(Reject::InvalidOp(msg)),
         };
+        if let (Some(rec), Some(fwd)) = (&self.recorder, &forward_for_record) {
+            rec.record(fwd, &inverse);
+        }
         self.undo_stack.push(inverse);
         self.redo_stack.clear();
         if self.seen_ops.len() == SEEN_OPS_CAP {
@@ -581,7 +652,11 @@ impl<D: Document> DocumentHost<D> {
         let Some(op) = self.undo_stack.pop() else {
             return Ok(false);
         };
+        let forward_for_record = self.recorder.as_ref().map(|_| op.clone());
         let inverse = self.document.apply(op)?;
+        if let (Some(rec), Some(fwd)) = (&self.recorder, &forward_for_record) {
+            rec.record(fwd, &inverse);
+        }
         self.redo_stack.push(inverse);
         Ok(true)
     }
@@ -592,7 +667,11 @@ impl<D: Document> DocumentHost<D> {
         let Some(op) = self.redo_stack.pop() else {
             return Ok(false);
         };
+        let forward_for_record = self.recorder.as_ref().map(|_| op.clone());
         let inverse = self.document.apply(op)?;
+        if let (Some(rec), Some(fwd)) = (&self.recorder, &forward_for_record) {
+            rec.record(fwd, &inverse);
+        }
         self.undo_stack.push(inverse);
         Ok(true)
     }
@@ -620,15 +699,6 @@ impl<D: Document> DocumentHost<D> {
     /// Consume the host and return the underlying document.
     pub fn into_document(self) -> D {
         self.document
-    }
-
-    /// Inverse of the most recently-applied op, if any.
-    ///
-    /// Equal to `undo_stack.last()` — exposed so journal sinks can record
-    /// the (forward, inverse) pair after a successful [`apply`](Self::apply)
-    /// without DocumentHost itself depending on the journal crate.
-    pub fn last_applied_inverse(&self) -> Option<&D::Op> {
-        self.undo_stack.last()
     }
 }
 
@@ -721,6 +791,48 @@ mod tests {
         host.redo().unwrap();
         assert_eq!(host.document().text, "Hello World");
         assert_eq!(host.generation(), 3);
+    }
+
+    /// A3 auto-bridge: an installed [`OpRecorder`] captures the
+    /// `(forward, inverse)` pair of apply **and** undo **and** redo — the
+    /// single seam that journals every state change with no per-call wiring.
+    #[test]
+    fn test_recorder_captures_apply_undo_redo() {
+        use std::sync::Mutex;
+
+        #[derive(Default)]
+        struct VecRecorder(Mutex<Vec<(TextOp, TextOp)>>);
+        impl OpRecorder<TextOp> for VecRecorder {
+            fn record(&self, forward: &TextOp, inverse: &TextOp) {
+                self.0.lock().unwrap().push((forward.clone(), inverse.clone()));
+            }
+        }
+
+        let rec = Arc::new(VecRecorder::default());
+        let mut host = DocumentHost::new(TextDocument {
+            id: DocumentId::new(1),
+            text: "Hi".to_string(),
+            generation: 0,
+        });
+        assert!(!host.has_recorder());
+        host.set_recorder(rec.clone());
+        assert!(host.has_recorder());
+
+        host.apply(Mutation::local(TextOp::Insert { pos: 2, text: "!".into() }))
+            .unwrap();
+        host.undo().unwrap();
+        host.redo().unwrap();
+
+        let log = rec.0.lock().unwrap();
+        assert_eq!(log.len(), 3, "apply + undo + redo each record one pair");
+        // apply: forward Insert, inverse Delete.
+        assert_eq!(log[0].0, TextOp::Insert { pos: 2, text: "!".into() });
+        assert_eq!(log[0].1, TextOp::Delete { pos: 2, len: 1 });
+        // undo: forward is the inverse Delete, inverse is the re-Insert.
+        assert_eq!(log[1].0, TextOp::Delete { pos: 2, len: 1 });
+        assert_eq!(log[1].1, TextOp::Insert { pos: 2, text: "!".into() });
+        // redo: forward Insert again.
+        assert_eq!(log[2].0, TextOp::Insert { pos: 2, text: "!".into() });
     }
 
     #[test]

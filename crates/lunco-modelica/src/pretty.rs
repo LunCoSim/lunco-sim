@@ -116,7 +116,7 @@ pub fn set_options(opts: PrettyOptions) {
 ///
 /// The printer emits a single semicolon-terminated line, indented by two
 /// spaces. Callers that need different indentation can post-process.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ComponentDecl {
     /// Fully-qualified or imported type name
     /// (e.g. `"Modelica.Electrical.Analog.Basic.Resistor"` or `"Resistor"`).
@@ -135,7 +135,7 @@ pub struct ComponentDecl {
 ///
 /// Maps to `annotation(Placement(transformation(extent={{x1,y1},{x2,y2}})))`.
 /// The printer builds the extent as `(x - w/2, y - h/2)..(x + w/2, y + h/2)`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Placement {
     /// Centre X in Modelica diagram coordinates (-100..100).
     pub x: f32,
@@ -163,7 +163,7 @@ impl Placement {
 /// ```
 ///
 /// Without `line`, emits the annotation-free form.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConnectEquation {
     /// Source port (`component.port`).
     pub from: PortRef,
@@ -174,7 +174,7 @@ pub struct ConnectEquation {
 }
 
 /// A reference to a component port by instance + port name.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct PortRef {
     /// Component instance name.
     pub component: String,
@@ -190,7 +190,7 @@ impl PortRef {
 }
 
 /// Wire polyline attached to a `connect(...) annotation(Line(...))`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Line {
     /// Polyline vertices in Modelica diagram coordinates.
     pub points: Vec<(f32, f32)>,
@@ -260,7 +260,7 @@ fn fmt_points(points: &[(f32, f32)]) -> String {
 /// [`crate::annotations::LunCoPlotNode`] for the read-side mirror.
 /// Position is in Modelica diagram coordinates (`{{x1,y1},{x2,y2}}`,
 /// the same convention every other graphic primitive uses).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LunCoPlotNodeSpec {
     pub x1: f32,
     pub y1: f32,
@@ -387,7 +387,7 @@ pub fn connect_equation(eq: &ConnectEquation) -> String {
 // ---------------------------------------------------------------------------
 
 /// Modelica class restriction keyword.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ClassKindSpec {
     Model,
     Block,
@@ -413,7 +413,7 @@ impl ClassKindSpec {
 }
 
 /// Variable causality flag (Modelica `input`/`output` prefix).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CausalitySpec {
     #[default]
     None,
@@ -422,7 +422,7 @@ pub enum CausalitySpec {
 }
 
 /// Variable variability prefix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum VariabilitySpec {
     #[default]
     Continuous,
@@ -433,7 +433,7 @@ pub enum VariabilitySpec {
 
 /// One variable declaration in a class body. Renders as one line:
 /// `{prefixes} <Type> <name>(modifications) = <value> "<description>";`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VariableDecl {
     pub name: String,
     pub type_name: String,
@@ -448,14 +448,14 @@ pub struct VariableDecl {
 
 /// One equation in a class equation section. `lhs = None` emits a
 /// statement (e.g. `assert(...)`) without an `=`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EquationDecl {
     pub lhs: Option<String>,
     pub rhs: String,
 }
 
 /// Modelica diagram graphic primitive (Icon or Diagram layer).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum GraphicSpec {
     Rectangle {
         x1: f32, y1: f32, x2: f32, y2: f32,
@@ -483,7 +483,7 @@ pub enum GraphicSpec {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum FillPattern {
     #[default]
     None,
@@ -499,7 +499,7 @@ impl FillPattern {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum LinePattern {
     #[default]
     Solid,

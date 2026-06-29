@@ -3,8 +3,8 @@
 //! This test verifies the electrical power system structure
 //! and simulates basic power flow using only USD data - no composition needed.
 
-use openusd::sdf::{AbstractData, Path as SdfPath, SpecType};
-use openusd::usda::TextReader;
+use lunco_usd_bevy::usd_data::UsdDataExt;
+use openusd::sdf::{AbstractData, Data as SdfData, Path as SdfPath, SpecType};
 use std::path::PathBuf;
 
 /// Represents a component on the EPS bus
@@ -51,9 +51,7 @@ fn load_rover_eps() -> Vec<EPSComponent> {
     let asset_root = manifest_dir.parent().unwrap().parent().unwrap();
     let usd_path = asset_root.join("assets/vessels/rovers/rucheyok/rucheyok.usda");
 
-    let raw = std::fs::read_to_string(&usd_path).expect("Failed to read rover USD");
-    let reader = lunco_usd_bevy::compose_native_fs(&raw, usd_path.parent().unwrap())
-        .expect("Failed to compose rover USD");
+    let reader = lunco_usd_bevy::compose_file(&usd_path).expect("Failed to compose rover USD");
 
     let mut components = Vec::new();
     for (path, spec) in reader.iter() {
@@ -78,7 +76,7 @@ fn load_rover_eps() -> Vec<EPSComponent> {
 /// Power generation (+) / consumption (-) for a composed component prim.
 /// Generators author `lunco:nominalPower`; motorized loads author
 /// `lunco:motorPower` (composed in from their referenced component).
-fn get_component_power(reader: &TextReader, path: &SdfPath) -> f64 {
+fn get_component_power(reader: &SdfData, path: &SdfPath) -> f64 {
     if let Some(power) = reader.prim_attribute_value::<f64>(path, "lunco:nominalPower") {
         return power; // Positive = generation
     }
