@@ -181,12 +181,19 @@ pub(crate) fn attach_rhai_scenario(
     // USD-embedded persistence: the LOAD half is done — a prim's `lunco:script`
     // is read by lunco-usd-bevy into `EmbeddedScenarioSource` and attached by
     // `attach_embedded_scenarios` below, so scene-authored scenarios run on
-    // spawn. TODO(save): author a live-edited scenario's source BACK onto its
-    // prim — `cmd("ApplyUsdOp", SetAttribute{path, "lunco:script", "string",
-    // <usd-escaped source>})` on Twin save. Needs the prim path (UsdPrimPath) +
-    // USD triple-quote string escaping; ⚠ the splicer's parent/child same-attr
-    // bug (text_edit.rs has a guard test now — verify). Ref:
-    // project_tools_architecture Phase 2.
+    // spawn.
+    //
+    // TODO(save) — BLOCKED on a USD bridge, not a scripting task: writing a
+    // live-edited scenario back onto its prim means `ApplyUsdOp` /
+    // `SetAttribute(path, "lunco:script", "string", <usd-escaped src>)`, which
+    // edits an EDITABLE document in `UsdDocumentRegistry`. But a runtime entity's
+    // `UsdPrimPath` references a read-only `Handle<UsdStageAsset>` (a flattened,
+    // composed `Arc<TextReader>`) — there is no mapping from that stage asset to
+    // a savable source document/layer. That asset↔document bridge must be built
+    // in the USD subsystem first. Until then, durable scenarios live as Twin
+    // files (see `crate::timelines` for the same pattern applied to timelines) or
+    // are authored directly in the `.usda` source. Ref: project_tools_architecture
+    // Phase 2 incr #3.
     registry
         .documents
         .insert(DocumentId::new(doc_id_raw), DocumentHost::new(doc));
@@ -352,6 +359,46 @@ fn push_rhai_string(s: &str, out: &mut String) {
     out.push('"');
 }
 
+/// Parse a timeline JSON string into its `steps` array value + step count.
+/// Accepts a bare `[ ...steps ]` array or an object with a `steps` array. Shared
+/// by `RunTimeline` (execute), `RunStoredTimeline`, and `RegisterTimeline`
+/// (validate-before-store). Errors are caller-prefixed.
+#[cfg(feature = "rhai")]
+fn parse_timeline_steps(timeline: &str) -> Result<(serde_json::Value, usize), String> {
+    let parsed: serde_json::Value = serde_json::from_str(timeline)
+        .map_err(|e| format!("`timeline` is not valid JSON: {e}"))?;
+    let steps = match &parsed {
+        serde_json::Value::Array(_) => parsed.clone(),
+        serde_json::Value::Object(o) => o
+            .get("steps")
+            .cloned()
+            .ok_or_else(|| "object form needs a `steps` array".to_string())?,
+        _ => return Err("`timeline` must be an array or object".to_string()),
+    };
+    let count = steps
+        .as_array()
+        .ok_or_else(|| "`steps` must be an array".to_string())?
+        .len();
+    Ok((steps, count))
+}
+
+/// Lower a timeline `steps` array into the generic rhai executor source — a
+/// `const TIMELINE` plus the three hooks that call the prelude's
+/// `compile_timeline` / `run_steps` / `seq_note_event`. Attaching the result via
+/// `attach_rhai_scenario` gives the timeline hot-reload, per-entity state, and
+/// `STEP_COMPLETE`/`SEQUENCE_COMPLETE` telemetry for free.
+#[cfg(feature = "rhai")]
+fn timeline_executor_source(steps: &serde_json::Value) -> String {
+    let mut steps_lit = String::new();
+    json_to_rhai_literal(steps, &mut steps_lit);
+    format!(
+        "const TIMELINE = #{{ steps: {steps_lit} }};\n\
+         fn on_start(me) {{ this.cur = seq_init(); this.steps = compile_timeline(TIMELINE.steps); }}\n\
+         fn on_tick(me) {{ this.cur = run_steps(me, this.steps, this.cur); }}\n\
+         fn on_event(me, evt) {{ this.cur = seq_note_event(this.cur, evt); }}\n"
+    )
+}
+
 #[cfg(feature = "rhai")]
 #[on_command(RunTimeline)]
 fn on_run_timeline(
@@ -361,33 +408,9 @@ fn on_run_timeline(
     q_existing: Query<&ScriptedModel>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
-    let parsed: serde_json::Value = serde_json::from_str(&cmd.timeline)
-        .map_err(|e| format!("RunTimeline: `timeline` is not valid JSON: {e}"))?;
-
-    // Accept a bare steps array or an object with a `steps` array.
-    let steps = match &parsed {
-        serde_json::Value::Array(_) => parsed.clone(),
-        serde_json::Value::Object(o) => o
-            .get("steps")
-            .cloned()
-            .ok_or_else(|| "RunTimeline: object form needs a `steps` array".to_string())?,
-        _ => return Err("RunTimeline: `timeline` must be an array or object".to_string()),
-    };
-    if !steps.is_array() {
-        return Err("RunTimeline: `steps` must be an array".to_string());
-    }
-    let step_count = steps.as_array().map(Vec::len).unwrap_or(0);
-
-    // Embed the steps as a rhai literal and wrap with the generic executor.
-    let mut steps_lit = String::new();
-    json_to_rhai_literal(&steps, &mut steps_lit);
-    let source = format!(
-        "const TIMELINE = #{{ steps: {steps_lit} }};\n\
-         fn on_start(me) {{ this.cur = seq_init(); this.steps = compile_timeline(TIMELINE.steps); }}\n\
-         fn on_tick(me) {{ this.cur = run_steps(me, this.steps, this.cur); }}\n\
-         fn on_event(me, evt) {{ this.cur = seq_note_event(this.cur, evt); }}\n"
-    );
-
+    let (steps, step_count) =
+        parse_timeline_steps(&cmd.timeline).map_err(|e| format!("RunTimeline: {e}"))?;
+    let source = timeline_executor_source(&steps);
     let (doc_id_raw, generation) = attach_rhai_scenario(
         cmd.target,
         source,
@@ -400,6 +423,100 @@ fn on_run_timeline(
     );
     let mut ack = Ack::new(OpId::new());
     ack.assigned = serde_json::json!({
+        "document_id": doc_id_raw,
+        "generation": generation,
+        "steps": step_count,
+    });
+    Ok(ack)
+}
+
+/// Save a named mission **timeline** to the Twin — the storage counterpart of
+/// `RunTimeline` (which runs an inline one). Validates the JSON parses as a
+/// timeline, stores it in the [`crate::timelines::TimelineStore`], and mirrors it
+/// to `<twin>/timelines/<name>.json` so it survives a restart (reloaded by the
+/// `TwinAdded` observer). Discover with `ListTimelines`/`GetTimeline`, run with
+/// `RunStoredTimeline`. Idempotent (re-registering a name replaces it).
+#[cfg(feature = "rhai")]
+#[Command(default)]
+pub struct RegisterTimeline {
+    pub name: String,
+    /// JSON: a steps array, or an object with a `steps` array (and optional `name`).
+    pub timeline: String,
+}
+
+#[cfg(feature = "rhai")]
+#[on_command(RegisterTimeline)]
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+fn on_register_timeline(
+    _t: On<RegisterTimeline>,
+    mut store: ResMut<crate::timelines::TimelineStore>,
+    // Optional: present only with the workspace plugin; used to persist to the
+    // active Twin's `timelines/` dir. `None` (headless / no-twin) keeps it in-memory.
+    ws: Option<Res<lunco_workspace::WorkspaceResource>>,
+) -> Result<Ack, String> {
+    if cmd.name.is_empty() {
+        return Err("RegisterTimeline: `name` must not be empty".to_string());
+    }
+    // Reject malformed timelines at store time, not at run time.
+    parse_timeline_steps(&cmd.timeline).map_err(|e| format!("RegisterTimeline: {e}"))?;
+    store.insert(cmd.name.clone(), cmd.timeline.clone());
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(root) = ws
+        .as_ref()
+        .and_then(|ws| ws.active_twin.and_then(|id| ws.twin(id)))
+        .map(|twin| twin.root.clone())
+    {
+        if let Err(e) = crate::timelines::save_timeline_file(&root, &cmd.name, &cmd.timeline) {
+            warn!("[timelines] could not persist '{}' to Twin: {e}", cmd.name);
+        }
+    }
+    let mut ack = Ack::new(OpId::new());
+    ack.assigned = serde_json::json!({ "name": cmd.name, "timelines": store.names() });
+    Ok(ack)
+}
+
+/// Run a stored mission timeline on an entity by name (resolved from the
+/// [`crate::timelines::TimelineStore`]) — the one-step "fetch + run" for a
+/// `RegisterTimeline`d / file-authored mission, sparing callers a
+/// `GetTimeline`→`RunTimeline` round-trip. Same execution path as `RunTimeline`.
+#[cfg(feature = "rhai")]
+#[Command]
+pub struct RunStoredTimeline {
+    #[authz_target]
+    pub target: Entity,
+    pub name: String,
+}
+
+#[cfg(feature = "rhai")]
+#[on_command(RunStoredTimeline)]
+fn on_run_stored_timeline(
+    _t: On<RunStoredTimeline>,
+    store: Res<crate::timelines::TimelineStore>,
+    mut registry: ResMut<ScriptRegistry>,
+    mut alloc: ResMut<ScenarioDocAllocator>,
+    q_existing: Query<&ScriptedModel>,
+    mut commands: Commands,
+) -> Result<Ack, String> {
+    // Own the JSON so the store borrow is released before we touch the registry.
+    let timeline = store
+        .get(&cmd.name)
+        .ok_or_else(|| format!("RunStoredTimeline: no timeline named '{}'", cmd.name))?
+        .to_string();
+    let (steps, step_count) =
+        parse_timeline_steps(&timeline).map_err(|e| format!("RunStoredTimeline: {e}"))?;
+    let source = timeline_executor_source(&steps);
+    let (doc_id_raw, generation) = attach_rhai_scenario(
+        cmd.target,
+        source,
+        String::new(),
+        &mut registry,
+        &mut alloc,
+        &q_existing,
+        &mut commands,
+    );
+    let mut ack = Ack::new(OpId::new());
+    ack.assigned = serde_json::json!({
+        "name": cmd.name,
         "document_id": doc_id_raw,
         "generation": generation,
         "steps": step_count,
@@ -485,6 +602,8 @@ register_commands!(
     on_run_rhai,
     on_run_scenario,
     on_run_timeline,
+    on_register_timeline,
+    on_run_stored_timeline,
     on_register_tool_library,
     on_run_python,
     on_set_scenario_paused,
@@ -495,6 +614,8 @@ register_commands!(
     on_run_rhai,
     on_run_scenario,
     on_run_timeline,
+    on_register_timeline,
+    on_run_stored_timeline,
     on_register_tool_library,
     on_set_scenario_paused,
     on_stop_scenario

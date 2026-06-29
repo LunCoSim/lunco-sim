@@ -681,6 +681,105 @@ fn run_timeline_arrives_advances_and_brakes() {
     );
 }
 
+#[test]
+fn timeline_storage_register_discover_and_run() {
+    // Timeline persistence/discovery end-to-end: RegisterTimeline stores a named
+    // mission; ListTimelines/GetTimeline surface it; RunStoredTimeline runs it by
+    // name and the runtime drives the rover from its first move_to step. (No Twin
+    // in the test harness → the store is in-memory; file persistence is unit-tested
+    // in timelines.rs.)
+    use lunco_api::executor::ApiCommandEvent;
+    use lunco_api::queries::ApiQueryRegistry;
+    use lunco_api::schema::ApiResponse;
+
+    let mut app = build_app();
+    let rover = spawn_rover(&mut app);
+
+    let timeline = serde_json::json!({
+        "steps": [ { "move_to": [0.0, 0.0, -20.0], "speed": 1.0, "radius": 2.0 } ]
+    })
+    .to_string();
+
+    // 1. Register a named timeline.
+    app.world_mut().trigger(ApiCommandEvent {
+        command: "RegisterTimeline".to_string(),
+        params: serde_json::json!({ "name": "approach", "timeline": timeline }),
+        id: 1,
+    });
+    app.world_mut().flush();
+
+    // 2. Discoverable via ListTimelines + GetTimeline.
+    let provider = app
+        .world()
+        .resource::<ApiQueryRegistry>()
+        .get("ListTimelines")
+        .expect("ListTimelines registered");
+    let list = match provider.execute(app.world_mut(), &serde_json::json!({})) {
+        ApiResponse::Ok { data, .. } => data.expect("ListTimelines data"),
+        other => panic!("ListTimelines returned {other:?}"),
+    };
+    let names: Vec<&str> = list["timelines"]
+        .as_array()
+        .expect("timelines array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert!(names.contains(&"approach"), "ListTimelines should include it; got {list}");
+
+    let provider = app
+        .world()
+        .resource::<ApiQueryRegistry>()
+        .get("GetTimeline")
+        .expect("GetTimeline registered");
+    let got = match provider.execute(app.world_mut(), &serde_json::json!({ "name": "approach" })) {
+        ApiResponse::Ok { data, .. } => data.expect("GetTimeline data"),
+        other => panic!("GetTimeline returned {other:?}"),
+    };
+    assert_eq!(got["name"], "approach", "got {got}");
+    assert!(
+        got["timeline"].as_str().unwrap_or("").contains("move_to"),
+        "GetTimeline should return the stored JSON; got {got}"
+    );
+
+    // 3. Run it by name → the rover drives forward toward the waypoint.
+    assert!(app.world().get::<ScriptedModel>(rover).is_none());
+    app.world_mut().trigger(ApiCommandEvent {
+        command: "RunStoredTimeline".to_string(),
+        params: serde_json::json!({ "target": ROVER_GID, "name": "approach" }),
+        id: 2,
+    });
+    app.world_mut().flush();
+    assert!(
+        app.world().get::<ScriptedModel>(rover).is_some(),
+        "RunStoredTimeline should attach a ScriptedModel"
+    );
+
+    tick(&mut app);
+    let drives = &app.world().resource::<DriveLog>().0;
+    assert!(
+        !drives.is_empty() && drives[0].0 > 0.0,
+        "stored timeline should drive the rover forward; got {drives:?}"
+    );
+}
+
+#[test]
+fn run_stored_timeline_unknown_name_errors() {
+    // Running a timeline that was never registered must not attach a scenario.
+    use lunco_api::executor::ApiCommandEvent;
+    let mut app = build_app();
+    let rover = spawn_rover(&mut app);
+    app.world_mut().trigger(ApiCommandEvent {
+        command: "RunStoredTimeline".to_string(),
+        params: serde_json::json!({ "target": ROVER_GID, "name": "nope" }),
+        id: 1,
+    });
+    app.world_mut().flush();
+    assert!(
+        app.world().get::<ScriptedModel>(rover).is_none(),
+        "an unknown stored timeline must not attach a scenario"
+    );
+}
+
 // ── Lifecycle completeness: on_stop teardown + pause/resume ──────────────────
 
 /// `on_stop` runs when the scripted entity despawns (the teardown prune in

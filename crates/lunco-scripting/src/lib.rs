@@ -23,6 +23,10 @@ pub mod world_bridge;
 /// Importable rhai tool libraries (named `libname::fn` modules).
 #[cfg(feature = "rhai")]
 pub mod tool_libs;
+/// Twin persistence + discovery for declarative mission timelines
+/// (`<twin>/timelines/*.json`; `ListTimelines`/`GetTimeline`/`RunStoredTimeline`).
+#[cfg(feature = "rhai")]
+pub mod timelines;
 /// Scripting adapter onto the unified diagnostics store (`ScriptStatus` query).
 #[cfg(feature = "rhai")]
 pub mod diagnostics;
@@ -105,6 +109,13 @@ impl Plugin for LunCoScriptingPlugin {
             // (native only — no filesystem on wasm).
             #[cfg(not(target_arch = "wasm32"))]
             app.add_observer(tool_libs::load_tools_on_twin_added);
+            // Named mission timelines: in-memory store + `<twin>/timelines/*.json`
+            // discovery (ListTimelines/GetTimeline), loaded on Twin open. The
+            // RegisterTimeline/RunStoredTimeline commands ride this store.
+            app.init_resource::<timelines::TimelineStore>();
+            timelines::register_queries(app);
+            #[cfg(not(target_arch = "wasm32"))]
+            app.add_observer(timelines::load_timelines_on_twin_added);
             diagnostics::register_queries(app);
             // Authoring catalog: ScriptingCatalog aggregates the full callable
             // surface (verbs + commands + queries + tools + prelude) for editor
