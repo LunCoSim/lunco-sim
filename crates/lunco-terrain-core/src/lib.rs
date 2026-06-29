@@ -27,5 +27,5 @@ pub mod source;
 pub mod tile;
 
 pub use quadtree::{QuadCoord, Quadtree, Selected, Square};
-pub use source::{AnalyticHeightSource, HeightSource};
+pub use source::{AnalyticHeightSource, CompositeHeightSource, HeightSource};
 pub use tile::{TileCoord, TileGrid};

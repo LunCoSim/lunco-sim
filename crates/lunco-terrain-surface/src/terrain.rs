@@ -64,6 +64,11 @@ pub struct DemTerrainRequest {
     /// The heightfield COLLIDER still spawns, so physics is unchanged. `false` =
     /// the normal single static mesh.
     pub lod_viz: bool,
+    /// Opt-in: stream a per-rover canonical-res heightfield collider ring instead
+    /// of one static full-DEM collider (see [`crate::collider_ring`]). When `true`
+    /// the static collider is **suppressed** (the ring replaces it — overlapping
+    /// heightfields would double up contacts). `false` = the single static collider.
+    pub collider_ring: bool,
     /// Apply a plain `StandardMaterial` when the bake finishes. `true` for the
     /// standalone command path; `false` for the USD path, where the prim's
     /// `materialType` authors the material (don't clobber it).
@@ -89,6 +94,9 @@ pub struct SpawnDemTerrain {
     /// Stream camera-driven LOD tiles tinted by depth instead of one static mesh
     /// (DEBUG view of the CDLOD machinery; collider/physics unchanged).
     pub lod_viz: bool,
+    /// Stream a per-rover canonical-res collider ring instead of one static
+    /// full-DEM collider (replaces it — physics rides the streamed tiles).
+    pub collider_ring: bool,
 }
 
 #[on_command(SpawnDemTerrain)]
@@ -118,6 +126,7 @@ fn on_spawn_dem_terrain(
             half_window,
             target_res: ev.target_res as usize,
             lod_viz: ev.lod_viz,
+            collider_ring: ev.collider_ring,
             with_default_material: true,
         },
         Transform::IDENTITY,
@@ -189,6 +198,7 @@ fn start_dem_builds(
         let half_window = req.half_window;
         let target_res = req.target_res;
         let lod_viz = req.lod_viz;
+        let collider_ring = req.collider_ring;
 
         let task = AsyncComputeTaskPool::get().spawn(async move {
             let meta_bytes = read_bytes(meta_path).await?;
@@ -211,13 +221,17 @@ fn start_dem_builds(
             };
             let half_extent = tile.half_extent;
             let res = tile.res;
-            let collider_heights = tile.to_avian_heights();
-            // In lod_viz mode, retain the grid for tile baking and skip the static
-            // visual mesh; otherwise build the single static mesh as usual.
-            let (mesh, grid) = if lod_viz {
-                (None, Some(std::sync::Arc::new(tile)))
+            // The static collider is built from these heights; skip the (whole-DEM)
+            // allocation when the collider ring will stream per-tile colliders instead.
+            let collider_heights = if collider_ring { Vec::new() } else { tile.to_avian_heights() };
+            // Static visual mesh unless lod_viz streams visual tiles instead.
+            let mesh = if lod_viz { None } else { Some(tile.to_mesh_data()) };
+            // Retain the grid whenever something streams tiles from it — visual LOD
+            // (`lod_viz`) or the physics collider ring (`collider_ring`).
+            let grid = if lod_viz || collider_ring {
+                Some(std::sync::Arc::new(tile))
             } else {
-                (Some(tile.to_mesh_data()), None)
+                None
             };
             Ok(DemBuild {
                 collider_heights,
@@ -271,19 +285,31 @@ fn finish_dem_builds(
         }
 
         let h = built.half_extent as f64;
-        let collider =
-            Collider::heightfield(built.collider_heights, DVec3::new(2.0 * h, 1.0, 2.0 * h));
-        // Heightfield collider always; mesh only when render assets exist.
         let mut e = commands.entity(entity);
-        e.insert((RigidBody::Static, collider));
-        // `lod_viz`: retain the grid + mark for camera-driven LOD tile streaming
-        // (the static visual mesh is suppressed — `built.mesh` is None).
+        // Static full-DEM collider — UNLESS the collider ring replaces it with
+        // streamed per-tile colliders (overlapping heightfields would double up).
+        if !req.collider_ring {
+            let collider =
+                Collider::heightfield(built.collider_heights, DVec3::new(2.0 * h, 1.0, 2.0 * h));
+            e.insert((RigidBody::Static, collider));
+        }
+        // Retain the grid + mark the streaming mode(s). `lod_viz` streams visual LOD
+        // tiles (static mesh suppressed); `collider_ring` streams physics tiles
+        // (static collider suppressed above). Both sample the retained `DemHeightField`.
         if let Some(grid) = built.grid {
-            e.insert((
-                crate::stream_viz::DemHeightField(grid),
-                crate::stream_viz::TerrainLodViz::default(),
-                crate::stream_viz::LodTiles::default(),
-            ));
+            e.insert(crate::stream_viz::DemHeightField(grid));
+            if req.lod_viz {
+                e.insert((
+                    crate::stream_viz::TerrainLodViz::default(),
+                    crate::stream_viz::LodTiles::default(),
+                ));
+            }
+            if req.collider_ring {
+                e.insert((
+                    crate::collider_ring::TerrainColliderRing::default(),
+                    crate::collider_ring::ColliderTiles::default(),
+                ));
+            }
         }
         if let (Some(meshes), Some(mesh)) = (meshes.as_mut(), built.mesh) {
             let MeshData { positions, normals, uvs, indices } = mesh;
@@ -302,7 +328,12 @@ fn finish_dem_builds(
                 }
             }
         }
-        let mode = if req.lod_viz { " [lod-viz: streaming tiles]" } else { "" };
+        let mode = match (req.lod_viz, req.collider_ring) {
+            (true, true) => " [lod-viz + collider-ring]",
+            (true, false) => " [lod-viz: streaming tiles]",
+            (false, true) => " [collider-ring: streaming colliders]",
+            (false, false) => "",
+        };
         if built.res == built.native_res {
             info!("[dem-terrain] built '{}' ({}² native, ±{:.0} m){}", built.site, built.res, h, mode);
         } else {

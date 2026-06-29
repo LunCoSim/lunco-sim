@@ -510,18 +510,25 @@ fn bridge_usd_dem_terrain(
         let lod_viz = reader
             .prim_attribute_value::<bool>(&sdf, "lunco:terrain:lodViz")
             .unwrap_or(false);
+        // `lunco:terrain:colliderRing` (bool) = stream a per-rover canonical-res
+        // heightfield collider ring instead of one static full-DEM collider
+        // (replaces it; deterministic, decoupled from visual LOD).
+        let collider_ring = reader
+            .prim_attribute_value::<bool>(&sdf, "lunco:terrain:colliderRing")
+            .unwrap_or(false);
         commands.entity(entity).insert((
             lunco_terrain_surface::DemTerrainRequest {
                 uri,
                 half_window,
                 target_res,
                 lod_viz,
+                collider_ring,
                 with_default_material: false,
             },
             lunco_terrain_surface::DemTerrainSurface,
         ));
         info!(
-            "[usd-dem] bridged terrain prim {} → DEM '{rel}' (target_res {target_res}, lod_viz {lod_viz})",
+            "[usd-dem] bridged terrain prim {} → DEM '{rel}' (target_res {target_res}, lod_viz {lod_viz}, collider_ring {collider_ring})",
             prim_path.path
         );
     }

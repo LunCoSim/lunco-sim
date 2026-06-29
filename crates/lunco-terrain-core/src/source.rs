@@ -10,6 +10,12 @@
 //! [`AnalyticHeightSource`], a deterministic hash-based value-noise FBM, so the
 //! streaming/LOD/collider machinery can be developed and tested with **no
 //! external asset**. Swapping in a DEM source later changes only this trait impl.
+//!
+//! [`CompositeHeightSource`] is the pure heart of the **orbit→surface bridge**: a
+//! high-detail site source inside a georeferenced region, a coarse globe source
+//! outside, blended at the edge — one continuous surface from orbit to the ground.
+
+use crate::quadtree::Square;
 
 /// Authoritative elevation over the XZ plane. Implementations must be pure and
 /// deterministic: equal inputs always yield equal outputs, on every platform.
@@ -78,6 +84,54 @@ impl HeightSource for AnalyticHeightSource {
             amp *= 0.5; // gain 0.5
         }
         h
+    }
+}
+
+/// The pure core of the **orbit→surface bridge**. Returns the high-detail `site`
+/// source inside a georeferenced square `region` (XZ, metres), the coarse `globe`
+/// source outside it, with a smooth crossover collar of width `blend_m` just
+/// outside the region edge. Descending from orbit to a site, the streamer samples
+/// ONE continuous height field — DEM detail in close, planetary elevation out
+/// wide — instead of two disjoint terrains.
+///
+/// The georef (lat/lon → this XZ `region`) and datum alignment are the caller's
+/// job: `site` and `globe` must report heights in the **same vertical datum**
+/// (e.g. metres above the body reference radius) for the blend to be meaningful.
+/// Pure + deterministic like every `HeightSource`, so derived data stays
+/// content-addressable and the bridge needs no per-peer transfer.
+#[derive(Debug, Clone, Copy)]
+pub struct CompositeHeightSource<S, G> {
+    /// High-detail source (e.g. a site DEM) applied inside `region`.
+    pub site: S,
+    /// Coarse fallback source (e.g. the planetary globe) applied outside.
+    pub globe: G,
+    /// The georeferenced region (XZ, metres) where `site` applies.
+    pub region: Square,
+    /// Width (metres) of the blend collar just outside the region edge. `0` = a
+    /// hard switch at the boundary.
+    pub blend_m: f64,
+}
+
+impl<S, G> CompositeHeightSource<S, G> {
+    pub fn new(site: S, globe: G, region: Square, blend_m: f64) -> Self {
+        Self { site, globe, region, blend_m: blend_m.max(0.0) }
+    }
+}
+
+impl<S: HeightSource, G: HeightSource> HeightSource for CompositeHeightSource<S, G> {
+    fn height_at(&self, x: f64, z: f64) -> f64 {
+        // Distance from the region: 0 inside/on-edge, growing outward.
+        let d = self.region.distance_to([x, z]);
+        if d <= 0.0 {
+            return self.site.height_at(x, z); // fully inside → site
+        }
+        if self.blend_m <= 0.0 || d >= self.blend_m {
+            return self.globe.height_at(x, z); // beyond the collar → globe
+        }
+        // Crossover collar: smoothstep site→globe (C1 at both ends, so the seam is
+        // continuous in value and slope).
+        let t = smoothstep((d / self.blend_m).clamp(0.0, 1.0));
+        lerp(self.site.height_at(x, z), self.globe.height_at(x, z), t)
     }
 }
 
@@ -169,5 +223,65 @@ mod tests {
         let n = s.normal_at(3.0, 4.0, 0.5);
         assert!((n[0]).abs() < 1e-9 && (n[2]).abs() < 1e-9 && (n[1] - 1.0).abs() < 1e-9);
         assert!(s.slope_at(3.0, 4.0, 0.5).abs() < 1e-6);
+    }
+
+    /// Constant-height source for composite tests (distinct site vs globe datums).
+    struct Flat(f64);
+    impl HeightSource for Flat {
+        fn height_at(&self, _x: f64, _z: f64) -> f64 {
+            self.0
+        }
+    }
+
+    fn composite() -> CompositeHeightSource<Flat, Flat> {
+        // site = 100 m inside a 200 m square at origin; globe = 0 m; 50 m collar.
+        CompositeHeightSource::new(Flat(100.0), Flat(0.0), Square { center: [0.0, 0.0], half: 100.0 }, 50.0)
+    }
+
+    #[test]
+    fn composite_site_inside_globe_outside() {
+        let c = composite();
+        // Deep inside → pure site.
+        assert_eq!(c.height_at(0.0, 0.0), 100.0);
+        assert_eq!(c.height_at(50.0, -30.0), 100.0);
+        // On the edge counts as inside (distance 0).
+        assert_eq!(c.height_at(100.0, 0.0), 100.0);
+        // Beyond the collar (edge 100 + blend 50 = 150) → pure globe.
+        assert_eq!(c.height_at(200.0, 0.0), 0.0);
+        assert_eq!(c.height_at(0.0, -300.0), 0.0);
+    }
+
+    #[test]
+    fn composite_blends_monotonically_in_collar() {
+        let c = composite();
+        // Midway through the collar (edge 100 + 25 = x 125) → strictly between.
+        let mid = c.height_at(125.0, 0.0);
+        assert!(mid > 0.0 && mid < 100.0, "collar midpoint {mid} not between");
+        // Monotone decreasing site→globe across the collar.
+        let mut prev = f64::INFINITY;
+        for k in 0..=10 {
+            let x = 100.0 + k as f64 * 5.0; // edge … edge+50
+            let h = c.height_at(x, 0.0);
+            assert!(h <= prev + 1e-9, "non-monotone at x={x}: {h} > {prev}");
+            prev = h;
+        }
+    }
+
+    #[test]
+    fn composite_continuous_across_seams() {
+        let c = composite();
+        let eps = 1e-3;
+        // Continuous at the inner edge (x=100) and outer edge of collar (x=150).
+        for &edge in &[100.0_f64, 150.0] {
+            let d = (c.height_at(edge + eps, 0.0) - c.height_at(edge - eps, 0.0)).abs();
+            assert!(d < 1.0, "discontinuity {d} at seam x={edge}");
+        }
+    }
+
+    #[test]
+    fn composite_zero_blend_is_hard_switch() {
+        let c = CompositeHeightSource::new(Flat(100.0), Flat(0.0), Square { center: [0.0, 0.0], half: 100.0 }, 0.0);
+        assert_eq!(c.height_at(100.0, 0.0), 100.0); // inside/edge
+        assert_eq!(c.height_at(100.1, 0.0), 0.0); // just outside → globe
     }
 }

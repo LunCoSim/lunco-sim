@@ -57,6 +57,16 @@ impl Plugin for TerrainSurfacePlugin {
                 crate::stream_viz::despawn_orphaned_lod_tiles,
             ),
         );
-        // M7 (remaining): geomorph shader + per-rover canonical-res collider ring.
+        // M7 (physics): opt-in per-rover canonical-res heightfield COLLIDER ring.
+        // Inert unless a DEM is built with `collider_ring`; then it replaces the
+        // static collider with deterministic per-tile colliders streamed around the
+        // dynamic bodies. See `crate::collider_ring`.
+        app.add_systems(
+            Update,
+            (
+                crate::collider_ring::update_collider_ring,
+                crate::collider_ring::despawn_orphaned_collider_tiles,
+            ),
+        );
     }
 }

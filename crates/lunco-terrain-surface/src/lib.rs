@@ -40,6 +40,7 @@
 //!   tile streaming + LOD + per-rover collider ring land in M7.
 
 pub mod bake;
+pub mod collider_ring;
 pub mod dem;
 pub mod plugin;
 pub mod stream_viz;
@@ -56,6 +57,7 @@ pub use lunco_terrain_core::{
     AnalyticHeightSource, HeightSource, QuadCoord, Quadtree, Selected, Square, TileCoord, TileGrid,
 };
 pub use plugin::{TerrainSurfaceConfig, TerrainSurfacePlugin};
+pub use collider_ring::{ColliderTiles, TerrainColliderRing};
 pub use stream_viz::{DemHeightField, LodTiles, TerrainLodViz};
 pub use terrain::{DemTerrainRequest, DemTerrainSurface, SpawnDemTerrain};
 pub use tile_mesh::{bake_tile_mesh, TileMesh};
