@@ -2,7 +2,7 @@
 
 **Feature Branch**: `000-testing-framework`
 **Created**: 2026-03-29
-**Status**: Active
+**Status**: Implemented (historical)
 **Authority**: Project Constitution (Principle II, VIII, IX).
 
 ## Problem Statement

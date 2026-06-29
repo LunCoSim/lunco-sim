@@ -1,5 +1,7 @@
 # 41 — Axes and Units (coordinate + unit conversion boundary)
 
+> Status: Active · Audience: contributors importing/exporting coordinates & units
+>
 > External tools disagree on **up-axis** and **units**; LunCoSim must not.
 > The engine runs in **one fixed canonical frame** (spec 009: f64, Y-up, RH,
 > −Z-forward, SI). Any external representation (USD, glTF, Blender, Isaac, ROS)

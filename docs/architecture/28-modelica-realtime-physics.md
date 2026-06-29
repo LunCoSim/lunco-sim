@@ -1,5 +1,7 @@
 # 28 — Modelica Realtime Physics (declarative custom physics, networked)
 
+> Status: Design · Audience: contributors planning declarative/networked Modelica physics (scopes Step 1)
+>
 > Goal: describe **most custom physics in Modelica** instead of hardcoding it
 > in Rust — with proper solvers, running in realtime, safe under multiplayer,
 > hot-changeable at runtime, and stepped as a first-class **ECS** citizen.

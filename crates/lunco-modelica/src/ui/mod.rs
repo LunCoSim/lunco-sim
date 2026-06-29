@@ -677,7 +677,7 @@ impl Plugin for ModelicaUiPlugin {
         // ModalQueue + modal host live in lunco-ui. `render_close_dialogs`
         // (added below by ModelicaCommandsPlugin) consumes ModalQueue, so
         // LuncoUiPlugin must be present whenever Modelica UI is mounted —
-        // not just in the 3D `lunco-client` binary that originally added it.
+        // not just in the 3D `lunco-sandbox` binary that originally added it.
         if !app.is_plugin_added::<lunco_ui::LuncoUiPlugin>() {
             app.add_plugins(lunco_ui::LuncoUiPlugin);
         }

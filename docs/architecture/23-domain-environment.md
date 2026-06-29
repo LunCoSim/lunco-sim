@@ -1,5 +1,7 @@
 # 23 — Environment Domain
 
+> Status: Active · Audience: contributors on gravity, atmosphere, and celestial-body providers
+>
 > Per-entity environmental state (gravity, atmosphere, radiation, ...)
 > computed from celestial-body providers. Implements the Modelica
 > `inner`/`outer` pattern in ECS terms.
@@ -80,4 +82,4 @@ input name. Not yet implemented.
 - [`22-domain-cosim.md`](22-domain-cosim.md) — where the injection happens
 - [`../../crates/lunco-celestial/`](../../crates/lunco-celestial/) — celestial bodies and their providers
 - `specs/018-astronomical-environment` — detailed environment spec
-- Superseded: [`research/gravity-architecture.md`](research/gravity-architecture.md) — older gravity architecture doc (retired)
+- Superseded: `research/gravity-architecture.md` — older gravity architecture doc (retired/removed)

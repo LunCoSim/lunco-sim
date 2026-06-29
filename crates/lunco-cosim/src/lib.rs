@@ -76,8 +76,8 @@ impl Plugin for CoSimPlugin {
             .register_type::<SimConnection>();
 
         // No per-kind observers: avian rigid bodies and joints are detected by
-        // component presence through the `AVIAN` spec table (see
-        // `docs/architecture/AVIAN_PORT_BACKEND_PLAN.md`).
+        // component presence through the `AVIAN` spec table (backend in this
+        // crate, `crates/lunco-cosim`; original design in git history).
 
         // CoSim runs in FixedUpdate (before Avian's FixedPostUpdate physics step).
         // Order: propagate wires first, then apply forces to Position.

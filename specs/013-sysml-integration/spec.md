@@ -1,5 +1,7 @@
 # Feature Specification: 013-sysml-integration
 
+**Status**: Not implemented (roadmap)
+
 ## Problem Statement
 The LunCoSim environment needs to be driven by formalized engineering models. We need to integrate a SysML v2 parser so that the `.sysml` files act as our **Static Architect & Master Specification**. SysML defines the "Signal Wiring Diagram" for our Bevy physical plants and the Stoichiometric Recipes for our factories. **SysML does not simulate; it instantiates.**
 

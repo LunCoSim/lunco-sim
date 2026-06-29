@@ -1,15 +1,27 @@
 # 14 — Simulation Layers
 
+> Status: Design · Audience: contributors planning the Twin control-plane / backend architecture
+>
+> ⚠️ **DESIGN SPEC — largely NOT IMPLEMENTED.** This document is the target
+> architecture. The core control-plane types it describes — `TwinCommand`,
+> `BackendRegistry`, `trait Backend`, `trait Participant`, `ParticipantSpec`,
+> and `IslandPartitioner` — **do not exist in the codebase**. Today the Twin is
+> a plain filesystem container (`lunco-twin` / `lunco-workspace`); control flows
+> through the existing `CommandMessage` / HTTP `/api/commands` fabric and the
+> cosim systems in `lunco-cosim` (`SimConnection`, `PendingForces`,
+> `apply_pending_forces`), not through a Twin-owned command queue. Read the
+> sections below as the intended end-state, not a description of current code.
+
 > Four layers — **Model, Run, Scenario, Twin** — plus a dynamic **BackendRegistry**
 > that lets simulation crates self-register. Aligns with FMI/SSP patterns,
 > scales from single-model MVP to cosim + remote + HIL without refactor.
 >
-> **Twin is the control surface.** Not just a filesystem container — it's the
-> live Bevy resource that owns scenarios, runs, backends, traces, and input
-> queues for its slice of the world. Every command (start / pause / reset /
-> step / warp / switch-fidelity) dispatches through Twin. UI, HTTP API,
-> scripts, remote controllers, and replay all go through the same Twin
-> interface.
+> **Twin is intended to be the control surface.** Not just a filesystem
+> container — the design has it as the live Bevy resource that owns scenarios,
+> runs, backends, traces, and input queues for its slice of the world. Every
+> command (start / pause / reset / step / warp / switch-fidelity) would dispatch
+> through Twin. UI, HTTP API, scripts, remote controllers, and replay all go
+> through the same Twin interface. *(Not yet built — see banner above.)*
 
 This doc is the canonical reference for how simulation is organised. Specific
 domain details live elsewhere:
@@ -450,7 +462,10 @@ surface or the MVP Run shape.
 
 ## Networking — server-authoritative, per spec 022
 
-Multi-user use is out of scope for MVP but the shape is fixed:
+Multi-user networking has **landed** (`lunco-networking`: WebTransport, state
+replication, RBAC policy substrate, headless `--no-ui` server). The
+server-authoritative shape below is the target; the Twin-resource framing
+(replica *backends*) remains aspirational per the banner at the top of this doc:
 
 - **Server** runs the authoritative `Run`. Full set of backends registered.
 - **Client** registers lightweight replica backends (Avian interpolation,

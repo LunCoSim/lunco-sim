@@ -4,9 +4,18 @@ Per-entity environmental state for LunCoSim — gravity, atmosphere, radiation,
 magnetic field, etc. — computed from celestial body providers and consumed by
 physics, co-simulation, and UI.
 
-**Currently implements:** gravity only.
-**Designed to grow into:** atmosphere, solar radiation, magnetic field,
-ambient temperature, anything else that varies with position and body.
+**Currently implements:** gravity (`LocalGravity`), solar direction
+(`LocalSolar` + sun→cosim bridge), lunar-sky lighting parameters (`LunarSun`,
+`EarthshineParams`, the `SetEnvironmentLight` tuner command), and baked horizon
+terrain self-shadowing (`HorizonShadowPlugin`). The gravity and solar values are
+already wired into the co-sim graph each tick.
+**Designed to grow into:** atmosphere, solar *radiation* (irradiance/eclipse),
+magnetic field, ambient temperature — anything else that varies with position
+and body.
+
+> Lighting / solar / horizon live behind the `render` feature (they read the
+> scene `DirectionalLight` / reach into the bevy light + post-process stack), so
+> a headless sim core builds with gravity alone.
 
 ## Why this crate exists
 
@@ -69,8 +78,10 @@ Our ECS analog:
 | `world.g`        | `LocalGravity` on the consumer entity  |
 
 Same scoping concept, ECS implementation. The injection from `LocalGravity`
-into a Modelica model's `input Real g` happens in `lunco-cosim`'s
-`inject_environment` system (not yet implemented — see roadmap below).
+into a Modelica model happens in this crate's `inject_local_gravity_into_cosim`
+system (implemented — runs in `EnvironmentSet::Apply`, before the cosim
+propagate step). Solar direction follows the same path via
+`inject_local_solar_into_cosim`.
 
 ## What's implemented
 
@@ -95,10 +106,35 @@ fn read_gravity(q: Query<&LocalGravity>) {
 }
 ```
 
+### `LocalSolar` + the solar→cosim bridge (`render` feature)
+
+`compute_local_solar` caches the scene sun's direction (azimuth/elevation) per
+entity as `LocalSolar`; `inject_local_solar_into_cosim` publishes it into the
+co-sim graph as `SimComponent` **outputs** (`SOLAR_AZIMUTH_CONNECTOR` /
+`SOLAR_ELEVATION_CONNECTOR`), so a sun-tracking model receives it through a
+normal output→input wire. The scene `DirectionalLight` *is* the provider — a
+richer `SolarProvider` (irradiance, eclipse) can attach later.
+
+### Lighting parameters: `LunarSun`, `EarthshineParams` (`render` feature)
+
+Physical lighting state of the lunar sky — the lighting analog of gravity. The
+`SetEnvironmentLight` command live-tunes the sun, the earthshine fill light
+(spawned once at startup, native render only — WebGL2 allows a single
+`DirectionalLight`), and bloom. `EnvironmentPlugin` also registers
+`Earthshine`/`LocalSolar` reflect types on the render path.
+
+### `HorizonShadowPlugin` + `HorizonMap` (`render` feature)
+
+Baked horizon-map terrain self-shadowing — the long-range half of the two-system
+shadow design. Inert until a terrain carries the (USD-stamped)
+`HorizonShadowTerrain` marker.
+
 ### `EnvironmentPlugin`
 
-Adds `compute_local_gravity` to `FixedUpdate` in the
-`EnvironmentSet::Compute` set. Add it once during app setup:
+Adds `compute_local_gravity` to `FixedUpdate` in the `EnvironmentSet::Compute`
+set, `apply_gravity_to_rigid_bodies` + `inject_local_gravity_into_cosim` in
+`EnvironmentSet::Apply`, and (behind `render`) the solar/lighting/horizon
+presentation half. Add it once during app setup:
 
 ```rust
 app.add_plugins(lunco_celestial::GravityPlugin);
@@ -202,11 +238,14 @@ That's the entire pattern. Three components, one system. Done.
 
 ## How environment values reach Modelica models
 
-Once `Local*` components exist, Modelica models get the values via
-`lunco-cosim`'s `inject_environment` system (TBD — see roadmap):
+Once `Local*` components exist, Modelica models get the values via injection
+systems that run in `EnvironmentSet::Apply` before the cosim propagate step.
+Gravity (`inject_local_gravity_into_cosim`) and solar direction
+(`inject_local_solar_into_cosim`) are implemented; the sketch below shows the
+general pattern a future atmosphere injector would follow:
 
 ```rust
-// Sketch — to be implemented in lunco-cosim
+// Sketch — the generic injection pattern
 fn inject_environment(
     q: Query<(&LocalGravity, Option<&LocalAtmosphere>, &mut SimComponent)>,
 ) {
@@ -245,12 +284,14 @@ injected — opt-in by name.
 
 ## Roadmap
 
-- [x] **Gravity** — `LocalGravity`, `compute_local_gravity` (this crate)
+- [x] **Gravity** — `LocalGravity`, `compute_local_gravity`, `apply_gravity_to_rigid_bodies`, `inject_local_gravity_into_cosim`
+- [x] **Solar direction** — `LocalSolar`, `compute_local_solar`, `inject_local_solar_into_cosim` (sun direction as a cosim output)
+- [x] **Lunar lighting** — `LunarSun`, `EarthshineParams`, `SetEnvironmentLight` tuner, earthshine fill
+- [x] **Horizon self-shadowing** — `HorizonShadowPlugin`, `HorizonMap`
 - [ ] **Atmosphere** — `LocalAtmosphere`, `AtmosphereProvider`, `StandardAtmosphere` model
-- [ ] **Radiation** — `LocalRadiation`, `SolarRadiationProvider`, distance falloff + shadow occlusion
+- [ ] **Solar radiation** — `LocalRadiation` irradiance + eclipse occlusion (distinct from the direction bridge above)
 - [ ] **Magnetic field** — `LocalMagneticField`, dipole + IGRF models
 - [ ] **Ambient temperature** — for thermal subsystem models (radiator design, electronics cooling)
-- [ ] **`inject_environment` in lunco-cosim** — auto-fills `SimComponent.inputs` from `Local*` components based on input name match
 
 ## Design notes
 

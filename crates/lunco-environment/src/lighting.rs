@@ -8,7 +8,7 @@
 //!
 //! This lives in `lunco-environment` because **lighting is environmental
 //! state** — the lighting analog of gravity. Every consumer that reads these
-//! values (the camera spawns in `lunco-celestial` / `lunco-client` /
+//! values (the camera spawns in `lunco-celestial` / `lunco-sandbox` /
 //! `lunco-usd-sim`, and the runtime `SetEnvironmentLight` tuner here) already
 //! sits at or above this crate. The lone exception is the `lunco-usd-bevy`
 //! `DistantLight` loader, which sits *below* environment and therefore cannot

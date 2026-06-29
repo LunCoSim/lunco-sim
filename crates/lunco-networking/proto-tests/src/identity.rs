@@ -1,6 +1,7 @@
 //! M1 — deterministic identity from provenance. Pure logic, no backend.
 //!
-//! Mirrors `IDENTITY.md`. The point of the tests around this module: prove that
+//! Mirrors README → *Entity Identity Mapping*. The point of the tests around this
+//! module: prove that
 //! two independent "processes" loading the same content derive the *same* id with
 //! zero coordination, and that the derivation is a fixed, cross-platform-stable
 //! function (NOT `DefaultHasher`).

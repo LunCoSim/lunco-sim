@@ -22,7 +22,7 @@ All panels are **entity viewers** — they watch a selected entity and render it
      └── Provides WorldPanel for 3D space panels
 ```
 
-See `docs/research-ui-ux-architecture.md` in the workspace root for full architecture research.
+See `docs/architecture/research/ui-ux-inspiration.md` in the workspace for full architecture research.
 
 ### What's Provided
 
@@ -38,9 +38,9 @@ See `docs/research-ui-ux-architecture.md` in the workspace root for full archite
 ### What's NOT Here
 
 - Panel implementations → domain crate `src/ui/`
-- Docking system → `bevy_workbench`
-- Theming → `bevy_workbench`
-- Inspector/console → `bevy_workbench`
+- Docking system → `lunco-workbench`
+- Theming → `lunco-workbench`
+- Inspector/console → `lunco-workbench`
 
 ## Quick Start
 
@@ -49,7 +49,7 @@ See `docs/research-ui-ux-architecture.md` in the workspace root for full archite
 ```toml
 [dependencies]
 lunco-ui = { path = "../lunco-ui" }
-bevy_workbench = { workspace = true }
+lunco-workbench = { path = "../lunco-workbench" }
 ```
 
 ### Create a Panel
@@ -57,12 +57,12 @@ bevy_workbench = { workspace = true }
 ```rust
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::Panel;
 use lunco_ui::prelude::*;
 
 pub struct MyPanel;
 
-impl WorkbenchPanel for MyPanel {
+impl Panel for MyPanel {
     fn id(&self) -> &str { "my_panel_preview" }  // "preview" → center tab
     fn title(&self) -> String { "My Panel".into() }
     fn needs_world(&self) -> bool { true }
@@ -93,4 +93,4 @@ app.register_panel(MyPanel);
 ## See Also
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — detailed mechanisms (WidgetSystem, CommandBuilder, 3D UI)
-- [Workspace UI/UX Research](../../docs/research-ui-ux-architecture.md) — professional tool analysis and architecture decisions
+- [Workspace UI/UX Research](../../docs/architecture/research/ui-ux-inspiration.md) — professional tool analysis and architecture decisions

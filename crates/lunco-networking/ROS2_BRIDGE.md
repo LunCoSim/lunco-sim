@@ -1,5 +1,10 @@
 # ROS2 integration — sync via a bridge, not a new mechanism
 
+> **⚠️ FUTURE — NOT YET IMPLEMENTED.** There is **no ros2/DDS code in `src/`**. This
+> document is a forward-looking design only (Phase 10 of the README roadmap). It
+> describes how a ROS2 bridge *would* slot onto the existing sync layer without
+> adding a new mechanism. Nothing here is shipped.
+
 How rover sync works when ROS2 is in the loop. Short version:
 
 > **ROS2 is not a new sync mechanism (no M8).** It's a **server-side bridge** at the
@@ -79,7 +84,7 @@ ROS expects a **TF tree** with REP-103/REP-105 conventions (right-handed, x-forw
 z-up; metric-scale coords near the frame origin) — `map → odom → base_link → …`.
 Our world is `big_space` cell+offset in Bevy's convention.
 
-**This is the same rebasing we already do per client** (`DESIGN_GAPS.md` A): treat
+**This is the same rebasing we already do per client** (README → *Known gaps*, gap A): treat
 the ROS `map` frame as "the ROS participant's floating origin," anchored at a chosen
 cell. Then:
 - `map` origin ← a cell origin (keeps nav-stack coords small & metric).
@@ -122,7 +127,7 @@ the rebasing code; we add an axis/units conversion at the boundary.
 ## 6. How this stays consistent with the architecture
 - **No new sync mechanism, no new authority model.** ROS = an edge bridge; the
   bridge holds a `Session` and (when controlling) a `NetworkAuthority`.
-- **Selection procedure unchanged** (`MECHANISM_SELECTION.md`): a new ROS-exposed
+- **Selection procedure unchanged** (`SYNC_ARCHITECTURE.md` §9): a new ROS-exposed
   signal is classified internally as usual (telemetry→M2, command→M3/M4); the
   bridge only decides *which topic* mirrors it. "Should this be a ROS topic?" is a
   **bridge-mapping** question, not a mechanism question.
@@ -161,7 +166,8 @@ What it is / isn't (verified, v1.0-rc1):
 | Model | **lockstep** / deterministic replay | server-authoritative + **prediction** (client runs ahead) |
 | Goal | unified execution + exact replay | hide latency, converge despite loss |
 
-So Copper does **not** fill the backend-decision gap (`STACK_COMPARISON.md`) and
+So Copper does **not** fill the backend-decision gap (settled in favour of
+lightyear — see `DECISIONS.md`) and
 does **not** revive lockstep *for us*: it can't run in the browser, and our world
 (avian + async Modelica) isn't a Copper-deterministic system. The two reasons
 lockstep was ruled out (browser clients, non-deterministic physics/cosim) still

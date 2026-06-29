@@ -1,5 +1,7 @@
 # 20 — Modelica Domain
 
+> Status: Active · Audience: contributors on behavioral modeling and the Modelica workbench
+>
 > Behavioral modeling using Modelica + the rumoca runtime. Wired into
 > Bevy ECS as a `ModelicaDocument` per model, stepped in `FixedUpdate` on
 > a background worker thread.
@@ -7,6 +9,24 @@
 > Engineering docs live in
 > [`../../crates/lunco-modelica/`](../../crates/lunco-modelica/) and
 > [`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md).
+
+## Contents
+
+- [1. Scope](#1-scope)
+- [2. Architecture in layers](#2-architecture-in-layers)
+- [3. Runtime architecture — background worker](#3-runtime-architecture--background-worker)
+- [4. Execution pipeline](#4-execution-pipeline)
+- [5. Document System integration](#5-document-system-integration)
+- [6. The `output` convention (rumoca workaround)](#6-the-output-convention-rumoca-workaround)
+- [7. Type vs. instance distinction](#7-type-vs-instance-distinction)
+- [7a. Document identity — three tiers, one truth](#7a-document-identity--three-tiers-one-truth)
+- [8. New-model workflow (target)](#8-new-model-workflow-target)
+- [9. The Modelica diagram editor](#9-the-modelica-diagram-editor)
+- [9c. Canvas animation + multi-user roadmap](#9c-canvas-animation--multi-user-roadmap)
+- [10. Panels (current + planned)](#10-panels-current--planned)
+- [11. Current gaps](#11-current-gaps)
+- [12. Dymola-workflow parity](#12-dymola-workflow-parity)
+- [13. See also](#13-see-also)
 
 ## 1. Scope
 
@@ -356,9 +376,9 @@ rules:
   spec means by name resolution.
 
 See
-[`../../crates/lunco-modelica/src/ui/panels/diagram.rs`](../../crates/lunco-modelica/src/ui/panels/diagram.rs)
+[`../../crates/lunco-modelica/src/ui/panels/canvas_projection.rs`](../../crates/lunco-modelica/src/ui/panels/canvas_projection.rs)
 (`import_model_to_diagram`) for the call site, and
-[`../../crates/lunco-modelica/src/document.rs`](../../crates/lunco-modelica/src/document.rs)
+[`../../crates/lunco-modelica/src/document/core.rs`](../../crates/lunco-modelica/src/document/core.rs)
 (`resolve_class`) for the class-path resolver used by AST ops.
 
 ## 6. The `output` convention (rumoca workaround)
@@ -932,9 +952,9 @@ finishing the acausal-connector visuals on `lunco-canvas`.
 ### Source
 
 - [`../../crates/lunco-modelica/`](../../crates/lunco-modelica/) — crate root
-- [`../../crates/lunco-modelica/src/document.rs`](../../crates/lunco-modelica/src/document.rs) — `ModelicaDocument`, op set, apply pipeline, span-based patch helpers, qualified-path `resolve_class`
+- [`../../crates/lunco-modelica/src/document/core.rs`](../../crates/lunco-modelica/src/document/core.rs) — `ModelicaDocument`, op set, apply pipeline, span-based patch helpers, qualified-path `resolve_class`
 - [`../../crates/lunco-modelica/src/pretty.rs`](../../crates/lunco-modelica/src/pretty.rs) — subset pretty-printer, `PrettyOptions`
-- [`../../crates/lunco-modelica/src/ui/panels/diagram.rs`](../../crates/lunco-modelica/src/ui/panels/diagram.rs) — diagram panel, sync-from-document, wire/position diffing, scope-aware type lookup
+- [`../../crates/lunco-modelica/src/ui/panels/canvas_projection.rs`](../../crates/lunco-modelica/src/ui/panels/canvas_projection.rs) — diagram panel, sync-from-document, wire/position diffing, scope-aware type lookup
 - [`../../crates/lunco-modelica/src/ui/panels/code_editor.rs`](../../crates/lunco-modelica/src/ui/panels/code_editor.rs) — code editor, debounced commit (`EDIT_DEBOUNCE_SEC`), word-wrap toggle
 
 ### Adjacent docs

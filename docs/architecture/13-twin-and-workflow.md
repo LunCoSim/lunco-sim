@@ -1,9 +1,32 @@
 # 13 — Twin and Workflow
 
+> Status: Active · Audience: contributors working on Twins, persistence, and workflow (§3a is flagged aspirational inline)
+>
 > **Twin** is LunCoSim's top-level persistent artifact: a folder of related
 > domain-standard files plus a tool-specific manifest. This doc defines
 > what's in a Twin, how it loads/saves, how users work inside and outside
 > a Twin, and how cross-document references survive edits.
+
+## Contents
+
+- [1. What a Twin is](#1-what-a-twin-is)
+- [1a. Three modes: File, Folder, Twin](#1a-three-modes-file-folder-twin)
+- [1b. What's in a Twin — Documents, file references, endpoints](#1b-whats-in-a-twin--documents-file-references-endpoints)
+- [2. Structure inside a Twin — flexible](#2-structure-inside-a-twin--flexible)
+- [3. The `twin.toml` manifest](#3-the-twintoml-manifest)
+- [3a. Twin is the simulation control surface — ASPIRATIONAL (not yet built)](#3a-twin-is-the-simulation-control-surface--aspirational-not-yet-built)
+- [4. Orphan documents — working outside a Twin](#4-orphan-documents--working-outside-a-twin)
+- [5. Session state — separate from Twin content](#5-session-state--separate-from-twin-content)
+- [5a. Journal — `lunco-twin-journal` subsystem](#5a-journal--lunco-twin-journal-subsystem)
+- [6. Startup flow](#6-startup-flow)
+- [7. Creating a new Document — unified across types](#7-creating-a-new-document--unified-across-types)
+- [8. Save, load, move, rename](#8-save-load-move-rename)
+- [9. Reference strategies — the "hybrid" default](#9-reference-strategies--the-hybrid-default)
+- [10. External libraries](#10-external-libraries)
+- [11. Git and collaboration edge cases](#11-git-and-collaboration-edge-cases)
+- [12. App composition and startup](#12-app-composition-and-startup)
+- [13. Future: live-collab Twins](#13-future-live-collab-twins)
+- [14. See also](#14-see-also)
 
 ## 1. What a Twin is
 
@@ -253,13 +276,21 @@ default = "build"                 # which workspace opens by default
 Minimal Twin = just `[project]` + `[modelica]` (or whichever domains are
 used). Everything else has sensible defaults.
 
-## 3a. Twin is the simulation control surface
+## 3a. Twin is the simulation control surface — ASPIRATIONAL (not yet built)
 
-Twin is not only an on-disk manifest — at runtime it's a **live Bevy
+> **Status: design / not implemented.** Today the Twin is a plain filesystem
+> container (a folder + `twin.toml` manifest, owned through `lunco-twin` /
+> `lunco-workspace`). The live-`Resource` control plane and the `TwinCommand`
+> queue described below **do not exist in code** — there is no `TwinCommand`
+> type. Control actions currently flow through the existing command/API fabric
+> (`CommandMessage`, the HTTP `/api/commands` endpoint, cosim/run systems), not
+> through a Twin-owned queue. This section is the target design.
+
+Twin is not only an on-disk manifest — at runtime it would be a **live Bevy
 `Resource`** that owns the simulation control plane for its slice of
 the world. Full design in
 [`14-simulation-layers.md`](14-simulation-layers.md). Key points that
-affect Twin authoring:
+would affect Twin authoring:
 
 - `twin.toml` grows a `[scenarios.*]` section declaring named
   simulation graphs; scenario files live under `<twin>/scenarios/`.
@@ -573,7 +604,7 @@ system) reads and writes through it.
 
 ## 6. Startup flow
 
-All three apps (`sandbox`, `lunco_client`, `lunica`)
+All three apps (`lunco-sandbox`, `luncosim`, `lunica`)
 share the same logic:
 
 ```
@@ -631,8 +662,8 @@ The Examples list is **filtered per app** to what it knows how to open:
 | App | Examples shown |
 |-----|----------------|
 | `lunica` | Modelica-only models |
-| `sandbox` | 3D sandbox scenarios |
-| `lunco_client` | All examples |
+| `lunco-sandbox` | 3D sandbox scenarios |
+| `luncosim` | All examples |
 
 ## 7. Creating a new Document — unified across types
 
@@ -931,8 +962,8 @@ Three categories:
 
 ### Key insight: apps differentiate by plugins, not by hardcoded scenes
 
-The three binaries — `lunica`, `sandbox`,
-`lunco_client` — share the **same Twin-loading machinery** from
+The three binaries — `lunica`, `lunco-sandbox`,
+`luncosim` — share the **same Twin-loading machinery** from
 `lunco-workbench` and `lunco-twin`. They differ only in:
 
 1. **Which domain plugins they register** (what Document types the app
@@ -948,8 +979,8 @@ uniformly for all of them.
 | App | Default Workspace | Domain plugins registered | Welcome examples shown |
 |-----|-------------------|---------------------------|------------------------|
 | `lunica` | **Analyze** | `ModelicaPlugin` + `ModelicaInspectorPlugin` | Modelica examples only (circuit, spring-mass, thermal, …) |
-| `sandbox` | **Build** | `CoSimPlugin`, `ModelicaCorePlugin`, `SandboxEditPlugin`, `EnvironmentPlugin`, `UsdPlugins`, `Mobility`, `Controller`, `Avatar`, … | Sandbox examples (rover-on-moon, balloon-test, …) |
-| `lunco_client` | **Build** (or last-used) | All of the above + `CelestialPlugin` + `LuncoUiPlugin` (MissionControl) | All examples, categorized |
+| `lunco-sandbox` | **Build** | `CoSimPlugin`, `ModelicaCorePlugin`, `SandboxEditPlugin`, `EnvironmentPlugin`, `UsdPlugins`, `Mobility`, `Controller`, `Avatar`, … | Sandbox examples (rover-on-moon, balloon-test, …) |
+| `luncosim` | **Build** (or last-used) | All of the above + `CelestialPlugin` + `LuncoUiPlugin` (MissionControl) | All examples, categorized |
 
 A `lunco-workbench` config type (passed to `WorkbenchPlugin`) declares
 which domains + workspaces this app supports. The workbench uses it to:
@@ -1001,8 +1032,8 @@ Each app exposes relevant `File → New →` items based on what it can edit:
 | App | New menu items |
 |-----|---------------|
 | `lunica` | New Modelica Model, New Modelica Package |
-| `sandbox` | New Scene (USD), New Twin, New Modelica Model |
-| `lunco_client` | New Scene, New Modelica Model, New Mission, New SysML Block, New Twin |
+| `lunco-sandbox` | New Scene (USD), New Twin, New Modelica Model |
+| `luncosim` | New Scene, New Modelica Model, New Mission, New SysML Block, New Twin |
 
 Across all three, the Command Palette can find any action — even if a
 menu item isn't exposed. Power users get uniform access.

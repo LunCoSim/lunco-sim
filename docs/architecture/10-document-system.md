@@ -1,5 +1,7 @@
 # 10 — Document System
 
+> Status: Active · Audience: contributors touching persistence, views, or ECS derivation
+>
 > The foundational data model of LunCoSim. Establishes what a "Document"
 > is, how views observe it, how edits flow, and how runtime ECS is derived.
 
@@ -246,10 +248,11 @@ impl<D: Document> DocumentHost<D> {
 }
 ```
 
-`DocumentHost` knows nothing about views, UI, or Bevy. Panels (in
-`lunco-ui`, future) drive it: they read via `document()`, emit ops
-by calling `apply()`, and re-render when `generation()` advances.
-This keeps the core headless and testable.
+`DocumentHost` knows nothing about views, UI, or Bevy. Panels (hosted by
+`lunco-workbench`, with widgets in `lunco-ui` and per-domain `ui` modules)
+drive it: they read via `document()`, emit ops by calling `apply()`, and
+re-render when `generation()` advances. This keeps the core headless and
+testable.
 
 ## 4. Documents and the ECS projection
 
@@ -497,17 +500,24 @@ Once the Document System is in place:
 |-------|-------|--------|
 | 1 | Design complete (this doc). | ✅ |
 | 2 | Implement `Document` / `DocumentOp` / `DocumentHost` / `DocumentError` / `DocumentId` in `lunco-doc`. Zero runtime deps. Unit tests. | ✅ |
-| 3 | `lunco-twin` crate: TwinManifest, DocumentRegistry, CacheRegistry, TwinTransaction. File I/O per domain. | next |
-| 4 | Modelica domain: `ModelicaDocument` + ops, migrate CodeEditor to DocumentView pattern to prove the API. | |
-| 5 | Modelica: full op set, Diagram ↔ Code sync, solves `modelica-editor-gaps.md` P0 items. | |
-| 6 | USD domain: basic ops (prim add/remove, attribute set, transform). Scene tree + 3D viewport + USDA text all view the same document. | |
+| 3 | `lunco-twin` crate (TwinManifest, document-kind registry, file I/O), plus `lunco-workspace` (editor session: open Twins + active doc/perspective) and `lunco-storage` (I/O-only backend). | ✅ |
+| 4 | Modelica domain: `ModelicaDocument` + ops, CodeEditor migrated to the DocumentView pattern. | ✅ |
+| 5 | Modelica: full op set, Diagram ↔ Code sync. | ✅ |
+| 6 | USD domain: ops (prim add/remove, attribute set, transform). Scene tree + 3D viewport + USDA text all view the same document. | ✅ |
 | 7 | Mission document (first entirely-new domain). | |
 | 8 | SysML document (structure + requirements only — see principles.md Article III). | |
 | 9 | Live-sync layer (Nucleus / CRDT / Yjs integration). | |
 
-Phase 4 is the go-no-go. If the API feels right after migrating one
-panel, commit to the pattern across the codebase. If it feels wrong,
-iterate in `lunco-doc` before going broader.
+> **Unified diagnostics substrate (shipped).** `lunco-doc/src/diagnostics.rs`
+> defines the neutral `Diagnostic` / `DiagnosticSeverity` / `CompileState` types
+> and the per-document `DocDiagnostics`; `lunco-doc-bevy` exposes the
+> `DocumentDiagnostics` resource (every domain's compile state in one place) plus
+> a `status_json` shape consumed by the UI/API. Modelica's `ScriptStatus` and
+> rhai both report through it; the remaining Modelica-specific diagnostics paths
+> are being migrated onto it.
+
+Phase 4 was the go-no-go and it passed: the pattern now spans Modelica and USD,
+and the `lunco-twin` / `lunco-workspace` / `lunco-storage` split shipped.
 
 ## 13. Open questions (to resolve as we migrate the first domain)
 
@@ -561,7 +571,7 @@ this decision: [`research/undo-redo-libraries.md`](research/undo-redo-libraries.
 - [`00-overview.md`](00-overview.md) — three-tier architecture, where Documents fit
 - [`01-ontology.md`](01-ontology.md) § 4c — Document/DocumentOp/DocumentView in the ontology
 - [`11-workbench.md`](11-workbench.md) — how panels (DocumentViews) are hosted by the workbench
-- [`20-domain-modelica.md`](20-domain-modelica.md) — first planned domain implementation (ModelicaDocument)
+- [`20-domain-modelica.md`](20-domain-modelica.md) — first (shipped) domain implementation (ModelicaDocument)
 - [`21-domain-usd.md`](21-domain-usd.md) — USD as a second Document domain
 - [`research/undo-redo-libraries.md`](research/undo-redo-libraries.md) — library survey & decision rationale
 

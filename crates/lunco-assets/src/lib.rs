@@ -380,7 +380,7 @@ pub fn assets_dir() -> PathBuf {
 /// Cache `models/` directory — where `lunco-assets -- download`
 /// materialises 3D model binaries declared in per-crate `Assets.toml`
 /// (`.glb`, `.gltf`, `.obj`, `.stl`). Served at runtime via the
-/// `lunco-lib://` Bevy `AssetSource` registered in `lunco-client`.
+/// `lunco-lib://` Bevy `AssetSource` registered in `lunco-sandbox`.
 /// Mirrors [`textures_dir`] for textures.
 pub fn models_dir() -> PathBuf {
     cache_subdir("models")

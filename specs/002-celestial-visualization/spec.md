@@ -4,7 +4,7 @@
 **Created**: 2026-03-31
 **Updated**: 2026-04-01
 **Status**: Implemented & Stable
-**Dependencies**: References `006-time-and-integrators` (advanced time/PhysicsMode), `009-coordinate-frame-tree` (advanced CFT)
+**Dependencies**: References advanced time/PhysicsMode (deferred — not yet specced), `009-coordinate-frame-tree` (advanced CFT)
 **Input**: User description: "I want to have model of Earth/Moon/Sun system, kind of like kerbal. It has to be simple. I want to use exponential camera. I want to be able to rotate it. Ideally I want to visualise position/trajectory of Artemis 2 mission there. Earth and Moon should be simple spheres. Position of three bodies must be real based on real data. We should be able to set time when it happens. If we get close we should be able to drive rovers."
 
 ## Scope & Philosophy
@@ -22,7 +22,7 @@ This spec lays the **foundational world architecture** for a solar-scale lunar c
 - SOI transitions and grid re-parenting
 
 **This spec does NOT own (deferred to other specs):**
-- Advanced time decoupling, integrators, PhysicsMode state machine → `006-time-and-integrators`
+- Advanced time decoupling, integrators, PhysicsMode state machine → deferred (advanced time/PhysicsMode — not yet specced)
 - Full coordinate frame tree with URDF/USD mapping → `009-coordinate-frame-tree`
 - Full astronomical environment (Lagrange points, n-body, asteroid belts) → `018-astronomical-environment`
 - Environmental hazards (radiation, thermal) → deferred
@@ -135,7 +135,7 @@ As a mission planner, I want to scrub through time at different speeds (X1 to X1
 **Acceptance Scenarios**:
 
 1.  **Given** the simulation is at **X1 speed**, **When** running, **Then** the **Celestial Clock** advances in real-time and body positions update from ephemeris.
-2.  **Given** the simulation is at **≥X100 speed**, **When** time is compressed, **Then** body positions update correctly from ephemeris. High-fidelity physics integration is suspended (deferred to `006` for the `PhysicsMode` state machine).
+2.  **Given** the simulation is at **≥X100 speed**, **When** time is compressed, **Then** body positions update correctly from ephemeris. High-fidelity physics integration is suspended (the `PhysicsMode` state machine is deferred — advanced time/PhysicsMode, not yet specced).
 3.  **Given** time is scrubbed, **When** UI/Camera input is received, **Then** the **Application Clock** ensures UI remains responsive regardless of celestial time speed.
 
 ### User Story 5 - Lightweight Reference Textures (Priority: P2)
@@ -189,7 +189,7 @@ As a developer, I want to run the flat-ground sandbox for quick physics iteratio
 -   **FR-010**: **Basic Clock Architecture**: Two clocks owned by this spec:
     -   **Celestial Clock**: Julian Date TDB internally, UTC for display. Scrubbable (X1 to X1M). Drives ephemeris queries and body positions.
     -   **Application Clock**: Standard Bevy `Time` (always 1.0×). Drives UI, Camera, and Avatar movement.
-    -   *(The Robotics Clock and advanced PhysicsMode transitions are owned by `006-time-and-integrators`.)*
+    -   *(The Robotics Clock and advanced PhysicsMode transitions are deferred — advanced time/PhysicsMode, not yet specced.)*
 -   **FR-011**: **Pluggable Gravity Model Architecture**: A `trait GravityModel` interface that allows different gravity implementations per body and per scale. This spec implements **point-mass gravity** as the default. The global avian `Gravity` resource is set by the celestial plugin based on the nearest body (AD-2).
     -   **Surface gravity**: Constant downward vector derived from body's GM and radius.
     -   **Orbital gravity**: Point-mass attraction from the dominant body (SOI parent).
@@ -211,7 +211,7 @@ As a developer, I want to run the flat-ground sandbox for quick physics iteratio
 -   **FR-024**: **Sphere-Terrain Layering** (AD-12): When terrain tiles are active, the sphere mesh remains visible underneath. Tiles are offset at `radius + 0.01m` to avoid Z-fighting. Sphere provides the horizon; tiles provide collision and local detail. Curvature error: 7.2m per 10km tile on Moon (acceptable).
 -   **FR-025**: **Dynamic Camera Clip Planes** (AD-13): Camera `near` clip plane adjusts dynamically based on surface distance ($altitude \times 0.001$). CLAMPED to range [0.1, 10000.0]. The 10km maximum limit is essential for maintaining solar visibility at 1 AU scale.
 -   **FR-026**: **System Ordering**: All celestial systems MUST execute in deterministic order: clock tick → ephemeris update → body rotation → sun light → SOI check → gravity update → terrain spawn → camera → clip planes. Registered as `.chain()` in `CelestialPlugin`.
--   **FR-027**: **TimeWarp State Interface**: A `TimeWarpState` resource published by `lunco-celestial` indicates current time compression speed and whether physics should be active (`physics_enabled = false` when `speed > 100×`). Physics crates gate their systems on this resource. Full PhysicsMode state machine deferred to `006-time-and-integrators`.
+-   **FR-027**: **TimeWarp State Interface**: A `TimeWarpState` resource published by `lunco-celestial` indicates current time compression speed and whether physics should be active (`physics_enabled = false` when `speed > 100×`). Physics crates gate their systems on this resource. Full PhysicsMode state machine deferred (advanced time/PhysicsMode — not yet specced).
 -   **FR-028**: **Input Conflict Resolution**: Only the active camera (ObserverCamera or AvatarCamera) consumes input. An `ActiveCamera` marker component gates input systems. During handoff, the marker is atomically moved between cameras.
 
 ### Key Entities
@@ -258,9 +258,9 @@ As a developer, I want to run the flat-ground sandbox for quick physics iteratio
 -   **Patched conics / n-body propagation** → `018-astronomical-environment`
 -   **Lagrange points, asteroid belts** → `018-astronomical-environment`
 -   **Spherical harmonics / mascon gravity models** → `018` or dedicated spec
--   **PhysicsMode state machine (FullPhysics/OnRails/HybridBlend)** → `006-time-and-integrators`
--   **Robotics Clock** → `006-time-and-integrators`
--   **Analytical Accounting (power/thermal during time warp)** → `006` + `029-power-systems`
+-   **PhysicsMode state machine (FullPhysics/OnRails/HybridBlend)** → deferred (advanced time/PhysicsMode — not yet specced)
+-   **Robotics Clock** → deferred (advanced time/PhysicsMode — not yet specced)
+-   **Analytical Accounting (power/thermal during time warp)** → deferred (advanced time/PhysicsMode + power systems — not yet specced)
 -   **Deformable terrain, heightmaps, terrain streaming** → future terrain spec
 -   **Environmental hazards (radiation, thermal, dust)** → future specs
 -   **Multiplayer networking** → `005-multiplayer-core`

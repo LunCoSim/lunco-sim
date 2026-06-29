@@ -61,8 +61,8 @@ with their `overrides` + `bounds` so a sweep's runs are self-describing.
 
 For parameter sweeps, prefer `RunExperiment` (explicit `overrides`) over
 mutating the source — each run becomes a proper `Experiment` with its
-override set recorded. Runs are one-at-a-time today (single-run gate);
-parallel + compile-once is a roadmap item.
+override set recorded. A sweep's runs execute **in parallel** and the model
+is **compiled once** and shared across runs (see `experiments_runner.rs`).
 
 ## Architecture at a glance
 
@@ -80,7 +80,7 @@ Op set: `ReplaceSource`, `EditText`, `AddComponent`,
 ones — is applied as a span-located text patch, so comments and
 formatting outside the edited range stay intact.
 
-See [`src/document.rs`](src/document.rs) for the full op surface and
+See [`src/document/core.rs`](src/document/core.rs) for the full op surface and
 [`src/pretty.rs`](src/pretty.rs) for the subset pretty-printer used
 when emitting new nodes.
 
@@ -138,7 +138,7 @@ lines scroll horizontally, matching VS Code's default).
 | Telemetry | `modelica_inspector` | Right dock | Parameters, inputs, variable toggles |
 | Graphs | `modelica_console` | Bottom dock | Time-series plots |
 
-Users can drag, split, tab, and float panels freely. Layout persists via `bevy_workbench` persistence.
+Users can drag, split, tab, and float panels freely. Layout persists via `lunco-workbench` persistence.
 
 ## Binaries
 
@@ -194,7 +194,7 @@ no silent stall regardless of model size.
 ## Key Dependencies
 
 - `rumoca-session`, `rumoca-phase-parse` — Modelica compilation (LunCoSim/rumoca fork)
-- `bevy_workbench` — docking, persistence, panel system
+- `lunco-workbench` — docking, persistence, panel system
 - `lunco-canvas` — interactive diagram rendering substrate
 - `egui_plot` — time-series charts
 
@@ -202,7 +202,6 @@ no silent stall regardless of model size.
 
 - [**Modelica Domain Architecture**](../../docs/architecture/20-domain-modelica.md) — full design doc: document model, op set, pretty-printer, name resolution (MLS §5.3), diagram ↔ code sync
 - [Document System Foundation](../../docs/architecture/10-document-system.md) — shared `Document` / `DocumentOp` / `DocumentHost` trait layer
-- [Workspace UI/UX Research](../../docs/research-ui-ux-architecture.md) — architecture decisions
-- [Plan: Switch to Parser](../../docs/plan-switch-to-parser.md) — regex → AST migration
+- [Workspace UI/UX Research](../../docs/architecture/research/ui-ux-inspiration.md) — architecture decisions
 - [Modelica Language Specification §5.3](https://specification.modelica.org/maint/3.7/class-predefined-types-and-declarations.html#static-name-lookup) — the static name lookup rules our type resolver follows
 - [Modelica Language Specification §18](https://specification.modelica.org/maint/3.7/annotations.html) — `Placement`, `Line`, `Icon` annotation shapes

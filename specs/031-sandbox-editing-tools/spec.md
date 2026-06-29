@@ -2,7 +2,7 @@
 
 **Feature Branch**: `031-sandbox-editing-tools`
 **Created**: 2026-04-09
-**Status**: Draft
+**Status**: Implemented
 **Input**: Add spawn panel, gizmo tools, terrain editing, and parameter editing to the sandbox
 
 ## Problem Statement

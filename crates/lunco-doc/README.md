@@ -1,13 +1,20 @@
 # lunco-doc
 
 Document System foundation for LunCoSim — `Document`, `DocumentOp`, and
-`DocumentHost` with built-in undo/redo. Zero runtime dependencies;
-UI-free; headless-capable.
+`DocumentHost` with built-in undo/redo. UI-free; headless-capable.
 
 This crate defines the **shape** of canonical, mutable, observable
 structured artifacts used throughout LunCoSim (Modelica models, USD
 scenes, SysML blocks, missions, connection graphs). Domain crates
 provide concrete implementations; apps compose them inside a Twin.
+
+**Dependencies.** Not dependency-free anymore: it pulls `lunco-core`
+(for the `Mutation` / `Ack` / `Reject` envelope + `OpId` / `SessionId`),
+`bevy_reflect` (so `DocumentId` derives `Reflect`), and `serde` /
+`serde_json` (stable disk + wire formats — journal entries, save/restore,
+`status_json`, lunco-api command payloads). `lunco-core` drags bevy in
+transitively, a regression on the original "headless data model" stance;
+splitting a bevy-free identity sub-crate out is the long-term move.
 
 **Unix convention.** A Document *is* a file. We do not invent a
 container format — `.mo` files, `.usda` stages, `.sysml` sources
@@ -21,16 +28,33 @@ tracked by the Twin and edited externally. See
 
 | Type | Role |
 |------|------|
-| [`DocumentId`] | Stable `u64` identifier for a Document |
+| [`DocumentId`] | Stable `u64` identifier for a Document (derives `Reflect`) |
 | [`DocumentOp`] | Marker trait — every Op type implements it |
 | [`Document`] | Per-domain trait: `id`, `generation`, `apply(op) -> inverse` |
-| [`DocumentHost<D>`] | Wraps a Document + undo/redo stacks |
-| [`DocumentError`] | Fallible-apply error type |
+| [`DocumentHost<D>`] | Wraps a Document + undo/redo stacks, op-id dedup, recorder |
+| [`DocumentError`] | Fallible-apply error type (`ValidationFailed` / `ReadOnly` / `Internal`) |
+| [`DocumentOrigin`] | Where a doc came from (`Untitled` / `Bundled` / `File`); drives save + read-only |
+| `Mutation` / `Ack` / `Reject` | Re-exported from `lunco-core` — the apply envelope (op-id, parent-gen, origin) |
+
+### Cross-document + domain machinery
+
+| Type | Role |
+|------|------|
+| [`SymbolPath`] | Opaque, domain-agnostic path into a Document (`Rocket.engine.thrust`, `/World/Rocket.translate`, …) |
+| [`Resolver`] | Trait — resolve a `SymbolPath` to a domain handle inside one doc |
+| [`DomainEngine`] | In-process owner of a domain's parser session; projects docs into a UI `Index`. Modelica + USD impl today |
+| [`RefIndex`] | Workspace-wide cross-document reference table (defines / dependents) for rename + dangling-ref validation |
+| `CompileState` / `Diagnostic` / `DiagnosticSeverity` | Unified diagnostics vocabulary |
+| [`DocDiagnostics`] / `status_json` | One doc's compile state + diagnostics; canonical status JSON shape (data-only, no Bevy) |
+| [`OpRecorder`] | Auto-bridge seam — installed on a host, records every apply/undo/redo `(forward, inverse)` pair into external history (Twin journal) with provenance |
+
+The Bevy `Resource` that stores `DocDiagnostics` per `DocumentId`
+(`DocumentDiagnostics`) lives in `lunco-doc-bevy`, not here.
 
 ## Minimal usage
 
 ```rust
-use lunco_doc::{Document, DocumentOp, DocumentHost, DocumentError, DocumentId};
+use lunco_doc::{Document, DocumentOp, DocumentHost, DocumentError, DocumentId, Mutation};
 
 struct Counter { id: DocumentId, value: i32, generation: u64 }
 
@@ -53,7 +77,8 @@ impl Document for Counter {
 let mut host = DocumentHost::new(Counter {
     id: DocumentId::new(1), value: 0, generation: 0,
 });
-host.apply(CounterOp::Inc(5)).unwrap();
+// `apply` takes a Mutation envelope; a bare op converts to a local one.
+host.apply(Mutation::local(CounterOp::Inc(5))).unwrap();
 assert_eq!(host.document().value, 5);
 host.undo().unwrap();
 assert_eq!(host.document().value, 0);
@@ -79,8 +104,11 @@ assert_eq!(host.document().value, 5);
 
 ## What this crate does NOT do (yet)
 
-- **Op serialization.** No `Serialize`/`Deserialize` bounds on `DocumentOp`
-  yet. Added when persistence or collaboration require it.
+- **Generic op serialization.** The identity + envelope types (`DocumentId`,
+  `SymbolPath`, `DocumentOrigin`, `NodeId`, `SymbolRef`, `Mutation`) *do* derive
+  `serde` now — used for the journal, `status_json`, and command payloads. What's
+  still absent is a `Serialize`/`Deserialize` bound on the `DocumentOp` trait
+  itself; concrete domain ops opt in as needed.
 - **Bevy integration.** `DocumentHost` is a plain struct, not a
   `Component`. Apps that need ECS integration wrap it themselves.
 - **Change notification beyond generation.** A generation bump is the
@@ -145,7 +173,7 @@ error-on-invalid-op, multi-step round-trip, new-op-clears-redo.
 ## Crate graph
 
 ```
-lunco-doc            ← this crate (no runtime deps)
+lunco-doc            ← this crate (deps: lunco-core, bevy_reflect, serde)
    ▲
    │ used by
    ├── lunco-twin    ← Twin container, DocumentRegistry, manifest

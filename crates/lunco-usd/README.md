@@ -1,26 +1,50 @@
 # lunco-usd
 
-The **High-Level Orchestrator and Engineering Metadata** bridge for USD.
+The **high-level orchestrator** for LunCoSim's USD (Universal Scene Description)
+system. It loads rover/scene definitions from USD files and maps them to Bevy
+entities with Avian3D physics and LunCoSim simulation components.
 
-## Rationale
-This crate acts as the central integration hub for all USD-related modules. It provides the `UsdPlugins` bundle, which registers the visual, physics, and simulation layers in the correct order.
+## `UsdPlugins`
 
-Additionally, this crate maps **LunCo-specific Engineering Metadata** (`lunco:*` namespace). While standard USD schemas handle physics and visuals, LunCo rovers require simulation-only metadata like Ephemeris IDs, hit radii for sensors, and telemetry port mappings that aren't defined in standard OpenUSD.
+A convenience bundle (`app.add_plugins(UsdPlugins)`) that wires the real,
+existing subsystems:
 
-## Key Functions & Features
+- **`UsdBevyPlugin`** (from `lunco-usd-bevy`) — visual sync: spawns child
+  entities for USD prims, attaches meshes + transforms + hierarchy.
+- **`UsdAvianPlugin`** (from `lunco-usd-avian`) — physics mapping: USD physics
+  attributes → Avian3D `RigidBody` / `Collider` / `Mass` / `Damping`.
+- **`UsdSimPlugin`** (from `lunco-usd-sim`) — simulation mapping: detects sim
+  schemas and creates `WheelRaycast` / FSW / `DifferentialDrive` components.
+- **`UsdCommandsPlugin`** (this crate, `commands` module) — the **headless-safe**
+  document/file verb layer: `ApplyUsdOp`, `OpenFile` / `NewDocument` /
+  `SaveDocument` observers, the async load pipeline, and the twin-scene
+  resolver. Added unconditionally so server / sandbox / networking bins get the
+  full USD document surface (egui-free).
 
-### 1. `UsdPlugins`
-A convenience bundle that adds all modular USD layers:
-*   `UsdBevyPlugin`: Visuals and Transforms.
-*   `UsdAvianPlugin`: Standard OpenUSD Physics.
-*   `UsdSimPlugin`: NVIDIA vehicle schemas and simulation behavior intercepts.
-*   `UsdLunCoPlugin`: Engineering metadata mapping.
+> There is **no `UsdLunCoPlugin`** — that was an old doc artifact.
 
-### 2. `UsdLunCoPlugin` (Metadata Mapping)
-Maps attributes in the `lunco:` namespace to Bevy components:
-*   `lunco:name` -> `Spacecraft::name`
-*   `lunco:ephemeris_id` -> `Spacecraft::ephemeris_id`
-*   `lunco:hit_radius_m` -> `Spacecraft::hit_radius_m`
+## UI plugins (`ui` feature only)
 
-## Architecture
-This crate ensures that standard-compliant USD models are enriched with the engineering data required for mission-critical lunar simulation without polluting standard visual or physics schemas.
+Behind the `ui` feature the `ui` module adds the egui browser/viewport panels,
+added separately by app composition (not by `UsdPlugins`):
+
+- **`UsdUiPlugin`** — Twin browser / loaded-stages / dispatch panels.
+- **`UsdViewportPlugin`** — `UsdViewportPanel`, the 3D scene of the active USD
+  document rendered into the dock.
+
+## Document model
+
+The egui-free USD document model lives in `document` (`UsdDocument`, `UsdOp`,
+`UsdChange`, `LayerId`) + `registry` (`UsdDocumentRegistry`). Edits author
+through openusd's `Stage` by SDF path (`lunco_usd_bevy::author`) — the old
+byte-splicing text editor is gone.
+
+## Engineering metadata
+
+LunCoSim enriches standard-compliant USD with simulation-only metadata in the
+`lunco:*` namespace (Ephemeris IDs, sensor hit radii, telemetry port mappings)
+that standard OpenUSD schemas don't define — without polluting standard visual
+or physics schemas.
+
+See [docs/architecture/21-domain-usd.md](../../docs/architecture/21-domain-usd.md)
+for the full architecture.

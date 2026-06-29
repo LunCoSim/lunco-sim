@@ -2,7 +2,7 @@
 
 **Feature Branch**: `003-astronaut-character`
 **Created**: 2026-03-31
-**Status**: Draft
+**Status**: Partial — avatar as camera/intents/recording only; no IK/skeleton/animation.
 **Input**: User description: "we need a simple astronaut character. It must be lightweight and generated. We should use kinematics + maybe lightweght neuralnets with basic bones for animating astronaut. It's ok to prepender some of the animations once downloaded. We will need basic movements and jumps at minimum. Idually we also need crawls, and interactions with doors, driving rover and maybe something more like interaction with the environment"
 
 ## User Scenarios & Testing *(mandatory)*

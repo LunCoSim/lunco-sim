@@ -12,7 +12,7 @@
 //! chasing jitter:
 //!
 //! ```text
-//! cargo run -p lunco-client --bin sandbox --features networking,net-diag \
+//! cargo run -p lunco-sandbox --bin sandbox --features networking,net-diag \
 //!     -- --connect 127.0.0.1:5888 --api 4002 --no-throttle
 //! ```
 //!
@@ -24,7 +24,7 @@
 //!   backward against its travel direction = the visible stutter, reported with the
 //!   gid and which prediction set it's in. Catches jitter from ANY layer (this is
 //!   what localised the `interpolate_all()` Transform-reset bug — see
-//!   `SYNC_ARCHITECTURE.md` §4.1 + `PREDICT_AND_SMOOTH_PLAN.md` ★OUTCOME).
+//!   `SYNC_ARCHITECTURE.md` §4.1 + README → *Client-Side Prediction*).
 //! - **vel** — a replicated body moving implausibly fast = bad feed-forward (the
 //!   deadbeat `(target−pos)/h` bug hit ~50 m/s) or a diverging authoritative body
 //!   (a runaway cosim balloon hit ~200 m/s).

@@ -23,13 +23,15 @@ The canvas is designed around three main extension seams:
 | **Overlay** | Floating screen-space UI elements (nav bars, toolbars) |
 
 ```
-lunco-canvas/
+lunco-canvas/src/
   ├── canvas.rs     — Main Canvas widget and UI loop
   ├── scene.rs      — Data model: Scene, Node, Edge, Port
   ├── viewport.rs   — Viewport math (zoom, pan, smoothing)
-  ├── tool/         — Input handling traits and DefaultTool
-  ├── layer/        — Render pass implementations (Grid, Nodes, Edges)
-  ├── visual/       — Visual representation traits and registries
+  ├── event.rs      — Canvas input/interaction events
+  ├── tool.rs       — Input handling traits and DefaultTool
+  ├── layer.rs      — Render pass implementations (Grid, Nodes, Edges)
+  ├── overlay.rs    — Floating screen-space UI (nav/toolbars)
+  ├── visual.rs     — Visual representation traits and registries
   └── selection.rs  — Selection state management
 ```
 

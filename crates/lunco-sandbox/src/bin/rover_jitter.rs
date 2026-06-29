@@ -17,9 +17,9 @@
 //!                   suspension reading the authored spring values).
 //!
 //! ```text
-//! cargo run -p lunco-client --bin rover_jitter -j2 -- --suspension=none
-//! cargo run -p lunco-client --bin rover_jitter -j2 -- --suspension=spring
-//! cargo run -p lunco-client --bin rover_jitter -j2 -- --suspension=none --drive=0.6
+//! cargo run -p lunco-sandbox --bin rover_jitter -j2 -- --suspension=none
+//! cargo run -p lunco-sandbox --bin rover_jitter -j2 -- --suspension=spring
+//! cargo run -p lunco-sandbox --bin rover_jitter -j2 -- --suspension=none --drive=0.6
 //! ```
 //!
 //! A settled rover has chassis |ω| ≈ 0 and |v| ≈ 0. A jittering one

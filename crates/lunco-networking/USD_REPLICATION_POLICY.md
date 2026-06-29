@@ -7,7 +7,8 @@ correct multiplayer replication for free. The only thing you ever hand-author is
 
 This is the entity/state-replication contract (which bodies' poses sync, and how the
 client treats them). It is distinct from command/op replication; see
-`MECHANISM_SELECTION.md` (M1–M7) for the broader sync model.
+`SYNC_ARCHITECTURE.md` (M1–M7 + the mechanism-selection procedure, §9) for the
+broader sync model.
 
 ## TL;DR for scene authors
 
@@ -55,7 +56,8 @@ Because `derive_id` is a pure function of `(parent, role)` and the root id is th
 both peers (allocated on the server, pinned on the client), descendants reconstruct
 **locally** with matching ids — only the root replicates. Authored scene prims are
 unaffected: they keep `Content`, whose composed prim paths are already unique per reference.
-See `DESIGN_GAPS.md` §B.1 and [[project_usd_instance_identity_derived]].
+See README → *Entity Identity Mapping*, `DECISIONS.md` D3/D4, and
+[[project_usd_instance_identity_derived]].
 
 ## Overrides — author only for exceptions
 

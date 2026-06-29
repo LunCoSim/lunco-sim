@@ -2,7 +2,7 @@
 
 **Feature Branch**: `015-realtime-assembly`  
 **Created**: 2026-03-29  
-**Status**: Draft  
+**Status**: Partial — spawn/catalog/gizmo built; no snap-assembly/auto-wiring.
 **Input**: Real-time vehicle assembly (KSP-like) with automatic signal port wiring and SysML-driven structural validation.
 
 ## Problem Statement

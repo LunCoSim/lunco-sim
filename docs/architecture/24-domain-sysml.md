@@ -1,5 +1,7 @@
 # 24 — SysML Domain
 
+> Status: Design · Audience: contributors planning SysML v2 structure & requirements (stub, not yet built)
+>
 > **Stub.** SysML v2 is the source of truth for **system structure and
 > requirements** — a peer domain inside a Twin, co-equal with Modelica
 > (behavior) and USD (geometry). Not the Twin container itself; see

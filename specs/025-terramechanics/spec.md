@@ -1,8 +1,8 @@
-# Feature Specification: 027-terramechanics
+# Feature Specification: 025-terramechanics
 
-**Feature Branch**: `027-terramechanics`
+**Feature Branch**: `025-terramechanics`
 **Created**: 2026-03-29
-**Status**: Draft
+**Status**: Partial — wheel kinematics built; Bekker-Wong soil model absent.
 **Input**: Basic wheel-soil interaction model for lunar regolith.
 
 ## Problem Statement

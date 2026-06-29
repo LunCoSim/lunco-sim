@@ -140,8 +140,9 @@ struct PortBackend {
 /// physical domain, and read/write realization. Part of an [`AvianGroup`].
 ///
 /// Avian's components are foreign types, so they are exposed by an external spec
-/// (these closures) rather than `#[derive]` — see `docs/architecture/
-/// AVIAN_PORT_BACKEND_PLAN.md`. Most ports are a one-line field read; the few
+/// (these closures) rather than `#[derive]` — the backend lives in this crate
+/// (`crates/lunco-cosim`; original design in git history). Most ports are a
+/// one-line field read; the few
 /// derived/semantic ones (joint twist, motor target) are named functions.
 pub struct AvianPort {
     /// Port name (e.g. `"position_y"`, `"force_y"`, `"angle"`).

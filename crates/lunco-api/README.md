@@ -13,7 +13,7 @@ Transport-agnostic API layer for LunCoSim. Exposes simulation state and typed co
                      ▼
 ┌────────────────────────────────────────────────────────────┐
 │  lunco-api-core                                            │
-│  ApiEntityRegistry  — ULID ↔ Bevy Entity mapping           │
+│  ApiEntityRegistry  — GlobalEntityId (u64) ↔ Bevy Entity   │
 │  ApiExecutor        — ApiRequest → ECS                    │
 │  ApiDiscovery       — schema introspection via reflection  │
 │  ApiTelemetry       — telemetry subscription + broadcast   │
@@ -45,7 +45,7 @@ Content-Type: application/json
 {
   "command": "DriveRover",
   "params": {
-    "target": "01ARZ7NDEKTSV4M9",
+    "target": 42,
     "forward": 0.8,
     "steer": 0.0
   }
@@ -141,8 +141,15 @@ app.add_plugins(LunCoApiPlugin::new(LunCoApiConfig {
 
 ## Entity IDs
 
-The API uses ULID-based stable IDs (`ApiEntityId`). The `ApiEntityRegistry` maps ULIDs to Bevy `Entity` handles automatically. Entity fields in command params accept ULID strings:
+The API addresses entities by **numeric** `GlobalEntityId` (a `u64`, defined in
+`lunco-core`), *not* a ULID string. The `ApiEntityRegistry` resource maintains a
+bidirectional `GlobalEntityId ↔ Bevy Entity` map; `sync_api_registry` keeps it
+in step as entities carrying a `GlobalEntityId` component are added/removed.
+Entity fields in command params are plain JSON numbers:
 
 ```json
-{ "target": "01ARZ7NDEKTSV4M9" }
+{ "target": 42 }
 ```
+
+(`ListEntities` / discovery responses report the same numeric ids, so a client
+reads an id from one call and passes it straight back as a command param.)

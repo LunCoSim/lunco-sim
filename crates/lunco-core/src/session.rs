@@ -363,7 +363,7 @@ impl SessionRbac {
 /// for a runtime-instanced subtree. Runtime instances get server-allocated
 /// identity (root `Authoritative`, children left un-networked) rather than
 /// content-derived ids — otherwise two instances of the same asset would derive
-/// the **same** id and collide (DESIGN_GAPS B.1 / gap G2). Placed on the spawn
+/// the **same** id and collide (design in git history). Placed on the spawn
 /// root; the loader skips its `Content` stamp for the root and its descendants.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct SkipContentStamp;
@@ -412,7 +412,7 @@ pub struct OwnedLocally;
 
 /// Client-side marker: predict this replicated body's **physics locally** even
 /// though this peer supplies it **no input** — a free dynamic prop (a ball /
-/// crate) you bump with your rover (`PREDICTION_MEMBERSHIP.md` Phase B). Like
+/// crate) you bump with your rover (design in git history). Like
 /// [`OwnedLocally`] it is excluded from kinematic-pinning and snapshot
 /// interpolation and runs its own avian step, so a local rover↔prop collision
 /// resolves crisply in the same frame. UNLIKE `OwnedLocally` it has no input seq
@@ -426,7 +426,7 @@ pub struct OwnedLocally;
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct PredictedDynamic;
 
-/// **Opaque-body guard** (`PREDICTION_MEMBERSHIP.md` §6): this body's motion is
+/// **Opaque-body guard** (design in git history): this body's motion is
 /// **not locally computable** — it is driven by forces the client does not run
 /// (primarily **cosim / Modelica** bodies: a balloon's buoyancy, a thruster, any
 /// `SimComponent`-forced prop). Such a body must be excluded from *every*
@@ -579,7 +579,7 @@ pub struct VesselInputLog {
     pub frames: VecDeque<InputFrame>,
     /// Client-only: the most recent `SimTick` at which THIS peer supplied
     /// **nonzero** control input to this vessel. Prediction membership keys off it
-    /// (computability, not ownership — see `PREDICTION_MEMBERSHIP.md` Phase A): a
+    /// (computability, not ownership — see design in git history): a
     /// vessel you possess but are *not actively driving* is dominated by external
     /// forces you can't reproduce locally, so it must fall back to the interpolated
     /// proxy path instead of free-running a local prediction with no correction.

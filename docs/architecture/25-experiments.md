@@ -1,8 +1,17 @@
-# Experiments — Spec
+# 25 — Experiments — Spec
 
-Status: draft, not yet implemented.
+> Status: Active · Audience: contributors running parameter sweeps & batch simulations
+>
+> **TL;DR.** `lunco-experiments` runs a model many times over swept parameters
+> and collects results — the engine behind lunica's batch/sweep runs. Parallel
+> execution lives in `26-parallel-experiments.md`.
+
+**Implemented.** `lunco-experiments` shipped — `Experiment`, `RunResult`,
+`RunStatus`, `ExperimentRegistry`, `ExperimentRunner` (trait), `ExperimentsPlugin`,
+with `lunco-modelica` providing the `ModelicaRunner` backend. Parallel execution
+is covered in `26-parallel-experiments.md`.
 Owner: lunica/modelica.
-Related: `13-twin-and-workflow.md`, `14-simulation-layers.md`, `22-domain-cosim.md`, `30-wasm-web-worker.md`.
+Related: `13-twin-and-workflow.md`, `14-simulation-layers.md`, `22-domain-cosim.md`, `26-parallel-experiments.md`, `30-wasm-web-worker.md`.
 
 ## Goal
 
@@ -32,7 +41,7 @@ The wasm host has no COOP/COEP headers and the worker is intentionally a separat
 ## Crate layout
 
 ```
-lunco-experiments/        (new, backend-agnostic)
+lunco-experiments/        (backend-agnostic)
   Experiment, RunResult, RunBounds, ParamValue, ParamPath
   ExperimentRegistry  (Resource, per-twin)
   ExperimentRunner    (trait)

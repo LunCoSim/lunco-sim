@@ -2,7 +2,7 @@
 
 **Feature Branch**: `032-model-source-listing`
 **Created**: 2026-04-25
-**Status**: Draft
+**Status**: Implemented (historical)
 **Input**: Expose all openable model sources (Twin folder, bundled examples, MSL, ephemeral docs) and current workspace state through the API, with a single scheme-aware `Open` command.
 
 ## Agent-Workflow Anchor

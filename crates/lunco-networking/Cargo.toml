@@ -39,7 +39,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 # `default-features = false`: we only use the registry/executor types + plugin,
 # never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).
-# Native builds still get transport-http via lunco-client's own default features.
+# Native builds still get transport-http via lunco-sandbox's own default features.
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-mobility = { path = "../lunco-mobility" }
 # Wire substrate needs avatar/sandbox-edit COMPONENTS + commands, never their
@@ -81,15 +81,22 @@ bincode = { workspace = true, optional = true }
 # ONLY for direct bare-IP native connections (a self-signed server over LAN/dev,
 # no CA cert) — see `native_client_config` in wt_client.rs. Hostname connections
 # always use full CA validation; the insecure path never applies to them.
-aeronet_webtransport = { version = "0.19", features = ["client", "dangerous-configuration"] }
-lightyear_aeronet = { version = "0.26.4", default-features = false }
+aeronet_webtransport = { version = "0.20", features = ["client", "dangerous-configuration"] }
+lightyear_aeronet = { version = "0.27.0", default-features = false }
 
 
 # Native (desktop / dedicated server): full client+server WebTransport.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-lightyear = { version = "0.26.4", default-features = false, optional = true, features = [
+lightyear = { version = "0.27.0", default-features = false, optional = true, features = [
   "client",
   "server",
+  # 0.27 split these out of an implicit bundle into standalone features (they're
+  # in lightyear's `default`, which we disable). `replication` is mandatory —
+  # lightyear's lib unconditionally `use`s `lightyear_replication`. We replicate
+  # snapshots + client-predict, so prediction/interpolation are needed too.
+  "replication",
+  "prediction",
+  "interpolation",
   "netcode",
   "webtransport",
   "webtransport_self_signed",
@@ -108,8 +115,12 @@ interprocess = { version = "2", optional = true }
 
 # Browser (wasm): client-only WebTransport. Cert digest comes from the URL hash.
 [target.'cfg(target_family = "wasm")'.dependencies]
-lightyear = { version = "0.26.4", default-features = false, optional = true, features = [
+lightyear = { version = "0.27.0", default-features = false, optional = true, features = [
   "client",
+  # See native block: 0.27 made these standalone; `replication` is mandatory.
+  "replication",
+  "prediction",
+  "interpolation",
   "netcode",
   "webtransport",
   "webtransport_self_signed",
@@ -118,10 +129,15 @@ lightyear = { version = "0.26.4", default-features = false, optional = true, fea
 # per-tab client id) and the client adapter's cert-digest read both need it, and
 # the crate is only ever compiled when the `networking` feature pulls it in.
 web-sys = { workspace = true, features = ["Window", "Location", "Performance"] }
-# lightyear's netcode pulls getrandom 0.2 transitively; on wasm it needs the JS
-# backend (`crypto.getRandomValues`) or it `compile_error!`s. We don't use it
-# directly — this entry exists only to turn the feature on via unification.
-getrandom = { version = "0.2", features = ["js"] }
+# On wasm the getrandom crates `compile_error!` unless a browser-crypto backend
+# is enabled. Two incompatible majors land in our graph, each needing its own
+# feature turned on via unification (we never call getrandom directly):
+#   * 0.2 — via ahash/const-random (egui). Uses the `js` feature.
+#   * 0.4 — NEW with lightyear 0.27: `rand 0.10` (in `lightyear_link`) pulls it.
+#     getrandom 0.3+ needs BOTH the `wasm_js` feature (here) AND
+#     `--cfg getrandom_backend="wasm_js"` (set globally by scripts/build_web.sh).
+getrandom_v02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom_v04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 [lints]
 workspace = true

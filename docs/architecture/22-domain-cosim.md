@@ -1,5 +1,7 @@
 # 22 — Co-Simulation Domain
 
+> Status: Active · Audience: contributors wiring simulation engines together
+>
 > Connects multiple simulation engines (Modelica, FMU, GMAT, Avian) in a
 > single Bevy world via explicit `SimConnection`s between named ports.
 > Implements the FMI/SSP pattern.
@@ -259,4 +261,3 @@ log polling.
 - [`20-domain-modelica.md`](20-domain-modelica.md) — Modelica-specific design
 - [`23-domain-environment.md`](23-domain-environment.md) — environment/gravity integration
 - `specs/014-modelica-simulation` — detailed Modelica spec
-- `specs/022-fmu-gmat-integration` — FMU and GMAT integration spec

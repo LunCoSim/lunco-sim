@@ -1,4 +1,10 @@
-# LunCoSim API
+# 12 — LunCoSim API
+
+> Status: Active · Audience: integrators & tools driving LunCoSim over HTTP
+>
+> **TL;DR.** A transport-agnostic command/query API: typed commands and state
+> reads exposed over HTTP at `/api/commands`. Start any binary with `--api` and
+> drive the sim from scripts, agents, or the MCP bridge.
 
 Transport-agnostic API layer for LunCoSim. Exposes simulation state and typed commands via HTTP.
 
@@ -78,6 +84,107 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `SetModelInput` | `{"doc": u64, "name": string, "value": f64}` | Set a model input value (returns success/error payload). |
 | `CopyShareLink` | `{"doc": u64?}` | Generate a sharing URL for the document source. |
 | `CosimStatus` | `{}` | List all USD-driven cosim entities with live telemetry. |
+
+---
+
+## Authoring a typed command
+
+**Every user-facing intent is a typed `Command`.** UI clicks, HTTP API calls, MCP tool invocations, scripts, and AI agents all dispatch the *same* typed event; observers in domain code do the work. One input shape, one log line, one place to find every entry point.
+
+The pattern is three macros from `lunco_core` (re-exporting `lunco-command-macro`).
+
+### Defining a command
+
+```rust
+use lunco_core::{Command, on_command, register_commands};
+use lunco_doc::DocumentId;
+
+/// Open a Modelica file and create a tab for it.
+#[Command(default)]                         // ← expands to:
+pub struct OpenFile {                       //   #[derive(Event, Reflect, Clone, Debug, Default)]
+    pub path: String,                       //   #[reflect(Event, Default)]
+}
+```
+
+`#[Command]` (no `default`) when the struct can't sensibly default. Use `#[Command(default)]` (the common case) so the HTTP API can fill in omitted fields. Empty unit-style commands take an empty named-fields body: `pub struct Ping {}`.
+
+### Defining the observer
+
+```rust
+#[on_command(OpenFile)]                     // ← emits an internal register helper
+fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
+    let path = trigger.event().path.clone();
+    /* … */
+}
+```
+
+The macro keeps `trigger: On<X>` as the synthetic first parameter and binds `cmd = trigger.event()` automatically — bodies that already use `trigger.event()` work unchanged. New observer bodies should prefer `cmd.field`. The generated `__register_*` helper is an internal detail — never call it by hand; list the observer in `register_commands!` (below).
+
+### Result-returning commands (`-> Result<Ack, String>`)
+
+Most commands are fire-and-forget (return `()`). A command whose caller needs a **result** (script stdout, a computed value, a hard pass/fail) instead returns `Result<Ack, String>`:
+
+```rust
+#[on_command(RunPython)]
+fn on_run_python(_t: On<RunPython>, backends: Res<ScriptBackends>) -> Result<Ack, String> {
+    let out = backends.get(ScriptLanguage::Python)
+        .ok_or("python backend not registered")?
+        .eval(&cmd.code)?;
+    let mut ack = Ack::new(OpId::new());
+    ack.assigned = serde_json::json!({ "stdout": out });
+    Ok(ack)          // Ok → Succeeded, Err → Failed
+}
+```
+
+The macro records the outcome in `CommandResults` (`lunco-core`) under the request id the transport minted, and the caller polls it back. In-process triggers (UI `commands.trigger`) set no active id, so nothing is recorded — only transport-dispatched calls are pollable. For the polling protocol, the `outcome` states, and the store's bounds/design rationale, see [*Command results — `QueryCommandResult`*](#command-results--querycommandresult) below.
+
+### Registering inside `Plugin::build`
+
+```rust
+// One source-of-truth list at module scope. Alphabetical for diff hygiene.
+// Entries may be bare idents or `module::fn` paths — the path form lets
+// observers live in split submodules without per-fn `use` shims.
+register_commands!(
+    on_open_file,
+    on_compile_model,
+    nav::on_set_view_mode,      // observer in a submodule → path form
+    /* … */
+);
+
+impl Plugin for ModelicaCommandsPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<CloseDialogState>();   // resources
+        register_all_commands(app);                // observers + reflect-types in one shot
+    }
+}
+```
+
+`register_commands!()` collapses a per-observer `__register_on_X(app)` boilerplate cascade into a single function call. Adding a new typed command is a three-line change: struct + observer + one entry in the list. (A future change to make commands self-register and drop the list entirely is tracked in [*TBD: grouped self-submitting command registration*](#tbd-grouped-self-submitting-command-registration) below.)
+
+### Field types
+
+- **`DocumentId`** is `Reflect`-derived in `lunco-doc` — use the typed `DocumentId` directly in command fields. **Never `u64` shims.** The HTTP-wire `{"doc": 1}` auto-converts via reflection.
+- New domain identifier types should derive `Reflect` for the same reason. Adding `bevy_reflect = "0.18"` to a leaf crate is cheap (no renderer / ECS deps).
+
+### Anti-patterns (do not do this)
+
+```rust
+// ✗ Hand-rolled equivalent of #[Command(default)] — verbose, drifts from canonical form
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct Foo { … }
+
+// ✗ Hand-rolled registration — easy to forget either half, no auto-discovery
+app.register_type::<Foo>().add_observer(on_foo);
+
+// ✗ Threading u64 doc-ids through commands to dodge a Reflect requirement
+pub struct Foo { pub doc: u64 }   // use DocumentId
+```
+
+### When NOT to use `#[Command]`
+
+- **Notifications** (system tells the world "X happened"): `DocumentChanged`, `DocumentSaved`, lifecycle events. These are observed *by* domain crates, not invoked by users — hand-rolled `#[derive(Event, Clone, Debug)]` is fine.
+- **High-frequency continuous signals** (joystick, drag deltas, telemetry): use the `ControlStream` channel in [`docs/architecture/01-ontology.md`](01-ontology.md#controlstream), not the Command Bus.
 
 ---
 
@@ -359,7 +466,7 @@ executor differentiates internally.
 it in your plugin's `build` via
 `app.world_mut().resource_mut::<ApiQueryRegistry>().register(...)`.
 See `crates/lunco-modelica/src/api_queries.rs` for examples and
-spec [`032-model-source-listing`](../specs/032-model-source-listing/spec.md)
+spec [`032-model-source-listing`](../../specs/032-model-source-listing/spec.md)
 for the design.
 
 **Adding a new typed command** (side-effect): follow the existing

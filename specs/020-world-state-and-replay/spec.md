@@ -2,7 +2,7 @@
 
 **Feature Branch**: `020-world-state-and-replay`
 **Created**: 2026-03-29
-**Status**: Draft
+**Status**: Partial — doc journal + snapshot + replay built; no ECS WorldSnapshot/MCAP.
 **Input**: Unified ECS State Persistence, check-pointing, deterministic replay, MCAP streaming, and replaying missions.
 
 ## Problem Statement

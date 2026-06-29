@@ -40,5 +40,5 @@ let rover_id = lunco_robotics::rover::spawn_standard_rover(&mut commands, ...);
 
 ## See Also
 
-- `lunco-client` — The primary consumer of these assembly helpers.
+- `luncosim` (the app binary) — The primary consumer of these assembly helpers.
 - `lunco-usd` — The counterpart for assembling vessels from USD scene definitions.

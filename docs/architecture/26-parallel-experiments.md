@@ -1,6 +1,8 @@
-# Parallel experiment execution — implementation plan
+# 26 — Parallel experiment execution — implementation plan
 
-Status: COMPLETE. Steps 1–5 DONE; step 4's rumoca rayon pin dropped as
+> Status: Active · Audience: contributors on batch/parallel experiment execution
+
+**Complete.** Steps 1–5 DONE; step 4's rumoca rayon pin dropped as
 unnecessary (see step 4 and Open questions). Companion to `25-experiments.md`.
 
 ## What already existed (do not rebuild)

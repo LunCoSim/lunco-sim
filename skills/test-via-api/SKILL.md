@@ -83,9 +83,11 @@ Successful response: `{"command_id": N}`. Error: `{"error":"..."}`.
 
 ## Command catalog
 
-All commands live in `crates/lunco-modelica/src/ui/commands.rs` as
-reflect-registered `Event` structs. Add new ones there if a flow needs
-them.
+All commands live under `crates/lunco-modelica/src/ui/commands/` as
+reflect-registered `Event` structs, grouped by area (`inspect.rs`,
+`compile.rs`, `lifecycle.rs`, `diagram.rs`, `nav.rs`, `sim.rs`,
+`plot.rs`, `doc.rs`, …). Add new ones in the matching file if a flow
+needs them.
 
 | Command | Params | Purpose |
 |---|---|---|
@@ -131,14 +133,15 @@ them.
      If not, parse failed.
   2. If components exist: their TYPES probably aren't in
      `local_classes_by_short` or the MSL palette. The diagram-builder
-     registers the target's nested + sibling classes (sibling-pass at
-     `panels/diagram.rs:1936`); connector types need to be in
+     registers the target's nested + sibling classes (sibling-pass in
+     `panels/canvas_projection.rs`, the `local_classes_by_short`
+     registration); connector types need to be in
      `msl_index.json` (regenerate via `cargo run --bin msl_indexer`).
 - **"Command 'X' not found or not API-accessible"**: the Event isn't
-  reflect-registered. Add `.register_type::<X>()` +
-  `.add_observer(on_x)` in `ModelicaCommandsPlugin::build`, and make
-  sure the struct has
-  `#[derive(Event, Reflect, ..., Default)] #[reflect(Event, Default)]`.
+  reflect-registered. Give the struct the `#[Command]` attribute, mark
+  its observer with `#[on_command(X)]`, and list that observer in the
+  `register_commands!(...)` block in
+  `crates/lunco-modelica/src/ui/commands/mod.rs` (see [§ Add a command](#add-a-command)).
 - **API returns 500 / silent no-op**: check `params` includes the
   empty object `{}` even for parameterless commands.
 - **Projection deadline exceeded (60s)**: rumoca parse stall, usually
@@ -153,22 +156,27 @@ them.
 When testing reveals a missing API surface, add the command immediately
 rather than asking the user:
 
-1. In `crates/lunco-modelica/src/ui/commands.rs`:
+1. In the matching file under `crates/lunco-modelica/src/ui/commands/`,
+   define the struct with the `#[Command]` attribute and the observer
+   with `#[on_command(...)]` (both from `lunco_core`):
    ```rust
-   #[derive(Event, Reflect, Clone, Debug, Default)]
-   #[reflect(Event, Default)]
+   use lunco_core::{Command, on_command};
+
+   #[Command(default)]              // or `#[Command]` if you impl Default
    pub struct MyCommand { pub foo: String }
 
-   fn on_my_command(trigger: On<MyCommand>, mut commands: Commands) {
+   #[on_command(MyCommand)]
+   pub fn on_my_command(trigger: On<MyCommand>, mut commands: Commands) {
        let foo = trigger.event().foo.clone();
        commands.queue(move |world: &mut World| { /* ... */ });
    }
    ```
-2. Register in `ModelicaCommandsPlugin::build`:
-   ```rust
-   .register_type::<MyCommand>()
-   .add_observer(on_my_command)
-   ```
+   `#[Command]` emits the `Event`/`Reflect`/`reflect(Event)` derives and
+   `#[on_command]` generates the `register_type` + `add_observer` wiring —
+   you don't write them by hand.
+2. Add the observer fn to the `register_commands!(...)` list in
+   `crates/lunco-modelica/src/ui/commands/mod.rs` (use the
+   `module::fn` path form, e.g. `inspect::on_my_command`).
 3. Build, restart workbench, curl it.
 
 ## What NOT to do

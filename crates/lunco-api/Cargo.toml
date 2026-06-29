@@ -7,10 +7,11 @@ description = "Transport-agnostic API layer for LunCoSim — HTTP, ROS2, IPC, et
 [features]
 default = ["transport-http", "render"]
 # Native HTTP server (axum + TcpListener). Opt-in so library consumers that
-# only need the registry/schema types stay axum-free. Pulls tokio's full
-# runtime/net — wasm-incompatible, so never enable this for wasm32 (the web
-# build leaves it off; the wasm JS bridge needs no feature — see below).
-transport-http = ["dep:axum", "dep:tokio", "tokio/full"]
+# only need the registry/schema types stay axum-free. Its deps (axum + tokio's
+# `full` runtime) live in the non-wasm target table below, so they are ABSENT on
+# wasm by construction — enabling this feature for a browser build pulls nothing
+# wasm-incompatible (no tokio/net → no mio). The wasm JS bridge needs no feature.
+transport-http = ["dep:axum", "dep:tokio"]
 
 # Screenshot / `CaptureScreenshot` support. Pulls bevy's render stack
 # (`Screenshot` + `ScreenshotCaptured` live in `bevy_render`). A headless
@@ -23,7 +24,7 @@ render = ["bevy/bevy_render", "bevy/bevy_core_pipeline", "bevy/bevy_window", "de
 # request wakes the app immediately (vs. waiting for the next reactive tick).
 # Needs `bevy::winit`. OFF for a headless `--no-ui` server — it has no event loop
 # (ScheduleRunnerPlugin ticks continuously), so the waker is a no-op anyway.
-# GUI binaries enable it via `lunco-client`'s `ui` feature.
+# GUI binaries enable it via `lunco-sandbox`'s `ui` feature.
 winit = ["bevy/bevy_winit"]
 
 # NOTE: there is no `transport-wasm` feature. On wasm32 the only usable
@@ -47,15 +48,18 @@ serde_json = { workspace = true }
 image = { workspace = true, optional = true }
 web-time = { workspace = true, optional = true }
 
-# Transport: HTTP (optional, native only). `tokio/full` is added by the
-# `transport-http` feature; the base dep stays featureless.
+# Native-only HTTP server transport (optional, pulled by `transport-http`). axum
+# + tokio's `full` runtime live in THIS non-wasm table — and crucially `full` is
+# set on the dependency here, NOT via a `tokio/full` line in the feature. A
+# feature string unifies across targets (that was the old bug: `tokio/full`
+# turned on `net` → mio on wasm); a non-wasm dependency's own features cannot.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 axum = { version = "0.8", features = ["ws"], optional = true }
-tokio = { version = "1", default-features = false, optional = true }
+tokio = { version = "1", default-features = false, features = ["full"], optional = true }
 
-# Wasm-only: the JS bridge (`window.lunco_api`) and its deps compile
-# automatically on wasm32 — no feature gate. `tokio/sync` gives the bridge its
-# runtime-agnostic channels without dragging in `net`/`rt` (which need mio and
-# break on wasm).
+# Wasm-only: the JS bridge (`window.lunco_api`) deps. tokio here carries ONLY
+# `sync` — the bridge's runtime-agnostic channels — with no `net`/`rt` (which
+# need mio and break on wasm). Non-optional: any wasm build is a bridge build.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 tokio = { version = "1", default-features = false, features = ["sync"] }
 wasm-bindgen = { workspace = true }

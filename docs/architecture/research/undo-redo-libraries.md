@@ -1,5 +1,7 @@
 # Undo/Redo Libraries — Research & Decision
 
+> Status: Active · Audience: contributors weighing undo/redo or live-sync libraries
+>
 > **Decision (2026-04):** Keep our own `lunco_doc::DocumentHost`. Do not
 > adopt `undo`, `yrs`, or `automerge` as a replacement. Revisit when we
 > add op merging/debouncing, or when live-sync scope forces the question.
@@ -152,5 +154,5 @@ Reopen this question if any of these fire:
 ## See also
 
 - [`10-document-system.md`](../10-document-system.md) — the design this decision serves.
-- [`../principles.md`](../principles.md) Article IV — replay/record of
+- [`../../principles.md`](../../principles.md) Article IV — replay/record of
   user intent as a core property.

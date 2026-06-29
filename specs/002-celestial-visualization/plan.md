@@ -24,7 +24,7 @@
 
 ### 1. Basic Clock Architecture (Foundation for `006`)
 
-This spec implements the **minimum viable clock system** for celestial visualization and time scrubbing. The advanced Robotics Clock, PhysicsMode transitions, and integrator architecture remain in `006-time-and-integrators`.
+This spec implements the **minimum viable clock system** for celestial visualization and time scrubbing. The advanced Robotics Clock, PhysicsMode transitions, and integrator architecture are deferred (advanced time/PhysicsMode — not yet specced).
 
 - **`CelestialClock`**: JD TDB-based mission epoch (UTC conversion via `celestial-time` for UI display). Scrubbable from X1 to X1,000,000. Drives all ephemeris queries.
 - **`AppClock`**: Standard Bevy `Time` (always 1.0×). Drives UI, Camera, and Avatar movement. Not affected by time scrubbing.
@@ -33,7 +33,7 @@ This spec implements the **minimum viable clock system** for celestial visualiza
 #[derive(Resource)]
 pub struct SimulationClockSet {
     pub celestial: CelestialClock,
-    // Robotics clock added by 006-time-and-integrators
+    // Robotics clock deferred (advanced time/PhysicsMode — not yet specced)
 }
 
 pub struct CelestialClock {
@@ -195,7 +195,7 @@ No external data files needed for basic Sun/Earth/Moon visualization. SPK kernel
 ### 8. Scenario System (AD-5)
 
 ```rust
-// In lunco-client/src/main.rs
+// In lunco-sandbox/src/bin/sandbox.rs
 
 fn main() {
     let mut app = App::new();
@@ -401,7 +401,7 @@ All celestial systems (1-8) are registered as `.chain()` in `CelestialPlugin`. C
 
 ### 19. TimeWarp ↔ Physics Interface (FR-027)
 
-When the Celestial Clock speed exceeds X100, high-fidelity physics is meaningless. This spec defines the **interface**; the full PhysicsMode state machine is owned by `006-time-and-integrators`.
+When the Celestial Clock speed exceeds X100, high-fidelity physics is meaningless. This spec defines the **interface**; the full PhysicsMode state machine is deferred (advanced time/PhysicsMode — not yet specced).
 
 ```rust
 /// Published by lunco-celestial. Readable by physics crates.

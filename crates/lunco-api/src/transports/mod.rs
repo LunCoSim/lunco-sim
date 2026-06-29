@@ -13,9 +13,12 @@ mod envelope;
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 pub use envelope::*;
 
-#[cfg(feature = "transport-http")]
+// The axum HTTP server is native-only: even when `transport-http` is enabled, it
+// must not compile on wasm (axum + tokio/net are absent there by construction —
+// see Cargo.toml). The bridge core above stays shared across both transports.
+#[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
 mod http;
-#[cfg(feature = "transport-http")]
+#[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
 pub use http::*;
 
 /// In-browser JS bridge (`window.lunco_api`). Reuses the entire bridge core;
@@ -83,7 +86,7 @@ impl HttpBridge {
 // allowed. The previous triple `.unwrap()` panicked this *detached*
 // thread silently (e.g. on port-in-use → the API just never came up);
 // failures are now logged and the thread returns.
-#[cfg(feature = "transport-http")]
+#[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
 #[allow(clippy::disallowed_methods)]
 pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) {
     let port = config.port;

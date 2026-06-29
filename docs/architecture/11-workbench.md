@@ -1,5 +1,7 @@
 # 11 — Workbench (UI/UX Architecture)
 
+> Status: Active · Audience: contributors building UI panels & perspectives
+>
 > How LunCoSim's user interface is organized: the workbench shell,
 > perspectives, panels, viewport, command palette, detachable windows.
 > Establishes the framework on top of which all domain-specific UI
@@ -12,8 +14,29 @@
 > sense). Read those sections with the translation in mind; the
 > terminology table in §1 is canonical.
 >
-> Status: design. Implementation lives in the planned `lunco-workbench` crate,
-> which replaces the current `bevy_workbench` dependency incrementally.
+> **Shipped & canonical.** `lunco-workbench` is the workbench crate; it
+> has replaced `bevy_workbench` and is now depended on by ~10 crates (luncosim,
+> lunco-sandbox, lunco-sandbox-edit, lunco-usd, lunco-modelica, lunco-celestial,
+> lunco-avatar, lunco-networking, …). The migration described in §13 is done.
+
+## Contents
+
+- [1. What "workbench" means here](#1-what-workbench-means-here)
+- [2. Why we're building this](#2-why-were-building-this)
+- [3. The standard layout](#3-the-standard-layout)
+- [4. Workspaces](#4-workspaces)
+- [5. Panel system](#5-panel-system)
+- [6. Context-awareness](#6-context-awareness)
+- [7. Command palette](#7-command-palette)
+- [8. Detachable windows](#8-detachable-windows)
+- [9. Window & layout persistence](#9-window--layout-persistence)
+- [10. Theming and keybinds](#10-theming-and-keybinds)
+- [11. Relationship to `lunco-ui` and domain crates](#11-relationship-to-lunco-ui-and-domain-crates)
+- [12. Three LunCoSim apps, different compositions](#12-three-luncosim-apps-different-compositions)
+- [13. Migration strategy (from bevy_workbench) — DONE](#13-migration-strategy-from-bevy_workbench--done)
+- [14. Open questions](#14-open-questions)
+- [Cross-domain URI handling](#cross-domain-uri-handling)
+- [See also](#see-also)
 
 ## 1. What "workbench" means here
 
@@ -538,11 +561,11 @@ lives in domain crates.
 Each binary is ~50 lines of plugin registration:
 
 ```
-sandbox     = workbench + SpawnPalette + SceneTree + Inspector +
+lunco-sandbox = workbench + SpawnPalette + SceneTree + Inspector +
                         ModelicaInspector + 3D viewport
                         (sandbox editor with compact Modelica view)
 
-lunco_client          = workbench + all sandbox panels + MissionControl +
+luncosim              = workbench + all sandbox panels + MissionControl +
                         CelestialBrowser + full 3D world
                         (main client, everything enabled)
 
@@ -552,10 +575,14 @@ lunica    = workbench + CodeEditor + Diagram + PackageBrowser +
 ```
 
 Same workbench shell, different panel sets, different default workspaces.
-`lunica` opens in the Analyze workspace; `sandbox`
-in Build; `lunco_client` in Observe with quick access to all others.
+`lunica` opens in the Analyze workspace; `lunco-sandbox`
+in Build; `luncosim` in Observe with quick access to all others.
 
-## 13. Migration strategy (from bevy_workbench)
+## 13. Migration strategy (from bevy_workbench) — DONE
+
+> This migration is complete. `bevy_workbench` has been retired and
+> `lunco-workbench` is the only workbench in `main`. The phase table below is
+> kept for historical reference.
 
 **Clean cutover, not parallel coexistence.** Each domain migrates its
 panels when `lunco-workbench` can host them; the final commit removes

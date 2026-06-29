@@ -5,7 +5,7 @@ This document provides a comprehensive index of all crates in the LunCoSim works
 ---
 
 ## 1. Workspace & Core Foundation
-Low-level primitives, document systems, and cross-cutting concerns (storage, assets, theming).
+Low-level primitives, document systems, and cross-cutting concerns (storage, assets, theming, settings).
 
 | Crate | Responsibility |
 | :--- | :--- |
@@ -17,6 +17,7 @@ Low-level primitives, document systems, and cross-cutting concerns (storage, ass
 | **`lunco-assets`** | Unified asset management: cache resolution, versioned downloads, and texture processing. |
 | **`lunco-cache`** | Generic resource cache with in-flight deduplication for resolved URIs and parsed artifacts. |
 | **`lunco-theme`** | Centralized design tokens (Catppuccin-based) for consistent UI across all panels and domains. |
+| **`lunco-settings`** | Centralised user-settings system: one JSON file (`~/.lunco/settings.json`), namespaced sections, auto-persist on change. |
 | **`lunco-command-macro`** | Procedural macros for the typed command system (re-exported by `lunco-core`). |
 | **`lunco-doc-bevy`** | Bevy ECS integration for the Document System: lifecycle events, `JournalResource` (Bevy wrapper around the canonical Twin journal), `BevyJournalSink` for remote-replay, `EditorIntent` keybindings, `Presence` collab seed. |
 | **`lunco-twin-journal`** | Canonical Twin-scoped op log: Lamport-ordered entries, DAG parents (for future merges), Streams + Composition, ChangeSets, Markers (named milestones), Branches. CRDT-shapable schema; in-memory backend today, yrs-swap-ready. |
@@ -24,13 +25,18 @@ Low-level primitives, document systems, and cross-cutting concerns (storage, ass
 ---
 
 ## 2. Simulation Engine
-The "Laws of Nature"—celestial mechanics, environmental state, terrain, and co-simulation orchestration.
+The "Laws of Nature"—celestial mechanics, environmental state, terrain, batch experiments, and co-simulation orchestration.
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-celestial`** | High-precision orbital mechanics (Ephemeris), gravity, and Sphere of Influence (SOI) transitions. |
+| **`lunco-celestial`** | Orbital mechanics (ephemeris abstraction), gravity, body-fixed rotation, and Sphere of Influence (SOI) transitions. |
+| **`lunco-celestial-ephemeris`** | Concrete high-fidelity ephemeris provider for `lunco-celestial` (VSOP2013 + ELP/MPP02 via `celestial-ephemeris`); the heavy, non-Windows-MSVC half of the celestial split. |
 | **`lunco-environment`** | Per-entity position-dependent environment state (atmosphere, radiation, local gravity). |
-| **`lunco-terrain`** | Procedural QuadSphere terrain generation, LOD subdivision, and heightmap-based collision. |
+| **`lunco-terrain-core`** | Projection-agnostic terrain LOD spine: quadtree-CDLOD selection, tile-grid math, and the `HeightSource` trait. Pure (std + serde), shared by both the planar DEM streamer and the cube-sphere planetary tiler. |
+| **`lunco-terrain-globe`** | Whole-body cube-sphere terrain tiling (orbital/planetary scale); the "globe" projection of the terrain family over the shared `lunco-terrain-core` LOD spine. |
+| **`lunco-terrain-surface`** | Local high-detail DEM ground terrain (surface scale): heightfield colliders, CDLOD tile streaming, `big_space` per-tile anchoring; the "surface" projection of the terrain family. |
+| **`lunco-obstacle-field`** | Procedural crater + rock field generation (with LOD) for rover testing. |
+| **`lunco-experiments`** | Backend-agnostic experiment / batch-run registry: models a single Fast Run as a first-class artifact (params, bounds, trajectory); the sim backend plugs in via the `ExperimentRunner` trait. |
 | **`lunco-cosim`** | Multi-engine orchestration (Modelica, FMU, GMAT, Avian) via explicit input/output wiring. |
 
 ---
@@ -59,7 +65,6 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, and simulati
 | **`lunco-usd-bevy`** | Core visual bridge: maps USD hierarchy, shapes, and transforms to Bevy entities/components. |
 | **`lunco-usd-avian`** | Physics bridge: maps `USDPhysics` schemas (RigidBody, Colliders) to Avian3D components. |
 | **`lunco-usd-sim`** | Intercepts specialized simulation schemas (e.g., PhysX Vehicles) and maps them to LunCo models. |
-| **`lunco-usd-composer`** | Handles USD asset path resolution and stage flattening for complex multi-file assets. |
 | **`lunco-materials`** | The one general self-describing `ShaderMaterial` (any `.wgsl` per-instance; params reflected from the shader's `struct Material`) for the USD rendering pipeline. |
 
 ---
@@ -77,7 +82,7 @@ External communication, ECS replication, telemetry extraction, and distributed a
 ---
 
 ## 6. Workbench & UI Tools
-The editor shell, visualization framework, generic 2D canvas, and sandbox editing tools.
+The editor shell, visualization framework, generic 2D canvas, sandbox editing tools, and render-look config.
 
 | Crate | Responsibility |
 | :--- | :--- |
@@ -86,16 +91,19 @@ The editor shell, visualization framework, generic 2D canvas, and sandbox editin
 | **`lunco-viz`** | Domain-agnostic visualization: SignalRegistry, LinePlots, and future 3D/Rerun bridges. |
 | **`lunco-canvas`** | Stateful 2D scene editor substrate for diagrams and annotation overlays. |
 | **`lunco-sandbox-edit`** | In-scene editing tools: spawn systems, transform gizmos, and inspector panels. |
+| **`lunco-render`** | Shared render-look configuration: single source of truth for lunar sun shadows, and the future home for exposure/AA/sky look settings. |
 
 ---
 
 ## 7. Scripting & Modeling
-Logic engines for dynamic simulation behavior and industrial modeling.
+Logic engines for dynamic simulation behavior, industrial modeling, and reusable tool libraries.
 
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-modelica`** | Modelica integration: AST-based editing, compilation via Rumoca, and diagram visualization. |
-| **`lunco-scripting`** | Reflected memory bridge for Python and Lua as first-class logic providers. |
+| **`lunco-scripting`** | Language-neutral world bridge with **rhai** as the default (browser-capable) backend; Python is an optional one-shot-eval backend, Lua a reserved (unimplemented) backend id. |
+| **`lunco-tools`** | Backend-agnostic tool registry: a *tool* is a named, reusable bundle of callable functions whose implementation is pluggable (rhai/native/future). Deliberately dependency-free — owns only the abstraction + global registry + discovery. |
+| **`lunco-tools-rhai`** | rhai adapter for the `lunco-tools` registry: `RhaiTool` (source) + `NativeRhaiTool` (native Rust), and `refresh`, which binds every registered tool into a rhai `Engine` as a static module callable as `name::fn(...)`. |
 
 ---
 
@@ -104,7 +112,10 @@ Primary entry points and simulation assembly targets.
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-client`** | The main simulation client assembling all plugins into a cohesive application. |
+| **`luncosim`** | The flagship windowed app: full lunar-mission simulator — celestial bodies + ephemeris, solar-system-scale `big_space`, orbital camera, and the whole FSW / hardware / mobility / robotics / avatar stack under the workbench. |
+| **`lunco-sandbox`** | The sandbox application (ground mobility + physics, loaded from USD); a composition root (`SandboxCorePlugin` + optional `SandboxUiPlugin`/`SandboxHeadlessPlugin`) shared by the `sandbox` GUI and `sandbox-server` headless binaries. |
+| **`lunco-sandbox-server`** | Headless launcher for the sandbox — same app as `sandbox`, built without the GUI (no winit/egui) and with the API + networking host. Its own crate so it can default to headless. |
+| **`lunco-web`** | Shared web-frontend boot library for the wasm apps: the streaming loader (`web/lunco-boot.{js,css}`) plus `WebReadyPlugin`, which signals the HTML loader once Bevy paints its first frame. |
 
 ---
 
@@ -136,6 +147,9 @@ Generic resource cache with in-flight deduplication. Ensures that concurrent req
 **`lunco-theme`**
 Centralized design tokens based on the Catppuccin palette. Provides semantic tokens for general UI (accent, success, error) and schematic-specific colors for diagram wires and badges, ensuring visual consistency across all panels.
 
+**`lunco-settings`**
+Centralised user-settings system. Persists one namespaced JSON file (`~/.lunco/settings.json`) with auto-save on change, giving subsystems a single place to read and write per-user preferences.
+
 **`lunco-command-macro`**
 Procedural macros for the typed command system. Provides the `#[Command]`, `#[on_command]`, and `register_commands!` macros used to simplify the creation and registration of simulation actions.
 
@@ -150,13 +164,28 @@ Canonical, append-only, Twin-scoped record of every change. Entries are immutabl
 ### 2. Simulation Engine
 
 **`lunco-celestial`**
-High-precision orbital mechanics and solar system simulation. Handles planetary ephemeris, body-fixed rotation, gravity vectors, and the Sphere of Influence (SOI) system for automatic coordinate frame transitions between bodies.
+Orbital mechanics and solar-system simulation spine. Handles body-fixed rotation, gravity vectors, and the Sphere of Influence (SOI) system for automatic coordinate frame transitions between bodies. Owns the `EphemerisResource` abstraction; the concrete high-fidelity provider lives in `lunco-celestial-ephemeris`.
+
+**`lunco-celestial-ephemeris`**
+Concrete high-fidelity ephemeris provider for `lunco-celestial`. The heavy half of the celestial split: pulls in `celestial-ephemeris` (VSOP2013 + ELP/MPP02), `celestial-time`, and `celestial-core` (none of which build on Windows MSVC). Apps that need real planetary positions add `EphemerisPlugin`, which overwrites the default `EphemerisResource`.
 
 **`lunco-environment`**
 Position-dependent environmental state (gravity, atmosphere, radiation, etc.). Uses a provider-consumer pattern to compute local conditions for each entity based on its proximity to celestial bodies and their specific environment models.
 
-**`lunco-terrain`**
-Procedural QuadSphere terrain generation and collision. Implements cube-to-sphere projection, LOD subdivision, and heightmap-based collision for planetary surfaces, ensuring deterministic terrain across networked clients.
+**`lunco-terrain-core`**
+Projection-agnostic terrain LOD spine. Provides quadtree-CDLOD tile selection, tile-grid math, and the `HeightSource` trait. Pure (std + serde only) with no bevy/avian/DEM/sphere dependency, so it is shared by both the planar DEM streamer (`lunco-terrain-surface`) and the cube-sphere planetary tiler (`lunco-terrain-globe`).
+
+**`lunco-terrain-globe`**
+Whole-body cube-sphere terrain tiling at orbital/planetary scale. The "globe" projection of the terrain family; pairs with `lunco-terrain-surface` (local DEM ground) over the shared `lunco-terrain-core` LOD spine.
+
+**`lunco-terrain-surface`**
+Local high-detail DEM ground terrain at surface scale: heightfield colliders, CDLOD tile streaming, and `big_space` per-tile anchoring. The "surface" projection of the terrain family; pairs with `lunco-terrain-globe` over the shared `lunco-terrain-core` LOD spine.
+
+**`lunco-obstacle-field`**
+Procedural crater + rock field generation for rover testing. Produces LOD-aware obstacle distributions usable as mobility test grounds.
+
+**`lunco-experiments`**
+Backend-agnostic experiment / batch-run registry. Models a single Fast Run as a first-class artifact (params, bounds, trajectory). The simulation backend is plugged in by another crate via the `ExperimentRunner` trait, keeping the registry decoupled from any one solver.
 
 **`lunco-cosim`**
 Multi-engine simulation orchestrator. Wires named outputs from one engine (e.g., Modelica) to named inputs of another (e.g., Avian physics) via `SimConnection` components, following FMI/SSP patterns for causality and propagation.
@@ -202,9 +231,6 @@ Physics bridge for OpenUSD. Automatically maps `USDPhysics` schemas (RigidBody, 
 **`lunco-usd-sim`**
 Specialized simulation metadata bridge. Intercepts complex industry-standard vehicle schemas (like NVIDIA PhysX Vehicles) and substitutes them with optimized LunCo simulation models (e.g., Raycast wheels).
 
-**`lunco-usd-composer`**
-Handles USD asset path resolution and stage flattening. Resolves complex multi-file composition (references, sublayers) into a unified data map for the simulation stage loader, anchoring paths to the Bevy asset directory.
-
 **`lunco-materials`**
 Material library for the USD pipeline. Provides one general self-describing `ShaderMaterial`: any `.wgsl` runs per-instance, its parameters reflected from the shader's `struct Material` and authored from USD `primvars` (e.g. `solar_panel.wgsl`, `blueprint.wgsl`, `regolith.wgsl`). No bespoke Rust material type per look.
 
@@ -243,6 +269,9 @@ Domain-agnostic visualization framework. Collects simulation data into a `Signal
 **`lunco-sandbox-edit`**
 In-scene editing toolkit for the 3D viewport. Implements click-to-place spawning, transform gizmos for manipulation, and inspector panels for real-time property editing during simulation assembly.
 
+**`lunco-render`**
+Shared render-look configuration. The single source of truth for lunar sun shadows, and the future home for exposure, anti-aliasing, and sky look settings, keeping render tuning out of individual app crates.
+
 ---
 
 ### 7. Scripting & Modeling
@@ -251,11 +280,26 @@ In-scene editing toolkit for the 3D viewport. Implements click-to-place spawning
 Modelica language integration. Provides AST-based editing, compilation via Rumoca, and interactive diagramming, allowing complex industrial models to drive simulation entities and vessel subsystems.
 
 **`lunco-scripting`**
-Reflected memory bridge for Python and Lua. Enables dynamic logic providers to read and write simulation memory directly, supporting both deterministic physics loops and interactive REPL sessions.
+Language-neutral world bridge for dynamic logic providers. The default (and only fully-wired) backend is **rhai** — browser-capable and enabled by the default `rhai` feature; build with `--no-default-features` for a script-free build. The bridge exposes ECS verbs and a native `ValueBuilder` (no JSON on the read path) over which each runtime is a thin binding. Python is an optional backend used for one-shot snippet evaluation only; Lua is a reserved (not yet implemented) backend id. rhai also funnels the `lunco-tools` registry into the engine via `lunco-tools-rhai`.
+
+**`lunco-tools`**
+Backend-agnostic tool registry. A *tool* is a named, reusable bundle of callable functions — a library of selection/behaviour policy a scenario can call as `name::fn(...)`. A tool's implementation is pluggable (rhai source, native Rust, or future runtimes); this crate is deliberately dependency-free and owns only the abstraction, the global registry, and discovery, so non-rhai consumers can enumerate/describe tools without pulling rhai in.
+
+**`lunco-tools-rhai`**
+rhai adapter for the `lunco-tools` registry. Provides the two concrete `Tool` impls scenarios use today — `RhaiTool` (rhai source) and `NativeRhaiTool` (native Rust functions) — and `refresh`, which binds every registered tool into a rhai `Engine` as a static module so it is callable as `name::fn(...)` from anywhere, including inside `on_tick`. Tools authored in other runtimes are exposed to rhai as a `NativeRhaiTool`.
 
 ---
 
 ### 8. Applications
 
-**`lunco-client`**
-Primary simulation entry point. Aggregates all domain plugins into cohesive application targets (Native/Web), orchestrating global configuration, scenario assembly, and environment integration.
+**`luncosim`**
+The flagship windowed application and full lunar-mission simulator. Assembles celestial bodies + ephemeris, solar-system-scale `big_space`, an orbital camera (auto-focus Earth), and the whole FSW / hardware / mobility / robotics / avatar stack under the workbench. (cf. `sandbox` = ground-physics test bed, `lunica` = Modelica workbench.)
+
+**`lunco-sandbox`**
+The LunCo sandbox application — ground mobility + physics, loaded from USD. A composition root rather than a UI host: `SandboxCorePlugin` (headless-safe sim/physics/cosim/USD/networking/API) plus an optional `SandboxUiPlugin` (egui workbench, windowed) or `SandboxHeadlessPlugin`. The single shared entry point for both the `sandbox` GUI and `sandbox-server` headless binaries.
+
+**`lunco-sandbox-server`**
+Headless launcher for the sandbox — the same app as `sandbox`, built without the GUI (no winit/egui) and with the API + networking host enabled. Exists as its own crate purely so it can default to headless (Cargo default features are per-package).
+
+**`lunco-web`**
+Shared web-frontend boot library for the wasm apps. Provides the streaming loader (`web/lunco-boot.{js,css}`) plus `WebReadyPlugin`, which signals the HTML loader once Bevy paints its first frame.

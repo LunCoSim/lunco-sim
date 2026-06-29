@@ -1,7 +1,7 @@
 //! Mechanism selection (M1–M7) from the four classifying axes. Pure logic.
 //!
 //! Mirrors `SYNC_ARCHITECTURE.md` §1–§3 and the selection procedure in
-//! `MECHANISM_SELECTION.md`. The tests assert that the case matrix routes exactly
+//! `SYNC_ARCHITECTURE.md` §9. The tests assert that the case matrix routes exactly
 //! as documented and that axis contradictions are rejected.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

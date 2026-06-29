@@ -48,7 +48,7 @@ Validate robotics, suspension, and environment interactions in our collaborative
 ```bash
 git clone https://github.com/LunCoSim/lunco-sim.git
 cd lunco-sim
-cargo run --release -p lunco-client --bin sandbox
+cargo run --release -p lunco-sandbox --bin sandbox
 ```
 
 ### 2. Lunica (Engineering Workbench)

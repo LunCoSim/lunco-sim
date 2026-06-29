@@ -1,5 +1,5 @@
 //! One place that registers **all** LunCo Bevy asset sources, so every binary
-//! (lunco-client, sandbox, web, model_viewer) gets the *same* schemes instead
+//! (luncosim, sandbox, web, model_viewer) gets the *same* schemes instead
 //! of each `main()` hand-listing a divergent subset.
 //!
 //! Asset sources must be registered **before** `AssetPlugin`/`DefaultPlugins`

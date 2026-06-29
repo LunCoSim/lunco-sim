@@ -2,7 +2,7 @@
 
 **Feature Branch**: `017-advanced-interop`  
 **Created**: 2026-03-29  
-**Status**: Draft  
+**Status**: Partial — USD export built; URDF/ROS2/DDS planned.
 **Input**: Advanced interoperability with robotics and aerospace standards (ROS2/SpaceROS, URDF, USD, Omniverse).
 
 ## Problem Statement

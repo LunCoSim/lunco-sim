@@ -1258,7 +1258,7 @@ pub fn resolve_root_prim(_asset_path: &str, override_in: &str) -> String {
 /// Plugin install hook — registers translator systems, per-tick sync
 /// systems, and the API query provider. Called from `UsdSimPlugin::build`.
 ///
-/// Opaque-body guard (`PREDICTION_MEMBERSHIP.md` §6): stamp
+/// Opaque-body guard (prediction-membership design in git history): stamp
 /// [`lunco_core::NotPredictable`] on every cosim-driven physics body — one with a
 /// [`SimComponent`] (its motion comes from Modelica/script forces the client does
 /// not run) AND a [`RigidBody`]. This is the cosim **takeover** site: the same

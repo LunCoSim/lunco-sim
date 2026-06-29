@@ -18,9 +18,9 @@
 //! SpringDamper{f=2,ζ=1}, max steer 0.5 rad, SubstepCount 12, lunar g.
 //!
 //! ```text
-//! cargo run -p lunco-client --bin rover_turn -j2 -- --mode=skid --drive=1 --steer=0
-//! cargo run -p lunco-client --bin rover_turn -j2 -- --mode=skid --drive=1 --steer=1
-//! cargo run -p lunco-client --bin rover_turn -j2 -- --mode=ackermann --drive=1 --steer=1
+//! cargo run -p lunco-sandbox --bin rover_turn -j2 -- --mode=skid --drive=1 --steer=0
+//! cargo run -p lunco-sandbox --bin rover_turn -j2 -- --mode=skid --drive=1 --steer=1
+//! cargo run -p lunco-sandbox --bin rover_turn -j2 -- --mode=ackermann --drive=1 --steer=1
 //! ```
 //!
 //! Reports net heading change (deg), yaw rate (deg/s) and ground-plane

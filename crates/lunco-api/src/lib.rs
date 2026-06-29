@@ -208,8 +208,11 @@ impl Plugin for LunCoApiPlugin {
                 .add_observer(http_response_observer)
                 .add_systems(Update, http_bridge_request_router);
 
-            // Native: spawn the blocking TcpListener HTTP server.
-            #[cfg(feature = "transport-http")]
+            // Native: spawn the blocking TcpListener HTTP server. wasm has no
+            // `spawn_server` (axum/tokio-net are native-only) — the browser uses
+            // the JS bridge below instead, so skip the call there even if
+            // `transport-http` happens to be enabled in the feature set.
+            #[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
             if let Some(config) = &self.config.http_config {
                 transports::spawn_server(config.clone(), bridge.clone());
             }

@@ -1,8 +1,8 @@
-# Feature Specification: 009-authority-rbac
+# Feature Specification: 010-authority-rbac
 
-**Feature Branch**: `009-authority-rbac`
+**Feature Branch**: `010-authority-rbac`
 **Created**: 2026-03-29
-**Status**: Draft
+**Status**: Implemented
 **Input**: Subsystem-level authority delegation, concurrent multi-user control, role-based access control.
 **Depends on**: `003-multiplayer-core`
 

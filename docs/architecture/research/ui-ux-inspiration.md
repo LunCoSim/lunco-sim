@@ -1,5 +1,7 @@
 # UI/UX Inspiration — Professional Tool Analysis
 
+> Status: Active · Audience: UX designers seeking prior-art patterns for LunCoSim
+>
 > **Research document.** Surveys UI patterns from professional engineering,
 > creative, and editor software to inform LunCoSim's UX design. Original
 > analysis captured 2025-04, distilled 2026-04.

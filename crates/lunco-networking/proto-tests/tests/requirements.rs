@@ -8,7 +8,8 @@
 //!
 //! Backend-dependent requirements (M2 replication arrives, M4 input mutates
 //! server, prediction/interpolation, host-client) become headless crossbeam
-//! integration tests once the backend is committed — see NETWORKING_TEST_PLAN.md.
+//! integration tests once the backend is committed (lightyear; original
+//! NETWORKING_TEST_PLAN.md is in git history).
 
 use lunco_net_proto_tests::identity::{content, derive_id, canonicalize_path, Provenance};
 use lunco_net_proto_tests::rebase::{GridPos, CELL_SIZE};

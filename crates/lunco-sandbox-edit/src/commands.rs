@@ -626,7 +626,7 @@ pub fn interpolate_proxies(
 /// Client (FixedUpdate): drive each kinematic replicated proxy that has a
 /// `RigidBody` **through the solver** by setting its `LinearVelocity` /
 /// `AngularVelocity` toward the shared interpolation curve, instead of teleporting
-/// its `Transform` each frame. This is the core of Step 1 (`PREDICT_AND_SMOOTH`):
+/// its `Transform` each frame. This is the core of Step 1 (predict-and-smooth; design in git history):
 ///
 /// * The proxy stays `RigidBody::Kinematic` (pinned by `force_kinematic_proxies`),
 ///   so the host stays authoritative — but now it carries a *real velocity* the
@@ -761,8 +761,8 @@ pub fn maintain_owned_locally(
     role: Res<lunco_core::NetworkRole>,
     local: Res<lunco_core::LocalSession>,
     reg: Res<lunco_core::SessionRegistry>,
-    // Prediction membership is **computability**, not ownership (Phase A,
-    // `PREDICTION_MEMBERSHIP.md`): predict the owned rover only while THIS peer is
+    // Prediction membership is **computability**, not ownership (Phase A;
+    // design in git history): predict the owned rover only while THIS peer is
     // actively driving it. A possessed-but-idle rover is dominated by external
     // forces (another rover pushing it, cosim) the client can't reproduce, so it
     // must interpolate as a normal proxy — else it free-runs local physics with no
@@ -1101,7 +1101,7 @@ pub fn reconcile_owned_prediction(
     }
 }
 
-/// Client Phase B (`PREDICTION_MEMBERSHIP.md`): designate **every replicated free
+/// Client Phase B (design in git history): designate **every replicated free
 /// dynamic prop** (a ball / crate / cone — whether runtime-spawned OR authored
 /// scene content) as [`lunco_core::PredictedDynamic`], so it runs local physics +
 /// state-reconcile instead of being kinematic-pinned + interpolated. That makes

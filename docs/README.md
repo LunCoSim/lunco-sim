@@ -21,8 +21,8 @@ We are evolving from a high-fidelity sandbox into a complete autonomous mission 
 | Milestone | Status | Description |
 |---|---|---|
 | **Space Robotics Core** | ✅ Foundation | Multi-domain co-simulation (USD + Modelica + Avian3D) with f64 precision. |
-| **Real-world Validation** | 📝 Planned | [**HIL/SIL Integration**](../specs/027-hil-sil-integration/) for Hardware-in-the-loop validation. |
-| **Industrial Interop** | 📝 Planned | [**NASA GMAT**](../specs/022-fmu-gmat-integration/) for orbital mechanics and **ROS2** for robotics control. |
+| **Real-world Validation** | 💭 Idea | HIL/SIL integration for hardware-in-the-loop validation (not yet specced). |
+| **Industrial Interop** | 💭 Idea | NASA GMAT for orbital mechanics and **ROS2** for robotics control (not yet specced). |
 | **Advanced Physics** | 📝 Planned | [**PINN Terramechanics**](../specs/025-terramechanics/) for high-fidelity soil interaction. |
 | **Autonomous Missions** | 📝 Planned | [**Agent-Driven Sim**](../specs/033-agent-driven-simulation/) and [**Mission Replay/Audit**](../specs/020-world-state-and-replay/). |
 

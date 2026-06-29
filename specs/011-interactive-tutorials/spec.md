@@ -1,8 +1,8 @@
-# Feature Specification: 010-interactive-tutorials
+# Feature Specification: 011-interactive-tutorials
 
-**Feature Branch**: `010-interactive-tutorials`
+**Feature Branch**: `011-interactive-tutorials`
 **Created**: 2026-03-29
-**Status**: Draft
+**Status**: Partial — tutor mode built; no objective/goal-evaluation framework.
 
 ## Problem Statement
 While LunCoSim is rigorous enough for high-fidelity engineering simulations, it must also serve as a training platform. We need an interactive tutorial system that teaches users how to assemble rovers, configure the lunar environment, and orchestrate missions. 

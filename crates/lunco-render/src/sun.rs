@@ -5,7 +5,7 @@
 //! copy-pasted into four places that had silently drifted apart:
 //!
 //! - the celestial bootstrap fallback sun (`lunco-celestial`),
-//! - the sandbox binary fallback sun (`lunco-client`),
+//! - the sandbox binary fallback sun (`lunco-sandbox`),
 //! - the USD `DistantLight` loader (`lunco-usd-bevy`),
 //! - the `SetEnvironmentLight` runtime tuner (`lunco-environment`).
 //!

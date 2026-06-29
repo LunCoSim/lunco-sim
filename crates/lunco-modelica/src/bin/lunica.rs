@@ -19,7 +19,7 @@
 //! frame-pacing fix that cured the "UI vanishes on zoom" bug on native,
 //! and the embedded-in-sandbox copy lacked clipboard + autosave. They are
 //! now one `fn main()` with `#[cfg(target_arch = "wasm32")]` branches —
-//! the same unification `crates/lunco-client/src/bin/sandbox.rs` already
+//! the same unification `crates/lunco-sandbox/src/bin/sandbox.rs` already
 //! uses for its desktop+web entry. wasm-bindgen (`--target web`) runs
 //! `main` automatically when the module loads, so there is no separate
 //! `#[wasm_bindgen(start)]` entry point.

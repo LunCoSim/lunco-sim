@@ -1,10 +1,23 @@
-# lunco-terrain
+# lunco-terrain-globe
 
-Terrain generation, QuadSphere tiling, and collision for LunCoSim.
+**Globe-scale** terrain: QuadSphere (cube-sphere) tiling, LOD, and collision for
+whole celestial bodies seen from orbit.
+
+> **Crate split.** The old monolithic `lunco-terrain` has been split:
+> - **`lunco-terrain-core`** — the projection-agnostic, render-/physics-free LOD
+>   spine (CDLOD `quadtree` selection, planar `tile` math, the `HeightSource`
+>   trait). Depends on nothing but std + serde; both terrain crates build on it.
+> - **`lunco-terrain-globe`** (this crate) — globe scale: cube-sphere region map
+>   + radius `HeightSource` for whole bodies.
+> - **`lunco-terrain-surface`** — surface scale: a DEM-backed `HeightSource` +
+>   avian heightfield colliders + big_space per-tile anchoring for local ground.
+>
+> A future orbit→surface bridge is a *composite* `HeightSource` returning the
+> site DEM inside a georeferenced region and the globe height outside it.
 
 ## Responsibility
 
-This crate implements the **surface representation** layer:
+This crate implements the **globe surface representation** layer:
 
 - **QuadSphere Math**: Cube-to-sphere projection and LOD subdivision
 - **Terrain Tiles**: Procedural mesh generation with height sampling
@@ -26,8 +39,8 @@ Terrain is split into two layers within the same crate:
 | **Layer 3 (Visual)** | Mesh generation, rendering (feature-gated) | Client only |
 
 ```
-lunco-terrain/
-  ├── lib.rs              # TerrainPlugin, config resources
+lunco-terrain-globe/src/
+  ├── lib.rs              # TerrainPlugin, TerrainTileConfig, TileCoord
   ├── quad_sphere.rs      # Cube→sphere projection, LOD subdivision
   ├── tile.rs             # Mesh generation, height sampling
   └── registry.rs         # Custom terrain map definitions
@@ -89,7 +102,7 @@ Client (rendering):
 ## Usage
 
 ```rust
-use lunco_terrain::TerrainPlugin;
+use lunco_terrain_globe::TerrainPlugin;
 
 app.add_plugins(TerrainPlugin);
 ```
@@ -97,7 +110,7 @@ app.add_plugins(TerrainPlugin);
 Terrain tile configuration:
 
 ```rust
-use lunco_terrain::TerrainTileConfig;
+use lunco_terrain_globe::TerrainTileConfig;
 
 app.insert_resource(TerrainTileConfig {
     tile_size_m: 500.0,

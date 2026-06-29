@@ -22,7 +22,7 @@ serde_json = { workspace = true }
 # per-tick force application incl. body kind / contact (`apply_wheel_drive`).
 # Mirrors `lunco-networking`'s `net-diag`. Used via the `drive_diag!` macro —
 # compiled out entirely when off (no hot-loop cost). Build with
-# `--features lunco-mobility/drive-diag` (or lunco-client's `drive-diag`).
+# `--features lunco-mobility/drive-diag` (or lunco-sandbox's `drive-diag`).
 drive-diag = []
 
 [lints]

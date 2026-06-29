@@ -2,7 +2,7 @@
 
 **Feature Branch**: `021-asset-pipeline`
 **Created**: 2026-03-29
-**Status**: Draft
+**Status**: Partial — sourcing/caching/MSL built; no decimation/KTX/GIS.
 **Input**: Raw Engineering and Artistic Data (CAD, GeoTIFF, PNG, SysML/JSON).
 
 ## Problem Statement

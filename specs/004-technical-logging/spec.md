@@ -1,8 +1,8 @@
-# Feature Specification: 002-technical-logging
+# Feature Specification: 004-technical-logging
 
-**Feature Branch**: `002-technical-logging`
+**Feature Branch**: `004-technical-logging`
 **Created**: 2026-03-29
-**Status**: Draft
+**Status**: Partial — bevy `tracing` only; no OpenTelemetry/Jaeger export.
 **Input**: Standardized cross-cutting logging logic, OpenTelemetry tracing, and semantic event interception.
 
 ## Problem Statement

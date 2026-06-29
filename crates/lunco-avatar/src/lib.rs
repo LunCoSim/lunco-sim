@@ -71,7 +71,7 @@ impl Default for MouseSensitivity {
 /// Tracks cumulative mouse scroll delta for zoom control.
 ///
 /// This is the input bridge between egui UI systems and camera zoom logic.
-/// The egui system in `lunco-client` adds to `delta`; camera systems consume it.
+/// The egui system in `lunco-sandbox` adds to `delta`; camera systems consume it.
 #[derive(Resource, Default)]
 pub struct CameraScroll {
     pub delta: f32,

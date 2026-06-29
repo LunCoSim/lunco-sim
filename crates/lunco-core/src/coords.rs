@@ -192,8 +192,9 @@ pub fn world_position_seeded<F: QueryFilter>(
 #[cfg(test)]
 mod tests {
     //! Round-trip proof for the cell↔absolute rebase that the networking apply
-    //! path (Phase 3) relies on. DESIGN_GAPS §A claimed a `rebase_*` /
-    //! `world_roundtrip_*` proto-test suite proved this; it never existed — this
+    //! path (Phase 3) relies on. Earlier design notes (now in git history) claimed
+    //! a `rebase_*` / `world_roundtrip_*` proto-test suite proved this; it never
+    //! existed — this
     //! module is that missing safety net. Locks the contract before the snapshot
     //! apply path is made cell-aware.
     use super::*;

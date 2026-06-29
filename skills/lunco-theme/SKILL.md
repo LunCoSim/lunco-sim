@@ -36,8 +36,10 @@ decision guide for *where* colors/spacing come from in this repo.
    Consumer code reads **fields**; `get_token` is reserved for
    resolving pinned user overrides.
 4. **Never call `ctx.set_visuals(...)` from a panel.**
-   `lunco-ui::sync_theme_system` already pushes `theme.to_visuals()`
-   to egui whenever `Theme` changes.
+   `lunco-workbench`'s layout/render loop already applies
+   `theme.to_visuals()` to the egui context each frame (it calls
+   `ctx.set_visuals(theme.to_visuals())` so chrome panels — menu bar,
+   status bar — paint correctly).
 5. **Dark/light is `theme.toggle_mode()`, not a branch on
    `ThemeMode`.** Overrides survive the toggle automatically.
 6. **Spacing and rounding come from `theme.spacing` and
@@ -223,8 +225,10 @@ Don't default tier 3 with palette picks.
 - Headless UI tests or standalone panel harnesses: add it yourself,
   `app.add_plugins(lunco_theme::ThemePlugin)`. Without it,
   `Res<Theme>` will not be present and systems will panic on access.
-- `lunco-ui::LuncoUiPlugin` installs `sync_theme_system`; add it
-  wherever you want `Theme` changes to propagate to egui.
+- `WorkbenchPlugin`'s layout/render loop is what pushes `Theme` into the
+  egui context (`ctx.set_visuals(theme.to_visuals())`). A standalone panel
+  harness without the workbench must apply `theme.to_visuals()` itself
+  (e.g. `ui.style_mut().visuals = theme.to_visuals();`).
 
 ## Dark / light toggle
 

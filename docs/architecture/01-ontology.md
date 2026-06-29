@@ -1,4 +1,10 @@
-# LunCoSim Engineering Ontology
+# 01 — LunCoSim Engineering Ontology
+
+> Status: Active · Audience: all contributors — canonical terminology
+>
+> **TL;DR.** The shared vocabulary for the whole codebase — Space System,
+> Verifier, Attribute, CommandMessage, Parameter (TM), and friends. Every
+> spec and implementation MUST use these terms as defined here.
 
 This document serves as the definitive source of truth for the architectural terminology and concepts used in the LunCoSim ecosystem. All specifications and code implementations MUST adhere to these definitions.
 
@@ -44,7 +50,7 @@ Every feature, from high-level flight software to low-level physics propagators,
 ### Hot-Swappable (Runtime Logic Injection)
 The 5-layer architecture MUST support runtime replacement of any Level 2, 3, or 4 component.
 - **OBC Swap**: Replacing a basic wheel driver with an advanced differential steering driver.
-- **FSW Swap**: Switching from internal Lua logic to an external Fprime/ROS bridge.
+- **FSW Swap**: Switching from internal `rhai` scripting logic to an external Fprime/ROS bridge.
 - **Controller Swap**: Changing from a Tank-drive mapping to a Character-movement mapping for the same vessel.
 
 ### Simulator as Mechanism, Avatar as Agency
@@ -154,8 +160,8 @@ continuous signals → ControlStream, discrete intents → Command Bus.
 **`WireChannel` is orthogonal to *authority*.** The tag picks the channel; whether a
 given client *may* issue a command against a given entity is a separate runtime gate
 on the target (the `AcquireStream` / `Possess` arbitration above). Channel = how it
-travels; authority = who may send it. See `crates/lunco-networking/` (`PH2_OP_LOG.md`,
-authority notes) for the full split.
+travels; authority = who may send it. See `crates/lunco-networking/README.md` and
+`crates/lunco-networking/SYNC_ARCHITECTURE.md` for the full split.
 
 ### Port
 The universal interface for data and power flow between architectural layers.
@@ -370,7 +376,7 @@ Every entity has BOTH a high-precision truth position and a render-ready Bevy Tr
 
 ## 6. Physics Mode (Entity-Level Propagation)
 
-Each entity's physics can be propagated differently depending on its spatial context. This is foundational to `004-time-and-integrators` and used by `022-fmu-gmat-integration`.
+Each entity's physics can be propagated differently depending on its spatial context. This is a forward-looking design direction (advanced time/integrators + external-tool FMU/GMAT interop — neither yet specced).
 
 ### PhysicsMode Enum
 

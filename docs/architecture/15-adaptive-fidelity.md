@@ -1,5 +1,7 @@
 # 15 — Adaptive Fidelity (Multi-Clock & LoD)
 
+> Status: Design · Audience: contributors planning multi-clock / level-of-detail (post-MVP, task #96)
+>
 > Multiple clocks, multiple fidelities per participant, policy-driven
 > switching. Handles the mission-scope vs physics-scope time-scale split,
 > time-warp, and CPU-budget-driven level-of-detail.

@@ -1,4 +1,10 @@
-# LunCoSim View & Intent Architecture
+# 17 — LunCoSim View & Intent Architecture
+
+> Status: Active · Audience: contributors on input, camera, and control systems
+>
+> **TL;DR.** A 5-layer control model that decouples raw input from physical
+> execution (UserIntent → … → actuation), keeping the camera and intent
+> systems modular and headless-safe.
 
 This document provides a technical guide to the modular, action-oriented, and headless-safe camera and intent systems in LunCoSim.
 
@@ -19,21 +25,30 @@ LunCoSim decouples human interaction from physical execution using five distinct
 
 ## 2. Vision Components: ViewPoint vs. CameraDevice
 
-### **ViewPoint (Logical)**
-The universal logical "eye." 
-- **Crate**: `lunco-core` (Headless Safe).
+> ⚠️ **Status note.** The 5-layer control model in §1 is real and implemented.
+> The clean `ViewPoint` / `CameraDevice` component split below is **aspirational
+> ontology — not yet in code.** There is no `ViewPoint` or `CameraDevice` type,
+> and there is no `lunco-camera` crate / `LunCoCameraPlugin`. Today the camera
+> lives in **`lunco-avatar`** (`LunCoAvatarPlugin`) as concrete camera-rig
+> components — `SpringArmCamera`, `OrbitCamera`, `FreeFlightCamera`,
+> `SurfaceCamera` — driving Bevy `Camera3d` + `big_space::FloatingOrigin`
+> directly. Sun / shadow rendering lives in `lunco-render`.
+
+### **ViewPoint (Logical)** — *planned*
+The universal logical "eye."
+- **Crate**: would live in `lunco-core` (Headless Safe). *Not yet implemented.*
 - **Purpose**: Defines where an entity is looking and its FOV. Both bots and players read this component to perform spatial math (e.g., "Is the Earth in the center of my ViewPoint?").
 - **Precision**: Uses `f64` for planetary-scale accuracy.
 
-### **CameraDevice (Physical)**
+### **CameraDevice (Physical)** — *planned*
 Representing a sensing hardware unit.
-- **Crate**: `lunco-core` (Hardware Marker).
+- **Crate**: would live in `lunco-core` (Hardware Marker). *Not yet implemented.*
 - **Purpose**: Attaches a `ViewPoint` to a physical presence. It can optionally have a **Physical Collider** (via `avian`) to prevent terrain clipping.
 
-### **Renderer / Blender (Visual)**
+### **Renderer / Blender (Visual)** — *today: `lunco-avatar`*
 The rendering bridge.
-- **Crate**: `lunco-camera` (Client Only).
-- **Purpose**: Syncs a Bevy `Camera3d` and its `FloatingOrigin` to the active `ViewPoint`. It handles interpolation (smoothing) between the logical truth and the rendered frame.
+- **Crate**: `lunco-avatar` (`LunCoAvatarPlugin`, client-only camera rigs). Sun/shadow in `lunco-render`.
+- **Purpose**: Drives a Bevy `Camera3d` and its `FloatingOrigin`. Camera rigs (spring-arm, orbit, free-flight, surface-relative) handle smoothing between simulation truth and the rendered frame.
 
 ---
 
@@ -62,10 +77,10 @@ To provide a natural "human" feel, manual user input always takes precedence ove
 ---
 
 ## 5. Headless Compatibility
-The simulation core (`lunco-celestial`, `lunco-core`) has NO dependency on `lunco-camera` or Bevy's rendering systems.
-- **Bots** can "see" and "look at" objects by reading and writing to `ViewPoint` components through the same `Action` system.
+The simulation core (`lunco-celestial`, `lunco-core`) has NO dependency on the camera rigs or Bevy's rendering systems.
+- **Bots** can "see" and "look at" objects through the same `Action` / intent system (against the planned `ViewPoint`; today against the avatar/camera transform).
 - **Server** instances run the full spatial logic without a GPU.
-- **Clients** add the `LunCoCameraPlugin` to provide the visual bridge and post-processing effects.
+- **Clients** add **`LunCoAvatarPlugin`** (`lunco-avatar`) to provide the camera rigs and visual bridge; post-processing / lighting come from `lunco-render`.
 
 ---
 

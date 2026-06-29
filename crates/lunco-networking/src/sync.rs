@@ -72,7 +72,7 @@ pub struct SyncCommand {
 /// farther than that saturate at the bound (see [`quantize_pos`]); covering a
 /// deep-orbital / cislunar-absolute frame needs big_space recentering, which is
 /// **deferred** (blocked on an avian↔big_space transform-writeback bridge — see
-/// `DESIGN_GAPS §A` and `crates/lunco-core/src/coords.rs` rebase tests).
+/// design in git history and `crates/lunco-core/src/coords.rs` rebase tests).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SnapshotEntry {
     pub gid: u64,

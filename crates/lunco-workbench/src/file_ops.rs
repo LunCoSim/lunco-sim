@@ -2,7 +2,7 @@
 //!
 //! Verbs that span every domain — Open, Save All, Save as Twin — live
 //! here so all three apps (`lunica`, `sandbox`,
-//! `lunco_client`) get the same File menu, keybinds, and HTTP API
+//! `luncosim`) get the same File menu, keybinds, and HTTP API
 //! shape from one place. Domain-specific commands (`SaveDocument`,
 //! `SaveAsDocument`, `CloseDocument`) stay in `lunco-doc-bevy`; their
 //! observers continue to live in domain crates because writing a

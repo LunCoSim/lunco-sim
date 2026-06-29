@@ -35,7 +35,7 @@ default = ["ui"]
 ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-theme"]
 # Compile the video encoder. Native Linux/macOS only — needs system libx264.
 # Without it the recording settings/command/hotkey still exist but capture
-# nothing (they log a warning). Forwarded by `lunco-client`'s `recording` feature.
+# nothing (they log a warning). Forwarded by `lunco-sandbox`'s `recording` feature.
 recording = ["dep:bevy_dev_tools"]
 
 [lints]

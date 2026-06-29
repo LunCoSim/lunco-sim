@@ -48,5 +48,4 @@ Lunica needs the Modelica Standard Library (MSL) on hand. On first use (desktop)
 ## See also
 
 - [**Modelica Domain Architecture**](../../architecture/20-domain-modelica.md) — how Lunica handles DAEs and solvers.
-- [**Web Build Reference**](../../architecture/32-web-build.md) — the wasm/WebGPU pipeline.
-- [**Wasm Web Worker**](../../architecture/30-wasm-web-worker.md) — how Lunica remains responsive during compiles on the web.
+- [**Wasm Web Worker & Web Build**](../../architecture/30-wasm-web-worker.md) — the wasm/WebGPU pipeline, build/deploy, and how Lunica stays responsive during compiles on the web.

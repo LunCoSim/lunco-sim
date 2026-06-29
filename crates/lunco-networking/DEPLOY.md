@@ -225,6 +225,36 @@ client connected`, and the replicated scene appears.
 
 ---
 
+## Appendix — local / self-signed dev cert (WebTransport)
+
+Production uses a real Let's Encrypt CA cert (above), so browsers validate the
+WebTransport host via the normal chain — **no digest / URL `#hash`**. On
+**localhost / LAN dev** there is no CA, and WebTransport (HTTP/3 = QUIC) **mandates
+TLS with no plaintext mode** — `--ignore-certificate-errors` does *not* cover QUIC.
+You must use a self-signed cert via Chrome's `serverCertificateHashes` path. Hard-won
+gotchas (cost real time during the Ph0 spike — read before debugging a dev handshake):
+
+1. **CA trust does NOT help the hash path.** If the wasm client sends a non-empty
+   `serverCertificateHashes`, Chrome takes the **hash-only** path and *ignores* CA
+   validation — a CA-trusted (long-lived) cert is then *rejected*. For dev you use
+   the hash, not `mkcert`/CA. (`mkcert -install` helps `wss://` WebSocket dev, not
+   WebTransport.)
+2. **`serverCertificateHashes` constraints (all required):** ECDSA **P-256**, X.509
+   **v3**, validity **< 14 days**, and `SHA-256(DER cert)` must equal the hash the
+   client sends. Use `-days 13` (14 is the boundary — sample certs often ship stale).
+3. **The digest must reach the client at runtime, not be baked at compile time.**
+   The Ph0 example baked the digest via `include_str!(".../digest.txt")` and its
+   URL-hash override was dead code, so a rotated server cert silently broke every
+   handshake until the wasm was rebuilt. **Our** browser client wires the digest from
+   the URL hash (`?connect=…#digest`, see `connect_link.rs`) so cert rotation needs
+   no wasm rebuild. Native dials by `SocketAddr` + digest; browser dials a hostname
+   URL (`wt_client`) so a real CA cert validates with no digest at all.
+4. **Background-tab throttling drops WebTransport** (keepalive lapses → server times
+   the client out). Keep the tab foregrounded for interactive testing.
+
+For LAN-by-IP dev, generate a fresh short-lived ECDSA P-256 cert, start the host
+with it, and pass its SHA-256 digest to the browser client via the connect URL hash.
+
 ## Redeploy (new build)
 
 ```bash

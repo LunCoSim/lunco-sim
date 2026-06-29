@@ -2,7 +2,7 @@
 
 **Feature Branch**: `001-unified-control-interaction`
 **Created**: 2026-03-29
-**Status**: Active
+**Status**: Implemented (historical)
 **Input**: 5-Layer Action-to-Actuator Technical Architecture (Avian & Leafwing).
 
 ## Problem Statement

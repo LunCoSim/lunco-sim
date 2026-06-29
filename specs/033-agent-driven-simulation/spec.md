@@ -2,7 +2,7 @@
 
 **Feature Branch**: `033-agent-driven-simulation`
 **Created**: 2026-04-25
-**Status**: Draft
+**Status**: Implemented (historical)
 **Input**: Expose model introspection and runtime mutation primitives so an AI agent can run a full "load → tune → simulate → observe" loop through the API without UI.
 
 ## Agent-Workflow Anchor

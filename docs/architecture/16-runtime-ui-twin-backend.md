@@ -1,4 +1,16 @@
-# Runtime: UI ↔ Twin ↔ Language Backend
+# 16 — Runtime: UI ↔ Twin ↔ Language Backend
+
+> Status: Design · Audience: contributors converging the UI ↔ Twin ↔ backend responsiveness model
+>
+> ⚠️ **NORTH-STAR / ASPIRATIONAL DESIGN — not the current implementation.**
+> The named types in this doc — `LanguageBackend`, `EmbeddedBackend` /
+> `RemoteBackend`, `Snapshot`, and `Aspect` — **do not exist in the codebase.**
+> The responsiveness problem it addresses is real and is solved today by
+> concrete, narrower machinery: `lunco-modelica/src/worker.rs` (off-thread
+> compile/solve) and the unified diagnostics substrate
+> (`lunco-doc` `Diagnostic`/`CompileState`, `lunco-doc-bevy`'s
+> `DocumentDiagnostics` resource + `status_json`). Read this as the target
+> model the system is converging toward, not a map of existing code.
 
 How the three runtime layers fit together, and how the system stays
 responsive when the language backend is slow.

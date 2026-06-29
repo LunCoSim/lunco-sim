@@ -1,5 +1,7 @@
 # 30 — Wasm Web Worker (off-thread Modelica)
 
+> Status: Active · Audience: contributors on the web/wasm build, worker runtime, and deploy
+
 How the browser build keeps the UI responsive while rumoca compiles a model.
 
 ## Why
@@ -244,3 +246,214 @@ the page still works.
   Splitting the worker logic into its own crate would cut this in half;
   not done because the bundle is loaded in parallel with the main wasm
   and doesn't show up as a startup-time bottleneck.
+
+## Prerequisites
+
+```bash
+# Required: wasm32 target
+rustup target add wasm32-unknown-unknown
+
+# Required: wasm-bindgen CLI (the build script also looks at
+# .cargo-bin/bin/wasm-bindgen if you keep a project-local copy).
+cargo install wasm-bindgen-cli
+
+# Strongly recommended: wasm-opt (binaryen). Shrinks the release wasm
+# ~30–40% and cuts in-browser compile time proportionally. The build
+# script auto-detects it on PATH and runs it after wasm-bindgen.
+sudo apt install binaryen          # Debian/Ubuntu (preferred)
+# or: cargo install --locked wasm-opt
+
+# Optional: Node.js http-server (recommended, fallback to python3)
+npm install -g http-server
+```
+
+If wasm-opt isn't on PATH the build still succeeds — the script logs a
+hint and skips the optimisation pass.
+
+## The wasm32 time problem (rumoca fork)
+
+`std::time::Instant` **panics** on `wasm32-unknown-unknown` (browsers
+restrict high-resolution monotonic clocks — Spectre mitigation). A fork
+at `LunCoSim/rumoca` replaces those imports with conditional compilation:
+
+```rust
+#[cfg(target_arch = "wasm32")]
+use instant::Instant;      // → performance.now() via wasm-bindgen
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+```
+
+The `Instant` / `thread::spawn` wasm fixes live on **`main`**; the web
+build consumes the **`wasm-asset-loader`** branch (which adds
+`Session::load_source_root_in_memory` on top of `main`).
+
+## Building & running
+
+```bash
+# Build wasm + bindings (writes dist/<bin>/)
+./scripts/build_web.sh build lunica
+
+# Serve locally
+./scripts/build_web.sh serve            # or: cd dist/lunica && http-server -p 8080 -c-1 --cors
+# Fallback: python3 -m http.server 8080  (won't serve pre-compressed siblings)
+# Open http://localhost:8080/index.html
+```
+
+Manual equivalent of the build:
+
+```bash
+cargo build --release --target wasm32-unknown-unknown --bin lunica
+wasm-bindgen target/wasm32-unknown-unknown/release/lunica.wasm \
+    --out-dir dist/lunica --target web
+```
+
+`./scripts/build_web.sh` is the supported path. There is no committed
+`crates/lunco-modelica/web/pkg/`.
+
+**Browser requirements:** Chrome/Edge 113+ or Safari 16.4+ with WebGPU
+(`chrome://gpu`); falls back to WebGL2. Must be served over HTTP —
+`file://` won't load wasm.
+
+### Output layout
+
+```
+dist/<binary>/
+  lunica.js          # wasm-bindgen JS glue
+  lunica_bg.wasm     # post-wasm-opt binary
+  lunica.d.ts        # TypeScript declarations
+  index.html         # copy of crates/lunco-web/web/index.html (shared template)
+  msl/
+    manifest.json    # bundle metadata + content hashes
+    sources-<sha>.tar.zst   # ~2 MB MSL source bundle
+    parsed-<sha>.bin.zst    # ~14 MB pre-parsed StoredDefinitions
+  worker/
+    lunica_worker.js, lunica_worker_bg.wasm   # separate worker bundle
+    worker_bootstrap.js                       # REQUIRED shim (see Bootstrap)
+target/wasm32-unknown-unknown/web-release/<binary>.wasm   # cargo's raw output
+target/web/<binary>/                          # wasm-bindgen intermediate
+.cargo-bin/                                    # optional local wasm-bindgen install
+```
+
+`dist/` and `.cargo-bin/` are git-ignored.
+
+## Performance — time-to-interactive
+
+Three levers, wired into the build + page:
+
+1. **`wasm-opt` (build step, ~40% smaller).** `build_web.sh` runs
+   `wasm-opt -Oz --converge --strip-debug` if binaryen is on PATH (`-Oz`
+   size-first, `--converge` re-runs to fixpoint). Typical: 103.9 MB →
+   ~60 MB. The Rust side also contributes — `[profile.web-release]` sets
+   `opt-level = "z"`, `lto = "fat"`, `codegen-units = 1`, `strip = true`,
+   `panic = "abort"`.
+2. **Streaming compile (page-side, free).** `crates/lunco-web/web/index.html`
+   fetches the wasm via a `TransformStream` and hands the live `Response`
+   to `init()`, so the browser pipes it into
+   `WebAssembly.instantiateStreaming` — compiling chunks as they download.
+3. **Brotli + gzip pre-compression at deploy (~3–4× on the wire).**
+   `scripts/deploy_web.sh` emits `.br` (`-q 11 --large_window=24`) and
+   `.gz` (`-9`) siblings for `wasm/js/html/json/css/svg/ts/xml/txt/map`;
+   already-compressed formats (zstd/png/woff2) are skipped. `python -m
+   http.server` won't serve these — production needs `brotli_static on;
+   gzip_static on;`.
+
+| stage                       | size      |
+|-----------------------------|-----------|
+| Rust release                | ~104 MB   |
+| `-Oz` + `panic=abort` + LTO | ~70 MB    |
+| `wasm-opt -Oz --converge`   | ~60 MB    |
+| gzip -9 on the wire         | ~14–16 MB |
+| brotli -q 11 on the wire    | ~11–13 MB |
+
+Still costs time: Bevy plugin construction at boot (auditing `bevy`
+features to drop unused renderers would help but is shared with the
+rover/viz bins), and the ~16 MB MSL fetch (non-blocking; status in the
+bottom egui bar).
+
+## Maintaining the rumoca fork
+
+The fork lives at `LunCoSim/rumoca`; the web build pulls branch
+`wasm-asset-loader` (adds `Session::load_source_root_in_memory` on top of
+`main`). Local dev typically uses a sibling worktree at `../rumoca/` with
+`path = …` deps in `lunco-modelica/Cargo.toml` / `lunco-assets/Cargo.toml`.
+To update:
+
+```bash
+cd ../rumoca
+git fetch origin
+git checkout wasm-asset-loader
+git rebase origin/main        # replay our diff on top of upstream
+git push --force-with-lease
+```
+
+Verify it's wired in:
+
+```bash
+cargo metadata --format-version 1 | jq '.packages[] | select(.name == "rumoca-sim") | .source'
+```
+
+## Deployment
+
+`scripts/deploy_web.sh` pre-compresses the bundle (brotli + gzip) and
+rsyncs it to a remote host.
+
+**Local setup:** `sudo apt install brotli binaryen` (deploy still runs
+gzip-only with a warning if brotli is missing).
+
+**Remote (nginx + brotli module):** `sudo apt install nginx
+libnginx-mod-http-brotli`. Site config:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name lunco.example;
+    root /var/www/lunco;
+
+    # application/wasm is required for streaming compile —
+    # most nginx installs don't ship it.
+    types {
+        application/wasm        wasm;
+        application/javascript  js mjs;
+    }
+
+    brotli_static on;       # drop if libnginx-mod-http-brotli absent
+    gzip_static   on;
+
+    location ~* \.(?:wasm|js|css|tar\.zst|bin\.zst)$ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+    location = /index.html { add_header Cache-Control "no-cache"; }
+    index index.html;
+}
+```
+
+```bash
+./scripts/build_web.sh build lunica
+./scripts/deploy_web.sh deploy@host:/var/www/lunco
+```
+
+`deploy_web.sh` env vars: `BIN` (default `lunica`), `DEPLOY_TARGET`
+(rsync dest, overrides positional), `SSH_PORT`, `EXTRA_RSYNC` (e.g. `-n`
+for dry-run). Verify on the wire:
+
+```bash
+curl -I -H "Accept-Encoding: br"   https://lunco.example/lunica_bg.wasm   # → Content-Encoding: br
+curl -I -H "Accept-Encoding: gzip" https://lunco.example/lunica_bg.wasm   # → Content-Encoding: gzip
+```
+
+If `br` is missing, `libnginx-mod-http-brotli` isn't loaded — install it
+or remove the `brotli_static on;` line and rely on gzip.
+
+## Troubleshooting (build / web)
+
+| Symptom                                     | Cause                                       | Fix                                                       |
+|---------------------------------------------|---------------------------------------------|-----------------------------------------------------------|
+| `time not implemented on this platform`     | direct `std::time::Instant` usage           | use `web_time::Instant` (or rely on the rumoca fork)      |
+| `thread::spawn` / `failed to spawn thread`  | raw `std::thread::spawn` on wasm            | `AsyncComputeTaskPool::get().spawn(async {…}).detach()`   |
+| Blank/dark canvas, no UI                    | wasm loaded, Bevy not painted yet           | check console for plugin-build panics; loader hides on first egui frame |
+| 404 on `lunica.js`                          | stale `dist/` after a layout change         | re-run `./scripts/build_web.sh build …`                   |
+| `[MSL] failed: …` in status bar             | `dist/<bin>/msl/manifest.json` missing/corrupt | re-run build (`build_msl_assets` regenerates)          |
+| Model errors `unresolved type reference: Modelica.*` | compile fired before MSL ready     | wait for "MSL · ready" then Compile again                 |
+| `wasm-opt` step says `not installed`        | binaryen not on PATH                        | see Prerequisites; install or skip                        |
+| Compile spinner forever, no `[worker]` logs | worker bundle didn't init                   | missing/broken `worker_bootstrap.js` (see Bootstrap)      |
+| `br` missing on the wire                    | `libnginx-mod-http-brotli` not loaded       | install it or drop `brotli_static on;`                    |

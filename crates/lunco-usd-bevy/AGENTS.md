@@ -26,7 +26,8 @@ layers. Pixar's distribution handles `.gltf`/`.glb` via the `UsdGltf`
 SdfFileFormat plugin — `prepend payload = @./body.glb@` *just works*. Our
 `openusd-rs 0.2` fork has no plugin system, so we approximate:
 
-1. **`lunco-usd-composer`** detects non-USD extensions (`glb`, `gltf`, `obj`,
+1. **The compose path (folded into `lunco-usd-bevy`)** detects non-USD extensions
+   (`glb`, `gltf`, `obj`,
    `stl`) on `payload`/`references`, skips the USD-text read, and synthesises
    a `lunco:resolvedAsset` attribute on the referencing prim with the
    resolved URI.
@@ -49,7 +50,7 @@ The composer passes through three URI shapes for the resolved attribute:
 
 | Shape | Meaning | Example |
 |---|---|---|
-| `lunco-lib://...` | LunCoSim shipped library — registered in `lunco-client/src/main.rs`, points at `<cache>/`. Populated by `cargo run -p lunco-assets -- download`. | `lunco-lib://models/perseverance.glb` |
+| `lunco-lib://...` | LunCoSim shipped library — registered in the `luncosim`/`lunco-sandbox` binary main, points at `<cache>/`. Populated by `cargo run -p lunco-assets -- download`. | `lunco-lib://models/perseverance.glb` |
 | `/abs/path` (filesystem) | `/`-prefixed USD asset path resolved against the workspace `assets/` root. | `/ws/assets/models/x.glb` |
 | `./relative.glb` | Relative to the layer's parent directory. | `./body.glb` |
 

@@ -1,8 +1,8 @@
-# Feature Specification: 007-coordinate-frame-tree
+# Feature Specification: 009-coordinate-frame-tree
 
-**Feature Branch**: `007-coordinate-frame-tree`
+**Feature Branch**: `009-coordinate-frame-tree`
 **Created**: 2026-03-29
-**Status**: Draft
+**Status**: Partial — `big_space` floating-origin built; named TF-tree types absent.
 **Input**: f64/f32 precision split, planetary-scale coordinates, robotic joint hierarchies.
 
 ## Problem Statement

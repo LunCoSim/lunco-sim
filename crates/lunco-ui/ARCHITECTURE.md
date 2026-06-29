@@ -6,15 +6,21 @@
 
 ## What lunco-ui Provides
 
+> **Note:** the external `bevy_workbench` crate was replaced by the in-house
+> `lunco-workbench` (path dep). The panel trait is now `Panel` (with `PanelCtx` /
+> `PanelId`), *not* `WorkbenchPanel`. Some code snippets below still show the old
+> trait name and are illustrative — check `lunco-workbench/src/panel.rs` for the
+> current API.
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                   bevy_workbench (external)                  │
+│                   lunco-workbench (in-house)                 │
 │  Docking · Themes · Persistence · Inspector · Console        │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ WorkbenchPanel trait
+                       │ Panel trait
          ┌─────────────┼─────────────┐
   ┌──────▼──────┐ ┌───▼──────┐ ┌───▼──────────┐
-  │lunco-client │ │sandbox-  │ │lunco-        │
+  │lunco-sandbox│ │sandbox-  │ │lunco-        │
   │  panels     │ │edit      │ │modelica      │
   │             │ │panels    │ │panels        │
   │ MissionCtl  │ │ SpawnPal │ │ Workbench    │
@@ -106,8 +112,8 @@ time_series_plot(ui, "modelica_plot", &series);
 
 | Mechanism | What it gives us |
 |-----------|-----------------|
-| Docking (`bevy_workbench`) | Drag/drop panels, tabs, resize, undo — works out of the box |
-| Themes (`bevy_workbench`) | Rerun Dark / Catppuccin — scientific dashboards look good immediately |
+| Docking (`lunco-workbench`) | Drag/drop panels, tabs, resize, undo — works out of the box |
+| Themes (`lunco-workbench`) | Rerun Dark / Catppuccin — scientific dashboards look good immediately |
 | Widget caching (`WidgetSystem`) | O(1) ECS queries for 1,000s of graph/diagram widgets |
 | UI→State (`CommandMessage`) | All UI actions are observable, replayable, and AI-compatible |
 
@@ -146,7 +152,7 @@ crates/lunco-sandbox-edit/
 
 ```toml
 [dependencies]
-bevy_workbench = "0.3"
+lunco-workbench = { path = "../lunco-workbench" }
 lunco-ui = { path = "../lunco-ui" }
 ```
 
@@ -248,7 +254,7 @@ fn on_delete_entity(trigger: On<CommandMessage>, mut commands: Commands) {
 
 ## Headless
 
-Removing UI plugins leaves a functioning simulation. Headless binaries don't compile `bevy_workbench` or `bevy_egui`:
+Removing UI plugins leaves a functioning simulation. Headless binaries don't compile `lunco-workbench` or `bevy_egui`:
 
 ```rust
 App::new()
@@ -295,33 +301,37 @@ This enables command-response correlation: observers can emit `CommandResponse {
 ```
 crates/lunco-ui/
 ├── ARCHITECTURE.md
-├── Cargo.toml               # 7 deps (bevy, bevy_egui, bevy_workbench, big_space, lunco-core, lunco-avatar, smallvec)
+├── Cargo.toml               # deps include bevy, bevy_egui, lunco-workbench, big_space, lunco-core, lunco-avatar
 └── src/
-    ├── lib.rs               # LuncoUiPlugin (~20 lines)
-    ├── widget.rs            # WidgetSystem + WidgetId + caching (~180 lines)
-    ├── context.rs           # UiContext + UiSelection (~50 lines)
-    ├── helpers.rs           # CommandBuilder (~50 lines)
-    └── components.rs        # WorldPanel + Label3D (~30 lines)
-    # Total: ~330 lines
+    ├── lib.rs               # LuncoUiPlugin + theme
+    ├── widget.rs            # WidgetSystem + WidgetId + caching
+    ├── context.rs           # UiContext + UiSelection
+    ├── helpers.rs           # CommandBuilder
+    ├── components.rs        # WorldPanel + Label3D
+    ├── mission_control.rs   # mission-control panel widget
+    ├── telemetry.rs         # telemetry panel widget
+    ├── busy/                # busy/spinner indicator widget (mod.rs, spinner.rs, widget.rs)
+    ├── diagrams/            # diagram widgets (mod.rs, time_series.rs)
+    └── modal/              # modal-dialog host (mod.rs, host.rs)
 ```
 
-Domain crate UI layout:
+Domain crate UI layout (panels implement `lunco-workbench`'s `Panel` trait):
 
 ```
-crates/lunco-client/src/ui/
-├── mod.rs                   # ClientUiPlugin
-├── mission_control.rs       # WorkbenchPanel impl
-└── telemetry.rs             # WorkbenchPanel impl
+crates/lunco-sandbox/src/ui/
+├── mod.rs                   # sandbox UI plugin
+├── code_panel.rs            # Panel impl
+└── models_palette.rs        # Panel impl
 
 crates/lunco-sandbox-edit/src/ui/
 ├── mod.rs                   # SandboxEditUiPlugin
-├── spawn_palette.rs         # WorkbenchPanel impl
-├── inspector.rs             # WorkbenchPanel impl
-└── entity_list.rs           # WorkbenchPanel impl
+├── spawn_palette.rs         # Panel impl
+├── inspector.rs             # Panel impl
+└── entity_list.rs           # Panel impl
 
 crates/lunco-modelica/src/ui/
 ├── mod.rs                   # ModelicaUiPlugin
-├── workbench.rs             # WorkbenchPanel impl
-├── code_editor.rs           # WorkbenchPanel impl
-└── graphs.rs                # WorkbenchPanel impl
+├── workbench.rs             # Panel impl
+├── code_editor.rs           # Panel impl
+└── graphs.rs                # Panel impl
 ```

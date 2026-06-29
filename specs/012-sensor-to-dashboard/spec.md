@@ -1,8 +1,8 @@
-# Feature Specification: 011-sensor-to-dashboard
+# Feature Specification: 012-sensor-to-dashboard
 
-**Feature Branch**: `011-sensor-to-dashboard`
+**Feature Branch**: `012-sensor-to-dashboard`
 **Created**: 2026-03-29
-**Status**: Draft
+**Status**: Partial — telemetry bridge + scalar sensing built; no camera/RGB sensors, no OpenMCT/Grafana.
 **Input**: Advanced sensor modeling, telemetry streaming to OpenMCT/Grafana, AI agent data feeds.
 **Consolidates**: Former specs `011-telemetry-bridge`, `012-sensor-simulation`.
 

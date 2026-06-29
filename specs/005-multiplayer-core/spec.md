@@ -1,8 +1,8 @@
-# Feature Specification: 003-multiplayer-core
+# Feature Specification: 005-multiplayer-core
 
-**Feature Branch**: `003-multiplayer-core`
+**Feature Branch**: `005-multiplayer-core`
 **Created**: 2026-03-29
-**Status**: Draft
+**Status**: Implemented (historical)
 **Input**: Server-authoritative networking, basic entity sync, observer presence.
 
 ## Problem Statement

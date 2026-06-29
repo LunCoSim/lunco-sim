@@ -11,7 +11,7 @@ so an experiment sweep reuses each generated field).
 ## Key facts (from codebase audit, 2026-06-26)
 - Rover drives on a **flat 4 km Cube slab at y≈0** (`assets/scenes/sandbox/sandbox_scene.usda:16`),
   NOT a heightfield. The DEM-heightfield path (`lunco-usd-avian/src/lib.rs:355`) is dormant;
-  the quadsphere (`lunco-terrain`) is render-only (no colliders).
+  the quadsphere (`lunco-terrain-globe`) is render-only (no colliders).
   → We **generate the height array ourselves**. Craters = bowl functions written into it.
   Build the Avian `Collider::heightfield(Vec<Vec<f64>>, scale)` directly from that array.
   Analytic `height_at(x,z)` (bilinear) gives off-thread rock-placement heights — no raycasts.

@@ -5,7 +5,7 @@ description: >
   Use this skill whenever working on any user interface for the LunCoSim
   solar system simulation — adding panels, building dashboards, creating
   inspectors, spawning UI, telemetry displays, docking layouts, themes,
-  or anything involving egui, bevy_workbench, or WorkbenchPanel.
+  or anything involving egui, lunco-workbench, or Panel.
   Also use when the user mentions CommandMessage, WidgetSystem, or 3D
   world-space UI. Even if the request seems simple (like "add a button"),
   use this skill because the panel registration and command patterns
@@ -28,33 +28,37 @@ and design decisions. This skill is a quick-reference summary.
 ## Core Principles
 
 1. **UI lives in `src/ui/`** — domain crates have `src/ui/mod.rs` exporting a `*UiPlugin`. UI code never lives outside `ui/` directories.
-2. **UI never mutates state** — all interactions emit `CommandMessage` events that observers handle. This makes the UI AI-native: AI observes the same command stream as humans and can emit identical commands.
-3. **Panels are `WorkbenchPanel` impls** — registered via `app.register_panel()` with bevy_workbench's docking system.
+2. **UI never mutates state** — all interactions emit typed command events (the `#[Command]` structs, triggered via `ctx.trigger(...)`) that observers handle. This makes the UI AI-native: AI observes the same command stream as humans and can emit identical commands.
+3. **Panels are `Panel` impls** (the trait lives in `lunco_workbench`, the in-house replacement for the old external `bevy_workbench`) — registered via `app.register_panel()` with lunco-workbench's docking system.
 4. **Headless must work** — removing UI plugins (Layers 3 and 4) leaves a functioning simulation. See `AGENTS.md` §4.1 for the four-layer architecture.
 
 ## Adding a Panel
 
 ```rust
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_ui::prelude::*;
 
 pub struct MyPanel;
 
-impl WorkbenchPanel for MyPanel {
-    fn id(&self) -> &str { "my_panel" }
+impl Panel for MyPanel {
+    fn id(&self) -> PanelId { PanelId("my_panel") }
     fn title(&self) -> String { "My Panel".into() }
-    fn needs_world(&self) -> bool { true }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
 
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        // READ state — query only, never mutate
-        let selected = world.resource::<UiSelection>();
-
-        // EMIT commands — never mutate directly
-        if ui.button("Action").clicked() {
-            world.commands().trigger(
-                CommandBuilder::new("MY_COMMAND").target(entity).build()
-            );
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        // READ state — view-model resources / selected components via the
+        // ctx, never raw `&mut World` scans, never mutate.
+        if let Some(sel) = ctx.resource::<UiSelection>() {
+            // ... read sel ...
         }
+
+        // EMIT a typed command event — never mutate directly.
+        if ui.button("Action").clicked() {
+            ctx.trigger(MyCommand { /* ... */ });
+        }
+
+        // Need `&mut World`? Queue it instead of blocking the paint:
+        // ctx.defer(|world: &mut World| { /* ... */ });
     }
 }
 
@@ -66,28 +70,31 @@ impl WorkbenchPanel for MyPanel {
 
 | ❌ Don't | ✅ Do |
 |----------|------|
-| Mutate resources directly from UI | Emit `CommandMessage`, let observers handle it |
+| Mutate resources directly from UI | `ctx.trigger(TypedCommand { .. })` (or `ctx.defer`), let observers handle it |
 | Put UI code in `lib.rs` or outside `ui/` | All UI in `src/ui/` subdirectory |
 | Use `world.query()` every frame for graphs | Use `WidgetSystem` for O(1) cached queries |
-| Build custom docking/themes | Use bevy_workbench — it's already there |
+| Build custom docking/themes | Use lunco-workbench — it's already there |
 
 ## Discovering Existing Commands
 
-Commands are defined by observers that handle `CommandMessage` events.
-To find what commands exist:
+Commands are typed structs marked `#[Command]`, handled by observers
+marked `#[on_command(TypeName)]` (both from `lunco_core`). To find what
+commands exist:
 
 ```bash
 # Find all command observers
-grep -rn "On<CommandMessage>" crates/
+grep -rn "#\[on_command(" crates/
 
-# Find all command names being matched
-grep -rn 'cmd\.name ==' crates/
+# Find all command struct definitions
+grep -rn "#\[Command" crates/
 
-# Find all commands being emitted
-grep -rn 'CommandMessage {' crates/
+# Find where a command is emitted from UI
+grep -rn "\.trigger(" crates/
 ```
 
-To add a new command, create an observer in the relevant domain crate.
+To add a new command: define a `#[Command]` struct + `#[on_command(..)]`
+observer in the relevant domain crate (see the `test-via-api` skill's
+"Add a command" section for the full pattern).
 
 ## When to Use WidgetSystem
 

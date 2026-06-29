@@ -1,8 +1,8 @@
-# Feature Specification: 006-developer-experience
+# Feature Specification: 008-developer-experience
 
-**Feature Branch**: `006-developer-experience`
+**Feature Branch**: `008-developer-experience`
 **Created**: 2026-03-29
-**Status**: Draft
+**Status**: Partial — scripting is rhai, not Lua/Python.
 **Input**: Unified Editor UI, Quake-style REPL, Dynamic Scripting (Lua/Python), Attribute Inspection, Remote API.
 **Consolidates**: Former specs `006-unified-scripting-repl`, `007-unified-editor`, `008-dynamic-scripting`.
 

@@ -1,5 +1,7 @@
 # 00 — LunCo Architecture Overview
 
+> Status: Active · Audience: everyone — canonical entry point for architecture decisions
+>
 > **LunCo: virtual universe to design real space missions.**
 > This is the canonical starting point for all architectural decisions.
 
@@ -63,19 +65,27 @@ This separation allows for seamless interoperability with NVIDIA Omniverse and o
 ## 5. Crate Layering
 
 ```
-Apps (sandbox, lunica, lunco_client)
+Apps (luncosim, lunco-sandbox, lunica)
    │
    ├── Networking (lunco-networking, replication, auth) ← Native Layer 2b
    │
    ├── Domain crates (Documents + Co-Simulation)
    │     lunco-modelica   lunco-usd   lunco-cosim   lunco-celestial
    │     lunco-environment   lunco-avatar   lunco-controller   ...
+   │     lunco-scripting   ← rhai world-bridge + op-graph generators
    │          │                     │                        │
    │          ▼                     ▼                        ▼
+   ├── Session / Twin layer
+   │     lunco-workspace  ← editor session (open Twins + active doc/perspective)
+   │     lunco-twin       ← Twin filesystem container + document-kind registry
+   │     lunco-storage    ← I/O backend (read/write only)
+   │          │
+   │          ▼
    ├── Framework layer
-   │     lunco-workbench  ← UI scaffold, docking, perspectives
+   │     lunco-workbench  ← canonical UI scaffold, docking, perspectives, File menu
    │     lunco-ui         ← Widget toolkit + Document traits
-   │     lunco-doc        ← Authority, undo/redo, CRUD foundation
+   │     lunco-doc        ← Authority, diagnostics substrate, CRUD foundation
+   │     lunco-doc-bevy   ← Bevy bridge: DocumentDiagnostics, open/new document
    │          │                     │
    │          ▼                     ▼
    └── lunco-core         ← f64 math foundation, CommandMessage, fundamentals
@@ -85,16 +95,15 @@ Apps (sandbox, lunica, lunco_client)
 
 We are moving from a **Sandbox** (physics validation) toward a **Mission Stack**:
 1. **Core Co-Sim (Built)**: USD + Modelica + Physics integration.
-2. **Native Collab (Built/Active)**: WebTransport + Replication.
-3. **Mission Timeline (Planned)**: Scheduling, event graphs, and automated CONOPS rehearsal.
-4. **HIL/SIL (Planned)**: Hardware/Software-in-the-loop validation for physical flight controllers.
-5. **AI Integration (Planned)**: Agent-driven simulation for autonomous mission analysis.
+2. **Native Collab (Built/Active)**: WebTransport + Replication (`lunco-networking` landed, RBAC policy substrate in place).
+3. **Scripting (Built)**: `rhai` world-bridge + op-graph generators (`lunco-scripting`, `lunco-tools-rhai`).
+4. **Experiments (Built)**: parameter sweeps + parallel runs (`lunco-experiments`).
+5. **Mission Timeline (Planned)**: Scheduling, event graphs, and automated CONOPS rehearsal.
+6. **HIL/SIL (Planned)**: Hardware/Software-in-the-loop validation for physical flight controllers.
+7. **AI Integration (Planned)**: Agent-driven simulation for autonomous mission analysis.
 
 ## 7. Reading order for newcomers
 
-1. **[`01-ontology.md`](01-ontology.md)** — vocabulary (Space System, Port, Connection, etc.)
-2. **[`10-document-system.md`](10-document-system.md)** — the data model foundation.
-3. **[`12-api.md`](12-api.md)** — how to drive the simulation externally.
-4. **[`14-simulation-layers.md`](14-simulation-layers.md)** — Twin/Scenario/Run/Model hierarchy.
-5. **[`17-view-and-intent.md`](17-view-and-intent.md)** — the 5-layer control model.
-6. **[`../../principles.md`](../principles.md)** — the project's non-negotiable rules.
+The canonical newcomer reading order lives in **[`docs/README.md` → Reading order for newcomers](../README.md#reading-order-for-newcomers)** — follow it there (kept in one place so the paths don't diverge).
+
+From this doc, the natural next reads are `01-ontology.md` (vocabulary), `10-document-system.md` (data model), then `12-api.md` (driving the sim). Note: `14-simulation-layers.md` is a design doc for a layer that is **largely not yet implemented** — read it as intent, not current behaviour.

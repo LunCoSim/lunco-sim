@@ -18,7 +18,7 @@ consistent — derivably, not feature-by-feature?**
 Every datum answers four questions. The answers are mostly *forced* by what the
 data is, so classification is near-automatic.
 
-1. **Provenance** (from `IDENTITY.md`): `Content` · `Derived` · `Authoritative` · `Local`.
+1. **Provenance** (see README → *Entity Identity Mapping*): `Content` · `Derived` · `Authoritative` · `Local`.
 2. **Temporal character**: `Static` · `Continuous` (high-rate) · `Discrete` (events) · `ConcurrentText`.
 3. **Authority**: `Server` · `ClientOwned(+validate)` · `Shared(CRDT)` · `LocalOnly`.
 4. **Receiver-computability**: `Reconstructible` (from shared content) · `Predictable` (from local inputs) · `Opaque` (must be received).
@@ -107,9 +107,9 @@ orthogonal, so a content entity keeps its derived id while its cell+offset strea
 
 The abstract "reconcile predicted (smooth error-correct, not rollback)" above is
 realised on the client as **physics-space error reduction** (Fiedler / Rocket
-League model). Canonical write-up + the debugging story:
-[`PREDICT_AND_SMOOTH_PLAN.md`](./PREDICT_AND_SMOOTH_PLAN.md) §★OUTCOME; membership
-rules: [`PREDICTION_MEMBERSHIP.md`](./PREDICTION_MEMBERSHIP.md). Shape:
+League model). Canonical as-built summary: README → *Client-Side Prediction* (the
+full write-up + debugging story lived in `PREDICT_AND_SMOOTH_PLAN.md` /
+`PREDICTION_MEMBERSHIP.md`, now in git history). Shape:
 
 - **Membership (which bodies predict locally).** Three disjoint sets, all client-only:
   - *Owned, actively driven* (`OwnedLocally`, computability rule + drive-grace):
@@ -200,7 +200,7 @@ Sync class is **declared, never assumed**, and the default is safe:
 3. **A single registration point** (mirroring the identity `on_add` hook):
    `app.sync::<T>(SyncClass::…)` routes T to M1/M2/M3/M5; M4/M6 are
    system-provided; M7 needs no registration. Domain crates call only this — they
-   never touch a transport or a backend type (the PREP.md invariant).
+   never touch a transport or a backend type (the domain-clean invariant).
 4. **Contradiction checks panic in debug.** You cannot register state whose axes
    disagree, can't predict an Opaque entity, can't make a Local component
    authoritative.
@@ -213,10 +213,10 @@ mechanism is independently convergent — therefore the world converges.**
 ---
 
 ## 8. How this maps to the rest of the design
-- **M1** ⇐ `IDENTITY.md` (provenance-derived ids, content loaders).
+- **M1** ⇐ README → *Entity Identity Mapping* (provenance-derived ids, content loaders).
 - **M2/M4/M6** ⇐ the backend (lightyear ships M2-predicted/interpolated + M6
-  tick-sync; this is the standing argument for lightyear). `TRANSPORT_ABSTRACTION.md`
-  is the pipes they ride.
+  tick-sync; this is the standing argument for lightyear). README → *Transport
+  Abstraction* is the pipes they ride.
 - **M2 local write chokepoint** ⇐ `lunco_core::attach::migrate_to_grid` (commit
   `7e5fddce`). When an applied snapshot or a reconciled prediction changes *which
   grid* a body belongs to (e.g. an SOI crossing), the local `(ChildOf, CellCoord,
@@ -232,9 +232,111 @@ mechanism is independently convergent — therefore the world converges.**
   built — it *is* the op-log).
 - **M5** ⇐ the Yjs/yrs plan in the README (Modelica text).
 - **M7** ⇐ today's local components (camera, selection) — unchanged.
-- The hard project-specific work (`DESIGN_GAPS.md` A–D) lives inside M1 (identity),
-  M2 (big_space pose, cosim-eligibility), and M6 (sim clock) — now each has a home.
+- The hard project-specific work (the former `DESIGN_GAPS.md` A–D; open items now in
+  README → *Known gaps*) lives inside M1 (identity), M2 (big_space pose,
+  cosim-eligibility), and M6 (sim clock) — each has a home.
 
 The architecture is complete: four axes, seven mechanisms, one tick pipeline, one
 convergence argument, one enforcement rule. Every case in §3 and §6 lands in it
 without invention.
+
+---
+
+## 9. Selecting a mechanism for a NEW feature (the procedure)
+
+The seven mechanisms are not novel — they're the field's established patterns,
+renamed and unified: M1 = "load the static world locally, replicate only dynamic
+actors" (Unreal/Source); M2 = snapshot interpolation + autonomous/simulated proxy
+(Valve/Unreal); M3 = reliable RPCs / op-log / event sourcing; M4 = redundant
+tick-stamped input backlog (Source `usercmd`, Overwatch, GGPO); M5 = CRDT
+(Yjs/Figma); M6 = clock sync (NTP-style offset, client runs ahead); M7 =
+local/cosmetic. **What's ours is the routing discipline (classify → route →
+enforce), not the mechanisms.**
+
+### The daily surface
+
+Domain authors touch a tiny API — never a socket, backend, or serializer:
+
+```rust
+app.sync::<Transform>(SyncClass::Continuous);                   // → M2 (role decided at runtime)
+app.sync::<NetworkAuthority>(SyncClass::Discrete);              // → M2 replicated / M3
+app.declare_channel::<DriveRover>(SyncChannel::ControlStream);  // → M4/M3 (reuses #[Command])
+commands.spawn((MyBundle, Provenance::Content { namespace:"usd", source, path }));  // → M1
+// keep something local: do nothing — Local is the DEFAULT (undeclared never crosses the layer)
+```
+
+### The procedure (run per *piece of state* a feature introduces — terminates at one mechanism)
+
+```
+Step 0 — Does any other peer need it to be the same?
+   NO  → M7 (Local). DONE.  (camera, selection, cosmetics, debug overlays)
+   YES → continue.
+
+Step 0.5 — Is it a pure function of already-synced state?
+   (computable from content + M6 clock + already-replicated state)
+   YES → M7, RECOMPUTE locally. DONE.  (don't sync what you can derive)
+   NO  → continue.
+
+Step 1 — Provenance (where does the ENTITY come from)?
+   Loaded identically from shared content   → existence/id via M1
+   Deterministic sub-part of a parent        → M1 (Derived)
+   Born at runtime, not derivable            → existence via M3 (server spawns+replicates)
+
+Step 2 — Temporal character of the changing part:
+   Never changes after creation      → M1 (if content-borne) else M3 (one reliable command)
+   Changes every tick / analog       → M2          (go to Step 3)
+   Discrete events / toggles / edits → M3
+   Concurrent free text / co-edit    → M5
+   High-rate player intent           → M4
+
+Step 3 — If M2: receiver role by COMPUTABILITY (not ownership!):
+   Receiver can reproduce from LOCAL inputs (own avian-driven motion) → M2-Predicted
+   Receiver cannot (server-only forces, someone else's entity)        → M2-Interpolated
+
+Step 4 — Authority sanity check (reject contradictions):
+   Server source of truth         → M2/M3 (default, OK)
+   Client owns it                 → M4 + server validation
+   No single owner / concurrent   → M5
+   Local + "must be authoritative"→ STOP, reclassify (debug-panics anyway)
+
+Step 5 — Declare: app.sync::<S>(class) / register_command / stamp Provenance.
+   (M6 you don't choose — it's the substrate everything is stamped in.)
+```
+
+### Rules of thumb (the smells)
+- **Low latency on your own action** → M4 + M2-Predicted. *Not* M3 (M3 is
+  reliable-but-slow — for *correct/ordered*, not *instant*).
+- **Must be correct & ordered, not instant** (spawn, edit, possess) → M3.
+- **Bulk / static / world geometry** → M1. Streaming something every tick that
+  never changes = wrong pick.
+- **Predicting something the client can't compute** → wrong; M2-Interpolated.
+- **Two users edit the same thing:** one field → M3 (server LWW); free text → M5.
+- **Added a component and nothing syncs** → you didn't declare it; default is M7.
+
+### The biggest bandwidth saver: don't sync derived state (Step 0.5)
+
+> Never replicate what is a deterministic function of already-synced inputs.
+> Recompute it locally.
+
+Day/night lighting & sun angle (pure function of M6 clock + ephemeris), meshes /
+materials / LODs / animation pose, interpolation buffers & smoothed camera, cosim
+*wiring* (derived from USD — only cosim *outputs* ride M2) → all **M7 recompute**,
+not M2. This is also a correctness win: derived state computed from synced inputs
+*can't* disagree.
+
+### Worked examples
+
+| New feature / state | Mechanism |
+|---|---|
+| Robotic-arm joint angles (you control) | M1 entity + **M2-Predicted** (Interpolated for others) |
+| Sample collected → inventory count | **M3** (runtime, discrete, server-auth) |
+| Chat message | **M3** (or M5 if a shared editable doc) |
+| Positional voice | **M4**-style (likely out-of-band stream) |
+| Terrain dig by rover | **M3** op-log (deterministic replay) — *not* M2 heightmap streaming |
+| New telemetry from a new Modelica model | M1 wiring + **M2 low-rate (Interpolated)** |
+| Day/night lighting | **M7 recompute** (Step 0.5) |
+| Procedural rocks scattered by seed | **M1** (seed shared once via M6/M3) |
+| "Highlight selected" outline | **M7** (per-peer view) |
+
+No feature ever needs a new mechanism — if it seems to, the state was misclassified
+(re-run Step 0.5 and Step 3 first).
