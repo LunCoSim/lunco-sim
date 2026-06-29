@@ -58,14 +58,19 @@ pub fn acquire() -> LaunchOutcome {
         return primary(url);
     };
 
-    // Is an instance already listening? If so, hand it the link and bow out.
-    if let Ok(mut stream) = Stream::connect(connect_name) {
-        if let Some(u) = &url {
+    // Only a deep-link launch forwards. A plain launch (no URL) must NEVER
+    // forward-and-exit — otherwise a second window could never open on the same
+    // machine (e.g. running a host + client side by side for testing). With no
+    // URL we fall through to become a secondary primary: the listener bind below
+    // fails (name already in use) and we degrade to a standalone instance.
+    if let Some(u) = &url {
+        // Is an instance already listening? If so, hand it the link and bow out.
+        if let Ok(mut stream) = Stream::connect(connect_name) {
             let _ = stream.write_all(u.as_bytes());
             let _ = stream.flush();
             info!("[net] forwarded deep link to running instance: {u}");
+            return LaunchOutcome::Forwarded;
         }
-        return LaunchOutcome::Forwarded;
     }
 
     // No one home — become primary and listen for future forwards.
