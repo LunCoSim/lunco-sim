@@ -198,6 +198,23 @@ fn path_is_under(p: &Path, root: &Path) -> bool {
 // Picker parameter types (`OpenFilter`/`SaveHint`) moved to the workbench's
 // picker with the dialog itself — see the note on the `Storage` trait below.
 
+/// Atomically persist `bytes` to a native file `path` **through the
+/// [`Storage`] API** (CQ-107).
+///
+/// A thin path-convenience over
+/// `FileStorage::new().write_sync(&StorageHandle::File(path), bytes)` —
+/// so the actual write goes through the backend (`FileStorage::write`,
+/// which does the tmp+rename atomic replace), NOT a parallel `std::fs`
+/// path. This is the one call config-file writers should use; it keeps
+/// the storage backend the single I/O chokepoint instead of each crate
+/// reaching for `std::fs::write` + a hand-rolled `rename`.
+///
+/// A crash mid-write leaves the prior file intact, never a truncated one.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_file_sync(path: &Path, bytes: &[u8]) -> StorageResult<()> {
+    FileStorage::new().write_sync(&StorageHandle::File(path.to_path_buf()), bytes)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The trait
 // ─────────────────────────────────────────────────────────────────────────────
@@ -222,7 +239,10 @@ pub trait Storage: Send + Sync {
     async fn read(&self, handle: &StorageHandle) -> StorageResult<Vec<u8>>;
 
     /// Write bytes to a handle, replacing existing content atomically
-    /// where the backend supports it.
+    /// where the backend supports it. [`FileStorage`]'s `File` writes do:
+    /// they tmp-write + `rename`, so a crash mid-write leaves the prior
+    /// file intact, never a truncated one. For a path-based one-liner see
+    /// [`write_file_sync`].
     async fn write(&self, handle: &StorageHandle, bytes: &[u8]) -> StorageResult<()>;
 
     /// Synchronous convenience wrapper around [`Storage::write`].

@@ -45,6 +45,35 @@ impl FileStorage {
     }
 }
 
+/// Atomic file replace (tmp + `fsync` + `rename`) — the implementation
+/// behind the `File` arm of [`FileStorage::write`] (CQ-107). Private: the
+/// world reaches this through the [`Storage`] API (`write` / `write_sync`),
+/// never as a bare-path bypass, so the backend abstraction holds. A crash
+/// mid-write leaves the prior file intact, never a truncated one. The temp
+/// is a hidden per-process sibling so the rename stays within one
+/// filesystem and won't collide with a concurrent writer's temp.
+#[cfg(not(target_arch = "wasm32"))]
+fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("tmp");
+    let tmp = path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl Storage for FileStorage {
     async fn read(&self, handle: &StorageHandle) -> StorageResult<Vec<u8>> {
@@ -73,14 +102,11 @@ impl Storage for FileStorage {
         match handle {
             #[cfg(not(target_arch = "wasm32"))]
             StorageHandle::File(path) => {
-                // Ensure parent dir exists — Save-As into a fresh folder
-                // shouldn't require the user to mkdir beforehand.
-                if let Some(parent) = path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-                }
-                std::fs::write(path, bytes)?;
+                // CQ-107: honor the trait's documented atomic-replace
+                // contract — tmp+rename (also creates parent dirs) instead
+                // of a truncating `std::fs::write` that leaves a zero-byte
+                // file if the process dies mid-write.
+                atomic_write(path, bytes)?;
                 Ok(())
             }
             StorageHandle::Memory(key) => {

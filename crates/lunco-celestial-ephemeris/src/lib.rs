@@ -127,14 +127,32 @@ impl CelestialEphemerisProvider {
                         }
                     } else {
                         // Queue for background fetch instead of blocking here.
+                        // CQ-303: percent-encode each interpolated value per
+                        // RFC 3986 (escape everything but the unreserved set).
+                        // The prior `.replace(' ', "%20")` only handled spaces,
+                        // so `& # + ,` in a mission value silently corrupted the
+                        // query. The single quotes stay literal — they're part
+                        // of the Horizons query syntax; only the user value
+                        // inside each pair is encoded.
+                        let enc = |s: &str| -> String {
+                            let mut out = String::with_capacity(s.len());
+                            for &b in s.as_bytes() {
+                                match b {
+                                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
+                                    | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
+                                    _ => out.push_str(&format!("%{b:02X}")),
+                                }
+                            }
+                            out
+                        };
                         let url = format!(
                             "https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND='{}'&OBJ_DATA='NO'&MAKE_EPHEM='YES'&EPHEM_TYPE='VECTORS'&CENTER='{}'&REF_PLANE='{}'&START_TIME='{}'&STOP_TIME='{}'&STEP_SIZE='{}'&CSV_FORMAT='YES'",
-                            src.command.replace(' ', "%20"),
-                            src.center.replace(' ', "%20"),
-                            src.ref_plane.replace(' ', "%20"),
-                            src.start_time.replace(' ', "%20"),
-                            src.stop_time.replace(' ', "%20"),
-                            src.step_size.replace(' ', "%20")
+                            enc(&src.command),
+                            enc(&src.center),
+                            enc(&src.ref_plane),
+                            enc(&src.start_time),
+                            enc(&src.stop_time),
+                            enc(&src.step_size),
                         );
                         pending.push(PendingFetch {
                             target_id: src.target_id,

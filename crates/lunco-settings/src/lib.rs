@@ -196,33 +196,11 @@ impl Settings {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let path = settings_path();
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            // Write to a sibling tmp file and rename. `std::fs::write`
-            // truncates the destination, which on Windows leaves a
-            // zero-byte file if the process is killed mid-write (real
-            // hazard during a power cut or hard close). `rename` over
-            // an existing file is atomic on POSIX and on Windows ≥ 1607
-            // — good enough for user settings.
-            let tmp = path.with_extension("json.tmp");
-            // Route the actual write through lunco-storage (clippy-banned
-            // `std::fs::write`, wasm-incompatible); the tmp+rename atomicity
-            // is preserved — `rename`/`create_dir_all` aren't on the ban list.
-            use lunco_storage::Storage;
-            if let Err(e) = lunco_storage::FileStorage::new()
-                .write_sync(&lunco_storage::StorageHandle::File(tmp.clone()), json.as_bytes())
-            {
-                warn!("[Settings] write tmp {} failed: {e}", tmp.display());
-                return;
-            }
-            if let Err(e) = std::fs::rename(&tmp, &path) {
-                warn!(
-                    "[Settings] atomic rename {} → {} failed: {e}",
-                    tmp.display(),
-                    path.display()
-                );
-                let _ = std::fs::remove_file(&tmp);
+            // CQ-107: persist through the Storage API (atomic tmp+rename,
+            // creates parent dirs). A truncating `std::fs::write` would leave
+            // a zero-byte settings file if the process were killed mid-write.
+            if let Err(e) = lunco_storage::write_file_sync(&path, json.as_bytes()) {
+                warn!("[Settings] write {} failed: {e}", path.display());
                 return;
             }
             self.dirty = false;

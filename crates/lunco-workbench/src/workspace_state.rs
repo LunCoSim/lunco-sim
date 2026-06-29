@@ -261,20 +261,10 @@ impl WorkspaceState {
     /// value a second time per write (CQ-209).
     pub fn save_serialized(&self, json: &str) -> std::io::Result<()> {
         let path = workspace_state_path(&self.twin_root);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        // Write through lunco-storage (clippy-banned `std::fs::write`,
-        // wasm-incompatible); `rename` isn't on the ban list, so the
-        // atomic tmp→final swap is preserved.
-        {
-            use lunco_storage::Storage;
-            lunco_storage::FileStorage::new()
-                .write_sync(&lunco_storage::StorageHandle::File(tmp.clone()), json.as_bytes())
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-        }
-        std::fs::rename(&tmp, &path)
+        // CQ-107: persist through the Storage API (atomic tmp+rename,
+        // creates parent dirs) instead of hand-rolling `std::fs`.
+        lunco_storage::write_file_sync(&path, json.as_bytes())
+            .map_err(|e| std::io::Error::other(e.to_string()))
     }
 }
 

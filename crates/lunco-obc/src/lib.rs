@@ -1,49 +1,28 @@
 //! On-Board Computer (OBC) emulation systems.
 //!
-//! This crate implements the interface between the high-level Flight Software 
-//! (digital) and the simulation physics (physical). It emulates hardware 
+//! This crate implements the interface between the high-level Flight Software
+//! (digital) and the simulation physics (physical). It emulates hardware
 //! signal processing:
-//! - **DAC (Digital-to-Analog)**: Maps `i16` register values to `f32` physical units.
-//! - **ADC (Analog-to-Digital)**: Samples `f32` physical sensors into `i16` registers.
+//! - **DAC (Digital-to-Analog)**: Maps `i16` register values to `f32` physical
+//!   units. **Canonical impl lives in [`lunco_core::wire_system`]** (registered
+//!   by core's plugin in `FixedUpdate`/`ControlDacSet`); this crate no longer
+//!   re-implements it (CQ-301).
+//! - **ADC (Analog-to-Digital)**: Samples `f32` physical sensors into `i16`
+//!   registers — the inverse direction, unique to this crate.
 
 use bevy::prelude::*;
 use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
 
 /// Plugin for emulating On-Board Computer signal processing pipelines.
+///
+/// Registers the ADC (sensor sampling) direction only. The DAC
+/// (command → actuator) direction is owned by [`lunco_core::wire_system`];
+/// pair this with core's plugin for a full bidirectional pipeline.
 pub struct LunCoObcPlugin;
 
 impl Plugin for LunCoObcPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (scale_digital_to_physical, scale_physical_to_digital));
-    }
-}
-
-/// The Level 2 Hardware Execution Pipeline (DAC).
-///
-/// Matches the 001-vessel-control-architecture spec to map `i16` commands 
-/// directly to `f32` physical outputs, scaled by the [Wire] gain. 
-/// This provides bounds-safety through hardware-faithful matching.
-fn scale_digital_to_physical(
-    q_digital: Query<&DigitalPort>,
-    mut q_physical: Query<&mut PhysicalPort>,
-    q_wire: Query<&Wire>,
-) {
-    for wire in q_wire.iter() {
-        if let Ok(digital) = q_digital.get(wire.source) {
-            if let Ok(mut physical) = q_physical.get_mut(wire.target) {
-                // CQ-514: a zero or non-finite scale is a misconfigured
-                // wire — skip it (warn once) rather than emit NaN/inf into
-                // the physics state.
-                if !wire.scale.is_finite() || wire.scale == 0.0 {
-                    warn_once!("DAC wire scale is zero or non-finite ({}); skipping", wire.scale);
-                    continue;
-                }
-                // Tier 2 Integration Math (DAC Pathway):
-                // Maps the full range of a 16-bit signed integer (-32767 to 32767)
-                // to a physical unit (e.g., Nm or Radians) defined by the Wire's scale.
-                physical.value = (digital.raw_value as f32 / 32767.0) * wire.scale;
-            }
-        }
+        app.add_systems(Update, scale_physical_to_digital);
     }
 }
 
@@ -81,28 +60,8 @@ fn scale_physical_to_digital(
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_dac_pipeline() {
-        let mut app = App::new();
-        app.add_plugins(LunCoObcPlugin);
-
-        let d_port = app.world_mut().spawn(DigitalPort { raw_value: 32767 }).id();
-        let p_port = app.world_mut().spawn(PhysicalPort { value: 0.0 }).id();
-        
-        app.world_mut().spawn(Wire {
-            source: d_port,
-            target: p_port,
-            // 100.0 Nm max torque
-            scale: 100.0,
-        });
-
-        // Run system
-        app.update();
-
-        // 32767 / 32767 * 100.0 = 100.0
-        let p_res = app.world().get::<PhysicalPort>(p_port).unwrap();
-        assert_eq!(p_res.value, 100.0);
-    }
+    // The DAC pipeline now lives in `lunco_core::wire_system` (CQ-301);
+    // its behaviour is covered by core's own tests.
 
     #[test]
     fn test_adc_pipeline() {
