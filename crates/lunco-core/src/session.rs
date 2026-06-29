@@ -602,38 +602,122 @@ pub struct OwnedInputLog(pub HashMap<u64, VesselInputLog>);
 #[derive(Resource, Default)]
 pub struct AppliedInputSeq(pub HashMap<u64, u32>);
 
+/// What a command demands of its caller. The default is a **fully open
+/// sandbox**: any authenticated session (Observer floor) may issue it with no
+/// ownership requirement. Tightening a command for RBAC is a matter of changing
+/// its policy — the [`authorize`] gate, the [`AuthorityRole`] lattice, and the
+/// command handlers never change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommandPolicy {
+    /// Minimum role on the [`AuthorityRole`] lattice the caller must satisfy.
+    pub min_role: AuthorityRole,
+    /// Whether the caller must **own** the command's target entity. When `true`,
+    /// control of a *non-owned* target additionally demands the elevated
+    /// `Operator` role (and is then rejected by the ownership check anyway).
+    pub ownership_gated: bool,
+}
+
+impl Default for CommandPolicy {
+    fn default() -> Self {
+        Self::OPEN
+    }
+}
+
+impl CommandPolicy {
+    /// Open sandbox: any authenticated session, no ownership requirement.
+    pub const OPEN: Self = Self { min_role: AuthorityRole::Observer, ownership_gated: false };
+    /// Ownership-gated control (e.g. `DriveRover`): the owner may act at the
+    /// Observer floor; a non-owner is rejected.
+    pub const OWNED_CONTROL: Self = Self { min_role: AuthorityRole::Observer, ownership_gated: true };
+}
+
+/// Per-command authorization policy, resolved by [`authorize`].
+///
+/// The registry is the single seam through which RBAC is introduced later
+/// **without touching the gate**:
+/// - `base` is the compile-time policy a command declares. Today it carries only
+///   the MVP ownership-gated control commands; in future the `#[Command]` derive
+///   (CQ-705) will populate it so policy lives on the type, not a stringly-typed
+///   match here.
+/// - `overrides` is the deployment-level knob, consulted *before* `base`, so an
+///   operator can lock a specific server down (or open it up) at runtime without
+///   recompiling any command. Empty by default = open sandbox.
+///
+/// A command absent from both resolves to [`CommandPolicy::OPEN`], so the current
+/// "everything works by default" behavior is preserved exactly.
+#[derive(Resource, Debug, Clone)]
+pub struct CommandPolicyRegistry {
+    base: HashMap<&'static str, CommandPolicy>,
+    overrides: HashMap<String, CommandPolicy>,
+}
+
+impl Default for CommandPolicyRegistry {
+    fn default() -> Self {
+        let mut base = HashMap::new();
+        // MVP policy, preserved: direct-control commands require ownership of
+        // their target (G4). Everything else stays OPEN.
+        base.insert("DriveRover", CommandPolicy::OWNED_CONTROL);
+        base.insert("BrakeRover", CommandPolicy::OWNED_CONTROL);
+        Self { base, overrides: HashMap::new() }
+    }
+}
+
+impl CommandPolicyRegistry {
+    /// Effective policy for a command type: `overrides` → `base` → [`CommandPolicy::OPEN`].
+    pub fn policy_for(&self, type_name: &str) -> CommandPolicy {
+        if let Some(p) = self.overrides.get(type_name) {
+            return *p;
+        }
+        self.base.get(type_name).copied().unwrap_or_default()
+    }
+
+    /// Declare a command's compile-time policy (the future `#[Command]`-derive seam).
+    pub fn register(&mut self, type_name: &'static str, policy: CommandPolicy) {
+        self.base.insert(type_name, policy);
+    }
+
+    /// Deployment knob: tighten or loosen a command at runtime without recompiling.
+    pub fn set_override(&mut self, type_name: impl Into<String>, policy: CommandPolicy) {
+        self.overrides.insert(type_name.into(), policy);
+    }
+
+    /// Drop a runtime override, falling back to the command's declared policy.
+    pub fn clear_override(&mut self, type_name: &str) {
+        self.overrides.remove(type_name);
+    }
+}
+
 /// The single authority gate. Given the `origin` session of a command, the
 /// command's short type name, and the target entity's [`crate::GlobalEntityId`]
 /// (raw), decide whether the host applies it.
 ///
-/// MVP policy:
-/// - `DriveRover` / `BrakeRover` (state-producing control): allowed only if
-///   `origin` **owns** the target. Cross-rover control is rejected (G4).
-/// - everything else (possession claims, spawns, structural edits): allowed —
-///   possession arbitration happens in the handler via [`SessionRegistry::claim`].
+/// Policy is **data**, resolved from [`CommandPolicyRegistry`] — this function
+/// encodes only the *mechanism* (role lattice + ownership), never the per-command
+/// policy. By default every command resolves to [`CommandPolicy::OPEN`], so an
+/// authenticated session may do anything; RBAC is introduced by registering or
+/// overriding policies, not by editing this gate.
 ///
 /// Single-player never reaches here (capture no-ops under `Standalone`).
 pub fn authorize(
     reg: &SessionRegistry,
     rbac: &SessionRbac,
+    policies: &CommandPolicyRegistry,
     origin: SessionId,
     type_name: &str,
     target_gid: Option<u64>,
 ) -> Result<(), Reject> {
-    // RBAC validation: check if the session has sufficient privileges.
-    //
-    // `DriveRover`/`BrakeRover` are gated by *ownership* of the target (enforced
-    // in the match below) — that is the MVP policy. An authenticated session that
-    // owns the rover may therefore drive it regardless of role, so it needs only
-    // Observer here. The elevated Operator role is demanded only for control of a
-    // rover the session does *not* own (which the ownership check then rejects
-    // anyway). Requiring Operator unconditionally would deny legitimate owners
-    // that connect as Observer and never send an `UpdateProfile` (e.g. net_smoke).
+    let policy = policies.policy_for(type_name);
     let owns_target = target_gid.is_some_and(|gid| reg.owns(origin, gid));
-    let required_role = if is_ownership_gated_control(type_name) && !owns_target {
+
+    // Role requirement. Ownership-gated control of a *non-owned* target demands
+    // the elevated Operator role (then rejected by the ownership check below); an
+    // owner needs only the command's declared `min_role`. This keeps a legitimate
+    // owner that connected as Observer (and never sent an `UpdateProfile`) able to
+    // control what it owns.
+    let required_role = if policy.ownership_gated && !owns_target {
         AuthorityRole::Operator
     } else {
-        AuthorityRole::Observer
+        policy.min_role
     };
 
     if !rbac.is_authorized(origin, required_role) {
@@ -642,11 +726,10 @@ pub fn authorize(
         )));
     }
 
-    // Ownership gate. Non-control commands (possession claims, spawns,
-    // structural edits) are intentionally allowed at the authenticated-Observer
-    // floor above — their arbitration happens in the handler (e.g.
-    // [`SessionRegistry::claim`]) — so they pass here.
-    if is_ownership_gated_control(type_name) {
+    // Ownership gate. Commands that aren't ownership-gated pass at the role floor
+    // above — their arbitration (if any) happens in the handler (e.g.
+    // [`SessionRegistry::claim`]).
+    if policy.ownership_gated {
         match target_gid {
             Some(gid) if reg.owns(origin, gid) => Ok(()),
             Some(_) => Err(Reject::InvalidOp(format!(
@@ -657,20 +740,6 @@ pub fn authorize(
     } else {
         Ok(())
     }
-}
-
-/// State-producing **control** commands: gated by *ownership* of the target,
-/// not merely by role. This is the single source of truth — listing a command
-/// here makes both the role requirement and the ownership check in
-/// [`authorize`] apply to it, so a new direct-control command is one edit and
-/// can't accidentally fall through to the permissive non-control default.
-///
-/// NOTE (CQ-705): the longer-term fix is to carry this requirement on the
-/// command type itself (e.g. via the `#[Command]` derive) rather than matching
-/// stringly-typed names here; until then this predicate keeps the policy in one
-/// place.
-fn is_ownership_gated_control(type_name: &str) -> bool {
-    matches!(type_name, "DriveRover" | "BrakeRover")
 }
 
 #[cfg(test)]
@@ -799,6 +868,7 @@ mod tests {
 
     #[test]
     fn authorize_drive_requires_ownership() {
+        let pol = CommandPolicyRegistry::default();
         let mut reg = SessionRegistry::default();
         reg.claim(A, R1).unwrap();
         let mut rbac = SessionRbac::default();
@@ -818,16 +888,16 @@ mod tests {
         });
 
         // The owner may issue control commands.
-        assert!(authorize(&reg, &rbac, A, "DriveRover", Some(R1)).is_ok());
-        assert!(authorize(&reg, &rbac, A, "BrakeRover", Some(R1)).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, A, "DriveRover", Some(R1)).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, A, "BrakeRover", Some(R1)).is_ok());
         // A non-owner may not.
-        assert!(authorize(&reg, &rbac, B, "DriveRover", Some(R1)).is_err());
+        assert!(authorize(&reg, &rbac, &pol, B, "DriveRover", Some(R1)).is_err());
         // A control command with no target is rejected.
-        assert!(authorize(&reg, &rbac, A, "DriveRover", None).is_err());
+        assert!(authorize(&reg, &rbac, &pol, A, "DriveRover", None).is_err());
         // Possession + structural commands are always allowed (arbitration is in
         // `claim`, not the authority gate).
-        assert!(authorize(&reg, &rbac, B, "PossessVessel", Some(R1)).is_ok());
-        assert!(authorize(&reg, &rbac, B, "SpawnEntity", None).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, B, "PossessVessel", Some(R1)).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, B, "SpawnEntity", None).is_ok());
 
         // An authenticated Observer that *owns* the rover may still drive it:
         // ownership is the gate, not the Operator role. (A client connects as
@@ -843,10 +913,10 @@ mod tests {
             });
         }
         // Owner-Observer A may drive what it owns, and possess/structural commands.
-        assert!(authorize(&reg, &observer_rbac, A, "DriveRover", Some(R1)).is_ok());
-        assert!(authorize(&reg, &observer_rbac, A, "PossessVessel", Some(R1)).is_ok());
+        assert!(authorize(&reg, &observer_rbac, &pol, A, "DriveRover", Some(R1)).is_ok());
+        assert!(authorize(&reg, &observer_rbac, &pol, A, "PossessVessel", Some(R1)).is_ok());
         // An authenticated non-owner is still rejected by the ownership gate.
-        assert!(authorize(&reg, &observer_rbac, B, "DriveRover", Some(R1)).is_err());
+        assert!(authorize(&reg, &observer_rbac, &pol, B, "DriveRover", Some(R1)).is_err());
 
         // The authenticated FLOOR remains: an UNauthenticated session is rejected
         // even for an owned entity (RBAC infra stays wired, just not role-gated).
@@ -858,7 +928,7 @@ mod tests {
             authenticated: false,
             token: None,
         });
-        assert!(authorize(&reg, &unauth_rbac, A, "DriveRover", Some(R1)).is_err());
+        assert!(authorize(&reg, &unauth_rbac, &pol, A, "DriveRover", Some(R1)).is_err());
 
         // M2: a session that is `authenticated` but carries NO server-issued token
         // is rejected even for an entity it owns. This is the gate that stops a
@@ -872,7 +942,66 @@ mod tests {
             authenticated: true,
             token: None,
         });
-        assert!(authorize(&reg, &tokenless_rbac, A, "DriveRover", Some(R1)).is_err());
-        assert!(authorize(&reg, &tokenless_rbac, A, "PossessVessel", Some(R1)).is_err());
+        assert!(authorize(&reg, &tokenless_rbac, &pol, A, "DriveRover", Some(R1)).is_err());
+        assert!(authorize(&reg, &tokenless_rbac, &pol, A, "PossessVessel", Some(R1)).is_err());
+    }
+
+    #[test]
+    fn unregistered_command_is_open_by_default() {
+        // The RBAC-readiness invariant: a command with no declared policy resolves
+        // to OPEN, so any authenticated Observer may issue it with no target. This
+        // keeps "everything works by default" true while the gate is data-driven.
+        let pol = CommandPolicyRegistry::default();
+        assert_eq!(pol.policy_for("SomeBrandNewCommand"), CommandPolicy::OPEN);
+
+        let reg = SessionRegistry::default();
+        let mut rbac = SessionRbac::default();
+        rbac.sessions.insert(A.0, UserSession {
+            session_id: A,
+            username: "Observer".to_string(),
+            role: AuthorityRole::Observer,
+            authenticated: true,
+            token: Some("srv-token-a".to_string()),
+        });
+        assert!(authorize(&reg, &rbac, &pol, A, "SomeBrandNewCommand", None).is_ok());
+    }
+
+    #[test]
+    fn override_tightens_a_command_without_touching_the_gate() {
+        // The RBAC switch: an operator locks `SpawnEntity` down to `Operator` at
+        // runtime. The gate code is unchanged — only data in the registry differs.
+        let mut pol = CommandPolicyRegistry::default();
+        pol.set_override(
+            "SpawnEntity",
+            CommandPolicy { min_role: AuthorityRole::Operator, ownership_gated: false },
+        );
+
+        let reg = SessionRegistry::default();
+        let mut rbac = SessionRbac::default();
+        rbac.sessions.insert(A.0, UserSession {
+            session_id: A,
+            username: "Observer".to_string(),
+            role: AuthorityRole::Observer,
+            authenticated: true,
+            token: Some("srv-token-a".to_string()),
+        });
+        rbac.sessions.insert(B.0, UserSession {
+            session_id: B,
+            username: "Operator".to_string(),
+            role: AuthorityRole::Operator,
+            authenticated: true,
+            token: Some("srv-token-b".to_string()),
+        });
+
+        // Observer is rejected for the tightened command…
+        assert!(authorize(&reg, &rbac, &pol, A, "SpawnEntity", None).is_err());
+        // …a still-open command (PossessVessel) is unaffected…
+        assert!(authorize(&reg, &rbac, &pol, A, "PossessVessel", None).is_ok());
+        // …and an Operator passes the tightened command.
+        assert!(authorize(&reg, &rbac, &pol, B, "SpawnEntity", None).is_ok());
+
+        // Clearing the override restores open-by-default.
+        pol.clear_override("SpawnEntity");
+        assert!(authorize(&reg, &rbac, &pol, A, "SpawnEntity", None).is_ok());
     }
 }

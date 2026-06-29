@@ -674,6 +674,7 @@ pub fn apply_sync_command(
     type_registry: Res<AppTypeRegistry>,
     session_registry: Res<SessionRegistry>,
     rbac: Res<lunco_core::session::SessionRbac>,
+    command_policies: Res<lunco_core::session::CommandPolicyRegistry>,
     role: Res<NetworkRole>,
     mut dedup: ResMut<SyncDedup>,
 ) {
@@ -692,7 +693,7 @@ pub fn apply_sync_command(
                 .get_with_short_type_path(&ev.type_name)
                 .and_then(|r| authz_target_gid(&ev.params, r.type_id(), &type_reg))
         };
-        if let Err(reject) = authorize(&session_registry, &rbac, ev.origin, &ev.type_name, target_gid) {
+        if let Err(reject) = authorize(&session_registry, &rbac, &command_policies, ev.origin, &ev.type_name, target_gid) {
             // Diagnostic: show the gid the command targets, who (if anyone) the
             // host thinks owns it, and the full ownership table — so a drive
             // rejected despite a successful possession reveals whether it's a
