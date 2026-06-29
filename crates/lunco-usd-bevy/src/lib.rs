@@ -1059,6 +1059,14 @@ fn apply_standard_material(
         .or_else(|| get_attribute_as_f32(reader, sdf_path, "reflectance"))
         .unwrap_or(0.5);
 
+    // UsdPreviewSurface transparency + refraction. Default opaque (alpha 1) and
+    // the glass-ish `ior` 1.5 USD uses; overridden only when a bound shader
+    // authors `inputs:opacity` / `inputs:opacityThreshold` / `inputs:ior`.
+    let mut alpha = 1.0f32;
+    let mut ior = 1.5f32;
+    let mut opacity_threshold = 0.0f32;
+    let mut opacity_connected = false;
+
     // A bound material shader network overrides individual channels where it
     // authors them. Channels the shader omits — or whose texture connection
     // fails to resolve — keep the geometry baseline above rather than reverting
@@ -1116,12 +1124,37 @@ fn apply_standard_material(
         if let Some(r) = get_attribute_as_f32(reader, &shader_path, "inputs:reflectance") {
             reflectance = r;
         }
+
+        // Transparency: scalar `inputs:opacity` drives base-color alpha; a
+        // *connected* opacity (texture) flips to blended even without a scalar.
+        if let Some(o) = get_attribute_as_f32(reader, &shader_path, "inputs:opacity") {
+            alpha = o;
+        }
+        opacity_threshold =
+            get_attribute_as_f32(reader, &shader_path, "inputs:opacityThreshold").unwrap_or(0.0);
+        opacity_connected = read_rel_target(reader, &shader_path, "inputs:opacity").is_some();
+
+        if let Some(i) = get_attribute_as_f32(reader, &shader_path, "inputs:ior") {
+            ior = i;
+        }
     }
+
+    // UsdPreviewSurface alpha semantics → Bevy `AlphaMode`: a non-zero
+    // `opacityThreshold` is a cutout (`Mask`); otherwise any sub-1 opacity or a
+    // connected opacity input is alpha-blended; fully-opaque stays `Opaque` so
+    // the depth-sorted transparent pass is only paid for when needed.
+    let alpha_mode = if opacity_threshold > 0.0 {
+        AlphaMode::Mask(opacity_threshold)
+    } else if alpha < 1.0 || opacity_connected {
+        AlphaMode::Blend
+    } else {
+        AlphaMode::Opaque
+    };
 
     entity_cmd.insert((
         Mesh3d(mesh_handle.clone()),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color,
+            base_color: base_color.with_alpha(alpha),
             base_color_texture,
             emissive,
             emissive_texture,
@@ -1131,6 +1164,8 @@ fn apply_standard_material(
             normal_map_texture,
             occlusion_texture,
             reflectance,
+            ior,
+            alpha_mode,
             ..default()
         }))
     ));
