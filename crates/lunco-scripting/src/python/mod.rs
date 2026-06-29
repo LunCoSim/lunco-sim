@@ -20,6 +20,27 @@ static PYTHON_LOADED: OnceLock<PythonStatus> = OnceLock::new();
 #[pymodule]
 pub fn lunco(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<reflect::EntityProxy>()?;
+    // TODO(python world-bridge): register the world verbs here so scripts can
+    // `import lunco; lunco.cmd(...)`. The language-neutral logic already lives in
+    // `crate::bridge_core`; the Python side is now "implement a binding", not
+    // "design the bridge". Concretely:
+    //   1. `PyBuilder<'py> { py: Python<'py> }` impl `bridge_core::ValueBuilder`
+    //      (type Value = PyObject; pyo3 0.23 — `into_py_any`, `PyList::new`,
+    //      `PyDict::new`). Mirror `world_bridge::RhaiBuilder`.
+    //   2. `#[pyfunction]`s cmd/get/query/find/name/parent/children/world_pos/
+    //      world_forward/list_entities/emit/sim_tick/dt/elapsed_seconds, each
+    //      delegating to `bridge_core::*(&PyBuilder{py}, …)`. Add them with
+    //      `m.add_function(wrap_pyfunction!(...)?)`.
+    //   3. Param/emit shims: Python dict -> serde_json::Value (cmd/query params,
+    //      the inherent JSON seam) and Python scalar -> TelemetryValue (emit).
+    //   4. `append_to_inittab!(lunco)` BEFORE `prepare_freethreaded_python()`
+    //      (in `get_python_status`) so `import lunco` resolves in scripts.
+    //   5. World access requires a live `bridge_core::WorldScope` — the python
+    //      exec must run in an EXCLUSIVE system (a `tick_python_scenarios` mirror
+    //      of `world_bridge::tick_rhai_scenarios`, entering the scope), NOT the
+    //      old non-exclusive dict path (now removed). Verbs return `()`/None
+    //      outside a scope. See `scenario.rs` for the lifecycle to plug into.
+    // Ref: project_world_bridge_runtime_agnostic memory.
     Ok(())
 }
 

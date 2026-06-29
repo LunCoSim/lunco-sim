@@ -5,7 +5,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lunco_doc::{Document, DocumentError, DocumentId, DocumentOrigin};
+use lunco_doc::{Diagnostic, Document, DocumentError, DocumentId, DocumentOrigin};
 use rumoca_phase_parse::parse_to_syntax;
 use rumoca_compile::parsing::ast::StoredDefinition;
 
@@ -16,62 +16,26 @@ use crate::index::ModelicaIndex;
 // SyntaxCache
 // ---------------------------------------------------------------------------
 
-/// One parse diagnostic, optionally located.
-///
-/// `line`/`column` are **1-based char positions** (matching the linter
-/// and the editor's char-indexed cursor jump), resolved from a rumoca
-/// parse error's byte span when present. `None` means the underlying
-/// error carried no usable span (e.g. compile/strict-fallback strings),
-/// in which case the Diagnostics row renders but isn't clickable.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ParseDiag {
-    pub message: String,
-    pub line: Option<u32>,
-    pub column: Option<u32>,
-}
-
-impl ParseDiag {
-    /// A diagnostic with no source location.
-    pub fn message_only(message: String) -> Self {
-        Self {
-            message,
-            line: None,
-            column: None,
-        }
-    }
-}
-
-impl From<String> for ParseDiag {
-    fn from(message: String) -> Self {
-        Self::message_only(message)
-    }
-}
-
-/// Resolve a rumoca [`rumoca_phase_parse::ParseError`] into a
-/// [`ParseDiag`], converting its byte span to a 1-based (line, column)
-/// over `source` when it has one. This is the single place the lenient
-/// parser's structured errors are turned into the panel's clickable
-/// form — every parse path (file-open, native async, wasm worker)
-/// funnels through it.
-pub fn parse_diag_from_error(e: &rumoca_phase_parse::ParseError, source: &str) -> ParseDiag {
+/// Resolve a rumoca [`rumoca_phase_parse::ParseError`] into the unified
+/// [`lunco_doc::Diagnostic`], converting its byte span to a 1-based (line,
+/// column) over `source` when it has one. This is the single place the lenient
+/// parser's structured errors are turned into the panel's clickable form —
+/// every parse path (file-open, native async, wasm worker) funnels through it.
+pub fn parse_diag_from_error(e: &rumoca_phase_parse::ParseError, source: &str) -> Diagnostic {
     use rumoca_phase_parse::ParseError;
     match e {
         ParseError::SyntaxError { message, span, .. } => {
             let (line, column) = byte_offset_to_line_col(source, span.start.0);
-            ParseDiag {
-                message: message.clone(),
-                line: Some(line),
-                column: Some(column),
-            }
+            Diagnostic::error(message.clone(), Some(line), Some(column))
         }
         // No-span variants — render a human description instead of the
         // raw `{:?}` debug dump (part of the rumoca-diagnostics
         // migration: "better description of errors").
         ParseError::NoAstProduced => {
-            ParseDiag::message_only("parser produced no AST (empty or unrecoverable source)".to_string())
+            Diagnostic::message_only("parser produced no AST (empty or unrecoverable source)")
         }
         ParseError::IoError { path, message } => {
-            ParseDiag::message_only(format!("I/O error reading `{path}`: {message}"))
+            Diagnostic::message_only(format!("I/O error reading `{path}`: {message}"))
         }
     }
 }
@@ -106,7 +70,7 @@ pub struct SyntaxCache {
     /// Best-effort parsed AST.
     pub ast: Arc<StoredDefinition>,
     /// Parse diagnostics, located where the parser gave us a span.
-    pub errors: Vec<ParseDiag>,
+    pub errors: Vec<Diagnostic>,
 }
 
 pub type AstCache = SyntaxCache;
@@ -161,7 +125,7 @@ impl SyntaxCache {
     pub fn install_from_worker(
         &mut self,
         ast: Arc<StoredDefinition>,
-        errors: Vec<ParseDiag>,
+        errors: Vec<Diagnostic>,
     ) {
         self.ast = ast;
         self.errors = errors;
@@ -425,7 +389,7 @@ impl ModelicaDocument {
             Err(msg) => SyntaxCache {
                 generation: 0,
                 ast: Arc::new(StoredDefinition::default()),
-                errors: vec![ParseDiag::message_only(msg)],
+                errors: vec![Diagnostic::message_only(msg)],
             },
         });
 

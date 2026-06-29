@@ -72,6 +72,7 @@ These tools are always available:
 | `possess_vessel` | Take direct control of a vessel — chase camera + keyboard input bound to the target |
 | `follow_target` | Chase camera onto any `SelectableRoot` (balloon, prop) without binding controls |
 | `focus_target` | Orbit camera at an appropriate distance (celestial bodies, large objects) |
+| `run_scenario` | Attach a persistent **rhai** scenario to an entity (`target`, `source`). Registers a `ScriptDocument` + `ScriptedModel{Rhai}` so the per-entity runtime calls the script's `on_start`/`on_tick`/`on_event` hooks. Scripts read world state (`world_pos`/`world_forward`/`get`), drive the sim (`cmd(...)` + prelude `nav_to`/`run_plan`/`drive`), and `emit`/receive `TelemetryEvent`s. Idempotent + hot-reload (re-run recompiles in place). Returns `{document_id, generation}` |
 
 ### Edit API
 

@@ -30,7 +30,7 @@ use big_space::prelude::CellCoord;
 use lunco_assets::assets_dir;
 use lunco_core::{Command, on_command, register_commands};
 use lunco_cosim::{SimComponent, SimConnection, SimStatus};
-use lunco_doc::DocumentId;
+use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
 use lunco_modelica::{
     extract_inputs_with_defaults_from_ast, extract_model_name_from_ast,
@@ -342,8 +342,10 @@ pub fn dispatch_loaded_python_sources(
                 generation: 0,
                 language: ScriptLanguage::Python,
                 source: src.text.clone(),
+                origin: DocumentOrigin::untitled(format!("Python-{}", doc_id.raw())),
                 inputs: vec!["height".to_string(), "velocity".to_string()],
                 outputs: vec!["netForce".to_string()],
+                params: String::new(),
             }),
         );
         commands.entity(entity).insert(ScriptedModel {

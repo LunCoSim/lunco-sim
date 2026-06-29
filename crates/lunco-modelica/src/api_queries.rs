@@ -31,7 +31,9 @@ use crate::models::bundled_models;
 use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
 // `DrilledInClassNames` reads migrated to
 // `crate::sim_default::drilled_class_for_doc`.
-use crate::state::{CompileState, CompileStates, ModelicaDocumentRegistry};
+use crate::state::ModelicaDocumentRegistry;
+use lunco_doc::CompileState;
+use lunco_doc_bevy::DocumentDiagnostics;
 use crate::visual_diagram::msl_class_library;
 use lunco_doc::DocumentId;
 
@@ -605,13 +607,13 @@ impl ApiQueryProvider for CompileStatusProvider {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
-        // Fetch `CompileStates` once and derive both the compile state and
-        // the error message from it (CQ-216 — was two separate resource
-        // look-ups for the same resource).
-        let (state, error_message) = world
-            .get_resource::<CompileStates>()
-            .map(|cs| (cs.state_of(doc_id), cs.error_for(doc_id).map(str::to_string)))
-            .unwrap_or((CompileState::Idle, None));
+        // Pull each piece of state in turn — `world.resource::<...>` borrows
+        // are scoped to the line, so successive `let`s are fine even though
+        // we touch four different resources.
+        let state = world
+            .get_resource::<DocumentDiagnostics>()
+            .map(|cs| cs.state_of(doc_id))
+            .unwrap_or(CompileState::Idle);
         // of going through the `DrilledInClassNames` cache. The
         // helper falls back to first-tab-for-doc when no
         // `TabRenderContext` is in scope (which is the case here —
@@ -656,6 +658,11 @@ impl ApiQueryProvider for CompileStatusProvider {
             && drilled_in.is_none()
             && preferred_count != 1
             && candidates.len() >= 2;
+
+        let error_message = world
+            .get_resource::<lunco_doc_bevy::DocumentDiagnostics>()
+            .and_then(|cs| cs.error_message(doc_id).map(str::to_string));
+
 
         // Live run-state, read from the `ModelicaModel` for this doc's
         // entity (if one exists yet). Lets a single CompileStatus call

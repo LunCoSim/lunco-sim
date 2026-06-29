@@ -32,6 +32,8 @@ We are evolving from a high-fidelity sandbox into a complete autonomous mission 
 |------|---------|
 | [`principles.md`](principles.md) | Non-negotiable project principles (TDD, plugin-first, etc.) |
 | [`crates-index.md`](crates-index.md) | Navigation guide for the workspace structure |
+| [`scripting-guide.md`](scripting-guide.md) | How to write rhai scenarios — lifecycle, verbs, sequencing, tools, persistence |
+| [`rhai-integration-design.md`](rhai-integration-design.md) | Rhai scripting design rationale + as-built reference |
 | [`architecture/`](architecture/) | Design narrative — how LunCoSim is structured |
 | [`architecture/01-ontology.md`](architecture/01-ontology.md) | Terminology reference — Space System, Port, Connection, Attribute |
 | `../specs/` | Detailed feature specifications (contracts for implementation) |

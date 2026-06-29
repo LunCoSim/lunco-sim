@@ -9,6 +9,11 @@ avian3d = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-hardware = { path = "../lunco-hardware" }
+# Expose physics-backed spatial queries (Raycast/GroundHeight) through the
+# API query registry. default-features off keeps the HTTP transport (tokio/mio)
+# out so mobility stays wasm-clean.
+lunco-api = { path = "../lunco-api", default-features = false }
+serde_json = { workspace = true }
 
 [features]
 # Drive-actuation chain tracing (off by default). Lights up the DriveRover →

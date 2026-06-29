@@ -108,3 +108,18 @@ impl Default for HorizonShadowTerrain {
         Self { resolution: 512, azimuths: 16 }
     }
 }
+
+/// A per-entity scenario source EMBEDDED in USD (`custom string lunco:script`),
+/// awaiting attachment to the runtime.
+///
+/// The USD loader (`lunco-usd-bevy`) stamps this when a prim carries a
+/// `lunco:script` attribute; `lunco-scripting` drains it — attaching the source
+/// as a rhai `ScriptedModel` and removing the marker — so a scenario travels
+/// WITH the Twin/scene and starts running when its entity spawns.
+///
+/// Lives in `lunco-core` so the loader and the scripting runtime share the
+/// contract without depending on each other (same pattern as
+/// [`HorizonShadowTerrain`] / [`FallbackSceneLight`]).
+#[derive(Component, Debug, Clone, Reflect, Default)]
+#[reflect(Component)]
+pub struct EmbeddedScenarioSource(pub String);

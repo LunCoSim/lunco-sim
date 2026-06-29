@@ -585,14 +585,11 @@ fn execute_request(
             Some(ApiResponse::ok(serde_json::to_value(&ApiSchema { commands: cmds }).unwrap_or_default()))
         }
         ApiRequest::SubscribeTelemetry { filter } => {
-            // Actually register the subscription so the telemetry observers
-            // start broadcasting matching events (previously this returned
-            // "created" but never touched the registry → silent no-op).
+            // Register the subscription so the telemetry observers actually
+            // stream matching events (incl. script `emit()`s) back to this
+            // client. Previously a no-op that lied "Subscription created".
             let id = subscriptions.subscribe(filter.clone());
-            Some(ApiResponse::ok(serde_json::json!({
-                "message": "Subscription created",
-                "subscription_id": id,
-            })))
+            Some(ApiResponse::ok(serde_json::json!({ "subscription_id": id })))
         }
         ApiRequest::QueryCommandResult { id } => {
             // `outcome: null` means no result recorded for this id — either a

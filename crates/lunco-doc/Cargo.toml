@@ -22,6 +22,9 @@ bevy_reflect = { workspace = true }
 # types derive Serialize/Deserialize so consumers don't hand-roll u64
 # shims at the boundary.
 serde = { workspace = true }
+# Status serialisation for the shared diagnostics store (`status_json`) — one
+# JSON shape every domain's status query returns. Data-only, no Bevy.
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # Only for tests. The toy TextDocument needs no external crates.

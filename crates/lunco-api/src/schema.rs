@@ -24,7 +24,8 @@ pub enum ApiRequest {
     /// Execute a typed command by name.
     /// The `command` field matches the short type name (e.g. "DriveRover").
     /// The `params` field is a JSON object with field values for the command struct.
-    /// Entity fields (like `target`) accept ULID strings and are resolved automatically.
+    /// Entity fields (like `target`) take a numeric `api_id` (as returned by
+    /// `ListEntities`) and are resolved to the live entity automatically.
     ExecuteCommand {
         command: String,
         params: serde_json::Value,

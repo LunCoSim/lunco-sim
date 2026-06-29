@@ -8,6 +8,6 @@
 //! linked at all; forcing the mode (vs. inferring it from the absent `ui`
 //! feature) also keeps it headless if a `--workspace` build unifies `ui` on.
 //! Run with `cargo run -p lunco-sandbox-server` — headless, no flags.
-fn main() {
-    lunco_sandbox::run_headless();
+fn main() -> lunco_sandbox::AppExit {
+    lunco_sandbox::run_headless()
 }

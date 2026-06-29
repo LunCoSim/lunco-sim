@@ -141,6 +141,14 @@ impl Plugin for LunCoApiPlugin {
             ApiTelemetryPlugin,
         ));
 
+        // Built-in transform-only spatial query providers (Nearest,
+        // EntitiesInRadius) — reachable over the API and via the scripting
+        // `query()` verb. Physics-backed providers (Raycast) register the same
+        // way from their owning crate.
+        queries::register_builtin_spatial_queries(
+            &mut app.world_mut().resource_mut::<queries::ApiQueryRegistry>(),
+        );
+
         // The networking wire (codec, capture/apply, snapshots) lives in the
         // optional `lunco-networking` crate and is registered by its plugin only
         // when the `networking` feature is on. This crate stays transport- and

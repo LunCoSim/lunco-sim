@@ -23,6 +23,7 @@ Most simulators focus on isolated physics. **LunCo** focuses on the **System-of-
 | **Native Collaboration** | **WebTransport** | Built-in, multi-user engineering. Design, test, and operate in the same scene simultaneously. |
 | **Scene Composition** | **OpenUSD** | Industrial-grade 3D interop with NVIDIA Omniverse. USD is our **world format**, not a sim engine. |
 | **Behavioral Rigor** | **Modelica / ROM** | Multi-domain behavioral simulation (power, thermal, robotics) with high-fidelity dynamics. |
+| **Mission Autonomy** | **rhai Scenarios** | Hot-reloadable per-entity flight software & declarative mission timelines — sense and command the world through the same API as the UI. |
 | **Robot Control** | **HIL / SIL / ROS2** | Native Hardware/Software-in-the-Loop support. Bridging logical intent to physical actuators. |
 | **Mission Control** | **XTCE / MAVLink** | Standardized telemetry compatible with NASA OpenMCT, YAMCS, and professional ground stations. |
 
@@ -34,6 +35,7 @@ Most simulators focus on isolated physics. **LunCo** focuses on the **System-of-
 - **Planetary Scale Precision**: Built on a specialized **f64 (double precision)** spatial math foundation, ensuring absolute stability from millimetre-scale parts to lunar orbits.
 - **Native Multi-User**: Architecture built from the ground up for collaboration. Every edit, command, and telemetry stream is replicated across the network.
 - **Headless-First & AI-Ready**: Designed for automation. Scalable for massive parallel Monte Carlo analysis and end-to-end AI agent training.
+- **Scriptable Autonomy**: Attach hot-reloadable **rhai scenarios** to any entity — lifecycle hooks, sensing, and declarative mission timelines drive behavior with no recompile, through the same command/query API the UI and AI agents use. See the **[Scripting Guide](docs/scripting-guide.md)**.
 - **Composition over Simulation**: We use OpenUSD to **compose** complex scenes from modular parts, then attach simulation behaviors via our multi-engine backend.
 
 ---
@@ -61,6 +63,7 @@ cargo run --bin lunica
 ## 🏗 Ecosystem & Governance
 
 - **[Documentation Hub](docs/README.md)** — Usage guides and architectural deep-dives.
+- **[Scripting Guide](docs/scripting-guide.md)** — Write hot-reloadable rhai scenarios & mission timelines.
 - **[Crates Index](docs/crates-index.md)** — A map of our 30+ specialized crates.
 - **[Principles](docs/principles.md)** — Our non-negotiable mandates: TDD-First, Headless-First, and Tunability.
 

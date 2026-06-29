@@ -6,6 +6,10 @@ edition = "2021"
 [dependencies]
 bevy = { workspace = true }
 lunco-doc = { path = "../lunco-doc" }
+# Shared per-document diagnostics store (the unified error-reporting substrate
+# used by Modelica + scripting). `default-features = false` drops its egui `ui`
+# feature so headless / wasm scripting builds don't pull bevy_egui→winit.
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 # Script execution is exposed as typed `#[Command]`s (RunPython/RunLua) via
 # the macros + `Ack`/`OpId`/`CommandResults` substrate in lunco-core. The API
 # discovers them by reflection (AppTypeRegistry) — no direct lunco-api dep.
@@ -15,13 +19,50 @@ libloading = { version = "0.8", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true, optional = true }
 anyhow = { workspace = true }
+# Default scripting backend: pure-Rust, wasm-clean, sandboxed. Optional so the
+# crate (and any binary) can be built with no interpreter at all.
+rhai = { workspace = true, optional = true }
+# Only the rhai World-bridge needs this: `cmd()` triggers `ApiCommandEvent`
+# (reusing the macro-reflected dispatcher + id-resolution), and reads resolve
+# `GlobalEntityId` via `ApiEntityRegistry`. Optional + gated on `rhai` so the
+# python-only / script-free builds don't pull it. No cycle: lunco-api has no
+# dep on lunco-scripting (it discovers RunRhai by reflection).
+# `default-features = false` is REQUIRED: lunco-api's default `transport-http`
+# pulls tokio/full → mio, which breaks the wasm build. We only need the
+# reflect-dispatch types (ApiCommandEvent) + ApiEntityRegistry, which are
+# transport-free. (Feature unification still gives the native app its HTTP
+# transport via the binary's own lunco-api dep.)
+lunco-api = { path = "../lunco-api", default-features = false, optional = true }
+# rhai World-bridge only: `world_pos()` walks the big_space float-origin
+# hierarchy (Grid / CellCoord) via lunco-core's coords helpers.
+big_space = { workspace = true, optional = true }
+# Tool libraries: the runtime-agnostic registry (lunco-tools) + its rhai binding
+# (lunco-tools-rhai). Gated on `rhai` since the binding + scenario runtime are
+# rhai; the registry itself is dependency-light.
+lunco-tools = { path = "../lunco-tools", optional = true }
+lunco-tools-rhai = { path = "../lunco-tools-rhai", optional = true }
+# Twin persistence: the `TwinAdded` event + `WorkspaceResource` (twin→root path)
+# let the tool-library loader scan `<twin>/tools/*.rhai` on open. Gated on `rhai`
+# (the tool subsystem is rhai). No cycle: lunco-workspace has no scripting dep.
+lunco-workspace = { path = "../lunco-workspace", optional = true }
 
 [features]
-default = []
-python = ["dep:pyo3", "dep:libloading", "dep:serde_json"]
+# rhai on by default — the browser-capable backend. Turn it off
+# (`--no-default-features`) for a script-free build.
+default = ["rhai"]
+rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:big_space", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace"]
+# Python pulls the same world-bridge deps as rhai (lunco-api + big_space) so the
+# language-neutral `bridge_core` compiles for a python-only build too.
+python = ["dep:pyo3", "dep:libloading", "dep:serde_json", "dep:lunco-api", "dep:big_space"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 crossbeam-channel = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# rhai → ahash/const-random pull getrandom 0.3, which on wasm needs BOTH the
+# `wasm_js` feature (here) and `--cfg getrandom_backend="wasm_js"` (RUSTFLAGS,
+# already set by scripts/build_web.sh). Mirrors luncosim/lunco-sandbox/modelica.
+getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
 
 [lints]
 workspace = true

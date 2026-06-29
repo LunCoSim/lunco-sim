@@ -1,85 +1,84 @@
 # lunco-scripting
 
-High-performance scripting bridge for the LunCo Digital Twin simulation. Integrates Python (`PyO3`) and Lua (`mlua`) as first-class citizens for simulation logic, REPL, and remote control.
+The scripting subsystem for the LunCoSim Digital Twin: **scenarios** — persistent
+per-entity programs that sense and drive the simulation through the same
+command/query API the HTTP API, MCP, and UI use.
 
-## Overview
+> **Writing scenarios? Start with the [Scripting Guide](../../docs/scripting-guide.md).**
+> This README is the crate/architecture overview.
 
-`lunco-scripting` provides a unified interface for executing dynamic code within the Bevy ECS. It leverages Bevy's **Reflection System** to allow scripts to read and write Rust struct fields with zero manual glue code.
+## Backends
 
-### Key Features
+| Language | Status |
+|---|---|
+| **rhai** | **Default & primary.** Pure-Rust, sandboxed, wasm-clean — runs natively and in the browser. The full scenario lifecycle + world bridge. |
+| Python (PyO3) | One-shot eval only (`RunPython`). A full scenario lifecycle (`PythonScenarioRuntime`) is planned — the language-neutral driver + world bridge are in place; the Python binding is not. |
+| Lua | Reserved language id; not implemented. |
 
-*   **Reflected Memory Bridge:** Scripts can access any component marked with `#[reflect(Component)]`.
-*   **Dual-Mode Execution:**
-    *   **Sync (Deterministic):** Scripts run in `FixedUpdate` (physics tick) via the `ScriptedModel` component. Used for high-fidelity physics plants and FSW.
-    *   **Async (Interactive):** Scripts run in the REPL or via remote API requests for live debugging and automation.
-*   **Digital Twin Integration:** Scripts are managed as `lunco-doc` documents, supporting versioning, hot-reloading, and co-simulation wires.
-*   **CLI REPL:** Direct interactive terminal access to the running simulation.
+The language-neutral core means a backend supplies only the interpreter
+mechanics; lifecycle, scheduling, hot-reload, pause, teardown, diagnostics, and
+the world verbs are shared (see [`scenario.rs`](src/scenario.rs) and
+[`bridge_core.rs`](src/bridge_core.rs)).
 
-## Architecture
+## Model
 
-The crate acts as a host for multiple language interpreters:
+A scenario is a program attached to an entity via a `ScriptedModel` component +
+a `ScriptDocument` (managed like a `lunco-doc` document: versioned, hot-reloadable).
+It runs every `FixedUpdate` tick with lifecycle hooks:
 
-1.  **Python Host:** Embedded `PyO3` runtime.
-2.  **Lua Host:** Embedded `mlua` runtime (implementation pending).
-3.  **Reflected Proxy:** A generic bridge that maps script attribute access (e.g., `entity.Transform.x`) to Rust memory offsets using the `AppTypeRegistry`.
-
-## Usage
-
-### 1. The ScriptedModel Component
-
-To attach logic to an entity, add a `ScriptedModel` component:
-
-```rust
-commands.spawn((
-    Name::new("MySubsystem"),
-    ScriptedModel {
-        document_id: Some(123), // Link to a ScriptDocument
-        language: Some(ScriptLanguage::Python),
-        inputs: [("voltage".to_string(), 12.0)].into(),
-        ..default()
-    }
-));
+```rhai
+fn on_start(me)      { this.idx = 0; }                       // once, after (re)compile
+fn on_tick(me)       { this.idx = run_plan(me, PLAN, this.idx, 1.0, 2.0); }  // every tick
+fn on_event(me, evt) { /* a TelemetryEvent arrived */ }
+fn on_stop(me)       { brake(me); }                          // teardown
 ```
 
-### 2. CLI REPL
+The host exposes a minimal generic bridge — `cmd` / `query` / `get` /
+`world_pos` / `world_forward` / `find` / `name` / `parent` / `children` /
+`list_entities` / `emit` / `sim_tick` / `dt` / `elapsed_seconds`. Everything
+ergonomic (navigation, sensing, sequencing, selection) is **policy** authored in
+the hot-reloadable [`rhai/prelude.rhai`](rhai/prelude.rhai) — no Rust rebuild to
+extend it.
 
-When running the simulation, use the terminal to interact with the world:
+Scenarios are **host-authoritative**: they run on the host and in single-player,
+never on a networked client (which receives behaviour via replication).
 
-```python
->>> rover = world.get_entity("Zhurong")
->>> rover.Battery.level = 1.0
->>> world.spawn_rover("NewRover", pos=(0, 5, 0))
-```
+## Key commands & queries
 
-### 3. Remote Execution (MCP)
+- **Run:** `RunScenario { target, source, params }` (attach/hot-reload), `RunRhai { code }` (one-shot), `RunTimeline` / `RunStoredTimeline` (declarative missions).
+- **Control:** `SetScenarioPaused`, `StopScenario`.
+- **Tools & timelines:** `RegisterToolLibrary`, `RegisterTimeline` (+ `List`/`Get` discovery queries; persisted under the Twin).
+- **Introspection:** `ScriptStatus` (health), `ScriptInspect` (live state), `ScriptingCatalog` (the full callable surface).
 
-AI agents can trigger scripts via the `lunco-api`:
+## Layout
 
-```json
-{
-  "command": "ExecuteScript",
-  "params": {
-    "language": "python",
-    "code": "world.get_entity('GreenBalloon').ScriptedModel.paused = True"
-  }
-}
-```
+| Path | What |
+|---|---|
+| [`src/world_bridge.rs`](src/world_bridge.rs) | the rhai backend (verbs + `RhaiScenarioRuntime`) |
+| [`src/bridge_core.rs`](src/bridge_core.rs) | language-neutral world bridge (`ValueBuilder`) |
+| [`src/scenario.rs`](src/scenario.rs) | language-neutral lifecycle driver |
+| [`src/commands.rs`](src/commands.rs) | the `#[Command]` entry points |
+| [`src/catalog.rs`](src/catalog.rs) · [`src/diagnostics.rs`](src/diagnostics.rs) | discovery + introspection queries |
+| [`src/tool_libs.rs`](src/tool_libs.rs) · [`src/timelines.rs`](src/timelines.rs) | tool / timeline registries + Twin persistence |
+| [`rhai/prelude.rhai`](rhai/prelude.rhai) · [`rhai/examples/`](rhai/examples) · [`rhai/tools/`](rhai/tools) | the helper library, example scenarios, example tool libraries |
 
-## Dependencies
+## Cargo features
 
-*   **Python:** Requires Python 3.12 shared libraries installed on the system.
-*   **Linker:** On Linux, ensure `libpython3.12.so` is in your library path. The project `.cargo/config.toml` includes helpers for standard Ubuntu paths.
+- `rhai` (**default**) — the rhai backend; pure-Rust, wasm-clean.
+- `python` — the PyO3 runtime (one-shot eval; requires a Python 3.12 shared library).
+
+The crate builds with `rhai`, with `--no-default-features` (script-free), with
+`python`, and for `wasm32-unknown-unknown`.
 
 ## Testing
 
-Run the scripting tests (requires Python 3.12):
-
 ```bash
-cargo test -p lunco-scripting
+# rhai backend (lib + live end-to-end scenario tests).
+# Note the env var: rhai debug info can stress the linker — line-tables-only avoids it.
+CARGO_PROFILE_TEST_DEBUG=line-tables-only cargo test -p lunco-scripting --lib --test rhai_rover_live_test
 ```
 
-To test the full physics integration:
+## Docs
 
-```bash
-cargo test -p lunco-scripting --test green_balloon_test
-```
+- **[Scripting Guide](../../docs/scripting-guide.md)** — how to write scenarios (start here).
+- **[Rhai integration design](../../docs/rhai-integration-design.md)** — design rationale + as-built reference.

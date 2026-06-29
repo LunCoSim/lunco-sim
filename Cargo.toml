@@ -35,6 +35,8 @@ members = [
     "crates/lunco-doc-bevy",
     "crates/lunco-twin",
     "crates/lunco-twin-journal",
+    "crates/lunco-tools",
+    "crates/lunco-tools-rhai",
     "crates/lunco-workbench",
     "crates/lunco-web",
     "crates/lunco-scripting",
@@ -198,6 +200,12 @@ egui-phosphor = "0.7.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
+# Pure-Rust embedded scripting engine. Chosen over Luau/mlua because mlua only
+# reaches wasm via `wasm32-unknown-emscripten`; rhai compiles cleanly to
+# `wasm32-unknown-unknown` (our wasm-bindgen target) with no C/C++ toolchain.
+# Sandboxed (op/depth/size caps) and deterministic — fits the FixedUpdate sync
+# path used by cosim + networking.
+rhai = { version = "1", features = ["sync", "serde"] }
 toml = "0.8"
 uuid = { version = "1", features = ["v4", "serde"] }
 indexmap = { version = "2.6", features = ["serde"] }

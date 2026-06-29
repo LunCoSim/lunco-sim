@@ -175,7 +175,7 @@ pub fn refresh_diagnostics(
     // error lives on `CompileStates`.
     workspace: Res<lunco_workspace::WorkspaceResource>,
     registry: Res<ModelicaDocumentRegistry>,
-    compile_states: Res<crate::state::CompileStates>,
+    compile_states: Res<lunco_doc_bevy::DocumentDiagnostics>,
     mut diagnostics: ResMut<DiagnosticsLog>,
     mut cursor: bevy::prelude::Local<DiagnosticsCursor>,
 ) {
@@ -205,7 +205,7 @@ pub fn refresh_diagnostics(
     };
 
     let ast_gen = host.document().ast().generation;
-    let err_hash = hash_str(compile_states.error_for(doc_id));
+    let err_hash = hash_str(compile_states.error_message(doc_id));
     // Lint depends on source content. AST gen ticks on every source
     // mutation, so combining (ast_gen, err_hash) is enough — no extra
     // source hash needed.
@@ -242,7 +242,7 @@ pub fn refresh_diagnostics(
             model: model_tag.clone(),
             // Located when the lenient parser gave us a span — makes
             // the row click-to-source like lint findings.
-            loc: diag.line.zip(diag.column).map(|(line, column)| {
+            loc: diag.line.zip(diag.col).map(|(line, column)| {
                 crate::ui::panels::log::SourceLoc { line, column }
             }),
         });
@@ -255,7 +255,7 @@ pub fn refresh_diagnostics(
     // finding; otherwise fall back to the flat summary string. Without
     // mirroring them here the Diagnostics panel stayed empty even when a
     // red "Error" chip was visible in the toolbar.
-    let located = compile_states.located_for(doc_id);
+    let located = compile_states.diagnostics(doc_id);
     if !located.is_empty() {
         for diag in located {
             entries.push(LogEntry {
@@ -265,12 +265,12 @@ pub fn refresh_diagnostics(
                 model: model_tag.clone(),
                 // Located when the failure's primary span sits in this
                 // doc — makes the row click-to-source like lint findings.
-                loc: diag.line.zip(diag.column).map(|(line, column)| {
+                loc: diag.line.zip(diag.col).map(|(line, column)| {
                     crate::ui::panels::log::SourceLoc { line, column }
                 }),
             });
         }
-    } else if let Some(msg) = compile_states.error_for(doc_id) {
+    } else if let Some(msg) = compile_states.error_message(doc_id) {
         entries.push(LogEntry {
             at: web_time::Instant::now(),
             level: LogLevel::Error,

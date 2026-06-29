@@ -43,7 +43,12 @@ use lunco_mobility::LunCoMobilityPlugin;
 use lunco_hardware::LunCoHardwarePlugin;
 // USD core (scene load + collider build) is always needed; the Twin browser /
 // RTT viewport UI plugins are `ui`-only (added by `SandboxUiPlugin`).
-use lunco_usd::{LoadScene, UsdDataExt, UsdPlugins};
+use lunco_usd::{LoadScene, UsdDataExt, UsdPlugins, UsdPrimPath, UsdStageAsset};
+use bevy::asset::AssetLoadFailedEvent;
+
+/// Re-exported so the (bevy-free) bin crates can return it from `main` to
+/// propagate the process exit code (e.g. the startup-scene fail-loud guard).
+pub use bevy::app::AppExit;
 use lunco_terrain_globe::TerrainPlugin;
 use lunco_obstacle_field::ObstacleFieldPlugin;
 use lunco_terrain_surface::TerrainSurfacePlugin;
@@ -68,11 +73,11 @@ mod url_scheme;
 /// Run the sandbox, choosing GUI vs. headless from the build + flags: headless
 /// when the `ui` feature is absent, or `--no-ui` / `LUNCO_NO_UI` is set;
 /// otherwise the windowed GUI. This is the `sandbox` (GUI) bin's entry point.
-pub fn run() {
+pub fn run() -> AppExit {
     let headless = !cfg!(feature = "ui")
         || std::env::args().any(|a| a == "--no-ui")
         || std::env::var("LUNCO_NO_UI").is_ok_and(|v| v != "0" && !v.is_empty());
-    run_with_mode(headless);
+    run_with_mode(headless)
 }
 
 /// Run the sandbox HEADLESS, unconditionally — the `sandbox-server` bin's entry
@@ -81,14 +86,14 @@ pub fn run() {
 /// a `cargo build --workspace` (which compiles the GUI `sandbox` bin alongside
 /// it). So the server never tries to open a window; in a lean `-p
 /// lunco-sandbox-server` build the GUI stack isn't linked at all.
-pub fn run_headless() {
-    run_with_mode(true);
+pub fn run_headless() -> AppExit {
+    run_with_mode(true)
 }
 
 /// Composition root. Builds the shared core, then conditionally layers on the UI
 /// or the headless runner. Nothing UI-specific lives here beyond selecting the
 /// windowing backend in [`default_plugins`].
-fn run_with_mode(headless: bool) {
+fn run_with_mode(headless: bool) -> AppExit {
     // Native deep-link single-instance gate (GUI only). Register the
     // `luncosim://` scheme handler (desktop integration, this crate), then decide
     // whether THIS process is the app or just a courier forwarding a clicked link
@@ -100,7 +105,9 @@ fn run_with_mode(headless: bool) {
         use lunco_networking::single_instance::{acquire, LaunchOutcome};
         url_scheme::register_best_effort();
         match acquire() {
-            LaunchOutcome::Forwarded => return,
+            // This process is just a courier — it forwarded the link to the
+            // running instance and has nothing to run, so exit cleanly.
+            LaunchOutcome::Forwarded => return AppExit::Success,
             LaunchOutcome::Primary(inbox) => Some(inbox),
         }
     } else {
@@ -132,7 +139,9 @@ fn run_with_mode(headless: bool) {
         app.add_plugins(SandboxHeadlessPlugin);
     }
 
-    app.run();
+    // Return the AppExit so a non-zero exit (e.g. the startup-scene fail-loud
+    // guard's `AppExit::error()`) propagates to the process exit code.
+    app.run()
 }
 
 /// Build the base [`DefaultPlugins`] group for the chosen mode.
@@ -368,6 +377,11 @@ impl Plugin for SandboxCorePlugin {
                 ..Default::default()
             })
             .add_systems(Startup, setup_sandbox)
+            // Fail loud if the requested `--scene` never loads (e.g. a wrong
+            // path that resolves to a missing asset). Without this the app
+            // silently boots a scene-less world (only procedural terrain /
+            // obstacles), which masks the real error.
+            .add_systems(Update, startup_scene_failguard)
             // Cosim pipeline ordering inside FixedUpdate:
             //   HandleResponses → Propagate → ApplyForces → SpawnRequests.
             .configure_sets(FixedUpdate, (
@@ -687,8 +701,68 @@ fn setup_sandbox(world: &mut World) {
         }
     };
     info!("Loading sandbox scene `{}` via LoadScene", load_path);
+    // Arm the fail-loud guard with the requested scene's file name, so a
+    // load failure (bad path → missing asset) is fatal instead of silent.
+    let scene_file = std::path::Path::new(&load_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| load_path.clone());
+    world.insert_resource(StartupSceneGuard { file: scene_file });
     world.trigger(LoadScene {
         path: load_path,
         root_prim: String::new(),
     });
+}
+
+/// Tracks the requested startup scene so [`startup_scene_failguard`] can turn a
+/// silent asset-load failure into a loud, fatal error. Removed once the scene
+/// has loaded (or failed), so later runtime `LoadScene`s (API / UI) — which
+/// must NOT crash the app on a bad request — are never affected.
+#[derive(Resource)]
+struct StartupSceneGuard {
+    /// File name of the requested startup scene, e.g. `sandbox_scene.usda`.
+    file: String,
+}
+
+/// Fail loud if the `--scene` (or default) USD scene fails to load at startup.
+///
+/// The bug this guards: `--scene` paths are relative to the `assets/` source
+/// root; prefixing `assets/` doubles it (`assets/assets/…`), the asset is not
+/// found, and the app *silently* boots a scene-less world. Here a matching
+/// `AssetLoadFailedEvent<UsdStageAsset>` → clear error + non-zero exit. Disarms
+/// on success (scene produced `UsdPrimPath` entities) so runtime loads are safe.
+fn startup_scene_failguard(
+    guard: Option<Res<StartupSceneGuard>>,
+    mut failures: MessageReader<AssetLoadFailedEvent<UsdStageAsset>>,
+    scene: Query<(), With<UsdPrimPath>>,
+    mut exit: MessageWriter<AppExit>,
+    mut commands: Commands,
+) {
+    let Some(guard) = guard else { return };
+
+    for failed in failures.read() {
+        let is_startup_scene = failed
+            .path
+            .path()
+            .file_name()
+            .and_then(|s| s.to_str())
+            == Some(guard.file.as_str());
+        if is_startup_scene {
+            error!(
+                "Startup scene `{}` failed to load: {}. \
+                 NOTE: `--scene` is relative to the `assets/` source root — do NOT prefix \
+                 `assets/` (use `scenes/sandbox/sandbox_scene.usda`, not `assets/scenes/...`).",
+                guard.file, failed.error,
+            );
+            exit.write(AppExit::error());
+            commands.remove_resource::<StartupSceneGuard>();
+            return;
+        }
+    }
+
+    // Scene loaded (entities exist) → disarm so a later runtime LoadScene
+    // failure (API/UI) never trips this fatal guard.
+    if !scene.is_empty() {
+        commands.remove_resource::<StartupSceneGuard>();
+    }
 }

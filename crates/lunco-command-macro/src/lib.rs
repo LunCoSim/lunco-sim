@@ -85,16 +85,25 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
         .filter(|s| !s.is_empty())
         .collect();
     let wants_default = keywords.contains("default");
+    // `reflect_default`: register `ReflectDefault` (so the API reflect
+    // deserializer fills MISSING fields from `Default`) WITHOUT deriving
+    // `Default` — for commands whose fields aren't all `Default` (e.g. an
+    // `Entity` field) but which still want optional/defaulted params. The caller
+    // provides a manual `impl Default`.
+    let wants_reflect_default = keywords.contains("reflect_default");
 
     // Reject unknown keywords so typos don't silently no-op.
     // `serde` was previously opt-in; it's now always on. Accept it as
     // a no-op for one release to avoid breaking callers that already
     // wrote `#[Command(default, serde)]`.
     for kw in &keywords {
-        if !matches!(*kw, "default" | "serde") {
+        if !matches!(*kw, "default" | "serde" | "reflect_default") {
             return syn::Error::new_spanned(
                 &input,
-                format!("unknown #[Command] keyword: `{}` (expected `default`)", kw),
+                format!(
+                    "unknown #[Command] keyword: `{}` (expected `default` or `reflect_default`)",
+                    kw
+                ),
             )
             .to_compile_error()
             .into();
@@ -149,7 +158,9 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
         derives.push(quote!(Default));
     }
 
-    let reflect = if wants_default {
+    // Register `ReflectDefault` when either deriving Default (`default`) or the
+    // caller supplies a manual one (`reflect_default`).
+    let reflect = if wants_default || wants_reflect_default {
         quote!(#[reflect(Event, Default)])
     } else {
         quote!(#[reflect(Event)])

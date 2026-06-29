@@ -246,14 +246,14 @@ pub struct ModelicaResult {
     pub loaded_source_root_id: Option<String>,
     /// Structured, located compile diagnostics produced alongside
     /// `error` on a failed Compile (rumoca `StrictCompileReport`
-    /// failures, converted to [`ParseDiag`](crate::document::ParseDiag)).
+    /// failures, converted to [`Diagnostic`](lunco_doc::Diagnostic)).
     /// Each entry may carry a 1-based (line, column) into the user
     /// document so the Diagnostics panel can render click-to-source
     /// rows for compile errors — the structured complement to the flat
     /// `error` summary string. Empty on success and for non-compile
     /// (solver / reset / parameter) results.
     #[serde(default)]
-    pub compile_diagnostics: Vec<crate::document::ParseDiag>,
+    pub compile_diagnostics: Vec<lunco_doc::Diagnostic>,
 }
 
 impl Default for ModelicaResult {
@@ -1546,7 +1546,7 @@ pub fn handle_modelica_responses(
     mut _workbench_state: ResMut<crate::state::WorkbenchState>,
     // Core compile-state (UI-agnostic). Optional so headless cosim tests run
     // without it.
-    compile_states: Option<ResMut<crate::state::CompileStates>>,
+    compile_states: Option<ResMut<lunco_doc_bevy::DocumentDiagnostics>>,
     // Lifecycle messages leave as core events; the reactive UI console observer
     // projects them. Core no longer references the console panel.
     mut notices: MessageWriter<crate::ModelicaNotice>,
@@ -1668,9 +1668,9 @@ pub fn handle_modelica_responses(
             let is_compile_result = result.is_new_model || result.is_parameter_update;
             if is_compile_result && !model.document.is_unassigned() {
                 let new_state = if result.error.is_some() {
-                    crate::state::CompileState::Error
+                    lunco_doc::CompileState::Error
                 } else {
-                    crate::state::CompileState::Ready
+                    lunco_doc::CompileState::Ready
                 };
                 if let Some(cs) = compile_states.as_mut() {
                     let elapsed = cs.mark_finished(model.document, new_state);
@@ -1682,7 +1682,7 @@ pub fn handle_modelica_responses(
                             format!("{:.0} ms", ms)
                         };
                         match new_state {
-                            crate::state::CompileState::Error => {
+                            lunco_doc::CompileState::Error => {
                                 warn!(
                                     "[Modelica] Compile finished with error for `{}` in {}",
                                     model.model_name, human
@@ -1695,7 +1695,7 @@ pub fn handle_modelica_responses(
                                     ),
                                 });
                             }
-                            crate::state::CompileState::Ready => {
+                            lunco_doc::CompileState::Ready => {
                                 info!(
                                     "[Modelica] Compile finished for `{}` in {}",
                                     model.model_name, human
@@ -1725,11 +1725,12 @@ pub fn handle_modelica_responses(
                     // shipped them (compile failures) so the panel can
                     // render click-to-source rows; empty for solver/reset
                     // errors falls back to the flat `err` string.
-                    cs.set_error_located(
-                        model.document,
-                        err.clone(),
-                        result.compile_diagnostics.clone(),
-                    );
+                    let diags = if result.compile_diagnostics.is_empty() {
+                        vec![lunco_doc::Diagnostic::message_only(err.clone())]
+                    } else {
+                        result.compile_diagnostics.clone()
+                    };
+                    cs.set_error(model.document, diags);
                 }
                 warn!("[Modelica] {err}");
                 // Classify for the console: compile-time errors are

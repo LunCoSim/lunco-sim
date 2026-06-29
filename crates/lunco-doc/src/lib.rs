@@ -66,12 +66,14 @@ pub use lunco_core::{Ack, Mutation, OpId, Reject, SessionId};
 // Submodules: domain engine abstraction + cross-doc reference index
 // ─────────────────────────────────────────────────────────────────────────────
 
+pub mod diagnostics;
 pub mod domain_engine;
 pub mod refindex;
 
+pub use diagnostics::{status_json, DocDiagnostics};
 pub use domain_engine::{
-    Diagnostic, DiagnosticSeverity, DomainEngine, DomainEngineError, NodeId, ResolvedRef,
-    SymbolRef, TextRange,
+    line_col_to_offset, offset_to_line_col, CompileState, Diagnostic, DiagnosticSeverity,
+    DomainEngine, DomainEngineError, NodeId, ResolvedRef, SymbolRef, TextRange,
 };
 pub use refindex::RefIndex;
 

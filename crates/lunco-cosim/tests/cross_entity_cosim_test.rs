@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use avian3d::prelude::*;
 use lunco_cosim::{CoSimPlugin, SimComponent, SimConnection, SimStatus};
-use lunco_doc::{DocumentHost, DocumentId};
+use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
 use lunco_modelica::{
     extract_inputs_with_defaults, extract_model_name, extract_parameters, ModelicaChannels,
     ModelicaCommand, ModelicaCorePlugin, ModelicaModel,
@@ -192,8 +192,10 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
                 generation: 0,
                 language: ScriptLanguage::Python,
                 source: AMPLIFIER_PY.to_string(),
+                origin: DocumentOrigin::untitled("Amplifier"),
                 inputs: vec!["signal".to_string()],
                 outputs: vec!["scaled".to_string()],
+                params: String::new(),
             }),
         );
         world.entity_mut(amplifier).insert((

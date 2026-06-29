@@ -178,7 +178,7 @@ impl ModelicaEngineHandle {
             // diagnostics now, while we still hold the source. Stashed on
             // the engine for the drain to fold into the doc's SyntaxCache
             // — without this the native live-edit path lost them entirely.
-            let diags: Vec<crate::document::ParseDiag> = recovery
+            let diags: Vec<lunco_doc::Diagnostic> = recovery
                 .parse_errors()
                 .iter()
                 .map(|e| crate::document::parse_diag_from_error(e, &*source))
@@ -329,8 +329,8 @@ pub fn drive_engine_sync(
                     // Prefer the located diagnostics; fall back to a
                     // generic note only when the parser gave us none.
                     let errors = if parse_diags.is_empty() {
-                        vec![crate::document::ParseDiag::message_only(
-                            "strict parse failed (lenient recovered)".into(),
+                        vec![lunco_doc::Diagnostic::message_only(
+                            "strict parse failed (lenient recovered)",
                         )]
                     } else {
                         parse_diags

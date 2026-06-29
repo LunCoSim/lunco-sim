@@ -104,15 +104,129 @@ pub enum DiagnosticSeverity {
     Hint,
 }
 
-/// One diagnostic produced by the domain engine for a document.
+/// One diagnostic produced by a domain (Modelica, scripting, …) for a document.
+///
+/// Location is 1-based `line`/`col` — the form every producer (rumoca, rhai)
+/// and every consumer (egui panel click-to-source, API/MCP status) actually
+/// uses, so no source-dependent byte conversions are needed at the boundaries.
+/// (Absolute byte ranges remain available via [`offset_to_line_col`] /
+/// [`line_col_to_offset`] + [`TextRange`], used independently by index spans.)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Diagnostic {
     /// How the diagnostic should be classified by the UI.
     pub severity: DiagnosticSeverity,
     /// Human-readable message body.
     pub message: String,
-    /// Source-text range the diagnostic refers to, if known.
-    pub range: Option<TextRange>,
+    /// 1-based source line, if located.
+    pub line: Option<u32>,
+    /// 1-based source column, if located.
+    pub col: Option<u32>,
+}
+
+impl Diagnostic {
+    /// An error diagnostic at an optional 1-based `(line, col)`.
+    pub fn error(message: impl Into<String>, line: Option<u32>, col: Option<u32>) -> Self {
+        Self {
+            severity: DiagnosticSeverity::Error,
+            message: message.into(),
+            line,
+            col,
+        }
+    }
+
+    /// A warning diagnostic at an optional 1-based `(line, col)`.
+    pub fn warning(message: impl Into<String>, line: Option<u32>, col: Option<u32>) -> Self {
+        Self {
+            severity: DiagnosticSeverity::Warning,
+            message: message.into(),
+            line,
+            col,
+        }
+    }
+
+    /// An error diagnostic with no source location (renders but isn't clickable).
+    pub fn message_only(message: impl Into<String>) -> Self {
+        Self::error(message, None, None)
+    }
+}
+
+impl From<String> for Diagnostic {
+    fn from(message: String) -> Self {
+        Self::message_only(message)
+    }
+}
+
+impl From<&str> for Diagnostic {
+    fn from(message: &str) -> Self {
+        Self::message_only(message)
+    }
+}
+
+/// Lifecycle of a document's compilation — the unified state every domain
+/// (Modelica, scripting, …) reports through, so callers poll one shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum CompileState {
+    /// Not yet compiled (no result either way).
+    #[default]
+    Idle,
+    /// Compilation in progress (async domains; instant ones skip this).
+    Compiling,
+    /// Compiled successfully — no error diagnostics.
+    Ready,
+    /// Compilation failed — see the document's error diagnostics.
+    Error,
+}
+
+impl CompileState {
+    /// Lowercase wire tag (`"idle"`/`"compiling"`/`"ready"`/`"error"`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CompileState::Idle => "idle",
+            CompileState::Compiling => "compiling",
+            CompileState::Ready => "ready",
+            CompileState::Error => "error",
+        }
+    }
+}
+
+/// Convert a byte `offset` into `source` to a 1-based `(line, column)`.
+/// Column counts Unicode scalar values (chars), not bytes, so it matches
+/// what an editor shows. Past-the-end offsets clamp to the final position.
+pub fn offset_to_line_col(source: &str, offset: usize) -> (u32, u32) {
+    let offset = offset.min(source.len());
+    let mut line = 1u32;
+    let mut col = 1u32;
+    for (i, ch) in source.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
+/// Convert a 1-based `(line, column)` in `source` to a byte offset (the inverse
+/// of [`offset_to_line_col`]). Out-of-range line/col clamp to the source end.
+pub fn line_col_to_offset(source: &str, line: u32, col: u32) -> usize {
+    let mut cur_line = 1u32;
+    let mut cur_col = 1u32;
+    for (i, ch) in source.char_indices() {
+        if cur_line == line && cur_col == col {
+            return i;
+        }
+        if ch == '\n' {
+            cur_line += 1;
+            cur_col = 1;
+        } else {
+            cur_col += 1;
+        }
+    }
+    source.len()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -242,3 +356,28 @@ impl std::fmt::Display for DomainEngineError {
 }
 
 impl std::error::Error for DomainEngineError {}
+
+#[cfg(test)]
+mod tests {
+    use super::{line_col_to_offset, offset_to_line_col};
+
+    #[test]
+    fn line_col_offset_roundtrips() {
+        let src = "fn a() {\n  let x = ;\n}\n";
+        // Start of line 2, col 1 = byte just after the first '\n' (offset 9).
+        let off = line_col_to_offset(src, 2, 1);
+        assert_eq!(&src[off..off + 2], "  ");
+        assert_eq!(offset_to_line_col(src, off), (2, 1));
+        // The ';'-ish error position on line 2.
+        let (l, c) = offset_to_line_col(src, off + 10);
+        assert_eq!(l, 2);
+        assert_eq!(line_col_to_offset(src, l, c), off + 10);
+    }
+
+    #[test]
+    fn offsets_clamp_out_of_range() {
+        let src = "abc";
+        assert_eq!(offset_to_line_col(src, 999), (1, 4)); // past end → after last char
+        assert_eq!(line_col_to_offset(src, 99, 99), src.len());
+    }
+}

@@ -149,7 +149,7 @@ pub struct ModelicaEngine {
     /// source + recovery) and taken by `drive_engine_sync` on drain to
     /// fill the doc's `SyntaxCache`. Lets the native live-edit path
     /// surface clickable parse errors instead of a generic string.
-    parse_diags: HashMap<DocumentId, Vec<crate::document::ParseDiag>>,
+    parse_diags: HashMap<DocumentId, Vec<lunco_doc::Diagnostic>>,
 }
 
 impl Default for ModelicaEngine {
@@ -205,7 +205,7 @@ impl ModelicaEngine {
     pub fn set_parse_diags(
         &mut self,
         doc_id: DocumentId,
-        diags: Vec<crate::document::ParseDiag>,
+        diags: Vec<lunco_doc::Diagnostic>,
     ) {
         self.parse_diags.insert(doc_id, diags);
     }
@@ -215,7 +215,7 @@ impl ModelicaEngine {
     pub fn take_parse_diags(
         &mut self,
         doc_id: DocumentId,
-    ) -> Vec<crate::document::ParseDiag> {
+    ) -> Vec<lunco_doc::Diagnostic> {
         self.parse_diags.remove(&doc_id).unwrap_or_default()
     }
 

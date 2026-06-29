@@ -533,7 +533,7 @@ impl ModelicaCompiler {
     /// just failed [`Self::compile_str`].
     ///
     /// Where `compile_str`'s `Err(String)` is a flat human summary,
-    /// this returns one [`ParseDiag`](crate::document::ParseDiag) per
+    /// this returns one [`Diagnostic`](lunco_doc::Diagnostic) per
     /// rumoca failure — each prefixed with the diagnostic code
     /// (e.g. `[ED008]`) and, when the failure's primary span points
     /// into the user's `model.mo`, carrying a 1-based (line, column)
@@ -551,7 +551,7 @@ impl ModelicaCompiler {
         &mut self,
         model_name: &str,
         user_uri: &str,
-    ) -> Vec<crate::document::ParseDiag> {
+    ) -> Vec<lunco_doc::Diagnostic> {
         let report = self
             .session
             .compile_model_strict_reachable_uncached_with_recovery(model_name);
@@ -839,7 +839,7 @@ impl ModelicaCompiler {
 }
 
 /// Convert a rumoca [`StrictCompileReport`] into the Diagnostics
-/// panel's [`ParseDiag`](crate::document::ParseDiag) form.
+/// panel's [`Diagnostic`](lunco_doc::Diagnostic) form.
 ///
 /// A failure becomes *located* (click-to-source) only when its primary
 /// label points at `user_uri` — diagnostics rooted in MSL / sibling
@@ -853,8 +853,8 @@ impl ModelicaCompiler {
 fn diagnostics_from_strict_report(
     report: &rumoca_compile::compile::StrictCompileReport,
     user_uri: &str,
-) -> Vec<crate::document::ParseDiag> {
-    use crate::document::ParseDiag;
+) -> Vec<lunco_doc::Diagnostic> {
+    use lunco_doc::Diagnostic;
     report
         .failures
         .iter()
@@ -875,18 +875,14 @@ fn diagnostics_from_strict_report(
                 Some((name, content, start)) if name == user_uri => {
                     let (line, column) =
                         crate::document::core::byte_offset_to_line_col(&content, start);
-                    ParseDiag {
-                        message,
-                        line: Some(line),
-                        column: Some(column),
-                    }
+                    Diagnostic::error(message, Some(line), Some(column))
                 }
                 // Diagnostic in another file — name it so the user knows
                 // where it came from, but leave it unlocated.
                 Some((name, _, _)) => {
-                    ParseDiag::message_only(format!("{message}  (in {name})"))
+                    Diagnostic::message_only(format!("{message}  (in {name})"))
                 }
-                None => ParseDiag::message_only(message),
+                None => Diagnostic::message_only(message),
             }
         })
         .collect()
@@ -911,8 +907,8 @@ fn diagnostics_from_strict_report(
 fn diagnostics_from_sim_error(
     err: &rumoca_sim::SimulationDiagnosticError,
     source: &str,
-) -> Vec<crate::document::ParseDiag> {
-    use crate::document::ParseDiag;
+) -> Vec<lunco_doc::Diagnostic> {
+    use lunco_doc::Diagnostic;
     let message = format!("[{}] {err}", err.diagnostic_code());
     match err.source_span() {
         // `start.0` is a 0-based UTF-8 byte offset; only trust it when it
@@ -921,13 +917,9 @@ fn diagnostics_from_sim_error(
         Some(span) if span.start.0 <= source.len() => {
             let (line, column) =
                 crate::document::core::byte_offset_to_line_col(source, span.start.0);
-            vec![ParseDiag {
-                message,
-                line: Some(line),
-                column: Some(column),
-            }]
+            vec![Diagnostic::error(message, Some(line), Some(column))]
         }
-        _ => vec![ParseDiag::message_only(message)],
+        _ => vec![Diagnostic::message_only(message)],
     }
 }
 

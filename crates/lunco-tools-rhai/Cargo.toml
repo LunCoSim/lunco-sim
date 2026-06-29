@@ -1,0 +1,16 @@
+[package]
+name = "lunco-tools-rhai"
+version = "0.1.0"
+edition = "2021"
+
+# rhai adapter for the runtime-agnostic lunco-tools registry: concrete tool
+# impls (rhai-source + native Rust) and the binding that exposes every
+# registered tool to a rhai Engine as a static module (`name::fn(...)`).
+# wasm-clean (rhai only; no bevy).
+
+[dependencies]
+lunco-tools = { path = "../lunco-tools" }
+rhai = { workspace = true }
+
+[lints]
+workspace = true
