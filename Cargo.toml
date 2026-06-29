@@ -76,14 +76,20 @@ resolver = "2"
 # scnr2 patch removed — rumoca main uses scnr2 0.3.3 and
 # parol_runtime 4.2 which resolve correctly without overrides.
 
-# openusd: consume the `main` branch from a local checkout (../openusd, tracking
-# github.com/mxpv/openusd) instead of the crates.io 0.5.0 release. main adds the
-# authoring/journaling features Phase C needs — the `Diff`/`Edit` API
-# (add_sink/extract_diff/apply_diff, usd/diff.rs), the `usd::editor` module, and
-# value-resolution/relocates/PathTable fixes — while still reporting version
-# 0.5.0 (satisfies the `=0.5.0` requirement below). Develop openusd locally;
-# revert this line to fall back to the published crate.
-openusd = { path = "../openusd" }
+# openusd consumed from the `main` branch of our fork github.com/LunCoSim/openusd
+# (which tracks github.com/mxpv/openusd as upstream) instead of the crates.io
+# 0.5.0 release. main adds the authoring/journaling features Phase C needs — the
+# `Diff`/`Edit` API (add_sink/extract_diff/apply_diff, usd/diff.rs), the
+# `usd::editor` module, value-resolution/relocates/PathTable fixes, and our
+# `usd::evaluate` export — while still reporting version 0.5.0 (satisfies the
+# `=0.5.0` requirement below). We consume the canonical git version rather than a
+# local checkout; local patches land on the fork's main, then `cargo update -p openusd`.
+# To develop against a local rumoca-style checkout, uncomment the [patch] block
+# below and point it at `../openusd`.
+openusd = { git = "https://github.com/LunCoSim/openusd", branch = "main" }
+
+# [patch."https://github.com/LunCoSim/openusd"]
+# openusd = { path = "../openusd" }
 
 # Rumoca consumed from the `main` branch of LunCoSim/rumoca (see
 # [workspace.dependencies]). The fixes are merged into that `main`, so we
