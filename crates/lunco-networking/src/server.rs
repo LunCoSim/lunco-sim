@@ -443,8 +443,13 @@ fn on_server_connected(
     }
     // Full state baseline: current pose of every replicated body (balloons,
     // cosim targets, rovers) so the joiner sees them at the right place
-    // immediately — not just future spawns/changes. Rides the snapshot channel,
-    // applied by the client's `apply_incoming_snapshots`.
+    // immediately — not just future spawns/changes. Applied by the client's
+    // snapshot ingest. L3: sent on the RELIABLE `CommandBus`, not the unreliable
+    // snapshot channel — a STATIC body emits no periodic diffs (`only_if_changed`),
+    // so if its one-shot baseline packet drops it stays invisible until it moves.
+    // The H3 monotonic tick gate still discards this baseline for a moving body if
+    // a newer periodic snapshot already landed, so reliability here is free of
+    // teleport-back risk.
     let entries: Vec<SnapshotEntry> = q_repl
         .iter()
         .map(|(gid, tf)| SnapshotEntry {
@@ -469,7 +474,7 @@ fn on_server_connected(
             &mut sender,
             server,
             &target,
-            SyncChannel::ControlStream,
+            SyncChannel::CommandBus,
             &SyncEnvelope::Snapshot(SnapshotMsg {
                 tick: tick.0,
                 entries,

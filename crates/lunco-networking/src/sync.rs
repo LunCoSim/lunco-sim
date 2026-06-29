@@ -1239,13 +1239,24 @@ pub fn gather_snapshot(
     if entries.is_empty() {
         return;
     }
-    outbox.0.push((
-        config.snapshot_channel,
-        SyncEnvelope::Snapshot(SnapshotMsg {
-            tick: tick.0,
-            entries,
-        }),
-    ));
+    // L2: cap entries per message so each serialized `SnapshotMsg` fits in ONE
+    // lightyear fragment (`FRAGMENT_SIZE` = 1180 B). A `SnapshotEntry` is ≈52 B, so
+    // ~22 fit; 20 leaves headroom for the enum tag + tick + Vec length prefix. The
+    // `SnapChannel` is `UnorderedUnreliable` with NO fragment retransmit, so a
+    // multi-fragment message is lost wholesale if any single fragment drops
+    // (delivery ≈ (1 − p_loss)^num_fragments — it gets WORSE as the sim grows).
+    // Splitting into single-fragment messages makes one lost datagram cost ≤20
+    // entities for one tick (interp hides it) instead of every body's update.
+    const MAX_SNAPSHOT_ENTRIES: usize = 20;
+    for chunk in entries.chunks(MAX_SNAPSHOT_ENTRIES) {
+        outbox.0.push((
+            config.snapshot_channel,
+            SyncEnvelope::Snapshot(SnapshotMsg {
+                tick: tick.0,
+                entries: chunk.to_vec(),
+            }),
+        ));
+    }
 }
 
 /// Host: when a runtime-spawned networked root gets its id minted, replicate the
