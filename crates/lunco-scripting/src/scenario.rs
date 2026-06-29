@@ -29,13 +29,24 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_core::TelemetryEvent;
+use lunco_core::{SessionId, TelemetryEvent};
 use lunco_doc::{Diagnostic, DocumentId};
 use lunco_doc_bevy::DocumentDiagnostics;
 
 use crate::bridge_core::{self, ValueBuilder};
 use crate::doc::{ScriptLanguage, ScriptedModel};
 use crate::ScriptRegistry;
+
+/// The session a scenario acts on behalf of — captured at attach from the wire
+/// origin ([`lunco_core::session::SyncApplyGuard`]). `Some` only for a scenario
+/// launched by a *remote* networked session; the driver sets it as the `cmd()`
+/// authority for that entity's hooks, so a remote script can't exceed its
+/// submitter's authority (design §3.4). Absent / `None` ⇒ host-trusted launch
+/// (local, standalone, USD-embedded) → ungated, matching the open-by-default
+/// substrate (and side-stepping the default-deny `SessionRbac` would apply where
+/// no sessions are registered).
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ScriptAuthority(pub Option<SessionId>);
 
 /// The lifecycle hook points a scenario may define.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,22 +200,24 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         // 1. Snapshot (entity, doc_id, gid, generation, source), releasing every
         //    World borrow before we execute scripts. `live` = all THIS-LANGUAGE
         //    entities (incl. paused) — drives despawn/detach teardown.
-        // (entity, doc_id, gid, generation, source, params-json).
-        let mut work: Vec<(Entity, u64, i64, u64, String, String)> = Vec::new();
+        // (entity, doc_id, gid, generation, source, params-json, authority).
+        let mut work: Vec<(Entity, u64, i64, u64, String, String, Option<SessionId>)> = Vec::new();
         let live: HashSet<Entity>;
         {
-            let mut q = world.query::<(Entity, &ScriptedModel)>();
-            let models: Vec<(Entity, bool, Option<ScriptLanguage>, Option<u64>)> = q
-                .iter(world)
-                .map(|(e, m)| (e, m.paused, m.language, m.document_id))
-                .collect();
+            let mut q = world.query::<(Entity, &ScriptedModel, Option<&ScriptAuthority>)>();
+            let models: Vec<(Entity, bool, Option<ScriptLanguage>, Option<u64>, Option<SessionId>)> =
+                q.iter(world)
+                    .map(|(e, m, auth)| {
+                        (e, m.paused, m.language, m.document_id, auth.and_then(|a| a.0))
+                    })
+                    .collect();
             live = models
                 .iter()
-                .filter(|(_, _, l, _)| *l == Some(language))
+                .filter(|(_, _, l, _, _)| *l == Some(language))
                 .map(|(e, ..)| *e)
                 .collect();
 
-            for (entity, paused, lang, doc_id) in models {
+            for (entity, paused, lang, doc_id, authority) in models {
                 if paused || lang != Some(language) {
                     continue;
                 }
@@ -225,7 +238,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     .api_id_for(entity)
                     .map(|g| g.get() as i64)
                     .unwrap_or(-1);
-                work.push((entity, raw, gid, generation, source, params));
+                work.push((entity, raw, gid, generation, source, params, authority));
             }
         }
 
@@ -257,7 +270,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             driver.runtime.maintain();
             let ScenarioDriver { runtime, fsm } = &mut *driver;
 
-            for (entity, raw, gid, generation, source, params) in work {
+            for (entity, raw, gid, generation, source, params, authority) in work {
+                // Gate this entity's hook `cmd()`s against the launching session
+                // (§3.4). `None` for a host-trusted launch → ungated. Covers the
+                // hot-reload `on_stop` below too (still inside this iteration).
+                bridge_core::set_script_authority(authority);
                 let st = fsm.entry(entity).or_default();
                 st.gid = gid;
                 let mut recompiled = false;
@@ -315,7 +332,10 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             }
 
             // Teardown: any tracked entity no longer live (despawned / detached)
-            // gets a final on_stop, then its state is dropped.
+            // gets a final on_stop, then its state is dropped. The entity (and its
+            // ScriptAuthority) is gone, so its `cmd()`s run host-trusted — teardown
+            // cleanup only, never ongoing behaviour.
+            bridge_core::set_script_authority(None);
             let dead: Vec<Entity> = fsm.keys().copied().filter(|e| !live.contains(e)).collect();
             for entity in dead {
                 if let Some(st) = fsm.remove(&entity) {

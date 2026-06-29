@@ -744,13 +744,15 @@ fn rhai_diagnostic(message: String, pos: rhai::Position) -> Diagnostic {
 
 // ── One-shot drain (RunRhai) ───────────────────────────────────────────────
 
-/// Queue of `(command_id, code)` snippets submitted by `RunRhai`, waiting to
-/// run inside the exclusive [`drain_world_scripts`] system where `&mut World`
-/// is available. The `command_id` is the request id so the outcome can be
-/// recorded in [`CommandResults`] for the caller to poll.
+/// Queue of `(command_id, code, authority)` snippets submitted by `RunRhai`,
+/// waiting to run inside the exclusive [`drain_world_scripts`] system where
+/// `&mut World` is available. The `command_id` is the request id so the outcome
+/// can be recorded in [`CommandResults`] for the caller to poll. `authority` is
+/// the submitting session (the wire origin captured by the handler) the
+/// snippet's `cmd()`s are gated against — `None` for a local/host launch (§3.4).
 #[derive(Resource, Default)]
 pub struct PendingWorldScripts {
-    pub queue: Vec<(u64, String)>,
+    pub queue: Vec<(u64, String, Option<lunco_core::SessionId>)>,
 }
 
 /// Exclusive system: run every queued snippet against the live World and record
@@ -761,8 +763,8 @@ pub fn drain_world_scripts(world: &mut World) {
     if pending.is_empty() {
         return;
     }
-    for (id, code) in pending {
-        let outcome = match eval_with_world(world, &code) {
+    for (id, code, authority) in pending {
+        let outcome = match eval_with_world_as(world, &code, authority) {
             Ok(stdout) => {
                 let mut ack = Ack::new(OpId::new());
                 ack.assigned = serde_json::json!({ "stdout": stdout });
@@ -780,8 +782,20 @@ pub fn drain_world_scripts(world: &mut World) {
 /// Evaluate `code` against `world`, capturing `print(...)` as stdout. The
 /// World is in scope (via [`WorldScope`]) for the whole evaluation, so the
 /// bridge verbs work. Returns captured output (plus the final expression's
-/// value if non-unit), or the error message.
+/// value if non-unit), or the error message. Runs host-trusted (no `cmd()`
+/// authority gate) — see [`eval_with_world_as`] to bind a submitting session.
 pub fn eval_with_world(world: &mut World, code: &str) -> Result<String, String> {
+    eval_with_world_as(world, code, None)
+}
+
+/// As [`eval_with_world`], but the snippet's `cmd()` calls are authorized against
+/// `authority` (the submitting session) per design §3.4. `None` = host-trusted
+/// (ungated), matching the open-by-default substrate.
+pub fn eval_with_world_as(
+    world: &mut World,
+    code: &str,
+    authority: Option<lunco_core::SessionId>,
+) -> Result<String, String> {
     use std::sync::{Arc, Mutex};
 
     // A fresh engine per call keeps state isolated; cheap relative to the work.
@@ -797,6 +811,8 @@ pub fn eval_with_world(world: &mut World, code: &str) -> Result<String, String> 
     });
 
     let _scope = bridge_core::WorldScope::enter(world);
+    // `enter` reset the authority to None; bind the submitter for this eval.
+    bridge_core::set_script_authority(authority);
     let result = engine.eval::<Dynamic>(code).map_err(|e| e.to_string())?;
 
     let mut captured = out
