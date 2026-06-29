@@ -26,7 +26,7 @@ fn parse_vec3(params: &serde_json::Value, key: &str) -> Option<DVec3> {
 /// `Raycast` — cast a world-space ray, return the first collider hit.
 /// params: `{ origin:[x,y,z], dir:[x,y,z], max?:f64 }` ·
 /// returns: `{ hit, entity:gid|null, distance, point:[x,y,z], normal:[x,y,z] }`.
-pub struct RaycastProvider;
+pub(crate) struct RaycastProvider;
 impl ApiQueryProvider for RaycastProvider {
     fn name(&self) -> &'static str {
         "Raycast"
@@ -57,7 +57,7 @@ impl ApiQueryProvider for RaycastProvider {
 /// `GroundHeight` — collider/terrain height under a world `(x, z)` by casting
 /// straight down. params: `{ x:f64, z:f64, from?:f64, max?:f64 }` ·
 /// returns: `{ hit, height, entity:gid|null, normal:[x,y,z] }`.
-pub struct GroundHeightProvider;
+pub(crate) struct GroundHeightProvider;
 impl ApiQueryProvider for GroundHeightProvider {
     fn name(&self) -> &'static str {
         "GroundHeight"
@@ -126,7 +126,7 @@ fn cast_ray_response(world: &mut World, origin: DVec3, dir: Dir3, max: f64) -> A
 /// Register the physics-backed spatial providers. Idempotent re: the registry
 /// resource (init-if-absent), so plugin ordering vs. `LunCoApiPlugin` doesn't
 /// matter.
-pub fn register_physics_queries(app: &mut App) {
+pub(crate) fn register_physics_queries(app: &mut App) {
     app.init_resource::<ApiQueryRegistry>();
     let mut reg = app.world_mut().resource_mut::<ApiQueryRegistry>();
     reg.register(RaycastProvider);
@@ -175,34 +175,72 @@ fn contact_pair(
     Some(format!("{a}:{b}"))
 }
 
-/// Bridge `CollisionStart`/`CollisionEnd` → `TelemetryEvent` (`COLLISION_START`
-/// / `COLLISION_END`, payload `"gidA:gidB"`). Triggered events reach the script
-/// inbox observer and are delivered to `on_event` next tick (the same
-/// frame-delayed actor model `emit` uses), so a one-tick latency is expected.
+/// The named trigger-zone events a contact produces: for each side that is a
+/// *named* sensor (a trigger volume carrying a `Name`), an
+/// `("<verb>:<zone>", entrant_gid)` pair, where the entrant is the OTHER side
+/// (`0` if unregistered). Empty when neither side is a named zone — those
+/// contacts still surface as the generic `COLLISION_START`/`COLLISION_END`.
+///
+/// `zone_name` maps a collider entity to its zone name (the sensor's `Name`);
+/// abstracted as a closure so this stays a pure, unit-testable function.
+fn zone_events(
+    verb: &str,
+    c1: Entity,
+    b1: Option<Entity>,
+    c2: Entity,
+    b2: Option<Entity>,
+    zone_name: impl Fn(Entity) -> Option<String>,
+    reg: &ApiEntityRegistry,
+) -> Vec<(String, i64)> {
+    let mut out = Vec::new();
+    if let Some(name) = zone_name(c1) {
+        out.push((format!("{verb}:{name}"), contact_gid(reg, c2, b2).unwrap_or(0) as i64));
+    }
+    if let Some(name) = zone_name(c2) {
+        out.push((format!("{verb}:{name}"), contact_gid(reg, c1, b1).unwrap_or(0) as i64));
+    }
+    out
+}
+
+/// Bridge `CollisionStart`/`CollisionEnd` → `TelemetryEvent`. Every contact fires
+/// the generic `COLLISION_START`/`COLLISION_END` (payload `"gidA:gidB"`). A
+/// contact involving a *named* sensor additionally fires `enter:<zone>` /
+/// `exit:<zone>` whose payload is the entrant's gid — so a scenario reacts to a
+/// trigger volume by name (`if evt.name == "enter:pad_2"`) without reverse-mapping
+/// gids. Triggered events reach the script inbox observer and are delivered to
+/// `on_event` next tick (the frame-delayed actor model `emit` uses).
 fn bridge_collision_events(
     mut starts: MessageReader<CollisionStart>,
     mut ends: MessageReader<CollisionEnd>,
     registry: Res<ApiEntityRegistry>,
+    zones: Query<&Name, With<Sensor>>,
     clock: Option<Res<CelestialClock>>,
     mut commands: Commands,
 ) {
     let timestamp = clock.map(|c| c.epoch).unwrap_or(0.0);
-    let mut fire = |name: &str, pair: String, commands: &mut Commands| {
-        commands.trigger(TelemetryEvent {
-            name: name.to_string(),
-            severity: Severity::Info,
-            data: TelemetryValue::String(pair),
-            timestamp,
-        });
+    let fire = |name: String, data: TelemetryValue, commands: &mut Commands| {
+        commands.trigger(TelemetryEvent { name, severity: Severity::Info, data, timestamp });
     };
+    let zone_name = |e: Entity| zones.get(e).ok().map(|n| n.as_str().to_string());
+
     for ev in starts.read() {
         if let Some(p) = contact_pair(&registry, ev.collider1, ev.body1, ev.collider2, ev.body2) {
-            fire("COLLISION_START", p, &mut commands);
+            fire("COLLISION_START".to_string(), TelemetryValue::String(p), &mut commands);
+        }
+        for (name, entrant) in
+            zone_events("enter", ev.collider1, ev.body1, ev.collider2, ev.body2, &zone_name, &registry)
+        {
+            fire(name, TelemetryValue::I64(entrant), &mut commands);
         }
     }
     for ev in ends.read() {
         if let Some(p) = contact_pair(&registry, ev.collider1, ev.body1, ev.collider2, ev.body2) {
-            fire("COLLISION_END", p, &mut commands);
+            fire("COLLISION_END".to_string(), TelemetryValue::String(p), &mut commands);
+        }
+        for (name, entrant) in
+            zone_events("exit", ev.collider1, ev.body1, ev.collider2, ev.body2, &zone_name, &registry)
+        {
+            fire(name, TelemetryValue::I64(entrant), &mut commands);
         }
     }
 }
@@ -223,7 +261,7 @@ fn arm_sensor_collision_events(
 /// Wire the collision → telemetry bridge + sensor auto-arming. Kept separate
 /// from [`register_physics_queries`] (the read-side provider seam) since this is
 /// the event-side bridge.
-pub fn register_collision_event_bridge(app: &mut App) {
+pub(crate) fn register_collision_event_bridge(app: &mut App) {
     app.add_systems(Update, arm_sensor_collision_events);
     app.add_systems(FixedUpdate, bridge_collision_events);
 }
@@ -258,5 +296,40 @@ mod tests {
         );
         // Neither side registered → None (nothing a script could name).
         assert_eq!(contact_pair(&reg, wheel, None, unreg, None), None);
+    }
+
+    #[test]
+    fn zone_events_name_by_sensor_and_carry_the_entrant() {
+        let mut world = World::new();
+        let rover = world.spawn_empty().id();
+        let pad = world.spawn_empty().id(); // the named sensor (trigger volume)
+        let plain = world.spawn_empty().id(); // a sensor with no name
+
+        let mut reg = ApiEntityRegistry::default();
+        reg.assign(rover, GlobalEntityId::from_raw(42));
+        reg.assign(pad, GlobalEntityId::from_raw(7));
+
+        // Only `pad` is a named zone.
+        let zone_name = |e: Entity| (e == pad).then(|| "pad_2".to_string());
+
+        // rover (side 1) enters pad (side 2, the named sensor) → "enter:pad_2"
+        // with the entrant (rover, 42) as payload.
+        assert_eq!(
+            zone_events("enter", rover, None, pad, None, &zone_name, &reg),
+            vec![("enter:pad_2".to_string(), 42)]
+        );
+        // Order-independent: the named side can be side 1.
+        assert_eq!(
+            zone_events("exit", pad, None, rover, None, &zone_name, &reg),
+            vec![("exit:pad_2".to_string(), 42)]
+        );
+        // A contact with no named sensor produces no zone events.
+        assert!(zone_events("enter", rover, None, plain, None, &zone_name, &reg).is_empty());
+        // Unregistered entrant → gid 0, but the zone event still fires.
+        let ghost = world.spawn_empty().id();
+        assert_eq!(
+            zone_events("enter", pad, None, ghost, None, &zone_name, &reg),
+            vec![("enter:pad_2".to_string(), 0)]
+        );
     }
 }

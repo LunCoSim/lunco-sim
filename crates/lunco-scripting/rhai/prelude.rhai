@@ -357,6 +357,32 @@ fn exited(evt, self_id) {
     evt.name == "COLLISION_END" && collision_other(evt, self_id) != ()
 }
 
+// Named trigger volumes — a Sensor authored with a Name fires, IN ADDITION to
+// the generic COLLISION_START/END, an `enter:<name>` / `exit:<name>` pulse whose
+// value is the ENTERING entity's gid. So a scenario reacts to a zone by name,
+// not by reverse-mapping gids:
+//
+//   fn on_event(self, evt) {
+//       if entered_zone(evt, "pad_2") { possess(evt.value); }   // evt.value = who entered
+//       let z = zone_of(evt);                                   // or branch on the name
+//   }
+
+/// The trigger-zone name an `enter:`/`exit:` pulse carries, or () if `evt` isn't
+/// a zone pulse. `enter:pad_2` → "pad_2".
+fn zone_of(evt) {
+    if evt.name.starts_with("enter:") { evt.name.sub_string(6) }
+    else if evt.name.starts_with("exit:") { evt.name.sub_string(5) }
+    else { () }
+}
+
+/// True if `evt` is an ENTER pulse for trigger zone `name` (something entered it;
+/// `evt.value` is the entrant's gid).
+fn entered_zone(evt, name) { evt.name == "enter:" + name }
+
+/// True if `evt` is an EXIT pulse for trigger zone `name` (`evt.value` = the gid
+/// that left).
+fn exited_zone(evt, name) { evt.name == "exit:" + name }
+
 // ── Selection toolkit (write targeting/selection algorithms in rhai) ─────────
 //
 // list_entities() returns #{ id, name, type, pos } per entity, so selection is

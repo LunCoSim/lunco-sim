@@ -966,6 +966,22 @@ mod tests {
     }
 
     #[test]
+    fn zone_helpers_match_named_trigger_volumes() {
+        use bevy::prelude::World;
+        let mut world = World::new();
+        // An `enter:pad_2` pulse: value is the entrant gid (42). zone_of strips
+        // the prefix; entered_zone/exited_zone match by name. (Assert bools only,
+        // so the check doesn't depend on how rhai quotes strings in an array.)
+        let code = r#"
+            let evt = #{ name: "enter:pad_2", value: 42 };
+            [ zone_of(evt) == "pad_2", entered_zone(evt, "pad_2"), entered_zone(evt, "bay"),
+              exited_zone(#{ name: "exit:bay" }, "bay"), zone_of(#{ name: "COLLISION_START" }) == () ]
+        "#;
+        let out = super::eval_with_world(&mut world, code).unwrap();
+        assert_eq!(out.trim(), "[true, true, false, true, true]", "got {out}");
+    }
+
+    #[test]
     fn sequencer_advances_through_steps() {
         use bevy::prelude::World;
         let mut world = World::new();
