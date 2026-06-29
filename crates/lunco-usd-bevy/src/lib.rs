@@ -100,6 +100,10 @@ impl Plugin for UsdBevyPlugin {
             .register_type::<bevy::gltf::GltfMaterialName>();
         app.init_asset::<UsdStageAsset>()
             .register_asset_loader(UsdLoader)
+            // E1b: raw-source asset so a scene document's base layer can be read
+            // through the same (web-ready) asset source the live world uses.
+            .init_asset::<UsdSourceText>()
+            .register_asset_loader(UsdSourceTextLoader)
             .register_type::<UsdPrimPath>()
             .init_resource::<DiagnosticLabelFont>()
             .init_resource::<DiagnosticLabelConfig>()
@@ -183,6 +187,45 @@ impl AssetLoader for UsdLoader {
         Ok(UsdStageAsset {
             reader: Arc::new(data),
         })
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &["usda"]
+    }
+}
+
+/// A USD layer's **raw source text**, read through the `AssetServer` without
+/// composition.
+///
+/// Distinct from [`UsdStageAsset`], which is the *composed + flattened* stage:
+/// this is just the bytes of one `.usda` layer, decoded to a `String`. E1b uses
+/// it to open a scene document's base layer **through the same asset source the
+/// live world loads from** (e.g. `twin://`) — so the read is web-ready (it rides
+/// whatever the source supports) instead of going through native `std::fs`.
+#[derive(Asset, TypePath, Clone)]
+pub struct UsdSourceText(pub String);
+
+/// Loader producing [`UsdSourceText`] — reads bytes, decodes UTF-8, no
+/// composition. Shares the `.usda` extension with [`UsdLoader`]; the requested
+/// asset type (`load::<UsdSourceText>` vs `load::<UsdStageAsset>`) selects the
+/// loader.
+#[derive(Default, TypePath)]
+pub struct UsdSourceTextLoader;
+
+impl AssetLoader for UsdSourceTextLoader {
+    type Asset = UsdSourceText;
+    type Settings = ();
+    type Error = anyhow::Error;
+
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &Self::Settings,
+        _load_context: &mut LoadContext<'_>,
+    ) -> Result<Self::Asset, Self::Error> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await?;
+        Ok(UsdSourceText(String::from_utf8(bytes)?))
     }
 
     fn extensions(&self) -> &[&str] {

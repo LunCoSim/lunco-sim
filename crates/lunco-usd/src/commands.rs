@@ -110,6 +110,35 @@ impl Plugin for UsdCommandsPlugin {
         // `<twin>/.lunco/runtime/<scene>.usda`, parallel to the journal.
         app.add_observer(crate::runtime_persistence::on_doc_opened_load_runtime);
         app.add_observer(crate::runtime_persistence::on_doc_changed_save_runtime);
+        // E1: project doc-backed scenes into the live world from their composed
+        // (base ⊕ runtime) stage, and keep them synced to later runtime edits.
+        app.init_resource::<crate::live_projection::PendingLiveImports>();
+        app.add_systems(
+            Update,
+            (
+                crate::live_projection::project_pending_live_imports,
+                crate::live_projection::refresh_live_doc_scenes,
+            )
+                .chain(),
+        );
+        // E1b: make the default twin scene doc-backed by serving its composed
+        // source as a `twin://` byte-overlay (web-ready via the async loader).
+        app.init_resource::<crate::twin_projection::PendingTwinDocs>();
+        app.init_resource::<crate::twin_projection::DocBackedTwinScenes>();
+        // Gated on the asset pipeline: these need `AssetServer` (reload) and the
+        // `Assets<UsdSourceText>` store (UsdBevyPlugin's `init_asset`). Both are
+        // absent in headless `MinimalPlugins` test apps — and a partial setup can
+        // have one without the other — so require both.
+        app.add_systems(
+            Update,
+            (
+                crate::twin_projection::drain_pending_twin_docs,
+                crate::twin_projection::sync_twin_overlays,
+            )
+                .chain()
+                .run_if(resource_exists::<AssetServer>)
+                .run_if(resource_exists::<Assets<lunco_usd_bevy::UsdSourceText>>),
+        );
         register_all_commands(app);
     }
 }
@@ -138,6 +167,10 @@ fn open_usd_docs_on_twin_added(
     trigger: On<TwinAdded>,
     workspace: Res<WorkspaceResource>,
     twin_roots: Res<lunco_assets::twin_source::TwinRoots>,
+    // Optional: headless/test apps (MinimalPlugins) have no `AssetServer`. When
+    // absent, E1b's doc-open is skipped — `LoadScene` still mounts the scene.
+    asset_server: Option<Res<AssetServer>>,
+    mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
     mut commands: Commands,
 ) {
     let twin_id = trigger.event().twin;
@@ -176,6 +209,18 @@ fn open_usd_docs_on_twin_added(
                 path: format!("twin://{}/{}", twin_name, scene),
                 root_prim: String::new(),
             });
+            // E1b: also open the scene as a document and make it doc-backed. The
+            // `LoadScene` above mounts the file-backed stage immediately; once the
+            // document exists, `sync_twin_overlays` shadows the twin source with
+            // the composed (base ⊕ runtime) source and reloads, so persisted
+            // runtime spawns/moves appear live. Read the base text THROUGH the
+            // twin source (web-ready) rather than `std::fs`. Skipped in
+            // headless/test apps with no `AssetServer`.
+            if let Some(asset_server) = &asset_server {
+                let handle = asset_server
+                    .load::<lunco_usd_bevy::UsdSourceText>(format!("twin://{}/{}", twin_name, scene));
+                pending_twin.push(handle, twin_name.clone(), scene.to_string(), twin.root.join(scene));
+            }
         }
         None => {
             info!(
@@ -239,10 +284,27 @@ fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
     if !is_usd_path(&path) {
         return;
     }
+    // `mem://` / `bundled://` scenes never become a registered file document
+    // (`on_open_file_for_usd` skips them), so keep the legacy file-backed
+    // additive import for those — the helper no-ops on a repeated
+    // `(asset, root_prim)` and warns + skips files outside the asset root.
+    if path.is_empty() || path.starts_with("mem://") || path.starts_with("bundled://") {
+        commands.queue(move |world: &mut World| {
+            lunco_usd_sim::cosim::spawn_scene_root_world(world, &path, "");
+        });
+        return;
+    }
+    // E1: real file paths DO get a document (allocated asynchronously by
+    // `on_open_file_for_usd` → `drain_pending_usd_file_loads`). Defer the
+    // live-world mount to `live_projection`, which sources the scene root from
+    // that document's *composed* (base ⊕ runtime) stage once it exists — so
+    // persisted runtime spawns/moves show in the world, not just the file.
     commands.queue(move |world: &mut World| {
-        // Additive import. Helper no-ops on same `(asset, root_prim)`,
-        // and warns + skips for files outside the asset root.
-        lunco_usd_sim::cosim::spawn_scene_root_world(world, &path, "");
+        if let Some(mut pending) =
+            world.get_resource_mut::<crate::live_projection::PendingLiveImports>()
+        {
+            pending.push(path);
+        }
     });
 }
 

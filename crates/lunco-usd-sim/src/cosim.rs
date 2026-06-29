@@ -994,10 +994,38 @@ pub fn spawn_scene_root_world(
     let Some(asset_path) = normalize_scene_asset_path(path_in) else {
         return None;
     };
-    let root_prim = resolve_root_prim(&asset_path, root_prim_in);
+    // File-backed source: the AssetServer reads + composes the on-disk
+    // stage. lunco-usd's E1 projection takes the other door
+    // ([`spawn_scene_root_with_stage`]) to mount a document's *composed*
+    // (base ⊕ runtime) stage instead.
     let handle = world
         .resource::<AssetServer>()
         .load::<UsdStageAsset>(asset_path.clone());
+    spawn_scene_root_with_stage(world, &asset_path, root_prim_in, handle)
+}
+
+/// Spawn a USD scene root from an **already-built** stage handle.
+///
+/// The handle-supplying sibling of [`spawn_scene_root_world`]: instead of
+/// loading the stage from disk via the `AssetServer`, the caller hands in a
+/// `Handle<UsdStageAsset>` it built itself. This is the seam E1 uses — lunco-usd
+/// passes a handle holding a [`UsdDocument`](../../lunco_usd/document)'s
+/// *composed* (`base ⊕ runtime`) stage, so the live world projects the editable
+/// document (with its persisted runtime spawns/moves) rather than the raw file.
+///
+/// `label` names the root (`Scene:{label}`) and feeds `defaultPrim` resolution;
+/// `root_prim_in` empty defers the mount path to the stage's `defaultPrim`
+/// (see [`resolve_root_prim`]). Blender-style no-op when the same
+/// `(handle, root_prim)` is already mounted. Returns the spawned entity, or
+/// `None` on no-op.
+pub fn spawn_scene_root_with_stage(
+    world: &mut World,
+    label: &str,
+    root_prim_in: &str,
+    handle: Handle<UsdStageAsset>,
+) -> Option<Entity> {
+    let asset_path = label.to_string();
+    let root_prim = resolve_root_prim(&asset_path, root_prim_in);
     let new_id = handle.id();
 
     {

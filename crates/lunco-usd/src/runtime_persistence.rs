@@ -57,7 +57,7 @@ fn doc_runtime_path(
     registry: &UsdDocumentRegistry,
     doc: DocumentId,
 ) -> Option<PathBuf> {
-    let path = registry.host(doc)?.document().origin().path()?;
+    let path = registry.host(doc)?.document().origin().canonical_path()?;
     runtime_path(workspace, path)
 }
 
