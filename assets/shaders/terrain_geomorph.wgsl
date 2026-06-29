@@ -128,6 +128,19 @@ fn aa_fade(scale: f32, pw: f32) -> f32 {
 // cottage cheese. We stamp a jittered-grid crater field as a world-space HEIGHT
 // field and perturb the shading normal by its analytic gradient: circular
 // features that read as craters. Pure math, no textures → wasm-safe.
+//
+// Why this is the "proper" lunar look (research, 2026-06-29):
+//   * Real macro relief = crater/rock geometry or procedural crater HEIGHT maps,
+//     not FBM (FBM noise reads as cottage-cheese; regolith is smooth BETWEEN
+//     impacts). — SIGGRAPH Asia 2025, "Materials for the Moon":
+//     https://dl.acm.org/doi/10.1145/3757374.3771428
+//   * Photometry: dark albedo (~0.08-0.13) + Hapke / Lommel-Seeliger + opposition
+//     surge (see lunar_brdf.wgsl). — JPL/arXiv physics-based lunar ground sim:
+//     https://arxiv.org/html/2410.04371v1
+//     and JPL AAS 23-122 image rendering / terrain generation.
+//   * Airless body → NO atmospheric haze: stays high-contrast, crisp to the
+//     horizon (the opposition/heiligenschein surge):
+//     https://the-moon.us/wiki/Retro-Reflection_phenomena
 
 fn hash21(p: vec2<f32>) -> f32 {
     var p3 = fract(vec3(p.x, p.y, p.x) * 0.1031);
