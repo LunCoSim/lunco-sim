@@ -226,3 +226,113 @@ def Xform "World"
     assert!((mat2.perceptual_roughness - 0.1).abs() < 1e-4);
     assert!((mat2.metallic - 0.9).abs() < 1e-4);
 }
+
+/// Helper: parse a USDA stage, bind it to one prim, run the visual sync, and
+/// return the resulting `StandardMaterial`.
+fn material_for(usda: &str, prim_path: &str) -> StandardMaterial {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(AssetPlugin::default());
+    app.init_asset::<UsdStageAsset>();
+    app.init_asset::<Mesh>();
+    app.init_asset::<StandardMaterial>();
+    app.init_asset::<Image>();
+    app.add_plugins(UsdBevyPlugin);
+
+    let reader = Arc::new(openusd::usda::parse(usda).expect("parse USDA"));
+    let stage_handle = {
+        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
+        stages.add(UsdStageAsset { reader })
+    };
+    let entity = app
+        .world_mut()
+        .spawn((
+            Name::new("Bound"),
+            UsdPrimPath { stage_handle: stage_handle.clone(), path: prim_path.to_string() },
+        ))
+        .id();
+    app.update();
+
+    let mh = app
+        .world()
+        .get::<MeshMaterial3d<StandardMaterial>>(entity)
+        .expect("entity should have a StandardMaterial")
+        .0
+        .clone();
+    app.world().resource::<Assets<StandardMaterial>>().get(&mh).unwrap().clone()
+}
+
+const OPACITY_STAGE: &str = r#"#usda 1.0
+( defaultPrim = "World" )
+def Xform "World"
+{
+    def Material "Glass"
+    {
+        token outputs:surface.connect = </World/Glass/S.outputs:surface>
+        def Shader "S"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.2, 0.4, 0.8)
+            float inputs:opacity = 0.4
+            float inputs:ior = 1.45
+            token outputs:surface
+        }
+    }
+    def Cube "Pane" ( apiSchemas = ["MaterialBindingAPI"] )
+    {
+        rel material:binding = </World/Glass>
+        double size = 2.0
+    }
+}
+"#;
+
+/// `inputs:opacity < 1` → base-color alpha + alpha-blended; `inputs:ior` binds.
+#[test]
+fn opacity_drives_alpha_blend_and_ior() {
+    let mat = material_for(OPACITY_STAGE, "/World/Pane");
+    assert!((mat.base_color.alpha() - 0.4).abs() < 1e-4, "alpha from inputs:opacity");
+    assert!(matches!(mat.alpha_mode, AlphaMode::Blend), "sub-1 opacity → Blend");
+    assert!((mat.ior - 1.45).abs() < 1e-4, "ior bound");
+}
+
+const CUTOUT_STAGE: &str = r#"#usda 1.0
+( defaultPrim = "World" )
+def Xform "World"
+{
+    def Material "Foliage"
+    {
+        token outputs:surface.connect = </World/Foliage/S.outputs:surface>
+        def Shader "S"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.1, 0.6, 0.1)
+            float inputs:opacityThreshold = 0.5
+            token outputs:surface
+        }
+    }
+    def Cube "Leaf" ( apiSchemas = ["MaterialBindingAPI"] )
+    {
+        rel material:binding = </World/Foliage>
+        double size = 2.0
+    }
+}
+"#;
+
+/// A non-zero `inputs:opacityThreshold` → cutout (`AlphaMode::Mask`).
+#[test]
+fn opacity_threshold_is_alpha_mask() {
+    let mat = material_for(CUTOUT_STAGE, "/World/Leaf");
+    match mat.alpha_mode {
+        AlphaMode::Mask(t) => assert!((t - 0.5).abs() < 1e-4),
+        other => panic!("expected Mask(0.5), got {other:?}"),
+    }
+}
+
+/// An opaque material (no opacity authored) stays `Opaque` — no needless
+/// transparent pass.
+#[test]
+fn opaque_material_stays_opaque() {
+    let mat = material_for(OPACITY_STAGE.replace("float inputs:opacity = 0.4\n", "").as_str(), "/World/Pane");
+    assert!(matches!(mat.alpha_mode, AlphaMode::Opaque), "no opacity → Opaque");
+    assert!((mat.base_color.alpha() - 1.0).abs() < 1e-4);
+}
