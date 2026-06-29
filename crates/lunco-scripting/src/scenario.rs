@@ -229,6 +229,17 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             }
         }
 
+        // Drain events fired since last tick (frame-delayed actor-model delivery)
+        // UNCONDITIONALLY, before the early-return below. `collect_script_events`
+        // pushes a clone of every telemetry event into the inbox each frame; if we
+        // returned without draining whenever no scenario is active (the common
+        // case) `pending` would grow without bound (review H1). Dropping events
+        // with no scenario to consume them is correct — there's nothing to deliver.
+        let events: Vec<TelemetryEvent> = world
+            .get_resource_mut::<ScriptEventInbox>()
+            .map(|mut inbox| std::mem::take(&mut inbox.pending))
+            .unwrap_or_default();
+
         // Run if there's work OR a tracked entity vanished (needs on_stop).
         let needs_teardown = world
             .get_resource::<ScenarioDriver<R>>()
@@ -236,12 +247,6 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         if work.is_empty() && !needs_teardown {
             return;
         }
-
-        // Events fired since last tick (frame-delayed actor-model delivery).
-        let events: Vec<TelemetryEvent> = world
-            .get_resource_mut::<ScriptEventInbox>()
-            .map(|mut inbox| std::mem::take(&mut inbox.pending))
-            .unwrap_or_default();
 
         // Per-document diagnostics to publish AFTER the scope: None = OK,
         // Some(diags) = errored. Only (re)compiles + runtime errors record.
@@ -393,6 +398,18 @@ pub struct ScriptEventInbox {
 
 /// Observer: mirror every fired `TelemetryEvent` into the scenario inbox. Reuses
 /// the existing telemetry bus — scenarios are just another subscriber.
-pub fn collect_script_events(trigger: On<TelemetryEvent>, mut inbox: ResMut<ScriptEventInbox>) {
+///
+/// Skips collection on a predicting client: the scenario driver (`run`) is gated
+/// by `scripts_run_here` and never executes there, so there is no consumer to
+/// drain the inbox and `pending` would grow without bound (review H1). This
+/// mirrors that same host-authoritative gate.
+pub fn collect_script_events(
+    trigger: On<TelemetryEvent>,
+    mut inbox: ResMut<ScriptEventInbox>,
+    role: Option<Res<lunco_core::NetworkRole>>,
+) {
+    if matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client)) {
+        return;
+    }
     inbox.pending.push(trigger.event().clone());
 }
