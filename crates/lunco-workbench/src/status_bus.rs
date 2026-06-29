@@ -247,6 +247,12 @@ pub struct StatusBus {
     /// Bumped on every push (discrete or progress). Renderers cache the
     /// last seq they saw to skip work when the bus hasn't changed.
     seq: u64,
+    /// Total discrete events ever appended to `history`, including ones
+    /// since dropped off the front of the capped ring. Unlike
+    /// `history().count()` (which plateaus at capacity), this keeps
+    /// growing, so a consumer mirroring history can use it as a
+    /// never-stalling watermark (CQ-523).
+    history_total: u64,
     /// Monotonic counter for new [`BusyId`]s.
     next_id: u64,
     /// Sender cloned into every [`BusyHandle`]. The matching receiver
@@ -270,6 +276,7 @@ impl Default for StatusBus {
             active_progress: HashMap::new(),
             by_id: HashMap::new(),
             seq: 0,
+            history_total: 0,
             next_id: 0,
             drop_tx,
             drop_rx: Mutex::new(drop_rx),
@@ -304,6 +311,7 @@ impl StatusBus {
             self.history.pop_front();
         }
         self.history.push_back(ev);
+        self.history_total = self.history_total.wrapping_add(1);
         self.seq = self.seq.wrapping_add(1);
     }
 
@@ -556,6 +564,14 @@ impl StatusBus {
     /// Double-ended so callers can render newest-first via `.rev()`.
     pub fn history(&self) -> std::collections::vec_deque::Iter<'_, StatusEvent> {
         self.history.iter()
+    }
+
+    /// Total discrete events ever pushed to history (a monotonic
+    /// watermark that, unlike `history().count()`, never plateaus when
+    /// the ring is at capacity). Consumers that forward "what's new
+    /// since last seen" should diff against this, not the live length.
+    pub fn history_total(&self) -> u64 {
+        self.history_total
     }
 
     /// Iterator over the active progress events. Order is unspecified;

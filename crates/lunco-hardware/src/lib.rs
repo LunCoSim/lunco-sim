@@ -255,12 +255,17 @@ impl Default for AngularVelocitySensor {
 
 /// System that samples angular velocity for [AngularVelocitySensor] components.
 fn sensor_velocity_system(
-    q_sensors: Query<(&AngularVelocitySensor, &AngularVelocity)>,
+    q_sensors: Query<(&AngularVelocitySensor, &AngularVelocity, &Rotation)>,
     mut q_ports: Query<&mut PhysicalPort>,
 ) {
-    for (sensor, velocity) in q_sensors.iter() {
+    for (sensor, velocity, rotation) in q_sensors.iter() {
         if let Ok(mut port) = q_ports.get_mut(sensor.port_entity) {
-            port.value = velocity.0.dot(sensor.axis) as f32;
+            // CQ-520: `AngularVelocity` is world-frame (avian), but
+            // `sensor.axis` is documented body-local. Rotate the axis into
+            // world before projecting, else a tilted chassis reads the
+            // wrong angular-rate component.
+            let world_axis = rotation.0 * sensor.axis;
+            port.value = velocity.0.dot(world_axis) as f32;
         }
     }
 }

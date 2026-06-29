@@ -1821,9 +1821,17 @@ pub fn handle_modelica_responses(
                 }
             }
 
-            model.current_time = result.new_time;
-            model.last_step_time = result.new_time;
-            let time_val = result.new_time;
+            // CQ-524: only advance the model clock on a genuine step or
+            // compile/reset result. Pure acks (LoadSourceRoot → carries
+            // `loaded_source_root_id`; worker-panic/error reports → carry
+            // `error`) all set `new_time = 0.0`; assigning that would
+            // momentarily zero a running sim's clock. An errored step also
+            // didn't progress, so leave the clock where it was.
+            if result.error.is_none() && result.loaded_source_root_id.is_none() {
+                model.current_time = result.new_time;
+                model.last_step_time = result.new_time;
+            }
+            let time_val = model.current_time;
 
             // Emit this step's observable samples to the reactive UI layer.
             // The core handler no longer knows about plots / `lunco_viz`: it

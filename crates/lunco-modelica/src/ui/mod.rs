@@ -1552,32 +1552,29 @@ fn install_image_loaders_once(
 /// Forward newly-pushed [`lunco_workbench::status_bus::StatusBus`]
 /// events to the [`panels::console::ConsoleLog`].
 ///
-/// We track the count of *discrete* history entries we've already
-/// mirrored so progress ticks (which mutate the bus seq but don't
-/// append to history) don't show up as console spam. New entries
-/// arrive at the back of the ring buffer; old ones drop off the front
-/// when capacity is hit. We use a (last_seen_seq, last_back_message)
-/// pair to detect "new entries since we last looked" without needing
-/// per-event sequence numbers.
+/// We track how many *discrete* history entries we've already mirrored
+/// so progress ticks (which mutate the bus seq but don't append to
+/// history) don't show up as console spam. We diff against the bus's
+/// monotonic [`StatusBus::history_total`] watermark — NOT
+/// `history().count()`, which plateaus at the ring's capacity and would
+/// make this early-return forever once the buffer filled, silently
+/// freezing the console audit trail (CQ-523).
 fn fan_status_bus_to_console(
     bus: bevy::prelude::Res<lunco_workbench::status_bus::StatusBus>,
     mut console: bevy::prelude::ResMut<panels::console::ConsoleLog>,
-    mut last_count: bevy::prelude::Local<usize>,
+    mut last_total: bevy::prelude::Local<u64>,
 ) {
-    let count = bus.history().count();
-    if count == 0 {
-        *last_count = 0;
+    let total = bus.history_total();
+    if total == *last_total {
         return;
     }
-    if count == *last_count {
-        return;
-    }
-    // The history ring buffer can lose entries from the front when
-    // capacity hits. We only forward what's *new* at the back since
-    // last we looked. Skip the first `(count - delta).min(count)`
-    // events; forward the rest.
-    let delta = count.saturating_sub(*last_count);
-    for ev in bus.history().rev().take(delta).collect::<Vec<_>>().into_iter().rev() {
+    // Forward only what's new since we last looked. If more entries
+    // arrived than the ring can hold (a burst between frames), `delta`
+    // exceeds the live length — clamp to what we still have so we take
+    // exactly the retained tail.
+    let delta = total.saturating_sub(*last_total) as usize;
+    let take = delta.min(bus.history().count());
+    for ev in bus.history().rev().take(take).collect::<Vec<_>>().into_iter().rev() {
         let level = match ev.level {
             lunco_workbench::status_bus::StatusLevel::Info => panels::console::ConsoleLevel::Info,
             lunco_workbench::status_bus::StatusLevel::Warn => panels::console::ConsoleLevel::Warn,
@@ -1588,5 +1585,5 @@ fn fan_status_bus_to_console(
         };
         console.push(level, format!("[{}] {}", ev.source, ev.message));
     }
-    *last_count = count;
+    *last_total = total;
 }

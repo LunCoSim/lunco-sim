@@ -181,10 +181,12 @@ struct RunnerState {
     /// FIFO of runs waiting for a slot. Drained by `pump_scheduler` as
     /// in-flight runs finish.
     pending: VecDeque<QueuedJob>,
-    /// Compile-once cache: `dae_cache_key(source, after_inputs)` → compiled
-    /// DAE. A parameter sweep reuses one rumoca compile and applies overrides
-    /// at the DAE level. Cleared when a model's source actually changes.
-    dae_cache: HashMap<u64, Arc<Dae>>,
+    /// Compile-once cache: `dae_cache_key(source)` → (model identity,
+    /// compiled DAE). A parameter sweep reuses one rumoca compile and applies
+    /// overrides at the DAE level. The key folds the model body (CQ-525), so a
+    /// source edit yields a fresh key; the stored [`ModelIdent`] lets
+    /// `set_model_source` evict only the edited model's entries.
+    dae_cache: HashMap<u64, (ModelIdent, Arc<Dae>)>,
     /// Persistent compiler reused across runs, so MSL installs **once** for
     /// the runner (lazily, demand-driven via `ModelicaCompiler`) instead of
     /// rebuilding a fresh session per run. Behind its **own** lock, not the
@@ -196,6 +198,10 @@ struct RunnerState {
     #[cfg(not(target_arch = "wasm32"))]
     compiler: Arc<Mutex<crate::ModelicaCompiler>>,
 }
+
+/// `(model_name, filename)` identity used to scope DAE-cache invalidation
+/// to a single model rather than clearing the whole cache (CQ-525).
+type ModelIdent = (String, String);
 
 impl Default for RunnerState {
     fn default() -> Self {
@@ -262,15 +268,21 @@ impl ModelicaRunner {
             // extras) actually changed — dispatch re-registers the same raw
             // source on every run of a sweep, and clearing then would defeat
             // the cache. (Correctness doesn't depend on this: the cache key
-            // already folds in the source hash; this only bounds memory.)
+            // folds in the source hash (CQ-525), so a stale entry is never
+            // served; this only bounds memory.)
             let changed = s
                 .sources
                 .get(&model_ref)
                 .map(|old| old.source != source.source || old.extras != source.extras)
                 .unwrap_or(true);
+            // Capture identity before `source` is moved into `sources`.
+            let ident: ModelIdent = (source.model_name.clone(), source.filename.clone());
             s.sources.insert(model_ref, source);
             if changed {
-                s.dae_cache.clear();
+                // CQ-525: evict only THIS model's cached DAEs, not the whole
+                // cache — an edit to one model shouldn't force every other
+                // model in a multi-model workspace to recompile.
+                s.dae_cache.retain(|_, (cached_ident, _)| *cached_ident != ident);
             }
         }
     }
@@ -586,15 +598,22 @@ pub fn pump_wasm_forwarders() {
 /// Body of the run thread. Compiles, runs the simulation, posts
 /// updates. All errors funnel into `RunUpdate::Failed`. Cancellation
 /// observed between steps via the shared `AtomicBool`.
-/// Key for the compile-once DAE cache. Folds in model identity, extra sources,
-/// and the input-substituted source — but NOT overrides (those are applied to
+/// Key for the compile-once DAE cache. Folds in model identity, the model
+/// **source body**, and extra sources — but NOT overrides (those are applied to
 /// the cached DAE), so a sweep that varies only overrides hits one cache entry.
+///
+/// CQ-525: the source body MUST be hashed in. Without it, editing a model's
+/// body while keeping its name/filename produced an identical key, serving a
+/// stale DAE; correctness then leaned entirely on the external whole-cache
+/// clear. (The old `after_inputs` param was always `""` — inputs are bound at
+/// the DAE level, not baked into source — so it contributed nothing and is
+/// dropped.)
 #[cfg(not(target_arch = "wasm32"))]
-fn dae_cache_key(src: &ModelSource, after_inputs: &str) -> u64 {
+fn dae_cache_key(src: &ModelSource) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     src.model_name.hash(&mut h);
     src.filename.hash(&mut h);
-    after_inputs.hash(&mut h);
+    src.source.hash(&mut h);
     for (name, body) in &src.extras {
         name.hash(&mut h);
         body.hash(&mut h);
@@ -715,8 +734,11 @@ fn run_inner(
     // in) a single time and cache the resulting DAE. Inputs and overrides are
     // applied to the DAE afterwards (see `apply_value_bindings_to_dae`), so a
     // whole parameter/input sweep shares ONE compile and recompiles zero times.
-    let key = dae_cache_key(&source, "");
-    let cached = state.lock().ok().and_then(|s| s.dae_cache.get(&key).cloned());
+    let key = dae_cache_key(&source);
+    let cached = state
+        .lock()
+        .ok()
+        .and_then(|s| s.dae_cache.get(&key).map(|(_, dae)| dae.clone()));
     let base_dae: Arc<Dae> = match cached {
         Some(d) => d,
         None => {
@@ -733,7 +755,9 @@ fn run_inner(
                 Ok(d) => {
                     let dae = d.dae.clone();
                     if let Ok(mut s) = state.lock() {
-                        s.dae_cache.insert(key, dae.clone());
+                        let ident: ModelIdent =
+                            (source.model_name.clone(), source.filename.clone());
+                        s.dae_cache.insert(key, (ident, dae.clone()));
                     }
                     dae
                 }
