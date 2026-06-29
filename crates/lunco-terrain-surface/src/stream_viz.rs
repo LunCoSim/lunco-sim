@@ -26,6 +26,7 @@ use big_space::prelude::Grid;
 use lunco_core::WorldGrid;
 use lunco_obstacle_field::field::HeightGrid;
 use lunco_obstacle_field::grid_mesh;
+use lunco_materials::{ParamValue, ShaderMaterial, ATTRIBUTE_MORPH_TARGET};
 
 use crate::quadtree::{QuadCoord, Quadtree};
 use crate::tile_mesh::bake_tile_mesh;
@@ -68,25 +69,25 @@ pub struct LodTiles(pub HashMap<QuadCoord, Entity>);
 #[derive(Component)]
 pub struct LodTileOf(pub Entity);
 
-/// Cached one-material-per-depth so tile churn at LOD boundaries doesn't allocate
-/// a new `StandardMaterial` every spawn.
+/// Cached one geomorph material per LOD depth so tile churn at LOD boundaries
+/// doesn't allocate a new `ShaderMaterial` every spawn. Each carries that depth's
+/// morph band + colour; the `terrain_geomorph` shader morphs vertices on the GPU.
 #[derive(Resource, Default)]
-pub struct LodMaterials(HashMap<u32, Handle<StandardMaterial>>);
+pub struct LodMaterials(HashMap<u32, Handle<ShaderMaterial>>);
 
 /// Flat, distinct colour per LOD depth (mirrors `terrain_debug.wgsl`'s palette
 /// intent): coarse→fine sweeps blue→cyan→green→yellow→orange→red→magenta.
-fn lod_color(depth: u32) -> Color {
-    const P: [(f32, f32, f32); 7] = [
-        (0.20, 0.35, 0.85), // 0 coarse — blue
-        (0.20, 0.75, 0.85), // 1 — cyan
-        (0.25, 0.80, 0.35), // 2 — green
-        (0.85, 0.85, 0.25), // 3 — yellow
-        (0.90, 0.55, 0.20), // 4 — orange
-        (0.85, 0.25, 0.25), // 5 — red
-        (0.80, 0.30, 0.80), // 6+ fine — magenta
+fn lod_rgb(depth: u32) -> [f32; 3] {
+    const P: [[f32; 3]; 7] = [
+        [0.20, 0.35, 0.85], // 0 coarse — blue
+        [0.20, 0.75, 0.85], // 1 — cyan
+        [0.25, 0.80, 0.35], // 2 — green
+        [0.85, 0.85, 0.25], // 3 — yellow
+        [0.90, 0.55, 0.20], // 4 — orange
+        [0.85, 0.25, 0.25], // 5 — red
+        [0.80, 0.30, 0.80], // 6+ fine — magenta
     ];
-    let (r, g, b) = P[(depth as usize).min(P.len() - 1)];
-    Color::srgb(r, g, b)
+    P[(depth as usize).min(P.len() - 1)]
 }
 
 /// Per-frame: stream the LOD tile set for each `lod_viz` terrain against the camera.
@@ -103,8 +104,9 @@ pub fn update_lod_tiles(
         &mut LodTiles,
     )>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<ShaderMaterial>>,
     mut lod_mats: ResMut<LodMaterials>,
+    asset_server: Res<AssetServer>,
 ) {
     // Use the first 3D camera as the focus. (Multiple cameras → the viz follows
     // whichever; fine for a debug view.)
@@ -112,6 +114,10 @@ pub fn update_lod_tiles(
     let cam_pos = cam.translation();
     // No world grid yet → can't anchor tiles; skip this frame.
     let Ok((grid_entity, grid)) = grids.single() else { return };
+
+    // The geomorph shader drives both the @vertex (CDLOD morph) and @fragment
+    // (pbr-lit) stages; load-by-path → cached handle, hot-reloads on edit.
+    let geomorph = asset_server.load("shaders/terrain_geomorph.wgsl");
 
     for (terrain, t_gt, hf, viz, mut tiles) in &mut terrains {
         // Camera in the terrain's local frame (the DEM frame, origin-centred).
@@ -150,18 +156,34 @@ pub fn update_lod_tiles(
             }
             let center = s.region.center;
             let tm = bake_tile_mesh(dem, s.region, viz.tile_res, h, center);
-            let mesh = meshes.add(grid_mesh(tm.positions, tm.normals, tm.uvs, tm.indices));
+            // Build the grid mesh and attach the CDLOD parent-lattice positions as
+            // the morph-target attribute the geomorph vertex shader lerps toward.
+            let mut mesh = grid_mesh(tm.positions, tm.normals, tm.uvs, tm.indices);
+            mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tm.morph_targets);
+            let mesh = meshes.add(mesh);
             let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], 0.0, center[1]));
             let depth = s.coord.depth as u32;
+            // Per-depth morph band (distances): finite for sub-root nodes, "never"
+            // for the root (no coarser parent to morph toward).
+            let (morph_start, morph_end) = if s.morph_end.is_finite() {
+                (s.morph_start as f32, s.morph_end as f32)
+            } else {
+                (1.0e20, 1.0e21)
+            };
             let mat = lod_mats
                 .0
                 .entry(depth)
                 .or_insert_with(|| {
-                    materials.add(StandardMaterial {
-                        base_color: lod_color(depth),
-                        perceptual_roughness: 1.0,
-                        ..default()
-                    })
+                    let mut m = ShaderMaterial::default();
+                    m.shader = geomorph.clone();
+                    m.vertex_shader = Some(geomorph.clone());
+                    m.set_many([
+                        ("base_color", ParamValue::Vec3(lod_rgb(depth))),
+                        ("roughness", ParamValue::F32(1.0)),
+                        ("morph_start", ParamValue::F32(morph_start)),
+                        ("morph_end", ParamValue::F32(morph_end)),
+                    ]);
+                    materials.add(m)
                 })
                 .clone();
             let ent = commands

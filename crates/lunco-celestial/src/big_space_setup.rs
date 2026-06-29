@@ -65,7 +65,37 @@ use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame, CelestialB
 use crate::gravity::PointMassGravity;
 use lunco_environment::GravityProvider;
 use crate::soi::SOI;
-use lunco_materials::{BlueprintMaterial, BlueprintExtension};
+use lunco_materials::{ParamValue, ShaderMaterial};
+
+/// Build a blueprint-grid [`ShaderMaterial`] for a celestial body tile: planet
+/// imagery (`albedo_map`) tinted by `surface`, with the lat/long grid overlay
+/// (`transition = 0`, the spherical mode of `blueprint.wgsl`). Replaces the old
+/// hand-rolled `BlueprintMaterial` (an `ExtendedMaterial`) — see `blueprint.wgsl`.
+fn blueprint_tile_material(
+    shader: Handle<bevy::shader::Shader>,
+    texture: Handle<Image>,
+    surface: [f32; 3],
+    line: [f32; 3],
+    subdivisions: [f32; 2],
+    line_width: f32,
+    roughness: f32,
+    materials: &mut Assets<ShaderMaterial>,
+) -> Handle<ShaderMaterial> {
+    let mut m = ShaderMaterial::default();
+    m.shader = shader;
+    m.albedo_map = Some(texture);
+    m.set_many([
+        ("surface_color", ParamValue::Vec3(surface)),
+        ("roughness", ParamValue::F32(roughness)),
+        ("high_line_color", ParamValue::Vec3(line)),
+        ("low_line_color", ParamValue::Vec3(line)),
+        ("subdivisions", ParamValue::Vec2(subdivisions)),
+        ("fade_range", ParamValue::Vec2([0.2, 0.6])),
+        ("line_width", ParamValue::F32(line_width)),
+        ("transition", ParamValue::F32(0.0)),
+    ]);
+    materials.add(m)
+}
 
 /// Marker for the solar system root grid (inertial, no rotation).
 #[derive(Component)]
@@ -106,7 +136,7 @@ pub fn setup_big_space_hierarchy(
     registry: Res<CelestialBodyRegistry>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut blueprint_materials: ResMut<Assets<BlueprintMaterial>>,
+    mut shader_materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
     // The single world-shell root (WorldShellPlugin) to nest under, and any prior
     // FloatingOrigin holder (the shell's OriginAnchor) the Observer Camera claims.
@@ -120,6 +150,10 @@ pub fn setup_big_space_hierarchy(
     // build_web.sh). A 4K Earth + Moon are tens of MB — far too large to embed.
     let earth_texture: Handle<Image> = asset_server.load("cached_textures://earth.png");
     let moon_texture: Handle<Image> = asset_server.load("cached_textures://moon.png");
+
+    // Blueprint grid shader (self-describing ShaderMaterial), loaded by path so it
+    // hot-reloads on native and HTTP-fetches on web like every other shader.
+    let blueprint_shader = asset_server.load("shaders/blueprint.wgsl");
 
     // 1. Reuse the single world-shell BigSpace root if present; otherwise
     //    (standalone celestial, no WorldShellPlugin) spawn our own. This is the
@@ -268,6 +302,11 @@ pub fn setup_big_space_hierarchy(
     // Earth terrain tiles — spawned with CellCoord, parented to Earth Surface Grid.
     // big_space's propagate_high_precision inherits Grid rotation to all children.
     let earth_grid_ref = Grid::new(1_000.0, 1.0e30);
+    let earth_blueprint = blueprint_tile_material(
+        blueprint_shader.clone(), earth_texture.clone(),
+        [1.0, 1.0, 1.0], [0.0, 0.5, 1.0], [36.0, 18.0], 1.0, 0.5,
+        &mut shader_materials,
+    );
     for face in 0..6 {
         for i in 0..2 {
             for j in 0..2 {
@@ -280,32 +319,7 @@ pub fn setup_big_space_hierarchy(
                     Mesh3d(meshes.add(lunco_terrain_globe::create_quadsphere_tile_mesh(
                         earth_body, face, 1, i, j, 6371.0e3, 32, DVec3::ZERO
                     ))),
-                    MeshMaterial3d(blueprint_materials.add(BlueprintMaterial {
-                        base: StandardMaterial {
-                            base_color: Color::WHITE,
-                            base_color_texture: Some(earth_texture.clone()),
-                            unlit: false,
-                            ..default()
-                        },
-                        extension: BlueprintExtension {
-                            high_color: LinearRgba::WHITE,
-                            low_color: LinearRgba::WHITE,
-                            high_line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
-                            low_line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
-                            subdivisions: Vec2::new(36.0, 18.0),
-                            fade_range: Vec2::new(0.2, 0.6),
-                            grid_scale: 1000.0,
-                            line_width: 1.0,
-                            transition: 0.0,
-                            body_radius: 6371.0e3,
-                            major_grid_spacing: 1000.0,
-                            minor_grid_spacing: 500.0,
-                            major_line_width: 0.75,
-                            minor_line_width: 0.4,
-                            minor_line_fade: 0.3,
-                            surface_color: LinearRgba::new(0.3, 0.3, 0.3, 1.0),
-                        },
-                    })),
+                    MeshMaterial3d(earth_blueprint.clone()),
                     tile_cell,
                     Transform::from_translation(tile_local_pos),
                     GlobalTransform::default(),
@@ -375,6 +389,11 @@ pub fn setup_big_space_hierarchy(
 
     // Moon terrain tiles — spawned with CellCoord, parented to Moon Surface Grid.
     let moon_grid_ref = Grid::new(1_000.0, 1.0e30);
+    let moon_blueprint = blueprint_tile_material(
+        blueprint_shader.clone(), moon_texture.clone(),
+        [0.5, 0.5, 0.5], [0.6, 0.6, 0.6], [24.0, 12.0], 2.0, 0.9,
+        &mut shader_materials,
+    );
     for face in 0..6 {
         for i in 0..2 {
             for j in 0..2 {
@@ -387,33 +406,7 @@ pub fn setup_big_space_hierarchy(
                     Mesh3d(meshes.add(lunco_terrain_globe::create_quadsphere_tile_mesh(
                         moon_body, face, 1, i, j, 1737.0e3, 32, DVec3::ZERO
                     ))),
-                    MeshMaterial3d(blueprint_materials.add(BlueprintMaterial {
-                        base: StandardMaterial {
-                            base_color: Color::srgb(0.5, 0.5, 0.5),
-                            base_color_texture: Some(moon_texture.clone()),
-                            metallic: 0.1,
-                            perceptual_roughness: 0.9,
-                            ..default()
-                        },
-                        extension: BlueprintExtension {
-                            high_color: LinearRgba::WHITE,
-                            low_color: LinearRgba::WHITE,
-                            high_line_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0),
-                            low_line_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0),
-                            subdivisions: Vec2::new(24.0, 12.0),
-                            fade_range: Vec2::new(0.2, 0.6),
-                            grid_scale: 1000.0,
-                            line_width: 2.0,
-                            transition: 0.0,
-                            body_radius: 1737_000.0,
-                            major_grid_spacing: 1000.0,
-                            minor_grid_spacing: 500.0,
-                            major_line_width: 0.75,
-                            minor_line_width: 0.4,
-                            minor_line_fade: 0.3,
-                            surface_color: LinearRgba::new(0.35, 0.35, 0.35, 1.0),
-                        },
-                    })),
+                    MeshMaterial3d(moon_blueprint.clone()),
                     tile_cell,
                     Transform::from_translation(tile_local_pos),
                     GlobalTransform::default(),

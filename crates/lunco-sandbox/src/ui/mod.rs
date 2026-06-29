@@ -73,7 +73,6 @@ impl Plugin for SandboxUiPlugin {
             .add_plugins(lunco_usd::ui::UsdViewportPlugin)
             .add_plugins(lunco_sandbox_edit::SandboxEditPlugin)
             .add_plugins(lunco_sandbox_edit::ui::SandboxEditUiPlugin)
-            .add_plugins(lunco_materials::BlueprintMaterialPlugin)
             .add_plugins(lunco_materials::ShaderMaterialPlugin)
             // Rover-specific panels and the attach-a-model click flow.
             .add_plugins(|app: &mut App| {

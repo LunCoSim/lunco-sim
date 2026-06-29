@@ -7089,6 +7089,7 @@ dependencies = [
  "bevy_mesh",
  "big_space",
  "lunco-core",
+ "lunco-materials",
  "lunco-obstacle-field",
  "lunco-storage",
  "lunco-terrain-core",

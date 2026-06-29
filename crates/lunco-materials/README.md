@@ -1,153 +1,109 @@
 # lunco-materials
 
-Self-contained material plugins for LunCoSim's USD-driven rendering pipeline.
+LunCoSim's custom Bevy render materials, kept **engine-agnostic** (nothing here is
+USD-specific). There is **one** general material — [`ShaderMaterial`] — and new
+looks are pure `.wgsl` asset files, **no Rust per material**.
 
 ## Architecture
 
-Each material is a **fully independent Bevy Plugin** that can be added to any App without cross-crate dependencies or manual configuration:
+`ShaderMaterial` is a single self-describing material that runs **any** `.wgsl`,
+chosen per-instance via its `shader: Handle<Shader>`:
 
-```rust
-app.add_plugins(SolarPanelMaterialPlugin)
-   .add_plugins(BlueprintMaterialPlugin);
-```
+- **Parameters are declared in the shader**, not in Rust. Each `.wgsl` declares a
+  WGSL `struct Material { … }` plus `//!@ui` / `//!@default` annotation comments.
+  The engine reflects them (`reflect_shader_schemas`) into a `ParamSchema`, so
+  every field becomes a free Inspector slider, `SetObjectProperty` target, and USD
+  `primvars:<field>` — and the layout **hot-reloads** on shader edit.
+- **Lighting** is opt-in via the shared `#import lunco::pbr_lit::lit` module (full
+  Bevy PBR — directional sun, shadows, tonemapping) — no `StandardMaterial`
+  inheritance, no hand-copied `PbrInput` boilerplate.
+- **Discovery is automatic**: drop a `.wgsl` in `assets/shaders/` (or an open Twin)
+  and the catalog scan (`maintain_catalogs` in `lunco-sandbox-edit`) picks it up.
 
-Each plugin handles:
-1. **Shader embedding** — WGSL compiled into the binary at compile time via `load_internal_asset!`
-2. **Material registration** — `MaterialPlugin<T>::default()` for Bevy's render pipeline
-3. **Auto-assignment** — post-sync system runs after `sync_usd_visuals`, reads `primvars:materialType` from USD, and applies the material
+> There are **no bespoke per-effect material types**. The old `SolarPanelMaterial`
+> and `BlueprintMaterial` (hand-rolled `ExtendedMaterial`s) are gone — they are now
+> `assets/shaders/solar_panel.wgsl` and `assets/shaders/blueprint.wgsl` driven by
+> `ShaderMaterial`. Reach for a new `Material` type only when you need a render
+> feature `ShaderMaterial` structurally cannot express (e.g. a brand-new bind-group
+> layout); extend `ShaderMaterial` first.
 
-## Adding a New Material
+## Adding a new material (the whole process)
 
-### 1. Define your extension
+### 1. Write the shader — `assets/shaders/my_material.wgsl`
 
-```rust
-#[derive(Asset, TypePath, AsBindGroup, Debug, Clone, Copy)]
-pub struct MyExtension {
-    #[uniform(100)]
-    pub my_param: f32,
+```wgsl
+#import bevy_pbr::forward_io::VertexOutput
+#import lunco::pbr_lit::lit
+
+//!@ui      base_color color "Base colour"
+//!@default base_color 0.8,0.8,0.8
+//!@ui      roughness  0 1   "Roughness"
+//!@default roughness  0.6
+struct Material {
+    base_color: vec3<f32>,
+    roughness:  f32,
 }
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
 
-impl MaterialExtension for MyExtension {
-    fn fragment_shader() -> ShaderRef {
-        MY_SHADER_HANDLE.into()
-    }
-}
-```
-
-### 2. Register your shader
-
-```rust
-pub const MY_SHADER_HANDLE: Handle<Shader> = Handle::Uuid(MY_UUID, PhantomData);
-
-pub struct MyMaterialPlugin;
-
-impl Plugin for MyMaterialPlugin {
-    fn build(&self, app: &mut App) {
-        load_internal_asset!(
-            app,
-            MY_SHADER_HANDLE,
-            "../../../assets/shaders/my_material.wgsl",
-            Shader::from_wgsl
-        );
-        app.add_plugins(MaterialPlugin::<MyMaterial>::default());
-        app.add_systems(Update, apply_my_material.after(lunco_usd_bevy::sync_usd_visuals));
-    }
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    return lit(in, is_front, mat.base_color, mat.roughness, 0.0, vec3(0.0));
 }
 ```
 
-### 3. Create the post-sync system
+That's it — no Rust. Optional texture slots are available at fixed bindings
+(`albedo_map` 2/3, `mineral_map` 4/5, `surface_map` 6/7, `normal_map` 8/9,
+`height_map` 1); declare only the ones you sample.
 
-```rust
-pub fn apply_my_material(
-    mut commands: Commands,
-    stages: Res<Assets<UsdStageAsset>>,
-    mut materials: ResMut<Assets<MyMaterial>>,
-    q_all: Query<(Entity, &UsdPrimPath), (With<Mesh3d>, Without<MyMaterialApplied>)>,
-) {
-    for (entity, prim_path) in q_all.iter() {
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
-        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue };
-        let reader = (*stage.reader).clone();
-
-        let mat_type: Option<String> = reader.prim_attribute_value(&sdf_path, "primvars:materialType");
-        if mat_type.as_deref() != Some("my_material") { continue; }
-
-        let mat = create_my_material(&reader, &sdf_path, &mut materials);
-        commands.entity(entity).insert((
-            MeshMaterial3d(mat),
-            MyMaterialApplied,
-        ));
-    }
-}
-```
-
-### 4. Define the USD primvars
+### 2. Apply it from USD
 
 ```usda
 def Cube "MyObject"
 {
-    string primvars:materialType = "my_material"
-    float primvars:myParam = 42.0
+    string primvars:materialType = "shader"
+    string primvars:shaderPath   = "shaders/my_material.wgsl"
+    color3f primvars:base_color   = (0.2, 0.4, 0.9)
+    float   primvars:roughness    = 0.3
 }
 ```
 
-### 5. Register in the binary
+Each `primvars:<name>` whose name matches a `Material` field is read and packed by
+`apply_usd_shader_materials` (in `lunco-usd-sim`, deterministically ordered after
+`sync_usd_visuals`). Colours read as `vec3`, scalars as `f32`.
+
+### 3. Or apply it from Rust
 
 ```rust
-app.add_plugins(MyMaterialPlugin);
+let mut m = ShaderMaterial::default();
+m.shader = asset_server.load("shaders/my_material.wgsl");
+m.set_many([
+    ("base_color", ParamValue::Vec3([0.2, 0.4, 0.9])),
+    ("roughness",  ParamValue::F32(0.3)),
+]);
+let handle = shader_materials.add(m);   // needs ShaderMaterialPlugin registered
 ```
 
-That's it. No changes to `lunco-usd-bevy` or any other crate needed.
+## Registering the pipeline
 
-## USD Convention
+A binary that renders `ShaderMaterial` adds `ShaderMaterialPlugin` (registers
+`MaterialPlugin::<ShaderMaterial>` + the schema-reflection system). USD authoring
+is separate — `lunco-usd-sim`'s `UsdSimPlugin` — so a binary with the pipeline but
+not `UsdSimPlugin` renders `materialType="shader"` prims as plain `StandardMaterial`.
 
-All materials use the **`primvars:`** namespace (USD-standard for per-geometry shader parameters):
-
-| Attribute | Purpose |
-|-----------|---------|
-| `primvars:materialType` | Material selector (e.g. `"solar_panel"`, `"BlueprintGrid"`) |
-| `primvars:cellColor` | Solar panel cell color |
-| `primvars:gridMajorSpacing` | Blueprint major grid spacing |
-| ... | Each material defines its own primvars |
-
-## Existing Materials
-
-### SolarPanelMaterial
-- Procedural photovoltaic cell grid (no textures)
-- 11 tunable parameters: cell layout, bus lines, glass reflection, frame border
-- Shader: `assets/shaders/solar_panel_extension.wgsl`
-
-### BlueprintMaterial
-- Blueprint-style grid pattern for terrain
-- 6 USD-configurable parameters + 10 shader defaults
-- Shader: `assets/shaders/blueprint_extension.wgsl`
-- **Re-exported by `lunco-celestial`** for use by terrain tiles, celestial body spheres, and visual transition systems
-
-## Crate Dependencies
-
-```
-lunco-materials
-    ├── bevy
-    ├── openusd
-    └── lunco-usd-bevy          (for USD post-sync systems)
-
-lunco-celestial  →  lunco-materials   (BlueprintMaterial consumer)
-```
-
-`lunco-materials` is the **canonical source** for all material types. `lunco-celestial` imports and re-exports them for convenience — downstream code can import from either crate.
-
-## Crate Structure
+## Crate structure
 
 ```
 crates/lunco-materials/
 ├── src/
-│   ├── lib.rs              # Re-exports + shared get_attribute_as_vec3() helper
-│   ├── shader_material.rs  # General ShaderMaterial: any WGSL per-instance, USD/curl-driven
-│   └── blueprint.rs        # BlueprintMaterialPlugin + shader + post-sync system
+│   ├── lib.rs              # re-exports
+│   ├── dyn_params.rs       # ParamSchema/ParamValue: WGSL `struct Material` reflection + std140 packing
+│   └── shader_material.rs  # the one general ShaderMaterial + ShaderMaterialPlugin
 └── tests/
-    └── materials_test.rs   # Defaults validation
+    └── materials_test.rs   # dynamic packing + blueprint.wgsl schema reflection
 
-The solar panel is no longer a bespoke material — it is the general `ShaderMaterial`
-+ `assets/shaders/solar_panel.wgsl`, authored from USD via
-`primvars:materialType = "shader"` + `primvars:shaderPath`.
+Shaders live in `assets/shaders/*.wgsl` (e.g. blueprint.wgsl, solar_panel.wgsl,
+regolith.wgsl, terrain_layered.wgsl, wheel.wgsl) — pure assets, hot-reloaded.
 ```
+
+The 256-byte uniform block caps all params (named + engine-filled) at 64 f32 lanes;
+supported types are `f32 / i32 / u32 / vec2 / vec3 / vec4` (std140).

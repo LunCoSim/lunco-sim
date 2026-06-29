@@ -13,9 +13,6 @@ use bevy_asset::load_internal_asset;
 use std::marker::PhantomData;
 use uuid::Uuid;
 
-#[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
-use lunco_materials::BLUEPRINT_SHADER_HANDLE;
-
 // ============================================================================
 // Embedded Shaders
 // Shader source is embedded at compile time from root assets/ folder.
@@ -55,13 +52,9 @@ impl Plugin for EmbeddedAssetsPlugin {
     fn build(&self, app: &mut App) {
         #[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
         {
-            // Register shaders with const UUID handles so MaterialExtension can resolve them
-            load_internal_asset!(
-                app,
-                BLUEPRINT_SHADER_HANDLE,
-                "../../../assets/shaders/blueprint_extension.wgsl",
-                Shader::from_wgsl
-            );
+            // Register the trajectory shader with its const UUID handle so its
+            // MaterialExtension can resolve it (blueprint is now a path-loaded
+            // ShaderMaterial — `blueprint.wgsl` — fetched over HTTP like the rest).
             load_internal_asset!(
                 app,
                 TRAJECTORY_SHADER_HANDLE,

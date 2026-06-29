@@ -9,9 +9,6 @@
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
-#[cfg(not(target_arch = "wasm32"))]
-use bevy::asset::load_internal_asset;
-use bevy_shader::Shader;
 // Gravity *types* now live in lunco-environment; celestial owns only the
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
 use lunco_environment::{Gravity, GravityBody};
@@ -51,9 +48,6 @@ pub use trajectories::*;
 pub use missions::*;
 pub use embedded_assets::*;
 
-// Re-export blueprint material types from lunco-materials (the canonical source).
-pub use lunco_materials::{BlueprintExtension, BlueprintMaterial, BlueprintMaterialPlugin, BLUEPRINT_SHADER_HANDLE};
-
 #[derive(Event, Debug, Clone, Copy)]
 pub struct SurfaceClickEvent {
     pub planet: Entity,
@@ -73,17 +67,9 @@ impl Plugin for CelestialPlugin {
         // EmbeddedAssetsPlugin embeds shaders/textures/missions on wasm32, no-op on desktop
         app.add_plugins(embedded_assets::EmbeddedAssetsPlugin);
 
-        // Register blueprint shader only on desktop (wasm32 handled by EmbeddedAssetsPlugin).
+        // Trajectory shader is desktop-only (wasm32 embeds it via EmbeddedAssetsPlugin).
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            load_internal_asset!(
-                app,
-                BLUEPRINT_SHADER_HANDLE,
-                "../../../assets/shaders/blueprint_extension.wgsl",
-                Shader::from_wgsl
-            );
-            app.add_plugins(trajectories::TrajectoryShaderPlugin);
-        }
+        app.add_plugins(trajectories::TrajectoryShaderPlugin);
 
         // Terrain is now in lunco-terrain crate — register it here
         app.add_plugins(lunco_terrain_globe::TerrainPlugin);
