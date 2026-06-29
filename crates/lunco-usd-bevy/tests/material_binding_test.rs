@@ -336,3 +336,42 @@ fn opaque_material_stays_opaque() {
     assert!(matches!(mat.alpha_mode, AlphaMode::Opaque), "no opacity → Opaque");
     assert!((mat.base_color.alpha() - 1.0).abs() < 1e-4);
 }
+
+const SPECULAR_STAGE: &str = r#"#usda 1.0
+( defaultPrim = "World" )
+def Xform "World"
+{
+    def Material "Spec"
+    {
+        token outputs:surface.connect = </World/Spec/S.outputs:surface>
+        def Shader "S"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.8, 0.8, 0.8)
+            int inputs:useSpecularWorkflow = 1
+            color3f inputs:specularColor = (0.9, 0.1, 0.1)
+            float inputs:metallic = 0.7
+            float inputs:clearcoat = 1.0
+            float inputs:clearcoatRoughness = 0.2
+            token outputs:surface
+        }
+    }
+    def Cube "Body" ( apiSchemas = ["MaterialBindingAPI"] )
+    {
+        rel material:binding = </World/Spec>
+        double size = 2.0
+    }
+}
+"#;
+
+/// Specular workflow forces `metallic = 0` and binds `specularColor` →
+/// `specular_tint`; clearcoat + clearcoatRoughness map 1:1.
+#[test]
+fn specular_workflow_and_clearcoat_bind() {
+    let mat = material_for(SPECULAR_STAGE, "/World/Body");
+    assert!((mat.metallic - 0.0).abs() < 1e-4, "specular workflow → metallic 0");
+    let t = mat.specular_tint.to_linear();
+    assert!((t.red - 0.9).abs() < 1e-4 && (t.green - 0.1).abs() < 1e-4 && (t.blue - 0.1).abs() < 1e-4);
+    assert!((mat.clearcoat - 1.0).abs() < 1e-4, "clearcoat bound");
+    assert!((mat.clearcoat_perceptual_roughness - 0.2).abs() < 1e-4, "clearcoatRoughness bound");
+}

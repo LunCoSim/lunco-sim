@@ -1016,6 +1016,20 @@ pub fn resolve_bound_shader(reader: &UsdData, mesh_path: &SdfPath) -> Option<Sdf
     parent_prim_path(&surf_conn)
 }
 
+/// Maps a `UsdUVTexture` `inputs:wrapS`/`inputs:wrapT` token to a Bevy sampler
+/// address mode. USD's `"useMetadata"` (and absent) fall back to `Repeat` —
+/// the common authored intent for tiled textures — rather than the spec's
+/// metadata-then-black, which we can't read from the file header here.
+fn usd_wrap_to_address(wrap: Option<&str>) -> bevy::image::ImageAddressMode {
+    use bevy::image::ImageAddressMode;
+    match wrap {
+        Some("clamp") => ImageAddressMode::ClampToEdge,
+        Some("mirror") => ImageAddressMode::MirrorRepeat,
+        Some("black") => ImageAddressMode::ClampToBorder,
+        _ => ImageAddressMode::Repeat,
+    }
+}
+
 /// Applies a standard PBR material to an entity, resolving material bindings
 /// and shader networks if present, or falling back to direct prim attributes.
 fn apply_standard_material(
@@ -1067,23 +1081,52 @@ fn apply_standard_material(
     let mut opacity_threshold = 0.0f32;
     let mut opacity_connected = false;
 
+    // Specular-workflow tint (default white = untinted) + clearcoat layer.
+    let mut specular_tint = Color::WHITE;
+    let mut clearcoat = 0.0f32;
+    let mut clearcoat_roughness = 0.0f32;
+
     // A bound material shader network overrides individual channels where it
     // authors them. Channels the shader omits — or whose texture connection
     // fails to resolve — keep the geometry baseline above rather than reverting
     // to a flat-white default.
     if let Some(shader_path) = resolve_bound_shader(reader, sdf_path) {
-        // Resolve a shader input's connected texture to a loadable image handle,
-        // or `None` if it has no connection / file / resolvable path.
-        let load_tex = |input: &str| -> Option<Handle<Image>> {
+        use bevy::image::{ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
+
+        // Resolve a shader input's connected `UsdUVTexture` to a loadable image
+        // handle, or `None` if it has no connection / file / resolvable path.
+        // `is_color` is the channel's default color space (true = sRGB for
+        // albedo/emissive, false = linear data for metallic/roughness/normal/AO);
+        // a `UsdUVTexture inputs:sourceColorSpace` of `raw`/`sRGB` overrides it.
+        // `inputs:wrapS`/`wrapT` drive the sampler address modes at load time.
+        let load_tex = |input: &str, is_color: bool| -> Option<Handle<Image>> {
             let conn = read_rel_target(reader, &shader_path, input)?;
             let texture_path = parent_prim_path(&conn)?;
             let asset_path = get_attribute_as_string(reader, &texture_path, "inputs:file")?;
             let resolved = resolve_texture_path(asset_server, stage_id, &asset_path)?;
-            Some(asset_server.load(resolved))
+
+            let is_srgb = match read_token(reader, &texture_path, "inputs:sourceColorSpace").as_deref() {
+                Some("sRGB") => true,
+                Some("raw") => false,
+                _ => is_color, // "auto" / absent → channel default
+            };
+            let addr_u = usd_wrap_to_address(read_token(reader, &texture_path, "inputs:wrapS").as_deref());
+            let addr_v = usd_wrap_to_address(read_token(reader, &texture_path, "inputs:wrapT").as_deref());
+
+            Some(asset_server.load_with_settings::<Image, ImageLoaderSettings>(
+                resolved,
+                move |s: &mut ImageLoaderSettings| {
+                    s.is_srgb = is_srgb;
+                    let mut d = ImageSamplerDescriptor::linear();
+                    d.address_mode_u = addr_u;
+                    d.address_mode_v = addr_v;
+                    s.sampler = ImageSampler::Descriptor(d);
+                },
+            ))
         };
 
         // diffuseColor: texture, else authored value, else geometry baseline.
-        base_color_texture = load_tex("inputs:diffuseColor");
+        base_color_texture = load_tex("inputs:diffuseColor", true);
         if base_color_texture.is_none() {
             if let Some(c) = get_attribute_as_vec3(reader, &shader_path, "inputs:diffuseColor") {
                 base_color = Color::linear_rgb(c.x, c.y, c.z);
@@ -1091,7 +1134,7 @@ fn apply_standard_material(
         }
 
         // emissiveColor
-        emissive_texture = load_tex("inputs:emissiveColor");
+        emissive_texture = load_tex("inputs:emissiveColor", true);
         if emissive_texture.is_none() {
             if let Some(c) = get_attribute_as_vec3(reader, &shader_path, "inputs:emissiveColor") {
                 emissive = LinearRgba::new(c.x, c.y, c.z, 1.0);
@@ -1099,7 +1142,7 @@ fn apply_standard_material(
         }
 
         // metallic
-        let metallic_texture = load_tex("inputs:metallic");
+        let metallic_texture = load_tex("inputs:metallic", false);
         if metallic_texture.is_none() {
             if let Some(m) = get_attribute_as_f32(reader, &shader_path, "inputs:metallic") {
                 metallic = m;
@@ -1107,7 +1150,7 @@ fn apply_standard_material(
         }
 
         // roughness
-        let roughness_texture = load_tex("inputs:roughness");
+        let roughness_texture = load_tex("inputs:roughness", false);
         if roughness_texture.is_none() {
             if let Some(r) = get_attribute_as_f32(reader, &shader_path, "inputs:roughness")
                 .or_else(|| get_attribute_as_f32(reader, &shader_path, "inputs:perceptual_roughness"))
@@ -1118,11 +1161,29 @@ fn apply_standard_material(
 
         metallic_roughness_texture = roughness_texture.or(metallic_texture);
 
-        normal_map_texture = load_tex("inputs:normal");
-        occlusion_texture = load_tex("inputs:occlusion");
+        normal_map_texture = load_tex("inputs:normal", false);
+        occlusion_texture = load_tex("inputs:occlusion", false);
 
         if let Some(r) = get_attribute_as_f32(reader, &shader_path, "inputs:reflectance") {
             reflectance = r;
+        }
+
+        // Specular workflow: `useSpecularWorkflow = 1` describes a dielectric by
+        // `specularColor` instead of metalness → tint the specular and force
+        // metallic 0 (USD's specular workflow has no metalness channel).
+        if get_attribute_as_f32(reader, &shader_path, "inputs:useSpecularWorkflow").unwrap_or(0.0) >= 0.5 {
+            metallic = 0.0;
+            if let Some(c) = get_attribute_as_vec3(reader, &shader_path, "inputs:specularColor") {
+                specular_tint = Color::linear_rgb(c.x, c.y, c.z);
+            }
+        }
+
+        // Clearcoat layer (UsdPreviewSurface ↔ StandardMaterial 1:1).
+        if let Some(c) = get_attribute_as_f32(reader, &shader_path, "inputs:clearcoat") {
+            clearcoat = c;
+        }
+        if let Some(cr) = get_attribute_as_f32(reader, &shader_path, "inputs:clearcoatRoughness") {
+            clearcoat_roughness = cr;
         }
 
         // Transparency: scalar `inputs:opacity` drives base-color alpha; a
@@ -1166,6 +1227,9 @@ fn apply_standard_material(
             reflectance,
             ior,
             alpha_mode,
+            specular_tint,
+            clearcoat,
+            clearcoat_perceptual_roughness: clearcoat_roughness,
             ..default()
         }))
     ));
@@ -2245,6 +2309,24 @@ mod mesh_tests {
              int[] faceVertexIndices = [0,1,9]\n}\n",
         );
         assert!(read_usd_mesh_indexed(&reader, &SdfPath::new("/Bad").unwrap()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod wrap_tests {
+    //! `UsdUVTexture` wrap-token → Bevy sampler address-mode mapping.
+    use super::*;
+    use bevy::image::ImageAddressMode;
+
+    #[test]
+    fn usd_wrap_tokens_map_to_address_modes() {
+        assert_eq!(usd_wrap_to_address(Some("clamp")), ImageAddressMode::ClampToEdge);
+        assert_eq!(usd_wrap_to_address(Some("mirror")), ImageAddressMode::MirrorRepeat);
+        assert_eq!(usd_wrap_to_address(Some("black")), ImageAddressMode::ClampToBorder);
+        assert_eq!(usd_wrap_to_address(Some("repeat")), ImageAddressMode::Repeat);
+        // "useMetadata" and absent both fall back to Repeat.
+        assert_eq!(usd_wrap_to_address(Some("useMetadata")), ImageAddressMode::Repeat);
+        assert_eq!(usd_wrap_to_address(None), ImageAddressMode::Repeat);
     }
 }
 

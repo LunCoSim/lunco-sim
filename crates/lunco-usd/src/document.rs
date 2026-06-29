@@ -219,6 +219,74 @@ pub enum UsdOp {
         /// [`sdf::Value`] by openusd's own parser at apply time.
         value: String,
     },
+    /// Author one **time sample** of an attribute on the prim at `path` —
+    /// the keyframe primitive. Creates the attribute if absent (just like
+    /// [`UsdOp::SetAttribute`]) and writes `value` at stage time `time`
+    /// instead of as the `default`. Repeated ops at distinct `time`s build
+    /// up the animation curve; the translator interpolates between them
+    /// when it evaluates the attribute at a clock time. The inverse is the
+    /// coarse full-source snapshot (sample removal has no typed op yet).
+    SetTimeSample {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose attribute to keyframe.
+        path: String,
+        /// The name of the attribute (e.g. `xformOp:translate`, `inputs:roughness`).
+        name: String,
+        /// The USD type name of the attribute (e.g. `double3` or `float`).
+        type_name: String,
+        /// Stage (composed) time code at which to author the sample.
+        time: f64,
+        /// The sample value formatted as a USD-compliant string literal,
+        /// parsed into a typed [`sdf::Value`] by openusd at apply time.
+        value: String,
+    },
+    /// Remove the single **time sample** at `time` from attribute `name` on the
+    /// prim at `path` — the inverse primitive to [`UsdOp::SetTimeSample`]. When
+    /// the last sample goes, the attribute's `timeSamples` field is cleared
+    /// entirely (it round-trips as if never keyframed). Removing a sample that
+    /// isn't there is an error, not a silent success, so a wrong `time` surfaces.
+    /// The inverse restores the prior full source (re-authoring the exact removed
+    /// value as a typed op would mean reserializing it back to a literal).
+    RemoveTimeSample {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose attribute to de-keyframe.
+        path: String,
+        /// The name of the attribute (e.g. `xformOp:translate`).
+        name: String,
+        /// Stage (composed) time code of the sample to remove.
+        time: f64,
+    },
+    /// Author a **relationship** `name` on the prim at `path`, pointing at
+    /// `targets` (absolute prim/property paths). Relationships are how USD
+    /// expresses non-hierarchical links — `material:binding`, collection
+    /// membership, light linking, skeleton bindings. Replaces any existing
+    /// target list (set-semantics, not append); an empty `targets` authors an
+    /// explicitly-empty relationship. The inverse restores the prior source.
+    SetRelationship {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim that owns the relationship.
+        path: String,
+        /// The relationship name (e.g. `material:binding`).
+        name: String,
+        /// Absolute target paths the relationship points at.
+        targets: Vec<String>,
+    },
+    /// Move the prim at `from_path` to `to_path` — one op covering both
+    /// **rename** (same parent, new leaf) and **reparent** (new parent), since
+    /// both are a namespace move. The destination parent must already exist. The
+    /// inverse is the exact reverse move (`from`/`to` swapped), so undo is typed
+    /// and cheap.
+    MovePrim {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim to move.
+        from_path: String,
+        /// New absolute USD path for the prim.
+        to_path: String,
+    },
 }
 
 impl Default for UsdOp {
@@ -583,7 +651,11 @@ impl Document for UsdDocument {
             | UsdOp::AddPrim { edit_target, .. }
             | UsdOp::RemovePrim { edit_target, .. }
             | UsdOp::SetTranslate { edit_target, .. }
-            | UsdOp::SetAttribute { edit_target, .. } => edit_target.clone(),
+            | UsdOp::SetAttribute { edit_target, .. }
+            | UsdOp::SetTimeSample { edit_target, .. }
+            | UsdOp::RemoveTimeSample { edit_target, .. }
+            | UsdOp::SetRelationship { edit_target, .. }
+            | UsdOp::MovePrim { edit_target, .. } => edit_target.clone(),
         };
         let target = TargetLayer::from_id(&id).ok_or_else(|| {
             DocumentError::ValidationFailed(format!(
@@ -754,6 +826,134 @@ impl Document for UsdDocument {
                     .map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::SetTimeSample {
+                path,
+                name,
+                type_name,
+                time,
+                value,
+                ..
+            } => {
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let val = parse_attribute_value(&type_name, &value).map_err(|e| {
+                    DocumentError::ValidationFailed(format!(
+                        "SetTimeSample `{name}` ({type_name}) @ {time}: {e}"
+                    ))
+                })?;
+                // Authoring a brand-new sample (no prior opinion at this exact
+                // time, in this layer) is exactly undone by removing it — a typed,
+                // cheap inverse. Overwriting an existing sample needs the prior
+                // value back, so fall back to the full-source snapshot.
+                let overwrote_existing = prim_sdf
+                    .append_property(name.as_str())
+                    .ok()
+                    .and_then(|attr| self.layer(target).field(&attr, "timeSamples").cloned())
+                    .map(|v| {
+                        matches!(v, sdf::Value::TimeSamples(ref m)
+                            if m.iter().any(|(t, _)| t.total_cmp(&time).is_eq()))
+                    })
+                    .unwrap_or(false);
+                let inverse = if overwrote_existing {
+                    self.coarse_inverse(target, &id)
+                } else {
+                    UsdOp::RemoveTimeSample {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        name: name.clone(),
+                        time,
+                    }
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage
+                    .create_attribute(format!("{path}.{name}"), type_name.as_str())
+                    .map_err(author_err)?
+                    .set_at(val, openusd::usd::TimeCode::new(time))
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::RemoveTimeSample {
+                path, name, time, ..
+            } => {
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let attr_sdf = prim_sdf.append_property(name.as_str()).map_err(|e| {
+                    DocumentError::ValidationFailed(format!(
+                        "RemoveTimeSample: bad attribute `{name}`: {e}"
+                    ))
+                })?;
+                // The full-source snapshot restores the removed sample's value
+                // (reserializing it to a typed `SetTimeSample` literal isn't worth
+                // it). Capture it before mutating.
+                let inverse = self.coarse_inverse(target, &id);
+                let mut new_data = self.layer(target).clone();
+                let removed = author::remove_time_sample(&mut new_data, &attr_sdf, time)
+                    .map_err(author_err)?;
+                if removed.is_none() {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "RemoveTimeSample: no sample on `{path}.{name}` at time {time}"
+                    )));
+                }
+                self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::SetRelationship {
+                path,
+                name,
+                targets,
+                ..
+            } => {
+                self.require_prim_anywhere(&path)?;
+                let target_paths = targets
+                    .iter()
+                    .map(|t| {
+                        SdfPath::new(t).map_err(|e| {
+                            DocumentError::ValidationFailed(format!(
+                                "SetRelationship `{name}`: invalid target `{t}`: {e}"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let inverse = self.coarse_inverse(target, &id);
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage
+                    .create_relationship(format!("{path}.{name}"))
+                    .map_err(author_err)?
+                    .set_targets(target_paths)
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::MovePrim {
+                from_path,
+                to_path,
+                ..
+            } => {
+                // Only move what the target layer itself authored.
+                self.require_prim_in(target, &from_path)?;
+                let from_sdf = parse_prim_path(&from_path)?;
+                let to_sdf = parse_prim_path(&to_path)?;
+                // Exact reverse move — a typed, cheap inverse.
+                let inverse = UsdOp::MovePrim {
+                    edit_target: id.clone(),
+                    from_path: to_path.clone(),
+                    to_path: from_path.clone(),
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let mut editor = openusd::usd::NamespaceEditor::new(&stage);
+                editor.move_prim(from_sdf, to_sdf);
+                editor.apply().map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                // A move changes prim paths on both ends; the translator re-keys
+                // entities by path, so a full reload is the honest change kind.
+                self.commit(target, new_data, UsdChange::FullReload);
                 Ok(inverse)
             }
         }
@@ -1038,6 +1238,154 @@ mod tests {
             .data()
             .prim_attribute_value::<[f32; 3]>(&SdfPath::new("/Ball").unwrap(), "primvars:displayColor");
         assert_eq!(color, Some([0.2, 0.4, 0.8]));
+    }
+
+    #[test]
+    fn set_time_sample_authors_keyframes_and_interpolates() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(14),
+            "#usda 1.0\ndef Xform \"Mover\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/anim.usda"),
+        );
+        // Two keyframes of the translate, authored as time samples. Each fresh
+        // keyframe inverts to a typed `RemoveTimeSample` at the same time.
+        let mut inverses = Vec::new();
+        for (t, x) in [(0.0_f64, 0.0_f64), (10.0, 10.0)] {
+            inverses.push(
+                doc.apply(UsdOp::SetTimeSample {
+                    edit_target: LayerId::root(),
+                    path: "/Mover".into(),
+                    name: "xformOp:translate".into(),
+                    type_name: "double3".into(),
+                    time: t,
+                    value: format!("({x}, 0, 0)"),
+                })
+                .unwrap(),
+            );
+        }
+        assert!(
+            matches!(inverses[0], UsdOp::RemoveTimeSample { time, .. } if time == 0.0),
+            "a fresh keyframe inverts to a typed RemoveTimeSample"
+        );
+        assert!(matches!(inverses[1], UsdOp::RemoveTimeSample { time, .. } if time == 10.0));
+        let mover = SdfPath::new("/Mover").unwrap();
+        // Time-aware read interpolates the authored curve.
+        assert_eq!(
+            doc.data().prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 5.0),
+            Some([5.0, 0.0, 0.0]),
+            "midpoint must linearly interpolate the two keyframes"
+        );
+        assert_eq!(
+            doc.data().prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 10.0),
+            Some([10.0, 0.0, 0.0])
+        );
+        // A sample-only attribute has no `default` opinion.
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(&mover, "xformOp:translate"),
+            None,
+            "time samples must not leak into the default opinion"
+        );
+        // Undo LIFO: replaying the typed inverses removes both samples, and the
+        // attribute round-trips to having no samples at all.
+        while let Some(inv) = inverses.pop() {
+            doc.apply(inv).unwrap();
+        }
+        assert_eq!(
+            doc.data().prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 5.0),
+            None,
+            "keyframes undone by the typed RemoveTimeSample inverses"
+        );
+    }
+
+    #[test]
+    fn move_prim_renames_and_reparents_with_typed_inverse() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(20),
+            "#usda 1.0\ndef Xform \"A\"\n{\n}\ndef Xform \"B\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/move.usda"),
+        );
+        let exists = |doc: &UsdDocument, p: &str| doc.data().spec(&SdfPath::new(p).unwrap()).is_some();
+
+        // Reparent /A under /B → /B/A.
+        let inverse = doc
+            .apply(UsdOp::MovePrim {
+                edit_target: LayerId::root(),
+                from_path: "/A".into(),
+                to_path: "/B/A".into(),
+            })
+            .unwrap();
+        assert!(!exists(&doc, "/A"), "source path is vacated");
+        assert!(exists(&doc, "/B/A"), "prim now lives under its new parent");
+        // The typed inverse is the exact reverse move.
+        assert!(matches!(
+            &inverse,
+            UsdOp::MovePrim { from_path, to_path, .. } if from_path == "/B/A" && to_path == "/A"
+        ));
+        doc.apply(inverse).unwrap();
+        assert!(exists(&doc, "/A") && !exists(&doc, "/B/A"), "inverse restores the original tree");
+    }
+
+    #[test]
+    fn set_relationship_authors_targets() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(21),
+            "#usda 1.0\ndef Xform \"Geom\"\n{\n}\ndef Material \"Red\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/rel.usda"),
+        );
+        doc.apply(UsdOp::SetRelationship {
+            edit_target: LayerId::root(),
+            path: "/Geom".into(),
+            name: "material:binding".into(),
+            targets: vec!["/Red".into()],
+        })
+        .unwrap();
+        // The relationship spec is authored under the prim.
+        let rel = SdfPath::new("/Geom.material:binding").unwrap();
+        assert!(
+            doc.data().spec(&rel).is_some(),
+            "material:binding relationship authored on /Geom"
+        );
+    }
+
+    #[test]
+    fn remove_time_sample_errors_when_absent() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(22),
+            "#usda 1.0\ndef Xform \"Mover\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/rm.usda"),
+        );
+        // Author one keyframe, then remove the wrong time → error, not silent.
+        doc.apply(UsdOp::SetTimeSample {
+            edit_target: LayerId::root(),
+            path: "/Mover".into(),
+            name: "xformOp:translate".into(),
+            type_name: "double3".into(),
+            time: 0.0,
+            value: "(0, 0, 0)".into(),
+        })
+        .unwrap();
+        assert!(doc
+            .apply(UsdOp::RemoveTimeSample {
+                edit_target: LayerId::root(),
+                path: "/Mover".into(),
+                name: "xformOp:translate".into(),
+                time: 99.0,
+            })
+            .is_err());
+        // Removing the right time succeeds and clears the curve.
+        doc.apply(UsdOp::RemoveTimeSample {
+            edit_target: LayerId::root(),
+            path: "/Mover".into(),
+            name: "xformOp:translate".into(),
+            time: 0.0,
+        })
+        .unwrap();
+        let mover = SdfPath::new("/Mover").unwrap();
+        assert_eq!(
+            doc.data().prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 0.0),
+            None,
+            "the only sample was removed, so nothing resolves"
+        );
     }
 
     #[test]

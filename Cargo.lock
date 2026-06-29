@@ -8557,6 +8557,7 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 [[package]]
 name = "openusd"
 version = "0.5.0"
+source = "git+https://github.com/LunCoSim/openusd?branch=main#c735a651949006c72ddf05b9efd3d4ceb683efc0"
 dependencies = [
  "anyhow",
  "bitflags 2.11.1",

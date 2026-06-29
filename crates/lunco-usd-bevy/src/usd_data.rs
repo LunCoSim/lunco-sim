@@ -14,6 +14,7 @@
 
 use openusd::sdf::{self, Path, SpecType, Value};
 use openusd::tf;
+use openusd::usd::InterpolationType;
 
 /// Ergonomic reads over a composed [`sdf::Data`]. Replaces the removed
 /// `TextReader` query methods (`try_get` → [`field`](UsdDataExt::field),
@@ -39,6 +40,29 @@ pub trait UsdDataExt {
 
     /// The `default` value of the attribute at `attr_path`, typed as `T`.
     fn attribute_value<T: TryFrom<Value>>(&self, attr_path: &Path) -> Option<T>;
+
+    /// The value of attribute `name` on prim `prim` **evaluated at stage time
+    /// `time`**, typed as `T`. When the attribute carries authored
+    /// `timeSamples` (see [`UsdOp::SetTimeSample`](crate)), they take
+    /// precedence and are linearly interpolated via openusd's own evaluator
+    /// (held at/beyond the end samples — USD semantics). Falls back to the
+    /// `default` opinion when there are no samples (or none resolve), so a
+    /// static attribute reads identically to [`prim_attribute_value`]. This is
+    /// the animation read path the clock drives each frame.
+    ///
+    /// [`prim_attribute_value`]: UsdDataExt::prim_attribute_value
+    fn prim_attribute_value_at<T: TryFrom<Value>>(
+        &self,
+        prim: &Path,
+        name: &str,
+        time: f64,
+    ) -> Option<T>;
+
+    /// The value of the attribute at `attr_path` evaluated at stage time
+    /// `time` (the by-property-path form of [`prim_attribute_value_at`]).
+    ///
+    /// [`prim_attribute_value_at`]: UsdDataExt::prim_attribute_value_at
+    fn attribute_value_at<T: TryFrom<Value>>(&self, attr_path: &Path, time: f64) -> Option<T>;
 
     /// Whether a prim is active (`active` metadata; defaults to `true`, matching
     /// USD semantics).
@@ -76,7 +100,86 @@ impl UsdDataExt for sdf::Data {
         self.field_as::<T>(attr_path, "default")
     }
 
+    fn prim_attribute_value_at<T: TryFrom<Value>>(
+        &self,
+        prim: &Path,
+        name: &str,
+        time: f64,
+    ) -> Option<T> {
+        let attr = prim.append_property(name).ok()?;
+        self.attribute_value_at::<T>(&attr, time)
+    }
+
+    fn attribute_value_at<T: TryFrom<Value>>(&self, attr_path: &Path, time: f64) -> Option<T> {
+        // Authored time samples win over `default` (USD value resolution).
+        if let Some(Value::TimeSamples(samples)) = self.field(attr_path, "timeSamples") {
+            if let Some(v) = openusd::usd::evaluate(samples, time, InterpolationType::Linear) {
+                return v.get::<T>();
+            }
+        }
+        self.field_as::<T>(attr_path, "default")
+    }
+
     fn prim_is_active(&self, prim: &Path) -> bool {
         self.field_as::<bool>(prim, "active").unwrap_or(true)
+    }
+}
+
+#[cfg(test)]
+mod time_sample_tests {
+    use super::*;
+
+    /// Parse single-layer USDA into Send-safe `sdf::Data` for reads.
+    fn data(usda: &str) -> sdf::Data {
+        openusd::usda::parse(usda).expect("parse USDA")
+    }
+
+    const ANIM: &str = r#"#usda 1.0
+
+def Xform "Mover"
+{
+    double3 xformOp:translate.timeSamples = {
+        0: (0, 0, 0),
+        10: (10, 0, 0),
+    }
+    float opacity = 0.25
+}
+"#;
+
+    #[test]
+    fn time_sample_interpolates_between_keys() {
+        let d = data(ANIM);
+        let mover = Path::new("/Mover").unwrap();
+        // Exactly on a key.
+        assert_eq!(
+            d.prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 0.0),
+            Some([0.0, 0.0, 0.0])
+        );
+        // Midway → linear interpolation.
+        assert_eq!(
+            d.prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 5.0),
+            Some([5.0, 0.0, 0.0])
+        );
+        // Beyond the last key → held (USD semantics).
+        assert_eq!(
+            d.prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 99.0),
+            Some([10.0, 0.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn falls_back_to_default_when_no_samples() {
+        let d = data(ANIM);
+        let mover = Path::new("/Mover").unwrap();
+        // `opacity` has only a default — the time-aware read returns it at any time.
+        assert_eq!(
+            d.prim_attribute_value_at::<f32>(&mover, "opacity", 3.0),
+            Some(0.25)
+        );
+        // And it matches the time-agnostic read.
+        assert_eq!(
+            d.prim_attribute_value_at::<f32>(&mover, "opacity", 3.0),
+            d.prim_attribute_value::<f32>(&mover, "opacity")
+        );
     }
 }
