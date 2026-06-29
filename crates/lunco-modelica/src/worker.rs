@@ -1661,11 +1661,18 @@ pub fn handle_modelica_responses(
                 }
             }
 
-            // Transition compile state for this entity's document, but
-            // only on compile-style results (new-model / parameter-update).
-            // Step results arrive continuously and must not clobber
-            // Ready/Error classifications.
-            let is_compile_result = result.is_new_model || result.is_parameter_update;
+            // Transition compile state for this entity's document, but only on
+            // compile-shaped lifecycle results (new-model / parameter-update /
+            // reset) — the same grouping the `is_compiling` and log blocks above
+            // use. Plain Step results arrive continuously and must not clobber
+            // Ready/Error classifications. `is_reset` MUST be included: a
+            // successful reset means the model re-initialised healthy, so it has
+            // to reconcile `state` back to `Ready`. Without it, the success
+            // branch below still clears the diagnostics list while `state` stays
+            // `Error`, leaving the UI stuck on a red "compilation failed" chip
+            // with no underlying message.
+            let is_compile_result =
+                result.is_new_model || result.is_parameter_update || result.is_reset;
             if is_compile_result && !model.document.is_unassigned() {
                 let new_state = if result.error.is_some() {
                     lunco_doc::CompileState::Error
