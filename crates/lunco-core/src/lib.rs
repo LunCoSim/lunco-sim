@@ -569,6 +569,12 @@ fn wire_system(
     for wire in q_wires.iter() {
         if let Ok(digital) = q_digital.get(wire.source) {
             if let Ok(mut physical) = q_physical.get_mut(wire.target) {
+                // CQ-514: skip a zero/non-finite scale (warn once) so a
+                // misconfigured wire can't push NaN/inf into PhysicalPort.
+                if !wire.scale.is_finite() || wire.scale == 0.0 {
+                    warn_once!("Wire scale is zero or non-finite ({}); skipping", wire.scale);
+                    continue;
+                }
                 // Normalize i16 (-32768..32767) to -1.0..1.0 approximately, then apply scale
                 physical.value = (digital.raw_value as f32 / 32767.0) * wire.scale;
             }

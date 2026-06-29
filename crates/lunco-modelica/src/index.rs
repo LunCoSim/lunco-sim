@@ -60,6 +60,13 @@ pub struct ModelicaIndex {
     /// All component entries across every class, in arbitrary order.
     pub components: Vec<ComponentEntry>,
 
+    /// Monotonic allocator for [`ComponentKey`]s (CQ-402). Keys must
+    /// NOT be derived from `components.len()`: `patch_component_removed`
+    /// shrinks the Vec, so a length-based key would alias a still-live
+    /// entry and "first match wins" resolution would then mutate the
+    /// wrong component. Reset to 0 on every full `rebuild_from_ast`.
+    next_component_key: u32,
+
     /// `(qualified_class, instance_name)` → key.
     pub component_by_qualified: HashMap<(String, String), ComponentKey>,
 
@@ -68,6 +75,10 @@ pub struct ModelicaIndex {
 
     /// Connections in arbitrary order.
     pub connections: Vec<ConnectionEntry>,
+
+    /// Monotonic allocator for [`ConnectionKey`]s — see
+    /// [`Self::next_component_key`] (CQ-402).
+    next_connection_key: u32,
 
     /// `qualified_class` → ordered keys.
     pub connections_by_class: HashMap<String, Vec<ConnectionKey>>,
@@ -375,6 +386,9 @@ impl ModelicaIndex {
         self.connections.clear();
         self.connections_by_class.clear();
         self.classes.clear();
+        // Fresh build → restart key allocation from 0 (CQ-402).
+        self.next_component_key = 0;
+        self.next_connection_key = 0;
         self.within_path = ast
             .within
             .as_ref()
@@ -400,6 +414,21 @@ impl ModelicaIndex {
         self.has_errors = has_errors;
     }
 
+    /// Mint a fresh [`ComponentKey`] from the monotonic counter (never
+    /// from `components.len()` — see [`Self::next_component_key`]).
+    fn alloc_component_key(&mut self) -> ComponentKey {
+        let key = ComponentKey(self.next_component_key);
+        self.next_component_key = self.next_component_key.wrapping_add(1);
+        key
+    }
+
+    /// Mint a fresh [`ConnectionKey`] from the monotonic counter.
+    fn alloc_connection_key(&mut self) -> ConnectionKey {
+        let key = ConnectionKey(self.next_connection_key);
+        self.next_connection_key = self.next_connection_key.wrapping_add(1);
+        key
+    }
+
     /// Optimistic component-add. Called from
     /// [`crate::document::ModelicaDocument::apply_patch`] in response
     /// to a [`crate::document::ModelicaChange::ComponentAdded`].
@@ -410,7 +439,7 @@ impl ModelicaIndex {
     /// those fill in on the next AST reconcile.
     pub fn patch_component_added(&mut self, class: &str, name: &str, type_name: &str) -> ComponentKey {
         self.generation = self.generation.saturating_add(1);
-        let key = ComponentKey(self.components.len() as u32);
+        let key = self.alloc_component_key();
         let entry = ComponentEntry {
             key,
             node_id: NodeId::new(format!("{}|component|{}", class, name)),
@@ -477,7 +506,7 @@ impl ModelicaIndex {
         to_port: Option<&str>,
     ) -> ConnectionKey {
         self.generation = self.generation.saturating_add(1);
-        let key = ConnectionKey(self.connections.len() as u32);
+        let key = self.alloc_connection_key();
         let entry = ConnectionEntry {
             key,
             node_id: NodeId::new(format!(
@@ -868,7 +897,7 @@ fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def:
     let info_by_name: HashMap<String, crate::ast_extract::ComponentInfo> =
         infos.into_iter().map(|i| (i.name.clone(), i)).collect();
     for (name, comp) in class_def.iter_components() {
-        let key = ComponentKey(idx.components.len() as u32);
+        let key = idx.alloc_component_key();
         let info = info_by_name.get(name).cloned();
         let (description, modifications) = info
             .map(|i| (i.description, i.modifications))
@@ -932,7 +961,7 @@ fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def:
             // Connect annotation is no longer carried on Equation::Connect
             // in rumoca main. Line waypoints are unavailable here.
             let waypoints = Vec::new();
-            let key = ConnectionKey(idx.connections.len() as u32);
+            let key = idx.alloc_connection_key();
             let entry = ConnectionEntry {
                 key,
                 node_id: NodeId::new(format!(
@@ -1061,6 +1090,43 @@ mod tests {
         idx.patch_component_removed("RC", "extra");
         assert!(idx.find_component("RC", "extra").is_none());
         assert!(!idx.components_by_class.get("RC").map(|v| !v.is_empty()).unwrap_or(false));
+    }
+
+    #[test]
+    fn patch_key_reuse_after_remove_does_not_alias_components() {
+        // CQ-402 regression: keys must come from a monotonic counter,
+        // not `components.len()`. Add A,B; remove A; add C; mutate C —
+        // B must be untouched and C must carry the edit.
+        let mut idx = ModelicaIndex::new();
+        idx.patch_component_added("RC", "a", "Real");
+        let key_b = idx.patch_component_added("RC", "b", "Real");
+        idx.patch_component_removed("RC", "a");
+        let key_c = idx.patch_component_added("RC", "c", "Real");
+
+        // The newly minted key must not collide with the still-live B.
+        assert_ne!(key_b, key_c, "key reused from Vec::len() aliased a live entry");
+
+        // Mutating C must land on C, leaving B clean.
+        idx.patch_parameter_changed("RC", "c", "R", "42");
+        let b = idx.find_component("RC", "b").expect("b present");
+        let c = idx.find_component("RC", "c").expect("c present");
+        assert!(b.modifications.is_empty(), "B was clobbered by an aliased key");
+        assert_eq!(c.modifications.get("R").map(String::as_str), Some("42"));
+    }
+
+    #[test]
+    fn patch_key_reuse_after_remove_does_not_alias_connections() {
+        // CQ-402 regression for the connection allocator.
+        let mut idx = ModelicaIndex::new();
+        idx.patch_connection_added("RC", "a", Some("p"), "b", Some("n"));
+        let key2 = idx.patch_connection_added("RC", "c", Some("p"), "d", Some("n"));
+        idx.patch_connection_removed("RC", "a", Some("p"), "b", Some("n"));
+        let key3 = idx.patch_connection_added("RC", "e", Some("p"), "f", Some("n"));
+        assert_ne!(key2, key3, "connection key reused from Vec::len()");
+        // The surviving connection (c→d) is still resolvable and distinct.
+        assert_eq!(idx.connections.len(), 2);
+        assert!(idx.connections.iter().any(|c| c.key == key2 && c.from.component_name == "c"));
+        assert!(idx.connections.iter().any(|c| c.key == key3 && c.from.component_name == "e"));
     }
 
     #[test]

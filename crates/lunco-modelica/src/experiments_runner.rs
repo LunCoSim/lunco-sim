@@ -26,6 +26,7 @@
 //! override can't be set at the DAE level (non-top-level param, array/enum
 //! value), it falls back to the legacy string-injection recompile.
 
+use crate::lock_ext::LockExt;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
@@ -329,7 +330,7 @@ impl ExperimentRunner for ModelicaRunner {
         // registry status stays `Pending`, which already reads as "queued"
         // in the panel.
         {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock_or_recover();
             s.pending.push_back(QueuedJob {
                 run_id,
                 model_ref: exp.model_ref.clone(),
@@ -524,7 +525,7 @@ fn spawn_forwarder(
     tx: crossbeam_channel::Sender<RunUpdate>,
     state: Arc<Mutex<RunnerState>>,
 ) {
-    let mut slot = wasm_forwarders().lock().unwrap();
+    let mut slot = wasm_forwarders().lock_or_recover();
     slot.push(WasmForwarder { run_id, forward_rx, tx, state });
 }
 
@@ -555,7 +556,7 @@ pub fn pump_wasm_forwarders() {
     // may push a new forwarder, which would deadlock under the same lock.
     let mut terminated: Vec<(Arc<Mutex<RunnerState>>, ExperimentId)> = Vec::new();
     {
-        let mut slot = wasm_forwarders().lock().unwrap();
+        let mut slot = wasm_forwarders().lock_or_recover();
         let mut keep = Vec::with_capacity(slot.len());
         for fwd in slot.drain(..) {
             let mut terminal = false;

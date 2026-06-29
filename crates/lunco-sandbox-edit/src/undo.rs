@@ -1,5 +1,7 @@
 //! Undo system for sandbox editing operations.
 
+use avian3d::physics_transform::{Position, Rotation};
+use avian3d::prelude::RigidBody;
 use bevy::prelude::*;
 
 /// Stack of undoable actions.
@@ -58,6 +60,9 @@ pub fn handle_undo_input(
     mut commands: Commands,
     q_children: Query<&Children>,
     mut q_transforms: Query<&mut Transform>,
+    mut q_pos: Query<&mut Position>,
+    mut q_rot: Query<&mut Rotation>,
+    q_has_rb: Query<(), With<RigidBody>>,
 ) {
     if keys.just_pressed(KeyCode::KeyZ)
         && (keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight))
@@ -77,6 +82,18 @@ pub fn handle_undo_input(
                     tf.translation = old_translation;
                     tf.rotation = old_rotation;
                     info!("Undo: restored transform for entity {:?}", entity);
+                }
+                // CQ-510: mirror `MoveEntity` / the inspector edit path — on a
+                // physics body avian writeback reverts a Transform-only change,
+                // so seat the f64 `Position`/`Rotation` and force Kinematic.
+                if let Ok(mut pos) = q_pos.get_mut(entity) {
+                    pos.0 = old_translation.as_dvec3();
+                }
+                if let Ok(mut rot) = q_rot.get_mut(entity) {
+                    rot.0 = old_rotation.as_dquat();
+                }
+                if q_has_rb.get(entity).is_ok() {
+                    commands.entity(entity).insert(RigidBody::Kinematic);
                 }
             }
         }

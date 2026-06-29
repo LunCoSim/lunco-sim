@@ -177,6 +177,7 @@ pub mod text_diff;
 /// type references, then primes the engine's icon cache via a single
 /// off-thread task. Drill-in projection sees a populated cache.
 pub mod icon_warmer;
+pub mod lock_ext;
 pub mod source_roots;
 
 /// Simple wrapper around rumoca-compile for compiling Modelica models.

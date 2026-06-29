@@ -51,6 +51,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{ErrorEvent, MessageEvent, Worker};
 
+use crate::lock_ext::LockExt;
 use crate::worker::{ModelicaChannels, ModelicaCommand, ModelicaResult};
 
 /// Wire-format envelope for the postMessage transport.
@@ -319,7 +320,7 @@ fn post_array_to(worker: &Worker, bytes: &[u8]) -> Result<(), JsValue> {
 /// Post raw bytes to worker `idx`. No-op (with a warning) if the index is
 /// out of range. Caller must NOT hold the pool lock (this takes it).
 fn post_bytes_to(idx: usize, bytes: &[u8], label: &str) {
-    let p = pool().lock().unwrap();
+    let p = pool().lock_or_recover();
     let Some(WorkerHandle(worker)) = p.workers.get(idx) else {
         bevy::log::warn!("[worker_transport] {label}: worker {idx} not installed");
         return;
@@ -542,7 +543,7 @@ pub fn install_worker(worker_url: &str) -> Result<(), JsValue> {
 
     let n = workers.len();
     {
-        let mut p = pool().lock().unwrap();
+        let mut p = pool().lock_or_recover();
         if !p.workers.is_empty() {
             // Already installed — keep the existing pool (idempotent).
             return Ok(());
@@ -603,7 +604,7 @@ pub fn ensure_pool_spawned() {
     // loaded — rare, and gated behind `msl_installed()` anyway), the MSL
     // bootstrap will ship to the now-existing pool when it runs.
     let seeded = if let Some(env) = MSL_WIRE.get() {
-        let mut p = pool().lock().unwrap();
+        let mut p = pool().lock_or_recover();
         match p.workers.first() {
             Some(WorkerHandle(worker)) => match post_array_to(worker, env) {
                 Ok(()) => {
@@ -802,7 +803,7 @@ fn handle_worker_error(idx: usize) {
         handle.clear_all_pending();
     }
     let crashed_run = {
-        let p = pool().lock().unwrap();
+        let p = pool().lock_or_recover();
         p.running.get(idx).copied().flatten()
     };
     if let Some(run_id) = crashed_run {
@@ -841,7 +842,7 @@ fn respawn_worker(idx: usize) {
         }
     };
     {
-        let mut p = pool().lock().unwrap();
+        let mut p = pool().lock_or_recover();
         if let Some(slot) = p.workers.get_mut(idx) {
             *slot = WorkerHandle(worker);
         }
@@ -997,7 +998,7 @@ fn assign_and_post_run_fast(run_id: lunco_experiments::ExperimentId, msg: WireMe
             return;
         }
     };
-    let mut p = pool().lock().unwrap();
+    let mut p = pool().lock_or_recover();
     let n = p.workers.len();
     if n == 0 {
         bevy::log::warn!("[worker_transport] run_fast: no workers installed");
@@ -1055,7 +1056,7 @@ fn assign_and_post_run_fast(run_id: lunco_experiments::ExperimentId, msg: WireMe
 /// to every worker (a no-op in the ones not running it).
 pub fn dispatch_cancel_run(run_id: lunco_experiments::ExperimentId) {
     let (target, n) = {
-        let p = pool().lock().unwrap();
+        let p = pool().lock_or_recover();
         (p.run_to_worker.get(&run_id).copied(), p.workers.len())
     };
     if n == 0 {
@@ -1215,7 +1216,7 @@ pub fn dispatch_parse_to_worker(
     // editing large files stays responsive. Compute the index under the lock,
     // then drop it before `post_msg_to` (which re-locks) to avoid a deadlock.
     let idx = {
-        let p = pool().lock().unwrap();
+        let p = pool().lock_or_recover();
         let n = p.workers.len();
         if n == 0 {
             return false;
@@ -1317,7 +1318,7 @@ pub fn install_msl_in_worker(
     }
 
     let n = {
-        let mut p = pool().lock().unwrap();
+        let mut p = pool().lock_or_recover();
         let n = p.workers.len();
         if n == 0 {
             return;
@@ -1419,7 +1420,7 @@ pub fn install_msl_compressed_in_worker(compressed: &[u8]) -> usize {
     // the buffer is safe).
     let Some(bytes) = encode(true) else { return 0 };
     let posted = {
-        let mut p = pool().lock().unwrap();
+        let mut p = pool().lock_or_recover();
         if p.workers.is_empty() {
             return 0;
         }
@@ -1466,7 +1467,7 @@ fn seed_secondary_workers() {
     };
     let mut seeded = 0usize;
     {
-        let mut p = pool().lock().unwrap();
+        let mut p = pool().lock_or_recover();
         let n = p.workers.len();
         for i in 1..n {
             if p.msl[i] != MslState::Absent || is_reseed_pending(i) {

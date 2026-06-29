@@ -15,10 +15,15 @@ pub struct EntityProxy {
 #[pymethods]
 impl EntityProxy {
     #[new]
-    pub fn new(index: u32) -> Self {
-        Self {
-            entity: Entity::from_raw_u32(index).unwrap(),
-        }
+    pub fn new(index: u32) -> PyResult<Self> {
+        // Surface an invalid index as a Python ValueError rather than
+        // `unwrap()`-panicking the host: `from_raw_u32` rejects the
+        // reserved placeholder slot, and `index` comes straight from
+        // user script input.
+        let entity = Entity::from_raw_u32(index).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid entity index {index}"))
+        })?;
+        Ok(Self { entity })
     }
 
     fn __repr__(&self) -> String {

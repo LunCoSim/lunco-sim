@@ -307,8 +307,12 @@ pub fn refresh_diagnostics(
         // in flight). See manual-test log silence after any
         // `Compile finished with error`.
         let (cache_hit_entries, need_spawn) = {
+            // CQ-513: recover from a poisoned lock rather than panicking.
+            // A worker task that panics mid-update would otherwise crash
+            // the whole UI on the next refresh; the cached lint state is
+            // plain data, so reading through poison is safe.
             let mut lint_state =
-                lint_worker_state().lock().expect("lint state lock");
+                lint_worker_state().lock().unwrap_or_else(|e| e.into_inner());
             let current_cache_key = lint_state.cached_for;
             let current_inflight_key = lint_state.inflight_for;
             let mut hit: Option<Vec<LogEntry>> = None;
@@ -388,7 +392,8 @@ pub fn refresh_diagnostics(
         // `entries` on the same refresh rather than the next one.
         if let Ok(mut slot) = lint_result_slot().lock() {
             if let Some((key, out)) = slot.take() {
-                let mut state = lint_worker_state().lock().expect("lint state lock");
+                let mut state =
+                    lint_worker_state().lock().unwrap_or_else(|e| e.into_inner());
                 state.cached_for = Some(key);
                 state.cached_entries = out.clone();
                 state.inflight_for = None;
@@ -402,11 +407,11 @@ pub fn refresh_diagnostics(
     diagnostics.append(entries);
 }
 
-/// Shared state between the lint-worker thread and the main-thread
+/// Shared state between the lint worker and the main-thread
 /// `refresh_diagnostics` caller. Kept as process-globals (via
-/// `OnceLock`) instead of a Bevy `Resource` because the worker is a
-/// plain `std::thread::spawn` — no bevy ECS access on the worker
-/// side — and the main thread lock is contended for ~microseconds.
+/// `OnceLock`) instead of a Bevy `Resource` because the worker runs on
+/// `AsyncComputeTaskPool` (no bevy ECS access on the worker side) and
+/// the main-thread lock is contended for ~microseconds.
 struct LintWorkerState {
     /// Key (doc, ast_gen) of the currently cached lint output. `None`
     /// when we've never finished a lint for any state.

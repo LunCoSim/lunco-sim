@@ -31,8 +31,15 @@ fn scale_digital_to_physical(
     for wire in q_wire.iter() {
         if let Ok(digital) = q_digital.get(wire.source) {
             if let Ok(mut physical) = q_physical.get_mut(wire.target) {
+                // CQ-514: a zero or non-finite scale is a misconfigured
+                // wire — skip it (warn once) rather than emit NaN/inf into
+                // the physics state.
+                if !wire.scale.is_finite() || wire.scale == 0.0 {
+                    warn_once!("DAC wire scale is zero or non-finite ({}); skipping", wire.scale);
+                    continue;
+                }
                 // Tier 2 Integration Math (DAC Pathway):
-                // Maps the full range of a 16-bit signed integer (-32767 to 32767) 
+                // Maps the full range of a 16-bit signed integer (-32767 to 32767)
                 // to a physical unit (e.g., Nm or Radians) defined by the Wire's scale.
                 physical.value = (digital.raw_value as f32 / 32767.0) * wire.scale;
             }
@@ -53,8 +60,14 @@ fn scale_physical_to_digital(
     for wire in q_wire.iter() {
         if let Ok(physical) = q_physical.get(wire.source) {
             if let Ok(mut digital) = q_digital.get_mut(wire.target) {
+                // CQ-514: guard the divide — a zero/non-finite scale would
+                // produce NaN/inf and saturate the register to garbage.
+                if !wire.scale.is_finite() || wire.scale == 0.0 {
+                    warn_once!("ADC wire scale is zero or non-finite ({}); skipping", wire.scale);
+                    continue;
+                }
                 // Tier 2 Integration Math (ADC Pathway):
-                // Takes physical value, divides by wire scale (limit), and 
+                // Takes physical value, divides by wire scale (limit), and
                 // clamps to ensure the digital register does not overflow.
                 let clamped_ratio = (physical.value / wire.scale).clamp(-1.0, 1.0);
                 digital.raw_value = (clamped_ratio * 32767.0) as i16;

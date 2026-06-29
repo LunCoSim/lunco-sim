@@ -4,6 +4,7 @@ use std::sync::Arc;
 use rumoca_compile::parsing::ast::StoredDefinition;
 use rumoca_phase_parse::parse_to_ast;
 use super::errors::AstMutError;
+use crate::lock_ext::LockExt;
 use crate::pretty;
 
 /// Wrapper class name used when fragments of Modelica (a binding
@@ -27,14 +28,14 @@ pub(crate) fn parse_stub_cached(stub: &str) -> Option<Arc<StoredDefinition>> {
         OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::with_capacity(64)));
 
-    if let Some(hit) = cache.lock().unwrap().get(stub).cloned() {
+    if let Some(hit) = cache.lock_or_recover().get(stub).cloned() {
         return Some(hit);
     }
 
     let parsed = parse_to_ast(stub, "__lunco_fragment.mo").ok()?;
     let arc = Arc::new(parsed);
 
-    let mut g = cache.lock().unwrap();
+    let mut g = cache.lock_or_recover();
     if g.len() >= 1024 {
         g.clear();
     }

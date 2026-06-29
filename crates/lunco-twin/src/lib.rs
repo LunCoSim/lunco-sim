@@ -60,6 +60,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 mod document_kind_registry;
@@ -113,6 +114,19 @@ impl TwinMode {
     /// - If `path` is a directory containing `twin.toml` → `Twin`.
     /// - If `path` is a directory without `twin.toml` → `Folder`.
     pub fn open(path: &Path) -> Result<Self, TwinError> {
+        let mut visited = HashSet::new();
+        Self::open_with_visited(path, &mut visited)
+    }
+
+    /// Recursion body for [`TwinMode::open`], threading the set of
+    /// canonical ancestor paths already on this open's DFS stack so
+    /// multi-level cycles (a→b→a) are caught — not just a manifest that
+    /// lists its own folder. Without this, a cyclic `twin.toml` graph
+    /// recurses forever and overflows the stack (CQ-508).
+    fn open_with_visited(
+        path: &Path,
+        visited: &mut HashSet<PathBuf>,
+    ) -> Result<Self, TwinError> {
         let meta = std::fs::metadata(path).map_err(|e| TwinError::Io {
             path: path.to_path_buf(),
             source: e,
@@ -125,6 +139,11 @@ impl TwinMode {
         if !meta.is_dir() {
             return Err(TwinError::NotAFileOrFolder(path.to_path_buf()));
         }
+
+        // Record this twin's canonical identity so any descendant that
+        // points back at it (directly or transitively) is recognised.
+        let canonical_self = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        visited.insert(canonical_self);
 
         let manifest_path = path.join(MANIFEST_FILENAME);
         let mut twin = Twin::index(path.to_path_buf())?;
@@ -147,14 +166,17 @@ impl TwinMode {
                 if !child_root.is_dir() {
                     continue;
                 }
-                // Recurse via TwinMode::open so the child's own
-                // manifest + children are discovered. Guard against
-                // cycles by comparing canonical paths against
-                // ancestors visited on this open.
-                if matches_ancestor(&twin.root, &child_root) {
+                // Cycle guard: skip any child that canonicalises to a
+                // path already visited on this open (an ancestor or, for
+                // a diamond graph, an already-loaded twin). Catches
+                // multi-level cycles, not just direct self-reference.
+                let canonical_child = child_root
+                    .canonicalize()
+                    .unwrap_or_else(|_| child_root.clone());
+                if visited.contains(&canonical_child) {
                     continue;
                 }
-                match TwinMode::open(&child_root)? {
+                match Self::open_with_visited(&child_root, visited)? {
                     TwinMode::Twin(t) | TwinMode::Folder(t) => children.push(t),
                     TwinMode::Orphan(_) => {}
                 }
@@ -166,18 +188,6 @@ impl TwinMode {
         } else {
             Ok(TwinMode::Folder(twin))
         }
-    }
-}
-
-/// Cycle guard: returns `true` when `candidate` canonicalises to the
-/// same path as `ancestor`. Cheaper than walking the entire ancestry
-/// because `TwinMode::open` always recurses from the parent downward,
-/// so a direct-parent check catches the common broken case (manifest
-/// that lists its own folder as a child).
-fn matches_ancestor(ancestor: &Path, candidate: &Path) -> bool {
-    match (ancestor.canonicalize(), candidate.canonicalize()) {
-        (Ok(a), Ok(c)) => a == c,
-        _ => false,
     }
 }
 

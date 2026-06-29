@@ -341,8 +341,24 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                                         old_rotation: old_r,
                                     });
                                 }
+                                let new_t = Vec3::new(x, y, z);
                                 if let Some(mut tf) = world.get_mut::<Transform>(entity) {
-                                    tf.translation = Vec3::new(x, y, z);
+                                    tf.translation = new_t;
+                                }
+                                // CQ-510: on a physics body avian re-derives
+                                // Transform from its f64 `Position` every tick,
+                                // so writing only Transform silently no-ops.
+                                // Mirror `MoveEntity`: seat `Position` and force
+                                // Kinematic so the new pose is authoritative.
+                                if let Some(mut pos) =
+                                    world.get_mut::<avian3d::physics_transform::Position>(entity)
+                                {
+                                    pos.0 = new_t.as_dvec3();
+                                }
+                                if world.get::<avian3d::prelude::RigidBody>(entity).is_some() {
+                                    world
+                                        .entity_mut(entity)
+                                        .insert(avian3d::prelude::RigidBody::Kinematic);
                                 }
                             });
                         }
