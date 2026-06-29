@@ -631,6 +631,27 @@ impl CommandPolicy {
     pub const OWNED_CONTROL: Self = Self { min_role: AuthorityRole::Observer, ownership_gated: true };
 }
 
+/// Well-known capability keys for authorization gates that aren't a single
+/// reflected command but still want one policy substrate — currently the
+/// avatar-relay paths (`TutorStatus`/`StudentStatus`/`SharePerspective`), which
+/// seize or redirect peers' avatar camera + input.
+///
+/// They are resolved through the same [`CommandPolicyRegistry`] as real commands
+/// (keyed by these strings), so an operator tightens "who may teach / share a
+/// perspective" exactly as they would tighten any command. Absent from the
+/// registry by default → [`CommandPolicy::OPEN`], so every authenticated peer may
+/// relay (matching the open-sandbox default). The string values intentionally
+/// match the wire envelope / command type names so the command and relay paths of
+/// the same concept share one policy entry.
+pub mod capability {
+    /// Relay a `TutorStatus` (locks/seizes targeted peers' avatar input + camera).
+    pub const TUTOR_STATUS: &str = "TutorStatus";
+    /// Relay a `StudentStatus` (mirrors a student's view to an observing tutor).
+    pub const STUDENT_STATUS: &str = "StudentStatus";
+    /// Relay a `SharePerspective` (one-shot snaps peers' camera to the sender's view).
+    pub const SHARE_PERSPECTIVE: &str = "SharePerspective";
+}
+
 /// Per-command authorization policy, resolved by [`authorize`].
 ///
 /// The registry is the single seam through which RBAC is introduced later

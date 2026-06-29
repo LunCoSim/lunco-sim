@@ -213,13 +213,15 @@ pub struct SessionCredential {
     pub token: Option<String>,
 }
 
-/// Two low-use resources bundled so [`drain_sync_inbox`] stays within Bevy's
-/// 16-param ceiling: the client's session-credential store (handshake) and the
-/// clock (tutor-status timestamps).
+/// Low-use resources bundled so [`drain_sync_inbox`] stays within Bevy's
+/// 16-param ceiling: the client's session-credential store (handshake), the clock
+/// (tutor-status timestamps), and the per-command/-capability authorization policy
+/// registry (relay gates).
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct InboundClientCtx<'w> {
     credential: ResMut<'w, SessionCredential>,
     time: Res<'w, Time>,
+    command_policies: Res<'w, lunco_core::session::CommandPolicyRegistry>,
 }
 
 /// Host → clients: the authoritative who-owns-what map (`gid → session`).
@@ -777,29 +779,33 @@ pub fn apply_sync_command(
 /// Returns whether the arm should keep processing:
 /// - non-host peer → `true` (clients never gate; they trust the host-stamped relay),
 /// - host + `Operator`-or-higher sender → `true` (caller stamps + relays + consumes),
-/// - host + Observer/unauthenticated sender → `false` (caller `continue`s: not relayed, not consumed).
+/// - host + sender lacks the relay capability's role → `false` (caller `continue`s: not relayed, not consumed).
 ///
-/// Gated at **`Operator`**, not `Observer`. Every raw connection is auto-inserted as
-/// an authenticated `Observer` (`server.rs`), so an Observer floor is no gate at all:
-/// any peer could emit `TutorStatus { allow_free_movement: false }` and freeze every
-/// other peer's input + seize their camera. `Operator` is the same bar the control
-/// commands use, and a client reaches it only by sending an `UpdateProfile`
-/// (`on_update_profile_rbac`) — an intentional act, not a side effect of connecting.
-/// A legitimate tutor sets a profile before teaching, so this does not drop real
-/// tutors; it drops the passive/auto Observer that the threat relies on.
+/// **Policy is data, not hardcoded.** The required role for `capability`
+/// (`lunco_core::session::capability::*`) is resolved from the shared
+/// [`CommandPolicyRegistry`], exactly like a reflected command goes through
+/// [`authorize`]. By default these capabilities are absent from the registry and
+/// resolve to [`CommandPolicy::OPEN`] (Observer floor), so any authenticated peer
+/// may relay — the open-sandbox default. RBAC is introduced by registering or
+/// overriding the capability's policy (e.g. tighten `SHARE_PERSPECTIVE` to
+/// `Operator`), with no change to this gate.
 ///
-/// This closes the unprivileged-floor hole. It does NOT make teaching fully safe:
-/// `Operator` promotion is still token-less self-promotion (see `on_update_profile_rbac`),
-/// and a broadcast `TutorStatus` still locks *all* peers rather than only opted-in
-/// followers. Real fixes — verified-token auth and per-peer follow opt-in — are
-/// tracked separately (review H4/M2 and target opt-in).
+/// Orthogonal protections remain regardless of role policy: the `authenticated +
+/// server-issued token` credential floor (`SessionRbac::is_authorized`), the
+/// per-sender identity binding done by each relay arm (anti-spoof), and the
+/// per-peer follow opt-in / explicit-target consent in the `TutorStatus` arm.
 #[inline]
 fn authed_for_avatar_relay(
     role: &NetworkRole,
     rbac: &lunco_core::session::SessionRbac,
+    policies: &lunco_core::session::CommandPolicyRegistry,
     sender: SessionId,
+    capability: &str,
 ) -> bool {
-    !role.is_host() || rbac.is_authorized(sender, lunco_core::session::AuthorityRole::Operator)
+    if !role.is_host() {
+        return true;
+    }
+    rbac.is_authorized(sender, policies.policy_for(capability).min_role)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -997,7 +1003,13 @@ pub fn drain_sync_inbox(
                 // camera and locks their input. Gate (one chokepoint) then bind the
                 // tutor identity to the actual sender (mirroring the `Cursor` arm) so a
                 // peer can't claim to be another session. See [`authed_for_avatar_relay`].
-                if !authed_for_avatar_relay(&role, &rbac, sender) {
+                if !authed_for_avatar_relay(
+                    &role,
+                    &rbac,
+                    &ctx.command_policies,
+                    sender,
+                    lunco_core::session::capability::TUTOR_STATUS,
+                ) {
                     continue;
                 }
                 if role.is_host() {
@@ -1065,7 +1077,13 @@ pub fn drain_sync_inbox(
                 // Anti-spoof: bind the report to its actual sender so a peer can't
                 // impersonate another student and pollute the observing tutor's
                 // mirrored view. See [`authed_for_avatar_relay`].
-                if !authed_for_avatar_relay(&role, &rbac, sender) {
+                if !authed_for_avatar_relay(
+                    &role,
+                    &rbac,
+                    &ctx.command_policies,
+                    sender,
+                    lunco_core::session::capability::STUDENT_STATUS,
+                ) {
                     continue;
                 }
                 if role.is_host() {
@@ -1090,7 +1108,13 @@ pub fn drain_sync_inbox(
                 // Same authz + anti-spoof as TutorStatus: a SharePerspective snaps
                 // every targeted peer's avatar/camera to the sender's view. See
                 // [`authed_for_avatar_relay`].
-                if !authed_for_avatar_relay(&role, &rbac, sender) {
+                if !authed_for_avatar_relay(
+                    &role,
+                    &rbac,
+                    &ctx.command_policies,
+                    sender,
+                    lunco_core::session::capability::SHARE_PERSPECTIVE,
+                ) {
                     continue;
                 }
                 if role.is_host() {
