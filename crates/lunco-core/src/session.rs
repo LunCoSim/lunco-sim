@@ -693,6 +693,11 @@ impl CommandPolicyRegistry {
     }
 
     /// Declare a command's compile-time policy (the future `#[Command]`-derive seam).
+    ///
+    // TODO(rbac step 4 / CQ-705): drive this from a `#[command(min_role = ..,
+    // ownership_gated)]` attribute in `lunco-command-macro` so policy lives on the
+    // command type and auto-populates `base` at startup, instead of being set here
+    // by hand. This `register()` entry point is the hook the derive will call.
     pub fn register(&mut self, type_name: &'static str, policy: CommandPolicy) {
         self.base.insert(type_name, policy);
     }
