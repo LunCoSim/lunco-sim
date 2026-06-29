@@ -122,22 +122,61 @@ pub fn tile_rotation_sync_system(
     // Intentionally empty — tiles stay at identity rotation in Grid frame.
 }
 
-pub fn update_sun_light_system(
-    mut q_light: Query<&mut Transform, With<DirectionalLight>>,
-    mut first_run: Local<bool>,
-) {
-    if !*first_run {
-        *first_run = true;
-        warn!("SUN_LIGHT: system running");
+/// Pure direction math for [`update_sun_light_system`]: the direction a
+/// `DirectionalLight` should EMIT along (its local `-Z` / forward) so sunlight
+/// travels from the Sun toward the scene, given heliocentric Sun and Moon
+/// positions (ecliptic J2000, AU). Returns `None` when degenerate (e.g. the
+/// `NoOpEphemerisProvider` returns ZERO for everything).
+pub(crate) fn sun_emit_direction(p_sun: bevy::math::DVec3, p_moon: bevy::math::DVec3) -> Option<Vec3> {
+    // `to_sun` = Moon→Sun in Bevy world space; the light emits the other way.
+    let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_moon).as_vec3().normalize_or_zero();
+    if to_sun.length_squared() < 0.5 {
+        return None;
     }
+    Some(-to_sun)
+}
 
-    // Point sun light along +Z axis (toward Earth at current epoch).
-    // This is a fixed direction that illuminates the Earth-Moon system.
-    // The exact direction varies with Earth's orbit, but +Z is a reasonable
-    // approximation that keeps the Moon illuminated from most viewing angles.
-    let dir = bevy::math::Vec3::NEG_Z;
-    if let Ok(mut light_tf) = q_light.single_mut() {
-        light_tf.look_to(dir, bevy::math::Vec3::Y);
+/// Point the scene's primary `DirectionalLight` along the **ephemeris** Sun
+/// direction at the current epoch (architecture doc 19 — T2; replaces the old
+/// hardcoded `Vec3::NEG_Z`).
+///
+/// The Sun sits at the heliocentre, so the Moon→Sun direction is just
+/// `-ecliptic_to_bevy(global_position(Moon))` (mirrors the solar-panel pointing
+/// in [`crate::missions`]). A `DirectionalLight` emits along its local forward
+/// (`-Z`) and rays travel FROM the Sun INTO the scene, so the light's forward is
+/// set to `-to_sun`. The brightest light is taken as the sun (the Earthshine
+/// fill is ~12 lx vs ~128 000 lx), matching the canonical `pick_sun` rule and
+/// avoiding both a marker dependency and the `single_mut()`-fails-with-two-lights
+/// trap.
+///
+/// With the default `NoOpEphemerisProvider` every position is ZERO, so `to_sun`
+/// degenerates and the system returns early — leaving the light under manual
+/// `SetEnvironmentLight` (yaw/pitch) control. The ephemeris is therefore
+/// authoritative ONLY when a real provider (`lunco-celestial-ephemeris`) is
+/// installed; sandbox / NoOp contexts keep dynamic manual control. That single
+/// authoritative writer per context resolves the earlier web-build conflict
+/// where two systems fought over the sun direction every frame.
+pub fn update_sun_light_system(
+    ephemeris: Option<Res<EphemerisResource>>,
+    clock: Res<crate::clock::CelestialClock>,
+    mut q_light: Query<(&mut Transform, &DirectionalLight)>,
+) {
+    let Some(ephemeris) = ephemeris else { return; };
+
+    let p_sun = ephemeris.provider.global_position(10, clock.epoch);
+    let p_moon = ephemeris.provider.global_position(301, clock.epoch);
+    let Some(dir) = sun_emit_direction(p_sun, p_moon) else {
+        // NoOp / degenerate ephemeris — leave the light to manual control.
+        return;
+    };
+    let up = if dir.dot(Vec3::Y).abs() > 0.99 { Vec3::X } else { Vec3::Y };
+
+    // The sun is the brightest `DirectionalLight` (Earthshine fill is far dimmer).
+    if let Some((mut light_tf, _)) = q_light
+        .iter_mut()
+        .max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance))
+    {
+        light_tf.look_to(dir, up);
     }
 }
 
@@ -202,5 +241,42 @@ pub fn celestial_visuals_system(
                 mat.set("transition", ParamValue::F32(transition));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod sun_dir_tests {
+    //! Pure ephemeris→sun-direction math ([`sun_emit_direction`], doc 19 — T2).
+    use super::*;
+    use bevy::math::DVec3;
+
+    #[test]
+    fn degenerate_ephemeris_yields_no_direction() {
+        // NoOpEphemerisProvider returns ZERO for every body → no sun direction,
+        // so the system leaves the light under manual control.
+        assert!(sun_emit_direction(DVec3::ZERO, DVec3::ZERO).is_none());
+    }
+
+    #[test]
+    fn emit_direction_is_unit_and_points_away_from_sun() {
+        // Sun at the heliocentre, Moon offset along +X (ecliptic).
+        let d = sun_emit_direction(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0))
+            .expect("non-degenerate");
+        assert!((d.length() - 1.0).abs() < 1e-5, "emit dir must be unit length");
+
+        // The light emits AWAY from the Sun: with the Moon on the far side, the
+        // emit direction flips to the antipode.
+        let d_opp = sun_emit_direction(DVec3::ZERO, DVec3::new(-1.0, 0.0, 0.0))
+            .expect("non-degenerate");
+        assert!((d + d_opp).length() < 1e-5, "antipodal Moon → antipodal light");
+    }
+
+    #[test]
+    fn emit_direction_tracks_the_moon_position() {
+        // Two distinct Moon positions give two distinct light directions — i.e.
+        // advancing the epoch (which moves the Moon) re-aims the sun.
+        let a = sun_emit_direction(DVec3::ZERO, DVec3::new(1.0, 0.2, 0.0)).unwrap();
+        let b = sun_emit_direction(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.3)).unwrap();
+        assert!((a - b).length() > 1e-3, "different Moon positions → different sun aim");
     }
 }

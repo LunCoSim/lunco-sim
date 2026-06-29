@@ -3,7 +3,6 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
-use chrono::TimeZone;
 
 use lunco_core::{Avatar, RoverVessel, Spacecraft, CelestialClock};
 use lunco_celestial::{CelestialBody, TeleportToSurface, LeaveSurface};
@@ -410,12 +409,10 @@ pub fn populate_mission_control_view(
         .collect();
 }
 
+/// Format a TDB epoch (Julian Date) as a UTC string via the spine — all the
+/// time-scale nuance (TDB→TT→TAI→UTC, leap seconds) lives in `lunco-time`
+/// (doc 19 — T3), so this UI never re-derives JD↔UTC. The old local version
+/// treated the master epoch as UTC (≈69 s early) anchored at J2000.
 fn jd_to_utc_string(jd: f64) -> String {
-    let j2000 = 2451545.0;
-    // CQ-512: carry the fractional day through to the clock. Truncating to
-    // whole days pinned the time-of-day at J2000's 12:00:00 epoch forever.
-    let secs_since_j2000 = ((jd - j2000) * 86400.0).round() as i64;
-    let base = chrono::Utc.with_ymd_and_hms(2000, 1, 1, 12, 0, 0).unwrap()
-        + chrono::Duration::seconds(secs_since_j2000);
-    base.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+    lunco_time::tdb_jd_to_utc_string(jd)
 }

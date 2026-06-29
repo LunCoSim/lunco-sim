@@ -6,7 +6,6 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt};
 
 use lunco_core::{Avatar, CelestialBody, CelestialClock};
 use crate::commands::TeleportToSurface;
-use chrono::TimeZone;
 
 /// Celestial time control panel.
 pub struct CelestialTimePanel;
@@ -159,13 +158,12 @@ pub fn populate_celestial_bodies_view(
         .collect();
 }
 
-/// Converts Julian Date to a human-readable UTC string.
+/// Format a TDB epoch (Julian Date) as a UTC string. All time-scale nuance lives
+/// in `lunco-time` (doc 19 — T3); this is a thin reuse, not a local JD↔UTC
+/// re-implementation (the old one mislabelled the master epoch as UTC and
+/// truncated the time-of-day to whole days).
 fn jd_to_utc_string(jd: f64) -> String {
-    let j2000 = 2451545.0;
-    let days_since_j2000 = (jd - j2000) as i64;
-    let base = chrono::Utc.with_ymd_and_hms(2000, 1, 1, 12, 0, 0).unwrap()
-        + chrono::Duration::days(days_since_j2000);
-    base.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+    lunco_time::tdb_jd_to_utc_string(jd)
 }
 
 /// Plugin that registers celestial UI panels.

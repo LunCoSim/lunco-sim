@@ -4,37 +4,23 @@ use lunco_core::SimTick;
 use lunco_time::{MissionClock, TimeTransport, TransportMode, WorldTime};
 
 pub fn get_default_celestial_clock() -> CelestialClock {
-    use chrono::Utc;
-
-    // Initializing from current system time
-    let now = Utc::now();
-    let unix_timestamp = now.timestamp() as f64 + (now.timestamp_subsec_nanos() as f64 / 1e9);
-
-    // JD = (Unix Timestamp / 86400.0) + 2440587.5
-    let epoch = (unix_timestamp / 86400.0) + 2440587.5;
-
     CelestialClock {
-        epoch,
+        // The epoch is **TDB** (the ephemeris input). Seed it from the current
+        // wall clock via the proper UTC→TAI→TT→TDB chain (doc 19 — T3). The old
+        // seed treated `Utc::now()` directly as a JD, conflating UTC with TDB and
+        // landing ~69 s (TT−UTC) early.
+        epoch: lunco_time::scales::utc_now_tdb_jd(),
         speed_multiplier: 1.0,
         paused: false,
     }
 }
 
+/// Format a **TDB** epoch (Julian Date) as a `YYYY-MM-DD HH:MM:SS UTC` string.
+/// Delegates to the spine's single canonical formatter (doc 19 — T3), which
+/// derives the correct UTC instant from TDB instead of mislabelling the master
+/// epoch as UTC. Kept here as a thin alias so existing call sites are untouched.
 pub fn jd_to_utc_string(epoch: f64) -> String {
-    use chrono::{TimeZone, Utc};
-
-    // Convert Julian Date to Unix Timestamp (seconds since 1970-01-01)
-    // JD 2440587.5 is Unix Epoch
-    let unix_secs = (epoch - 2440587.5) * 86400.0;
-
-    if let Some(dt) = Utc
-        .timestamp_opt(unix_secs as i64, ((unix_secs.rem_euclid(1.0)) * 1e9) as u32)
-        .single()
-    {
-        dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
-    } else {
-        format!("JD {:.2}", epoch)
-    }
+    lunco_time::scales::tdb_jd_to_utc_string(epoch)
 }
 
 /// Startup: seed the [`MissionClock`] mission origin **and** calendar anchor from

@@ -30,6 +30,9 @@ use lunco_core::{SimTick, TimeWarpState, SECS_PER_TICK};
 pub mod domain;
 pub use domain::*;
 
+pub mod scales;
+pub use scales::{tdb_jd_to_utc_string, utc_jd_to_tdb_jd, utc_now_tdb_jd, TimeScales};
+
 /// Seconds in one day — the JD/epoch unit conversion.
 pub const SECS_PER_DAY: f64 = 86_400.0;
 
@@ -326,6 +329,21 @@ pub struct WorldTime {
     pub met_secs: f64,
     /// Current live-world regime.
     pub regime: TimeRegime,
+}
+
+impl WorldTime {
+    /// Derive all civil/atomic/rotational scales (UTC/TAI/TT/UT1 + GMST) from the
+    /// master TDB epoch (doc 19 — T3). See [`TimeScales`].
+    #[inline]
+    pub fn scales(&self) -> TimeScales {
+        TimeScales::from_tdb_jd(self.epoch_jd)
+    }
+
+    /// The current epoch as a `YYYY-MM-DD HH:MM:SS UTC` string.
+    #[inline]
+    pub fn utc_string(&self) -> String {
+        tdb_jd_to_utc_string(self.epoch_jd)
+    }
 }
 
 /// System set for the spine step. `lunco-celestial`'s legacy bridge orders its

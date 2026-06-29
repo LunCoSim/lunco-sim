@@ -7171,6 +7171,8 @@ name = "lunco-time"
 version = "0.6.0-dev"
 dependencies = [
  "bevy",
+ "celestial-time",
+ "chrono",
  "lunco-core",
 ]
 
@@ -7223,6 +7225,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-core",
  "lunco-theme",
+ "lunco-time",
  "lunco-workbench",
  "web-time",
 ]
