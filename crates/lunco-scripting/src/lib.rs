@@ -38,6 +38,10 @@ pub mod catalog;
 use std::collections::HashMap;
 use lunco_doc::{DocumentId, DocumentHost};
 use doc::{ScriptDocument, ScriptedModel};
+// Brings the pyo3 method traits (`PyDictMethods::{set_item,get_item}`,
+// `PyAnyMethods::{downcast,extract}`) into scope for `run_scripted_models`.
+#[cfg(feature = "python")]
+use pyo3::prelude::*;
 
 #[derive(Resource, Default)]
 pub struct ScriptRegistry {
@@ -72,8 +76,12 @@ impl Plugin for LunCoScriptingPlugin {
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, repl::process_repl_commands);
 
-        // Per-frame execution of Python/Lua `ScriptedModel`s (rhai scenarios run
-        // via the world-bridge systems below).
+        // Per-tick Python `ScriptedModel` executor (the inputs/outputs dict
+        // model used by USD Python-cosim port mapping in `lunco-usd-sim`:
+        // `sync_script_inputs` feeds `ScriptedModel.inputs`, this runs the
+        // script, `sync_script_outputs` reads `ScriptedModel.outputs`). Python
+        // only — rhai scenarios run via the world-bridge systems below.
+        #[cfg(feature = "python")]
         app.add_systems(FixedUpdate, run_scripted_models);
 
         // World-bound rhai: a queue of (command_id, code) drained by an
@@ -155,9 +163,21 @@ impl Plugin for LunCoScriptingPlugin {
         app.insert_resource(backends);
 
         commands::register_all_commands(app);
+        // Data-driven RBAC: declare the script-execution commands' policies in
+        // the shared CommandPolicyRegistry so script submission goes through the
+        // same authorization seam as every other command (Operator floor for
+        // script execution; ownership-gated lifecycle). See the function's docs.
+        #[cfg(any(feature = "rhai", feature = "python"))]
+        commands::register_command_policies(app);
     }
 }
 
+/// Per-tick executor for Python `ScriptedModel`s (the legacy inputs/outputs
+/// dict model). Python-only: rhai scenarios run via the world-bridge systems.
+/// Feeds the USD Python-cosim path (`lunco-usd-sim/cosim.rs`), which syncs
+/// `SimComponent` ports into `ScriptedModel.inputs` before this and reads
+/// `ScriptedModel.outputs` after.
+#[cfg(feature = "python")]
 fn run_scripted_models(
     mut q_models: Query<&mut ScriptedModel>,
     registry: Res<ScriptRegistry>,
@@ -165,68 +185,60 @@ fn run_scripted_models(
 ) {
     for mut model in q_models.iter_mut() {
         if model.paused { continue; }
-        
+
         let Some(doc_id_raw) = model.document_id else { continue };
         let doc_id = DocumentId::new(doc_id_raw);
         let Some(host) = registry.documents.get(&doc_id) else { continue };
         let doc = host.document();
 
-        // Execution logic for Python/Lua
-        if doc.language == doc::ScriptLanguage::Python {
-            #[cfg(feature = "python")]
-            {
-                if *python_status != python::PythonStatus::Available {
-                    error_once!("Python is not available on this system. Cannot run Python scripts.");
-                    continue;
-                }
-                pyo3::Python::with_gil(|py| {
-                    // 1. Prepare inputs
-                    let locals = pyo3::types::PyDict::new(py);
-                    let inputs_dict = pyo3::types::PyDict::new(py);
-                    for (k, v) in &model.inputs {
-                        let _ = inputs_dict.set_item(k, v);
-                    }
-                    let outputs_dict = pyo3::types::PyDict::new(py);
-                    for (k, v) in &model.outputs {
-                        let _ = outputs_dict.set_item(k, v);
-                    }
-                    let _ = locals.set_item("inputs", inputs_dict);
-                    let _ = locals.set_item("outputs", outputs_dict);
+        if doc.language != doc::ScriptLanguage::Python { continue; }
 
-                    // 2. Run source
-                    // TODO(CQ-217): `py.run` re-parses + recompiles the script
-                    // source from scratch on *every* FixedUpdate tick. Compile
-                    // once (`PyModule`/`compile` → cached code object, keyed on
-                    // doc source revision) and only execute the cached code per
-                    // tick. See docs/code-quality-remediation.md (CQ-217).
-                    let c_str = match std::ffi::CString::new(doc.source.as_str()) {
-                        Ok(c) => c,
-                        Err(_) => {
-                            error!("ScriptedModel: source contains a NUL byte; skipping");
-                            return;
-                        }
-                    };
-                    if let Err(e) = py.run(&c_str, None, Some(&locals)) {
-                        error!("ScriptedModel Python Error: {}", e);
-                    } else {
-                        // 3. Extract outputs
-                        if let Ok(Some(outputs)) = locals.get_item("outputs") {
-                            if let Ok(dict) = outputs.downcast::<pyo3::types::PyDict>() {
-                                for (k, v) in dict.iter() {
-                                    if let (Ok(key), Ok(val)) = (k.extract::<String>(), v.extract::<f64>()) {
-                                        model.outputs.insert(key, val);
-                                    }
-                                }
+        if *python_status != python::PythonStatus::Available {
+            error_once!("Python is not available on this system. Cannot run Python scripts.");
+            continue;
+        }
+        pyo3::Python::with_gil(|py| {
+            // 1. Prepare inputs
+            let locals = pyo3::types::PyDict::new(py);
+            let inputs_dict = pyo3::types::PyDict::new(py);
+            for (k, v) in &model.inputs {
+                let _ = inputs_dict.set_item(k, v);
+            }
+            let outputs_dict = pyo3::types::PyDict::new(py);
+            for (k, v) in &model.outputs {
+                let _ = outputs_dict.set_item(k, v);
+            }
+            let _ = locals.set_item("inputs", inputs_dict);
+            let _ = locals.set_item("outputs", outputs_dict);
+
+            // 2. Run source
+            // TODO(CQ-217): `py.run` re-parses + recompiles the script
+            // source from scratch on *every* FixedUpdate tick. Compile
+            // once (`PyModule`/`compile` → cached code object, keyed on
+            // doc source revision) and only execute the cached code per
+            // tick. See docs/code-quality-remediation.md (CQ-217).
+            let c_str = match std::ffi::CString::new(doc.source.as_str()) {
+                Ok(c) => c,
+                Err(_) => {
+                    error!("ScriptedModel: source contains a NUL byte; skipping");
+                    return;
+                }
+            };
+            if let Err(e) = py.run(&c_str, None, Some(&locals)) {
+                error!("ScriptedModel Python Error: {}", e);
+            } else {
+                // 3. Extract outputs
+                if let Ok(Some(outputs)) = locals.get_item("outputs") {
+                    if let Ok(dict) = outputs.downcast::<pyo3::types::PyDict>() {
+                        for (k, v) in dict.iter() {
+                            if let (Ok(key), Ok(val)) = (k.extract::<String>(), v.extract::<f64>()) {
+                                model.outputs.insert(key, val);
                             }
                         }
                     }
-                });
+                }
             }
-            #[cfg(not(feature = "python"))]
-            {
-                error_once!("Python support was not compiled into this binary.");
-            }
-        }
+        });
     }
 }
 

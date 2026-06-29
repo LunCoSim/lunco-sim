@@ -76,24 +76,32 @@ impl LunCoApiConfig {
     /// [`DEFAULT_API_PORT`](lunco_core::session::DEFAULT_API_PORT).
     /// If `--api` is NOT present, returns configuration with HTTP disabled.
     pub fn from_args() -> Self {
-        let args: Vec<String> = std::env::args().collect();
-        let mut port = None;
+        // The CLI port only matters when an outward HTTP transport is compiled
+        // in; without `transport-http` the config carries no fields, so parsing
+        // args here would be dead work (and an unused `port`).
+        #[cfg(feature = "transport-http")]
+        let http_config = {
+            let args: Vec<String> = std::env::args().collect();
+            let mut port = None;
 
-        for i in 0..args.len() {
-            if args[i] == "--api" {
-                port = Some(lunco_core::session::DEFAULT_API_PORT);
-                if i + 1 < args.len() {
-                    if let Ok(p) = args[i + 1].parse::<u16>() {
-                        port = Some(p);
+            for i in 0..args.len() {
+                if args[i] == "--api" {
+                    port = Some(lunco_core::session::DEFAULT_API_PORT);
+                    if i + 1 < args.len() {
+                        if let Ok(p) = args[i + 1].parse::<u16>() {
+                            port = Some(p);
+                        }
                     }
+                    break;
                 }
-                break;
             }
-        }
+
+            port.map(|p| transports::HttpServerConfig { port: p })
+        };
 
         Self {
             #[cfg(feature = "transport-http")]
-            http_config: port.map(|p| transports::HttpServerConfig { port: p }),
+            http_config,
         }
     }
 }
@@ -112,18 +120,29 @@ impl Default for LunCoApiConfig {
 /// - Telemetry subscription system
 /// - HTTP transport server (if enabled)
 pub struct LunCoApiPlugin {
+    /// HTTP transport config — only present when `transport-http` is compiled
+    /// in. Without it `LunCoApiConfig` has no fields and the plugin registers
+    /// only ECS-side plumbing, so there is nothing to store.
+    #[cfg(feature = "transport-http")]
     config: LunCoApiConfig,
 }
 
 impl LunCoApiPlugin {
     /// Create a new API plugin with the given configuration.
     pub fn new(config: LunCoApiConfig) -> Self {
-        Self { config }
+        // Without an HTTP transport the config carries nothing actionable.
+        #[cfg(not(feature = "transport-http"))]
+        let _ = config;
+        Self {
+            #[cfg(feature = "transport-http")]
+            config,
+        }
     }
 
     /// Create with default configuration.
     pub fn default() -> Self {
         Self {
+            #[cfg(feature = "transport-http")]
             config: LunCoApiConfig::default(),
         }
     }

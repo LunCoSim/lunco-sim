@@ -1,4 +1,5 @@
 use std::io::{self, BufRead};
+#[cfg(feature = "python")]
 use std::ffi::CString;
 use crossbeam_channel::{Receiver, unbounded};
 use bevy::prelude::*;
