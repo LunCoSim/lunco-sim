@@ -303,6 +303,7 @@ fn finish_dem_builds(
                 e.insert((
                     crate::stream_viz::TerrainLodViz::default(),
                     crate::stream_viz::LodTiles::default(),
+                    crate::stream_viz::PendingTileBakes::default(),
                     // Default Lit; switchable live in the Inspector (Terrain Shader).
                     crate::stream_viz::TerrainShaderMode::default(),
                 ));

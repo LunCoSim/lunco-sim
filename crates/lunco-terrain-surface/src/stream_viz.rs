@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::Grid;
 use lunco_core::WorldGrid;
 use lunco_obstacle_field::field::HeightGrid;
@@ -38,13 +39,6 @@ const MAX_DEPTH: u8 = 6;
 /// `refine_range(d) = RANGE_FACTOR · geometric_error(d)`. Larger → refine from
 /// farther (more fine tiles on screen).
 const RANGE_FACTOR: f64 = 3.0;
-/// Max tiles BAKED per frame (across all terrains). A big scale/zoom change can
-/// select hundreds of new tiles at once; baking them all in one frame on the main
-/// thread is the "stuck on scale change" hitch. Capping it amortises the work over
-/// frames — the coarser parent stays visible until each tile refines in. Despawns
-/// are unbounded (cheap). One tile/frame is the smoothest (no per-frame spike); at
-/// 140+ FPS a full ring still fills in well under a second.
-const MAX_TILE_BAKES_PER_FRAME: usize = 1;
 
 /// The DEM grid retained on a terrain entity so LOD tiles can sample heights.
 /// `Arc` so a future off-thread bake can share it without a copy.
@@ -143,7 +137,9 @@ pub struct TerrainLodConfig {
 
 impl Default for TerrainLodConfig {
     fn default() -> Self {
-        TerrainLodConfig { range_factor: RANGE_FACTOR, max_depth: MAX_DEPTH, bakes_per_frame: MAX_TILE_BAKES_PER_FRAME }
+        // Off-thread baking → safe to start several tasks/frame for a fast,
+        // non-blocking fill. Raise/lower live in the Inspector.
+        TerrainLodConfig { range_factor: RANGE_FACTOR, max_depth: MAX_DEPTH, bakes_per_frame: 4 }
     }
 }
 
@@ -157,6 +153,27 @@ pub struct LodMeshCache(HashMap<QuadCoord, Handle<Mesh>>);
 
 /// Soft cap on cached tile meshes before non-resident entries are trimmed.
 const CACHE_CAP: usize = 1024;
+/// Max bake tasks in flight per terrain (backpressure so a big move doesn't queue
+/// thousands of tasks). New tasks wait for slots to free.
+const MAX_INFLIGHT_BAKES: usize = 64;
+
+/// Result of an off-thread tile bake: the finished CPU `Mesh` (not yet uploaded)
+/// plus the spawn metadata the main thread needs.
+struct BakedTile {
+    mesh: Mesh,
+    center: [f64; 2],
+    depth: u32,
+    morph_start: f32,
+    morph_end: f32,
+}
+
+/// In-flight off-thread tile bakes for a terrain, keyed by quadtree node. The CPU
+/// bake (`bake_tile_mesh` + grid mesh build) runs on the [`AsyncComputeTaskPool`];
+/// the main thread only uploads the finished mesh + spawns the entity — so baking
+/// never blocks the frame ("non-blocking, extend outward"). Cancelled by drop when
+/// the terrain despawns.
+#[derive(Component, Default)]
+pub struct PendingTileBakes(HashMap<QuadCoord, Task<BakedTile>>);
 
 /// Build a tile `ShaderMaterial` for a `(mode, depth)` with its morph band. The
 /// geomorph vertex stage is shared; the fragment + colour come from the mode.
@@ -183,6 +200,47 @@ fn build_tile_material(
     materials.add(m)
 }
 
+/// Spawn one LOD tile entity (mesh + per-(mode,depth) material, anchored to its own
+/// big_space cell). Shared by the cache-hit and finalized-bake paths.
+#[allow(clippy::too_many_arguments)]
+fn spawn_tile(
+    commands: &mut Commands,
+    grid: &Grid,
+    grid_entity: Entity,
+    terrain: Entity,
+    coord: QuadCoord,
+    mesh: Handle<Mesh>,
+    center: [f64; 2],
+    depth: u32,
+    morph_start: f32,
+    morph_end: f32,
+    mode: TerrainShaderMode,
+    shader: &Handle<Shader>,
+    materials: &mut Assets<ShaderMaterial>,
+    lod_mats: &mut LodMaterials,
+) -> Entity {
+    let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], 0.0, center[1]));
+    let mat = if let Some(h) = lod_mats.0.get(&(mode, depth)) {
+        h.clone()
+    } else {
+        let h = build_tile_material(mode, morph_start, morph_end, depth, shader, materials);
+        lod_mats.0.insert((mode, depth), h.clone());
+        h
+    };
+    commands
+        .spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(mat),
+            cell,
+            Transform::from_translation(local),
+            Visibility::Inherited,
+            LodTileOf(terrain),
+            Name::new(format!("LodTile d{} {},{}", coord.depth, coord.x, coord.z)),
+            ChildOf(grid_entity),
+        ))
+        .id()
+}
+
 /// Read a scalar param off a material (for carrying a tile's morph band across a
 /// shader-mode swap).
 fn mat_f32(m: &ShaderMaterial, name: &str) -> Option<f32> {
@@ -204,6 +262,7 @@ pub fn update_lod_tiles(
         &DemHeightField,
         &TerrainLodViz,
         &mut LodTiles,
+        &mut PendingTileBakes,
         Option<&TerrainShaderMode>,
     )>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -223,7 +282,7 @@ pub fn update_lod_tiles(
     // Per-frame bake budget shared across all terrains (amortise scale changes).
     let mut bake_budget = cfg.bakes_per_frame.max(1);
 
-    for (terrain, t_gt, hf, viz, mut tiles, mode_opt) in &mut terrains {
+    for (terrain, t_gt, hf, viz, mut tiles, mut pending, mode_opt) in &mut terrains {
         let mode = mode_opt.copied().unwrap_or_default();
         // The mode's shader drives both the @vertex (CDLOD morph) and @fragment
         // stages; load-by-path → cached handle, hot-reloads on edit.
@@ -284,65 +343,77 @@ pub fn update_lod_tiles(
         };
         sel.sort_by(|a, b| dist2(a).partial_cmp(&dist2(b)).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Spawn newly-selected tiles (real DEM-sampled geometry, tinted by depth).
-        // Each tile anchors to its OWN big_space `CellCoord` (computed from its
-        // world centre) with vertices baked relative to that centre — so a tile far
-        // from the origin keeps f32 precision instead of riding one shared cell.
-        // The DEM sits at the grid origin (terrain anchored at `CellCoord::default`),
-        // so the tile's DEM-local centre equals its absolute grid position.
-        for s in &sel {
-            if tiles.0.contains_key(&s.coord) {
+        // ── Finalize completed off-thread bakes ──────────────────────
+        // Poll in-flight tasks; for each finished bake, upload its mesh (cheap, main
+        // thread) + spawn the tile. The expensive DEM sampling already ran on a
+        // worker thread, so the frame never blocks on baking.
+        let mut done: Vec<(QuadCoord, BakedTile)> = Vec::new();
+        pending.0.retain(|coord, task| match block_on(future::poll_once(&mut *task)) {
+            Some(baked) => {
+                done.push((*coord, baked));
+                false
+            }
+            None => true,
+        });
+        for (coord, baked) in done {
+            let handle = meshes.add(baked.mesh);
+            mesh_cache.0.insert(coord, handle.clone());
+            // No longer selected while it baked → keep the cached mesh, skip spawning.
+            if !wanted.contains(&coord) {
                 continue;
             }
-            let center = s.region.center;
-            // Reuse the cached mesh if this node was baked before; only a true bake
-            // (cache miss) spends the per-frame budget. Amortise: once spent, stop —
-            // the remaining tiles re-select next frame (no hitch).
-            let mesh = if let Some(cached) = mesh_cache.0.get(&s.coord) {
-                cached.clone()
-            } else {
-                if bake_budget == 0 {
-                    break;
-                }
-                bake_budget -= 1;
-                let tm = bake_tile_mesh(dem, s.region, viz.tile_res, h, center);
-                // Build the grid mesh and attach the CDLOD parent-lattice positions as
-                // the morph-target attribute the geomorph vertex shader lerps toward.
-                let mut mesh = grid_mesh(tm.positions, tm.normals, tm.uvs, tm.indices);
-                mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tm.morph_targets);
-                let handle = meshes.add(mesh);
-                mesh_cache.0.insert(s.coord, handle.clone());
-                handle
-            };
-            let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], 0.0, center[1]));
+            let ent = spawn_tile(
+                &mut commands, grid, grid_entity, terrain, coord, handle, baked.center,
+                baked.depth, baked.morph_start, baked.morph_end, mode, &shader, &mut materials,
+                &mut lod_mats,
+            );
+            tiles.0.insert(coord, ent);
+        }
+
+        // ── Queue new work, nearest-first ────────────────────────────
+        // Cache hits spawn instantly; misses spawn an off-thread bake task (budgeted:
+        // `bakes_per_frame` new tasks/frame, ≤ MAX_INFLIGHT in flight). Tiles anchor
+        // to their OWN big_space `CellCoord` (vertices baked relative to the tile
+        // centre) so far-from-origin tiles keep f32 precision.
+        let pool = AsyncComputeTaskPool::get();
+        for s in &sel {
+            if tiles.0.contains_key(&s.coord) || pending.0.contains_key(&s.coord) {
+                continue;
+            }
             let depth = s.coord.depth as u32;
-            // Per-depth morph band (distances): finite for sub-root nodes, "never"
-            // for the root (no coarser parent to morph toward).
+            // Per-depth morph band: finite for sub-root nodes, "never" for the root.
             let (morph_start, morph_end) = if s.morph_end.is_finite() {
                 (s.morph_start as f32, s.morph_end as f32)
             } else {
                 (1.0e20, 1.0e21)
             };
-            let mat = if let Some(h) = lod_mats.0.get(&(mode, depth)) {
-                h.clone()
-            } else {
-                let h = build_tile_material(mode, morph_start, morph_end, depth, &shader, &mut materials);
-                lod_mats.0.insert((mode, depth), h.clone());
-                h
-            };
-            let ent = commands
-                .spawn((
-                    Mesh3d(mesh),
-                    MeshMaterial3d(mat),
-                    cell,
-                    Transform::from_translation(local),
-                    Visibility::Inherited,
-                    LodTileOf(terrain),
-                    Name::new(format!("LodTile d{} {},{}", s.coord.depth, s.coord.x, s.coord.z)),
-                    ChildOf(grid_entity),
-                ))
-                .id();
-            tiles.0.insert(s.coord, ent);
+            if let Some(cached) = mesh_cache.0.get(&s.coord) {
+                let ent = spawn_tile(
+                    &mut commands, grid, grid_entity, terrain, s.coord, cached.clone(),
+                    s.region.center, depth, morph_start, morph_end, mode, &shader,
+                    &mut materials, &mut lod_mats,
+                );
+                tiles.0.insert(s.coord, ent);
+                continue;
+            }
+            // Cache miss → needs a bake. Respect the per-frame + in-flight budgets
+            // (keep scanning for cheap cache hits regardless of the bake budget).
+            if bake_budget == 0 || pending.0.len() >= MAX_INFLIGHT_BAKES {
+                continue;
+            }
+            bake_budget -= 1;
+            let dem_arc = hf.0.clone();
+            let region = s.region;
+            let tile_res = viz.tile_res;
+            let half = h;
+            let center = s.region.center;
+            let task = pool.spawn(async move {
+                let tm = bake_tile_mesh(&dem_arc, region, tile_res, half, center);
+                let mut mesh = grid_mesh(tm.positions, tm.normals, tm.uvs, tm.indices);
+                mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tm.morph_targets);
+                BakedTile { mesh, center, depth, morph_start, morph_end }
+            });
+            pending.0.insert(s.coord, task);
         }
 
         // Despawn no-longer-wanted tiles, but KEEP an old tile while it still covers
