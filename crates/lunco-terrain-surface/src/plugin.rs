@@ -47,6 +47,10 @@ impl Plugin for TerrainSurfacePlugin {
         // M3: spawn a static DEM terrain (mesh + heightfield collider) on the
         // `SpawnDemTerrain` command. See `crate::terrain`.
         crate::terrain::register(app);
+        // Expose the DEM height field to the API / scripting surface as
+        // `query("TerrainHeight", #{x, z})` — analytic height/normal/slope, no
+        // raycast. See `crate::query`.
+        crate::query::register_terrain_queries(app);
         // S3 (visual-only): opt-in camera-driven CDLOD tile streaming for SEEING
         // LODs. Inert unless a DEM is built with `lod_viz`. Physics still rides the
         // static heightfield collider. See `crate::stream_viz`.
