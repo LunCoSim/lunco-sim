@@ -219,6 +219,28 @@ pub enum UsdOp {
         /// [`sdf::Value`] by openusd's own parser at apply time.
         value: String,
     },
+    /// Author one **time sample** of an attribute on the prim at `path` —
+    /// the keyframe primitive. Creates the attribute if absent (just like
+    /// [`UsdOp::SetAttribute`]) and writes `value` at stage time `time`
+    /// instead of as the `default`. Repeated ops at distinct `time`s build
+    /// up the animation curve; the translator interpolates between them
+    /// when it evaluates the attribute at a clock time. The inverse is the
+    /// coarse full-source snapshot (sample removal has no typed op yet).
+    SetTimeSample {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose attribute to keyframe.
+        path: String,
+        /// The name of the attribute (e.g. `xformOp:translate`, `inputs:roughness`).
+        name: String,
+        /// The USD type name of the attribute (e.g. `double3` or `float`).
+        type_name: String,
+        /// Stage (composed) time code at which to author the sample.
+        time: f64,
+        /// The sample value formatted as a USD-compliant string literal,
+        /// parsed into a typed [`sdf::Value`] by openusd at apply time.
+        value: String,
+    },
 }
 
 impl Default for UsdOp {
@@ -583,7 +605,8 @@ impl Document for UsdDocument {
             | UsdOp::AddPrim { edit_target, .. }
             | UsdOp::RemovePrim { edit_target, .. }
             | UsdOp::SetTranslate { edit_target, .. }
-            | UsdOp::SetAttribute { edit_target, .. } => edit_target.clone(),
+            | UsdOp::SetAttribute { edit_target, .. }
+            | UsdOp::SetTimeSample { edit_target, .. } => edit_target.clone(),
         };
         let target = TargetLayer::from_id(&id).ok_or_else(|| {
             DocumentError::ValidationFailed(format!(
@@ -751,6 +774,34 @@ impl Document for UsdDocument {
                     .create_attribute(format!("{path}.{name}"), type_name.as_str())
                     .map_err(author_err)?
                     .set(val)
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::SetTimeSample {
+                path,
+                name,
+                type_name,
+                time,
+                value,
+                ..
+            } => {
+                self.require_prim_anywhere(&path)?;
+                let val = parse_attribute_value(&type_name, &value).map_err(|e| {
+                    DocumentError::ValidationFailed(format!(
+                        "SetTimeSample `{name}` ({type_name}) @ {time}: {e}"
+                    ))
+                })?;
+                // Sample removal has no typed inverse — restore the full prior
+                // source. (A future `RemoveTimeSample` could make this exact.)
+                let inverse = self.coarse_inverse(target, &id);
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage
+                    .create_attribute(format!("{path}.{name}"), type_name.as_str())
+                    .map_err(author_err)?
+                    .set_at(val, openusd::usd::TimeCode::new(time))
                     .map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
@@ -1038,6 +1089,55 @@ mod tests {
             .data()
             .prim_attribute_value::<[f32; 3]>(&SdfPath::new("/Ball").unwrap(), "primvars:displayColor");
         assert_eq!(color, Some([0.2, 0.4, 0.8]));
+    }
+
+    #[test]
+    fn set_time_sample_authors_keyframes_and_interpolates() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(14),
+            "#usda 1.0\ndef Xform \"Mover\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/anim.usda"),
+        );
+        // Two keyframes of the translate, authored as time samples. The first
+        // op's inverse snapshots the pristine (sample-free) source.
+        let mut restore = None;
+        for (t, x) in [(0.0_f64, 0.0_f64), (10.0, 10.0)] {
+            let inverse = doc
+                .apply(UsdOp::SetTimeSample {
+                    edit_target: LayerId::root(),
+                    path: "/Mover".into(),
+                    name: "xformOp:translate".into(),
+                    type_name: "double3".into(),
+                    time: t,
+                    value: format!("({x}, 0, 0)"),
+                })
+                .unwrap();
+            restore.get_or_insert(inverse);
+        }
+        let mover = SdfPath::new("/Mover").unwrap();
+        // Time-aware read interpolates the authored curve.
+        assert_eq!(
+            doc.data().prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 5.0),
+            Some([5.0, 0.0, 0.0]),
+            "midpoint must linearly interpolate the two keyframes"
+        );
+        assert_eq!(
+            doc.data().prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 10.0),
+            Some([10.0, 0.0, 0.0])
+        );
+        // A sample-only attribute has no `default` opinion.
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(&mover, "xformOp:translate"),
+            None,
+            "time samples must not leak into the default opinion"
+        );
+        // The captured inverse restores the prior (sample-free) source.
+        doc.apply(restore.unwrap()).unwrap();
+        assert_eq!(
+            doc.data().prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 5.0),
+            None,
+            "keyframes undone by the coarse inverse snapshot"
+        );
     }
 
     #[test]
