@@ -22,21 +22,38 @@ fn lander_settled(lander) {
 
 /// The engine auto-runs a `task(me)` if defined (prelude `__init_task`), so no
 /// on_start / on_tick wiring is needed. Entities are resolved by path at step
-/// time (inside the closures), not at build time.
+/// time (inside the closures), not at build time. Each phase posts an on-screen
+/// `notify(...)` so the player sees the mission advance.
 fn task(me) {
     seq([
-        once(|m| possess(find("/LanderTest/Lander"))),
+        once(|m| {
+            possess(find("/LanderTest/Lander"));
+            notify_kind("Powered descent — the GNC is flying the lander down.", "info");
+        }),
         // PID flies the descent; suspend until the body is settled on its legs.
         wait_until(|m| lander_settled(find("/LanderTest/Lander"))),
         // Disarm the GNC via the PORT path (`set`) — clobber-safe through
         // SimComponent.inputs. (`set_input` is the API, not a rhai verb.)
-        once(|m| set(find("/LanderTest/Lander"), "engine_enable", 0.0)),
+        once(|m| {
+            set(find("/LanderTest/Lander"), "engine_enable", 0.0);
+            notify_kind("Touchdown. Engine safed.", "success");
+        }),
         wait(1.5),                                       // brief settle (sim seconds)
-        once(|m| detach_joint(find("/LanderTest/LanderRoverJoint"))),
+        once(|m| {
+            detach_joint(find("/LanderTest/LanderRoverJoint"));
+            notify("Releasing the rover...");
+        }),
         wait(2.0),                                       // let the rover fall clear
         once(|m| {
             possess(find("/LanderTest/SkidRover"));
-            print("[Scenario] Rover deployed — control to player. (Click the lander + hold Space to fly it.)");
+            notify_kind("Rover deployed - you have control. Drive to the green dome.", "success");
+            print("[Scenario] Rover deployed - control to player.");
         }),
+        // First player task: reach the waypoint. Detection is EVENT-DRIVEN —
+        // avian fires `enter:waypoint` when the rover crosses the marker's sensor
+        // volume (fast, no per-tick distance poll). The processing — what arrival
+        // MEANS — stays here in rhai.
+        wait_for("enter:waypoint"),
+        once(|m| notify_kind("Waypoint reached! Next: photograph the rock.", "success")),
     ])
 }

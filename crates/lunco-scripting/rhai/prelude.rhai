@@ -532,6 +532,12 @@ fn set_property(id, key, val)  { cmd("SetObjectProperty", #{ target: id, key: ke
 fn detach_joint(joint)         { cmd("DetachJoint", #{ target: joint }) }
 fn possess(vessel)             { cmd("PossessVessel", #{ target: vessel }) }
 
+// On-screen player notifications (toasts). `notify` is info-styled; `notify_kind`
+// takes a style: "info" | "success" | "warn" | "error". Lets a scenario announce
+// each phase without any Rust — drawn by the avatar UI overlay, logged headless.
+fn notify(msg)                 { cmd("ShowNotification", #{ text: msg }) }
+fn notify_kind(msg, kind)      { cmd("ShowNotification", #{ text: msg, kind: kind }) }
+
 /// Fire a command and return JUST its assigned data (the `.data` bag), or () if
 /// it failed or reported none. The create-then-manipulate shortcut:
 ///   let id = cmd_data("SpawnThing", #{...}); if id != () { set_property(id, ...) }

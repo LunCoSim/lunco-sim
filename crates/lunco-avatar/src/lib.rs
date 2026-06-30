@@ -21,7 +21,7 @@ use leafwing_input_manager::prelude::*;
 use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 
 use lunco_controller::ControllerLink;
-use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands, SessionProfiles, LocalSession, NetworkRole, LocalAvatar};
+use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands, on_command, SessionProfiles, LocalSession, NetworkRole, LocalAvatar};
 use lunco_core::attach::migrate_to_grid;
 use lunco_celestial::{LocalGravityField, TeleportToSurface, LeaveSurface};
 use lunco_time::{TimeTransport, TransportMode, WorldTime};
@@ -469,6 +469,29 @@ impl Plugin for LunCoAvatarPlugin {
         app.init_resource::<RoverNameTagSettings>()
            .register_type::<RoverNameTagSettings>();
 
+        // On-screen notifications (rhai `notify(...)` → `ShowNotification`). The
+        // command itself is registered as a REAL command via `register_commands!`
+        // below (API-discoverable); here we only need its toast queue.
+        app.init_resource::<ScreenNotifications>();
+
+        // Native input → script EVENT bus: project key presses onto the shared
+        // `TelemetryEvent` bus so scenarios can `wait_for("key:KeyG")` / `on_event`
+        // raw input exactly like a zone enter or an `emit()`. Demonstrates the
+        // generic `project_events` registrar — every event source lands on ONE bus
+        // that rhai both produces (`emit`) and consumes (`on_event`/`wait_for`).
+        {
+            use bevy::input::keyboard::KeyboardInput;
+            use lunco_core::ScriptEventAppExt;
+            app.project_events::<KeyboardInput, _>(|e| {
+                e.state.is_pressed().then(|| lunco_core::TelemetryEvent {
+                    name: format!("key:{:?}", e.key_code),
+                    severity: lunco_core::Severity::Info,
+                    data: lunco_core::TelemetryValue::Bool(true),
+                    timestamp: 0.0,
+                })
+            });
+        }
+
         app.add_systems(Update, (
             avatar_init_system,
             capture_avatar_intent,
@@ -478,6 +501,7 @@ impl Plugin for LunCoAvatarPlugin {
             surface_mode_transition_system,
             enforce_ownership,
             sync_profile,
+            tick_notifications,
         ));
 
         // Possessed-rover name tags: an egui screen-space overlay (the scene has
@@ -486,6 +510,8 @@ impl Plugin for LunCoAvatarPlugin {
         // `LunCoAvatarPlugin`; `AvatarUiPlugin` is luncosim-only.
         #[cfg(feature = "ui")]
         app.add_systems(bevy_egui::EguiPrimaryContextPass, crate::ui::draw_rover_name_tags);
+        #[cfg(feature = "ui")]
+        app.add_systems(bevy_egui::EguiPrimaryContextPass, crate::ui::draw_notifications);
 
         // Chase camera shares the rover's fixed-step time domain so its
         // slerp/lerp uses a constant `dt = 1/60s`. Variable render-frame `dt`
@@ -2335,6 +2361,54 @@ fn on_update_profile(
     info!("[net] session {} set name to '{}'", origin.0, trigger.event().name);
 }
 
+/// One active on-screen toast (see [`ScreenNotifications`]).
+#[derive(Clone, Debug)]
+pub struct Toast {
+    pub text: String,
+    /// "info" | "success" | "warn" | "error" — drives color.
+    pub kind: String,
+    /// Seconds left before it disappears (counts down on REAL time, so it fades
+    /// even while the sim is paused). Also drives the fade-out in the last second.
+    pub remaining: f32,
+}
+
+/// Queue of transient on-screen notifications drawn by the ui-gated
+/// `draw_notifications` overlay. Written by [`commands::ShowNotification`] (rhai
+/// `notify(...)`), aged by [`tick_notifications`]. Always present (headless too)
+/// so the command never panics on a missing resource; only the draw is gated.
+#[derive(Resource, Default)]
+pub struct ScreenNotifications {
+    pub toasts: Vec<Toast>,
+}
+
+/// Real command (registered via `register_commands!`, so it's API-discoverable
+/// and dispatchable through `/api/commands` and rhai `cmd("ShowNotification")`).
+/// Pushes a toast onto [`ScreenNotifications`]; the ui overlay renders it.
+#[on_command(ShowNotification)]
+pub fn on_show_notification(cmd: ShowNotification, mut notes: ResMut<ScreenNotifications>) {
+    let secs = if cmd.secs > 0.0 { cmd.secs } else { 4.5 };
+    let kind = if cmd.kind.is_empty() { "info" } else { cmd.kind.as_str() }.to_string();
+    info!("[notify:{kind}] {}", cmd.text);
+    notes.toasts.push(Toast { text: cmd.text, kind, remaining: secs });
+    // Cap the backlog so a chatty script can't grow it unbounded.
+    let overflow = notes.toasts.len().saturating_sub(6);
+    if overflow > 0 {
+        notes.toasts.drain(0..overflow);
+    }
+}
+
+/// Age out toasts on REAL time (independent of sim pause / rate).
+fn tick_notifications(mut notes: ResMut<ScreenNotifications>, time: Res<Time<Real>>) {
+    if notes.toasts.is_empty() {
+        return;
+    }
+    let dt = time.delta_secs();
+    for t in &mut notes.toasts {
+        t.remaining -= dt;
+    }
+    notes.toasts.retain(|t| t.remaining > 0.0);
+}
+
 
 fn sync_profile(
     role: Res<NetworkRole>,
@@ -2368,5 +2442,6 @@ register_commands!(
     on_capture_screenshot,
     on_toggle_recording,
     on_start_recording,
-    on_stop_recording
+    on_stop_recording,
+    on_show_notification
 );

@@ -670,6 +670,7 @@ fn instantiate_usd_prim(
             }
         }
 
+
         // glTF / external-mesh branch.
         //
         // The composer writes `lunco:resolvedAsset` onto any prim whose
@@ -1145,7 +1146,15 @@ fn apply_standard_material(
     // UsdPreviewSurface transparency + refraction. Default opaque (alpha 1) and
     // the glass-ish `ior` 1.5 USD uses; overridden only when a bound shader
     // authors `inputs:opacity` / `inputs:opacityThreshold` / `inputs:ior`.
-    let mut alpha = 1.0f32;
+    //
+    // Geometry-baseline transparency: the standard UsdGeomGprim
+    // `primvars:displayOpacity` lets a simple prim be translucent WITHOUT a
+    // bound shader network (used by the waypoint-marker asset). A bound shader's
+    // `inputs:opacity` still wins below. A sub-1 value flips `AlphaMode::Blend`
+    // via the rule further down.
+    let mut alpha = get_attribute_as_f32(reader, sdf_path, "primvars:displayOpacity")
+        .or_else(|| get_attribute_as_f32(reader, sdf_path, "displayOpacity"))
+        .unwrap_or(1.0);
     let mut ior = 1.5f32;
     let mut opacity_threshold = 0.0f32;
     let mut opacity_connected = false;

@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
+use lunco_core::{Severity, TelemetryEvent, TelemetryValue, TriggerZone};
 
 /// Parse a `[x, y, z]` JSON array under `key`.
 fn parse_vec3(params: &serde_json::Value, key: &str) -> Option<DVec3> {
@@ -213,7 +213,7 @@ fn bridge_collision_events(
     mut starts: MessageReader<CollisionStart>,
     mut ends: MessageReader<CollisionEnd>,
     registry: Res<ApiEntityRegistry>,
-    zones: Query<&Name, With<Sensor>>,
+    zones: Query<(Option<&TriggerZone>, &Name), With<Sensor>>,
     world: Option<Res<lunco_time::WorldTime>>,
     mut commands: Commands,
 ) {
@@ -221,7 +221,14 @@ fn bridge_collision_events(
     let fire = |name: String, data: TelemetryValue, commands: &mut Commands| {
         commands.trigger(TelemetryEvent { name, severity: Severity::Info, data, timestamp });
     };
-    let zone_name = |e: Entity| zones.get(e).ok().map(|n| n.as_str().to_string());
+    // Prefer the explicit `TriggerZone` name (short, stable), falling back to the
+    // entity's `Name` (its USD path) for an unnamed sensor.
+    let zone_name = |e: Entity| {
+        zones
+            .get(e)
+            .ok()
+            .map(|(tz, name)| tz.map(|z| z.0.clone()).unwrap_or_else(|| name.as_str().to_string()))
+    };
 
     for ev in starts.read() {
         if let Some(p) = contact_pair(&registry, ev.collider1, ev.body1, ev.collider2, ev.body2) {

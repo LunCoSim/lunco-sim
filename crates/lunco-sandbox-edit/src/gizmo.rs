@@ -133,15 +133,24 @@ pub fn sync_gizmo_transforms(
             rot.0 = tf.rotation.as_dquat();
         }
 
-        let dt = time.delta_secs();
-        if dt > 1e-6 {
-            if let Ok(mut prev) = q_prev_pos.get_mut(entity) {
+        // `restore_dragged_transform` clamps the mesh back to `prev.local_pos`
+        // every frame (to cancel Avian's integrator writeback), so `prev` MUST
+        // advance to the gizmo's current position every frame — including while
+        // PAUSED. When paused, time is frozen and `delta_secs()` is 0; the old
+        // `if dt > 1e-6` gate wrapped the whole block, so `prev` went stale and
+        // the restore snapped the object back to its drag-start spot — the gizmo
+        // couldn't move anything while paused. Only the velocity estimate (which
+        // drags joint-coupled child bodies along and is meaningless at dt = 0)
+        // stays gated on dt.
+        if let Ok(mut prev) = q_prev_pos.get_mut(entity) {
+            let dt = time.delta_secs();
+            if dt > 1e-6 {
                 let delta = local_pos - prev.local_pos;
                 if let Ok(mut lin_vel) = q_lin_vel.get_mut(entity) {
                     lin_vel.0 = delta / dt as f64;
                 }
-                prev.local_pos = local_pos;
             }
+            prev.local_pos = local_pos;
         }
     }
 }

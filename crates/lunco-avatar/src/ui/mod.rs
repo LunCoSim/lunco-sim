@@ -339,3 +339,60 @@ pub fn draw_rover_name_tags(
         painter.galley(top_left, galley, text_color);
     }
 }
+
+/// Draw active [`crate::ScreenNotifications`] toasts as a centered stack near the
+/// top of the screen, newest at the bottom; each fades out over its final second.
+///
+/// ui-gated screen-space overlay (the scene has only a `Camera3d`, so a
+/// world-anchored `Text2d` HUD never renders) — registered in the egui pass by
+/// [`crate::LunCoAvatarPlugin`]. Mission scripts drive it through rhai `notify`.
+pub fn draw_notifications(
+    mut egui_ctx: EguiContexts,
+    notes: Res<crate::ScreenNotifications>,
+) {
+    if notes.toasts.is_empty() {
+        return;
+    }
+    let Ok(ctx) = egui_ctx.ctx_mut() else { return };
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("lunco_notifications"),
+    ));
+    let rect = ctx.content_rect();
+    let cx = rect.center().x;
+    let mut y = rect.top() + 56.0;
+    let pad = egui::vec2(14.0, 8.0);
+
+    for t in &notes.toasts {
+        // Fully opaque until the final second, then linearly fade out.
+        let fade = t.remaining.clamp(0.0, 1.0);
+        let a = |base: f32| (base * fade) as u8;
+        let (bg, fg) = match t.kind.as_str() {
+            "success" => (
+                egui::Color32::from_rgba_unmultiplied(28, 92, 44, a(225.0)),
+                egui::Color32::from_rgba_unmultiplied(205, 255, 215, a(255.0)),
+            ),
+            "warn" => (
+                egui::Color32::from_rgba_unmultiplied(120, 88, 20, a(225.0)),
+                egui::Color32::from_rgba_unmultiplied(255, 232, 160, a(255.0)),
+            ),
+            "error" => (
+                egui::Color32::from_rgba_unmultiplied(120, 32, 32, a(225.0)),
+                egui::Color32::from_rgba_unmultiplied(255, 190, 190, a(255.0)),
+            ),
+            _ => (
+                egui::Color32::from_rgba_unmultiplied(24, 36, 58, a(225.0)),
+                egui::Color32::from_rgba_unmultiplied(196, 218, 255, a(255.0)),
+            ),
+        };
+
+        let font = egui::FontId::proportional(16.0);
+        let galley = painter.layout_no_wrap(t.text.clone(), font, fg);
+        let size = galley.size();
+        let top_left = egui::pos2(cx - size.x * 0.5, y);
+        let bg_rect = egui::Rect::from_min_size(top_left, size).expand2(pad);
+        painter.rect_filled(bg_rect, 6.0, bg);
+        painter.galley(top_left, galley, fg);
+        y += size.y + pad.y * 2.0 + 8.0;
+    }
+}

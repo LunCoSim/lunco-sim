@@ -549,6 +549,27 @@ fn process_usd_avian_prims(
             return;
         }
 
+        // ── TRIGGER ZONE (geofence sensor) ──
+        // `custom string lunco:triggerZone = "<name>"` makes this prim an
+        // overlap-only static volume: a `Sensor` collider that fires
+        // `enter:<name>` / `exit:<name>` events (see lunco-mobility's collision
+        // bridge), reacted to in rhai via `wait_for("enter:<name>")`. Handled
+        // FIRST so a zone is always its own static sensor body and never folded
+        // into a parent's compound (the collider-child branch below would
+        // otherwise drop it because it has a parent). The discrete-event source
+        // that pairs with continuous port signals.
+        if let Some(zone) = reader
+            .prim_attribute_value::<String>(&sdf_path, "lunco:triggerZone")
+            .filter(|z| !z.trim().is_empty())
+        {
+            commands.entity(entity).insert(RigidBody::Static);
+            add_collider_from_usd(&mut commands, entity, reader, &sdf_path);
+            commands
+                .entity(entity)
+                .insert((Sensor, lunco_core::TriggerZone(zone), UsdAvianProcessed));
+            return;
+        }
+
         if has_rigid_body_api {
             // ── COMPOUND BODY ROOT ──
             // Read child collider shapes from USD and build compound collider

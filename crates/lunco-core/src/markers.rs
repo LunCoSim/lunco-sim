@@ -138,3 +138,22 @@ pub struct EmbeddedScenarioSource(pub String);
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component)]
 pub struct EmbeddedScenarioPath(pub String);
+
+/// A named overlap **trigger zone** (geofence) — the discrete-event twin of a
+/// continuous port signal.
+///
+/// Stamped by the USD loader (`lunco-usd-avian`) on a prim carrying
+/// `custom string lunco:triggerZone = "<name>"` (alongside an avian `Sensor` +
+/// collider shape). `lunco-mobility`'s collision bridge fires
+/// `enter:<name>` / `exit:<name>` [`TelemetryEvent`]s (payload = the entrant's
+/// gid) when a body crosses the volume; scenarios react in rhai via
+/// `wait_for("enter:<name>")` / `entered_zone(evt, "<name>")` — no per-tick
+/// distance polling, detection happens in avian.
+///
+/// Decouples the event/signal NAME from the entity's `Name` (its USD path) so
+/// zone names stay short and stable. Lives in `lunco-core` so the loader and the
+/// collision bridge share the contract without depending on each other (same
+/// pattern as [`EmbeddedScenarioPath`]).
+#[derive(Component, Debug, Clone, Reflect, Default)]
+#[reflect(Component)]
+pub struct TriggerZone(pub String);

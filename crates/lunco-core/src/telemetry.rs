@@ -109,3 +109,42 @@ pub struct SampledParameter {
     pub timestamp: f64,
 }
 
+/// Extension for projecting native/foreign Bevy **messages** onto the neutral
+/// [`TelemetryEvent`] script bus — the discrete-event analog of a port wire.
+///
+/// Every "something happened" source (input, networking, a Modelica `when` edge,
+/// a foreign physics message) can land on the SAME bus that rhai scenarios read
+/// via `on_event` / `wait_for`, instead of each inventing its own delivery to
+/// scripts. Use it for sources whose projection is PURE
+/// (`&E -> Option<TelemetryEvent>`; return `None` to drop an event). Context-
+/// heavy sources (e.g. collision zones needing the entity registry) keep a
+/// dedicated system that still ends at `commands.trigger(TelemetryEvent)` — the
+/// unification is "every event lands on ONE bus", not "one identical registrar".
+pub trait ScriptEventAppExt {
+    /// Add an `Update` system that turns every `E` message into 0..1
+    /// [`TelemetryEvent`]s via `project`, fired onto the shared bus.
+    fn project_events<E, F>(&mut self, project: F) -> &mut Self
+    where
+        E: bevy::ecs::message::Message,
+        F: Fn(&E) -> Option<TelemetryEvent> + Send + Sync + 'static;
+}
+
+impl ScriptEventAppExt for App {
+    fn project_events<E, F>(&mut self, project: F) -> &mut Self
+    where
+        E: bevy::ecs::message::Message,
+        F: Fn(&E) -> Option<TelemetryEvent> + Send + Sync + 'static,
+    {
+        self.add_systems(
+            Update,
+            move |mut reader: MessageReader<E>, mut commands: Commands| {
+                for e in reader.read() {
+                    if let Some(ev) = project(e) {
+                        commands.trigger(ev);
+                    }
+                }
+            },
+        )
+    }
+}
+

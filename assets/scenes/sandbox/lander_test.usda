@@ -168,6 +168,28 @@ def Xform "LanderTest"
             bool physics:collisionEnabled = false
         }
 
+        # Engine exhaust plume. A translucent emissive cone (apex down, below the
+        # nozzle). Its behaviour is DESCRIBED IN rhai (scenarios/flame.rhai), not
+        # built-in Rust: the script reads the GNC `throttle` SIGNAL each tick and
+        # scales this cone to match, collapsing to ~zero at idle. So the flame is
+        # exactly as big as the engine is firing — whether the PID flies the
+        # descent or the player holds Space. Starts tiny; the script owns scale.
+        def Cone "Flame"
+        {
+            uniform token axis = "Y"
+            double radius = 1.0
+            double height = 1.0
+            double3 xformOp:translate = (0, -3.6, 0)
+            double3 xformOp:rotateXYZ = (180.0, 0, 0)
+            double3 xformOp:scale = (0.02, 0.02, 0.02)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f primvars:displayColor = (1.0, 0.55, 0.12)
+            color3f primvars:emissiveColor = (1.0, 0.5, 0.12)
+            float primvars:displayOpacity = 0.75
+            bool physics:collisionEnabled = false
+            custom string lunco:scriptPath = "scenarios/flame.rhai"
+        }
+
         # Side tanks (fuel/oxidizer — 4 tanks at 90° intervals)
         def Capsule "TankPX"
         {
@@ -316,6 +338,19 @@ def Xform "LanderTest"
         rel physics:body1 = </LanderTest/SkidRover>
         point3f physics:localPos0 = (0, -1.5, 0)
         point3f physics:localPos1 = (0, 0.15, 0)
+    }
+
+    # ── Rover drive-to waypoint ─────────────────────────────────────────────
+    # A translucent glowing beacon (reusable visual-only marker asset) the player
+    # drives the rover to after deployment. NO physics — arrival is detected in
+    # the scenario rhai by distance (`arrived(...)`), keeping the gameplay logic
+    # in script, not Rust. Move the goal by editing this one translate.
+    def Xform "RoverTarget" (
+        prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
+    )
+    {
+        double3 xformOp:translate = (40.0, 0.0, 18.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
     # ── Mission scenario (doc 34, Decision 3) ───────────────────────────────
