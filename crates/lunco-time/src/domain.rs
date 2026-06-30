@@ -26,6 +26,8 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
+use lunco_core::{on_command, register_commands, Command};
+
 use crate::{TransportMode, WorldTime};
 
 /// Coupling class of a domain (doc §5). Informational in v1 (the sampler is a pure
@@ -278,8 +280,80 @@ pub fn spawn_driven_domain(commands: &mut Commands, parent: Option<Entity>, play
         .id()
 }
 
-/// Plugin wiring for the clock tree: components, [`ResolvedDomains`], and the
-/// resolve system in [`DomainResolveSet`] (`Update`). Added by [`TimePlugin`](crate::TimePlugin).
+// --- animation preview transport (doc 19 — T7) -------------------------------
+
+/// The singleton **animation preview** domain: a driven domain that USD-animated
+/// entities bind to by default (see `lunco-usd-bevy`'s `sample_usd_animation`
+/// auto-bind). It advances with the sim while `Playing` — so authored animation
+/// plays in lock-step with the world by default — but its [`Playback`] head can
+/// be paused, seeked, or rate-scaled to scrub a clip **without touching the
+/// physics clock** (which is gated by [`TimeTransport`](crate::TimeTransport),
+/// not this domain). This is what the [`ControlAnimation`] command and the
+/// Inspector transport widget drive.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct AnimationPreview {
+    /// The driven domain entity (carries the [`Playback`] head).
+    pub domain: Entity,
+}
+
+/// Startup: spawn the singleton [`AnimationPreview`] domain (rate 1, playing,
+/// unbounded). Idempotent-by-construction — guarded `TimePlugin` adds run once.
+fn spawn_animation_preview(mut commands: Commands) {
+    let domain = commands
+        .spawn((
+            Name::new("AnimationPreview"),
+            TimeDomain::default(),
+            Playback::default(),
+        ))
+        .id();
+    commands.insert_resource(AnimationPreview { domain });
+}
+
+/// Drive the [`AnimationPreview`] transport. Each field is optional so one verb
+/// covers run / pause / scroll(seek) / rate — `{"command":"ControlAnimation",
+/// "params":{"playing":false}}` pauses, `{"seek_secs":3.0}` scrubs to 3 s,
+/// `{"rate":2.0}` doubles speed. Headless-safe: it only writes the preview
+/// domain's [`Playback`], never any UI or render resource.
+#[Command(default)]
+pub struct ControlAnimation {
+    /// Play (`Some(true)`) / pause (`Some(false)`) the animation; `None` leaves it.
+    pub playing: Option<bool>,
+    /// Seek the playhead to this time in **seconds**; `None` leaves it.
+    pub seek_secs: Option<f64>,
+    /// Playback rate (1.0 = realtime); `None` leaves it.
+    pub rate: Option<f64>,
+}
+
+#[on_command(ControlAnimation)]
+fn on_control_animation(
+    trigger: On<ControlAnimation>,
+    preview: Option<Res<AnimationPreview>>,
+    mut q: Query<&mut Playback>,
+) {
+    let Some(preview) = preview else { return };
+    let Ok(mut pb) = q.get_mut(preview.domain) else { return };
+    apply_control_animation(&mut pb, trigger.event());
+}
+
+/// Pure transport edit — apply a [`ControlAnimation`] to a [`Playback`]. Split
+/// out so the verb is unit-tested headless without an observer / world.
+pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) {
+    if let Some(playing) = cmd.playing {
+        pb.mode = if playing { TransportMode::Playing } else { TransportMode::Paused };
+    }
+    if let Some(secs) = cmd.seek_secs {
+        pb.head = secs;
+    }
+    if let Some(rate) = cmd.rate {
+        pb.rate = rate;
+    }
+}
+
+register_commands!(on_control_animation);
+
+/// Plugin wiring for the clock tree: components, [`ResolvedDomains`], the resolve
+/// system in [`DomainResolveSet`] (`Update`), the [`AnimationPreview`] domain, and
+/// the [`ControlAnimation`] command. Added by [`TimePlugin`](crate::TimePlugin).
 pub(crate) fn build_domain_tree(app: &mut App) {
     app.register_type::<TimeDomain>()
         .register_type::<Playback>()
@@ -287,7 +361,9 @@ pub(crate) fn build_domain_tree(app: &mut App) {
         .register_type::<DomainRegime>()
         .init_resource::<ResolvedDomains>()
         .init_resource::<LastWorldSecs>()
-        .add_systems(Update, advance_and_resolve_domains.in_set(DomainResolveSet));
+        .add_systems(Update, advance_and_resolve_domains.in_set(DomainResolveSet))
+        .add_systems(Startup, spawn_animation_preview);
+    register_all_commands(app);
 }
 
 #[cfg(test)]
@@ -303,6 +379,32 @@ mod tests {
 
     fn snap(parent: Option<Entity>, offset: f64, scale: f64, head: Option<f64>) -> DomainSnapshot {
         DomainSnapshot { parent, offset, scale, head }
+    }
+
+    #[test]
+    fn control_animation_pauses_seeks_and_rates_independently() {
+        let mut pb = Playback::default(); // playing, head 0, rate 1
+        // Pause only.
+        apply_control_animation(&mut pb, &ControlAnimation { playing: Some(false), ..default() });
+        assert!(matches!(pb.mode, TransportMode::Paused));
+        assert_eq!(pb.head, 0.0);
+        assert_eq!(pb.rate, 1.0);
+        // Seek only — leaves the paused mode untouched.
+        apply_control_animation(&mut pb, &ControlAnimation { seek_secs: Some(3.5), ..default() });
+        assert!(matches!(pb.mode, TransportMode::Paused));
+        assert!((pb.head - 3.5).abs() < EPS);
+        // Play + rate in one verb.
+        apply_control_animation(
+            &mut pb,
+            &ControlAnimation { playing: Some(true), rate: Some(2.0), ..default() },
+        );
+        assert!(matches!(pb.mode, TransportMode::Playing));
+        assert!((pb.rate - 2.0).abs() < EPS);
+        assert!((pb.head - 3.5).abs() < EPS); // seek preserved
+
+        // A paused preview head does NOT advance with the world delta (scrub holds).
+        let held = Playback { mode: TransportMode::Paused, head: 3.5, ..default() };
+        assert!((step_playhead(&held, 10.0) - 3.5).abs() < EPS);
     }
 
     #[test]
