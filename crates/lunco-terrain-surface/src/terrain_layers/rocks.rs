@@ -19,8 +19,14 @@ pub struct TerrainRock;
 /// Number of size buckets → shared rock meshes (so N rocks reuse a few meshes).
 const ROCK_BUCKETS: usize = 6;
 /// Distance LOD: rocks fully visible to `LOD_FAR`, cross-fade out over `LOD_FADE`.
-const LOD_FAR: f32 = 250.0;
-const LOD_FADE: f32 = 60.0;
+/// Rocks are scattered only in a near-origin region (`region_half_extent`, ~±300 m),
+/// and unlike craters they have NO coarse always-on fallback — once culled they
+/// just vanish. So the cull distance must comfortably exceed the region (else
+/// backing away from origin drops every rock). The scatter is bounded + the meshes
+/// are size-bucketed/shared, so keeping all of them visible is cheap. Camera-following
+/// rock streaming (rocks around wherever you are) is the real fix for full-map coverage.
+const LOD_FAR: f32 = 2500.0;
+const LOD_FADE: f32 = 500.0;
 
 fn rock_visibility_range() -> VisibilityRange {
     VisibilityRange {
