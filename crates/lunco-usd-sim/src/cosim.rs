@@ -829,6 +829,7 @@ pub struct LoadScene {
 fn on_load_scene(
     cmd: LoadScene,
     asset_server: Res<AssetServer>,
+    stages: Res<Assets<UsdStageAsset>>,
     mut commands: Commands,
     q_usd: Query<(Entity, &UsdPrimPath)>,
     q_wires: Query<Entity, With<SimConnection>>,
@@ -866,8 +867,15 @@ fn on_load_scene(
         &mut script_registry,
     );
 
-    // Force fresh read from disk in case the user edited the file.
-    asset_server.reload(&path);
+    // Force a fresh disk read ONLY for a genuine re-open — i.e. the asset is
+    // already RESIDENT (loaded earlier, then switched away). On a FIRST load the
+    // asset isn't in the store yet, so this `reload` is redundant AND fires a
+    // SECOND `LoadedWithDependencies` after the initial load → a duplicate
+    // instantiation pass (doubled crater-overlay meshes / rocks that z-fight).
+    // The no-op guard above already prevents reloading the *active* scene.
+    if stages.get(new_id).is_some() {
+        asset_server.reload(&path);
+    }
 
     // Spawn via shared helper, deferred so despawns flush first.
     commands.queue(move |world: &mut World| {

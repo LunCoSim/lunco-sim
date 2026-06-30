@@ -170,7 +170,10 @@ pub fn scatter_terrain_layers(
     let mut materials = materials;
     let mut shader_materials = shader_materials;
     for (entity, dem, base, stack) in &q {
-        commands.entity(entity).insert(TerrainLayersApplied);
+        // `try_insert`: a doc-backed scene reload (E1b) can despawn + re-instantiate
+        // this terrain in the same frame, so the entity may be gone by the time
+        // these deferred commands apply — skip silently rather than panic.
+        commands.entity(entity).try_insert(TerrainLayersApplied);
         // Material/shader layers configure the terrain entity first…
         for layer in &stack.0 {
             layer.configure(entity, &mut commands);

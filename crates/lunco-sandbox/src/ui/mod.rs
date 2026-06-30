@@ -67,9 +67,15 @@ impl Plugin for SandboxUiPlugin {
             // so scene selection / possession / spawn-placement run as click observers.
             .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
             .add_plugins(lunco_workbench::WorkbenchPlugin)
-            // USD Twin browser + the offscreen RTT preview viewport.
+            // USD Twin browser. NOTE: the USD *viewport preview*
+            // (`UsdViewportPlugin`) is intentionally NOT added here. It is an
+            // editor tool that OWNS its own scene — it parses the active USD doc
+            // into a second `UsdStageAsset` and mounts a private `scene_root`. The
+            // sandbox is a sim app: its single scene is the live `LoadScene` world,
+            // viewed by the window camera. Adding the preview built the scene a
+            // SECOND time (doubled crater meshes / rocks). A view must not own a
+            // scene — see `docs/usd-source-of-truth-ecs-projection-design.md`.
             .add_plugins(lunco_usd::ui::UsdUiPlugin)
-            .add_plugins(lunco_usd::ui::UsdViewportPlugin)
             .add_plugins(lunco_sandbox_edit::SandboxEditPlugin)
             .add_plugins(lunco_sandbox_edit::ui::SandboxEditUiPlugin)
             .add_plugins(lunco_materials::ShaderMaterialPlugin)

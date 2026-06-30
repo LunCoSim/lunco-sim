@@ -19,7 +19,9 @@ impl TerrainLayer for ShaderLayer {
         "shader"
     }
     fn configure(&self, terrain: Entity, commands: &mut Commands) {
-        commands.entity(terrain).insert(self.mode);
+        // `try_insert`: the terrain may be despawned mid-frame by a doc-backed
+        // scene reload before this deferred command applies.
+        commands.entity(terrain).try_insert(self.mode);
     }
 }
 

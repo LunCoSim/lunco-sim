@@ -922,6 +922,13 @@ fn setup_sandbox(world: &mut World) {
         path: load_path,
         root_prim: String::new(),
     });
+    // NOTE: doc-backing the `--scene` for live USD→ECS editing (Step 0 of
+    // `docs/usd-source-of-truth-ecs-projection-design.md`) is DEFERRED: wiring it
+    // via `twin_projection::doc_back_twin_scene` works (a runtime `SetAttribute`
+    // does re-bake the live terrain) but the E1b overlay reload re-instantiates
+    // the scene a SECOND time alongside this `LoadScene`, doubling scatter
+    // entities (crater overlays / rocks) and z-fighting. Resolve that
+    // double-mount before re-enabling.
 }
 
 /// Tracks the requested startup scene so [`startup_scene_failguard`] can turn a
