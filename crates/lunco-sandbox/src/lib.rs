@@ -1083,22 +1083,31 @@ fn lander_manual_control(
     q_controllers: Query<&lunco_controller::ControllerLink>,
     keys: Res<ButtonInput<KeyCode>>,
     mut q_sim_components: Query<&mut lunco_cosim::SimComponent>,
-    mut q_pending_forces: Query<(&mut lunco_cosim::avian::PendingForces, &Transform)>,
     q_names: Query<(Entity, &Name)>,
+    q_parents: Query<&ChildOf>,
     mut commands: Commands,
 ) {
-    // 1. Find possessed entity (the lander)
+    // 1. Find possessed entity (the lander or one of its children)
     let Some(link) = q_controllers.iter().next() else { return };
     let vessel = link.vessel_entity;
 
-    // Guard: Only apply manual controls if the possessed vessel is the lander
-    if let Ok((_, name)) = q_names.get(vessel) {
-        if name.as_str() != "/LanderTest/Lander" {
-            return;
+    // Walk up the parent hierarchy to find the ancestor Lander SimComponent
+    let mut current = vessel;
+    let mut target_vessel = None;
+    while current != Entity::PLACEHOLDER {
+        if let Ok((_, name)) = q_names.get(current) {
+            if name.as_str().starts_with("/LanderTest/Lander") && q_sim_components.contains(current) {
+                target_vessel = Some(current);
+                break;
+            }
         }
-    } else {
-        return;
+        if let Ok(child_of) = q_parents.get(current) {
+            current = child_of.0;
+        } else {
+            break;
+        }
     }
+    let Some(target_vessel) = target_vessel else { return };
 
     // 2. Space = manual override of the lander GNC (Lander.mo). Holding Space
     //    hands thrust authority to the player (the model's mode-select fires
@@ -1106,45 +1115,26 @@ fn lander_manual_control(
     //    SimComponent.inputs directly — the cosim source of truth that
     //    `sync_modelica_inputs` carries to the worker, so it isn't clobbered.
     //    Always write (the key may be created async by the compiler).
-    if let Ok(mut comp) = q_sim_components.get_mut(vessel) {
+    if let Ok(mut comp) = q_sim_components.get_mut(target_vessel) {
         let manual = if keys.pressed(KeyCode::Space) { 1.0 } else { 0.0 };
         comp.inputs.insert("manual".to_string(), manual);
         comp.inputs.insert("manual_throttle".to_string(), manual);
-    }
 
-    // 3. WASD / Arrow keys for attitude torque
-    let mut local_torque = Vec3::ZERO;
-    let strength = 75000.0; // torque strength for responsive control on 5-ton lander
+        let mut pitch = 0.0;
+        if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) { pitch -= 1.0; }
+        if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) { pitch += 1.0; }
 
-    if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
-        local_torque.x -= strength;
-    }
-    if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) {
-        local_torque.x += strength;
-    }
-    if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) {
-        local_torque.z += strength;
-    }
-    if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) {
-        local_torque.z -= strength;
-    }
-    if keys.pressed(KeyCode::KeyQ) {
-        local_torque.y += strength;
-    }
-    if keys.pressed(KeyCode::KeyE) {
-        local_torque.y -= strength;
-    }
+        let mut roll = 0.0;
+        if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) { roll += 1.0; }
+        if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) { roll -= 1.0; }
 
-    if local_torque != Vec3::ZERO {
-        if let Ok((mut pf, transform)) = q_pending_forces.get_mut(vessel) {
-            let world_torque = (transform.rotation * local_torque).as_dvec3();
-            pf.torque += world_torque;
-        } else {
-            // PendingForces is missing, spawn it!
-            if let Ok(mut entity_mut) = commands.get_entity(vessel) {
-                entity_mut.insert(lunco_cosim::avian::PendingForces::default());
-            }
-        }
+        let mut yaw = 0.0;
+        if keys.pressed(KeyCode::KeyQ) { yaw += 1.0; }
+        if keys.pressed(KeyCode::KeyE) { yaw -= 1.0; }
+
+        comp.inputs.insert("manual_pitch".to_string(), pitch);
+        comp.inputs.insert("manual_roll".to_string(), roll);
+        comp.inputs.insert("manual_yaw".to_string(), yaw);
     }
 
     // 4. Detach key G (or E)

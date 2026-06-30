@@ -75,7 +75,7 @@ def Xform "LanderTest"
         uniform token axis = "Y"
         double radius = 2.5
         double height = 3.0
-        double3 xformOp:translate = (0, 30.0, 0)
+        double3 xformOp:translate = (0, 60.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (0.85, 0.83, 0.78)
 
@@ -83,6 +83,7 @@ def Xform "LanderTest"
         bool physics:collisionEnabled = true
         float physics:mass = 2000.0
         float physics:linearDamping = 0.02
+        double3 physics:linearVelocity = (-5.0, 0.0, -5.0)
 
         string lunco:vessel = "true"
 
@@ -92,7 +93,7 @@ def Xform "LanderTest"
         #   velocity_y    --> descent_rate   (PID damping term)
         #   gravity_accel --> g              (env-correct gravity feed-forward; lunar ≈ 1.62)
         string lunco:modelicaModel = "models/Lander.mo"
-        string lunco:simWires = "thrust:force_local_y,height:altitude,velocity_y:descent_rate,gravity_accel:g"
+        string lunco:simWires = "force_x:force_x,force_y:force_y,force_z:force_z,torque_x:torque_x,torque_y:torque_y,torque_z:torque_z,position_x:pos_x,position_y:pos_y,position_z:pos_z,velocity_x:vel_x,velocity_y:vel_y,velocity_z:vel_z,quat_w:q_w,quat_x:q_x,quat_y:q_y,quat_z:q_z,angvel_x:w_x,angvel_y:w_y,angvel_z:w_z,gravity_accel:g,throttle:throttle"
 
         # Modelica `when` events: threshold crossings of the model's continuous
         # OUTPUT signals become discrete events on the bus (edge detection in Rust,
@@ -105,13 +106,14 @@ def Xform "LanderTest"
         # script (doc 34, Decision 1). The script monitors the GNC's propellant
         # port and disarms a dry engine; it does NOT fly the descent.
         custom string lunco:scriptPath = "scenarios/lander_subsystems.rhai"
+        custom string lunco:params = "speed=5.0, angular_speed=2.0"
 
         # ── Physics hull ──
         # Enabling colliders on the footpads switches this rigid body into
         # CHILDREN-ONLY compound mode (lunco-usd-avian: a parent with any
         # collider-child drops its own shape). This invisible child re-adds the
         # body bulk so the compound = hull + 4 pads. Lowest point is the pads
-        # (y=-3.1), so the lander rests on its legs instead of sinking the
+        # (y=-5.0), so the lander rests on its legs instead of sinking the
         # cylinder (whose bottom is only y=-1.5) into the ground.
         def Cylinder "Hull" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
@@ -122,6 +124,20 @@ def Xform "LanderTest"
             double height = 3.0
             token visibility = "invisible"
             bool physics:collisionEnabled = true
+        }
+
+        # Altimeter sensor tool - raycasts downwards and outputs "range" port
+        def Xform "Altimeter"
+        {
+            token visibility = "invisible"
+            custom bool lunco:sensor:range = true
+            custom token lunco:sensor:rangeAxis = "-Y"
+            custom float lunco:sensor:rangeMax = 150.0
+            custom token lunco:sensor:rangeOutOfRangeMode = "IdealAltitude"
+            custom bool lunco:sensor:rangeVisualize = true
+            custom double3 lunco:sensor:offset = (0.0, 0.0, 0.0)
+            double3 xformOp:translate = (0.0, -3.3, 0.0) # centered locally at nozzle bottom
+            uniform token[] xformOpOrder = ["xformOp:translate"]
         }
 
         # ── Visual-only structure ──
@@ -260,9 +276,9 @@ def Xform "LanderTest"
         def Cube "LegPX"
         {
             double size = 1.0
-            double3 xformOp:translate = (3.0, -1.2, 0)
+            double3 xformOp:translate = (3.95, -1.68, 0)
             double3 xformOp:rotateXYZ = (0, 0, 25.0)
-            double3 xformOp:scale = (0.15, 3.8, 0.15)
+            double3 xformOp:scale = (0.15, 7.33, 0.15)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
             color3f primvars:displayColor = (0.55, 0.55, 0.57)
             bool physics:collisionEnabled = false
@@ -272,7 +288,7 @@ def Xform "LanderTest"
             uniform token axis = "Y"
             double radius = 0.4
             double height = 0.08
-            double3 xformOp:translate = (4.2, -3.1, 0)
+            double3 xformOp:translate = (5.5, -5.0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f primvars:displayColor = (0.45, 0.45, 0.48)
             bool physics:collisionEnabled = true
@@ -282,9 +298,9 @@ def Xform "LanderTest"
         def Cube "LegNX"
         {
             double size = 1.0
-            double3 xformOp:translate = (-3.0, -1.2, 0)
+            double3 xformOp:translate = (-3.95, -1.68, 0)
             double3 xformOp:rotateXYZ = (0, 0, -25.0)
-            double3 xformOp:scale = (0.15, 3.8, 0.15)
+            double3 xformOp:scale = (0.15, 7.33, 0.15)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
             color3f primvars:displayColor = (0.55, 0.55, 0.57)
             bool physics:collisionEnabled = false
@@ -294,7 +310,7 @@ def Xform "LanderTest"
             uniform token axis = "Y"
             double radius = 0.4
             double height = 0.08
-            double3 xformOp:translate = (-4.2, -3.1, 0)
+            double3 xformOp:translate = (-5.5, -5.0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f primvars:displayColor = (0.45, 0.45, 0.48)
             bool physics:collisionEnabled = true
@@ -304,9 +320,9 @@ def Xform "LanderTest"
         def Cube "LegPZ"
         {
             double size = 1.0
-            double3 xformOp:translate = (0, -1.2, 3.0)
+            double3 xformOp:translate = (0, -1.68, 3.95)
             double3 xformOp:rotateXYZ = (-25.0, 0, 0)
-            double3 xformOp:scale = (0.15, 3.8, 0.15)
+            double3 xformOp:scale = (0.15, 7.33, 0.15)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
             color3f primvars:displayColor = (0.55, 0.55, 0.57)
             bool physics:collisionEnabled = false
@@ -316,7 +332,7 @@ def Xform "LanderTest"
             uniform token axis = "Y"
             double radius = 0.4
             double height = 0.08
-            double3 xformOp:translate = (0, -3.1, 4.2)
+            double3 xformOp:translate = (0, -5.0, 5.5)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f primvars:displayColor = (0.45, 0.45, 0.48)
             bool physics:collisionEnabled = true
@@ -326,9 +342,9 @@ def Xform "LanderTest"
         def Cube "LegNZ"
         {
             double size = 1.0
-            double3 xformOp:translate = (0, -1.2, -3.0)
+            double3 xformOp:translate = (0, -1.68, -3.95)
             double3 xformOp:rotateXYZ = (25.0, 0, 0)
-            double3 xformOp:scale = (0.15, 3.8, 0.15)
+            double3 xformOp:scale = (0.15, 7.33, 0.15)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
             color3f primvars:displayColor = (0.55, 0.55, 0.57)
             bool physics:collisionEnabled = false
@@ -338,7 +354,7 @@ def Xform "LanderTest"
             uniform token axis = "Y"
             double radius = 0.4
             double height = 0.08
-            double3 xformOp:translate = (0, -3.1, -4.2)
+            double3 xformOp:translate = (0, -5.0, -5.5)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f primvars:displayColor = (0.45, 0.45, 0.48)
             bool physics:collisionEnabled = true
@@ -350,8 +366,9 @@ def Xform "LanderTest"
         prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
-        double3 xformOp:translate = (0, 28.35, 0)
+        double3 xformOp:translate = (0, 58.35, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 physics:linearVelocity = (-5.0, 0.0, -5.0)
 
         # Autopilot: drives the deployed rover through the waypoint course, and
         # yields to the player on any key press. Engages on the `rover_deployed`
@@ -394,6 +411,80 @@ def Xform "LanderTest"
     {
         double3 xformOp:translate = (5.0, 0.0, -15.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "LandingLocation" (
+        prepend references = @../../vessels/markers/landing_location.usda@</LandingLocationMarker>
+    )
+    {
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def "TargetToLanderX"
+    {
+        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
+        string lunco:fromPort = "position_x"
+        rel lunco:wireTo = </LanderTest/Lander>
+        string lunco:toPort = "target_x"
+        double lunco:scale = 1.0
+    }
+    def "TargetToLanderY"
+    {
+        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
+        string lunco:fromPort = "position_y"
+        rel lunco:wireTo = </LanderTest/Lander>
+        string lunco:toPort = "target_y"
+        double lunco:scale = 1.0
+    }
+    def "TargetToLanderZ"
+    {
+        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
+        string lunco:fromPort = "position_z"
+        rel lunco:wireTo = </LanderTest/Lander>
+        string lunco:toPort = "target_z"
+        double lunco:scale = 1.0
+    }
+    def "TargetToLanderQw"
+    {
+        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
+        string lunco:fromPort = "quat_w"
+        rel lunco:wireTo = </LanderTest/Lander>
+        string lunco:toPort = "target_qw"
+        double lunco:scale = 1.0
+    }
+    def "TargetToLanderQx"
+    {
+        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
+        string lunco:fromPort = "quat_x"
+        rel lunco:wireTo = </LanderTest/Lander>
+        string lunco:toPort = "target_qx"
+        double lunco:scale = 1.0
+    }
+    def "TargetToLanderQy"
+    {
+        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
+        string lunco:fromPort = "quat_y"
+        rel lunco:wireTo = </LanderTest/Lander>
+        string lunco:toPort = "target_qy"
+        double lunco:scale = 1.0
+    }
+    def "TargetToLanderQz"
+    {
+        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
+        string lunco:fromPort = "quat_z"
+        rel lunco:wireTo = </LanderTest/Lander>
+        string lunco:toPort = "target_qz"
+        double lunco:scale = 1.0
+    }
+
+    def "AltimeterToLander"
+    {
+        rel lunco:wireFrom = </LanderTest/Lander/Altimeter>
+        string lunco:fromPort = "range"
+        rel lunco:wireTo = </LanderTest/Lander>
+        string lunco:toPort = "altitude"
+        double lunco:scale = 1.0
     }
 
     # ── Mission scenario (doc 34, Decision 3) ───────────────────────────────

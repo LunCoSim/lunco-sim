@@ -517,11 +517,22 @@ fn process_usd_sim_prims(
                 .prim_attribute_value::<f32>(&sdf_path, "lunco:sensor:rangeMax")
                 .map(|v| v as f64)
                 .unwrap_or(100.0);
+            let out_of_range_mode = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:sensor:rangeOutOfRangeMode").as_deref() {
+                Some("NegativeOne") => lunco_cosim::sensors::OutOfRangeMode::NegativeOne,
+                Some("NaN") => lunco_cosim::sensors::OutOfRangeMode::NaN,
+                Some("IdealAltitude") => lunco_cosim::sensors::OutOfRangeMode::IdealAltitude,
+                _ => lunco_cosim::sensors::OutOfRangeMode::MaxDistance,
+            };
+            let visualize = reader
+                .prim_attribute_value::<bool>(&sdf_path, "lunco:sensor:rangeVisualize")
+                .unwrap_or(false);
             commands.entity(entity).insert(lunco_cosim::sensors::RangeSensor {
                 offset: sensor_offset,
                 axis,
                 max_distance,
                 distance: max_distance,
+                out_of_range_mode,
+                visualize,
             });
         }
         if reader.prim_attribute_value::<bool>(&sdf_path, "lunco:sensor:contact").is_some() {

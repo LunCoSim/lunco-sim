@@ -56,7 +56,6 @@ fn task(me) {
         }),
         wait(2.0),                                       // let the rover fall clear
         once(|m| {
-            possess(find("/LanderTest/SkidRover"));
             // Engage the rover's autopilot (it drives the course until a key is
             // pressed). The rover's own script listens for this event.
             emit("rover_deployed");

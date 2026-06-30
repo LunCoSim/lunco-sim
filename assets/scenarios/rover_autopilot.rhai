@@ -63,6 +63,7 @@ fn on_event(me, evt) {
         // Any key hands control to the player — autopilot stands down for good.
         if this.active == true && this.manual != true {
             this.manual = true;
+            possess(me);
             brake(me);
             notify_kind("Manual control - autopilot off.", "info");
         }
