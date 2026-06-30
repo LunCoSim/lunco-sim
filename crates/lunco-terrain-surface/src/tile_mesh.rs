@@ -13,7 +13,8 @@
 //! Pure + Bevy-free → unit-tested and wasm-safe; the plugin runs it off-thread
 //! and assembles the attributes into a Bevy `Mesh`.
 
-use lunco_obstacle_field::field::{grid_indices, grid_normals, HeightGrid};
+use lunco_obstacle_field::field::{grid_indices, HeightGrid};
+use lunco_terrain_core::HeightSource;
 
 use crate::quadtree::Square;
 
@@ -60,26 +61,105 @@ pub fn bake_tile_mesh(
     };
     let height = |wx: f64, wz: f64| -> f32 { dem.height_at(wx as f32, wz as f32) };
 
+    // Normals are sampled ANALYTICALLY from the DEM at a fixed `eps` (the DEM
+    // spacing), NOT from each tile's own grid — so any world position yields the
+    // same normal in every tile and at every LOD. Per-tile finite-difference
+    // normals don't agree at shared edges → the visible shading "stitching"; the
+    // analytic field removes that (and smooths the over-zoom facets).
+    let eps = (dem.spacing() as f64).max(1e-3);
+    let normal_at = |wx: f64, wz: f64| -> [f32; 3] {
+        let n = dem.normal_at(wx, wz, eps);
+        [n[0] as f32, n[1] as f32, n[2] as f32]
+    };
+
     let mut positions = Vec::with_capacity(res * res);
     let mut morph_targets = Vec::with_capacity(res * res);
+    let mut normals = Vec::with_capacity(res * res);
     let mut uvs = Vec::with_capacity(res * res);
+    let (mut min_y, mut max_y) = (f32::MAX, f32::MIN);
     for iz in 0..res {
         for ix in 0..res {
             let (wx, wz) = world(ix, iz);
-            positions.push([(wx - ox) as f32, height(wx, wz), (wz - oz) as f32]);
+            let y = height(wx, wz);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+            positions.push([(wx - ox) as f32, y, (wz - oz) as f32]);
 
             // Snap to the parent's even lattice and re-sample.
             let (sx, sz) = world(ix & !1, iz & !1);
             morph_targets.push([(sx - ox) as f32, height(sx, sz), (sz - oz) as f32]);
 
+            normals.push(normal_at(wx, wz));
             uvs.push([((wx + dem_half_extent) * inv_uv) as f32, ((wz + dem_half_extent) * inv_uv) as f32]);
         }
     }
 
-    // Normals + indices via the shared obstacle-field helpers (one grid-mesh impl).
-    let normals = grid_normals(&positions, res);
-    let indices = grid_indices(res);
+    let mut indices = grid_indices(res);
+
+    // --- Skirts: hide T-junction cracks between neighbouring tiles of different
+    // LOD. The per-tile morph band can't guarantee a finer tile's edge matches its
+    // coarser neighbour's straight edge, so a thin vertical wall is dropped around
+    // the perimeter to cover the gap. Depth scales with the tile's relief (+ a
+    // small floor) so it always spans the gap without a needlessly tall wall.
+    let skirt_depth = ((max_y - min_y) * 0.75 + region.side() as f32 * 0.05).max(0.5);
+    append_skirts(
+        res,
+        skirt_depth,
+        &mut positions,
+        &mut morph_targets,
+        &mut normals,
+        &mut uvs,
+        &mut indices,
+    );
+
     TileMesh { positions, morph_targets, normals, uvs, indices }
+}
+
+/// Append a downward skirt wall around the tile perimeter. For each of the four
+/// edges, every edge vertex gets a duplicate dropped by `skirt_depth`, and each
+/// segment becomes a double-sided wall quad (both windings → never culled, so the
+/// crack is covered from any angle). Skirt verts carry the edge vertex's morph
+/// target (also dropped) so the wall follows the surface as it geomorphs.
+#[allow(clippy::too_many_arguments)]
+fn append_skirts(
+    res: usize,
+    skirt_depth: f32,
+    positions: &mut Vec<[f32; 3]>,
+    morph_targets: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    uvs: &mut Vec<[f32; 2]>,
+    indices: &mut Vec<u32>,
+) {
+    // The four perimeter runs as ordered grid-vertex indices.
+    let top: Vec<usize> = (0..res).collect();
+    let bottom: Vec<usize> = (0..res).map(|ix| (res - 1) * res + ix).collect();
+    let left: Vec<usize> = (0..res).map(|iz| iz * res).collect();
+    let right: Vec<usize> = (0..res).map(|iz| iz * res + (res - 1)).collect();
+
+    for edge in [top, bottom, left, right] {
+        // Drop a skirt vertex below each edge vertex, recording its new index.
+        let mut skirt: Vec<u32> = Vec::with_capacity(edge.len());
+        for &gi in &edge {
+            let p = positions[gi];
+            let mt = morph_targets[gi];
+            let n = normals[gi];
+            let uv = uvs[gi];
+            skirt.push(positions.len() as u32);
+            positions.push([p[0], p[1] - skirt_depth, p[2]]);
+            morph_targets.push([mt[0], mt[1] - skirt_depth, mt[2]]);
+            normals.push(n); // hidden wall — reuse the edge normal
+            uvs.push(uv);
+        }
+        // Wall quads per segment, emitted with BOTH windings (double-sided).
+        for k in 0..edge.len() - 1 {
+            let (a, b) = (edge[k] as u32, edge[k + 1] as u32);
+            let (sa, sb) = (skirt[k], skirt[k + 1]);
+            // front winding
+            indices.extend_from_slice(&[a, sa, b, b, sa, sb]);
+            // back winding
+            indices.extend_from_slice(&[a, b, sa, b, sb, sa]);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -106,11 +186,15 @@ mod tests {
 
     #[test]
     fn flat_dem_bakes_flat_no_morph() {
-        let m = bake_tile_mesh(&flat_dem(), Square { center: [0.0, 0.0], half: 50.0 }, 5, 100.0, [0.0, 0.0]);
-        assert_eq!(m.positions.len(), 25);
-        assert_eq!(m.indices.len(), 4 * 4 * 6);
-        assert!(m.positions.iter().all(|p| p[1] == 0.0));
-        // Flat → morph target equals position (same height everywhere).
+        let res = 5;
+        let m = bake_tile_mesh(&flat_dem(), Square { center: [0.0, 0.0], half: 50.0 }, res, 100.0, [0.0, 0.0]);
+        // Interior grid first, then appended skirt verts.
+        assert!(m.positions.len() >= res * res);
+        assert!(m.indices.len() >= 4 * 4 * 6);
+        // Interior surface is flat at y=0; skirt verts hang below it.
+        assert!(m.positions[..res * res].iter().all(|p| p[1] == 0.0));
+        assert!(m.positions[res * res..].iter().all(|p| p[1] < 0.0));
+        // Flat → up normals (interior + skirts copy the edge normal).
         assert!(m.normals.iter().all(|n| n[1] > 0.99));
     }
 
@@ -142,9 +226,10 @@ mod tests {
     #[test]
     fn positions_carry_dem_height() {
         let dem = ramp_dem();
-        let m = bake_tile_mesh(&dem, Square { center: [0.0, 0.0], half: 50.0 }, 5, 100.0, [0.0, 0.0]);
-        // height == world x on this ramp.
-        for p in &m.positions {
+        let res = 5;
+        let m = bake_tile_mesh(&dem, Square { center: [0.0, 0.0], half: 50.0 }, res, 100.0, [0.0, 0.0]);
+        // height == world x on this ramp (interior verts only; skirts hang below).
+        for p in &m.positions[..res * res] {
             assert!((p[1] - p[0]).abs() < 1e-2, "pos.y {} != world x {}", p[1], p[0]);
         }
     }

@@ -654,10 +654,51 @@ pub fn build_shader_material(shader: Handle<Shader>, mut material: ShaderMateria
     material
 }
 
+/// Converts a camelCase / PascalCase identifier to snake_case. Idempotent for
+/// names that are already snake_case (no uppercase → returned unchanged), so it
+/// is safe to apply on every authored param. USD authors material params in
+/// camelCase by convention (`colorA`, `baseColor`, `morphStart`), while WGSL
+/// `struct Material` fields are snake_case (`color_a`, `base_color`,
+/// `morph_start`); this bridges the two so authored names actually resolve to a
+/// schema field instead of silently packing to nothing.
+///
+/// An underscore is inserted before an uppercase letter that either follows a
+/// lowercase letter/digit (`baseColor` → `base_color`) or begins a new word at
+/// the end of an acronym (`AOStrength` → `ao_strength`).
+pub fn to_snake_case(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, &c) in chars.iter().enumerate() {
+        if c.is_ascii_uppercase() {
+            let prev_lower_or_digit =
+                i > 0 && (chars[i - 1].is_ascii_lowercase() || chars[i - 1].is_ascii_digit());
+            let acronym_boundary = i > 0
+                && chars[i - 1].is_ascii_uppercase()
+                && i + 1 < chars.len()
+                && chars[i + 1].is_ascii_lowercase();
+            if prev_lower_or_digit || acronym_boundary {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Sets one named property from a string (the USD-authoring + `SetObjectProperty`
 /// text vocabulary). Resolves the field's type from the material's reflected
 /// schema, parses, and stores by name. Returns `true` if the value parsed.
+///
+/// The authored name is normalized to snake_case ([`to_snake_case`]) so
+/// USD-conventional camelCase params (`colorA`) land on the snake_case WGSL field
+/// (`color_a`). The conversion is idempotent for names that are already
+/// snake_case, so the inspector / scripting paths (which use the schema's own
+/// field names) are unaffected.
 pub fn apply_param(m: &mut ShaderMaterial, key: &str, value: &str) -> bool {
+    let key = to_snake_case(key);
+    let key = key.as_str();
     // Type from the reflected schema if known; else infer from the value's
     // arity (so values authored before the shader is reflected still store —
     // packing applies them at the reflected offset once the schema lands).
@@ -798,5 +839,61 @@ pub fn reflect_shader_schemas(
         if let Some(m) = mats.get_mut(id) {
             m.set_schema(schema);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dyn_params::ParamSchema;
+    use std::sync::Arc;
+
+    #[test]
+    fn snake_case_conversion() {
+        assert_eq!(to_snake_case("colorA"), "color_a");
+        assert_eq!(to_snake_case("baseColor"), "base_color");
+        assert_eq!(to_snake_case("morphStart"), "morph_start");
+        // already snake_case → unchanged (idempotent)
+        assert_eq!(to_snake_case("color_a"), "color_a");
+        assert_eq!(to_snake_case("roughness"), "roughness");
+        // acronym boundary
+        assert_eq!(to_snake_case("AOStrength"), "ao_strength");
+        // digits
+        assert_eq!(to_snake_case("uvScale2"), "uv_scale2");
+    }
+
+    fn material_with_schema() -> ShaderMaterial {
+        let wgsl = "struct Material {\n\
+                    base_color: vec3<f32>,\n\
+                    color_a: vec3<f32>,\n\
+                    morph_start: f32,\n\
+                    }";
+        let schema = ParamSchema::parse(wgsl).expect("schema parses");
+        let mut m = ShaderMaterial::default();
+        m.set_schema(Arc::new(schema));
+        m
+    }
+
+    #[test]
+    fn camelcase_authored_params_land_on_snake_fields() {
+        let mut m = material_with_schema();
+        // USD-conventional camelCase authoring resolves to the snake_case field.
+        assert!(apply_param(&mut m, "colorA", "0.1,0.2,0.3"));
+        assert!(apply_param(&mut m, "baseColor", "0.4,0.5,0.6"));
+        assert!(apply_param(&mut m, "morphStart", "2.0"));
+
+        assert_eq!(m.get_color("color_a"), Some([0.1, 0.2, 0.3]));
+        assert_eq!(m.get_color("base_color"), Some([0.4, 0.5, 0.6]));
+        assert_eq!(m.get_scalar("morph_start"), Some(2.0));
+        // stored under the canonical snake_case key, not the camelCase input
+        assert!(m.values.contains_key("color_a"));
+        assert!(!m.values.contains_key("colorA"));
+    }
+
+    #[test]
+    fn snake_case_authoring_still_works() {
+        let mut m = material_with_schema();
+        assert!(apply_param(&mut m, "color_a", "0.7,0.8,0.9"));
+        assert_eq!(m.get_color("color_a"), Some([0.7, 0.8, 0.9]));
     }
 }

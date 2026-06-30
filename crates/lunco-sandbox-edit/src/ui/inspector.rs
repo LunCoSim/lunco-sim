@@ -304,6 +304,12 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
             .show(ui, |ui| obstacle_field_section(ui, ctx));
         ui.separator();
 
+        // ── Terrain LOD (runtime streaming knobs) ────────────────────
+        egui::CollapsingHeader::new("Terrain LOD")
+            .default_open(true)
+            .show(ui, |ui| terrain_lod_section(ui, ctx));
+        ui.separator();
+
         // Get current selection
         let Some(entity) = ctx.resource::<SelectedEntities>().and_then(|s| s.primary()) else {
             ui.label("No entity selected.");
@@ -500,6 +506,37 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                         });
                 }
             }
+        }
+
+        // ── Terrain shader mode (streamed DEM terrain) ──────────────
+        if let Some(mode) = ctx.get::<lunco_terrain_surface::TerrainShaderMode>(entity).copied() {
+            use lunco_terrain_surface::TerrainShaderMode as M;
+            egui::CollapsingHeader::new("Terrain Shader")
+                .default_open(true)
+                .show(ui, |ui| {
+                    let label = |m: M| match m {
+                        M::Lit => "Lit (regolith)",
+                        M::DebugLod => "Debug LOD (colours)",
+                        M::Plain => "Plain (no shader)",
+                    };
+                    let mut sel = mode;
+                    egui::ComboBox::from_label("Mode")
+                        .selected_text(label(sel))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut sel, M::Lit, label(M::Lit));
+                            ui.selectable_value(&mut sel, M::DebugLod, label(M::DebugLod));
+                            ui.selectable_value(&mut sel, M::Plain, label(M::Plain));
+                        });
+                    if sel != mode {
+                        ctx.defer(move |world| {
+                            if let Some(mut m) =
+                                world.get_mut::<lunco_terrain_surface::TerrainShaderMode>(entity)
+                            {
+                                *m = sel;
+                            }
+                        });
+                    }
+                });
         }
 
         // ── Modelica parameters component ───────────────────────────
@@ -763,6 +800,24 @@ fn camera_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 /// `ObstacleFieldSpec` resource via [`PanelCtx::resource_scope`] (the
 /// narrow mutate-during-paint surface); the field rebuilds only on slider
 /// release / button press.
+/// Runtime LOD knobs for streamed DEM terrain — detail-vs-distance + load
+/// smoothness, applied live (no rebuild). Edits the global `TerrainLodConfig`.
+fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+    use lunco_terrain_surface::TerrainLodConfig;
+    if ctx.resource::<TerrainLodConfig>().is_none() {
+        ui.label("No streaming terrain in this scene.");
+        return;
+    }
+    ctx.resource_scope(|_ctx, cfg: &mut TerrainLodConfig| {
+        ui.add(egui::Slider::new(&mut cfg.range_factor, 0.5..=12.0).text("Detail range ×"))
+            .on_hover_text("Higher = finer tiles persist farther out (more detail at distance, more tiles).");
+        ui.add(egui::Slider::new(&mut cfg.max_depth, 1u8..=9).text("Max LOD depth"))
+            .on_hover_text("Deepest refinement = closest-up detail.");
+        ui.add(egui::Slider::new(&mut cfg.bakes_per_frame, 1usize..=32).text("Bakes / frame"))
+            .on_hover_text("1 = smoothest frame-time, slowest fill. Higher = faster load, bigger spikes.");
+    });
+}
+
 fn obstacle_field_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     let mut regen_spec: Option<ObstacleFieldSpec> = None;
 
@@ -858,6 +913,12 @@ fn obstacle_field_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                     regen = true;
                 }
             }
+            // Keep the size distribution valid: min ≤ mode ≤ max. If the sliders
+            // invert (e.g. min > mode) the log-normal sampler clamps EVERY crater to
+            // the high end → a dense field of oversized overlapping basins + rims that
+            // reads as jagged spike noise from altitude (the "craters look worse").
+            s.craters.size.min = s.craters.size.min.min(s.craters.size.mode);
+            s.craters.size.max = s.craters.size.max.max(s.craters.size.mode);
         });
 
         egui::CollapsingHeader::new("Rocks").default_open(true).show(ui, |ui| {
@@ -876,6 +937,9 @@ fn obstacle_field_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                     regen = true;
                 }
             }
+            // Same validity clamp as craters: min ≤ mode ≤ max.
+            s.rocks.size.min = s.rocks.size.min.min(s.rocks.size.mode);
+            s.rocks.size.max = s.rocks.size.max.max(s.rocks.size.mode);
         });
 
         ui.separator();

@@ -44,6 +44,12 @@ pub struct TerrainSurfacePlugin;
 impl Plugin for TerrainSurfacePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TerrainSurfaceConfig>();
+        app.register_type::<crate::georef::TerrainGeoref>();
+        app.register_type::<crate::stream_viz::TerrainShaderMode>();
+        // Runtime-tunable LOD knobs (Inspector → "Terrain LOD") + the tile-mesh cache.
+        app.init_resource::<crate::stream_viz::TerrainLodConfig>();
+        app.register_type::<crate::stream_viz::TerrainLodConfig>();
+        app.init_resource::<crate::stream_viz::LodMeshCache>();
         // M3: spawn a static DEM terrain (mesh + heightfield collider) on the
         // `SpawnDemTerrain` command. See `crate::terrain`.
         crate::terrain::register(app);
@@ -51,6 +57,10 @@ impl Plugin for TerrainSurfacePlugin {
         // `query("TerrainHeight", #{x, z})` — analytic height/normal/slope, no
         // raycast. See `crate::query`.
         crate::query::register_terrain_queries(app);
+        // P3b: bake DEM-derived surface (rough/AO/hazard) + normal layers off the
+        // main thread and bind them onto the terrain `ShaderMaterial`. Inert
+        // headless (gated on render assets existing). See `crate::derived_layers`.
+        crate::derived_layers::register(app);
         // S3 (visual-only): opt-in camera-driven CDLOD tile streaming for SEEING
         // LODs. Inert unless a DEM is built with `lod_viz`. Physics still rides the
         // static heightfield collider. See `crate::stream_viz`.
@@ -64,9 +74,16 @@ impl Plugin for TerrainSurfacePlugin {
             Update,
             (
                 crate::stream_viz::update_lod_tiles,
+                crate::stream_viz::animate_tile_reveal,
                 crate::stream_viz::despawn_orphaned_lod_tiles,
             ),
         );
+        // Composable TERRAIN LAYER stack (authored as USD child layer prims; craters
+        // stamp into the grid, rocks scatter on the surface). The parser registry maps
+        // each `lunco:layer` type → a parser; register more with `App::add_terrain_layer`
+        // — no changes to the build/scatter/regen systems. See `crate::terrain_layers`.
+        app.init_resource::<crate::terrain_layers::TerrainLayerParserRegistry>();
+        app.add_systems(Update, crate::terrain_layers::scatter_terrain_layers);
         // M7 (physics): opt-in per-rover canonical-res heightfield COLLIDER ring.
         // Inert unless a DEM is built with `collider_ring`; then it replaces the
         // static collider with deterministic per-tile colliders streamed around the

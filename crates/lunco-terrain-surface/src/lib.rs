@@ -42,10 +42,13 @@
 pub mod bake;
 pub mod collider_ring;
 pub mod dem;
+pub mod derived_layers;
+pub mod georef;
 pub mod plugin;
 pub mod query;
 pub mod stream_viz;
 pub mod terrain;
+pub mod terrain_layers;
 pub mod tile_mesh;
 
 // Re-export the shared LOD spine modules so `crate::quadtree` / `crate::source` /
@@ -58,8 +61,18 @@ pub use lunco_terrain_core::{
     AnalyticHeightSource, HeightSource, QuadCoord, Quadtree, Selected, Square, TileCoord, TileGrid,
 };
 pub use plugin::{TerrainSurfaceConfig, TerrainSurfacePlugin};
+pub use derived_layers::DerivedLayersBuilt;
+pub use georef::TerrainGeoref;
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use collider_ring::{ColliderTiles, TerrainColliderRing};
-pub use stream_viz::{DemHeightField, LodTiles, TerrainLodViz};
-pub use terrain::{DemTerrainRequest, DemTerrainSurface, SpawnDemTerrain};
+pub use stream_viz::{DemHeightField, LodTiles, TerrainLodConfig, TerrainLodViz, TerrainShaderMode};
+pub use terrain_layers::{
+    make_crater_layer, LayerAttrSource, LayerScatterCx, TerrainLayer, TerrainLayerAppExt,
+    TerrainLayerParser, TerrainLayerParserRegistry, TerrainLayerStack, TerrainLayersApplied,
+    TerrainRock, TerrainScatterEntity,
+};
+pub use terrain::{
+    DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface, RegenerateTerrainLayers,
+    SpawnDemTerrain,
+};
 pub use tile_mesh::{bake_tile_mesh, TileMesh};

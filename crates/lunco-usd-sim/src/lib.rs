@@ -597,7 +597,16 @@ fn process_usd_sim_prims(
                 .copied()
                 .unwrap_or_default()
                 .exposure_ev100;
-            let camera_look = move || (bevy::camera::Exposure { ev100 },);
+            // AgX tonemapping: a filmic curve that rolls off the blown highlights
+            // and lifts the toe of the brutal grazing-sun terminator (vs the hard
+            // clip that read as pure white/black), while keeping the realistic
+            // high-contrast lunar exposure (ev100 stays lunar-calibrated).
+            let camera_look = move || {
+                (
+                    bevy::camera::Exposure { ev100 },
+                    bevy::core_pipeline::tonemapping::Tonemapping::AgX,
+                )
+            };
 
             // Build camera based on mode, then parent to Grid for FloatingOrigin
             match camera_mode.as_str() {

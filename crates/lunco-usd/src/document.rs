@@ -1563,6 +1563,65 @@ mod tests {
         assert!(prim_exists(host.document(), "/World"), "base intact across spawn undo");
     }
 
+    /// Repro for the doc-backed live-edit path (E1b): a runtime-layer
+    /// `SetAttribute` that OVERRIDES an existing base attribute on a DEEPLY
+    /// NESTED prim must win in the composed view — this is exactly the
+    /// `SetObjectProperty`→USD authoring case (e.g. terrain crater `density`).
+    #[test]
+    fn runtime_set_attribute_overrides_nested_base_attr_in_composed() {
+        let base = "#usda 1.0\n(\n    defaultPrim = \"Root\"\n)\ndef Xform \"Root\"\n{\n    def Xform \"Mid\"\n    {\n        def Xform \"Leaf\"\n        {\n            custom float density = 1.5\n        }\n    }\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(40),
+            base,
+            DocumentOrigin::writable_file("/tmp/nested.usda"),
+        );
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::runtime(),
+            path: "/Root/Mid/Leaf".into(),
+            name: "density".into(),
+            type_name: "float".into(),
+            value: "4.0".into(),
+        })
+        .unwrap();
+        let composed = doc.composed();
+        assert_eq!(
+            composed.prim_attribute_value::<f32>(&SdfPath::new("/Root/Mid/Leaf").unwrap(), "density"),
+            Some(4.0),
+            "runtime override must win in the composed sdf::Data"
+        );
+        assert!(
+            doc.composed_source().contains("density = 4"),
+            "composed USDA source must carry the override:\n{}",
+            doc.composed_source()
+        );
+    }
+
+    /// Repro: a runtime-layer `AddPrim` under a NESTED (non-root) parent must
+    /// appear in the composed view — the runtime spawn case for a doc-backed scene.
+    #[test]
+    fn runtime_add_prim_under_nested_parent_in_composed() {
+        let base = "#usda 1.0\n(\n    defaultPrim = \"Root\"\n)\ndef Xform \"Root\"\n{\n    def Xform \"Mid\"\n    {\n    }\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(41),
+            base,
+            DocumentOrigin::writable_file("/tmp/nested2.usda"),
+        );
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/Root/Mid".into(),
+            name: "Probe".into(),
+            type_name: Some("Cube".into()),
+            reference: None,
+        })
+        .unwrap();
+        let composed = doc.composed();
+        assert_eq!(
+            composed.prim_type_name(&SdfPath::new("/Root/Mid/Probe").unwrap()).as_deref(),
+            Some("Cube"),
+            "runtime child under a nested parent must appear in the composed view"
+        );
+    }
+
     #[test]
     fn base_and_runtime_ops_are_independent() {
         let mut doc = UsdDocument::new(DocumentId::new(33), TINY_USDA);

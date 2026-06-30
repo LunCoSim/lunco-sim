@@ -34,6 +34,10 @@ lunco-materials = { path = "../lunco-materials" }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 lunco-storage = { path = "../lunco-storage" }
+# Shared content-addressed cache dir (`cache://`) for the derived-layer bake
+# (P4): persist surface/normal maps keyed by DEM+param hash so the AO march
+# isn't redone every load and peers converge. `cache_dir()` is cross-platform.
+lunco-assets = { path = "../lunco-assets" }
 serde = { workspace = true }
 # `ApiQueryProvider` speaks `serde_json::Value` for params/response.
 serde_json = { workspace = true }

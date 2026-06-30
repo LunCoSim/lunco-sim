@@ -40,6 +40,8 @@ lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-materials = { path = "../lunco-materials" }
+# Terrain shader-mode selector (Lit / Debug-LOD / Plain) in the Inspector.
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-assets = { path = "../lunco-assets" }
 

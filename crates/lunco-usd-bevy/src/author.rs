@@ -215,8 +215,24 @@ pub fn compose_layers(base: &sdf::Data, runtime: &sdf::Data) -> sdf::Data {
         match out.spec_mut(path) {
             Some(bspec) => {
                 for (key, value) in &rspec.fields {
-                    if key == "primChildren" {
-                        union_prim_children(bspec, value);
+                    if key == "primChildren" || key == "propertyChildren" {
+                        // Both are ordering token-lists (the `TextWriter` emits a
+                        // prim's children/attributes by enumerating these): a
+                        // runtime sparse `over` names only the prims/attributes IT
+                        // touched, so blindly overwriting would drop every base
+                        // sibling on serialize. Union instead — keep base order,
+                        // append runtime-only names.
+                        union_token_list(bspec, key, value);
+                    } else if key == "specifier" {
+                        // Keep the strongest DEFINING specifier. A runtime sparse
+                        // edit authors `over` prims (an overlay opinion); blindly
+                        // copying that would DOWNGRADE the base's `def` → `over`.
+                        // When this merged layer is later serialized and re-parsed
+                        // standalone (the E1b twin overlay → `UsdLoader` path), an
+                        // `over` with no underlying `def` defines nothing, so the
+                        // whole subtree would silently vanish. Compose to the
+                        // strongest opinion instead (def > class > over).
+                        merge_specifier(bspec, value);
                     } else {
                         // Runtime opinion wins (stronger layer). `add` upserts
                         // in place, preserving field order.
@@ -233,23 +249,56 @@ pub fn compose_layers(base: &sdf::Data, runtime: &sdf::Data) -> sdf::Data {
     out
 }
 
-/// Union a runtime `primChildren` token list into the base spec's, preserving
-/// base order and appending only names base doesn't already list — so a runtime
-/// `over` that adds one child doesn't drop the base's siblings.
-fn union_prim_children(bspec: &mut SpecData, rval: &Value) {
-    let Value::TokenVec(rkids) = rval else {
-        bspec.add("primChildren", rval.clone());
+/// Compose the runtime `specifier` opinion onto the base spec, keeping the
+/// strongest DEFINING opinion (`def` > `class` > `over`). A sparse runtime edit
+/// authors `over` prims; that must never downgrade a base `def`, or the merged
+/// layer — once serialized and re-parsed standalone — would lose the prim (an
+/// `over` with no `def` defines nothing).
+fn merge_specifier(bspec: &mut SpecData, rval: &Value) {
+    let rank = |s: sdf::Specifier| match s {
+        sdf::Specifier::Def => 2,
+        sdf::Specifier::Class => 1,
+        sdf::Specifier::Over => 0,
+    };
+    let runtime = match rval {
+        Value::Specifier(s) => *s,
+        // Non-specifier value under the `specifier` key — shouldn't happen; just
+        // take the runtime opinion verbatim.
+        _ => {
+            bspec.add("specifier", rval.clone());
+            return;
+        }
+    };
+    let base = match bspec.get_mut("specifier") {
+        Some(Value::Specifier(s)) => *s,
+        // Base has no specifier yet — take the runtime one.
+        _ => {
+            bspec.add("specifier", Value::Specifier(runtime));
+            return;
+        }
+    };
+    let strongest = if rank(runtime) > rank(base) { runtime } else { base };
+    bspec.add("specifier", Value::Specifier(strongest));
+}
+
+/// Union a runtime token-list ordering field (`primChildren` or `properties`)
+/// into the base spec's, preserving base order and appending only names base
+/// doesn't already list — so a runtime `over` that touches one child/attribute
+/// doesn't drop the base's siblings when the merged layer is serialized.
+fn union_token_list(bspec: &mut SpecData, key: &str, rval: &Value) {
+    let Value::TokenVec(rnames) = rval else {
+        bspec.add(key, rval.clone());
         return;
     };
-    match bspec.get_mut("primChildren") {
-        Some(Value::TokenVec(bkids)) => {
-            for k in rkids {
-                if !bkids.iter().any(|x| x == k) {
-                    bkids.push(k.clone());
+    match bspec.get_mut(key) {
+        Some(Value::TokenVec(bnames)) => {
+            for k in rnames {
+                if !bnames.iter().any(|x| x == k) {
+                    bnames.push(k.clone());
                 }
             }
         }
-        _ => bspec.add("primChildren", rval.clone()),
+        _ => bspec.add(key, rval.clone()),
     }
 }
 
@@ -398,6 +447,81 @@ mod tests {
             .collect();
         assert!(kids.contains(&"Box".to_string()), "base child survives: {kids:?}");
         assert!(kids.contains(&"Obstacle".to_string()), "runtime child added: {kids:?}");
+    }
+
+    /// A runtime sparse `over` (the shape a `SetAttribute` edit authors) must NOT
+    /// downgrade the base `def` — and the composed layer must survive a full
+    /// serialize → reparse round-trip with the override intact. This is the E1b
+    /// twin-overlay path: `composed()` → `data_to_usda` → `UsdLoader` reparse. The
+    /// bug this guards: a downgraded `over` with no underlying `def` defines
+    /// nothing on reparse, so the whole subtree silently vanished.
+    #[test]
+    fn compose_layers_keeps_base_def_and_survives_roundtrip() {
+        let base = usda_to_data(SCENE).unwrap(); // /World(def)/Box(def, radius=1)/Inner(def)
+        let runtime = usda_to_data(
+            "#usda 1.0\nover \"World\"\n{\n    over \"Box\"\n    {\n        double radius = 7\n    }\n}\n",
+        )
+        .unwrap();
+        let composed = compose_layers(&base, &runtime);
+
+        // Specifier stays `def` on every overridden prim (not downgraded to over).
+        for p in ["/World", "/World/Box"] {
+            let spec = composed.spec(&SdfPath::new(p).unwrap()).unwrap();
+            let specifier = spec.fields.iter().find(|(k, _)| k == "specifier").map(|(_, v)| v);
+            assert!(
+                matches!(specifier, Some(Value::Specifier(sdf::Specifier::Def))),
+                "{p} must stay `def`, got {specifier:?}"
+            );
+        }
+
+        // The override survives a serialize → reparse round-trip (what the live
+        // world actually does when reloading the twin overlay).
+        let text = data_to_usda(&composed).unwrap();
+        let reparsed = usda_to_data(&text).unwrap();
+        assert_eq!(
+            reparsed.prim_attribute_value::<f64>(&SdfPath::new("/World/Box").unwrap(), "radius"),
+            Some(7.0),
+            "override must survive the round-trip:\n{text}"
+        );
+        // The base prim type + nested child survive the round-trip too.
+        assert_eq!(
+            reparsed.prim_type_name(&SdfPath::new("/World/Box").unwrap()).as_deref(),
+            Some("Sphere"),
+            "base prim type must survive:\n{text}"
+        );
+        assert_eq!(
+            reparsed.prim_attribute_value::<f64>(&SdfPath::new("/World/Box/Inner").unwrap(), "radius"),
+            Some(9.0),
+            "nested base child must survive:\n{text}"
+        );
+    }
+
+    /// A runtime sparse override of ONE attribute must not drop the prim's other
+    /// attributes when the merged layer is serialized — the prim `properties`
+    /// ordering list must be UNIONed, not overwritten. (The bug: a `SetAttribute`
+    /// edit authors a runtime prim whose `properties` names only the edited attr,
+    /// so a plain overwrite made `data_to_usda` emit only that one attr — e.g. a
+    /// terrain Craters layer kept `density` but lost `lunco:layer`, sizeMode, ….)
+    #[test]
+    fn compose_layers_unions_properties_on_sparse_override() {
+        let base = usda_to_data(
+            "#usda 1.0\ndef Xform \"P\"\n{\n    custom float a = 1.0\n    custom float b = 2.0\n    custom string tag = \"keep\"\n}\n",
+        )
+        .unwrap();
+        // Runtime sparse `over` touching only `a` — the shape SetAttribute authors.
+        let runtime =
+            usda_to_data("#usda 1.0\nover \"P\"\n{\n    custom float a = 9.0\n}\n").unwrap();
+        let composed = compose_layers(&base, &runtime);
+        let text = data_to_usda(&composed).unwrap();
+        let reparsed = usda_to_data(&text).unwrap();
+        let p = SdfPath::new("/P").unwrap();
+        assert_eq!(reparsed.prim_attribute_value::<f32>(&p, "a"), Some(9.0), "override lost:\n{text}");
+        assert_eq!(reparsed.prim_attribute_value::<f32>(&p, "b"), Some(2.0), "sibling `b` dropped:\n{text}");
+        assert_eq!(
+            reparsed.prim_attribute_value::<String>(&p, "tag").as_deref(),
+            Some("keep"),
+            "sibling `tag` dropped:\n{text}"
+        );
     }
 
     /// An empty runtime layer composes to exactly the base.

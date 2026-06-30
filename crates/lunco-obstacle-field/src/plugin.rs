@@ -109,6 +109,7 @@ impl Plugin for ObstacleFieldPlugin {
             .init_resource::<ObstacleFieldHeights>()
             .init_resource::<PhysicsHold>()
             .add_message::<RegenerateField>()
+            .init_resource::<ObstacleFieldMode>()
             .add_systems(Startup, trigger_initial)
             .add_systems(
                 Update,
@@ -156,8 +157,46 @@ fn manage_physics_hold(
     }
 }
 
-fn trigger_initial(mut ev: MessageWriter<RegenerateField>) {
-    ev.write(RegenerateField);
+/// Who owns crater/rock generation from the shared [`ObstacleFieldSpec`].
+///
+/// The spec (and its Inspector + networked [`UpdateObstacleFieldSpec`]) is the
+/// single source of truth either way; this only selects what the spec *drives*:
+///
+/// - [`Standalone`](ObstacleFieldMode::Standalone) (default): this plugin builds
+///   its own flat-slab arena (a ±200 m heightfield with craters stamped in + rocks
+///   scattered on top) and rebuilds it on [`RegenerateField`]. The pre-DEM test
+///   scaffold.
+/// - [`DemDelegated`](ObstacleFieldMode::DemDelegated): the real ground is a **DEM
+///   terrain** (`lunco-terrain-surface`), which consumes the *same* spec — craters
+///   stamp into the DEM height grid, rocks scatter on the DEM surface. This plugin
+///   then builds **no** slab (it would float on / z-fight the DEM) and leaves
+///   [`RegenerateField`] for the terrain crate to apply to the DEM.
+///
+/// So the moonbase sandbox sets `DemDelegated` and the *one* Inspector panel tunes
+/// the DEM craters/rocks live; a slab-only scene leaves it `Standalone`.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ObstacleFieldMode {
+    Standalone,
+    DemDelegated,
+}
+
+impl Default for ObstacleFieldMode {
+    fn default() -> Self {
+        Self::Standalone
+    }
+}
+
+impl ObstacleFieldMode {
+    /// True when this plugin owns the flat-slab build path.
+    pub fn is_standalone(self) -> bool {
+        matches!(self, ObstacleFieldMode::Standalone)
+    }
+}
+
+fn trigger_initial(mode: Res<ObstacleFieldMode>, mut ev: MessageWriter<RegenerateField>) {
+    if mode.is_standalone() {
+        ev.write(RegenerateField);
+    }
 }
 
 /// Build a Bevy `Mesh` from raw height-grid vertex arrays. The single
@@ -189,6 +228,7 @@ fn rock_visibility_range() -> VisibilityRange {
 #[allow(clippy::too_many_arguments)]
 fn regenerate_obstacle_field(
     mut events: MessageReader<RegenerateField>,
+    mode: Res<ObstacleFieldMode>,
     spec: Res<ObstacleFieldSpec>,
     existing: Query<Entity, With<ObstacleFieldRoot>>,
     grids: Query<Entity, With<WorldGrid>>,
@@ -201,6 +241,18 @@ fn regenerate_obstacle_field(
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
+    // In DEM-delegated mode the DEM terrain owns crater/rock generation from the
+    // shared spec (see `lunco-terrain-surface`), so the flat slab must NOT build —
+    // it would float on / z-fight the DEM. Leave the `RegenerateField` events for
+    // the terrain crate's reader (cursors are per-system, so not consuming here is
+    // correct). Tear down any stray slab from a prior Standalone run first.
+    if !mode.is_standalone() {
+        events.clear();
+        for e in &existing {
+            commands.entity(e).despawn();
+        }
+        return;
+    }
     if events.is_empty() {
         return;
     }
