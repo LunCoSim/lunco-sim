@@ -1,0 +1,92 @@
+#usda 1.0
+(
+    defaultPrim = "DiffRig"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# G5 — ISOLATED differential test rig (not a vehicle).
+#
+# A heavy fixed base (3000 kg pillar resting on the ground) carries two rockers
+# that swing freely in air on LATERAL-axis (X) revolutes:
+#   * RockerL is FRONT-HEAVY — its pivot is at the rear end, so gravity pitches
+#     it nose-down toward θ_L ≈ −90°.
+#   * RockerR is BALANCED — pivot at its centre, no gravity torque, so on its own
+#     it stays at θ_R ≈ 0.
+#
+# With NO differential, RockerR stays put while RockerL hangs. A WORKING
+# differential enforcing `θ_L + θ_R → 0` must drive RockerR to mirror RockerL
+# (θ_R ≈ +90°). So `HingeR.angle` is the clean signal: ~0 without the coupling,
+# ~−HingeL.angle with it. No ground-contact or chassis-roll confounds.
+
+def Xform "DiffRig" (
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+)
+{
+    float physics:mass = 3000.0
+    float3 physics:diagonalInertia = (4000.0, 4000.0, 4000.0)
+
+    rel lunco:differential:rockerA = </DiffRig/RockerL>
+    rel lunco:differential:rockerB = </DiffRig/RockerR>
+    uniform token lunco:differential:axis = "X"
+    float lunco:differential:stiffness = 8000.0
+    float lunco:differential:damping = 1200.0
+    float lunco:differential:restSum = 0.0
+
+    # Heavy base pillar (root rigid body). Spans y -1.5..1.5 about the root; the
+    # scene places the root at y=1.5 so the base rests on the ground.
+    def Cube "Base" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {
+        double size = 1.0
+        double3 xformOp:scale = (1.5, 3.0, 1.5)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
+        color3f primvars:displayColor = (0.6, 0.6, 0.65)
+    }
+
+    # Front-heavy rocker: centre 0.75 m forward of its pivot (pivot at rear end).
+    def Cube "RockerL" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 1.0
+        float physics:mass = 60.0
+        float3 physics:diagonalInertia = (50.0, 50.0, 5.0)
+        float physics:angularDamping = 8.0
+        double3 xformOp:translate = (-1.2, 1.0, 0.75)
+        double3 xformOp:scale = (0.2, 0.2, 1.5)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.85, 0.2, 0.2)
+    }
+
+    # Balanced rocker: pivot at its centre (no gravity torque).
+    def Cube "RockerR" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 1.0
+        float physics:mass = 60.0
+        float3 physics:diagonalInertia = (50.0, 50.0, 5.0)
+        float physics:angularDamping = 8.0
+        double3 xformOp:translate = (1.2, 1.0, 0.0)
+        double3 xformOp:scale = (0.2, 0.2, 1.5)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.2, 0.2, 0.85)
+    }
+
+    def PhysicsRevoluteJoint "HingeL"
+    {
+        rel physics:body0 = </DiffRig>
+        rel physics:body1 = </DiffRig/RockerL>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (-1.2, 1.0, 0.0)
+        point3f physics:localPos1 = (0.0, 0.0, -0.75)
+    }
+    def PhysicsRevoluteJoint "HingeR"
+    {
+        rel physics:body0 = </DiffRig>
+        rel physics:body1 = </DiffRig/RockerR>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (1.2, 1.0, 0.0)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+    }
+}

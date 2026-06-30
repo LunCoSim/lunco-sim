@@ -1,0 +1,70 @@
+#usda 1.0
+(
+    defaultPrim = "RockerBogieTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# G5 CONTROL scene — identical to `rocker_bogie_test.usda` but the differential
+# is DISABLED by a local `lunco:differential:stiffness = 0` opinion on the Rover
+# (a local opinion overrides the referenced rover's value). With the coupling
+# off, the step under the left-front corner should ROLL the chassis noticeably
+# more than the coupled case — isolating the differential's leveling effect.
+
+def Xform "RockerBogieTest"
+{
+    custom bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.4, 0.4, 0.45)
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+    def Cube "Step" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-1.0, 0.0, 1.2)
+        double3 xformOp:scale = (0.7, 0.5, 0.7)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.6, 0.5, 0.4)
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 10000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        double3 xformOp:translate = (7.0, 5.0, 8.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "Rover" (
+        prepend references = @../../vessels/rovers/rocker_bogie.usda@</RockerBogie>
+    )
+    {
+        # Disable the differential (local opinion wins over the referenced value).
+        float lunco:differential:stiffness = 0.0
+        float lunco:differential:damping = 0.0
+        double3 xformOp:translate = (0, 1.6, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}

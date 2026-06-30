@@ -1,0 +1,169 @@
+#usda 1.0
+(
+    defaultPrim = "SixWheelIndependent"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Six-wheel rover with INDEPENDENT per-wheel drive — the full G4 + G4b stack:
+#   * G4 extensible port set: `lunco:drivePorts` declares six custom actuator
+#     ports `drive_w0..drive_w5` (beyond the canonical drive_left/right/...).
+#   * G4 per-wheel binding: each wheel names its own port via `lunco:drivePort`.
+#   * G4b authored mix: `lunco:driveMix` maps the DriveRover (forward, steer)
+#     command onto all six channels — left bank `+steer`, right bank `−steer`
+#     (skid steering realised through six independent motors, not a 2-port mix).
+#
+# There is NO `PhysxVehicleDriveSkidAPI` here: the drivetrain is the authored
+# mix, so adding a 7th wheel or re-routing a channel is a one-line USD edit.
+# `PhysxVehicleContextAPI` still provides the FlightSoftware + RoverVessel.
+
+def Xform "SixWheelIndependent" (
+    kind = "component"
+    prepend apiSchemas = [
+        "PhysicsRigidBodyAPI",
+        "PhysicsMassAPI",
+        "PhysxVehicleContextAPI"
+    ]
+)
+{
+    float physics:mass = 1400.0
+    float lunco:spawnLift = 1.0
+    float physics:linearDamping = 0.5
+    float physics:angularDamping = 2.0
+    float3 physics:diagonalInertia = (2400.0, 3000.0, 1200.0)
+    float3 physics:centerOfMass = (0.0, -0.1, 0.0)
+
+    # G4 — six custom actuator ports (one per wheel).
+    string lunco:drivePorts = "drive_w0 drive_w1 drive_w2 drive_w3 drive_w4 drive_w5"
+
+    # G4b — the mix. Left bank (w0,w1,w2) = forward+steer; right bank (w3,w4,w5)
+    # = forward−steer. Pure forward drives all six equally; pure steer pivots.
+    string lunco:driveMix = "drive_w0=1,1 drive_w1=1,1 drive_w2=1,1 drive_w3=1,-1 drive_w4=1,-1 drive_w5=1,-1"
+
+    def Cube "Chassis" (
+        kind = "subcomponent"
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:scale = (2.0, 0.3, 5.0)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
+        color3f primvars:displayColor = (0.2, 0.7, 0.85)
+    }
+
+    # --- Left bank → drive_w0/w1/w2 -----------------------------------------
+    def Cylinder "Wheel_L0" (
+        kind = "subcomponent"
+        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+    )
+    {
+        uniform token axis = "X"
+        double radius = 0.4
+        double height = 0.3
+        double3 xformOp:translate = (-1.0, -0.15, -2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (1.0, 0.0, 0.0)
+        int physxVehicleWheel:index = 0
+        float physxVehicleWheel:radius = 0.4
+        string lunco:drivePort = "drive_w0"
+        float physxVehicleSuspension:restLength = 0.7
+        float physxVehicleSuspension:springStiffness = 15000.0
+        float physxVehicleSuspension:springDamping = 3000.0
+    }
+
+    def Cylinder "Wheel_L1" (
+        kind = "subcomponent"
+        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+    )
+    {
+        uniform token axis = "X"
+        double radius = 0.4
+        double height = 0.3
+        double3 xformOp:translate = (-1.0, -0.15, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (1.0, 0.4, 0.0)
+        int physxVehicleWheel:index = 2
+        float physxVehicleWheel:radius = 0.4
+        string lunco:drivePort = "drive_w1"
+        float physxVehicleSuspension:restLength = 0.7
+        float physxVehicleSuspension:springStiffness = 15000.0
+        float physxVehicleSuspension:springDamping = 3000.0
+    }
+
+    def Cylinder "Wheel_L2" (
+        kind = "subcomponent"
+        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+    )
+    {
+        uniform token axis = "X"
+        double radius = 0.4
+        double height = 0.3
+        double3 xformOp:translate = (-1.0, -0.15, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.0, 0.0, 1.0)
+        int physxVehicleWheel:index = 4
+        float physxVehicleWheel:radius = 0.4
+        string lunco:drivePort = "drive_w2"
+        float physxVehicleSuspension:restLength = 0.7
+        float physxVehicleSuspension:springStiffness = 15000.0
+        float physxVehicleSuspension:springDamping = 3000.0
+    }
+
+    # --- Right bank → drive_w3/w4/w5 ----------------------------------------
+    def Cylinder "Wheel_R0" (
+        kind = "subcomponent"
+        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+    )
+    {
+        uniform token axis = "X"
+        double radius = 0.4
+        double height = 0.3
+        double3 xformOp:translate = (1.0, -0.15, -2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (1.0, 0.0, 0.0)
+        int physxVehicleWheel:index = 1
+        float physxVehicleWheel:radius = 0.4
+        string lunco:drivePort = "drive_w3"
+        float physxVehicleSuspension:restLength = 0.7
+        float physxVehicleSuspension:springStiffness = 15000.0
+        float physxVehicleSuspension:springDamping = 3000.0
+    }
+
+    def Cylinder "Wheel_R1" (
+        kind = "subcomponent"
+        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+    )
+    {
+        uniform token axis = "X"
+        double radius = 0.4
+        double height = 0.3
+        double3 xformOp:translate = (1.0, -0.15, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (1.0, 0.4, 0.0)
+        int physxVehicleWheel:index = 3
+        float physxVehicleWheel:radius = 0.4
+        string lunco:drivePort = "drive_w4"
+        float physxVehicleSuspension:restLength = 0.7
+        float physxVehicleSuspension:springStiffness = 15000.0
+        float physxVehicleSuspension:springDamping = 3000.0
+    }
+
+    def Cylinder "Wheel_R2" (
+        kind = "subcomponent"
+        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+    )
+    {
+        uniform token axis = "X"
+        double radius = 0.4
+        double height = 0.3
+        double3 xformOp:translate = (1.0, -0.15, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.0, 0.0, 1.0)
+        int physxVehicleWheel:index = 5
+        float physxVehicleWheel:radius = 0.4
+        string lunco:drivePort = "drive_w5"
+        float physxVehicleSuspension:restLength = 0.7
+        float physxVehicleSuspension:springStiffness = 15000.0
+        float physxVehicleSuspension:springDamping = 3000.0
+    }
+}

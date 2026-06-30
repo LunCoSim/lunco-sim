@@ -1,0 +1,108 @@
+#usda 1.0
+(
+    defaultPrim = "RockerBogie"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# G5 — rocker-bogie chassis with a differential coupling.
+#
+# Two side rockers (single fore-aft beam bodies) hang off the chassis on
+# LATERAL-axis (X) revolute joints, so each pitches fore-aft to let its front and
+# rear ends ride terrain independently — the passive rocker suspension, buildable
+# with today's authored joints. The missing piece is the DIFFERENTIAL:
+# `lunco:differential:rockerA/B` on the chassis names the two rockers; the reader
+# attaches a `lunco_mobility::DifferentialCoupling` that softly enforces
+# `θ_left + θ_right → 0`, so when one rocker pitches up the other pitches down and
+# the chassis rides at their average (stays level over a bump).
+#
+# Each rocker authors `physics:diagonalInertia` (G2) so the coupling torque is
+# well-conditioned, and the coupling stiffness stays under the explicit-penalty
+# stability limit (`k < I/dt²`).
+#
+# Verify: load over a step under one rocker's front; read the two hinge `angle`
+# ports (`lunco-cosim` auto-exposes them on every RevoluteJoint). The differential
+# holds `HingeL.angle + HingeR.angle ≈ 0` even though each is individually
+# non-zero — without the coupling only the bumped rocker would move.
+
+def Xform "RockerBogie" (
+    kind = "component"
+    prepend apiSchemas = [
+        "PhysicsRigidBodyAPI",
+        "PhysicsMassAPI",
+        "PhysicsArticulationRootAPI"
+    ]
+)
+{
+    float physics:mass = 400.0
+    float lunco:spawnLift = 1.5
+    float physics:linearDamping = 0.4
+    float physics:angularDamping = 2.0
+
+    # G5 — the differential. Couple the two rockers about the lateral (X) axis.
+    # Soft: rocker inertia ≈ 60 kg·m², physics dt ≈ 1/64 s ⇒ stability needs
+    # k < I/dt² ≈ 2.5e5; 1.5e4 is a comfortable margin.
+    rel lunco:differential:rockerA = </RockerBogie/RockerL>
+    rel lunco:differential:rockerB = </RockerBogie/RockerR>
+    uniform token lunco:differential:axis = "X"
+    float lunco:differential:stiffness = 15000.0
+    float lunco:differential:damping = 1500.0
+    float lunco:differential:restSum = 0.0
+
+    # Chassis collider (compound child of the rigid-body root).
+    def Cube "Body" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:scale = (1.6, 0.4, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
+        color3f primvars:displayColor = (0.85, 0.75, 0.2)
+    }
+
+    # ── Left rocker: a single beam body below the chassis ───────────────────
+    def Cube "RockerL" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 1.0
+        float physics:mass = 80.0
+        float3 physics:diagonalInertia = (60.0, 60.0, 6.0)
+        double3 xformOp:translate = (-1.0, -0.5, 0.0)
+        double3 xformOp:scale = (0.3, 0.3, 2.8)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.8, 0.2, 0.2)
+    }
+
+    # ── Right rocker ────────────────────────────────────────────────────────
+    def Cube "RockerR" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 1.0
+        float physics:mass = 80.0
+        float3 physics:diagonalInertia = (60.0, 60.0, 6.0)
+        double3 xformOp:translate = (1.0, -0.5, 0.0)
+        double3 xformOp:scale = (0.3, 0.3, 2.8)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.2, 0.2, 0.8)
+    }
+
+    # ── Lateral-axis revolute hinges (chassis ↔ rocker) ─────────────────────
+    def PhysicsRevoluteJoint "HingeL"
+    {
+        rel physics:body0 = </RockerBogie>
+        rel physics:body1 = </RockerBogie/RockerL>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (-1.0, -0.5, 0.0)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+    }
+    def PhysicsRevoluteJoint "HingeR"
+    {
+        rel physics:body0 = </RockerBogie>
+        rel physics:body1 = </RockerBogie/RockerR>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (1.0, -0.5, 0.0)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+    }
+}

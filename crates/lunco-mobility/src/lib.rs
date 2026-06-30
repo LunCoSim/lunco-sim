@@ -80,6 +80,7 @@ impl Plugin for LunCoMobilityPlugin {
            .register_type::<DifferentialDrive>()
            .register_type::<AckermannSteer>()
            .register_type::<WheelRaycast>()
+           .register_type::<GenericDriveMix>()
            .register_type::<DifferentialCoupling>()
            // G5 rocker-bogie differential — separate set: it doesn't read the
            // control ports, only couples two rocker hinges. Idle unless a
@@ -569,6 +570,61 @@ pub struct AckermannSteer {
     pub max_steer_angle: f32,
 }
 
+/// G4b — One linear mix term: how a drive command projects onto ONE named port.
+/// `value = forward·fwd + steer·steer + brake·brake`, clamped to ±1 then scaled
+/// to the i16 port range. Covers skid (`fwd=1, steer=±1`), Ackermann-style drive
+/// (`fwd=1, steer=0` on drive ports + a dedicated steer port `steer=1`), and
+/// arbitrary **per-wheel** routing (each wheel its own port + coefficients).
+#[derive(Debug, Clone, Reflect, Default)]
+pub struct MixEntry {
+    /// FSW port name this term writes (must exist in the rover's `port_map`).
+    pub port: String,
+    pub forward: f64,
+    pub steer: f64,
+    /// Applied as a 0/1 gate from `FlightSoftware::brake_active` (a brake port
+    /// gets `brake=1`; a drive port leaves it 0 and is zeroed while braking).
+    pub brake: f64,
+}
+
+/// G4b — USD-authored drive **mix** for arbitrary actuator topology. Replaces the
+/// hardcoded skid/Ackermann routing for vehicles that declare one, so per-wheel
+/// independent drive (6-wheel, rocker-bogie, crab-steer) is a USD table, not Rust.
+/// Built from `lunco:driveMix` (see [`GenericDriveMix::parse`]); a rover has at
+/// most one of {`DifferentialDrive`, `AckermannSteer`, `GenericDriveMix`}.
+#[derive(Component, Debug, Clone, Reflect, Default)]
+#[reflect(Component, Default)]
+pub struct GenericDriveMix {
+    pub entries: Vec<MixEntry>,
+}
+
+impl GenericDriveMix {
+    /// Parse the compact `lunco:driveMix` string: whitespace-separated
+    /// `port=forward,steer[,brake]` terms (brake defaults 0). Example:
+    /// `"drive_left=1,1 drive_right=1,-1 brake=0,0,1"`. Malformed terms are
+    /// skipped with a warning rather than failing the whole vehicle.
+    pub fn parse(spec: &str) -> Self {
+        let mut entries = Vec::new();
+        for term in spec.split_whitespace() {
+            let Some((port, coeffs)) = term.split_once('=') else {
+                warn!("driveMix term '{term}' missing '=port=f,s[,b]'; skipped");
+                continue;
+            };
+            let nums: Vec<f64> = coeffs.split(',').filter_map(|c| c.trim().parse().ok()).collect();
+            if port.is_empty() || nums.len() < 2 {
+                warn!("driveMix term '{term}' needs port=forward,steer[,brake]; skipped");
+                continue;
+            }
+            entries.push(MixEntry {
+                port: port.to_string(),
+                forward: nums[0],
+                steer: nums[1],
+                brake: nums.get(2).copied().unwrap_or(0.0),
+            });
+        }
+        Self { entries }
+    }
+}
+
 /// G5 — Rocker-bogie **differential** coupling primitive.
 ///
 /// A rocker-bogie chassis hangs between two rockers (one per side), each joined
@@ -657,6 +713,19 @@ fn differential_torque(
 /// rockers' pitch + rate relative to the chassis and applies the PD coupling
 /// torque about the hinge axis (equal on each rocker, `−2τ` reaction on the
 /// chassis). Idle unless a `DifferentialCoupling` exists.
+///
+/// **Verified** on an isolated rig (`differential_rig_test.usda`, 2026-06-30):
+/// a fixed base carries a front-heavy rocker A and a balanced rocker B on lateral
+/// revolutes. A/B by hinge `angle` ports —
+/// - coupling OFF: A free-falls to the pendulum bottom (`+3.06`), B untouched (`+0.06`);
+/// - coupling ON:  A held at `+1.72`, B driven to `−1.65` (mirror), `θ_A+θ_B ≈ 0.07`.
+///
+/// So the coupling correctly enforces `θ_A + θ_B → rest_sum`. NOTE: needs a
+/// non-redundant rig to *show* its effect — a passive two-rocker pair each pinned
+/// by its own two ground feet already self-levels, leaving nothing for the
+/// coupling to do (the original `rocker_bogie_test.usda` is that redundant case).
+/// And keep `stiffness < I/dt²` and damp the rockers, or the explicit penalty
+/// rings / diverges.
 fn differential_coupling_system(
     q_coupling: Query<&DifferentialCoupling>,
     mut q_bodies: Query<Forces>,
@@ -844,6 +913,7 @@ fn on_drive_rover(
     mut q_rovers: Query<&mut FlightSoftware, With<RoverVessel>>,
     q_diff: Query<&DifferentialDrive>,
     q_ack: Query<&AckermannSteer>,
+    q_mix: Query<&GenericDriveMix>,
     mut q_digital_ports: Query<&mut DigitalPort>,
 ) {
     let Ok(fsw) = q_rovers.get_mut(cmd.target) else {
@@ -851,6 +921,26 @@ fn on_drive_rover(
         return;
     };
     drive_diag!("[drive-diag] on_drive_rover: target {:?} fwd={} steer={} brake={} ports={:?}", cmd.target, cmd.forward, cmd.steer, fsw.brake_active, fsw.port_map);
+
+    // G4b — USD-authored linear mix wins when present (arbitrary per-wheel
+    // topology). While braking, forward/steer are forced to 0 (matching the
+    // skid/Ackermann branches) and only brake-coefficient ports stay live.
+    if let Ok(mix) = q_mix.get(cmd.target) {
+        let (fwd, steer, brake) = if fsw.brake_active {
+            (0.0, 0.0, 1.0)
+        } else {
+            (cmd.forward, cmd.steer, 0.0)
+        };
+        let full = DIGITAL_PORT_FULL_SCALE as f64;
+        for e in &mix.entries {
+            let Some(&port_id) = fsw.port_map.get(&e.port) else { continue };
+            let raw = (fwd * e.forward + steer * e.steer + brake * e.brake).clamp(-1.0, 1.0);
+            if let Ok(mut p) = q_digital_ports.get_mut(port_id) {
+                p.raw_value = (raw * full).round() as i16;
+            }
+        }
+        return;
+    }
 
     if fsw.brake_active {
         for name in ["drive_left", "drive_right", "steering"] {
@@ -959,6 +1049,28 @@ mod force_law_tests {
         assert!(differential_torque(0.2, -0.2, 0.0, 0.0, k, d).abs() < 1e-12);
         // Damping opposes a positive constraint-rate even at zero error.
         assert!(differential_torque(0.0, 0.0, 0.5, 0.0, k, d) < 0.0);
+    }
+
+    // ── G4b generic drive mix: parse + linear projection ────────────────────
+    #[test]
+    fn drive_mix_parses_and_skips_garbage() {
+        let m = GenericDriveMix::parse("drive_left=1,1 drive_right=1,-1 brake=0,0,1 junk bad=1");
+        // `junk` (no '=') and `bad=1` (only one coeff) are skipped.
+        assert_eq!(m.entries.len(), 3);
+        assert_eq!(m.entries[0].port, "drive_left");
+        assert_eq!((m.entries[0].forward, m.entries[0].steer, m.entries[0].brake), (1.0, 1.0, 0.0));
+        assert_eq!(m.entries[2].port, "brake");
+        assert_eq!(m.entries[2].brake, 1.0);
+    }
+
+    #[test]
+    fn drive_mix_skid_projection_is_symmetric() {
+        // The skid table: left = fwd+steer, right = fwd-steer. Pure forward ⇒
+        // both sides equal; pure steer ⇒ opposite sign (pivot).
+        let m = GenericDriveMix::parse("L=1,1 R=1,-1");
+        let proj = |fwd: f64, steer: f64, e: &MixEntry| (fwd * e.forward + steer * e.steer).clamp(-1.0, 1.0);
+        assert_eq!(proj(0.5, 0.0, &m.entries[0]), proj(0.5, 0.0, &m.entries[1]));
+        assert_eq!(proj(0.0, 0.5, &m.entries[0]), -proj(0.0, 0.5, &m.entries[1]));
     }
 
     // ── drive_force_mag: reverse must work ──────────────────────────────────

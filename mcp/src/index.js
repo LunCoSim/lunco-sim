@@ -340,6 +340,52 @@ const STATIC_TOOLS = [
       required: ['target', 'source'],
     },
   },
+  // ── Live telemetry (cosim port table) ────────────────────────────────
+  // The unified port table (`PortRegistry`) is the canonical live-telemetry
+  // surface: every Modelica var, Avian rigid-body state (position/velocity/
+  // attitude/rates/forces/mass-props), joint angle, and hardware signal is a
+  // named scalar port readable here. These wrap the `ListPorts`/`GetPort`
+  // providers. MCP is request/response, so "realtime" = read on demand
+  // (`read_port`/`read_ports`) or sample a short time-series in one call
+  // (`watch_ports`).
+  {
+    name: 'read_port',
+    description: 'Read ONE live telemetry port value. Returns `{name, value}`. Needs the owning entity\'s `api_id` (from `list_entities`) and the port `name` (discover names with `read_ports`). Port names include Avian rigid-body telemetry (`position_x/y/z`, `height`, `velocity_x/y/z`, `quat_w/x/y/z`, `yaw`/`pitch`/`roll`, `angvel_x/y/z`, `force_*`, `torque_*`, `mass`, `inertia_xx/yy/zz`, `com_*`), revolute-joint `angle`, Modelica vars, and hardware signals.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        api_id: { type: 'integer', description: 'Owning entity api_id (from list_entities / read_ports).' },
+        name: { type: 'string', description: 'Port name (e.g. "pitch", "angle", "velocity_y").' },
+      },
+      required: ['api_id', 'name'],
+    },
+  },
+  {
+    name: 'read_ports',
+    description: 'Snapshot live telemetry ports. With `api_id`: that entity\'s ports as `{ports:[{name,value,direction,kind}]}`. Without `api_id`: EVERY port-bearing entity as `{entities:[{api_id,name,ports}]}` — can be large, so pass `name_filter` (case-insensitive substring on the entity name/USD path, e.g. "Lander" or "Hinge") and/or `ports` (only these port names) to narrow it. One-shot; call again for fresh values, or use `watch_ports` for a time-series.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        api_id: { type: 'integer', description: 'Optional. One entity\'s ports. Omit to list all port-bearing entities.' },
+        name_filter: { type: 'string', description: 'Optional case-insensitive substring on entity name/path (all-entities form only).' },
+        ports: { type: 'array', items: { type: 'string' }, description: 'Optional port-name allowlist to keep the output small.' },
+      },
+    },
+  },
+  {
+    name: 'watch_ports',
+    description: 'Sample one entity\'s telemetry ports repeatedly in a single call and return the time-series — the realtime/streaming view within request/response MCP. Returns `{api_id, interval_ms, series:[{i, t_ms, <port>:<value>, ...}]}`. Use to watch a value evolve (settle, oscillate, diverge) without manual re-polling. Bounded: `samples`≤120, `interval_ms` 50–5000, total wall-clock ≤30 s (auto-clamped).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        api_id: { type: 'integer', description: 'Entity to watch (from list_entities / read_ports).' },
+        ports: { type: 'array', items: { type: 'string' }, description: 'Optional port-name allowlist (default: all of the entity\'s ports).' },
+        samples: { type: 'integer', description: 'Number of samples (default 10, max 120).', default: 10 },
+        interval_ms: { type: 'integer', description: 'Delay between samples in ms (default 200, clamped 50–5000).', default: 200 },
+      },
+      required: ['api_id'],
+    },
+  },
 ];
 
 // Dynamic tools cache (built from schema)
@@ -676,6 +722,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'get_document_source':
       case 'describe_model':
       case 'snapshot_variables':
+      case 'read_port':
       case 'find_model': {
         // Each of these is backed by an ApiQueryProvider on the Rust
         // side. Rather than duplicate the schema/PascalCase mapping for
@@ -692,6 +739,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           get_document_source: 'GetDocumentSource',
           describe_model: 'DescribeModel',
           snapshot_variables: 'SnapshotVariables',
+          read_port: 'GetPort',
           find_model: 'FindModel',
         };
         const result = await executeCommand(commandMap[name], args ?? {});
@@ -729,6 +777,64 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'read_ports': {
+        // Live telemetry snapshot via the `ListPorts` provider. Single-entity
+        // form when `api_id` is given; otherwise every port-bearing entity,
+        // optionally narrowed client-side by `name_filter` / `ports`.
+        const { api_id, name_filter, ports: portFilter } = args ?? {};
+        const result = await executeCommand('ListPorts', api_id !== undefined ? { api_id } : {});
+        if (result.error) {
+          return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
+        }
+        let payload = result.data ?? result;
+        const keep = portFilter && portFilter.length
+          ? (p) => portFilter.includes(p.name)
+          : () => true;
+        if (Array.isArray(payload.entities)) {
+          const nf = name_filter ? name_filter.toLowerCase() : null;
+          payload = {
+            entities: payload.entities
+              .filter((e) => !nf || String(e.name ?? '').toLowerCase().includes(nf))
+              .map((e) => ({ ...e, ports: (e.ports ?? []).filter(keep) }))
+              .filter((e) => e.ports.length),
+          };
+        } else if (Array.isArray(payload.ports)) {
+          payload = { ...payload, ports: payload.ports.filter(keep) };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
+      }
+
+      case 'watch_ports': {
+        // Realtime view: sample one entity's ports `samples` times at
+        // `interval_ms` and return the time-series. Bounded so a single call
+        // can't run away (≤120 samples, 50–5000 ms, ≤30 s total wall-clock).
+        const { api_id, ports: portFilter } = args ?? {};
+        if (api_id === undefined) {
+          return { content: [{ type: 'text', text: 'Error: `api_id` is required' }], isError: true };
+        }
+        const interval = Math.min(5000, Math.max(50, Number(args?.interval_ms ?? 200)));
+        let samples = Math.min(120, Math.max(1, Number(args?.samples ?? 10)));
+        if (samples * interval > 30000) samples = Math.max(1, Math.floor(30000 / interval));
+        const allow = portFilter && portFilter.length ? new Set(portFilter) : null;
+        const series = [];
+        for (let i = 0; i < samples; i++) {
+          const r = await executeCommand('ListPorts', { api_id });
+          if (r.error) {
+            return { content: [{ type: 'text', text: `Error: ${r.error}` }], isError: true };
+          }
+          const data = r.data ?? r;
+          const row = { i, t_ms: i * interval };
+          for (const p of data.ports ?? []) {
+            if (!allow || allow.has(p.name)) row[p.name] = p.value;
+          }
+          series.push(row);
+          if (i < samples - 1) await new Promise((res) => setTimeout(res, interval));
+        }
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ api_id, samples, interval_ms: interval, series }, null, 2) }],
         };
       }
 

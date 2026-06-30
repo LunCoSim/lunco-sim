@@ -1,4 +1,5 @@
-> **Status:** Design / analysis — not yet implemented
+> **Status:** Partially implemented — G1/G1b/G2/G3/G4/G4b/G5/G6 done (G5 verified on an
+> isolated differential rig); G7/G8 deferred.
 > **Audience:** Engineers working on vehicle, cosim, and USD-physics subsystems
 
 # 33 — Modeling Spacecraft (Landers & Rovers) in LunCoSim
@@ -102,33 +103,96 @@ was found and fixed during verification.) Overrides are `f32`; principal (diagon
 inertia only — off-diagonal left to static USD authoring. Verified: `SetPort
 mass/inertia_xx/com_y` all stick on read-back while the lander keeps hovering.
 
-**Remaining G2 (load-time):** read `physics:diagonalInertia` / `physics:principalAxes`
-/ `physics:centerOfMass` in `lunco-usd-avian` → Avian override components, so an
-*authored* inertia/COM is honoured at spawn (today only scalar `physics:mass` is read).
-The runtime ports above already let a model *drive* them. `gravity_accel` is auto-injected into models.
+### G2 (load-time inertia/COM)  **[DONE]**
+`lunco-usd-avian` now reads `physics:diagonalInertia` and `physics:centerOfMass`
+at spawn → Avian `AngularInertia { principal, local_frame }` / `CenterOfMass`
+*override* components (the SAME components the runtime mass-props ports write, so
+authored and model-driven values share one path). Implemented as a single
+`apply_rigid_body_mass_props` helper called from both the main
+`PhysicsRigidBodyAPI` path and the legacy `rigidBodyEnabled` fallback — which
+also fixed the WP-3-flagged mass-handling divergence (the fallback used to skip
+the 1000 kg default). `physics:principalAxes` (a quat rotating the principal
+frame) defaults to identity — off-diagonal inertia is left to that quat and is
+almost always identity for landers/rovers. `gravity_accel` is auto-injected into
+models.
 
-### G4 — Arbitrary actuator port topology authored in USD  **[MED-HIGH — rover extraction]**
-The drive port set is **hardcoded to 4 names** (`drive_left/right/steering/brake`,
-`lunco-usd-sim/src/lib.rs:640`). Fine for 4-wheel skid; insufficient for
-per-wheel independent drive or 4-corner steering (Curiosity-class).
-- Replace the fixed set with a **USD-declared port list** + a USD- or rhai-authored
-  **mixing function** (skid/Ackermann/per-wheel). Move the mix out of Rust constants.
+### G4 — Arbitrary actuator port topology authored in USD  **[wiring DONE; mix = G4b]**
+The wheel→actuator **wiring topology** was hardcoded in two Rust spots: the port
+*set* (4 fixed names) and `try_wire_wheel`'s `index%2`/`index<2` parity. Both are
+now USD-authorable:
+- **Per-wheel binding** — `lunco:drivePort` / `lunco:steerPort` (token) on a wheel
+  prim name the FSW port it wires to, overriding index parity. So a 6-wheel rover,
+  per-wheel independent drive, or a non-2×N layout is declared in USD, not coded.
+  Unauthored wheels keep the documented parity default (even→`drive_left`,
+  odd→`drive_right`, front→`steering`), so the 4-wheel base rovers are unchanged.
+- **Extensible port set** — `lunco:drivePorts` (space-separated tokens) on the
+  rover root spawns extra named `DigitalPort`s beyond the canonical four, which
+  wheels bind to and a wire/rhai/Modelica mix drives.
+- **Proof:** `assets/vessels/rovers/six_wheel_rover.usda` — a self-contained
+  6-wheel skid rover whose three-per-side wheels bind explicitly via
+  `lunco:drivePort`; also authors G2 inertia/COM.
 
-### G5 — Differential / coupling constraint for rocker-bogie  **[MED]**
+**G4b — authored mix  [DONE]:** `lunco:driveMix` on the rover root declares a
+**linear per-port mix** — whitespace-separated `port=forward,steer[,brake]` terms
+→ `GenericDriveMix` component (`lunco-mobility`). `on_drive_rover` projects the
+`DriveRover` command onto every named port (`value = fwd·f + steer·s + brake·b`,
+clamped, scaled to i16), taking precedence over the built-in skid/Ackermann
+routing. Covers skid, Ackermann-style, and true **per-wheel independent** drive
+(each wheel its own port + coefficients). While braking, forward/steer are forced
+to 0 so only brake-coefficient ports stay live (matches the skid/Ackermann
+branches). Proof: `assets/vessels/rovers/six_wheel_independent.usda` — six custom
+`drive_w0..w5` ports, each wheel bound to its own, skid-steered through all six
+independent channels with no `PhysxVehicleDriveSkidAPI`. Parse + projection
+unit-tested. (Nonlinear mixes — e.g. exact Ackermann geometry — would still want
+a rhai hook; the linear table covers the stated skid/per-wheel cases.)
+
+### G5 — Differential / coupling constraint for rocker-bogie  **[DONE — verified]**
 Rocker-bogie = chassis + rocker + bogie links via revolute joints **plus a
-differential** that mechanically averages the two rockers' pitch. Avian has no
-gear/differential joint. Options:
-- (a) Rust "differential constraint" primitive (couple two revolute angles), or
-- (b) model the differential kinematically in Modelica as a constraint, or
-- (c) a passive spring coupling (approximate).
-Everything *except* the differential is buildable with today's revolute joints.
+differential** that averages the two rockers' pitch. Avian has no gear/differential
+joint, so this is a Rust **soft holonomic coupling**.
 
-### G6 — Finish USD-driven dynamics tuning  **[MED]**
-Holdouts still hardcoded in Rust: force-law constants (drive-per-normal 2.0, max
-suspension 100 kN, contact grip 50), joint-wheel tuning (`MAX_DRIVE_OMEGA=12`,
-`DRIVE_DAMP=30`, `Mass(100)`), and USD `drive:angular:physics:maxForce` is
-**ignored** in favor of Rust engine `peakTorque`. Promote these to USD attributes;
-honor the authored drive force.
+- **USD reader** — `lunco:differential:rockerA/B` (rel) + `:axis`/`:stiffness`/
+  `:damping`/`:restSum` on a chassis prim → `PendingDifferential` →
+  `resolve_differential_coupling` (deferred, matches prim-paths → entities, gated
+  on `With<Position>`, same pattern as USD joints) → `DifferentialCoupling`
+  (`lunco-mobility`). Reads each rocker's chassis-frame pitch (swing-twist about the
+  hinge axis) and applies a PD torque enforcing `θ_a + θ_b → rest_sum`, equal on
+  each rocker, `−2τ` reaction on the chassis (momentum-conserving). Idle unless a
+  `DifferentialCoupling` exists, so it's free for every other vehicle.
+- **Scalar PD law** (`angle_about_axis`, `differential_torque`) is unit-tested.
+- **Verified live** on `differential_rig_test.usda` — a fixed base, a front-heavy
+  rocker A + a balanced rocker B on lateral revolutes. A/B via the hinge `angle`
+  ports: coupling OFF → A free-falls to the pendulum bottom (`+3.06`), B untouched
+  (`+0.06`); coupling ON → A held at `+1.72`, B mirrors to `−1.65`, `θ_A+θ_B ≈ 0.07`.
+  Textbook differential behaviour.
+
+**Gotchas (both real, both cost a debugging loop):**
+- **Stability:** the explicit penalty needs `stiffness < I/dt²` *and* damped rockers,
+  else it rings/diverges (a first try at `k=4e5` on `I≈60`, `dt≈1/64` tripped avian's
+  collider-AABB assert). Author rocker `physics:diagonalInertia` (G2) so `I` is sane.
+- **Redundant rigs hide the effect:** a passive two-rocker rover where each rocker is
+  pinned by its own two ground feet already self-levels — the coupling has nothing to
+  do, so an A/B shows no difference. Demonstrating the differential needs a rig where
+  the coupled DOF is otherwise free (the isolated `differential_rig` is that case;
+  `rocker_bogie_test.usda` is the redundant one, kept as a caution).
+
+### G6 — Finish USD-driven dynamics tuning  **[DONE (tuning); maxForce intentionally not honored]**
+Tuning knobs an author of a dynamic vehicle actually sets are now USD attributes:
+- **Raycast:** `lunco:driveForcePerNormal` (was const 2.0) → per-wheel
+  `WheelRaycast.drive_force_per_normal`.
+- **Joint:** `lunco:maxDriveOmega` (12), `lunco:driveDamping` (30),
+  `lunco:stallTorqueGain` (6), and the joint wheel `physics:mass` (was a hardcoded
+  `Mass(100)`) — all read into a `JointDriveParams` struct in `setup_physical_wheel`.
+  Defaults reproduce the verified feel.
+- **Left as a const (deliberately):** `MAX_SUSPENSION_FORCE_N` (100 kN) is a
+  numerical guard-rail (caps a deeply-compressed strut / velocity-spike impulse),
+  not a feel knob — documented as such.
+- **`drive:angular:physics:maxForce` is still NOT honored**, on purpose: the demo
+  scenes author it at 12000, which fed straight into the motor made the rover
+  apply ~30× its lunar weight and wheelie on every input (see
+  `project_physical_rover_suspension`). The engine `peakTorque × stallTorqueGain`
+  is the canonical drive authority and is now itself USD-tunable, which is the
+  right way to raise drive force without the regression.
 
 ### G7 — Extra joint types (spherical / D6 / distance)  **[LOW — optional]**
 Unsupported joints warn and fall through. Rocker-bogie can avoid them; landing-gear

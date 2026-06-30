@@ -55,7 +55,7 @@ use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
 use lunco_usd_bevy::{has_api_schema, read_rel_target, usd_data::UsdDataExt};
 use openusd::sdf::Path as SdfPath;
-use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
+use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer, GenericDriveMix, DifferentialCoupling};
 use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel_roll_rate};
 use lunco_fsw::FlightSoftware;
 use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
@@ -123,7 +123,7 @@ impl Plugin for UsdSimPlugin {
            .add_observer(on_add_usd_sim_prim)
            // `try_wire_wheel` runs in PreUpdate so that Wire entities exist
            // before `wire_system` (Update) propagates values through them.
-           .add_systems(PreUpdate, try_wire_wheel)
+           .add_systems(PreUpdate, (try_wire_wheel, resolve_differential_coupling))
            // USD → ShaderMaterial authoring. Ordered AFTER the visuals exist
            // and BEFORE `process_usd_sim_prims` consumes them, so the material
            // is always present before a wheel is split onto its visual child
@@ -248,6 +248,23 @@ pub struct PendingWheelWiring {
     /// G4: USD-authored steer binding (`lunco:steerPort`). `Some` overrides the
     /// `index < 2` front-steer default.
     pub steer_port_name: Option<String>,
+}
+
+/// G5 — marker holding an authored rocker-bogie differential until its two
+/// rocker bodies have spawned + been admitted by Avian. `resolve_differential_coupling`
+/// matches the prim-path strings → entities (same deferred pattern as
+/// `try_wire_wheel` / USD joints) then attaches the [`DifferentialCoupling`].
+#[derive(Component)]
+pub struct PendingDifferential {
+    /// Composed prim path of the left rocker body (`lunco:differential:rockerA`).
+    pub rocker_a: String,
+    /// Composed prim path of the right rocker body (`lunco:differential:rockerB`).
+    pub rocker_b: String,
+    /// Hinge axis in the chassis-local frame.
+    pub axis: DVec3,
+    pub rest_sum: f64,
+    pub stiffness: f64,
+    pub damping: f64,
 }
 
 /// Process USD prims for sim mapping AFTER their assets are loaded.
@@ -698,7 +715,18 @@ fn process_usd_sim_prims(
         }
 
         // 2. Detect Drive Schemas (Chassis Logic)
-        if has_api_schema(reader, &sdf_path, "PhysxVehicleDriveSkidAPI") {
+        // G4b: an authored `lunco:driveMix` (linear per-port mix) wins over the
+        // built-in skid/Ackermann routing — arbitrary per-wheel topology as USD
+        // data. See `GenericDriveMix::parse`.
+        if let Some(spec) = reader.prim_attribute_value::<String>(&sdf_path, "lunco:driveMix") {
+            let mix = GenericDriveMix::parse(&spec);
+            info!(
+                "Detected custom driveMix for {} ({} ports)",
+                prim_path.path,
+                mix.entries.len()
+            );
+            commands.entity(entity).insert(mix);
+        } else if has_api_schema(reader, &sdf_path, "PhysxVehicleDriveSkidAPI") {
             info!("Detected Skid Drive for {}", prim_path.path);
             commands.entity(entity).insert(DifferentialDrive {
                 left_port: "drive_left".to_string(),
@@ -711,6 +739,39 @@ fn process_usd_sim_prims(
                 drive_right_port: "drive_right".to_string(),
                 steer_port: "steering".to_string(),
                 max_steer_angle: 0.5,
+            });
+        }
+
+        // 2b. G5 — rocker-bogie differential. A chassis that names two rocker
+        // bodies gets a soft coupling that averages their pitch (keeps the body
+        // level over rough ground). Defer-resolved once both rockers spawn.
+        if let (Some(rocker_a), Some(rocker_b)) = (
+            read_rel_target(reader, &sdf_path, "lunco:differential:rockerA"),
+            read_rel_target(reader, &sdf_path, "lunco:differential:rockerB"),
+        ) {
+            let read_f = |name: &str, dflt: f64| {
+                reader
+                    .prim_attribute_value::<f32>(&sdf_path, name)
+                    .map(|v| v as f64)
+                    .or_else(|| reader.prim_attribute_value::<f64>(&sdf_path, name))
+                    .unwrap_or(dflt)
+            };
+            let axis = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:differential:axis").as_deref() {
+                Some("Y") => DVec3::Y,
+                Some("Z") => DVec3::Z,
+                _ => DVec3::X,
+            };
+            info!(
+                "Detected rocker-bogie differential on {} (rockers {} / {})",
+                prim_path.path, rocker_a, rocker_b
+            );
+            commands.entity(entity).insert(PendingDifferential {
+                rocker_a,
+                rocker_b,
+                axis,
+                rest_sum: read_f("lunco:differential:restSum", 0.0),
+                stiffness: read_f("lunco:differential:stiffness", 200_000.0),
+                damping: read_f("lunco:differential:damping", 20_000.0),
             });
         }
 
@@ -1646,6 +1707,45 @@ fn try_wire_wheel(
         } else {
             debug!("Wheel {} FSW not found yet, retrying next frame", prim_path.path);
         }
+    }
+}
+
+/// G5 — resolve a [`PendingDifferential`] into a [`DifferentialCoupling`] once
+/// both rocker bodies are spawned and Avian-admitted (the `With<Position>` gate,
+/// same as USD joints). Matches the authored prim-path strings against live
+/// `UsdPrimPath`s, scoped by stage. The chassis is the entity that carries the
+/// pending marker; gating it on `With<Position>` ensures the coupling system
+/// (which writes torques via `Forces`) never runs before the chassis is ready.
+fn resolve_differential_coupling(
+    q_pending: Query<(Entity, &UsdPrimPath, &PendingDifferential), With<Position>>,
+    q_bodies: Query<(Entity, &UsdPrimPath), With<Position>>,
+    mut commands: Commands,
+) {
+    for (chassis, chassis_path, pending) in q_pending.iter() {
+        let find = |target: &str| {
+            q_bodies
+                .iter()
+                .find(|(_, p)| p.path == target && p.stage_handle == chassis_path.stage_handle)
+                .map(|(e, _)| e)
+        };
+        let (Some(rocker_a), Some(rocker_b)) = (find(&pending.rocker_a), find(&pending.rocker_b))
+        else {
+            continue; // a rocker not admitted yet — retry next frame
+        };
+        commands.entity(chassis).insert(DifferentialCoupling {
+            chassis,
+            rocker_a,
+            rocker_b,
+            axis: pending.axis,
+            rest_sum: pending.rest_sum,
+            stiffness: pending.stiffness,
+            damping: pending.damping,
+        });
+        commands.entity(chassis).remove::<PendingDifferential>();
+        info!(
+            "Resolved rocker-bogie differential on {} ({} <-> {})",
+            chassis_path.path, pending.rocker_a, pending.rocker_b
+        );
     }
 }
 

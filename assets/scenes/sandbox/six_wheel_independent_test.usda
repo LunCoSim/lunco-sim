@@ -1,0 +1,57 @@
+#usda 1.0
+(
+    defaultPrim = "SixWheelIndependentTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Loads the G4b independent-drive 6-wheel rover over ground. Verifies the full
+# authored-topology stack: six custom ports spawn, each wheel wires to its own
+# `drive_wN`, and DriveRover routes through the USD `lunco:driveMix`.
+#
+#   sandbox --scene scenes/sandbox/six_wheel_independent_test.usda
+#
+# Verify (server log): "Detected custom driveMix for /.../Rover (6 ports)";
+# six "Wired wheel .../Wheel_LN drive to FSW port drive_wM" lines.
+
+def Xform "SixWheelIndependentTest"
+{
+    custom bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.4, 0.4, 0.45)
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 10000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        double3 xformOp:translate = (8.0, 6.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "Rover" (
+        prepend references = @../../vessels/rovers/six_wheel_independent.usda@</SixWheelIndependent>
+    )
+    {
+        double3 xformOp:translate = (0, 1.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}
