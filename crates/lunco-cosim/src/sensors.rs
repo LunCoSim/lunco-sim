@@ -258,11 +258,13 @@ pub fn update_range_sensors(
         let Ok(dir) = Dir3::new(dir_world.as_vec3()) else {
             continue;
         };
-        let mut excluded = vec![e];
+        let mut filter = SpatialQueryFilter::from_mask(
+            avian3d::prelude::LayerMask(!lunco_core::TRIGGER_COLLISION_LAYER),
+        );
+        filter.excluded_entities.insert(e);
         if let Ok(parent) = q_parents.get(e) {
-            excluded.push(parent.0);
+            filter.excluded_entities.insert(parent.0);
         }
-        let filter = SpatialQueryFilter::from_excluded_entities(excluded);
         let mut hit_dist = s.max_distance;
         let hit_something = match spatial.cast_ray(origin, dir, s.max_distance, true, &filter) {
             Some(hit) => {
