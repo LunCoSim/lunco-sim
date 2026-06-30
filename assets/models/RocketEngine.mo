@@ -3,13 +3,13 @@ model RocketEngine
   "Simplified liquid rocket engine — thrust from propellant mass flow and exhaust velocity"
 
   // ── Design parameters ──
-  parameter Real m_dot_max = 120.0 "Max propellant mass flow rate (kg/s)";
-  parameter Real v_e = 2900.0 "Effective exhaust velocity (m/s) — LOX/kerosene-class";
-  parameter Real p_chamber_max = 10e6 "Rated chamber pressure (Pa)";
-  parameter Real m_prop_initial = 4000.0 "Initial propellant mass (kg)";
+  parameter Real m_dot_max = 15.0 "Max propellant mass flow rate (kg/s)";
+  parameter Real v_e = 3100.0 "Effective exhaust velocity (m/s) — LOX/LH2-class";
+  parameter Real p_chamber_max = 5e6 "Rated chamber pressure (Pa)";
+  parameter Real m_prop_initial = 8000.0 "Initial propellant mass (kg)";
 
   // ── Runtime inputs ──
-  input Real throttle = 1.0 "Throttle command, 0..1";
+  input Real throttle = 0.0 "Throttle command, 0..1 (default off — script/user controls it)";
 
   // ── State ──
   Real m_prop(start=m_prop_initial) "Propellant remaining (kg)";

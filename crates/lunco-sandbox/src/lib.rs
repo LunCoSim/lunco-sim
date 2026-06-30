@@ -383,7 +383,7 @@ impl Plugin for SandboxCorePlugin {
             // path that resolves to a missing asset). Without this the app
             // silently boots a scene-less world (only procedural terrain /
             // obstacles), which masks the real error.
-            .add_systems(Update, startup_scene_failguard)
+            .add_systems(Update, (startup_scene_failguard, lander_manual_control))
             // Cosim pipeline ordering inside FixedUpdate:
             //   HandleResponses → Propagate → ApplyForces → SpawnRequests.
             .configure_sets(FixedUpdate, (
@@ -1025,5 +1025,85 @@ fn startup_scene_failguard(
     // failure (API/UI) never trips this fatal guard.
     if !scene.is_empty() {
         commands.remove_resource::<StartupSceneGuard>();
+    }
+}
+
+fn lander_manual_control(
+    q_controllers: Query<&lunco_controller::ControllerLink>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut q_sim_components: Query<&mut lunco_cosim::SimComponent>,
+    mut q_pending_forces: Query<(&mut lunco_cosim::avian::PendingForces, &Transform)>,
+    q_names: Query<(Entity, &Name)>,
+    mut commands: Commands,
+) {
+    // 1. Find possessed entity (the lander)
+    let Some(link) = q_controllers.iter().next() else { return };
+    let vessel = link.vessel_entity;
+
+    // Guard: Only apply manual controls if the possessed vessel is the lander
+    if let Ok((_, name)) = q_names.get(vessel) {
+        if name.as_str() != "/LanderTest/Lander" {
+            return;
+        }
+    } else {
+        return;
+    }
+
+    // 2. Space = manual override of the lander GNC (Lander.mo). Holding Space
+    //    hands thrust authority to the player (the model's mode-select fires
+    //    `manual_throttle * max_thrust`); releasing returns to the PID. We write
+    //    SimComponent.inputs directly — the cosim source of truth that
+    //    `sync_modelica_inputs` carries to the worker, so it isn't clobbered.
+    //    Always write (the key may be created async by the compiler).
+    if let Ok(mut comp) = q_sim_components.get_mut(vessel) {
+        let manual = if keys.pressed(KeyCode::Space) { 1.0 } else { 0.0 };
+        comp.inputs.insert("manual".to_string(), manual);
+        comp.inputs.insert("manual_throttle".to_string(), manual);
+    }
+
+    // 3. WASD / Arrow keys for attitude torque
+    let mut local_torque = Vec3::ZERO;
+    let strength = 75000.0; // torque strength for responsive control on 5-ton lander
+
+    if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
+        local_torque.x -= strength;
+    }
+    if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) {
+        local_torque.x += strength;
+    }
+    if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) {
+        local_torque.z += strength;
+    }
+    if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) {
+        local_torque.z -= strength;
+    }
+    if keys.pressed(KeyCode::KeyQ) {
+        local_torque.y += strength;
+    }
+    if keys.pressed(KeyCode::KeyE) {
+        local_torque.y -= strength;
+    }
+
+    if local_torque != Vec3::ZERO {
+        if let Ok((mut pf, transform)) = q_pending_forces.get_mut(vessel) {
+            let world_torque = (transform.rotation * local_torque).as_dvec3();
+            pf.torque += world_torque;
+        } else {
+            // PendingForces is missing, spawn it!
+            if let Ok(mut entity_mut) = commands.get_entity(vessel) {
+                entity_mut.insert(lunco_cosim::avian::PendingForces::default());
+            }
+        }
+    }
+
+    // 4. Detach key G (or E)
+    if keys.just_pressed(KeyCode::KeyG) {
+        for (entity, name) in &q_names {
+            if name.as_str() == "/LanderTest/LanderRoverJoint" {
+                info!("Manual input: Detaching LanderRoverJoint!");
+                commands.trigger(lunco_sandbox_edit::commands::DetachJoint { target: entity });
+                break;
+            }
+        }
     }
 }

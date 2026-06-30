@@ -123,3 +123,18 @@ impl Default for HorizonShadowTerrain {
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component)]
 pub struct EmbeddedScenarioSource(pub String);
+
+/// A per-entity scenario referenced by FILE PATH in USD
+/// (`custom string lunco:scriptPath = "scenarios/foo.rhai"`), awaiting load.
+///
+/// The asset-relative path to a `.rhai` source. The USD loader
+/// (`lunco-usd-bevy`) stamps this when a prim carries `lunco:scriptPath`;
+/// `lunco-scripting` loads the file through the `AssetServer` (wasm-safe — no
+/// `std::fs`) and, once ready, replaces it with an [`EmbeddedScenarioSource`]
+/// so the normal attach path runs. Keeps scenarios as editable, hot-reloadable,
+/// reusable `.rhai` files instead of strings baked into the scene. Lives in
+/// `lunco-core` so the loader and scripting runtime share the contract without
+/// depending on each other (same as [`EmbeddedScenarioSource`]).
+#[derive(Component, Debug, Clone, Reflect, Default)]
+#[reflect(Component)]
+pub struct EmbeddedScenarioPath(pub String);

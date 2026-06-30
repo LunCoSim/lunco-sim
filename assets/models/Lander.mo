@@ -1,47 +1,80 @@
-// tagline: Powered descent lander — closed-loop throttle from altitude + descent rate
+// tagline: Lander GNC — live-tunable PID hover + manual override, gravity from environment
 model Lander
-  "Soft-landing controller + engine. Reads altitude & descent rate from the
-   physics body, commands body-frame thrust to arrest the fall and hover at a
-   target height. Gravity stays on the Avian side (do not re-apply it here)."
+  "Powered-descent guidance + engine for the surface-mission lander. A PID holds
+   a target altitude from the body's altitude + descent rate; GRAVITY IS READ FROM
+   THE ENVIRONMENT (wire `gravity_accel:g`) — never hardcode 9.81, lunar g ≈ 1.62.
+   Gains and set-point are INPUTS so they retune live through the co-sim port
+   (no recompile — see doc 34, Decision 2). A manual override lets a possessing
+   player fly on thrust directly (hold Space). Do NOT re-apply gravity here — Avian
+   owns it. Engine thrust is body-frame: wire `thrust:force_local_y`."
 
-  // ── Vehicle / engine design parameters ──
-  parameter Real vehicle_mass = 1500.0 "Wet vehicle mass (kg) — keep == USD physics:mass";
-  parameter Real g_ff = 9.81 "Gravity feed-forward (m/s^2) — sandbox default; integral trims any mismatch";
-  parameter Real max_thrust = 30000.0 "Max engine thrust (N) — TWR ~2 at g_ff";
-  parameter Real v_e = 2900.0 "Effective exhaust velocity (m/s) — for propellant bookkeeping";
+  // ── Engine design parameters (compile-time) ──
+  parameter Real vehicle_mass = 2000.0 "Vehicle mass (kg) — keep == USD physics:mass";
+  parameter Real max_thrust = 60000.0 "Max engine thrust (N) — TWR ≈ 3 at lunar g";
+  parameter Real v_e = 2900.0 "Effective exhaust velocity (m/s) — propellant bookkeeping";
+  parameter Real i_band = 5.0 "Anti-windup: only integrate within ±band (m) of the set-point";
 
-  // ── Guidance set-point + gains ──
-  parameter Real target_altitude = 6.0 "Hover / touchdown set-point (m)";
-  parameter Real kp = 1.2 "Altitude proportional gain";
-  parameter Real kd = 2.5 "Descent-rate (damping) gain";
-  parameter Real ki = 0.4 "Integral gain — self-trims to the true mass*g hover point";
+  // ── Live-tunable control inputs (set via co-sim port — no restart) ──
+  input Real target_altitude = 3.0 "Hover / touchdown set-point (m)";
+  input Real kp = 1.2 "Altitude proportional gain";
+  input Real kd = 2.5 "Descent-rate (damping) gain";
+  input Real ki = 0.4 "Integral gain — trims the steady gravity bias to a true hover";
+  input Real engine_enable = 1.0 "1 = PID engine armed, 0 = cut (script cuts after touchdown)";
+  input Real manual = 0.0 "1 = manual override active (player flying)";
+  input Real manual_throttle = 0.0 "Manual throttle 0..1 while manual = 1";
 
-  // ── Runtime inputs (wired from the Avian body) ──
-  input Real altitude = target_altitude "Body height above ground (m) — from `height` port";
-  input Real descent_rate = 0.0 "Vertical velocity (m/s, +up) — from `velocity_y` port";
+  // ── Wired-from-body / environment inputs ──
+  input Real altitude = target_altitude "Body height above ground (m) — wire `height:altitude`";
+  input Real descent_rate = 0.0 "Vertical velocity (m/s, +up) — wire `velocity_y:descent_rate`";
+  input Real g = 1.62 "Local gravity (m/s^2) — wire `gravity_accel:g` (env-correct, lunar default)";
 
   // ── State ──
-  Real i_err(start=0) "Integral of altitude error — cancels steady gravity bias";
-  Real m_prop(start=2000.0) "Propellant remaining (kg) — bookkeeping only (mass is static until G3)";
+  Real i_err(start = 0) "Anti-windup integral of altitude error";
+  Real m_prop(start = 2000.0) "Propellant remaining (kg) — bookkeeping (mass static until G3)";
 
   // ── Observables / outputs ──
   // Inline conditionals (no Boolean intermediates) per the rumoca
   // algebraic-elimination constraint — see RocketEngine.mo.
   Real a_cmd "Commanded vertical accel (m/s^2)";
+  Real pid_raw "Unclamped PID thrust = vehicle_mass * a_cmd (N)";
+  Real pid_pos "Lower-clamped (>=0) PID thrust (N)";
+  Real pid_thrust "PID thrust after clamp, before mode select (N)";
   Real thrust "Commanded thrust (N) — wire to `force_local_y`";
-  Real throttle "Throttle fraction 0..1 (observable)";
+  Real throttle "Effective throttle fraction 0..1 (observable)";
 
 equation
-  // PID hover/descent law. g_ff is feed-forward; the integral term absorbs any
-  // mismatch between g_ff and the world's actual gravity*mass, so the lander
-  // settles to a true hover regardless of the configured gravity constant.
-  der(i_err) = target_altitude - altitude;
-  a_cmd = g_ff + kp * (target_altitude - altitude) - kd * descent_rate + ki * i_err;
+  // Anti-windup: only integrate when the engine is armed (auto) AND the body is
+  // within ±i_band of the set-point. This stops the 30 m descent set-point error
+  // from winding the integral to garbage during the free-fall/braking phase, so
+  // the lander still settles to a clean hover once it arrives.
+  der(i_err) = if engine_enable > 0.5 and (altitude - target_altitude) < i_band and (altitude - target_altitude) > (-i_band)
+               then target_altitude - altitude
+               else 0.0;
 
-  // thrust = clamp(vehicle_mass * a_cmd, 0, max_thrust)
-  thrust = if vehicle_mass * a_cmd < 0.0 then 0.0
-           else if vehicle_mass * a_cmd > max_thrust then max_thrust
-           else vehicle_mass * a_cmd;
+  // PID hover/descent law. `g` is the feed-forward (from the environment); the
+  // integral absorbs any residual mass*g mismatch so it settles to a true hover.
+  a_cmd = g + kp * (target_altitude - altitude) - kd * descent_rate + ki * i_err;
+
+  // clamp(vehicle_mass * a_cmd, 0, max_thrust) via SINGLE-level ifs only —
+  // rumoca mis-lowers NESTED `if … else if … else` chains (they collapse to the
+  // final else), which left pid_thrust unclamped (6.5 MN) and NEGATIVE above the
+  // set-point → the lander thrust itself DOWN through the ground. A single
+  // `if a then b else c` lowers correctly (proven by RocketEngine.mo), so compose
+  // the two-sided clamp from two of them through continuous intermediates.
+  pid_raw = vehicle_mass * a_cmd;
+  pid_pos = if pid_raw > 0.0 then pid_raw else 0.0;                   // lower clamp at 0
+  pid_thrust = if pid_pos > max_thrust then max_thrust else pid_pos;  // upper clamp at max
+
+  // Mode select as ARITHMETIC gates (manual / engine_enable are 0/1 inputs):
+  //   manual=1            -> manual_throttle * max_thrust
+  //   manual=0, enable=1  -> pid_thrust
+  //   manual=0, enable=0  -> 0
+  // A nested `if manual>0.5 ... else if engine_enable>0.5 ...` chain is mis-lowered
+  // by rumoca's reconstructor (the manual branch read as 0 at runtime even with
+  // manual=1, while pid_thrust computed fine) — so blend continuously instead, the
+  // form the algebraic-elimination reconstructor evaluates correctly.
+  thrust = manual * (manual_throttle * max_thrust)
+           + (1.0 - manual) * engine_enable * pid_thrust;
   throttle = thrust / max_thrust;
 
   // Propellant bookkeeping (not yet fed back to Avian mass — see gap G3).

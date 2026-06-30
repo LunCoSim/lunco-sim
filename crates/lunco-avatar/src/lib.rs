@@ -506,6 +506,9 @@ impl Plugin for LunCoAvatarPlugin {
             surface_camera_system,
             avatar_universal_locomotion_system,
             update_avatar_clip_planes_system,
+            spring_arm_paused_system.run_if(|transport: Option<Res<lunco_time::TimeTransport>>| {
+                transport.map_or(false, |t| matches!(t.mode, lunco_time::TransportMode::Paused))
+            }),
         ).chain().in_set(AvatarCameraSet));
 
         app.configure_sets(
@@ -671,8 +674,8 @@ pub struct ChaseCamera {
 ///
 /// **Ground-vehicle only** — no surface reference for spacecraft.
 /// For aircraft use `ChaseCamera`. For orbit use `OrbitCamera`.
-fn spring_arm_system(
-    time: Res<Time>,
+fn update_spring_arm_impl(
+    dt: f32,
     mut q_avatar: Query<(
         Entity,
         &mut Transform,
@@ -683,19 +686,14 @@ fn spring_arm_system(
     ), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
-    _q_parents: Query<&ChildOf>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
-
-    defaults: Res<CameraDefaults>,
-
-    mut scroll_res: ResMut<CameraScroll>,
-    sens: Res<CameraScrollSensitivity>,
-    keys: Res<ButtonInput<KeyCode>>,
-    spatial_query: Option<avian3d::prelude::SpatialQuery>,
+    defaults: &CameraDefaults,
+    scroll_res: &mut CameraScroll,
+    sens: &CameraScrollSensitivity,
+    keys: &ButtonInput<KeyCode>,
+    spatial_query: &Option<avian3d::prelude::SpatialQuery>,
 ) {
     if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) { return; }
-
-    let dt = time.delta_secs();
 
     for (_avatar_ent, mut tf, mut cell, mut arm, child_of, surface_mode) in q_avatar.iter_mut() {
         // Skip follow while the target is being dragged by the editor gizmo
@@ -818,6 +816,74 @@ fn spring_arm_system(
         *cell = new_cell;
         tf.translation = new_tf;
     }
+}
+
+fn spring_arm_system(
+    time: Res<Time>,
+    q_avatar: Query<(
+        Entity,
+        &mut Transform,
+        &mut CellCoord,
+        &mut SpringArmCamera,
+        &ChildOf,
+        Option<&SurfaceRelativeMode>,
+    ), (With<Avatar>, Without<FrameBlend>)>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_grids: Query<&Grid>,
+    q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
+    defaults: Res<CameraDefaults>,
+    mut scroll_res: ResMut<CameraScroll>,
+    sens: Res<CameraScrollSensitivity>,
+    keys: Res<ButtonInput<KeyCode>>,
+    spatial_query: Option<avian3d::prelude::SpatialQuery>,
+) {
+    let dt = time.delta_secs();
+    update_spring_arm_impl(
+        dt,
+        q_avatar,
+        q_spatial,
+        q_grids,
+        q_dragging,
+        &defaults,
+        &mut scroll_res,
+        &sens,
+        &keys,
+        &spatial_query,
+    );
+}
+
+fn spring_arm_paused_system(
+    time_real: Res<Time<Real>>,
+    q_avatar: Query<(
+        Entity,
+        &mut Transform,
+        &mut CellCoord,
+        &mut SpringArmCamera,
+        &ChildOf,
+        Option<&SurfaceRelativeMode>,
+    ), (With<Avatar>, Without<FrameBlend>)>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_grids: Query<&Grid>,
+    q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
+    defaults: Res<CameraDefaults>,
+    mut scroll_res: ResMut<CameraScroll>,
+    sens: Res<CameraScrollSensitivity>,
+    keys: Res<ButtonInput<KeyCode>>,
+    spatial_query: Option<avian3d::prelude::SpatialQuery>,
+) {
+    let dt = time_real.delta_secs();
+    update_spring_arm_impl(
+        dt,
+        q_avatar,
+        q_spatial,
+        q_grids,
+        q_dragging,
+        &defaults,
+        &mut scroll_res,
+        &sens,
+        &keys,
+        &spatial_query,
+    );
 }
 
 /// ChaseCamera system: follows a target with full 3D orientation follow.

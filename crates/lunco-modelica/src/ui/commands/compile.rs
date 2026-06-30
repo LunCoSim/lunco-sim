@@ -946,7 +946,13 @@ pub fn on_compile_model(
                     // Newly-compiled model starts paused/ready — no auto-start.
                     paused: true,
                     parameters: params,
-                    inputs: runtime_inputs.into_iter().map(|n| (n, 0.0)).collect(),
+                    inputs: {
+                        let mut map = inputs_with_defaults;
+                        for name in runtime_inputs {
+                            map.entry(name).or_insert(0.0);
+                        }
+                        map
+                    },
                     variables: HashMap::new(),
                     document: doc,
                     is_stepping: true,

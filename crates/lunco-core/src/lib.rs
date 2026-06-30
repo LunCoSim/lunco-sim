@@ -51,8 +51,8 @@ pub use commands::{
     SyncChannel,
 };
 pub use markers::{
-    ActuatorDrivenJoint, EmbeddedScenarioSource, FallbackSceneLight, GridAnchor,
-    HorizonShadowTerrain, SoiMigrant, SunAngularDiameter,
+    ActuatorDrivenJoint, EmbeddedScenarioPath, EmbeddedScenarioSource, FallbackSceneLight,
+    GridAnchor, HorizonShadowTerrain, SoiMigrant, SunAngularDiameter,
 };
 pub use invariants::BigSpaceInvariantsPlugin;
 pub use world::{

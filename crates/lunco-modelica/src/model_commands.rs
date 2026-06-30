@@ -80,11 +80,30 @@ pub fn apply_set_model_input(
     } else {
         doc_raw
     };
-    let registry = world.resource::<ModelicaDocumentRegistry>();
-    let entities = registry.entities_linked_to(doc);
-    let Some(entity) = entities.first().copied() else {
-        return Err(SetModelInputError::NoLinkedEntity { doc: doc.raw() });
+    let entity = {
+        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let entities = registry.entities_linked_to(doc);
+        match entities.first().copied() {
+            Some(e) => e,
+            None => return Err(SetModelInputError::NoLinkedEntity { doc: doc.raw() }),
+        }
     };
+
+    // Port-first (doc 34, Decision 2). Route the write through the shared
+    // `PortRegistry` so it lands in `SimComponent.inputs` — the source of truth
+    // the co-sim sync (`sync_modelica_inputs`) copies into `ModelicaModel.inputs`
+    // every tick. A *direct* `ModelicaModel.inputs` write would be clobbered
+    // within one frame on any co-sim'd entity (wired lander, rover, …). Bare
+    // workbench / batch models have no registered port, so `write_port` returns
+    // false and we fall through to the direct write below (which also owns the
+    // friendly `UnknownInput` validation for the no-cosim case).
+    if let Some(registry) = world.get_resource::<lunco_core::ports::PortRegistry>().cloned() {
+        if registry.write_port(world, entity, name, value) {
+            bevy::log::debug!("[SetModelInput] doc={} {}={} (via port)", doc.raw(), name, value);
+            return Ok(doc);
+        }
+    }
+
     let Some(mut model) = world.get_mut::<crate::ModelicaModel>(entity) else {
         return Err(SetModelInputError::EntityMissingModel { doc: doc.raw() });
     };

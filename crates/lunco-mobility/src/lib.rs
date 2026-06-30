@@ -89,7 +89,7 @@ impl Plugin for LunCoMobilityPlugin {
                FixedUpdate,
                differential_coupling_system
                    .run_if(any_with_component::<DifferentialCoupling>)
-                   .run_if(|tw: Res<lunco_core::TimeWarpState>| tw.is_running()),
+                   .run_if(|t: Res<Time<Virtual>>| t.relative_speed_f64() > 0.0),
            )
            .add_systems(FixedUpdate, (
                suspension_system,

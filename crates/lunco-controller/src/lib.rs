@@ -325,7 +325,7 @@ pub fn get_avatar_input_map() -> InputMap<lunco_core::UserIntent> {
         (MoveDown, KeyCode::KeyQ),
         (Action, KeyCode::KeyF),
         (SwitchMode, KeyCode::KeyV),
-        (Pause, KeyCode::Space),
+        (Pause, KeyCode::KeyP),
     ]);
     input_map.insert_dual_axis(Look, MouseMove::default());
     input_map.insert_axis(Zoom, MouseScrollAxis::Y);

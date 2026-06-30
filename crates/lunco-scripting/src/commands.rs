@@ -256,6 +256,48 @@ pub fn attach_embedded_scenarios(
     }
 }
 
+/// LOAD half for FILE-backed scenarios: entities the USD loader stamped with
+/// [`lunco_core::EmbeddedScenarioPath`] (a `lunco:scriptPath` attribute). Loads
+/// the `.rhai` asset through the `AssetServer` (wasm-safe — no `std::fs`) and,
+/// once ready, swaps the path marker for an [`lunco_core::EmbeddedScenarioSource`]
+/// so [`attach_embedded_scenarios`] runs the normal attach path next. Keeps the
+/// USD loader and scripting runtime decoupled via the lunco-core markers (same
+/// pattern as the inline path). The `Local` map holds a strong handle per entity
+/// so the asset isn't dropped mid-load; it's cleared on swap/failure.
+#[cfg(feature = "rhai")]
+pub fn resolve_embedded_scenario_paths(
+    q: Query<
+        (Entity, &lunco_core::EmbeddedScenarioPath),
+        Without<lunco_core::EmbeddedScenarioSource>,
+    >,
+    sources: Res<Assets<crate::source_asset::RhaiSource>>,
+    asset_server: Res<AssetServer>,
+    mut pending: Local<std::collections::HashMap<Entity, Handle<crate::source_asset::RhaiSource>>>,
+    mut commands: Commands,
+) {
+    for (entity, path) in q.iter() {
+        let handle = pending.entry(entity).or_insert_with(|| {
+            // USD authors may write an `assets/` prefix; the AssetServer root is
+            // already `assets/`, so strip it (mirrors lunco-usd-sim).
+            let rel = path.0.strip_prefix("assets/").unwrap_or(&path.0).to_string();
+            asset_server.load(rel)
+        });
+        if asset_server.load_state(&*handle).is_failed() {
+            warn!("[scripting] failed to load scenario `{}` via AssetServer", path.0);
+            commands.entity(entity).remove::<lunco_core::EmbeddedScenarioPath>();
+            pending.remove(&entity);
+            continue;
+        }
+        if let Some(src) = sources.get(&*handle) {
+            commands
+                .entity(entity)
+                .insert(lunco_core::EmbeddedScenarioSource(src.text.clone()))
+                .remove::<lunco_core::EmbeddedScenarioPath>();
+            pending.remove(&entity);
+        }
+    }
+}
+
 /// Register (or hot-replace) a named rhai **tool library** — a reusable bundle
 /// of selection / behaviour policy callable from any scenario as
 /// `name::fn(...)` (see [`crate::tool_libs`]). The scenario-authoring counterpart

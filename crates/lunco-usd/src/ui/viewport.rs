@@ -389,7 +389,7 @@ fn propagate_preview_render_layer(
     }
     while let Some(entity) = stack.pop() {
         if q_has_layers.get(entity).is_err() {
-            commands.entity(entity).insert(preview_layers.clone());
+            commands.entity(entity).try_insert(preview_layers.clone());
         }
         if let Ok(children) = q_children.get(entity) {
             for child in children.iter() {

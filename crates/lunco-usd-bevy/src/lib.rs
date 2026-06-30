@@ -641,11 +641,32 @@ fn instantiate_usd_prim(
         // prim carries a rhai scenario. Stamp the lunco-core marker so
         // `lunco-scripting` attaches + runs it (the two crates stay decoupled —
         // neither depends on the other). Scenarios thus travel with the scene.
-        if let Some(src) = get_attribute_as_string(reader, &sdf_path, "lunco:script") {
-            if !src.trim().is_empty() {
-                commands
-                    .entity(entity)
-                    .insert(lunco_core::EmbeddedScenarioSource(src));
+        if let Some(src) =
+            get_attribute_as_string(reader, &sdf_path, "lunco:script").filter(|s| !s.trim().is_empty())
+        {
+            commands
+                .entity(entity)
+                .insert(lunco_core::EmbeddedScenarioSource(src));
+        } else if let Some(path) = get_attribute_as_string(reader, &sdf_path, "lunco:scriptPath")
+            .filter(|s| !s.trim().is_empty())
+        {
+            // File-backed scenario: `lunco:scriptPath` references a `.rhai` asset.
+            // Stamp a lunco_core path marker; lunco-scripting loads it via the
+            // AssetServer (wasm-safe) and swaps in EmbeddedScenarioSource. Inline
+            // `lunco:script` wins if both are present.
+            commands
+                .entity(entity)
+                .insert(lunco_core::EmbeddedScenarioPath(path));
+        }
+
+        // Custom `lunco:vessel = "true"` attribute marks this prim as a
+        // possessable vessel. Without `PhysxVehicleContextAPI` (which auto-
+        // inserts `Vessel` for rovers), standalone rigid bodies like landers
+        // and spacecraft need this explicit tag so the avatar system routes
+        // plain-clicks to `PossessVessel` instead of `FollowTarget`.
+        if let Some(val) = get_attribute_as_string(reader, &sdf_path, "lunco:vessel") {
+            if val.eq_ignore_ascii_case("true") {
+                commands.entity(entity).insert(lunco_core::Vessel);
             }
         }
 

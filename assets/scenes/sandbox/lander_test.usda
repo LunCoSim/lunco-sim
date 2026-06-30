@@ -20,10 +20,13 @@
 # the lander's own +Y, so it follows attitude (validates the new force_local_*
 # ports without needing a separate gimbal demo yet).
 #
-# Verify (HTTP API, sandbox running):
-#   - lander starts at y=12, falls, the engine arrests it and it settles ~6 m.
-#   - `CosimStatus` → Lander `thrust` ≈ vehicle_mass*9.81 (~14.7 kN) at hover.
-#   - `QueryEntity`/`GetPort` height → converges to target_altitude (6.0).
+# Controls:
+#   Space       — full thrust
+#   W/S/A/D     — pitch/roll torque
+#   Q/E         — yaw torque
+#   G           — detach rover joint
+#   P           — pause/unpause simulation
+#   Backspace   — release possession
 #
 #   sandbox --scene scenes/sandbox/lander_test.usda
 
@@ -39,7 +42,7 @@ def Xform "LanderTest"
         double3 xformOp:translate = (0, -0.5, 0)
         double3 xformOp:scale = (200.0, 1.0, 200.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.4, 0.4, 0.45)
+        color3f primvars:displayColor = (0.35, 0.33, 0.38)
         bool physics:collisionEnabled = true
         float physics:friction = 1.0
     }
@@ -49,166 +52,289 @@ def Xform "LanderTest"
         string lunco:avatar = "true"
         string lunco:cameraMode = "freeflight"
         float lunco:cameraYaw = -0.4
-        float lunco:cameraPitch = -0.1
-        double3 xformOp:translate = (14.0, 8.0, 16.0)
+        float lunco:cameraPitch = -0.15
+        double3 xformOp:translate = (18.0, 12.0, 20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
     def DistantLight "Sun"
     {
-        float inputs:intensity = 10000
+        float inputs:intensity = 12000
         float inputs:angle = 0.53
-        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        double3 xformOp:rotateXYZ = (-30.0, 45.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
 
     # ── The powered-descent lander ──────────────────────────────────────────
-    # The descent body: a cylindrical tank. Its cylinder is the collider; legs
-    # and nozzle are visual-only children. Starts at 12 m and falls under
-    # gravity; Lander.mo throttles the engine to arrest the descent and hover.
+    # Main body: cylindrical tank with structural details. Starts at 30 m,
+    # auto-descends via the rhai script, then hands control to the user.
     def Cylinder "Lander" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
     )
     {
         uniform token axis = "Y"
-        double radius = 1.2
-        double height = 2.0
-        double3 xformOp:translate = (0, 12.0, 0)
+        double radius = 2.5
+        double height = 3.0
+        double3 xformOp:translate = (0, 30.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.8, 0.78, 0.7)
+        color3f primvars:displayColor = (0.85, 0.83, 0.78)
 
         bool physics:rigidBodyEnabled = true
         bool physics:collisionEnabled = true
-        float physics:mass = 1500.0
-        float physics:linearDamping = 0.05
+        float physics:mass = 2000.0
+        float physics:linearDamping = 0.02
 
-        # Cosim: bind Lander.mo and self-wire its I/O.
-        #   height       → altitude       (sense)
-        #   velocity_y    → descent_rate   (sense)
-        #   thrust        → force_local_y  (actuate, body-frame — gap G1)
+        string lunco:vessel = "true"
+
+        # Cosim: bind the lander GNC (Lander.mo) and self-wire its I/O.
+        #   thrust        --> force_local_y  (actuate, body-frame)
+        #   height        --> altitude       (PID measurement)
+        #   velocity_y    --> descent_rate   (PID damping term)
+        #   gravity_accel --> g              (env-correct gravity feed-forward; lunar ≈ 1.62)
         string lunco:modelicaModel = "models/Lander.mo"
-        string lunco:simWires = "height:altitude,velocity_y:descent_rate,thrust:force_local_y"
+        string lunco:simWires = "thrust:force_local_y,height:altitude,velocity_y:descent_rate,gravity_accel:g"
 
-        # Embedded scenario script for landing and rover deployment
-        custom string lunco:script = """
-        fn on_start(me) {
-            this.stage = "descending";
-            this.timer = 0.0;
-            print("Scenario started: lander descending...");
-        }
+        # The MISSION orchestration lives on the `/LanderTest/Scenario` prim below.
+        # This entity carries the lander's GNC Modelica model (above) AND a local
+        # supervisory script (below) at the same time — one entity, a model + a
+        # script (doc 34, Decision 1). The script monitors the GNC's propellant
+        # port and disarms a dry engine; it does NOT fly the descent.
+        custom string lunco:scriptPath = "scenarios/lander_subsystems.rhai"
 
-        fn on_tick(me) {
-            if this.stage == "descending" {
-                let pos = world_pos(me);
-                if pos != () {
-                    let alt = pos[1];
-                    let v = velocity(me);
-                    let speed = 0.0;
-                    if v != () { speed = v[1]; }
-                    if alt < 6.2 && speed > -0.1 && speed < 0.1 {
-                        print("Lander touched down. Initiating rover deployment timer...");
-                        this.stage = "touchdown";
-                        this.timer = 2.0;
-                    }
-                }
-            } else if this.stage == "touchdown" {
-                this.timer -= dt();
-                if this.timer <= 0.0 {
-                    let joint = find("LanderRoverJoint");
-                    if joint != () {
-                        print("Deploying rover via detach_joint helper...");
-                        detach_joint(joint);
-                        this.stage = "deployed";
-                        this.timer = 2.0;
-                    } else {
-                        print("Error: LanderRoverJoint not found!");
-                        this.stage = "error";
-                    }
-                }
-            } else if this.stage == "deployed" {
-                this.timer -= dt();
-                if this.timer <= 0.0 {
-                    let rover = find("Rucheyok");
-                    if rover != () {
-                        print("Possessing rover!");
-                        possess(rover);
-                        this.stage = "finished";
-                    }
-                }
-            }
-        }
-        """
-
-        # ── Visual-only structure ──
-        def Cylinder "Nozzle"
+        # ── Physics hull ──
+        # Enabling colliders on the footpads switches this rigid body into
+        # CHILDREN-ONLY compound mode (lunco-usd-avian: a parent with any
+        # collider-child drops its own shape). This invisible child re-adds the
+        # body bulk so the compound = hull + 4 pads. Lowest point is the pads
+        # (y=-3.1), so the lander rests on its legs instead of sinking the
+        # cylinder (whose bottom is only y=-1.5) into the ground.
+        def Cylinder "Hull" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
         {
             uniform token axis = "Y"
-            double radius = 0.45
-            double height = 0.8
-            double3 xformOp:translate = (0, -1.3, 0)
+            double radius = 2.5
+            double height = 3.0
+            token visibility = "invisible"
+            bool physics:collisionEnabled = true
+        }
+
+        # ── Visual-only structure ──
+
+        # Upper deck (flat top with instruments)
+        def Cylinder "UpperDeck"
+        {
+            uniform token axis = "Y"
+            double radius = 2.6
+            double height = 0.15
+            double3 xformOp:translate = (0, 1.55, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.25, 0.22, 0.2)
+            color3f primvars:displayColor = (0.6, 0.58, 0.55)
             bool physics:collisionEnabled = false
         }
 
+        # Antenna mast
+        def Cylinder "Antenna"
+        {
+            uniform token axis = "Y"
+            double radius = 0.06
+            double height = 2.5
+            double3 xformOp:translate = (0.8, 2.8, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.7, 0.7, 0.72)
+            bool physics:collisionEnabled = false
+        }
+
+        # Antenna dish
+        def Sphere "AntennaDish"
+        {
+            double radius = 0.35
+            double3 xformOp:translate = (0.8, 4.1, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.9, 0.9, 0.92)
+            bool physics:collisionEnabled = false
+        }
+
+        # Engine bell / nozzle (emissive orange-red glow)
+        def Cone "Nozzle"
+        {
+            uniform token axis = "Y"
+            double radius = 1.2
+            double height = 1.8
+            double3 xformOp:translate = (0, -2.4, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.3, 0.28, 0.25)
+            color3f primvars:emissiveColor = (0.6, 0.25, 0.05)
+            bool physics:collisionEnabled = false
+        }
+
+        # Side tanks (fuel/oxidizer — 4 tanks at 90° intervals)
+        def Capsule "TankPX"
+        {
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 2.4
+            double3 xformOp:translate = (2.2, 0.0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.75, 0.72, 0.65)
+            bool physics:collisionEnabled = false
+        }
+        def Capsule "TankNX"
+        {
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 2.4
+            double3 xformOp:translate = (-2.2, 0.0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.75, 0.72, 0.65)
+            bool physics:collisionEnabled = false
+        }
+        def Capsule "TankPZ"
+        {
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 2.4
+            double3 xformOp:translate = (0, 0.0, 2.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.75, 0.72, 0.65)
+            bool physics:collisionEnabled = false
+        }
+        def Capsule "TankNZ"
+        {
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 2.4
+            double3 xformOp:translate = (0, 0.0, -2.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.75, 0.72, 0.65)
+            bool physics:collisionEnabled = false
+        }
+
+        # ── Landing legs with footpads ──
+        # Leg +X
         def Cube "LegPX"
         {
             double size = 1.0
-            double3 xformOp:translate = (1.4, -1.0, 0)
-            double3 xformOp:rotateXYZ = (0, 0, -25.0)
-            double3 xformOp:scale = (0.1, 2.0, 0.1)
+            double3 xformOp:translate = (3.0, -1.2, 0)
+            double3 xformOp:rotateXYZ = (0, 0, 25.0)
+            double3 xformOp:scale = (0.15, 3.8, 0.15)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (0.5, 0.5, 0.52)
+            color3f primvars:displayColor = (0.55, 0.55, 0.57)
             bool physics:collisionEnabled = false
         }
+        def Cylinder "PadPX"
+        {
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 0.08
+            double3 xformOp:translate = (4.2, -3.1, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.45, 0.45, 0.48)
+            bool physics:collisionEnabled = true
+        }
+
+        # Leg -X
         def Cube "LegNX"
         {
             double size = 1.0
-            double3 xformOp:translate = (-1.4, -1.0, 0)
-            double3 xformOp:rotateXYZ = (0, 0, 25.0)
-            double3 xformOp:scale = (0.1, 2.0, 0.1)
+            double3 xformOp:translate = (-3.0, -1.2, 0)
+            double3 xformOp:rotateXYZ = (0, 0, -25.0)
+            double3 xformOp:scale = (0.15, 3.8, 0.15)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (0.5, 0.5, 0.52)
+            color3f primvars:displayColor = (0.55, 0.55, 0.57)
             bool physics:collisionEnabled = false
         }
+        def Cylinder "PadNX"
+        {
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 0.08
+            double3 xformOp:translate = (-4.2, -3.1, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.45, 0.45, 0.48)
+            bool physics:collisionEnabled = true
+        }
+
+        # Leg +Z
         def Cube "LegPZ"
         {
             double size = 1.0
-            double3 xformOp:translate = (0, -1.0, 1.4)
-            double3 xformOp:rotateXYZ = (25.0, 0, 0)
-            double3 xformOp:scale = (0.1, 2.0, 0.1)
+            double3 xformOp:translate = (0, -1.2, 3.0)
+            double3 xformOp:rotateXYZ = (-25.0, 0, 0)
+            double3 xformOp:scale = (0.15, 3.8, 0.15)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (0.5, 0.5, 0.52)
+            color3f primvars:displayColor = (0.55, 0.55, 0.57)
             bool physics:collisionEnabled = false
         }
+        def Cylinder "PadPZ"
+        {
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 0.08
+            double3 xformOp:translate = (0, -3.1, 4.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.45, 0.45, 0.48)
+            bool physics:collisionEnabled = true
+        }
+
+        # Leg -Z
         def Cube "LegNZ"
         {
             double size = 1.0
-            double3 xformOp:translate = (0, -1.0, -1.4)
-            double3 xformOp:rotateXYZ = (-25.0, 0, 0)
-            double3 xformOp:scale = (0.1, 2.0, 0.1)
+            double3 xformOp:translate = (0, -1.2, -3.0)
+            double3 xformOp:rotateXYZ = (25.0, 0, 0)
+            double3 xformOp:scale = (0.15, 3.8, 0.15)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (0.5, 0.5, 0.52)
+            color3f primvars:displayColor = (0.55, 0.55, 0.57)
             bool physics:collisionEnabled = false
+        }
+        def Cylinder "PadNZ"
+        {
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 0.08
+            double3 xformOp:translate = (0, -3.1, -4.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.45, 0.45, 0.48)
+            bool physics:collisionEnabled = true
         }
     }
 
     # ── The rover attached to the lander ──
-    def Xform "Rucheyok" (
-        prepend references = @../../vessels/rovers/rucheyok/rucheyok.usda@</Rucheyok>
+    def Xform "SkidRover" (
+        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
-        double3 xformOp:translate = (0, 9.7, 0)
-        double3 xformOp:scale = (0.2, 0.2, 0.2)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        double3 xformOp:translate = (0, 28.35, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
     # ── The fixed joint holding the rover and lander together ──
     def PhysicsFixedJoint "LanderRoverJoint"
     {
         rel physics:body0 = </LanderTest/Lander>
-        rel physics:body1 = </LanderTest/Rucheyok>
+        rel physics:body1 = </LanderTest/SkidRover>
         point3f physics:localPos0 = (0, -1.5, 0)
-        point3f physics:localPos1 = (0, 4.0, 0)
+        point3f physics:localPos1 = (0, 0.15, 0)
+    }
+
+    # ── Mission scenario (doc 34, Decision 3) ───────────────────────────────
+    # A first-class *scenario*: a non-physical prim that owns the MISSION state
+    # machine. It references the vehicles by path with `find(...)` (never `me`),
+    # so the orchestration is decoupled from any one entity and a scene can host
+    # several scenarios / several vehicle scripts independently. The phases:
+    #   descending → touchdown (PID lands, engine disarmed) → deployed
+    #   (joint detached, rover falls) → finished (control handed to the player).
+    # Player-task objectives (drive-to-rock, photo, thermal/energy budgets) plug
+    # in as a `fn mission(me)` returning prelude `objective(...)`s — see the
+    # objectives/mission engine in `crates/lunco-scripting/rhai/prelude.rhai`.
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "rover-surface-ops"
+        # Orchestration lives in a dedicated, hot-reloadable .rhai file (loaded via
+        # the AssetServer → RhaiSource → EmbeddedScenarioSource). It's a declarative
+        # prelude `task` — timing from internal sim time (`wait`), advancement from
+        # state predicates (`wait_until`); no tick-counting / dt integration in rhai.
+        custom string lunco:scriptPath = "scenarios/rover_surface_ops.rhai"
     }
 }

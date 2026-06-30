@@ -35,7 +35,7 @@ pub struct SpawnEntity {
 }
 
 /// Detach a joint by despawning it.
-#[Command(default)]
+#[Command]
 pub struct DetachJoint {
     /// The joint entity to despawn.
     pub target: Entity,
@@ -66,8 +66,8 @@ pub fn on_detach_joint(
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
-    if let Some(mut entity) = commands.get_entity(cmd.target) {
-        entity.despawn_recursive();
+    if let Ok(mut entity) = commands.get_entity(cmd.target) {
+        entity.despawn();
         info!("DETACH_JOINT: despawned joint entity {:?}", cmd.target);
     }
 }

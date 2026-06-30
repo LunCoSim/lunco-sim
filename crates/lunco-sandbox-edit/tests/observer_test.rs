@@ -43,7 +43,7 @@ fn test_detach_joint_command() {
     app.register_type::<lunco_sandbox_edit::commands::DetachJoint>();
 
     let joint_entity = app.world_mut().spawn_empty().id();
-    assert!(app.world().get_entity(joint_entity).is_some());
+    assert!(app.world().get_entity(joint_entity).is_ok());
 
     app.world_mut().trigger(lunco_sandbox_edit::commands::DetachJoint {
         target: joint_entity,
@@ -52,6 +52,6 @@ fn test_detach_joint_command() {
     // Flush commands to execute the observer
     app.world_mut().flush();
 
-    assert!(app.world().get_entity(joint_entity).is_none(), "Joint entity must be despawned by DetachJoint command");
+    assert!(app.world().get_entity(joint_entity).is_err(), "Joint entity must be despawned by DetachJoint command");
 }
 
