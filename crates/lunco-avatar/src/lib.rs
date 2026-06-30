@@ -803,7 +803,10 @@ fn update_spring_arm_impl(
         let ray_origin = target_pos;
         let ray_dir = (desired_pos - target_pos).normalize_or(DVec3::Y);
         let ray_len = desired_pos.distance(target_pos);
-        let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([arm.target]);
+        // Mask out the TRIGGER layer so the camera doesn't clip on invisible
+        // trigger-zone sensors (waypoints etc.); still excludes the followed target.
+        let mut filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([arm.target]);
+        filter.mask = avian3d::prelude::LayerMask(!lunco_core::TRIGGER_COLLISION_LAYER);
         let hit = if let Some(ref sq) = spatial_query {
             sq.cast_ray(
                 ray_origin,

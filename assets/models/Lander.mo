@@ -55,15 +55,14 @@ equation
   // integral absorbs any residual mass*g mismatch so it settles to a true hover.
   a_cmd = g + kp * (target_altitude - altitude) - kd * descent_rate + ki * i_err;
 
-  // clamp(vehicle_mass * a_cmd, 0, max_thrust) via SINGLE-level ifs only —
-  // rumoca mis-lowers NESTED `if … else if … else` chains (they collapse to the
-  // final else), which left pid_thrust unclamped (6.5 MN) and NEGATIVE above the
-  // set-point → the lander thrust itself DOWN through the ground. A single
-  // `if a then b else c` lowers correctly (proven by RocketEngine.mo), so compose
-  // the two-sided clamp from two of them through continuous intermediates.
+  // clamp(vehicle_mass * a_cmd, 0, max_thrust). NOTE: a single `if a > 0 then a
+  // else 0` on an ALGEBRAIC variable mis-lowers in rumoca — the relation is
+  // evaluated once at init (a = 0 → false → else) and never re-fires, so the
+  // clamp is stuck at 0 and the engine never thrusts. Use the `max`/`min`
+  // builtins instead (continuous, no zero-crossing event to mishandle).
   pid_raw = vehicle_mass * a_cmd;
-  pid_pos = if pid_raw > 0.0 then pid_raw else 0.0;                   // lower clamp at 0
-  pid_thrust = if pid_pos > max_thrust then max_thrust else pid_pos;  // upper clamp at max
+  pid_pos = max(pid_raw, 0.0);              // lower clamp at 0
+  pid_thrust = min(pid_pos, max_thrust);    // upper clamp at max
 
   // Mode select as ARITHMETIC gates (manual / engine_enable are 0/1 inputs):
   //   manual=1            -> manual_throttle * max_thrust

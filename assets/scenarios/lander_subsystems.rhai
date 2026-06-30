@@ -15,8 +15,11 @@ fn on_tick(me) {
     // Latched so it emits exactly once. The data owner detects; others react.
     if this.touchdown != true {
         let pos = world_pos(me);
-        let v = velocity(me);
-        if pos != () && v != () && pos[1] < 3.4 && v[1] > -0.1 && v[1] < 0.1 {
+        // Read the avian `velocity_y` PORT, not velocity()/LinearVelocity — a
+        // cosim'd body doesn't expose LinearVelocity to reflection, so velocity()
+        // returns () and the old guard never passed. The port is wired + reliable.
+        let vy = get(me, "velocity_y");
+        if pos != () && vy != () && pos[1] < 3.4 && vy > -0.1 && vy < 0.1 {
             this.touchdown = true;
             emit("lander_touchdown");
             print("[Lander] Touchdown - settled on legs.");

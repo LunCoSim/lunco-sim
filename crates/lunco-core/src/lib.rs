@@ -53,6 +53,7 @@ pub use commands::{
 pub use markers::{
     ActuatorDrivenJoint, EmbeddedScenarioPath, EmbeddedScenarioSource, FallbackSceneLight,
     GridAnchor, HorizonShadowTerrain, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
+    TRIGGER_COLLISION_LAYER,
 };
 pub use invariants::BigSpaceInvariantsPlugin;
 pub use world::{

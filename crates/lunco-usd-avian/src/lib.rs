@@ -564,9 +564,19 @@ fn process_usd_avian_prims(
         {
             commands.entity(entity).insert(RigidBody::Static);
             add_collider_from_usd(&mut commands, entity, reader, &sdf_path);
-            commands
-                .entity(entity)
-                .insert((Sensor, lunco_core::TriggerZone(zone), UsdAvianProcessed));
+            // On the dedicated TRIGGER layer (membership), filtering ALL so it
+            // still overlaps the rover for `enter`/`exit` events — but the wheel
+            // and camera raycasts mask this layer out, so it's not a solid/ray
+            // obstacle. See lunco_core::TRIGGER_COLLISION_LAYER.
+            commands.entity(entity).insert((
+                Sensor,
+                lunco_core::TriggerZone(zone),
+                CollisionLayers::new(
+                    LayerMask(lunco_core::TRIGGER_COLLISION_LAYER),
+                    LayerMask::ALL,
+                ),
+                UsdAvianProcessed,
+            ));
             return;
         }
 

@@ -158,6 +158,20 @@ pub struct EmbeddedScenarioPath(pub String);
 #[reflect(Component)]
 pub struct TriggerZone(pub String);
 
+/// Avian collision-layer BIT reserved for [`TriggerZone`] sensor volumes.
+///
+/// A trigger must fire OVERLAP events for the rover, yet never be a physical or
+/// ray-castable obstacle to anything. avian sensors are non-solid for *contacts*
+/// but ARE still hit by spatial queries (the rover's wheel-suspension raycasts
+/// and the chase-camera anti-clip raycast), so without this the rover rides up
+/// on the invisible sphere and the camera clips on it. The avian-using crates
+/// put trigger colliders on this layer and MASK IT OUT of those raycasts
+/// (`LayerMask(!TRIGGER_COLLISION_LAYER)`), while keeping it in the contact
+/// pipeline so overlap events still fire. Kept as a bare `u32` because
+/// `lunco-core` has no avian dependency. Bit 7 is outside the default gameplay
+/// layers (avian default = all bits).
+pub const TRIGGER_COLLISION_LAYER: u32 = 1 << 7;
+
 /// Per-prim numeric **script parameters**, authored in USD as
 /// `custom string lunco:params = "wmax=1.05, lmax=3.6, flick=1.0"` and read by a
 /// script via the native `param(me, "wmax", default)` verb (a HashMap lookup —
