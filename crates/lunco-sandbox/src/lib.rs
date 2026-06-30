@@ -1032,7 +1032,6 @@ fn lander_manual_control(
     q_controllers: Query<&lunco_controller::ControllerLink>,
     keys: Res<ButtonInput<KeyCode>>,
     mut q_sim_components: Query<&mut lunco_cosim::SimComponent>,
-    mut q_pending_forces: Query<(&mut lunco_cosim::avian::PendingForces, &Transform)>,
     q_names: Query<(Entity, &Name)>,
     mut commands: Commands,
 ) {
@@ -1059,41 +1058,22 @@ fn lander_manual_control(
         let manual = if keys.pressed(KeyCode::Space) { 1.0 } else { 0.0 };
         comp.inputs.insert("manual".to_string(), manual);
         comp.inputs.insert("manual_throttle".to_string(), manual);
-    }
 
-    // 3. WASD / Arrow keys for attitude torque
-    let mut local_torque = Vec3::ZERO;
-    let strength = 75000.0; // torque strength for responsive control on 5-ton lander
+        let mut pitch = 0.0;
+        if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) { pitch -= 1.0; }
+        if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) { pitch += 1.0; }
 
-    if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
-        local_torque.x -= strength;
-    }
-    if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) {
-        local_torque.x += strength;
-    }
-    if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) {
-        local_torque.z += strength;
-    }
-    if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) {
-        local_torque.z -= strength;
-    }
-    if keys.pressed(KeyCode::KeyQ) {
-        local_torque.y += strength;
-    }
-    if keys.pressed(KeyCode::KeyE) {
-        local_torque.y -= strength;
-    }
+        let mut roll = 0.0;
+        if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) { roll += 1.0; }
+        if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) { roll -= 1.0; }
 
-    if local_torque != Vec3::ZERO {
-        if let Ok((mut pf, transform)) = q_pending_forces.get_mut(vessel) {
-            let world_torque = (transform.rotation * local_torque).as_dvec3();
-            pf.torque += world_torque;
-        } else {
-            // PendingForces is missing, spawn it!
-            if let Ok(mut entity_mut) = commands.get_entity(vessel) {
-                entity_mut.insert(lunco_cosim::avian::PendingForces::default());
-            }
-        }
+        let mut yaw = 0.0;
+        if keys.pressed(KeyCode::KeyQ) { yaw += 1.0; }
+        if keys.pressed(KeyCode::KeyE) { yaw -= 1.0; }
+
+        comp.inputs.insert("manual_pitch".to_string(), pitch);
+        comp.inputs.insert("manual_roll".to_string(), roll);
+        comp.inputs.insert("manual_yaw".to_string(), yaw);
     }
 
     // 4. Detach key G (or E)

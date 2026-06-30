@@ -11,18 +11,42 @@
 //    for the mission scenario to wait on.
 
 fn on_tick(me) {
+    let target_ent = find("/LanderTest/LandingLocation");
+
     // Touchdown: settled on the legs (low altitude + near-zero vertical rate).
     // Latched so it emits exactly once. The data owner detects; others react.
     if this.touchdown != true {
-        let pos = world_pos(me);
-        // Read the avian `velocity_y` PORT, not velocity()/LinearVelocity — a
-        // cosim'd body doesn't expose LinearVelocity to reflection, so velocity()
-        // returns () and the old guard never passed. The port is wired + reliable.
-        let vy = get(me, "velocity_y");
-        if pos != () && vy != () && pos[1] < 3.4 && vy > -0.1 && vy < 0.1 {
-            this.touchdown = true;
-            emit("lander_touchdown");
-            print("[Lander] Touchdown - settled on legs.");
+        let should_touchdown = false;
+        if target_ent == () {
+            should_touchdown = true;
+        } else {
+            let target_pos = world_pos(target_ent);
+            if target_pos != () && target_pos[1] <= 0.1 {
+                should_touchdown = true;
+            }
+        }
+
+        if should_touchdown {
+            let alt_ent = find("/LanderTest/Lander/Altimeter");
+            let alt = if alt_ent != () { get(alt_ent, "range") } else { () };
+            let pos = world_pos(me);
+            let vy = get(me, "velocity_y");
+
+            let is_low = false;
+            if alt != () {
+                // Nozzle-mounted altimeter is at Y=-3.3, pads at Y=-5.0.
+                // When pads touch the ground, altimeter range is 1.7m.
+                is_low = alt < 2.0;
+            } else if pos != () {
+                // Fallback to ideal coordinates
+                is_low = pos[1] < 5.3;
+            }
+
+            if is_low && vy != () && vy > -0.1 && vy < 0.1 {
+                this.touchdown = true;
+                emit("lander_touchdown");
+                print("[Lander] Touchdown - settled on legs.");
+            }
         }
     }
 }

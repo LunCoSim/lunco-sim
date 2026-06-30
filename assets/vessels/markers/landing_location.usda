@@ -1,0 +1,43 @@
+#usda 1.0
+(
+    defaultPrim = "LandingLocationMarker"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Reusable landing location marker — a translucent glowing DOME representing the
+# target touchdown site. It NEVER collides with physics: the dome has no collider,
+# and the trigger volume is an overlap-only avian Sensor (non-solid).
+#
+# Drop it anywhere with `prepend references` + `xformOp:translate`.
+def Xform "LandingLocationMarker"
+{
+    custom string lunco:landingLocation = "true"
+
+    # Translucent emissive dome. A sphere centred at the marker origin (ground
+    # level): the upper half reads as a half-sphere dome; the lower half sits
+    # below the surface and is hidden. Purely visual — no collider.
+    def Sphere "Dome"
+    {
+        double radius = 2.5
+        color3f primvars:displayColor = (0.95, 0.2, 0.2)
+        color3f primvars:emissiveColor = (0.85, 0.12, 0.12)
+        float primvars:displayOpacity = 0.28
+        bool physics:collisionEnabled = false
+    }
+
+    # Geofence trigger volume — overlap-only Sensor (invisible, NON-SOLID, so it
+    # never pushes the lander). `lunco:triggerZone` fires `enter:landing_location` /
+    # `exit:landing_location` events when a vehicle crosses it.
+    def Sphere "Zone" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double radius = 4.0
+        double3 xformOp:translate = (0, 1.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        bool physics:collisionEnabled = true
+        token visibility = "invisible"
+        custom string lunco:triggerZone = "landing_location"
+    }
+}

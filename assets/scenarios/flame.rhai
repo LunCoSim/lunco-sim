@@ -47,4 +47,5 @@ fn on_tick(me) {
     if len < 0.02 { len = 0.02; } // avoid a fully-degenerate transform at idle
 
     set(me, "Transform.scale", [width, len, width]);
+    set(me, "Transform.translation", [0.0, -3.3 - len / 2.0, 0.0]);
 }

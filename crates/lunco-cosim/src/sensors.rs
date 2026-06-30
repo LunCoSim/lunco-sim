@@ -67,9 +67,23 @@ impl ImuSensor {
     }
 }
 
+/// Behavior when the range sensor does not hit any geometry within its maximum distance.
+#[derive(Reflect, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OutOfRangeMode {
+    /// Report the maximum distance (realistic).
+    #[default]
+    MaxDistance,
+    /// Report -1.0.
+    NegativeOne,
+    /// Report NaN.
+    NaN,
+    /// Report the ideal altitude (sensor world Y).
+    IdealAltitude,
+}
+
 /// Range finder / lidar ray. Casts from the mount point along [`axis`](Self::axis)
 /// (body-local, rotated by attitude) and reports distance-to-geometry, or
-/// `max_distance` when nothing is hit. Default points down (`-Y`) — an altimeter.
+/// a configured fallback when nothing is hit. Default points down (`-Y`) — an altimeter.
 #[derive(Component, Debug, Clone, Copy, Reflect)]
 #[reflect(Component)]
 pub struct RangeSensor {
@@ -81,6 +95,8 @@ pub struct RangeSensor {
     pub max_distance: f64,
     /// Last measured distance (m), updated by [`update_range_sensors`].
     pub distance: f64,
+    /// Behavior when the sensor range is exceeded.
+    pub out_of_range_mode: OutOfRangeMode,
 }
 
 impl Default for RangeSensor {
@@ -90,6 +106,7 @@ impl Default for RangeSensor {
             axis: DVec3::NEG_Y,
             max_distance: 100.0,
             distance: 100.0,
+            out_of_range_mode: OutOfRangeMode::MaxDistance,
         }
     }
 }
@@ -224,22 +241,32 @@ pub fn update_imu_sensors(
 }
 
 /// Cast each range sensor's ray from its mount point and record the hit distance
-/// (or `max_distance`). The sensor's own body is excluded so it never ranges
-/// itself.
+/// or the configured out-of-range fallback. The sensor's own entity and its parent
+/// are excluded so it never ranges itself or the vehicle it is mounted to.
 pub fn update_range_sensors(
     spatial: SpatialQuery,
-    mut q: Query<(Entity, &mut RangeSensor, &Position, &Rotation)>,
+    q_parents: Query<&ChildOf>,
+    mut q: Query<(Entity, &mut RangeSensor, &GlobalTransform)>,
 ) {
-    for (e, mut s, pos, rot) in &mut q {
-        let origin = pos.0 + rot.0 * s.offset;
-        let dir_world = rot.0 * s.axis;
+    for (e, mut s, transform) in &mut q {
+        let origin = transform.translation().as_dvec3() + transform.rotation().as_dquat() * s.offset;
+        let dir_world = transform.rotation().as_dquat() * s.axis;
         let Ok(dir) = Dir3::new(dir_world.as_vec3()) else {
             continue;
         };
-        let filter = SpatialQueryFilter::from_excluded_entities([e]);
+        let mut excluded = vec![e];
+        if let Ok(parent) = q_parents.get(e) {
+            excluded.push(parent.0);
+        }
+        let filter = SpatialQueryFilter::from_excluded_entities(excluded);
         s.distance = match spatial.cast_ray(origin, dir, s.max_distance, true, &filter) {
             Some(hit) => hit.distance,
-            None => s.max_distance,
+            None => match s.out_of_range_mode {
+                OutOfRangeMode::MaxDistance => s.max_distance,
+                OutOfRangeMode::NegativeOne => -1.0,
+                OutOfRangeMode::NaN => f64::NAN,
+                OutOfRangeMode::IdealAltitude => origin.y,
+            },
         };
     }
 }

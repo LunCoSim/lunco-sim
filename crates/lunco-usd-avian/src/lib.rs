@@ -1103,4 +1103,10 @@ fn apply_rigid_body_mass_props(
     if let Some(f) = reader.prim_attribute_value::<f32>(sdf_path, "physics:friction") {
         commands.entity(entity).insert(Friction::new(f.into()));
     }
+    if let Some(vel) = read_vec3_attribute(reader, sdf_path, "physics:linearVelocity") {
+        commands.entity(entity).insert(LinearVelocity(vel));
+    }
+    if let Some(ang) = read_vec3_attribute(reader, sdf_path, "physics:angularVelocity") {
+        commands.entity(entity).insert(AngularVelocity(ang));
+    }
 }
