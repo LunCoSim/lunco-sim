@@ -25,7 +25,7 @@
 
 use bevy::prelude::*;
 
-use lunco_core::{SimTick, TimeWarpState, SECS_PER_TICK};
+use lunco_core::{SimTick, SECS_PER_TICK};
 
 pub mod domain;
 pub use domain::*;
@@ -226,27 +226,12 @@ impl MissionClock {
     }
 }
 
-/// The derived views produced each frame — what the legacy resources and Bevy
-/// `Time<Virtual>` get written from. Computed purely; never stored as truth.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ClockSample {
-    /// Derived epoch (Julian Date, TDB).
-    pub epoch_jd: f64,
-    /// Active regime after this step.
-    pub regime: TimeRegime,
-    /// `TimeWarpState.speed` view (rate while running, else 0).
-    pub warp_speed: f64,
-    /// `TimeWarpState.physics_enabled` view.
-    pub physics_enabled: bool,
-    /// What to set `Time::<Virtual>.relative_speed` to. This is the **knob
-    /// unification**: one `rate` drives the fixed-step cadence (→ tick → epoch)
-    /// AND the avian/`Res<Time>` consumers. Zero freezes the tick (paused or warp).
-    pub relative_speed: f64,
-}
-
 /// The single pure step of the time spine. Resolves the regime (re-anchoring the
-/// *calendar* mapping on transitions, leaving the mission origin fixed), derives
-/// the epoch, and returns the views for the legacy resources + `Time<Virtual>`.
+/// *calendar* mapping on transitions, leaving the mission origin fixed) and
+/// returns the **one** control output — the `Time::<Virtual>.relative_speed` to
+/// apply (`> 0` ⇒ running; `0` ⇒ frozen). Everything else the caller needs
+/// (epoch, regime) is read back from the now-updated `clock`, so there is no
+/// return struct duplicating clock state.
 ///
 /// * `tick` — current [`SimTick`].
 /// * `rate` — transport rate (clamped ≥0).
@@ -261,7 +246,7 @@ pub fn advance_clock(
     rate: f64,
     paused: bool,
     real_secs: f64,
-) -> ClockSample {
+) -> f64 {
     let rate = rate.max(0.0);
     let running = !paused && rate > 0.0;
     let desired = if running && rate > MAX_REALTIME_RATE {
@@ -302,17 +287,14 @@ pub fn advance_clock(
     }
     clock.regime = desired;
 
-    let epoch_jd = clock.epoch_jd(tick, real_secs);
-
-    let relative_speed = match (running, desired) {
+    // The single control output: what to set `Time::<Virtual>.relative_speed` to.
+    // Everything else the caller needs (epoch, regime) is read back from the
+    // now-updated `clock` — no redundant return struct. `> 0` is "running".
+    match (running, desired) {
         (false, _) => 0.0,                           // paused → freeze tick + physics
         (true, TimeRegime::RealtimePhysics) => rate, // physics keeps up; epoch ← tick
         (true, TimeRegime::KinematicWarp) => 0.0,    // tick frozen; epoch ← wall preview
-    };
-    let physics_enabled = running && matches!(desired, TimeRegime::RealtimePhysics);
-    let warp_speed = if running { rate } else { 0.0 };
-
-    ClockSample { epoch_jd, regime: desired, warp_speed, physics_enabled, relative_speed }
+    }
 }
 
 /// The derived, read-only time view every consumer reads. Written each frame by
@@ -352,38 +334,41 @@ impl WorldTime {
 pub struct TimeSpineSet;
 
 /// The Bevy adapter: feed [`advance_clock`] the tick + wall clock, write the
-/// derived views (`WorldTime`, `TimeWarpState`, `Time<Virtual>.relative_speed`).
-/// Runs in `PreUpdate` (before `FixedUpdate` physics/tick) so the regime gate and
-/// the unified rate take effect this frame.
+/// derived `WorldTime` (per frame — the clock is moving), and project the rate
+/// onto `Time<Virtual>.relative_speed` (the **single** control state, which is
+/// also the tick/physics gate: `relative_speed > 0` ⇒ running). Runs in
+/// `PreUpdate` (before `FixedUpdate` physics/tick) so the regime gate and the
+/// unified rate take effect this frame.
 pub fn advance_world_clock(
     tick: Res<SimTick>,
     transport: Res<TimeTransport>,
     real: Res<Time<Real>>,
     mut clock: ResMut<MissionClock>,
     mut world: ResMut<WorldTime>,
-    mut warp_state: ResMut<TimeWarpState>,
     mut virtual_time: ResMut<Time<Virtual>>,
 ) {
     let real_secs = real.elapsed_secs_f64();
     let paused = matches!(transport.mode, TransportMode::Paused);
-    let sample = advance_clock(&mut clock, tick.0, transport.rate, paused, real_secs);
+    let relative_speed = advance_clock(&mut clock, tick.0, transport.rate, paused, real_secs);
 
-    world.epoch_jd = sample.epoch_jd;
+    // Epoch/regime are read back from the now-updated `clock` (no return struct
+    // duplicating them). The epoch genuinely advances every frame (the tick — or,
+    // in warp, the wall preview — moved), so this write is a *sample of a moving
+    // clock*, not a redundant projection.
+    world.epoch_jd = clock.epoch_jd(tick.0, real_secs);
     world.sim_secs = clock.sim_secs(tick.0);
     world.met_secs = clock.met_secs(tick.0, real_secs);
-    world.regime = sample.regime;
+    world.regime = clock.regime;
 
-    warp_state.speed = sample.warp_speed;
-    warp_state.physics_enabled = sample.physics_enabled;
-
-    // The **direct clock state** is `relative_speed` — a single continuous truth.
-    // `relative_speed = 0` *is* the pause (it freezes `Time<Fixed>` accumulation →
-    // tick + avian frozen) and `is_running()` (below, on `TimeWarpState`) is the
-    // gate consumers read. We deliberately do NOT also toggle
-    // `Time<Virtual>::pause()`: that boolean would be a second, redundant
-    // representation of the same fact (paused ⇔ speed 0) that nothing reads and
-    // that can only drift from `relative_speed`. One representation, no drift.
-    virtual_time.set_relative_speed_f64(sample.relative_speed);
+    // Control projection is **change-driven**: only touch `Time<Virtual>` when the
+    // rate actually changed. Comparing the value (rather than gating the whole
+    // system on `resource_changed`) keeps it self-healing — if anything clobbers
+    // `relative_speed` out of band, the mismatch is corrected next frame — while
+    // avoiding a redundant per-frame write and the spurious change-detection it
+    // would trigger.
+    if virtual_time.relative_speed_f64() != relative_speed {
+        virtual_time.set_relative_speed_f64(relative_speed);
+    }
 }
 
 /// Startup: anchor the [`MissionClock`] mission origin **and** calendar anchor
@@ -421,11 +406,10 @@ pub struct TimePlugin;
 
 impl Plugin for TimePlugin {
     fn build(&self, app: &mut App) {
-        // `SimTick`/`TimeWarpState` live in `lunco-core`; `init_resource` is
-        // idempotent, so this is harmless where `CelestialPlugin` also inserts
-        // them and makes the spine self-sufficient where it doesn't.
+        // `SimTick` lives in `lunco-core`; `init_resource` is idempotent, so this
+        // is harmless where another plugin also inserts it and makes the spine
+        // self-sufficient where it doesn't.
         app.init_resource::<SimTick>()
-            .init_resource::<TimeWarpState>()
             .init_resource::<MissionClock>()
             .init_resource::<TimeTransport>()
             .init_resource::<WorldTime>()
@@ -472,29 +456,24 @@ mod tests {
     #[test]
     fn paused_freezes_tick_and_physics() {
         let mut c = MissionClock::default();
-        let s = advance_clock(&mut c, 500, 1.0, true, 10.0);
-        assert_eq!(s.relative_speed, 0.0);
-        assert!(!s.physics_enabled);
-        assert_eq!(s.warp_speed, 0.0);
+        // `relative_speed == 0` is the whole "paused" story — frozen tick + physics.
+        assert_eq!(advance_clock(&mut c, 500, 1.0, true, 10.0), 0.0);
     }
 
     #[test]
     fn realtime_rate_unifies_the_knob() {
         let mut c = MissionClock::default();
-        let s = advance_clock(&mut c, 0, 50.0, false, 0.0);
-        assert_eq!(s.regime, TimeRegime::RealtimePhysics);
-        assert_eq!(s.relative_speed, 50.0); // one rate → relative_speed
-        assert!(s.physics_enabled);
-        assert_eq!(s.warp_speed, 50.0);
+        let rs = advance_clock(&mut c, 0, 50.0, false, 0.0);
+        assert_eq!(c.regime, TimeRegime::RealtimePhysics);
+        assert_eq!(rs, 50.0); // one rate → relative_speed (> 0 ⇒ running)
     }
 
     #[test]
     fn high_warp_switches_to_kinematic_and_freezes_tick() {
         let mut c = MissionClock::default();
-        let s = advance_clock(&mut c, 0, 500.0, false, 0.0);
-        assert_eq!(s.regime, TimeRegime::KinematicWarp);
-        assert_eq!(s.relative_speed, 0.0); // tick frozen
-        assert!(!s.physics_enabled);
+        let rs = advance_clock(&mut c, 0, 500.0, false, 0.0);
+        assert_eq!(c.regime, TimeRegime::KinematicWarp);
+        assert_eq!(rs, 0.0); // tick frozen (not running)
         assert!(c.warp.is_some());
     }
 
@@ -502,11 +481,11 @@ mod tests {
     fn kinematic_warp_advances_epoch_from_wall_clock() {
         let mut c = MissionClock::anchored(J2000_JD, 0);
         // Enter warp at real_secs = 0.
-        let s0 = advance_clock(&mut c, 0, 1000.0, false, 0.0);
-        assert_eq!(s0.epoch_jd, J2000_JD);
+        advance_clock(&mut c, 0, 1000.0, false, 0.0);
+        assert_eq!(c.epoch_jd(0, 0.0), J2000_JD);
         // 2 wall seconds later at 1000× = 2000 sim seconds advanced, tick unchanged.
-        let s1 = advance_clock(&mut c, 0, 1000.0, false, 2.0);
-        assert!((s1.epoch_jd - (J2000_JD + 2000.0 / SECS_PER_DAY)).abs() < EPS);
+        advance_clock(&mut c, 0, 1000.0, false, 2.0);
+        assert!((c.epoch_jd(0, 2.0) - (J2000_JD + 2000.0 / SECS_PER_DAY)).abs() < EPS);
         // MET advances during warp even though sim_secs (tick-locked) does not.
         // Tolerance is loose because MET = (epoch − mission_epoch0)·86400 cancels a
         // ~2.45e6-magnitude single-`f64` JD; sub-ms MET precision needs the
@@ -519,18 +498,19 @@ mod tests {
     fn leaving_warp_reanchors_epoch_continuously_but_not_sim_secs() {
         let mut c = MissionClock::anchored(J2000_JD, 0);
         advance_clock(&mut c, 0, 1000.0, false, 0.0); // enter warp
-        let warped = advance_clock(&mut c, 0, 1000.0, false, 5.0).epoch_jd; // advance
+        advance_clock(&mut c, 0, 1000.0, false, 5.0); // advance
+        let warped = c.epoch_jd(0, 5.0);
         // Drop back to realtime at tick 0: epoch must continue from `warped`,
         // not snap back to the tick-derived J2000.
-        let back = advance_clock(&mut c, 0, 1.0, false, 5.0);
-        assert_eq!(back.regime, TimeRegime::RealtimePhysics);
-        assert!((back.epoch_jd - warped).abs() < EPS);
+        advance_clock(&mut c, 0, 1.0, false, 5.0);
+        assert_eq!(c.regime, TimeRegime::RealtimePhysics);
+        assert!((c.epoch_jd(0, 5.0) - warped).abs() < EPS);
         assert!(c.warp.is_none());
         // sim_secs is unaffected by the calendar re-anchor (mission origin fixed).
         assert!(c.sim_secs(0).abs() < EPS);
         // And the epoch now derives forward from the new calendar anchor.
-        let later = advance_clock(&mut c, 60, 1.0, false, 6.0);
-        assert!((later.epoch_jd - (warped + 1.0 / SECS_PER_DAY)).abs() < EPS);
+        advance_clock(&mut c, 60, 1.0, false, 6.0);
+        assert!((c.epoch_jd(60, 6.0) - (warped + 1.0 / SECS_PER_DAY)).abs() < EPS);
         // While sim_secs advances from the *mission* origin, not the re-anchor.
         assert!((c.sim_secs(60) - 1.0).abs() < EPS);
     }
@@ -538,8 +518,8 @@ mod tests {
     #[test]
     fn paused_does_not_enter_warp_even_at_high_rate() {
         let mut c = MissionClock::default();
-        let s = advance_clock(&mut c, 0, 5000.0, true, 0.0);
-        assert_eq!(s.regime, TimeRegime::RealtimePhysics);
-        assert_eq!(s.relative_speed, 0.0);
+        let rs = advance_clock(&mut c, 0, 5000.0, true, 0.0);
+        assert_eq!(c.regime, TimeRegime::RealtimePhysics);
+        assert_eq!(rs, 0.0);
     }
 }

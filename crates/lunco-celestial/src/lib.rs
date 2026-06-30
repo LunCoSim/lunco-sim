@@ -13,7 +13,6 @@ use bevy::math::DVec3;
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
 use lunco_environment::{Gravity, GravityBody};
 
-mod clock;
 pub mod ephemeris;
 pub mod registry;
 mod big_space_setup;
@@ -38,7 +37,6 @@ pub mod ui;
 pub mod commands;
 pub use commands::*;
 
-pub use clock::*;
 pub use ephemeris::*;
 pub use registry::*;
 pub use big_space_setup::*;
@@ -74,8 +72,6 @@ impl Plugin for CelestialPlugin {
 
         // Terrain is now in lunco-terrain crate — register it here
         app.add_plugins(lunco_terrain_globe::TerrainPlugin);
-
-        app.init_resource::<TimeWarpState>();
 
         // The unified mission-time spine (doc 19 — T1): MissionClock + transport +
         // the derived `WorldTime` view. Guarded so a context that also adds it via

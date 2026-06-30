@@ -256,32 +256,13 @@ pub struct CelestialBody {
     pub radius_m: f64,
 }
 
-/// Global simulation speed and physics state control.
-#[derive(Resource, Default, Debug, Clone, Copy)]
-pub struct TimeWarpState {
-    /// Multiplier for simulation time (e.g., 2.0 = 2x speed).
-    pub speed: f64,
-    /// Whether the physics engine should be active (paused during warp).
-    pub physics_enabled: bool,
-}
-
-impl TimeWarpState {
-    /// The single predicate for "physics is actually advancing": enabled AND
-    /// time is flowing (`speed > 0`). Gate every physics-stepping system AND the
-    /// [`SimTick`] advance on THIS so they can never disagree.
-    ///
-    /// The `SimTick`-frozen-while-driving bug was exactly such a disagreement:
-    /// the wheels gated on `physics_enabled` alone while `advance_sim_tick`
-    /// required `physics_enabled && speed > 0`, so a `speed: 0.0` (e.g. the
-    /// sandbox's `..default()`, or a paused celestial clock which sets
-    /// `physics_enabled: true, speed: 0.0`) ran physics with a frozen tick — and
-    /// would have run the wheels through a "pause". One predicate removes the
-    /// whole class.
-    #[inline]
-    pub fn is_running(&self) -> bool {
-        self.physics_enabled && self.speed > 0.0
-    }
-}
+// `TimeWarpState` was removed (doc 19): "is physics advancing" had three
+// redundant encodings (`physics_enabled` ≡ `is_running()` ≡
+// `Time<Virtual>.relative_speed > 0`). The single source is now the direct clock
+// state on `Time<Virtual>` — the `lunco-time` spine sets `relative_speed`, and
+// every gate (the `SimTick` advance below + the physics-stepping systems in
+// hardware/mobility/usd-sim) reads `relative_speed_f64() > 0`. One representation,
+// no drift.
 
 /// Marker resource indicating that entity dragging is active.
 ///
@@ -455,12 +436,14 @@ pub(crate) fn register_core_resources(app: &mut App) {
         .init_resource::<ActiveCommandId>();
 }
 
-/// Advance the discrete [`SimTick`] once per fixed step, *only while physics is
-/// actually running* (so a paused/zero-speed world freezes the tick and peers
-/// stay comparable). `TimeWarpState` is read optionally: if a binary hasn't
-/// inserted it, we treat the world as running and advance.
-fn advance_sim_tick(mut tick: ResMut<SimTick>, warp: Option<Res<TimeWarpState>>) {
-    let running = warp.map_or(true, |w| w.is_running());
+/// Advance the discrete [`SimTick`] once per fixed step, *only while time is
+/// actually flowing* (so a paused/zero-speed/warping world freezes the tick and
+/// peers stay comparable). The gate is the direct clock state
+/// `Time<Virtual>.relative_speed > 0` — the same predicate the physics-stepping
+/// systems use. `Time<Virtual>` is read optionally: a bare world without Bevy's
+/// `TimePlugin` (e.g. a headless unit test) is treated as running.
+fn advance_sim_tick(mut tick: ResMut<SimTick>, vtime: Option<Res<Time<Virtual>>>) {
+    let running = vtime.map_or(true, |t| t.relative_speed_f64() > 0.0);
     if running {
         tick.0 = tick.0.wrapping_add(1);
     }
@@ -658,35 +641,22 @@ mod ph1_identity_tests {
     }
 
     #[test]
-    fn is_running_requires_both_enabled_and_speed() {
-        // The one predicate every physics gate uses. A "paused" world that left
-        // `physics_enabled: true, speed: 0.0` (the SimTick-freeze bug) is NOT
-        // running — and neither is a disabled one with speed.
-        assert!(TimeWarpState { speed: 1.0, physics_enabled: true }.is_running());
-        assert!(!TimeWarpState { speed: 0.0, physics_enabled: true }.is_running());
-        assert!(!TimeWarpState { speed: 1.0, physics_enabled: false }.is_running());
-        assert!(!TimeWarpState::default().is_running());
-    }
-
-    #[test]
     fn sim_tick_advances_under_run_paused_does_not() {
         let mut app = ph1_app(true);
 
-        // Running world: tick advances each fixed step.
-        app.insert_resource(TimeWarpState {
-            speed: 1.0,
-            physics_enabled: true,
-        });
+        // Running world: `Time<Virtual>` default `relative_speed` is 1.0 (> 0), so
+        // the tick advances each fixed step. This is the single gate — no separate
+        // `TimeWarpState`.
+        app.insert_resource(Time::<Virtual>::default());
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(app.world().resource::<SimTick>().0, 1);
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(app.world().resource::<SimTick>().0, 2);
 
-        // Paused: tick frozen.
-        app.insert_resource(TimeWarpState {
-            speed: 0.0,
-            physics_enabled: false,
-        });
+        // Paused (`relative_speed == 0`): tick frozen.
+        app.world_mut()
+            .resource_mut::<Time<Virtual>>()
+            .set_relative_speed_f64(0.0);
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(app.world().resource::<SimTick>().0, 2);
     }

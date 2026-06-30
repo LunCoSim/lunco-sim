@@ -116,10 +116,10 @@ impl Plugin for UsdSimPlugin {
            // Client-only: reconstruct a remote rover's wheels from its chassis
            // (kinematic followers — wheels are no longer replicated), then re-derive
            // the cosmetic visual roll. Chained so the visual spin layers on the
-           // freshly-placed body. Same `tw.is_running()` gate as raycast wheels.
+           // freshly-placed body. Same `relative_speed > 0` gate as raycast wheels.
            .add_systems(FixedUpdate, (reconstruct_proxy_wheels, animate_proxy_physical_wheels)
                .chain()
-               .run_if(|tw: Res<lunco_core::TimeWarpState>| tw.is_running()))
+               .run_if(|t: Res<Time<Virtual>>| t.relative_speed_f64() > 0.0))
            .add_observer(on_add_usd_sim_prim)
            // `try_wire_wheel` runs in PreUpdate so that Wire entities exist
            // before `wire_system` (Update) propagates values through them.

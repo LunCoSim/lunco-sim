@@ -15,7 +15,6 @@ fn main() {
             lunco_mobility::LunCoMobilityPlugin,
             UsdPlugins,
         ))
-        .insert_resource(lunco_core::TimeWarpState { speed: 1.0, physics_enabled: true })
         .add_systems(Startup, (setup_scene, setup_rover))
         .add_systems(Update, (orbit_camera, debug_rover_presence))
         .run();
