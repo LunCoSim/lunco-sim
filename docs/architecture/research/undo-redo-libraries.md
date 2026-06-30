@@ -154,5 +154,5 @@ Reopen this question if any of these fire:
 ## See also
 
 - [`10-document-system.md`](../10-document-system.md) — the design this decision serves.
-- [`../../principles.md`](../../principles.md) Article IV — replay/record of
+- [`principles.md`](../../principles.md) Article IV — replay/record of
   user intent as a core property.

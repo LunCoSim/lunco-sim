@@ -7,6 +7,7 @@ edition = "2021"
 bevy = { workspace = true }
 avian3d = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-time = { path = "../lunco-time" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-hardware = { path = "../lunco-hardware" }
 # Expose physics-backed spatial queries (Raycast/GroundHeight) through the

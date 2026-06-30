@@ -1,9 +1,12 @@
 # lunco-sandbox
 
-The LunCo sandbox application — ground mobility + physics, loaded from USD. This
-is the composition root that aggregates the domain crates (`lunco-core`,
-`lunco-celestial`, `lunco-mobility`, `lunco-usd`, `lunco-controller`,
-`lunco-environment`, terrain, scripting, …) into a runnable app.
+The ground-physics **sandbox** test bed for LunCoSim — ground mobility + physics,
+loaded from USD: a USD scene + Avian physics + the in-scene edit tools, exposed as
+the `sandbox` binary. It is the composition root that aggregates the domain crates
+(`lunco-core`, `lunco-celestial`, `lunco-mobility`, `lunco-usd`, `lunco-controller`,
+`lunco-environment`, terrain, scripting, …) into a runnable app. (The full mission
+simulator is the separate `luncosim` crate; the headless variant is
+`lunco-sandbox-server`.)
 
 ## What This Crate Does
 
@@ -38,6 +41,16 @@ Physics test harnesses live in `src/bin/` — run with
 | `rover_jitter` | Headless probe — chassis buzz under drive torque (no `ui`) |
 | `rover_turn` | Headless turning/steering probe (no `ui`) |
 | `joint_minimal` | Minimal windowed joint test (needs `ui`) |
+
+## Project Hierarchy
+
+`lunco-sandbox` serves as an **Integration Layer** (Level 5) in the project hierarchy.
+
+- **Level 1 (Foundation)**: `lunco-core`, `lunco-assets`
+- **Level 2 (Domain Logic)**: `lunco-celestial`, `lunco-mobility`, `lunco-usd`
+- **Level 3 (Software)**: `lunco-fsw`, `lunco-obc`, `lunco-controller`
+- **Level 4 (Workflow)**: `lunco-ui`, `lunco-workbench`
+- **Level 5 (Application)**: `lunco-sandbox` (this crate), `luncosim`, `lunco-sandbox-server`
 
 ## Features
 

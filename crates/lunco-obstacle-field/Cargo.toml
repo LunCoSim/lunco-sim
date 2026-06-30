@@ -14,6 +14,7 @@ bevy_mesh = { workspace = true }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-time = { path = "../lunco-time" }
 # `HeightGrid` implements the shared `HeightSource` trait (the impl lives with the
 # type to satisfy the orphan rule); `lunco-terrain-core` is the pure leaf that
 # defines the trait. (The former `lunco-terrain` dep was unused and was removed.)

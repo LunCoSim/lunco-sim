@@ -49,7 +49,7 @@ use avian3d::prelude::*;
 use avian3d::physics_transform::{Position, Rotation};
 use lunco_usd_bevy::{
     has_api_schema, read_rel_target, read_shape_dims, read_transform_from_usd,
-    read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, UsdVisualSynced,
+    read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, UsdAnimated, UsdVisualSynced,
 };
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
@@ -81,8 +81,34 @@ impl Plugin for UsdAvianPlugin {
                     build_usd_physics_joints.run_if(any_with_component::<PendingUsdJoint>),
                     build_terrain_mesh_colliders
                         .run_if(any_with_component::<PendingTerrainCollider>),
+                    enforce_kinematic_on_animated,
                 ),
             );
+    }
+}
+
+/// An animated USD body must be `Kinematic`, never `Dynamic`: the per-frame
+/// [`lunco_usd_bevy::sample_usd_animation`] sampler writes its `Transform`
+/// directly, and a `Dynamic` body would fight Avian's integrator each step
+/// (the authored pose and the solved pose disagree → jitter / launch). When a
+/// prim carries both a rigid body and authored animation, the visual sampler is
+/// the motion authority, so demote it — a `Kinematic` body still collides and
+/// still drives its joints, it just isn't integrated from forces.
+///
+/// `Or<(Added<RigidBody>, Added<UsdAnimated>)>` makes this fire once when either
+/// marker lands (the two arrive on different frames via separate observers), so
+/// it catches both insertion orders and then idles (empty query).
+fn enforce_kinematic_on_animated(
+    mut commands: Commands,
+    q: Query<
+        (Entity, &RigidBody),
+        (With<UsdAnimated>, Or<(Added<RigidBody>, Added<UsdAnimated>)>),
+    >,
+) {
+    for (entity, body) in &q {
+        if matches!(body, RigidBody::Dynamic) {
+            commands.entity(entity).insert(RigidBody::Kinematic);
+        }
     }
 }
 

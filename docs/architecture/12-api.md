@@ -204,6 +204,7 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | | `CaptureScreenshot` | Trigger an in-sim screenshot. |
 | **USD** | `LoadScene` | Reload a USD stage from disk. |
 | | `ApplyUsdOp` | Mutate a USD document via an atomic Op. |
+| **Time** | `ControlAnimation` | Play/pause/scrub/rate the USD animation preview (independent of the physics clock). |
 | **Modelica** | `CompileModel` | Compile a specific class in a document. |
 | | `RunActiveModel` | Start/Resume simulation of the active model. |
 | | `PauseActiveModel` | Pause simulation. |
@@ -281,6 +282,30 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 
 `root_prim` empty auto-derives `/PascalCaseFromFilename`
 (`sandbox_scene.usda` → `/SandboxScene`).
+
+### Example: Control USD animation playback
+
+`ControlAnimation` drives the animation-preview timeline that authored USD
+`timeSamples` play on — **independent of the physics clock** (pausing here freezes
+animation while the sim keeps running). Every field is optional, so one command covers
+play / pause / scrub / rate.
+
+```bash
+# Pause the animation (physics keeps running)
+curl -X POST http://127.0.0.1:4101/api/commands \
+  -d '{"command":"ControlAnimation","params":{"playing":false}}'
+
+# Scrub the playhead to 3.0 seconds
+curl -X POST http://127.0.0.1:4101/api/commands \
+  -d '{"command":"ControlAnimation","params":{"seek_secs":3.0}}'
+
+# Resume at half speed
+curl -X POST http://127.0.0.1:4101/api/commands \
+  -d '{"command":"ControlAnimation","params":{"playing":true,"rate":0.5}}'
+```
+
+The same controls are in the Inspector's **Animation** section. See
+[`19-unified-time-and-clock.md`](19-unified-time-and-clock.md) for the clock model.
 
 ### Example: Possess / Follow / Focus
 
@@ -558,7 +583,6 @@ that want a runtime-toggleable opt-out.
 |---|---|---|
 | `sandbox` | `--api [PORT]` | 4101 |
 | `lunica` | `--api [PORT]` | 4101 |
-| `model_viewer` | `--api [PORT]` | 4101 |
 
 ## Troubleshooting
 

@@ -11,9 +11,9 @@
 //! 2. **Events**: Discrete notifications of system state changes (e.g., 
 //!    "Battery Low", "Command Ack"). These are typically broadcast as 
 //!    `TelemetryEvent` packets.
-//! 3. **Timekeeping**: All telemetry is timestamped using the [CelestialClock] 
-//!    epoch (Julian Date) to allow for precise post-mission analysis and 
-//!    correlation with ephemeris data.
+//! 3. **Timekeeping**: All telemetry is timestamped using the `WorldTime`
+//!    epoch (Julian Date, TDB; from the `lunco-time` spine) to allow for precise
+//!    post-mission analysis and correlation with ephemeris data.
 
 use bevy::prelude::*;
 

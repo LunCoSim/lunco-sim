@@ -53,8 +53,14 @@ pub fn sample_parameters(world: &mut World) {
     let type_registry = world.resource::<AppTypeRegistry>().clone();
     let registry_read = type_registry.read();
     
-    // Resolve simulation time for timestamping results
-    let current_epoch = world.resource::<lunco_core::CelestialClock>().epoch;
+    // Resolve simulation time for timestamping results. Graceful when the
+    // `lunco-time` spine isn't installed (timestamp falls back to 0.0), matching
+    // the other telemetry-timestamp readers (`scripting::emit`, mobility's
+    // collision bridge) — so this plugin is safe to add in a spine-less context.
+    let current_epoch = world
+        .get_resource::<lunco_time::WorldTime>()
+        .map(|w| w.epoch_jd)
+        .unwrap_or(0.0);
     
     // Decouple sampling from event triggering to avoid parallel world mutation.
     let mut samples = Vec::new();

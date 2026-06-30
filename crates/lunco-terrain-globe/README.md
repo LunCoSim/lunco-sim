@@ -1,16 +1,20 @@
 # lunco-terrain-globe
 
-**Globe-scale** terrain: QuadSphere (cube-sphere) tiling, LOD, and collision for
+Streaming **globe-scale** planetary terrain for LunCoSim: QuadSphere (cube-sphere)
+quadtree-CDLOD tiling, LOD, avian heightfield collision, and big_space anchoring for
 whole celestial bodies seen from orbit.
 
-> **Crate split.** The old monolithic `lunco-terrain` has been split:
+> **Crate split.** The old monolithic `lunco-terrain` has been split into
+> `lunco-terrain-{core,globe,surface}`:
 > - **`lunco-terrain-core`** — the projection-agnostic, render-/physics-free LOD
 >   spine (CDLOD `quadtree` selection, planar `tile` math, the `HeightSource`
->   trait). Depends on nothing but std + serde; both terrain crates build on it.
+>   trait). Shared primitives; depends on nothing but std + serde; both terrain
+>   crates build on it.
 > - **`lunco-terrain-globe`** (this crate) — globe scale: cube-sphere region map
 >   + radius `HeightSource` for whole bodies.
 > - **`lunco-terrain-surface`** — surface scale: a DEM-backed `HeightSource` +
->   avian heightfield colliders + big_space per-tile anchoring for local ground.
+>   avian heightfield colliders + big_space per-tile anchoring for local ground,
+>   plus surface/regolith detail.
 >
 > A future orbit→surface bridge is a *composite* `HeightSource` returning the
 > site DEM inside a georeferenced region and the globe height outside it.

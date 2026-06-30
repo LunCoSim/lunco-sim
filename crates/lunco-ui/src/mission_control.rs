@@ -3,9 +3,9 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
-use chrono::TimeZone;
 
-use lunco_core::{Avatar, RoverVessel, Spacecraft, CelestialClock};
+use lunco_core::{Avatar, RoverVessel, Spacecraft};
+use lunco_time::{TimeTransport, TransportMode, WorldTime};
 use lunco_celestial::{CelestialBody, TeleportToSurface, LeaveSurface};
 use lunco_avatar::{PossessVessel, ReleaseVessel, FocusTarget};
 
@@ -52,9 +52,14 @@ impl Panel for MissionControl {
             on_surface = view.map(|v| v.on_surface).unwrap_or(false);
             gravity_body = view.and_then(|v| v.gravity_body);
 
-            clock_state = ctx
-                .resource::<CelestialClock>()
-                .map(|c| (c.epoch, c.paused, c.speed_multiplier));
+            // Epoch from the derived `WorldTime`; play/rate from the
+            // `TimeTransport` authority (doc 19 — the `CelestialClock` middleman is
+            // gone). Both are inserted together by `TimePlugin`, so the tuple is
+            // `Some` iff the spine is present.
+            clock_state = ctx.resource::<WorldTime>().and_then(|w| {
+                ctx.resource::<TimeTransport>()
+                    .map(|t| (w.epoch_jd, matches!(t.mode, TransportMode::Paused), t.rate))
+            });
 
             // Networking context, read from the always-on substrate. In
             // single-player (Standalone, empty registry) `networked` is false
@@ -282,15 +287,15 @@ impl Panel for MissionControl {
         if toggle_pause {
             let cur = clock_state.map(|(_, p, _)| p).unwrap_or(false);
             ctx.defer(move |world| {
-                if let Some(mut clock) = world.get_resource_mut::<CelestialClock>() {
-                    clock.paused = !cur;
+                if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
+                    t.mode = if cur { TransportMode::Playing } else { TransportMode::Paused };
                 }
             });
         }
         if let Some(m) = set_speed {
             ctx.defer(move |world| {
-                if let Some(mut clock) = world.get_resource_mut::<CelestialClock>() {
-                    clock.speed_multiplier = m;
+                if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
+                    t.rate = m;
                 }
             });
         }
@@ -410,12 +415,10 @@ pub fn populate_mission_control_view(
         .collect();
 }
 
+/// Format a TDB epoch (Julian Date) as a UTC string via the spine — all the
+/// time-scale nuance (TDB→TT→TAI→UTC, leap seconds) lives in `lunco-time`
+/// (doc 19 — T3), so this UI never re-derives JD↔UTC. The old local version
+/// treated the master epoch as UTC (≈69 s early) anchored at J2000.
 fn jd_to_utc_string(jd: f64) -> String {
-    let j2000 = 2451545.0;
-    // CQ-512: carry the fractional day through to the clock. Truncating to
-    // whole days pinned the time-of-day at J2000's 12:00:00 epoch forever.
-    let secs_since_j2000 = ((jd - j2000) * 86400.0).round() as i64;
-    let base = chrono::Utc.with_ymd_and_hms(2000, 1, 1, 12, 0, 0).unwrap()
-        + chrono::Duration::seconds(secs_since_j2000);
-    base.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+    lunco_time::tdb_jd_to_utc_string(jd)
 }

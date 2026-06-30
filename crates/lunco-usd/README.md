@@ -44,7 +44,11 @@ byte-splicing text editor is gone.
 LunCoSim enriches standard-compliant USD with simulation-only metadata in the
 `lunco:*` namespace (Ephemeris IDs, sensor hit radii, telemetry port mappings)
 that standard OpenUSD schemas don't define — without polluting standard visual
-or physics schemas.
+or physics schemas. Concrete `lunco:` attribute → Bevy component mappings:
+
+*   `lunco:name` -> `Spacecraft::name`
+*   `lunco:ephemeris_id` -> `Spacecraft::ephemeris_id`
+*   `lunco:hit_radius_m` -> `Spacecraft::hit_radius_m`
 
 See [docs/architecture/21-domain-usd.md](../../docs/architecture/21-domain-usd.md)
 for the full architecture.

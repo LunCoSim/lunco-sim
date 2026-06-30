@@ -13,6 +13,7 @@ edition = "2021"
 bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking", "tonemapping_luts", "zstd_rust"] }
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-time = { path = "../lunco-time" }
 lunco-render = { path = "../lunco-render" }
 big_space = { workspace = true }
 anyhow = { workspace = true }

@@ -3,8 +3,8 @@ use bevy::math::DQuat;
 use big_space::prelude::*;
 
 use crate::big_space_setup::{SolarSystemRoot, EarthRoot, MoonRoot};
-use crate::clock::CelestialClock;
 use crate::ephemeris::EphemerisResource;
+use lunco_time::WorldTime;
 use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
 use crate::coords::ecliptic_to_bevy;
 use crate::coords::world_position_seeded;
@@ -13,7 +13,7 @@ use lunco_materials::{ParamValue, ShaderMaterial};
 /// Update body and frame positions based on ephemeris data.
 /// Optimized: Only re-computes if Epoch has changed significantly.
 pub fn ephemeris_update_system(
-    clock: Res<CelestialClock>,
+    world: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,
     mut q_entities: Query<(Entity, &mut CellCoord, &mut Transform, Option<&CelestialBody>, Option<&CelestialReferenceFrame>)>,
     _q_all_parents: Query<&ChildOf>,
@@ -28,16 +28,16 @@ pub fn ephemeris_update_system(
     // takes), so the first real epoch always runs; thereafter a paused /
     // time-warp-stopped clock skips the full recompute. (This is the gate
     // the doc comment always promised but never wired up.)
-    if (clock.epoch - *last_jd).abs() < 1e-9 {
+    if (world.epoch_jd - *last_jd).abs() < 1e-9 {
         return;
     }
-    *last_jd = clock.epoch;
+    *last_jd = world.epoch_jd;
 
     for (entity, mut cell, mut tf, body, frame) in q_entities.iter_mut() {
         let ephemeris_id = if let Some(b) = body { b.ephemeris_id } else if let Some(f) = frame { f.ephemeris_id } else { continue; };
         
         // EphemerisProvider::position returns position relative to its parent defined in registry/hierarchy
-        let rel_pos_au = ephemeris.provider.position(ephemeris_id, clock.epoch);
+        let rel_pos_au = ephemeris.provider.position(ephemeris_id, world.epoch_jd);
         let pos_bevy_m = ecliptic_to_bevy(rel_pos_au);
 
         // Find the grid this entity is in. Since body/frame entities are typically children of their reference frame grid:
@@ -94,11 +94,11 @@ pub fn ephemeris_update_system(
 /// in that grid, in high precision."
 /// We rotate the Grid so tiles (and future rovers) automatically inherit rotation.
 pub fn body_rotation_system(
-    clock: Res<CelestialClock>,
+    world: Res<WorldTime>,
     registry: Res<CelestialBodyRegistry>,
     mut q_grids: Query<(&mut Transform, &CelestialReferenceFrame)>,
 ) {
-    let days_since_j2000 = clock.epoch - 2_451_545.0;
+    let days_since_j2000 = world.epoch_jd - lunco_time::J2000_JD;
     for (mut tf, frame) in q_grids.iter_mut() {
         if let Some(desc) = registry.bodies.iter().find(|d| d.ephemeris_id == frame.ephemeris_id) {
             if desc.rotation_rate_rad_per_day != 0.0 {
@@ -122,8 +122,66 @@ pub fn tile_rotation_sync_system(
     // Intentionally empty — tiles stay at identity rotation in Grid frame.
 }
 
+/// Pure direction math for [`update_sun_light_system`]: the direction a
+/// `DirectionalLight` should EMIT along (its local `-Z` / forward) so sunlight
+/// travels from the Sun toward the scene, given heliocentric Sun and Moon
+/// positions (ecliptic J2000, AU). Returns `None` when degenerate (e.g. the
+/// `NoOpEphemerisProvider` returns ZERO for everything).
+pub(crate) fn sun_emit_direction(p_sun: bevy::math::DVec3, p_moon: bevy::math::DVec3) -> Option<Vec3> {
+    // `to_sun` = Moon→Sun in Bevy world space; the light emits the other way.
+    let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_moon).as_vec3().normalize_or_zero();
+    if to_sun.length_squared() < 0.5 {
+        return None;
+    }
+    Some(-to_sun)
+}
+
+/// Point the scene's primary `DirectionalLight` along the **ephemeris** Sun
+/// direction at the current epoch (architecture doc 19 — T2; replaces the old
+/// hardcoded `Vec3::NEG_Z`).
+///
+/// The Sun sits at the heliocentre, so the Moon→Sun direction is just
+/// `-ecliptic_to_bevy(global_position(Moon))` (mirrors the solar-panel pointing
+/// in [`crate::missions`]). A `DirectionalLight` emits along its local forward
+/// (`-Z`) and rays travel FROM the Sun INTO the scene, so the light's forward is
+/// set to `-to_sun`. The brightest light is taken as the sun (the Earthshine
+/// fill is ~12 lx vs ~128 000 lx), matching the canonical `pick_sun` rule and
+/// avoiding both a marker dependency and the `single_mut()`-fails-with-two-lights
+/// trap.
+///
+/// With the default `NoOpEphemerisProvider` every position is ZERO, so `to_sun`
+/// degenerates and the system returns early — leaving the light under manual
+/// `SetEnvironmentLight` (yaw/pitch) control. The ephemeris is therefore
+/// authoritative ONLY when a real provider (`lunco-celestial-ephemeris`) is
+/// installed; sandbox / NoOp contexts keep dynamic manual control. That single
+/// authoritative writer per context resolves the earlier web-build conflict
+/// where two systems fought over the sun direction every frame.
+pub fn update_sun_light_system(
+    ephemeris: Option<Res<EphemerisResource>>,
+    world: Res<WorldTime>,
+    mut q_light: Query<(&mut Transform, &DirectionalLight)>,
+) {
+    let Some(ephemeris) = ephemeris else { return; };
+
+    let p_sun = ephemeris.provider.global_position(10, world.epoch_jd);
+    let p_moon = ephemeris.provider.global_position(301, world.epoch_jd);
+    let Some(dir) = sun_emit_direction(p_sun, p_moon) else {
+        // NoOp / degenerate ephemeris — leave the light to manual control.
+        return;
+    };
+    let up = if dir.dot(Vec3::Y).abs() > 0.99 { Vec3::X } else { Vec3::Y };
+
+    // The sun is the brightest `DirectionalLight` (Earthshine fill is far dimmer).
+    if let Some((mut light_tf, _)) = q_light
+        .iter_mut()
+        .max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance))
+    {
+        light_tf.look_to(dir, up);
+    }
+}
+
 pub fn celestial_telemetry_system(
-    clock: Res<crate::clock::CelestialClock>,
+    world: Res<WorldTime>,
     q_earth: Query<(&Transform, &big_space::prelude::CellCoord), With<EarthRoot>>,
     q_moon: Query<(&Transform, &big_space::prelude::CellCoord), With<MoonRoot>>,
     q_sun: Query<&Transform, With<SolarSystemRoot>>,
@@ -131,7 +189,7 @@ pub fn celestial_telemetry_system(
     mut timer: Local<u32>,
 ) {
     if *timer % 60 == 0 {
-        if let Some((tf, cell)) = q_earth.iter().next() { info!("TELEMETRY: Epoch: {:.4}, Earth Cell: {:?}, Earth Pos: {:?}", clock.epoch, cell, tf.translation); }
+        if let Some((tf, cell)) = q_earth.iter().next() { info!("TELEMETRY: Epoch: {:.4}, Earth Cell: {:?}, Earth Pos: {:?}", world.epoch_jd, cell, tf.translation); }
         if let Some((tf, cell)) = q_moon.iter().next() { info!("TELEMETRY: Moon Cell: {:?}, Moon Pos: {:?}", cell, tf.translation); }
         if let Some(tf) = q_sun.iter().next() { info!("TELEMETRY: Sun Pos: {:?}", tf.translation); }
         if let Some(tf) = q_cam.iter().next() { info!("TELEMETRY: Camera Local Pos: {:?}", tf.translation); }
@@ -183,5 +241,42 @@ pub fn celestial_visuals_system(
                 mat.set("transition", ParamValue::F32(transition));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod sun_dir_tests {
+    //! Pure ephemeris→sun-direction math ([`sun_emit_direction`], doc 19 — T2).
+    use super::*;
+    use bevy::math::DVec3;
+
+    #[test]
+    fn degenerate_ephemeris_yields_no_direction() {
+        // NoOpEphemerisProvider returns ZERO for every body → no sun direction,
+        // so the system leaves the light under manual control.
+        assert!(sun_emit_direction(DVec3::ZERO, DVec3::ZERO).is_none());
+    }
+
+    #[test]
+    fn emit_direction_is_unit_and_points_away_from_sun() {
+        // Sun at the heliocentre, Moon offset along +X (ecliptic).
+        let d = sun_emit_direction(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0))
+            .expect("non-degenerate");
+        assert!((d.length() - 1.0).abs() < 1e-5, "emit dir must be unit length");
+
+        // The light emits AWAY from the Sun: with the Moon on the far side, the
+        // emit direction flips to the antipode.
+        let d_opp = sun_emit_direction(DVec3::ZERO, DVec3::new(-1.0, 0.0, 0.0))
+            .expect("non-degenerate");
+        assert!((d + d_opp).length() < 1e-5, "antipodal Moon → antipodal light");
+    }
+
+    #[test]
+    fn emit_direction_tracks_the_moon_position() {
+        // Two distinct Moon positions give two distinct light directions — i.e.
+        // advancing the epoch (which moves the Moon) re-aims the sun.
+        let a = sun_emit_direction(DVec3::ZERO, DVec3::new(1.0, 0.2, 0.0)).unwrap();
+        let b = sun_emit_direction(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.3)).unwrap();
+        assert!((a - b).length() > 1e-3, "different Moon positions → different sun aim");
     }
 }

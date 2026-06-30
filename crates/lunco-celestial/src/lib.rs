@@ -13,7 +13,6 @@ use bevy::math::DVec3;
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
 use lunco_environment::{Gravity, GravityBody};
 
-mod clock;
 pub mod ephemeris;
 pub mod registry;
 mod big_space_setup;
@@ -38,7 +37,6 @@ pub mod ui;
 pub mod commands;
 pub use commands::*;
 
-pub use clock::*;
 pub use ephemeris::*;
 pub use registry::*;
 pub use big_space_setup::*;
@@ -75,8 +73,15 @@ impl Plugin for CelestialPlugin {
         // Terrain is now in lunco-terrain crate — register it here
         app.add_plugins(lunco_terrain_globe::TerrainPlugin);
 
-        app.insert_resource(get_default_celestial_clock());
-        app.init_resource::<TimeWarpState>();
+        // The unified mission-time spine (doc 19 — T1): MissionClock + transport +
+        // the derived `WorldTime` view. Guarded so a context that also adds it via
+        // another plugin (e.g. `UsdBevyPlugin` for the animation sampler) is fine.
+        // `TimePlugin` now owns the wall-clock seed itself (Startup), so every
+        // spine context anchors at the real launch instant — no celestial-only
+        // seed system anymore.
+        if !app.is_plugin_added::<lunco_time::TimePlugin>() {
+            app.add_plugins(lunco_time::TimePlugin);
+        }
         app.init_resource::<TerrainMapRegistry>();
         app.insert_resource(Gravity::surface());
         app.register_type::<TrajectoryView>();
@@ -119,15 +124,18 @@ impl Plugin for CelestialPlugin {
         // System ordering is critical:
         // 1. big_space propagation runs first (default PreUpdate ordering)
         // 2. Our systems run AFTER to override GlobalTransform with body rotation
+        // The spine (`advance_world_clock`, in `TimeSpineSet`) runs first; then the
+        // celestial chain consumes the derived `WorldTime.epoch_jd` directly — no
+        // `CelestialClock` bridge anymore. Ordered `.after` the spine so the epoch
+        // is fresh this frame.
         app.add_systems(PreUpdate, (
-            celestial_clock_tick_system,
             ephemeris_update_system,
             body_rotation_system,
             tile_rotation_sync_system
                 .after(bevy::transform::TransformSystems::Propagate)
                 .after(big_space::prelude::BigSpaceSystems::PropagateHighPrecision),
             soi_transition_system,
-        ).chain());
+        ).chain().after(lunco_time::TimeSpineSet));
 
         app.add_systems(Update, (
             celestial_telemetry_system,

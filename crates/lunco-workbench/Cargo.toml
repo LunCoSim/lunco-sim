@@ -32,6 +32,7 @@ egui_dock = { version = "0.18", features = ["serde"] }
 # `OpenFolder`, `OpenTwin`, ...) onto the same typed-command bus that
 # domain crates already use.
 lunco-core = { path = "../lunco-core" }
+lunco-time = { path = "../lunco-time" }
 lunco-doc = { path = "../lunco-doc" }
 # `SaveDocument` / `SaveAsDocument` / `CloseDocument` Command structs +
 # `EditorIntent` rebindable verbs.

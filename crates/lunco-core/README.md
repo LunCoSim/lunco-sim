@@ -50,7 +50,7 @@ Built by domain-specific builders:
 - `WireGraphBuilder` (planned) — ECS ports/wires → ComponentGraph
 - `FswGraphBuilder` (planned) — FSW architecture → ComponentGraph
 
-Ontology alignment: every `ComponentGraph` concept maps to SysML v2 terms from `docs/architecture/01-ontology.md`.
+Ontology alignment: every `ComponentGraph` concept maps to SysML v2 terms from the engineering ontology in `docs/architecture/01-ontology.md`.
 
 | ComponentGraph | SysML v2 | Modelica |
 |---------------|----------|----------|

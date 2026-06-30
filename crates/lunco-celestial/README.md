@@ -23,7 +23,6 @@ This crate implements the **orbital mechanics** layer of the LunCoSim digital tw
 
 ```
 lunco-celestial/src/
-  ├── clock.rs            # Time resource wrapper
   ├── ephemeris.rs        # Body position calculations
   ├── gravity.rs          # Per-entity gravity systems
   ├── soi.rs              # Sphere of influence transitions
@@ -43,7 +42,8 @@ lunco-celestial/src/
 
 | Dependency | Why |
 |---|---|
-| `lunco-core` | `CelestialClock`, `TimeWarpState`, `Command` macros |
+| `lunco-core` | `SimTick`, `Command` macros |
+| `lunco-time` | `WorldTime` / `TimeTransport` — the unified time spine (reads epoch/regime; no local clock) |
 | `lunco-terrain-globe` | Terrain tile re-exports for backward compatibility (core/surface siblings) |
 | `lunco-controller` | Avatar input map (used by camera spawning) |
 
@@ -52,7 +52,7 @@ lunco-celestial/src/
 **Server (headless):** Runs ephemeris, gravity, SOI — all shared truth.
 **Client (rendering):** Same systems + terrain generation + UI panels.
 
-The celestial clock and body positions are **authoritative** — all clients receive the same ephemeris data from the server.
+Time (via `lunco_time::WorldTime` / `TimeTransport`) and body positions are **authoritative** — all clients receive the same ephemeris data from the server.
 
 ## Usage
 

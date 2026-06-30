@@ -440,7 +440,7 @@ fields are all additive.
 Actual live-sync implementation is out of scope for the initial
 Document System. The design explicitly does not foreclose it.
 
-See [30-collab-roadmap.md](30-collab-roadmap.md) when written.
+A dedicated collaboration-roadmap doc is not yet written; see the journal/history design in [18-unified-journal-and-history.md](18-unified-journal-and-history.md) for the multi-author substrate.
 
 ## 9. Per-domain implementation contract
 

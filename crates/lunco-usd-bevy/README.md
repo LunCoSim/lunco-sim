@@ -10,8 +10,9 @@ By separating visuals into this crate, we keep the core integration lightweight 
 ## Key Functions & Features
 
 ### 1. `UsdBevyPlugin`
-The main plugin. Registers the `UsdStageAsset` type, the USD asset loader, and
-the `sync_usd_visuals` system that drives USDA visual synchronization.
+The main plugin that sets up the USDA visual synchronization system. Registers the
+`UsdStageAsset` type, the USD asset loader, and the `sync_usd_visuals` system that
+drives USDA visual synchronization.
 
 ### 2. Automatic Visual Mapping
 Maps standard USD types to Bevy primitives:

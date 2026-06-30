@@ -871,8 +871,8 @@ sprint with the journal subsystem.
 | **MSL Palette** | ✅ Working | ~20 MSL components |
 | **Library Browser** | ✅ Working | File tree of `.mo` files |
 | **Package Browser** | ✅ Working | MSL package hierarchy |
-| **Telemetry / Parameters** | ⚠️ Has parameter-update bug (see gaps) | Legacy; being replaced by `ModelicaInspectorPanel` |
-| **`ModelicaInspectorPanel`** | ✅ New, compact, context-aware | Fixes the parameter-update bug |
+| **Telemetry / Parameters** | ⚠️ Has parameter-update bug (see gaps) | Legacy |
+| **`ModelicaInspectorPanel`** | 🔶 Planned (not yet implemented) | Intended compact, context-aware inspector to fix the parameter-update bug |
 | **Graphs** | ✅ Working | Time-series via `egui_plot` |
 
 ## 11. Current gaps

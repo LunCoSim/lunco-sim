@@ -14,6 +14,7 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 # the macros + `Ack`/`OpId`/`CommandResults` substrate in lunco-core. The API
 # discovers them by reflection (AppTypeRegistry) — no direct lunco-api dep.
 lunco-core = { path = "../lunco-core" }
+lunco-time = { path = "../lunco-time" }
 pyo3 = { version = "0.23", optional = true }
 libloading = { version = "0.8", optional = true }
 serde = { workspace = true }

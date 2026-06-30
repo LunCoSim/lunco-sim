@@ -4,9 +4,9 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt};
 
-use lunco_core::{Avatar, CelestialBody, CelestialClock};
+use lunco_core::{Avatar, CelestialBody};
+use lunco_time::{TimeTransport, TransportMode, WorldTime};
 use crate::commands::TeleportToSurface;
-use chrono::TimeZone;
 
 /// Celestial time control panel.
 pub struct CelestialTimePanel;
@@ -24,24 +24,26 @@ impl Panel for CelestialTimePanel {
         }
 
         ui.heading("Epoch & UTC Time");
-        // Snapshot the clock state up front so all reads release the
-        // immutable `ctx` borrow before any `ctx.defer` below.
-        let clock_state = ctx
-            .resource::<CelestialClock>()
-            .map(|c| (c.epoch, c.paused, c.speed_multiplier));
+        // Snapshot the time state up front so all reads release the immutable
+        // `ctx` borrow before any `ctx.defer` below. Epoch comes from the derived
+        // `WorldTime`; play/rate from the `TimeTransport` authority (doc 19).
+        let epoch = ctx.resource::<WorldTime>().map(|w| w.epoch_jd);
+        let transport = ctx
+            .resource::<TimeTransport>()
+            .map(|t| (matches!(t.mode, TransportMode::Paused), t.rate));
 
-        if let Some((epoch, _, _)) = clock_state {
+        if let Some(epoch) = epoch {
             ui.label(format!("JD: {:.4}", epoch));
             ui.label(format!("UTC: {}", jd_to_utc_string(epoch)));
         }
 
-        let (paused, speed) = clock_state.map(|(_, p, s)| (p, s)).unwrap_or((false, 1.0));
+        let (paused, speed) = transport.unwrap_or((false, 1.0));
 
         ui.horizontal(|ui| {
             if ui.button(if paused { "▶ Play" } else { "⏸ Pause" }).clicked() {
                 ctx.defer(move |world| {
-                    if let Some(mut clock) = world.get_resource_mut::<CelestialClock>() {
-                        clock.paused = !paused;
+                    if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
+                        t.mode = if paused { TransportMode::Playing } else { TransportMode::Paused };
                     }
                 });
             }
@@ -51,8 +53,8 @@ impl Panel for CelestialTimePanel {
             for &m in multipliers.iter() {
                 if ui.selectable_label(speed == m, format!("{}x", m)).clicked() {
                     ctx.defer(move |world| {
-                        if let Some(mut clock) = world.get_resource_mut::<CelestialClock>() {
-                            clock.speed_multiplier = m;
+                        if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
+                            t.rate = m;
                         }
                     });
                 }
@@ -159,13 +161,12 @@ pub fn populate_celestial_bodies_view(
         .collect();
 }
 
-/// Converts Julian Date to a human-readable UTC string.
+/// Format a TDB epoch (Julian Date) as a UTC string. All time-scale nuance lives
+/// in `lunco-time` (doc 19 — T3); this is a thin reuse, not a local JD↔UTC
+/// re-implementation (the old one mislabelled the master epoch as UTC and
+/// truncated the time-of-day to whole days).
 fn jd_to_utc_string(jd: f64) -> String {
-    let j2000 = 2451545.0;
-    let days_since_j2000 = (jd - j2000) as i64;
-    let base = chrono::Utc.with_ymd_and_hms(2000, 1, 1, 12, 0, 0).unwrap()
-        + chrono::Duration::days(days_since_j2000);
-    base.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+    lunco_time::tdb_jd_to_utc_string(jd)
 }
 
 /// Plugin that registers celestial UI panels.

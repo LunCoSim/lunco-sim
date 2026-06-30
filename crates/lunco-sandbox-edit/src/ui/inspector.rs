@@ -286,6 +286,12 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
             .show(ui, |ui| environment_section(ui, ctx));
         ui.separator();
 
+        // ── Animation transport (play/pause/scrub/rate) ──────────────
+        egui::CollapsingHeader::new("Animation")
+            .default_open(false)
+            .show(ui, |ui| animation_transport_section(ui, ctx));
+        ui.separator();
+
         // ── Camera (exposure + post-process) ─────────────────────────
         egui::CollapsingHeader::new("Camera")
             .default_open(false)
@@ -537,6 +543,57 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
 /// snapshot and dispatches every edit through a single
 /// [`SetEnvironmentLight`](lunco_environment::SetEnvironmentLight) command
 /// — the same mutation path the HTTP/MCP API uses.
+/// Animation transport for the USD animation-preview domain (doc 19 — T7).
+/// Reads the singleton [`lunco_time::AnimationPreview`]'s [`lunco_time::Playback`]
+/// and drives it through the [`lunco_time::ControlAnimation`] command (the same
+/// authority the API/MCP use), so play/pause/scrub/rate touch only animation —
+/// never the physics clock.
+fn animation_transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+    use lunco_time::{AnimationPreview, ControlAnimation, Playback, TransportMode};
+
+    let Some(domain) = ctx.resource::<AnimationPreview>().map(|p| p.domain) else {
+        ui.label("Animation spine not active.");
+        return;
+    };
+    let Some(pb) = ctx.get::<Playback>(domain).copied() else {
+        ui.label("No animation timeline yet.");
+        return;
+    };
+    let playing = matches!(pb.mode, TransportMode::Playing);
+
+    ui.horizontal(|ui| {
+        if ui.button(if playing { "⏸ Pause" } else { "▶ Play" }).clicked() {
+            ctx.trigger(ControlAnimation { playing: Some(!playing), ..Default::default() });
+        }
+        if ui.button("⏮ Rewind").clicked() {
+            ctx.trigger(ControlAnimation { seek_secs: Some(0.0), ..Default::default() });
+        }
+    });
+
+    // Scrub the playhead (seconds) over the bound clips' authored span (set by
+    // `bind_animated_to_preview`); fall back to a default window when no clip has
+    // bound yet (so the bar is still usable). Pausing first lets the slider hold.
+    let range = if pb.bounded() { pb.start..=pb.end } else { 0.0..=120.0 };
+    let mut head = pb.head;
+    if ui
+        .add(egui::Slider::new(&mut head, range).text("Time (s)"))
+        .changed()
+    {
+        ctx.trigger(ControlAnimation { seek_secs: Some(head), ..Default::default() });
+    }
+
+    // Playback rate (1× = realtime). 0 freezes without changing the play flag.
+    let mut rate = pb.rate;
+    if ui
+        .add(egui::Slider::new(&mut rate, 0.0..=10.0).text("Rate ×"))
+        .changed()
+    {
+        ctx.trigger(ControlAnimation { rate: Some(rate), ..Default::default() });
+    }
+
+    ui.label("Animation only — the physics clock is the toolbar ⏸.");
+}
+
 fn environment_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     use lunco_environment::SetEnvironmentLight;
 

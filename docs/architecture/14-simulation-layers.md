@@ -2,15 +2,21 @@
 
 > Status: Design · Audience: contributors planning the Twin control-plane / backend architecture
 >
-> ⚠️ **DESIGN SPEC — largely NOT IMPLEMENTED.** This document is the target
-> architecture. The core control-plane types it describes — `TwinCommand`,
-> `BackendRegistry`, `trait Backend`, `trait Participant`, `ParticipantSpec`,
-> and `IslandPartitioner` — **do not exist in the codebase**. Today the Twin is
-> a plain filesystem container (`lunco-twin` / `lunco-workspace`); control flows
-> through the existing `CommandMessage` / HTTP `/api/commands` fabric and the
-> cosim systems in `lunco-cosim` (`SimConnection`, `PendingForces`,
-> `apply_pending_forces`), not through a Twin-owned command queue. Read the
-> sections below as the intended end-state, not a description of current code.
+> ⚠️ **DESIGN SPEC — partially implemented; the control plane is the target,
+> not current code.** The four-layer model and the core control-plane types it
+> describes — `TwinCommand`, `BackendRegistry`, `trait Backend`,
+> `trait Participant`, `ParticipantSpec`, and `IslandPartitioner` — **do not
+> exist in the codebase**. Today the Twin is a plain filesystem container
+> (`lunco-twin` / `lunco-workspace`); control flows through the existing
+> `CommandMessage` / HTTP `/api/commands` fabric and the cosim systems in
+> `lunco-cosim` (`SimConnection`, `PendingForces`, `apply_pending_forces`), not
+> through a Twin-owned command queue. What *is* implemented today:
+> `RunStatus` / `RunBounds` / experiment runs in `lunco-experiments`, cosim
+> wiring (`SimConnection`) in `lunco-cosim`, and the time/transport control in
+> `lunco-time` (`WorldTime` / `TimeTransport` are the sole time authority — the
+> former `CelestialClock` has been removed). Read the sections below — and the
+> Rust blocks especially — as the intended end-state, not a description of
+> current code.
 
 > Four layers — **Model, Run, Scenario, Twin** — plus a dynamic **BackendRegistry**
 > that lets simulation crates self-register. Aligns with FMI/SSP patterns,
@@ -343,8 +349,8 @@ adopting either isn't a migration. Full design in
 pub struct Run {
     pub id: RunId,
     pub scenario_id: ScenarioId,
-    pub status: RunStatus,     // Idle | Running | Paused | Completed | Failed
-    pub mode: RunMode,         // Live | Batch | Stepped | Replay
+    pub status: RunStatus,     // implemented enum (lunco-experiments): Pending | Queued | Running | Done | Failed | Cancelled
+    pub mode: RunMode,         // design: Live | Batch | Stepped | Replay
     pub rate_factor: f64,      // time-warp; 1.0 = real-time
     pub t_start: f64,
     pub t_end: Option<f64>,    // None = open-ended live session

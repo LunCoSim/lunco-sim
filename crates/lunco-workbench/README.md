@@ -97,10 +97,11 @@ fn main() {
 }
 ```
 
-Run the demo:
+The workbench is embedded by the apps that use it — run one of them to see it live:
 
 ```bash
-cargo run -p lunco-workbench --example hello_workbench
+cargo run --bin sandbox     # ground-physics sandbox
+cargo run --bin lunica      # Modelica workbench
 ```
 
 ## What ships today

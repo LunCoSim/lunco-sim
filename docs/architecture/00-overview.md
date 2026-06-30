@@ -88,7 +88,7 @@ Apps (luncosim, lunco-sandbox, lunica)
    │     lunco-doc-bevy   ← Bevy bridge: DocumentDiagnostics, open/new document
    │          │                     │
    │          ▼                     ▼
-   └── lunco-core         ← f64 math foundation, CommandMessage, fundamentals
+   └── lunco-core         ← f64 math foundation, Mutation<P> command substrate, fundamentals
 ```
 
 ## 6. Strategic Roadmap Orientation

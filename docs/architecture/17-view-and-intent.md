@@ -6,6 +6,8 @@
 > execution (UserIntent → … → actuation), keeping the camera and intent
 > systems modular and headless-safe.
 
+**Status: design / proposal (not yet implemented).** The `ViewPoint` / `CameraDevice` components and the `lunco-camera` crate described below are the intended target architecture; they do not exist in the codebase yet. Camera behaviors today live in `lunco-avatar`.
+
 This document provides a technical guide to the modular, action-oriented, and headless-safe camera and intent systems in LunCoSim.
 
 ---

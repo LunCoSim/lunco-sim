@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-time = { path = "../lunco-time" }
 
 [lints]
 workspace = true

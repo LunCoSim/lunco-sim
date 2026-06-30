@@ -19,6 +19,9 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
 - **`SimPort`** — metadata for a connectable interface point
 - **`PortRegistry`** — the unified scalar-port surface (in `lunco-core::ports`) every
   participant reads/writes through; the cosim engine registers the built-in backends.
+- **Avian as a cosim participant** — Avian physics is wired in through a typed-port
+  spec table (`AvianGroup`/`AvianPort`) plus a `PendingForces` component, not a
+  bespoke `AvianSim` struct.
 
 ## The port surface (one telemetry + actuation API)
 
@@ -59,7 +62,8 @@ FixedUpdate:
 
 FixedPostUpdate:
   7. Avian PhysicsSchedule          — integrate_positions, constraint solve, writeback
-                                       (Avian outputs read on demand via PortRegistry — no snapshot system)
+                                       (Avian outputs — Position / LinearVelocity — read on demand
+                                        via PortRegistry; no separate read_avian_outputs snapshot system)
 ```
 
 The master loop reads outputs, propagates through connections, writes inputs,

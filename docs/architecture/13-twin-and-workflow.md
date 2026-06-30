@@ -1063,7 +1063,7 @@ Out of scope for initial implementation; designing the foundations now:
 - `twin.toml` could declare `[collab] server = "..."` to opt into live
   syncing.
 
-See [30-collab-roadmap.md](30-collab-roadmap.md) (TBD) for design.
+A dedicated collab-roadmap doc is TBD; see [18-unified-journal-and-history.md](18-unified-journal-and-history.md) for the multi-author journal substrate.
 
 ## 14. See also
 

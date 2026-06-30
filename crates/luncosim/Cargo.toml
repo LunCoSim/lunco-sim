@@ -26,6 +26,7 @@ big_space = { workspace = true }
 
 lunco-assets = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-time = { path = "../lunco-time" }
 lunco-ui = { path = "../lunco-ui" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-materials = { path = "../lunco-materials" }

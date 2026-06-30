@@ -21,8 +21,6 @@ fn main() {
         UsdSimPlugin,
     ));
 
-    app.insert_resource(lunco_core::TimeWarpState { speed: 1.0, physics_enabled: true });
-    
     println!("\n--- Loading Rucheyok Rover Physics ---");
 
     // Compose from disk (synchronous, no async AssetServer) so the referenced

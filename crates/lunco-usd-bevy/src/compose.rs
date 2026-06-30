@@ -145,6 +145,14 @@ fn flatten_stage(stage: &Stage, binary_assets: &[(SdfPath, String)]) -> Result<s
     if let Ok(tops) = stage.root_prims() {
         root_spec.add("primChildren", Value::TokenVec(tops));
     }
+    // Stage `timeCodesPerSecond`: the animation sampler maps sim-seconds onto
+    // time codes (`code = seconds * tcps`). openusd's accessor falls back to
+    // `framesPerSecond`, then 24 (USD spec), so this is always populated and
+    // the runtime reader (`stage_time_codes_per_second`) never has to guess.
+    root_spec.add(
+        "timeCodesPerSecond",
+        Value::Double(stage.time_codes_per_second()),
+    );
     data.insert(SdfPath::abs_root(), root_spec);
 
     // Collect every composed prim path first (traverse takes an FnMut, so we
@@ -170,12 +178,30 @@ fn flatten_stage(stage: &Stage, binary_assets: &[(SdfPath, String)]) -> Result<s
         spec.add("primChildren", Value::TokenVec(children));
         data.insert(path.clone(), spec);
 
-        // Attribute composed defaults (under the `default` field, where
-        // `prim_attribute_value` reads them).
+        // Attribute composed values: the default-time opinion (under `default`,
+        // where `prim_attribute_value` reads) AND the composed `timeSamples`
+        // (under `timeSamples`, where the animation sampler reads).
         for attr in prim.attributes().unwrap_or_default() {
+            let mut a = SpecData::new(SpecType::Attribute);
+            let mut authored = false;
             if let Some(v) = attr.get::<Value>().map_err(|e| anyhow!("{} default: {e}", attr.path()))? {
-                let mut a = SpecData::new(SpecType::Attribute);
                 a.add("default", v);
+                authored = true;
+            }
+            // Composed `timeSamples` — the animation read path. PCP has already
+            // retimed them through any sublayer / reference `LayerOffset`, so the
+            // sampler sees stage-time codes. Without this, animated attributes on
+            // *composed* stages (the asset-loader path) silently lost their
+            // samples — only single-layer `usda::parse` stages kept them. An
+            // attribute may carry samples but no `default`, so this is also what
+            // keeps a samples-only attribute from being dropped entirely.
+            if let Ok(Some(samples)) = attr.time_samples() {
+                if !samples.is_empty() {
+                    a.add("timeSamples", Value::TimeSamples(samples));
+                    authored = true;
+                }
+            }
+            if authored {
                 data.insert(attr.path().clone(), a);
             }
         }

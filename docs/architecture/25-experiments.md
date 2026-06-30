@@ -96,6 +96,7 @@ pub struct RunBounds {
 
 pub enum RunStatus {
     Pending,
+    Queued,
     Running { t_current: f64 },
     Done { wall_time_ms: u64 },
     Failed { error: String, partial: bool },

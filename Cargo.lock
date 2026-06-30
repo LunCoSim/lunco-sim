@@ -6716,6 +6716,7 @@ dependencies = [
  "lunco-mobility",
  "lunco-settings",
  "lunco-theme",
+ "lunco-time",
  "lunco-workbench",
  "serde",
 ]
@@ -6762,6 +6763,7 @@ dependencies = [
  "lunco-storage",
  "lunco-terrain-globe",
  "lunco-theme",
+ "lunco-time",
  "lunco-workbench",
  "serde",
  "serde_json",
@@ -6911,6 +6913,7 @@ dependencies = [
  "lunco-core",
  "lunco-fsw",
  "lunco-hardware",
+ "lunco-time",
  "serde_json",
 ]
 
@@ -7032,6 +7035,7 @@ dependencies = [
  "big_space",
  "lunco-core",
  "lunco-terrain-core",
+ "lunco-time",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "serde",
@@ -7121,6 +7125,7 @@ dependencies = [
  "lunco-modelica",
  "lunco-obstacle-field",
  "lunco-theme",
+ "lunco-time",
  "lunco-usd",
  "lunco-usd-bevy",
  "lunco-usd-sim",
@@ -7150,6 +7155,7 @@ dependencies = [
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-time",
  "lunco-tools",
  "lunco-tools-rhai",
  "lunco-workspace",
@@ -7187,6 +7193,7 @@ version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "lunco-core",
+ "lunco-time",
 ]
 
 [[package]]
@@ -7239,6 +7246,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-time"
+version = "0.6.0-dev"
+dependencies = [
+ "bevy",
+ "celestial-time",
+ "chrono",
+ "lunco-core",
+]
+
+[[package]]
 name = "lunco-tools"
 version = "0.1.0"
 
@@ -7287,6 +7304,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-core",
  "lunco-theme",
+ "lunco-time",
  "lunco-workbench",
  "web-time",
 ]
@@ -7345,6 +7363,7 @@ dependencies = [
  "lunco-assets",
  "lunco-core",
  "lunco-render",
+ "lunco-time",
  "openusd",
 ]
 
@@ -7416,6 +7435,7 @@ dependencies = [
  "lunco-settings",
  "lunco-storage",
  "lunco-theme",
+ "lunco-time",
  "lunco-twin",
  "lunco-workspace",
  "rfd",
@@ -7467,6 +7487,7 @@ dependencies = [
  "lunco-materials",
  "lunco-mobility",
  "lunco-robotics",
+ "lunco-time",
  "lunco-ui",
  "lunco-web",
  "lunco-workbench",

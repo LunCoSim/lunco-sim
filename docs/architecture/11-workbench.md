@@ -218,17 +218,19 @@ Panels live inside side docks or bottom docks. Each panel implements a
 small trait:
 
 ```rust
-// Sketch — in lunco-workbench
+// The Panel trait — lunco-workbench/src/panel.rs
 pub trait Panel: Send + Sync + 'static {
-    fn id(&self) -> &str;
+    fn id(&self) -> PanelId;                 // newtype over &'static str
     fn title(&self) -> String;
-    fn category(&self) -> PanelCategory;   // Navigation / Inspector / Tool / Output
-    fn default_location(&self) -> PanelSlot; // Left / Right / Bottom / Floating
-    fn render(&mut self, ui: &mut egui::Ui, world: &mut World);
+    fn default_slot(&self) -> PanelSlot;     // Left / RightInspector / Bottom / Center / …
+    // Render reads through the capability-narrowed `PanelCtx` (no raw `&mut World`);
+    // mutations are queued via `ctx.defer(|world| { … })` and applied after paint.
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx);
+    // Optional: closable(), transparent_background(), dynamic_title().
 }
 ```
 
-Panel categories map to default slot rules:
+A panel's default slot derives from its `default_slot()` (and `id` substring conventions — e.g. an `id` containing `"inspector"` auto-docks right):
 
 | Category | Default slot | Examples |
 |----------|--------------|----------|
