@@ -39,7 +39,7 @@ Built by domain-specific builders:
 - `WireGraphBuilder` (planned) — ECS ports/wires → ComponentGraph
 - `FswGraphBuilder` (planned) — FSW architecture → ComponentGraph
 
-Ontology alignment: every `ComponentGraph` concept maps to SysML v2 terms from `specs/ontology.md`.
+Ontology alignment: every `ComponentGraph` concept maps to SysML v2 terms from the engineering ontology.
 
 | ComponentGraph | SysML v2 | Modelica |
 |---------------|----------|----------|
@@ -50,5 +50,5 @@ Ontology alignment: every `ComponentGraph` concept maps to SysML v2 terms from `
 
 ## See Also
 
-- [Workspace UI/UX Research](../../docs/research-ui-ux-architecture.md) — architecture decisions
-- [specs/ontology.md](../../specs/ontology.md) — engineering terminology source of truth
+- [UI/UX Research](../../docs/architecture/research/ui-ux-inspiration.md) — architecture decisions
+- [01-ontology.md](../../docs/architecture/01-ontology.md) — engineering terminology source of truth

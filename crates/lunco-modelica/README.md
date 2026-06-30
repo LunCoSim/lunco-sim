@@ -202,7 +202,6 @@ no silent stall regardless of model size.
 
 - [**Modelica Domain Architecture**](../../docs/architecture/20-domain-modelica.md) — full design doc: document model, op set, pretty-printer, name resolution (MLS §5.3), diagram ↔ code sync
 - [Document System Foundation](../../docs/architecture/10-document-system.md) — shared `Document` / `DocumentOp` / `DocumentHost` trait layer
-- [Workspace UI/UX Research](../../docs/research-ui-ux-architecture.md) — architecture decisions
-- [Plan: Switch to Parser](../../docs/plan-switch-to-parser.md) — regex → AST migration
+- [UI/UX Research](../../docs/architecture/research/ui-ux-inspiration.md) — architecture decisions
 - [Modelica Language Specification §5.3](https://specification.modelica.org/maint/3.7/class-predefined-types-and-declarations.html#static-name-lookup) — the static name lookup rules our type resolver follows
 - [Modelica Language Specification §18](https://specification.modelica.org/maint/3.7/annotations.html) — `Placement`, `Line`, `Icon` annotation shapes

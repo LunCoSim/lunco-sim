@@ -384,7 +384,7 @@ executor differentiates internally.
 it in your plugin's `build` via
 `app.world_mut().resource_mut::<ApiQueryRegistry>().register(...)`.
 See `crates/lunco-modelica/src/api_queries.rs` for examples and
-spec [`032-model-source-listing`](../specs/032-model-source-listing/spec.md)
+spec [`032-model-source-listing`](../../specs/032-model-source-listing/spec.md)
 for the design.
 
 **Adding a new typed command** (side-effect): follow the existing
@@ -476,7 +476,6 @@ that want a runtime-toggleable opt-out.
 |---|---|---|
 | `sandbox` | `--api [PORT]` | 4101 |
 | `lunica` | `--api [PORT]` | 4101 |
-| `model_viewer` | `--api [PORT]` | 4101 |
 
 ## Troubleshooting
 

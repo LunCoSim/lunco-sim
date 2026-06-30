@@ -15,7 +15,7 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
 - **`SimComponent`** — wraps a model instance; exposes named inputs / outputs
 - **`SimConnection`** — links a source port to a target port (FMI/SSP Connection)
 - **`SimPort`** — metadata for a connectable interface point
-- **`AvianSim`** — Avian physics treated as a cosim model
+- **Avian as a cosim participant** — Avian physics is wired in through a typed-port spec table (`AvianGroup`/`AvianPort`) plus a `PendingForces` component, not a bespoke `AvianSim` struct
 
 ## Execution pipeline
 
@@ -27,13 +27,13 @@ FixedUpdate:
   1. ModelicaSet::HandleResponses   — receive async results from worker thread
   2. sync_modelica_outputs          — ModelicaModel.variables → SimComponent.outputs
   3. CosimSet::Propagate            — propagate_connections: source outputs → target inputs
-  4. CosimSet::ApplyForces          — apply_sim_forces: route netForce into Avian Forces
+  4. CosimSet::ApplyForces          — apply_pending_forces: route PendingForces into Avian Forces
   5. sync_inputs_to_modelica        — SimComponent.inputs → ModelicaModel.inputs
   6. ModelicaSet::SpawnRequests     — send next step command with fixed dt
 
 FixedPostUpdate:
   7. Avian PhysicsSchedule          — integrate_positions, constraint solve, writeback
-  8. read_avian_outputs             — Position / LinearVelocity → AvianSim.outputs
+  8. read_avian_outputs             — Position / LinearVelocity → Avian output ports
 ```
 
 The master loop reads outputs, propagates through connections, writes inputs,

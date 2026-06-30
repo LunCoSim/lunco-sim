@@ -168,7 +168,7 @@ Representative commands already covering the user's surface:
 | **Temporal sequencing (wait/over-time)** | ❌ | no coroutine/yield/await/scheduler anywhere |
 | **Navigation: waypoints/goals/arrival/path-follow** | ❌ | zero hits; only camera follow exists. `DriveRover` is raw forward/steer, re-commanded every tick (no setpoint) |
 | **By-name entity lookup** | ❌ | must `ListEntities` + match `Name` string |
-| **Timer "after N seconds"** | ❌ | derive from `SimTick`×`SECS_PER_TICK` or `CelestialClock` |
+| **Timer "after N seconds"** | ❌ | derive from `SimTick`×`SECS_PER_TICK` or `WorldTime` |
 | Telemetry subscribe (events to script) | ⚠️ stub | `executor.rs:584` returns "Subscription created" |
 
 Net: the *manipulation* surface is done; what's missing is (a) the World bridge,
@@ -402,7 +402,7 @@ of what every engine gives authors. Missing, in priority order:
    declarative objective/condition system (reach X, dwell, plant flag) with
    completion + branching — evaluated, not imperatively scripted. rhai = glue for
    custom conditions. We under-weighted this.
-5. **Time-warp coupling.** Scenarios tick in sim-time, respecting `TimeWarpState`
+5. **Time-warp coupling.** Scenarios tick in sim-time, respecting `TimeTransport`
    (pause / speed). Ties into the timer/coroutine layer.
 6. **Observability/debugging** — inspect/step scenario state, visualize active
    goal/BT node.
@@ -442,7 +442,7 @@ planned. Resulting split:
 **Core exposes only (irreducible mechanism):**
 - Persistent scenario VM — `rhai::AST` + `Scope` per scenario, recompiled on
   `ScriptDocument` source change (hot-reload).
-- Host→script hooks: `on_start()`, `on_tick(ctx)` (sim-time, `TimeWarpState`-gated),
+- Host→script hooks: `on_start()`, `on_tick(ctx)` (sim-time, transport-gated via `TimeTransport`),
   `on_event(evt)`.
 - Ch.1 write — `cmd(name, #{…})` → `ReflectEvent::trigger`, behind RBAC.
 - Ch.2 read — reflection bridge (`get(entity,"Comp.field")`, `query()`, `list`,
@@ -494,7 +494,7 @@ ground-station/ROS interop):
 - `Severity` (YAMCS 5-tier) (`:25`); `SampledParameter` (`:101`) — continuous data;
   `Parameter { name, unit, path }` (`:87`) — reflection-path monitor source for the
   lunco-telemetry sampling engine.
-- timestamp = CelestialClock TDB epoch (Julian Date) — already the standard (`:14`).
+- timestamp = `WorldTime.epoch_jd` TDB epoch (Julian Date) — already the standard (`:14`).
 - The docstring even names *"Command Ack"* as an example `TelemetryEvent` — it was
   designed for exactly this notification role.
 

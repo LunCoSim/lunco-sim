@@ -78,7 +78,7 @@ Apps (sandbox, lunica, lunco_client)
    │     lunco-doc        ← Authority, undo/redo, CRUD foundation
    │          │                     │
    │          ▼                     ▼
-   └── lunco-core         ← f64 math foundation, CommandMessage, fundamentals
+   └── lunco-core         ← f64 math foundation, Mutation<P> command substrate, fundamentals
 ```
 
 ## 6. Strategic Roadmap Orientation

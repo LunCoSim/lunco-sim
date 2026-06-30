@@ -313,7 +313,7 @@ end RoverBattery;
    motor power and exposes `soc`/`voltage` outputs. **Zero new Rust to author.**
 2. **ECS stepper** — confirm the model steps via the existing `FixedUpdate` cosim
    pipeline (`sync_modelica_outputs` → `propagate_connections` → `sync_inputs_to_modelica`
-   → worker step), gated on `TimeWarpState::is_running()` and sub-rated to ~10 Hz
+   → worker step), gated on the sim running (`Time<Virtual>.relative_speed > 0`) and sub-rated to ~10 Hz
    (every Nth `SimTick`), running on the worker thread.
 3. **State-as-component** — store the stepper's `soc` on the entity as a small
    replicated component (`BatteryState { soc, voltage }`), the first concrete

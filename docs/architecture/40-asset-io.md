@@ -120,7 +120,7 @@ no manual hunt.
 | Site | Status |
 |---|---|
 | `lunco-usd-bevy/UsdLoader` | ✅ Bevy AssetLoader |
-| `lunco-usd-composer::flatten_with_fetcher` | ✅ injected fetcher, wasm path pre-fetches via `LoadContext::read_asset_bytes` |
+| `lunco-usd-bevy` compose (`flatten_stage`) | ✅ injected fetcher, wasm path pre-fetches via `LoadContext::read_asset_bytes` |
 | `lunco-usd-sim/cosim.rs` modelica/python source reads | ✅ migrated to AssetServer (see `ModelicaSource` / `PythonSource`) |
 | `lunco-usd/src/ui/browser_dispatch.rs:114` | ⏳ TODO |
 | `lunco-usd/src/commands.rs:128` | ⏳ TODO |

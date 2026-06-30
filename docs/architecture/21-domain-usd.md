@@ -4,7 +4,7 @@
 > LunCoSim uses for the 3D world. Bases, rovers, habitats, terrain — everything
 > physical — lives as USD prims in USD stages. See
 > [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
-> `lunco-usd-avian`, `lunco-usd-bevy`, `lunco-usd-composer`, `lunco-usd-sim`.
+> `lunco-usd-avian`, `lunco-usd-bevy` (which also owns composition/flattening), `lunco-usd-sim`.
 
 ## Scope
 
@@ -60,7 +60,7 @@ Views observing a `UsdDocument`:
 ```
 Twin (workspace folder, owns documents)         spec 14
   └─ active USD stage = a UsdDocument            spec 10 / 21
-        └─ composed (UsdComposer::flatten)        lunco-usd-composer
+        └─ composed (flatten_stage)               lunco-usd-bevy/compose.rs
               └─ UsdStageAsset (baked stage)       lunco-usd-bevy
                     └─ UsdPrimPath root under Grid  → sync_usd_visuals spawns entities
                           └─ the live 3D world      (avian + cosim translators key off prims)

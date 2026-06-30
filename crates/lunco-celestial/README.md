@@ -13,7 +13,7 @@ This crate implements the **orbital mechanics** layer of the LunCoSim digital tw
 - **Trajectories**: Rendering of orbital paths
 
 **What it does NOT contain:**
-- Terrain generation or mesh rendering (see [`lunco-terrain`](../lunco-terrain/))
+- Terrain generation or mesh rendering (see [`lunco-terrain-globe`](../lunco-terrain-globe/))
 - Camera/avatar control (see [`lunco-avatar`](../lunco-avatar/))
 - Physics for surface vehicles (see [`lunco-mobility`](../lunco-mobility/))
 
@@ -23,7 +23,6 @@ This crate implements the **orbital mechanics** layer of the LunCoSim digital tw
 
 ```
 lunco-celestial/
-  ├── clock.rs          # Time resource wrapper
   ├── ephemeris.rs      # Body position calculations
   ├── gravity.rs        # Per-entity gravity systems
   ├── soi.rs            # Sphere of influence transitions
@@ -38,8 +37,9 @@ lunco-celestial/
 
 | Dependency | Why |
 |---|---|
-| `lunco-core` | `CelestialClock`, `TimeWarpState`, `Command` macros |
-| `lunco-terrain` | Terrain tile re-exports for backward compatibility |
+| `lunco-core` | `SimTick`, `Command` macros |
+| `lunco-time` | `WorldTime` / `TimeTransport` — the unified time spine (reads epoch/regime; no local clock) |
+| `lunco-terrain-globe` | Terrain tile re-exports |
 | `lunco-controller` | Avatar input map (used by camera spawning) |
 
 ## Multiplayer

@@ -1,6 +1,6 @@
-# lunco-terrain
+# lunco-terrain-globe
 
-Terrain generation, QuadSphere tiling, and collision for LunCoSim.
+Streaming planetary-globe terrain for LunCoSim: quadtree-CDLOD tiling, avian heightfield collision, and big_space anchoring. (Part of the `lunco-terrain-{core,globe,surface}` split; shared primitives live in `lunco-terrain-core`, surface/regolith detail in `lunco-terrain-surface`.)
 
 ## Responsibility
 

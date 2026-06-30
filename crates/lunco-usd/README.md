@@ -14,10 +14,9 @@ A convenience bundle that adds all modular USD layers:
 *   `UsdBevyPlugin`: Visuals and Transforms.
 *   `UsdAvianPlugin`: Standard OpenUSD Physics.
 *   `UsdSimPlugin`: NVIDIA vehicle schemas and simulation behavior intercepts.
-*   `UsdLunCoPlugin`: Engineering metadata mapping.
 
-### 2. `UsdLunCoPlugin` (Metadata Mapping)
-Maps attributes in the `lunco:` namespace to Bevy components:
+### 2. Engineering Metadata Mapping
+This crate maps attributes in the `lunco:` namespace to Bevy components:
 *   `lunco:name` -> `Spacecraft::name`
 *   `lunco:ephemeris_id` -> `Spacecraft::ephemeris_id`
 *   `lunco:hit_radius_m` -> `Spacecraft::hit_radius_m`

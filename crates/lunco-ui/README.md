@@ -22,7 +22,7 @@ All panels are **entity viewers** — they watch a selected entity and render it
      └── Provides WorldPanel for 3D space panels
 ```
 
-See `docs/research-ui-ux-architecture.md` in the workspace root for full architecture research.
+See [`docs/architecture/research/ui-ux-inspiration.md`](../../docs/architecture/research/ui-ux-inspiration.md) for full architecture research.
 
 ### What's Provided
 
@@ -57,19 +57,20 @@ bevy_workbench = { workspace = true }
 ```rust
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_ui::prelude::*;
 
 pub struct MyPanel;
 
-impl WorkbenchPanel for MyPanel {
-    fn id(&self) -> &str { "my_panel_preview" }  // "preview" → center tab
+impl Panel for MyPanel {
+    fn id(&self) -> PanelId { PanelId("my_panel_inspector") } // "inspector" → right dock
     fn title(&self) -> String { "My Panel".into() }
-    fn needs_world(&self) -> bool { true }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
 
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        let selected = world.resource::<WorkbenchState>().selected_entity;
-        // Render data for selected entity
+    // Reads go through the capability-narrowed `PanelCtx` (no raw `&mut World`);
+    // queue mutations with `ctx.defer(|world| { ... })`.
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        // e.g. `let sel = ctx.resource::<SelectedEntities>();`
     }
 }
 ```
@@ -93,4 +94,4 @@ app.register_panel(MyPanel);
 ## See Also
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — detailed mechanisms (WidgetSystem, CommandBuilder, 3D UI)
-- [Workspace UI/UX Research](../../docs/research-ui-ux-architecture.md) — professional tool analysis and architecture decisions
+- [UI/UX Research](../../docs/architecture/research/ui-ux-inspiration.md) — professional tool analysis and architecture decisions

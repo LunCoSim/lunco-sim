@@ -9,7 +9,7 @@ By separating visuals into this crate, we keep the core integration lightweight 
 
 ## Key Functions & Features
 
-### 1. `LunCoUsdBevyPlugin`
+### 1. `UsdBevyPlugin`
 The main plugin that sets up the USDA visual synchronization system.
 
 ### 2. Automatic Visual Mapping

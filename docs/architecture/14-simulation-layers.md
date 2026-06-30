@@ -1,5 +1,7 @@
 # 14 — Simulation Layers
 
+**Status: target architecture, partially implemented.** The four-layer model and the structs below (`Twin` control resource, `TwinCommand`, `BackendRegistry`, `Backend`/`Participant` traits) are the design; they are not all built yet. Implemented today: `RunStatus`/`RunBounds`/experiment runs in `lunco-experiments`, cosim wiring (`SimConnection`) in `lunco-cosim`, and the time/transport control in `lunco-time`. Treat the Rust blocks here as illustrative of the destination, not current API.
+
 > Four layers — **Model, Run, Scenario, Twin** — plus a dynamic **BackendRegistry**
 > that lets simulation crates self-register. Aligns with FMI/SSP patterns,
 > scales from single-model MVP to cosim + remote + HIL without refactor.
@@ -331,8 +333,8 @@ adopting either isn't a migration. Full design in
 pub struct Run {
     pub id: RunId,
     pub scenario_id: ScenarioId,
-    pub status: RunStatus,     // Idle | Running | Paused | Completed | Failed
-    pub mode: RunMode,         // Live | Batch | Stepped | Replay
+    pub status: RunStatus,     // implemented enum (lunco-experiments): Pending | Queued | Running | Done | Failed | Cancelled
+    pub mode: RunMode,         // design: Live | Batch | Stepped | Replay
     pub rate_factor: f64,      // time-warp; 1.0 = real-time
     pub t_start: f64,
     pub t_end: Option<f64>,    // None = open-ended live session

@@ -138,7 +138,7 @@ cargo test -p lunco-modelica --test balloon_stepper_test
 ```
 
 `lunco-cosim`'s dep graph is small, so these tests recompile in a few seconds
-on an incremental build — unlike `lunco-client` tests, which pull in the full
+on an incremental build — unlike `luncosim` / `sandbox` tests, which pull in the full
 Bevy renderer.
 
 ## Upstream rumoca workaround

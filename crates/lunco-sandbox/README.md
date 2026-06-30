@@ -1,6 +1,6 @@
-# lunco-client
+# lunco-sandbox
 
-The primary application crate for LunCoSim, containing executable binaries and high-level application logic.
+The ground-physics **sandbox** test bed for LunCoSim: a USD scene + Avian physics + the in-scene edit tools, exposed as the `sandbox` binary. (The full mission simulator is the separate `luncosim` crate; the headless variant is `lunco-sandbox-server`.)
 
 ## What This Crate Does
 
@@ -21,13 +21,13 @@ This crate aggregates all domain-specific crates (`lunco-celestial`, `lunco-mobi
 
 ## Architecture
 
-`lunco-client` serves as the **Integration Layer** (Level 5) in the project hierarchy.
+`lunco-sandbox` serves as an **Integration Layer** (Level 5) in the project hierarchy.
 
 - **Level 1 (Foundation)**: `lunco-core`, `lunco-assets`
 - **Level 2 (Domain Logic)**: `lunco-celestial`, `lunco-mobility`, `lunco-usd`
 - **Level 3 (Software)**: `lunco-fsw`, `lunco-obc`, `lunco-controller`
 - **Level 4 (Workflow)**: `lunco-ui`, `lunco-workbench`
-- **Level 5 (Application)**: `lunco-client` (this crate)
+- **Level 5 (Application)**: `lunco-sandbox` (this crate), `luncosim`, `lunco-sandbox-server`
 
 ## Web Build
 
@@ -37,7 +37,7 @@ The web target uses `wasm-bindgen` and `web-sys` to bridge Bevy's systems with b
 
 ```bash
 # Run the sandbox natively
-cargo run -p lunco-client --bin sandbox
+cargo run -p lunco-sandbox --bin sandbox
 
 # Build for web (using scripts/build_web.sh)
 ./scripts/build_web.sh

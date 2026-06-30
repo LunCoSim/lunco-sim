@@ -356,7 +356,7 @@ rules:
   spec means by name resolution.
 
 See
-[`../../crates/lunco-modelica/src/ui/panels/diagram.rs`](../../crates/lunco-modelica/src/ui/panels/diagram.rs)
+[`../../crates/lunco-modelica/src/diagram.rs`](../../crates/lunco-modelica/src/diagram.rs)
 (`import_model_to_diagram`) for the call site, and
 [`../../crates/lunco-modelica/src/document.rs`](../../crates/lunco-modelica/src/document.rs)
 (`resolve_class`) for the class-path resolver used by AST ops.
@@ -851,8 +851,8 @@ sprint with the journal subsystem.
 | **MSL Palette** | ✅ Working | ~20 MSL components |
 | **Library Browser** | ✅ Working | File tree of `.mo` files |
 | **Package Browser** | ✅ Working | MSL package hierarchy |
-| **Telemetry / Parameters** | ⚠️ Has parameter-update bug (see gaps) | Legacy; being replaced by `ModelicaInspectorPanel` |
-| **`ModelicaInspectorPanel`** | ✅ New, compact, context-aware | Fixes the parameter-update bug |
+| **Telemetry / Parameters** | ⚠️ Has parameter-update bug (see gaps) | Legacy |
+| **`ModelicaInspectorPanel`** | 🔶 Planned (not yet implemented) | Intended compact, context-aware inspector to fix the parameter-update bug |
 | **Graphs** | ✅ Working | Time-series via `egui_plot` |
 
 ## 11. Current gaps
@@ -934,7 +934,7 @@ finishing the acausal-connector visuals on `lunco-canvas`.
 - [`../../crates/lunco-modelica/`](../../crates/lunco-modelica/) — crate root
 - [`../../crates/lunco-modelica/src/document.rs`](../../crates/lunco-modelica/src/document.rs) — `ModelicaDocument`, op set, apply pipeline, span-based patch helpers, qualified-path `resolve_class`
 - [`../../crates/lunco-modelica/src/pretty.rs`](../../crates/lunco-modelica/src/pretty.rs) — subset pretty-printer, `PrettyOptions`
-- [`../../crates/lunco-modelica/src/ui/panels/diagram.rs`](../../crates/lunco-modelica/src/ui/panels/diagram.rs) — diagram panel, sync-from-document, wire/position diffing, scope-aware type lookup
+- [`../../crates/lunco-modelica/src/diagram.rs`](../../crates/lunco-modelica/src/diagram.rs) — diagram panel, sync-from-document, wire/position diffing, scope-aware type lookup
 - [`../../crates/lunco-modelica/src/ui/panels/code_editor.rs`](../../crates/lunco-modelica/src/ui/panels/code_editor.rs) — code editor, debounced commit (`EDIT_DEBOUNCE_SEC`), word-wrap toggle
 
 ### Adjacent docs

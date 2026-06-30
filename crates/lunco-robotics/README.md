@@ -16,8 +16,7 @@ This crate provides factory-style logic for assembling complex vessels from thei
 
 ```
 lunco-robotics/
-  ├── rover.rs       — Factory for standard rover vessels
-  └── assembler.rs   — Generic entity composition helpers
+  └── assembler.rs   — Generic entity composition helpers (chassis, wheels, FSW, sensors)
 ```
 
 ### Dependencies
@@ -32,13 +31,13 @@ This crate is a central hub for robot construction:
 ## Usage
 
 ```rust
-app.add_plugins(LunCoRoboticsPlugin);
-
-// Use a helper to spawn a complete rover
-let rover_id = lunco_robotics::rover::spawn_standard_rover(&mut commands, ...);
+// Compose a complete rover from its parts via the `assembler` module helpers
+// (chassis + wheels + FSW + OBC + hardware), which link coordinate frames and
+// component wiring consistently.
+use lunco_robotics::assembler;
 ```
 
 ## See Also
 
-- `lunco-client` — The primary consumer of these assembly helpers.
+- `lunco-sandbox` / `luncosim` — primary consumers of these assembly helpers.
 - `lunco-usd` — The counterpart for assembling vessels from USD scene definitions.
