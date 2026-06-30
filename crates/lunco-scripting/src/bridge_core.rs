@@ -545,6 +545,19 @@ pub fn get_field<B: ValueBuilder>(b: &B, gid: u64, path: &str) -> Option<B::Valu
     .flatten()
 }
 
+/// `param(gid, key)` — read a per-prim numeric script parameter from the
+/// entity's [`lunco_core::ScriptParams`] (authored in USD as `lunco:params`). A
+/// HashMap lookup — the typed, fast way for a reusable script to get per-instance
+/// config, vs scanning `name(me)`. `None` if the entity/component/key is absent.
+pub fn script_param(gid: u64, key: &str) -> Option<f64> {
+    with_world(|world| {
+        let e = resolve_entity(world, gid)?;
+        let p = world.get::<lunco_core::ScriptParams>(e)?;
+        p.0.get(key).copied()
+    })
+    .flatten()
+}
+
 /// `get_setting("Resource.field")` — generic reflection read of a global
 /// `Resource` field (the resource twin of [`get_field`]). Settings/config live in
 /// resources, not components, so this is how a script reaches them. `None` if the
@@ -869,6 +882,15 @@ pub fn elapsed_seconds() -> f64 {
 
 thread_local! {
     static RNG_STATE: Cell<u64> = const { Cell::new(0) };
+    /// The gid of the entity whose hook is currently running — set by
+    /// `rng_begin` (called before every hook) so `emit` can stamp the EMITTER
+    /// onto its `TelemetryEvent.source` without the script passing `me`.
+    static CURRENT_SELF: Cell<u64> = const { Cell::new(0) };
+}
+
+/// The gid of the script entity whose hook is currently executing (`0` if none).
+pub fn current_self() -> u64 {
+    CURRENT_SELF.with(|c| c.get())
 }
 
 /// SplitMix64 — advance `state`, return a well-diffused 64-bit value. Tiny,
@@ -891,6 +913,7 @@ pub fn rng_begin(gid: u64, tick: u64, salt: u64) {
         ^ tick.wrapping_mul(0xD1B5_4A32_D192_ED03)
         ^ salt.wrapping_mul(0xA0761_D6478_BD642F);
     RNG_STATE.with(|c| c.set(seed));
+    CURRENT_SELF.with(|c| c.set(gid));
 }
 
 /// Next uniform `f64` in `[0, 1)` from the seeded stream (53-bit mantissa).
@@ -926,6 +949,8 @@ pub fn emit(name: &str, value: TelemetryValue) -> bool {
             .unwrap_or(0.0);
         world.trigger(TelemetryEvent {
             name: name.to_string(),
+            // The emitter = the script whose hook is running (set by rng_begin).
+            source: current_self(),
             severity: Severity::Info,
             data: value,
             timestamp,
@@ -939,6 +964,9 @@ pub fn emit(name: &str, value: TelemetryValue) -> bool {
 pub fn build_event<B: ValueBuilder>(b: &B, ev: &TelemetryEvent) -> B::Value {
     b.map(vec![
         ("name".to_string(), b.string(&ev.name)),
+        // The emitter's gid — branch on `evt.source` to tell WHICH sensor/script
+        // fired (independent of the name). `0` = global/no entity.
+        ("source".to_string(), b.int(ev.source as i64)),
         ("value".to_string(), telemetry_value(b, &ev.data)),
         ("severity".to_string(), b.string(&format!("{:?}", ev.severity))),
         ("timestamp".to_string(), b.float(ev.timestamp)),

@@ -149,7 +149,8 @@ fn step(act, done) { #{ act: act, done: done } }   // closed-loop: act until don
 fn once(act)       { #{ act: act } }               // run once, then advance
 fn wait(secs)      { #{ secs: secs } }             // dwell `secs` seconds
 fn wait_until(done){ #{ done: done } }             // hold until predicate true
-fn wait_for(event) { #{ event: event } }           // hold until event `name` fires
+fn wait_for(event) { #{ event: event } }           // hold until event `name` fires (any source)
+fn wait_for_from(event, src) { #{ event: event, src: src } } // ...from a SPECIFIC emitter gid
 
 /// True when the current step `s` is complete. Precedence: explicit `done`
 /// predicate, else `secs` dwell, else `event` match, else one-shot (advance now).
@@ -243,7 +244,15 @@ fn __tick_leaf(me, s, now, ev) {
     let d = true;                                  // bare/once → advance immediately
     if s.done != () { d = s.done.call(me); }       // wait_until / step predicate
     else if s.secs != () { if s._t0 == () { s._t0 = now; } d = (now - s._t0) >= s.secs; }
-    else if s.event != () { d = ev.some(|n| n == s.event); }   // wait_for
+    // wait_for: match event name, and (if wait_for_from gave a `src`) the EMITTER
+    // too — so one name from many sensors is distinguished by source. `src` may be
+    // a gid OR a path string resolved LAZILY here (entities may not exist yet when
+    // the task tree is built at on_start).
+    else if s.event != () {
+        let want = s.src;
+        if want != () && type_of(want) == "string" { want = find(want); }
+        d = ev.some(|e| e.name == s.event && (want == () || e.source == want));
+    }
     #{ n: s, d: d }
 }
 
@@ -333,7 +342,9 @@ fn __run_task(me) {
 fn __note_task_event(me, evt) {
     if this.task == () { return; }
     if this.__events == () { this.__events = []; }
-    if evt.name != () { this.__events.push(evt.name); }
+    // Buffer name + emitter source so `wait_for` (name) and `wait_for_from`
+    // (name + source) can both match against this tick's events.
+    if evt.name != () { this.__events.push(#{ name: evt.name, source: evt.source }); }
 }
 
 /// SUGAR — define a `task(me)` function returning a node and the engine runs it
@@ -537,6 +548,12 @@ fn possess(vessel)             { cmd("PossessVessel", #{ target: vessel }) }
 // each phase without any Rust — drawn by the avatar UI overlay, logged headless.
 fn notify(msg)                 { cmd("ShowNotification", #{ text: msg }) }
 fn notify_kind(msg, kind)      { cmd("ShowNotification", #{ text: msg, kind: kind }) }
+
+// Event-source helpers. `evt.source` is the EMITTER's gid — which sensor/script
+// fired — so ONE `on_event` can branch per source (e.g. many checkpoints all
+// named `enter:checkpoint`, different behaviour each). `0` = global (raw input).
+fn emitter(evt)                { evt.source }
+fn from_entity(evt, id)        { evt.source == id }
 
 /// Fire a command and return JUST its assigned data (the `.data` bag), or () if
 /// it failed or reported none. The create-then-manipulate shortcut:

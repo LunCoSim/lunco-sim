@@ -1,16 +1,15 @@
 // Engine-exhaust plume — a SIGNAL consumer.
 //
-// Follows the nearest ancestor's `throttle` cosim output (0..1) every tick and
-// scales this flame mesh to match: length on Y, width easing in on X/Z, and
-// collapsing toward zero (invisible) at zero throttle. ALL the mapping lives
-// here — no built-in Rust drives the flame. The Modelica engine model only
-// PUBLISHES the throttle signal (a continuous port); turning that signal into a
-// visual is scenario/rhai concern, exactly like reading any other port.
+// Scales this cone from the nearest ancestor's `throttle` output (0..1) every
+// tick, with a SMOOTHED FLICKER so it reads as a live flame, collapsing to ~zero
+// at idle. ALL the mapping lives here — no built-in Rust drives the flame; the
+// Modelica engine model only PUBLISHES the throttle signal.
 //
-// `me` is the flame prim — attach this with `lunco:scriptPath` on the flame
-// (or on a reusable rocket-engine component that contains it). It works wherever
-// the engine is mounted because it WALKS UP to whatever ancestor exposes the
-// `throttle` port (the possessed vessel's GNC), rather than hard-coding a path.
+// Many cones can share this one script (attached via `lunco:scriptPath` on each):
+// each reads its OWN per-instance config from `param(me, key, default)` (USD
+// `lunco:params`) — `wmax`/`lmax` size, `flick` flicker depth — so the script is
+// generic, with NO `name(me)` inference. Works wherever the engine is mounted: it
+// WALKS UP to whatever ancestor exposes the `throttle` port (the vessel's GNC).
 
 /// Nearest ancestor that exposes a `throttle` port, or 0.0 if none. Pure rhai.
 fn nearest_throttle(me) {
@@ -30,12 +29,22 @@ fn on_tick(me) {
     if t == () { t = 0.0; }
     t = clamp(t, 0.0, 1.0);
 
-    // Width blooms quickly (reads as a lit plume even at low throttle); length
-    // tracks throttle linearly. A small floor avoids a fully-degenerate (zero)
-    // transform while staying sub-visible at idle.
-    let width = (0.35 + 0.65 * t) * 1.4;
-    let len = t * 3.0;
-    if len < 0.02 { len = 0.02; }
+    // Smoothed flicker: `rand` is fresh each tick (deterministic), so blend it
+    // into a running value — a shimmer, not a strobe.
+    let target = 0.8 + rand() * 0.4;
+    if this.flick == () { this.flick = 1.0; }
+    this.flick = this.flick * 0.7 + target * 0.3;
+
+    // Per-instance config — typed, fast (a HashMap read), no name inference.
+    let wmax  = param(me, "wmax", 1.0);    // max width scale
+    let lmax  = param(me, "lmax", 3.0);    // max length scale
+    let depth = param(me, "flick", 1.0);   // 0 = steady, 1 = full flicker
+    let fl = 1.0 + (this.flick - 1.0) * depth;
+
+    // Width blooms quickly with throttle; length tracks throttle and flickers.
+    let width = (0.28 + 0.72 * t) * wmax;
+    let len = t * lmax * fl;
+    if len < 0.02 { len = 0.02; } // avoid a fully-degenerate transform at idle
 
     set(me, "Transform.scale", [width, len, width]);
 }

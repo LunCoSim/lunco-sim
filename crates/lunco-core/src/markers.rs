@@ -157,3 +157,17 @@ pub struct EmbeddedScenarioPath(pub String);
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component)]
 pub struct TriggerZone(pub String);
+
+/// Per-prim numeric **script parameters**, authored in USD as
+/// `custom string lunco:params = "wmax=1.05, lmax=3.6, flick=1.0"` and read by a
+/// script via the native `param(me, "wmax", default)` verb (a HashMap lookup —
+/// fast, typed, no fragile `name(me).contains(...)` string scanning).
+///
+/// This is how a reusable script gets PER-INSTANCE config: the same `flame.rhai`
+/// drives many cones, each carrying its own `lunco:params`, instead of inferring
+/// its role from its name. Stamped by the USD loader (`lunco-usd-bevy`); lives in
+/// `lunco-core` so loader and scripting runtime share it (same pattern as
+/// [`TriggerZone`]).
+#[derive(Component, Debug, Clone, Reflect, Default)]
+#[reflect(Component)]
+pub struct ScriptParams(pub std::collections::HashMap<String, f64>);

@@ -485,6 +485,7 @@ impl Plugin for LunCoAvatarPlugin {
             app.project_events::<KeyboardInput, _>(|e| {
                 e.state.is_pressed().then(|| lunco_core::TelemetryEvent {
                     name: format!("key:{:?}", e.key_code),
+                    source: 0, // raw input — no emitting entity
                     severity: lunco_core::Severity::Info,
                     data: lunco_core::TelemetryValue::Bool(true),
                     timestamp: 0.0,
@@ -2389,7 +2390,7 @@ pub fn on_show_notification(cmd: ShowNotification, mut notes: ResMut<ScreenNotif
     let secs = if cmd.secs > 0.0 { cmd.secs } else { 4.5 };
     let kind = if cmd.kind.is_empty() { "info" } else { cmd.kind.as_str() }.to_string();
     info!("[notify:{kind}] {}", cmd.text);
-    notes.toasts.push(Toast { text: cmd.text, kind, remaining: secs });
+    notes.toasts.push(Toast { text: cmd.text.clone(), kind, remaining: secs });
     // Cap the backlog so a chatty script can't grow it unbounded.
     let overflow = notes.toasts.len().saturating_sub(6);
     if overflow > 0 {

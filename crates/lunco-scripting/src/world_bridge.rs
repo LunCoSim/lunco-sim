@@ -332,6 +332,20 @@ pub fn build_world_engine() -> Engine {
         }
     });
 
+    // param(id, "key", default) -> f64 — read a per-prim numeric script param
+    // (USD `lunco:params`) via ScriptParams. The typed, fast per-instance-config
+    // read; falls back to `default` when absent. Use this, NOT name(me) scanning.
+    engine.register_fn("param", |id: i64, key: ImmutableString, default: f64| -> f64 {
+        bridge_core::script_param(id as u64, key.as_str()).unwrap_or(default)
+    });
+    // param(id, "key") -> f64 | () — same, but () when the param is absent.
+    engine.register_fn("param", |id: i64, key: ImmutableString| -> Dynamic {
+        match bridge_core::script_param(id as u64, key.as_str()) {
+            Some(v) => Dynamic::from_float(v),
+            None => Dynamic::UNIT,
+        }
+    });
+
     // get_setting("Resource.field") -> Dynamic — read a GLOBAL setting (the
     // resource twin of get()). Settings/config live in resources, not components;
     // this reaches any reflect-registered `Resource`. () if missing.

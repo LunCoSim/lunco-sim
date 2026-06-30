@@ -191,13 +191,18 @@ fn zone_events(
     b2: Option<Entity>,
     zone_name: impl Fn(Entity) -> Option<String>,
     reg: &ApiEntityRegistry,
-) -> Vec<(String, i64)> {
+) -> Vec<(String, i64, u64)> {
+    // (event name, entrant gid → payload, ZONE gid → event source)
     let mut out = Vec::new();
     if let Some(name) = zone_name(c1) {
-        out.push((format!("{verb}:{name}"), contact_gid(reg, c2, b2).unwrap_or(0) as i64));
+        let entrant = contact_gid(reg, c2, b2).unwrap_or(0) as i64;
+        let zone = contact_gid(reg, c1, b1).unwrap_or(0);
+        out.push((format!("{verb}:{name}"), entrant, zone));
     }
     if let Some(name) = zone_name(c2) {
-        out.push((format!("{verb}:{name}"), contact_gid(reg, c1, b1).unwrap_or(0) as i64));
+        let entrant = contact_gid(reg, c1, b1).unwrap_or(0) as i64;
+        let zone = contact_gid(reg, c2, b2).unwrap_or(0);
+        out.push((format!("{verb}:{name}"), entrant, zone));
     }
     out
 }
@@ -218,8 +223,8 @@ fn bridge_collision_events(
     mut commands: Commands,
 ) {
     let timestamp = world.map(|w| w.epoch_jd).unwrap_or(0.0);
-    let fire = |name: String, data: TelemetryValue, commands: &mut Commands| {
-        commands.trigger(TelemetryEvent { name, severity: Severity::Info, data, timestamp });
+    let fire = |name: String, data: TelemetryValue, source: u64, commands: &mut Commands| {
+        commands.trigger(TelemetryEvent { name, source, severity: Severity::Info, data, timestamp });
     };
     // Prefer the explicit `TriggerZone` name (short, stable), falling back to the
     // entity's `Name` (its USD path) for an unnamed sensor.
@@ -232,22 +237,22 @@ fn bridge_collision_events(
 
     for ev in starts.read() {
         if let Some(p) = contact_pair(&registry, ev.collider1, ev.body1, ev.collider2, ev.body2) {
-            fire("COLLISION_START".to_string(), TelemetryValue::String(p), &mut commands);
+            fire("COLLISION_START".to_string(), TelemetryValue::String(p), 0, &mut commands);
         }
-        for (name, entrant) in
+        for (name, entrant, zone) in
             zone_events("enter", ev.collider1, ev.body1, ev.collider2, ev.body2, &zone_name, &registry)
         {
-            fire(name, TelemetryValue::I64(entrant), &mut commands);
+            fire(name, TelemetryValue::I64(entrant), zone, &mut commands);
         }
     }
     for ev in ends.read() {
         if let Some(p) = contact_pair(&registry, ev.collider1, ev.body1, ev.collider2, ev.body2) {
-            fire("COLLISION_END".to_string(), TelemetryValue::String(p), &mut commands);
+            fire("COLLISION_END".to_string(), TelemetryValue::String(p), 0, &mut commands);
         }
-        for (name, entrant) in
+        for (name, entrant, zone) in
             zone_events("exit", ev.collider1, ev.body1, ev.collider2, ev.body2, &zone_name, &registry)
         {
-            fire(name, TelemetryValue::I64(entrant), &mut commands);
+            fire(name, TelemetryValue::I64(entrant), zone, &mut commands);
         }
     }
 }

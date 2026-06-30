@@ -228,6 +228,16 @@ pub fn process_usd_cosim_prims(
             }
         }
 
+        // Port-edge event rules: `lunco:portEvents = "m_prop<200:lander_low_fuel, ..."`.
+        // Each turns a model OUTPUT-signal threshold crossing into a discrete
+        // TelemetryEvent (the rumoca-safe Modelica `when` — see fire_model_port_events).
+        if let Some(spec) = reader.prim_attribute_value::<String>(&sdf_path, "lunco:portEvents") {
+            let rules = parse_port_events(&spec);
+            if !rules.is_empty() {
+                commands.entity(entity).insert(ModelEventRules(rules));
+            }
+        }
+
         let kind = if modelica_path.is_some() { "modelica" } else { "python" };
         info!("[usd-cosim] wired {} ({}) from USD attrs", prim_path.path, kind);
     }
@@ -453,6 +463,114 @@ pub fn sync_script_inputs(
 ) {
     for (comp, mut model) in &mut q {
         upsert_ports(&mut model.inputs, comp.inputs.iter());
+    }
+}
+
+// ── Modelica `when` / port-edge → event bridge ───────────────────────────────
+//
+// Modelica HAS discrete events (`when`, zero-crossings), but our rumoca codegen
+// surfaces only continuous variable VALUES as ports, and conditions on wired
+// INPUTS read defaults — so putting the event condition INSIDE the model is
+// unreliable. Instead the model stays a continuous SIGNAL emitter, and the edge
+// detection happens HERE in trusted Rust: a declarative `lunco:portEvents` rule
+// turns a threshold crossing of a model OUTPUT into a discrete `TelemetryEvent`
+// on the shared bus — the same bus rhai reads via `on_event` / `wait_for`.
+
+#[derive(Clone, Copy)]
+enum EdgeOp {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl EdgeOp {
+    fn holds(self, v: f64, thr: f64) -> bool {
+        match self {
+            EdgeOp::Lt => v < thr,
+            EdgeOp::Le => v <= thr,
+            EdgeOp::Gt => v > thr,
+            EdgeOp::Ge => v >= thr,
+        }
+    }
+}
+
+/// One declarative port-edge rule: emit `event` when output `port` `op`-crosses
+/// `threshold`. Re-triggerable — `armed` clears on fire and re-arms when the
+/// condition is false again, so it fires once per rising edge.
+#[derive(Clone)]
+struct PortEventRule {
+    port: String,
+    op: EdgeOp,
+    threshold: f64,
+    event: String,
+    armed: bool,
+}
+
+/// Port-edge event rules on a cosim entity, parsed from `lunco:portEvents`.
+#[derive(Component, Default)]
+pub struct ModelEventRules(Vec<PortEventRule>);
+
+/// Parse `"port OP thr : event, ..."` (OP ∈ `<`, `<=`, `>`, `>=`). Skips
+/// malformed entries. e.g. `"m_prop<200:lander_low_fuel, throttle>0.01:firing"`.
+fn parse_port_events(spec: &str) -> Vec<PortEventRule> {
+    let mut out = Vec::new();
+    for raw in spec.split(',') {
+        let entry = raw.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((cond, event)) = entry.split_once(':') else { continue };
+        let event = event.trim().to_string();
+        let cond = cond.trim();
+        // Longest operator first so "<=" isn't misread as "<".
+        let (op, idx, oplen) = if let Some(i) = cond.find("<=") {
+            (EdgeOp::Le, i, 2)
+        } else if let Some(i) = cond.find(">=") {
+            (EdgeOp::Ge, i, 2)
+        } else if let Some(i) = cond.find('<') {
+            (EdgeOp::Lt, i, 1)
+        } else if let Some(i) = cond.find('>') {
+            (EdgeOp::Gt, i, 1)
+        } else {
+            continue;
+        };
+        let port = cond[..idx].trim().to_string();
+        let Ok(threshold) = cond[idx + oplen..].trim().parse::<f64>() else { continue };
+        if port.is_empty() || event.is_empty() {
+            continue;
+        }
+        out.push(PortEventRule { port, op, threshold, event, armed: true });
+    }
+    out
+}
+
+/// Per-tick: evaluate each entity's port-edge rules against its fresh
+/// `SimComponent.outputs` and fire a `TelemetryEvent` (source = the model
+/// entity) on each rising edge. This is the "Modelica events" bridge — a
+/// continuous model signal in, a discrete event out.
+pub fn fire_model_port_events(
+    mut q: Query<(&mut ModelEventRules, &SimComponent, Option<&lunco_core::GlobalEntityId>)>,
+    mut commands: Commands,
+) {
+    for (mut rules, comp, gid) in &mut q {
+        let src = gid.map(|g| g.get()).unwrap_or(0);
+        for rule in rules.0.iter_mut() {
+            let Some(&v) = comp.outputs.get(&rule.port) else { continue };
+            let cond = rule.op.holds(v, rule.threshold);
+            if cond && rule.armed {
+                rule.armed = false;
+                commands.trigger(lunco_core::TelemetryEvent {
+                    name: rule.event.clone(),
+                    source: src,
+                    severity: lunco_core::Severity::Info,
+                    data: lunco_core::TelemetryValue::F64(v),
+                    timestamp: 0.0,
+                });
+            } else if !cond {
+                rule.armed = true;
+            }
+        }
     }
 }
 
@@ -1347,6 +1465,10 @@ pub(crate) fn install(app: &mut App) {
             sync_script_outputs.after(ModelicaSet::HandleResponses).before(PropagateCosimSet::Propagate),
             sync_modelica_inputs.after(ApplyForcesCosimSet::ApplyForces).before(ModelicaSet::SpawnRequests),
             sync_script_inputs.after(ApplyForcesCosimSet::ApplyForces).before(ModelicaSet::SpawnRequests),
+            // Modelica `when` bridge: edge-detect on fresh outputs, after they sync.
+            fire_model_port_events
+                .after(sync_modelica_outputs)
+                .after(sync_script_outputs),
         ),
     );
 

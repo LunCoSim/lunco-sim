@@ -1,31 +1,39 @@
 // Lander-local subsystem monitor — referenced from USD by `lunco:scriptPath` on
-// the `/LanderTest/Lander` prim. It runs ON the lander entity ALONGSIDE that
-// entity's Modelica GNC model: one entity carrying a MODEL and a SCRIPT at once
-// (doc 34, Decision 1 — model = continuous control, script = supervisory logic).
+// the `/LanderTest/Lander` prim. Runs ON the lander entity ALONGSIDE its Modelica
+// GNC model (doc 34, Decision 1 — model = continuous control, script = supervisory).
 //
-// It reads OUTSIDE DATA — the GNC model's own published ports (`m_prop`
-// propellant, exposed as a co-sim output on this same entity) — instead of
-// re-deriving state in rhai. Event-driven and latched; no time integration.
+// EVENT-DRIVEN, no port polling:
+//  - Fuel thresholds are NATIVE Modelica `when` events now (`lunco:portEvents` on
+//    the Lander prim turns `m_prop` crossings into `lander_low_fuel` /
+//    `lander_depleted`); this script only REACTS to them in on_event.
+//  - Touchdown is a COMPOUND condition (low AND slow) — not a single port edge —
+//    so it stays a latched rhai edge here, and is emitted as `lander_touchdown`
+//    for the mission scenario to wait on.
 
 fn on_tick(me) {
-    // Propellant remaining (kg): a Modelica observable surfaced as a port on
-    // this entity. `get` falls back to the port read for a bare name.
-    let prop = get(me, "m_prop");
-    if prop == () { return; }
-
-    // Low-fuel warning — latched so it fires once, not every tick.
-    if prop < 200.0 && this.low_fuel != true {
-        this.low_fuel = true;
-        emit("LANDER_LOW_FUEL", prop);
-        print("[Lander] LOW FUEL: " + prop + " kg remaining.");
+    // Touchdown: settled on the legs (low altitude + near-zero vertical rate).
+    // Latched so it emits exactly once. The data owner detects; others react.
+    if this.touchdown != true {
+        let pos = world_pos(me);
+        let v = velocity(me);
+        if pos != () && v != () && pos[1] < 3.4 && v[1] > -0.1 && v[1] < 0.1 {
+            this.touchdown = true;
+            emit("lander_touchdown");
+            print("[Lander] Touchdown - settled on legs.");
+        }
     }
+}
 
-    // Auto-disarm on empty so a dry engine can't command phantom thrust. Cut via
-    // the port path (clobber-safe through SimComponent.inputs).
-    if prop <= 0.0 && this.dry != true {
-        this.dry = true;
+fn on_event(me, evt) {
+    // React to the native Modelica port-edge events (from `lunco:portEvents`).
+    if evt.name == "lander_low_fuel" {
+        notify_kind("Lander low on fuel.", "warn");
+        print("[Lander] LOW FUEL.");
+    } else if evt.name == "lander_depleted" {
+        // Auto-disarm a dry engine so it can't command phantom thrust. Cut via
+        // the port path (clobber-safe through SimComponent.inputs).
         set(me, "engine_enable", 0.0);
-        emit("LANDER_PROPELLANT_DEPLETED", 0);
-        print("[Lander] Propellant depleted — engine disarmed.");
+        notify_kind("Propellant depleted - engine disarmed.", "warn");
+        print("[Lander] Propellant depleted - engine disarmed.");
     }
 }

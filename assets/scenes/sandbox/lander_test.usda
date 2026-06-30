@@ -94,6 +94,11 @@ def Xform "LanderTest"
         string lunco:modelicaModel = "models/Lander.mo"
         string lunco:simWires = "thrust:force_local_y,height:altitude,velocity_y:descent_rate,gravity_accel:g"
 
+        # Modelica `when` events: threshold crossings of the model's continuous
+        # OUTPUT signals become discrete events on the bus (edge detection in Rust,
+        # rumoca-safe). The lander script (and any other) reacts via on_event.
+        custom string lunco:portEvents = "m_prop<200:lander_low_fuel, m_prop<=0.5:lander_depleted"
+
         # The MISSION orchestration lives on the `/LanderTest/Scenario` prim below.
         # This entity carries the lander's GNC Modelica model (above) AND a local
         # supervisory script (below) at the same time — one entity, a model + a
@@ -168,25 +173,43 @@ def Xform "LanderTest"
             bool physics:collisionEnabled = false
         }
 
-        # Engine exhaust plume. A translucent emissive cone (apex down, below the
-        # nozzle). Its behaviour is DESCRIBED IN rhai (scenarios/flame.rhai), not
-        # built-in Rust: the script reads the GNC `throttle` SIGNAL each tick and
-        # scales this cone to match, collapsing to ~zero at idle. So the flame is
-        # exactly as big as the engine is firing — whether the PID flies the
-        # descent or the player holds Space. Starts tiny; the script owns scale.
+        # Engine exhaust plume — TWO translucent emissive cones (apex DOWN, below
+        # the nozzle), both DESCRIBED IN rhai (scenarios/flame.rhai), not built-in
+        # Rust: the script reads the GNC `throttle` SIGNAL each tick, scales each
+        # cone to match (collapsing to ~zero at idle), and adds a smoothed flicker.
+        # The outer cone is a soft orange halo; the inner "...Core" is a slimmer,
+        # hotter yellow-white tongue. base_color is kept DARK and the emissive is
+        # HDR (>1) so the colour is the GLOW — the Sun can't wash it to tan.
         def Cone "Flame"
         {
             uniform token axis = "Y"
             double radius = 1.0
             double height = 1.0
-            double3 xformOp:translate = (0, -3.6, 0)
+            double3 xformOp:translate = (0, -3.5, 0)
             double3 xformOp:rotateXYZ = (180.0, 0, 0)
             double3 xformOp:scale = (0.02, 0.02, 0.02)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (1.0, 0.55, 0.12)
-            color3f primvars:emissiveColor = (1.0, 0.5, 0.12)
-            float primvars:displayOpacity = 0.75
+            color3f primvars:displayColor = (0.5, 0.16, 0.02)
+            color3f primvars:emissiveColor = (3.0, 1.0, 0.12)
+            float primvars:displayOpacity = 0.4
             bool physics:collisionEnabled = false
+            custom string lunco:params = "wmax=1.05, lmax=3.6, flick=1.0"
+            custom string lunco:scriptPath = "scenarios/flame.rhai"
+        }
+        def Cone "FlameCore"
+        {
+            uniform token axis = "Y"
+            double radius = 1.0
+            double height = 1.0
+            double3 xformOp:translate = (0, -3.4, 0)
+            double3 xformOp:rotateXYZ = (180.0, 0, 0)
+            double3 xformOp:scale = (0.02, 0.02, 0.02)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f primvars:displayColor = (0.95, 0.7, 0.2)
+            color3f primvars:emissiveColor = (6.0, 3.5, 0.9)
+            float primvars:displayOpacity = 0.85
+            bool physics:collisionEnabled = false
+            custom string lunco:params = "wmax=0.5, lmax=2.5, flick=0.5"
             custom string lunco:scriptPath = "scenarios/flame.rhai"
         }
 
@@ -329,6 +352,11 @@ def Xform "LanderTest"
     {
         double3 xformOp:translate = (0, 28.35, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # Autopilot: drives the deployed rover through the waypoint course, and
+        # yields to the player on any key press. Engages on the `rover_deployed`
+        # event; see scenarios/rover_autopilot.rhai.
+        custom string lunco:scriptPath = "scenarios/rover_autopilot.rhai"
     }
 
     # ── The fixed joint holding the rover and lander together ──
@@ -340,16 +368,31 @@ def Xform "LanderTest"
         point3f physics:localPos1 = (0, 0.15, 0)
     }
 
-    # ── Rover drive-to waypoint ─────────────────────────────────────────────
-    # A translucent glowing beacon (reusable visual-only marker asset) the player
-    # drives the rover to after deployment. NO physics — arrival is detected in
-    # the scenario rhai by distance (`arrived(...)`), keeping the gameplay logic
-    # in script, not Rust. Move the goal by editing this one translate.
-    def Xform "RoverTarget" (
+    # ── Rover drive-to waypoints ────────────────────────────────────────────
+    # Three translucent glowing domes (the same reusable marker asset) forming a
+    # course. Each carries an overlap-only Sensor named "waypoint" (so they SHARE
+    # an event name); the scenario distinguishes them by the emitting sensor's
+    # SOURCE (via `wait_for_from`) and reveals them one at a time. Arrival is an
+    # EVENT (`enter:waypoint`), never a per-tick distance poll.
+    def Xform "RoverTarget1" (
         prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
     )
     {
         double3 xformOp:translate = (40.0, 0.0, 18.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "RoverTarget2" (
+        prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
+    )
+    {
+        double3 xformOp:translate = (8.0, 0.0, 46.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "RoverTarget3" (
+        prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
+    )
+    {
+        double3 xformOp:translate = (-34.0, 0.0, 30.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 

@@ -6,32 +6,39 @@
 // (`wait_until` reads the live world / model ports). No hand-rolled tick counting
 // or `dt()` integration in rhai — timing and state come from the simulation.
 //
-// Phases: possess the lander → the GNC PID flies the descent → settle on legs →
-// disarm the engine → detach the rover → hand control to the player.
+// Phases: possess lander → wait for the lander's `lander_touchdown` event →
+// disarm the engine → detach the rover → drive a revealed-one-at-a-time course.
+// Arrivals are EVENTS (the lander's touchdown, the gates' sensor enters), not
+// per-tick polls — the scenario only `wait_for`s.
 
-/// True once the lander has settled on its legs: low above ground AND near-zero
-/// vertical rate. Pure read of OUTSIDE DATA (world position + Avian velocity) —
-/// holds no integrated state of its own.
-fn lander_settled(lander) {
-    let pos = world_pos(lander);
-    if pos == () { return false; }
-    let v = velocity(lander);
-    let vy = if v == () { 0.0 } else { v[1] };
-    pos[1] < 3.4 && vy > -0.1 && vy < 0.1
+/// Reveal (`on`) or hide a waypoint dome by scaling its mesh — the same trick
+/// the flame uses. Resolved by path at call time (inside a step closure).
+fn show_wp(n, on) {
+    let s = if on { 1.0 } else { 0.0 };
+    set(find("/LanderTest/RoverTarget" + n + "/Dome"), "Transform.scale", [s, s, s]);
 }
 
-/// The engine auto-runs a `task(me)` if defined (prelude `__init_task`), so no
-/// on_start / on_tick wiring is needed. Entities are resolved by path at step
-/// time (inside the closures), not at build time. Each phase posts an on-screen
-/// `notify(...)` so the player sees the mission advance.
+/// The asset-relative path of a waypoint's Sensor — the EMITTER of its
+/// `enter:waypoint` event. Passed to `wait_for_from` as a string and resolved
+/// lazily, so all three gates can share the name "waypoint" yet be told apart by
+/// source.
+fn wp_zone(n) { "/LanderTest/RoverTarget" + n + "/Zone" }
+
+/// The engine auto-runs a `task(me)` if defined (prelude `__init_task`). Phases:
+/// land (wait for the lander's own `lander_touchdown` event) → deploy rover →
+/// drive a 3-gate course, each gate revealed only after the previous is reached.
 fn task(me) {
     seq([
         once(|m| {
             possess(find("/LanderTest/Lander"));
-            notify_kind("Powered descent — the GNC is flying the lander down.", "info");
+            // Course starts with only the first dome showing.
+            show_wp(2, false);
+            show_wp(3, false);
+            notify_kind("Powered descent - the GNC is flying the lander down.", "info");
         }),
-        // PID flies the descent; suspend until the body is settled on its legs.
-        wait_until(|m| lander_settled(find("/LanderTest/Lander"))),
+        // The lander's OWN script emits `lander_touchdown` when it settles — wait
+        // for that event instead of polling world state here.
+        wait_for("lander_touchdown"),
         // Disarm the GNC via the PORT path (`set`) — clobber-safe through
         // SimComponent.inputs. (`set_input` is the API, not a rhai verb.)
         once(|m| {
@@ -46,14 +53,33 @@ fn task(me) {
         wait(2.0),                                       // let the rover fall clear
         once(|m| {
             possess(find("/LanderTest/SkidRover"));
-            notify_kind("Rover deployed - you have control. Drive to the green dome.", "success");
-            print("[Scenario] Rover deployed - control to player.");
+            // Engage the rover's autopilot (it drives the course until a key is
+            // pressed). The rover's own script listens for this event.
+            emit("rover_deployed");
+            notify_kind("Rover deployed - autopilot driving the course. Press any key to take over.", "success");
         }),
-        // First player task: reach the waypoint. Detection is EVENT-DRIVEN —
-        // avian fires `enter:waypoint` when the rover crosses the marker's sensor
-        // volume (fast, no per-tick distance poll). The processing — what arrival
-        // MEANS — stays here in rhai.
-        wait_for("enter:waypoint"),
-        once(|m| notify_kind("Waypoint reached! Next: photograph the rock.", "success")),
+
+        // ── 3-gate course ──────────────────────────────────────────────────
+        // All gates fire the SAME event name ("enter:waypoint"); they're told
+        // apart by the EMITTING sensor's source (wait_for_from). Each arrival
+        // hides the reached dome and reveals the next — "show the next after it's
+        // done once". Detection is the avian Sensor, not a distance poll.
+        wait_for_from("enter:waypoint", wp_zone(1)),
+        once(|m| {
+            show_wp(1, false);
+            show_wp(2, true);
+            notify_kind("Waypoint 1 reached! Next dome revealed (2 of 3).", "success");
+        }),
+        wait_for_from("enter:waypoint", wp_zone(2)),
+        once(|m| {
+            show_wp(2, false);
+            show_wp(3, true);
+            notify_kind("Waypoint 2 reached! Final dome revealed (3 of 3).", "success");
+        }),
+        wait_for_from("enter:waypoint", wp_zone(3)),
+        once(|m| {
+            show_wp(3, false);
+            notify_kind("All waypoints reached - mission complete!", "success");
+        }),
     ])
 }

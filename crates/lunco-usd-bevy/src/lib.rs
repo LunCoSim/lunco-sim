@@ -670,6 +670,23 @@ fn instantiate_usd_prim(
             }
         }
 
+        // Per-prim script params: `lunco:params = "wmax=1.05, lmax=3.6"`. Parsed
+        // into a `ScriptParams` map a reusable script reads via `param(me, key,
+        // default)` — the typed, fast alternative to inferring config from a name.
+        if let Some(spec) = get_attribute_as_string(reader, &sdf_path, "lunco:params") {
+            let mut map = std::collections::HashMap::new();
+            for entry in spec.split(',') {
+                if let Some((k, v)) = entry.split_once('=') {
+                    if let Ok(val) = v.trim().parse::<f64>() {
+                        map.insert(k.trim().to_string(), val);
+                    }
+                }
+            }
+            if !map.is_empty() {
+                commands.entity(entity).insert(lunco_core::ScriptParams(map));
+            }
+        }
+
 
         // glTF / external-mesh branch.
         //

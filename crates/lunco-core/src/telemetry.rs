@@ -59,9 +59,14 @@ impl Default for TelemetryValue {
 pub struct TelemetryEvent {
     /// The unique mnemonic for the event.
     pub name: String,
+    /// The `GlobalEntityId` of the **emitter** — which sensor/script/source
+    /// fired this. `0` = no entity (global, e.g. raw input). Lets a consumer
+    /// apply different logic per source ("which of my ten checkpoints?"),
+    /// independent of the `name`. Exposed to scripts as `evt.source`.
+    pub source: u64,
     /// Alert level.
     pub severity: Severity,
-    /// Associated data payload.
+    /// Associated data payload (e.g. for a zone enter, the ENTRANT's gid).
     pub data: TelemetryValue,
     /// The simulation TDB epoch of the event.
     pub timestamp: f64,
@@ -71,6 +76,7 @@ impl Default for TelemetryEvent {
     fn default() -> Self {
         Self {
             name: "UNKNOWN".to_string(),
+            source: 0,
             severity: Severity::Info,
             data: TelemetryValue::F64(0.0),
             timestamp: 0.0,

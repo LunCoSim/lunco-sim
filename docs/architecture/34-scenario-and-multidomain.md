@@ -27,6 +27,17 @@ hands to the rover → progressively harder player tasks that exercise **energy*
 | Task state machines | rhai `seq`/`par_all`/`par_race`/`repeat` sequencer + `fn task(me)` | ✅ |
 | Connector/`connect()` Modelica | rumoca flattens `RC_Circuit.mo`, `CascadedRCFilter.mo` | ✅ (verify MSL `LimPID` specifically) |
 | Live input retune (no recompile) | port write changes `input Real` next step | ✅ (must be a model **input**, not a `parameter`) |
+| Named trigger zones (geofence events) | `lunco:triggerZone="name"` → overlap-only Sensor → `enter:/exit:<name>` events | ✅ |
+| Modelica `when` / threshold events | `lunco:portEvents="m_prop<200:evt,…"` → edge-detect a model output signal in native code → event | ✅ (rumoca-safe: edge logic out of the model) |
+| Per-instance script config | `lunco:params="k=v,…"` → `ScriptParams` → rhai `param(me,k,default)` | ✅ (the right answer instead of `name(me)` matching) |
+| Emitter identity on events | `TelemetryEvent.source` (sensor/script gid); `wait_for_from(name, src)`, `evt.source` | ✅ |
+| On-screen notifications | `ShowNotification` command + rhai `notify`/`notify_kind` + ui overlay | ✅ |
+| Native/foreign event → script bus | `App::project_events::<E>(…)`; e.g. keyboard → `key:<KeyCode>` events | ✅ (input wired; network projector pending) |
+| Throttle-driven engine flame | rhai signal consumer (reads `throttle`, sets `Transform.scale`) | ✅ (no built-in Rust; see tutorial) |
+
+> **Authoring walkthrough:** [`../tutorials/01-lander-rover-mission.md`](../tutorials/01-lander-rover-mission.md)
+> builds this entire mission from scratch in USD + rhai + Modelica, exercising
+> every mechanism in this table.
 
 **Conclusion:** "several models / several scripts in the world" needs **no core
 change** — it is the SSP sub-prim-per-model pattern below.
