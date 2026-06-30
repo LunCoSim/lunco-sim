@@ -31,8 +31,31 @@ use lunco_obstacle_field::field::HeightGrid;
 
 use crate::stream_viz::DemHeightField;
 
-pub use craters::make_crater_layer;
-pub use rocks::TerrainRock;
+pub use craters::{crater_layer, make_crater_layer};
+pub use rocks::{rock_layer, TerrainRock};
+
+/// Rebuild the `craters`/`rocks` layers of `stack` from a typed [`ObstacleFieldSpec`]
+/// (the Inspector's editable model), preserving every other layer (the surface
+/// shader, the ground `dem`, …). Mutating the stack through this trips
+/// `Changed<TerrainLayerStack>`, so the terrain's incremental `regenerate_dem_layers`
+/// re-bakes — NO full scene reload, so the live world is never duplicated. This is
+/// how the obstacle-field Inspector panel drives the composable USD-layer terrain.
+pub fn apply_obstacle_spec_to_stack(
+    stack: &mut TerrainLayerStack,
+    spec: &lunco_obstacle_field::spec::ObstacleFieldSpec,
+) {
+    // Drop the existing crater/rock layers; keep the rest in order.
+    stack.0.retain(|l| !matches!(l.id(), "craters" | "rocks"));
+    // The near-field high-fidelity crater overlay extent isn't in the spec — keep
+    // the established default (the value the USD `detailRegionM` defaults to).
+    const DETAIL_REGION_M: f32 = 400.0;
+    if spec.craters.enabled && spec.craters.density > 0.0 {
+        stack.0.push(crater_layer(spec.craters, spec.seed, DETAIL_REGION_M));
+    }
+    if spec.rocks.enabled && spec.rocks.density > 0.0 {
+        stack.0.push(rock_layer(spec.rocks, spec.region_half_extent, spec.pattern, spec.seed));
+    }
+}
 
 /// The composed, ordered layers of a DEM terrain (the non-ground stamp / scatter /
 /// shader layers; the `dem` ground layer drives the build itself). Authored as USD

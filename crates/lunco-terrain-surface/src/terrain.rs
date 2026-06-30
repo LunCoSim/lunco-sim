@@ -580,11 +580,28 @@ fn regenerate_dem_layers(
 #[derive(Message, Default)]
 pub struct RegenerateTerrainLayers;
 
+/// Live terrain tuning from the Inspector's "Craters & Rocks" panel: when the
+/// shared [`ObstacleFieldSpec`] is edited (the panel fires
+/// [`UpdateObstacleFieldSpec`]), rebuild every DEM terrain's crater/rock layers
+/// from the new spec. Mutating the stack trips `Changed<TerrainLayerStack>`, so
+/// [`regenerate_dem_layers`] re-bakes incrementally off the retained base grid —
+/// no GeoTIFF re-read, no scene reload (so the live world is never duplicated).
+fn on_obstacle_spec_rebuild_layers(
+    trigger: On<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>,
+    mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack>,
+) {
+    let spec = trigger.event().spec.clone();
+    for mut stack in &mut terrains {
+        crate::terrain_layers::apply_obstacle_spec_to_stack(&mut stack, &spec);
+    }
+}
+
 /// Register the DEM-terrain command + spawn systems. Called from
 /// [`crate::plugin::TerrainSurfacePlugin`].
 pub(crate) fn register(app: &mut App) {
     app.register_type::<SpawnDemTerrain>()
         .add_message::<RegenerateTerrainLayers>()
+        .add_observer(on_obstacle_spec_rebuild_layers)
         .add_systems(Update, (start_dem_builds, finish_dem_builds, regenerate_dem_layers));
     register_all_commands(app);
 }

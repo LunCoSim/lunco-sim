@@ -128,6 +128,19 @@ impl TerrainLayer for RockScatterLayer {
     }
 }
 
+/// Build a rock layer from a typed [`RockLayer`] (e.g. the Inspector's
+/// `ObstacleFieldSpec.rocks`) so live tuning can rebuild the terrain's rock layer
+/// directly — honouring density, full size distribution, scatter `pattern`, and
+/// the near-field `region_half_extent`.
+pub fn rock_layer(
+    rocks: RockLayer,
+    region_half_extent: f32,
+    pattern: Pattern,
+    seed: u64,
+) -> Arc<dyn TerrainLayer> {
+    Arc::new(RockScatterLayer { rocks, region_half_extent, pattern, seed })
+}
+
 /// Parse a `lunco:layer = "rocks"` prim: `density` (per ha, required > 0), `sizeMode`
 /// (modal radius m), `regionM` (near-field scatter half-extent), `seed`.
 pub(super) fn parse_rock_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {

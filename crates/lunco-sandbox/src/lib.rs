@@ -919,38 +919,18 @@ fn setup_sandbox(world: &mut World) {
         .unwrap_or_else(|| load_path.clone());
     world.insert_resource(StartupSceneGuard { file: scene_file });
     world.trigger(LoadScene {
-        path: load_path.clone(),
+        path: load_path,
         root_prim: String::new(),
     });
-
-    // Step 0 (USD = source of truth): make a Twin-backed `--scene` DOC-BACKED so
-    // runtime USD edits (`UsdOp::SetAttribute`) project into the live ECS world via
-    // E1b (`twin_projection::sync_twin_overlays`): an edit bumps the document
-    // generation → the composed `base ⊕ runtime` source reloads → the scene
-    // re-instantiates with the edit. The `LoadScene` above does the immediate
-    // file-backed mount — the same dual path `open_usd_docs_on_twin_added` runs in
-    // production. (The old double-scene/z-fight came from the editor *viewport
-    // preview* owning a second scene — NOT added in the sandbox; see `ui/mod.rs`.)
-    // Only `twin://` scenes qualify; relative/orphan scenes stay file-backed.
-    // Skipped headless (no `AssetServer`) and if E1b isn't installed.
-    if let Some((name, rel)) = load_path.strip_prefix("twin://").and_then(|r| r.split_once('/')) {
-        if world.contains_resource::<AssetServer>() {
-            let asset_server = world.resource::<AssetServer>().clone();
-            let abs = std::path::PathBuf::from(&scene_path);
-            if let Some(mut pending) =
-                world.get_resource_mut::<lunco_usd::twin_projection::PendingTwinDocs>()
-            {
-                lunco_usd::twin_projection::doc_back_twin_scene(
-                    &asset_server,
-                    &mut pending,
-                    name,
-                    rel,
-                    abs,
-                );
-                info!("[sandbox] scene `{load_path}` is doc-backed — runtime USD edits project live");
-            }
-        }
-    }
+    // NOTE: full USD doc-backing of the `--scene` (Step 0 / E1b `sync_twin_overlays`)
+    // is deliberately NOT enabled here. It works, but its edit path RELOADS +
+    // re-instantiates the WHOLE scene on every USD edit, which fights the terrain's
+    // own lightweight incremental re-bake (`regenerate_dem_layers` on
+    // `Changed<TerrainLayerStack>`) → two re-bake paths → a duplicated scene.
+    // Live terrain tuning instead goes through the terrain's incremental path (the
+    // Inspector → `TerrainLayerStack` edit → `regenerate_dem_layers`). A
+    // lightweight doc-reparse (USD edit → re-parse just the layer stack, no scene
+    // reload) is the future unification — see the design doc.
 }
 
 /// Tracks the requested startup scene so [`startup_scene_failguard`] can turn a

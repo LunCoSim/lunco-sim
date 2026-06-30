@@ -210,6 +210,14 @@ pub(super) fn parse_crater_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn Terr
     Some(Arc::new(CraterStampLayer { craters, seed, detail_region }))
 }
 
+/// Build a crater layer from a typed [`CraterLayer`] (e.g. the Inspector's
+/// `ObstacleFieldSpec.craters`) so live tuning can rebuild the terrain's crater
+/// layer directly — honouring every authored field (density, depth, rim, full
+/// size distribution). `detail_region` = near-field high-fidelity overlay extent.
+pub fn crater_layer(craters: CraterLayer, seed: u64, detail_region: f32) -> Arc<dyn TerrainLayer> {
+    Arc::new(CraterStampLayer { craters, seed, detail_region })
+}
+
 /// Construct a crater layer directly (the quick `SpawnDemTerrain` command path /
 /// programmatic use; the USD path uses [`parse_crater_layer`]).
 pub fn make_crater_layer(density: f32, size_mode: f32, depth_ratio: f32, seed: u64) -> Arc<dyn TerrainLayer> {
