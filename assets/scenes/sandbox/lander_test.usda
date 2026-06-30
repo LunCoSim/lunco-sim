@@ -378,21 +378,21 @@ def Xform "LanderTest"
         prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
     )
     {
-        double3 xformOp:translate = (40.0, 0.0, 18.0)
+        double3 xformOp:translate = (14.0, 0.0, 9.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     def Xform "RoverTarget2" (
         prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
     )
     {
-        double3 xformOp:translate = (8.0, 0.0, 46.0)
+        double3 xformOp:translate = (-11.0, 0.0, 16.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     def Xform "RoverTarget3" (
         prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
     )
     {
-        double3 xformOp:translate = (-34.0, 0.0, 30.0)
+        double3 xformOp:translate = (5.0, 0.0, -15.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
