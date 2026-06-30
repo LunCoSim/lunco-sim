@@ -34,3 +34,24 @@ fn both_global_observers_run_for_one_event() {
     assert_eq!(A_RAN.load(Ordering::SeqCst), 1, "observer A must run");
     assert_eq!(B_RAN.load(Ordering::SeqCst), 1, "observer B must run for the SAME event");
 }
+
+#[test]
+fn test_detach_joint_command() {
+    let mut app = App::new();
+    app.add_plugins(lunco_core::LunCoCorePlugin);
+    app.add_observer(lunco_sandbox_edit::commands::on_detach_joint);
+    app.register_type::<lunco_sandbox_edit::commands::DetachJoint>();
+
+    let joint_entity = app.world_mut().spawn_empty().id();
+    assert!(app.world().get_entity(joint_entity).is_some());
+
+    app.world_mut().trigger(lunco_sandbox_edit::commands::DetachJoint {
+        target: joint_entity,
+    });
+
+    // Flush commands to execute the observer
+    app.world_mut().flush();
+
+    assert!(app.world().get_entity(joint_entity).is_none(), "Joint entity must be despawned by DetachJoint command");
+}
+

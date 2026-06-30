@@ -89,6 +89,56 @@ def Xform "LanderTest"
         string lunco:modelicaModel = "models/Lander.mo"
         string lunco:simWires = "height:altitude,velocity_y:descent_rate,thrust:force_local_y"
 
+        # Embedded scenario script for landing and rover deployment
+        custom string lunco:script = """
+        fn on_start(me) {
+            this.stage = "descending";
+            this.timer = 0.0;
+            print("Scenario started: lander descending...");
+        }
+
+        fn on_tick(me) {
+            if this.stage == "descending" {
+                let pos = world_pos(me);
+                if pos != () {
+                    let alt = pos[1];
+                    let v = velocity(me);
+                    let speed = 0.0;
+                    if v != () { speed = v[1]; }
+                    if alt < 6.2 && speed > -0.1 && speed < 0.1 {
+                        print("Lander touched down. Initiating rover deployment timer...");
+                        this.stage = "touchdown";
+                        this.timer = 2.0;
+                    }
+                }
+            } else if this.stage == "touchdown" {
+                this.timer -= dt();
+                if this.timer <= 0.0 {
+                    let joint = find("LanderRoverJoint");
+                    if joint != () {
+                        print("Deploying rover via detach_joint helper...");
+                        detach_joint(joint);
+                        this.stage = "deployed";
+                        this.timer = 2.0;
+                    } else {
+                        print("Error: LanderRoverJoint not found!");
+                        this.stage = "error";
+                    }
+                }
+            } else if this.stage == "deployed" {
+                this.timer -= dt();
+                if this.timer <= 0.0 {
+                    let rover = find("Rucheyok");
+                    if rover != () {
+                        print("Possessing rover!");
+                        possess(rover);
+                        this.stage = "finished";
+                    }
+                }
+            }
+        }
+        """
+
         # ── Visual-only structure ──
         def Cylinder "Nozzle"
         {
@@ -141,5 +191,24 @@ def Xform "LanderTest"
             color3f primvars:displayColor = (0.5, 0.5, 0.52)
             bool physics:collisionEnabled = false
         }
+    }
+
+    # ── The rover attached to the lander ──
+    def Xform "Rucheyok" (
+        prepend references = @../../vessels/rovers/rucheyok/rucheyok.usda@</Rucheyok>
+    )
+    {
+        double3 xformOp:translate = (0, 9.7, 0)
+        double3 xformOp:scale = (0.2, 0.2, 0.2)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    # ── The fixed joint holding the rover and lander together ──
+    def PhysicsFixedJoint "LanderRoverJoint"
+    {
+        rel physics:body0 = </LanderTest/Lander>
+        rel physics:body1 = </LanderTest/Rucheyok>
+        point3f physics:localPos0 = (0, -1.5, 0)
+        point3f physics:localPos1 = (0, 4.0, 0)
     }
 }

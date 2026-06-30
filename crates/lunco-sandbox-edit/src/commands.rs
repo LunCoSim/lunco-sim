@@ -34,6 +34,14 @@ pub struct SpawnEntity {
     pub position: Vec3,
 }
 
+/// Detach a joint by despawning it.
+#[Command(default)]
+pub struct DetachJoint {
+    /// The joint entity to despawn.
+    pub target: Entity,
+}
+
+
 /// Force a re-scan of project USD files into the spawn catalog. Picks up
 /// `*.usda` dropped into an already-open Twin mid-session (twin-open is
 /// auto-scanned; this covers new files after that). Idempotent.
@@ -49,6 +57,18 @@ pub fn on_rescan_spawn_catalog(
     if let Some(roots) = twin_roots.as_deref() {
         let n = crate::catalog::scan_usd_into_catalog(roots, &mut catalog);
         info!("RESCAN_SPAWN_CATALOG: +{n} USD asset(s)");
+    }
+}
+
+/// Observer that handles DetachJoint commands.
+pub fn on_detach_joint(
+    trigger: On<DetachJoint>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    if let Some(mut entity) = commands.get_entity(cmd.target) {
+        entity.despawn_recursive();
+        info!("DETACH_JOINT: despawned joint entity {:?}", cmd.target);
     }
 }
 
@@ -2624,6 +2644,7 @@ fn doc_for_stage(
 impl Plugin for SpawnCommandPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_spawn_entity_command);
+        app.add_observer(on_detach_joint);
         app.add_systems(
             Update,
             remove_legacy_ground_prim.run_if(obstacle_field_scene_changed),
@@ -2654,6 +2675,7 @@ impl Plugin for SpawnCommandPlugin {
         // `discover_schema`). Register them so MCP/HTTP clients can spawn from the
         // catalog and teleport entities exactly like the in-app palette/gizmo.
         app.register_type::<SpawnEntity>();
+        app.register_type::<DetachJoint>();
         app.register_type::<MoveEntity>();
         app.register_type::<RescanSpawnCatalog>();
         app.register_type::<SetObjectProperty>();

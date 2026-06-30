@@ -529,6 +529,8 @@ fn brake(rover) {
 fn load_scene(path)            { cmd("LoadScene", #{ path: path }) }
 fn clear_scene()               { cmd("ClearScene") }
 fn set_property(id, key, val)  { cmd("SetObjectProperty", #{ target: id, key: key, value: val }) }
+fn detach_joint(joint)         { cmd("DetachJoint", #{ target: joint }) }
+fn possess(vessel)             { cmd("PossessVessel", #{ target: vessel }) }
 
 /// Fire a command and return JUST its assigned data (the `.data` bag), or () if
 /// it failed or reported none. The create-then-manipulate shortcut:
