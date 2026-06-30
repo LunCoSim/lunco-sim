@@ -479,58 +479,134 @@ fn finish_dem_builds(
     }
 }
 
+/// The product of an off-thread live re-stamp: the new (crater-stamped) working grid
+/// + the rebuilt static collider (only when this terrain isn't a streaming collider
+/// ring; `None` otherwise). All the heavy CPU work — the full base-grid clone, every
+/// crater stamp, and the heightfield collider build — happens inside the task, so the
+/// main thread never freezes during a live edit.
+struct DemRestampResult {
+    grid: HeightGrid,
+    collider: Option<Collider>,
+}
+
+/// In-flight off-thread re-stamp for a terrain (see [`start_dem_restamp`]).
+#[derive(Component)]
+struct DemRestampTask(Task<DemRestampResult>);
+
+/// Set when a re-bake is requested while one is already running → coalesce: when the
+/// current task finishes, run exactly one more with the latest stack. So dragging a
+/// slider streams responsively (first edit starts immediately) and settles on a final
+/// re-bake, instead of queueing a full re-stamp every frame of the drag.
+#[derive(Component)]
+struct DemRestampPending;
+
+/// Spawn the off-thread re-stamp task: clone the pristine (upscaled, crater-free)
+/// [`DemBaseGrid`], stamp the stack's geometry layers into it, and (unless a collider
+/// ring streams physics) build the heightfield collider — all on the task pool.
+fn spawn_restamp_task(
+    commands: &mut Commands,
+    entity: Entity,
+    base: &DemBaseGrid,
+    src: &DemTerrainSource,
+    stack: &crate::terrain_layers::TerrainLayerStack,
+) {
+    let base_grid = base.0.clone();
+    let layers = stack.0.clone();
+    let collider_ring = src.collider_ring;
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        let mut grid = (*base_grid).clone();
+        for layer in &layers {
+            layer.stamp(&mut grid);
+        }
+        let collider = if collider_ring {
+            None
+        } else {
+            let half = grid.half_extent as f64;
+            Some(Collider::heightfield(
+                grid.to_avian_heights(),
+                DVec3::new(2.0 * half, 1.0, 2.0 * half),
+            ))
+        };
+        DemRestampResult { grid, collider }
+    });
+    commands.entity(entity).insert(DemRestampTask(task));
+}
+
 /// Live **re-bake** of the DEM crater + rock layers when the shared
-/// [`ObstacleFieldSpec`] changes (Inspector edit / networked `UpdateObstacleFieldSpec`
-/// → [`RegenerateField`]). This is what makes the *one* obstacle-field Inspector
-/// drive the DEM: no GeoTIFF re-read — craters re-stamp off the retained
-/// [`DemBaseGrid`], the new grid is swapped into [`DemHeightField`], the static
-/// collider is rebuilt, and the streamed visual tiles + their mesh cache are
-/// invalidated so they re-bake from the new heights. Rocks re-scatter by clearing
-/// [`RocksScattered`] (the scatter system re-runs next frame).
-#[allow(clippy::too_many_arguments)]
-fn regenerate_dem_layers(
+/// [`ObstacleFieldSpec`] changes (Inspector edit / networked `UpdateObstacleFieldSpec`)
+/// or a [`RegenerateTerrainLayers`] force message fires. This is what makes the *one*
+/// obstacle-field Inspector drive the DEM: no GeoTIFF re-read — craters re-stamp off
+/// the retained [`DemBaseGrid`]. The expensive work runs OFF-THREAD ([`spawn_restamp_task`])
+/// so the edit never freezes the frame; [`finish_dem_restamp`] swaps the result in.
+fn start_dem_restamp(
     mut events: MessageReader<RegenerateTerrainLayers>,
     mut commands: Commands,
-    mut terrains: Query<(
+    q: Query<(
         Entity,
         &DemBaseGrid,
         &DemTerrainSource,
         Ref<crate::terrain_layers::TerrainLayerStack>,
+        Has<DemRestampTask>,
+    )>,
+) {
+    // Re-bake when the stack CHANGED (a layer prim / the Inspector spec was edited →
+    // the stack was re-parsed + re-inserted; change detection avoids the
+    // command-ordering races a one-shot message would have), or when forced.
+    let forced = !events.is_empty();
+    events.clear();
+    for (entity, base, src, stack, busy) in &q {
+        if !forced && !stack.is_changed() {
+            continue;
+        }
+        if busy {
+            // A re-stamp is already running → mark for one coalesced trailing run.
+            commands.entity(entity).insert(DemRestampPending);
+            continue;
+        }
+        spawn_restamp_task(&mut commands, entity, base, src, &stack);
+    }
+}
+
+/// Collect finished off-thread re-stamps: swap in the new heights + collider, then
+/// trigger a **progressive** visual refresh — bump the streaming generation so live
+/// tiles go stale and re-bake near-camera-first (covering the surface meanwhile)
+/// rather than all being despawned at once. Rocks/overlays re-scatter next frame.
+#[allow(clippy::type_complexity)]
+fn finish_dem_restamp(
+    mut commands: Commands,
+    mut tasks: Query<(
+        Entity,
+        &mut DemRestampTask,
+        &DemBaseGrid,
+        &DemTerrainSource,
+        &crate::terrain_layers::TerrainLayerStack,
         &mut crate::stream_viz::DemHeightField,
         Option<&mut crate::stream_viz::LodTiles>,
+        Option<&mut crate::stream_viz::PendingTileBakes>,
         Has<Mesh3d>,
+        Has<DemRestampPending>,
     )>,
     scattered: Query<Entity, With<crate::terrain_layers::TerrainScatterEntity>>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
 ) {
-    // Re-bake a terrain when its layer stack CHANGED (a USD layer prim was edited →
-    // the stack was re-parsed + re-inserted; change detection avoids command-ordering
-    // races a one-shot message would have), or when a force message is fired.
-    let forced = !events.is_empty();
-    events.clear();
-
+    use bevy::tasks::futures_lite::future;
     let mut any = false;
-    for (entity, base, src, stack, mut hf, tiles, has_static_mesh) in &mut terrains {
-        if !forced && !stack.is_changed() {
+    for (entity, mut task, base, src, stack, mut hf, tiles, pending, has_static_mesh, was_pending) in
+        &mut tasks
+    {
+        let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
-        }
+        };
+        commands.entity(entity).remove::<DemRestampTask>();
         any = true;
-        // Re-stamp the stack's geometry layers off the pristine (upscaled, crater-free)
-        // base grid — no disk I/O, full crater detail preserved.
-        let mut grid = (*base.0).clone();
-        for layer in &stack.0 {
-            layer.stamp(&mut grid);
-        }
+
+        let DemRestampResult { grid, collider } = result;
         let half = grid.half_extent as f64;
 
-        // Rebuild the static heightfield collider (skip when a collider ring streams
-        // physics — it re-derives from the swapped DemHeightField below).
-        if !src.collider_ring {
-            let collider =
-                Collider::heightfield(grid.to_avian_heights(), DVec3::new(2.0 * half, 1.0, 2.0 * half));
+        // Swap the static collider (absent when a collider ring streams physics).
+        if let Some(collider) = collider {
             commands.entity(entity).insert((RigidBody::Static, collider));
         }
-
         // Rebuild the static visual mesh, if this terrain uses one (not streaming).
         if has_static_mesh {
             if let Some(meshes) = meshes.as_mut() {
@@ -540,31 +616,35 @@ fn regenerate_dem_layers(
                 )));
             }
         }
-
-        // Swap in the new height grid (streaming tiles, collider ring, and the
-        // TerrainHeight query all sample this).
+        // Swap in the new heights (streaming tiles, collider ring, TerrainHeight query).
         *hf = crate::stream_viz::DemHeightField(std::sync::Arc::new(grid));
 
-        // Invalidate streamed visual tiles: despawn the live set + drop in-flight
-        // bakes so update_lod_tiles re-bakes from the new heights.
+        // Progressive refresh: bump the generation so live tiles go stale + re-bake
+        // near-first (still covering the surface), and drop in-flight bakes from the
+        // OLD heights. No despawn-everything flash.
         if let Some(mut tiles) = tiles {
-            for (_, e) in tiles.0.drain() {
-                commands.entity(e).try_despawn();
-            }
-            commands.entity(entity).insert(crate::stream_viz::PendingTileBakes::default());
+            tiles.invalidate();
+        }
+        if let Some(mut pending) = pending {
+            *pending = crate::stream_viz::PendingTileBakes::default();
         }
 
         // Scatter layers re-run once the applied-marker is gone (next frame).
         commands.entity(entity).remove::<crate::terrain_layers::TerrainLayersApplied>();
 
+        // Coalesced trailing re-bake (a slider drag requested more mid-task).
+        if was_pending {
+            commands.entity(entity).remove::<DemRestampPending>();
+            spawn_restamp_task(&mut commands, entity, base, src, stack);
+        }
         info!("[dem-terrain] regenerated terrain layers (±{:.0} m)", half);
     }
 
     if any {
-        // The cached tile meshes are stale now → drop them so re-baked tiles pick up
-        // the new heights (the cache is keyed by quadtree node, not terrain).
+        // Cached tile meshes are stale now → drop so re-baked tiles pick up the new
+        // heights (the cache is keyed by quadtree node, not terrain).
         commands.insert_resource(crate::stream_viz::LodMeshCache::default());
-        // Despawn old scatter entities (rocks, …); scatter rebuilds from the new spec.
+        // Despawn old scatter entities (rocks, crater overlays); scatter rebuilds.
         for e in &scattered {
             commands.entity(e).try_despawn();
         }
@@ -574,7 +654,7 @@ fn regenerate_dem_layers(
 /// Fire to force a re-bake of every layered DEM terrain from its current
 /// [`TerrainLayerStack`]. Re-stamps off the retained base grid + re-scatters (no
 /// GeoTIFF re-read). The usual live-edit path needs no message: editing a layer prim
-/// re-parses + re-inserts the stack, and `regenerate_dem_layers` picks that up via
+/// re-parses + re-inserts the stack, and `start_dem_restamp` picks that up via
 /// `Changed<TerrainLayerStack>`. This message is the explicit force path for when the
 /// stack content is unchanged but a re-bake is still wanted.
 #[derive(Message, Default)]
@@ -584,8 +664,8 @@ pub struct RegenerateTerrainLayers;
 /// shared [`ObstacleFieldSpec`] is edited (the panel fires
 /// [`UpdateObstacleFieldSpec`]), rebuild every DEM terrain's crater/rock layers
 /// from the new spec. Mutating the stack trips `Changed<TerrainLayerStack>`, so
-/// [`regenerate_dem_layers`] re-bakes incrementally off the retained base grid —
-/// no GeoTIFF re-read, no scene reload (so the live world is never duplicated).
+/// [`start_dem_restamp`] re-bakes OFF-THREAD off the retained base grid and refreshes
+/// the tiles progressively — no GeoTIFF re-read, no scene reload, no frame freeze.
 fn on_obstacle_spec_rebuild_layers(
     trigger: On<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>,
     mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack>,
@@ -602,6 +682,9 @@ pub(crate) fn register(app: &mut App) {
     app.register_type::<SpawnDemTerrain>()
         .add_message::<RegenerateTerrainLayers>()
         .add_observer(on_obstacle_spec_rebuild_layers)
-        .add_systems(Update, (start_dem_builds, finish_dem_builds, regenerate_dem_layers));
+        .add_systems(
+            Update,
+            (start_dem_builds, finish_dem_builds, start_dem_restamp, finish_dem_restamp),
+        );
     register_all_commands(app);
 }

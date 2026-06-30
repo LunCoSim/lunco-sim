@@ -68,6 +68,7 @@ impl Plugin for TerrainSurfacePlugin {
             Update,
             (
                 crate::stream_viz::update_lod_tiles,
+                crate::stream_viz::animate_tile_reveal,
                 crate::stream_viz::despawn_orphaned_lod_tiles,
             ),
         );

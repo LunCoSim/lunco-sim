@@ -24,11 +24,13 @@
 //!@default roughness   1.0
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
+//!@default reveal       1.0
 struct Material {
     base_color:  vec3<f32>,
     roughness:   f32,
     morph_start: f32,
     morph_end:   f32,
+    reveal:      f32,  // 1 = own geometry; <1 = settling in from the parent lattice
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> mat: Material;
@@ -51,7 +53,9 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
     if (mat.morph_end > mat.morph_start) {
         morph = smoothstep(mat.morph_start, mat.morph_end, dist);
     }
-    let local_pos = mix(vertex.position, vertex.morph_target, morph);
+    // Reveal "settle" (see terrain_geomorph.wgsl): grow in from the parent lattice.
+    let m = max(morph, 1.0 - mat.reveal);
+    let local_pos = mix(vertex.position, vertex.morph_target, m);
     out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(local_pos, 1.0));
     out.position = position_world_to_clip(out.world_position.xyz);
     out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);

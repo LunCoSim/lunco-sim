@@ -37,7 +37,7 @@ pub use rocks::{rock_layer, TerrainRock};
 /// Rebuild the `craters`/`rocks` layers of `stack` from a typed [`ObstacleFieldSpec`]
 /// (the Inspector's editable model), preserving every other layer (the surface
 /// shader, the ground `dem`, …). Mutating the stack through this trips
-/// `Changed<TerrainLayerStack>`, so the terrain's incremental `regenerate_dem_layers`
+/// `Changed<TerrainLayerStack>`, so the terrain's off-thread `start_dem_restamp`
 /// re-bakes — NO full scene reload, so the live world is never duplicated. This is
 /// how the obstacle-field Inspector panel drives the composable USD-layer terrain.
 pub fn apply_obstacle_spec_to_stack(

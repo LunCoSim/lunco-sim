@@ -53,6 +53,7 @@
 //!@default mottle            0.22
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
+//!@default reveal       1.0
 struct Material {
     albedo:            vec3<f32>,
     macro_clump_scale: f32,
@@ -65,6 +66,7 @@ struct Material {
     mottle:            f32,
     morph_start:       f32,  // distance where geomorph toward the parent begins
     morph_end:         f32,  // distance where the parent fully takes over
+    reveal:            f32,  // 1 = own geometry; <1 = settling in from the parent lattice
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> mat: Material;
@@ -308,7 +310,12 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
     if (mat.morph_end > mat.morph_start) {
         morph = smoothstep(mat.morph_start, mat.morph_end, dist);
     }
-    let local_pos = mix(vertex.position, vertex.morph_target, morph);
+    // Reveal "settle": a freshly-spawned / re-baked tile starts on the parent's
+    // coarse lattice (reveal 0 → morph 1) and grows into its own geometry as reveal
+    // animates to 1. Combined with the distance morph it never pops — `max` keeps a
+    // far tile collapsed while still letting a near tile finish revealing.
+    let m = max(morph, 1.0 - mat.reveal);
+    let local_pos = mix(vertex.position, vertex.morph_target, m);
 
     out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(local_pos, 1.0));
     out.position = position_world_to_clip(out.world_position.xyz);

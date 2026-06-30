@@ -103,11 +103,37 @@ impl Default for TerrainLodViz {
     }
 }
 
+/// One spawned LOD tile + the regen **generation** it was baked at. When a live
+/// re-bake (Inspector edit) changes the heights, the terrain's generation bumps; a
+/// tile whose `gen` is older is *stale* — it keeps rendering (so the surface never
+/// opens a hole) while a fresh replacement bakes near-camera-first, and is despawned
+/// the instant that fresh tile spawns. This is what makes regeneration *progressive*
+/// instead of a synchronous despawn-everything flash.
+#[derive(Clone, Copy)]
+struct TileSlot {
+    entity: Entity,
+    gen: u32,
+}
+
 /// The LOD tile entities currently spawned for a terrain, keyed by quadtree node.
-/// The second field is the shader mode the live tiles were built with — when it
-/// changes (inspector edit) the tiles are despawned and rebuilt with the new shader.
+/// `mode` is the shader the live tiles were built with (a mode change swaps their
+/// materials in place); `gen` bumps on every live height re-bake so tiles refresh
+/// progressively (see [`TileSlot`]) rather than all being despawned at once.
 #[derive(Component, Default)]
-pub struct LodTiles(pub HashMap<QuadCoord, Entity>, TerrainShaderMode);
+pub struct LodTiles {
+    tiles: HashMap<QuadCoord, TileSlot>,
+    mode: TerrainShaderMode,
+    gen: u32,
+}
+
+impl LodTiles {
+    /// Bump the generation: every live tile becomes stale and re-bakes from the new
+    /// heights, near-camera-first, while still covering the surface until replaced.
+    /// Called by the live re-bake instead of despawning the whole tile set.
+    pub fn invalidate(&mut self) {
+        self.gen = self.gen.wrapping_add(1);
+    }
+}
 
 /// Back-pointer from a spawned LOD tile to its owning terrain. Tiles are parented
 /// to the big_space **grid** (so each can carry its own `CellCoord`), not to the
@@ -159,6 +185,23 @@ const CACHE_CAP: usize = 1024;
 /// Max bake tasks in flight per terrain (backpressure so a big move doesn't queue
 /// thousands of tasks). New tasks wait for slots to free.
 const MAX_INFLIGHT_BAKES: usize = 64;
+/// A freshly-spawned LOD tile **refines in** from its parent's coarse lattice over
+/// this many seconds (a CDLOD "settle") instead of popping — this both animates LOD
+/// refinement as you move and makes live height re-bakes resolve smoothly.
+const REVEAL_SECS: f32 = 0.35;
+
+/// A LOD tile currently playing its reveal "settle" (refine from the parent lattice
+/// to its own geometry). Carries a transient per-tile material being tweened; when
+/// the reveal completes the tile swaps back to the shared (batched) depth material
+/// and this is removed. Bounded by the per-frame spawn rate × [`REVEAL_SECS`].
+#[derive(Component)]
+pub(crate) struct TileReveal {
+    elapsed: f32,
+    /// The transient clone being tweened (`reveal` 0→1); dropped when done.
+    anim: Handle<ShaderMaterial>,
+    /// The shared cached material to restore once revealed (recovers batching).
+    shared: Handle<ShaderMaterial>,
+}
 
 /// Result of an off-thread tile bake: the finished CPU `Mesh` (not yet uploaded)
 /// plus the spawn metadata the main thread needs.
@@ -176,7 +219,7 @@ struct BakedTile {
 /// never blocks the frame ("non-blocking, extend outward"). Cancelled by drop when
 /// the terrain despawns.
 #[derive(Component, Default)]
-pub struct PendingTileBakes(HashMap<QuadCoord, Task<BakedTile>>);
+pub struct PendingTileBakes(HashMap<QuadCoord, (u32, Task<BakedTile>)>);
 
 /// Build a tile `ShaderMaterial` for a `(mode, depth)` with its morph band. The
 /// geomorph vertex stage is shared; the fragment + colour come from the mode.
@@ -221,7 +264,7 @@ fn spawn_tile(
     shader: &Handle<Shader>,
     materials: &mut Assets<ShaderMaterial>,
     lod_mats: &mut LodMaterials,
-) -> Entity {
+) -> (Entity, Handle<ShaderMaterial>) {
     let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], 0.0, center[1]));
     let mat = if let Some(h) = lod_mats.0.get(&(mode, depth)) {
         h.clone()
@@ -230,10 +273,10 @@ fn spawn_tile(
         lod_mats.0.insert((mode, depth), h.clone());
         h
     };
-    commands
+    let ent = commands
         .spawn((
             Mesh3d(mesh),
-            MeshMaterial3d(mat),
+            MeshMaterial3d(mat.clone()),
             cell,
             Transform::from_translation(local),
             Visibility::Inherited,
@@ -241,7 +284,54 @@ fn spawn_tile(
             Name::new(format!("LodTile d{} {},{}", coord.depth, coord.x, coord.z)),
             ChildOf(grid_entity),
         ))
-        .id()
+        .id();
+    (ent, mat)
+}
+
+/// Start a tile's reveal "settle": give it a transient clone of its shared material
+/// with `reveal = 0` (vertices ride the parent's coarse lattice) and a [`TileReveal`]
+/// so [`animate_tile_reveal`] tweens it up to its own geometry. Only sub-root tiles
+/// animate (the root has no coarser parent to grow from).
+fn begin_reveal(
+    commands: &mut Commands,
+    entity: Entity,
+    shared: Handle<ShaderMaterial>,
+    materials: &mut Assets<ShaderMaterial>,
+) {
+    let Some(mut anim) = materials.get(&shared).cloned() else { return };
+    anim.set("reveal", ParamValue::F32(0.0));
+    let anim = materials.add(anim);
+    commands
+        .entity(entity)
+        .insert((MeshMaterial3d(anim.clone()), TileReveal { elapsed: 0.0, anim, shared }));
+}
+
+/// Per-frame: advance each revealing tile's `reveal` 0→1, then restore the shared
+/// (batched) material + drop the transient clone. See [`TileReveal`] / [`REVEAL_SECS`].
+pub(crate) fn animate_tile_reveal(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut materials: ResMut<Assets<ShaderMaterial>>,
+    mut q: Query<(Entity, &mut TileReveal)>,
+) {
+    let dt = time.delta_secs();
+    for (ent, mut rev) in &mut q {
+        rev.elapsed += dt;
+        let t = (rev.elapsed / REVEAL_SECS).clamp(0.0, 1.0);
+        // smoothstep ease so the settle starts/ends gently.
+        let s = t * t * (3.0 - 2.0 * t);
+        if let Some(m) = materials.get_mut(&rev.anim) {
+            m.set("reveal", ParamValue::F32(s));
+        }
+        if t >= 1.0 {
+            let anim = rev.anim.clone();
+            commands
+                .entity(ent)
+                .insert(MeshMaterial3d(rev.shared.clone()))
+                .remove::<TileReveal>();
+            materials.remove(&anim);
+        }
+    }
 }
 
 /// Read a scalar param off a material (for carrying a tile's morph band across a
@@ -287,16 +377,19 @@ pub fn update_lod_tiles(
 
     for (terrain, t_gt, hf, viz, mut tiles, mut pending, mode_opt) in &mut terrains {
         let mode = mode_opt.copied().unwrap_or_default();
+        // The terrain's current height generation: a tile/bake tagged with an older
+        // gen is stale (a live re-bake changed the heights) and is replaced near-first.
+        let cur_gen = tiles.gen;
         // The mode's shader drives both the @vertex (CDLOD morph) and @fragment
         // stages; load-by-path → cached handle, hot-reloads on edit.
         let shader = asset_server.load(mode.shader_path());
         // Shader mode changed (inspector edit) → SWAP the material on every live
         // tile in place (same geometry, new shader/colour) instead of despawning +
         // rebuilding, which left a one-frame black hole until the tiles re-baked.
-        if tiles.1 != mode {
-            let old_mode = tiles.1;
+        if tiles.mode != mode {
+            let old_mode = tiles.mode;
             let swaps: Vec<(Entity, u32)> =
-                tiles.0.iter().map(|(c, &e)| (e, c.depth as u32)).collect();
+                tiles.tiles.iter().map(|(c, s)| (s.entity, c.depth as u32)).collect();
             for (ent, depth) in swaps {
                 let handle = if let Some(h) = lod_mats.0.get(&(mode, depth)) {
                     h.clone()
@@ -319,7 +412,7 @@ pub fn update_lod_tiles(
                 };
                 commands.entity(ent).insert(MeshMaterial3d(handle));
             }
-            tiles.1 = mode;
+            tiles.mode = mode;
         }
 
         // Camera in the terrain's local frame (the DEM frame, origin-centred).
@@ -346,31 +439,52 @@ pub fn update_lod_tiles(
         };
         sel.sort_by(|a, b| dist2(a).partial_cmp(&dist2(b)).unwrap_or(std::cmp::Ordering::Equal));
 
+        // A coord is *fresh* (no work needed) when it has a resident tile OR an
+        // in-flight bake tagged with the current generation. A stale entry (older
+        // gen, from before a live re-bake) still renders but no longer counts as
+        // satisfied, so a current-gen replacement is queued for it.
+        let fresh_tile = |tiles: &LodTiles, c: &QuadCoord| {
+            tiles.tiles.get(c).is_some_and(|s| s.gen == cur_gen)
+        };
+
         // ── Finalize completed off-thread bakes ──────────────────────
         // Poll in-flight tasks; for each finished bake, upload its mesh (cheap, main
         // thread) + spawn the tile. The expensive DEM sampling already ran on a
         // worker thread, so the frame never blocks on baking.
-        let mut done: Vec<(QuadCoord, BakedTile)> = Vec::new();
-        pending.0.retain(|coord, task| match block_on(future::poll_once(&mut *task)) {
+        let mut done: Vec<(QuadCoord, u32, BakedTile)> = Vec::new();
+        pending.0.retain(|coord, (gen, task)| match block_on(future::poll_once(&mut *task)) {
             Some(baked) => {
-                done.push((*coord, baked));
+                done.push((*coord, *gen, baked));
                 false
             }
             None => true,
         });
-        for (coord, baked) in done {
+        for (coord, gen, baked) in done {
+            // A bake from a superseded generation (heights changed while it ran) is
+            // discarded — its mesh would show the OLD terrain.
+            if gen != cur_gen {
+                continue;
+            }
             let handle = meshes.add(baked.mesh);
             mesh_cache.0.insert(coord, handle.clone());
             // No longer selected while it baked → keep the cached mesh, skip spawning.
             if !wanted.contains(&coord) {
                 continue;
             }
-            let ent = spawn_tile(
+            let depth = baked.depth;
+            let (ent, shared) = spawn_tile(
                 &mut commands, grid, grid_entity, terrain, coord, handle, baked.center,
-                baked.depth, baked.morph_start, baked.morph_end, mode, &shader, &mut materials,
+                depth, baked.morph_start, baked.morph_end, mode, &shader, &mut materials,
                 &mut lod_mats,
             );
-            tiles.0.insert(coord, ent);
+            // Sub-root tiles settle in from their parent's coarse lattice (no pop).
+            if depth > 0 {
+                begin_reveal(&mut commands, ent, shared, &mut materials);
+            }
+            // Replace any stale slot at this coord, despawning the tile it held.
+            if let Some(old) = tiles.tiles.insert(coord, TileSlot { entity: ent, gen: cur_gen }) {
+                commands.entity(old.entity).try_despawn();
+            }
         }
 
         // ── Queue new work, nearest-first ────────────────────────────
@@ -380,7 +494,10 @@ pub fn update_lod_tiles(
         // centre) so far-from-origin tiles keep f32 precision.
         let pool = AsyncComputeTaskPool::get();
         for s in &sel {
-            if tiles.0.contains_key(&s.coord) || pending.0.contains_key(&s.coord) {
+            // Skip coords already satisfied at the current generation (resident tile
+            // or in-flight current-gen bake). Stale tiles fall through → re-baked.
+            let have_pending = pending.0.get(&s.coord).is_some_and(|(g, _)| *g == cur_gen);
+            if fresh_tile(&tiles, &s.coord) || have_pending {
                 continue;
             }
             let depth = s.coord.depth as u32;
@@ -391,12 +508,19 @@ pub fn update_lod_tiles(
                 (1.0e20, 1.0e21)
             };
             if let Some(cached) = mesh_cache.0.get(&s.coord) {
-                let ent = spawn_tile(
+                let (ent, shared) = spawn_tile(
                     &mut commands, grid, grid_entity, terrain, s.coord, cached.clone(),
                     s.region.center, depth, morph_start, morph_end, mode, &shader,
                     &mut materials, &mut lod_mats,
                 );
-                tiles.0.insert(s.coord, ent);
+                if depth > 0 {
+                    begin_reveal(&mut commands, ent, shared, &mut materials);
+                }
+                if let Some(old) =
+                    tiles.tiles.insert(s.coord, TileSlot { entity: ent, gen: cur_gen })
+                {
+                    commands.entity(old.entity).try_despawn();
+                }
                 continue;
             }
             // Cache miss → needs a bake. Respect the per-frame + in-flight budgets
@@ -416,28 +540,30 @@ pub fn update_lod_tiles(
                 mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tm.morph_targets);
                 BakedTile { mesh, center, depth, morph_start, morph_end }
             });
-            pending.0.insert(s.coord, task);
+            pending.0.insert(s.coord, (cur_gen, task));
         }
 
-        // Despawn no-longer-wanted tiles, but KEEP an old tile while it still covers
-        // a wanted tile that hasn't baked yet — otherwise the despawn opens a hole
-        // that shows the black sky through ("black squares", worse at 1 bake/frame).
-        // Once a region's replacement is in, the old tile no longer overlaps any
-        // missing wanted region and is reaped — so this also bounds growth while the
-        // camera moves continuously (tiles left behind stop covering holes).
+        // Despawn no-longer-wanted (or stale, replaced) tiles, but KEEP one while it
+        // still covers a wanted region that has no fresh tile yet — otherwise the
+        // despawn opens a hole showing black sky ("black squares"). This is also what
+        // makes a live re-bake progressive: on a generation bump every tile goes
+        // stale at once, all keep covering the surface, and each is reaped only when
+        // its current-gen replacement bakes in (near-camera-first).
         let missing: Vec<Square> = sel
             .iter()
-            .filter(|s| !tiles.0.contains_key(&s.coord))
+            .filter(|s| !fresh_tile(&tiles, &s.coord))
             .map(|s| s.region)
             .collect();
-        tiles.0.retain(|coord, ent| {
-            if wanted.contains(coord) {
+        tiles.tiles.retain(|coord, slot| {
+            // A fresh, still-wanted tile always stays.
+            if slot.gen == cur_gen && wanted.contains(coord) {
                 return true;
             }
+            // Otherwise (not wanted, or stale): hold it only while it plugs a hole.
             let region = qt.region(*coord);
             let covers_hole = missing.iter().any(|m| squares_overlap(region, *m));
             if !covers_hole {
-                commands.entity(*ent).despawn();
+                commands.entity(slot.entity).try_despawn();
             }
             covers_hole
         });
@@ -447,7 +573,7 @@ pub fn update_lod_tiles(
         // demand). Single-terrain scenes are the norm; with several terrains this may
         // drop another's cached meshes, which is harmless (they re-bake).
         if mesh_cache.0.len() > CACHE_CAP {
-            let resident: HashSet<QuadCoord> = tiles.0.keys().copied().collect();
+            let resident: HashSet<QuadCoord> = tiles.tiles.keys().copied().collect();
             mesh_cache.0.retain(|c, _| resident.contains(c));
         }
     }
