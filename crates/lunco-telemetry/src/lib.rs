@@ -54,7 +54,7 @@ pub fn sample_parameters(world: &mut World) {
     let registry_read = type_registry.read();
     
     // Resolve simulation time for timestamping results
-    let current_epoch = world.resource::<lunco_core::CelestialClock>().epoch;
+    let current_epoch = world.resource::<lunco_time::WorldTime>().epoch_jd;
     
     // Decouple sampling from event triggering to avoid parallel world mutation.
     let mut samples = Vec::new();

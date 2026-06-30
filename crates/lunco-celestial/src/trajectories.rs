@@ -6,8 +6,8 @@ use big_space::prelude::CellCoord;
 use futures_lite::future;
 use std::sync::Arc;
 use crate::ephemeris::EphemerisResource;
-use crate::clock::CelestialClock;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame};
+use lunco_time::WorldTime;
 
 use bevy::shader::ShaderRef;
 use bevy::render::render_resource::AsBindGroup;
@@ -200,13 +200,13 @@ pub fn trajectory_setup_system(
 }
 
 pub fn spawn_trajectory_update_task(
-    clock: Res<CelestialClock>,
+    world: Res<WorldTime>,
     ephemeris: Res<EphemerisResource>,
     registry: Res<CelestialBodyRegistry>,
     mut commands: Commands,
     q_views: Query<(Entity, &TrajectoryView, &TrajectoryPath), Without<TrajectoryTask>>,
 ) {
-    let current_epoch = clock.epoch;
+    let current_epoch = world.epoch_jd;
     let pool = bevy::tasks::ComputeTaskPool::get();
     
     for (entity, view, path) in q_views.iter() {
@@ -248,7 +248,7 @@ pub fn spawn_trajectory_update_task(
                         
                         if view_copy.frame == TrajectoryFrame::BodyFixed {
                             if let Some(desc) = registry_arc.bodies.iter().find(|b| b.ephemeris_id == view_copy.reference_id) {
-                                let days_since_j2000 = jd - 2_451_545.0;
+                                let days_since_j2000 = jd - lunco_time::J2000_JD;
                                 let angle = days_since_j2000 * desc.rotation_rate_rad_per_day;
                                 let rot = bevy::math::DQuat::from_axis_angle(desc.polar_axis, angle);
                                 rel_pos = rot.inverse() * rel_pos;
@@ -269,7 +269,7 @@ pub fn spawn_trajectory_update_task(
                         
                         if view_copy.frame == TrajectoryFrame::BodyFixed {
                             if let Some(desc) = registry_arc.bodies.iter().find(|b| b.ephemeris_id == view_copy.reference_id) {
-                                let days_since_j2000 = jd - 2_451_545.0;
+                                let days_since_j2000 = jd - lunco_time::J2000_JD;
                                 let angle = days_since_j2000 * desc.rotation_rate_rad_per_day;
                                 let rot = bevy::math::DQuat::from_axis_angle(desc.polar_axis, angle);
                                 rel_pos = rot.inverse() * rel_pos;
@@ -385,7 +385,7 @@ pub fn trajectory_mesh_update_system(
 }
 
 pub fn trajectory_alpha_update_system(
-    clock: Res<CelestialClock>,
+    world: Res<WorldTime>,
     mut meshes: ResMut<Assets<Mesh>>,
     q_paths: Query<(&TrajectoryPath, &TrajectoryView, &Children)>,
     q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
@@ -393,7 +393,7 @@ pub fn trajectory_alpha_update_system(
     // TODO(CQ-214): this rebuilds the full per-point ATTRIBUTE_COLOR Vec and
     // re-uploads it to the GPU for every trajectory, every frame, with no
     // change detection — even when the clock is paused or unchanged. Gate on
-    // `clock.is_changed()` (+ a per-view epoch/color stamp), and skip the
+    // `world.is_changed()` (+ a per-view epoch/color stamp), and skip the
     // re-upload when the alpha curve hasn't moved. See
     // docs/code-quality-remediation.md (CQ-214).
     for (path, view, children) in q_paths.iter() {
@@ -419,7 +419,7 @@ pub fn trajectory_alpha_update_system(
                         let t = i as f64 / (num_points - 1) as f64;
                         let pt_epoch = start_epoch + t * total_sampling_days;
                         
-                        let days_past = clock.epoch - pt_epoch;
+                        let days_past = world.epoch_jd - pt_epoch;
                         let alpha = if days_past > 0.0 {
                             // Smoothly fade out the past trajectory over 10% of total duration (capped between 1 to 20 days)
                             let fade_days = (total_sampling_days * 0.1).clamp(1.0, 20.0);
@@ -442,12 +442,12 @@ pub fn trajectory_alpha_update_system(
 
 
 pub fn mission_visibility_system(
-    clock: Res<CelestialClock>,
+    world: Res<WorldTime>,
     mut q_views: Query<&mut TrajectoryView>,
 ) {
     for mut view in q_views.iter_mut() {
         if let (Some(start), Some(end)) = (view.start_epoch, view.end_epoch) {
-            let should_be_visible = clock.epoch >= start && clock.epoch <= end;
+            let should_be_visible = world.epoch_jd >= start && world.epoch_jd <= end;
             if view.is_visible != should_be_visible {
                 view.is_visible = should_be_visible;
             }

@@ -42,7 +42,7 @@ use lunco_api::queries::ApiQueryRegistry;
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
 use lunco_core::{
-    coords, CelestialBody, CelestialClock, CommandOutcome, CommandResults, GlobalEntityId, OpId,
+    coords, CelestialBody, CommandOutcome, CommandResults, GlobalEntityId, OpId,
     RoverVessel, Severity, SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
 
@@ -786,8 +786,8 @@ pub fn hash_str(s: &str) -> u64 {
 pub fn emit(name: &str, value: TelemetryValue) -> bool {
     with_world(|world| {
         let timestamp = world
-            .get_resource::<CelestialClock>()
-            .map(|c| c.epoch)
+            .get_resource::<lunco_time::WorldTime>()
+            .map(|w| w.epoch_jd)
             .unwrap_or(0.0);
         world.trigger(TelemetryEvent {
             name: name.to_string(),

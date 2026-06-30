@@ -23,7 +23,8 @@ use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 use lunco_controller::ControllerLink;
 use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands, SessionProfiles, LocalSession, NetworkRole, LocalAvatar};
 use lunco_core::attach::migrate_to_grid;
-use lunco_celestial::{CelestialClock, LocalGravityField, TeleportToSurface, LeaveSurface};
+use lunco_celestial::{LocalGravityField, TeleportToSurface, LeaveSurface};
+use lunco_time::{TimeTransport, TransportMode, WorldTime};
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_settings::{AppSettingsExt, ProfileSettings};
 
@@ -1140,7 +1141,7 @@ fn avatar_universal_locomotion_system(
 /// Captures high-level [UserIntent] signals and forwards zoom input.
 fn capture_avatar_intent(
     mut q_avatar: Query<(Entity, &IntentState, &mut IntentAnalogState), With<Avatar>>,
-    clock: Option<Res<CelestialClock>>,
+    world: Option<Res<WorldTime>>,
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     scroll_res: ResMut<CameraScroll>,
@@ -1167,7 +1168,7 @@ fn capture_avatar_intent(
         analog.side = side * boost;
         analog.elevation = elevation * boost;
         analog.look_delta = delta;
-        analog.timestamp = clock.as_ref().map(|c| c.epoch).unwrap_or_default();
+        analog.timestamp = world.as_ref().map(|w| w.epoch_jd).unwrap_or_default();
 
         commands.entity(entity).trigger(|e| {
             let mut a = (*analog).clone();
@@ -1253,11 +1254,14 @@ fn avatar_behavior_input_system(
     }
 }
 
-fn avatar_global_hotkeys(q_avatar: Query<&IntentState, With<Avatar>>, mut clock: Option<ResMut<CelestialClock>>) {
+fn avatar_global_hotkeys(q_avatar: Query<&IntentState, With<Avatar>>, mut transport: Option<ResMut<TimeTransport>>) {
     for intent_state in q_avatar.iter() {
         if intent_state.just_pressed(&UserIntent::Pause) {
-            if let Some(clock) = clock.as_deref_mut() {
-                clock.paused = !clock.paused;
+            if let Some(transport) = transport.as_deref_mut() {
+                transport.mode = match transport.mode {
+                    TransportMode::Playing => TransportMode::Paused,
+                    TransportMode::Paused => TransportMode::Playing,
+                };
             }
         }
     }

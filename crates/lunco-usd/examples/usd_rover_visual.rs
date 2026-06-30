@@ -16,7 +16,6 @@ fn main() {
             UsdPlugins,
         ))
         .insert_resource(lunco_core::TimeWarpState { speed: 1.0, physics_enabled: true })
-        .insert_resource(lunco_core::CelestialClock::default())
         .add_systems(Startup, (setup_scene, setup_rover))
         .add_systems(Update, (orbit_camera, debug_rover_presence))
         .run();

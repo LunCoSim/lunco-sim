@@ -71,8 +71,8 @@ pub enum TimeRegime {
 }
 
 /// The transport authority: the single internal source of truth for play state
-/// and rate. UI writes this; legacy UI still writes `CelestialClock` and a bridge
-/// (in `lunco-celestial`) mirrors it here during migration.
+/// and rate. UI (the Time Control / mission-control panels and the avatar pause
+/// hotkey) writes this directly — it is the sole play/rate authority.
 #[derive(Resource, Debug, Clone, Copy, Reflect)]
 #[reflect(Resource)]
 pub struct TimeTransport {
@@ -346,8 +346,8 @@ impl WorldTime {
     }
 }
 
-/// System set for the spine step. `lunco-celestial`'s legacy bridge orders its
-/// `CelestialClock` compat shims `.before`/`.after` this set.
+/// System set for the spine step. Celestial/USD consumers order their epoch
+/// readers `.after` this set so they see the freshly-derived `WorldTime`.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TimeSpineSet;
 
@@ -380,8 +380,8 @@ pub fn advance_world_clock(
 }
 
 /// Installs the mission-time spine: resources + the `PreUpdate` step. Add once
-/// (guarded callers use [`App::is_plugin_added`]). The legacy `CelestialClock`
-/// bridge lives in `lunco-celestial` and orders around [`TimeSpineSet`].
+/// (guarded callers use [`App::is_plugin_added`]). `lunco-celestial` seeds the
+/// mission origin from the wall clock at startup and reads `WorldTime` thereafter.
 pub struct TimePlugin;
 
 impl Plugin for TimePlugin {

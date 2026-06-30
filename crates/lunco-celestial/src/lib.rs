@@ -75,7 +75,6 @@ impl Plugin for CelestialPlugin {
         // Terrain is now in lunco-terrain crate — register it here
         app.add_plugins(lunco_terrain_globe::TerrainPlugin);
 
-        app.insert_resource(get_default_celestial_clock());
         app.init_resource::<TimeWarpState>();
 
         // The unified mission-time spine (doc 19 — T1): MissionClock + transport +
@@ -84,8 +83,8 @@ impl Plugin for CelestialPlugin {
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
         }
-        // Seed the spine's mission origin from the wall-seeded celestial epoch.
-        app.add_systems(Startup, seed_mission_clock_from_celestial);
+        // Seed the spine's mission origin from the wall clock (doc 19 — T3).
+        app.add_systems(Startup, seed_mission_clock_from_wall);
         app.init_resource::<TerrainMapRegistry>();
         app.insert_resource(Gravity::surface());
         app.register_type::<TrajectoryView>();
@@ -128,18 +127,11 @@ impl Plugin for CelestialPlugin {
         // System ordering is critical:
         // 1. big_space propagation runs first (default PreUpdate ordering)
         // 2. Our systems run AFTER to override GlobalTransform with body rotation
-        // Compat-in: mirror the legacy `CelestialClock` knobs onto the transport
-        // authority *before* the spine steps.
-        app.add_systems(
-            PreUpdate,
-            sync_transport_from_celestial.before(lunco_time::TimeSpineSet),
-        );
-        // The spine (`advance_world_clock`, in `TimeSpineSet`) runs here; then the
-        // celestial chain consumes the derived epoch. `sync_celestial_from_world`
-        // copies the derived epoch back onto `CelestialClock.epoch` so
-        // `ephemeris_update_system` (and downstream) read the fresh value.
+        // The spine (`advance_world_clock`, in `TimeSpineSet`) runs first; then the
+        // celestial chain consumes the derived `WorldTime.epoch_jd` directly — no
+        // `CelestialClock` bridge anymore. Ordered `.after` the spine so the epoch
+        // is fresh this frame.
         app.add_systems(PreUpdate, (
-            sync_celestial_from_world,
             ephemeris_update_system,
             body_rotation_system,
             tile_rotation_sync_system

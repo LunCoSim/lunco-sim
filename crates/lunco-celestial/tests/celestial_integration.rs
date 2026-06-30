@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use big_space::prelude::*;
 use lunco_celestial::CelestialPlugin;
 use lunco_celestial::CelestialBody;
-use lunco_celestial::CelestialClock;
 use lunco_materials::ShaderMaterial;
+use lunco_time::WorldTime;
 use lunco_celestial::{EphemerisProvider, EphemerisResource};
 use std::sync::Arc;
 
@@ -57,7 +57,7 @@ fn test_celestial_startup_and_movement() {
     // Ensure startup systems run
     app.update();
     
-    let epoch_before = app.world().resource::<CelestialClock>().epoch;
+    let epoch_before = app.world().resource::<WorldTime>().epoch_jd;
     
     // 1. Verify Sun and Earth exist
     let mut query = app.world_mut().query::<(&lunco_celestial::EarthRoot, &CellCoord, &Transform)>();
@@ -68,10 +68,10 @@ fn test_celestial_startup_and_movement() {
     // and `CellCoord` stays (0,0,0) — the position lives entirely in `Transform`.
     let earth_tf_1 = earth.2.translation;
     
-    // 2. Advance the clock by 10 days. `CelestialClock.epoch` is now a *derived*
-    //    view (the `lunco-time` spine overwrites it from `WorldTime` each frame),
-    //    so seek via the authority — re-anchor the `MissionClock` epoch. The spine
-    //    then re-derives `CelestialClock.epoch` and the ephemeris follows.
+    // 2. Advance the clock by 10 days. The epoch is a *derived* view
+    //    (`WorldTime.epoch_jd`, written by the `lunco-time` spine each frame), so
+    //    seek via the authority — re-anchor the `MissionClock` epoch. The spine
+    //    then re-derives `WorldTime.epoch_jd` and the ephemeris follows.
     {
         let mut mission = app.world_mut().resource_mut::<lunco_time::MissionClock>();
         mission.anchor.epoch0_jd += 10.0;
@@ -81,7 +81,7 @@ fn test_celestial_startup_and_movement() {
     app.update();
 
     // Sanity: the seek propagated through the spine to the derived epoch.
-    let epoch_after = app.world().resource::<CelestialClock>().epoch;
+    let epoch_after = app.world().resource::<WorldTime>().epoch_jd;
     assert!(
         (epoch_after - (epoch_before + 10.0)).abs() < 1e-3,
         "derived epoch should track the MissionClock re-anchor (+10 days)"

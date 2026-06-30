@@ -6646,6 +6646,7 @@ dependencies = [
  "lunco-mobility",
  "lunco-settings",
  "lunco-theme",
+ "lunco-time",
  "lunco-workbench",
  "serde",
 ]
@@ -6842,6 +6843,7 @@ dependencies = [
  "lunco-core",
  "lunco-fsw",
  "lunco-hardware",
+ "lunco-time",
  "serde_json",
 ]
 
@@ -7080,6 +7082,7 @@ dependencies = [
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-time",
  "lunco-tools",
  "lunco-tools-rhai",
  "lunco-workspace",
@@ -7117,6 +7120,7 @@ version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "lunco-core",
+ "lunco-time",
 ]
 
 [[package]]
@@ -7406,6 +7410,7 @@ dependencies = [
  "lunco-materials",
  "lunco-mobility",
  "lunco-robotics",
+ "lunco-time",
  "lunco-ui",
  "lunco-web",
  "lunco-workbench",

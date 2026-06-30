@@ -152,18 +152,18 @@ fn main() {
 
 /// Toggles time dilation for debugging physics and high-speed maneuvers.
 ///
-/// Drives the **unified** speed knob (`CelestialClock.speed_multiplier`, which the
-/// `lunco-time` spine mirrors onto `TimeTransport.rate` and then onto
-/// `Time<Virtual>.relative_speed`) rather than writing `relative_speed` directly —
-/// the spine reasserts `relative_speed = rate` every frame, so a direct write here
-/// would be overwritten (doc 19 — T1 knob unification).
+/// Drives the **unified** speed knob (`TimeTransport.rate`, which the `lunco-time`
+/// spine maps onto `Time<Virtual>.relative_speed`) rather than writing
+/// `relative_speed` directly — the spine reasserts `relative_speed = rate` every
+/// frame, so a direct write here would be overwritten (doc 19 — T1 knob
+/// unification).
 fn toggle_slow_motion(
     keyboard: Res<ButtonInput<KeyCode>>,
-    clock: Option<ResMut<lunco_celestial::CelestialClock>>,
+    transport: Option<ResMut<lunco_time::TimeTransport>>,
 ) {
-    let Some(mut clock) = clock else { return };
+    let Some(mut transport) = transport else { return };
     if keyboard.just_pressed(KeyCode::KeyT) {
-        clock.speed_multiplier = if clock.speed_multiplier < 1.0 { 1.0 } else { 0.01 };
+        transport.rate = if transport.rate < 1.0 { 1.0 } else { 0.01 };
     }
 }
 

@@ -18,6 +18,7 @@ lunco-controller = { path = "../lunco-controller" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-environment = { path = "../lunco-environment" }
 lunco-core = { path = "../lunco-core" }
+lunco-time = { path = "../lunco-time" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-assets = { workspace = true }

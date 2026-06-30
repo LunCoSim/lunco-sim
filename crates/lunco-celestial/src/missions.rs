@@ -245,11 +245,11 @@ pub fn load_missions_system(
 }
 
 pub fn update_spacecraft_position_system(
-    clock: Res<crate::clock::CelestialClock>,
+    world: Res<lunco_time::WorldTime>,
     ephemeris: Res<crate::ephemeris::EphemerisResource>,
     mut q_spacecraft: Query<(&Spacecraft, &mut Transform, &mut CellCoord)>,
 ) {
-    let jd = clock.epoch;
+    let jd = world.epoch_jd;
     for (sc, mut tf, mut cell) in q_spacecraft.iter_mut() {
         let p_target = ephemeris.provider.global_position(sc.ephemeris_id, jd);
         let p_ref = ephemeris.provider.global_position(sc.reference_id, jd);
@@ -300,13 +300,13 @@ pub fn spacecraft_alignment_system(
 }
 
 pub fn spacecraft_visibility_system(
-    clock: Res<crate::clock::CelestialClock>,
+    world: Res<lunco_time::WorldTime>,
     mut q_sc: Query<(&Spacecraft, &mut Visibility)>,
 ) {
     for (sc, mut vis) in q_sc.iter_mut() {
         let mut mission_visible = true;
         if let (Some(start), Some(end)) = (sc.start_epoch_jd, sc.end_epoch_jd) {
-            mission_visible = clock.epoch >= start && clock.epoch <= end;
+            mission_visible = world.epoch_jd >= start && world.epoch_jd <= end;
         }
         
         let final_visible = mission_visible && sc.user_visible;

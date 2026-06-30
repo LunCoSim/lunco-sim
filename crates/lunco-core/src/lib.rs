@@ -318,31 +318,6 @@ pub struct SpawnToolActive(pub bool);
 #[derive(Component, Default)]
 pub struct GizmoDragging;
 
-/// Represents the current "wall clock" time in the simulation universe.
-///
-/// Uses Julian Date for astronomical precision and provides a mechanism
-/// for non-linear time progression.
-#[derive(Resource, Debug, Clone, Copy, Reflect)]
-#[reflect(Resource)]
-pub struct CelestialClock {
-    /// Current Julian Date (TDB - Terrestrial Dynamic Time).
-    pub epoch: f64,
-    /// Multiplier relative to real-time progression.
-    pub speed_multiplier: f64,
-    /// Pause state for the simulation clock.
-    pub paused: bool,
-}
-
-impl Default for CelestialClock {
-    fn default() -> Self {
-        Self {
-            epoch: 2451545.0, // J2000.0
-            speed_multiplier: 1.0,
-            paused: false,
-        }
-    }
-}
-
 /// The fixed-simulation rate, in Hz. The **single source of truth** for every
 /// fixed-step clock in the system: it drives `Time::<Fixed>` (set by each app
 /// binary), [`SimTick`] advancement ([`advance_sim_tick`], one tick per fixed
@@ -357,7 +332,8 @@ pub const SECS_PER_TICK: f64 = 1.0 / FIXED_HZ;
 
 /// Monotonic discrete **simulation tick** — the netcode time substrate (M6).
 ///
-/// `CelestialClock`/`TimeWarpState` give *continuous* sim time + warp; netcode
+/// The `lunco-time` spine (`WorldTime`/`TimeTransport`) gives *continuous* sim
+/// time + warp; netcode
 /// also needs a monotonic integer counter that prediction, rollback,
 /// input-stamping and the shared clock all key off. Advanced once per
 /// `FixedUpdate` step (see [`advance_sim_tick`]). Warp-independent: warp scales
@@ -417,7 +393,6 @@ impl Plugin for LunCoCorePlugin {
            .register_type::<TelemetryEvent>()
            .register_type::<Parameter>()
            .register_type::<SampledParameter>()
-           .register_type::<CelestialClock>()
            .register_type::<UserIntent>()
            .register_type::<IntentAnalogState>()
            .register_type::<PhysicalPort>()

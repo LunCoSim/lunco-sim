@@ -3,8 +3,8 @@ use bevy::math::DQuat;
 use big_space::prelude::*;
 
 use crate::big_space_setup::{SolarSystemRoot, EarthRoot, MoonRoot};
-use crate::clock::CelestialClock;
 use crate::ephemeris::EphemerisResource;
+use lunco_time::WorldTime;
 use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
 use crate::coords::ecliptic_to_bevy;
 use crate::coords::world_position_seeded;
@@ -13,7 +13,7 @@ use lunco_materials::{ParamValue, ShaderMaterial};
 /// Update body and frame positions based on ephemeris data.
 /// Optimized: Only re-computes if Epoch has changed significantly.
 pub fn ephemeris_update_system(
-    clock: Res<CelestialClock>,
+    world: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,
     mut q_entities: Query<(Entity, &mut CellCoord, &mut Transform, Option<&CelestialBody>, Option<&CelestialReferenceFrame>)>,
     _q_all_parents: Query<&ChildOf>,
@@ -28,16 +28,16 @@ pub fn ephemeris_update_system(
     // takes), so the first real epoch always runs; thereafter a paused /
     // time-warp-stopped clock skips the full recompute. (This is the gate
     // the doc comment always promised but never wired up.)
-    if (clock.epoch - *last_jd).abs() < 1e-9 {
+    if (world.epoch_jd - *last_jd).abs() < 1e-9 {
         return;
     }
-    *last_jd = clock.epoch;
+    *last_jd = world.epoch_jd;
 
     for (entity, mut cell, mut tf, body, frame) in q_entities.iter_mut() {
         let ephemeris_id = if let Some(b) = body { b.ephemeris_id } else if let Some(f) = frame { f.ephemeris_id } else { continue; };
         
         // EphemerisProvider::position returns position relative to its parent defined in registry/hierarchy
-        let rel_pos_au = ephemeris.provider.position(ephemeris_id, clock.epoch);
+        let rel_pos_au = ephemeris.provider.position(ephemeris_id, world.epoch_jd);
         let pos_bevy_m = ecliptic_to_bevy(rel_pos_au);
 
         // Find the grid this entity is in. Since body/frame entities are typically children of their reference frame grid:
@@ -94,11 +94,11 @@ pub fn ephemeris_update_system(
 /// in that grid, in high precision."
 /// We rotate the Grid so tiles (and future rovers) automatically inherit rotation.
 pub fn body_rotation_system(
-    clock: Res<CelestialClock>,
+    world: Res<WorldTime>,
     registry: Res<CelestialBodyRegistry>,
     mut q_grids: Query<(&mut Transform, &CelestialReferenceFrame)>,
 ) {
-    let days_since_j2000 = clock.epoch - 2_451_545.0;
+    let days_since_j2000 = world.epoch_jd - lunco_time::J2000_JD;
     for (mut tf, frame) in q_grids.iter_mut() {
         if let Some(desc) = registry.bodies.iter().find(|d| d.ephemeris_id == frame.ephemeris_id) {
             if desc.rotation_rate_rad_per_day != 0.0 {
@@ -158,13 +158,13 @@ pub(crate) fn sun_emit_direction(p_sun: bevy::math::DVec3, p_moon: bevy::math::D
 /// where two systems fought over the sun direction every frame.
 pub fn update_sun_light_system(
     ephemeris: Option<Res<EphemerisResource>>,
-    clock: Res<crate::clock::CelestialClock>,
+    world: Res<WorldTime>,
     mut q_light: Query<(&mut Transform, &DirectionalLight)>,
 ) {
     let Some(ephemeris) = ephemeris else { return; };
 
-    let p_sun = ephemeris.provider.global_position(10, clock.epoch);
-    let p_moon = ephemeris.provider.global_position(301, clock.epoch);
+    let p_sun = ephemeris.provider.global_position(10, world.epoch_jd);
+    let p_moon = ephemeris.provider.global_position(301, world.epoch_jd);
     let Some(dir) = sun_emit_direction(p_sun, p_moon) else {
         // NoOp / degenerate ephemeris — leave the light to manual control.
         return;
@@ -181,7 +181,7 @@ pub fn update_sun_light_system(
 }
 
 pub fn celestial_telemetry_system(
-    clock: Res<crate::clock::CelestialClock>,
+    world: Res<WorldTime>,
     q_earth: Query<(&Transform, &big_space::prelude::CellCoord), With<EarthRoot>>,
     q_moon: Query<(&Transform, &big_space::prelude::CellCoord), With<MoonRoot>>,
     q_sun: Query<&Transform, With<SolarSystemRoot>>,
@@ -189,7 +189,7 @@ pub fn celestial_telemetry_system(
     mut timer: Local<u32>,
 ) {
     if *timer % 60 == 0 {
-        if let Some((tf, cell)) = q_earth.iter().next() { info!("TELEMETRY: Epoch: {:.4}, Earth Cell: {:?}, Earth Pos: {:?}", clock.epoch, cell, tf.translation); }
+        if let Some((tf, cell)) = q_earth.iter().next() { info!("TELEMETRY: Epoch: {:.4}, Earth Cell: {:?}, Earth Pos: {:?}", world.epoch_jd, cell, tf.translation); }
         if let Some((tf, cell)) = q_moon.iter().next() { info!("TELEMETRY: Moon Cell: {:?}, Moon Pos: {:?}", cell, tf.translation); }
         if let Some(tf) = q_sun.iter().next() { info!("TELEMETRY: Sun Pos: {:?}", tf.translation); }
         if let Some(tf) = q_cam.iter().next() { info!("TELEMETRY: Camera Local Pos: {:?}", tf.translation); }

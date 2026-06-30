@@ -4,7 +4,8 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt};
 
-use lunco_core::{Avatar, CelestialBody, CelestialClock};
+use lunco_core::{Avatar, CelestialBody};
+use lunco_time::{TimeTransport, TransportMode, WorldTime};
 use crate::commands::TeleportToSurface;
 
 /// Celestial time control panel.
@@ -23,24 +24,26 @@ impl Panel for CelestialTimePanel {
         }
 
         ui.heading("Epoch & UTC Time");
-        // Snapshot the clock state up front so all reads release the
-        // immutable `ctx` borrow before any `ctx.defer` below.
-        let clock_state = ctx
-            .resource::<CelestialClock>()
-            .map(|c| (c.epoch, c.paused, c.speed_multiplier));
+        // Snapshot the time state up front so all reads release the immutable
+        // `ctx` borrow before any `ctx.defer` below. Epoch comes from the derived
+        // `WorldTime`; play/rate from the `TimeTransport` authority (doc 19).
+        let epoch = ctx.resource::<WorldTime>().map(|w| w.epoch_jd);
+        let transport = ctx
+            .resource::<TimeTransport>()
+            .map(|t| (matches!(t.mode, TransportMode::Paused), t.rate));
 
-        if let Some((epoch, _, _)) = clock_state {
+        if let Some(epoch) = epoch {
             ui.label(format!("JD: {:.4}", epoch));
             ui.label(format!("UTC: {}", jd_to_utc_string(epoch)));
         }
 
-        let (paused, speed) = clock_state.map(|(_, p, s)| (p, s)).unwrap_or((false, 1.0));
+        let (paused, speed) = transport.unwrap_or((false, 1.0));
 
         ui.horizontal(|ui| {
             if ui.button(if paused { "▶ Play" } else { "⏸ Pause" }).clicked() {
                 ctx.defer(move |world| {
-                    if let Some(mut clock) = world.get_resource_mut::<CelestialClock>() {
-                        clock.paused = !paused;
+                    if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
+                        t.mode = if paused { TransportMode::Playing } else { TransportMode::Paused };
                     }
                 });
             }
@@ -50,8 +53,8 @@ impl Panel for CelestialTimePanel {
             for &m in multipliers.iter() {
                 if ui.selectable_label(speed == m, format!("{}x", m)).clicked() {
                     ctx.defer(move |world| {
-                        if let Some(mut clock) = world.get_resource_mut::<CelestialClock>() {
-                            clock.speed_multiplier = m;
+                        if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
+                            t.rate = m;
                         }
                     });
                 }

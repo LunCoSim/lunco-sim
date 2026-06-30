@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_core::{CelestialClock, Severity, TelemetryEvent, TelemetryValue};
+use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
 
 /// Parse a `[x, y, z]` JSON array under `key`.
 fn parse_vec3(params: &serde_json::Value, key: &str) -> Option<DVec3> {
@@ -183,10 +183,10 @@ fn bridge_collision_events(
     mut starts: MessageReader<CollisionStart>,
     mut ends: MessageReader<CollisionEnd>,
     registry: Res<ApiEntityRegistry>,
-    clock: Option<Res<CelestialClock>>,
+    world: Option<Res<lunco_time::WorldTime>>,
     mut commands: Commands,
 ) {
-    let timestamp = clock.map(|c| c.epoch).unwrap_or(0.0);
+    let timestamp = world.map(|w| w.epoch_jd).unwrap_or(0.0);
     let mut fire = |name: &str, pair: String, commands: &mut Commands| {
         commands.trigger(TelemetryEvent {
             name: name.to_string(),

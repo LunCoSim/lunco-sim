@@ -4,7 +4,8 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use lunco_core::{Avatar, RoverVessel, Spacecraft, CelestialClock};
+use lunco_core::{Avatar, RoverVessel, Spacecraft};
+use lunco_time::{TimeTransport, TransportMode, WorldTime};
 use lunco_celestial::{CelestialBody, TeleportToSurface, LeaveSurface};
 use lunco_avatar::{PossessVessel, ReleaseVessel, FocusTarget};
 
@@ -51,9 +52,14 @@ impl Panel for MissionControl {
             on_surface = view.map(|v| v.on_surface).unwrap_or(false);
             gravity_body = view.and_then(|v| v.gravity_body);
 
-            clock_state = ctx
-                .resource::<CelestialClock>()
-                .map(|c| (c.epoch, c.paused, c.speed_multiplier));
+            // Epoch from the derived `WorldTime`; play/rate from the
+            // `TimeTransport` authority (doc 19 — the `CelestialClock` middleman is
+            // gone). Both are inserted together by `TimePlugin`, so the tuple is
+            // `Some` iff the spine is present.
+            clock_state = ctx.resource::<WorldTime>().and_then(|w| {
+                ctx.resource::<TimeTransport>()
+                    .map(|t| (w.epoch_jd, matches!(t.mode, TransportMode::Paused), t.rate))
+            });
 
             // Networking context, read from the always-on substrate. In
             // single-player (Standalone, empty registry) `networked` is false
@@ -281,15 +287,15 @@ impl Panel for MissionControl {
         if toggle_pause {
             let cur = clock_state.map(|(_, p, _)| p).unwrap_or(false);
             ctx.defer(move |world| {
-                if let Some(mut clock) = world.get_resource_mut::<CelestialClock>() {
-                    clock.paused = !cur;
+                if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
+                    t.mode = if cur { TransportMode::Playing } else { TransportMode::Paused };
                 }
             });
         }
         if let Some(m) = set_speed {
             ctx.defer(move |world| {
-                if let Some(mut clock) = world.get_resource_mut::<CelestialClock>() {
-                    clock.speed_multiplier = m;
+                if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
+                    t.rate = m;
                 }
             });
         }
