@@ -13,6 +13,17 @@
 fn on_tick(me) {
     let target_ent = find("/LanderTest/LandingLocation");
 
+    // If the lander has touchdown but is moved back up into the air (Y > 5.5),
+    // reset touchdown latch and re-arm the engine so the pilot can fly it again.
+    let pos = world_pos(me);
+    if pos != () && pos[1] > 5.5 {
+        if this.touchdown == true {
+            this.touchdown = false;
+            set(me, "engine_enable", 1.0);
+            print("[Lander] Lander moved in the air - re-arming engine and resetting touchdown.");
+        }
+    }
+
     // Touchdown: settled on the legs (low altitude + near-zero vertical rate).
     // Latched so it emits exactly once. The data owner detects; others react.
     if this.touchdown != true {

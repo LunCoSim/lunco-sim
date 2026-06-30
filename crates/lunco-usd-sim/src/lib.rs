@@ -523,12 +523,16 @@ fn process_usd_sim_prims(
                 Some("IdealAltitude") => lunco_cosim::sensors::OutOfRangeMode::IdealAltitude,
                 _ => lunco_cosim::sensors::OutOfRangeMode::MaxDistance,
             };
+            let visualize = reader
+                .prim_attribute_value::<bool>(&sdf_path, "lunco:sensor:rangeVisualize")
+                .unwrap_or(false);
             commands.entity(entity).insert(lunco_cosim::sensors::RangeSensor {
                 offset: sensor_offset,
                 axis,
                 max_distance,
                 distance: max_distance,
                 out_of_range_mode,
+                visualize,
             });
         }
         if reader.prim_attribute_value::<bool>(&sdf_path, "lunco:sensor:contact").is_some() {

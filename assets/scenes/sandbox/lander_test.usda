@@ -93,7 +93,7 @@ def Xform "LanderTest"
         #   velocity_y    --> descent_rate   (PID damping term)
         #   gravity_accel --> g              (env-correct gravity feed-forward; lunar ≈ 1.62)
         string lunco:modelicaModel = "models/Lander.mo"
-        string lunco:simWires = "force_x:force_x,force_y:force_y,force_z:force_z,torque_x:torque_x,torque_y:torque_y,torque_z:torque_z,position_x:pos_x,position_y:pos_y,position_z:pos_z,velocity_x:vel_x,velocity_y:vel_y,velocity_z:vel_z,quat_w:q_w,quat_x:q_x,quat_y:q_y,quat_z:q_z,angvel_x:w_x,angvel_y:w_y,angvel_z:w_z,gravity_accel:g"
+        string lunco:simWires = "force_x:force_x,force_y:force_y,force_z:force_z,torque_x:torque_x,torque_y:torque_y,torque_z:torque_z,position_x:pos_x,position_y:pos_y,position_z:pos_z,velocity_x:vel_x,velocity_y:vel_y,velocity_z:vel_z,quat_w:q_w,quat_x:q_x,quat_y:q_y,quat_z:q_z,angvel_x:w_x,angvel_y:w_y,angvel_z:w_z,gravity_accel:g,throttle:throttle"
 
         # Modelica `when` events: threshold crossings of the model's continuous
         # OUTPUT signals become discrete events on the bus (edge detection in Rust,
@@ -129,10 +129,12 @@ def Xform "LanderTest"
         # Altimeter sensor tool - raycasts downwards and outputs "range" port
         def Xform "Altimeter"
         {
+            token visibility = "invisible"
             custom bool lunco:sensor:range = true
             custom token lunco:sensor:rangeAxis = "-Y"
             custom float lunco:sensor:rangeMax = 150.0
             custom token lunco:sensor:rangeOutOfRangeMode = "IdealAltitude"
+            custom bool lunco:sensor:rangeVisualize = true
             custom double3 lunco:sensor:offset = (0.0, 0.0, 0.0)
             double3 xformOp:translate = (0.0, -3.3, 0.0) # centered locally at nozzle bottom
             uniform token[] xformOpOrder = ["xformOp:translate"]
@@ -421,7 +423,7 @@ def Xform "LanderTest"
 
     def "TargetToLanderX"
     {
-        rel lunco:wireFrom = </LanderTest/LandingLocation>
+        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
         string lunco:fromPort = "position_x"
         rel lunco:wireTo = </LanderTest/Lander>
         string lunco:toPort = "target_x"
@@ -429,7 +431,7 @@ def Xform "LanderTest"
     }
     def "TargetToLanderY"
     {
-        rel lunco:wireFrom = </LanderTest/LandingLocation>
+        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
         string lunco:fromPort = "position_y"
         rel lunco:wireTo = </LanderTest/Lander>
         string lunco:toPort = "target_y"
@@ -437,7 +439,7 @@ def Xform "LanderTest"
     }
     def "TargetToLanderZ"
     {
-        rel lunco:wireFrom = </LanderTest/LandingLocation>
+        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
         string lunco:fromPort = "position_z"
         rel lunco:wireTo = </LanderTest/Lander>
         string lunco:toPort = "target_z"
@@ -445,7 +447,7 @@ def Xform "LanderTest"
     }
     def "TargetToLanderQw"
     {
-        rel lunco:wireFrom = </LanderTest/LandingLocation>
+        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
         string lunco:fromPort = "quat_w"
         rel lunco:wireTo = </LanderTest/Lander>
         string lunco:toPort = "target_qw"
@@ -453,7 +455,7 @@ def Xform "LanderTest"
     }
     def "TargetToLanderQx"
     {
-        rel lunco:wireFrom = </LanderTest/LandingLocation>
+        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
         string lunco:fromPort = "quat_x"
         rel lunco:wireTo = </LanderTest/Lander>
         string lunco:toPort = "target_qx"
@@ -461,7 +463,7 @@ def Xform "LanderTest"
     }
     def "TargetToLanderQy"
     {
-        rel lunco:wireFrom = </LanderTest/LandingLocation>
+        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
         string lunco:fromPort = "quat_y"
         rel lunco:wireTo = </LanderTest/Lander>
         string lunco:toPort = "target_qy"
@@ -469,7 +471,7 @@ def Xform "LanderTest"
     }
     def "TargetToLanderQz"
     {
-        rel lunco:wireFrom = </LanderTest/LandingLocation>
+        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
         string lunco:fromPort = "quat_z"
         rel lunco:wireTo = </LanderTest/Lander>
         string lunco:toPort = "target_qz"

@@ -19,7 +19,7 @@
 //! sensor that isn't at the body origin reports from its true mount point.
 
 use avian3d::prelude::{
-    AngularVelocity, Collisions, LinearVelocity, Physics, Position, Rotation, SpatialQuery,
+    AngularVelocity, Collisions, LinearVelocity, Physics, Rotation, SpatialQuery,
     SpatialQueryFilter, SubstepCount,
 };
 use bevy::math::{DVec3, Dir3};
@@ -97,6 +97,8 @@ pub struct RangeSensor {
     pub distance: f64,
     /// Behavior when the sensor range is exceeded.
     pub out_of_range_mode: OutOfRangeMode,
+    /// Whether to draw the laser beam line using Bevy gizmos.
+    pub visualize: bool,
 }
 
 impl Default for RangeSensor {
@@ -107,6 +109,7 @@ impl Default for RangeSensor {
             max_distance: 100.0,
             distance: 100.0,
             out_of_range_mode: OutOfRangeMode::MaxDistance,
+            visualize: false,
         }
     }
 }
@@ -247,6 +250,7 @@ pub fn update_range_sensors(
     spatial: SpatialQuery,
     q_parents: Query<&ChildOf>,
     mut q: Query<(Entity, &mut RangeSensor, &GlobalTransform)>,
+    mut gizmos: Gizmos,
 ) {
     for (e, mut s, transform) in &mut q {
         let origin = transform.translation().as_dvec3() + transform.rotation().as_dquat() * s.offset;
@@ -259,15 +263,36 @@ pub fn update_range_sensors(
             excluded.push(parent.0);
         }
         let filter = SpatialQueryFilter::from_excluded_entities(excluded);
-        s.distance = match spatial.cast_ray(origin, dir, s.max_distance, true, &filter) {
-            Some(hit) => hit.distance,
-            None => match s.out_of_range_mode {
-                OutOfRangeMode::MaxDistance => s.max_distance,
-                OutOfRangeMode::NegativeOne => -1.0,
-                OutOfRangeMode::NaN => f64::NAN,
-                OutOfRangeMode::IdealAltitude => origin.y,
-            },
+        let mut hit_dist = s.max_distance;
+        let hit_something = match spatial.cast_ray(origin, dir, s.max_distance, true, &filter) {
+            Some(hit) => {
+                hit_dist = hit.distance;
+                s.distance = hit.distance;
+                true
+            }
+            None => {
+                s.distance = match s.out_of_range_mode {
+                    OutOfRangeMode::MaxDistance => s.max_distance,
+                    OutOfRangeMode::NegativeOne => -1.0,
+                    OutOfRangeMode::NaN => f64::NAN,
+                    OutOfRangeMode::IdealAltitude => origin.y,
+                };
+                false
+            }
         };
+
+        if s.visualize {
+            let end = origin + dir_world * hit_dist;
+            let color = if hit_something {
+                Color::srgb(1.0, 0.1, 0.1) // Bright red when hit-locked
+            } else {
+                Color::srgba(1.0, 0.1, 0.1, 0.4) // Faint translucent red when out of range
+            };
+            gizmos.line(origin.as_vec3(), end.as_vec3(), color);
+            if hit_something {
+                gizmos.sphere(end.as_vec3(), 0.15, color);
+            }
+        }
     }
 }
 

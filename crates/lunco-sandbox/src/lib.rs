@@ -1033,20 +1033,30 @@ fn lander_manual_control(
     keys: Res<ButtonInput<KeyCode>>,
     mut q_sim_components: Query<&mut lunco_cosim::SimComponent>,
     q_names: Query<(Entity, &Name)>,
+    q_parents: Query<&ChildOf>,
     mut commands: Commands,
 ) {
-    // 1. Find possessed entity (the lander)
+    // 1. Find possessed entity (the lander or one of its children)
     let Some(link) = q_controllers.iter().next() else { return };
     let vessel = link.vessel_entity;
 
-    // Guard: Only apply manual controls if the possessed vessel is the lander
-    if let Ok((_, name)) = q_names.get(vessel) {
-        if name.as_str() != "/LanderTest/Lander" {
-            return;
+    // Walk up the parent hierarchy to find the ancestor Lander SimComponent
+    let mut current = vessel;
+    let mut target_vessel = None;
+    while current != Entity::PLACEHOLDER {
+        if let Ok((_, name)) = q_names.get(current) {
+            if name.as_str().starts_with("/LanderTest/Lander") && q_sim_components.contains(current) {
+                target_vessel = Some(current);
+                break;
+            }
         }
-    } else {
-        return;
+        if let Ok(child_of) = q_parents.get(current) {
+            current = child_of.0;
+        } else {
+            break;
+        }
     }
+    let Some(target_vessel) = target_vessel else { return };
 
     // 2. Space = manual override of the lander GNC (Lander.mo). Holding Space
     //    hands thrust authority to the player (the model's mode-select fires
@@ -1054,7 +1064,7 @@ fn lander_manual_control(
     //    SimComponent.inputs directly — the cosim source of truth that
     //    `sync_modelica_inputs` carries to the worker, so it isn't clobbered.
     //    Always write (the key may be created async by the compiler).
-    if let Ok(mut comp) = q_sim_components.get_mut(vessel) {
+    if let Ok(mut comp) = q_sim_components.get_mut(target_vessel) {
         let manual = if keys.pressed(KeyCode::Space) { 1.0 } else { 0.0 };
         comp.inputs.insert("manual".to_string(), manual);
         comp.inputs.insert("manual_throttle".to_string(), manual);
