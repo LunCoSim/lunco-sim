@@ -613,6 +613,47 @@ fn parse_terrain_layer_stack<R: lunco_usd::UsdDataExt>(
     stack
 }
 
+/// Seed the shared [`ObstacleFieldSpec`] from the USD-authored `craters`/`rocks` child
+/// layer prims so the Inspector's "Craters & Rocks" panel opens showing the scene's
+/// ACTUAL values (density, size, ratios) instead of the resource defaults. Mirrors the
+/// `SizeDist` the layer parsers build (`craters` → `new(8, mode, 40, 0.7)`, `rocks` →
+/// `new(0.2, mode, mode*4, 0.6)`) so a subsequent panel edit starts from the authored
+/// look rather than jumping. Writes the resource only (no `UpdateObstacleFieldSpec`,
+/// no re-stamp — the terrain already built from the same USD stack).
+fn sync_obstacle_spec_from_usd<R: lunco_usd::UsdDataExt>(
+    reader: &R,
+    terrain: &openusd::sdf::Path,
+    spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
+) {
+    use lunco_obstacle_field::spec::SizeDist;
+    for child in reader.prim_children(terrain) {
+        match reader.prim_attribute_value::<String>(&child, "lunco:layer").as_deref() {
+            Some("craters") => {
+                let density = reader.prim_attribute_value::<f32>(&child, "density").unwrap_or(0.0);
+                let mode = reader.prim_attribute_value::<f32>(&child, "sizeMode").unwrap_or(22.0);
+                spec.craters.enabled = density > 0.0;
+                spec.craters.density = density;
+                spec.craters.depth_ratio =
+                    reader.prim_attribute_value::<f32>(&child, "depthRatio").unwrap_or(0.3);
+                spec.craters.rim_height_ratio =
+                    reader.prim_attribute_value::<f32>(&child, "rimRatio").unwrap_or(0.5);
+                spec.craters.size = SizeDist::new(8.0, mode, 40.0, 0.7);
+                if let Some(seed) = reader.prim_attribute_value::<i32>(&child, "seed") {
+                    spec.seed = seed as u64;
+                }
+            }
+            Some("rocks") => {
+                let density = reader.prim_attribute_value::<f32>(&child, "density").unwrap_or(0.0);
+                let mode = reader.prim_attribute_value::<f32>(&child, "sizeMode").unwrap_or(0.6);
+                spec.rocks.enabled = density > 0.0;
+                spec.rocks.density = density;
+                spec.rocks.size = SizeDist::new(0.2, mode, (mode * 4.0).max(2.5), 0.6);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Live-edit: when a stage is modified (a terrain layer prim was edited in the
 /// Inspector / via `SetObjectProperty`), re-parse the composable stack of every
 /// layered terrain on that stage and re-insert it. The change is picked up by
@@ -650,6 +691,7 @@ fn bridge_usd_dem_terrain(
     stages: Res<Assets<lunco_usd::UsdStageAsset>>,
     twins: Res<lunco_assets::twin_source::TwinRoots>,
     registry: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
+    mut obstacle_spec: ResMut<lunco_obstacle_field::ObstacleFieldSpec>,
     mut commands: Commands,
 ) {
     for (entity, prim_path) in &q {
@@ -675,6 +717,10 @@ fn bridge_usd_dem_terrain(
         // parsed from the child layer prims (helpers shared with the live-edit refresh).
         let dem_layer_sdf = find_dem_layer(reader, &sdf);
         let stack = parse_terrain_layer_stack(reader, &sdf, &registry);
+        // Seed the Inspector's shared spec from the authored values so the panel opens
+        // showing THIS scene's craters/rocks, not the resource defaults. `bypass_change_
+        // detection` so it doesn't look like a runtime edit (no networked re-broadcast).
+        sync_obstacle_spec_from_usd(reader, &sdf, obstacle_spec.bypass_change_detection());
 
         // DEM/ground parameters: prefer a `dem` child layer prim (plain attr names);
         // fall back to the Terrain prim's own `lunco:terrain:*` attrs (back-compat).

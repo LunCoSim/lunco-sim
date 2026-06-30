@@ -488,19 +488,30 @@ fn finish_dem_builds(
     }
 }
 
-/// The product of an off-thread live re-stamp: the new (crater-stamped) working grid
-/// + the rebuilt static collider (only when this terrain isn't a streaming collider
-/// ring; `None` otherwise). All the heavy CPU work — the full base-grid clone, every
-/// crater stamp, and the heightfield collider build — happens inside the task, so the
-/// main thread never freezes during a live edit.
-struct DemRestampResult {
-    grid: HeightGrid,
-    collider: Option<Collider>,
-}
-
-/// In-flight off-thread re-stamp for a terrain (see [`start_dem_restamp`]).
+/// In-flight off-thread **visual** re-stamp for a terrain: clones the pristine base
+/// grid and stamps the layers into it, producing the new working [`HeightGrid`]. This
+/// is the FAST path (clone + stamp only); the expensive static-collider rebuild is
+/// split off into a separate debounced task ([`DemColliderDirty`]/[`DemColliderTask`])
+/// so the visible terrain updates ~immediately and physics catches up after.
 #[derive(Component)]
-struct DemRestampTask(Task<DemRestampResult>);
+struct DemRestampTask(Task<HeightGrid>);
+
+/// Armed after a visual re-stamp swaps new heights in (non-collider-ring terrains):
+/// once it settles, the static heightfield collider is rebuilt off-thread from the
+/// current grid. Decoupling it from the visual swap means dragging a slider doesn't
+/// wait on (or repeatedly redo) the multi-million-point collider build — physics just
+/// reconverges shortly after the visuals.
+#[derive(Component)]
+struct DemColliderDirty(Timer);
+
+/// In-flight off-thread static-collider rebuild (see [`DemColliderDirty`]).
+#[derive(Component)]
+struct DemColliderTask(Task<Collider>);
+
+/// Settle delay before the (heavy) static collider is rebuilt after the last visual
+/// re-stamp. Longer than the restamp debounce so a burst of edits rebuilds the
+/// collider just once, after the heights stop changing.
+const COLLIDER_DEBOUNCE_SECS: f32 = 0.6;
 
 /// Set when a re-bake is requested while one is already running → coalesce: when the
 /// current task finishes, run exactly one more with the latest stack. So dragging a
@@ -521,34 +532,24 @@ struct DemRestampDebounce(Timer);
 /// swallow a continuous slider drag, short enough to feel responsive on release.
 const RESTAMP_DEBOUNCE_SECS: f32 = 0.3;
 
-/// Spawn the off-thread re-stamp task: clone the pristine (upscaled, crater-free)
-/// [`DemBaseGrid`], stamp the stack's geometry layers into it, and (unless a collider
-/// ring streams physics) build the heightfield collider — all on the task pool.
+/// Spawn the off-thread **visual** re-stamp task: clone the pristine (upscaled,
+/// crater-free) [`DemBaseGrid`] and stamp the stack's geometry layers into it. Just
+/// the grid — the collider rebuild is deferred ([`DemColliderDirty`]) so the visuals
+/// don't wait on it.
 fn spawn_restamp_task(
     commands: &mut Commands,
     entity: Entity,
     base: &DemBaseGrid,
-    src: &DemTerrainSource,
     stack: &crate::terrain_layers::TerrainLayerStack,
 ) {
     let base_grid = base.0.clone();
     let layers = stack.0.clone();
-    let collider_ring = src.collider_ring;
     let task = AsyncComputeTaskPool::get().spawn(async move {
         let mut grid = (*base_grid).clone();
         for layer in &layers {
             layer.stamp(&mut grid);
         }
-        let collider = if collider_ring {
-            None
-        } else {
-            let half = grid.half_extent as f64;
-            Some(Collider::heightfield(
-                grid.to_avian_heights(),
-                DVec3::new(2.0 * half, 1.0, 2.0 * half),
-            ))
-        };
-        DemRestampResult { grid, collider }
+        grid
     });
     commands.entity(entity).insert(DemRestampTask(task));
 }
@@ -567,7 +568,6 @@ fn start_dem_restamp(
     mut q: Query<(
         Entity,
         &DemBaseGrid,
-        &DemTerrainSource,
         Ref<crate::terrain_layers::TerrainLayerStack>,
         Has<DemRestampTask>,
         Option<&mut DemRestampDebounce>,
@@ -578,7 +578,7 @@ fn start_dem_restamp(
     // command-ordering races a one-shot message would have), or when forced.
     let forced = !events.is_empty();
     events.clear();
-    for (entity, base, src, stack, busy, debounce) in &mut q {
+    for (entity, base, stack, busy, debounce) in &mut q {
         if forced || stack.is_changed() {
             // (Re)arm the debounce on every change so a continuous drag keeps
             // pushing the deadline out → exactly one re-stamp once the drag stops.
@@ -607,7 +607,7 @@ fn start_dem_restamp(
             commands.entity(entity).insert(DemRestampPending);
             continue;
         }
-        spawn_restamp_task(&mut commands, entity, base, src, &stack);
+        spawn_restamp_task(&mut commands, entity, base, &stack);
     }
 }
 
@@ -621,6 +621,7 @@ fn finish_dem_restamp(
     mut tasks: Query<(
         Entity,
         &mut DemRestampTask,
+        &DemTerrainSource,
         &mut crate::stream_viz::DemHeightField,
         Option<&mut crate::stream_viz::LodTiles>,
         Option<&mut crate::stream_viz::PendingTileBakes>,
@@ -632,19 +633,24 @@ fn finish_dem_restamp(
 ) {
     use bevy::tasks::futures_lite::future;
     let mut any = false;
-    for (entity, mut task, mut hf, tiles, pending, has_static_mesh, was_pending) in &mut tasks {
-        let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
+    for (entity, mut task, src, mut hf, tiles, pending, has_static_mesh, was_pending) in &mut tasks {
+        let Some(grid) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
         commands.entity(entity).remove::<DemRestampTask>();
         any = true;
 
-        let DemRestampResult { grid, collider } = result;
         let half = grid.half_extent as f64;
 
-        // Swap the static collider (absent when a collider ring streams physics).
-        if let Some(collider) = collider {
-            commands.entity(entity).insert((RigidBody::Static, collider));
+        // Defer the (heavy) static-collider rebuild: arm its debounce instead of
+        // building it here, so the VISUAL swap below lands immediately and physics
+        // reconverges shortly after. Collider-ring terrains stream physics → no
+        // static collider to rebuild.
+        if !src.collider_ring {
+            commands.entity(entity).insert(DemColliderDirty(Timer::from_seconds(
+                COLLIDER_DEBOUNCE_SECS,
+                TimerMode::Once,
+            )));
         }
         // Rebuild the static visual mesh, if this terrain uses one (not streaming).
         if has_static_mesh {
@@ -699,6 +705,62 @@ fn finish_dem_restamp(
     }
 }
 
+/// Debounced **static-collider rebuild**, decoupled from the visual re-stamp. When a
+/// re-stamp swaps new heights in it arms [`DemColliderDirty`]; once that settles (no
+/// further re-stamp), this rebuilds the heightfield collider OFF-THREAD from the
+/// current grid. So a slider drag updates the visible terrain right away and physics
+/// reconverges a moment later — instead of every edit blocking on the multi-million-
+/// point collider build. Skips while a build is already in flight (it'll re-arm).
+fn start_dem_collider(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut q: Query<(
+        Entity,
+        &crate::stream_viz::DemHeightField,
+        Has<DemColliderTask>,
+        &mut DemColliderDirty,
+    )>,
+) {
+    for (entity, hf, busy, mut dirty) in &mut q {
+        if !dirty.0.tick(time.delta()).just_finished() {
+            continue;
+        }
+        commands.entity(entity).remove::<DemColliderDirty>();
+        if busy {
+            // A build is still running with older heights → re-arm so we rebuild once
+            // more from the latest grid when it frees up.
+            commands.entity(entity).insert(DemColliderDirty(Timer::from_seconds(
+                COLLIDER_DEBOUNCE_SECS,
+                TimerMode::Once,
+            )));
+            continue;
+        }
+        let grid = hf.0.clone();
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            let h = grid.half_extent as f64;
+            Collider::heightfield(grid.to_avian_heights(), DVec3::new(2.0 * h, 1.0, 2.0 * h))
+        });
+        commands.entity(entity).insert(DemColliderTask(task));
+    }
+}
+
+/// Insert finished off-thread static colliders (see [`start_dem_collider`]).
+fn finish_dem_collider(
+    mut commands: Commands,
+    mut q: Query<(Entity, &mut DemColliderTask)>,
+) {
+    use bevy::tasks::futures_lite::future;
+    for (entity, mut task) in &mut q {
+        let Some(collider) = future::block_on(future::poll_once(&mut task.0)) else {
+            continue;
+        };
+        commands
+            .entity(entity)
+            .remove::<DemColliderTask>()
+            .insert((RigidBody::Static, collider));
+    }
+}
+
 /// Fire to force a re-bake of every layered DEM terrain from its current
 /// [`TerrainLayerStack`]. Re-stamps off the retained base grid + re-scatters (no
 /// GeoTIFF re-read). The usual live-edit path needs no message: editing a layer prim
@@ -732,7 +794,14 @@ pub(crate) fn register(app: &mut App) {
         .add_observer(on_obstacle_spec_rebuild_layers)
         .add_systems(
             Update,
-            (start_dem_builds, finish_dem_builds, start_dem_restamp, finish_dem_restamp),
+            (
+                start_dem_builds,
+                finish_dem_builds,
+                start_dem_restamp,
+                finish_dem_restamp,
+                start_dem_collider,
+                finish_dem_collider,
+            ),
         );
     register_all_commands(app);
 }
