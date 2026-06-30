@@ -71,6 +71,12 @@ impl Plugin for TerrainSurfacePlugin {
                 crate::stream_viz::despawn_orphaned_lod_tiles,
             ),
         );
+        // Composable TERRAIN LAYER stack (authored as USD child layer prims; craters
+        // stamp into the grid, rocks scatter on the surface). The parser registry maps
+        // each `lunco:layer` type → a parser; register more with `App::add_terrain_layer`
+        // — no changes to the build/scatter/regen systems. See `crate::terrain_layers`.
+        app.init_resource::<crate::terrain_layers::TerrainLayerParserRegistry>();
+        app.add_systems(Update, crate::terrain_layers::scatter_terrain_layers);
         // M7 (physics): opt-in per-rover canonical-res heightfield COLLIDER ring.
         // Inert unless a DEM is built with `collider_ring`; then it replaces the
         // static collider with deterministic per-tile colliders streamed around the

@@ -1,0 +1,145 @@
+//! Built-in **rocks** layer: scatters faceted boulders ON the DEM surface (static
+//! drivable obstacles, LOD-culled), ground height resolved from the stamped grid.
+
+use std::sync::Arc;
+
+use avian3d::prelude::{Collider, RigidBody};
+use bevy::camera::visibility::VisibilityRange;
+use bevy::prelude::*;
+use lunco_obstacle_field::rock::faceted_rock_mesh;
+use lunco_obstacle_field::sampler::{salt, sample_layer};
+use lunco_obstacle_field::spec::{Pattern, RockLayer, SizeDist};
+
+use super::{LayerAttrSource, LayerScatterCx, TerrainLayer, TerrainScatterEntity};
+
+/// One scattered rock (kept distinct from [`TerrainScatterEntity`] for selection).
+#[derive(Component)]
+pub struct TerrainRock;
+
+/// Number of size buckets → shared rock meshes (so N rocks reuse a few meshes).
+const ROCK_BUCKETS: usize = 6;
+/// Distance LOD: rocks fully visible to `LOD_FAR`, cross-fade out over `LOD_FADE`.
+const LOD_FAR: f32 = 250.0;
+const LOD_FADE: f32 = 60.0;
+
+fn rock_visibility_range() -> VisibilityRange {
+    VisibilityRange {
+        start_margin: 0.0..0.0,
+        end_margin: LOD_FAR..(LOD_FAR + LOD_FADE),
+        use_aabb: false,
+    }
+}
+
+/// Scatters faceted boulders bounded to a near-field region around the origin.
+struct RockScatterLayer {
+    rocks: RockLayer,
+    region_half_extent: f32,
+    pattern: Pattern,
+    seed: u64,
+}
+
+impl TerrainLayer for RockScatterLayer {
+    fn id(&self) -> &'static str {
+        "rocks"
+    }
+    fn scatter(&self, cx: &mut LayerScatterCx) {
+        let grid = cx.grid;
+        let half = self.region_half_extent.min(grid.half_extent);
+        if half <= 0.0 {
+            return;
+        }
+        let side = (2.0 * half) as f64;
+        let count = ((self.rocks.density as f64 * side * side) / 10_000.0).round().max(0.0) as usize;
+        if count == 0 {
+            return;
+        }
+
+        let placements = sample_layer(
+            self.seed,
+            salt::ROCKS,
+            self.pattern,
+            half,
+            count,
+            self.rocks.size,
+            self.rocks.dynamic_fraction,
+        );
+
+        let size = self.rocks.size;
+        let span = (size.max - size.min).max(1e-3);
+
+        // Build shared visual meshes per size bucket (client only). Done BEFORE the
+        // spawn loop so the `cx.meshes` borrow is released before `cx.commands` is.
+        let bucket_handles: Option<Vec<Handle<Mesh>>> = cx.meshes.as_deref_mut().map(|meshes| {
+            (0..ROCK_BUCKETS)
+                .map(|b| {
+                    let r = size.min + span * (b as f32 / (ROCK_BUCKETS - 1) as f32);
+                    meshes.add(faceted_rock_mesh(self.seed ^ (0xB0 + b as u64), 4, r.max(0.05)))
+                })
+                .collect()
+        });
+        let rock_material = cx.materials.as_deref_mut().map(|materials| {
+            materials.add(StandardMaterial {
+                base_color: Color::srgb(0.10, 0.10, 0.11),
+                perceptual_roughness: 1.0,
+                ..default()
+            })
+        });
+
+        let bucket_of = |sz: f32| -> usize {
+            let t = ((sz - size.min) / span).clamp(0.0, 1.0);
+            ((t * (ROCK_BUCKETS - 1) as f32).round() as usize).min(ROCK_BUCKETS - 1)
+        };
+
+        let mut spawned = 0usize;
+        cx.commands.entity(cx.terrain).with_children(|parent| {
+            for p in &placements {
+                let y = grid.height_at(p.pos.x, p.pos.y);
+                let mut rock = parent.spawn((
+                    TerrainRock,
+                    TerrainScatterEntity,
+                    Name::new("TerrainRock"),
+                    Transform::from_xyz(p.pos.x, y - p.size * 0.25, p.pos.y)
+                        .with_rotation(Quat::from_rotation_y(p.yaw)),
+                    Visibility::Inherited,
+                    RigidBody::Static,
+                    Collider::sphere((p.size * 0.8) as f64),
+                ));
+                if let (Some(handles), Some(mat)) = (&bucket_handles, &rock_material) {
+                    rock.insert((
+                        Mesh3d(handles[bucket_of(p.size)].clone()),
+                        MeshMaterial3d(mat.clone()),
+                        rock_visibility_range(),
+                    ));
+                }
+                spawned += 1;
+            }
+        });
+
+        info!(
+            "[terrain-layer/rocks] scattered {spawned} rock(s) (±{:.0} m region, density {}/ha)",
+            half, self.rocks.density
+        );
+    }
+}
+
+/// Parse a `lunco:layer = "rocks"` prim: `density` (per ha, required > 0), `sizeMode`
+/// (modal radius m), `regionM` (near-field scatter half-extent), `seed`.
+pub(super) fn parse_rock_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
+    let density = a.get_f32("density").unwrap_or(0.0);
+    if density <= 0.0 {
+        return None;
+    }
+    let mode = a.get_f32("sizeMode").unwrap_or(0.6);
+    let rocks = RockLayer {
+        enabled: true,
+        density,
+        size: SizeDist::new(0.2, mode, (mode * 4.0).max(2.5), 0.6),
+        dynamic_fraction: 0.0,
+    };
+    Some(Arc::new(RockScatterLayer {
+        rocks,
+        region_half_extent: a.get_f32("regionM").unwrap_or(300.0),
+        pattern: Pattern::Uniform,
+        seed: a.get_i64("seed").map(|s| s as u64).unwrap_or(0xB0A1),
+    }))
+}

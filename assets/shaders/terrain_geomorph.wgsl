@@ -212,12 +212,27 @@ fn relief_height(xz: vec2<f32>, pw: f32, amp: f32, rock_amp: f32) -> f32 {
     // "Maturity" mask: a smooth low-frequency field that thins the crater field
     // in patches → flatter mare-like basins between saturated-cratered highlands,
     // so the surface stops reading as uniform bubble-wrap.
+    // PERF: footprint fades decide whether each octave is even visible. Compute them
+    // FIRST and early-out — once a feature shrinks under the pixel footprint its
+    // contribution is ~0, so far pixels must SKIP the Voronoi loops, not run them and
+    // multiply by ~0. The @fragment gradient calls this 3×/pixel and looking at the
+    // horizon fills the screen with far tiles; this early-out is the difference
+    // between a ~1 s frame and a fast one.
+    let f_crater = aa_fade(1.0 / 3.0, pw);
+    let f_rock   = aa_fade(1.0 / 1.2, pw);
+    if (f_crater <= 0.0 && f_rock <= 0.0) {
+        return 0.0;
+    }
     let mare = mix(0.45, 1.0, smoothstep(0.35, 0.7, fbm(vec3(xz.x, 0.0, xz.y) * 0.0025, 3, 0.5)));
     var h = 0.0;
-    h = h + crater_octave(xz, 34.0, 2.2,  0.34) * amp * mare * aa_fade(1.0 / 34.0, pw); // big ≈30 m
-    h = h + crater_octave(xz,  9.0, 0.7,  0.42) * amp * mare * aa_fade(1.0 /  9.0, pw); // medium ≈9 m
-    h = h + crater_octave(xz,  2.5, 0.18, 0.48) * amp * mare * aa_fade(1.0 /  2.5, pw); // small ≈2.5 m
-    h = h + rock_octave(xz,    1.2, 0.10, 0.28) * rock_amp * aa_fade(1.0 / 1.2, pw); // rocks
+    // The big + medium impact craters are now REAL GEOMETRY — the DEM-stamped crater
+    // layer (lunco-terrain-surface, driven by ObstacleFieldSpec), which shows in the
+    // mesh AND the collider. So the shader no longer fakes large craters as
+    // normal-only "bubbles" (that competed with — and muddied — the real ones). It
+    // only adds FINE sub-metre texture the geometry can't carry: a sparse scatter of
+    // small ≈3 m pits + rock clods, as micro-relief grain.
+    if (f_crater > 0.0) { h = h + crater_octave(xz, 3.0, 0.06, 0.18) * amp * mare * f_crater; } // ≈3 m pits
+    if (f_rock   > 0.0) { h = h + rock_octave(xz,  1.2, 0.10, 0.28) * rock_amp * f_rock; }      // rock clods
     return h;
 }
 

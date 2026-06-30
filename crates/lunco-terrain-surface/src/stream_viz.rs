@@ -32,13 +32,16 @@ use lunco_materials::{ParamValue, ShaderMaterial, ATTRIBUTE_MORPH_TARGET};
 use crate::quadtree::{QuadCoord, Quadtree, Selected, Square};
 use crate::tile_mesh::bake_tile_mesh;
 
-/// Vertices per tile side (so each tile is `TILE_RES²` verts). 33 → 32² quads.
-const TILE_RES: usize = 33;
-/// Deepest LOD the viz refines to. Bounds the tile count near the camera.
-const MAX_DEPTH: u8 = 6;
+/// Vertices per tile side (so each tile is `TILE_RES²` verts). 49 → 48² quads.
+/// Higher = finer geometry per tile (smoother crater rims / slopes, fewer visible
+/// triangle "lines") at the same tile count — cheap on a modern GPU.
+const TILE_RES: usize = 49;
+/// Deepest LOD the viz refines to. Bounds the tile count near the camera. 7 gives
+/// finer near-field geometry (drivable crater detail) than 6.
+const MAX_DEPTH: u8 = 7;
 /// `refine_range(d) = RANGE_FACTOR · geometric_error(d)`. Larger → refine from
-/// farther (more fine tiles on screen).
-const RANGE_FACTOR: f64 = 3.0;
+/// farther (more fine tiles on screen), so mid-distance crater rims stop faceting.
+const RANGE_FACTOR: f64 = 4.5;
 
 /// The DEM grid retained on a terrain entity so LOD tiles can sample heights.
 /// `Arc` so a future off-thread bake can share it without a copy.

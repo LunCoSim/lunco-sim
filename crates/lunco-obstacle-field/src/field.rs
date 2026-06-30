@@ -72,15 +72,14 @@ impl HeightGrid {
             for ix in min_x..=max_x {
                 let p = self.sample_pos(ix as usize, iz as usize);
                 let d = p.distance(center) / radius; // normalised radial distance
-                let bowl = if d < 1.0 { -depth * (1.0 - d * d) } else { 0.0 };
-                // Raised wall centred on the rim (d = 1), Gaussian falloff.
-                let rim = rim_height * (-((d - 1.0) / 0.28).powi(2)).exp();
-                let delta = (bowl + rim) as f64;
                 let i = self.idx(ix as usize, iz as usize);
-                self.heights[i] += delta;
+                self.heights[i] += crater_delta(d, depth, rim_height) as f64;
             }
         }
     }
+
+    // (crater cross-section moved to the free fn `crater_delta` so the streamed-tile
+    // stamp AND a dedicated high-fidelity crater mesh share one profile.)
 
     /// Stamp every crater placement using the layer's depth/rim ratios.
     pub fn stamp_craters(&mut self, placements: &[Placement], layer: &CraterLayer) {
@@ -144,6 +143,26 @@ impl HeightGrid {
         let indices = grid_indices(res);
         MeshData { positions, normals, uvs, indices }
     }
+}
+
+/// Height delta (m) of a simple bowl crater at normalised radial distance `d`
+/// (0 = centre, 1 = rim radius). Shared by [`HeightGrid::stamp_crater`] (rasterised
+/// into the streamed-tile grid) and the dedicated high-fidelity crater mesh
+/// (`lunco-terrain-surface`'s craters layer), so both agree on the cross-section.
+///
+/// Reads as a real impact, not a soft saucer: a fairly flat floor (`1 - d⁴` stays
+/// near max depth across the floor) turning UP into a steep inner wall, a SHARP
+/// raised rim lip at `d≈1` (the key cue under raking light), then a low outward
+/// ejecta apron to ~1.5 r.
+pub fn crater_delta(d: f32, depth: f32, rim_height: f32) -> f32 {
+    let bowl = if d < 1.0 { -depth * (1.0 - d * d * d * d) } else { 0.0 };
+    let rim = rim_height * (-((d - 0.98) / 0.14).powi(2)).exp();
+    let apron = if (1.0..1.6).contains(&d) {
+        rim_height * 0.25 * (-((d - 1.15) / 0.30).powi(2)).exp()
+    } else {
+        0.0
+    };
+    bowl + rim + apron
 }
 
 /// Smooth normals for a row-major `res×res` vertex grid via central differences

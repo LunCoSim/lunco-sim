@@ -48,6 +48,7 @@ pub mod plugin;
 pub mod query;
 pub mod stream_viz;
 pub mod terrain;
+pub mod terrain_layers;
 pub mod tile_mesh;
 
 // Re-export the shared LOD spine modules so `crate::quadtree` / `crate::source` /
@@ -65,5 +66,13 @@ pub use georef::TerrainGeoref;
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use collider_ring::{ColliderTiles, TerrainColliderRing};
 pub use stream_viz::{DemHeightField, LodTiles, TerrainLodConfig, TerrainLodViz, TerrainShaderMode};
-pub use terrain::{DemTerrainRequest, DemTerrainSurface, SpawnDemTerrain};
+pub use terrain_layers::{
+    make_crater_layer, LayerAttrSource, LayerScatterCx, TerrainLayer, TerrainLayerAppExt,
+    TerrainLayerParser, TerrainLayerParserRegistry, TerrainLayerStack, TerrainLayersApplied,
+    TerrainRock, TerrainScatterEntity,
+};
+pub use terrain::{
+    DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface, RegenerateTerrainLayers,
+    SpawnDemTerrain,
+};
 pub use tile_mesh::{bake_tile_mesh, TileMesh};

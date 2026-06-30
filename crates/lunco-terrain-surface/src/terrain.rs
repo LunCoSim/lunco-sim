@@ -19,6 +19,8 @@ use bevy::tasks::{AsyncComputeTaskPool, Task};
 use big_space::prelude::CellCoord;
 use lunco_core::{on_command, register_commands, Command, GridAnchor, WorldGrid};
 use lunco_obstacle_field::field::{HeightGrid, MeshData};
+use lunco_obstacle_field::sampler::{salt, sample_layer};
+use lunco_obstacle_field::spec::{CraterLayer, Pattern};
 
 use crate::bake::{crop_centered, resample};
 use crate::dem::{height_grid_from_geotiff, DemMetadata};
@@ -39,6 +41,61 @@ const HEAVY_TILE_RES: usize = 2048;
 /// universal `materialType="shader"` path supplies the material.
 #[derive(Component)]
 pub struct DemTerrainSurface;
+
+/// Stamp the shared [`CraterLayer`] (from the global [`ObstacleFieldSpec`]) into a
+/// DEM working grid as REAL geometry — so the large basins appear in BOTH the
+/// streamed visual mesh AND the heightfield collider (you can drive into them).
+///
+/// **Non-destructive** (the source DEM bytes are never touched — only the in-memory
+/// working copy) and **deterministic** (the seed drives placement, so every
+/// networked peer regenerates identical basins with nothing to transfer; the spec
+/// itself already replicates). Distinct from the `terrain_geomorph` shader's fine
+/// normal-only crater texture — this layer owns the big, drivable basins.
+///
+/// Craters fill the WHOLE DEM window (`grid.half_extent`), not the spec's
+/// `region_half_extent` (which bounds the near-field rock scatter). Placement is
+/// **blue-noise** with a `min_spacing` derived from crater size + density — NOT the
+/// spec's `pattern` (which tunes rocks): `stamp_crater` is *additive*, so uniform
+/// overlap stacks rims into spike artifacts and sums bowls into bottomless holes,
+/// and a 3 m Poisson spacing over an 8 km window would blow up. Returns the count
+/// stamped. Pure → safe to call off-thread.
+pub(crate) fn stamp_spec_craters(grid: &mut HeightGrid, craters: &CraterLayer, seed: u64) -> usize {
+    let placements = crater_placements(craters, seed, grid.half_extent);
+    grid.stamp_craters(&placements, craters);
+    placements.len()
+}
+
+/// The deterministic crater placements for a terrain of the given `half_extent` —
+/// the SAME set [`stamp_spec_craters`] rasterises into the grid, so the dedicated
+/// high-fidelity crater mesh (the craters layer's overlay) lands exactly on the
+/// stamped basins. Blue-noise `min_spacing` derived from crater size + density (NOT
+/// the spec pattern): `stamp_crater` is additive, so uniform overlap stacks rims into
+/// spikes, and a 3 m Poisson over an 8 km window would blow up.
+pub(crate) fn crater_placements(
+    craters: &CraterLayer,
+    seed: u64,
+    half_extent: f32,
+) -> Vec<lunco_obstacle_field::sampler::Placement> {
+    if !craters.enabled || craters.density <= 0.0 {
+        return Vec::new();
+    }
+    let side = (2.0 * half_extent) as f64;
+    let count = ((craters.density as f64 * side * side) / 10_000.0).round().max(0.0) as usize;
+    if count == 0 {
+        return Vec::new();
+    }
+    let pitch = (side / count.max(1) as f64).sqrt() as f32 * 0.7;
+    let min_spacing = (craters.size.mode * 2.0).max(pitch).max(6.0);
+    sample_layer(
+        seed,
+        salt::CRATERS,
+        Pattern::PoissonDisk { min_spacing },
+        half_extent,
+        count,
+        craters.size,
+        0.0,
+    )
+}
 
 /// A request to build a DEM tile **onto the entity carrying this component**.
 /// [`start_dem_builds`] kicks the off-thread bake; [`finish_dem_builds`] inserts
@@ -74,6 +131,29 @@ pub struct DemTerrainRequest {
     /// standalone command path; `false` for the USD path, where the prim's
     /// `materialType` authors the material (don't clobber it).
     pub with_default_material: bool,
+    /// **Intelligent upscaling** factor for the working grid. The DEM is coarse
+    /// (~5 m); generated craters are *procedural* and can be far crisper than that.
+    /// `> 1` bilinearly **upscales the coarse ground** to a finer working grid
+    /// (no fake ground detail — just smoother interpolation) BEFORE the crater layer
+    /// stamps into it, so craters get high fidelity (sub-5 m rims) decoupled from the
+    /// DEM resolution. `1` = native. Cost: the static collider + height grid grow
+    /// ~factor² (a load-time structural choice; crater *shape* stays live-tunable).
+    pub detail_upsample: usize,
+}
+
+/// Retained on a built DEM terrain so its crater layer can be **re-baked live**
+/// (Inspector → `RegenerateField`) without re-reading the GeoTIFF: the cropped /
+/// resampled grid BEFORE any craters were stamped. [`crate::derived_layers`]'s
+/// regenerate path clones this, re-stamps the current [`ObstacleFieldSpec`]
+/// craters, and swaps the result into [`crate::stream_viz::DemHeightField`].
+#[derive(Component, Clone)]
+pub struct DemBaseGrid(pub std::sync::Arc<HeightGrid>);
+
+/// Retained build settings a live re-bake needs (whether the static collider or a
+/// streamed collider ring carries physics).
+#[derive(Component, Clone, Copy)]
+pub struct DemTerrainSource {
+    pub collider_ring: bool,
 }
 
 /// Build a DEM terrain from a site directory at **native resolution**. `uri`
@@ -98,6 +178,10 @@ pub struct SpawnDemTerrain {
     /// Stream a per-rover canonical-res collider ring instead of one static
     /// full-DEM collider (replaces it — physics rides the streamed tiles).
     pub collider_ring: bool,
+    /// Convenience: add a crater layer at this density (craters per hectare). `0`
+    /// (default) = no craters. The USD path instead composes layers as child prims
+    /// (see [`crate::terrain_layers`]); this is for the quick command path.
+    pub crater_density: f32,
 }
 
 #[on_command(SpawnDemTerrain)]
@@ -110,6 +194,12 @@ fn on_spawn_dem_terrain(
     if ev.uri.is_empty() {
         warn!("[dem-terrain] SpawnDemTerrain with empty uri ignored");
         return;
+    }
+    // Compose the layer stack: just a crater layer when requested. (The USD path
+    // composes richer stacks from child layer prims.)
+    let mut stack = crate::terrain_layers::TerrainLayerStack::default();
+    if ev.crater_density > 0.0 {
+        stack.0.push(crate::terrain_layers::make_crater_layer(ev.crater_density, 22.0, 0.3, 0xC0FFEE));
     }
     let half_window = match ev.window_m {
         w if w == 0.0 => f64::INFINITY,          // whole map
@@ -129,7 +219,9 @@ fn on_spawn_dem_terrain(
             lod_viz: ev.lod_viz,
             collider_ring: ev.collider_ring,
             with_default_material: true,
+            detail_upsample: 1,
         },
+        stack,
         Transform::IDENTITY,
         Visibility::Inherited,
     ));
@@ -149,9 +241,12 @@ struct DemBuild {
     /// The static visual mesh — `None` in `lod_viz` mode (tiles draw instead).
     mesh: Option<MeshData>,
     collider_heights: Vec<Vec<f64>>,
-    /// The realized tile grid, always retained as the shared `HeightSource` the
-    /// streaming consumers and the `TerrainHeight` query sample.
+    /// The realized tile grid (with craters stamped), always retained as the shared
+    /// `HeightSource` the streaming consumers and the `TerrainHeight` query sample.
     grid: Option<std::sync::Arc<HeightGrid>>,
+    /// The same tile grid BEFORE craters were stamped — retained so a live
+    /// `RegenerateField` re-bakes craters off it without re-reading the GeoTIFF.
+    base_grid: std::sync::Arc<HeightGrid>,
     half_extent: f32,
     /// Tile resolution actually meshed (= native crop res, or the resample target).
     res: usize,
@@ -191,9 +286,12 @@ async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
 /// Kick an off-thread build for each pending request.
 fn start_dem_builds(
     mut commands: Commands,
-    q: Query<(Entity, &DemTerrainRequest), Without<DemBuildTask>>,
+    q: Query<
+        (Entity, &DemTerrainRequest, Option<&crate::terrain_layers::TerrainLayerStack>),
+        Without<DemBuildTask>,
+    >,
 ) {
-    for (entity, req) in &q {
+    for (entity, req, stack) in &q {
         let dir = std::path::PathBuf::from(&req.uri);
         let meta_path = dir.join("metadata.yaml");
         let tif_path = dir.join("materials/textures/heightmap.tif");
@@ -201,6 +299,11 @@ fn start_dem_builds(
         let target_res = req.target_res;
         let lod_viz = req.lod_viz;
         let collider_ring = req.collider_ring;
+        let detail_upsample = req.detail_upsample.max(1);
+        // The terrain's composed layer stack (from its USD child layer prims). Stamp
+        // layers (craters, …) run OFF-THREAD in the build task below; scatter layers
+        // (rocks) are no-ops here and run on the main thread post-build.
+        let layers = stack.map(|s| s.0.clone()).unwrap_or_default();
 
         let task = AsyncComputeTaskPool::get().spawn(async move {
             let meta_bytes = read_bytes(meta_path).await?;
@@ -216,13 +319,33 @@ fn start_dem_builds(
             let tile = crop_centered(&grid, half_window);
             let native_res = tile.res;
             // Optional visual-quality downsample (lossy). 0 / ≥ native keeps native.
-            let tile = if target_res > 0 && target_res < native_res {
+            let mut tile = if target_res > 0 && target_res < native_res {
                 resample(&tile, tile.half_extent as f64, target_res)
             } else {
                 tile
             };
+            // INTELLIGENT UPSCALING: the DEM ground is coarse (~5 m) but generated
+            // craters are procedural and deserve higher fidelity. Bilinearly upscale
+            // the coarse ground to a finer working grid (no fake ground detail — just
+            // smoother interpolation), THEN stamp craters into it so their rims resolve
+            // well below the DEM sampling. Decouples crater fidelity from DEM res.
+            if detail_upsample > 1 {
+                let target = (tile.res - 1) * detail_upsample + 1;
+                tile = resample(&tile, tile.half_extent as f64, target);
+            }
             let half_extent = tile.half_extent;
             let res = tile.res;
+            // Retain the upscaled-but-crater-FREE grid so a live Inspector regenerate
+            // re-stamps craters off it at full detail without re-reading the GeoTIFF.
+            let base_grid = std::sync::Arc::new(tile.clone());
+            // Apply the geometry STAMP layers (craters, …) into the working grid BEFORE
+            // the collider/mesh derive, so both the streamed tiles and the heightfield
+            // collider show (and collide with) the same features. Deterministic from
+            // the spec seed; the source DEM bytes are never touched. Each layer logs
+            // its own contribution.
+            for layer in &layers {
+                layer.stamp(&mut tile);
+            }
             // The static collider is built from these heights; skip the (whole-DEM)
             // allocation when the collider ring will stream per-tile colliders instead.
             let collider_heights = if collider_ring { Vec::new() } else { tile.to_avian_heights() };
@@ -238,6 +361,7 @@ fn start_dem_builds(
                 collider_heights,
                 mesh,
                 grid,
+                base_grid,
                 half_extent,
                 res,
                 native_res,
@@ -294,6 +418,12 @@ fn finish_dem_builds(
                 Collider::heightfield(built.collider_heights, DVec3::new(2.0 * h, 1.0, 2.0 * h));
             e.insert((RigidBody::Static, collider));
         }
+        // Retain the pristine base grid + source settings so the crater layer can be
+        // re-baked live from the Inspector (`RegenerateField`) without disk I/O.
+        e.insert((
+            DemBaseGrid(built.base_grid),
+            DemTerrainSource { collider_ring: req.collider_ring },
+        ));
         // Retain the grid + mark the streaming mode(s). `lod_viz` streams visual LOD
         // tiles (static mesh suppressed); `collider_ring` streams physics tiles
         // (static collider suppressed above). Both sample the retained `DemHeightField`.
@@ -349,10 +479,112 @@ fn finish_dem_builds(
     }
 }
 
+/// Live **re-bake** of the DEM crater + rock layers when the shared
+/// [`ObstacleFieldSpec`] changes (Inspector edit / networked `UpdateObstacleFieldSpec`
+/// → [`RegenerateField`]). This is what makes the *one* obstacle-field Inspector
+/// drive the DEM: no GeoTIFF re-read — craters re-stamp off the retained
+/// [`DemBaseGrid`], the new grid is swapped into [`DemHeightField`], the static
+/// collider is rebuilt, and the streamed visual tiles + their mesh cache are
+/// invalidated so they re-bake from the new heights. Rocks re-scatter by clearing
+/// [`RocksScattered`] (the scatter system re-runs next frame).
+#[allow(clippy::too_many_arguments)]
+fn regenerate_dem_layers(
+    mut events: MessageReader<RegenerateTerrainLayers>,
+    mut commands: Commands,
+    mut terrains: Query<(
+        Entity,
+        &DemBaseGrid,
+        &DemTerrainSource,
+        Ref<crate::terrain_layers::TerrainLayerStack>,
+        &mut crate::stream_viz::DemHeightField,
+        Option<&mut crate::stream_viz::LodTiles>,
+        Has<Mesh3d>,
+    )>,
+    scattered: Query<Entity, With<crate::terrain_layers::TerrainScatterEntity>>,
+    mut meshes: Option<ResMut<Assets<Mesh>>>,
+) {
+    // Re-bake a terrain when its layer stack CHANGED (a USD layer prim was edited →
+    // the stack was re-parsed + re-inserted; change detection avoids command-ordering
+    // races a one-shot message would have), or when a force message is fired.
+    let forced = !events.is_empty();
+    events.clear();
+
+    let mut any = false;
+    for (entity, base, src, stack, mut hf, tiles, has_static_mesh) in &mut terrains {
+        if !forced && !stack.is_changed() {
+            continue;
+        }
+        any = true;
+        // Re-stamp the stack's geometry layers off the pristine (upscaled, crater-free)
+        // base grid — no disk I/O, full crater detail preserved.
+        let mut grid = (*base.0).clone();
+        for layer in &stack.0 {
+            layer.stamp(&mut grid);
+        }
+        let half = grid.half_extent as f64;
+
+        // Rebuild the static heightfield collider (skip when a collider ring streams
+        // physics — it re-derives from the swapped DemHeightField below).
+        if !src.collider_ring {
+            let collider =
+                Collider::heightfield(grid.to_avian_heights(), DVec3::new(2.0 * half, 1.0, 2.0 * half));
+            commands.entity(entity).insert((RigidBody::Static, collider));
+        }
+
+        // Rebuild the static visual mesh, if this terrain uses one (not streaming).
+        if has_static_mesh {
+            if let Some(meshes) = meshes.as_mut() {
+                let MeshData { positions, normals, uvs, indices } = grid.to_mesh_data();
+                commands.entity(entity).insert(Mesh3d(meshes.add(
+                    lunco_obstacle_field::grid_mesh(positions, normals, uvs, indices),
+                )));
+            }
+        }
+
+        // Swap in the new height grid (streaming tiles, collider ring, and the
+        // TerrainHeight query all sample this).
+        *hf = crate::stream_viz::DemHeightField(std::sync::Arc::new(grid));
+
+        // Invalidate streamed visual tiles: despawn the live set + drop in-flight
+        // bakes so update_lod_tiles re-bakes from the new heights.
+        if let Some(mut tiles) = tiles {
+            for (_, e) in tiles.0.drain() {
+                commands.entity(e).try_despawn();
+            }
+            commands.entity(entity).insert(crate::stream_viz::PendingTileBakes::default());
+        }
+
+        // Scatter layers re-run once the applied-marker is gone (next frame).
+        commands.entity(entity).remove::<crate::terrain_layers::TerrainLayersApplied>();
+
+        info!("[dem-terrain] regenerated terrain layers (±{:.0} m)", half);
+    }
+
+    if any {
+        // The cached tile meshes are stale now → drop them so re-baked tiles pick up
+        // the new heights (the cache is keyed by quadtree node, not terrain).
+        commands.insert_resource(crate::stream_viz::LodMeshCache::default());
+        // Despawn old scatter entities (rocks, …); scatter rebuilds from the new spec.
+        for e in &scattered {
+            commands.entity(e).try_despawn();
+        }
+    }
+}
+
+/// Fire to force a re-bake of every layered DEM terrain from its current
+/// [`TerrainLayerStack`]. Re-stamps off the retained base grid + re-scatters (no
+/// GeoTIFF re-read). The usual live-edit path needs no message: editing a layer prim
+/// re-parses + re-inserts the stack, and `regenerate_dem_layers` picks that up via
+/// `Changed<TerrainLayerStack>`. This message is the explicit force path for when the
+/// stack content is unchanged but a re-bake is still wanted.
+#[derive(Message, Default)]
+pub struct RegenerateTerrainLayers;
+
 /// Register the DEM-terrain command + spawn systems. Called from
 /// [`crate::plugin::TerrainSurfacePlugin`].
 pub(crate) fn register(app: &mut App) {
     app.register_type::<SpawnDemTerrain>()
-        .add_systems(Update, (start_dem_builds, finish_dem_builds));
+        .add_message::<RegenerateTerrainLayers>()
+        .add_systems(Update, (start_dem_builds, finish_dem_builds, regenerate_dem_layers));
     register_all_commands(app);
 }
