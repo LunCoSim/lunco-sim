@@ -177,6 +177,7 @@ fn main() {
                 focused_mode: UpdateMode::Continuous,
                 unfocused_mode: UpdateMode::reactive_low_power(std::time::Duration::from_secs(1)),
             });
+            app.add_systems(Update, open_latest_twin_on_startup);
         }
     }
 
@@ -437,4 +438,22 @@ fn setup_web_workbench(
     // No automatic compile on boot: the user clicks Compile when ready.
     // Avoids racing the MSL fetch (lands seconds later on web).
     let _ = (entity, model_name, source, channels);
+}
+
+/// Auto-opens the most recently opened Twin on native GUI startup.
+#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+fn open_latest_twin_on_startup(
+    workspace: Res<lunco_workspace::WorkspaceResource>,
+    mut commands: Commands,
+    mut done: Local<bool>,
+) {
+    if *done {
+        return;
+    }
+    *done = true;
+    if let Some(latest) = workspace.recents.twin_paths.first() {
+        let path = latest.to_string_lossy().into_owned();
+        bevy::log::info!("[lunica] Auto-opening latest twin from recents: {}", path);
+        commands.trigger(lunco_workbench::file_ops::OpenFolder { path });
+    }
 }

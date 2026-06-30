@@ -89,6 +89,8 @@ openusd = { workspace = true }
 lunco-sandbox-edit = { path = "../lunco-sandbox-edit", default-features = false }
 lunco-web = { workspace = true }
 lunco-assets = { workspace = true }
+lunco-workspace = { path = "../lunco-workspace" }
+lunco-twin = { path = "../lunco-twin" }
 # ── UI-only crate deps (gated behind the `ui` feature) ────────────────────
 # A `--no-ui` server build (`--no-default-features --features server`) omits
 # these entirely: the egui workbench, the blueprint/shader material editors,

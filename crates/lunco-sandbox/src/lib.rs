@@ -926,44 +926,95 @@ fn setup_sandbox(world: &mut World) {
     ));
 
     // --- Load scene from USD ---
-    // Routed through the typed-command bus so startup and runtime (API/MCP
-    // `LoadScene`) share one code path. Empty `root_prim` auto-derives
-    // `/PascalCaseFromFilename`.
-    //
-    // An ABSOLUTE `--scene` path names an external Twin scene: register its
-    // folder under the `twin://` source (keyed by the folder name) and load
-    // through that source — stable, cross-platform identity. Relative paths load
-    // from the default `assets/` source unchanged.
-    let load_path = {
-        let pb = std::path::PathBuf::from(&scene_path);
-        match (
-            pb.is_absolute(),
-            pb.parent(),
-            pb.parent().and_then(|p| p.file_name()),
-            pb.file_name(),
-        ) {
-            (true, Some(parent), Some(key), Some(file)) => {
-                let key = key.to_string_lossy().into_owned();
-                world
-                    .resource::<lunco_assets::twin_source::TwinRoots>()
-                    .register(&key, parent);
-                format!("twin://{}/{}", key, file.to_string_lossy())
-            }
-            _ => scene_path.clone(),
-        }
+    // Resolve the absolute path to find the enclosing Twin folder.
+    let pb = std::path::PathBuf::from(&scene_path);
+    let abs_path = if pb.is_absolute() {
+        pb
+    } else {
+        std::env::current_dir().unwrap_or_default().join("assets").join(pb)
     };
-    info!("Loading sandbox scene `{}` via LoadScene", load_path);
-    // Arm the fail-loud guard with the requested scene's file name, so a
-    // load failure (bad path → missing asset) is fatal instead of silent.
-    let scene_file = std::path::Path::new(&load_path)
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| load_path.clone());
-    world.insert_resource(StartupSceneGuard { file: scene_file });
-    world.trigger(LoadScene {
-        path: load_path,
-        root_prim: String::new(),
+
+    // Find the enclosing Twin root folder (walk up to find twin.toml or use the parent dir)
+    let mut current = abs_path.parent().map(|p| p.to_path_buf());
+    let mut twin_root = None;
+    while let Some(dir) = current {
+        if dir.join(lunco_twin::MANIFEST_FILENAME).is_file() {
+            twin_root = Some(dir);
+            break;
+        }
+        current = dir.parent().map(|p| p.to_path_buf());
+    }
+    let twin_root = twin_root.unwrap_or_else(|| {
+        abs_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
     });
+
+    let scene_file = abs_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    world.insert_resource(StartupSceneGuard { file: scene_file.clone() });
+
+    let mut twin_loaded = false;
+    if let Ok(twin_mode) = lunco_twin::TwinMode::open(&twin_root) {
+        let mut twin = match twin_mode {
+            lunco_twin::TwinMode::Twin(t) | lunco_twin::TwinMode::Folder(t) => t,
+            lunco_twin::TwinMode::Orphan(_) => panic!("expected folder or twin"),
+        };
+
+        // Override or insert default_scene in the manifest
+        let rel_scene_path = abs_path.strip_prefix(&twin_root)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or(scene_file.clone());
+
+        if let Some(manifest) = &mut twin.manifest {
+            if let Some(usd) = &mut manifest.usd {
+                usd.default_scene = Some(rel_scene_path);
+            } else {
+                manifest.usd = Some(lunco_twin::UsdManifest {
+                    default_scene: Some(rel_scene_path),
+                });
+            }
+        } else {
+            // It was loaded as Folder, create a default manifest
+            twin.manifest = Some(lunco_twin::TwinManifest {
+                name: twin_root.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+                description: None,
+                version: "0.1.0".into(),
+                default_perspective: None,
+                children: Vec::new(),
+                usd: Some(lunco_twin::UsdManifest {
+                    default_scene: Some(rel_scene_path),
+                }),
+            });
+        }
+
+        let twin_id = world.resource_mut::<lunco_workspace::WorkspaceResource>().add_twin(twin);
+        world.trigger(lunco_workspace::TwinAdded { twin: twin_id });
+        twin_loaded = true;
+    }
+
+    if !twin_loaded {
+        let load_path = {
+            let pb = std::path::PathBuf::from(&scene_path);
+            match (
+                pb.is_absolute(),
+                pb.parent(),
+                pb.parent().and_then(|p| p.file_name()),
+                pb.file_name(),
+            ) {
+                (true, Some(parent), Some(key), Some(file)) => {
+                    let key = key.to_string_lossy().into_owned();
+                    world
+                        .resource::<lunco_assets::twin_source::TwinRoots>()
+                        .register(&key, parent);
+                    format!("twin://{}/{}", key, file.to_string_lossy())
+                }
+                _ => scene_path.clone(),
+            }
+        };
+        info!("Failed to load Twin; falling back to direct load of sandbox scene `{}` via LoadScene", load_path);
+        world.trigger(LoadScene {
+            path: load_path,
+            root_prim: String::new(),
+        });
+    }
     // NOTE: full USD doc-backing of the `--scene` (Step 0 / E1b `sync_twin_overlays`)
     // is deliberately NOT enabled here. It works, but its edit path RELOADS +
     // re-instantiates the WHOLE scene on every USD edit, which fights the terrain's

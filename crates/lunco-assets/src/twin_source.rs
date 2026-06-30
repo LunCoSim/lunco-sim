@@ -155,9 +155,18 @@ impl TwinReader {
     /// Resolve `twin://`-relative `<name>/<rel>` to an absolute filesystem path.
     fn resolve(&self, path: &Path) -> Option<PathBuf> {
         let mut comps = path.components();
-        let name = comps.next()?.as_os_str().to_str()?;
-        let root = self.roots.root_for(name)?;
-        Some(root.join(comps.as_path()))
+        let first = comps.next()?;
+        let first_str = first.as_os_str().to_str()?;
+        if first_str == ".." {
+            // Relative path escaped the Twin root!
+            // Resolve relative to the parent of the primary Twin root.
+            let (_, primary_root) = self.roots.primary()?;
+            let parent = primary_root.parent()?;
+            Some(parent.join(path))
+        } else {
+            let root = self.roots.root_for(first_str)?;
+            Some(root.join(comps.as_path()))
+        }
     }
 }
 
