@@ -712,19 +712,22 @@ fn instantiate_usd_prim(
         // Only override position/rotation if the USD prim has explicit NON-ZERO values.
         // A zero translation in USD means "no offset" — it shouldn't overwrite a spawn position.
         let mut transform = existing_tf.cloned().unwrap_or_default();
-        if let Some(v) = get_attribute_as_vec3(reader, &sdf_path, "xformOp:translate") {
-            // Only apply USD translation if it's non-zero (to avoid overwriting spawn positions)
+        // Full local transform: `xformOpOrder` composition when authored, else a
+        // full `xformOp:transform` matrix, else piecewise translate + the full
+        // rotation set (Euler orders, `orient`, single-axis) + scale. Each
+        // component is applied with a spawn-preservation guard so an identity/zero
+        // USD value doesn't clobber a code-set spawn pose.
+        let usd_tf = local_transform_at(reader, &sdf_path, 0.0);
+        if let Some(v) = usd_tf.map(|t| t.translation) {
+            // Only apply USD translation if it's non-zero (avoid overwriting spawn positions).
             if v.length_squared() > 1e-6 {
                 transform.translation = v;
             }
         }
-        if let Some(v) = get_attribute_as_vec3(reader, &sdf_path, "xformOp:rotateXYZ") {
-            // USD stores rotation in degrees; the canonical decoder
-            // converts to radians. Only apply USD rotation if it's
-            // non-zero (to preserve existing spawn rotation).
-            let is_zero = v.x.abs() < 1e-6 && v.y.abs() < 1e-6 && v.z.abs() < 1e-6;
-            if !is_zero {
-                transform.rotation = euler_xyz_deg_to_quat(v);
+        if let Some(q) = usd_tf.map(|t| t.rotation) {
+            // Only apply a non-identity USD rotation (preserve spawn rotation otherwise).
+            if !q.abs_diff_eq(Quat::IDENTITY, 1e-6) {
+                transform.rotation = q;
             }
         }
         // UsdGeomCylinder.axis token (X|Y|Z, default Z). Compose the
@@ -745,11 +748,12 @@ fn instantiate_usd_prim(
                 transform.rotation
             );
         }
-        // `xformOp:scale` (UsdGeomXformable) — non-uniform scaling
-        // composed with translate + rotate. Spec-compliant `Cube`
-        // prims rely on this to express width/height/depth without
-        // the legacy `width`/`height`/`depth` attributes.
-        if let Some(v) = get_attribute_as_vec3(reader, &sdf_path, "xformOp:scale") {
+        // `xformOp:scale` (UsdGeomXformable) — non-uniform scaling composed with
+        // translate + rotate. Spec-compliant `Cube` prims rely on this to express
+        // width/height/depth without the legacy `width`/`height`/`depth`
+        // attributes. The composed transform (matrix / xformOpOrder) carries scale too.
+        let usd_scale = usd_tf.map(|t| t.scale);
+        if let Some(v) = usd_scale {
             let nonzero = v.x.abs() > 1e-6 || v.y.abs() > 1e-6 || v.z.abs() > 1e-6;
             if nonzero {
                 transform.scale = v;
@@ -1458,14 +1462,14 @@ pub const ANIMATED_XFORM_OPS: [&str; 3] =
 pub const ANIMATED_SHADER_INPUTS: [&str; 2] = ["inputs:diffuseColor", "inputs:opacity"];
 
 /// True iff any of the entity's xform ops carries `timeSamples` — i.e. the prim
-/// is animated and the entity should get the [`UsdAnimated`] marker. Covers the
-/// `ANIMATED_XFORM_OPS` (T/Euler-R/S) plus the quaternion `xformOp:orient`
-/// rotation channel.
+/// is animated and the entity should get the [`UsdAnimated`] marker. Covers
+/// translate / scale, the full matrix `xformOp:transform`, and every rotation
+/// channel ([`ROTATION_OPS`]: Euler orders, `orient`, single-axis).
 pub fn prim_has_xform_time_samples(reader: &UsdData, path: &SdfPath) -> bool {
-    ANIMATED_XFORM_OPS
-        .iter()
-        .any(|op| attr_has_time_samples(reader, path, op))
-        || attr_has_time_samples(reader, path, "xformOp:orient")
+    attr_has_time_samples(reader, path, "xformOp:translate")
+        || attr_has_time_samples(reader, path, "xformOp:scale")
+        || attr_has_time_samples(reader, path, "xformOp:transform")
+        || prim_rotation_animated(reader, path)
 }
 
 /// True iff the prim carries ANY channel the runtime samples per-frame: an
@@ -1535,10 +1539,12 @@ fn attr_sample_span(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<(f64
 /// guessed range.
 pub fn animated_time_range(reader: &UsdData, path: &SdfPath) -> Option<(f64, f64)> {
     let mut spans: Vec<(f64, f64)> = Vec::new();
-    for op in ANIMATED_XFORM_OPS {
+    for op in ["xformOp:translate", "xformOp:scale", "xformOp:transform"] {
         spans.extend(attr_sample_span(reader, path, op));
     }
-    spans.extend(attr_sample_span(reader, path, "xformOp:orient"));
+    for op in ROTATION_OPS {
+        spans.extend(attr_sample_span(reader, path, op));
+    }
     spans.extend(attr_sample_span(reader, path, "visibility"));
     spans.extend(attr_sample_span(reader, path, "primvars:displayColor"));
     if let Some(shader) = resolve_bound_shader(reader, path) {
@@ -1575,27 +1581,6 @@ fn sample_animated_vec3(reader: &UsdData, path: &SdfPath, attr: &str, time: f64)
         return None;
     }
     read_vec3_f64_at(reader, path, attr, time)
-}
-
-/// Sample an animated **quaternion** channel (`xformOp:orient`) at `time`.
-/// openusd's evaluator **slerps** quaternions (shortest-arc), so this is correct
-/// rotation interpolation — unlike component-lerping Euler angles, which can
-/// wobble or gimbal-lock. `None` for a static channel (held by the caller) or a
-/// half-precision `quath` orient (uncommon; not yet supported). USD authors the
-/// quaternion as `(w, x, y, z)`; Bevy's `Quat` is `(x, y, z, w)`.
-fn sample_animated_quat(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<Quat> {
-    if !attr_has_time_samples(reader, path, attr) {
-        return None;
-    }
-    let attr_path = path.append_property(attr).ok()?;
-    let Some(Value::TimeSamples(samples)) = reader.field(&attr_path, "timeSamples") else {
-        return None;
-    };
-    match openusd::usd::evaluate(samples, time, openusd::usd::InterpolationType::Linear)? {
-        Value::Quatf(q) => Some(Quat::from_xyzw(q.x, q.y, q.z, q.w)),
-        Value::Quatd(q) => Some(Quat::from_xyzw(q.x as f32, q.y as f32, q.z as f32, q.w as f32)),
-        _ => None,
-    }
 }
 
 /// Per-frame USD animation sampler (doc 19 — the animation funnel / T5).
@@ -1635,20 +1620,38 @@ pub fn sample_usd_animation(
         let secs = lunco_time::domain_time(&resolved, binding, &world);
         let t = secs * stage_time_codes_per_second(reader);
 
-        if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:translate", t) {
-            tf.translation = Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
-        }
-        if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:rotateXYZ", t) {
-            tf.rotation = euler_xyz_deg_to_quat(Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32));
-        }
-        // Quaternion rotation (`xformOp:orient`) — slerped, wins over Euler when
-        // both are authored (they normally aren't). This is the channel DCC tools
-        // export for animated rotation.
-        if let Some(q) = sample_animated_quat(reader, &sdf_path, "xformOp:orient", t) {
-            tf.rotation = q;
-        }
-        if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:scale", t) {
-            tf.scale = Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
+        // An authored `xformOpOrder` defines the whole local transform — recompose
+        // it (honoring op order) so non-TRS stacks animate correctly. Else an
+        // `xformOp:transform` matrix drives the full pose. Else sample the
+        // piecewise translate / rotation / scale channels (the per-channel gate
+        // preserves a code-set spawn pose on un-animated channels).
+        if has_xform_op_order(reader, &sdf_path) {
+            if let Some(m) = compose_xform_order_at(reader, &sdf_path, t) {
+                tf.translation = m.translation;
+                tf.rotation = m.rotation;
+                tf.scale = m.scale;
+            }
+        } else if attr_has_time_samples(reader, &sdf_path, "xformOp:transform") {
+            if let Some(m) = read_matrix_transform_at(reader, &sdf_path, t) {
+                tf.translation = m.translation;
+                tf.rotation = m.rotation;
+                tf.scale = m.scale;
+            }
+        } else {
+            if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:translate", t) {
+                tf.translation = Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
+            }
+            // Any animated rotation channel → recompose the full local rotation
+            // (Euler order / `orient` slerp / single-axis) at `t`. Static rotation
+            // ops in the mix contribute their `default`.
+            if prim_rotation_animated(reader, &sdf_path) {
+                if let Some(q) = local_rotation_at(reader, &sdf_path, t) {
+                    tf.rotation = q;
+                }
+            }
+            if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:scale", t) {
+                tf.scale = Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
+            }
         }
 
         // Animated `visibility` (token, held): `invisible` → `Hidden`, anything
@@ -1814,18 +1817,237 @@ pub fn euler_xyz_deg_to_quat(deg: Vec3) -> Quat {
     )
 }
 
-/// Canonical local-transform decode from `xformOp:translate` +
-/// `xformOp:rotateXYZ`. Scale is left at `ONE` (callers that need
-/// `xformOp:scale` compose it themselves; avian pre-applies scale onto
-/// the collider instead). Avian downcasts the resulting `Transform` to
-/// `DVec3`/`DQuat` at its call site.
+/// USD rotation xform-ops, in sampler precedence: the quaternion `orient`, then
+/// the six Euler-order triples, then the single-axis scalars. A prim normally
+/// authors exactly one; when several are present they compose in this order
+/// (`local_rotation_at`).
+pub const ROTATION_OPS: [&str; 10] = [
+    "xformOp:orient",
+    "xformOp:rotateXYZ", "xformOp:rotateXZY", "xformOp:rotateYXZ",
+    "xformOp:rotateYZX", "xformOp:rotateZXY", "xformOp:rotateZYX",
+    "xformOp:rotateX", "xformOp:rotateY", "xformOp:rotateZ",
+];
+
+/// Map a USD Euler-order op name + authored **degrees** (`float3`, each
+/// component the angle about that axis) to a Bevy `Quat`. The op-name letter
+/// order is the application sequence. `None` for a non-Euler-order op name.
+fn euler_op_to_quat(op: &str, deg: Vec3) -> Option<Quat> {
+    let (x, y, z) = (deg.x.to_radians(), deg.y.to_radians(), deg.z.to_radians());
+    let q = match op {
+        "xformOp:rotateXYZ" => Quat::from_euler(EulerRot::XYZ, x, y, z),
+        "xformOp:rotateXZY" => Quat::from_euler(EulerRot::XZY, x, z, y),
+        "xformOp:rotateYXZ" => Quat::from_euler(EulerRot::YXZ, y, x, z),
+        "xformOp:rotateYZX" => Quat::from_euler(EulerRot::YZX, y, z, x),
+        "xformOp:rotateZXY" => Quat::from_euler(EulerRot::ZXY, z, x, y),
+        "xformOp:rotateZYX" => Quat::from_euler(EulerRot::ZYX, z, y, x),
+        _ => return None,
+    };
+    Some(q)
+}
+
+/// A USD quaternion value (`quatf`/`quatd`/`quath`) → Bevy `Quat`. USD authors
+/// `(w, x, y, z)`; Bevy is `(x, y, z, w)`. Half-precision components convert via
+/// `f16::to_f32` (no raw `f16` arithmetic in this crate).
+fn quat_from_value(v: &Value) -> Option<Quat> {
+    match v {
+        Value::Quatf(q) => Some(Quat::from_xyzw(q.x, q.y, q.z, q.w)),
+        Value::Quatd(q) => Some(Quat::from_xyzw(q.x as f32, q.y as f32, q.z as f32, q.w as f32)),
+        Value::Quath(q) => Some(Quat::from_xyzw(q.x.to_f32(), q.y.to_f32(), q.z.to_f32(), q.w.to_f32())),
+        _ => None,
+    }
+}
+
+/// One attribute's value at time code `time` — `timeSamples` interpolated
+/// (held/linear; quaternions slerp) when authored, else the `default` opinion.
+/// `None` when the attribute is absent. The shared read for the rotation /
+/// matrix composers, which serve both static decode and the animation sampler.
+fn value_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<Value> {
+    let ap = path.append_property(attr).ok()?;
+    if let Some(Value::TimeSamples(s)) = reader.field(&ap, "timeSamples") {
+        if let Some(v) = openusd::usd::evaluate(s, time, openusd::usd::InterpolationType::Linear) {
+            return Some(v);
+        }
+    }
+    reader.field(&ap, "default").cloned()
+}
+
+/// A scalar numeric attribute (`float`/`double`, or integer-authored angles) at
+/// time `time` (timeSamples-or-default). The int fallback avoids the silent-`None`
+/// trap when an angle is authored as a bare integer (`rotateZ = 90`). `None` when
+/// absent or non-numeric.
+fn read_scalar_f32_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
+    reader
+        .prim_attribute_value_at::<f32>(path, attr, time)
+        .or_else(|| reader.prim_attribute_value_at::<f64>(path, attr, time).map(|v| v as f32))
+        .or_else(|| match value_at(reader, path, attr, time)? {
+            Value::Int(v) => Some(v as f32),
+            Value::Int64(v) => Some(v as f32),
+            _ => None,
+        })
+}
+
+/// Composed local **rotation** at time code `time` from whatever rotation
+/// xform-op(s) the prim authors: quaternion `orient` (slerped), else an
+/// Euler-order triple (`rotateXYZ`…`rotateZYX`), else single-axis `rotateX/Y/Z`
+/// composed about X then Y then Z. Each channel reads its `default` when static,
+/// so this serves both load-time decode (any `time`) and the animation sampler.
+/// `None` when the prim authors no rotation op.
+pub fn local_rotation_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option<Quat> {
+    // 1. Quaternion orient wins.
+    if let Some(q) = value_at(reader, path, "xformOp:orient", time).and_then(|v| quat_from_value(&v)) {
+        return Some(q);
+    }
+    // 2. An Euler-order triple (degrees).
+    for op in &ROTATION_OPS[1..7] {
+        if let Some(v) = read_vec3_f64_at(reader, path, op, time) {
+            return euler_op_to_quat(op, Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32));
+        }
+    }
+    // 3. Single-axis scalars, composed (rotate about X, then Y, then Z).
+    let mut q = Quat::IDENTITY;
+    let mut any = false;
+    for (op, axis) in [
+        ("xformOp:rotateX", Vec3::X),
+        ("xformOp:rotateY", Vec3::Y),
+        ("xformOp:rotateZ", Vec3::Z),
+    ] {
+        if let Some(a) = read_scalar_f32_at(reader, path, op, time) {
+            q = Quat::from_axis_angle(axis, a.to_radians()) * q;
+            any = true;
+        }
+    }
+    any.then_some(q)
+}
+
+/// `xformOp:transform` (matrix4d) at time `time`, decomposed to a Bevy
+/// `Transform`. USD matrices are row-major / row-vector with translation in the
+/// last row — exactly glam's column-major / column-vector layout transposed, and
+/// the two transposes cancel, so the raw 16 elements feed `Mat4::from_cols_array`
+/// directly. `None` when no `xformOp:transform` is authored.
+pub fn read_matrix_transform_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option<Transform> {
+    match value_at(reader, path, "xformOp:transform", time)? {
+        Value::Matrix4d(m) => {
+            let cols: [f32; 16] = std::array::from_fn(|i| m.0[i] as f32);
+            Some(Transform::from_matrix(Mat4::from_cols_array(&cols)))
+        }
+        _ => None,
+    }
+}
+
+/// True iff any rotation xform-op carries `timeSamples` (so the sampler must
+/// recompose the prim's rotation this frame).
+fn prim_rotation_animated(reader: &UsdData, path: &SdfPath) -> bool {
+    ROTATION_OPS.iter().any(|op| attr_has_time_samples(reader, path, op))
+}
+
+/// The prim's authored `xformOpOrder` (the ordered op-token list), or `None`
+/// when unauthored or empty. When authored it is the **authoritative** op
+/// sequence — [`compose_xform_order_at`] honors it exactly, including non-TRS
+/// orders the piecewise decode can't express.
+fn read_xform_op_order(reader: &UsdData, path: &SdfPath) -> Option<Vec<String>> {
+    let ap = path.append_property("xformOpOrder").ok()?;
+    let order: Vec<String> = match reader.field(&ap, "default")? {
+        Value::TokenVec(v) => v.iter().map(|t| t.to_string()).collect(),
+        Value::StringVec(v) => v.clone(),
+        _ => return None,
+    };
+    (!order.is_empty()).then_some(order)
+}
+
+/// True iff the prim authors a non-empty `xformOpOrder` (so its local transform
+/// is defined by the ordered op stack, not the implicit TRS fallback).
+fn has_xform_op_order(reader: &UsdData, path: &SdfPath) -> bool {
+    read_xform_op_order(reader, path).is_some()
+}
+
+/// The glam matrix for one `xformOp:*` token at time `time` (already in glam's
+/// column-vector form). Handles every op kind — translate / scale / the six
+/// Euler orders / single-axis / `orient` / the full `transform` matrix — keyed
+/// by the type segment after `xformOp:` (so a named op like
+/// `xformOp:translate:pivot` still resolves). `None` for an unknown or absent op.
+fn op_matrix_at(reader: &UsdData, path: &SdfPath, token: &str, time: f64) -> Option<Mat4> {
+    let kind = token.strip_prefix("xformOp:")?.split(':').next()?;
+    let vec3 = |v: [f64; 3]| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
+    let m = match kind {
+        "translate" => Mat4::from_translation(vec3(read_vec3_f64_at(reader, path, token, time)?)),
+        "scale" => Mat4::from_scale(vec3(read_vec3_f64_at(reader, path, token, time)?)),
+        "orient" => Mat4::from_quat(quat_from_value(&value_at(reader, path, token, time)?)?),
+        "transform" => match value_at(reader, path, token, time)? {
+            Value::Matrix4d(m) => Mat4::from_cols_array(&std::array::from_fn(|i| m.0[i] as f32)),
+            _ => return None,
+        },
+        "rotateX" => Mat4::from_rotation_x(read_scalar_f32_at(reader, path, token, time)?.to_radians()),
+        "rotateY" => Mat4::from_rotation_y(read_scalar_f32_at(reader, path, token, time)?.to_radians()),
+        "rotateZ" => Mat4::from_rotation_z(read_scalar_f32_at(reader, path, token, time)?.to_radians()),
+        "rotateXYZ" | "rotateXZY" | "rotateYXZ" | "rotateYZX" | "rotateZXY" | "rotateZYX" => {
+            let v = read_vec3_f64_at(reader, path, token, time)?;
+            Mat4::from_quat(euler_op_to_quat(&format!("xformOp:{kind}"), vec3(v))?)
+        }
+        _ => return None,
+    };
+    Some(m)
+}
+
+/// Compose the prim's local `Transform` at time `time` from its `xformOpOrder`,
+/// honoring op order and `!invert!` prefixes (USD §`UsdGeomXformable`). USD uses
+/// row vectors with the composite `M = M(opₙ)·…·M(op₀)` (the **last** listed op
+/// is applied first to the geometry — openusd's `Matrix4d::from_trs` builds
+/// `S·R·T` for the standard `["translate","rotateXYZ","scale"]`). In glam's
+/// column-vector form that is `m₀·m₁·…·mₙ`, so each op **right**-multiplies the
+/// accumulator. `None` when no `xformOpOrder` is authored. A listed op that fails
+/// to read is skipped (treated as identity), matching USD's lenient stack.
+pub fn compose_xform_order_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option<Transform> {
+    let order = read_xform_op_order(reader, path)?;
+    let mut m = Mat4::IDENTITY;
+    for token in &order {
+        let (token, invert) = match token.strip_prefix("!invert!") {
+            Some(rest) => (rest, true),
+            None => (token.as_str(), false),
+        };
+        let Some(op_mat) = op_matrix_at(reader, path, token, time) else { continue };
+        m *= if invert { op_mat.inverse() } else { op_mat };
+    }
+    Some(Transform::from_matrix(m))
+}
+
+/// The prim's full local `Transform` at time `time`: `xformOpOrder` composition
+/// when authored (authoritative), else a full `xformOp:transform` matrix, else
+/// the implicit-order piecewise fallback (translate + [`local_rotation_at`] +
+/// scale). `None` when the prim authors no xform op at all — the caller then
+/// keeps the entity's existing transform. Shared by the static decoder and the
+/// animation sampler so both agree.
+pub fn local_transform_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option<Transform> {
+    if let Some(tf) = compose_xform_order_at(reader, path, time) {
+        return Some(tf);
+    }
+    if let Some(tf) = read_matrix_transform_at(reader, path, time) {
+        return Some(tf);
+    }
+    let t = read_vec3_f64_at(reader, path, "xformOp:translate", time);
+    let r = local_rotation_at(reader, path, time);
+    let s = read_vec3_f64_at(reader, path, "xformOp:scale", time);
+    if t.is_none() && r.is_none() && s.is_none() {
+        return None;
+    }
+    let vec3 = |v: [f64; 3]| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
+    Some(Transform {
+        translation: t.map(vec3).unwrap_or(Vec3::ZERO),
+        rotation: r.unwrap_or(Quat::IDENTITY),
+        scale: s.map(vec3).unwrap_or(Vec3::ONE),
+    })
+}
+
+/// Canonical local-transform decode via [`local_transform_at`] — `xformOpOrder`
+/// composition when authored, else a full `xformOp:transform`, else piecewise
+/// translate + the full rotation set ([`local_rotation_at`]). Scale is forced to
+/// `ONE` (callers that need `xformOp:scale` compose it themselves; avian
+/// pre-applies scale onto the collider instead). Avian downcasts the resulting
+/// `Transform` to `DVec3`/`DQuat` at its call site.
 pub fn read_transform_from_usd(reader: &UsdData, path: &SdfPath) -> Transform {
-    let translation =
-        get_attribute_as_vec3(reader, path, "xformOp:translate").unwrap_or(Vec3::ZERO);
-    let rotation = get_attribute_as_vec3(reader, path, "xformOp:rotateXYZ")
-        .map(euler_xyz_deg_to_quat)
-        .unwrap_or(Quat::IDENTITY);
-    Transform { translation, rotation, scale: Vec3::ONE }
+    match local_transform_at(reader, path, 0.0) {
+        Some(tf) => Transform { scale: Vec3::ONE, ..tf },
+        None => Transform::IDENTITY,
+    }
 }
 
 /// Canonical `UsdGeom` `axis` token → quaternion folding. A Bevy/Avian
@@ -2880,15 +3102,135 @@ def Xform "Spinner"
         assert!(prim_has_xform_time_samples(&reader, &spinner));
         assert!(prim_is_animated(&reader, &spinner));
         // USD (w,x,y,z) = (1,0,0,0) → Bevy identity at the first key.
-        let q0 = sample_animated_quat(&reader, &spinner, "xformOp:orient", 0.0).unwrap();
+        let q0 = local_rotation_at(&reader, &spinner, 0.0).unwrap();
         assert!(q0.abs_diff_eq(Quat::IDENTITY, 1e-6));
         // Held past the last key → (0,1,0,0) = 180° about X.
-        let q_end = sample_animated_quat(&reader, &spinner, "xformOp:orient", 99.0).unwrap();
+        let q_end = local_rotation_at(&reader, &spinner, 99.0).unwrap();
         assert!(q_end.abs_diff_eq(Quat::from_xyzw(1.0, 0.0, 0.0, 0.0), 1e-6));
         // Midway slerps to 90° about X (normalized) — not a component lerp.
-        let q_mid = sample_animated_quat(&reader, &spinner, "xformOp:orient", 5.0).unwrap();
+        let q_mid = local_rotation_at(&reader, &spinner, 5.0).unwrap();
         assert!(q_mid.is_normalized());
         assert!(q_mid.abs_diff_eq(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2), 1e-5));
+    }
+
+    const ROTATION_OPS_SCENE: &str = r#"#usda 1.0
+
+def Xform "HingeZ"
+{
+    float xformOp:rotateZ.timeSamples = {
+        0: 0.0,
+        4: 90.0,
+    }
+}
+
+def Xform "EulerZYX"
+{
+    float3 xformOp:rotateZYX = (0, 0, 90)
+}
+
+def Xform "Matrixed"
+{
+    matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (3, 4, 5, 1) )
+}
+"#;
+
+    #[test]
+    fn single_axis_rotation_is_detected_and_composed() {
+        let reader = parse(ROTATION_OPS_SCENE);
+        let hinge = SdfPath::new("/HingeZ").unwrap();
+        // A single-axis `rotateZ` time-sample marks the prim animated.
+        assert!(prim_has_xform_time_samples(&reader, &hinge));
+        // Held start = 0° → identity; midway (code 2) = 45° about Z.
+        assert!(local_rotation_at(&reader, &hinge, 0.0).unwrap().abs_diff_eq(Quat::IDENTITY, 1e-6));
+        let q = local_rotation_at(&reader, &hinge, 2.0).unwrap();
+        assert!(q.abs_diff_eq(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4), 1e-5));
+    }
+
+    #[test]
+    fn euler_order_zyx_composes() {
+        let reader = parse(ROTATION_OPS_SCENE);
+        // `rotateZYX = (0,0,90)` → 90° about Z (the X and Y angles are zero).
+        let q = local_rotation_at(&reader, &SdfPath::new("/EulerZYX").unwrap(), 0.0).unwrap();
+        assert!(q.abs_diff_eq(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2), 1e-5));
+    }
+
+    #[test]
+    fn quath_orient_decodes() {
+        // Half-precision quaternion orient: USD (w,x,y,z) = (0,1,0,0) → 180° about
+        // X. Proves the `quath` arm (via `f16::to_f32`) decodes.
+        let scene = r#"#usda 1.0
+def Xform "HalfSpin"
+{
+    quath xformOp:orient = (0, 1, 0, 0)
+}
+"#;
+        let reader = parse(scene);
+        let q = local_rotation_at(&reader, &SdfPath::new("/HalfSpin").unwrap(), 0.0).unwrap();
+        assert!(q.abs_diff_eq(Quat::from_xyzw(1.0, 0.0, 0.0, 0.0), 1e-3));
+    }
+
+    const ORDER_SCENE: &str = r#"#usda 1.0
+
+def Xform "ScaleFirst"
+{
+    double3 xformOp:translate = (1, 0, 0)
+    double3 xformOp:scale = (2, 2, 2)
+    uniform token[] xformOpOrder = ["xformOp:scale", "xformOp:translate"]
+}
+
+def Xform "TranslateFirst"
+{
+    double3 xformOp:translate = (1, 0, 0)
+    double3 xformOp:scale = (2, 2, 2)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+}
+
+def Xform "Std"
+{
+    double3 xformOp:translate = (5, 6, 7)
+    float3 xformOp:rotateXYZ = (0, 0, 90)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+}
+"#;
+
+    #[test]
+    fn xform_op_order_is_honored() {
+        let reader = parse(ORDER_SCENE);
+        // `["scale","translate"]`: translate is the LAST op → applied first to the
+        // geometry, then `scale` (first op) scales it → translation (2,0,0).
+        let sf = compose_xform_order_at(&reader, &SdfPath::new("/ScaleFirst").unwrap(), 0.0).unwrap();
+        assert!(sf.translation.abs_diff_eq(Vec3::new(2.0, 0.0, 0.0), 1e-5));
+        assert!(sf.scale.abs_diff_eq(Vec3::splat(2.0), 1e-5));
+        // `["translate","scale"]` (standard order): scale applied first, then the
+        // unscaled translate → (1,0,0). Different result ⇒ op order is honored.
+        let tf = compose_xform_order_at(&reader, &SdfPath::new("/TranslateFirst").unwrap(), 0.0).unwrap();
+        assert!(tf.translation.abs_diff_eq(Vec3::new(1.0, 0.0, 0.0), 1e-5));
+        assert!(tf.scale.abs_diff_eq(Vec3::splat(2.0), 1e-5));
+    }
+
+    #[test]
+    fn xform_op_order_standard_matches_piecewise() {
+        // Standard-order content (`["translate","rotateXYZ"]`, what the rover
+        // assets author) decodes identically to the implicit piecewise path —
+        // no regression.
+        let reader = parse(ORDER_SCENE);
+        let tf = local_transform_at(&reader, &SdfPath::new("/Std").unwrap(), 0.0).unwrap();
+        assert!(tf.translation.abs_diff_eq(Vec3::new(5.0, 6.0, 7.0), 1e-5));
+        assert!(tf.rotation.abs_diff_eq(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2), 1e-5));
+        assert!(tf.scale.abs_diff_eq(Vec3::ONE, 1e-5));
+    }
+
+    #[test]
+    fn matrix_transform_decomposes_translation() {
+        let reader = parse(ROTATION_OPS_SCENE);
+        // Identity rotation/scale, translation in the USD matrix's last row.
+        let tf = read_matrix_transform_at(&reader, &SdfPath::new("/Matrixed").unwrap(), 0.0).unwrap();
+        assert!(tf.translation.abs_diff_eq(Vec3::new(3.0, 4.0, 5.0), 1e-5));
+        assert!(tf.rotation.abs_diff_eq(Quat::IDENTITY, 1e-5));
+        assert!(tf.scale.abs_diff_eq(Vec3::ONE, 1e-5));
+        // And `read_transform_from_usd` prefers the matrix.
+        let full = read_transform_from_usd(&reader, &SdfPath::new("/Matrixed").unwrap());
+        assert!(full.translation.abs_diff_eq(Vec3::new(3.0, 4.0, 5.0), 1e-5));
     }
 
     #[test]

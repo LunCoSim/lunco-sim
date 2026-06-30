@@ -256,6 +256,46 @@ The `lunco-sandbox-edit` crate provides the interactive layer (palette, gizmo, i
 | Bevy   | Y       | -Z           | Right-handed, Z-backward |
 | Avian3D| Y       | -Z           | Matches Bevy |
 
+### Transform decode
+
+One shared stack (`lunco-usd-bevy`, `local_transform_at`) decodes a prim's local
+`Transform`, used by **both** the static load decoder (`read_transform_from_usd` + the
+instantiate path) and the per-frame animation sampler, so a static pose and its animated
+pose always agree. Precedence:
+
+1. **`xformOpOrder`** (when authored) — honored exactly by `compose_xform_order_at`,
+   including op order and `!invert!`. USD is row-vector (`M = S·R·T`, openusd's
+   `Matrix4d::from_trs`): the **last** listed op is applied first to the geometry. Op
+   matrices are built in glam's column form and right-multiplied, so the standard
+   `["translate","rotateXYZ","scale"]` decodes to exactly `Transform{t,r,s}`.
+2. **`xformOp:transform`** — a full `matrix4d` decomposed via `read_matrix_transform_at`.
+3. **Piecewise fallback** — `xformOp:translate` + rotation + `xformOp:scale`.
+
+Rotation (`local_rotation_at`) covers every USD channel: the six Euler orders
+`rotateXYZ`…`rotateZYX`, the quaternion `xformOp:orient` (`quatf`/`quatd`/`quath`), and
+single-axis `rotateX/Y/Z`.
+
+### Animation
+
+Authored `timeSamples` drive entities at the current sim time (architecture doc 19 — the
+unified time spine). At composition (`flatten_stage`) each attribute's composed
+`timeSamples` and the stage `timeCodesPerSecond` are carried onto the flattened scene
+(sublayer/reference `LayerOffset`s are baked in by PCP), so animation works on referenced
+assets, not just single-layer files. A prim with any animated channel is tagged
+`UsdAnimated`; the per-frame samplers then drive:
+
+- **Transform** — the full transform decode above, evaluated at the entity's resolved time.
+- **Visibility** — animated `visibility` token (held).
+- **Material** — animated `inputs:diffuseColor` / `inputs:opacity` (and geom
+  `primvars:displayColor`) into the live `StandardMaterial`.
+
+An animated rigid body is demoted to `RigidBody::Kinematic` (`lunco-usd-avian`) so the
+sampler's writes don't fight the physics solver. Playback is independent of the physics
+clock: animated entities bind to a singleton **animation-preview** `TimeDomain`, driven by
+the `ControlAnimation` command (API/MCP) and the Inspector **Animation** section
+(play / pause / scrub / rate). See [`19-unified-time-and-clock.md`](19-unified-time-and-clock.md)
+(T5/T7) for the clock model.
+
 ### Testing
 All tests load **real USD files** through the same pipeline as runtime:
 - `integration_asset_loading.rs` — verifies full pipeline (composition → Bevy → Avian → Sim)
@@ -269,5 +309,6 @@ All tests load **real USD files** through the same pipeline as runtime:
 - [`10-document-system.md`](10-document-system.md) — the document pattern
 - [`13-twin-and-workflow.md`](13-twin-and-workflow.md) — Twin container + layout
 - [`14-simulation-layers.md`](14-simulation-layers.md) — Twin/Scenario/Run/Model + `participant_id`
+- [`19-unified-time-and-clock.md`](19-unified-time-and-clock.md) — time spine + USD animation sampler/transport
 - [`00-overview.md`](00-overview.md) — three-tier architecture
 - `specs/030-usd-scene-integration` — detailed spec
