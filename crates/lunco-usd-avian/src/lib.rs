@@ -118,7 +118,42 @@ pub struct PendingUsdJoint {
     pub limit_upper: f64,
     /// The joint kind from USD (e.g., `PhysicsPrismaticJoint`).
     pub joint_type: String,
+    /// Authored `UsdPhysicsDriveAPI` drive (the `linear` instance for prismatic,
+    /// `angular` for revolute), or `None` when the joint carries no drive — it
+    /// then stays passive until a cosim wire commands its `displacement`/`angle`
+    /// port.
+    pub drive: Option<JointDrive>,
 }
+
+/// A `UsdPhysicsDriveAPI` joint drive, read at load. Configures the Avian joint
+/// motor so an Omniverse-authored mechanism seeks its target out of the box; a
+/// cosim wire targeting the joint's port overrides `target_position` per tick.
+#[derive(Clone, Copy, Default)]
+pub struct JointDrive {
+    /// `drive:{angular,linear}:physics:targetPosition` (rad or m).
+    pub target_position: Option<f64>,
+    /// `drive:{angular,linear}:physics:targetVelocity` (rad/s or m/s).
+    pub target_velocity: Option<f64>,
+    /// `drive:{angular,linear}:physics:maxForce` — the motor's torque (N·m) or
+    /// force (N) saturation. Replaces the cosim default when authored.
+    pub max_force: Option<f64>,
+}
+
+/// Overdamped spring-damper for load-time joint drives — mirrors
+/// `lunco_cosim::joint`'s motor model so a USD-driven joint and a wire-driven
+/// one track their setpoint identically (≈3 Hz, ζ=2, no overshoot under XPBD
+/// substepping). avian's `MotorModel` reparameterizes stiffness/damping as
+/// frequency/ratio, so USD `physics:stiffness`/`physics:damping` are not mapped
+/// 1:1 yet; `physics:maxForce` and the targets (the load-bearing knobs) are.
+const JOINT_DRIVE_MOTOR_MODEL: MotorModel = MotorModel::SpringDamper {
+    frequency: 3.0,
+    damping_ratio: 2.0,
+};
+
+/// Force (N) / torque (N·m) saturation a USD-driven joint motor gets when its
+/// `physics:maxForce` is left unauthored — generous enough to hold the target
+/// against gravity, matching `lunco_cosim::joint`'s wire-driven default.
+const JOINT_DRIVE_MAX_FORCE_DEFAULT: f64 = 1.0e8;
 
 /// Checks if a USD prim has a specific API schema applied.
 /// Collects collider shapes from all child prims of a compound body root,
@@ -620,10 +655,19 @@ fn on_add_usd_prim(
                             .unwrap_or(DVec3::ZERO);
                         let local_pos1 = read_vec3_attribute(reader, &sdf_path, "physics:localPos1")
                             .unwrap_or(DVec3::ZERO);
-                        let limit_lower = reader.prim_attribute_value::<f64>(&sdf_path, "physics:limitLower")
+                        let limit_lower = read_scalar_attribute(reader, &sdf_path, "physics:limitLower")
                             .unwrap_or(f64::NEG_INFINITY);
-                        let limit_upper = reader.prim_attribute_value::<f64>(&sdf_path, "physics:limitUpper")
+                        let limit_upper = read_scalar_attribute(reader, &sdf_path, "physics:limitUpper")
                             .unwrap_or(f64::INFINITY);
+
+                        // `UsdPhysicsDriveAPI` instance is named for the DOF it
+                        // drives: `linear` on a prismatic joint, `angular` on a
+                        // revolute one. Absent → passive joint (wire-driven only).
+                        let drive = match type_name.as_str() {
+                            "PhysicsPrismaticJoint" => read_joint_drive(reader, &sdf_path, "linear"),
+                            "PhysicsRevoluteJoint" => read_joint_drive(reader, &sdf_path, "angular"),
+                            _ => None,
+                        };
 
                         info!("Detected USD joint {} -> {} <-> {}", type_name, body0_path, body1_path);
 
@@ -636,6 +680,7 @@ fn on_add_usd_prim(
                             limit_lower,
                             limit_upper,
                             joint_type: type_name.clone(),
+                            drive,
                         });
                     }
                     (b0, b1) => {
@@ -694,22 +739,38 @@ fn build_usd_physics_joints(
         // USD-specific lookup.
         match pending.joint_type.as_str() {
             "PhysicsPrismaticJoint" => {
-                commands.entity(joint_entity).insert(
-                    PrismaticJoint::new(b0, b1)
-                        .with_local_anchor1(pending.local_pos0)
-                        .with_local_anchor2(pending.local_pos1)
-                        .with_slider_axis(pending.axis)
-                        .with_limits(pending.limit_lower, pending.limit_upper),
-                );
+                let mut joint = PrismaticJoint::new(b0, b1)
+                    .with_local_anchor1(pending.local_pos0)
+                    .with_local_anchor2(pending.local_pos1)
+                    .with_slider_axis(pending.axis)
+                    .with_limits(pending.limit_lower, pending.limit_upper);
+                if let Some(d) = pending.drive {
+                    joint.motor = LinearMotor {
+                        enabled: d.target_position.is_some() || d.target_velocity.is_some(),
+                        target_position: d.target_position.unwrap_or(0.0),
+                        target_velocity: d.target_velocity.unwrap_or(0.0),
+                        max_force: d.max_force.unwrap_or(JOINT_DRIVE_MAX_FORCE_DEFAULT),
+                        motor_model: JOINT_DRIVE_MOTOR_MODEL,
+                    };
+                }
+                commands.entity(joint_entity).insert(joint);
             }
             "PhysicsRevoluteJoint" => {
-                commands.entity(joint_entity).insert(
-                    RevoluteJoint::new(b0, b1)
-                        .with_local_anchor1(pending.local_pos0)
-                        .with_local_anchor2(pending.local_pos1)
-                        .with_hinge_axis(pending.axis)
-                        .with_angle_limits(pending.limit_lower, pending.limit_upper),
-                );
+                let mut joint = RevoluteJoint::new(b0, b1)
+                    .with_local_anchor1(pending.local_pos0)
+                    .with_local_anchor2(pending.local_pos1)
+                    .with_hinge_axis(pending.axis)
+                    .with_angle_limits(pending.limit_lower, pending.limit_upper);
+                if let Some(d) = pending.drive {
+                    joint.motor = AngularMotor {
+                        enabled: d.target_position.is_some() || d.target_velocity.is_some(),
+                        target_position: d.target_position.unwrap_or(0.0),
+                        target_velocity: d.target_velocity.unwrap_or(0.0),
+                        max_torque: d.max_force.unwrap_or(JOINT_DRIVE_MAX_FORCE_DEFAULT),
+                        motor_model: JOINT_DRIVE_MOTOR_MODEL,
+                    };
+                }
+                commands.entity(joint_entity).insert(joint);
             }
             "PhysicsFixedJoint" => {
                 commands.entity(joint_entity).insert(
@@ -744,6 +805,37 @@ fn read_token_attribute(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<
 /// "bodies launched into orbit" bug for `physics:localPos*` anchors.
 fn read_vec3_attribute(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<DVec3> {
     lunco_usd_bevy::read_vec3_f64(reader, path, attr).map(|v| DVec3::new(v[0], v[1], v[2]))
+}
+
+/// Reads a `UsdPhysicsDriveAPI` drive off a joint prim — the `drive:{ns}:physics:
+/// {targetPosition,targetVelocity,maxForce}` attributes, where `ns` is `angular`
+/// (revolute) or `linear` (prismatic). Returns `None` when none are authored, so
+/// an undriven joint stays passive (wire-driven only).
+fn read_joint_drive(reader: &UsdData, path: &SdfPath, ns: &str) -> Option<JointDrive> {
+    let target_position = read_scalar_attribute(reader, path, &format!("drive:{ns}:physics:targetPosition"));
+    let target_velocity = read_scalar_attribute(reader, path, &format!("drive:{ns}:physics:targetVelocity"));
+    let max_force = read_scalar_attribute(reader, path, &format!("drive:{ns}:physics:maxForce"));
+    if target_position.is_none() && target_velocity.is_none() && max_force.is_none() {
+        return None;
+    }
+    Some(JointDrive {
+        target_position,
+        target_velocity,
+        max_force,
+    })
+}
+
+/// Reads a scalar attribute as `f64`, trying `float` first then `double`.
+///
+/// UsdPhysics/Omniverse authors most physics scalars as `float` (e.g.
+/// `float drive:linear:physics:maxForce`), so a `::<f64>`-only read silently
+/// returns `None` — the documented silent-`None` trap. Mirrors the f32-first
+/// convention `lunco-usd-sim` uses for wheel/suspension attributes.
+fn read_scalar_attribute(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<f64> {
+    reader
+        .prim_attribute_value::<f32>(path, attr)
+        .map(|v| v as f64)
+        .or_else(|| reader.prim_attribute_value::<f64>(path, attr))
 }
 
 /// Read mass, principal inertia, COM, damping, and friction from a rigid-body

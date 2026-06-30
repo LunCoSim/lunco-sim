@@ -11,9 +11,10 @@
 //!
 //! Three kinds of backend live here:
 //! - **Modelica** [`SimComponent`] — `HashMap<String, f64>` inputs/outputs.
-//! - **Avian** rigid bodies + revolute joints — foreign components exposed by an
-//!   external spec ([`AvianPort`]/[`AvianGroup`]) rather than `#[derive]`. Adding
-//!   an avian kind is one entry in [`AVIAN`] plus its group declaration.
+//! - **Avian** rigid bodies + revolute/prismatic joints — foreign components
+//!   exposed by an external spec ([`AvianPort`]/[`AvianGroup`]) rather than
+//!   `#[derive]`. Adding an avian kind is one entry in [`AVIAN`] plus its group
+//!   declaration.
 //! - **SysML/hardware** single-value ports ([`PhysicalPort`]/[`DigitalPort`]) —
 //!   one bidirectional scalar each.
 //!
@@ -53,10 +54,10 @@ pub struct AvianPort {
 }
 
 /// A group of avian ports gated on a component's presence — one avian kind
-/// (rigid body, revolute joint, …). Declared in [`crate::avian`] /
-/// [`crate::joint`] and folded into the avian [`PortBackend`] below. Adding a kind
-/// (prismatic joint, sensor, …) is one entry in [`AVIAN`] plus its group
-/// declaration — no new struct, observer, or system.
+/// (rigid body, revolute joint, prismatic joint, …). Declared in
+/// [`crate::avian`] / [`crate::joint`] and folded into the avian [`PortBackend`]
+/// below. Adding a kind (a sensor, a D6 joint, …) is one entry in [`AVIAN`] plus
+/// its group declaration — no new struct, observer, or system.
 pub struct AvianGroup {
     /// Does `entity` belong to this group (carry the gating component)?
     pub present: fn(&World, Entity) -> bool,
@@ -68,6 +69,7 @@ pub struct AvianGroup {
 const AVIAN: &[AvianGroup] = &[
     crate::avian::RIGID_BODY_GROUP,
     crate::joint::REVOLUTE_JOINT_GROUP,
+    crate::joint::PRISMATIC_JOINT_GROUP,
 ];
 
 fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
@@ -167,7 +169,8 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
     },
 };
 
-/// Avian rigid bodies + revolute joints, folded from the [`AVIAN`] spec table.
+/// Avian rigid bodies + revolute/prismatic joints, folded from the [`AVIAN`]
+/// spec table.
 const AVIAN_BACKEND: PortBackend = PortBackend {
     list: avian_list,
     read_output: avian_read_output,

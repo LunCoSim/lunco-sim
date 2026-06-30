@@ -1,5 +1,6 @@
-> **Status:** Partially implemented — G1/G1b/G2/G3/G4/G4b/G5/G6 done (G5 verified on an
-> isolated differential rig); G7/G8 deferred.
+> **Status:** Partially implemented — G1/G1b/G2/G3/G4/G4b/G5/G6/G9 done (G5 verified on an
+> isolated differential rig; G9 = generic joint actuation + USD drive schema);
+> G7/G8 deferred.
 > **Audience:** Engineers working on vehicle, cosim, and USD-physics subsystems
 
 # 33 — Modeling Spacecraft (Landers & Rovers) in LunCoSim
@@ -194,9 +195,50 @@ Tuning knobs an author of a dynamic vehicle actually sets are now USD attributes
   is the canonical drive authority and is now itself USD-tunable, which is the
   right way to raise drive force without the regression.
 
+### G9 — Generic joint actuation + USD drive schema  **[DONE]**
+Joint **motor drive** used to be revolute-only: a revolute joint auto-exposed an
+`angle` port, but a prismatic joint was *built and then undrivable* — no cosim
+port, no way to deploy a landing-gear strut, raise an elevator/piston, or extend
+an arm stage from a wire/FSW/rhai/Modelica. The `AVIAN` port table was hardcoded
+to `[RIGID_BODY_GROUP, REVOLUTE_JOINT_GROUP]` (`lunco-cosim/src/ports.rs`).
+- **Prismatic `displacement` port** — `PRISMATIC_JOINT_GROUP` (`lunco-cosim/src/
+  joint.rs`), the translational mirror of the revolute `angle` group: `In` drives
+  the Avian `LinearMotor` (position control), `Out` measures the signed slider
+  offset (anchors projected onto the world axis). One entry in the `AVIAN` table —
+  no new struct/observer/system, exactly the extension the table was built for.
+- **USD / Omniverse drive schema** — `lunco-usd-avian` now reads the standard
+  `UsdPhysicsDriveAPI` at load: the `linear` instance on a prismatic joint, the
+  `angular` instance on a revolute one (`drive:{linear,angular}:physics:
+  {targetPosition,targetVelocity,maxForce}`). An authored target **enables the
+  motor at load**, so an Omniverse-authored mechanism seeks its setpoint with no
+  wire; `physics:maxForce` replaces the hardcoded motor saturation. A cosim wire
+  on the joint's port overrides the target per tick. The port pair is the runtime
+  face of `PhysxJointStateAPI:{linear,angular} physics:position` (out) +
+  `PhysicsDriveAPI` `targetPosition` (in).
+- **Not yet mapped:** `physics:stiffness`/`physics:damping` — Avian's `MotorModel`
+  reparameterizes these as frequency/damping-ratio (needs body mass), so the proven
+  overdamped 3 Hz spring-damper is kept as the model; the load-bearing knobs
+  (`maxForce` + targets) are honored. Wheels are unaffected: their revolute joints
+  are built in `lunco-mobility`, not the authored-joint path, so the G6
+  `drive:angular:maxForce` wheelie cannot recur here.
+- **Proof:** `assets/scenes/sandbox/prismatic_drive_test.usda` — a standard
+  `PhysicsPrismaticJoint` + `PhysicsDriveAPI:linear` elevator (50 kg platform).
+  **Verified live** on the headless `sandbox-server`: (A) the USD load-time drive
+  holds at `-1.5276` (target `-1.5`; ~0.027 m droop = spring-damper steady-state
+  under load); (B) `SetPort displacement -0.5` → `-0.5276`; (C) `+0.3` → `+0.2716`;
+  (D) `-5.0` clamps at `-3.0000` (authored `limitLower`). Projection math
+  unit-tested (`lunco-cosim` `joint::tests`).
+- **Gotcha (cost a debug loop):** UsdPhysics/Omniverse authors physics scalars as
+  `float`, so `prim_attribute_value::<f64>` silently returns `None` — the drive and
+  joint limits must be read **f32-first** (`read_scalar_attribute`). The first run
+  fell straight through the (also-`f64`-read) limit before this was fixed. Same
+  class as the `localPos` "bodies launched into orbit" trap — *all* USD physics
+  scalar reads are f32-first.
+
 ### G7 — Extra joint types (spherical / D6 / distance)  **[LOW — optional]**
 Unsupported joints warn and fall through. Rocker-bogie can avoid them; landing-gear
-or robotic arms may want them later.
+or robotic arms may want them later. (G9 made the revolute/prismatic joints we *do*
+build fully actuatable; G7 is about adding more joint *kinds*.)
 
 ### G8 — Determinism / FMI interop  **[SEPARATE TRACK]**
 Live cosim is non-deterministic, no FMU. Matters if a lander descent must be
