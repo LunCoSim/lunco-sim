@@ -24,7 +24,8 @@
 //!   wheels to maintain a common center of rotation, reducing tire scrub.
 
 use bevy::prelude::*;
-use bevy::math::DVec3;
+use bevy::ecs::schedule::common_conditions::any_with_component;
+use bevy::math::{DQuat, DVec3};
 use avian3d::prelude::*;
 use lunco_core::architecture::DigitalPort;
 use lunco_core::RoverVessel;
@@ -79,6 +80,16 @@ impl Plugin for LunCoMobilityPlugin {
            .register_type::<DifferentialDrive>()
            .register_type::<AckermannSteer>()
            .register_type::<WheelRaycast>()
+           .register_type::<DifferentialCoupling>()
+           // G5 rocker-bogie differential — separate set: it doesn't read the
+           // control ports, only couples two rocker hinges. Idle unless a
+           // `DifferentialCoupling` exists, so it's free for every other vehicle.
+           .add_systems(
+               FixedUpdate,
+               differential_coupling_system
+                   .run_if(any_with_component::<DifferentialCoupling>)
+                   .run_if(|tw: Res<lunco_core::TimeWarpState>| tw.is_running()),
+           )
            .add_systems(FixedUpdate, (
                suspension_system,
                apply_wheel_suspension,
@@ -130,8 +141,8 @@ const DIGITAL_PORT_FULL_SCALE: i16 = 32767;
 /// Per-wheel drive force magnitude from a normalized throttle, clamped to
 /// `[-1, 1]`. NEGATIVE throttle drives in **reverse** — the old `clamp(0.0, 1.0)`
 /// silently dropped reverse even though the differential mix carried the sign.
-fn drive_force_mag(throttle: f64, normal_force: f64) -> f64 {
-    throttle.clamp(-1.0, 1.0) * normal_force * DEFAULT_DRIVE_FORCE_PER_NORMAL
+fn drive_force_mag(throttle: f64, normal_force: f64, force_per_normal: f64) -> f64 {
+    throttle.clamp(-1.0, 1.0) * normal_force * force_per_normal
 }
 
 /// Contact friction opposing the slip *velocity vector*. Continuous through zero
@@ -233,6 +244,10 @@ pub struct WheelRaycast {
     /// Peak brake torque about the axle in N·m. When it exceeds the available
     /// traction torque the wheel locks and skids.
     pub brake_torque_max: f64,
+    /// Max per-wheel drive force as a multiple of that wheel's normal force
+    /// (`throttle · N · this`). Caps traction to a fraction of contact grip.
+    /// USD: `lunco:driveForcePerNormal` (default [`DEFAULT_DRIVE_FORCE_PER_NORMAL`]).
+    pub drive_force_per_normal: f64,
 }
 
 impl Default for WheelRaycast {
@@ -258,6 +273,7 @@ impl Default for WheelRaycast {
             slip_stiffness: 8000.0,
             contact_grip_stiffness: DEFAULT_CONTACT_GRIP_STIFFNESS,
             brake_torque_max: 600.0,
+            drive_force_per_normal: DEFAULT_DRIVE_FORCE_PER_NORMAL,
         }
     }
 }
@@ -473,8 +489,8 @@ fn apply_wheel_drive(
                     // --- Drive force ---
                     // `port.value` is the wire-scaled throttle; `drive_force_mag`
                     // clamps it to [-1, 1] (negative = reverse).
-                    let drive_force_vec =
-                        forward * drive_force_mag(port.value as f64, normal_force);
+                    let drive_force_vec = forward
+                        * drive_force_mag(port.value as f64, normal_force, wheel.drive_force_per_normal);
                     forces.apply_force_at_point(drive_force_vec, hub_pos_world);
 
                     // --- Friction (longitudinal + lateral) ---
@@ -553,9 +569,135 @@ pub struct AckermannSteer {
     pub max_steer_angle: f32,
 }
 
+/// G5 — Rocker-bogie **differential** coupling primitive.
+///
+/// A rocker-bogie chassis hangs between two rockers (one per side), each joined
+/// to the body by a lateral-axis revolute. A real rover links the two rockers
+/// through a *differential* — a transverse bar or gear — so that when the left
+/// rocker pitches up, the right pitches down by the same amount and the body
+/// rides at their **average** pitch (keeping the payload level over rough
+/// ground). Avian has no gear/differential joint, so this is a soft holonomic
+/// coupling: a PD law that drives the constraint `θ_a + θ_b → rest_sum` with
+/// equal/opposite corrective torques about the hinge axis (reaction on the
+/// chassis). Everything *else* in a rocker-bogie (the rocker/bogie links) is
+/// already buildable with today's authored `PhysicsRevoluteJoint`s — this fills
+/// the one missing piece. Stiff but compliant: the body still conforms, it just
+/// can't simply fold one rocker flat while the other stays put.
+///
+/// Author from USD on the chassis prim (e.g. `PhysxVehicleDifferentialAPI` /
+/// `lunco:differential*` → this component); inert until present, so existing
+/// vehicles are unaffected.
+#[derive(Component, Debug, Clone, Reflect)]
+#[reflect(Component)]
+pub struct DifferentialCoupling {
+    /// The chassis body the two rockers pivot against (reaction torque target).
+    pub chassis: Entity,
+    /// Left rocker body (hinged to the chassis about `axis`).
+    pub rocker_a: Entity,
+    /// Right rocker body.
+    pub rocker_b: Entity,
+    /// Hinge axis in the **chassis local** frame (typically lateral, ±X).
+    pub axis: DVec3,
+    /// Target for `θ_a + θ_b` (rad). Zero ⇒ symmetric (mirror) rockers.
+    pub rest_sum: f64,
+    /// Coupling stiffness (N·m per rad of constraint error).
+    pub stiffness: f64,
+    /// Coupling damping (N·m per rad/s of constraint-error rate).
+    pub damping: f64,
+}
+
+impl Default for DifferentialCoupling {
+    fn default() -> Self {
+        Self {
+            chassis: Entity::PLACEHOLDER,
+            rocker_a: Entity::PLACEHOLDER,
+            rocker_b: Entity::PLACEHOLDER,
+            axis: DVec3::X,
+            rest_sum: 0.0,
+            stiffness: 200_000.0,
+            damping: 20_000.0,
+        }
+    }
+}
+
+/// Signed rotation angle (rad) of a relative quaternion about `axis` — the twist
+/// component of a swing-twist decomposition. For a pure rotation `θ` about a unit
+/// `axis`, `q = (cos θ/2, sin θ/2 · axis)` and this returns `θ`, wrapped to
+/// `(-π, π]`. Used to read each rocker's pitch in the chassis frame.
+fn angle_about_axis(rel: DQuat, axis: DVec3) -> f64 {
+    let a = axis.normalize_or_zero();
+    let proj = DVec3::new(rel.x, rel.y, rel.z).dot(a);
+    let mut angle = 2.0 * proj.atan2(rel.w);
+    // 2·atan2 lands in (−2π, 2π); fold to (−π, π].
+    if angle > std::f64::consts::PI {
+        angle -= std::f64::consts::TAU;
+    } else if angle <= -std::f64::consts::PI {
+        angle += std::f64::consts::TAU;
+    }
+    angle
+}
+
+/// PD corrective torque (N·m, about the hinge axis) for the differential
+/// constraint `c = θ_a + θ_b − rest_sum`. Applied **identically** to each rocker
+/// (∂c/∂θ each = 1); the chassis takes `−2·τ` as reaction. `rate_sum` is
+/// `ċ = (ω_a + ω_b − 2·ω_c)·axis`.
+fn differential_torque(
+    angle_a: f64,
+    angle_b: f64,
+    rate_sum: f64,
+    rest_sum: f64,
+    stiffness: f64,
+    damping: f64,
+) -> f64 {
+    let c = angle_a + angle_b - rest_sum;
+    -(stiffness * c + damping * rate_sum)
+}
+
+/// Enforces every [`DifferentialCoupling`] each fixed step. Reads the two
+/// rockers' pitch + rate relative to the chassis and applies the PD coupling
+/// torque about the hinge axis (equal on each rocker, `−2τ` reaction on the
+/// chassis). Idle unless a `DifferentialCoupling` exists.
+fn differential_coupling_system(
+    q_coupling: Query<&DifferentialCoupling>,
+    mut q_bodies: Query<Forces>,
+) {
+    for coupling in q_coupling.iter() {
+        let Ok([chassis, mut a, mut b]) =
+            q_bodies.get_many_mut([coupling.chassis, coupling.rocker_a, coupling.rocker_b])
+        else {
+            continue;
+        };
+        let rot_c = chassis.rotation().0;
+        let axis_world = (rot_c * coupling.axis).normalize_or_zero();
+        // Rocker pitch in the chassis frame (twist about the hinge axis).
+        let angle_a = angle_about_axis(rot_c.inverse() * a.rotation().0, coupling.axis);
+        let angle_b = angle_about_axis(rot_c.inverse() * b.rotation().0, coupling.axis);
+        // ċ = (ω_a + ω_b − 2·ω_c) · axis_world.
+        let w_c = chassis.angular_velocity();
+        let rate_sum = (a.angular_velocity() + b.angular_velocity() - 2.0 * w_c).dot(axis_world);
+        let tau = differential_torque(
+            angle_a,
+            angle_b,
+            rate_sum,
+            coupling.rest_sum,
+            coupling.stiffness,
+            coupling.damping,
+        );
+        if !tau.is_finite() {
+            continue;
+        }
+        let torque = axis_world * tau;
+        a.apply_torque(torque);
+        b.apply_torque(torque);
+        // Reaction keeps the system's angular momentum conserved.
+        let mut chassis = chassis;
+        chassis.apply_torque(-2.0 * torque);
+    }
+}
+
 /// Suspension configuration for joint-based (non-raycast) chassis.
 ///
-/// **Why**: Some vehicles use physical collision wheels for higher fidelity, 
+/// **Why**: Some vehicles use physical collision wheels for higher fidelity,
 /// but still require emulated spring-damper logic for PrismaticJoints.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
@@ -788,20 +930,50 @@ mod force_law_tests {
     //! test pins a property whose violation previously caused a jitter or a
     //! broken control (the comments name the bug).
     use super::*;
-    use bevy::math::DVec3;
+    use bevy::math::{DQuat, DVec3};
+
+    // ── G5 differential coupling: twist angle + PD law ──────────────────────
+    #[test]
+    fn angle_about_axis_reads_pure_twist() {
+        let axis = DVec3::X;
+        // A +0.3 rad rotation about X reads back as +0.3.
+        let q = DQuat::from_axis_angle(DVec3::X, 0.3);
+        assert!((angle_about_axis(q, axis) - 0.3).abs() < 1e-9);
+        // Sign flips with rotation direction.
+        let q_neg = DQuat::from_axis_angle(DVec3::X, -0.3);
+        assert!((angle_about_axis(q_neg, axis) + 0.3).abs() < 1e-9);
+        // Identity ⇒ zero pitch.
+        assert!(angle_about_axis(DQuat::IDENTITY, axis).abs() < 1e-12);
+    }
+
+    #[test]
+    fn differential_restores_and_opposes_motion() {
+        let (k, d) = (1000.0, 100.0);
+        // Symmetric rockers at rest_sum=0, no motion ⇒ no torque.
+        assert!(differential_torque(0.0, 0.0, 0.0, 0.0, k, d).abs() < 1e-12);
+        // Both rockers pitched the SAME way (sum > 0) ⇒ restoring torque is
+        // NEGATIVE (drives the sum back toward zero / the average pitch).
+        assert!(differential_torque(0.2, 0.2, 0.0, 0.0, k, d) < 0.0);
+        // MIRRORED rockers (a up, b down) satisfy the constraint ⇒ no torque,
+        // which is exactly the differential letting the body conform.
+        assert!(differential_torque(0.2, -0.2, 0.0, 0.0, k, d).abs() < 1e-12);
+        // Damping opposes a positive constraint-rate even at zero error.
+        assert!(differential_torque(0.0, 0.0, 0.5, 0.0, k, d) < 0.0);
+    }
 
     // ── drive_force_mag: reverse must work ──────────────────────────────────
     #[test]
     fn drive_supports_forward_and_reverse() {
         let n = 1000.0;
-        assert!(drive_force_mag(0.5, n) > 0.0, "forward drives forward");
+        let f = DEFAULT_DRIVE_FORCE_PER_NORMAL;
+        assert!(drive_force_mag(0.5, n, f) > 0.0, "forward drives forward");
         // REGRESSION: reverse used to be clamped to 0 (`clamp(0.0, 1.0)`).
-        assert!(drive_force_mag(-0.5, n) < 0.0, "negative throttle = reverse");
-        assert!((drive_force_mag(0.5, n) + drive_force_mag(-0.5, n)).abs() < 1e-9);
+        assert!(drive_force_mag(-0.5, n, f) < 0.0, "negative throttle = reverse");
+        assert!((drive_force_mag(0.5, n, f) + drive_force_mag(-0.5, n, f)).abs() < 1e-9);
         // throttle clamps to [-1, 1]
-        assert_eq!(drive_force_mag(5.0, n), drive_force_mag(1.0, n));
-        assert_eq!(drive_force_mag(-5.0, n), drive_force_mag(-1.0, n));
-        assert_eq!(drive_force_mag(0.0, n), 0.0);
+        assert_eq!(drive_force_mag(5.0, n, f), drive_force_mag(1.0, n, f));
+        assert_eq!(drive_force_mag(-5.0, n, f), drive_force_mag(-1.0, n, f));
+        assert_eq!(drive_force_mag(0.0, n, f), 0.0);
     }
 
     // ── contact_friction: continuous through zero, saturating, brake grips ───
@@ -1078,7 +1250,7 @@ mod oracle {
     }
     /// Drive minus contact friction — the longitudinal net force under throttle.
     fn drive_minus_friction(throttle: f64, k: f64, mu_n: f64) -> impl Fn(f64) -> f64 {
-        move |v| drive_force_mag(throttle, N_NORMAL) + contact_friction(DVec3::new(v, 0.0, 0.0), k, mu_n, false).x
+        move |v| drive_force_mag(throttle, N_NORMAL, DEFAULT_DRIVE_FORCE_PER_NORMAL) + contact_friction(DVec3::new(v, 0.0, 0.0), k, mu_n, false).x
     }
 
     #[test]
@@ -1129,7 +1301,7 @@ mod oracle {
         // (viscous regime). Validates drive magnitude (throttle·N·2) and the
         // drive/friction balance against the continuous reference.
         let (throttle, k, mu_n) = (0.2, 50.0, N_NORMAL);
-        let drive = drive_force_mag(throttle, N_NORMAL);
+        let drive = drive_force_mag(throttle, N_NORMAL, DEFAULT_DRIVE_FORCE_PER_NORMAL);
         let v_term = drive / k;
         assert!(drive < mu_n, "scenario must stay in the sub-cone (balanced) regime");
         let rust = long_step(drive_minus_friction(throttle, k, mu_n), 0.0, 30.0);
@@ -1156,7 +1328,7 @@ mod oracle {
         // High throttle: drive > μN, so contact grip can NEVER balance it — the chassis
         // accelerates past the cone knee (wheelspin), net accel → (drive−μN)/m.
         let (throttle, k, mu_n) = (0.8, 50.0, N_NORMAL);
-        let drive = drive_force_mag(throttle, N_NORMAL);
+        let drive = drive_force_mag(throttle, N_NORMAL, DEFAULT_DRIVE_FORCE_PER_NORMAL);
         assert!(drive > mu_n, "this scenario must exceed the cone");
         let rust = long_step(drive_minus_friction(throttle, k, mu_n), 0.0, 10.0);
         let n = rust.len();

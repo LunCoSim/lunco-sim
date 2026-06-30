@@ -1,0 +1,60 @@
+#usda 1.0
+(
+    defaultPrim = "SixWheelTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Loads the G4 six-wheel rover over a ground plane. Verifies that a non-2×2
+# wheel layout whose wheel→actuator wiring is authored in USD
+# (`lunco:drivePort`) spawns and wires through the unified path — i.e. a "dynamic
+# vehicle" is a USD file, not a Rust struct.
+#
+#   sandbox --scene scenes/sandbox/six_wheel_test.usda
+#
+# Verify: 6 wheels spawn; the server logs "Wired wheel .../Wheel_L* drive to FSW
+# port drive_left" and ".../Wheel_R* drive to FSW port drive_right" (the authored
+# bindings, not index parity). DriveRover should yaw the body by skid steering.
+
+def Xform "SixWheelTest"
+{
+    custom bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.4, 0.4, 0.45)
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 10000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        double3 xformOp:translate = (8.0, 6.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # The six-wheel rover, referenced from its reusable component definition.
+    def Xform "Rover" (
+        prepend references = @../../vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
+    )
+    {
+        double3 xformOp:translate = (0, 1.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}

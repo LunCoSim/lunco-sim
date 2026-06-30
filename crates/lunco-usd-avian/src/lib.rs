@@ -518,20 +518,7 @@ fn process_usd_avian_prims(
             // gravity on the rover root. Default to 1000 kg, matching
             // the canonical rover mass authored in the base rover
             // .usda files.
-            let mass = reader
-                .prim_attribute_value::<f32>(&sdf_path, "physics:mass")
-                .or_else(|| reader.prim_attribute_value::<f64>(&sdf_path, "physics:mass").map(|v| v as f32))
-                .unwrap_or(1000.0);
-            commands.entity(entity).insert(Mass(mass));
-            if let Some(d) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:linearDamping") {
-                commands.entity(entity).insert(LinearDamping(d as f64));
-            }
-            if let Some(d) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:angularDamping") {
-                commands.entity(entity).insert(AngularDamping(d as f64));
-            }
-            if let Some(f) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:friction") {
-                commands.entity(entity).insert(Friction::new(f.into()));
-            }
+            apply_rigid_body_mass_props(&mut commands, entity, reader, &sdf_path);
 
             commands.entity(entity).insert(UsdAvianProcessed);
         } else if has_collision_api {
@@ -551,20 +538,7 @@ fn process_usd_avian_prims(
                     RigidBody::Dynamic,
                     lunco_core::SelectableRoot,
                 ));
-                if let Some(mass) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:mass") {
-                    commands.entity(entity).insert(Mass(mass));
-                } else if let Some(mass) = reader.prim_attribute_value::<f64>(&sdf_path, "physics:mass") {
-                    commands.entity(entity).insert(Mass(mass as f32));
-                }
-                if let Some(d) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:linearDamping") {
-                    commands.entity(entity).insert(LinearDamping(d as f64));
-                }
-                if let Some(d) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:angularDamping") {
-                    commands.entity(entity).insert(AngularDamping(d as f64));
-                }
-                if let Some(f) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:friction") {
-                    commands.entity(entity).insert(Friction::new(f.into()));
-                }
+                apply_rigid_body_mass_props(&mut commands, entity, reader, &sdf_path);
                 add_collider_from_usd(&mut commands, entity, reader, &sdf_path);
             } else if let Some(false) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
                 commands.entity(entity).insert(RigidBody::Static);
@@ -770,4 +744,64 @@ fn read_token_attribute(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<
 /// "bodies launched into orbit" bug for `physics:localPos*` anchors.
 fn read_vec3_attribute(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<DVec3> {
     lunco_usd_bevy::read_vec3_f64(reader, path, attr).map(|v| DVec3::new(v[0], v[1], v[2]))
+}
+
+/// Read mass, principal inertia, COM, damping, and friction from a rigid-body
+/// prim and insert the corresponding Avian *override* components.
+///
+/// Centralises the previously-duplicated `physics:mass`/damping/friction reads
+/// (the main `PhysicsRigidBodyAPI` path and the legacy `rigidBodyEnabled`
+/// fallback diverged on mass handling — see the WP-3 DRY audit) and adds the
+/// **G2 load-time** mass-properties (`physics:diagonalInertia` /
+/// `physics:centerOfMass`).
+///
+/// Mass defaults to 1000 kg (canonical rover mass) when unauthored — keeping
+/// gravity alive even when openusd-rs's resolver can't compose `physics:mass`
+/// across a reference. Inertia/COM are inserted only when explicitly authored;
+/// otherwise Avian derives them from collider geometry. These are the same
+/// *override* components the runtime mass-props cosim ports write
+/// (`lunco-cosim`), so authored and model-driven values share one path.
+fn apply_rigid_body_mass_props(
+    commands: &mut Commands,
+    entity: Entity,
+    reader: &UsdData,
+    sdf_path: &SdfPath,
+) {
+    let mass = reader
+        .prim_attribute_value::<f32>(sdf_path, "physics:mass")
+        .or_else(|| {
+            reader
+                .prim_attribute_value::<f64>(sdf_path, "physics:mass")
+                .map(|v| v as f32)
+        })
+        .unwrap_or(1000.0);
+    commands.entity(entity).insert(Mass(mass));
+
+    // G2 — authored principal inertia. `physics:diagonalInertia` is the diagonal
+    // of the inertia tensor in the principal frame. `physics:principalAxes` (a
+    // quat) would rotate that frame; it's almost always identity for
+    // landers/rovers and is left to default. Off-diagonal inertia is not
+    // representable here (Avian stores principal + frame), matching the
+    // UsdPhysics schema.
+    if let Some(diag) = read_vec3_attribute(reader, sdf_path, "physics:diagonalInertia") {
+        commands.entity(entity).insert(AngularInertia {
+            principal: diag.as_vec3(),
+            local_frame: Quat::IDENTITY,
+        });
+    }
+
+    // G2 — authored centre of mass (body-frame offset).
+    if let Some(com) = read_vec3_attribute(reader, sdf_path, "physics:centerOfMass") {
+        commands.entity(entity).insert(CenterOfMass(com.as_vec3()));
+    }
+
+    if let Some(d) = reader.prim_attribute_value::<f32>(sdf_path, "physics:linearDamping") {
+        commands.entity(entity).insert(LinearDamping(d as f64));
+    }
+    if let Some(d) = reader.prim_attribute_value::<f32>(sdf_path, "physics:angularDamping") {
+        commands.entity(entity).insert(AngularDamping(d as f64));
+    }
+    if let Some(f) = reader.prim_attribute_value::<f32>(sdf_path, "physics:friction") {
+        commands.entity(entity).insert(Friction::new(f.into()));
+    }
 }

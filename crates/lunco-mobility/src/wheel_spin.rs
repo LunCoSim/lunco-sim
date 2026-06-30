@@ -244,6 +244,7 @@ mod tests {
                 slip_stiffness: 1000.0,
                 contact_grip_stiffness: 1000.0,
                 brake_torque_max: 0.0,
+                drive_force_per_normal: 2.0,
             },
             Transform::from_translation(wheel_local),
             GlobalTransform::from(Transform::from_translation(wheel_gtf_translation)),

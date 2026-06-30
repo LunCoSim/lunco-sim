@@ -240,6 +240,14 @@ pub struct PendingWheelWiring {
     pub index: i32,
     pub p_drive: Entity,
     pub p_steer: Entity,
+    /// G4: USD-authored actuator binding (`lunco:drivePort`). When `Some`, this
+    /// wheel wires to the named FSW port verbatim — overriding the index-parity
+    /// default — so arbitrary topologies (per-wheel drive, 6-wheel, rocker-bogie)
+    /// are declared in USD rather than hardcoded in `try_wire_wheel`.
+    pub drive_port_name: Option<String>,
+    /// G4: USD-authored steer binding (`lunco:steerPort`). `Some` overrides the
+    /// `index < 2` front-steer default.
+    pub steer_port_name: Option<String>,
 }
 
 /// Process USD prims for sim mapping AFTER their assets are loaded.
@@ -637,12 +645,32 @@ fn process_usd_sim_prims(
             info!("Intercepted PhysxVehicleContextAPI for {}, initializing Flight Software", prim_path.path);
 
             let mut port_map = HashMap::new();
-            for name in ["drive_left", "drive_right", "steering", "brake"] {
+            // Canonical actuator ports the built-in skid/Ackermann mix drives.
+            let mut port_names: Vec<String> =
+                ["drive_left", "drive_right", "steering", "brake"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect();
+            // G4: extra USD-declared actuator ports (`lunco:drivePorts`, a
+            // space-separated token list). Lets a dynamic vehicle expose custom
+            // per-wheel actuators that wheels bind to via `lunco:drivePort` and a
+            // wire/rhai/Modelica mix drives — arbitrary topology authored in USD,
+            // not hardcoded here. Deduped against the canonical set.
+            if let Some(extra) =
+                reader.prim_attribute_value::<String>(&sdf_path, "lunco:drivePorts")
+            {
+                for name in extra.split_whitespace() {
+                    if !port_names.iter().any(|n| n == name) {
+                        port_names.push(name.to_string());
+                    }
+                }
+            }
+            for name in &port_names {
                 let port_ent = commands.spawn((
                     DigitalPort::default(),
                     Name::new(format!("Port_{}", name)),
                 )).id();
-                port_map.insert(name.to_string(), port_ent);
+                port_map.insert(name.clone(), port_ent);
             }
 
             commands.entity(entity).insert((
@@ -731,8 +759,23 @@ fn process_usd_sim_prims(
 
             let index = reader.prim_attribute_value::<i32>(&sdf_path, "physxVehicleWheel:index").unwrap_or(0);
 
+            // G4: optional per-wheel actuator binding. A token naming the FSW
+            // drive/steer port this wheel listens to — extracts the rover's
+            // wiring topology from `try_wire_wheel`'s hardcoded index parity
+            // into USD, enabling per-wheel drive and non-2×N layouts.
+            let drive_port_name =
+                reader.prim_attribute_value::<String>(&sdf_path, "lunco:drivePort");
+            let steer_port_name =
+                reader.prim_attribute_value::<String>(&sdf_path, "lunco:steerPort");
+
             // Mark for wiring — the try_wire_wheel system will connect ports once FSW exists
-            commands.entity(entity).insert(PendingWheelWiring { index, p_drive, p_steer });
+            commands.entity(entity).insert(PendingWheelWiring {
+                index,
+                p_drive,
+                p_steer,
+                drive_port_name,
+                steer_port_name,
+            });
 
             // Suspension parameters — read ONCE here (the single
             // `physxVehicleSuspension:*` reading path) and handed to whichever
@@ -788,6 +831,18 @@ fn process_usd_sim_prims(
             // Chassis-contact grip stiffness (slope of contact friction vs slip
             // before the Coulomb cone). USD: `lunco:contactGripStiffness`.
             let contact_grip_stiffness = read_f("lunco:contactGripStiffness").unwrap_or(50.0);
+            // Drive force as a multiple of the wheel's normal force (traction
+            // authority before the friction cone limits it). USD-authorable per
+            // wheel so a heavy hauler and a light scout can differ.
+            let drive_force_per_normal = read_f("lunco:driveForcePerNormal").unwrap_or(2.0);
+            // Joint-wheel drive tuning (rigid-axle rovers). Defaults reproduce
+            // the verified feel; USD lets a dynamic vehicle override per build.
+            let joint_drive = JointDriveParams {
+                wheel_mass: read_f("physics:mass").unwrap_or(100.0),
+                max_omega: read_f("lunco:maxDriveOmega").unwrap_or(12.0),
+                drive_damp: read_f("lunco:driveDamping").unwrap_or(30.0),
+                stall_torque_gain: read_f("lunco:stallTorqueGain").unwrap_or(6.0),
+            };
 
             // Standard-USD discriminator: an authored `PhysicsRevoluteJoint`
             // pointing at this wheel via `physics:body1` ⇒ joint-based.
@@ -810,6 +865,7 @@ fn process_usd_sim_prims(
                     radius, p_drive,
                     drive_torque_max,
                     steer_for_wheel, max_steer_angle,
+                    joint_drive,
                 );
             } else {
                 setup_raycast_wheel(
@@ -826,6 +882,7 @@ fn process_usd_sim_prims(
                         slip_stiffness,
                         contact_grip_stiffness,
                         brake_torque_max,
+                        drive_force_per_normal,
                     },
                 );
             }
@@ -877,6 +934,24 @@ struct WheelSpinParams {
     slip_stiffness: f64,
     contact_grip_stiffness: f64,
     brake_torque_max: f64,
+    /// Drive force as a multiple of normal force (`lunco:driveForcePerNormal`).
+    drive_force_per_normal: f64,
+}
+
+/// Joint-wheel drive tuning, read from USD so a dynamic vehicle's feel is
+/// authored rather than hardcoded. Defaults reproduce the values verified in
+/// `project_physical_rover_suspension` (the comment at the use site explains
+/// why each was chosen).
+struct JointDriveParams {
+    /// Rigid-axle wheel-body mass (kg). `physics:mass`, default 100 — heavier
+    /// than the raycast wheel to damp the joint↔solver impulse echo.
+    wheel_mass: f64,
+    /// Motor target spin at full throttle (rad/s). `lunco:maxDriveOmega`.
+    max_omega: f64,
+    /// Velocity-tracking aggressiveness (1/s). `lunco:driveDamping`.
+    drive_damp: f64,
+    /// Stall torque = `peakTorque × this`. `lunco:stallTorqueGain`.
+    stall_torque_gain: f64,
 }
 
 /// Sets up a raycast wheel with entity splitting for correct raycasting.
@@ -920,6 +995,7 @@ fn setup_raycast_wheel(
         slip_stiffness: spin.slip_stiffness,
         contact_grip_stiffness: spin.contact_grip_stiffness,
         brake_torque_max: spin.brake_torque_max,
+        drive_force_per_normal: spin.drive_force_per_normal,
         ..default()
     };
 
@@ -1037,6 +1113,7 @@ fn setup_physical_wheel(
     peak_torque: f64,
     steer: Option<Entity>,
     max_steer_angle: f64,
+    drive: JointDriveParams,
 ) {
     info!("Setting up PHYSICAL wheel {}", prim_path.path);
 
@@ -1122,12 +1199,13 @@ fn setup_physical_wheel(
         },
         RigidBody::Dynamic,
         collider,
-        // Heavier wheels (100 kg vs the previous 25) damp the
+        // Heavier wheels (100 kg default vs the raycast 25) damp the
         // joint↔solver impulse echo that produced visible idle wobble
         // when the rover was dropped from Y=5 onto the ground. With a
         // 1000 kg chassis the previous 40:1 mass ratio amplified
-        // lateral float-precision noise into rolling drift.
-        Mass(100.0),
+        // lateral float-precision noise into rolling drift. USD-overridable
+        // via `physics:mass`.
+        Mass(drive.wheel_mass as f32),
         // The drive is an axle TORQUE on the wheel (see MotorActuator); wheel↔ground
         // friction propels the rover. μ is a COMPROMISE: high μ gives traction +
         // Ackermann cornering grip, but also high LATERAL grip that resists a skid
@@ -1210,16 +1288,14 @@ fn setup_physical_wheel(
     // low cap lets them just keep rolling forward with the rover → no speed
     // differential → no yaw. A high stall torque lets the wheels actually enforce
     // their left/right speed split and pivot the body. Velocity control self-caps
-    // the spin, so a high stall torque can't run away (unlike raw torque). Tunable
-    // via USD later.
-    const MAX_DRIVE_OMEGA: f64 = 12.0; // rad/s at full throttle (≈ 4.8 m/s at r=0.4)
-    const DRIVE_DAMP: f64 = 30.0; // velocity-tracking aggressiveness (1/s)
-    const STALL_TORQUE_GAIN: f64 = 6.0; // stall torque = peakTorque × this
+    // the spin, so a high stall torque can't run away (unlike raw torque). Now
+    // USD-tunable (`lunco:maxDriveOmega` / `lunco:driveDamping` /
+    // `lunco:stallTorqueGain`); defaults reproduce the verified feel.
     let drive_motor = AngularMotor::new(MotorModel::AccelerationBased {
         stiffness: 0.0,
-        damping: DRIVE_DAMP,
+        damping: drive.drive_damp,
     })
-    .with_max_torque(peak_torque * STALL_TORQUE_GAIN);
+    .with_max_torque(peak_torque * drive.stall_torque_gain);
 
     let mut joint_cmd = commands.spawn((
         RevoluteJoint::new(chassis, entity)
@@ -1234,7 +1310,7 @@ fn setup_physical_wheel(
         // and the front frame-steer does the turning.
         MotorActuator {
             port_entity: p_drive,
-            max_omega: MAX_DRIVE_OMEGA,
+            max_omega: drive.max_omega,
             drive_sign: -1.0,
         },
         Name::new(format!("PhysicalWheelJoint_{}", prim_path.path)),
@@ -1506,10 +1582,16 @@ fn on_add_usd_sim_prim(
 ///
 /// # Wiring Rules
 ///
-/// - **Left wheels** → `drive_left` digital port
-/// - **Right wheels** → `drive_right` digital port
-/// - **Front wheels** → `steering` digital port (for Ackermann)
-/// - **All wheels** → brake (handled separately)
+/// USD authority first (G4 — topology authored, not hardcoded):
+/// - `lunco:drivePort = "<name>"` on the wheel → wire its drive to that FSW port.
+/// - `lunco:steerPort = "<name>"` on the wheel → wire its steer to that FSW port.
+///
+/// Default when unauthored (the canonical skid/Ackermann layout):
+/// - **Even index** → `drive_left`, **odd index** → `drive_right`.
+/// - **Index < 2** (front) → `steering` (only meaningful for Ackermann).
+///
+/// A named port that is absent from the FSW `port_map` warns and is skipped —
+/// declare custom ports with `lunco:drivePorts` on the rover root.
 fn try_wire_wheel(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingWheelWiring)>,
     q_fsw: Query<(&UsdPrimPath, &FlightSoftware)>,
@@ -1521,27 +1603,43 @@ fn try_wire_wheel(
         });
 
         if let Some((_, fsw)) = fsw_root {
-            let is_left = pending.index % 2 == 0;
-            let is_front = pending.index < 2;
-
-            let drive_port_name = if is_left { "drive_left" } else { "drive_right" };
-            if let Some(&d_port) = fsw.port_map.get(drive_port_name) {
+            // Drive: authored binding wins, else even/odd index parity.
+            let drive_port_name = pending.drive_port_name.clone().unwrap_or_else(|| {
+                if pending.index % 2 == 0 { "drive_left" } else { "drive_right" }.to_string()
+            });
+            if let Some(&d_port) = fsw.port_map.get(&drive_port_name) {
                 commands.spawn((
                     Wire { source: d_port, target: pending.p_drive, scale: 1.0 },
                     Name::new(format!("Wire_Drive_{}", drive_port_name)),
                 ));
                 debug!("Wired wheel {} drive to FSW port {}", prim_path.path, drive_port_name);
+            } else {
+                warn!(
+                    "Wheel {} drive port '{}' not in FSW port_map; skipping",
+                    prim_path.path, drive_port_name
+                );
             }
 
-            if is_front {
-                if let Some(&s_port) = fsw.port_map.get("steering") {
+            // Steer: authored binding wins, else front wheels (index < 2) steer.
+            // An unauthored rear/skid wheel has no steer port — leave it unwired.
+            let steer_port_name = pending
+                .steer_port_name
+                .clone()
+                .or_else(|| (pending.index < 2).then(|| "steering".to_string()));
+            if let Some(name) = steer_port_name {
+                if let Some(&s_port) = fsw.port_map.get(&name) {
                     commands.spawn((
                         Wire { source: s_port, target: pending.p_steer, scale: 1.0 },
-                        Name::new("Wire_Steering"),
+                        Name::new(format!("Wire_Steer_{}", name)),
                     ));
-                    info!("Wired wheel {} STEERING to FSW port steering", prim_path.path);
-                } else {
-                    warn!("Wheel {} is front wheel but FSW has no 'steering' port!", prim_path.path);
+                    info!("Wired wheel {} steering to FSW port {}", prim_path.path, name);
+                } else if pending.steer_port_name.is_some() {
+                    // Only warn when the author asked for a port that's missing;
+                    // a defaulted front wheel on a skid rover legitimately has none.
+                    warn!(
+                        "Wheel {} steer port '{}' not in FSW port_map; skipping",
+                        prim_path.path, name
+                    );
                 }
             }
             commands.entity(ent).remove::<PendingWheelWiring>();
