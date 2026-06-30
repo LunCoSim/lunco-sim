@@ -493,6 +493,36 @@ fn process_usd_sim_prims(
             commands.entity(entity).insert(lunco_core::NotPredictable);
         }
 
+        // USD-authored sensors → cosim telemetry ports (lunco-cosim::sensors).
+        // Each marker turns the body's port surface on for that sensor kind; the
+        // sensor systems fill the values each tick.
+        if reader.prim_attribute_value::<bool>(&sdf_path, "lunco:sensor:imu").is_some() {
+            commands.entity(entity).insert(lunco_cosim::sensors::ImuSensor::default());
+        }
+        if reader.prim_attribute_value::<bool>(&sdf_path, "lunco:sensor:range").is_some() {
+            let axis = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:sensor:rangeAxis").as_deref() {
+                Some("X") => DVec3::X,
+                Some("-X") => DVec3::NEG_X,
+                Some("Y") => DVec3::Y,
+                Some("Z") => DVec3::Z,
+                Some("-Z") => DVec3::NEG_Z,
+                // Default and explicit "-Y": a downward altimeter.
+                _ => DVec3::NEG_Y,
+            };
+            let max_distance = reader
+                .prim_attribute_value::<f32>(&sdf_path, "lunco:sensor:rangeMax")
+                .map(|v| v as f64)
+                .unwrap_or(100.0);
+            commands.entity(entity).insert(lunco_cosim::sensors::RangeSensor {
+                axis,
+                max_distance,
+                distance: max_distance,
+            });
+        }
+        if reader.prim_attribute_value::<bool>(&sdf_path, "lunco:sensor:contact").is_some() {
+            commands.entity(entity).insert(lunco_cosim::sensors::ContactSensor::default());
+        }
+
         // 0. Detect Avatar prim
         if reader.prim_attribute_value::<String>(&sdf_path, "lunco:avatar").is_some() {
             info!("Detected Avatar prim at {}, setting up camera", prim_path.path);
@@ -1358,12 +1388,10 @@ fn setup_physical_wheel(
     })
     .with_max_torque(peak_torque * drive.stall_torque_gain);
 
+    // Joint construction lives in `lunco-usd-avian` (the single home for all
+    // Avian joint-building); we add the mobility/hardware actuators on top.
     let mut joint_cmd = commands.spawn((
-        RevoluteJoint::new(chassis, entity)
-            .with_local_anchor1(mount_local)
-            .with_local_anchor2(DVec3::ZERO)
-            .with_hinge_axis(axle)
-            .with_motor(drive_motor),
+        lunco_usd_avian::wheel_revolute_joint(chassis, entity, mount_local, axle, drive_motor),
         JointCollisionDisabled,
         // All-wheel drive. The throttle port already carries the skid rover's
         // per-side differential (drive_left/drive_right), so a single mapping here

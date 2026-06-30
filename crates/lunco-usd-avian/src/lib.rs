@@ -118,6 +118,11 @@ pub struct PendingUsdJoint {
     pub limit_upper: f64,
     /// The joint kind from USD (e.g., `PhysicsPrismaticJoint`).
     pub joint_type: String,
+    /// Spherical-joint swing cone half-angles `(angle0, angle1)` from
+    /// `physics:coneAngle0Limit`/`physics:coneAngle1Limit`, or `None` for a free
+    /// (unlimited) cone. `limit_lower/upper` carry the *twist* limit for a
+    /// spherical joint.
+    pub swing_limit: Option<(f64, f64)>,
     /// Authored `UsdPhysicsDriveAPI` drive (the `linear` instance for prismatic,
     /// `angular` for revolute), or `None` when the joint carries no drive — it
     /// then stays passive until a cosim wire commands its `displacement`/`angle`
@@ -655,10 +660,19 @@ fn on_add_usd_prim(
                             .unwrap_or(DVec3::ZERO);
                         let local_pos1 = read_vec3_attribute(reader, &sdf_path, "physics:localPos1")
                             .unwrap_or(DVec3::ZERO);
-                        let limit_lower = read_scalar_attribute(reader, &sdf_path, "physics:limitLower")
+                        // Generic travel/angle limit. For a DistanceJoint the
+                        // standard attrs are `physics:minDistance/maxDistance`;
+                        // fall back to the generic limit names otherwise.
+                        let limit_lower = read_scalar_attribute(reader, &sdf_path, "physics:minDistance")
+                            .or_else(|| read_scalar_attribute(reader, &sdf_path, "physics:limitLower"))
                             .unwrap_or(f64::NEG_INFINITY);
-                        let limit_upper = read_scalar_attribute(reader, &sdf_path, "physics:limitUpper")
+                        let limit_upper = read_scalar_attribute(reader, &sdf_path, "physics:maxDistance")
+                            .or_else(|| read_scalar_attribute(reader, &sdf_path, "physics:limitUpper"))
                             .unwrap_or(f64::INFINITY);
+                        // Spherical swing cone (half-angles about the two axes
+                        // orthogonal to the twist axis).
+                        let swing_limit = read_scalar_attribute(reader, &sdf_path, "physics:coneAngle0Limit")
+                            .zip(read_scalar_attribute(reader, &sdf_path, "physics:coneAngle1Limit"));
 
                         // `UsdPhysicsDriveAPI` instance is named for the DOF it
                         // drives: `linear` on a prismatic joint, `angular` on a
@@ -680,6 +694,7 @@ fn on_add_usd_prim(
                             limit_lower,
                             limit_upper,
                             joint_type: type_name.clone(),
+                            swing_limit,
                             drive,
                         });
                     }
@@ -779,6 +794,57 @@ fn build_usd_physics_joints(
                         .with_local_anchor2(pending.local_pos1),
                 );
             }
+            "PhysicsSphericalJoint" => {
+                // Ball joint: 3 rotational DOF about the anchor. `physics:axis`
+                // is the twist axis; the cone (`physics:coneAngle*Limit`) bounds
+                // swing, `physics:limit{Lower,Upper}` bounds twist. Suspension
+                // uprights, robotic wrists, gimbals.
+                let mut joint = SphericalJoint::new(b0, b1)
+                    .with_local_anchor1(pending.local_pos0)
+                    .with_local_anchor2(pending.local_pos1)
+                    .with_twist_axis(pending.axis);
+                if let Some((a0, a1)) = pending.swing_limit {
+                    // avian carries a single swing AngleLimit; use the larger
+                    // cone half-angle as a symmetric bound.
+                    let s = a0.abs().max(a1.abs());
+                    joint = joint.with_swing_limits(-s, s);
+                }
+                if pending.limit_lower.is_finite() && pending.limit_upper.is_finite() {
+                    joint = joint.with_twist_limits(pending.limit_lower, pending.limit_upper);
+                }
+                commands.entity(joint_entity).insert(joint);
+            }
+            "PhysicsDistanceJoint" => {
+                // Tether/strut: keeps the two anchors within [min, max] distance.
+                // Cables, fixed-length links. Unauthored → a rigid rod at the
+                // current separation's min (0) which is degenerate, so warn.
+                let min = if pending.limit_lower.is_finite() { pending.limit_lower.max(0.0) } else { 0.0 };
+                let max = if pending.limit_upper.is_finite() { pending.limit_upper.max(min) } else { min };
+                if !pending.limit_upper.is_finite() {
+                    warn!(
+                        "DistanceJoint {} has no physics:maxDistance — defaulting to rigid {min} m",
+                        pending.body1_path
+                    );
+                }
+                commands.entity(joint_entity).insert(
+                    DistanceJoint::new(b0, b1)
+                        .with_local_anchor1(pending.local_pos0)
+                        .with_local_anchor2(pending.local_pos1)
+                        .with_limits(min, max),
+                );
+            }
+            // UsdPhysics generic D6 joint has no avian primitive (avian offers
+            // fixed/revolute/prismatic/spherical/distance, not a configurable
+            // 6-DOF constraint). Reducing it needs per-DOF PhysicsLimitAPI
+            // analysis; until then, point the author at the explicit joint kinds.
+            "PhysicsJoint" | "PhysicsD6Joint" => {
+                warn!(
+                    "Generic D6 joint {} unsupported — author an explicit \
+                     PhysicsRevoluteJoint/PrismaticJoint/SphericalJoint/\
+                     DistanceJoint/FixedJoint for the DOF you need",
+                    pending.body1_path
+                );
+            }
             other => {
                 warn!("Unsupported USD joint type: {}", other);
             }
@@ -786,6 +852,28 @@ fn build_usd_physics_joints(
 
         commands.entity(joint_entity).remove::<PendingUsdJoint>();
     }
+}
+
+/// Builds the chassis↔wheel revolute constraint for a physical (joint-driven)
+/// wheel — the one programmatically-synthesized joint (vs. the authored
+/// `Physics*Joint` prims [`build_usd_physics_joints`] resolves). Centralizing it
+/// here keeps **all** Avian joint construction in `lunco-usd-avian`, matching the
+/// documented ownership; the caller (`lunco-usd-sim::setup_physical_wheel`)
+/// supplies the drive [`AngularMotor`] and adds its mobility/hardware actuators
+/// on top. `mount_local` is the hub anchor in chassis-local space, `axle` the
+/// hinge axis (chassis-local).
+pub fn wheel_revolute_joint(
+    chassis: Entity,
+    wheel: Entity,
+    mount_local: DVec3,
+    axle: DVec3,
+    drive_motor: avian3d::prelude::AngularMotor,
+) -> RevoluteJoint {
+    RevoluteJoint::new(chassis, wheel)
+        .with_local_anchor1(mount_local)
+        .with_local_anchor2(DVec3::ZERO)
+        .with_hinge_axis(axle)
+        .with_motor(drive_motor)
 }
 
 /// Reads a USD token attribute (e.g., `uniform token axis = "X"`).

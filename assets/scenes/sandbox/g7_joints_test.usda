@@ -1,0 +1,111 @@
+#usda 1.0
+(
+    defaultPrim = "SandboxScene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Verifies G7 joint kinds: PhysicsSphericalJoint + PhysicsDistanceJoint
+# (lunco-usd-avian build_usd_physics_joints).
+#   - BallArm hangs off a kinematic anchor via a SPHERICAL joint (3-DOF swing,
+#     45° cone) → swings like a pendulum, constrained to the cone.
+#   - Weight hangs off a second anchor via a DISTANCE joint (max 2 m) → falls
+#     under gravity but is held at ≤2 m from the anchor.
+# Expect server log: "Built USD joint PhysicsSphericalJoint ..." and
+#   "Built USD joint PhysicsDistanceJoint ..." with NO "Unsupported" warning.
+# Loaded by `sandbox --scene scenes/sandbox/g7_joints_test.usda`.
+
+def Xform "SandboxScene"
+{
+    custom bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.4, 0.4, 0.45)
+        bool physics:collisionEnabled = true
+    }
+
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        double3 xformOp:translate = (0.0, 6.0, 12.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # ---- Spherical (ball) joint ----
+    def Cube "BallAnchor" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.4
+        double3 xformOp:translate = (-2.0, 6.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (1.0, 0.3, 0.3)
+        float physics:mass = 1.0
+        bool physics:kinematicEnabled = true
+    }
+
+    def Cube "BallArm" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.3
+        double3 xformOp:translate = (-2.0, 5.0, 0.0)
+        double3 xformOp:scale = (1.0, 3.0, 1.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.2, 0.6, 1.0)
+        float physics:mass = 2.0
+    }
+
+    def PhysicsSphericalJoint "BallJoint"
+    {
+        rel physics:body0 = </SandboxScene/BallAnchor>
+        rel physics:body1 = </SandboxScene/BallArm>
+        uniform token physics:axis = "Y"
+        point3f physics:localPos0 = (0.0, 0.0, 0.0)
+        point3f physics:localPos1 = (0.0, 1.0, 0.0)
+        float physics:coneAngle0Limit = 0.785
+        float physics:coneAngle1Limit = 0.785
+    }
+
+    # ---- Distance (tether) joint ----
+    def Cube "TetherAnchor" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.4
+        double3 xformOp:translate = (2.0, 6.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (1.0, 0.3, 0.3)
+        float physics:mass = 1.0
+        bool physics:kinematicEnabled = true
+    }
+
+    def Cube "Weight" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.5
+        double3 xformOp:translate = (2.0, 4.5, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.3, 0.9, 0.4)
+        float physics:mass = 5.0
+    }
+
+    def PhysicsDistanceJoint "Tether"
+    {
+        rel physics:body0 = </SandboxScene/TetherAnchor>
+        rel physics:body1 = </SandboxScene/Weight>
+        point3f physics:localPos0 = (0.0, 0.0, 0.0)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+        float physics:minDistance = 0.0
+        float physics:maxDistance = 2.0
+    }
+}

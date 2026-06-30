@@ -1,6 +1,8 @@
-> **Status:** Partially implemented — G1/G1b/G2/G3/G4/G4b/G5/G6/G9 done (G5 verified on an
-> isolated differential rig; G9 = generic joint actuation + USD drive schema);
-> G7/G8 deferred.
+> **Status:** Implemented — G1/G1b/G2/G3/G4/G4b/G5/G6/G7/G9/G10/G11 done (G5 on an
+> isolated differential rig; G9 = generic joint actuation + USD drive schema;
+> G7 = spherical/distance joints; G10 = USD-authored sensors; G11 = single-track
+> lean wheel). All Avian joint-building consolidated in `lunco-usd-avian`. G8
+> (determinism/FMI) is a separate track.
 > **Audience:** Engineers working on vehicle, cosim, and USD-physics subsystems
 
 # 33 — Modeling Spacecraft (Landers & Rovers) in LunCoSim
@@ -235,10 +237,63 @@ to `[RIGID_BODY_GROUP, REVOLUTE_JOINT_GROUP]` (`lunco-cosim/src/ports.rs`).
   class as the `localPos` "bodies launched into orbit" trap — *all* USD physics
   scalar reads are f32-first.
 
-### G7 — Extra joint types (spherical / D6 / distance)  **[LOW — optional]**
-Unsupported joints warn and fall through. Rocker-bogie can avoid them; landing-gear
-or robotic arms may want them later. (G9 made the revolute/prismatic joints we *do*
-build fully actuatable; G7 is about adding more joint *kinds*.)
+### G7 — Extra joint types (spherical / distance)  **[DONE; D6 reduces or warns]**
+`lunco-usd-avian::build_usd_physics_joints` now builds two more avian joint kinds
+from standard UsdPhysics prims:
+- **`PhysicsSphericalJoint`** → avian `SphericalJoint` (ball joint: 3-DOF swing +
+  twist). `physics:axis` = twist axis; `physics:coneAngle0/1Limit` → swing cone
+  (larger half-angle as a symmetric bound, since avian carries one swing
+  `AngleLimit`); `physics:limitLower/Upper` → twist limit. Suspension uprights,
+  robotic wrists, gimbals.
+- **`PhysicsDistanceJoint`** → avian `DistanceJoint` (tether/strut within
+  `[physics:minDistance, physics:maxDistance]`). Cables, fixed-length links.
+- **Generic `PhysicsD6Joint`/`PhysicsJoint`** has no avian primitive (avian offers
+  fixed/revolute/prismatic/spherical/distance, not a configurable 6-DOF
+  constraint). It warns with guidance to author an explicit joint for the needed
+  DOF — full D6 reduction (per-DOF `PhysicsLimitAPI` analysis) is the remaining
+  edge.
+- **Verified live** on `assets/scenes/sandbox/g7_joints_test.usda`: both build
+  with no "Unsupported" warning; the distance-tethered Weight settles at exactly
+  `2.0 m` below its anchor (= `maxDistance`); the ball-jointed arm hangs stable.
+  Also note **all programmatic joint construction now lives in `lunco-usd-avian`**
+  — the wheel revolute joint moved out of `lunco-usd-sim::setup_physical_wheel`
+  into `lunco_usd_avian::wheel_revolute_joint` (one home for joint-building).
+
+### G10 — USD-authored sensors (IMU / range / contact)  **[DONE]**
+Telemetry was limited to a body's own kinematic state + joint DOFs — no *sensor*
+concept. `lunco-cosim/src/sensors.rs` adds three USD-authorable sensor kinds, each
+a component with cached outputs filled by a small system and surfaced through the
+same port mechanism as the rigid body (gated on the marker, so unsensed bodies pay
+nothing). Authored in `lunco-usd-sim` from `lunco:sensor:*`:
+- **`lunco:sensor:imu`** → `ImuSensor` → ports `accel_x/y/z` (world-frame linear
+  acceleration, finite-differenced from `LinearVelocity`). Pairs with the existing
+  `angvel_*` + `quat_*` for a full 9-DOF IMU. (Body-frame specific force —
+  subtracting gravity — is a future refinement.)
+- **`lunco:sensor:range`** (+ `:rangeAxis` token, `:rangeMax`) → `RangeSensor` →
+  port `range`. A raycast altimeter/lidar along the body-local axis (default `-Y`).
+- **`lunco:sensor:contact`** → `ContactSensor` → ports `contact` (0/1) +
+  `contact_force` (N). From avian's `Collisions`.
+- **Verified live** on `assets/scenes/sandbox/sensor_test.usda` (100 kg box at
+  rest): `range = 0.500` (exact centre-to-ground), `contact = 1`, `accel ≈ 0`
+  (correct for a static body). Caveat: `contact_force` reads ≈2× the static weight
+  at rest — it currently includes the solver's penetration-correction impulse, not
+  just gravity support; it tracks load but the absolute calibration is a known
+  refinement.
+
+### G11 — Single-track / lean wheel (bikes, motorcycles)  **[DONE]**
+The raycast wheel decomposed traction in a flat wheel basis (forward `-Z`/right
+`+X`), assuming an upright wheel on a flat patch — a leaning two-wheeler got its
+lateral force in the wrong plane. `lunco-mobility::contact_plane_basis` now builds
+the traction basis in the **actual contact plane** (the ray hit normal): the wheel
+heading projected onto the plane ⟂ to the contact normal, `right = forward ×
+normal`. For an upright wheel (normal ≈ wheel up) this is *mathematically identical*
+to the old basis — existing rovers are unchanged (unit-tested + live: a six-wheel
+rover rests at `speed 0`, no drift). For a leaning bike the basis follows the
+cambered contact plane, so drive + lateral grip are computed correctly. Unit-tested
+(`force_law_tests::contact_basis_*`). **Remaining for full fidelity** (deferred):
+raked steering-head axis (steer is still about chassis `Y`, `lib.rs:539`) and
+gyroscopic precession — balance itself is a *controller* (already expressible via
+the torque + attitude/rate ports), not a substrate gap.
 
 ### G8 — Determinism / FMI interop  **[SEPARATE TRACK]**
 Live cosim is non-deterministic, no FMU. Matters if a lander descent must be

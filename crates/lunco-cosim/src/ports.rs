@@ -70,6 +70,9 @@ const AVIAN: &[AvianGroup] = &[
     crate::avian::RIGID_BODY_GROUP,
     crate::joint::REVOLUTE_JOINT_GROUP,
     crate::joint::PRISMATIC_JOINT_GROUP,
+    crate::sensors::IMU_SENSOR_GROUP,
+    crate::sensors::RANGE_SENSOR_GROUP,
+    crate::sensors::CONTACT_SENSOR_GROUP,
 ];
 
 fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {

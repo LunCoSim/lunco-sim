@@ -152,6 +152,29 @@ fn drive_force_mag(throttle: f64, normal_force: f64, force_per_normal: f64) -> f
 /// steering jitter). Linear `-k·slip` below the Coulomb cone, saturating at it.
 /// While `braking`, a locked wheel grips at the FULL cone (opposing all sliding)
 /// so it actually decelerates the chassis.
+/// Wheel traction basis projected into the contact plane defined by `normal`.
+///
+/// Returns `(forward, right)`: orthonormal vectors spanning the plane ⟂ to the
+/// contact `normal`, with `forward` the wheel heading projected into that plane
+/// and `right = forward × normal`. For an upright wheel (where `normal` is the
+/// wheel's own up, so the heading already lies in the plane) this reproduces the
+/// raw `(wheel_forward, wheel_right)` — existing rovers are byte-for-byte
+/// unchanged. For a **leaning single-track vehicle** the contact normal tilts
+/// with the lean, so decomposing slip/drive in this basis gives the correct
+/// longitudinal/lateral split instead of assuming a flat patch. Falls back to
+/// the raw vectors if the heading is parallel to the normal (degenerate).
+fn contact_plane_basis(wheel_forward: DVec3, wheel_right: DVec3, normal: DVec3) -> (DVec3, DVec3) {
+    let n = normal.normalize_or_zero();
+    if n == DVec3::ZERO {
+        return (wheel_forward, wheel_right);
+    }
+    let forward = (wheel_forward - n * wheel_forward.dot(n))
+        .try_normalize()
+        .unwrap_or(wheel_forward);
+    let right = forward.cross(n).try_normalize().unwrap_or(wheel_right);
+    (forward, right)
+}
+
 fn contact_friction(
     slip_vec: DVec3,
     grip_stiffness: f64,
@@ -459,8 +482,10 @@ fn apply_wheel_drive(
             let braking = fsw.is_some_and(|f| f.brake_active);
 
             if let Ok(port) = q_ports.get(wheel.drive_port) {
-                // Traction only exists when the ray is hitting the ground
-                if hits.iter().next().is_some() {
+                // Traction only exists when the ray is hitting the ground. Bind
+                // the hit so its surface normal defines the contact plane (needed
+                // for leaning single-track wheels).
+                if let Some(ground_hit) = hits.iter().next() {
                     let normal_force = wheel.last_normal_force;
                     if normal_force < 1.0 {
                         // Not enough contact to transmit meaningful force
@@ -484,8 +509,17 @@ fn apply_wheel_drive(
                         wheel_tf.translation.as_dvec3(),
                         wheel_tf.rotation.as_dquat(),
                     );
-                    let forward: DVec3 = wheel_world_rot * DVec3::NEG_Z;
-                    let right: DVec3 = wheel_world_rot * DVec3::X;
+                    // Single-track / lean support: build the traction basis in
+                    // the ACTUAL contact plane (the ray hit normal), not a flat
+                    // wheel basis. For an upright wheel (normal ≈ wheel up) this
+                    // reproduces the old forward/right exactly, so existing rovers
+                    // are unchanged; a leaning bike gets its drive + lateral grip
+                    // in the tilted contact plane instead of fighting a phantom
+                    // flat patch.
+                    let wheel_forward: DVec3 = wheel_world_rot * DVec3::NEG_Z;
+                    let wheel_right: DVec3 = wheel_world_rot * DVec3::X;
+                    let (forward, right) =
+                        contact_plane_basis(wheel_forward, wheel_right, ground_hit.normal);
 
                     // --- Drive force ---
                     // `port.value` is the wire-scaled throttle; `drive_force_mag`
@@ -1021,6 +1055,28 @@ mod force_law_tests {
     //! broken control (the comments name the bug).
     use super::*;
     use bevy::math::{DQuat, DVec3};
+
+    // ── Single-track lean: contact-plane traction basis ─────────────────────
+    #[test]
+    fn contact_basis_upright_matches_flat_wheel() {
+        // Upright wheel: contact normal = world up. Basis must equal the raw
+        // wheel forward/right (so existing rovers are unchanged).
+        let (f, r) = contact_plane_basis(DVec3::NEG_Z, DVec3::X, DVec3::Y);
+        assert!((f - DVec3::NEG_Z).length() < 1e-9, "forward changed: {f:?}");
+        assert!((r - DVec3::X).length() < 1e-9, "right changed: {r:?}");
+    }
+
+    #[test]
+    fn contact_basis_leaned_lies_in_contact_plane() {
+        // Cambered contact: normal tilted 22° off vertical. Both basis vectors
+        // must lie in the plane ⟂ to the normal, stay unit, and be orthogonal.
+        let n = DVec3::new(0.0, 1.0, 0.4).normalize();
+        let (f, r) = contact_plane_basis(DVec3::NEG_Z, DVec3::X, n);
+        assert!(f.dot(n).abs() < 1e-9, "forward not in contact plane: {}", f.dot(n));
+        assert!(r.dot(n).abs() < 1e-9, "right not in contact plane: {}", r.dot(n));
+        assert!((f.length() - 1.0).abs() < 1e-9 && (r.length() - 1.0).abs() < 1e-9);
+        assert!(f.dot(r).abs() < 1e-9, "forward/right not orthogonal");
+    }
 
     // ── G5 differential coupling: twist angle + PD law ──────────────────────
     #[test]

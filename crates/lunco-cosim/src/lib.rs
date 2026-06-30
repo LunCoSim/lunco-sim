@@ -43,6 +43,7 @@ pub mod avian;
 pub mod component;
 pub mod joint;
 pub mod ports;
+pub mod sensors;
 pub mod suggestion;
 pub mod systems;
 pub mod connection;
@@ -73,7 +74,10 @@ impl Plugin for CoSimPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<SimComponent>()
             .register_type::<PendingForces>()
-            .register_type::<SimConnection>();
+            .register_type::<SimConnection>()
+            .register_type::<sensors::ImuSensor>()
+            .register_type::<sensors::RangeSensor>()
+            .register_type::<sensors::ContactSensor>();
 
         // The shared port substrate (in `lunco-core`, below every participant).
         // The cosim engine owns the avian/joint/Modelica/hardware backends and
@@ -152,6 +156,19 @@ impl Plugin for CoSimPlugin {
         // Avian outputs (position/velocity, joint twist) are read on demand
         // through the resolver — avian's state is stable between physics steps,
         // so no per-tick snapshot system is needed.
+
+        // Sensors refresh their cached outputs before propagation so a wire
+        // reading `accel_*`/`range`/`contact*` sees this tick's value. They only
+        // touch entities carrying the corresponding sensor component.
+        app.add_systems(
+            FixedUpdate,
+            (
+                sensors::update_imu_sensors,
+                sensors::update_range_sensors,
+                sensors::update_contact_sensors,
+            )
+                .before(systems::propagate::CosimSet::Propagate),
+        );
 
         app.add_systems(Update, systems::collider::sync_collider);
     }
