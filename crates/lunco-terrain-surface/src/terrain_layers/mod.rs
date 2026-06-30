@@ -53,7 +53,16 @@ pub fn apply_obstacle_spec_to_stack(
         stack.0.push(crater_layer(spec.craters, spec.seed, DETAIL_REGION_M));
     }
     if spec.rocks.enabled && spec.rocks.density > 0.0 {
-        stack.0.push(rock_layer(spec.rocks, spec.region_half_extent, spec.pattern, spec.seed));
+        // Rocks scatter across the WHOLE DEM (the layer clamps `f32::MAX` to the grid
+        // half-extent), not just the ±region centre — capped to a sane total in the
+        // layer so a 16 km map doesn't try to spawn hundreds of thousands of entities.
+        //
+        // FORCE Uniform sampling here (ignore `spec.pattern`): Poisson-disk fills the
+        // ENTIRE region at `min_spacing` (a ~14 M-cell background grid + millions of
+        // candidate points over an 8 km map) before subsetting — a ~12 s MAIN-THREAD
+        // freeze. Blue-noise spacing is meaningless at full-map scale anyway; Uniform
+        // is O(count). Poisson stays available for the small standalone arena path.
+        stack.0.push(rock_layer(spec.rocks, f32::MAX, lunco_obstacle_field::spec::Pattern::Uniform, spec.seed));
     }
 }
 

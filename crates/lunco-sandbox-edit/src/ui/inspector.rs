@@ -854,6 +854,12 @@ fn obstacle_field_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                     regen = true;
                 }
             }
+            // Keep the size distribution valid: min ≤ mode ≤ max. If the sliders
+            // invert (e.g. min > mode) the log-normal sampler clamps EVERY crater to
+            // the high end → a dense field of oversized overlapping basins + rims that
+            // reads as jagged spike noise from altitude (the "craters look worse").
+            s.craters.size.min = s.craters.size.min.min(s.craters.size.mode);
+            s.craters.size.max = s.craters.size.max.max(s.craters.size.mode);
         });
 
         egui::CollapsingHeader::new("Rocks").default_open(true).show(ui, |ui| {
@@ -872,6 +878,9 @@ fn obstacle_field_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                     regen = true;
                 }
             }
+            // Same validity clamp as craters: min ≤ mode ≤ max.
+            s.rocks.size.min = s.rocks.size.min.min(s.rocks.size.mode);
+            s.rocks.size.max = s.rocks.size.max.max(s.rocks.size.mode);
         });
 
         ui.separator();

@@ -18,6 +18,12 @@ pub struct TerrainRock;
 
 /// Number of size buckets → shared rock meshes (so N rocks reuse a few meshes).
 const ROCK_BUCKETS: usize = 6;
+/// Hard cap on scattered rock ENTITIES regardless of density × area. Scattering at a
+/// real per-hectare density across a 16 km DEM would be hundreds of thousands of
+/// bodies; cap the total and spread it over the whole map (LOD-culled near the
+/// camera). Camera-following rock streaming is the real fix for uniform full-map
+/// density at high counts; this gives full-map coverage cheaply meanwhile.
+const MAX_ROCKS: usize = 6000;
 /// Distance LOD: rocks fully visible to `LOD_FAR`, cross-fade out over `LOD_FADE`.
 /// Rocks are scattered only in a near-origin region (`region_half_extent`, ~±300 m),
 /// and unlike craters they have NO coarse always-on fallback — once culled they
@@ -56,8 +62,16 @@ impl TerrainLayer for RockScatterLayer {
         }
         let side = (2.0 * half) as f64;
         let count = ((self.rocks.density as f64 * side * side) / 10_000.0).round().max(0.0) as usize;
+        let count = count.min(MAX_ROCKS);
         if count == 0 {
             return;
+        }
+        if count == MAX_ROCKS {
+            info!(
+                "[terrain-layer/rocks] capping scatter at {MAX_ROCKS} rocks over ±{:.0} m \
+                 (requested density {}/ha would be more); LOD-culled, full-map coverage",
+                half, self.rocks.density
+            );
         }
 
         let placements = sample_layer(

@@ -133,6 +133,25 @@ impl LodTiles {
     pub fn invalidate(&mut self) {
         self.gen = self.gen.wrapping_add(1);
     }
+
+    /// Remove (and return for despawn) every tile already stale from a PRIOR
+    /// invalidation — i.e. older than the current generation. Called right before a
+    /// new `invalidate()` so that rapid successive re-bakes keep at most ONE
+    /// generation of hole-cover instead of piling up generations of dead tiles (which
+    /// made the per-frame tile bookkeeping go O(n²) and tanked the frame rate).
+    pub fn reap_stale(&mut self) -> Vec<Entity> {
+        let cur = self.gen;
+        let mut dead = Vec::new();
+        self.tiles.retain(|_, slot| {
+            if slot.gen == cur {
+                true
+            } else {
+                dead.push(slot.entity);
+                false
+            }
+        });
+        dead
+    }
 }
 
 /// Back-pointer from a spawned LOD tile to its owning terrain. Tiles are parented
@@ -555,11 +574,15 @@ pub fn update_lod_tiles(
             .map(|s| s.region)
             .collect();
         tiles.tiles.retain(|coord, slot| {
-            // A fresh, still-wanted tile always stays.
-            if slot.gen == cur_gen && wanted.contains(coord) {
+            // Keep ANY tile whose coord is still wanted — O(1). A fresh one is final;
+            // a stale one covers the surface until its same-coord replacement bakes in
+            // (the spawn paths despawn the slot they replace). This O(1) keep is what
+            // stops a full-generation invalidation from going O(stale × missing).
+            if wanted.contains(coord) {
                 return true;
             }
-            // Otherwise (not wanted, or stale): hold it only while it plugs a hole.
+            // Not wanted (camera moved off it): hold only while it plugs a not-yet-
+            // baked hole. This overlap runs ONLY for the small trailing-edge set.
             let region = qt.region(*coord);
             let covers_hole = missing.iter().any(|m| squares_overlap(region, *m));
             if !covers_hole {

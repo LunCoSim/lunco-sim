@@ -240,7 +240,11 @@ register_commands!(on_spawn_dem_terrain);
 struct DemBuild {
     /// The static visual mesh — `None` in `lod_viz` mode (tiles draw instead).
     mesh: Option<MeshData>,
-    collider_heights: Vec<Vec<f64>>,
+    /// The static heightfield collider, **built off-thread** — `None` in
+    /// `collider_ring` mode (a streamed collider ring replaces it). Constructing the
+    /// parry heightfield for a multi-million-point DEM is expensive, so it happens in
+    /// the build task; the main thread only inserts the finished component.
+    collider: Option<Collider>,
     /// The realized tile grid (with craters stamped), always retained as the shared
     /// `HeightSource` the streaming consumers and the `TerrainHeight` query sample.
     grid: Option<std::sync::Arc<HeightGrid>>,
@@ -346,9 +350,16 @@ fn start_dem_builds(
             for layer in &layers {
                 layer.stamp(&mut tile);
             }
-            // The static collider is built from these heights; skip the (whole-DEM)
-            // allocation when the collider ring will stream per-tile colliders instead.
-            let collider_heights = if collider_ring { Vec::new() } else { tile.to_avian_heights() };
+            // Build the static heightfield collider HERE (off-thread) when this isn't
+            // a streamed collider ring — the parry heightfield build over a
+            // multi-million-point DEM is the load-time cost that used to stall the
+            // main thread in `finish_dem_builds`.
+            let collider = if collider_ring {
+                None
+            } else {
+                let h = tile.half_extent as f64;
+                Some(Collider::heightfield(tile.to_avian_heights(), DVec3::new(2.0 * h, 1.0, 2.0 * h)))
+            };
             // Static visual mesh unless lod_viz streams visual tiles instead.
             let mesh = if lod_viz { None } else { Some(tile.to_mesh_data()) };
             // Always retain the grid as a shared `HeightSource`. The streaming
@@ -358,7 +369,7 @@ fn start_dem_builds(
             // `to_avian_heights`/`to_mesh_data` only borrow, and the `Arc` is shared.
             let grid = Some(std::sync::Arc::new(tile));
             Ok(DemBuild {
-                collider_heights,
+                collider,
                 mesh,
                 grid,
                 base_grid,
@@ -411,11 +422,9 @@ fn finish_dem_builds(
 
         let h = built.half_extent as f64;
         let mut e = commands.entity(entity);
-        // Static full-DEM collider — UNLESS the collider ring replaces it with
-        // streamed per-tile colliders (overlapping heightfields would double up).
-        if !req.collider_ring {
-            let collider =
-                Collider::heightfield(built.collider_heights, DVec3::new(2.0 * h, 1.0, 2.0 * h));
+        // Static full-DEM collider — already built off-thread (`None` when a collider
+        // ring streams per-tile colliders instead). Just insert the finished component.
+        if let Some(collider) = built.collider {
             e.insert((RigidBody::Static, collider));
         }
         // Retain the pristine base grid + source settings so the crater layer can be
@@ -500,6 +509,18 @@ struct DemRestampTask(Task<DemRestampResult>);
 #[derive(Component)]
 struct DemRestampPending;
 
+/// Debounce armed on each layer-stack change; the re-stamp only kicks off once it
+/// elapses with no further change. Re-stamping the *whole* DEM is heavy (clone +
+/// tens of thousands of crater stamps + collider build), so coalescing a slider
+/// drag's many changes into ONE trailing re-stamp is what keeps live tuning from
+/// piling up back-to-back full re-bakes (the "it stuck" when changing repeatedly).
+#[derive(Component)]
+struct DemRestampDebounce(Timer);
+
+/// Settle delay before a layer edit triggers the off-thread re-stamp. Long enough to
+/// swallow a continuous slider drag, short enough to feel responsive on release.
+const RESTAMP_DEBOUNCE_SECS: f32 = 0.3;
+
 /// Spawn the off-thread re-stamp task: clone the pristine (upscaled, crater-free)
 /// [`DemBaseGrid`], stamp the stack's geometry layers into it, and (unless a collider
 /// ring streams physics) build the heightfield collider — all on the task pool.
@@ -538,15 +559,18 @@ fn spawn_restamp_task(
 /// obstacle-field Inspector drive the DEM: no GeoTIFF re-read — craters re-stamp off
 /// the retained [`DemBaseGrid`]. The expensive work runs OFF-THREAD ([`spawn_restamp_task`])
 /// so the edit never freezes the frame; [`finish_dem_restamp`] swaps the result in.
+#[allow(clippy::type_complexity)]
 fn start_dem_restamp(
     mut events: MessageReader<RegenerateTerrainLayers>,
+    time: Res<Time>,
     mut commands: Commands,
-    q: Query<(
+    mut q: Query<(
         Entity,
         &DemBaseGrid,
         &DemTerrainSource,
         Ref<crate::terrain_layers::TerrainLayerStack>,
         Has<DemRestampTask>,
+        Option<&mut DemRestampDebounce>,
     )>,
 ) {
     // Re-bake when the stack CHANGED (a layer prim / the Inspector spec was edited →
@@ -554,12 +578,32 @@ fn start_dem_restamp(
     // command-ordering races a one-shot message would have), or when forced.
     let forced = !events.is_empty();
     events.clear();
-    for (entity, base, src, stack, busy) in &q {
-        if !forced && !stack.is_changed() {
+    for (entity, base, src, stack, busy, debounce) in &mut q {
+        if forced || stack.is_changed() {
+            // (Re)arm the debounce on every change so a continuous drag keeps
+            // pushing the deadline out → exactly one re-stamp once the drag stops.
+            match debounce {
+                Some(mut d) => {
+                    d.0.set_duration(std::time::Duration::from_secs_f32(RESTAMP_DEBOUNCE_SECS));
+                    d.0.reset();
+                }
+                None => {
+                    commands.entity(entity).insert(DemRestampDebounce(Timer::from_seconds(
+                        RESTAMP_DEBOUNCE_SECS,
+                        TimerMode::Once,
+                    )));
+                }
+            }
             continue;
         }
+        // No change this frame: tick the pending debounce and fire when it settles.
+        let Some(mut d) = debounce else { continue };
+        if !d.0.tick(time.delta()).just_finished() {
+            continue;
+        }
+        commands.entity(entity).remove::<DemRestampDebounce>();
         if busy {
-            // A re-stamp is already running → mark for one coalesced trailing run.
+            // A re-stamp is still running → mark for one coalesced trailing run.
             commands.entity(entity).insert(DemRestampPending);
             continue;
         }
@@ -577,9 +621,6 @@ fn finish_dem_restamp(
     mut tasks: Query<(
         Entity,
         &mut DemRestampTask,
-        &DemBaseGrid,
-        &DemTerrainSource,
-        &crate::terrain_layers::TerrainLayerStack,
         &mut crate::stream_viz::DemHeightField,
         Option<&mut crate::stream_viz::LodTiles>,
         Option<&mut crate::stream_viz::PendingTileBakes>,
@@ -591,9 +632,7 @@ fn finish_dem_restamp(
 ) {
     use bevy::tasks::futures_lite::future;
     let mut any = false;
-    for (entity, mut task, base, src, stack, mut hf, tiles, pending, has_static_mesh, was_pending) in
-        &mut tasks
-    {
+    for (entity, mut task, mut hf, tiles, pending, has_static_mesh, was_pending) in &mut tasks {
         let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
@@ -621,8 +660,13 @@ fn finish_dem_restamp(
 
         // Progressive refresh: bump the generation so live tiles go stale + re-bake
         // near-first (still covering the surface), and drop in-flight bakes from the
-        // OLD heights. No despawn-everything flash.
+        // OLD heights. No despawn-everything flash. First REAP any tiles already stale
+        // from a prior re-bake so rapid edits keep at most one generation of cover —
+        // otherwise dead tiles pile up and the per-frame bookkeeping goes O(n²).
         if let Some(mut tiles) = tiles {
+            for e in tiles.reap_stale() {
+                commands.entity(e).try_despawn();
+            }
             tiles.invalidate();
         }
         if let Some(mut pending) = pending {
@@ -632,10 +676,14 @@ fn finish_dem_restamp(
         // Scatter layers re-run once the applied-marker is gone (next frame).
         commands.entity(entity).remove::<crate::terrain_layers::TerrainLayersApplied>();
 
-        // Coalesced trailing re-bake (a slider drag requested more mid-task).
+        // Coalesced trailing re-bake (a change arrived mid-task): re-arm the debounce
+        // rather than spawning immediately, so a still-active drag keeps coalescing.
         if was_pending {
             commands.entity(entity).remove::<DemRestampPending>();
-            spawn_restamp_task(&mut commands, entity, base, src, stack);
+            commands.entity(entity).insert(DemRestampDebounce(Timer::from_seconds(
+                RESTAMP_DEBOUNCE_SECS,
+                TimerMode::Once,
+            )));
         }
         info!("[dem-terrain] regenerated terrain layers (±{:.0} m)", half);
     }
