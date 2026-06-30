@@ -46,7 +46,7 @@ The "Brains and Brawn"—Flight Software (FSW), On-Board Computer (OBC), mobilit
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-mobility`** | Physics models for planetary rovers using high-performance raycast-based wheel/suspension logic. |
+| **`lunco-mobility`** | Parameterized surface-vehicle physics: contact-plane raycast wheels (incl. leaning bikes), suspension, drive mixing, rocker-bogie differential. |
 | **`lunco-robotics`** | High-level assembly logic and rover structural definitions. |
 | **`lunco-avatar`** | Human-interaction layer: composable camera behaviors (SpringArm, Orbit) and control intents. |
 | **`lunco-obc`** | Hardware interface emulation (ADC/DAC) between digital FSW registers and physical units. |
@@ -63,7 +63,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, and simulati
 | :--- | :--- |
 | **`lunco-usd`** | High-level USD orchestrator and mapper for LunCo-specific engineering metadata (`lunco:*`). |
 | **`lunco-usd-bevy`** | Core visual bridge: maps USD hierarchy, shapes, and transforms to Bevy entities/components. |
-| **`lunco-usd-avian`** | Physics bridge: maps `USDPhysics` schemas (RigidBody, Colliders) to Avian3D components. |
+| **`lunco-usd-avian`** | Physics bridge: maps `USDPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. |
 | **`lunco-usd-sim`** | Intercepts specialized simulation schemas (e.g., PhysX Vehicles) and maps them to LunCo models. |
 | **`lunco-materials`** | The one general self-describing `ShaderMaterial` (any `.wgsl` per-instance; params reflected from the shader's `struct Material`) for the USD rendering pipeline. |
 
@@ -188,14 +188,14 @@ Procedural crater + rock field generation for rover testing. Produces LOD-aware 
 Backend-agnostic experiment / batch-run registry. Models a single Fast Run as a first-class artifact (params, bounds, trajectory). The simulation backend is plugged in by another crate via the `ExperimentRunner` trait, keeping the registry decoupled from any one solver.
 
 **`lunco-cosim`**
-Multi-engine simulation orchestrator. Wires named outputs from one engine (e.g., Modelica) to named inputs of another (e.g., Avian physics) via `SimConnection` components, following FMI/SSP patterns for causality and propagation.
+Multi-engine simulation orchestrator. Wires named outputs from one engine (e.g., Modelica) to named inputs of another (e.g., Avian physics) via `SimConnection` components, following FMI/SSP patterns. Owns the built-in `PortRegistry` backends: rigid-body state (position/velocity/attitude/rates + force/torque/mass-props), revolute/prismatic joint motors (`angle`/`displacement`), and USD-authored sensors (IMU, range, contact).
 
 ---
 
 ### 3. Vessel Control & Hardware
 
 **`lunco-mobility`**
-Physics models for surface mobility and traction. Implements high-performance raycast-based wheel models, suspension dynamics (spring-damper), and steering mixing (Skid/Ackermann) for realistic planetary rover simulation.
+Physics models for surface mobility and traction — the parameterized substrate (a vehicle is a USD file, not a Rust struct). Raycast wheel model with contact-plane traction (supports leaning single-track bikes), suspension (spring-damper), steering mixing (Skid/Ackermann/`GenericDriveMix`), and a soft rocker-bogie `DifferentialCoupling`.
 
 **`lunco-robotics`**
 High-level vessel assembly and spawning logic. Orchestrates the composition of complex robots from constituent parts, linking chassis, wheels, software, and sensors into a cohesive simulation unit.
@@ -226,7 +226,7 @@ High-level USD orchestrator and engineering metadata bridge. Maps LunCo-specific
 Core OpenUSD visual bridge. Maps USD prim hierarchies, shapes (Cubes, Spheres, Meshes), and transforms into Bevy entities and components for instant visual synchronization from USDA source files.
 
 **`lunco-usd-avian`**
-Physics bridge for OpenUSD. Automatically maps `USDPhysics` schemas (RigidBody, Colliders) to Avian3D components using high-performance ECS observers that react to USD prim paths.
+Physics bridge for OpenUSD. Maps `USDPhysics` schemas — rigid bodies + mass-properties, all collider shapes, and **all joints** (revolute/prismatic/fixed/spherical/distance, D6-reduced) with `UsdPhysicsDriveAPI` motor drive — to Avian3D. The single home for Avian joint construction (incl. the programmatic wheel hinge).
 
 **`lunco-usd-sim`**
 Specialized simulation metadata bridge. Intercepts complex industry-standard vehicle schemas (like NVIDIA PhysX Vehicles) and substitutes them with optimized LunCo simulation models (e.g., Raycast wheels).

@@ -495,9 +495,13 @@ fn process_usd_sim_prims(
 
         // USD-authored sensors → cosim telemetry ports (lunco-cosim::sensors).
         // Each marker turns the body's port surface on for that sensor kind; the
-        // sensor systems fill the values each tick.
+        // sensor systems fill the values each tick. `lunco:sensor:offset` is the
+        // shared body-local mount point (lever arm from the COM).
+        let sensor_offset = lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:sensor:offset")
+            .map(|v| DVec3::new(v[0], v[1], v[2]))
+            .unwrap_or(DVec3::ZERO);
         if reader.prim_attribute_value::<bool>(&sdf_path, "lunco:sensor:imu").is_some() {
-            commands.entity(entity).insert(lunco_cosim::sensors::ImuSensor::default());
+            commands.entity(entity).insert(lunco_cosim::sensors::ImuSensor::mounted(sensor_offset));
         }
         if reader.prim_attribute_value::<bool>(&sdf_path, "lunco:sensor:range").is_some() {
             let axis = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:sensor:rangeAxis").as_deref() {
@@ -514,6 +518,7 @@ fn process_usd_sim_prims(
                 .map(|v| v as f64)
                 .unwrap_or(100.0);
             commands.entity(entity).insert(lunco_cosim::sensors::RangeSensor {
+                offset: sensor_offset,
                 axis,
                 max_distance,
                 distance: max_distance,
@@ -935,6 +940,13 @@ fn process_usd_sim_prims(
                 stall_torque_gain: read_f("lunco:stallTorqueGain").unwrap_or(6.0),
             };
 
+            // Raked steering-head axis (USD `lunco:steerAxis`, wheel-local
+            // float3). Default `+Y` (vertical yaw) for cars; a motorcycle fork
+            // authors e.g. `(0, 0.91, 0.42)` for a ~25° rake.
+            let wheel_steer_axis = lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:steerAxis")
+                .map(|v| DVec3::new(v[0], v[1], v[2]))
+                .unwrap_or(DVec3::Y);
+
             // Standard-USD discriminator: an authored `PhysicsRevoluteJoint`
             // pointing at this wheel via `physics:body1` ⇒ joint-based.
             let key = (prim_path.stage_handle.clone(), prim_path.path.clone());
@@ -974,6 +986,7 @@ fn process_usd_sim_prims(
                         contact_grip_stiffness,
                         brake_torque_max,
                         drive_force_per_normal,
+                        steer_axis: wheel_steer_axis,
                     },
                 );
             }
@@ -1027,6 +1040,8 @@ struct WheelSpinParams {
     brake_torque_max: f64,
     /// Drive force as a multiple of normal force (`lunco:driveForcePerNormal`).
     drive_force_per_normal: f64,
+    /// Raked steering-head axis in the wheel's local frame (`lunco:steerAxis`).
+    steer_axis: DVec3,
 }
 
 /// Joint-wheel drive tuning, read from USD so a dynamic vehicle's feel is
@@ -1087,6 +1102,7 @@ fn setup_raycast_wheel(
         contact_grip_stiffness: spin.contact_grip_stiffness,
         brake_torque_max: spin.brake_torque_max,
         drive_force_per_normal: spin.drive_force_per_normal,
+        steer_axis: spin.steer_axis,
         ..default()
     };
 

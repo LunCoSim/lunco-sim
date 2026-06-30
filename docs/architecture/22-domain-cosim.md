@@ -17,7 +17,30 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
 - **`SimComponent`** — wraps a model instance; exposes named inputs / outputs
 - **`SimConnection`** — links a source port to a target port (FMI/SSP Connection)
 - **`SimPort`** — metadata for a connectable interface point
-- **`AvianSim`** — Avian physics treated as a cosim model
+- **`PortRegistry`** — the unified scalar-port surface (in `lunco-core::ports`) every
+  participant reads/writes through; the cosim engine registers the built-in backends.
+
+## The port surface (one telemetry + actuation API)
+
+Every participant's state is exposed as **named scalar ports** through the shared
+**`PortRegistry`** — the single surface wires, the HTTP API (`ListPorts`/`GetPort`/
+`SetPort`), the inspector, rhai, and Python all use. Avian rigid bodies, joints,
+and sensors are exposed declaratively via the `AVIAN` spec table (an `AvianGroup`
+per kind), not a mirror component. The available ports:
+
+| Kind | Ports |
+|---|---|
+| **Rigid body** | out: `position_{x,y,z}`, `height`, `velocity_{x,y,z}`, `quat_{w,x,y,z}`, `yaw`/`pitch`/`roll`, `angvel_{x,y,z}`; in: `force_{x,y,z}`, `force_local_{x,y,z}`, `torque_{x,y,z}`, `mass`, `inertia_{xx,yy,zz}`, `com_{x,y,z}` |
+| **Revolute joint** | `angle` (out = measured, in = drives `AngularMotor`) |
+| **Prismatic joint** | `displacement` (out = slider offset, in = drives `LinearMotor`) |
+| **Sensors** (USD `lunco:sensor:*`) | IMU `accel_{x,y,z}` + `spec_force_{x,y,z}`; range `range`; contact `contact` + `contact_force` |
+| **Modelica / hardware** | model `input`/`output` vars; `value` / `raw` |
+
+Full closures + the "add a kind = one `AvianGroup` entry" pattern live in
+[`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md). USD
+authoring of joints + sensors is in [`21-domain-usd.md`](21-domain-usd.md);
+vehicle/lander modeling that builds on this surface is in
+[`33-spacecraft-modeling.md`](33-spacecraft-modeling.md).
 
 ## Execution pipeline
 
@@ -29,13 +52,14 @@ FixedUpdate:
   1. ModelicaSet::HandleResponses   — receive async results from worker thread
   2. sync_modelica_outputs          — ModelicaModel.variables → SimComponent.outputs
   3. CosimSet::Propagate            — propagate_connections: source outputs → target inputs
-  4. CosimSet::ApplyForces          — apply_sim_forces: route netForce into Avian Forces
+                                       (force_* → PendingForces; joint angle/displacement → motor)
+  4. CosimSet::ApplyForces          — apply_pending_forces: drain PendingForces into Avian Forces
   5. sync_inputs_to_modelica        — SimComponent.inputs → ModelicaModel.inputs
   6. ModelicaSet::SpawnRequests     — send next step command with fixed dt
 
 FixedPostUpdate:
   7. Avian PhysicsSchedule          — integrate_positions, constraint solve, writeback
-  8. read_avian_outputs             — Position / LinearVelocity → AvianSim.outputs
+                                       (Avian outputs read on demand via PortRegistry — no snapshot system)
 ```
 
 The master loop reads outputs, propagates through connections, writes inputs,

@@ -9,19 +9,18 @@
 //! rigid body. Gated on the marker component, so a body without the sensor pays
 //! nothing.
 //!
-//! | USD attr (`lunco-usd-sim`) | Component       | Ports                         |
-//! |----------------------------|-----------------|-------------------------------|
-//! | `lunco:sensor:imu`         | [`ImuSensor`]   | `accel_x/y/z`                 |
-//! | `lunco:sensor:range`       | [`RangeSensor`] | `range`                       |
-//! | `lunco:sensor:contact`     | [`ContactSensor`]| `contact`, `contact_force`   |
+//! | USD attr (`lunco-usd-sim`) | Component        | Ports                                   |
+//! |----------------------------|------------------|-----------------------------------------|
+//! | `lunco:sensor:imu`         | [`ImuSensor`]    | `accel_x/y/z`, `spec_force_x/y/z`       |
+//! | `lunco:sensor:range`       | [`RangeSensor`]  | `range`                                 |
+//! | `lunco:sensor:contact`     | [`ContactSensor`]| `contact`, `contact_force`              |
 //!
-//! The IMU's accel pairs with the rigid-body group's existing `angvel_*` +
-//! `quat_*` to form a full 9-DOF IMU. (Accel is world-frame coordinate
-//! acceleration via finite difference; body-frame specific force — subtracting
-//! gravity, rotating into the body — is a future refinement.)
+//! All three honor a **body-local mounting offset** (`lunco:sensor:offset`) so a
+//! sensor that isn't at the body origin reports from its true mount point.
 
 use avian3d::prelude::{
-    Collisions, LinearVelocity, Position, Rotation, SpatialQuery, SpatialQueryFilter,
+    AngularVelocity, Collisions, LinearVelocity, Physics, Position, Rotation, SpatialQuery,
+    SpatialQueryFilter, SubstepCount,
 };
 use bevy::math::{DVec3, Dir3};
 use bevy::prelude::*;
@@ -29,25 +28,53 @@ use bevy::prelude::*;
 use crate::connection::{PortDirection, PortType};
 use crate::ports::{AvianGroup, AvianPort};
 
-/// Inertial measurement unit. Exposes world-frame linear acceleration
-/// (`accel_x/y/z`), finite-differenced from [`LinearVelocity`] each fixed tick.
+/// Inertial measurement unit. Reports both world-frame linear acceleration
+/// (`accel_*`, coordinate acceleration) and body-frame **specific force**
+/// (`spec_force_*`, what a real accelerometer measures: `a − g` rotated into the
+/// body) at the sensor's mount point — including the rigid-body lever-arm terms
+/// `α × r + ω × (ω × r)` when mounted off the centre of mass. Pairs with the
+/// rigid-body group's `angvel_*` + `quat_*` for a full 9-DOF IMU.
 #[derive(Component, Debug, Clone, Copy, Default, Reflect)]
 #[reflect(Component, Default)]
 pub struct ImuSensor {
-    /// World-frame linear acceleration (m/s²), updated by [`update_imu_sensors`].
+    /// Mount point in the body's local frame (lever arm from the COM).
+    pub offset: DVec3,
+    /// Local gravity vector (m/s², world frame) — the authoritative value
+    /// **fed by `lunco-environment`** from its per-body `LocalGravity` (avian's
+    /// own `Gravity` resource is zero here; gravity is applied as an explicit
+    /// force). Needed for the body-frame specific force `a − g`. Stays zero if
+    /// no gravity provider runs, degrading `spec_force` gracefully to `accel`.
+    pub gravity: DVec3,
+    /// World-frame linear acceleration at the mount point (m/s²).
     pub accel: DVec3,
-    /// Previous tick's velocity, for the finite difference.
+    /// Body-frame specific force at the mount point (m/s²) — accelerometer output.
+    pub spec_force: DVec3,
+    /// Previous tick's linear velocity, for the finite difference.
     prev_vel: DVec3,
-    /// False until the first tick has stored a velocity (no accel on frame 0).
+    /// Previous tick's angular velocity, for the angular-acceleration term.
+    prev_angvel: DVec3,
+    /// False until the first tick has stored samples (no accel on frame 0).
     primed: bool,
 }
 
-/// Range finder / lidar ray. Casts along [`axis`](Self::axis) (body-local,
-/// rotated by attitude) and reports distance-to-geometry, or `max_distance` when
-/// nothing is hit. Default points down (`-Y`) — an altimeter.
+impl ImuSensor {
+    /// An IMU mounted at `offset` (body-local lever arm), with zeroed state.
+    pub fn mounted(offset: DVec3) -> Self {
+        Self {
+            offset,
+            ..Default::default()
+        }
+    }
+}
+
+/// Range finder / lidar ray. Casts from the mount point along [`axis`](Self::axis)
+/// (body-local, rotated by attitude) and reports distance-to-geometry, or
+/// `max_distance` when nothing is hit. Default points down (`-Y`) — an altimeter.
 #[derive(Component, Debug, Clone, Copy, Reflect)]
 #[reflect(Component)]
 pub struct RangeSensor {
+    /// Mount point in the body's local frame (ray origin offset from the COM).
+    pub offset: DVec3,
     /// Cast direction in the body's local frame.
     pub axis: DVec3,
     /// Maximum range (m); reported when the ray hits nothing.
@@ -59,6 +86,7 @@ pub struct RangeSensor {
 impl Default for RangeSensor {
     fn default() -> Self {
         Self {
+            offset: DVec3::ZERO,
             axis: DVec3::NEG_Y,
             max_distance: 100.0,
             distance: 100.0,
@@ -77,7 +105,8 @@ pub struct ContactSensor {
     pub normal_force: f64,
 }
 
-/// IMU port group — world-frame linear acceleration, gated on [`ImuSensor`].
+/// IMU port group — world-frame acceleration + body-frame specific force, gated
+/// on [`ImuSensor`].
 pub const IMU_SENSOR_GROUP: AvianGroup = AvianGroup {
     present: |w, e| w.get::<ImuSensor>(e).is_some(),
     ports: &[
@@ -100,6 +129,27 @@ pub const IMU_SENSOR_GROUP: AvianGroup = AvianGroup {
             dir: PortDirection::Out,
             port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<ImuSensor>(e).map(|s| s.accel.z)),
+            write: None,
+        },
+        AvianPort {
+            name: "spec_force_x",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<ImuSensor>(e).map(|s| s.spec_force.x)),
+            write: None,
+        },
+        AvianPort {
+            name: "spec_force_y",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<ImuSensor>(e).map(|s| s.spec_force.y)),
+            write: None,
+        },
+        AvianPort {
+            name: "spec_force_z",
+            dir: PortDirection::Out,
+            port_type: PortType::Kinematic,
+            read: Some(|w, e| w.get::<ImuSensor>(e).map(|s| s.spec_force.z)),
             write: None,
         },
     ],
@@ -142,57 +192,92 @@ pub const CONTACT_SENSOR_GROUP: AvianGroup = AvianGroup {
     ],
 };
 
-/// Finite-difference [`LinearVelocity`] into world-frame acceleration each fixed
-/// tick. No acceleration is reported on the first tick (no prior sample).
-pub fn update_imu_sensors(time: Res<Time<Fixed>>, mut q: Query<(&mut ImuSensor, &LinearVelocity)>) {
+/// Update each IMU: world-frame acceleration at the mount point (rigid-body
+/// transport: `a_com + α×r + ω×(ω×r)`) and the body-frame specific force
+/// (`a − g` rotated into the body). No output on the first tick (no prior
+/// sample to difference).
+pub fn update_imu_sensors(
+    time: Res<Time<Fixed>>,
+    mut q: Query<(&mut ImuSensor, &LinearVelocity, &AngularVelocity, &Rotation)>,
+) {
     let dt = time.delta_secs_f64();
     if dt <= 0.0 {
         return;
     }
-    for (mut imu, v) in &mut q {
+    for (mut imu, v, w, rot) in &mut q {
+        let omega = w.0;
         if imu.primed {
-            imu.accel = (v.0 - imu.prev_vel) / dt;
+            let a_com = (v.0 - imu.prev_vel) / dt;
+            let alpha = (omega - imu.prev_angvel) / dt;
+            let r = rot.0 * imu.offset;
+            let a_point = a_com + alpha.cross(r) + omega.cross(omega.cross(r));
+            imu.accel = a_point;
+            // Accelerometer measures specific force a − g (g = the local gravity
+            // fed by lunco-environment), expressed in the body frame: a static
+            // sensor reads +1 g along its local "up".
+            imu.spec_force = rot.0.inverse() * (a_point - imu.gravity);
         }
         imu.prev_vel = v.0;
+        imu.prev_angvel = omega;
         imu.primed = true;
     }
 }
 
-/// Cast each range sensor's ray and record the hit distance (or `max_distance`).
-/// The sensor's own body is excluded so it never ranges itself.
+/// Cast each range sensor's ray from its mount point and record the hit distance
+/// (or `max_distance`). The sensor's own body is excluded so it never ranges
+/// itself.
 pub fn update_range_sensors(
     spatial: SpatialQuery,
     mut q: Query<(Entity, &mut RangeSensor, &Position, &Rotation)>,
 ) {
     for (e, mut s, pos, rot) in &mut q {
+        let origin = pos.0 + rot.0 * s.offset;
         let dir_world = rot.0 * s.axis;
         let Ok(dir) = Dir3::new(dir_world.as_vec3()) else {
             continue;
         };
         let filter = SpatialQueryFilter::from_excluded_entities([e]);
-        s.distance = match spatial.cast_ray(pos.0, dir, s.max_distance, true, &filter) {
+        s.distance = match spatial.cast_ray(origin, dir, s.max_distance, true, &filter) {
             Some(hit) => hit.distance,
             None => s.max_distance,
         };
     }
 }
 
-/// Sum contact normal impulses on each contact sensor and convert to force
-/// (impulse / dt). `in_contact` is set whenever any contact pair touches.
+/// Contact normal force from the **converged per-substep contact impulse**.
+///
+/// Subtlety (why not `total_normal_impulse / dt`): avian's
+/// `ContactPoint::normal_impulse` is a solver *accumulator* — its own doc says it
+/// sums "across substeps **and restitution**", i.e. over both the biased
+/// `solve_contacts::<true>` and the unbiased relax `solve_contacts::<false>`
+/// passes (plus restitution). Dividing it by `dt` does **not** give Newtons (it
+/// over-reads ≈2× at rest, more with restitution). Instead we read
+/// `ContactPoint::warm_start_normal_impulse` — *"the clamped accumulated impulse
+/// from the last substep"* — the actual physical impulse delivered in one
+/// substep, and divide by the substep duration `dt / SubstepCount`. This is
+/// solver-config-robust (independent of substep count and restitution) rather
+/// than a tuned divisor.
 pub fn update_contact_sensors(
-    time: Res<Time<Fixed>>,
+    time: Res<Time<Physics>>,
+    substeps: Res<SubstepCount>,
     collisions: Collisions,
     mut q: Query<(Entity, &mut ContactSensor)>,
 ) {
     let dt = time.delta_secs_f64().max(1e-9);
+    let substep_dt = dt / (substeps.0.max(1) as f64);
     for (e, mut s) in &mut q {
-        let mut impulse = 0.0;
+        let mut warm_impulse = 0.0;
         let mut touching = false;
         for pair in collisions.collisions_with(e) {
+            for manifold in &pair.manifolds {
+                for point in &manifold.points {
+                    warm_impulse += point.warm_start_normal_impulse;
+                }
+            }
             touching = true;
-            impulse += pair.total_normal_impulse_magnitude();
         }
         s.in_contact = touching;
-        s.normal_force = impulse / dt;
+        // Per-substep impulse / substep duration = the physical normal force.
+        s.normal_force = warm_impulse / substep_dt;
     }
 }

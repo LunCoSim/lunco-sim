@@ -247,11 +247,13 @@ from standard UsdPhysics prims:
   robotic wrists, gimbals.
 - **`PhysicsDistanceJoint`** → avian `DistanceJoint` (tether/strut within
   `[physics:minDistance, physics:maxDistance]`). Cables, fixed-length links.
-- **Generic `PhysicsD6Joint`/`PhysicsJoint`** has no avian primitive (avian offers
-  fixed/revolute/prismatic/spherical/distance, not a configurable 6-DOF
-  constraint). It warns with guidance to author an explicit joint for the needed
-  DOF — full D6 reduction (per-DOF `PhysicsLimitAPI` analysis) is the remaining
-  edge.
+- **Generic `PhysicsD6Joint`/`PhysicsJoint`** has no avian primitive, so it is
+  **reduced** to the joint matching its free DOFs by reading per-DOF
+  `PhysicsLimitAPI` (`limit:{transX,…,rotZ}:physics:{low,high}`; `low>high` =
+  locked): all-locked→Fixed, 1 free rotation→Revolute, 1 free translation→
+  Prismatic, 3 free rotations→Spherical. A genuinely multi-DOF joint with no
+  match still warns. Verified: a D6 with only rotZ free logs `Reduced
+  PhysicsD6Joint -> PhysicsRevoluteJoint (axis Z)` and builds.
 - **Verified live** on `assets/scenes/sandbox/g7_joints_test.usda`: both build
   with no "Unsupported" warning; the distance-tethered Weight settles at exactly
   `2.0 m` below its anchor (= `maxDistance`); the ball-jointed arm hangs stable.
@@ -266,19 +268,35 @@ a component with cached outputs filled by a small system and surfaced through th
 same port mechanism as the rigid body (gated on the marker, so unsensed bodies pay
 nothing). Authored in `lunco-usd-sim` from `lunco:sensor:*`:
 - **`lunco:sensor:imu`** → `ImuSensor` → ports `accel_x/y/z` (world-frame linear
-  acceleration, finite-differenced from `LinearVelocity`). Pairs with the existing
-  `angvel_*` + `quat_*` for a full 9-DOF IMU. (Body-frame specific force —
-  subtracting gravity — is a future refinement.)
+  acceleration) **and `spec_force_x/y/z`** (body-frame specific force `a − g` — a
+  real accelerometer, reads +1 g up at rest). Both include the rigid-body
+  lever-arm `α×r + ω×(ω×r)` when mounted off the COM. Pairs with `angvel_*` +
+  `quat_*` for a full 9-DOF IMU. Gravity comes from `lunco-environment`'s
+  authoritative `LocalGravity` (fed into the sensor by
+  `feed_gravity_into_imu_sensors` — avian's own `Gravity` resource is zero here,
+  gravity being an explicit force).
 - **`lunco:sensor:range`** (+ `:rangeAxis` token, `:rangeMax`) → `RangeSensor` →
-  port `range`. A raycast altimeter/lidar along the body-local axis (default `-Y`).
+  port `range`. A raycast altimeter/lidar from the mount point along the
+  body-local axis (default `-Y`).
 - **`lunco:sensor:contact`** → `ContactSensor` → ports `contact` (0/1) +
-  `contact_force` (N). From avian's `Collisions`.
-- **Verified live** on `assets/scenes/sandbox/sensor_test.usda` (100 kg box at
-  rest): `range = 0.500` (exact centre-to-ground), `contact = 1`, `accel ≈ 0`
-  (correct for a static body). Caveat: `contact_force` reads ≈2× the static weight
-  at rest — it currently includes the solver's penetration-correction impulse, not
-  just gravity support; it tracks load but the absolute calibration is a known
-  refinement.
+  `contact_force` (N). From avian's `Collisions`, converted with `Time<Physics>`
+  (the solver's own clock).
+- **All three honor `lunco:sensor:offset`** (float3, body-local) — a sensor that
+  isn't at the body origin reports from its true mount point.
+- **`contact_force` — physically grounded, no tuned constant:** the obvious
+  `total_normal_impulse / dt` does **not** give Newtons. avian's
+  `ContactPoint::normal_impulse` is a solver *accumulator* (its own doc: summed
+  "across substeps **and restitution**", over both the biased `solve_contacts::
+  <true>` and unbiased relax `solve_contacts::<false>` passes), so it over-reads
+  ≈2× at rest and more with restitution. Instead `contact_force` sums
+  `ContactPoint::warm_start_normal_impulse` — *"the clamped accumulated impulse
+  from the last substep"*, i.e. the real per-substep contact impulse — and divides
+  by the substep duration `dt / SubstepCount` (read at runtime). This is robust to
+  substep count and restitution, not a fitted divisor.
+- **Verified live** on `assets/scenes/sandbox/sensor_test.usda` (boxes at rest,
+  sensors mounted +0.3 m): `spec_force_y = 9.81` (1 g up), `accel ≈ 0`, `range =
+  0.800` (0.5 centre-to-ground + 0.3 offset), `contact = 1`, and **`contact_force
+  = 980.8 N` for a 100 kg box / `490.2 N` for 50 kg** (= m·g to within 0.07%).
 
 ### G11 — Single-track / lean wheel (bikes, motorcycles)  **[DONE]**
 The raycast wheel decomposed traction in a flat wheel basis (forward `-Z`/right
@@ -290,14 +308,26 @@ normal`. For an upright wheel (normal ≈ wheel up) this is *mathematically iden
 to the old basis — existing rovers are unchanged (unit-tested + live: a six-wheel
 rover rests at `speed 0`, no drift). For a leaning bike the basis follows the
 cambered contact plane, so drive + lateral grip are computed correctly. Unit-tested
-(`force_law_tests::contact_basis_*`). **Remaining for full fidelity** (deferred):
-raked steering-head axis (steer is still about chassis `Y`, `lib.rs:539`) and
-gyroscopic precession — balance itself is a *controller* (already expressible via
-the torque + attitude/rate ports), not a substrate gap.
+(`force_law_tests::contact_basis_*`). The **raked steering-head axis** is now
+USD-authorable too: `lunco:steerAxis` (float3, wheel-local) sets the steer
+rotation axis — default `+Y` (flat car steer, identical to the old
+`from_rotation_y`), a motorcycle fork authors e.g. `(0, 0.91, 0.42)` for a ~25°
+rake. **Remaining for full fidelity** (deferred): gyroscopic precession — balance
+itself is a *controller* (already expressible via the torque + attitude/rate
+ports), not a substrate gap.
 
-### G8 — Determinism / FMI interop  **[SEPARATE TRACK]**
-Live cosim is non-deterministic, no FMU. Matters if a lander descent must be
-reproducible. Out of scope for first pass.
+### G8 — Determinism / FMI interop  **[TODO — separate track, not started]**
+The one remaining G-series item, deliberately orthogonal to "author assets in
+USD". Live cosim is non-deterministic and there is no FMU import/export. Scope when
+picked up:
+- **Deterministic stepping** — fixed-seed, fixed-order cosim so a lander descent
+  or a rover run is bit-reproducible (today wall-clock stepping + float-order vary
+  run-to-run). Prereq for regression-testing dynamics and for networked replay.
+- **FMI/FMU + SSP** — export a Modelica subsystem as an FMU; import a third-party
+  FMU as a cosim component. The `PortRegistry` was built FMI-shaped (one scalar
+  port surface, see `project_port_registry_substrate`), so the substrate is ready —
+  the work is the FMU package/solver bindings + the determinism above.
+Matters for reproducibility and standards interop, not for modeling more assets.
 
 ---
 

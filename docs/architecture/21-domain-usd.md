@@ -171,8 +171,8 @@ section.
 ### Pipeline Phases
 
 1. **UsdBevyPlugin** — Spawns child entities for USD prims and attaches meshes + transforms.
-2. **UsdAvianPlugin** — Maps USD physics attributes (`physics:rigidBodyEnabled`, `physics:mass`, `physics:collisionEnabled`) to Avian3D components.
-3. **UsdSimPlugin** — Detects simulation schemas (`PhysxVehicleContextAPI`, `PhysxVehicleWheelAPI`, `PhysxVehicleDriveSkidAPI`) and creates `WheelRaycast`, `FlightSoftware`, `DifferentialDrive`, etc.
+2. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`physics:rigidBodyEnabled`/`PhysicsRigidBodyAPI`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). The single home for Avian joint construction.
+3. **UsdSimPlugin** — Detects simulation schemas (`PhysxVehicleContextAPI`, `PhysxVehicleWheelAPI`, `PhysxVehicleDriveSkidAPI`/`Drive4WAPI`) and creates `WheelRaycast`, `FlightSoftware`, `DifferentialDrive`, `GenericDriveMix`, `DifferentialCoupling`, sensors, etc. Also wires actuator topology + drive mix and cosim models/wires (see [`22-domain-cosim.md`](22-domain-cosim.md)).
 
 ### Rover Definitions
 
@@ -191,6 +191,46 @@ The `lunco:wheelType` attribute on the **chassis prim** determines wheel behavio
 Raycast wheels need identity rotation so `RayCaster` casts straight down. The system splits the USD wheel into:
 1. **Physics entity**: identity rotation, NO mesh.
 2. **Visual child entity**: correct orientation + mesh.
+
+A raycast wheel decomposes traction in the **actual contact plane** (the ray-hit
+normal), so a leaning single-track vehicle (bike/motorcycle) gets correct lateral
+grip; for an upright wheel this is identical to the flat basis. The steer axis is
+`lunco:steerAxis` (float3, wheel-local; default `+Y`) — a raked motorcycle fork
+authors e.g. `(0, 0.91, 0.42)`.
+
+### Physics Joints
+
+All Avian joints are built by **`lunco-usd-avian`** from standard `UsdPhysics`
+joint prims (`physics:body0/1` rels, `physics:axis` token, `physics:localPos0/1`
+anchors, `physics:limitLower/Upper` or `physics:min/maxDistance`):
+
+| USD prim | Avian joint | Notes |
+|---|---|---|
+| `PhysicsRevoluteJoint` | `RevoluteJoint` | 1-DOF hinge; exposes `angle` port |
+| `PhysicsPrismaticJoint` | `PrismaticJoint` | 1-DOF slider; exposes `displacement` port |
+| `PhysicsFixedJoint` | `FixedJoint` | rigid weld |
+| `PhysicsSphericalJoint` | `SphericalJoint` | ball; `physics:coneAngle0/1Limit` → swing, limits → twist |
+| `PhysicsDistanceJoint` | `DistanceJoint` | tether within `[minDistance, maxDistance]` |
+| `PhysicsD6Joint` / `PhysicsJoint` | reduced | per-DOF `PhysicsLimitAPI` (`low>high`=locked) → the matching primitive; genuinely multi-DOF warns |
+
+**Joint drive (`UsdPhysicsDriveAPI`):** `drive:angular:*` on a revolute or
+`drive:linear:*` on a prismatic joint — `physics:targetPosition` (enables the
+motor at load, so an Omniverse-authored mechanism seeks its setpoint with no
+wire), `physics:targetVelocity`, `physics:maxForce` (motor saturation). A cosim
+wire on the joint's `angle`/`displacement` port overrides the target per tick. The
+programmatic wheel hinge also lives here (`wheel_revolute_joint`).
+
+### Sensors
+
+`lunco:sensor:*` markers on a rigid-body prim attach `lunco-cosim` sensors that
+expose telemetry ports (see [`22-domain-cosim.md`](22-domain-cosim.md)):
+
+| Attribute | Sensor | Ports |
+|---|---|---|
+| `bool lunco:sensor:imu` | IMU | `accel_{x,y,z}` (world lin. accel), `spec_force_{x,y,z}` (body-frame `a−g`) |
+| `bool lunco:sensor:range` (+ `token :rangeAxis`, `float :rangeMax`) | range finder | `range` (raycast distance along a body-local axis, default `-Y`) |
+| `bool lunco:sensor:contact` | contact | `contact` (0/1), `contact_force` (N) |
+| `float3 lunco:sensor:offset` | (shared) | body-local mount point — IMU lever-arm + range origin |
 
 ### glTF Payloads & Placeholders
 

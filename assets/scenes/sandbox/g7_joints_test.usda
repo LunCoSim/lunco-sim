@@ -108,4 +108,51 @@ def Xform "SandboxScene"
         float physics:minDistance = 0.0
         float physics:maxDistance = 2.0
     }
+
+    # ---- Generic D6 joint, all DOF locked except rotation about Z ----
+    # Expect: "Reduced PhysicsD6Joint -> PhysicsRevoluteJoint (axis ...Z...)".
+    def Cube "D6Anchor" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.4
+        double3 xformOp:translate = (0.0, 6.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (1.0, 0.3, 0.3)
+        float physics:mass = 1.0
+        bool physics:kinematicEnabled = true
+    }
+
+    def Cube "D6Arm" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.3
+        double3 xformOp:translate = (0.0, 5.0, 0.0)
+        double3 xformOp:scale = (1.0, 3.0, 1.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.9, 0.6, 0.2)
+        float physics:mass = 2.0
+    }
+
+    def PhysicsD6Joint "D6Hinge" (
+        prepend apiSchemas = ["PhysicsLimitAPI:transX", "PhysicsLimitAPI:transY", "PhysicsLimitAPI:transZ", "PhysicsLimitAPI:rotX", "PhysicsLimitAPI:rotY"]
+    )
+    {
+        rel physics:body0 = </SandboxScene/D6Anchor>
+        rel physics:body1 = </SandboxScene/D6Arm>
+        point3f physics:localPos0 = (0.0, 0.0, 0.0)
+        point3f physics:localPos1 = (0.0, 1.0, 0.0)
+        # low > high ⇒ DOF locked. rotZ is left unauthored ⇒ free ⇒ Revolute(Z).
+        float limit:transX:physics:low = 1.0
+        float limit:transX:physics:high = -1.0
+        float limit:transY:physics:low = 1.0
+        float limit:transY:physics:high = -1.0
+        float limit:transZ:physics:low = 1.0
+        float limit:transZ:physics:high = -1.0
+        float limit:rotX:physics:low = 1.0
+        float limit:rotX:physics:high = -1.0
+        float limit:rotY:physics:low = 1.0
+        float limit:rotY:physics:high = -1.0
+    }
 }

@@ -227,6 +227,7 @@ mod tests {
                 suspension_port: port,
                 drive_port: port,
                 steer_port: port,
+                steer_axis: DVec3::Y,
                 rest_length: 1.0,
                 spring_k: 1000.0,
                 damping_c: 100.0,

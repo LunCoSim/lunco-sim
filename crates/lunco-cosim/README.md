@@ -6,27 +6,43 @@ route named outputs to named inputs, following the FMI/SSP pattern.
 
 ## Architecture at a glance
 
-Every simulation engine is treated as a model with named inputs and outputs:
+Every participant — Modelica/FMU model, Avian rigid body, joint, sensor, or
+hardware signal — exposes its state as **named scalar ports** through one shared
+surface, the **`PortRegistry`** (defined in `lunco-core::ports`, *below* every
+participant so wires, the HTTP API, the inspector, rhai, and Python all read/write
+through it without depending "up" into this engine). `lunco-cosim` owns and
+registers the built-in backends (`ports::register_builtin_port_backends`):
 
-| Model                       | Inputs                     | Outputs                              |
-| --------------------------- | -------------------------- | ------------------------------------ |
-| **AvianSim**                | `force_y`, `force_x`, ...  | `position_y`, `velocity_y`, `height` |
-| **SimComponent** (Modelica) | `height`, `velocity`, ...  | `netForce`, `volume`, ...            |
-| **SimComponent** (FMU)      | `current_in`, ...          | `soc`, `voltage`, ...                |
+| Backend | Ports |
+| --- | --- |
+| **Modelica `SimComponent`** | its declared `input`/`output` variables (`height`, `netForce`, …) |
+| **Avian rigid body** (`RIGID_BODY_GROUP`) | **out:** `position_{x,y,z}`, `height`, `velocity_{x,y,z}`, `quat_{w,x,y,z}`, `yaw`/`pitch`/`roll`, `angvel_{x,y,z}` · **in:** `force_{x,y,z}` (world), `force_local_{x,y,z}` (body-frame), `torque_{x,y,z}`, `mass`, `inertia_{xx,yy,zz}`, `com_{x,y,z}` |
+| **Avian revolute joint** (`REVOLUTE_JOINT_GROUP`) | `angle` — out (measured twist) + in (drives the `AngularMotor`) |
+| **Avian prismatic joint** (`PRISMATIC_JOINT_GROUP`) | `displacement` — out (slider offset) + in (drives the `LinearMotor`) |
+| **Sensors** (`sensors.rs`, gated on a marker component) | IMU → `accel_{x,y,z}` (world lin. accel) + `spec_force_{x,y,z}` (body-frame, = `a − g`); range → `range`; contact → `contact` (0/1) + `contact_force` (N) |
+| **Hardware** (`PhysicalPort`/`DigitalPort`) | `value` (f32) / `raw` (i16, DAC-saturated) |
 
-A [`SimConnection`] connects any output to any input. The co-sim master runs in
-`FixedUpdate` in two ordered sets:
+Avian's foreign components are exposed declaratively via the `AVIAN` spec table
+(`ports.rs`) — adding a kind (a new joint or sensor) is one `AvianGroup` entry,
+no observer or sync system. **Adding a port group:** declare the `AvianGroup`
+(present-predicate + `AvianPort`s with read/write closures) and list it in `AVIAN`.
+
+A [`SimConnection`] connects any output port to any input port. The cosim master
+runs in `FixedUpdate`:
 
 1. **`Propagate`** — `propagate_connections` reads every source output and writes
-   the target input (accumulating with `+=` so multiple wires can sum into one
-   input).
-2. **`ApplyForces`** — `apply_sim_forces` integrates `netForce → LinearVelocity`
-   for kinematic balloons. Avian's own `integrate_positions` advances `Position`
-   from `LinearVelocity` later in `FixedPostUpdate`.
+   the target input (summing with `+=` so multiple wires sum into one input). A
+   `force_*` write lands in the body's `PendingForces` accumulator; a joint
+   `angle`/`displacement` write drives that joint's motor inline.
+2. **`ApplyForces`** — the single `apply_pending_forces` system drains
+   `PendingForces` into Avian's `Forces` (world force, `apply_local_force` for
+   body-frame, `apply_torque`) and clears it. Bodies are `RigidBody::Dynamic`;
+   Avian's own integrator advances them in `FixedPostUpdate`. Gravity is a force
+   applied separately by [`lunco-environment`](../lunco-environment) — models
+   produce thrust/buoyancy only, never weight.
 
-`read_avian_outputs` runs after `PhysicsSystems::Writeback` in
-`FixedPostUpdate`, populating `AvianSim.outputs` from `Position` +
-`LinearVelocity` so the next frame's wires see fresh values.
+Avian *outputs* are read on demand through the registry (state is stable between
+physics steps), so there is no per-tick output-snapshot system.
 
 ## Modelica model convention: declare everything you want to observe as `input` or `output`
 

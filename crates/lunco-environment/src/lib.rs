@@ -176,6 +176,23 @@ pub fn apply_gravity_to_rigid_bodies(
     }
 }
 
+/// Feeds each body's authoritative [`LocalGravity`] into its
+/// [`lunco_cosim::sensors::ImuSensor`] so the accelerometer's specific-force
+/// output (`a − g`) uses the real local gravity. avian's own `Gravity` resource
+/// is zero here — gravity is applied as an explicit force — so the IMU cannot
+/// read it directly; this is the same "reuse the one authoritative value"
+/// principle as [`inject_local_gravity_into_cosim`]. Change-guarded so it doesn't
+/// dirty the component every tick.
+pub fn feed_gravity_into_imu_sensors(
+    mut q: Query<(&LocalGravity, &mut lunco_cosim::sensors::ImuSensor)>,
+) {
+    for (gravity, mut imu) in &mut q {
+        if imu.gravity != gravity.0 {
+            imu.gravity = gravity.0;
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Consumer: feed local gravity into the co-simulation graph
 // ─────────────────────────────────────────────────────────────────────────────
@@ -456,6 +473,11 @@ impl Plugin for EnvironmentPlugin {
                 // before cosim copies outputs→inputs, so models read the real
                 // local value the same tick.
                 inject_local_gravity_into_cosim
+                    .in_set(EnvironmentSet::Apply)
+                    .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
+                // Feed gravity into IMU sensors before they compute specific
+                // force (both run before propagation, same tick).
+                feed_gravity_into_imu_sensors
                     .in_set(EnvironmentSet::Apply)
                     .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
             ),

@@ -272,6 +272,11 @@ pub struct WheelRaycast {
     /// (`throttle · N · this`). Caps traction to a fraction of contact grip.
     /// USD: `lunco:driveForcePerNormal` (default [`DEFAULT_DRIVE_FORCE_PER_NORMAL`]).
     pub drive_force_per_normal: f64,
+    /// Steering rotation axis in the wheel's local frame (USD `lunco:steerAxis`).
+    /// Default `+Y` (yaw) reproduces a flat-ground car steer; a motorcycle's
+    /// raked steering head tilts this (e.g. `(0, cos θ, sin θ)`) so the front
+    /// wheel steers about the fork axis, not vertical.
+    pub steer_axis: DVec3,
 }
 
 impl Default for WheelRaycast {
@@ -298,6 +303,7 @@ impl Default for WheelRaycast {
             contact_grip_stiffness: DEFAULT_CONTACT_GRIP_STIFFNESS,
             brake_torque_max: 600.0,
             drive_force_per_normal: DEFAULT_DRIVE_FORCE_PER_NORMAL,
+            steer_axis: DVec3::Y,
         }
     }
 }
@@ -558,10 +564,10 @@ fn apply_wheel_drive(
 /// computed `output_angle` and rotates the wheel about local Y; the visual mesh
 /// rotation (steer + roll spin) is composed in `update_wheel_spin`.
 fn apply_wheel_steering(
-    mut q_wheels: Query<(&mut Transform, &ChildOf, &lunco_hardware::SteeringActuator), With<WheelRaycast>>,
+    mut q_wheels: Query<(&mut Transform, &ChildOf, &lunco_hardware::SteeringActuator, &WheelRaycast)>,
     q_chassis: Query<&RigidBody, With<RoverVessel>>,
 ) {
-    for (mut transform, parent, steer) in q_wheels.iter_mut() {
+    for (mut transform, parent, steer, wheel) in q_wheels.iter_mut() {
         // Predict-own: this chain runs on a client too. Skip wheels of a
         // `Kinematic` chassis (replicated rovers this peer does NOT own), whose
         // local steer ports are stale and would point the wheels wrong.
@@ -570,7 +576,12 @@ fn apply_wheel_steering(
                 continue;
             }
         }
-        transform.rotation = Quat::from_rotation_y(-steer.output_angle as f32);
+        // Steer about the wheel's steer axis. Default `+Y` reproduces the flat
+        // yaw steer; a raked motorcycle fork tilts the axis so the front wheel
+        // turns about the steering head, not vertical.
+        let raw = wheel.steer_axis.as_vec3();
+        let axis = if raw.length_squared() > 1e-12 { raw.normalize() } else { Vec3::Y };
+        transform.rotation = Quat::from_axis_angle(axis, -steer.output_angle as f32);
     }
 }
 

@@ -683,6 +683,22 @@ fn on_add_usd_prim(
                             _ => None,
                         };
 
+                        // A generic D6 joint has no avian primitive — reduce it
+                        // to the joint that matches its free DOFs (or leave it to
+                        // warn in the build step if it's genuinely multi-DOF).
+                        let (type_name, axis, limit_lower, limit_upper) =
+                            if matches!(type_name.as_str(), "PhysicsJoint" | "PhysicsD6Joint") {
+                                match reduce_generic_joint(reader, &sdf_path) {
+                                    Some((reduced, ax, lo, hi)) => {
+                                        info!("Reduced {} -> {} (axis {:?})", type_name, reduced, ax);
+                                        (reduced.to_string(), ax, lo, hi)
+                                    }
+                                    None => (type_name, axis, limit_lower, limit_upper),
+                                }
+                            } else {
+                                (type_name, axis, limit_lower, limit_upper)
+                            };
+
                         info!("Detected USD joint {} -> {} <-> {}", type_name, body0_path, body1_path);
 
                         commands.entity(entity).insert(PendingUsdJoint {
@@ -911,6 +927,52 @@ fn read_joint_drive(reader: &UsdData, path: &SdfPath, ns: &str) -> Option<JointD
         target_velocity,
         max_force,
     })
+}
+
+/// Reduces a generic UsdPhysics D6 joint to the avian primitive that matches its
+/// free degrees of freedom, by reading the per-DOF `PhysicsLimitAPI`
+/// (`limit:{transX,transY,transZ,rotX,rotY,rotZ}:physics:{low,high}`). A DOF is
+/// *locked* when `low > high` (UsdPhysics convention), *free* when no limit is
+/// authored, else *limited*. Returns `(reduced_type, axis, lower, upper)` for the
+/// cases avian can represent, or `None` (→ caller warns) for a genuinely
+/// multi-DOF joint with no primitive (avian has no configurable 6-DOF joint):
+/// - all locked → `Fixed`; 1 free rotation → `Revolute`; 1 free translation →
+///   `Prismatic`; all 3 rotations free (translations locked) → `Spherical`.
+fn reduce_generic_joint(reader: &UsdData, path: &SdfPath) -> Option<(&'static str, DVec3, f64, f64)> {
+    const DOFS: [(&str, DVec3, bool); 6] = [
+        ("transX", DVec3::X, false),
+        ("transY", DVec3::Y, false),
+        ("transZ", DVec3::Z, false),
+        ("rotX", DVec3::X, true),
+        ("rotY", DVec3::Y, true),
+        ("rotZ", DVec3::Z, true),
+    ];
+    let mut free_trans: Vec<(DVec3, f64, f64)> = Vec::new();
+    let mut free_rot: Vec<(DVec3, f64, f64)> = Vec::new();
+    for (inst, axis, is_rot) in DOFS {
+        let low = read_scalar_attribute(reader, path, &format!("limit:{inst}:physics:low"));
+        let high = read_scalar_attribute(reader, path, &format!("limit:{inst}:physics:high"));
+        match (low, high) {
+            // Locked DOF: contributes no motion.
+            (Some(l), Some(h)) if l > h => {}
+            // Free or limited DOF.
+            (l, h) => {
+                let entry = (axis, l.unwrap_or(f64::NEG_INFINITY), h.unwrap_or(f64::INFINITY));
+                if is_rot {
+                    free_rot.push(entry);
+                } else {
+                    free_trans.push(entry);
+                }
+            }
+        }
+    }
+    match (free_trans.len(), free_rot.len()) {
+        (0, 0) => Some(("PhysicsFixedJoint", DVec3::Y, f64::NEG_INFINITY, f64::INFINITY)),
+        (0, 1) => Some(("PhysicsRevoluteJoint", free_rot[0].0, free_rot[0].1, free_rot[0].2)),
+        (1, 0) => Some(("PhysicsPrismaticJoint", free_trans[0].0, free_trans[0].1, free_trans[0].2)),
+        (0, 3) => Some(("PhysicsSphericalJoint", free_rot[0].0, f64::NEG_INFINITY, f64::INFINITY)),
+        _ => None,
+    }
 }
 
 /// Reads a scalar attribute as `f64`, trying `float` first then `double`.
