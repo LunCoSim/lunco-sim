@@ -349,6 +349,16 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<lunco_theme::ThemePlugin>() {
             app.add_plugins(lunco_theme::ThemePlugin);
         }
+        // The mission-time spine (doc 19): `TimeTransport` is the single
+        // play/pause + rate authority and `WorldTime` the derived view. Guarded so
+        // contexts that also add it via `CelestialPlugin` / `UsdBevyPlugin` are
+        // fine. Adding it on the workbench shell makes the transport present
+        // wherever the toolbar Pause button lives — including modelica-only
+        // `lunica`, which has no celestial/USD plugins — so the button drives the
+        // same authority as the avatar hotkey and mission-control panel.
+        if !app.is_plugin_added::<lunco_time::TimePlugin>() {
+            app.add_plugins(lunco_time::TimePlugin);
+        }
         // Workspace (editor session) resource + event observers. Lives in
         // `lunco-workspace` (bevy ECS substrate, no UI) so headless tests /
         // API-only servers that don't want the full dock shell can install
@@ -2672,12 +2682,16 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             });
             anchor_rects.push(("menu.network", r_network.response.rect));
 
-            // Pause/Resume simulation. Toggles `Time<Virtual>` so both
-            // physics (avian -> Time<Physics> derived from Virtual) and
-            // the celestial clock (delta_secs gated) freeze together.
+            // Pause/Resume simulation via the single transport authority
+            // (`TimeTransport.mode`, doc 19). The spine maps `Paused` onto
+            // `relative_speed = 0`, freezing tick + avian (`Time<Physics>` derives
+            // from Virtual) + epoch together — and now stays in sync with the
+            // avatar pause hotkey and the mission-control / celestial panels, which
+            // write the same resource.
             {
-                let mut vtime = world.resource_mut::<bevy::prelude::Time<bevy::prelude::Virtual>>();
-                let paused = vtime.is_paused();
+                let paused = world
+                    .get_resource::<lunco_time::TimeTransport>()
+                    .is_some_and(|t| matches!(t.mode, lunco_time::TransportMode::Paused));
                 let (glyph, hover) = if paused {
                     ("▶", "Resume simulation")
                 } else {
@@ -2686,7 +2700,13 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 let btn_resp = ui.button(glyph).on_hover_text(hover);
                 anchor_rects.push(("toolbar.run", btn_resp.rect));
                 if btn_resp.clicked() {
-                    if paused { vtime.unpause(); } else { vtime.pause(); }
+                    if let Some(mut t) = world.get_resource_mut::<lunco_time::TimeTransport>() {
+                        t.mode = if paused {
+                            lunco_time::TransportMode::Playing
+                        } else {
+                            lunco_time::TransportMode::Paused
+                        };
+                    }
                 }
             }
 

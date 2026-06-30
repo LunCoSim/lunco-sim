@@ -310,9 +310,11 @@ impl Plugin for SandboxCorePlugin {
             // boundaries under non-integer DPRs). Harmless headless.
             .insert_resource(ClearColor(Color::srgb_u8(0x1a, 0x1a, 0x1a)))
             .insert_resource(Time::<Fixed>::from_hz(lunco_core::FIXED_HZ))
-            // `speed: 1.0` is load-bearing: `..default()` leaves it 0.0, which
-            // keeps physics running but FREEZES `SimTick` — breaking every
-            // tick-keyed netcode path. Match the rover examples: both explicit.
+            // Explicit frame-0 `TimeWarpState`. The `lunco-time` spine (here via
+            // `UsdPlugins` → `UsdBevyPlugin` → `TimePlugin`) overwrites this every
+            // PreUpdate from `TimeTransport`, so `..default()` would also work now;
+            // kept explicit only so the pre-spine first frame is well-defined
+            // (running, tick advancing).
             .insert_resource(lunco_core::TimeWarpState { physics_enabled: true, speed: 1.0 })
             .insert_resource(avian3d::prelude::Gravity::ZERO)
             .insert_resource(lunco_environment::Gravity::flat(9.81, bevy::math::DVec3::NEG_Y))

@@ -376,12 +376,47 @@ pub fn advance_world_clock(
     warp_state.speed = sample.warp_speed;
     warp_state.physics_enabled = sample.physics_enabled;
 
+    // The **direct clock state** is `relative_speed` — a single continuous truth.
+    // `relative_speed = 0` *is* the pause (it freezes `Time<Fixed>` accumulation →
+    // tick + avian frozen) and `is_running()` (below, on `TimeWarpState`) is the
+    // gate consumers read. We deliberately do NOT also toggle
+    // `Time<Virtual>::pause()`: that boolean would be a second, redundant
+    // representation of the same fact (paused ⇔ speed 0) that nothing reads and
+    // that can only drift from `relative_speed`. One representation, no drift.
     virtual_time.set_relative_speed_f64(sample.relative_speed);
 }
 
-/// Installs the mission-time spine: resources + the `PreUpdate` step. Add once
-/// (guarded callers use [`App::is_plugin_added`]). `lunco-celestial` seeds the
-/// mission origin from the wall clock at startup and reads `WorldTime` thereafter.
+/// Startup: anchor the [`MissionClock`] mission origin **and** calendar anchor
+/// from the current wall clock (via the proper UTC→TAI→TT→TDB chain — doc 19 T3)
+/// at the current tick, so absolute mission time is anchored at the real launch
+/// instant in **every** spine context (celestial, USD, modelica, workbench) — not
+/// just where the ephemeris runs. The integrator clock (`sim_secs`) is unaffected:
+/// at `Startup` the tick is still 0, so `mission_tick0` stays 0 — only the
+/// calendar epoch moves off the `J2000` default.
+///
+/// **Skipped if the clock was already customized** away from the default (an app
+/// or scenario that inserted a specific epoch, or a deterministic replay), so an
+/// explicit override is never clobbered.
+///
+/// **Multiplayer:** the per-peer wall seed is a transient. The `anchor` is the
+/// host-authoritative, replicable unit — the networking layer overwrites the
+/// client's seed on first sync (doc 19 §transport). Sub-second machine-clock skew
+/// is cosmetic for celestial visuals until then, and the epoch projection is
+/// explicitly *not* required to be cross-peer bit-deterministic.
+pub fn seed_mission_clock_from_wall(tick: Res<SimTick>, mut mission: ResMut<MissionClock>) {
+    let is_default = mission.mission_tick0 == 0
+        && mission.mission_epoch0_jd == J2000_JD
+        && mission.anchor.tick0 == 0
+        && mission.anchor.epoch0_jd == J2000_JD;
+    if is_default {
+        *mission = MissionClock::anchored(scales::utc_now_tdb_jd(), tick.0);
+    }
+}
+
+/// Installs the mission-time spine: resources, the `PreUpdate` derivation step,
+/// and the wall-clock seed at `Startup`. Add once (guarded callers use
+/// [`App::is_plugin_added`]). Every consumer reads `WorldTime`; nothing else
+/// seeds the clock.
 pub struct TimePlugin;
 
 impl Plugin for TimePlugin {
@@ -397,7 +432,8 @@ impl Plugin for TimePlugin {
             .register_type::<MissionClock>()
             .register_type::<TimeTransport>()
             .register_type::<WorldTime>()
-            .add_systems(PreUpdate, advance_world_clock.in_set(TimeSpineSet));
+            .add_systems(PreUpdate, advance_world_clock.in_set(TimeSpineSet))
+            .add_systems(Startup, seed_mission_clock_from_wall);
 
         // The clock tree (T5): TimeDomain/Playback/TimeBinding + the per-frame
         // resolve into `ResolvedDomains` (in `DomainResolveSet`, `Update`).

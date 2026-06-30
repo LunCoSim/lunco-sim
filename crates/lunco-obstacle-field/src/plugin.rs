@@ -125,20 +125,33 @@ impl Plugin for ObstacleFieldPlugin {
     }
 }
 
-/// Freeze `Time<Virtual>` (which avian's `Time<Physics>` derives from) for a few
-/// frames after a rebuild, then restore. Only unpauses if we were the one to
-/// pause — a user's manual pause survives a regen untouched.
-fn manage_physics_hold(mut hold: ResMut<PhysicsHold>, mut vtime: ResMut<Time<Virtual>>) {
+/// Freeze the sim for a few frames after a rebuild, then restore — long enough for
+/// the re-seated colliders to settle before physics steps again. Goes through the
+/// single transport authority (`TimeTransport.mode`, doc 19), which the spine maps
+/// onto `relative_speed = 0` (and thus avian's `Time<Physics>`). Only unpauses if
+/// *we* paused — a user's manual pause (same authority) survives a regen untouched.
+fn manage_physics_hold(
+    mut hold: ResMut<PhysicsHold>,
+    transport: Option<ResMut<lunco_time::TimeTransport>>,
+) {
     if hold.frames_left == 0 {
         return;
     }
-    if !hold.paused_by_us && !vtime.is_paused() {
-        vtime.pause();
+    // No time spine in this context (e.g. a bare generator test) — nothing to
+    // freeze through the transport; drop the hold so we don't spin forever.
+    let Some(mut transport) = transport else {
+        hold.frames_left = 0;
+        hold.paused_by_us = false;
+        return;
+    };
+    let is_paused = matches!(transport.mode, lunco_time::TransportMode::Paused);
+    if !hold.paused_by_us && !is_paused {
+        transport.mode = lunco_time::TransportMode::Paused;
         hold.paused_by_us = true;
     }
     hold.frames_left -= 1;
     if hold.frames_left == 0 && hold.paused_by_us {
-        vtime.unpause();
+        transport.mode = lunco_time::TransportMode::Playing;
         hold.paused_by_us = false;
     }
 }

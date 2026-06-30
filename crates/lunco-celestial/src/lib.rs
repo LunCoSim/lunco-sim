@@ -80,11 +80,12 @@ impl Plugin for CelestialPlugin {
         // The unified mission-time spine (doc 19 — T1): MissionClock + transport +
         // the derived `WorldTime` view. Guarded so a context that also adds it via
         // another plugin (e.g. `UsdBevyPlugin` for the animation sampler) is fine.
+        // `TimePlugin` now owns the wall-clock seed itself (Startup), so every
+        // spine context anchors at the real launch instant — no celestial-only
+        // seed system anymore.
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
         }
-        // Seed the spine's mission origin from the wall clock (doc 19 — T3).
-        app.add_systems(Startup, seed_mission_clock_from_wall);
         app.init_resource::<TerrainMapRegistry>();
         app.insert_resource(Gravity::surface());
         app.register_type::<TrajectoryView>();
