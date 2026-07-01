@@ -37,6 +37,8 @@ pub mod commands;
 #[cfg(feature = "ui")]
 pub mod gizmo;
 #[cfg(feature = "ui")]
+pub mod joint_viz;
+#[cfg(feature = "ui")]
 pub mod perf_bridge;
 #[cfg(feature = "ui")]
 pub mod physics_viz;
@@ -129,6 +131,15 @@ impl Plugin for SandboxEditPlugin {
             ),
         );
         physics_viz::register_all_commands(app);
+
+        // Joint + wheel-force visualization gizmos (toggled via
+        // `ToggleJointViz` command — reachable from UI / API / Rhai).
+        app.init_resource::<joint_viz::JointVizSettings>();
+        app.add_systems(
+            Update,
+            (joint_viz::draw_joint_viz, joint_viz::draw_wheel_force_viz),
+        );
+        joint_viz::register_all_commands(app);
 
         // NOTE: gizmo handle picking is provided by transform-gizmo-bevy's own
         // `TransformGizmoPickingPlugin` (added by `TransformGizmoPlugin`). Its

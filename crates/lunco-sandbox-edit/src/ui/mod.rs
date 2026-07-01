@@ -114,7 +114,28 @@ impl Plugin for SandboxEditUiPlugin {
                 .in_set(ViewModelSet)
                 .run_if(inspector::inspector_inputs_changed),
         );
+
+        // Debug-viz settings menu rows (joint + wheel-force gizmos).
+        app.add_systems(Startup, register_debug_viz_settings);
     }
+}
+
+/// Register checkbox rows in the workbench Settings menu for the joint
+/// and wheel-force gizmos. Mutates [`joint_viz::JointVizSettings`]
+/// directly; the resource is not persisted (debug toggle, defaults off).
+fn register_debug_viz_settings(world: &mut World) {
+    use bevy_egui::egui;
+    let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
+        return;
+    };
+    layout.register_settings(|ui, world| {
+        ui.label(egui::RichText::new("Debug Visualization").weak().small());
+        let mut settings = world.resource_mut::<crate::joint_viz::JointVizSettings>();
+        ui.checkbox(&mut settings.show_joints, "Show joints")
+            .on_hover_text("Draw anchor dots + axis lines for every Avian joint");
+        ui.checkbox(&mut settings.show_wheel_forces, "Show wheel forces")
+            .on_hover_text("Draw a force box + arrow at every wheel");
+    });
 }
 
 /// Rover sandbox's default workspace — full-screen 3D, no panels.

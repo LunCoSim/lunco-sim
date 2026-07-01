@@ -7,41 +7,37 @@
 
 # G5 — rocker-bogie chassis with a differential coupling.
 #
-# Two side rockers (single fore-aft beam bodies) hang off the chassis on
-# LATERAL-axis (X) revolute joints, so each pitches fore-aft to let its front and
-# rear ends ride terrain independently — the passive rocker suspension, buildable
-# with today's authored joints. The missing piece is the DIFFERENTIAL:
-# `lunco:differential:rockerA/B` on the chassis names the two rockers; the reader
-# attaches a `lunco_mobility::DifferentialCoupling` that softly enforces
-# `θ_left + θ_right → 0`, so when one rocker pitches up the other pitches down and
-# the chassis rides at their average (stays level over a bump).
+# A complete physical joint-based rocker-bogie suspension with 6 motorized wheels:
+#   - Two side rockers (RockerL/R) hinge to the chassis on the X axis.
+#   - Two bogies (BogieL/R) hinge to the rear of the rockers on the X axis.
+#   - Six wheels (FL/FR/ML/MR/RL/RR) reference the reusable motorized wheel components.
+#   - The differential coupling softly enforces: θ_left + θ_right → 0.
+#   - Controllable via keyboard/UI through PhysxVehicleDriveSkidAPI.
 #
-# Each rocker authors `physics:diagonalInertia` (G2) so the coupling torque is
-# well-conditioned, and the coupling stiffness stays under the explicit-penalty
-# stability limit (`k < I/dt²`).
-#
-# Verify: load over a step under one rocker's front; read the two hinge `angle`
-# ports (`lunco-cosim` auto-exposes them on every RevoluteJoint). The differential
-# holds `HingeL.angle + HingeR.angle ≈ 0` even though each is individually
-# non-zero — without the coupling only the bumped rocker would move.
+# FOR PARAMETER EDITING GUIDE: See the accompanying README.md in this directory.
 
 def Xform "RockerBogie" (
     kind = "component"
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",
-        "PhysicsArticulationRootAPI"
+        "PhysicsArticulationRootAPI",
+        "PhysxVehicleContextAPI",
+        "PhysxVehicleDriveSkidAPI"
     ]
 )
 {
-    float physics:mass = 400.0
+    # --- VEHICLE MASS & DAMPING ---
+    # Edit the chassis mass here (default 300 kg)
+    float physics:mass = 300.0
     float lunco:spawnLift = 1.5
     float physics:linearDamping = 0.4
     float physics:angularDamping = 2.0
 
-    # G5 — the differential. Couple the two rockers about the lateral (X) axis.
-    # Soft: rocker inertia ≈ 60 kg·m², physics dt ≈ 1/64 s ⇒ stability needs
-    # k < I/dt² ≈ 2.5e5; 1.5e4 is a comfortable margin.
+    # --- DIFFERENTIAL COUPLING (HOLONOMIC CONSTRAINT) ---
+    # stiffness: Controls how strongly the rockers are forced to mirror each other (default 15000.0)
+    # damping: Prevents differential oscillations (default 1500.0)
+    # restSum: Symmetric target sum (default 0.0 rad)
     rel lunco:differential:rockerA = </RockerBogie/RockerL>
     rel lunco:differential:rockerB = </RockerBogie/RockerR>
     uniform token lunco:differential:axis = "X"
@@ -49,43 +45,596 @@ def Xform "RockerBogie" (
     float lunco:differential:damping = 1500.0
     float lunco:differential:restSum = 0.0
 
-    # Chassis collider (compound child of the rigid-body root).
+    # --- CHASSIS GEOMETRY & VISUALS ---
+    # Gold solar foil main body
     def Cube "Body" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:scale = (1.6, 0.4, 2.0)
+        double3 xformOp:scale = (1.2, 0.4, 1.8)
         uniform token[] xformOpOrder = ["xformOp:scale"]
         color3f primvars:displayColor = (0.85, 0.75, 0.2)
     }
 
-    # ── Left rocker: a single beam body below the chassis ───────────────────
-    def Cube "RockerL" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
-    )
+    # Slanted Solar panel deck on top of the chassis
+    def Cube "SolarDeck"
     {
         double size = 1.0
-        float physics:mass = 80.0
-        float3 physics:diagonalInertia = (60.0, 60.0, 6.0)
-        double3 xformOp:translate = (-1.0, -0.5, 0.0)
-        double3 xformOp:scale = (0.3, 0.3, 2.8)
+        double3 xformOp:translate = (0.0, 0.21, 0.0)
+        double3 xformOp:scale = (1.3, 0.02, 1.9)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.8, 0.2, 0.2)
+        color3f primvars:displayColor = (0.05, 0.05, 0.2)
+        bool physics:collisionEnabled = false
+    }
+
+    # High-gain antenna mast and dish
+    def Cylinder "AntennaMast"
+    {
+        uniform token axis = "Y"
+        double radius = 0.015
+        double height = 0.3
+        double3 xformOp:translate = (0.3, 0.35, 0.6)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.6, 0.6, 0.6)
+        bool physics:collisionEnabled = false
+    }
+
+    def Cylinder "AntennaDish"
+    {
+        uniform token axis = "Y"
+        double radius = 0.15
+        double height = 0.02
+        double3 xformOp:translate = (0.3, 0.5, 0.6)
+        double3 xformOp:rotateXYZ = (30.0, 45.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f primvars:displayColor = (0.8, 0.8, 0.8)
+        bool physics:collisionEnabled = false
+    }
+
+    # Instrument platform / science mast
+    def Cylinder "Mast"
+    {
+        uniform token axis = "Y"
+        double radius = 0.04
+        double height = 0.8
+        double3 xformOp:translate = (0.0, 0.5, -0.6)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.6, 0.6, 0.6)
+        bool physics:collisionEnabled = false
+    }
+
+    def Cube "CameraHead"
+    {
+        double size = 1.0
+        double3 xformOp:scale = (0.2, 0.15, 0.15)
+        double3 xformOp:translate = (0.0, 0.95, -0.6)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.15, 0.15, 0.15)
+        bool physics:collisionEnabled = false
+    }
+
+    # Headlights
+    def Xform "Headlight_L"
+    {
+        double3 xformOp:translate = (-0.5, 0.1, -0.9)
+        double3 xformOp:rotateXYZ = (-15, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+        def SphereLight "Light"
+        {
+            float inputs:intensity = 1000000.0
+            float inputs:exposure = 0.0
+            color3f inputs:color = (1.0, 0.95, 0.85)
+            bool inputs:shadow:enable = true
+            float inputs:shaping:cone:angle = 45.0
+            float inputs:shaping:cone:softness = 0.3
+            float lunco:light:range = 60.0
+        }
+
+        def Cylinder "Casing"
+        {
+            uniform token axis = "Z"
+            double radius = 0.1
+            double height = 0.15
+            double3 xformOp:translate = (0, 0, 0.075)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.1, 0.1, 0.1)
+            bool physics:collisionEnabled = false
+        }
+
+        def Cylinder "Lens"
+        {
+            uniform token axis = "Z"
+            double radius = 0.09
+            double height = 0.02
+            double3 xformOp:translate = (0, 0, -0.01)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (1.0, 0.95, 0.85)
+            color3f primvars:emissiveColor = (5.0, 4.75, 4.25)
+            bool physics:collisionEnabled = false
+        }
+    }
+
+    def Xform "Headlight_R"
+    {
+        double3 xformOp:translate = (0.5, 0.1, -0.9)
+        double3 xformOp:rotateXYZ = (-15, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+        def SphereLight "Light"
+        {
+            float inputs:intensity = 1000000.0
+            float inputs:exposure = 0.0
+            color3f inputs:color = (1.0, 0.95, 0.85)
+            bool inputs:shadow:enable = true
+            float inputs:shaping:cone:angle = 45.0
+            float inputs:shaping:cone:softness = 0.3
+            float lunco:light:range = 60.0
+        }
+
+        def Cylinder "Casing"
+        {
+            uniform token axis = "Z"
+            double radius = 0.1
+            double height = 0.15
+            double3 xformOp:translate = (0, 0, 0.075)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.1, 0.1, 0.1)
+            bool physics:collisionEnabled = false
+        }
+
+        def Cylinder "Lens"
+        {
+            uniform token axis = "Z"
+            double radius = 0.09
+            double height = 0.02
+            double3 xformOp:translate = (0, 0, -0.01)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (1.0, 0.95, 0.85)
+            color3f primvars:emissiveColor = (5.0, 4.75, 4.25)
+            bool physics:collisionEnabled = false
+        }
+    }
+
+    # ── Left rocker ─────────────────────────────────────────────────────────
+    def Xform "RockerL" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        float physics:mass = 50.0
+        float3 physics:diagonalInertia = (30.0, 30.0, 3.0)
+        double3 xformOp:translate = (-0.9, -0.2, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # Rocker main forward-down link (pivots down/forward to front wheel)
+        # Length: 1.265m, Midpoint: (0.0, -0.2, -0.6), Rotated: -18.43 deg about X
+        def Cylinder "FrontLink"
+        {
+            uniform token axis = "Z"
+            double radius = 0.06
+            double height = 1.265
+            double3 xformOp:translate = (0.0, -0.2, -0.6)
+            double3 xformOp:rotateXYZ = (-18.43, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            color3f primvars:displayColor = (0.35, 0.35, 0.38)
+            bool physics:collisionEnabled = false
+        }
+
+        # Rocker rear-down link (pivots down/backward to bogie hinge)
+        # Length: 0.632m, Midpoint: (0.0, -0.1, 0.3), Rotated: 18.43 deg about X
+        def Cylinder "RearLink"
+        {
+            uniform token axis = "Z"
+            double radius = 0.06
+            double height = 0.632
+            double3 xformOp:translate = (0.0, -0.1, 0.3)
+            double3 xformOp:rotateXYZ = (18.43, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            color3f primvars:displayColor = (0.35, 0.35, 0.38)
+            bool physics:collisionEnabled = false
+        }
+
+        # Outward X-axis axle to front wheel
+        def Cylinder "Axle"
+        {
+            uniform token axis = "X"
+            double radius = 0.04
+            double height = 0.25
+            double3 xformOp:translate = (-0.125, -0.4, -1.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.6, 0.6, 0.6)
+            bool physics:collisionEnabled = false
+        }
+
+        # Rocker joint cover housing
+        def Cylinder "JointCover"
+        {
+            uniform token axis = "X"
+            double radius = 0.12
+            double height = 0.12
+            double3 xformOp:translate = (0.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.85, 0.7, 0.2)
+            bool physics:collisionEnabled = false
+        }
+
+        # Simplified box collider for the rocker arm (clears the bogie space).
+        # `visibility = "invisible"` — collision-only: the loader would otherwise
+        # render this as a white bar (no displayColor → Color::WHITE fallback).
+        def Cube "Collider" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:scale = (0.12, 0.12, 1.2)
+            double3 xformOp:translate = (0.0, -0.2, -0.6)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            token visibility = "invisible"
+            bool physics:collisionEnabled = true
+        }
+
+        # Front Left Wheel
+        def Cylinder "Wheel_FL" (
+            kind = "subcomponent"
+            prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        )
+        {
+            uniform token axis = "X"
+            double radius = 0.4
+            double height = 0.3
+            double3 xformOp:translate = (-0.25, -0.4, -1.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.15, 0.15, 0.15)
+
+            # --- WHEEL DYNAMICS CONFIGURATION ---
+            int physxVehicleWheel:index = 0
+            float physxVehicleWheel:radius = 0.4
+            float physxVehicleSuspension:restLength = 0.5
+            float physxVehicleSuspension:springStiffness = 12000.0
+            float physxVehicleSuspension:springDamping = 2500.0
+        }
     }
 
     # ── Right rocker ────────────────────────────────────────────────────────
-    def Cube "RockerR" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    def Xform "RockerR" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        double size = 1.0
-        float physics:mass = 80.0
-        float3 physics:diagonalInertia = (60.0, 60.0, 6.0)
-        double3 xformOp:translate = (1.0, -0.5, 0.0)
-        double3 xformOp:scale = (0.3, 0.3, 2.8)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.2, 0.2, 0.8)
+        float physics:mass = 50.0
+        float3 physics:diagonalInertia = (30.0, 30.0, 3.0)
+        double3 xformOp:translate = (0.9, -0.2, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Cylinder "FrontLink"
+        {
+            uniform token axis = "Z"
+            double radius = 0.06
+            double height = 1.265
+            double3 xformOp:translate = (0.0, -0.2, -0.6)
+            double3 xformOp:rotateXYZ = (-18.43, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            color3f primvars:displayColor = (0.35, 0.35, 0.38)
+            bool physics:collisionEnabled = false
+        }
+
+        def Cylinder "RearLink"
+        {
+            uniform token axis = "Z"
+            double radius = 0.06
+            double height = 0.632
+            double3 xformOp:translate = (0.0, -0.1, 0.3)
+            double3 xformOp:rotateXYZ = (18.43, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            color3f primvars:displayColor = (0.35, 0.35, 0.38)
+            bool physics:collisionEnabled = false
+        }
+
+        def Cylinder "Axle"
+        {
+            uniform token axis = "X"
+            double radius = 0.04
+            double height = 0.25
+            double3 xformOp:translate = (0.125, -0.4, -1.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.6, 0.6, 0.6)
+            bool physics:collisionEnabled = false
+        }
+
+        def Cylinder "JointCover"
+        {
+            uniform token axis = "X"
+            double radius = 0.12
+            double height = 0.12
+            double3 xformOp:translate = (0.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.85, 0.7, 0.2)
+            bool physics:collisionEnabled = false
+        }
+
+        # Simplified box collider for the rocker arm (clears the bogie space).
+        # `visibility = "invisible"` — collision-only: the loader would otherwise
+        # render this as a white bar (no displayColor → Color::WHITE fallback).
+        def Cube "Collider" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:scale = (0.12, 0.12, 1.2)
+            double3 xformOp:translate = (0.0, -0.2, -0.6)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            token visibility = "invisible"
+            bool physics:collisionEnabled = true
+        }
+
+        # Front Right Wheel
+        def Cylinder "Wheel_FR" (
+            kind = "subcomponent"
+            prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        )
+        {
+            uniform token axis = "X"
+            double radius = 0.4
+            double height = 0.3
+            double3 xformOp:translate = (0.25, -0.4, -1.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.15, 0.15, 0.15)
+
+            int physxVehicleWheel:index = 1
+            float physxVehicleWheel:radius = 0.4
+            float physxVehicleSuspension:restLength = 0.5
+            float physxVehicleSuspension:springStiffness = 12000.0
+            float physxVehicleSuspension:springDamping = 2500.0
+        }
+    }
+
+    # ── Left bogie ──────────────────────────────────────────────────────────
+    def Xform "BogieL" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        float physics:mass = 30.0
+        float3 physics:diagonalInertia = (15.0, 15.0, 1.5)
+        double3 xformOp:translate = (-0.9, -0.4, 0.6)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # Bogie front-down link (goes down/forward to middle wheel)
+        # Length: 0.447m, Midpoint: (0.0, -0.1, -0.2), Rotated: -26.57 deg about X
+        def Cylinder "FrontLink"
+        {
+            uniform token axis = "Z"
+            double radius = 0.05
+            double height = 0.447
+            double3 xformOp:translate = (0.0, -0.1, -0.2)
+            double3 xformOp:rotateXYZ = (-26.57, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            color3f primvars:displayColor = (0.45, 0.45, 0.48)
+            bool physics:collisionEnabled = false
+        }
+
+        # Bogie rear-down link (goes down/backward to rear wheel)
+        # Length: 0.632m, Midpoint: (0.0, -0.1, 0.3), Rotated: 18.43 deg about X
+        def Cylinder "RearLink"
+        {
+            uniform token axis = "Z"
+            double radius = 0.05
+            double height = 0.632
+            double3 xformOp:translate = (0.0, -0.1, 0.3)
+            double3 xformOp:rotateXYZ = (18.43, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            color3f primvars:displayColor = (0.45, 0.45, 0.48)
+            bool physics:collisionEnabled = false
+        }
+
+        # Axle to middle wheel
+        def Cylinder "MiddleAxle"
+        {
+            uniform token axis = "X"
+            double radius = 0.035
+            double height = 0.25
+            double3 xformOp:translate = (-0.125, -0.2, -0.4)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.6, 0.6, 0.6)
+            bool physics:collisionEnabled = false
+        }
+
+        # Axle to rear wheel
+        def Cylinder "RearAxle"
+        {
+            uniform token axis = "X"
+            double radius = 0.035
+            double height = 0.25
+            double3 xformOp:translate = (-0.125, -0.2, 0.6)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.6, 0.6, 0.6)
+            bool physics:collisionEnabled = false
+        }
+
+        # Joint cover housing
+        def Cylinder "JointCover"
+        {
+            uniform token axis = "X"
+            double radius = 0.1
+            double height = 0.1
+            double3 xformOp:translate = (0.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.85, 0.7, 0.2)
+            bool physics:collisionEnabled = false
+        }
+
+        # Simplified box collider (collision-only, hidden — see RockerL/Collider).
+        def Cube "Collider" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:scale = (0.1, 0.1, 1.2)
+            double3 xformOp:translate = (0.0, -0.1, 0.1)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            token visibility = "invisible"
+            bool physics:collisionEnabled = true
+        }
+
+        # Middle Left Wheel
+        def Cylinder "Wheel_ML" (
+            kind = "subcomponent"
+            prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        )
+        {
+            uniform token axis = "X"
+            double radius = 0.4
+            double height = 0.3
+            double3 xformOp:translate = (-0.25, -0.2, -0.4)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.15, 0.15, 0.15)
+
+            int physxVehicleWheel:index = 2
+            float physxVehicleWheel:radius = 0.4
+            float physxVehicleSuspension:restLength = 0.5
+            float physxVehicleSuspension:springStiffness = 12000.0
+            float physxVehicleSuspension:springDamping = 2500.0
+        }
+
+        # Rear Left Wheel
+        def Cylinder "Wheel_RL" (
+            kind = "subcomponent"
+            prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        )
+        {
+            uniform token axis = "X"
+            double radius = 0.4
+            double height = 0.3
+            double3 xformOp:translate = (-0.25, -0.2, 0.6)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.15, 0.15, 0.15)
+
+            int physxVehicleWheel:index = 4
+            float physxVehicleWheel:radius = 0.4
+            float physxVehicleSuspension:restLength = 0.5
+            float physxVehicleSuspension:springStiffness = 12000.0
+            float physxVehicleSuspension:springDamping = 2500.0
+        }
+    }
+
+    # ── Right bogie ─────────────────────────────────────────────────────────
+    def Xform "BogieR" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        float physics:mass = 30.0
+        float3 physics:diagonalInertia = (15.0, 15.0, 1.5)
+        double3 xformOp:translate = (0.9, -0.4, 0.6)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Cylinder "FrontLink"
+        {
+            uniform token axis = "Z"
+            double radius = 0.05
+            double height = 0.447
+            double3 xformOp:translate = (0.0, -0.1, -0.2)
+            double3 xformOp:rotateXYZ = (-26.57, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            color3f primvars:displayColor = (0.45, 0.45, 0.48)
+            bool physics:collisionEnabled = false
+        }
+
+        def Cylinder "RearLink"
+        {
+            uniform token axis = "Z"
+            double radius = 0.05
+            double height = 0.632
+            double3 xformOp:translate = (0.0, -0.1, 0.3)
+            double3 xformOp:rotateXYZ = (18.43, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            color3f primvars:displayColor = (0.45, 0.45, 0.48)
+            bool physics:collisionEnabled = false
+        }
+
+        def Cylinder "MiddleAxle"
+        {
+            uniform token axis = "X"
+            double radius = 0.035
+            double height = 0.25
+            double3 xformOp:translate = (0.125, -0.2, -0.4)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.6, 0.6, 0.6)
+            bool physics:collisionEnabled = false
+        }
+
+        def Cylinder "RearAxle"
+        {
+            uniform token axis = "X"
+            double radius = 0.035
+            double height = 0.25
+            double3 xformOp:translate = (0.125, -0.2, 0.6)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.6, 0.6, 0.6)
+            bool physics:collisionEnabled = false
+        }
+
+        def Cylinder "JointCover"
+        {
+            uniform token axis = "X"
+            double radius = 0.1
+            double height = 0.1
+            double3 xformOp:translate = (0.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.85, 0.7, 0.2)
+            bool physics:collisionEnabled = false
+        }
+
+        # Simplified box collider (collision-only, hidden — see RockerL/Collider).
+        def Cube "Collider" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:scale = (0.1, 0.1, 1.2)
+            double3 xformOp:translate = (0.0, -0.1, 0.1)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            token visibility = "invisible"
+            bool physics:collisionEnabled = true
+        }
+
+        # Middle Right Wheel
+        def Cylinder "Wheel_MR" (
+            kind = "subcomponent"
+            prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        )
+        {
+            uniform token axis = "X"
+            double radius = 0.4
+            double height = 0.3
+            double3 xformOp:translate = (0.25, -0.2, -0.4)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.15, 0.15, 0.15)
+
+            int physxVehicleWheel:index = 3
+            float physxVehicleWheel:radius = 0.4
+            float physxVehicleSuspension:restLength = 0.5
+            float physxVehicleSuspension:springStiffness = 12000.0
+            float physxVehicleSuspension:springDamping = 2500.0
+        }
+
+        # Rear Right Wheel
+        def Cylinder "Wheel_RR" (
+            kind = "subcomponent"
+            prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        )
+        {
+            uniform token axis = "X"
+            double radius = 0.4
+            double height = 0.3
+            double3 xformOp:translate = (0.25, -0.2, 0.6)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (0.15, 0.15, 0.15)
+
+            int physxVehicleWheel:index = 5
+            float physxVehicleWheel:radius = 0.4
+            float physxVehicleSuspension:restLength = 0.5
+            float physxVehicleSuspension:springStiffness = 12000.0
+            float physxVehicleSuspension:springDamping = 2500.0
+        }
     }
 
     # ── Lateral-axis revolute hinges (chassis ↔ rocker) ─────────────────────
@@ -94,7 +643,7 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie>
         rel physics:body1 = </RockerBogie/RockerL>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (-1.0, -0.5, 0.0)
+        point3f physics:localPos0 = (-0.9, -0.2, 0.0)
         point3f physics:localPos1 = (0.0, 0.0, 0.0)
     }
     def PhysicsRevoluteJoint "HingeR"
@@ -102,7 +651,106 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie>
         rel physics:body1 = </RockerBogie/RockerR>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (1.0, -0.5, 0.0)
+        point3f physics:localPos0 = (0.9, -0.2, 0.0)
         point3f physics:localPos1 = (0.0, 0.0, 0.0)
+    }
+
+    # ── Lateral-axis revolute hinges (rocker ↔ bogie) ───────────────────────
+    def PhysicsRevoluteJoint "BogieHingeL"
+    {
+        rel physics:body0 = </RockerBogie/RockerL>
+        rel physics:body1 = </RockerBogie/BogieL>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (0.0, -0.2, 0.6)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+    }
+    def PhysicsRevoluteJoint "BogieHingeR"
+    {
+        rel physics:body0 = </RockerBogie/RockerR>
+        rel physics:body1 = </RockerBogie/BogieR>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (0.0, -0.2, 0.6)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+    }
+
+    # ── Wheel revolute joints (rocker/bogie ↔ wheel) ────────────────────────
+    # These declare the joint-driven motorized properties. The parser auto-spawns
+    # them using wheel coordinates, but targets are declared here for G4 recognition.
+    def PhysicsRevoluteJoint "Wheel_FL_Hinge" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    )
+    {
+        rel physics:body0 = </RockerBogie/RockerL>
+        rel physics:body1 = </RockerBogie/RockerL/Wheel_FL>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (-0.25, -0.4, -1.2)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+        float drive:angular:physics:maxForce = 12000.0
+        uniform token drive:angular:physics:type = "force"
+    }
+
+    def PhysicsRevoluteJoint "Wheel_FR_Hinge" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    )
+    {
+        rel physics:body0 = </RockerBogie/RockerR>
+        rel physics:body1 = </RockerBogie/RockerR/Wheel_FR>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (0.25, -0.4, -1.2)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+        float drive:angular:physics:maxForce = 12000.0
+        uniform token drive:angular:physics:type = "force"
+    }
+
+    def PhysicsRevoluteJoint "Wheel_ML_Hinge" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    )
+    {
+        rel physics:body0 = </RockerBogie/BogieL>
+        rel physics:body1 = </RockerBogie/BogieL/Wheel_ML>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (-0.25, -0.2, -0.4)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+        float drive:angular:physics:maxForce = 12000.0
+        uniform token drive:angular:physics:type = "force"
+    }
+
+    def PhysicsRevoluteJoint "Wheel_MR_Hinge" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    )
+    {
+        rel physics:body0 = </RockerBogie/BogieR>
+        rel physics:body1 = </RockerBogie/BogieR/Wheel_MR>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (0.25, -0.2, -0.4)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+        float drive:angular:physics:maxForce = 12000.0
+        uniform token drive:angular:physics:type = "force"
+    }
+
+    def PhysicsRevoluteJoint "Wheel_RL_Hinge" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    )
+    {
+        rel physics:body0 = </RockerBogie/BogieL>
+        rel physics:body1 = </RockerBogie/BogieL/Wheel_RL>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (-0.25, -0.2, 0.6)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+        float drive:angular:physics:maxForce = 12000.0
+        uniform token drive:angular:physics:type = "force"
+    }
+
+    def PhysicsRevoluteJoint "Wheel_RR_Hinge" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    )
+    {
+        rel physics:body0 = </RockerBogie/BogieR>
+        rel physics:body1 = </RockerBogie/BogieR/Wheel_RR>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (0.25, -0.2, 0.6)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+        float drive:angular:physics:maxForce = 12000.0
+        uniform token drive:angular:physics:type = "force"
     }
 }

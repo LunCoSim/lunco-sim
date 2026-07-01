@@ -325,15 +325,15 @@ mod tests {
         let zone_name = |e: Entity| (e == pad).then(|| "pad_2".to_string());
 
         // rover (side 1) enters pad (side 2, the named sensor) → "enter:pad_2"
-        // with the entrant (rover, 42) as payload.
+        // with the entrant (rover, 42) as payload, and pad (7) as zone.
         assert_eq!(
             zone_events("enter", rover, None, pad, None, &zone_name, &reg),
-            vec![("enter:pad_2".to_string(), 42)]
+            vec![("enter:pad_2".to_string(), 42, 7)]
         );
         // Order-independent: the named side can be side 1.
         assert_eq!(
             zone_events("exit", pad, None, rover, None, &zone_name, &reg),
-            vec![("exit:pad_2".to_string(), 42)]
+            vec![("exit:pad_2".to_string(), 42, 7)]
         );
         // A contact with no named sensor produces no zone events.
         assert!(zone_events("enter", rover, None, plain, None, &zone_name, &reg).is_empty());
@@ -341,7 +341,7 @@ mod tests {
         let ghost = world.spawn_empty().id();
         assert_eq!(
             zone_events("enter", pad, None, ghost, None, &zone_name, &reg),
-            vec![("enter:pad_2".to_string(), 0)]
+            vec![("enter:pad_2".to_string(), 0, 7)]
         );
     }
 }
