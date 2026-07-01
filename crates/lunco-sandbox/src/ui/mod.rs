@@ -101,8 +101,15 @@ impl Plugin for SandboxUiPlugin {
                 init_current_scene_path,
                 register_sandbox_scenarios_menu,
             ))
-            .add_observer(|t: On<lunco_usd::LoadScene>, mut current: ResMut<CurrentScenePath>| {
+            .add_observer(|t: On<lunco_usd::LoadScene>, mut current: ResMut<CurrentScenePath>, current_name: Option<ResMut<lunco_workbench::CurrentSceneName>>| {
                 current.0 = t.event().path.clone();
+                if let Some(mut name) = current_name {
+                    name.0 = std::path::Path::new(&t.event().path)
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or(&t.event().path)
+                        .to_string();
+                }
             })
             // Confine window-targeting cameras to the ViewportPanel rect (prevents
             // the full-window 3D bleed-on-pass-skip bug). RTT cameras are skipped.
@@ -335,8 +342,19 @@ fn sandbox_boot_from_url(
 #[derive(Resource, Clone, Default)]
 pub(crate) struct CurrentScenePath(pub(crate) String);
 
-fn init_current_scene_path(scene_path: Res<crate::ScenePath>, mut commands: Commands) {
+fn init_current_scene_path(
+    scene_path: Res<crate::ScenePath>,
+    mut commands: Commands,
+    current_name: Option<ResMut<lunco_workbench::CurrentSceneName>>,
+) {
     commands.insert_resource(CurrentScenePath(scene_path.0.clone()));
+    if let Some(mut name) = current_name {
+        name.0 = std::path::Path::new(&scene_path.0)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or(&scene_path.0)
+            .to_string();
+    }
 }
 
 fn register_sandbox_scenarios_menu(world: &mut World) {

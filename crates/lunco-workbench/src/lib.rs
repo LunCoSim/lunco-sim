@@ -444,6 +444,7 @@ impl Plugin for WorkbenchPlugin {
             // plugin (lunco-modelica, a future lunco-usd, …) pushes
             // its own handler on build. See `uri.rs` for the trait.
             .init_resource::<UriRegistry>()
+            .init_resource::<CurrentSceneName>()
             .add_observer(on_open_tab)
             .add_observer(on_close_tab);
         register_all_commands(app);
@@ -475,6 +476,11 @@ impl Plugin for WorkbenchPlugin {
 /// the slot-setter DSL ([`set_side_browser`](Self::set_side_browser),
 /// [`set_center`](Self::set_center), [`set_right_inspector`](Self::set_right_inspector),
 /// [`set_bottom`](Self::set_bottom)).
+/// Holds the name of the currently loaded USD scene file to display in the status bar.
+#[derive(Resource, Clone, Default, Debug, Reflect)]
+#[reflect(Resource, Default)]
+pub struct CurrentSceneName(pub String);
+
 #[derive(Resource)]
 pub struct WorkbenchLayout {
     pub(crate) panels: HashMap<PanelId, Box<dyn Panel>>,
@@ -3111,21 +3117,21 @@ fn render_status_bar_inner(
         .unwrap_or(false);
 
     ui.horizontal(|ui| {
-        // The whole strip is one clickable region; the popup anchors
-        // off its response so it appears just above the bar.
+        let scene_name = world.get_resource::<CurrentSceneName>().map(|s| s.0.clone()).unwrap_or_default();
+
+        // Calculate the reserved width for all elements to the right of the status scope
+        let right_reserve = 16.0
+            + if perf_enabled { 300.0 } else { 0.0 }
+            + if net_active { 220.0 } else { 0.0 }
+            + if !scene_name.is_empty() { 150.0 } else { 0.0 };
+
+        let status_width = (ui.available_width() - right_reserve).max(160.0);
+
+        // The status message scope on the left
         let response = ui
             .scope(|ui| {
                 ui.set_height(18.0);
-                // Whole strip is the click target, not just the dot+text:
-                // stretch this region to fill the available width minus the
-                // space the right-aligned perf HUD / net chip will claim.
-                // The content stays left-aligned; the trailing empty space
-                // is still part of the response rect, so a click anywhere on
-                // the bar opens the history popup.
-                let right_reserve = 8.0
-                    + if perf_enabled { 300.0 } else { 0.0 }
-                    + if net_active { 220.0 } else { 0.0 };
-                ui.set_min_width((ui.available_width() - right_reserve).max(160.0));
+                ui.set_max_width(status_width);
                 if let Some(l) = latest.as_ref() {
                     let dot_color = match l.level {
                         StatusLevel::Error => theme.tokens.error,
@@ -3142,7 +3148,8 @@ fn render_status_bar_inner(
                     );
                     ui.painter().circle_filled(rect.center(), 4.0, dot_color);
                     ui.label(egui::RichText::new(l.source).small().strong());
-                    ui.label(egui::RichText::new(&l.message).small());
+                    let text = egui::RichText::new(&l.message).small();
+                    ui.add(egui::Label::new(text).truncate());
                     if let Some(pct) = l.progress_pct {
                         ui.add(
                             egui::ProgressBar::new((pct as f32) / 100.0)
@@ -3156,7 +3163,8 @@ fn render_status_bar_inner(
                     // API so existing call sites keep working.
                     match layout.status.as_ref() {
                         Some(StatusContent::Text(s)) => {
-                            ui.label(egui::RichText::new(s).small());
+                            let text = egui::RichText::new(s).small();
+                            ui.add(egui::Label::new(text).truncate());
                         }
                         None => {
                             ui.label(egui::RichText::new("ready").small().weak());
@@ -3172,11 +3180,13 @@ fn render_status_bar_inner(
             egui::Popup::toggle_id(ui.ctx(), popup_id);
         }
 
+        if !scene_name.is_empty() {
+            ui.separator();
+            ui.label(egui::RichText::new(format!("🎬 {}", scene_name)).small());
+        }
+
         ui.separator();
 
-        // Pinned networking chip — host/client role, endpoint + ports, and a
-        // live peer / connection readout. Silent in single-player. Reads
-        // `lunco_core::NetStatus` (no lightyear dep here).
         render_net_chip(ui, world, theme);
 
         // Right-aligned perf segment. Hidden when the HUD is off so
