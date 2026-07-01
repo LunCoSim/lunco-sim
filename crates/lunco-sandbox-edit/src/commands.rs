@@ -2878,7 +2878,8 @@ mod tests {
         let cmd = super::SpawnEntity {
             target: bevy::prelude::Entity::PLACEHOLDER,
             entry_id: "test".to_string(),
-            position: bevy::math::Vec3::ZERO,
+            position: bevy::prelude::Vec3::ZERO,
+            rotation: None,
         };
         assert_eq!(cmd.entry_id, "test");
     }
@@ -3066,6 +3067,7 @@ mod tests {
             target: grid,
             entry_id: "test_rover".into(),
             position: Vec3::new(2.0, 0.0, 7.0),
+            rotation: None,
         });
         for _ in 0..3 {
             app.update();
