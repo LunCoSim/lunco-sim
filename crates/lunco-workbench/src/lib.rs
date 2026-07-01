@@ -523,6 +523,18 @@ pub struct WorkbenchLayout {
     pub(crate) help_menu:
         Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World, &WorkbenchLayout) + Send + Sync>>,
 
+    /// App-wide File menu contributions. Same pattern as
+    /// [`settings_menu`](Self::settings_menu) — domain plugins push a
+    /// closure via [`WorkbenchLayout::register_file_menu`] at Startup so
+    /// the File menu can host domain-specific verbs (e.g. Load Example)
+    /// without hardcoding them in `lunco-workbench`.
+    pub(crate) file_menu:
+        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+
+    /// Dynamic top-level menus contributed by domain plugins.
+    pub(crate) custom_menus:
+        Vec<(&'static str, Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>)>,
+
     /// The live dock tree — what egui_dock actually renders. Stores
     /// [`TabId`]s so both singleton panels and multi-instance tabs
     /// coexist in the same tree.
@@ -583,6 +595,8 @@ impl Default for WorkbenchLayout {
             settings_menu: Vec::new(),
             edit_menu: Vec::new(),
             help_menu: Vec::new(),
+            file_menu: Vec::new(),
+            custom_menus: Vec::new(),
             dock: DockState::new(Vec::new()),
         }
     }
@@ -980,6 +994,23 @@ impl WorkbenchLayout {
         F: Fn(&mut bevy_egui::egui::Ui, &mut World, &WorkbenchLayout) + Send + Sync + 'static,
     {
         self.help_menu.push(Box::new(callback));
+    }
+
+    /// Register a closure that contributes entries to the global File
+    /// menu. Mirrors [`register_settings`](Self::register_settings).
+    pub fn register_file_menu<F>(&mut self, callback: F)
+    where
+        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+    {
+        self.file_menu.push(Box::new(callback));
+    }
+
+    /// Register a custom top-level menu button.
+    pub fn register_custom_menu<F>(&mut self, name: &'static str, callback: F)
+    where
+        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+    {
+        self.custom_menus.push((name, Box::new(callback)));
     }
 
     /// Register a perspective (named workbench layout). The first one
@@ -2335,6 +2366,15 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 }
                 ui.separator();
 
+                let callbacks = std::mem::take(&mut layout.file_menu);
+                if !callbacks.is_empty() {
+                    for cb in &callbacks {
+                        cb(ui, world);
+                    }
+                    ui.separator();
+                }
+                layout.file_menu = callbacks;
+
                 // -- Close --------------------------------------------
                 if ui
                     .add_enabled(has_active, egui::Button::new("Close\tCtrl+W"))
@@ -2471,6 +2511,17 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 }
             });
             anchor_rects.push(("menu.view", r_view.response.rect));
+
+            // Custom top-level menus
+            let custom_menus = std::mem::take(&mut layout.custom_menus);
+            for (name, cb) in &custom_menus {
+                let r_custom = ui.menu_button(*name, |ui| {
+                    cb(ui, world);
+                });
+                anchor_rects.push((*name, r_custom.response.rect));
+            }
+            layout.custom_menus = custom_menus;
+
             let r_settings = ui.menu_button("Settings", |ui| {
                 ui.label(egui::RichText::new("Theme").weak().small());
                 let mut theme = world.resource_mut::<lunco_theme::Theme>();

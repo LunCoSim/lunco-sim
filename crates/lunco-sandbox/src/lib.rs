@@ -871,7 +871,7 @@ impl Plugin for SandboxHeadlessPlugin {
 /// Resource that holds the asset-source-relative path of the scene to load on
 /// Startup. Initialised from the `--scene` CLI arg by [`SandboxCorePlugin`].
 #[derive(Resource)]
-struct ScenePath(String);
+pub struct ScenePath(pub String);
 
 // `set_parent_in_place` is `disallowed_methods`-banned for its atomicity
 // hazard (a `GridAnchor`/`RigidBody` parented after spawn can be mis-tagged

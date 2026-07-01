@@ -96,6 +96,14 @@ impl Plugin for SandboxUiPlugin {
             .add_systems(Startup, |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
                 layout.activate_perspective(lunco_workbench::PerspectiveId("sandbox_view"));
             })
+            .insert_resource(CurrentScenePath::default())
+            .add_systems(Startup, (
+                init_current_scene_path,
+                register_sandbox_scenarios_menu,
+            ))
+            .add_observer(|t: On<lunco_usd::LoadScene>, mut current: ResMut<CurrentScenePath>| {
+                current.0 = t.event().path.clone();
+            })
             // Confine window-targeting cameras to the ViewportPanel rect (prevents
             // the full-window 3D bleed-on-pass-skip bug). RTT cameras are skipped.
             .add_systems(Update, auto_tag_workbench_3d_cameras)
@@ -321,4 +329,80 @@ fn sandbox_boot_from_url(
         bevy::log::info!("[sandbox_boot_from_url] OpenClass({qual}) triggered (MSL ready)");
     }
     state.done = true;
+}
+
+/// Tracks the currently loaded scene path, so the user can restart it.
+#[derive(Resource, Clone, Default)]
+pub(crate) struct CurrentScenePath(pub(crate) String);
+
+fn init_current_scene_path(scene_path: Res<crate::ScenePath>, mut commands: Commands) {
+    commands.insert_resource(CurrentScenePath(scene_path.0.clone()));
+}
+
+fn register_sandbox_scenarios_menu(world: &mut World) {
+    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+        return;
+    };
+    layout.register_custom_menu("Scenarios", |ui, world| {
+        let current_path = world.get_resource::<CurrentScenePath>().map(|c| c.0.clone());
+        
+        ui.add_enabled_ui(current_path.is_some(), |ui| {
+            if ui.button("🔄 Restart Scenario").clicked() {
+                if let Some(path) = current_path {
+                    world.trigger(lunco_usd::LoadScene {
+                        path,
+                        root_prim: String::new(),
+                    });
+                }
+                ui.close();
+            }
+        });
+
+        ui.separator();
+
+        let Some(roots) = world.get_resource::<lunco_assets::twin_source::TwinRoots>() else {
+            ui.label(
+                bevy_egui::egui::RichText::new("(no TwinRoots resource)")
+                    .weak()
+                    .italics(),
+            );
+            return;
+        };
+
+        let mut assets = lunco_assets::discovery::list_usd_assets(roots);
+        assets.retain(|asset| asset.rel.starts_with("scenes/"));
+        assets.sort_by(|a, b| a.stem.cmp(&b.stem));
+
+        if assets.is_empty() {
+            ui.label(
+                bevy_egui::egui::RichText::new("(no scenes found)")
+                    .weak()
+                    .italics(),
+            );
+        } else {
+            for asset in assets {
+                let label = clean_scene_name(&asset.stem);
+                if ui.button(label).clicked() {
+                    world.trigger(lunco_usd::LoadScene {
+                        path: asset.asset_path.clone(),
+                        root_prim: String::new(),
+                    });
+                    ui.close();
+                }
+            }
+        }
+    });
+}
+
+fn clean_scene_name(stem: &str) -> String {
+    stem.split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
