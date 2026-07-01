@@ -2097,6 +2097,100 @@ pub fn read_transform_from_usd(reader: &UsdData, path: &SdfPath) -> Transform {
     }
 }
 
+/// Spawn footprint of a vehicle, derived in real time from the composed USD
+/// geometry — the single source of truth for spawn sizing (no hand-tuned
+/// per-asset table, no `lunco:spawnLift` attribute that can drift from the
+/// mesh). Computed by walking the same composed stage that `sync_usd_visuals`
+/// instantiates, so the placement solver and the live entity can never disagree.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WheelFootprint {
+    /// Half of the wheel-track width along X (metres). The placement solver
+    /// samples terrain at `±half_w` from the click point to fit a slope normal.
+    pub half_w: f64,
+    /// Half of the wheelbase along Z (metres).
+    pub half_l: f64,
+    /// Rest height: signed distance from the root origin down to the lowest
+    /// wheel ground contact. The solver lifts the root by this along the
+    /// terrain normal so the wheels sit on — not in or above — the ground.
+    pub contact_depth: f64,
+}
+
+/// Derive the [`WheelFootprint`] of a vehicle by walking the composed USD stage
+/// from `root_prim` (e.g. `"/RockerBogie"`).
+///
+/// Recursively composes each prim's [`local_transform_at`] down the hierarchy;
+/// any prim carrying `physxVehicleWheel:index` (the universal wheel signal —
+/// present on every wheel across the raycast and physical drivetrains) is
+/// treated as a wheel. Its ground contact is `center - radius·Y` in the root's
+/// **level** frame; the placement solver re-orients this box to the terrain
+/// normal afterwards. Wheel authoring never tilts the cylinder, so the level
+/// frame is exact for the pre-slope-fit footprint.
+///
+/// Returns `None` when no wheel prims are found (non-vehicle assets use the
+/// caller's default footprint).
+pub fn wheel_footprint(reader: &UsdData, root_prim: &str) -> Option<WheelFootprint> {
+    let Ok(root) = SdfPath::new(root_prim) else { return None };
+    let mut contacts: Vec<bevy::math::DVec3> = Vec::new();
+    let root_tf = local_transform_at(reader, &root, 0.0).unwrap_or_default();
+    collect_wheel_contacts(reader, &root, root_tf, &mut contacts);
+    if contacts.is_empty() {
+        return None;
+    }
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_z = f64::INFINITY;
+    let mut max_z = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    for c in &contacts {
+        min_x = min_x.min(c.x);
+        max_x = max_x.max(c.x);
+        min_z = min_z.min(c.z);
+        max_z = max_z.max(c.z);
+        min_y = min_y.min(c.y);
+    }
+    Some(WheelFootprint {
+        half_w: (max_x - min_x) * 0.5,
+        half_l: (max_z - min_z) * 0.5,
+        contact_depth: -min_y,
+    })
+}
+
+/// Recursive helper for [`wheel_footprint`]: DFS the prim tree composing
+/// transforms, and record each wheel's ground contact in the root's level frame.
+fn collect_wheel_contacts(
+    reader: &UsdData,
+    path: &SdfPath,
+    parent_tf: Transform,
+    contacts: &mut Vec<bevy::math::DVec3>,
+) {
+    for child in reader.prim_children(path) {
+        if !reader.prim_is_active(&child) {
+            continue;
+        }
+        // `parent_tf * local` composes the child's transform in the root frame
+        // (Bevy `Transform * Transform` = parent ∘ child-local). Scale is kept
+        // because USD propagates parent scale to child positions — stripping it
+        // would misplace wheels under any scaled intermediate Xform.
+        let local = local_transform_at(reader, &child, 0.0).unwrap_or_default();
+        let world = parent_tf * local;
+        if reader
+            .prim_attribute_value::<i32>(&child, "physxVehicleWheel:index")
+            .is_some()
+        {
+            let radius = reader
+                .prim_attribute_value::<f64>(&child, "radius")
+                .unwrap_or(0.25);
+            let center = world.translation.as_dvec3();
+            contacts.push(bevy::math::DVec3::new(
+                center.x,
+                center.y - radius,
+                center.z,
+            ));
+        }
+        collect_wheel_contacts(reader, &child, world, contacts);
+    }
+}
+
 /// Canonical `UsdGeom` `axis` token → quaternion folding. A Bevy/Avian
 /// primitive (`Cylinder`/`Cone`/`Capsule`/`Plane`) is Y-axial; this
 /// rotates it onto the authored `axis`. `None` for `"Y"` (already

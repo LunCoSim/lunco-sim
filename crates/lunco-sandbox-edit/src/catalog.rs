@@ -105,6 +105,26 @@ pub struct SpawnResult {
     pub root_entity: Entity,
 }
 
+/// Derive the USD root prim path from an entry id: snake_case → PascalCase
+/// with a leading `/` (e.g. `"skid_rover"` → `"/SkidRover"`,
+/// `"rocker_bogie"` → `"/RockerBogie"`). Single home so [`spawn_usd_entry`]
+/// and the real-time footprint derivation ([`crate::spawn`]) agree on which
+/// prim to walk.
+pub fn prim_path_from_entry_id(id: &str) -> String {
+    let pascal = id
+        .split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().chain(chars).collect(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!("/{}", pascal)
+}
+
 /// Spawns a USD-based entry at the given world position.
 ///
 /// Returns the root entity that was spawned. The USD asset is loaded
@@ -117,23 +137,14 @@ pub fn spawn_usd_entry(
     asset_server: &AssetServer,
     entry: &SpawnableEntry,
     world_pos: Vec3,
+    rotation: Quat,
     grid: Entity,
 ) -> SpawnResult {
     let SpawnSource::UsdFile(path) = &entry.source;
     let handle = asset_server.load(path.clone());
 
     // Derive USD prim path from entry id: "solar_panel" → "/SolarPanel"
-    let prim_path = entry.id.split('_')
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(c) => c.to_uppercase().chain(chars).collect(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("");
-    let prim_path = format!("/{}", prim_path);
+    let prim_path = prim_path_from_entry_id(&entry.id);
 
     let root = commands.spawn((
         Name::new(entry.display_name.clone()),
@@ -148,7 +159,11 @@ pub fn spawn_usd_entry(
             stage_handle: handle,
             path: prim_path,
         },
-        Transform::from_translation(world_pos),
+        Transform {
+            translation: world_pos,
+            rotation,
+            ..default()
+        },
         big_space::prelude::CellCoord::default(),
         ChildOf(grid),
         Visibility::Visible,

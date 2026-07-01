@@ -73,7 +73,8 @@ impl Plugin for UsdAvianPlugin {
         //   it's a deferred state-machine waiting on Avian to admit
         //   both bodies into its island graph (FixedUpdate-driven).
         //   `run_if(any pending)` makes it idle when no joints await.
-        app.add_observer(on_add_usd_prim)
+        app.register_type::<ShouldBeDynamic>()
+            .add_observer(on_add_usd_prim)
             .add_observer(process_usd_avian_prims)
             .add_systems(
                 Update,
@@ -601,7 +602,12 @@ fn process_usd_avian_prims(
             let kinematic = reader
                 .prim_attribute_value::<bool>(&sdf_path, "physics:kinematicEnabled")
                 .unwrap_or(false);
-            let body = if kinematic { RigidBody::Kinematic } else { RigidBody::Dynamic };
+            let body = if kinematic {
+                RigidBody::Kinematic
+            } else {
+                commands.entity(entity).insert(ShouldBeDynamic);
+                RigidBody::Kinematic
+            };
             commands.entity(entity).insert((
                 body,
                 lunco_core::SelectableRoot,
@@ -632,7 +638,8 @@ fn process_usd_avian_prims(
             // ── FALLBACK: legacy physics:rigidBodyEnabled ──
             if let Some(true) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
                 commands.entity(entity).insert((
-                    RigidBody::Dynamic,
+                    RigidBody::Kinematic,
+                    ShouldBeDynamic,
                     lunco_core::SelectableRoot,
                 ));
                 apply_rigid_body_mass_props(&mut commands, entity, reader, &sdf_path);
@@ -874,7 +881,7 @@ fn build_usd_physics_joints(
                         motor_model: JOINT_DRIVE_MOTOR_MODEL,
                     };
                 }
-                commands.entity(joint_entity).insert(joint);
+                commands.entity(joint_entity).insert((joint, JointCollisionDisabled));
             }
             "PhysicsRevoluteJoint" => {
                 let mut joint = RevoluteJoint::new(b0, b1)
@@ -891,14 +898,15 @@ fn build_usd_physics_joints(
                         motor_model: JOINT_DRIVE_MOTOR_MODEL,
                     };
                 }
-                commands.entity(joint_entity).insert(joint);
+                commands.entity(joint_entity).insert((joint, JointCollisionDisabled));
             }
             "PhysicsFixedJoint" => {
-                commands.entity(joint_entity).insert(
+                commands.entity(joint_entity).insert((
                     FixedJoint::new(b0, b1)
                         .with_local_anchor1(pending.local_pos0)
                         .with_local_anchor2(pending.local_pos1),
-                );
+                    JointCollisionDisabled,
+                ));
             }
             "PhysicsSphericalJoint" => {
                 // Ball joint: 3 rotational DOF about the anchor. `physics:axis`
@@ -918,7 +926,7 @@ fn build_usd_physics_joints(
                 if pending.limit_lower.is_finite() && pending.limit_upper.is_finite() {
                     joint = joint.with_twist_limits(pending.limit_lower, pending.limit_upper);
                 }
-                commands.entity(joint_entity).insert(joint);
+                commands.entity(joint_entity).insert((joint, JointCollisionDisabled));
             }
             "PhysicsDistanceJoint" => {
                 // Tether/strut: keeps the two anchors within [min, max] distance.
@@ -932,12 +940,13 @@ fn build_usd_physics_joints(
                         pending.body1_path
                     );
                 }
-                commands.entity(joint_entity).insert(
+                commands.entity(joint_entity).insert((
                     DistanceJoint::new(b0, b1)
                         .with_local_anchor1(pending.local_pos0)
                         .with_local_anchor2(pending.local_pos1)
                         .with_limits(min, max),
-                );
+                    JointCollisionDisabled,
+                ));
             }
             // UsdPhysics generic D6 joint has no avian primitive (avian offers
             // fixed/revolute/prismatic/spherical/distance, not a configurable
@@ -1143,3 +1152,10 @@ fn apply_rigid_body_mass_props(
         commands.entity(entity).insert(AngularVelocity(ang));
     }
 }
+
+/// Marker component to hold a rigid body as Kinematic until all joints
+/// and constraints are fully resolved in the stage, preventing 1-frame
+/// physics separation explosions.
+#[derive(Component, Reflect, Default)]
+#[reflect(Component, Default)]
+pub struct ShouldBeDynamic;

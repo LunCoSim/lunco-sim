@@ -54,6 +54,7 @@ use avian3d::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdInstanceRoot};
 use lunco_usd_bevy::{has_api_schema, read_rel_target, usd_data::UsdDataExt};
+use lunco_usd_avian::ShouldBeDynamic;
 use openusd::sdf::Path as SdfPath;
 use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer, GenericDriveMix, DifferentialCoupling};
 use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel_roll_rate};
@@ -137,9 +138,13 @@ impl Plugin for UsdSimPlugin {
            // `OnAdd<UsdVisualSynced>` observer. Gating with `run_if`
            // skips the system entirely on frames with no unprocessed
            // USD prim (archetype-level check, near-zero cost).
-           .add_systems(Update, process_usd_sim_prims
-               .run_if(any_unprocessed_usd_sim)
-               .after(lunco_usd_bevy::sync_usd_visuals));
+           .add_systems(Update, (
+                process_usd_sim_prims
+                    .run_if(any_unprocessed_usd_sim)
+                    .after(lunco_usd_bevy::sync_usd_visuals),
+                activate_dynamic_bodies
+                    .run_if(any_with_component::<ShouldBeDynamic>),
+            ));
         // Self-healing watchdog: a USD prim that stays unprocessed forever means
         // an unmet dependency is silently deadlocking setup (the wheel-shader bug:
         // physics deferred until a render-only `ShaderMaterial` that never arrives
@@ -1329,7 +1334,8 @@ fn setup_physical_wheel(
             steers: steer.is_some(),
             wheelbase: 2.0 * existing_tf.translation.as_dvec3().z.abs(),
         },
-        RigidBody::Dynamic,
+        RigidBody::Kinematic,
+        ShouldBeDynamic,
         collider,
         // Heavier wheels (100 kg default vs the raycast 25) damp the
         // joint↔solver impulse echo that produced visible idle wobble
@@ -1852,6 +1858,23 @@ fn resolve_differential_coupling(
             "Resolved rocker-bogie differential on {} ({} <-> {})",
             chassis_path.path, pending.rocker_a, pending.rocker_b
         );
+    }
+}
+
+fn activate_dynamic_bodies(
+    mut commands: Commands,
+    q_kinematic: Query<(Entity, &UsdPrimPath), With<ShouldBeDynamic>>,
+    q_pending_joints: Query<&UsdPrimPath, With<lunco_usd_avian::PendingUsdJoint>>,
+    q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
+) {
+    for (entity, path) in q_kinematic.iter() {
+        let has_pending_joint = q_pending_joints.iter().any(|j_path| j_path.stage_handle == path.stage_handle);
+        let has_pending_diff = q_pending_diffs.iter().any(|d_path| d_path.stage_handle == path.stage_handle);
+        if !has_pending_joint && !has_pending_diff {
+            commands.entity(entity).insert(RigidBody::Dynamic);
+            commands.entity(entity).remove::<ShouldBeDynamic>();
+            debug!("Activated RigidBody::Dynamic for stage: {:?}", path.stage_handle);
+        }
     }
 }
 

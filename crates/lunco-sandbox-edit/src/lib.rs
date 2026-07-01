@@ -70,6 +70,7 @@ impl Plugin for SandboxEditPlugin {
             .init_resource::<InspectorTarget>()
             .init_resource::<UndoStack>()
             .init_resource::<catalog::SpawnCatalog>()
+            .init_resource::<spawn::FootprintCache>()
             .insert_resource(lunco_core::DragModeActive { active: false })
             .init_resource::<lunco_core::SpawnToolActive>();
 

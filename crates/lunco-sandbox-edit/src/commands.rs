@@ -32,6 +32,8 @@ pub struct SpawnEntity {
     pub entry_id: String,
     /// World-space position (x, y, z).
     pub position: Vec3,
+    /// World-space rotation (optional).
+    pub rotation: Option<Quat>,
 }
 
 /// Detach a joint by despawning it.
@@ -111,7 +113,8 @@ pub fn on_spawn_entity_command(
 
     info!("SPAWN_ENTITY: {} at {:?}", cmd.entry_id, cmd.position);
 
-    let result = spawn_usd_entry(&mut commands, &asset_server, entry, cmd.position, grid);
+    let rotation = cmd.rotation.unwrap_or(Quat::IDENTITY);
+    let result = spawn_usd_entry(&mut commands, &asset_server, entry, cmd.position, rotation, grid);
 
     // Networked identity (gap G2): a runtime instance gets a server-allocated
     // unique id (SkipContentStamp → assign_global_entity_ids mints
@@ -154,7 +157,7 @@ pub fn apply_replicated_spawns(
             continue;
         };
         let pos = job.position;
-        let result = spawn_usd_entry(&mut commands, &asset_server, entry, pos, grid);
+        let result = spawn_usd_entry(&mut commands, &asset_server, entry, pos, Quat::IDENTITY, grid);
         // Pin the host id; mark runtime instance + replication target. Forced
         // Kinematic by `force_kinematic_proxies` so snapshots drive it.
         commands.entity(result.root_entity).insert((
