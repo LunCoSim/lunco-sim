@@ -52,7 +52,7 @@ use bevy::prelude::*;
 use bevy::math::{DQuat, DVec3};
 use avian3d::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
-pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdInstanceMember};
+pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdInstanceRoot};
 use lunco_usd_bevy::{has_api_schema, read_rel_target, usd_data::UsdDataExt};
 use openusd::sdf::Path as SdfPath;
 use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer, GenericDriveMix, DifferentialCoupling};
@@ -1722,18 +1722,43 @@ fn on_add_usd_sim_prim(
 ///
 /// A named port that is absent from the FSW `port_map` warns and is skipped —
 /// declare custom ports with `lunco:drivePorts` on the rover root.
+fn find_instance_root(
+    entity: Entity,
+    q_child_of: &Query<&ChildOf>,
+    q_usd_path: &Query<&UsdPrimPath>,
+    q_instance_root: &Query<(), With<UsdInstanceRoot>>,
+) -> Entity {
+    let mut cursor = entity;
+    let mut best_root = entity;
+    loop {
+        if q_instance_root.get(cursor).is_ok() {
+            return cursor;
+        }
+        if q_usd_path.get(cursor).is_ok() {
+            best_root = cursor;
+        }
+        match q_child_of.get(cursor) {
+            Ok(parent) => cursor = parent.parent(),
+            Err(_) => break,
+        }
+    }
+    best_root
+}
+
 fn try_wire_wheel(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingWheelWiring)>,
     q_fsw: Query<(Entity, &UsdPrimPath, &FlightSoftware)>,
-    q_member: Query<&UsdInstanceMember>,
+    q_child_of: Query<&ChildOf>,
+    q_usd_path: Query<&UsdPrimPath>,
+    q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
     for (ent, prim_path, pending) in q_pending.iter() {
-        let wheel_root = q_member.get(ent).map(|m| m.root).unwrap_or(ent);
+        let wheel_root = find_instance_root(ent, &q_child_of, &q_usd_path, &q_instance_root);
         let fsw_root = q_fsw.iter().find(|(fsw_ent, path, _)| {
             path.stage_handle == prim_path.stage_handle
                 && prim_path.path.starts_with(&path.path)
-                && q_member.get(*fsw_ent).map(|m| m.root).unwrap_or(*fsw_ent) == wheel_root
+                && find_instance_root(*fsw_ent, &q_child_of, &q_usd_path, &q_instance_root) == wheel_root
         });
 
         if let Some((_, _, fsw)) = fsw_root {
@@ -1792,18 +1817,20 @@ fn try_wire_wheel(
 fn resolve_differential_coupling(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingDifferential), With<Position>>,
     q_bodies: Query<(Entity, &UsdPrimPath), With<Position>>,
-    q_member: Query<&UsdInstanceMember>,
+    q_child_of: Query<&ChildOf>,
+    q_usd_path: Query<&UsdPrimPath>,
+    q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
     for (chassis, chassis_path, pending) in q_pending.iter() {
-        let chassis_root = q_member.get(chassis).map(|m| m.root).unwrap_or(chassis);
+        let chassis_root = find_instance_root(chassis, &q_child_of, &q_usd_path, &q_instance_root);
         let find = |target: &str| {
             q_bodies
                 .iter()
                 .find(|(e, p)| {
                     p.path == target
                         && p.stage_handle == chassis_path.stage_handle
-                        && q_member.get(*e).map(|m| m.root).unwrap_or(*e) == chassis_root
+                        && find_instance_root(*e, &q_child_of, &q_usd_path, &q_instance_root) == chassis_root
                 })
                 .map(|(e, _)| e)
         };

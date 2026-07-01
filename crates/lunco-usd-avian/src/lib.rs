@@ -51,7 +51,7 @@ use lunco_usd_bevy::{
     has_api_schema, read_rel_target, read_shape_dims, read_transform_from_usd,
     read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, UsdAnimated, UsdVisualSynced,
 };
-pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, UsdInstanceMember};
+pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, UsdInstanceRoot};
 use openusd::sdf::Path as SdfPath;
 use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::UsdData;
@@ -784,6 +784,29 @@ fn on_add_usd_prim(
     // and avoid duplicate processing.
 }
 
+fn find_instance_root(
+    entity: Entity,
+    q_child_of: &Query<&ChildOf>,
+    q_usd_path: &Query<&UsdPrimPath>,
+    q_instance_root: &Query<(), With<UsdInstanceRoot>>,
+) -> Entity {
+    let mut cursor = entity;
+    let mut best_root = entity;
+    loop {
+        if q_instance_root.get(cursor).is_ok() {
+            return cursor;
+        }
+        if q_usd_path.get(cursor).is_ok() {
+            best_root = cursor;
+        }
+        match q_child_of.get(cursor) {
+            Ok(parent) => cursor = parent.parent(),
+            Err(_) => break,
+        }
+    }
+    best_root
+}
+
 /// Resolves pending USD joints once both body entities exist.
 ///
 /// This system runs every frame. When a `PendingUsdJoint` entity finds that both its
@@ -802,23 +825,25 @@ fn build_usd_physics_joints(
     // so this query is empty for the first few frames after spawn,
     // and the joint stays in `PendingUsdJoint` until ready.
     q_bodies: Query<(Entity, &UsdPrimPath), With<Position>>,
-    q_member: Query<&UsdInstanceMember>,
+    q_child_of: Query<&ChildOf>,
+    q_usd_path: Query<&UsdPrimPath>,
+    q_instance_root: Query<(), With<UsdInstanceRoot>>,
 ) {
     for (joint_entity, pending, joint_prim_path) in q_pending.iter() {
-        let joint_root = q_member.get(joint_entity).map(|m| m.root).ok();
+        let joint_root = find_instance_root(joint_entity, &q_child_of, &q_usd_path, &q_instance_root);
         // Find body0 and body1 entities by matching USD paths and instance roots
         let body0_ent = q_bodies.iter()
             .find(|(e, path)| {
                 path.path == pending.body0_path
                     && path.stage_handle == joint_prim_path.stage_handle
-                    && q_member.get(*e).map(|m| m.root).ok() == joint_root
+                    && find_instance_root(*e, &q_child_of, &q_usd_path, &q_instance_root) == joint_root
             })
             .map(|(e, _)| e);
         let body1_ent = q_bodies.iter()
             .find(|(e, path)| {
                 path.path == pending.body1_path
                     && path.stage_handle == joint_prim_path.stage_handle
-                    && q_member.get(*e).map(|m| m.root).ok() == joint_root
+                    && find_instance_root(*e, &q_child_of, &q_usd_path, &q_instance_root) == joint_root
             })
             .map(|(e, _)| e);
 
