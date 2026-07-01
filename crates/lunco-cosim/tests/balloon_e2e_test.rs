@@ -99,3 +99,10 @@ fn test_balloon_connection_accumulation() {
     assert_eq!(read_input_port(app.world(), balloon, "force_y"), Some(150.0),
         "Two connections should accumulate into one input");
 }
+
+fn read_input_port(world: &World, entity: Entity, name: &str) -> Option<f64> {
+    world
+        .resource::<lunco_core::ports::PortRegistry>()
+        .read_input_port(world, entity, name)
+}
+
