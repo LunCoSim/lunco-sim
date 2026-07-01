@@ -24,6 +24,7 @@
 def Xform "SandboxScene"
 {
     custom bool lunco:spawnable = false
+    custom string lunco:description = "An arm that turns around a vertical post. Checks that a motorized hinge can rotate the arm to a chosen angle."
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]

@@ -12,6 +12,7 @@
 def Xform "DiffRigTest"
 {
     custom bool lunco:spawnable = false
+    custom string lunco:description = "A test stand for the balancing linkage a rover uses between its left and right sides. With it switched on, the two sides move as mirror images of each other."
 
     def Cube "Ground" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"])
     {

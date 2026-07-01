@@ -9,6 +9,7 @@ def Xform "SandboxScene"
 {
     # A whole scene, not a spawnable part — excluded from the spawn catalog.
     custom bool lunco:spawnable = false
+    custom string lunco:description = "The main sandbox: a large flat ground with ramps and rovers. The everyday space for driving rovers around obstacles."
 
     # --- Ground plane (static terrain surface) ---
     # Spec-compliant Cube: `double size = 1` + `xformOp:scale` for

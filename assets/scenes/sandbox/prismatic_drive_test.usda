@@ -31,6 +31,7 @@
 def Xform "SandboxScene"
 {
     custom bool lunco:spawnable = false
+    custom string lunco:description = "A platform that slides up and down a vertical rail. Checks that a motorized slider can move to a chosen height and hold there against gravity."
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]

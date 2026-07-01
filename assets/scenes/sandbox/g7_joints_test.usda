@@ -18,6 +18,7 @@
 def Xform "SandboxScene"
 {
     custom bool lunco:spawnable = false
+    custom string lunco:description = "Three different joints on display: a ball joint that swings inside a cone, a tether that holds at a fixed distance, and a hinge that only turns around one axis."
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]

@@ -27,6 +27,7 @@
 def Xform "SunTrackerTest"
 {
     custom bool lunco:spawnable = false
+    custom string lunco:description = "A solar panel that turns to face the sun. A controller reads where the sun is and turns the panel to point at it; move the sun and watch the panel re-aim."
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]

@@ -14,6 +14,7 @@
 def Xform "RockerBogieTest"
 {
     custom bool lunco:spawnable = false
+    custom string lunco:description = "The rocker-bogie rover over a step, but with the body-leveling linkage switched off. The body tips more, showing what the linkage normally does."
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]

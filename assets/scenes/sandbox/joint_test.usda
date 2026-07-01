@@ -22,6 +22,7 @@
 def Xform "SandboxScene"
 {
     custom bool lunco:spawnable = false
+    custom string lunco:description = "Two cubes glued together by a fixed joint. Drag one with the mouse and the other should follow exactly - a basic check that the joint holds."
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]

@@ -19,6 +19,7 @@
 def Xform "RockerBogieTest"
 {
     custom bool lunco:spawnable = false
+    custom string lunco:description = "The rocker-bogie rover (the kind Mars rovers use) driving over a small step. The linkage should keep the body level as one side lifts."
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]

@@ -19,6 +19,7 @@
 def Xform "SixWheelTest"
 {
     custom bool lunco:spawnable = false
+    custom string lunco:description = "A six-wheel rover on flat ground. Checks that all six wheels drive together and the rover can turn by skidding its left and right sides."
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]

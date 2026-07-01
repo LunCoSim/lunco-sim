@@ -18,6 +18,7 @@
 def Xform "SandboxScene"
 {
     custom bool lunco:spawnable = false
+    custom string lunco:description = "A box resting on the ground carrying simple sensors: one that feels motion, one that measures distance to the ground, and one that feels touch. Checks that each reports sensible numbers."
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]

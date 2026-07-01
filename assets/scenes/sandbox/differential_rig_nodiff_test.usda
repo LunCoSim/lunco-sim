@@ -11,6 +11,7 @@
 def Xform "DiffRigTest"
 {
     custom bool lunco:spawnable = false
+    custom string lunco:description = "The same balancing-linkage test as the differential rig, but with the linkage switched off. Shows what the linkage does by showing what changes when it is gone."
 
     def Cube "Ground" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"])
     {

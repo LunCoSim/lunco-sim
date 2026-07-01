@@ -33,6 +33,7 @@
 def Xform "LanderTest"
 {
     custom bool lunco:spawnable = false
+    custom string lunco:description = "A lander dropping under gravity with a rocket you can fire to slow and steer it. Hold Space to thrust, WASD to tilt, Q/E to turn, G to release the rover, P to pause."
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]

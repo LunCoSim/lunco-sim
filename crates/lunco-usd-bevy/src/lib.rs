@@ -1372,6 +1372,26 @@ pub fn stage_default_prim(reader: &UsdData) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
+/// Parse a single USD layer's source text with openusd's USDA parser (no PCP
+/// composition, no reference resolution) and read a `string`/`token` attribute
+/// authored directly on the stage's `defaultPrim`. Returns `None` when the text
+/// doesn't parse, the stage declares no `defaultPrim`, or the attribute is
+/// absent.
+///
+/// For metadata that lives on the root prim (e.g. a scene's
+/// `lunco:description` tooltip) this is a cheap, composition-free alternative
+/// to [`compose_file`] / the async `AssetServer` loader — referenced sub-layers
+/// are not consulted, which is correct for root-prim metadata but NOT for
+/// attributes that a reference might override. The single parsed layer is the
+/// same [`UsdData`] = `sdf::Data` the composed-stage flattener produces, so
+/// [`stage_default_prim`] + [`read_token`] work on it unchanged.
+pub fn read_default_prim_attr(text: &str, attr: &str) -> Option<String> {
+    let data = openusd::usda::parse(text).ok()?;
+    let prim_name = stage_default_prim(&data)?;
+    let path = SdfPath::new(&format!("/{prim_name}")).ok()?;
+    read_token(&data, &path, attr)
+}
+
 /// True if the prim at `path` applies the named API schema, by exact
 /// token match against its `apiSchemas` list (or list-op). Canonical
 /// shared helper — `lunco-usd-avian` and `lunco-usd-sim` both call
@@ -3396,5 +3416,50 @@ def Xform "Std"
         let mover_reader = parse(SCENE);
         assert!(prim_is_animated(&mover_reader, &SdfPath::new("/Mover").unwrap()));
         assert!(!prim_is_animated(&mover_reader, &SdfPath::new("/Static").unwrap()));
+    }
+}
+
+#[cfg(test)]
+mod default_prim_attr_tests {
+    //! `read_default_prim_attr` — openusd-parse a single layer and read a
+    //! `string`/`token` attribute off its `defaultPrim` (the path the scene
+    //! `lunco:description` tooltip uses).
+    use super::*;
+
+    const SCENE: &str = "#usda 1.0\n\
+        (\n\
+            defaultPrim = \"SandboxScene\"\n\
+            upAxis = \"Y\"\n\
+        )\n\
+        def Xform \"SandboxScene\"\n{\n\
+            custom bool lunco:spawnable = false\n\
+            custom string lunco:description = \"Two cubes joined together.\"\n\
+            def Cube \"Ground\"\n{\n}\n\
+        }\n";
+
+    #[test]
+    fn reads_string_attr_off_default_prim() {
+        assert_eq!(
+            read_default_prim_attr(SCENE, "lunco:description").as_deref(),
+            Some("Two cubes joined together.")
+        );
+    }
+
+    #[test]
+    fn missing_attr_is_none() {
+        assert!(read_default_prim_attr(SCENE, "lunco:notAuthored").is_none());
+    }
+
+    #[test]
+    fn no_default_prim_is_none() {
+        // Layer with no `defaultPrim` metadata — even if the attribute exists
+        // on a prim, we don't know which prim is the root.
+        let src = "#usda 1.0\ndef Xform \"Orphan\"\n{\n    custom string lunco:description = \"x\"\n}\n";
+        assert!(read_default_prim_attr(src, "lunco:description").is_none());
+    }
+
+    #[test]
+    fn unparseable_text_is_none() {
+        assert!(read_default_prim_attr("this is not USDA", "lunco:description").is_none());
     }
 }

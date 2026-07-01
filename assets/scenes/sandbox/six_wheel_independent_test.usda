@@ -17,6 +17,7 @@
 def Xform "SixWheelIndependentTest"
 {
     custom bool lunco:spawnable = false
+    custom string lunco:description = "A six-wheel rover where every wheel has its own motor. Checks that all six motors are wired up and can each be driven on its own."
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
