@@ -52,7 +52,7 @@ use bevy::prelude::*;
 use bevy::math::{DQuat, DVec3};
 use avian3d::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
-pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset};
+pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdInstanceMember};
 use lunco_usd_bevy::{has_api_schema, read_rel_target, usd_data::UsdDataExt};
 use openusd::sdf::Path as SdfPath;
 use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer, GenericDriveMix, DifferentialCoupling};
@@ -1724,15 +1724,19 @@ fn on_add_usd_sim_prim(
 /// declare custom ports with `lunco:drivePorts` on the rover root.
 fn try_wire_wheel(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingWheelWiring)>,
-    q_fsw: Query<(&UsdPrimPath, &FlightSoftware)>,
+    q_fsw: Query<(Entity, &UsdPrimPath, &FlightSoftware)>,
+    q_member: Query<&UsdInstanceMember>,
     mut commands: Commands,
 ) {
     for (ent, prim_path, pending) in q_pending.iter() {
-        let fsw_root = q_fsw.iter().find(|(path, _)| {
-            path.stage_handle == prim_path.stage_handle && prim_path.path.starts_with(&path.path)
+        let wheel_root = q_member.get(ent).map(|m| m.root).unwrap_or(ent);
+        let fsw_root = q_fsw.iter().find(|(fsw_ent, path, _)| {
+            path.stage_handle == prim_path.stage_handle
+                && prim_path.path.starts_with(&path.path)
+                && q_member.get(*fsw_ent).map(|m| m.root).unwrap_or(*fsw_ent) == wheel_root
         });
 
-        if let Some((_, fsw)) = fsw_root {
+        if let Some((_, _, fsw)) = fsw_root {
             // Drive: authored binding wins, else even/odd index parity.
             let drive_port_name = pending.drive_port_name.clone().unwrap_or_else(|| {
                 if pending.index % 2 == 0 { "drive_left" } else { "drive_right" }.to_string()
@@ -1788,13 +1792,19 @@ fn try_wire_wheel(
 fn resolve_differential_coupling(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingDifferential), With<Position>>,
     q_bodies: Query<(Entity, &UsdPrimPath), With<Position>>,
+    q_member: Query<&UsdInstanceMember>,
     mut commands: Commands,
 ) {
     for (chassis, chassis_path, pending) in q_pending.iter() {
+        let chassis_root = q_member.get(chassis).map(|m| m.root).unwrap_or(chassis);
         let find = |target: &str| {
             q_bodies
                 .iter()
-                .find(|(_, p)| p.path == target && p.stage_handle == chassis_path.stage_handle)
+                .find(|(e, p)| {
+                    p.path == target
+                        && p.stage_handle == chassis_path.stage_handle
+                        && q_member.get(*e).map(|m| m.root).unwrap_or(*e) == chassis_root
+                })
                 .map(|(e, _)| e)
         };
         let (Some(rocker_a), Some(rocker_b)) = (find(&pending.rocker_a), find(&pending.rocker_b))
