@@ -79,6 +79,19 @@ def Xform "LanderTest"
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (0.85, 0.83, 0.78)
 
+        string primvars:materialType = "shader"
+        string primvars:shaderPath = "shaders/solar_panel.wgsl"
+        float primvars:seamless_u = 1.0
+        float primvars:v_scale = 8.0
+        float primvars:cell_rows = 20.0
+        float primvars:cell_cols = 6.0
+        float primvars:cell_gap = 0.006
+        float primvars:bus_width = 0.002
+        float primvars:border = 0.04
+        color3f primvars:cell_color = (0.03, 0.03, 0.25)
+        color3f primvars:bus_color = (0.95, 0.95, 0.98)
+        color3f primvars:frame_color = (0.1, 0.1, 0.12)
+
         bool physics:rigidBodyEnabled = true
         bool physics:collisionEnabled = true
         float physics:mass = 2000.0

@@ -49,3 +49,18 @@ fn test_blueprint_shader_schema_reflects() {
     // Whole block stays within the 256-byte uniform budget.
     assert!(schema.size <= 256, "blueprint params overflow uniform block: {}", schema.size);
 }
+
+/// Verifies that `solar_panel.wgsl`'s `Material` struct correctly reflects the
+/// newly introduced `seamless_u` and `v_scale` parameters.
+#[test]
+fn test_solar_panel_shader_reflects_seamless_u_and_v_scale() {
+    let wgsl = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/shaders/solar_panel.wgsl"
+    ))
+    .expect("solar_panel.wgsl present");
+    let schema = ParamSchema::parse(&wgsl).expect("solar_panel Material struct reflects");
+    assert_eq!(schema.field("seamless_u").map(|f| f.ty), Some(ParamType::F32));
+    assert_eq!(schema.field("v_scale").map(|f| f.ty), Some(ParamType::F32));
+    assert!(schema.size <= 256, "solar_panel params overflow uniform block: {}", schema.size);
+}

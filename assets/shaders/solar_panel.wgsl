@@ -38,6 +38,10 @@
 //!@default border      0.04
 //!@engine  sun_vis
 //!@default sun_vis     1
+//!@ui      seamless_u  0 1 "Seamless U"
+//!@default seamless_u  0
+//!@ui      v_scale     0.1 10 "V scale / aspect ratio"
+//!@default v_scale     1.0
 struct Material {
     cell_color:  vec3<f32>,
     cell_rows:   f32,
@@ -48,6 +52,8 @@ struct Material {
     bus_width:   f32,
     border:      f32,
     sun_vis:     f32,  // engine-filled: horizon-shadow sun visibility
+    seamless_u:  f32,
+    v_scale:     f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
@@ -73,13 +79,20 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
 
     var color = mat.cell_color;  // silicon cell
 
-    if (on_line(uv.x, sx, gap * 0.5) || on_line(uv.y, sy, gap * 0.5)) {
-        color = vec3<f32>(0.02, 0.02, 0.02);                     // dark cell gap
-    } else if (on_line(uv.x, sx, bus * 0.5) || on_line(uv.y, sy, bus * 0.5)) {
+    let gap_x = gap * 0.5;
+    let gap_y = gap * 0.5 * mat.v_scale;
+    let bus_x = bus * 0.5;
+    let bus_y = bus * 0.5 * mat.v_scale;
+
+    if (on_line(uv.x, sx, bus_x) || on_line(uv.y, sy, bus_y)) {
         color = mix(mat.cell_color, mat.bus_color, 0.9);         // metallic bus line
+    } else if (on_line(uv.x, sx, gap_x) || on_line(uv.y, sy, gap_y)) {
+        color = vec3<f32>(0.02, 0.02, 0.02);                     // dark cell gap
     }
 
-    if (uv.x < border || uv.x > 1.0 - border || uv.y < border || uv.y > 1.0 - border) {
+    let border_x = (mat.seamless_u < 0.5) && (uv.x < border || uv.x > 1.0 - border);
+    let border_y = uv.y < border || uv.y > 1.0 - border;
+    if (border_x || border_y) {
         color = mat.frame_color;                                 // frame border
     }
 
