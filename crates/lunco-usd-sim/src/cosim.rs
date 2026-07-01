@@ -1078,6 +1078,7 @@ fn clear_scene_entities(
         "[scene] cleanup: {} entities despawned, {} Modelica steppers freed, {} Python docs freed",
         despawned, modelica_freed, scripts_freed,
     );
+    commands.trigger(lunco_core::RestoreFallbackLights);
 }
 
 /// Despawn a single USD prim **subtree** (one runtime prim and its descendants)

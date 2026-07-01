@@ -9,6 +9,7 @@
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
+use big_space::prelude::CellCoord;
 // Gravity *types* now live in lunco-environment; celestial owns only the
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
 use lunco_environment::{Gravity, GravityBody};
@@ -159,6 +160,7 @@ impl Plugin for CelestialPlugin {
         // where the earthshine fill made it a silent no-op). A future
         // ephemeris-driven sun would write the transform from the sim clock,
         // not pin it to a constant.
+        app.add_observer(on_restore_fallback_lights);
     }
 }
 
@@ -189,3 +191,35 @@ impl Plugin for GravityPlugin {
         // Add EnvironmentPlugin alongside GravityPlugin for full gravity behavior.
     }
 }
+
+fn on_restore_fallback_lights(
+    _trigger: On<lunco_core::RestoreFallbackLights>,
+    mut commands: Commands,
+    fallbacks: Query<Entity, With<lunco_core::FallbackSceneLight>>,
+    solar_grid_q: Query<Entity, With<SolarSystemRoot>>,
+) {
+    if !fallbacks.is_empty() {
+        return;
+    }
+    let Some(solar_grid) = solar_grid_q.iter().next() else {
+        // No SolarSystemRoot found, so we're not running in a celestial/heliocentric context
+        return;
+    };
+
+    let sun = lunco_render::LunarSunShadow::default();
+    let ls = lunco_environment::LunarSun::default();
+    commands.insert_resource(sun.shadow_map());
+    commands.spawn((
+        sun.directional_light(Color::WHITE, ls.illuminance_lux),
+        sun.cascade_config(),
+        lunco_core::SunAngularDiameter(ls.angular_diameter_deg),
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Name::new("Sun Light"),
+        lunco_core::FallbackSceneLight,
+        ChildOf(solar_grid),
+    ));
+    info!("[restore-fallback-lights] restored celestial fallback light");
+}
+

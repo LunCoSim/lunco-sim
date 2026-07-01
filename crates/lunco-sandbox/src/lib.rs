@@ -379,6 +379,7 @@ impl Plugin for SandboxCorePlugin {
                 ..Default::default()
             })
             .add_systems(Startup, setup_sandbox)
+            .add_observer(on_restore_fallback_lights)
             // Fail loud if the requested `--scene` never loads (e.g. a wrong
             // path that resolves to a missing asset). Without this the app
             // silently boots a scene-less world (only procedural terrain /
@@ -1148,3 +1149,39 @@ fn lander_manual_control(
         }
     }
 }
+
+fn on_restore_fallback_lights(
+    _trigger: On<lunco_core::RestoreFallbackLights>,
+    mut commands: Commands,
+    fallbacks: Query<Entity, With<lunco_core::FallbackSceneLight>>,
+    grid_q: Query<Entity, With<lunco_core::WorldGrid>>,
+    ls: Res<lunco_environment::LunarSun>,
+) {
+    if !fallbacks.is_empty() {
+        return;
+    }
+    let Some(grid) = grid_q.iter().next() else {
+        warn!("[restore-fallback-lights] No WorldGrid found to parent sandbox fallback light");
+        return;
+    };
+
+    let sun = lunco_render::LunarSunShadow {
+        depth_bias: 0.02,
+        normal_bias: 0.8,
+        ..Default::default()
+    };
+    commands.insert_resource(sun.shadow_map());
+    commands.spawn((
+        sun.directional_light(Color::WHITE, ls.illuminance_lux),
+        sun.cascade_config(),
+        lunco_core::SunAngularDiameter(ls.angular_diameter_deg),
+        Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 0.5, -0.2, 0.0)),
+        GlobalTransform::default(),
+        CellCoord::default(),
+        Name::new("Sun"),
+        lunco_core::FallbackSceneLight,
+        ChildOf(grid),
+    ));
+    info!("[restore-fallback-lights] restored sandbox fallback light");
+}
+

@@ -62,6 +62,13 @@ pub struct SoiMigrant;
 #[reflect(Component)]
 pub struct FallbackSceneLight;
 
+/// Trigger event/command to request restoration of default fallback lights.
+/// This is fired when the active scene is cleared or reloaded, to guarantee
+/// that a fallback sun is present if the incoming scene authors no lighting.
+#[derive(Event, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Debug, Default)]
+pub struct RestoreFallbackLights;
+
 /// Angular **diameter** of a sun (`DirectionalLight`) in degrees, from the
 /// UsdLux `inputs:angle` attribute (Sol from Earth/Moon ≈ 0.53°). Drives
 /// physically-scaled penumbra width in the horizon-shadow ray-march:

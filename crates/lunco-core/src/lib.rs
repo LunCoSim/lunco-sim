@@ -52,7 +52,7 @@ pub use commands::{
 };
 pub use markers::{
     ActuatorDrivenJoint, EmbeddedScenarioPath, EmbeddedScenarioSource, FallbackSceneLight,
-    GridAnchor, HorizonShadowTerrain, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
+    GridAnchor, HorizonShadowTerrain, RestoreFallbackLights, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
     TRIGGER_COLLISION_LAYER,
 };
 pub use invariants::BigSpaceInvariantsPlugin;
@@ -388,6 +388,7 @@ impl Plugin for LunCoCorePlugin {
            .register_type::<ActionStatus>()
            .register_type::<GlobalEntityId>()
            .register_type::<Provenance>()
+           .register_type::<RestoreFallbackLights>()
            .register_type::<SimTick>();
         // All always-on core/substrate resources live in one function so a
         // unit test can assert the full set is present without building the
