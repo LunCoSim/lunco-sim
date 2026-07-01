@@ -104,8 +104,7 @@ def Xform "SandboxScene"
     {
         string lunco:avatar = "true"
         string lunco:cameraMode = "freeflight"
-        float lunco:cameraYaw = -2.245559
-        float lunco:cameraPitch = -0.303039
+        custom double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
         double3 xformOp:translate = (-30.0, 15.0, -20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

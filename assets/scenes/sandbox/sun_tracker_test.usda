@@ -47,8 +47,7 @@ def Xform "SunTrackerTest"
     {
         string lunco:avatar = "true"
         string lunco:cameraMode = "freeflight"
-        float lunco:cameraYaw = -0.5
-        float lunco:cameraPitch = -0.15
+        custom double3 lunco:cameraLookAt = (0.0, 4.0, 0.0)
         double3 xformOp:translate = (10.0, 7.0, 12.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

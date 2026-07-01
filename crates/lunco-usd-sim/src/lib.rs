@@ -576,10 +576,28 @@ fn process_usd_sim_prims(
             }
             let camera_mode = reader.prim_attribute_value::<String>(&sdf_path, "lunco:cameraMode")
                 .unwrap_or_else(|| "freeflight".to_string());
-            let yaw = reader.prim_attribute_value::<f32>(&sdf_path, "lunco:cameraYaw")
+            let mut yaw = reader.prim_attribute_value::<f32>(&sdf_path, "lunco:cameraYaw")
                 .unwrap_or(std::f32::consts::PI * 0.8);
-            let pitch = reader.prim_attribute_value::<f32>(&sdf_path, "lunco:cameraPitch")
+            let mut pitch = reader.prim_attribute_value::<f32>(&sdf_path, "lunco:cameraPitch")
                 .unwrap_or(-0.3);
+
+            // `lunco:cameraLookAt` (double3, scene-local): when authored,
+            // derive yaw/pitch so the camera aims from its USD
+            // `xformOp:translate` toward this point on start. Overrides any
+            // authored `lunco:cameraYaw`/`lunco:cameraPitch` — expressing
+            // "look at the main object" as a target point is more maintainable
+            // than hand-tuned angles (move the camera or the object and the
+            // aim stays correct). The math inverts `freeflight_system`'s
+            // `Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0)`, whose forward
+            // is `(-sin(yaw)·cos(pitch), sin(pitch), -cos(yaw)·cos(pitch))`:
+            //   pitch = asin(dir.y),  yaw = atan2(-dir.x, -dir.z).
+            if let Some([lx, ly, lz]) = lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:cameraLookAt") {
+                let dir = DVec3::new(lx, ly, lz) - existing_tf.translation.as_dvec3();
+                if let Some(n) = dir.try_normalize() {
+                    pitch = (n.y.clamp(-1.0, 1.0)).asin() as f32;
+                    yaw = (-n.x).atan2(-n.z) as f32;
+                }
+            }
 
             // Avatar position from USD transform
             let avatar_tf = Transform {

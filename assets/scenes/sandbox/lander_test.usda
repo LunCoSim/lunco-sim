@@ -52,8 +52,7 @@ def Xform "LanderTest"
     {
         string lunco:avatar = "true"
         string lunco:cameraMode = "freeflight"
-        float lunco:cameraYaw = -0.4
-        float lunco:cameraPitch = -0.15
+        custom double3 lunco:cameraLookAt = (0.0, 30.0, 0.0)
         double3 xformOp:translate = (18.0, 12.0, 20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

@@ -33,6 +33,7 @@ def Xform "DiffRigTest"
     {
         string lunco:avatar = "true"
         string lunco:cameraMode = "freeflight"
+        custom double3 lunco:cameraLookAt = (0.0, 1.5, 0.0)
         double3 xformOp:translate = (6.0, 4.0, 7.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

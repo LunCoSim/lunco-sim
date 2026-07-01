@@ -44,6 +44,7 @@ def Xform "SixWheelIndependentTest"
     {
         string lunco:avatar = "true"
         string lunco:cameraMode = "freeflight"
+        custom double3 lunco:cameraLookAt = (0.0, 1.0, 0.0)
         double3 xformOp:translate = (8.0, 6.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
