@@ -45,6 +45,10 @@ pub struct TutorialMeta {
     /// The chain to the NEXT tutorial is NOT here — it lives in the scene's USD
     /// (`lunco:nextScene`), so each tutorial declares its own successor as data.
     pub scene: &'static str,
+    /// Auto-launch this tutorial once on the user's first run (persisted via
+    /// [`TutorialProgress::onboarded`]). At most one built-in should set it —
+    /// the first-run onboarding entry point.
+    pub first_start: bool,
 }
 
 /// The catalog of registered tutorials. Populated in [`TutorialPlugin::build`]
@@ -81,6 +85,11 @@ pub struct TutorialProgress {
     /// The tutorial currently running (set by [`StartTutorial`], cleared on
     /// completion/skip) — so a `MISSION_COMPLETE` event is attributed correctly.
     pub current: Option<String>,
+    /// First-run onboarding has been offered. Set once the `first_start`
+    /// tutorial auto-launches, so it never re-fires on later launches.
+    /// `#[serde(default)]` keeps older `settings.json` (no field) loading.
+    #[serde(default)]
+    pub onboarded: bool,
 }
 
 impl TutorialProgress {
@@ -216,6 +225,56 @@ fn on_mission_complete(
     });
 }
 
+/// Auto-launch the first-run onboarding tutorial once. Fires ~1 s after start
+/// (so the default scene has settled before we swap to the tutorial scene) and
+/// only for a genuine interactive first run: skipped when `--scene` or `--api`
+/// is on the command line (automated / explicit-scene sessions), and naturally
+/// absent headless (the plugin is UI-gated). Gated by the persisted
+/// [`TutorialProgress::onboarded`] flag so it never re-fires.
+fn first_start_autolaunch(
+    mut ticks: Local<u32>,
+    registry: Res<TutorialRegistry>,
+    mut progress: ResMut<TutorialProgress>,
+    mut commands: Commands,
+) {
+    const DONE: u32 = u32::MAX;
+    const SETTLE_TICKS: u32 = 60; // ~1 s at 60 fps
+
+    if *ticks == DONE {
+        return;
+    }
+    if progress.onboarded {
+        *ticks = DONE;
+        return;
+    }
+    *ticks += 1;
+    if *ticks < SETTLE_TICKS {
+        return;
+    }
+    *ticks = DONE; // act at most once per process
+
+    // Don't hijack automated or explicit-scene launches — those aren't
+    // first-run onboarding. Leaving `onboarded` false means a later plain
+    // launch still onboards.
+    if std::env::args().any(|a| a == "--scene" || a == "--api") {
+        return;
+    }
+
+    let Some(meta) = registry
+        .tutorials
+        .iter()
+        .find(|t| t.first_start && !progress.is_completed(t.id))
+    else {
+        // Nothing to onboard (already completed, or none flagged) — mark done
+        // so we stop checking on every future launch.
+        progress.onboarded = true;
+        return;
+    };
+    info!("[tutorial] first-run onboarding → {}", meta.title);
+    progress.onboarded = true;
+    commands.trigger(StartTutorial { id: meta.id.to_string() });
+}
+
 // ── Launcher panel ────────────────────────────────────────────────────────
 
 /// Panel id for the tutorials launcher.
@@ -298,6 +357,7 @@ fn builtin_tutorials() -> Vec<TutorialMeta> {
             app: "sandbox",
             difficulty: "beginner",
             scene: "tutorials/sandbox_intro/sandbox_intro.usda",
+            first_start: true,
         },
         TutorialMeta {
             id: "first-drive",
@@ -306,6 +366,7 @@ fn builtin_tutorials() -> Vec<TutorialMeta> {
             app: "sandbox",
             difficulty: "beginner",
             scene: "tutorials/first_drive/first_drive.usda",
+            first_start: false,
         },
         TutorialMeta {
             id: "lander-rover-mission",
@@ -314,6 +375,7 @@ fn builtin_tutorials() -> Vec<TutorialMeta> {
             app: "sandbox",
             difficulty: "intermediate",
             scene: "scenes/sandbox/lander_test.usda",
+            first_start: false,
         },
     ]
 }
@@ -335,6 +397,7 @@ impl Plugin for TutorialPlugin {
         app.register_settings_section::<TutorialProgress>();
         register_all_commands(app);
         app.add_observer(on_mission_complete);
+        app.add_systems(Update, first_start_autolaunch);
         app.register_panel(TutorialsPanel);
     }
 }

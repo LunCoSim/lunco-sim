@@ -1,0 +1,40 @@
+{
+  "paths": [
+    {
+      "icon": "⚡",
+      "title": "Circuits 101",
+      "subtitle": "From a passive filter to an op-amp stage.",
+      "steps": [
+        { "qualified": "Modelica.Electrical.Analog.Examples.ChuaCircuit", "label": "ChuaCircuit", "goal": "Run it. Watch the chaotic attractor form on the XY plot." },
+        { "qualified": "Modelica.Electrical.Analog.Examples.CauerLowPassAnalog", "label": "CauerLowPass", "goal": "5th-order Cauer filter. Compare input to filtered output." },
+        { "qualified": "Modelica.Electrical.Analog.Examples.Rectifier", "label": "Rectifier", "goal": "Turn AC into pulsed DC. Overlay grid + load voltage." },
+        { "qualified": "Modelica.Electrical.Analog.Examples.ShowSaturatingInductor", "label": "SaturatingInductor", "goal": "Inductor hits its B-H knee. See current go non-linear." },
+        { "qualified": "Modelica.Electrical.Analog.Examples.AmplifierWithOpAmpDetailed", "label": "OpAmpDetailed", "goal": "Amplify a small sine. Tune the feedback ratio, re-run." }
+      ]
+    },
+    {
+      "icon": "⚙",
+      "title": "Control basics",
+      "subtitle": "Feedback loops, filters, boolean plumbing.",
+      "steps": [
+        { "qualified": "Modelica.Blocks.Examples.PID_Controller", "label": "PID_Controller", "goal": "Step change in setpoint. Watch P-I-D tame the response." },
+        { "qualified": "Modelica.Blocks.Examples.FilterWithRiseTime", "label": "FilterWithRiseTime", "goal": "Low-pass with a rise-time spec. Time the 10→90% climb." },
+        { "qualified": "Modelica.Blocks.Examples.InverseModel", "label": "InverseModel", "goal": "Invert a transfer function live. The classic trick." },
+        { "qualified": "Modelica.Blocks.Examples.RealNetwork1", "label": "RealNetwork1", "goal": "Arithmetic blocks wired into a tiny network." },
+        { "qualified": "Modelica.Blocks.Examples.LogicalNetwork1", "label": "LogicalNetwork1", "goal": "Boolean gates reacting to pulses. Read the truth table." }
+      ]
+    },
+    {
+      "icon": "🔧",
+      "title": "Moving parts",
+      "subtitle": "Mechanics from a spring-damper to a 3D pendulum.",
+      "steps": [
+        { "qualified": "Modelica.Mechanics.Rotational.Examples.First", "label": "Rotational.First", "goal": "Torque through inertia + spring-damper. The hello world." },
+        { "qualified": "Modelica.Mechanics.Rotational.Examples.ElasticBearing", "label": "ElasticBearing", "goal": "Shaft flex under load. Watch the phase lag develop." },
+        { "qualified": "Modelica.Mechanics.Rotational.Examples.CoupledClutches", "label": "CoupledClutches", "goal": "Clutches engage in sequence. Follow torque hand-off." },
+        { "qualified": "Modelica.Mechanics.Translational.Examples.Damper", "label": "Translational.Damper", "goal": "Mass-spring-damper in 1D. Change c, see the overshoot shift." },
+        { "qualified": "Modelica.Mechanics.MultiBody.Examples.Elementary.DoublePendulum", "label": "DoublePendulum", "goal": "Chaotic 3D two-link pendulum. Tweak initial angle." }
+      ]
+    }
+  ]
+}

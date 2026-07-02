@@ -47,6 +47,7 @@ pub mod models;
 pub mod msl;
 pub mod process;
 pub mod scripting;
+pub mod tutorials;
 pub mod twin_source;
 
 pub use asset_sources::register_lunco_asset_sources;
