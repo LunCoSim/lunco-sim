@@ -1,0 +1,14 @@
+[package]
+name = "lunco-hooks-rhai"
+version = "0.1.0"
+edition = "2021"
+description = "rhai binding for the runtime-agnostic lunco-hooks registry: implements ScriptHook once for rhai so a rhai function can fill ANY internal hook point (merge policy, authorization, …). wasm-clean (rhai only; no bevy)."
+
+[dependencies]
+lunco-hooks = { path = "../lunco-hooks" }
+# `sync` feature (workspace-pinned) makes rhai's Engine/Dynamic Send+Sync, so a
+# RhaiHook can live in the global registry behind `Arc<dyn ScriptHook>`.
+rhai = { workspace = true }
+
+[lints]
+workspace = true

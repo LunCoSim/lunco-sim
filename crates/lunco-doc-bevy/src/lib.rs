@@ -57,6 +57,9 @@
 
 pub mod diagnostics;
 pub use diagnostics::DocumentDiagnostics;
+
+pub mod journal_persist;
+pub use journal_persist::JournalPersistencePlugin;
 // The pure-data half lives in lunco-doc; re-export for convenience so callers
 // can reach the whole diagnostics surface from one place.
 pub use lunco_doc::{status_json, DocDiagnostics};

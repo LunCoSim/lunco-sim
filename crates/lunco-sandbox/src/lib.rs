@@ -506,6 +506,15 @@ impl Plugin for SandboxCorePlugin {
         #[cfg(feature = "lunco-api")]
         app.add_plugins(lunco_api::LunCoApiPlugin::default());
 
+        // Durable journal history for headless (`lunco-sandbox-server` / any
+        // `--no-ui` host): load-on-startup + debounced-save of the canonical
+        // journal, so collaborative edit history survives restarts. The GUI keeps
+        // its own Twin-scoped `lunco-workspace` persistence, so this is
+        // headless-only to avoid two mechanisms writing the same history.
+        if self.headless {
+            app.add_plugins(lunco_doc_bevy::JournalPersistencePlugin);
+        }
+
         // Multiplayer. Native: `--host [port]` / `--connect <addr>`; browser:
         // `?connect=host`. With no address the plugin still loads client-capable
         // but idle (single-player) so the in-sim *Connect* button / `JoinServer`

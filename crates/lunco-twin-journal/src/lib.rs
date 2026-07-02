@@ -1122,22 +1122,10 @@ impl Journal {
     /// appears exactly once.
     pub fn merged_order_ids(&self) -> Vec<EntryId> {
         // Kahn's algorithm with a min-heap keyed on (lamport, author) for a
-        // deterministic pick among concurrently-ready entries.
-        let mut indeg: HashMap<EntryId, usize> = HashMap::with_capacity(self.entries.len());
-        let mut children: HashMap<EntryId, Vec<EntryId>> = HashMap::new();
-        for e in self.entries.values() {
-            let present_parents = e
-                .parents
-                .iter()
-                .filter(|p| self.entries.contains_key(p))
-                .count();
-            indeg.insert(e.id.clone(), present_parents);
-            for p in &e.parents {
-                if self.entries.contains_key(p) {
-                    children.entry(p.clone()).or_default().push(e.id.clone());
-                }
-            }
-        }
+        // deterministic pick among concurrently-ready entries. This is the fast
+        // default path (O(n log n)); [`merged_order_ids_with`] is the general,
+        // policy-driven variant.
+        let (mut indeg, children) = self.dag_edges();
 
         // Min-heap via `Reverse` on the order key (lamport, author, full id).
         let key = |id: &EntryId| (id.lamport, id.author.clone(), id.clone());
@@ -1167,10 +1155,92 @@ impl Journal {
             out.push(id);
         }
 
-        // Defensive: a cycle (never produced by well-formed causal history —
-        // a parent's lamport is always < its child's) would leave entries
-        // unemitted; append them deterministically so `merged_order` is total.
+        self.append_cycle_leftovers(out, &seen)
+    }
+
+    /// [`merged_order_ids`](Self::merged_order_ids) with a **pluggable**
+    /// [`MergePolicy`] deciding the tie-break among concurrent (ready) entries,
+    /// instead of the built-in `(lamport, author)` key. The topological (causal)
+    /// constraint is unconditional — a policy only reorders entries that are
+    /// mutually concurrent — so replay stays causally valid whatever the policy.
+    ///
+    /// To keep convergence guaranteed even if a policy returns `Equal` for
+    /// distinct entries (a sloppy/nondeterministic script), the final selection
+    /// tie-breaks by the full [`EntryId`], so the order is always total. Uses a
+    /// linear-scan min-select (O(n²) worst case) rather than a heap, since the
+    /// policy comparator can't key a `BinaryHeap`; merge histories are modest.
+    ///
+    /// The policy MUST be pure and identical on every peer (see [`MergePolicy`]),
+    /// or peers diverge. `merged_order_ids_with(&DefaultMergePolicy)` is identical
+    /// to [`merged_order_ids`](Self::merged_order_ids).
+    pub fn merged_order_ids_with(&self, policy: &dyn MergePolicy) -> Vec<EntryId> {
+        let (mut indeg, children) = self.dag_edges();
+        let mut ready: Vec<EntryId> =
+            indeg.iter().filter(|(_, &d)| d == 0).map(|(id, _)| id.clone()).collect();
+
+        let mut out: Vec<EntryId> = Vec::with_capacity(self.entries.len());
+        let mut seen: HashSet<EntryId> = HashSet::with_capacity(self.entries.len());
+        while !ready.is_empty() {
+            // Pick the minimum ready entry per the policy, tie-broken by full id.
+            let pick = ready
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| {
+                    let (ea, eb) = (&self.entries[*a], &self.entries[*b]);
+                    policy.concurrent_cmp(ea, eb).then_with(|| a.cmp(b))
+                })
+                .map(|(i, _)| i)
+                .unwrap();
+            let id = ready.swap_remove(pick);
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            if let Some(kids) = children.get(&id) {
+                for k in kids {
+                    if let Some(d) = indeg.get_mut(k) {
+                        *d -= 1;
+                        if *d == 0 {
+                            ready.push(k.clone());
+                        }
+                    }
+                }
+            }
+            out.push(id);
+        }
+
+        self.append_cycle_leftovers(out, &seen)
+    }
+
+    /// Build the present-parent in-degree + child-adjacency for the entry DAG,
+    /// shared by both linearizers. A parent absent from the journal (out-of-order
+    /// delivery) is treated as already-satisfied, so a partial set still
+    /// linearizes and converges once completed.
+    fn dag_edges(&self) -> (HashMap<EntryId, usize>, HashMap<EntryId, Vec<EntryId>>) {
+        let mut indeg: HashMap<EntryId, usize> = HashMap::with_capacity(self.entries.len());
+        let mut children: HashMap<EntryId, Vec<EntryId>> = HashMap::new();
+        for e in self.entries.values() {
+            let present_parents = e
+                .parents
+                .iter()
+                .filter(|p| self.entries.contains_key(p))
+                .count();
+            indeg.insert(e.id.clone(), present_parents);
+            for p in &e.parents {
+                if self.entries.contains_key(p) {
+                    children.entry(p.clone()).or_default().push(e.id.clone());
+                }
+            }
+        }
+        (indeg, children)
+    }
+
+    /// Defensive tail: a cycle (never produced by well-formed causal history — a
+    /// parent's lamport is always < its child's) would leave entries unemitted;
+    /// append them deterministically by `(lamport, author, id)` so the order is
+    /// always total (every entry appears exactly once).
+    fn append_cycle_leftovers(&self, mut out: Vec<EntryId>, seen: &HashSet<EntryId>) -> Vec<EntryId> {
         if out.len() < self.entries.len() {
+            let key = |id: &EntryId| (id.lamport, id.author.clone(), id.clone());
             let mut leftover: Vec<EntryId> = self
                 .entries
                 .keys()
@@ -1199,6 +1269,110 @@ impl Journal {
     pub fn merged_head(&self) -> Option<EntryId> {
         self.merged_order_ids().into_iter().next_back()
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MergePolicy — the pluggable conflict-resolution hook
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// How to order two **concurrent** entries during merge linearization — the sole
+/// decision that turns a forked DAG into one convergent sequence, and thus the
+/// natural first *hook point*: a deployment may want "latest wins" (the default),
+/// "a designated author wins ties", "server author always wins", etc.
+///
+/// This trait is the **language-neutral mechanism**; a scripted implementation
+/// (`ScriptedMergePolicy`, behind the `hooks` feature) fills it from rhai/Python
+/// via [`lunco_hooks`], so the pure journal never depends on a scripting runtime.
+///
+/// # Determinism contract (non-negotiable)
+///
+/// [`concurrent_cmp`](MergePolicy::concurrent_cmp) MUST be:
+/// - a **strict total order** (or at least never contradict itself), and
+/// - **identical on every peer** and across re-runs (a pure function of the two
+///   entries).
+///
+/// Otherwise peers linearize the same DAG differently and their replayed state
+/// diverges — the one thing merge exists to prevent. [`merged_order_ids_with`]
+/// tie-breaks by full [`EntryId`] after the policy, so a policy that merely
+/// returns `Equal` too often still converges; a policy that returns *inconsistent*
+/// orders does not.
+pub trait MergePolicy {
+    /// Order concurrent entries `a` and `b`. Neither is a causal ancestor of the
+    /// other (the linearizer only asks about mutually-concurrent entries).
+    fn concurrent_cmp(&self, a: &JournalEntry, b: &JournalEntry) -> std::cmp::Ordering;
+}
+
+/// The built-in policy: order by `(lamport, author)` — the machine-independent
+/// key the merge resolver has always used. Total, pure, identical on every peer.
+/// `merged_order_ids_with(&DefaultMergePolicy)` == `merged_order_ids()`.
+pub struct DefaultMergePolicy;
+
+impl MergePolicy for DefaultMergePolicy {
+    fn concurrent_cmp(&self, a: &JournalEntry, b: &JournalEntry) -> std::cmp::Ordering {
+        (a.id.lamport, &a.id.author).cmp(&(b.id.lamport, &b.id.author))
+    }
+}
+
+/// A [`MergePolicy`] whose tie-break decision is delegated to a scripted hook
+/// (rhai/Python/…) registered in the [`lunco_hooks`] registry under `hook_id`.
+///
+/// The hook receives two entry maps `{ author, lamport, domain }` and returns a
+/// number `< 0`, `0`, or `> 0` (the `a` vs `b` ordering, C-`memcmp` convention).
+/// If the hook is absent or faults, this **falls back to [`DefaultMergePolicy`]**
+/// so a scripting error can never wedge the merge — but note the determinism
+/// contract: a hook that faults on *one* peer only would diverge, so a merge hook
+/// must be deployed identically on all peers (it is registered `deterministic`).
+///
+/// This is the reference "internal decision authored outside Rust" hook. The
+/// adapter lives here (with the trait it fills) behind the `hooks` feature so the
+/// default build of the pure journal stays scripting-free.
+#[cfg(feature = "hooks")]
+pub struct ScriptedMergePolicy {
+    /// The [`lunco_hooks`] id whose hook decides the ordering.
+    pub hook_id: String,
+}
+
+#[cfg(feature = "hooks")]
+impl ScriptedMergePolicy {
+    /// Bind to the hook registered under `hook_id`.
+    pub fn new(hook_id: impl Into<String>) -> Self {
+        Self { hook_id: hook_id.into() }
+    }
+}
+
+#[cfg(feature = "hooks")]
+impl MergePolicy for ScriptedMergePolicy {
+    fn concurrent_cmp(&self, a: &JournalEntry, b: &JournalEntry) -> std::cmp::Ordering {
+        use lunco_hooks::HookValue;
+        let args = [entry_to_hookvalue(a), entry_to_hookvalue(b)];
+        match lunco_hooks::invoke(&self.hook_id, &args) {
+            Some(Ok(v)) => match v.as_i64() {
+                Some(n) => n.cmp(&0),
+                // Wrong-shaped return → fall back rather than pick arbitrarily.
+                None => DefaultMergePolicy.concurrent_cmp(a, b),
+            },
+            // Absent or faulted → built-in behaviour (never wedge the merge).
+            _ => DefaultMergePolicy.concurrent_cmp(a, b),
+        }
+    }
+}
+
+/// Marshal an entry into the neutral `{ author, lamport, domain }` map a merge
+/// hook sees. Deliberately *not* the whole op payload — a tie-break decision
+/// needs identity + domain, and keeping the surface small keeps the cross-language
+/// cost negligible.
+#[cfg(feature = "hooks")]
+fn entry_to_hookvalue(e: &JournalEntry) -> lunco_hooks::HookValue {
+    use lunco_hooks::HookValue;
+    let domain = match &e.kind {
+        EntryKind::Op { domain, .. } | EntryKind::Snapshot { domain, .. } => format!("{domain:?}"),
+        _ => "None".to_string(),
+    };
+    HookValue::map([
+        ("author", HookValue::str(&e.id.author.0)),
+        ("lamport", HookValue::Int(e.id.lamport as i64)),
+        ("domain", HookValue::str(domain)),
+    ])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1734,6 +1908,115 @@ mod tests {
         // Convergent tip is the last in that order, on both journals.
         assert_eq!(j1.merged_head(), j2.merged_head());
         assert_eq!(j1.merged_head(), order.last().cloned());
+    }
+
+    /// `merged_order_ids_with(&DefaultMergePolicy)` reproduces the built-in
+    /// `merged_order_ids()` exactly — the policy seam adds a knob without changing
+    /// default behaviour.
+    #[test]
+    fn default_policy_matches_builtin_order() {
+        let r0 = EntryId { author: AuthorId::new("alice"), lamport: 1 };
+        let entries = vec![
+            mk_entry("alice", 1, vec![]),
+            mk_entry("alice", 2, vec![r0.clone()]),
+            mk_entry("bob", 2, vec![r0.clone()]),
+        ];
+        let mut j = new_journal();
+        for e in &entries {
+            j.append_remote(e.clone());
+        }
+        assert_eq!(j.merged_order_ids(), j.merged_order_ids_with(&DefaultMergePolicy));
+    }
+
+    /// A custom [`MergePolicy`] changes the tie-break among CONCURRENT entries
+    /// (here: author descending) while causality is still respected — proving the
+    /// hook point is real, not cosmetic.
+    #[test]
+    fn custom_policy_reorders_concurrent_entries() {
+        struct AuthorDescending;
+        impl MergePolicy for AuthorDescending {
+            fn concurrent_cmp(&self, a: &JournalEntry, b: &JournalEntry) -> std::cmp::Ordering {
+                // Reverse of the default author order among equal lamports.
+                b.id.author.cmp(&a.id.author)
+            }
+        }
+        let r0 = EntryId { author: AuthorId::new("alice"), lamport: 1 };
+        let entries = vec![
+            mk_entry("alice", 1, vec![]),
+            mk_entry("alice", 2, vec![r0.clone()]),
+            mk_entry("bob", 2, vec![r0.clone()]),
+        ];
+        let mut j = new_journal();
+        for e in &entries {
+            j.append_remote(e.clone());
+        }
+        let order = j.merged_order_ids_with(&AuthorDescending);
+        let pos = |a: &str, l: u64| {
+            order.iter().position(|id| id.author == AuthorId::new(a) && id.lamport == l).unwrap()
+        };
+        // Causality still holds: alice@1 (the root) precedes both children.
+        assert!(pos("alice", 1) < pos("alice", 2));
+        assert!(pos("alice", 1) < pos("bob", 2));
+        // Tie-break flipped: bob@2 now precedes alice@2 (default put alice first).
+        assert!(pos("bob", 2) < pos("alice", 2));
+    }
+
+    /// End-to-end scripted policy: register a NATIVE hook that orders concurrent
+    /// entries by author descending, bind a [`ScriptedMergePolicy`] to it, and
+    /// confirm the merge order follows the hook. Falls back to the default when
+    /// the hook id is unregistered.
+    #[cfg(feature = "hooks")]
+    #[test]
+    fn scripted_merge_policy_drives_order_and_falls_back() {
+        use lunco_hooks::{HookResult, HookValue, RegisteredHook, ScriptHook};
+        use std::sync::Arc;
+
+        // A native hook standing in for a rhai one: return >0/<0 so `b` (author
+        // desc) sorts first among concurrent entries.
+        struct AuthorDescHook;
+        impl ScriptHook for AuthorDescHook {
+            fn invoke(&self, args: &[HookValue]) -> HookResult {
+                let author = |v: &HookValue| v.get("author").and_then(|s| s.as_str().map(str::to_owned)).unwrap_or_default();
+                let a = author(&args[0]);
+                let b = author(&args[1]);
+                // memcmp convention: negative ⇒ a before b. Author DESC ⇒ reverse.
+                Ok(HookValue::Int(match b.cmp(&a) {
+                    std::cmp::Ordering::Less => -1,
+                    std::cmp::Ordering::Equal => 0,
+                    std::cmp::Ordering::Greater => 1,
+                }))
+            }
+        }
+
+        let hook_id = "test.merge.author_desc";
+        lunco_hooks::register(RegisteredHook {
+            id: hook_id.into(),
+            backend: "rust".into(),
+            deterministic: true,
+            hook: Arc::new(AuthorDescHook),
+        });
+
+        let r0 = EntryId { author: AuthorId::new("alice"), lamport: 1 };
+        let entries = vec![
+            mk_entry("alice", 1, vec![]),
+            mk_entry("alice", 2, vec![r0.clone()]),
+            mk_entry("bob", 2, vec![r0.clone()]),
+        ];
+        let mut j = new_journal();
+        for e in &entries {
+            j.append_remote(e.clone());
+        }
+        let order = j.merged_order_ids_with(&ScriptedMergePolicy::new(hook_id));
+        let pos = |a: &str, l: u64| {
+            order.iter().position(|id| id.author == AuthorId::new(a) && id.lamport == l).unwrap()
+        };
+        assert!(pos("bob", 2) < pos("alice", 2), "scripted author-desc must flip the tie-break");
+
+        // Unregistered hook id → ScriptedMergePolicy falls back to the default.
+        let fallback = j.merged_order_ids_with(&ScriptedMergePolicy::new("test.merge.absent"));
+        assert_eq!(fallback, j.merged_order_ids(), "absent hook falls back to default order");
+
+        lunco_hooks::unregister(hook_id);
     }
 
     /// A remote entry that does NOT build on the current head (a divergent

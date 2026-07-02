@@ -42,32 +42,70 @@ pub struct JournalEntryMsg {
 
 // ── Peer identity ─────────────────────────────────────────────────────────────
 
-/// Peer-unique journal author for a client session. Keeps `(author, lamport)`
-/// entry ids globally distinct from the host and other clients — without this,
-/// two peers mint colliding ids and `append_remote` dedups a remote entry as a
-/// local one. (Session-scoped for now; a stable per-install id would survive
-/// reconnects — a later refinement.)
-pub fn peer_author(session: u64) -> AuthorId {
-    AuthorId::new(format!("peer-{session}"))
-}
-
-/// The host's stable journal author. One host per session, so a fixed id is
-/// unique against every `peer-<n>` client.
-pub fn host_author() -> AuthorId {
-    AuthorId::new("host")
-}
-
-/// Host startup: stamp the host's peer-unique journal author so its authored
-/// edits are attributable and never collide with a client's. Clients stamp
-/// `peer-<session>` on handshake instead (see `sync::drain_sync_inbox`). No-op
-/// off the host / when no journal is present. Idempotent.
-pub fn stamp_host_journal_author(role: Res<NetworkRole>, journal: Option<Res<JournalResource>>) {
-    if !role.is_host() {
-        return;
+/// This peer's **stable journal author** — durable across reconnects *and* across
+/// the single-player→networked transition, so a peer's own offline edits keep the
+/// same author and therefore upload + merge correctly when it (re)connects. This
+/// is the fix for the old session-scoped author, under which a reconnect minted a
+/// fresh `peer-<session>` id → the peer's prior offline entries (authored under
+/// the old id) were filtered out of `broadcast_journal_entries` and silently
+/// stranded. Precedence:
+///
+/// 1. `LUNCO_PEER_ID` env override — distinct ids for multiple instances on ONE
+///    machine (tests, `net_smoke`, `run_host_client`), which otherwise share the
+///    persisted install id and would collide.
+/// 2. A per-install id persisted in the user config dir (`identity/peer_id`),
+///    minted once from fresh entropy and reused forever — the real-product path.
+/// 3. A fresh random id if the config dir can't be read/written (never collides
+///    within a run; just not durable — logged).
+pub fn local_author_id() -> AuthorId {
+    if let Ok(id) = std::env::var("LUNCO_PEER_ID") {
+        let id = id.trim();
+        if !id.is_empty() {
+            return AuthorId::new(id);
+        }
     }
+    AuthorId::new(persisted_install_id())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn persisted_install_id() -> String {
+    let path = lunco_assets::user_config_subdir("identity").join("peer_id");
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let id = existing.trim();
+        if !id.is_empty() {
+            return id.to_string();
+        }
+    }
+    let fresh = format!("peer-{:016x}", lunco_core::ids::random_u64());
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(&path, &fresh) {
+        warn!("[journal-plane] could not persist install id to {}: {e}", path.display());
+    } else {
+        info!("[journal-plane] minted install id {fresh} at {}", path.display());
+    }
+    fresh
+}
+
+#[cfg(target_arch = "wasm32")]
+fn persisted_install_id() -> String {
+    // TODO(web-identity): persist via localStorage/OPFS so a browser peer keeps a
+    // stable identity across reloads. For now a per-page-load id (stable within a
+    // session, not across reloads).
+    format!("peer-{:016x}", lunco_core::ids::random_u64())
+}
+
+/// Stamp this peer's stable install id ([`local_author_id`]) as the journal's
+/// local author, so authored edits are attributable and durable across
+/// reconnects. Runs on **both** roles the frame the [`JournalResource`] appears
+/// (idempotent — only writes when it differs). Was host-only + session-scoped
+/// (stamped on handshake); now identity is set once at startup and never churns.
+pub fn stamp_local_journal_author(journal: Option<Res<JournalResource>>) {
     if let Some(j) = journal {
-        if j.local_author() != host_author() {
-            j.set_local_author(host_author());
+        let me = local_author_id();
+        if j.local_author() != me {
+            j.set_local_author(me);
         }
     }
 }
@@ -215,10 +253,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn peer_and_host_authors_are_distinct() {
-        assert_ne!(peer_author(1), host_author());
-        assert_ne!(peer_author(1), peer_author(2));
-        assert_eq!(peer_author(7), peer_author(7));
+    fn local_author_id_respects_env_override() {
+        // The env override is how multiple instances on one machine (tests,
+        // net_smoke) get distinct stable authors. Single test touching this var.
+        std::env::set_var("LUNCO_PEER_ID", "peer-override-xyz");
+        assert_eq!(local_author_id(), AuthorId::new("peer-override-xyz"));
+        std::env::remove_var("LUNCO_PEER_ID");
     }
 
     /// End-to-end simulation of the bidirectional plane across THREE peers
@@ -235,9 +275,9 @@ mod tests {
         use lunco_twin_journal::{AuthorTag, TwinId};
 
         let twin = TwinId::new("t");
-        let host = JournalResource::new(twin.clone(), host_author());
-        let c1 = JournalResource::new(twin.clone(), peer_author(1));
-        let c2 = JournalResource::new(twin.clone(), peer_author(2));
+        let host = JournalResource::new(twin.clone(), AuthorId::new("host"));
+        let c1 = JournalResource::new(twin.clone(), AuthorId::new("peer-1"));
+        let c2 = JournalResource::new(twin.clone(), AuthorId::new("peer-2"));
 
         // Author a local USD op on `j` (EntryId.author = j's local_author).
         let author_usd = |j: &JournalResource, v: i32| {
@@ -288,12 +328,12 @@ mod tests {
         };
         // Client 2 authored nothing → it replays ALL three edits (host's 1,2 +
         // client 1's 3), in convergent order.
-        assert_eq!(vals(&scene_ops_after(&c2, None, &peer_author(2), &none)), vec![1, 2, 3]);
+        assert_eq!(vals(&scene_ops_after(&c2, None, &AuthorId::new("peer-2"), &none)), vec![1, 2, 3]);
         // Client 1 authored edit 3 → it is EXCLUDED (already applied locally);
         // only the host's two remote edits replay.
-        assert_eq!(vals(&scene_ops_after(&c1, None, &peer_author(1), &none)), vec![1, 2]);
+        assert_eq!(vals(&scene_ops_after(&c1, None, &AuthorId::new("peer-1"), &none)), vec![1, 2]);
         // The host sees client 1's edit (author != host), not its own two.
-        assert_eq!(vals(&scene_ops_after(&host, None, &host_author(), &none)), vec![3]);
+        assert_eq!(vals(&scene_ops_after(&host, None, &AuthorId::new("host"), &none)), vec![3]);
     }
 
     #[test]

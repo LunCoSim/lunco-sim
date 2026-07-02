@@ -28,7 +28,9 @@ cargo build -p lunco-networking --bin net_smoke --features networking -j2 || exi
 rm -f "$HOST_LOG" "$CLIENT_LOG"
 
 echo "==> launching host on :$PORT"
-./target/debug/net_smoke --host "$PORT" >"$HOST_LOG" 2>&1 &
+# Distinct LUNCO_PEER_ID per instance: both processes share this machine's
+# persisted install id otherwise, colliding on journal author ids.
+LUNCO_PEER_ID=smoke-host ./target/debug/net_smoke --host "$PORT" >"$HOST_LOG" 2>&1 &
 HOST_PID=$!
 # Ensure the host is torn down even if the client hangs.
 trap 'kill "$HOST_PID" 2>/dev/null' EXIT
@@ -37,7 +39,7 @@ trap 'kill "$HOST_PID" 2>/dev/null' EXIT
 sleep 2
 
 echo "==> launching client -> 127.0.0.1:$PORT"
-./target/debug/net_smoke --connect "127.0.0.1:$PORT" >"$CLIENT_LOG" 2>&1
+LUNCO_PEER_ID=smoke-client ./target/debug/net_smoke --connect "127.0.0.1:$PORT" >"$CLIENT_LOG" 2>&1
 
 wait "$HOST_PID" 2>/dev/null
 

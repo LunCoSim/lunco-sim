@@ -39,7 +39,6 @@ use bevy::prelude::*;
 use lunco_core::SessionId;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::JournalResource;
-use lunco_networking::journal_plane::host_author;
 use lunco_networking::{LunCoNetworkingPlugin, NetworkMode};
 use lunco_twin_journal::{AuthorId, AuthorTag, DomainKind, EntryKind, TwinId};
 
@@ -409,8 +408,8 @@ fn host_journal_report(time: Res<Time>, mut t: Local<f32>, journal: Option<Res<J
     *t = 0.0;
     if let Some(j) = journal {
         let (total, peers) = j.with_read(|jj| {
-            let host = host_author();
-            (jj.len(), jj.entries().filter(|e| e.id.author != host).count())
+            let me = jj.local_author();
+            (jj.len(), jj.entries().filter(|e| &e.id.author != me).count())
         });
         info!("[test] HOST-JOURNAL total={total} peer_entries={peers}");
     }
@@ -484,9 +483,10 @@ fn exit_after_timeout(
             .as_ref()
             .map(|j| {
                 j.with_read(|jj| {
-                    let host = host_author();
+                    let me = jj.local_author();
+                    // A foreign-authored Op entry = the host's edit reached us.
                     jj.entries()
-                        .any(|e| e.id.author == host && matches!(e.kind, EntryKind::Op { .. }))
+                        .any(|e| &e.id.author != me && matches!(e.kind, EntryKind::Op { .. }))
                 })
             })
             .unwrap_or(false);

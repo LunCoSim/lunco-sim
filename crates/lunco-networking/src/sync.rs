@@ -896,16 +896,18 @@ pub fn apply_sync_command(
 
 // ── Inbox drain (commands / snapshots / spawns / handshake) ───────────────────
 
-/// Host relay gate for avatar-control envelopes (`TutorStatus`/`StudentStatus`/
-/// `SharePerspective`). These seize or redirect targeted peers' avatar camera +
-/// input, so the host must drop them from an *unauthenticated* sender (and the
-/// caller stamps the sender identity to prevent impersonation). Single chokepoint
-/// for that policy — change the required role here, not in each arm.
+/// Host capability gate for inbound envelopes keyed by a well-known capability
+/// (`lunco_core::session::capability::*`): the avatar-control relays
+/// (`TutorStatus`/`StudentStatus`/`SharePerspective`, which seize peers' camera +
+/// input) and the journal plane (`JournalEdit`, who may mutate shared authored
+/// content). The host drops such an envelope from a sender lacking the capability's
+/// role. Single chokepoint for that policy — change the required role in the
+/// registry, not in each arm.
 ///
 /// Returns whether the arm should keep processing:
-/// - non-host peer → `true` (clients never gate; they trust the host-stamped relay),
-/// - host + `Operator`-or-higher sender → `true` (caller stamps + relays + consumes),
-/// - host + sender lacks the relay capability's role → `false` (caller `continue`s: not relayed, not consumed).
+/// - non-host peer → `true` (clients never gate; they trust the host's decisions),
+/// - host + sender satisfies the capability's role → `true` (caller processes it),
+/// - host + sender lacks the role → `false` (caller rejects / `continue`s).
 ///
 /// **Policy is data, not hardcoded.** The required role for `capability`
 /// (`lunco_core::session::capability::*`) is resolved from the shared
@@ -921,7 +923,7 @@ pub fn apply_sync_command(
 /// per-sender identity binding done by each relay arm (anti-spoof), and the
 /// per-peer follow opt-in / explicit-target consent in the `TutorStatus` arm.
 #[inline]
-fn authed_for_avatar_relay(
+fn authed_for_capability(
     role: &NetworkRole,
     rbac: &lunco_core::session::SessionRbac,
     policies: &lunco_core::session::CommandPolicyRegistry,
@@ -1069,12 +1071,12 @@ pub fn drain_sync_inbox(
                     // challenge/elevation path — stored now so the handshake field is
                     // load-bearing rather than dead.
                     ctx.credential.token = Some(h.token);
-                    // Stamp this client's peer-unique journal author (journal
-                    // plane) so its locally-authored edits get globally-unique
-                    // entry ids — distinct from the host and other clients.
-                    if let Some(journal) = ctx.journal.as_ref() {
-                        journal.set_local_author(crate::journal_plane::peer_author(h.session));
-                    }
+                    // NOTE: the journal author is NOT (re)stamped here anymore. It's
+                    // set once at startup to a stable per-install id
+                    // (`journal_plane::stamp_local_journal_author`) so a peer's own
+                    // offline edits keep the same author across reconnects and thus
+                    // upload + merge correctly (the session-scoped author dropped
+                    // them). See `journal_plane::local_author_id`.
                     info!("[net] handshake accepted: assigned session={}", h.session);
                 }
             }
@@ -1162,8 +1164,8 @@ pub fn drain_sync_inbox(
                 // Host authz + anti-spoof: tutor mode seizes targeted peers' avatar
                 // camera and locks their input. Gate (one chokepoint) then bind the
                 // tutor identity to the actual sender (mirroring the `Cursor` arm) so a
-                // peer can't claim to be another session. See [`authed_for_avatar_relay`].
-                if !authed_for_avatar_relay(
+                // peer can't claim to be another session. See [`authed_for_capability`].
+                if !authed_for_capability(
                     &role,
                     &rbac,
                     &ctx.command_policies,
@@ -1236,8 +1238,8 @@ pub fn drain_sync_inbox(
                 //
                 // Anti-spoof: bind the report to its actual sender so a peer can't
                 // impersonate another student and pollute the observing tutor's
-                // mirrored view. See [`authed_for_avatar_relay`].
-                if !authed_for_avatar_relay(
+                // mirrored view. See [`authed_for_capability`].
+                if !authed_for_capability(
                     &role,
                     &rbac,
                     &ctx.command_policies,
@@ -1267,8 +1269,8 @@ pub fn drain_sync_inbox(
             SyncEnvelope::SharePerspective(mut msg) => {
                 // Same authz + anti-spoof as TutorStatus: a SharePerspective snaps
                 // every targeted peer's avatar/camera to the sender's view. See
-                // [`authed_for_avatar_relay`].
-                if !authed_for_avatar_relay(
+                // [`authed_for_capability`].
+                if !authed_for_capability(
                     &role,
                     &rbac,
                     &ctx.command_policies,
@@ -1343,8 +1345,24 @@ pub fn drain_sync_inbox(
                 // host's edits; the host merges each client's edits, from which
                 // its `broadcast_journal_entries` then relays them to the other
                 // clients (host = fan-out hub). Idempotent, so echoes are no-ops.
-                // The plane owns the apply logic; the ferry only routes.
-                if let Some(journal) = ctx.journal.as_ref() {
+                //
+                // RBAC: the host first authorizes the sender against the
+                // `JournalEdit` capability (resolved from `CommandPolicyRegistry`,
+                // like any command) — a read-only viewer, or any role below the
+                // deployment's threshold, is rejected so it can't mutate the
+                // shared authored content. Open-sandbox by default (Observer
+                // floor); tighten via `set_override("JournalEdit", …)`. Clients
+                // skip the gate (`authed_for_capability` returns true off-host):
+                // they trust the host's already-authorized, relayed entries.
+                if !authed_for_capability(
+                    &role,
+                    &rbac,
+                    &ctx.command_policies,
+                    sender,
+                    lunco_core::session::capability::JOURNAL_EDIT,
+                ) {
+                    warn!("[journal-plane] rejected journal edit from unauthorized session {sender}");
+                } else if let Some(journal) = ctx.journal.as_ref() {
                     crate::journal_plane::apply_inbound_entry(journal, &msg);
                 }
             }
@@ -2674,9 +2692,14 @@ impl Plugin for SyncPlugin {
             .add_observer(apply_sync_command)
             .add_observer(on_update_profile_rbac)
             .add_systems(Startup, setup_host_rbac)
-            // Journal plane: stamp the host's peer-unique journal author (clients
-            // stamp theirs on handshake) so cross-peer entry ids don't collide.
-            .add_systems(Startup, crate::journal_plane::stamp_host_journal_author)
+            // Journal plane: stamp this peer's stable per-install journal author
+            // (both roles) so edits are attributable + durable across reconnects.
+            // Reactive: runs once the frame the JournalResource appears.
+            .add_systems(
+                Update,
+                crate::journal_plane::stamp_local_journal_author
+                    .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
+            )
             .add_systems(PreUpdate, block_bevy_inputs)
             .add_systems(Update, (
                 drain_sync_inbox,
