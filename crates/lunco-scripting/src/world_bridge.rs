@@ -251,17 +251,43 @@ fn scenario_debug() -> bool {
 /// Ergonomic policy wrappers (drive/distance/arrived/...), authored in rhai and
 /// embedded at compile time so they're available with zero IO on every target
 /// (incl. wasm). Edit `rhai/prelude.rhai` — no Rust change needed for new helpers.
-pub(crate) const PRELUDE: &str = concat!(
-    include_str!("../rhai/prelude/_intro.rhai"), "\n",
-    include_str!("../rhai/prelude/math.rhai"), "\n",
-    include_str!("../rhai/prelude/nav.rhai"), "\n",
-    include_str!("../rhai/prelude/tasks.rhai"), "\n",
-    include_str!("../rhai/prelude/mission.rhai"), "\n",
-    include_str!("../rhai/prelude/control.rhai"), "\n",
-    include_str!("../rhai/prelude/hud.rhai"), "\n",
-    include_str!("../rhai/prelude/sensing.rhai"), "\n",
-    include_str!("../rhai/prelude/select.rhai"), "\n",
-);
+/// The prelude's topic files (name, source), embedded at compile time. Split by
+/// concern for readability; loaded by [`compile_prelude`] which compiles each and
+/// `AST::merge`s them into ONE flat-namespace AST — same result as one big file,
+/// but a parse error names the actual file instead of an offset into a blob.
+pub(crate) const PRELUDE_FILES: &[(&str, &str)] = &[
+    ("_intro", include_str!("../rhai/prelude/_intro.rhai")),
+    ("math", include_str!("../rhai/prelude/math.rhai")),
+    ("nav", include_str!("../rhai/prelude/nav.rhai")),
+    ("tasks", include_str!("../rhai/prelude/tasks.rhai")),
+    ("mission", include_str!("../rhai/prelude/mission.rhai")),
+    ("control", include_str!("../rhai/prelude/control.rhai")),
+    ("hud", include_str!("../rhai/prelude/hud.rhai")),
+    ("sensing", include_str!("../rhai/prelude/sensing.rhai")),
+    ("select", include_str!("../rhai/prelude/select.rhai")),
+];
+
+/// Compile the split prelude into one AST (per-file compile + `AST::merge`).
+/// Flat namespace + embedded, identical to compiling a single concatenated
+/// string, but a syntax error is logged with the offending file's name and its
+/// position is relative to that file (error locality). Both prelude uses — the
+/// global module and the per-scenario `prelude_ast` merge — go through here.
+pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, rhai::ParseError> {
+    let mut acc: Option<AST> = None;
+    for (name, src) in PRELUDE_FILES {
+        match engine.compile(src) {
+            Ok(part) => acc = Some(match acc {
+                Some(a) => a.merge(&part),
+                None => part,
+            }),
+            Err(e) => {
+                error!("[rhai] prelude/{name}.rhai failed to parse: {e}");
+                return Err(e);
+            }
+        }
+    }
+    Ok(acc.expect("PRELUDE_FILES is non-empty"))
+}
 
 /// Build a rhai [`Engine`] with the World-bridge verbs registered, the embedded
 /// prelude loaded as a global module, and the same sandbox caps as the one-shot
@@ -551,7 +577,7 @@ pub fn build_world_engine() -> Engine {
     // Load the embedded prelude as a global module so its helpers are callable
     // unqualified (e.g. `drive(r, 1.0, 0.0)`). Compiled against the same engine
     // so the wrappers can reach the native verbs above.
-    match engine.compile(PRELUDE) {
+    match compile_prelude(&engine) {
         Ok(ast) => match rhai::Module::eval_ast_as_new(rhai::Scope::new(), &ast, &engine) {
             Ok(module) => {
                 engine.register_global_module(module.into());
@@ -613,9 +639,8 @@ impl Default for RhaiScenarioRuntime {
     fn default() -> Self {
         let mut engine = build_world_engine();
         engine.on_print(|s| info!("[rhai] {s}"));
-        let prelude_ast = engine
-            .compile(PRELUDE)
-            .unwrap_or_else(|e| panic!("prelude.rhai must compile: {e}"));
+        let prelude_ast =
+            compile_prelude(&engine).unwrap_or_else(|e| panic!("prelude must compile: {e}"));
         Self {
             engine,
             states: std::collections::HashMap::new(),
@@ -1016,10 +1041,12 @@ mod tests {
 
     #[test]
     fn prelude_and_examples_parse() {
-        let engine = rhai::Engine::new();
-        engine
-            .compile(super::PRELUDE)
-            .expect("prelude.rhai must parse");
+        // Use the SAME raised expr-depth the scenario engine uses at runtime — the
+        // prelude's sequencer legitimately needs it; a stock engine's lower default
+        // rejects it (this test used to fail on that pre-existing mismatch).
+        let mut engine = rhai::Engine::new();
+        engine.set_max_expr_depths(128, 128);
+        super::compile_prelude(&engine).expect("prelude must parse");
 
         for (name, src) in [
             ("patrol", include_str!("../rhai/examples/patrol.rhai")),
