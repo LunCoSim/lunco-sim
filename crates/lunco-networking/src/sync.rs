@@ -2640,6 +2640,7 @@ impl Plugin for SyncPlugin {
             .init_resource::<crate::scenario_sync::AssetDownloads>()
             .init_resource::<crate::scenario_sync::IncomingAssetChunks>()
             .init_resource::<crate::scenario_sync::PendingAssetRequests>()
+            .init_resource::<crate::scenario_sync::AssetPersist>()
             .register_settings_section::<CursorSettings>()
             .register_settings_section::<TutorialSettings>()
             .init_resource::<SyncChannelRegistry>()
@@ -2671,6 +2672,7 @@ impl Plugin for SyncPlugin {
                 // host-side serve/send pair is registered in `setup_host`.
                 crate::scenario_sync::request_missing_assets,
                 crate::scenario_sync::reassemble_asset_chunks,
+                crate::scenario_sync::drain_persist_results,
             ))
             // `gather_snapshot` runs on the sim clock (`FixedPostUpdate`): it only
             // writes our `SyncOutbox` (never calls lightyear), so it's safe off the

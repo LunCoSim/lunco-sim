@@ -33,12 +33,15 @@
 
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
+use crossbeam_channel::{unbounded, Receiver, Sender};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use lunco_core::{NetworkRole, SessionId, SyncChannel};
+use lunco_storage::StorageHandle;
 
-use crate::scenario::{cid_for_content, AssetChunkMsg, AssetRequestMsg, RemoteScenarioManifest, ScenarioManifestMsg};
+use crate::scenario::{cid_from_bytes, AssetChunkMsg, AssetRequestMsg, RemoteScenarioManifest};
 use crate::sync::{SyncEnvelope, SyncOutbox};
 
 /// Asset chunk payload size (bytes). Kept well under the lightyear reliable
@@ -69,6 +72,34 @@ pub struct AssetDownloads {
 struct Inflight {
     total: u64,
     buf: Vec<u8>,
+    /// Running SHA-256 fed one chunk at a time, so verification costs nothing
+    /// extra at completion (no full-buffer re-hash) and the CPU is spread across
+    /// the download instead of a single main-thread spike — identical on native
+    /// and web (the key to not blocking the browser main thread on a big asset).
+    hasher: Sha256,
+}
+
+/// Async persist outcome, sent from the spawned write future back to
+/// [`drain_persist_results`]. Uniform across platforms — native pushes from an
+/// `AsyncComputeTaskPool` task, web from a `spawn_local` future.
+struct PersistOutcome {
+    cid: Vec<u8>,
+    ok: bool,
+}
+
+/// Client-side channel carrying async persist outcomes. A resource so the
+/// spawned write future (which outlives the submitting system) can report back.
+#[derive(Resource)]
+pub struct AssetPersist {
+    tx: Sender<PersistOutcome>,
+    rx: Receiver<PersistOutcome>,
+}
+
+impl Default for AssetPersist {
+    fn default() -> Self {
+        let (tx, rx) = unbounded();
+        Self { tx, rx }
+    }
 }
 
 /// Client-side queue: raw chunks pushed by the `AssetChunk` arm of
@@ -170,13 +201,14 @@ pub fn reassemble_asset_chunks(
     mut incoming: ResMut<IncomingAssetChunks>,
     mut downloads: ResMut<AssetDownloads>,
     remote: Res<RemoteScenarioManifest>,
+    persist: Res<AssetPersist>,
 ) {
     if role.is_host() || incoming.0.is_empty() {
         return;
     }
     for ch in std::mem::take(&mut incoming.0) {
-        // Append into the per-CID buffer (scoped borrow so we can touch
-        // `downloads.requested` afterwards without overlapping the `entry` borrow).
+        // Append into the per-CID buffer + feed the running hash (scoped borrow so
+        // we can touch `downloads.requested` afterwards without overlapping it).
         let (complete, out_of_order) = {
             let entry = downloads.inflight.entry(ch.cid.clone()).or_default();
             entry.total = ch.total;
@@ -184,6 +216,7 @@ pub fn reassemble_asset_chunks(
                 (false, true)
             } else {
                 entry.buf.extend_from_slice(&ch.data);
+                entry.hasher.update(&ch.data);
                 (entry.buf.len() as u64 >= entry.total, false)
             }
         };
@@ -193,41 +226,110 @@ pub fn reassemble_asset_chunks(
             downloads.requested.remove(&ch.cid); // allow a future re-request
             continue;
         }
-        if complete {
-            if let Some(done) = downloads.inflight.remove(&ch.cid) {
-                if !finish_asset(&ch.cid, &done.buf, remote.manifest.as_ref()) {
-                    downloads.requested.remove(&ch.cid); // failed → retriable
-                }
+        if !complete {
+            continue;
+        }
+        let Some(done) = downloads.inflight.remove(&ch.cid) else {
+            continue;
+        };
+        // Verify (fail-closed) by comparing the incremental digest to the CID's
+        // embedded sha2-256 — no full-buffer re-hash.
+        let actual = done.hasher.finalize();
+        let expected = cid_from_bytes(&ch.cid).map(|c| c.hash().digest().to_vec());
+        if expected.as_deref() != Some(actual.as_slice()) {
+            warn!("[net] downloaded asset failed CID verification; discarding");
+            downloads.requested.remove(&ch.cid); // retriable on next manifest
+            continue;
+        }
+        // Resolve the cache target from the manifest (cid → rel path + scenario id)
+        // and hand the write off to the async backend (never blocks this system).
+        let target = remote
+            .manifest
+            .as_ref()
+            .and_then(|m| {
+                m.assets
+                    .iter()
+                    .find(|a| a.cid.as_slice() == ch.cid.as_slice())
+                    .and_then(|a| asset_storage_handle(&m.scenario_id, &a.path))
+            });
+        match target {
+            Some(handle) => submit_persist(persist.tx.clone(), ch.cid.clone(), handle, done.buf),
+            None => {
+                warn!("[net] verified asset has no manifest entry / safe path; discarding");
+                downloads.requested.remove(&ch.cid);
             }
         }
     }
 }
 
-/// Verify a completed asset's bytes hash back to its CID (fail-closed) and write
-/// it to the scenario cache. Returns `true` on success.
-fn finish_asset(cid: &[u8], bytes: &[u8], manifest: Option<&ScenarioManifestMsg>) -> bool {
-    if cid_for_content(bytes).to_bytes().as_slice() != cid {
-        warn!("[net] downloaded asset failed CID verification; discarding");
-        return false;
+/// Drain async persist outcomes: a failed write drops the CID from `requested`
+/// so a later manifest can re-fetch it; a success is already accounted for.
+/// Client-only.
+pub fn drain_persist_results(
+    role: Res<NetworkRole>,
+    persist: Res<AssetPersist>,
+    mut downloads: ResMut<AssetDownloads>,
+) {
+    if role.is_host() {
+        return;
     }
-    let Some(manifest) = manifest else {
-        warn!("[net] asset completed but no manifest to place it; discarding");
-        return false;
-    };
-    let Some(asset) = manifest.assets.iter().find(|a| a.cid.as_slice() == cid) else {
-        warn!("[net] verified asset not in current manifest; discarding");
-        return false;
-    };
-    let Some(path) = scenario_asset_path(&manifest.scenario_id, &asset.path) else {
-        return false;
-    };
-    match lunco_storage::write_file_sync(&path, bytes) {
-        Ok(()) => {
-            info!("[net] scenario asset cached: {}", asset.path);
-            true
+    while let Ok(outcome) = persist.rx.try_recv() {
+        if !outcome.ok {
+            downloads.requested.remove(&outcome.cid);
         }
+    }
+}
+
+/// The storage handle for a scenario asset's cache location. A
+/// [`StorageHandle::File`] on **both** platforms (native: absolute, under
+/// `cache_dir()`; web: the same path fed to `OpfsStorage`, which maps its
+/// components onto the OPFS tree) — so only the backend, not the handle, differs.
+fn asset_storage_handle(scenario_id: &[u8; 16], rel: &str) -> Option<StorageHandle> {
+    Some(StorageHandle::File(scenario_asset_path(scenario_id, rel)?))
+}
+
+/// Spawn the verify-passed asset's write on the platform's async executor and
+/// report the outcome back over `tx`. The write NEVER runs on the calling
+/// system: native → `AsyncComputeTaskPool` (real thread); web → `spawn_local`
+/// (async OPFS on the main thread, non-blocking). The awaited body is the only
+/// native/web divergence — see [`do_write`].
+fn submit_persist(tx: Sender<PersistOutcome>, cid: Vec<u8>, handle: StorageHandle, bytes: Vec<u8>) {
+    let fut = async move {
+        let ok = do_write(handle, bytes).await;
+        let _ = tx.send(PersistOutcome { cid, ok });
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        AsyncComputeTaskPool::get().spawn(fut).detach();
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        wasm_bindgen_futures::spawn_local(fut);
+    }
+}
+
+/// Write reassembled+verified asset bytes to the scenario cache. The ONLY
+/// native/web-divergent code in the client path: native uses the `Send`
+/// [`lunco_storage::Storage`] trait over `FileStorage`; web uses
+/// [`lunco_storage::OpfsStorage`]'s inherent (non-`Send`) async methods.
+#[cfg(not(target_arch = "wasm32"))]
+async fn do_write(handle: StorageHandle, bytes: Vec<u8>) -> bool {
+    use lunco_storage::Storage;
+    match lunco_storage::FileStorage::new().write(&handle, &bytes).await {
+        Ok(()) => true,
         Err(e) => {
-            warn!("[net] failed to cache asset {}: {e}", asset.path);
+            warn!("[net] asset cache write failed: {e}");
+            false
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn do_write(handle: StorageHandle, bytes: Vec<u8>) -> bool {
+    match lunco_storage::OpfsStorage::new().write(&handle, &bytes).await {
+        Ok(()) => true,
+        Err(e) => {
+            warn!("[net] asset cache write failed: {e}");
             false
         }
     }
@@ -303,6 +405,7 @@ fn read_and_chunk(jobs: Vec<(Vec<u8>, PathBuf)>) -> Vec<AssetChunkMsg> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenario::cid_for_content;
 
     #[test]
     fn asset_path_rejects_traversal() {
@@ -334,5 +437,26 @@ mod tests {
         }
         assert_eq!(buf, data);
         assert_eq!(cid_for_content(&buf).to_bytes(), cid);
+    }
+
+    #[test]
+    fn incremental_hash_matches_cid_digest() {
+        // Mirrors the client verify path: feed chunks to a running Sha256, then
+        // compare finalize() to the CID's embedded sha2-256 digest (no re-hash).
+        let data = vec![0x5Au8; ASSET_CHUNK_SIZE * 2 + 7];
+        let cid = cid_for_content(&data).to_bytes();
+        let mut hasher = Sha256::new();
+        for chunk in data.chunks(ASSET_CHUNK_SIZE) {
+            hasher.update(chunk);
+        }
+        let actual = hasher.finalize();
+        let expected = cid_from_bytes(&cid).map(|c| c.hash().digest().to_vec());
+        assert_eq!(expected.as_deref(), Some(actual.as_slice()));
+        // A single-byte change must fail the same comparison.
+        let mut tampered = data.clone();
+        tampered[0] ^= 0xFF;
+        let mut h2 = Sha256::new();
+        h2.update(&tampered);
+        assert_ne!(Some(h2.finalize().as_slice()), expected.as_deref());
     }
 }

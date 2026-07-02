@@ -47,6 +47,15 @@ pub mod web_storage;
 #[cfg(target_arch = "wasm32")]
 pub use web_storage::WebStorage;
 
+/// OPFS backend for wasm binary assets (meshes/textures/DEMs) — where
+/// [`WebStorage`]'s `localStorage`+hex is unusable. Inherent async methods (not
+/// the `Send` [`Storage`] trait); see the module docs.
+#[cfg(target_arch = "wasm32")]
+pub mod opfs_storage;
+
+#[cfg(target_arch = "wasm32")]
+pub use opfs_storage::OpfsStorage;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Errors
 // ─────────────────────────────────────────────────────────────────────────────
