@@ -21,6 +21,9 @@ static PRELUDE: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/sc
 static TOOLS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/scripting/tools");
 /// Example scenarios — used by docs / the parse test / the catalog.
 static EXAMPLES: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/scripting/examples");
+/// Built-in rhai POLICY snippets (RBAC/authorization/control-authority) registered
+/// as `lunco_hooks` at startup — the `policy→rhai` decision surface.
+static POLICY: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/scripting/policy");
 /// Bundled runtime scenarios — the guidance/mission scripts a scene loads at
 /// startup (e.g. lander auto-land). Distinct from `examples/`: these are shipped
 /// behaviour, not documentation samples, and live alongside the scene assets.
@@ -73,6 +76,18 @@ pub fn scenario(stem: &str) -> Option<&'static str> {
         .and_then(|f| f.contents_utf8())
 }
 
+/// Built-in policy snippets (`assets/scripting/policy/*.rhai`) as `(stem, source)`.
+pub fn policies() -> Vec<(&'static str, &'static str)> {
+    rhai_files(&POLICY)
+}
+
+/// One built-in policy's source by file stem (e.g. `"control_authority"`).
+pub fn policy(stem: &str) -> Option<&'static str> {
+    POLICY
+        .get_file(format!("{stem}.rhai"))
+        .and_then(|f| f.contents_utf8())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,6 +99,7 @@ mod tests {
             ("tools", tool_libraries()),
             ("examples", examples()),
             ("scenarios", scenarios()),
+            ("policy", policies()),
         ] {
             assert!(!files.is_empty(), "{label} embedded empty");
             let mut sorted = files.clone();

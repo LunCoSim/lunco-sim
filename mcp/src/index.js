@@ -6,7 +6,7 @@
  * Dynamic tools are generated from the API schema on startup.
  *
  * Usage:
- *   npx @lunco/mcp-server                    # Use default localhost:3000
+ *   npx @lunco/mcp-server                    # Use default localhost:4101
  *   LUNCO_API_HOST=192.168.1.100 LUNCO_API_PORT=8080 npx @lunco/mcp-server
  */
 
@@ -1008,7 +1008,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // Start the server
 async function main() {
   console.error(`[LunCoSim MCP] Server starting...`);
-  console.error(`[LunCoSim MCP] API: ${process.env.LUNCO_API_HOST || 'localhost'}:${process.env.LUNCO_API_PORT || '3000'}`);
+  console.error(`[LunCoSim MCP] API: ${process.env.LUNCO_API_HOST || 'localhost'}:${process.env.LUNCO_API_PORT || '4101'}`);
 
   // Fetch schema on startup to populate dynamic tools
   await refreshSchema();

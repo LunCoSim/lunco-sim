@@ -12,8 +12,6 @@ Start here, in order (new to the codebase? the canonical narrative path is **[do
 4. **[specs/README.md](specs/README.md)** — feature-spec status index (Implemented / Partial / Not-built / Superseded).
 5. **This file (AGENTS.md)** — the rules below.
 
-Doc hygiene note: a 2026-06-29 audit removed stale planning docs and consolidated networking docs 23→6; see `docs/DOC_AUDIT_2026-06-29.md` for what moved.
-
 ## Agent Mandates
 - **Crate Maintenance**: Whenever a new crate is added to the workspace, the agent MUST update `docs/crates-index.md` to include the new crate in the appropriate category with a concise responsibility summary.
 - **Doc accuracy**: when you rename/remove a crate, type, or binary, grep the docs (`*.md`) for the old name and fix references in the same change — don't leave dangling docs for a later audit.

@@ -27,4 +27,4 @@ pub mod events;
 pub mod node;
 
 pub use events::{entered_zone, event_matches, exited_zone, zone_of};
-pub use node::{Action, Node, Parallel, ParallelPolicy, Repeat, Selector, Sequence, Status};
+pub use node::{Action, BoxNode, Node, Parallel, ParallelPolicy, Repeat, Selector, Sequence, Status};

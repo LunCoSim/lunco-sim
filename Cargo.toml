@@ -6,6 +6,7 @@ members = [
     "crates/lunco-fsw",
     "crates/lunco-behavior",
     "crates/lunco-controller",
+    "crates/lunco-autopilot",
     "crates/lunco-attributes",
     "crates/lunco-avatar",
     "crates/luncosim",

@@ -675,6 +675,20 @@ pub mod capability {
 /// Absent hook ⇒ behaviour is byte-for-byte the pre-hook gate.
 pub const AUTHORIZE_HOOK: &str = "rbac.authorize";
 
+/// The [`lunco_hooks`] id of the **control-authority takeover** policy (spec 034).
+///
+/// When one actor tries to possess a vessel **another session already owns**, the
+/// possession path ([`SessionRegistry::claim`] is `Exclusive` by default and would
+/// refuse) asks this hook whether the takeover is allowed. The rule — e.g. "a human
+/// may take a vessel from an autopilot (`AiAgent`), but an autopilot may not take
+/// one a human holds" — is authored in **rhai**, not Rust, so a deployment tunes it
+/// without recompiling (`policy→rhai`). The hook receives a map
+/// `{ taker, taker_role, owner, owner_role, target }` and returns a bool (`true` =
+/// the taker may steal, so the prior owner is released first). It fails **closed**:
+/// absent hook or a non-bool/faulting policy ⇒ no takeover (the vessel stays with
+/// its current owner). See [`may_take_control`].
+pub const CONTROL_AUTHORITY_HOOK: &str = "control.authority.take";
+
 /// Per-command authorization policy, resolved by [`authorize`].
 ///
 /// The registry is the single seam through which RBAC is introduced later
@@ -836,6 +850,40 @@ fn authz_hook_gate(
             "session {origin} denied {type_name}: authorization policy error: {e}"
         ))),
     }
+}
+
+/// Ask the rhai control-authority policy ([`CONTROL_AUTHORITY_HOOK`]) whether
+/// `taker` may take a vessel currently owned by `owner`. Used by the possession
+/// path when the vessel is owned by a *different* session, so the built-in
+/// `Exclusive` refusal can be overridden by an authored takeover rule (spec 034).
+///
+/// The decision is entirely the rhai policy's — this only marshals the context and
+/// **fails closed**: with no hook registered, or a policy that faults or returns a
+/// non-bool, it returns `false` (no takeover; the current owner keeps the vessel).
+pub fn may_take_control(
+    rbac: &SessionRbac,
+    taker: SessionId,
+    owner: SessionId,
+    target_gid: u64,
+) -> bool {
+    use lunco_hooks::HookValue;
+    let role_of = |s: SessionId| {
+        rbac.sessions
+            .get(&s.0)
+            .map(|u| format!("{:?}", u.role))
+            .unwrap_or_else(|| "None".to_string())
+    };
+    let ctx = HookValue::map([
+        ("taker", HookValue::Int(taker.0 as i64)),
+        ("taker_role", HookValue::str(role_of(taker))),
+        ("owner", HookValue::Int(owner.0 as i64)),
+        ("owner_role", HookValue::str(role_of(owner))),
+        ("target", HookValue::Int(target_gid as i64)),
+    ]);
+    matches!(
+        lunco_hooks::invoke(CONTROL_AUTHORITY_HOOK, &[ctx]),
+        Some(Ok(v)) if v.as_bool() == Some(true)
+    )
 }
 
 #[cfg(test)]

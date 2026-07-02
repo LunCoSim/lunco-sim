@@ -5,7 +5,7 @@
  * Uses the tagged format: {"type": "ExecuteCommand", "command": "...", "params": {...}}
  */
 
-const API_BASE_URL = `http://${process.env.LUNCO_API_HOST || 'localhost'}:${process.env.LUNCO_API_PORT || '3000'}`;
+const API_BASE_URL = `http://${process.env.LUNCO_API_HOST || 'localhost'}:${process.env.LUNCO_API_PORT || '4101'}`;
 
 /**
  * Make a request to the LunCoSim API.

@@ -5,14 +5,16 @@ design, and reference documentation.
 
 ## Application Guide
 
-Documentation for each primary binary and tool in the workspace.
+Documentation for each primary binary and tool in the workspace. The
+**[Applications index](apps/README.md)** lists every runnable binary (primary,
+utility, and dev) with launch commands and the shared CLI/API surface.
 
 | App | Purpose |
 |---|---|
-| [**Sandbox**](apps/sandbox/README.md) | Ground mobility and physics testing |
+| [**luncosim**](apps/luncosim/README.md) | Flagship lunar-mission simulator (full FSW/robotics/avatar stack) |
+| [**Sandbox**](apps/sandbox/README.md) | Ground mobility and physics testing (+ headless [server](apps/sandbox/OPS.md)) |
 | [**Lunica**](apps/lunica/README.md) | Modelica engineering workbench |
 | [**Assets Manager**](apps/assets-manager/README.md) | Download and process workspace assets |
-| [**Model Viewer**](apps/model-viewer/README.md) | Minimal USD model inspection |
 
 ## Strategic Roadmap
 

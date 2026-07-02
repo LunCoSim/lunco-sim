@@ -1,15 +1,29 @@
-// ── Rover control (re-emit every tick: DriveRover has no persistent setpoint) ──
+// ── Rover control (re-emit every tick: the FSW command surface has no persistent
+// setpoint) ──
+//
+// Control is the ONE generic `SetPorts` command: a batch of named input-port
+// writes on the vessel's FlightSoftware command surface (`throttle`/`steer`/
+// `brake`). A `DriveMix` + kernel then projects those onto the actuator ports.
+// There is no `DriveRover`/`BrakeRover`. Like the keyboard path, we write EVERY
+// command port every tick (0 when unused) so a released setpoint — especially a
+// prior `brake` — zeroes out cleanly instead of sticking.
 
-/// Drive a rover this tick. `seq`/`tick` default to 0 — fine for host-local
-/// scenarios; networked control should thread real sequence/tick numbers.
+/// Drive a rover this tick: `forward` throttle + `steer` in [-1, 1], brake
+/// released. `seq`/`tick` default to 0 — fine for host-local scenarios; networked
+/// control should thread real sequence/tick numbers.
 fn drive(rover, forward, steer) {
-    cmd("DriveRover", #{ target: rover, forward: forward, steer: steer, seq: 0, tick: 0 })
+    cmd("SetPorts", #{ target: rover,
+        writes: [["throttle", forward], ["steer", steer], ["brake", 0.0]],
+        seq: 0, tick: 0 })
 }
 
-/// Stop a rover this tick. `intensity` is REQUIRED by BrakeRover (no default) —
-/// 1.0 = full brake; `seq`/`tick` default to 0 (host-local, like `drive`).
+/// Stop a rover this tick: full brake. Writes ONLY `brake` — the drive mix forces
+/// throttle/steer to 0 whenever `brake > 0.5`, so an arrived/idle rover emits no
+/// throttle/steer setpoint at all (it's purely braking, not "driving forward 0").
+/// `drive()` re-writes `brake = 0` next time it's called, so the brake never
+/// sticks. `seq`/`tick` default to 0 (host-local, like `drive`).
 fn brake(rover) {
-    cmd("BrakeRover", #{ target: rover, intensity: 1.0, seq: 0, tick: 0 })
+    cmd("SetPorts", #{ target: rover, writes: [["brake", 1.0]], seq: 0, tick: 0 })
 }
 
 // ── Scene / world manipulation shortcuts (all generic cmd() under the hood) ──

@@ -1,7 +1,8 @@
 // ── Navigation (PURE rhai policy over the world_pos/world_forward reads) ─────
 //
 // All steering math lives here — Rust only exposes the raw position/heading
-// reads + the DriveRover command. Tune or replace freely; no Rust rebuild.
+// reads + the generic `SetPorts` command (via `drive`/`brake`). Tune or replace
+// freely; no Rust rebuild.
 
 /// Signed steer command in [-1, 1] that turns `entity` toward world point
 /// `target`, matched to the SKID-drive sign convention: the drive mixes

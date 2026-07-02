@@ -6801,6 +6801,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-autopilot"
+version = "0.6.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-behavior",
+ "lunco-core",
+ "lunco-cosim",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lunco-avatar"
 version = "0.6.0-dev"
 dependencies = [
@@ -7205,6 +7217,7 @@ dependencies = [
  "leafwing-input-manager",
  "lunco-api",
  "lunco-assets",
+ "lunco-autopilot",
  "lunco-avatar",
  "lunco-celestial",
  "lunco-celestial-ephemeris",
@@ -7299,6 +7312,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-fsw",
+ "lunco-hooks-rhai",
  "lunco-time",
  "lunco-tools",
  "lunco-tools-rhai",
@@ -7642,6 +7656,7 @@ dependencies = [
  "js-sys",
  "lunco-api",
  "lunco-assets",
+ "lunco-autopilot",
  "lunco-avatar",
  "lunco-celestial",
  "lunco-celestial-ephemeris",

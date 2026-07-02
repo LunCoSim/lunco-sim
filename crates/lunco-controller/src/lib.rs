@@ -87,6 +87,13 @@ fn drive_from_bindings(
     role: Res<lunco_core::NetworkRole>,
     tick: Res<lunco_core::SimTick>,
     mut log: ResMut<lunco_core::OwnedInputLog>,
+    // Spec 034 yield: control authority is vessel ownership, so the human keyboard
+    // drives ONLY vessels the local session owns. A vessel owned by another actor
+    // (another player, or an autopilot's `AiAgent` session) is driven by that actor
+    // — the human yields on a single `owner_of` lookup, no per-frame arbiter. Both
+    // `Option` so a controller-only test app without the session substrate runs.
+    registry: Option<Res<lunco_core::SessionRegistry>>,
+    local_session: Option<Res<lunco_core::LocalSession>>,
     q_ctrl: Query<(&ControllerLink, &ActionState<UserIntent>)>,
     q_binding: Query<&ControlBinding>,
     q_vessel: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
@@ -104,14 +111,32 @@ fn drive_from_bindings(
         // The binding is authored ON THE VESSEL (USD `lunco:controlBindings`, or a
         // topology default stamped at possess) — skip a vessel that carries none.
         let Ok(binding) = q_binding.get(link.vessel_entity) else { continue };
+
+        // The vessel's id (gid + is-it-locally-owned) — used both by the ownership
+        // yield below and the client seq bookkeeping.
+        let vessel_id = q_vessel.get(link.vessel_entity).ok();
+
+        // Spec 034 yield: if this vessel is owned by a session OTHER than ours, that
+        // actor (a remote player, or an autopilot's `AiAgent` session) is the single
+        // writer this tick — stay silent so the two never fight (no jitter). Owner
+        // `None` (unpossessed) or our own session → we drive. When an autopilot
+        // yields the vessel, ownership clears and this stops matching.
+        if let (Some(reg), Some(local), Some((gid, _))) =
+            (registry.as_ref(), local_session.as_ref(), vessel_id)
+        {
+            if reg.owner_of(gid.get()).is_some_and(|owner| owner != local.0) {
+                continue;
+            }
+        }
+
         let writes = binding.resolve(|intent| intents.pressed(&intent));
 
         // Owned + predicted on a client → assign a real seq (buffered for replay
         // by `record_control_input`). seq MUST be stamped HERE (the origin)
         // because the wire-capture serializes the command we trigger below.
         let owned_gid = client
-            .then(|| match q_vessel.get(link.vessel_entity) {
-                Ok((gid, true)) => Some(gid.get()),
+            .then(|| match vessel_id {
+                Some((gid, true)) => Some(gid.get()),
                 _ => None,
             })
             .flatten();
