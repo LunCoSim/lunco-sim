@@ -1,16 +1,32 @@
 //! Input mapping and controller translation for simulation vessels.
 //!
-//! This crate translates raw user input (Keyboard) into the ONE generic vessel
-//! control command, [`lunco_cosim::SetPorts`] — a batch of named input-port
-//! writes. It abstracts the UI/Input layer from the simulation core: a possessed
-//! vessel carries a [`ControlBinding`] declaring which key contributes what to
-//! which named port, and [`drive_from_bindings`] turns held keys into port writes
-//! every fixed tick. There is no vessel-kind vocabulary — a rover binds
-//! `throttle`/`steer`/`brake`, a cosim-flown lander binds its Modelica `manual_*`
-//! inputs, both through the same command and the same [`lunco_core::ports::PortRegistry`].
+//! This crate translates user input into the ONE generic vessel control command,
+//! [`lunco_cosim::SetPorts`] — a batch of named input-port writes — through a
+//! **two-stage, fully data-driven** mapping that reuses the existing
+//! [`lunco_core::UserIntent`] input-abstraction (leafwing) rather than reading
+//! raw keys:
+//!
+//! 1. **key → intent**: the possessed avatar's [`leafwing_input_manager`]
+//!    [`InputMap<UserIntent>`](leafwing_input_manager::prelude::InputMap)
+//!    (see [`get_avatar_input_map`]) turns keys/gamepad into semantic intents
+//!    (`MoveForward`, `Action`, …). This is the ONLY place raw devices appear,
+//!    it's shared with avatar locomotion, and — being a leafwing InputMap — it's
+//!    serializable, so a saved keymap ("mapping file") rebinds every vessel.
+//! 2. **intent → port** ([`ControlBinding`], per-vessel, authorable in USD/rhai):
+//!    an active intent contributes `scale` to a named input port. A rover maps
+//!    `MoveForward→throttle`; a cosim-flown lander maps `MoveForward→manual_pitch`.
+//!    Same intent vocabulary, different actuation — no vessel-kind branch.
+//!
+//! [`drive_from_bindings`] composes the two every fixed tick (the controller's
+//! [`ActionState<UserIntent>`](leafwing_input_manager::prelude::ActionState) →
+//! summed port writes → `SetPorts`). Because control is keyed by *intent*,
+//! anything internal (rhai, mission logic, AI) can drive a vessel by naming
+//! intents — the same consistent vocabulary. All writes land through the same
+//! [`lunco_core::ports::PortRegistry`].
 
 use bevy::prelude::*;
-use std::collections::HashMap;
+use leafwing_input_manager::prelude::ActionState;
+use lunco_core::UserIntent;
 
 /// Plugin for managing vessel input and command translation.
 pub struct LunCoControllerPlugin;
@@ -22,7 +38,7 @@ impl Plugin for LunCoControllerPlugin {
         // unconditionally, but it does NOT init them here — single source of
         // truth lives in lunco-core, which every consumer depends on.
         //
-        // Keyboard → port writes are EMITTED once per fixed tick (so the
+        // Input → port writes are EMITTED once per fixed tick (so the
         // prediction replay is a clean 1:1 loop over `InputFrame`s).
         app.add_systems(FixedUpdate, drive_from_bindings);
         // The SINGLE input-bookkeeping chokepoint: every `SetPorts` — keyboard,
@@ -41,50 +57,13 @@ pub struct ControllerLink {
     pub vessel_entity: Entity,
 }
 
-/// Keyboard→port binding for a possessed vessel: while a key is pressed, it
-/// contributes `value` to the named input port. Multiple entries may name the
-/// same key (e.g. Space arming both `manual` and `manual_throttle`) or the same
-/// port (e.g. W/S summing into `throttle`). Selected by TOPOLOGY at possess time
-/// ([`rover_binding`] vs [`flight_binding`]) — see `lunco_avatar::on_possess_command`.
-#[derive(Component)]
-pub struct ControlBinding {
-    /// `(key, port_name, contribution)` — each held key adds its contribution to
-    /// the port; contributions to one port are summed then clamped to [-1, 1].
-    pub binds: Vec<(KeyCode, String, f64)>,
-}
-
-impl ControlBinding {
-    /// Wheeled rover: W/S → `throttle`, A/D → `steer`, Space → `brake`.
-    pub fn rover_binding() -> ControlBinding {
-        ControlBinding {
-            binds: vec![
-                (KeyCode::KeyW, "throttle".into(), 1.0),
-                (KeyCode::KeyS, "throttle".into(), -1.0),
-                (KeyCode::KeyA, "steer".into(), -1.0),
-                (KeyCode::KeyD, "steer".into(), 1.0),
-                (KeyCode::Space, "brake".into(), 1.0),
-            ],
-        }
-    }
-
-    /// Cosim-flown lander: W/S → pitch, A/D → roll, Q/E → yaw, Space arms manual
-    /// mode AND fires full throttle (`manual` + `manual_throttle`, mirroring
-    /// `Lander.mo`). Port names match the Modelica `SimComponent.inputs`.
-    pub fn flight_binding() -> ControlBinding {
-        ControlBinding {
-            binds: vec![
-                (KeyCode::KeyW, "manual_pitch".into(), -1.0),
-                (KeyCode::KeyS, "manual_pitch".into(), 1.0),
-                (KeyCode::KeyA, "manual_roll".into(), 1.0),
-                (KeyCode::KeyD, "manual_roll".into(), -1.0),
-                (KeyCode::KeyQ, "manual_yaw".into(), 1.0),
-                (KeyCode::KeyE, "manual_yaw".into(), -1.0),
-                (KeyCode::Space, "manual".into(), 1.0),
-                (KeyCode::Space, "manual_throttle".into(), 1.0),
-            ],
-        }
-    }
-}
+/// The per-vessel **intent → port** binding (stage 2) is [`lunco_core::ControlBinding`]
+/// — pure data, authored on the VESSEL from USD (`lunco:controlBindings`) or
+/// defaulted by topology at possess time. Re-exported for the possession code and
+/// tests; the actual mapping/parse logic lives in `lunco-core` alongside
+/// [`UserIntent`]. This crate only provides the SYSTEM that consumes it
+/// ([`drive_from_bindings`]).
+pub use lunco_core::ControlBinding;
 
 /// Cap on the unacked input ring (~2 s at 60 Hz). The reconcile normally drains
 /// it to the acked `seq` each snapshot; this only bounds a stalled/disconnected
@@ -108,28 +87,20 @@ fn drive_from_bindings(
     role: Res<lunco_core::NetworkRole>,
     tick: Res<lunco_core::SimTick>,
     mut log: ResMut<lunco_core::OwnedInputLog>,
-    keys: Res<ButtonInput<KeyCode>>,
-    q_ctrl: Query<(&ControllerLink, &ControlBinding)>,
+    q_ctrl: Query<(&ControllerLink, &ActionState<UserIntent>)>,
+    q_binding: Query<&ControlBinding>,
     q_vessel: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
     mut commands: Commands,
 ) {
     let client = matches!(*role, lunco_core::NetworkRole::Client);
-    for (link, binding) in q_ctrl.iter() {
-        // Sum each bound key's contribution into its port; keep a 0.0 entry for
-        // every bound port so a released key writes 0 (clears the setpoint).
-        let mut values: HashMap<String, f64> = HashMap::new();
-        for (_key, port, _v) in &binding.binds {
-            values.entry(port.clone()).or_insert(0.0);
-        }
-        for (key, port, v) in &binding.binds {
-            if keys.pressed(*key) {
-                *values.get_mut(port).unwrap() += *v;
-            }
-        }
-        let writes: Vec<(String, f64)> = values
-            .into_iter()
-            .map(|(name, v)| (name, v.clamp(-1.0, 1.0)))
-            .collect();
+
+    for (link, intents) in q_ctrl.iter() {
+        // Stage 1 (key→intent) is the shared leafwing `InputMap<UserIntent>`;
+        // stage 2 maps this vessel's active intents → summed, clamped port writes.
+        // The binding is authored ON THE VESSEL (USD `lunco:controlBindings`, or a
+        // topology default stamped at possess) — skip a vessel that carries none.
+        let Ok(binding) = q_binding.get(link.vessel_entity) else { continue };
+        let writes = binding.resolve(|intent| intents.pressed(&intent));
 
         // Owned + predicted on a client → assign a real seq (buffered for replay
         // by `record_control_input`). seq MUST be stamped HERE (the origin)
@@ -219,6 +190,10 @@ pub fn get_avatar_input_map() -> leafwing_input_manager::prelude::InputMap<lunco
         (MoveUp, KeyCode::KeyE),
         (MoveDown, KeyCode::KeyQ),
         (Action, KeyCode::KeyF),
+        // Space also fires `Action`: for a possessed vessel that's brake (rover)
+        // / arm-manual+full-throttle (lander) via its `ControlBinding`; for a
+        // free avatar it's the same context interaction as F.
+        (Action, KeyCode::Space),
         (SwitchMode, KeyCode::KeyV),
         (Pause, KeyCode::KeyP),
     ]);

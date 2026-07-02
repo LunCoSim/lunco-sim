@@ -115,6 +115,122 @@ impl Default for IntentAnalogState {
     }
 }
 
+/// Parse a control-intent name (case-insensitive, `Move` prefix optional, with
+/// vessel-friendly aliases) into a [`UserIntent`]. Used by USD authoring
+/// ([`ControlBinding::from_usd_spec`]) so a scene can name intents in plain
+/// words (`"forward"`, `"brake"`, `"yaw_left"`).
+pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "forward" | "moveforward" | "pitch_down" => Some(UserIntent::MoveForward),
+        "backward" | "back" | "movebackward" | "pitch_up" => Some(UserIntent::MoveBackward),
+        "left" | "moveleft" | "roll_left" => Some(UserIntent::MoveLeft),
+        "right" | "moveright" | "roll_right" => Some(UserIntent::MoveRight),
+        "up" | "moveup" | "yaw_right" => Some(UserIntent::MoveUp),
+        "down" | "movedown" | "yaw_left" => Some(UserIntent::MoveDown),
+        "action" | "brake" | "arm" | "fire" => Some(UserIntent::Action),
+        "switchmode" | "switch_mode" => Some(UserIntent::SwitchMode),
+        "pause" => Some(UserIntent::Pause),
+        _ => None,
+    }
+}
+
+/// Per-vessel **intent → port** binding: while a [`UserIntent`] is active it
+/// contributes `scale` to the named input port. Multiple entries may share an
+/// intent (e.g. `Action` arming both `manual` and `manual_throttle`) or a port
+/// (e.g. `MoveForward`/`MoveBackward` summing into `throttle`).
+///
+/// This is the SECOND, per-vessel stage of control. The first (key → intent) is
+/// the shared leafwing [`UserIntent`] input map; this component decides only what
+/// each intent *actuates* on this vessel, so a rover and a lander share the
+/// intent vocabulary while binding different ports. It's authorable from USD via
+/// [`from_usd_spec`](ControlBinding::from_usd_spec) (`lunco:controlBindings`), and
+/// the controller falls back to a topology default ([`rover_binding`] /
+/// [`flight_binding`]) when a possessed vessel carries none. The consuming system
+/// (`lunco_controller::drive_from_bindings`) reads it off the vessel via the
+/// controller link.
+#[derive(Component, Debug, Clone)]
+pub struct ControlBinding {
+    /// `(intent, port_name, scale)` — each active intent adds its scale to the
+    /// port; contributions to one port are summed then clamped to [-1, 1].
+    pub binds: Vec<(UserIntent, String, f64)>,
+}
+
+impl ControlBinding {
+    /// Wheeled rover: forward/back → `throttle`, left/right → `steer`,
+    /// `Action` (Space/F) → `brake`.
+    pub fn rover_binding() -> ControlBinding {
+        ControlBinding {
+            binds: vec![
+                (UserIntent::MoveForward, "throttle".into(), 1.0),
+                (UserIntent::MoveBackward, "throttle".into(), -1.0),
+                (UserIntent::MoveLeft, "steer".into(), -1.0),
+                (UserIntent::MoveRight, "steer".into(), 1.0),
+                (UserIntent::Action, "brake".into(), 1.0),
+            ],
+        }
+    }
+
+    /// Cosim-flown lander: forward/back → pitch, left/right → roll, up/down
+    /// (E/Q) → yaw, `Action` (Space/F) arms manual mode AND fires full throttle
+    /// (`manual` + `manual_throttle`, mirroring `Lander.mo`). Port names match the
+    /// Modelica `SimComponent.inputs`.
+    pub fn flight_binding() -> ControlBinding {
+        ControlBinding {
+            binds: vec![
+                (UserIntent::MoveForward, "manual_pitch".into(), -1.0),
+                (UserIntent::MoveBackward, "manual_pitch".into(), 1.0),
+                (UserIntent::MoveLeft, "manual_roll".into(), 1.0),
+                (UserIntent::MoveRight, "manual_roll".into(), -1.0),
+                (UserIntent::MoveDown, "manual_yaw".into(), 1.0),
+                (UserIntent::MoveUp, "manual_yaw".into(), -1.0),
+                (UserIntent::Action, "manual".into(), 1.0),
+                (UserIntent::Action, "manual_throttle".into(), 1.0),
+            ],
+        }
+    }
+
+    /// Parse a `lunco:controlBindings` USD attribute into a binding. The spec is
+    /// a comma-separated list of `intent:port:scale` entries, e.g.
+    /// `"forward:throttle:1, backward:throttle:-1, action:brake:1"`. Unparseable
+    /// entries (unknown intent, missing port, bad scale) are skipped with a
+    /// warning. Returns `None` when nothing valid parsed, so the caller can fall
+    /// back to a topology default.
+    pub fn from_usd_spec(spec: &str) -> Option<ControlBinding> {
+        let mut binds = Vec::new();
+        for entry in spec.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            let mut parts = entry.split(':');
+            let intent = parts.next().and_then(parse_user_intent);
+            let port = parts.next().map(str::trim).filter(|p| !p.is_empty());
+            let scale = parts.next().and_then(|s| s.trim().parse::<f64>().ok());
+            match (intent, port, scale) {
+                (Some(i), Some(p), Some(s)) => binds.push((i, p.to_string(), s)),
+                _ => warn!("[ControlBinding] ignoring malformed entry '{entry}' (want intent:port:scale)"),
+            }
+        }
+        (!binds.is_empty()).then_some(ControlBinding { binds })
+    }
+
+    /// Resolve active intents into summed, clamped port writes. Every port named
+    /// by the binding is present (0.0 when its intents are idle) so a released
+    /// input writes 0 and clears the setpoint. `active(intent)` is the sole input
+    /// — shared by the keyboard path and any internal (rhai/mission/AI) driver.
+    pub fn resolve(&self, active: impl Fn(UserIntent) -> bool) -> Vec<(String, f64)> {
+        let mut values: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        for (_intent, port, _s) in &self.binds {
+            values.entry(port.clone()).or_insert(0.0);
+        }
+        for (intent, port, s) in &self.binds {
+            if active(*intent) {
+                *values.get_mut(port).unwrap() += *s;
+            }
+        }
+        values
+            .into_iter()
+            .map(|(name, v)| (name, v.clamp(-1.0, 1.0)))
+            .collect()
+    }
+}
+
 // ── Digital / Physical Ports ──────────────────────────────────────────────────
 
 /// Level 2: Digital Port (OBC Register Emulation)

@@ -1018,7 +1018,7 @@ mod tests {
         // (1) Local/host launch → ungated. No observer is registered for the
         // command, so it dispatches as a fire-and-forget no-op and reports ok.
         set_script_authority(None);
-        let r = cmd_raw("DriveRover", serde_json::json!({ "target": 1, "forward": 1.0 }));
+        let r = cmd_raw("SetPorts", serde_json::json!({ "target": 1, "writes": [] }));
         assert_eq!(r["ok"], serde_json::json!(true), "local launch must be ungated");
 
         // (2) Authenticated Observer + an OPEN command (not in the policy base)
@@ -1030,7 +1030,7 @@ mod tests {
         // (3) Same Observer + an OWNED_CONTROL command on a target it does NOT
         // own → demands Operator → rejected BEFORE dispatch.
         set_script_authority(Some(SessionId(7)));
-        let r = cmd_raw("DriveRover", serde_json::json!({ "target": 1, "forward": 1.0 }));
+        let r = cmd_raw("SetPorts", serde_json::json!({ "target": 1, "writes": [] }));
         assert_eq!(r["ok"], serde_json::json!(false), "unowned OWNED_CONTROL must be rejected");
         assert!(r["error"].is_string());
 

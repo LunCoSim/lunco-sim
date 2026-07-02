@@ -236,6 +236,18 @@ fn par_race(items) { #{ k: "race", items: items } }
 fn repeat(n, body) { #{ k: "repeat", n: n, body: body, cur: body, done_n: 0 } }
 fn forever(body)   { #{ k: "forever", body: body, cur: body } }
 
+/// True if any event in `ev` matches `evt_name` and (when `want != ()`) was
+/// emitted by source `want`. Hoisted to its own top-level function so the closure
+/// doesn't nest past rhai's stock expr-depth cap inside `__tick_leaf`'s if/else
+/// chain (same reason the composite kinds below are each their own helper).
+fn __event_matches(ev, evt_name, want) {
+    ev.some(|e| {
+        let name_ok = e.name == evt_name;
+        let src_ok = want == () || e.source == want;
+        name_ok && src_ok
+    })
+}
+
 /// Tick ONE leaf step `s` (a once/wait/wait_until/wait_for/step map), tracking its
 /// own dwell start on `s._t0`. `ev` is this tick's event-name buffer. Returns
 /// `#{ n: <updated leaf>, d: <done?> }`. (Mirrors run_steps' step_done precedence.)
@@ -251,7 +263,7 @@ fn __tick_leaf(me, s, now, ev) {
     else if s.event != () {
         let want = s.src;
         if want != () && type_of(want) == "string" { want = find(want); }
-        d = ev.some(|e| e.name == s.event && (want == () || e.source == want));
+        d = __event_matches(ev, s.event, want);
     }
     #{ n: s, d: d }
 }

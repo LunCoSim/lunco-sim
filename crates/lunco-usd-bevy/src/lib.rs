@@ -674,6 +674,18 @@ fn instantiate_usd_prim(
             }
         }
 
+        // Custom `lunco:controlBindings` authors this vessel's intent→port map
+        // (stage 2 of control) directly in the scene — a comma-separated list of
+        // `intent:port:scale`, e.g. `"forward:throttle:1, action:brake:1"`. When
+        // absent, the controller stamps a topology default at possess time. This
+        // is the fully data-driven path: a new vessel declares what its inputs
+        // actuate without any Rust change.
+        if let Some(spec) = get_attribute_as_string(reader, &sdf_path, "lunco:controlBindings") {
+            if let Some(binding) = lunco_core::ControlBinding::from_usd_spec(&spec) {
+                commands.entity(entity).insert(binding);
+            }
+        }
+
         // Per-prim script params: `lunco:params = "wmax=1.05, lmax=3.6"`. Parsed
         // into a `ScriptParams` map a reusable script reads via `param(me, key,
         // default)` — the typed, fast alternative to inferring config from a name.

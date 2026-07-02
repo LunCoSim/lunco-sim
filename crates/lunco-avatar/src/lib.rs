@@ -1581,9 +1581,10 @@ fn on_release_command(
         });
     }
 
+    // Dropping the `ControllerLink` stops `drive_from_bindings` (the vessel keeps
+    // its own `ControlBinding` for the next possession).
     commands.entity(avatar_ent)
         .remove::<ControllerLink>()
-        .remove::<lunco_controller::ControlBinding>()
         .remove::<SpringArmCamera>()
         .remove::<OrbitCamera>()
         .remove::<FrameBlend>()
@@ -1652,6 +1653,7 @@ fn on_possess_command(
     q_sc: Query<&Spacecraft>,
     q_vessel: Query<&lunco_fsw::FlightSoftware>,
     q_lander_vessel: Query<(), With<lunco_cosim::SimComponent>>,
+    q_control_binding: Query<(), With<lunco_controller::ControlBinding>>,
     q_vessel_gravity: Query<&GravityBody>,
     guard: Res<lunco_core::SyncApplyGuard>,
     registry: Res<lunco_core::SessionRegistry>,
@@ -1734,28 +1736,25 @@ fn on_possess_command(
         &q_grids, &q_parents, &q_spatial_abs,
     );
 
-    // VesselIntent state + input map go on the **avatar**, not the vessel.
-    // `lunco-controller::translate_intents_to_commands` joins on
-    // `(VesselIntentState, ControllerLink)` — both must live on the same
-    // entity for the query to match. Putting the action state on the vessel
-    // (as a stranded component) silently disabled the entire keyboard drive
-    // path; the legacy `on_user_intent` observer was masking the bug.
-    //
-    // The InputMap is selected by TOPOLOGY, not a vessel-kind marker: a body
-    // actuated through a Modelica `SimComponent` (its manual-override ports)
-    // binds Space to `ArmManual` and Q/E to yaw, while a wheel-drive vessel
-    // keeps the Space=Brake / no-yaw layout. Sharing one `VesselIntent` enum
-    // with two binding tables keeps the surface (HTTP API, MCP, scripts)
-    // identical while the keys match each vessel's physical actuation.
-    let is_lander = q_lander_vessel.get(cmd.target).is_ok();
-    commands.entity(avatar_ent).insert((
-        ControllerLink { vessel_entity: cmd.target },
-        if is_lander {
+    // The controller link goes on the **avatar** (it carries the shared
+    // `ActionState<UserIntent>` that `drive_from_bindings` reads); the intent→port
+    // `ControlBinding` lives on the **vessel** (its own property). If the vessel
+    // was authored with one from USD (`lunco:controlBindings`) it's already there;
+    // otherwise fall back to a TOPOLOGY default so any possessable vessel drives —
+    // a Modelica `SimComponent` body binds Q/E→yaw + Space→arm-manual, a
+    // wheel-drive vessel binds Space→brake. The shared `UserIntent` vocabulary
+    // keeps the surface (HTTP API, MCP, scripts) identical across both.
+    commands
+        .entity(avatar_ent)
+        .insert(ControllerLink { vessel_entity: cmd.target });
+    if q_control_binding.get(cmd.target).is_err() {
+        let is_lander = q_lander_vessel.get(cmd.target).is_ok();
+        commands.entity(cmd.target).insert(if is_lander {
             lunco_controller::ControlBinding::flight_binding()
         } else {
             lunco_controller::ControlBinding::rover_binding()
-        },
-    ));
+        });
+    }
 
     // Detect if target is a surface vehicle (has GravityBody) and propagate surface mode.
     let is_surface_vehicle = q_vessel_gravity.get(cmd.target).is_ok();
@@ -1861,11 +1860,11 @@ fn on_follow_command(
         &q_grids, &q_parents, &q_spatial_abs,
     );
 
-    // Strip any prior controller binding — follow ≠ possess.
+    // Drop the controller link — follow ≠ possess (the vessel keeps its own
+    // `ControlBinding`).
     let mut cmd_ent = commands.entity(avatar_ent);
     cmd_ent
         .remove::<ControllerLink>()
-        .remove::<lunco_controller::ControlBinding>()
         .remove::<FreeFlightCamera>()
         .remove::<SurfaceCamera>()
         .remove::<OrbitCamera>()
