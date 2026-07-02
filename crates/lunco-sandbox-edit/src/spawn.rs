@@ -142,7 +142,7 @@ pub fn update_spawn_ghost(
     asset_server: Res<AssetServer>,
     stages: Res<Assets<UsdStageAsset>>,
     mut footprint_cache: ResMut<FootprintCache>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
     windows: Query<&Window>,
     q_ghost: Query<(Entity, &Transform), With<SpawnGhost>>,
     grids: Query<Entity, With<Grid>>,
@@ -159,7 +159,15 @@ pub fn update_spawn_ghost(
     // snaps to the real slope-fit once available.
     let fp = ensure_footprint(&mut *footprint_cache, &catalog, &asset_server, &stages, entry_id);
 
-    let (camera, cam_tf) = match cameras.iter().next() {
+    // Ray through the ACTIVE window camera (the one you're looking through) —
+    // not merely the first Camera3d, which may now be an inactive scene camera.
+    let (camera, cam_tf) = match cameras
+        .iter()
+        .find(|(cam, _, target)| {
+            cam.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
+        })
+        .map(|(cam, tf, _)| (cam, tf))
+    {
         Some(c) => c,
         None => return,
     };

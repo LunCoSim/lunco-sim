@@ -558,6 +558,12 @@ fn set_property(id, key, val)  { cmd("SetObjectProperty", #{ target: id, key: ke
 fn detach_joint(joint)         { cmd("DetachJoint", #{ target: joint }) }
 fn possess(vessel)             { cmd("PossessVessel", #{ target: vessel }) }
 
+// Switch the active window camera by name (full USD prim path or its leaf) —
+// the switch surface for cutscenes: `set_camera("ChaseCam")` cuts to the rover
+// cam, `set_camera("WideShot")` to a scene camera. "Which camera renders" is
+// Bevy's own is_active; scene cameras are standard USD `def Camera` prims.
+fn set_camera(name)            { cmd("SetActiveCamera", #{ name: name }) }
+
 // On-screen player notifications (toasts). `notify` is info-styled; `notify_kind`
 // takes a style: "info" | "success" | "warn" | "error". Lets a scenario announce
 // each phase without any Rust — drawn by the avatar UI overlay, logged headless.

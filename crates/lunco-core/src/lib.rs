@@ -191,6 +191,46 @@ pub struct Avatar;
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct LocalAvatar;
 
+/// The main window's 3D **viewport**: which camera it renders from, whether
+/// it's shown, and the sub-rect it occupies. A single reconciler
+/// (`lunco_usd_bevy::reconcile_scene_viewport`) turns this into Bevy's
+/// per-camera `Camera::is_active` + `Camera::viewport` — the ONE authority over
+/// window-camera activation. Models an Omniverse Viewport (which owns an active
+/// `camera`), reusing Bevy's own `is_active`/`viewport` rather than inventing a
+/// bespoke "view" concept.
+///
+/// Contributors write DATA here and NEVER touch `Camera::is_active` themselves:
+/// - the camera switch (`set_camera(name)` / `KeyC`) rebinds [`active_camera`];
+/// - the workbench sets [`visible`] + [`rect`] from its layout perspective.
+///
+/// [`active_camera`]: SceneViewport::active_camera
+/// [`visible`]: SceneViewport::visible
+/// [`rect`]: SceneViewport::rect
+#[derive(Resource, Debug, Clone)]
+pub struct SceneViewport {
+    /// The bound (active) camera — which window `Camera3d` renders. Revalidated
+    /// each frame by the reconciler; falls back to the local avatar camera
+    /// (else any window camera) when unset or stale.
+    pub active_camera: Option<Entity>,
+    /// Whether the 3D scene renders at all (the workbench Design perspective
+    /// sets this `false`). Defaults `true` so tooling/headless binaries with no
+    /// workbench Just Work.
+    pub visible: bool,
+    /// Physical `(position, size)` sub-rect the viewport occupies within the
+    /// window, or `None` for the full window (the current default).
+    pub rect: Option<(UVec2, UVec2)>,
+}
+
+impl Default for SceneViewport {
+    fn default() -> Self {
+        Self {
+            active_camera: None,
+            visible: true,
+            rect: None,
+        }
+    }
+}
+
 /// Defines a spacecraft entity with its ephemeris and physical constraints.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component)]
@@ -422,6 +462,11 @@ impl Plugin for LunCoCorePlugin {
 pub(crate) fn register_core_resources(app: &mut App) {
     app.init_resource::<SimTick>()
         .init_resource::<IsServer>()
+        // The scene viewport's active-camera binding (+ visibility/rect). The
+        // single source of truth the viewport-camera reconciler actuates; the
+        // switch and workbench write it. Core-guaranteed so every windowed
+        // binary has it without ordering worries.
+        .init_resource::<SceneViewport>()
         .init_resource::<session::NetworkRole>()
         .init_resource::<session::LocalSession>()
         .init_resource::<session::SyncApplyGuard>()

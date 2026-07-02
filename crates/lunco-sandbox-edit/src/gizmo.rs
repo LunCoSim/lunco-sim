@@ -233,14 +233,33 @@ pub fn restore_gizmo_dynamic(
     }
 }
 
-/// Ensures the primary window camera carries the GizmoCamera marker.
+/// Keeps `GizmoCamera` on the **active** window camera only.
+///
+/// The gizmo renders/interacts through whichever camera carries `GizmoCamera`.
+/// With multiple scene cameras present (USD `def Camera` prims spawn as extra
+/// window `Camera3d`s), tagging *every* window camera made the gizmo bind to
+/// the wrong one. So exactly the active window camera (`Camera::is_active`) is
+/// tagged; the rest are untagged as the active view switches.
 pub fn sync_gizmo_camera(
-    q_cameras: Query<(Entity, &RenderTarget), (With<Camera3d>, Without<GizmoCamera>)>,
+    q_cameras: Query<(Entity, &Camera, &RenderTarget), With<Camera3d>>,
+    q_tagged: Query<Entity, With<GizmoCamera>>,
     mut commands: Commands,
 ) {
-    for (camera, target) in q_cameras.iter() {
-        if matches!(target, RenderTarget::Window(_)) {
-            commands.entity(camera).insert(GizmoCamera);
+    let active = q_cameras
+        .iter()
+        .find(|(_, cam, target)| cam.is_active && matches!(target, RenderTarget::Window(_)))
+        .map(|(e, _, _)| e);
+
+    // Untag any camera that is no longer the active window view.
+    for tagged in q_tagged.iter() {
+        if Some(tagged) != active {
+            commands.entity(tagged).remove::<GizmoCamera>();
+        }
+    }
+    // Tag the active window camera (idempotent).
+    if let Some(active) = active {
+        if !q_tagged.contains(active) {
+            commands.entity(active).insert(GizmoCamera);
         }
     }
 }

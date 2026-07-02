@@ -54,7 +54,7 @@ use bevy::prelude::*;
 // `bevy::camera::*` re-exports work on *both* native and
 // `--no-default-features` wasm builds. `bevy::render::camera::*` only
 // exists when the `bevy_render` feature is on, which wasm strips.
-use bevy::camera::{ClearColorConfig, RenderTarget, Viewport};
+use bevy::camera::{ClearColorConfig, RenderTarget};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
 
 use crate::{Panel, PanelCtx, PanelId, PanelSlot};
@@ -331,60 +331,34 @@ pub fn ensure_egui_host(
     }
 }
 
-/// PostUpdate system — write the [`ViewportPanel`] rect into every
-/// [`WorkbenchViewportCamera`]-tagged camera's `Camera::viewport`.
-///
-/// Runs before Bevy's `CameraUpdateSystems` so the new viewport is in
-/// effect for the same frame the panel measured. If the panel hasn't
-/// recorded its rect yet (first frame, perspective without a viewport
-/// panel) the cameras' viewports are cleared to `None` — they render
-/// to their target's full extent, which the invariant sentinel will
-/// catch if the target is the window.
+/// Push the workbench's layout state — is the 3D scene shown, and (future) in
+/// what rect — into [`SceneViewport`](lunco_core::SceneViewport). The
+/// viewport-camera reconciler in `lunco-usd-bevy` actuates it onto the actual
+/// cameras; this system deliberately does NOT touch `Camera::is_active` so the
+/// workbench and the camera switch stop fighting over it.
 pub fn apply_workbench_viewport(
-    rects: Res<PanelRects>,
     layout: Option<Res<crate::WorkbenchLayout>>,
-    mut cameras: Query<&mut Camera, With<WorkbenchViewportCamera>>,
+    vp: Option<ResMut<lunco_core::SceneViewport>>,
 ) {
-    // Three modes, gated on the *current layout's contents* — never on
-    // `PanelRects`, because that resource intentionally keeps stale
-    // rects across perspective switches:
-    //   (a) Empty layout / no layout (View perspective, tooling
-    //       binaries) → camera active, viewport=None, full window.
-    //   (b) Layout CONTAINS ViewportPanel (Build) → camera active,
-    //       viewport=last recorded rect (or None until first paint).
-    //   (c) Layout has other panels but NO ViewportPanel (Design) →
-    //       camera INACTIVE. No 3D render reaches the framebuffer, so
-    //       no panel gap, no stale rect, and no pass-skip can leak 3D
-    //       under the UI.
+    // The workbench contributes VISIBILITY (and a future rect) to the scene
+    // viewport; it never writes `Camera::is_active` — the viewport-camera
+    // reconciler in `lunco-usd-bevy` is the single authority. Gated on the
+    // *current layout's contents* (never on stale `PanelRects`):
+    //   (a) Empty layout / no layout (View perspective, tooling) → visible.
+    //   (b) Layout CONTAINS ViewportPanel (Build)                 → visible.
+    //   (c) Other panels but NO ViewportPanel (Design)            → hidden, so
+    //       no 3D reaches the framebuffer and no pass-skip leaks it under the UI.
     let (layout_empty, layout_has_viewport) = match layout.as_ref() {
         None => (true, false),
         Some(l) => (layout_is_empty(l), layout_contains_panel(l, VIEWPORT_PANEL_ID)),
     };
-    // Camera3d always renders to the full window now; the chrome
-    // panels (opaque side/top/bottom) overlay where they are and the
-    // 3D shows through every transparent gap — including the dock
-    // tab-strip area above ViewportPanel and the dock padding below.
-    // Sub-rect viewports left a hole of uncleared framebuffer in
-    // those gaps; full-window 3D fills them naturally.
-    let _ = rects; // kept around for diagnostics; no longer drives Camera::viewport
-    let target_viewport: Option<Viewport> = None;
-    let want_active = layout_empty || layout_has_viewport;
-
-    for mut camera in &mut cameras {
-        if camera.is_active != want_active {
-            camera.is_active = want_active;
-        }
-        let same = match (&camera.viewport, &target_viewport) {
-            (None, None) => true,
-            (Some(a), Some(b)) => {
-                a.physical_position == b.physical_position && a.physical_size == b.physical_size
-            }
-            _ => false,
-        };
-        if !same {
-            camera.viewport = target_viewport.clone();
-        }
-    }
+    let Some(mut vp) = vp else { return };
+    // 3D renders full-window: the chrome panels (opaque side/top/bottom)
+    // overlay it and the scene shows through every transparent gap. `rect =
+    // None` = full window; a future sub-rect would derive it from the
+    // ViewportPanel's recorded rect.
+    vp.visible = layout_empty || layout_has_viewport;
+    vp.rect = None;
 }
 
 /// True iff `panel` appears in the active layout — either as a tab in

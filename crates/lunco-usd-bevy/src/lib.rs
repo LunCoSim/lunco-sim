@@ -47,6 +47,10 @@ use std::sync::Arc;
 mod resolver;
 mod compose;
 mod light;
+mod camera;
+pub mod camera_mount;
+pub mod camera_switch;
+pub use camera_switch::SetActiveCamera;
 pub mod author;
 pub mod usd_data;
 use usd_data::UsdDataExt;
@@ -63,6 +67,12 @@ pub struct UsdBevyPlugin;
 
 impl Plugin for UsdBevyPlugin {
     fn build(&self, app: &mut App) {
+        // `SetActiveCamera` (avatar-free camera switch). Registered here so a
+        // static/headless USD world can switch cameras via the command bus/rhai
+        // without pulling in the avatar plugin. The observer is generated +
+        // wired by the `register_commands!` invocation at module scope below.
+        register_all_commands(app);
+
         // The mission-time spine provides `WorldTime` (the world animation clock)
         // for `sample_usd_animation`. Guarded so a context that also adds it via
         // `CelestialPlugin` is fine; where neither celestial nor a real clock UI
@@ -120,6 +130,35 @@ impl Plugin for UsdBevyPlugin {
             .add_systems(Startup, load_diagnostic_label_font)
             .add_observer(on_usd_prim_added)
             .add_observer(light::on_usd_light_added)
+            // Active-camera switch (avatar-free): the `SetActiveCamera` command
+            // + `KeyC` cycle both fire the internal `ActivateCamera` trigger,
+            // which enforces the one-active-window-camera invariant and
+            // relocates the big_space FloatingOrigin. Works in a static,
+            // input-less world (the command path needs neither).
+            .add_observer(camera_switch::on_activate_camera)
+            .add_observer(camera_switch::bind_avatar_camera_on_add)
+            // The viewport-camera reconciler: the SINGLE authority over
+            // window-camera `is_active` + `viewport`. Reads `SceneViewport`
+            // (bound camera + visibility + rect, written by the switch and the
+            // workbench) and actuates it. Runs every frame so async spawns and
+            // provisional→avatar takeover stay coherent.
+            .add_systems(
+                Update,
+                (
+                    camera_switch::cycle_active_camera,
+                    camera_switch::reconcile_scene_viewport.after(camera_switch::cycle_active_camera),
+                ),
+            )
+            // Rover/vehicle-mounted cameras: a nested `def Camera` is realised
+            // as a grid-direct follower (so it can host the FloatingOrigin at
+            // full precision). `resolve` rigs it once during load; `follow`
+            // tracks the mount each frame, before transform propagation.
+            .add_systems(Update, camera_mount::resolve_camera_mounts)
+            .add_systems(
+                PostUpdate,
+                camera_mount::follow_mounted_cameras
+                    .before(bevy::transform::TransformSystems::Propagate),
+            )
             // `sync_usd_visuals` runs only on frames where a stage's
             // `LoadedWithDependencies` event was emitted. Idle frames
             // skip it entirely (run-condition short-circuits).
@@ -152,6 +191,10 @@ impl Plugin for UsdBevyPlugin {
             );
     }
 }
+
+// Generates `register_all_commands(app)` (register_type + add_observer for the
+// listed command handlers). Called from `UsdBevyPlugin::build`.
+lunco_core::register_commands!(camera_switch::on_set_active_camera);
 
 /// A Bevy Asset representing a loaded USD Stage.
 ///
@@ -501,6 +544,13 @@ fn instantiate_usd_prim(
         // orientation from `xformOp:rotateXYZ`.
         light::instantiate_light_prim(reader, &sdf_path, prim_type.as_deref(), commands, entity);
 
+        // UsdGeomCamera (`def Camera`) → an inactive Bevy `Camera3d` (see
+        // `camera.rs`). Standard USD camera prim; which one renders is Bevy's
+        // `Camera::is_active`, chosen by the switch mechanism in `lunco-avatar`.
+        // A camera nested under a moving prim rides it via the shared transform
+        // path below + `ChildOf` propagation ("camera on a rover").
+        camera::instantiate_camera_prim(reader, &sdf_path, prim_type.as_deref(), commands, entity);
+
         // Horizon-map terrain self-shadowing (consumed by
         // `lunco-environment`'s horizon system). Authors opt a terrain prim
         // in with `custom bool lunco:terrain:horizonShadows = true`; the
@@ -817,6 +867,26 @@ fn instantiate_usd_prim(
                 axis,
                 transform.rotation
             );
+        }
+        // UsdGeomCamera aim by target point: when a `def Camera` authors
+        // `lunco:cameraLookAt` (double3, in the camera's PARENT-local space),
+        // orient it to look from its `xformOp:translate` toward that point.
+        // The ergonomic way to point a scene/cutscene camera at an object —
+        // move either the camera or the object and the aim stays correct.
+        // Overrides any authored rotation and produces a standard rotation
+        // (same convenience the avatar camera has, but pure `Transform`).
+        // Parent-local on both sides, so a camera nested under a rover aims in
+        // rover-local space and the aim rides the rover.
+        if prim_type.as_deref() == Some("Camera") {
+            if let Some([tx, ty, tz]) = read_vec3_f64(reader, &sdf_path, "lunco:cameraLookAt") {
+                let target = Vec3::new(tx as f32, ty as f32, tz as f32);
+                let eye = transform.translation;
+                if (target - eye).length_squared() > 1e-6 {
+                    transform.rotation = Transform::from_translation(eye)
+                        .looking_at(target, Vec3::Y)
+                        .rotation;
+                }
+            }
         }
         // `xformOp:scale` (UsdGeomXformable) — non-uniform scaling composed with
         // translate + rotate. Spec-compliant `Cube` prims rely on this to express
