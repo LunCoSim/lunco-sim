@@ -7121,6 +7121,8 @@ dependencies = [
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-hooks",
+ "lunco-hooks-rhai",
  "lunco-mobility",
  "lunco-obstacle-field",
  "lunco-sandbox-edit",

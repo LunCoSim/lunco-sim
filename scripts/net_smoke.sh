@@ -50,6 +50,8 @@ grep -E "CLAIMED|DENIED|rejected DriveRover" "$HOST_LOG" | head -n 6 || true
 echo "----- journal sync (client→host leg: peer_entries should be >0) -----"
 grep -E "HOST-JOURNAL" "$HOST_LOG" | tail -n 2 || true
 grep -E "authored journal entry" "$HOST_LOG" "$CLIENT_LOG" || true
+echo "----- scripted merge policy (rhai, both peers) -----"
+grep -E "activated scripted merge policy|merged_markers|policy_active" "$HOST_LOG" "$CLIENT_LOG" | tail -n 4 || true
 
 if grep -q "RESULT: PASS" "$CLIENT_LOG"; then
   echo "net_smoke: PASS"

@@ -24,7 +24,7 @@ use std::collections::HashSet;
 
 use lunco_core::NetworkRole;
 use lunco_doc_bevy::JournalResource;
-use lunco_twin_journal::{AuthorId, DomainKind, EntryId, EntryKind, JournalEntry};
+use lunco_twin_journal::{AuthorId, DomainKind, EntryId, EntryKind, JournalEntry, MergeStrategy};
 
 use crate::sync::{SyncEnvelope, SyncOutbox};
 use lunco_core::SyncChannel;
@@ -248,6 +248,39 @@ pub fn scene_ops_after(
     })
 }
 
+// ── Layer C: pluggable convergent merge policy (rhai) ─────────────────────────
+
+/// Activate a **scripted convergent merge policy** on `journal`: compile+register
+/// the rhai `source` (entry fn `entry(a, b) -> int`, C-`memcmp` convention over
+/// the two `{ author, lamport, domain }` maps) under `hook_id` as a
+/// **deterministic** hook, then switch the journal to [`MergeStrategy::Scripted`]
+/// so *every* convergent read uses it: the client scene replay
+/// ([`scene_ops_after`]), the `append_remote` `main` re-pointing, and
+/// [`merged_head`](lunco_twin_journal::Journal::merged_head).
+///
+/// # Determinism contract
+///
+/// Every peer MUST call this with the **identical** `hook_id` and `source`, or
+/// peers linearize the same history differently and their scenes diverge — the one
+/// thing the merge plane exists to prevent. Distribute the policy script over the
+/// content plane so all peers run byte-identical source. Returns the rhai compile
+/// error (journal unchanged) on failure.
+pub fn activate_scripted_merge_policy(
+    journal: &JournalResource,
+    hook_id: &str,
+    entry: &str,
+    source: &str,
+) -> Result<(), String> {
+    lunco_hooks_rhai::register_rhai_hook(hook_id, entry, source, true)?;
+    journal.with_write(|j| j.set_merge_strategy(MergeStrategy::Scripted(hook_id.to_string())));
+    Ok(())
+}
+
+/// Revert `journal` to the built-in `(lamport, author)` convergent order.
+pub fn use_default_merge_policy(journal: &JournalResource) {
+    journal.with_write(|j| j.set_merge_strategy(MergeStrategy::Default));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,5 +411,62 @@ mod tests {
         // Already-applied ids are skipped.
         let done: HashSet<_> = [host(2)].into_iter().collect();
         assert_eq!(lam(&scene_ops_after(&journal, Some(&host(1)), &me, &done)), vec![4]);
+    }
+
+    /// A scripted merge policy activated on the journal changes the convergent
+    /// replay order at the real networking call site ([`scene_ops_after`]): two
+    /// concurrent edits are tie-broken by the rhai hook, not the built-in
+    /// `(lamport, author)` key. Proves the wiring end-to-end.
+    #[test]
+    fn scripted_policy_reorders_scene_replay() {
+        use lunco_doc::DocumentId;
+        use lunco_twin_journal::{AuthorTag, TwinId};
+
+        let viewer = AuthorId::new("viewer");
+        let journal = JournalResource::new(TwinId::new("t"), viewer.clone());
+        // Two CONCURRENT root USD ops from different authors at the same lamport —
+        // neither is a causal ancestor, so only the tie-break orders them.
+        let mk = |author: &str, v: i32| JournalEntry {
+            id: EntryId { author: AuthorId::new(author), lamport: 1 },
+            parents: vec![],
+            author: AuthorTag { user: author.into(), tool: "t".into() },
+            at_ms: 0,
+            twin: TwinId::new("t"),
+            doc: DocumentId::new(1),
+            kind: EntryKind::Op {
+                domain: DomainKind::Usd,
+                op: serde_json::json!({ "v": v }),
+                inverse: serde_json::json!({}),
+            },
+            change_set: None,
+        };
+        journal.with_write(|j| {
+            j.append_remote(mk("aaa", 1));
+            j.append_remote(mk("bbb", 5));
+        });
+        let none = HashSet::new();
+        let vals = |ops: &[(EntryId, serde_json::Value)]| {
+            ops.iter().map(|(_, v)| v["v"].as_i64().unwrap()).collect::<Vec<_>>()
+        };
+
+        // Default: author ascending → aaa (1) before bbb (5).
+        assert_eq!(vals(&scene_ops_after(&journal, None, &viewer, &none)), vec![1, 5]);
+
+        // Activate a rhai policy that orders authors DESCENDING (a<b ⇒ a AFTER b).
+        activate_scripted_merge_policy(
+            &journal,
+            "test.net.author_desc",
+            "cmp",
+            "fn cmp(a, b) { if a.author < b.author { 1 } else if a.author > b.author { -1 } else { 0 } }",
+        )
+        .unwrap();
+        // Now bbb (5) sorts before aaa (1).
+        assert_eq!(vals(&scene_ops_after(&journal, None, &viewer, &none)), vec![5, 1]);
+
+        // Reverting restores the built-in order.
+        use_default_merge_policy(&journal);
+        assert_eq!(vals(&scene_ops_after(&journal, None, &viewer, &none)), vec![1, 5]);
+
+        lunco_hooks::unregister("test.net.author_desc");
     }
 }

@@ -85,8 +85,14 @@ fn load_journal_once(journal: Option<Res<JournalResource>>) {
             let n = loaded.len();
             journal.with_write(|j| {
                 let me = j.local_author().clone();
+                // Merge strategy is live configuration, not persisted data — the
+                // loaded journal carries the default; preserve whatever the
+                // networking layer activated so a scripted merge policy survives
+                // a reload.
+                let strategy = j.merge_strategy().clone();
                 *j = loaded;
                 j.set_local_author(me);
+                j.set_merge_strategy(strategy);
             });
             info!("[journal-persist] loaded {n} entries from {}", path.display());
         }

@@ -25,10 +25,18 @@
 //! **rejected** (the client doesn't own it), so G1 never moves. The host also
 //! broadcasts the authoritative ownership table, which the client adopts.
 //!
+//! Both peers also activate the SAME scripted (rhai) convergent **merge policy**
+//! at startup, so the journal plane resolves concurrent edits (host's `H1`,
+//! client's `C1`) via the hook — proving conflict resolution "in rhai" over the
+//! real wire (the author-descending policy orders `["H1", "C1"]` where the
+//! built-in key would give `["C1", "H1"]`).
+//!
 //! PASS (logged by the client as `[test] RESULT: PASS`) requires ALL of:
 //!   - G2 proxy moved   (owned + driven + snapshot round-trip works);
 //!   - G1 proxy did NOT move (unauthorized drive correctly rejected);
-//!   - synced ownership shows G2 = me, G1 = host (`SessionId::LOCAL`).
+//!   - synced ownership shows G2 = me, G1 = host (`SessionId::LOCAL`);
+//!   - the host's journal edit reached the client (journal-plane sync);
+//!   - the scripted merge policy is active and drives the convergent order.
 //!
 //! Everything on the wire — the command reflect round-trip, `Entity`↔
 //! `GlobalEntityId` mapping, the avatar-strip, authority, ownership broadcast,
@@ -40,7 +48,7 @@ use lunco_core::SessionId;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::JournalResource;
 use lunco_networking::{LunCoNetworkingPlugin, NetworkMode};
-use lunco_twin_journal::{AuthorId, AuthorTag, DomainKind, EntryKind, TwinId};
+use lunco_twin_journal::{AuthorId, AuthorTag, DomainKind, EntryKind, MergeStrategy, TwinId};
 
 /// When (seconds) the host authors a journal edit — after the handshake so it
 /// ships via the live `broadcast_journal_entries` tail (not the on-connect
@@ -136,6 +144,10 @@ fn main() {
     // path works (the domain plugins normally do this; the harness skips them).
     app.register_type::<lunco_mobility::DriveRover>();
     app.register_type::<lunco_avatar::PossessVessel>();
+
+    // Both peers activate the SAME scripted (rhai) convergent merge policy before
+    // any edits are authored — exercising conflict resolution over the real wire.
+    app.add_systems(Startup, activate_smoke_merge_policy);
 
     if is_host {
         app.add_systems(Startup, host_spawn_rovers);
@@ -362,6 +374,34 @@ fn client_report(
 
 // ── Journal plane (host ↔ client edit-history sync over the real wire) ─────────
 
+/// The scripted convergent merge policy both peers activate. Orders concurrent
+/// entries by author **descending** — the reverse of the built-in `(lamport,
+/// author)` key — so its effect is visible in the merged order.
+const SMOKE_MERGE_HOOK: &str = "smoke.merge.author_desc";
+const SMOKE_MERGE_SRC: &str =
+    "fn cmp(a, b) { if a.author < b.author { 1 } else if a.author > b.author { -1 } else { 0 } }";
+
+/// Both peers, at startup: activate the SAME scripted merge policy, so the whole
+/// journal plane (client scene replay, `append_remote` main re-pointing,
+/// `merged_head`) resolves concurrent edits via the rhai hook rather than the
+/// built-in key. Identical hook id + source on every peer ⇒ convergent (the
+/// [`MergeStrategy`] determinism contract). This is the "conflict resolution
+/// strategies but in rhai" path exercised over the real WebTransport wire.
+fn activate_smoke_merge_policy(journal: Option<Res<JournalResource>>) {
+    let Some(j) = journal else {
+        return;
+    };
+    match lunco_networking::journal_plane::activate_scripted_merge_policy(
+        &j,
+        SMOKE_MERGE_HOOK,
+        "cmp",
+        SMOKE_MERGE_SRC,
+    ) {
+        Ok(()) => info!("[test] activated scripted merge policy '{SMOKE_MERGE_HOOK}' (author-descending)"),
+        Err(e) => warn!("[test] scripted merge policy failed to compile: {e}"),
+    }
+}
+
 /// Author one journal `Op` entry (a stand-in USD edit) into `journal`, tagged as
 /// `marker`. `EntryId.author` is the journal's stamped local author (host="host",
 /// client="peer-<session>").
@@ -491,15 +531,40 @@ fn exit_after_timeout(
             })
             .unwrap_or(false);
 
+        // The scripted (rhai) merge policy must be active on this peer, and the
+        // convergent merged order is what it dictates (concurrent edits ordered by
+        // author DESCENDING) — proving the journal plane ran WITH the scripted
+        // conflict-resolution strategy over the wire.
+        let (policy_active, markers) = journal
+            .as_ref()
+            .map(|j| {
+                j.with_read(|jj| {
+                    let active = matches!(jj.merge_strategy(), MergeStrategy::Scripted(id) if id == SMOKE_MERGE_HOOK);
+                    let order = jj
+                        .merged_order()
+                        .iter()
+                        .filter_map(|e| match &e.kind {
+                            EntryKind::Op { op, .. } => {
+                                op.get("marker").and_then(|m| m.as_str()).map(String::from)
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    (active, order)
+                })
+            })
+            .unwrap_or((false, Vec::new()));
+
         info!(
             "[test] checks: g2_moved={g2_moved} (x={:.2})  g1_still={g1_still} (x={:.2})  \
              g2_mine={g2_mine} (owner={g2_owner:?}, me={me})  g1_host={g1_host} (owner={g1_owner:?})  \
-             g3_despawned={g3_despawned}  journal_from_host={journal_from_host}",
+             g3_despawned={g3_despawned}  journal_from_host={journal_from_host}  \
+             policy_active={policy_active}  merged_markers={markers:?}",
             m.g2, m.g1
         );
 
-        if g2_moved && g1_still && g2_mine && g1_host && g3_despawned && journal_from_host {
-            info!("[test] RESULT: PASS — exclusive possession + ownership-gated drive + sync + despawn-repl + journal-sync all hold");
+        if g2_moved && g1_still && g2_mine && g1_host && g3_despawned && journal_from_host && policy_active {
+            info!("[test] RESULT: PASS — exclusive possession + ownership-gated drive + sync + despawn-repl + journal-sync (scripted merge policy) all hold");
         } else {
             warn!("[test] RESULT: FAIL — see checks above");
         }

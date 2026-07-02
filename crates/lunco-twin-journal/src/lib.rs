@@ -644,6 +644,29 @@ pub struct Journal {
 
     next_change_set: u64,
     next_marker: u64,
+
+    /// Which [`MergePolicy`] the convergent reads use. Configuration, not
+    /// persisted data — reset to [`MergeStrategy::Default`] on load, then
+    /// re-applied by the layer that activated it (see the persistence layer,
+    /// which preserves it across a load swap).
+    merge_strategy: MergeStrategy,
+}
+
+/// Which merge policy a [`Journal`]'s convergent reads use — the single knob that
+/// makes conflict resolution pluggable across the *whole* journal (scene replay,
+/// `main` re-pointing, [`merged_head`](Journal::merged_head)) at once.
+///
+/// `Clone` (unlike a `Box<dyn MergePolicy>`) so the persistence layer can preserve
+/// it across a load swap. `Scripted` names a [`lunco_hooks`] hook id; resolving it
+/// needs the `hooks` feature (a build without it falls back to `Default`, since it
+/// can't invoke a hook anyway).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum MergeStrategy {
+    /// Built-in `(lamport, author)` order — [`DefaultMergePolicy`].
+    #[default]
+    Default,
+    /// A scripted [`ScriptedMergePolicy`] bound to this [`lunco_hooks`] hook id.
+    Scripted(String),
 }
 
 /// Serializable snapshot of a [`Journal`] for persistence (B1).
@@ -688,6 +711,7 @@ impl Journal {
             markers: HashMap::new(),
             next_change_set: 0,
             next_marker: 0,
+            merge_strategy: MergeStrategy::Default,
         };
         let main_stream = Stream {
             id: StreamId::main(),
@@ -777,7 +801,23 @@ impl Journal {
             markers: dto.markers.into_iter().map(|m| (m.id, m)).collect(),
             next_change_set: dto.next_change_set,
             next_marker: dto.next_marker,
+            // Policy is configuration, not persisted state; the persistence layer
+            // re-applies the active strategy after a load swap.
+            merge_strategy: MergeStrategy::Default,
         }
+    }
+
+    /// The active convergent merge strategy.
+    pub fn merge_strategy(&self) -> &MergeStrategy {
+        &self.merge_strategy
+    }
+
+    /// Set the convergent merge strategy used by every convergent read
+    /// ([`merged_order_ids`](Self::merged_order_ids), [`merged_head`](Self::merged_head),
+    /// and the `append_remote` re-pointing). MUST be identical on every peer, or
+    /// peers linearize divergently (see [`MergePolicy`]).
+    pub fn set_merge_strategy(&mut self, strategy: MergeStrategy) {
+        self.merge_strategy = strategy;
     }
 
     // ── Entry append ─────────────────────────────────────────────────────
@@ -1121,10 +1161,22 @@ impl Journal {
     /// (malformed) cycle is appended last in key order, so every entry always
     /// appears exactly once.
     pub fn merged_order_ids(&self) -> Vec<EntryId> {
-        // Kahn's algorithm with a min-heap keyed on (lamport, author) for a
-        // deterministic pick among concurrently-ready entries. This is the fast
-        // default path (O(n log n)); [`merged_order_ids_with`] is the general,
-        // policy-driven variant.
+        // Dispatch on the configured strategy: the fast heap for the built-in
+        // order, the policy-driven variant for a scripted one. Resolving a
+        // scripted strategy needs the `hooks` feature (a build without it can't
+        // invoke a hook, so it transparently uses the default order).
+        #[cfg(feature = "hooks")]
+        if let MergeStrategy::Scripted(hook_id) = &self.merge_strategy {
+            return self.merged_order_ids_with(&ScriptedMergePolicy::new(hook_id));
+        }
+        self.heap_order_ids()
+    }
+
+    /// The built-in convergent order: Kahn's algorithm with a min-heap keyed on
+    /// `(lamport, author)` for a deterministic pick among concurrently-ready
+    /// entries. Fast (O(n log n)); [`merged_order_ids_with`] is the general,
+    /// policy-driven variant used for a scripted strategy.
+    fn heap_order_ids(&self) -> Vec<EntryId> {
         let (mut indeg, children) = self.dag_edges();
 
         // Min-heap via `Reverse` on the order key (lamport, author, full id).
