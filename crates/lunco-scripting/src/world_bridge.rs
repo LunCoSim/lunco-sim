@@ -251,7 +251,17 @@ fn scenario_debug() -> bool {
 /// Ergonomic policy wrappers (drive/distance/arrived/...), authored in rhai and
 /// embedded at compile time so they're available with zero IO on every target
 /// (incl. wasm). Edit `rhai/prelude.rhai` — no Rust change needed for new helpers.
-pub(crate) const PRELUDE: &str = include_str!("../rhai/prelude.rhai");
+pub(crate) const PRELUDE: &str = concat!(
+    include_str!("../rhai/prelude/_intro.rhai"), "\n",
+    include_str!("../rhai/prelude/math.rhai"), "\n",
+    include_str!("../rhai/prelude/nav.rhai"), "\n",
+    include_str!("../rhai/prelude/tasks.rhai"), "\n",
+    include_str!("../rhai/prelude/mission.rhai"), "\n",
+    include_str!("../rhai/prelude/control.rhai"), "\n",
+    include_str!("../rhai/prelude/hud.rhai"), "\n",
+    include_str!("../rhai/prelude/sensing.rhai"), "\n",
+    include_str!("../rhai/prelude/select.rhai"), "\n",
+);
 
 /// Build a rhai [`Engine`] with the World-bridge verbs registered, the embedded
 /// prelude loaded as a global module, and the same sandbox caps as the one-shot
