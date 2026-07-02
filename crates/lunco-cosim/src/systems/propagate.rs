@@ -30,82 +30,129 @@ pub enum CosimSet {
     Propagate,
 }
 
-/// A flattened connection, decoupled from the live `SimConnection` component so
-/// the source query borrow is released before the mutable write pass.
-type FlatConnection = (Entity, String, Entity, String, f64, f64);
+/// One compiled wire: source endpoint + affine gain + the *index* of its target
+/// in [`CompiledWiring::targets`]. Connector names are owned here (cloned once at
+/// compile time) so the per-tick hot loop touches no strings.
+pub struct CompiledWire {
+    pub src_entity: Entity,
+    pub src_port: String,
+    /// Index into [`CompiledWiring::targets`] — the accumulator slot.
+    pub dst_index: usize,
+    pub scale: f64,
+    pub offset: f64,
+}
 
-/// Propagates values through all [`crate::SimConnection`]s.
+/// The flattened wiring fabric — the "SignalBus" — rebuilt only when the
+/// [`crate::SimConnection`] set actually changes (see [`rebuild_compiled_wiring`]).
 ///
-/// Exclusive system: it addresses arbitrary backends through the resolver,
-/// which needs whole-world access. Three phases, no per-type special-casing:
+/// Replaces the old per-tick snapshot (string-cloning every connector every
+/// tick + a string-keyed `HashMap` accumulator). Targets are interned to dense
+/// indices so propagation accumulates into a plain `Vec<f64>` with no hashing.
+#[derive(Resource, Default)]
+pub struct CompiledWiring {
+    pub wires: Vec<CompiledWire>,
+    /// Distinct targets `(entity, input port)`, one accumulator slot each.
+    pub targets: Vec<(Entity, String)>,
+}
+
+/// Rebuilds [`CompiledWiring`] when the wire set changes.
 ///
-/// 1. **Collect** — snapshot every valid connection (drops the query borrow).
-/// 2. **Accumulate** — read each source via [`read_port`], sum `src*scale+offset`
-///    per target. Every driven target is seeded to `0.0`, so a target whose
-///    source vanished cleanly returns to zero.
-/// 3. **Write** — push each accumulated value to its input via [`write_port`].
-///    A target with no such input port is a dangling wire — reported, not
-///    silently dropped.
-///
-/// Undriven input ports are never touched, so a manual `SetPort` hold survives.
-pub fn propagate_connections(
-    world: &mut World,
-    mut conns: Local<Vec<FlatConnection>>,
-    mut acc: Local<HashMap<(Entity, String), f64>>,
+/// Gated on `Changed<SimConnection>` (which subsumes `Added`, so an added or
+/// edited wire triggers a rebuild) plus `RemovedComponents<SimConnection>` (a
+/// removed component or despawned wire entity). On the overwhelming majority of
+/// frames — values flowing, wiring static — this early-returns after two empty
+/// checks, so the per-tick cost of the old snapshot is gone. Correctness is
+/// unchanged: any structural or field edit rebuilds before the next propagate.
+pub fn rebuild_compiled_wiring(
+    q_changed: Query<(), Changed<SimConnection>>,
+    mut removed: RemovedComponents<SimConnection>,
+    q_all: Query<&SimConnection>,
+    mut compiled: ResMut<CompiledWiring>,
 ) {
-    // Phase 1: collect. `world.query` borrows the world immutably for the
-    // duration of `iter`; we clone out so the borrow ends before phase 3's
-    // mutable writes. (TODO(perf): cache as a flat index table — the SignalBus
-    // step — once propagation shows up in a profile; string-keyed is fine at
-    // the current connection counts.)
-    conns.clear();
-    let mut q = world.query::<&SimConnection>();
-    for c in q.iter(world) {
-        if c.start_element == Entity::PLACEHOLDER || c.end_element == Entity::PLACEHOLDER {
-            continue;
-        }
-        conns.push((
-            c.start_element,
-            c.start_connector.clone(),
-            c.end_element,
-            c.end_connector.clone(),
-            c.scale,
-            c.offset,
-        ));
-    }
-    if conns.is_empty() {
+    // Always drain removed events (so the queue can't linger across early
+    // returns), then decide whether anything changed.
+    let removed_any = removed.read().count() > 0;
+    if q_changed.is_empty() && !removed_any {
         return;
     }
 
-    // Resolve every endpoint through the shared port registry. Cloned out of the
-    // world (a `Vec` of `Copy` backend fn-pointers) so phase 3 can take `&mut
-    // World` without holding a resource borrow.
+    let compiled = &mut *compiled;
+    compiled.wires.clear();
+    compiled.targets.clear();
+    let mut target_index: HashMap<(Entity, String), usize> = HashMap::new();
+
+    for c in &q_all {
+        if c.start_element == Entity::PLACEHOLDER || c.end_element == Entity::PLACEHOLDER {
+            continue;
+        }
+        let key = (c.end_element, c.end_connector.clone());
+        let dst_index = *target_index.entry(key).or_insert_with(|| {
+            let i = compiled.targets.len();
+            compiled.targets.push((c.end_element, c.end_connector.clone()));
+            i
+        });
+        compiled.wires.push(CompiledWire {
+            src_entity: c.start_element,
+            src_port: c.start_connector.clone(),
+            dst_index,
+            scale: c.scale,
+            offset: c.offset,
+        });
+    }
+}
+
+/// Propagates values through the compiled wiring fabric.
+///
+/// Exclusive system: it addresses arbitrary backends through the resolver,
+/// which needs whole-world access. Reads [`CompiledWiring`] (built by
+/// [`rebuild_compiled_wiring`]) — no per-tick query, string clone, or hash:
+///
+/// 1. **Seed** — every target's accumulator slot to `0.0`, so a target whose
+///    source vanished cleanly returns to zero.
+/// 2. **Accumulate** — read each source via [`PortRegistry::read_output_port`],
+///    sum `src*scale+offset` into `acc[dst_index]`.
+/// 3. **Write** — push each accumulated value to its input via
+///    [`PortRegistry::write_port`], once per target, in stable (insertion)
+///    order. A target with no such input port is a dangling wire — reported,
+///    not silently dropped.
+///
+/// Undriven input ports are never touched, so a manual `SetPort` hold survives.
+pub fn propagate_connections(world: &mut World, mut acc: Local<Vec<f64>>) {
+    // Registry is a `Vec` of `Copy` backend fn-pointers; clone it out so the
+    // write phase can take `&mut World` without holding a resource borrow.
     let registry = world.resource::<PortRegistry>().clone();
 
-    // Phase 2: accumulate. Seed every driven target to 0 so summing is clean
-    // and a target with a missing source resets rather than holding stale data.
-    acc.clear();
-    for (_, _, end_element, end_connector, _, _) in conns.iter() {
-        acc.entry((*end_element, end_connector.clone())).or_insert(0.0);
-    }
-    for (start_element, start_connector, end_element, end_connector, scale, offset) in conns.iter() {
-        let Some(src) = registry.read_output_port(world, *start_element, start_connector) else {
-            continue; // source output absent — contributes nothing this tick
-        };
-        if let Some(slot) = acc.get_mut(&(*end_element, end_connector.clone())) {
-            *slot += src * *scale + *offset;
+    // `resource_scope` lifts `CompiledWiring` out of the world for the duration
+    // of the closure, giving `&mut World` *and* a borrow of the compiled fabric
+    // at once — so we read the owned connector strings by reference (no clone)
+    // while still calling the resolver's `&mut World` writes.
+    world.resource_scope(|world, compiled: Mut<CompiledWiring>| {
+        if compiled.targets.is_empty() {
+            return;
         }
-    }
 
-    // Phase 3: write each target once through the resolver.
-    for ((entity, name), value) in acc.iter() {
-        if !registry.write_port(world, *entity, name, *value) {
-            warn_once!(
-                "[cosim] connection targets unknown input port '{}' on {:?} — value dropped \
-                 (declare the port or fix the wire)",
-                name,
-                entity
-            );
+        // Phase 1: seed accumulator slots.
+        acc.clear();
+        acc.resize(compiled.targets.len(), 0.0);
+
+        // Phase 2: accumulate.
+        for w in &compiled.wires {
+            let Some(src) = registry.read_output_port(world, w.src_entity, &w.src_port) else {
+                continue; // source output absent — contributes nothing this tick
+            };
+            acc[w.dst_index] += src * w.scale + w.offset;
         }
-    }
+
+        // Phase 3: write each target once through the resolver.
+        for (i, (entity, name)) in compiled.targets.iter().enumerate() {
+            if !registry.write_port(world, *entity, name, acc[i]) {
+                warn_once!(
+                    "[cosim] connection targets unknown input port '{}' on {:?} — value dropped \
+                     (declare the port or fix the wire)",
+                    name,
+                    entity
+                );
+            }
+        }
+    });
 }
