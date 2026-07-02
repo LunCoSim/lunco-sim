@@ -172,15 +172,15 @@ section.
 
 1. **UsdBevyPlugin** — Spawns child entities for USD prims and attaches meshes + transforms.
 2. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`physics:rigidBodyEnabled`/`PhysicsRigidBodyAPI`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). The single home for Avian joint construction.
-3. **UsdSimPlugin** — Detects simulation schemas (`PhysxVehicleContextAPI`, `PhysxVehicleWheelAPI`, `PhysxVehicleDriveSkidAPI`/`Drive4WAPI`) and creates `WheelRaycast`, `FlightSoftware`, `DifferentialDrive`, `GenericDriveMix`, `DifferentialCoupling`, sensors, etc. Also wires actuator topology + drive mix and cosim models/wires (see [`22-domain-cosim.md`](22-domain-cosim.md)).
+3. **UsdSimPlugin** — Detects simulation schemas (`PhysxVehicleContextAPI`, `PhysxVehicleWheelAPI`, and the Omniverse differential/steering APIs `PhysxVehicleTankDifferentialAPI` (skid) / `PhysxVehicleAckermannSteeringAPI`) and creates `WheelRaycast`, `FlightSoftware`, a data-driven `DriveMix` (allocated by a named kernel in `lunco-core`'s `ControlKernelRegistry` — `skid`/`linear`), `DifferentialCoupling`, sensors, etc. Also wires actuator topology + drive mix and cosim models/wires (see [`22-domain-cosim.md`](22-domain-cosim.md)).
 
 ### Rover Definitions
 
 #### Consolidated Base Files
 | File | Steering | Default Wheel Type |
 |------|----------|-------------------|
-| `skid_rover.usda` | `PhysxVehicleDriveSkidAPI` | `raycast` |
-| `ackermann_rover.usda` | `PhysxVehicleDrive4WAPI` | `raycast` |
+| `skid_rover.usda` | `PhysxVehicleTankDifferentialAPI` (skid) | `raycast` |
+| `ackermann_rover.usda` | `PhysxVehicleAckermannSteeringAPI` | `raycast` |
 
 #### Wheel Type Declaration
 The `lunco:wheelType` attribute on the **chassis prim** determines wheel behavior:
@@ -231,6 +231,28 @@ expose telemetry ports (see [`22-domain-cosim.md`](22-domain-cosim.md)):
 | `bool lunco:sensor:range` (+ `token :rangeAxis`, `float :rangeMax`) | range finder | `range` (raycast distance along a body-local axis, default `-Y`) |
 | `bool lunco:sensor:contact` | contact | `contact` (0/1), `contact_force` (N) |
 | `float3 lunco:sensor:offset` | (shared) | body-local mount point — IMU lever-arm + range origin |
+
+### Cameras
+
+Scene cameras are **standard `def Camera` (`UsdGeomCamera`) prims** — `lunco-usd-bevy`
+projects each to an *inactive* Bevy `Camera3d` (see [`17-view-and-intent.md §6`](17-view-and-intent.md)).
+
+| Attribute | Meaning |
+|---|---|
+| `float focalLength`, `float verticalAperture` | vertical FOV = `2·atan(verticalAperture / (2·focalLength))` |
+| `float2 clippingRange` | near / far planes |
+| `token projection` | `perspective` (default) or `orthographic` |
+| `custom double3 lunco:cameraLookAt` | aim the camera at this point (parent-local); overrides authored rotation |
+
+- **Placement:** a **top-level** `def Camera` is a static scene camera (a wide
+  shot); it can host the big_space `FloatingOrigin` directly. A `def Camera`
+  **nested under a moving prim** (e.g. under a rover Xform) becomes an *onboard*
+  camera that rides the mount — realised as a grid-direct follower so it stays
+  jitter-free at any distance (no follow-code in the USD). Aim it forward with
+  `lunco:cameraLookAt`.
+- **Switching:** cameras spawn inactive; make one the active view with
+  `set_camera("Name")` (rhai / API `SetActiveCamera`, matches the prim's leaf or
+  full path) or the `KeyC` hotkey. Exactly one window camera renders at a time.
 
 ### glTF Payloads & Placeholders
 

@@ -137,15 +137,16 @@ now USD-authorable:
 
 **G4b — authored mix  [DONE]:** `lunco:driveMix` on the rover root declares a
 **linear per-port mix** — whitespace-separated `port=forward,steer[,brake]` terms
-→ `GenericDriveMix` component (`lunco-mobility`). `on_drive_rover` projects the
-`DriveRover` command onto every named port (`value = fwd·f + steer·s + brake·b`,
+→ a data-driven `DriveMix` component (`lunco-core`; allocated by the `linear`
+kernel in `ControlKernelRegistry`). The kernel projects the drive inputs onto
+every named port (`value = fwd·f + steer·s + brake·b`,
 clamped, scaled to i16), taking precedence over the built-in skid/Ackermann
 routing. Covers skid, Ackermann-style, and true **per-wheel independent** drive
 (each wheel its own port + coefficients). While braking, forward/steer are forced
 to 0 so only brake-coefficient ports stay live (matches the skid/Ackermann
 branches). Proof: `assets/vessels/rovers/six_wheel_independent.usda` — six custom
 `drive_w0..w5` ports, each wheel bound to its own, skid-steered through all six
-independent channels with no `PhysxVehicleDriveSkidAPI`. Parse + projection
+independent channels with no `PhysxVehicleTankDifferentialAPI`. Parse + projection
 unit-tested. (Nonlinear mixes — e.g. exact Ackermann geometry — would still want
 a rhai hook; the linear table covers the stated skid/per-wheel cases.)
 

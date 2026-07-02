@@ -6,7 +6,7 @@
 > execution (UserIntent → … → actuation), keeping the camera and intent
 > systems modular and headless-safe.
 
-**Status: design / proposal (not yet implemented).** The `ViewPoint` / `CameraDevice` components and the `lunco-camera` crate described below are the intended target architecture; they do not exist in the codebase yet. Camera behaviors today live in `lunco-avatar`.
+**Status: partly implemented.** The `ViewPoint` / `CameraDevice` components and the `lunco-camera` crate described in §1–§5 remain the aspirational target ontology; they do not exist in the codebase yet. However, camera **selection** and the **viewport** are now real and follow a single-authority design — see **§6 (Implemented: Scene Viewport & Active Camera)**. Camera *rig behaviors* (spring-arm, orbit, free-flight, surface) still live in `lunco-avatar`.
 
 This document provides a technical guide to the modular, action-oriented, and headless-safe camera and intent systems in LunCoSim.
 
@@ -83,6 +83,77 @@ The simulation core (`lunco-celestial`, `lunco-core`) has NO dependency on the c
 - **Bots** can "see" and "look at" objects through the same `Action` / intent system (against the planned `ViewPoint`; today against the avatar/camera transform).
 - **Server** instances run the full spatial logic without a GPU.
 - **Clients** add **`LunCoAvatarPlugin`** (`lunco-avatar`) to provide the camera rigs and visual bridge; post-processing / lighting come from `lunco-render`.
+
+---
+
+## 6. Implemented: Scene Viewport & Active Camera (2026-07)
+
+The camera-*selection* and viewport machinery below is **implemented** (distinct
+from the aspirational `ViewPoint`/`CameraDevice` ontology in §2). It reuses Bevy
+and USD standards rather than inventing bespoke types, and follows a strict
+**single-authority** discipline: exactly one system writes window-camera state.
+
+### 6.1 Cameras are standard USD + Bevy
+
+- A scene camera is a standard USD **`def Camera`** (`UsdGeomCamera`) prim.
+  `lunco-usd-bevy` (`camera.rs`) translates each to an **inactive** Bevy
+  `Camera3d`: `focalLength` / `verticalAperture` → vertical FOV, `clippingRange`
+  → near/far, `projection` token → perspective/orthographic. The optional
+  `lunco:cameraLookAt` (double3, parent-local) aims the camera at a point.
+- "Which camera renders" is Bevy's own **`Camera::is_active`** — there is no
+  bespoke "active camera" marker.
+- A *switchable* camera is any `Camera3d` with a window `RenderTarget`: every USD
+  `def Camera`, plus whatever free/avatar camera a host adds. RTT
+  (`Image`-target) cameras and the egui `Camera2d` are excluded.
+
+### 6.2 The Viewport is the single source of truth
+
+`lunco_core::SceneViewport` models the main window's 3D viewport (à la an
+Omniverse Viewport, which owns an active `camera`):
+
+| Field | Meaning | Written by |
+| :--- | :--- | :--- |
+| `active_camera: Option<Entity>` | which camera renders | the camera switch |
+| `visible: bool` | whether 3D renders at all | the workbench (layout perspective) |
+| `rect: Option<(UVec2, UVec2)>` | window sub-rect, or full-window | the workbench |
+
+Exactly **one** system writes window-camera `is_active` / `viewport`:
+`lunco-usd-bevy`'s **`reconcile_scene_viewport`**. It actuates the viewport
+(`is_active = bound-camera && visible`), relocates the big_space
+`FloatingOrigin` onto the active camera, and self-heals (revalidates the
+binding, defaulting to the local-avatar camera) so async spawns and
+provisional→avatar takeover never leave zero or many active cameras. **No other
+system touches `is_active`** — this is what eliminated the two-writer conflict
+that previously double-rendered and jammed camera switching (the workbench's
+`apply_workbench_viewport` used to force-activate every window camera).
+
+### 6.3 Switching
+
+Three surfaces, one mechanism — all rebind `SceneViewport.active_camera`:
+- **`SetActiveCamera { name }`** command (API + rhai `set_camera("Name")`); the
+  name matches the full USD prim path *or* its leaf.
+- the **`KeyC`** hotkey cycles window cameras.
+- (cutscenes) a rhai script calling `set_camera(...)` on a timeline; a USD-animated
+  `def Camera` supplies moving shots.
+
+### 6.4 Rover-mounted cameras
+
+A `def Camera` authored nested under a moving prim (e.g. under a rover Xform) is
+realised as a **grid-direct follower** (`camera_mount.rs`), because big_space
+requires the `FloatingOrigin` on a grid-direct entity — a literally-nested
+camera could never host it. `resolve_camera_mounts` reparents it to the mount's
+grid with a `MountedCamera { mount, offset }`; `follow_mounted_cameras` writes
+`mount · offset` back into the camera's grid-local pose each frame in double
+precision. So an onboard rover camera rides the rover at full precision and can
+host the active-view origin — no follow-code in the authored USD.
+
+### 6.5 Camera rigs still live in `lunco-avatar`
+
+The *behavior* of the free/possession cameras — `SpringArmCamera`,
+`OrbitCamera`, `FreeFlightCamera`, `SurfaceCamera` — remains in `lunco-avatar`
+(§2). The viewport reconciler decides *which* camera is shown; the rigs decide
+*how* a given camera moves. They compose: possession changes the avatar camera's
+rig without changing which camera the viewport shows.
 
 ---
 

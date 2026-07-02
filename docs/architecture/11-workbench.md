@@ -126,7 +126,11 @@ the side panels for tabbed dock trees.
    content depends on the selected Activity. Resizable, collapsible.
 5. **Viewport (center)** — the 3D world. **Structurally persistent** —
    always the central region of the window. Not a panel, not a tile.
-   Cannot be closed or docked-over.
+   Cannot be closed or docked-over. The workbench contributes only the
+   viewport's *visibility* (a perspective without a viewport panel hides 3D)
+   and *rect* into `lunco_core::SceneViewport`; it never sets camera
+   `is_active` — the single-authority reconciler in `lunco-usd-bevy` actuates
+   that (see [`17-view-and-intent.md §6`](17-view-and-intent.md)).
 6. **Properties / Inspector (right)** — context-aware content for the
    current selection and workspace. See § 6.
 7. **Bottom panel (toggleable)** — workspace-dependent: Console, Plots,

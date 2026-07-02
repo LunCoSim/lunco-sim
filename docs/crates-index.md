@@ -9,7 +9,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-core`** | Core primitives (`DigitalPort`, `PhysicalPort`, the typed `Mutation<P>` command substrate, `SimTick`), coordinate systems, and canonical diagram data types. |
+| **`lunco-core`** | Core primitives (`DigitalPort`, `PhysicalPort`, the typed `Mutation<P>` command substrate, `SimTick`), coordinate systems, the `SceneViewport` (active-camera binding), the `ControlKernelRegistry` (drive-allocation kernels), and canonical diagram data types. |
 | **`lunco-command-macro`** | Procedural macros for the typed command system (`#[Command]`, `#[on_command]`, `register_commands!`; re-exported by `lunco-core`). |
 | **`lunco-workspace`** | Headless editor session management: open Twins, active documents, perspectives, and recents. |
 | **`lunco-twin`** | The simulation unit on disk: folder structure, `twin.toml` manifest parsing, and file indexing. |
@@ -49,7 +49,7 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | :--- | :--- |
 | **`lunco-mobility`** | Parameterized surface-vehicle physics: contact-plane raycast wheels (incl. leaning bikes), suspension, drive mixing, rocker-bogie differential. |
 | **`lunco-robotics`** | High-level assembly logic and rover structural definitions (`assembler`). |
-| **`lunco-avatar`** | Human-interaction layer: composable camera behaviors (SpringArm, Orbit) and control intents. |
+| **`lunco-avatar`** | Human-interaction layer: composable camera **rigs** (SpringArm, Orbit, FreeFlight, Surface) and control intents. (Camera *selection* / viewport lives in `lunco-usd-bevy` + `lunco-core::SceneViewport`.) |
 | **`lunco-obc`** | Hardware interface emulation (ADC/DAC) between digital FSW registers and physical units. |
 | **`lunco-fsw`** | Decentralized Flight Software architecture for coordinating vessel subsystems (GNC, Power, etc.). |
 | **`lunco-hardware`** | Concrete physical actuators and sensors bridging `PhysicalPort` values to the `avian3d` physics engine. |
@@ -63,7 +63,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-usd`** | High-level USD orchestrator (`UsdPlugins`) and mapper for LunCo-specific engineering metadata (`lunco:*`). |
-| **`lunco-usd-bevy`** | Core visual bridge (`UsdBevyPlugin`): maps USD hierarchy, shapes, transforms, and `timeSamples` animation to Bevy entities/components. Owns composition/flattening (`compose.rs`, `flatten_stage`). |
+| **`lunco-usd-bevy`** | Core visual bridge (`UsdBevyPlugin`): maps USD hierarchy, shapes, transforms, and `timeSamples` animation to Bevy entities/components. Owns composition/flattening (`compose.rs`, `flatten_stage`), USD `def Camera` translation + rover-mounted camera followers (`camera.rs`, `camera_mount.rs`), and the single-authority viewport-camera reconciler + `SetActiveCamera` switch (`camera_switch.rs`). |
 | **`lunco-usd-avian`** | Physics bridge (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. |
 | **`lunco-usd-sim`** | Simulation-schema bridge (`UsdSimPlugin`): intercepts specialized vehicle/cosim schemas (e.g., PhysX Vehicles) and maps them to LunCo models. |
 | **`lunco-materials`** | The one general self-describing `ShaderMaterial` (any `.wgsl` per-instance; params reflected from the shader's `struct Material`) for the USD rendering pipeline. |
@@ -196,13 +196,13 @@ Backend-agnostic experiment / batch-run registry. Models a single Fast Run as a 
 ### Vessel Control & Hardware
 
 **`lunco-mobility`**
-Physics models for surface mobility and traction — the parameterized substrate (a vehicle is a USD file, not a Rust struct). Raycast wheel model with contact-plane traction (supports leaning single-track bikes), suspension (spring-damper), steering mixing (Skid/Ackermann/`GenericDriveMix`), and a soft rocker-bogie `DifferentialCoupling`.
+Physics models for surface mobility and traction — the parameterized substrate (a vehicle is a USD file, not a Rust struct). Raycast wheel model with contact-plane traction (supports leaning single-track bikes), suspension (spring-damper), a data-driven `DriveMix` allocated by a named kernel from `lunco-core`'s `ControlKernelRegistry` (`skid`/`linear`), and a soft rocker-bogie `DifferentialCoupling`.
 
 **`lunco-robotics`**
 High-level vessel assembly and spawning logic. Orchestrates the composition of complex robots from constituent parts, linking chassis, wheels, software, and sensors into a cohesive simulation unit.
 
 **`lunco-avatar`**
-Human-interaction layer. Provides composable camera behaviors (SpringArm, Orbit, FreeFlight) with smooth jitter-free transitions and coordinate-grid awareness for avatar-based exploration of celestial bodies.
+Human-interaction layer. Provides composable camera **rigs** (SpringArm, Orbit, FreeFlight, Surface) with smooth jitter-free transitions and coordinate-grid awareness for avatar-based exploration of celestial bodies. The rigs decide *how* a camera moves; *which* camera the viewport shows is owned by the reconciler in `lunco-usd-bevy` (they compose — possession changes the avatar camera's rig without changing the active view).
 
 **`lunco-obc`**
 On-Board Computer emulation. Acts as the signal-processing bridge (DAC/ADC) between digital Flight Software registers (`i16`) and physical hardware units (`f32`), emulating hardware quantization and scaling.
@@ -224,7 +224,7 @@ Input mapping and translation. Converts raw human-interface device inputs (Keybo
 High-level USD orchestrator (`UsdPlugins`) and engineering metadata bridge. Maps LunCo-specific metadata (`lunco:*` namespace) from USD stages to Bevy components, enriching 3D models with simulation-critical data like Ephemeris IDs.
 
 **`lunco-usd-bevy`**
-Core OpenUSD visual bridge. Maps USD prim hierarchies, shapes, and transforms into Bevy entities/components, decodes the full xform-op stack (`local_transform_at`), and drives authored `timeSamples` animation (`sample_usd_animation`). Composition/flattening lives here (`compose.rs`, `flatten_stage`) — there is no separate `lunco-usd-composer` crate.
+Core OpenUSD visual bridge. Maps USD prim hierarchies, shapes, and transforms into Bevy entities/components, decodes the full xform-op stack (`local_transform_at`), and drives authored `timeSamples` animation (`sample_usd_animation`). Composition/flattening lives here (`compose.rs`, `flatten_stage`) — there is no separate `lunco-usd-composer` crate. Also owns the **camera pipeline**: USD `def Camera` → inactive `Camera3d` (`camera.rs`), rover-mounted grid-direct camera followers (`camera_mount.rs`), and the **single-authority viewport-camera reconciler** + `SetActiveCamera`/`KeyC` switch that actuates `lunco_core::SceneViewport` (`camera_switch.rs`). See [`17-view-and-intent.md §6`](architecture/17-view-and-intent.md).
 
 **`lunco-usd-avian`**
 Physics bridge for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas — rigid bodies + mass-properties, all collider shapes, and **all joints** (revolute/prismatic/fixed/spherical/distance, D6-reduced) with `UsdPhysicsDriveAPI` motor drive — to Avian3D. The single home for Avian joint construction (incl. the programmatic wheel hinge).

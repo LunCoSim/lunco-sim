@@ -96,6 +96,7 @@ authoritative list. Highlights:
 - **Sequencer (Layer 1):** `seq_init`, `run_steps`, `seq_note_event`, step ctors `step`/`once`/`wait`/`wait_until`/`wait_for`.
 - **Timeline (Layer 2):** `compile_timeline`, `timeline_step`.
 - **Selection toolkit:** `all_of_type`, `min_by`/`max_by`, `count_where`, `nearest_where`/`farthest_where`, `has_component`, `kind`.
+- **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`.
 
 Add helpers freely — editing the prelude needs no Rust rebuild.
 
