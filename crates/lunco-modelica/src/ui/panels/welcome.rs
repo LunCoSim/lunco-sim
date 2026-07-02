@@ -43,28 +43,62 @@ pub const WELCOME_PANEL_ID: PanelId = PanelId("modelica_welcome");
 /// human-authored goal that tells the learner *what to look for*
 /// when they hit Run. Keeping the goal short (< 90 chars) keeps
 /// cards visually uniform and encourages punchy copy.
-struct PathStep {
-    qualified: &'static str,
+#[derive(Clone, Debug)]
+pub struct PathStep {
+    /// Fully-qualified MSL class to open (read-only).
+    pub qualified: &'static str,
     /// Short display name (falls back to the trailing segment of
     /// `qualified` when empty).
-    label: &'static str,
-    goal: &'static str,
+    pub label: &'static str,
+    /// One-line "what to look for" goal shown under the step.
+    pub goal: &'static str,
 }
 
 /// A hand-curated tutorial arc across ~5 MSL examples.
-struct LearningPath {
-    icon: &'static str,
-    title: &'static str,
-    subtitle: &'static str,
-    steps: &'static [PathStep],
+#[derive(Clone, Debug)]
+pub struct LearningPath {
+    /// Leading glyph for the header.
+    pub icon: &'static str,
+    /// Path title.
+    pub title: &'static str,
+    /// One-line subtitle under the title.
+    pub subtitle: &'static str,
+    /// Ordered steps (aim for 4..=6, simplest first).
+    pub steps: &'static [PathStep],
 }
 
-/// The three beginner paths. Intentionally small — more than three
-/// is paradox-of-choice; four examples per path is the classic
+/// Open registry of learning paths rendered by the [`WelcomePanel`]. Seeded
+/// with the built-ins via [`LearningPathRegistry::with_builtins`]; any plugin
+/// can [`register`](Self::register) more — the curriculum is a registry
+/// resource, not a `const` array welded into the render (spec 011 §6). This
+/// mirrors the sandbox `TutorialRegistry` pattern (code-seeded catalog,
+/// `&'static str` entries) but is lunica-local and class-based (open MSL
+/// classes to read/run, not scene+script missions).
+#[derive(Resource, Default, Clone)]
+pub struct LearningPathRegistry {
+    /// Registered paths, in display order.
+    pub paths: Vec<LearningPath>,
+}
+
+impl LearningPathRegistry {
+    /// A registry seeded with the three built-in beginner paths.
+    pub fn with_builtins() -> Self {
+        Self { paths: builtin_learning_paths() }
+    }
+
+    /// Append a path to the registry.
+    pub fn register(&mut self, path: LearningPath) {
+        self.paths.push(path);
+    }
+}
+
+/// The three built-in beginner paths. Intentionally small — more than
+/// three is paradox-of-choice; four examples per path is the classic
 /// tutorial rhythm (setup → variation → extension → integration).
-/// Adding a path? Keep `steps.len()` in the 4..=6 range and lead
-/// with the simplest, most visual example.
-const PATHS: &[LearningPath] = &[
+/// Adding one? Keep `steps.len()` in the 4..=6 range and lead with the
+/// simplest, most visual example — or `register` it from another plugin.
+fn builtin_learning_paths() -> Vec<LearningPath> {
+    vec![
     LearningPath {
         icon: "⚡",
         title: "Circuits 101",
@@ -161,7 +195,8 @@ const PATHS: &[LearningPath] = &[
             },
         ],
     },
-];
+    ]
+}
 
 /// Per-panel state: which path (if any) is expanded, plus the
 /// Browse-all search/domain state. Stored in egui's data bag so the
@@ -169,8 +204,8 @@ const PATHS: &[LearningPath] = &[
 /// is a singleton panel so a single key is safe.
 #[derive(Clone, Default)]
 struct WelcomeState {
-    /// Index into `PATHS` of the expanded path. `None` = all
-    /// collapsed.
+    /// Index into the registry's `paths` of the expanded path. `None` =
+    /// all collapsed.
     expanded: Option<usize>,
     /// Live search string for Browse-all.
     browse_query: String,
@@ -318,6 +353,14 @@ impl Panel for WelcomePanel {
             .resource::<ExampleProgress>()
             .cloned()
             .unwrap_or_default();
+
+        // Learning-path catalog — a registry resource (was a `const` array),
+        // so the render reads data and other plugins can contribute paths.
+        // Falls back to the built-ins if the resource wasn't inserted.
+        let registry: LearningPathRegistry = ctx
+            .resource::<LearningPathRegistry>()
+            .cloned()
+            .unwrap_or_else(LearningPathRegistry::with_builtins);
 
         // Pull + mutate per-panel UI state from egui's data bag.
         let state_id = egui::Id::new(STATE_ID);
@@ -507,8 +550,9 @@ impl Panel for WelcomePanel {
                 // Overall header — "X of N paths started" turns the
                 // section into a tiny dashboard.
                 let total_steps: usize =
-                    PATHS.iter().map(|p| p.steps.len()).sum();
-                let done_steps: usize = PATHS
+                    registry.paths.iter().map(|p| p.steps.len()).sum();
+                let done_steps: usize = registry
+                    .paths
                     .iter()
                     .flat_map(|p| p.steps.iter())
                     .filter(|s| progress.is_opened(s.qualified))
@@ -536,7 +580,7 @@ impl Panel for WelcomePanel {
                 );
                 ui.add_space(10.0);
 
-                for (i, path) in PATHS.iter().enumerate() {
+                for (i, path) in registry.paths.iter().enumerate() {
                     let opened = path
                         .steps
                         .iter()

@@ -178,6 +178,17 @@ pub struct ModelicaDocument {
     /// `> last_seen_idx` and never miss or double-process an entry.
     next_change_idx: u64,
     last_source_edit_at: Option<web_time::Instant>,
+    /// Whether the emitting [`Self::rebuild_index`] has run its first
+    /// (baseline) pass. A document's *initial* class set is not a series of
+    /// `ClassAdded` mutations — external change-ring consumers read the index
+    /// directly for initial state, and the ring is for *subsequent* structural
+    /// edits. On an editable doc the real parse is deferred (async worker; the
+    /// constructor seeds an empty placeholder), so the first emitting rebuild —
+    /// whether triggered by the worker or a synchronous `refresh_ast_now` before
+    /// the first structured op — would otherwise emit a spurious `ClassAdded`
+    /// for every existing class, polluting the op's change stream. The first
+    /// build sets this and emits nothing; every build after diffs and emits.
+    index_baselined: bool,
 }
 
 impl ModelicaDocument {
@@ -416,6 +427,10 @@ impl ModelicaDocument {
             Some(0)
         };
         let has_errors = syntax.has_errors();
+        // Baseline is already established iff this constructor was handed a real
+        // parsed syntax (classes present) rather than the empty placeholder that
+        // `with_origin` seeds for async parsing — see [`Self::index_baselined`].
+        let index_baselined = !syntax.ast.classes.is_empty();
         let mut index = ModelicaIndex::new();
         index.rebuild_with_errors(&syntax.ast, &source, has_errors);
         Self {
@@ -430,6 +445,7 @@ impl ModelicaDocument {
             changes: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
             next_change_idx: 0,
             last_source_edit_at: None,
+            index_baselined,
         }
     }
 
@@ -525,6 +541,17 @@ impl ModelicaDocument {
             &self.source,
             has_errors,
         );
+        // First (baseline) build: adopt the initial class set silently. The
+        // document's starting classes aren't `ClassAdded` mutations — consumers
+        // read the index directly for initial state; the ring carries only the
+        // structural edits that follow. Without this, the deferred first parse
+        // (async worker, or the sync `refresh_ast_now` before the first op)
+        // would emit a spurious `ClassAdded` per class into the op's change
+        // stream. See [`Self::index_baselined`].
+        if !self.index_baselined {
+            self.index_baselined = true;
+            return;
+        }
         let now: std::collections::HashSet<String> =
             self.index.classes.keys().cloned().collect();
         let added: Vec<String> = now.difference(&prior).cloned().collect();
@@ -615,6 +642,19 @@ impl ModelicaDocument {
         if !self.ast_is_stale() && !self.syntax_is_stale() {
             return;
         }
+        self.reparse_source_ast();
+    }
+
+    /// Reparse the live source into the syntax cache + index UNCONDITIONALLY —
+    /// the guard-free core of [`Self::refresh_ast_now`]. Structured ops need this
+    /// even when the cache looks "fresh": a prior structured op installs a
+    /// `FreshAst::Mutated` cache whose STRUCTURE is current but whose class
+    /// byte-`location` spans are stale (the text moved under them). Computing the
+    /// next op's text patch from those stale spans corrupts the source, so each
+    /// structured op reparses here first. Cheap at user-op cadence; the class-set
+    /// diff is a no-op (the source structure already matches the index), so no
+    /// spurious `ClassAdded`/`Removed` is emitted.
+    fn reparse_source_ast(&mut self) {
         // The global engine is only needed for cross-file resolution
         // (it learns about this doc's AST so other docs can `extends` it).
         // A standalone / headless doc — and unit tests — can still refresh
@@ -839,6 +879,21 @@ impl Document for ModelicaDocument {
             return Err(DocumentError::ReadOnly);
         }
         let kind = op.classify();
+        // Structured ops (AddComponent/AddConnection/…) rewrite a class by its
+        // byte-`location` span, so the AST MUST match the current source exactly.
+        // Two ways it wouldn't: (1) on a fresh editable doc the real parse is
+        // async (gen-1 placeholder starts empty) — a synchronous caller (the UI
+        // before the worker lands, every unit test) would see no classes and
+        // fail "class not found"; (2) a *prior* structured op installed a mutated
+        // AST whose structure is current but whose spans are stale (the text
+        // moved), so the guarded `refresh_ast_now` would skip and this op would
+        // patch the wrong range, corrupting the source. So reparse the live
+        // source first. Text ops (EditText/ReplaceSource) splice bytes WITHOUT
+        // consulting the AST, so they stay on the deferred-parse path — the async
+        // worker refreshes the AST, keeping keystroke edits responsive.
+        if matches!(kind, super::ops::OpKind::Structured) {
+            self.reparse_source_ast();
+        }
         let (range, replacement, change, fresh_ast) =
             super::apply::op_to_patch(&self.source, &self.syntax, &self.syntax.ast, op)?;
         

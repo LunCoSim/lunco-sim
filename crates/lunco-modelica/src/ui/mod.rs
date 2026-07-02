@@ -735,9 +735,12 @@ impl Plugin for ModelicaUiPlugin {
         // fires — drives the progress dots on the learning paths.
         app.add_plugins(welcome_progress::WelcomeProgressPlugin);
 
-        // Multi-screen help/tour overlay. Pops on first launch (per
-        // `HelpOverlaySettings.seen` in settings.json), reachable
-        // thereafter from Help → Show Tour or F1. Apps that embed the
+        // Registers lunica's guided tour as data in the shared
+        // `tour_driver::TourCatalog` (played by the workbench's coach-card
+        // driver) and opens the demo model while it runs. First-launch
+        // auto-open + navigation live in the shared driver (persisted per
+        // `tour_seen` in settings.json), reachable thereafter from Help → Show
+        // Tour or F1. Apps that embed the
         // Modelica workbench as a *secondary* workspace (sandbox's
         // Design tab) pre-insert `ModelicaUiConfig { include_help_overlay:
         // false, .. }` to suppress the tour — there's no point coaching
@@ -929,6 +932,7 @@ impl Plugin for ModelicaUiPlugin {
             .register_panel(panels::package_browser::PackageBrowserPanel)
             .register_panel(lunco_workbench::TwinBrowserPanel)
             .register_panel(lunco_workbench::FilesPanel)
+            .insert_resource(panels::welcome::LearningPathRegistry::with_builtins())
             .register_panel(panels::welcome::WelcomePanel)
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_instance_panel(panels::graphs::ModelicaPlotPanel)

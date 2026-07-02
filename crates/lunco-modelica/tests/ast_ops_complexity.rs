@@ -20,6 +20,26 @@ fn reparse_ok(source: &str) -> bool {
     rumoca_phase_parse::parse_to_ast(source, "test.mo").is_ok()
 }
 
+/// Whitespace-insensitive `contains`. Structured ops regenerate a class via
+/// `to_modelica`, whose canonical layout (`R = 100`, `extent = {{-5, -5}, …}`)
+/// is valid Modelica but differs from a terse hand-written form — these
+/// assertions care about content, not spacing.
+fn has_nospace(haystack: &str, needle: &str) -> bool {
+    let strip = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    strip(haystack).contains(&strip(needle))
+}
+
+/// The latest change-ring index. The ring is keyed by a monotonic *change index*
+/// decoupled from source `generation` (a single edit can emit several changes),
+/// so this — not `host.generation()` — is the correct watermark to pass to
+/// `changes_since`.
+fn latest_change_idx(host: &DocumentHost<ModelicaDocument>) -> u64 {
+    host.document()
+        .changes_since(0)
+        .and_then(|it| it.map(|(g, _)| *g).max())
+        .unwrap_or(0)
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // 1. Multi-component circuit: add heterogeneous components + connect
 // ─────────────────────────────────────────────────────────────────────
@@ -428,9 +448,12 @@ fn remove_connection_deletes_single_connect() {
         from: PortRef::new("a", "p"),
         to: PortRef::new("b", "n"),
     }).unwrap();
-    let expected = "model M\n  Real a;\n  Real b;\nequation\n  connect(a.n, b.p);\nend M;\n";
-    assert_eq!(host.document().source(), expected);
-    assert!(reparse_ok(host.document().source()));
+    let out = host.document().source();
+    // The removed connect is gone, the other survives, and it still parses.
+    // Compare on content (not layout — `to_modelica` re-emits canonical spacing).
+    assert!(reparse_ok(&out), "reparse: {out}");
+    assert!(has_nospace(&out, "connect(a.n,b.p)"), "kept connection: {out}");
+    assert!(!has_nospace(&out, "connect(a.p,b.n)"), "removed connection: {out}");
 }
 
 #[test]
@@ -469,7 +492,7 @@ fn set_placement_inserts_annotation_when_missing() {
         placement: Placement::at(5.0, 5.0),
     }).unwrap();
     let src = host.document().source();
-    assert!(src.contains("annotation(Placement(transformation(extent={{-5,-5},{15,15}})))"),
+    assert!(has_nospace(src, "annotation(Placement(transformation(extent={{-5,-5},{15,15}})))"),
         "placement inserted: {}", src);
     assert!(reparse_ok(src));
 }
@@ -484,8 +507,8 @@ fn set_placement_replaces_existing_placement() {
         placement: Placement::at(50.0, -20.0),
     }).unwrap();
     let out = host.document().source();
-    assert!(out.contains("{{40,-30},{60,-10}}"), "new placement extent: {}", out);
-    assert!(reparse_ok(out));
+    assert!(has_nospace(&out, "{{40,-30},{60,-10}}"), "new placement extent: {}", out);
+    assert!(reparse_ok(&out));
 }
 
 #[test]
@@ -529,8 +552,8 @@ fn set_parameter_inserts_when_list_missing() {
         value: "100".into(),
     }).unwrap();
     let out = host.document().source();
-    assert!(out.contains("R1(R=100)"), "list created: {}", out);
-    assert!(reparse_ok(out));
+    assert!(has_nospace(&out, "R1(R=100)"), "list created: {}", out);
+    assert!(reparse_ok(&out));
 }
 
 #[test]
@@ -543,9 +566,9 @@ fn set_parameter_appends_when_list_present_but_param_missing() {
         value: "293".into(),
     }).unwrap();
     let out = host.document().source();
-    assert!(out.contains("R=100"), "original param kept: {}", out);
-    assert!(out.contains("T=293"), "new param appended: {}", out);
-    assert!(reparse_ok(out));
+    assert!(has_nospace(&out, "R=100"), "original param kept: {}", out);
+    assert!(has_nospace(&out, "T=293"), "new param appended: {}", out);
+    assert!(reparse_ok(&out));
 }
 
 #[test]
@@ -693,8 +716,9 @@ fn undo_emits_text_replaced() {
             placement: None,
         },
     }).unwrap();
-    // Snapshot the generation after the forward op.
-    let after_forward = host.generation();
+    // Snapshot the change-ring watermark after the forward op (NOT the source
+    // generation — the ring index is decoupled from it).
+    let after_forward = latest_change_idx(&host);
     host.undo().unwrap();
     // Undo pushed a new change AFTER the forward one.
     let changes = collect_changes(&host, after_forward);
@@ -829,6 +853,10 @@ fn mixed_op_sequence_undoes_back_to_start() {
     // Redo → identical to post-op state.
     for _ in 0..3 { host.redo().unwrap(); }
     assert!(reparse_ok(host.document().source()));
+    // Undo/redo are TEXT ops; the AST refresh after a text edit is normally the
+    // async worker's job (debounced), so in this synchronous test refresh it in
+    // place before reading the structured AST — the documented test-helper path.
+    host.document_mut().refresh_ast_now();
     let ast = host.document().strict_ast().unwrap();
     let circuit = ast.classes.get("Circuit").unwrap();
     assert_eq!(circuit.components.len(), 2);

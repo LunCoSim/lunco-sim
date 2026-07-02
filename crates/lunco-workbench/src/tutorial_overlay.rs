@@ -309,97 +309,430 @@ fn paint_scrim(
     ctx.request_repaint();
 }
 
-/// Draw the guided-tour coach mark: scrim+ring on the step's anchor, plus a card
-/// with a "🎓 TUTORIAL" banner, title, body, progress dots, and Back/Next/Skip
-/// controls. The controls fire `cmd:TutorialBack`/`cmd:TutorialNext`/
-/// `cmd:TutorialSkip` on the TelemetryEvent bus; the tour script advances on them.
+/// Side of the spotlight target the coach card sits on — drives where the
+/// speech-bubble tail's apex points.
+#[derive(Clone, Copy)]
+enum CalloutSide {
+    Right,
+    Below,
+    Above,
+    Left,
+    /// Card sits *on* the target (huge central panels / no room alongside) — no
+    /// tail.
+    Over,
+    /// No target — centred, no tail.
+    Centred,
+}
+
+/// Fire a tour-navigation event on the bus. The data driver (and rhai tours)
+/// advance on these; `data` carries the jump index for `cmd:TutorialGoto` and
+/// the pin flag for `cmd:TutorialPin`.
+fn emit_tour(commands: &mut Commands, name: &str, data: lunco_core::TelemetryValue) {
+    commands.trigger(lunco_core::TelemetryEvent {
+        name: name.to_string(),
+        source: 0,
+        severity: lunco_core::Severity::Info,
+        data,
+        timestamp: 0.0,
+    });
+}
+
+/// Draw the guided-tour coach mark: scrim + pulsing ring on the step's anchor,
+/// a speech-bubble tail, and a themed card with a full-width accent banner,
+/// body, progress bar, clickable jump-dots, and Back / Skip / Next·Done
+/// controls (plus a "show on next start" toggle for data tours). Controls fire
+/// `cmd:Tutorial{Next,Back,Skip,Goto,Pin}` on the bus; the driver advances on
+/// them. Matches the lunica product tour's polish so both apps share one card.
 fn draw_tour(
     mut egui_ctx: EguiContexts,
     hud: Res<TutorialHud>,
     anchors: Res<crate::HelpAnchors>,
+    theme: Option<Res<lunco_theme::Theme>>,
+    active: Option<Res<crate::tour_driver::ActiveTour>>,
+    seen: Option<Res<crate::tour_driver::TourSeen>>,
     mut commands: Commands,
 ) {
     let Some(step) = hud.tour.clone() else { return };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     let screen = ctx.content_rect();
-    let target = if step.anchor.is_empty() { None } else { anchors.get(&step.anchor) };
 
+    let theme = theme.map(|t| t.clone()).unwrap_or_else(lunco_theme::Theme::dark);
+    let accent = theme.tokens.accent;
+    let accent_text = theme.colors.base;
+    let muted = theme.tokens.text_subdued;
+    let text = theme.colors.text;
+    let card_fill = {
+        let [r, g, b, _] = theme.tokens.surface_raised.to_array();
+        egui::Color32::from_rgba_unmultiplied(r, g, b, 250)
+    };
+
+    // "Show on next start" checkbox — only meaningful while a *data* tour is
+    // active (rhai tours don't track a persisted seen-set).
+    let (show_checkbox, seen_now) = match (active.as_ref().and_then(|a| a.id), seen.as_ref()) {
+        (Some(id), Some(seen)) => (true, seen.seen.iter().any(|s| s == id.as_str())),
+        _ => (false, false),
+    };
+
+    let target = if step.anchor.is_empty() {
+        None
+    } else {
+        anchors
+            .get(&step.anchor)
+            .map(|r| r.expand(6.0).intersect(screen))
+            .filter(|r| r.width() > 4.0 && r.height() > 4.0)
+    };
+
+    // ── Card placement — pick the side that fits around the target, matching
+    // the lunica tour's Right/Below/Above/Left/Over/Centred logic.
+    let card_w = 360.0;
+    let card_h_est = 300.0;
+    let margin = 18.0;
+    let (side, card_pos) = if let Some(t) = target {
+        let over_pos = egui::pos2(
+            (t.center().x - card_w * 0.5)
+                .clamp(screen.min.x + margin, screen.max.x - card_w - margin),
+            (t.min.y + 16.0).clamp(screen.min.y + margin, screen.max.y - card_h_est - margin),
+        );
+        let target_huge =
+            t.width() > screen.width() * 0.55 && t.height() > screen.height() * 0.5;
+        let target_short = t.height() < 50.0;
+        let below_y = if target_short {
+            (t.max.y + 80.0).clamp(screen.min.y + margin, screen.max.y - card_h_est - margin)
+        } else {
+            t.max.y + margin
+        };
+        let candidates = [
+            (
+                CalloutSide::Right,
+                egui::pos2(
+                    t.max.x + margin,
+                    (t.center().y - card_h_est * 0.5)
+                        .clamp(screen.min.y + margin, screen.max.y - card_h_est - margin),
+                ),
+            ),
+            (
+                CalloutSide::Below,
+                egui::pos2(
+                    (t.center().x - card_w * 0.5)
+                        .clamp(screen.min.x + margin, screen.max.x - card_w - margin),
+                    below_y,
+                ),
+            ),
+            (
+                CalloutSide::Above,
+                egui::pos2(
+                    (t.center().x - card_w * 0.5)
+                        .clamp(screen.min.x + margin, screen.max.x - card_w - margin),
+                    t.min.y - card_h_est - margin,
+                ),
+            ),
+            (
+                CalloutSide::Left,
+                egui::pos2(
+                    t.min.x - card_w - margin,
+                    (t.center().y - card_h_est * 0.5)
+                        .clamp(screen.min.y + margin, screen.max.y - card_h_est - margin),
+                ),
+            ),
+        ];
+        let fits = |p: &egui::Pos2| {
+            p.x >= screen.min.x + margin
+                && p.x + card_w <= screen.max.x - margin
+                && p.y >= screen.min.y + margin
+                && p.y + card_h_est <= screen.max.y - margin
+        };
+        if target_huge {
+            (CalloutSide::Over, over_pos)
+        } else {
+            candidates
+                .into_iter()
+                .find(|(_, p)| fits(p))
+                .unwrap_or((CalloutSide::Over, over_pos))
+        }
+    } else {
+        (
+            CalloutSide::Centred,
+            egui::pos2(
+                screen.center().x - card_w * 0.5,
+                screen.center().y - card_h_est * 0.5,
+            ),
+        )
+    };
+
+    // ── Scrim + ring + speech-bubble tail (behind the card) ──────────────────
     egui::Area::new(egui::Id::new("lunco_tour_scrim"))
         .order(egui::Order::Foreground)
         .interactable(false)
         .fixed_pos(screen.min)
-        .show(ctx, |ui| paint_scrim(ui.painter(), ctx, screen, target));
+        .show(ctx, |ui| {
+            let painter = ui.painter();
+            paint_scrim(painter, ctx, screen, target);
+            if let Some(t) = target {
+                let card_rect =
+                    egui::Rect::from_min_size(card_pos, egui::vec2(card_w, card_h_est));
+                if let Some((apex, b1, b2)) = tour_tail_points(side, t, card_rect) {
+                    painter.add(egui::Shape::Path(egui::epaint::PathShape {
+                        points: vec![apex, b1, b2],
+                        closed: true,
+                        fill: card_fill,
+                        stroke: egui::Stroke::new(1.0, accent.linear_multiply(0.55)).into(),
+                    }));
+                }
+            }
+        });
 
-    // Card placement: below the target, else centred.
-    let card_w = 340.0;
-    let pos = match target {
-        Some(t) => {
-            let x = (t.center().x - card_w * 0.5).clamp(screen.left() + 12.0, screen.right() - card_w - 12.0);
-            let below = t.max.y + 16.0;
-            let y = if below + 120.0 <= screen.bottom() { below } else { (t.min.y - 150.0).max(screen.top() + 12.0) };
-            egui::pos2(x, y)
-        }
-        None => egui::pos2(screen.center().x - card_w * 0.5, screen.center().y - 70.0),
-    };
+    // ── Card ─────────────────────────────────────────────────────────────────
+    let last = step.index + 1 >= step.total;
+    let mut next = false;
+    let mut back = false;
+    let mut skip = false;
+    let mut goto: Option<usize> = None;
+    let mut pin: Option<bool> = None;
 
-    let mut nav: Option<&str> = None;
     egui::Area::new(egui::Id::new("lunco_tour_card"))
         .order(egui::Order::Tooltip)
         .interactable(true)
-        .fixed_pos(pos)
+        .fixed_pos(card_pos)
         .show(ctx, |ui| {
             ui.set_width(card_w);
             egui::Frame::new()
-                .fill(egui::Color32::from_rgba_unmultiplied(20, 28, 44, 252))
+                .fill(card_fill)
                 .corner_radius(14.0)
-                .stroke(egui::Stroke::new(1.5, ACCENT))
-                .inner_margin(egui::Margin::symmetric(16, 14))
+                .inner_margin(egui::Margin::ZERO)
+                .stroke(egui::Stroke::new(1.5, accent))
                 .show(ui, |ui| {
-                    ui.label(egui::RichText::new("🎓  TUTORIAL").color(ACCENT).small().strong());
-                    if !step.title.is_empty() {
-                        ui.add_space(3.0);
-                        ui.label(egui::RichText::new(&step.title).color(egui::Color32::from_rgb(230, 240, 255)).size(17.0).strong());
+                    // Banner — full-width accent stripe with diagonal pinstripes.
+                    let banner_h = 32.0;
+                    let (banner_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(card_w, banner_h), egui::Sense::hover());
+                    let p = ui.painter();
+                    p.rect_filled(
+                        banner_rect,
+                        egui::CornerRadius { nw: 13, ne: 13, sw: 0, se: 0 },
+                        accent,
+                    );
+                    let stripe = accent_text.linear_multiply(0.12);
+                    let mut x = banner_rect.min.x - banner_h;
+                    while x < banner_rect.max.x {
+                        p.line_segment(
+                            [
+                                egui::pos2(x, banner_rect.max.y),
+                                egui::pos2(x + banner_h, banner_rect.min.y),
+                            ],
+                            egui::Stroke::new(1.5, stripe),
+                        );
+                        x += 10.0;
                     }
-                    if !step.body.is_empty() {
-                        ui.add_space(4.0);
-                        ui.label(egui::RichText::new(&step.body).color(egui::Color32::from_rgb(206, 220, 244)).size(15.0));
+                    let banner_label = if step.title.is_empty() {
+                        "🎓  INTERACTIVE TUTORIAL".to_string()
+                    } else {
+                        format!("🎓  {}", step.title.to_uppercase())
+                    };
+                    p.text(
+                        banner_rect.min + egui::vec2(14.0, banner_h * 0.5),
+                        egui::Align2::LEFT_CENTER,
+                        banner_label,
+                        egui::FontId::proportional(12.5),
+                        accent_text,
+                    );
+                    if step.total > 0 {
+                        p.text(
+                            banner_rect.max - egui::vec2(14.0, banner_h * 0.5),
+                            egui::Align2::RIGHT_CENTER,
+                            format!("Step {} / {}", step.index + 1, step.total),
+                            egui::FontId::proportional(11.5),
+                            accent_text,
+                        );
                     }
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        // Progress dots.
-                        for i in 0..step.total {
-                            let filled = i == step.index;
-                            ui.label(
-                                egui::RichText::new(if filled { "●" } else { "○" })
-                                    .color(if filled { ACCENT } else { egui::Color32::from_gray(110) })
-                                    .size(12.0),
-                            );
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let last = step.index + 1 >= step.total;
-                            if ui.button(if last { "Done" } else { "Next ▶" }).clicked() {
-                                nav = Some("cmd:TutorialNext");
+
+                    ui.add_space(2.0);
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin::symmetric(18, 14))
+                        .show(ui, |ui| {
+                            if !step.body.is_empty() {
+                                ui.label(egui::RichText::new(&step.body).size(14.0).color(text));
+                                ui.add_space(10.0);
                             }
-                            if step.index > 0 && ui.button("◀ Back").clicked() {
-                                nav = Some("cmd:TutorialBack");
+
+                            // Progress bar.
+                            if step.total > 0 {
+                                let (bar, _) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width(), 4.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(bar, 2.0, muted.linear_multiply(0.25));
+                                let frac = (step.index as f32 + 1.0) / step.total as f32;
+                                let fill = egui::Rect::from_min_max(
+                                    bar.min,
+                                    egui::pos2(bar.min.x + bar.width() * frac, bar.max.y),
+                                );
+                                ui.painter().rect_filled(fill, 2.0, accent);
+                                ui.add_space(8.0);
+
+                                // Clickable jump-dots.
+                                ui.horizontal_wrapped(|ui| {
+                                    for i in 0..step.total {
+                                        let is_cur = i == step.index;
+                                        let done = i < step.index;
+                                        let color = if is_cur {
+                                            accent
+                                        } else if done {
+                                            accent.linear_multiply(0.5)
+                                        } else {
+                                            muted.linear_multiply(0.4)
+                                        };
+                                        let (dot, resp) = ui.allocate_exact_size(
+                                            egui::vec2(14.0, 14.0),
+                                            egui::Sense::click(),
+                                        );
+                                        ui.painter().circle_filled(
+                                            dot.center(),
+                                            if is_cur { 5.0 } else { 3.5 },
+                                            color,
+                                        );
+                                        if resp.clicked() {
+                                            goto = Some(i);
+                                        }
+                                        resp.on_hover_text(format!("Step {}", i + 1));
+                                    }
+                                });
+                                ui.add_space(10.0);
                             }
-                            if !last && ui.button("Skip").clicked() {
-                                nav = Some("cmd:TutorialSkip");
+
+                            // Buttons.
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add_enabled(
+                                        step.index > 0,
+                                        egui::Button::new("◀  Back")
+                                            .min_size(egui::vec2(80.0, 28.0)),
+                                    )
+                                    .clicked()
+                                {
+                                    back = true;
+                                }
+                                if ui
+                                    .button(egui::RichText::new("Skip").color(muted).size(11.0))
+                                    .clicked()
+                                {
+                                    skip = true;
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let label = if last { "Done ✓" } else { "Next  ▶" };
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new(label)
+                                                        .strong()
+                                                        .color(accent_text),
+                                                )
+                                                .fill(accent)
+                                                .min_size(egui::vec2(90.0, 28.0)),
+                                            )
+                                            .clicked()
+                                        {
+                                            next = true;
+                                        }
+                                    },
+                                );
+                            });
+
+                            if show_checkbox {
+                                ui.add_space(4.0);
+                                let mut show_next = !seen_now;
+                                if ui
+                                    .checkbox(&mut show_next, "Show on next start")
+                                    .on_hover_text(
+                                        "Re-open this tour automatically next time you \
+                                         launch the app.",
+                                    )
+                                    .changed()
+                                {
+                                    pin = Some(show_next);
+                                }
                             }
                         });
-                    });
                 });
         });
 
-    if let Some(name) = nav {
-        commands.trigger(lunco_core::TelemetryEvent {
-            name: name.to_string(),
-            source: 0,
-            severity: lunco_core::Severity::Info,
-            data: lunco_core::TelemetryValue::Bool(true),
-            timestamp: 0.0,
-        });
+    if next {
+        emit_tour(&mut commands, "cmd:TutorialNext", lunco_core::TelemetryValue::Bool(true));
     }
+    if back {
+        emit_tour(&mut commands, "cmd:TutorialBack", lunco_core::TelemetryValue::Bool(true));
+    }
+    if skip {
+        emit_tour(&mut commands, "cmd:TutorialSkip", lunco_core::TelemetryValue::Bool(true));
+    }
+    if let Some(i) = goto {
+        emit_tour(&mut commands, "cmd:TutorialGoto", lunco_core::TelemetryValue::I64(i as i64));
+    }
+    if let Some(b) = pin {
+        emit_tour(&mut commands, "cmd:TutorialPin", lunco_core::TelemetryValue::Bool(b));
+    }
+}
+
+/// Three points of the speech-bubble tail triangle: apex (near the target) and
+/// two base points on the card edge. `None` for `Over`/`Centred` (no tail).
+fn tour_tail_points(
+    side: CalloutSide,
+    target: egui::Rect,
+    card: egui::Rect,
+) -> Option<(egui::Pos2, egui::Pos2, egui::Pos2)> {
+    let base_half = 10.0;
+    Some(match side {
+        CalloutSide::Right => {
+            let edge_x = card.min.x;
+            let cy = target
+                .center()
+                .y
+                .clamp(card.min.y + base_half + 4.0, card.max.y - base_half - 4.0);
+            (
+                egui::pos2(target.max.x, cy),
+                egui::pos2(edge_x + 0.5, cy - base_half),
+                egui::pos2(edge_x + 0.5, cy + base_half),
+            )
+        }
+        CalloutSide::Left => {
+            let edge_x = card.max.x;
+            let cy = target
+                .center()
+                .y
+                .clamp(card.min.y + base_half + 4.0, card.max.y - base_half - 4.0);
+            (
+                egui::pos2(target.min.x, cy),
+                egui::pos2(edge_x - 0.5, cy - base_half),
+                egui::pos2(edge_x - 0.5, cy + base_half),
+            )
+        }
+        CalloutSide::Below => {
+            let edge_y = card.min.y;
+            let cx = target
+                .center()
+                .x
+                .clamp(card.min.x + base_half + 4.0, card.max.x - base_half - 4.0);
+            (
+                egui::pos2(cx, target.max.y),
+                egui::pos2(cx - base_half, edge_y + 0.5),
+                egui::pos2(cx + base_half, edge_y + 0.5),
+            )
+        }
+        CalloutSide::Above => {
+            let edge_y = card.max.y;
+            let cx = target
+                .center()
+                .x
+                .clamp(card.min.x + base_half + 4.0, card.max.x - base_half - 4.0);
+            (
+                egui::pos2(cx, target.min.y),
+                egui::pos2(cx - base_half, edge_y - 0.5),
+                egui::pos2(cx + base_half, edge_y - 0.5),
+            )
+        }
+        CalloutSide::Over | CalloutSide::Centred => return None,
+    })
 }
 
 /// Adds the [`TutorialHud`] resource, its commands, and the ui-gated overlay draw
