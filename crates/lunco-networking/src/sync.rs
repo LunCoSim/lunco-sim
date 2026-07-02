@@ -43,6 +43,7 @@ use lunco_core::{
 use lunco_api::executor::{authz_target_gid, globalize_command_ids, resolve_command_ids};
 use lunco_api::registry::ApiEntityRegistry;
 pub use lunco_doc_bevy::{Presence, UserId, PresenceInfo};
+use lunco_doc_bevy::JournalResource;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_celestial::CelestialReferenceFrame;
 
@@ -236,6 +237,10 @@ pub struct InboundClientCtx<'w> {
     // `pending_asset_requests` (client arm is a no-op).
     incoming_chunks: ResMut<'w, crate::scenario_sync::IncomingAssetChunks>,
     pending_asset_requests: ResMut<'w, crate::scenario_sync::PendingAssetRequests>,
+    // Canonical Twin journal — a client applies host-sent entries here via
+    // `append_remote` (merge). `Option` so the drain still runs in a build with
+    // no journal (e.g. a minimal networking-only test); host arm is a no-op.
+    journal: Option<Res<'w, JournalResource>>,
 }
 
 /// Host → clients: the authoritative who-owns-what map (`gid → session`).
@@ -466,6 +471,20 @@ pub struct TutorStatusResource {
     pub one_shot_snap_request: Option<SharePerspectiveMsg>,
 }
 
+/// Host → clients (scenario-plane sync): one Twin-journal entry, so peers
+/// converge on the same edit history. The entry is carried as **JSON text**
+/// (not the typed `JournalEntry`) because it rides the positional `bincode`
+/// codec, which can't (de)serialize the `serde_json::Value` inside
+/// `EntryKind::Op` — exactly the reason [`SyncCommand`] carries its payload as a
+/// string. The client `serde_json::from_str`s it and feeds
+/// [`Journal::append_remote`](lunco_twin_journal::Journal::append_remote), which
+/// merges divergent history deterministically.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct JournalEntryMsg {
+    /// `serde_json::to_string(&JournalEntry)`.
+    pub json: String,
+}
+
 /// Everything that crosses the wire, tagged for reliable/unreliable routing by
 /// the accompanying [`SyncChannel`]. `lunco-networking` (de)serializes these.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -503,6 +522,10 @@ pub enum SyncEnvelope {
     AssetChunk(crate::scenario::AssetChunkMsg),
     // Peer → host: "I already have this CID" dedupe hint (Phase 3+).
     AssetHave(crate::scenario::AssetHaveMsg),
+    // Host → client: a Twin-journal entry (scenario-plane sync). Appended LAST
+    // (same positional-codec rule): a stale peer that predates journal sync
+    // simply never sends/handles it; prior discriminants stay put.
+    JournalEntry(JournalEntryMsg),
 }
 
 // ── Resources (the contract `lunco-networking` touches) ───────────────────────
@@ -1321,8 +1344,62 @@ pub fn drain_sync_inbox(
             SyncEnvelope::AssetHave(_) => {
                 // Phase 3+: host skips streaming an asset the peer already has.
             }
+            SyncEnvelope::JournalEntry(msg) => {
+                // Client mirrors the host's edit history: deserialize + merge via
+                // `append_remote` (idempotent + convergent). Host ignores inbound
+                // journal entries in this one-way phase (client→host op upload is
+                // the later bidirectional step).
+                if !role.is_host() {
+                    if let Some(journal) = ctx.journal.as_ref() {
+                        match serde_json::from_str::<lunco_twin_journal::JournalEntry>(&msg.json) {
+                            Ok(entry) => journal.with_write(|j| j.append_remote(entry)),
+                            Err(e) => warn!("[net] bad journal entry from host: {e}"),
+                        }
+                    }
+                }
+            }
         }
     }
+}
+
+/// Host: broadcast newly-appended Twin-journal entries to all clients so their
+/// journals converge with the host's (scenario-plane sync). Ships the tail of
+/// `entry_order` past what it last sent; a fresh client also gets the full
+/// journal on connect (`on_server_connected`) — the overlap is harmless since
+/// [`append_remote`](lunco_twin_journal::Journal::append_remote) is idempotent.
+/// Reliable `BulkData` lane (edit history, not per-tick state). Host-only.
+pub fn broadcast_journal_entries(
+    role: Res<NetworkRole>,
+    journal: Option<Res<JournalResource>>,
+    mut outbox: ResMut<SyncOutbox>,
+    // Count of entries already broadcast (append-only log ⇒ a monotonic cursor).
+    mut sent: Local<usize>,
+) {
+    if !role.is_host() {
+        return;
+    }
+    let Some(journal) = journal else {
+        return;
+    };
+    journal.with_read(|j| {
+        let total = j.len();
+        // Journal replaced (e.g. a Twin loaded mid-session shrank/reset the log):
+        // re-send from the start — clients dedupe by EntryId.
+        if total < *sent {
+            *sent = 0;
+        }
+        if total == *sent {
+            return;
+        }
+        for entry in j.entries().skip(*sent) {
+            if let Ok(json) = serde_json::to_string(entry) {
+                outbox
+                    .0
+                    .push((SyncChannel::BulkData, SyncEnvelope::JournalEntry(JournalEntryMsg { json })));
+            }
+        }
+        *sent = total;
+    });
 }
 
 // ── State replication (host → clients) ────────────────────────────────────────
@@ -2673,6 +2750,8 @@ impl Plugin for SyncPlugin {
                 crate::scenario_sync::request_missing_assets,
                 crate::scenario_sync::reassemble_asset_chunks,
                 crate::scenario_sync::drain_persist_results,
+                // Scenario-plane sync: host streams new journal entries to clients.
+                broadcast_journal_entries,
             ))
             // `gather_snapshot` runs on the sim clock (`FixedPostUpdate`): it only
             // writes our `SyncOutbox` (never calls lightyear), so it's safe off the
@@ -2836,6 +2915,54 @@ mod codec_roundtrip {
         }))
         .expect("serialize");
         assert_eq!(&have[..4], &[16, 0, 0, 0], "AssetHave must be index 16");
+
+        let journal = serialize_env(&SyncEnvelope::JournalEntry(JournalEntryMsg {
+            json: String::new(),
+        }))
+        .expect("serialize");
+        assert_eq!(&journal[..4], &[17, 0, 0, 0], "JournalEntry must be index 17");
+    }
+
+    /// A `JournalEntry` round-trips through the JSON-in-bincode envelope — the
+    /// `serde_json::Value` inside an `Op` (which plain bincode can't carry)
+    /// survives because the entry travels as a JSON string.
+    #[test]
+    fn journal_entry_envelope_roundtrips() {
+        use lunco_twin_journal::{
+            AuthorId, AuthorTag, DomainKind, EntryId, EntryKind, JournalEntry, TwinId,
+        };
+        let entry = JournalEntry {
+            id: EntryId { author: AuthorId::new("peer"), lamport: 7 },
+            parents: vec![EntryId { author: AuthorId::local(), lamport: 3 }],
+            author: AuthorTag { user: "peer".into(), tool: "remote".into() },
+            at_ms: 42,
+            twin: TwinId::new("t"),
+            doc: lunco_doc::DocumentId::new(1),
+            // The Op carries `serde_json::Value` payloads — the exact shape plain
+            // bincode chokes on; the JSON-string envelope handles it.
+            kind: EntryKind::Op {
+                domain: DomainKind::Usd,
+                op: serde_json::json!({ "SetTranslate": { "path": "/World/rover", "value": [1.0, 2.0, 3.0] } }),
+                inverse: serde_json::json!({ "SetTranslate": { "path": "/World/rover", "value": [0.0, 0.0, 0.0] } }),
+            },
+            change_set: None,
+        };
+        let msg = JournalEntryMsg { json: serde_json::to_string(&entry).unwrap() };
+        let bytes = serialize_env(&SyncEnvelope::JournalEntry(msg)).expect("serialize");
+        let back = deserialize_env(&bytes).expect("deserialize");
+        let SyncEnvelope::JournalEntry(m) = back else {
+            panic!("wrong variant");
+        };
+        let round: JournalEntry = serde_json::from_str(&m.json).unwrap();
+        assert_eq!(round.id, entry.id);
+        assert_eq!(round.parents, entry.parents);
+        match round.kind {
+            EntryKind::Op { domain, op, .. } => {
+                assert_eq!(domain, DomainKind::Usd);
+                assert_eq!(op["SetTranslate"]["value"][0], 1.0);
+            }
+            _ => panic!("expected Op"),
+        }
     }
 
     #[test]

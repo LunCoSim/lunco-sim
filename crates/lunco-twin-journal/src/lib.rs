@@ -47,7 +47,8 @@
 
 use lunco_doc::DocumentId;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -884,10 +885,15 @@ impl Journal {
     /// to keep causality, then inserts. If the entry's id is already
     /// known, it's a no-op (idempotent replay).
     ///
-    /// `main` branch advancement: if the new entry's parents include the
-    /// current main head, fast-forward main to the new entry. Otherwise
-    /// the entry lives in the DAG but main stays put — the caller (or a
-    /// future merge resolver) decides what to do.
+    /// `main` branch advancement:
+    /// - **Fast-forward** (common streaming case): if the new entry's parents
+    ///   include the current main head, advance main to it — O(1).
+    /// - **Merge** (divergence): the entry does NOT build on the current head
+    ///   (concurrent peers, or offline edits on a promoted scenario), so main
+    ///   is re-pointed at the deterministic convergent tip
+    ///   ([`merged_head`](Self::merged_head)). Every peer with the same entries
+    ///   converges to the same head; consumers replay [`merged_order`] for
+    ///   convergent state (latest-in-order wins per target).
     pub fn append_remote(&mut self, entry: JournalEntry) {
         if self.entries.contains_key(&entry.id) {
             return; // idempotent
@@ -900,7 +906,8 @@ impl Journal {
 
         self.insert_entry(entry);
 
-        // Fast-forward main if the remote entry extends our current head.
+        // Fast-forward main if the remote entry extends our current head;
+        // otherwise reconcile to the convergent tip (merge).
         let main_head = self
             .branches
             .get("main")
@@ -912,6 +919,9 @@ impl Journal {
         };
         if extends_main {
             self.advance_main(id.clone());
+        } else if let Some(tip) = self.merged_head() {
+            // Divergent branch: re-point main at the deterministic merged tip.
+            self.advance_main(tip);
         }
 
         if let Some(cs_id) = change_set {
@@ -1075,6 +1085,109 @@ impl Journal {
             composition: Composition::Sequential,
             head,
         }
+    }
+
+    // ── Merge (convergent linearization) ─────────────────────────────────
+    //
+    // The resolver for divergent history: two peers that edited concurrently
+    // (or one that edited a promoted scenario offline) each hold a DAG that has
+    // forked. Rather than getting stuck (the old fast-forward-only behavior) or
+    // needing a central coordinator, we define ONE deterministic linear order
+    // over the whole DAG that every peer computes identically from the same
+    // entry set. Replaying ops in that order gives convergent state
+    // (`Composition::LastWriteWins`: latest-in-order wins per target).
+
+    /// Deterministic convergent order of **all** entries: a topological sort
+    /// (every entry after each of its parents that is present) with concurrent
+    /// entries tie-broken by `(lamport, author)` — the unique, machine-
+    /// independent key on every peer. Pure function of the entry set: two
+    /// journals holding the same entries (regardless of insertion/arrival order)
+    /// return the identical sequence, so consumers replaying ops in this order
+    /// converge without any coordination.
+    ///
+    /// A parent not present in the journal (out-of-order delivery) is treated as
+    /// already-satisfied — it orders "before everything we hold" — so a partial
+    /// set still linearizes and converges once completed. Any entry left by a
+    /// (malformed) cycle is appended last in key order, so every entry always
+    /// appears exactly once.
+    pub fn merged_order_ids(&self) -> Vec<EntryId> {
+        // Kahn's algorithm with a min-heap keyed on (lamport, author) for a
+        // deterministic pick among concurrently-ready entries.
+        let mut indeg: HashMap<EntryId, usize> = HashMap::with_capacity(self.entries.len());
+        let mut children: HashMap<EntryId, Vec<EntryId>> = HashMap::new();
+        for e in self.entries.values() {
+            let present_parents = e
+                .parents
+                .iter()
+                .filter(|p| self.entries.contains_key(p))
+                .count();
+            indeg.insert(e.id.clone(), present_parents);
+            for p in &e.parents {
+                if self.entries.contains_key(p) {
+                    children.entry(p.clone()).or_default().push(e.id.clone());
+                }
+            }
+        }
+
+        // Min-heap via `Reverse` on the order key (lamport, author, full id).
+        let key = |id: &EntryId| (id.lamport, id.author.clone(), id.clone());
+        let mut ready: BinaryHeap<Reverse<(u64, AuthorId, EntryId)>> = BinaryHeap::new();
+        for (id, &d) in &indeg {
+            if d == 0 {
+                ready.push(Reverse(key(id)));
+            }
+        }
+
+        let mut out: Vec<EntryId> = Vec::with_capacity(self.entries.len());
+        let mut seen: HashSet<EntryId> = HashSet::with_capacity(self.entries.len());
+        while let Some(Reverse((_, _, id))) = ready.pop() {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            if let Some(kids) = children.get(&id) {
+                for k in kids {
+                    if let Some(d) = indeg.get_mut(k) {
+                        *d -= 1;
+                        if *d == 0 {
+                            ready.push(Reverse(key(k)));
+                        }
+                    }
+                }
+            }
+            out.push(id);
+        }
+
+        // Defensive: a cycle (never produced by well-formed causal history —
+        // a parent's lamport is always < its child's) would leave entries
+        // unemitted; append them deterministically so `merged_order` is total.
+        if out.len() < self.entries.len() {
+            let mut leftover: Vec<EntryId> = self
+                .entries
+                .keys()
+                .filter(|id| !seen.contains(*id))
+                .cloned()
+                .collect();
+            leftover.sort_by(|a, b| key(a).cmp(&key(b)));
+            out.extend(leftover);
+        }
+        out
+    }
+
+    /// [`merged_order_ids`](Self::merged_order_ids) resolved to entries — the
+    /// convergent replay sequence for `Composition::LastWriteWins` consumers
+    /// (networked / post-merge). Use this instead of [`entries`](Self::entries)
+    /// (insertion order) when a peer may hold divergent history.
+    pub fn merged_order(&self) -> Vec<&JournalEntry> {
+        self.merged_order_ids()
+            .iter()
+            .filter_map(|id| self.entries.get(id))
+            .collect()
+    }
+
+    /// The convergent tip — the last entry in [`merged_order_ids`]. This is what
+    /// `main` points at after a merge; `None` iff the journal is empty.
+    pub fn merged_head(&self) -> Option<EntryId> {
+        self.merged_order_ids().into_iter().next_back()
     }
 }
 
@@ -1552,5 +1665,82 @@ mod tests {
         assert_eq!(count, 1);
         let other = AuthorId::new("nobody");
         assert_eq!(j.entries_by_author(&other).count(), 0);
+    }
+
+    /// Build a bare entry with an explicit id + parents (for DAG-shape tests).
+    fn mk_entry(author: &str, lamport: u64, parents: Vec<EntryId>) -> JournalEntry {
+        JournalEntry {
+            id: EntryId { author: AuthorId::new(author), lamport },
+            parents,
+            author: AuthorTag { user: author.into(), tool: "t".into() },
+            at_ms: 0,
+            twin: TwinId::new("test-twin"),
+            doc: DocumentId::new(1),
+            kind: EntryKind::Lifecycle(LifecycleKind::Saved),
+            change_set: None,
+        }
+    }
+
+    /// The convergent merge order is a pure function of the entry SET — the same
+    /// entries arriving in any order yield the identical linearization (so peers
+    /// converge). Causality is respected; concurrent entries tie-break by
+    /// (lamport, author).
+    #[test]
+    fn merged_order_is_deterministic_regardless_of_arrival() {
+        let r0 = EntryId { author: AuthorId::new("alice"), lamport: 1 };
+        let b1 = EntryId { author: AuthorId::new("bob"), lamport: 2 };
+        // r0 <- alice@2 ; r0 <- bob@2 <- bob@3 (two concurrent branches off r0).
+        let entries = vec![
+            mk_entry("alice", 1, vec![]),
+            mk_entry("alice", 2, vec![r0.clone()]),
+            mk_entry("bob", 2, vec![r0.clone()]),
+            mk_entry("bob", 3, vec![b1.clone()]),
+        ];
+
+        let mut j1 = new_journal();
+        for e in &entries {
+            j1.append_remote(e.clone());
+        }
+        let mut j2 = new_journal();
+        for e in entries.iter().rev() {
+            j2.append_remote(e.clone());
+        }
+        // Same set, opposite arrival order → identical convergent order.
+        assert_eq!(j1.merged_order_ids(), j2.merged_order_ids());
+
+        let order = j1.merged_order_ids();
+        let pos = |a: &str, l: u64| {
+            order
+                .iter()
+                .position(|id| id.author == AuthorId::new(a) && id.lamport == l)
+                .unwrap()
+        };
+        // Causality: a parent always precedes its child.
+        assert!(pos("alice", 1) < pos("alice", 2));
+        assert!(pos("alice", 1) < pos("bob", 2));
+        assert!(pos("bob", 2) < pos("bob", 3));
+        // Concurrent alice@2 vs bob@2 (equal lamport) → author tiebreak alice<bob.
+        assert!(pos("alice", 2) < pos("bob", 2));
+        // Convergent tip is the last in that order, on both journals.
+        assert_eq!(j1.merged_head(), j2.merged_head());
+        assert_eq!(j1.merged_head(), order.last().cloned());
+    }
+
+    /// A remote entry that does NOT build on the current head (a divergent
+    /// branch — concurrent peer / offline edit) re-points `main` at the
+    /// deterministic convergent tip instead of leaving it stuck.
+    #[test]
+    fn append_remote_merges_divergent_branch() {
+        let mut j = new_journal();
+        let op = FakeOp { class: "F".into(), name: "k".into(), value: 1.0 };
+        // Local genesis edit → main head = (local, 1).
+        j.record_op(AuthorTag::local_user(), DocumentId::new(1), &op, &op, None)
+            .unwrap();
+        // Divergent remote root (empty parents; does not extend local head).
+        let b = EntryId { author: AuthorId::new("peer"), lamport: 5 };
+        j.append_remote(mk_entry("peer", 5, vec![]));
+        // Both are roots; higher (lamport,author) with no children sorts last → tip = b.
+        assert_eq!(j.merged_head(), Some(b.clone()));
+        assert_eq!(j.branch("main").map(|x| x.head.clone()), Some(b));
     }
 }

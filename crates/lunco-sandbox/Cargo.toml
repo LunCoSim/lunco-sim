@@ -91,6 +91,11 @@ lunco-web = { workspace = true }
 lunco-assets = { workspace = true }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-twin = { path = "../lunco-twin" }
+# Canonical Twin change-journal (`TwinJournalPlugin` / `JournalResource`), added
+# by `SandboxCorePlugin` as core substrate so the headless server + clients
+# record edits (not just the egui workbench). `default-features = false` keeps
+# `lunco-doc-bevy/ui` (→ bevy_egui) off the headless server (CQ-601).
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 # ── UI-only crate deps (gated behind the `ui` feature) ────────────────────
 # A `--no-ui` server build (`--no-default-features --features server`) omits
 # these entirely: the egui workbench, the blueprint/shader material editors,

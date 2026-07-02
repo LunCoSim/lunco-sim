@@ -683,9 +683,15 @@ impl Plugin for ModelicaUiPlugin {
         }
 
         // Twin-level change journal subscribes to the generic document
-        // lifecycle events this plugin fires. One journal per App —
-        // adding the plugin multiple times is a no-op on `init_resource`.
-        app.add_plugins(lunco_doc_bevy::TwinJournalPlugin);
+        // lifecycle events this plugin fires. The journal is now CORE substrate
+        // (added by `SandboxCorePlugin` so the headless server + clients journal
+        // too), but a standalone Modelica workbench that never adds the sandbox
+        // core still needs it — so add it here only if absent. Guarded because
+        // `TwinJournalPlugin` registers lifecycle observers: a double-add would
+        // record every open/save/close twice.
+        if !app.is_plugin_added::<lunco_doc_bevy::TwinJournalPlugin>() {
+            app.add_plugins(lunco_doc_bevy::TwinJournalPlugin);
+        }
 
         // Per AGENTS.md §3 (Tunability): Journal panel display knobs
         // go through `lunco-settings`. Registered here so `settings.json`

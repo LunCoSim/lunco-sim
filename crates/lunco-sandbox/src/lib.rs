@@ -380,6 +380,16 @@ impl Plugin for SandboxCorePlugin {
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
             .add_plugins(lunco_core::WorldShellPlugin)
+            // Canonical Twin change-journal (op log). CORE substrate, not UI:
+            // it must exist on the headless server + every client so authored
+            // edits are recorded (the domain registries' `wire_*_journal_handle`
+            // systems fire on `resource_added::<JournalResource>` and attach a
+            // recorder to each DocumentHost). Previously added only by the
+            // workbench UI plugin, so a headless networked host journaled
+            // nothing — the blocker for journal-on-wire sync. Pure lifecycle
+            // observers + resources; no GPU/egui. The workbench add is now
+            // guarded to avoid a double-add (double observers).
+            .add_plugins(lunco_doc_bevy::TwinJournalPlugin)
             .add_plugins(GravityPlugin)
             .add_plugins(EnvironmentPlugin)
             .add_plugins(TerrainPlugin)
