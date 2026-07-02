@@ -51,8 +51,41 @@ pub struct VesselSubsystem;
 pub struct FlightSoftware {
     /// Maps mnemonic strings (e.g., "thruster_main") to their ECS entity ID.
     pub port_map: HashMap<String, Entity>,
-    /// Global state flag for overriding drive commands.
+    /// Commanded logical **input** ports — the vessel's command surface. A rover
+    /// seeds `throttle`/`steer`/`brake`, an avatar `forward`/`side`/`up`, a lander
+    /// `throttle`/`pitch`/`roll`/`yaw`. Written through the shared port substrate
+    /// (`SetPorts` → the FSW command backend) and consumed by the vehicle's
+    /// actuator (`apply_drive_mix`, `apply_fly`, a Modelica bridge, …).
+    ///
+    /// The command *vocabulary is data*: the keys seeded here declare exactly which
+    /// command ports this vehicle accepts, so the backend stays strict (an
+    /// undeclared name is rejected → still reported as a dangling wire). This
+    /// replaces the old bespoke `DriveCommand{throttle,steer,brake}` component —
+    /// there is no per-vehicle-class command type any more.
+    pub inputs: HashMap<String, f64>,
+    /// Derived brake state, cached from `inputs["brake"] > 0.5` by the actuator so
+    /// the per-tick physics systems read a bool without a map lookup.
     pub brake_active: bool,
+}
+
+impl FlightSoftware {
+    /// Build with a `port_map` and a seeded command vocabulary: the input-port
+    /// names this vehicle accepts, each initialised to `0.0`. The seeded keys ARE
+    /// the vehicle's command surface (see [`FlightSoftware::inputs`]).
+    pub fn new(port_map: HashMap<String, Entity>, command_ports: &[&str]) -> Self {
+        Self {
+            port_map,
+            inputs: command_ports.iter().map(|n| (n.to_string(), 0.0)).collect(),
+            brake_active: false,
+        }
+    }
+
+    /// Current value of command input `name` (`0.0` if this vehicle doesn't
+    /// accept it). The read side of the FSW command surface for actuators.
+    #[inline]
+    pub fn cmd(&self, name: &str) -> f64 {
+        self.inputs.get(name).copied().unwrap_or(0.0)
+    }
 }
 
 /// Fallback observer that manages commands sent to a [FlightSoftware] entity
@@ -68,30 +101,31 @@ fn unrecognized_command_handler(
 }
 
 
-// TODO: Migrate tests to the port-driven control path (write a `DriveCommand`
-// and run `lunco_mobility::apply_drive_mix`, or drive via `lunco_cosim::SetPorts`).
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-// 
-//     fn setup_test_app() -> (App, Entity, Entity, Entity) {
-//         let mut app = App::new();
-//         app.add_plugins(LunCoFswPlugin);
-//         let p_l = app.world_mut().spawn(DigitalPort::default()).id();
-//         let p_r = app.world_mut().spawn(DigitalPort::default()).id();
-//         let mut map = HashMap::new();
-//         map.insert("drive_left".to_string(), p_l);
-//         map.insert("drive_right".to_string(), p_r);
-//         let fsw_entity = app.world_mut().spawn(FlightSoftware { port_map: map, brake_active: false }).id();
-//         (app, fsw_entity, p_l, p_r)
-//     }
-// 
-//     #[test]
-//     fn test_rover_differential_turning_left() {
-//         let (mut app, fsw_entity, p_l, p_r) = setup_test_app();
-//         // e.g. insert `lunco_mobility::DriveCommand { throttle: 1.0, steer: -1.0, brake: 0.0 }`
-//         // on `fsw_entity` and run `apply_drive_mix`.
-//         assert_eq!(app.world().get::<DigitalPort>(p_l).unwrap().raw_value, 0);
-//         assert_eq!(app.world().get::<DigitalPort>(p_r).unwrap().raw_value, 32767);
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_surface_seeds_declared_ports_only() {
+        let fsw = FlightSoftware::new(HashMap::new(), &["throttle", "steer", "brake"]);
+        // Seeded keys exist and default to 0.0; undeclared keys read as 0.0 too.
+        assert_eq!(fsw.cmd("throttle"), 0.0);
+        assert_eq!(fsw.cmd("steer"), 0.0);
+        assert_eq!(fsw.cmd("brake"), 0.0);
+        assert_eq!(fsw.cmd("nonexistent"), 0.0);
+        // Only the declared command vocabulary is present in the map — this is what
+        // keeps the FSW command backend strict (undeclared writes are rejected).
+        assert_eq!(fsw.inputs.len(), 3);
+        assert!(fsw.inputs.contains_key("throttle"));
+        assert!(!fsw.inputs.contains_key("nonexistent"));
+    }
+
+    #[test]
+    fn writing_a_command_input_reads_back() {
+        let mut fsw = FlightSoftware::new(HashMap::new(), &["forward", "side", "up"]);
+        // An avatar's command vocabulary — same mechanism, different keys.
+        *fsw.inputs.get_mut("forward").unwrap() = 1.0;
+        assert_eq!(fsw.cmd("forward"), 1.0);
+        assert_eq!(fsw.cmd("side"), 0.0);
+    }
+}

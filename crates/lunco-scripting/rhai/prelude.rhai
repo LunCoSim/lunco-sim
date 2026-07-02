@@ -726,9 +726,7 @@ fn has_component(id, name) { get(id, name) != () }
 /// is queryable from script (kind is now derived, not stored on a marker).
 fn kind(id) {
     if has_component(id, "SimComponent") { "spacecraft" }
-    else if has_component(id, "DifferentialDrive")
-         || has_component(id, "AckermannSteer")
-         || has_component(id, "GenericDriveMix") { "rover" }
+    else if has_component(id, "DriveMix") { "rover" }
     else if has_component(id, "CelestialBody") { "planet" }
     else { "unknown" }
 }

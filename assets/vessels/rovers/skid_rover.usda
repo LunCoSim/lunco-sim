@@ -14,7 +14,7 @@
 #
 # **Pixar/Omniverse-correct structure**: an `Xform` root holds the
 # vehicle/physics schemas (`PhysicsRigidBodyAPI`, `PhysicsMassAPI`,
-# `PhysxVehicleContextAPI`, `PhysxVehicleDriveSkidAPI`); a child
+# `PhysxVehicleContextAPI`, `PhysxVehicleTankDifferentialAPI`); a child
 # `Cube "Chassis"` carries `PhysicsCollisionAPI` + the visual mesh +
 # its own `xformOp:scale` for chassis dimensions; sibling
 # `Cylinder` wheels carry `PhysxVehicleWheelAPI`.
@@ -52,7 +52,7 @@ def Xform "SkidRover" (
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleDriveSkidAPI"
+        "PhysxVehicleTankDifferentialAPI"
     ]
     prepend variantSets = "drivetrain"
     variants = {

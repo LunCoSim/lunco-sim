@@ -191,11 +191,11 @@ impl Plugin for CoSimPlugin {
 /// vessel control — there is no `DriveRover`/`BrakeRover`/`DriveLander` and no
 /// axis/`VesselIntent` vocabulary. "Controlling" anything means writing its
 /// command input ports:
-/// - a wheeled rover exposes `throttle`/`steer`/`brake` (a
-///   [`lunco_mobility::DriveCommand`] backend); a mix system projects them onto
-///   its actuator ports,
-/// - a cosim-flown lander exposes its Modelica `manual_*` inputs
-///   ([`SimComponent`] backend),
+/// - a wheeled rover exposes `throttle`/`steer`/`brake` (its `FlightSoftware`
+///   command surface, via the FSW command backend); a mix system projects them
+///   onto its actuator ports,
+/// - a cosim-flown lander exposes its Modelica command inputs (`throttle`/`pitch`/
+///   `roll`/`yaw`) via the [`SimComponent`] backend,
 /// - a crane/door/factory arm exposes whatever input ports it declares.
 ///
 /// The same command is emitted by the keyboard input path
@@ -222,8 +222,9 @@ pub struct SetPorts {
 
 /// Observer for [`SetPorts`]: applies each `(name, value)` via the
 /// [`PortRegistry`] — the single dispatch that reaches Modelica `SimComponent`
-/// inputs, `DriveCommand` throttle/steer/brake, `PhysicalPort`/`DigitalPort`
-/// registers, or any future backend, all by name. `write_port` needs `&mut
+/// inputs, a `FlightSoftware`'s command inputs (throttle/steer/brake, …),
+/// `PhysicalPort`/`DigitalPort` registers, or any future backend, all by name.
+/// `write_port` needs `&mut
 /// World`, so we clone the (cheap, `fn`-pointer) registry and defer the writes
 /// through a `Commands` world closure.
 #[on_command(SetPorts)]

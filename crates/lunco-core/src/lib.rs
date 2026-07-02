@@ -5,6 +5,7 @@
 //! and the core plugin registration.
 
 pub mod architecture;
+pub mod kernels;
 pub mod mocks;
 pub mod ports;
 pub mod telemetry;
@@ -388,7 +389,13 @@ impl Plugin for LunCoCorePlugin {
            .register_type::<GlobalEntityId>()
            .register_type::<Provenance>()
            .register_type::<RestoreFallbackLights>()
+           .register_type::<kernels::DriveMix>()
            .register_type::<SimTick>();
+
+        // NOTE: the `ControlKernelRegistry` resource is owned/seeded by the plugin
+        // that actually runs the allocation systems (lunco-mobility, like
+        // `PortRegistry`), so a minimal app that runs drive systems without the full
+        // core plugin still has it. Core only DEFINES the kernels + `DriveMix` type.
         // All always-on core/substrate resources live in one function so a
         // unit test can assert the full set is present without building the
         // heavier LunCoCorePlugin (log + big-space). See its doc comment for

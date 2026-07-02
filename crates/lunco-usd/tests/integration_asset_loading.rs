@@ -6,7 +6,8 @@ use bevy::asset::AssetPlugin;
 use lunco_usd_bevy::*;
 use lunco_usd_avian::*;
 use lunco_usd_sim::*;
-use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
+use lunco_mobility::WheelRaycast;
+use lunco_core::kernels::DriveMix;
 use lunco_materials::ShaderMaterial;
 use lunco_fsw::FlightSoftware;
 
@@ -202,18 +203,24 @@ fn test_rover_components_via_bevy_pipeline() {
         let _mat = app.world().get::<MeshMaterial3d<StandardMaterial>>(chassis)
             .unwrap_or_else(|| panic!("{label}: Chassis Missing MeshMaterial3d (body not visible!)"));
 
-        // Steering: Skid has DifferentialDrive, Ackermann has AckermannSteer
+        // Steering allocation: every rover carries a `DriveMix` naming a kernel.
+        // Ackermann → the `linear` kernel with a `steering` term; skid → the
+        // `skid` kernel over the two drive ports.
+        let mix = app.world().get::<DriveMix>(rover_ent)
+            .unwrap_or_else(|| panic!("{label}: Missing DriveMix (cannot steer!)"));
         if f.contains("ackermann") {
-            let ack = app.world().get::<AckermannSteer>(rover_ent)
-                .unwrap_or_else(|| panic!("{label}: Missing AckermannSteer (cannot steer!)"));
-            assert!(!ack.drive_left_port.is_empty(), "{label}: AckermannSteer.drive_left_port empty");
-            assert!(!ack.drive_right_port.is_empty(), "{label}: AckermannSteer.drive_right_port empty");
-            assert!(!ack.steer_port.is_empty(), "{label}: AckermannSteer.steer_port empty");
+            assert_eq!(mix.kernel, "linear", "{label}: ackermann should use the linear kernel");
+            assert!(mix.entries.iter().any(|e| e.port == "steering" && e.steer != 0.0),
+                "{label}: ackermann DriveMix missing a steering term");
         } else {
-            let diff = app.world().get::<DifferentialDrive>(rover_ent)
-                .unwrap_or_else(|| panic!("{label}: Missing DifferentialDrive (cannot steer!)"));
-            assert!(!diff.left_port.is_empty(), "{label}: DifferentialDrive.left_port empty");
-            assert!(!diff.right_port.is_empty(), "{label}: DifferentialDrive.right_port empty");
+            // skid or an explicit linear per-wheel mix — both must name a known kernel.
+            assert!(mix.kernel == "skid" || mix.kernel == "linear",
+                "{label}: unexpected drive kernel '{}'", mix.kernel);
+            if mix.kernel == "skid" {
+                assert_eq!(mix.ports.len(), 2, "{label}: skid needs two drive ports");
+            } else {
+                assert!(!mix.entries.is_empty(), "{label}: linear DriveMix has no entries");
+            }
         }
 
         // FlightSoftware (for command routing)
@@ -317,7 +324,7 @@ fn test_wheel_mesh_dimensions_after_composition() {
 
 // ============================================================
 // Test: Async asset loading + sim processing
-// Catches: rovers spawning without FSW/DifferentialDrive because
+// Catches: rovers spawning without FSW/DriveMix because
 // assets load AFTER the observer fires (async loading bug)
 // ============================================================
 
@@ -374,12 +381,11 @@ fn test_rover_sim_processing_after_async_load() {
             "{label}: FlightSoftware must be present after sim processing. Got {fsw_count} entities with FSW. \
             This means the sim system didn't process the rover - likely async loading bug.");
 
-        // MUST have DifferentialDrive or AckermannSteer (depending on rover type)
-        let mut q_skid = app.world_mut().query_filtered::<Entity, With<DifferentialDrive>>();
-        let mut q_ack = app.world_mut().query_filtered::<Entity, With<AckermannSteer>>();
-        let has_drive = q_skid.iter(app.world()).count() > 0 || q_ack.iter(app.world()).count() > 0;
+        // MUST have a DriveMix (the kernel-selected allocation) after sim processing.
+        let mut q_mix = app.world_mut().query_filtered::<Entity, With<DriveMix>>();
+        let has_drive = q_mix.iter(app.world()).count() > 0;
         assert!(has_drive,
-            "{label}: Must have DifferentialDrive or AckermannSteer after sim processing. \
+            "{label}: Must have a DriveMix after sim processing. \
             Rover won't be able to steer!");
 
         // MUST have FlightSoftware
@@ -487,6 +493,15 @@ fn test_full_scene_loads_with_rovers() {
     // it panics. (The single-rover tests use raycast wheels, so they don't.)
     app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
+    // PhysicsPlugins is here only so the joint-spawn hooks find avian's resources
+    // (JointGraph) — this is a composition/structure test, not a physics-step test.
+    // Stop `FixedMain` from ticking during the update loop below: it would run the
+    // full physics + mobility fixed schedule, which needs resources this minimal
+    // harness (no `LunCoCorePlugin`) doesn't have (`NetworkRole`,
+    // `ColliderTreeDiagnostics`, …) and panics. A huge fixed period never
+    // accumulates a tick across the ~10 fast updates. The structural wiring the
+    // test checks (wheels, DriveMix, steer wires) is built in PreUpdate/Update.
+    app.insert_resource(Time::<Fixed>::from_hz(0.0001));
 
     // Spawn scene — rovers come from scene references
     let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
@@ -511,14 +526,11 @@ fn test_full_scene_loads_with_rovers() {
         .collect();
     assert_eq!(rover_info.len(), 5, "Must have 5 rovers from scene, got {}: {:?}", rover_info.len(), rover_info);
 
-    // Drivable = has steering system (DifferentialDrive OR AckermannSteer) + FSW
+    // Drivable = carries a `DriveMix` (any kernel) + FSW.
     // 3 skid (2 raycast + 1 physical) + 2 ackermann (1 raycast + 1 physical) = 5
-    let mut q_skid = app.world_mut().query_filtered::<Entity, (With<DifferentialDrive>, With<FlightSoftware>)>();
-    let skid_count: usize = q_skid.iter(app.world()).count();
-    let mut q_ackermann = app.world_mut().query_filtered::<Entity, (With<AckermannSteer>, With<FlightSoftware>)>();
-    let ackermann_count: usize = q_ackermann.iter(app.world()).count();
-    let drivable = skid_count + ackermann_count;
-    assert_eq!(drivable, 5, "All 5 rovers must be drivable (skid={}, ackermann={}), got {drivable}", skid_count, ackermann_count);
+    let mut q_mix = app.world_mut().query_filtered::<Entity, (With<DriveMix>, With<FlightSoftware>)>();
+    let drivable: usize = q_mix.iter(app.world()).count();
+    assert_eq!(drivable, 5, "All 5 rovers must be drivable (carry DriveMix), got {drivable}");
 
     // 12 raycast wheels (3 raycast rovers × 4 wheels)
     // Skid_Physical_1 + Ackermann_Physical_1 have physical wheels
@@ -552,7 +564,10 @@ fn test_full_scene_loads_with_rovers() {
     use lunco_core::architecture::Wire;
     let mut q_wires = app.world_mut().query::<(&Wire, &Name)>();
     let steering_wires: Vec<_> = q_wires.iter(app.world())
-        .filter(|(_, name)| name.as_str().contains("Steering"))
+        // Steer wires are named `Wire_Steer_<port>` (the port is lowercase
+        // "steering"), so match the wire prefix — the old `"Steering"` filter never
+        // matched the actual name (a latent bug, unrelated to the drive kernel).
+        .filter(|(_, name)| name.as_str().contains("Wire_Steer"))
         .map(|(_, name)| name.as_str().to_string())
         .collect();
     // 5 rovers × 2 front wheels = 10 steering wires

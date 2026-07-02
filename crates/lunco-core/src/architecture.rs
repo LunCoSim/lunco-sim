@@ -174,6 +174,21 @@ impl ControlBinding {
         (!binds.is_empty()).then_some(ControlBinding { binds })
     }
 
+    /// The distinct port names this binding targets — i.e. the vessel's declared
+    /// command surface (from USD). A controllable seeds exactly these into its FSW
+    /// `inputs` so the strict command backend accepts writes to them and no others.
+    pub fn ports(&self) -> impl Iterator<Item = &str> {
+        // `binds` is small (a handful of intents); a linear "seen" scan beats a
+        // HashSet here and keeps the return borrow-clean.
+        let mut seen: Vec<&str> = Vec::new();
+        for (_i, port, _s) in &self.binds {
+            if !seen.contains(&port.as_str()) {
+                seen.push(port.as_str());
+            }
+        }
+        seen.into_iter()
+    }
+
     /// Resolve active intents into summed, clamped port writes. Every port named
     /// by the binding is present (0.0 when its intents are idle) so a released
     /// input writes 0 and clears the setpoint. `active(intent)` is the sole input

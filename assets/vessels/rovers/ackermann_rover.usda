@@ -28,7 +28,7 @@ def Xform "AckermannRover" (
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleDrive4WAPI"
+        "PhysxVehicleAckermannSteeringAPI"
     ]
     prepend variantSets = "drivetrain"
     variants = {

@@ -7,7 +7,8 @@ use big_space::prelude::CellCoord;
 use lunco_usd_bevy::*;
 use lunco_usd_avian::*;
 use lunco_usd_sim::*;
-use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
+use lunco_mobility::WheelRaycast;
+use lunco_core::kernels::DriveMix;
 use lunco_materials::ShaderMaterial;
 use avian3d::prelude::*;
 use lunco_fsw::FlightSoftware;
@@ -177,16 +178,15 @@ fn test_all_rover_files_match_procedural() {
         assert!(app.world().get::<MeshMaterial3d<StandardMaterial>>(chassis).is_some(),
             "{label}: Chassis missing MeshMaterial3d (body invisible!)");
 
-        // Steering: Skid has DifferentialDrive, Ackermann has AckermannSteer
+        // Steering allocation: every rover carries a `DriveMix` naming a kernel.
+        let mix = app.world().get::<DriveMix>(rover).expect(&format!("{label}: missing DriveMix"));
         if file.contains("ackermann") {
-            let ack = app.world().get::<AckermannSteer>(rover).expect(&format!("{label}: missing AckermannSteer"));
-            assert_eq!(ack.drive_left_port, "drive_left", "{label}: wrong drive_left_port");
-            assert_eq!(ack.drive_right_port, "drive_right", "{label}: wrong drive_right_port");
-            assert_eq!(ack.steer_port, "steering", "{label}: wrong steer_port");
+            assert_eq!(mix.kernel, "linear", "{label}: ackermann should use the linear kernel");
+            assert!(mix.entries.iter().any(|e| e.port == "steering"), "{label}: missing steering term");
+            assert!(mix.entries.iter().any(|e| e.port == "drive_left"), "{label}: missing drive_left term");
         } else {
-            let diff = app.world().get::<DifferentialDrive>(rover).expect(&format!("{label}: missing DifferentialDrive"));
-            assert_eq!(diff.left_port, "drive_left", "{label}: wrong left_port");
-            assert_eq!(diff.right_port, "drive_right", "{label}: wrong right_port");
+            assert_eq!(mix.kernel, "skid", "{label}: skid rover should use the skid kernel");
+            assert_eq!(mix.ports, vec!["drive_left".to_string(), "drive_right".to_string()], "{label}: wrong skid ports");
         }
 
         // FlightSoftware

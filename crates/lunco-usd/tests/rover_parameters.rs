@@ -216,7 +216,10 @@ fn test_prim_children() {
     let path = SdfPath::new("/Rucheyok").unwrap();
 
     let children = reader.prim_children(&path);
-    assert_eq!(children.len(), 7, "Rucheyok should have 7 children (Chassis, SolarPanel, Battery, 4 Wheels)");
+    // 8 children: Chassis, SolarPanel, Battery, 4 Wheels + the `Controls` scope
+    // composed in from the inherited `_RoverControl` profile (control_profiles.usda).
+    assert_eq!(children.len(), 8,
+        "Rucheyok should have 8 children (Chassis, SolarPanel, Battery, 4 Wheels, Controls)");
 
     let child_names: Vec<&str> = children.iter().map(|p| p.as_str()).collect();
     assert!(child_names.contains(&"/Rucheyok/Chassis"));
@@ -226,6 +229,7 @@ fn test_prim_children() {
     assert!(child_names.contains(&"/Rucheyok/Wheel_FR"));
     assert!(child_names.contains(&"/Rucheyok/Wheel_RL"));
     assert!(child_names.contains(&"/Rucheyok/Wheel_RR"));
+    assert!(child_names.contains(&"/Rucheyok/Controls"), "Controls scope from _RoverControl");
 }
 
 #[test]

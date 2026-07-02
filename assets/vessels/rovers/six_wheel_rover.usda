@@ -13,7 +13,7 @@
 # in USD). Unlike the 4-wheel base rovers, the wheel→actuator wiring is NOT left
 # to `try_wire_wheel`'s index-parity default: each wheel names the FSW drive port
 # it listens to via `lunco:drivePort`. Three wheels per side bind to `drive_left`
-# / `drive_right`, so the built-in skid mix (`PhysxVehicleDriveSkidAPI`) yaws the
+# / `drive_right`, so the built-in skid mix (`PhysxVehicleTankDifferentialAPI`) yaws the
 # body exactly as it does for the 4-wheel rover — proving a non-2×2 layout is a
 # USD file, not a Rust struct.
 #
@@ -29,7 +29,7 @@ def Xform "SixWheelRover" (
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleDriveSkidAPI"
+        "PhysxVehicleTankDifferentialAPI"
     ]
 )
 {

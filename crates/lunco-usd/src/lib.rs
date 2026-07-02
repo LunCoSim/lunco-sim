@@ -60,7 +60,7 @@ pub use lunco_usd_sim::cosim::{ClearScene, LoadScene};
 /// This is equivalent to adding all three subsystems individually:
 /// - `UsdBevyPlugin` — visual sync (meshes, transforms, hierarchy)
 /// - `UsdAvianPlugin` — physics mapping (RigidBody, Collider, Mass, Damping)
-/// - `UsdSimPlugin` — simulation mapping (WheelRaycast, FSW, DifferentialDrive)
+/// - `UsdSimPlugin` — simulation mapping (WheelRaycast, FSW, DriveMix)
 pub struct UsdPlugins;
 
 impl Plugin for UsdPlugins {

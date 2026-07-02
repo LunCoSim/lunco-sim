@@ -84,9 +84,9 @@ fn api_schemas_compose() {
     let ok = lunco_usd_bevy::has_api_schema(
         &r,
         &SdfPath::new("/SandboxScene/Skid_Physical_1").unwrap(),
-        "PhysxVehicleDriveSkidAPI",
+        "PhysxVehicleTankDifferentialAPI",
     );
-    assert!(ok, "Skid_Physical_1 must compose PhysxVehicleDriveSkidAPI");
+    assert!(ok, "Skid_Physical_1 must compose PhysxVehicleTankDifferentialAPI");
 }
 
 /// Relationship targets survive the flatten (the physical rover's wheel hinge
@@ -116,8 +116,8 @@ fn standalone_rover_reader_is_complete() {
 
     // Vehicle-type detection.
     assert!(
-        lunco_usd_bevy::has_api_schema(&r, &SdfPath::new("/SkidRover").unwrap(), "PhysxVehicleDriveSkidAPI"),
-        "SkidRover must compose PhysxVehicleDriveSkidAPI"
+        lunco_usd_bevy::has_api_schema(&r, &SdfPath::new("/SkidRover").unwrap(), "PhysxVehicleTankDifferentialAPI"),
+        "SkidRover must compose PhysxVehicleTankDifferentialAPI"
     );
 
     // Wheel parameters the sim reads. Native USD types are preserved by the
@@ -145,8 +145,8 @@ fn standalone_rover_reader_is_complete() {
 fn drivetrain_physical_variant_brings_joints() {
     let r = compose("scenes/sandbox/sandbox_scene.usda");
     for (rover, _drive) in [
-        ("Skid_Physical_1", "PhysxVehicleDriveSkidAPI"),
-        ("Ackermann_Physical_1", "PhysxVehicleDrive4WAPI"),
+        ("Skid_Physical_1", "PhysxVehicleTankDifferentialAPI"),
+        ("Ackermann_Physical_1", "PhysxVehicleAckermannSteeringAPI"),
     ] {
         for w in ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
             let hinge = format!("/SandboxScene/{rover}/{w}_Hinge");
@@ -197,7 +197,7 @@ fn drivetrain_physical_composes_articulation_and_drive() {
         "ArticulationRootAPI must compose from the physical variant"
     );
     assert!(
-        lunco_usd_bevy::has_api_schema(&r, &skid, "PhysxVehicleDriveSkidAPI"),
+        lunco_usd_bevy::has_api_schema(&r, &skid, "PhysxVehicleTankDifferentialAPI"),
         "DriveSkidAPI must compose from the base rover across the reference"
     );
 }

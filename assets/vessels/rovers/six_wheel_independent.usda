@@ -17,7 +17,7 @@
 #     onto all six channels — left bank `+steer`, right bank `−steer`
 #     (skid steering realised through six independent motors, not a 2-port mix).
 #
-# There is NO `PhysxVehicleDriveSkidAPI` here: the drivetrain is the authored
+# There is NO `PhysxVehicleTankDifferentialAPI` here: the drivetrain is the authored
 # mix, so adding a 7th wheel or re-routing a channel is a one-line USD edit.
 # `PhysxVehicleContextAPI` still provides the FlightSoftware control surface.
 

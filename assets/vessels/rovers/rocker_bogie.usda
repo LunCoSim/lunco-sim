@@ -16,7 +16,7 @@
 #   - Two bogies (BogieL/R) hinge to the rear of the rockers on the X axis.
 #   - Six wheels (FL/FR/ML/MR/RL/RR) reference the reusable motorized wheel components.
 #   - The differential coupling softly enforces: θ_left + θ_right → 0.
-#   - Controllable via keyboard/UI through PhysxVehicleDriveSkidAPI.
+#   - Controllable via keyboard/UI through PhysxVehicleTankDifferentialAPI.
 #
 # FOR PARAMETER EDITING GUIDE: See the accompanying README.md in this directory.
 
@@ -28,7 +28,7 @@ def Xform "RockerBogie" (
         "PhysicsMassAPI",
         "PhysicsArticulationRootAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleDriveSkidAPI"
+        "PhysxVehicleTankDifferentialAPI"
     ]
 )
 {

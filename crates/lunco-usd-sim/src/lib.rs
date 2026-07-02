@@ -8,9 +8,10 @@
 //!
 //! | USD Schema | LunCoSim Components | Description |
 //! |---|---|---|
-//! | `PhysxVehicleContextAPI` | `FlightSoftware`, `Vessel` | Rover root entity (kind is topology-derived, no `RoverVessel` marker) |
-//! | `PhysxVehicleDriveSkidAPI` | `DifferentialDrive` | Skid steering |
-//! | `PhysxVehicleDrive4WAPI` | `AckermannSteer` | Ackermann steering |
+//! | `PhysxVehicleContextAPI` | `FlightSoftware` | Rover root entity (kind is topology-derived, no `RoverVessel` marker) |
+//! | `PhysxVehicleTankDifferentialAPI` | `DriveMix { kernel: "skid" }` | Skid/tank steering |
+//! | `PhysxVehicleAckermannSteeringAPI` | `DriveMix { kernel: "linear" }` + steering port | Ackermann steering |
+//! | `lunco:driveMix` (string) | `DriveMix { kernel: "linear" }` | Arbitrary per-wheel linear mix |
 //! | `PhysxVehicleWheelAPI` | `WheelRaycast` *or* `MotorActuator` + `RigidBody` | Wheel — kind decided by joint authoring |
 //!
 //! ## Wheel kind: discriminated by standard authoring
@@ -56,7 +57,8 @@ pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdInstance
 use lunco_usd_bevy::{has_api_schema, read_rel_target, usd_data::UsdDataExt};
 use lunco_usd_avian::ShouldBeDynamic;
 use openusd::sdf::Path as SdfPath;
-use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer, GenericDriveMix, DifferentialCoupling};
+use lunco_mobility::{WheelRaycast, DifferentialCoupling};
+use lunco_core::kernels::DriveMix;
 use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel_roll_rate};
 use lunco_fsw::FlightSoftware;
 use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
@@ -280,8 +282,8 @@ pub struct PendingDifferential {
 ///
 /// 1. **Detects `PhysxVehicleContextAPI`** → Creates `FlightSoftware` with 4 digital ports
 ///    (`drive_left`, `drive_right`, `steering`, `brake`), plus `Vessel`.
-/// 2. **Detects `PhysxVehicleDriveSkidAPI`** → Creates `DifferentialDrive` with port names.
-/// 3. **Detects `PhysxVehicleDrive4WAPI`** → Creates `AckermannSteer` with port names.
+/// 2. **Detects `PhysxVehicleTankDifferentialAPI`** → `DriveMix { kernel: "skid" }`.
+/// 3. **Detects `PhysxVehicleAckermannSteeringAPI`** → `DriveMix { kernel: "linear" }` + steering.
 /// 4. **Detects `PhysxVehicleWheelAPI`** → Sets up wheel based on whether an authored
 ///    `PhysicsRevoluteJoint` targets the wheel:
 ///    - **Joint-based** (joint authored): `RigidBody`, `Collider`, `MotorActuator` (constraint built by `lunco-usd-avian`)
@@ -769,14 +771,14 @@ fn process_usd_sim_prims(
             }
 
             commands.entity(entity).insert((
-                FlightSoftware {
-                    port_map,
-                    brake_active: false,
-                },
+                // The rover's command surface (throttle/steer/brake input ports, mixed
+                // to the wheels by `apply_drive_mix`) is NOT hardcoded here — it is
+                // derived from the vessel's USD `Controls` binding by
+                // `sync_fsw_command_surface`. Start empty; the `_RoverControl` profile
+                // declares the vocabulary.
+                FlightSoftware::new(port_map, &[]),
                 lunco_core::SelectableRoot,
                 RoverWheels::default(),
-                // Expose throttle/steer/brake command ports (driven by `SetPorts`).
-                lunco_mobility::DriveCommand::default(),
             ));
 
             // OpenUSD-standard `PhysicsArticulationRootAPI` declares
@@ -792,32 +794,29 @@ fn process_usd_sim_prims(
             info!("Successfully initialized FSW for {}", prim_path.path);
         }
 
-        // 2. Detect Drive Schemas (Chassis Logic)
-        // G4b: an authored `lunco:driveMix` (linear per-port mix) wins over the
-        // built-in skid/Ackermann routing — arbitrary per-wheel topology as USD
-        // data. See `GenericDriveMix::parse`.
-        if let Some(spec) = reader.prim_attribute_value::<String>(&sdf_path, "lunco:driveMix") {
-            let mix = GenericDriveMix::parse(&spec);
-            info!(
-                "Detected custom driveMix for {} ({} ports)",
-                prim_path.path,
-                mix.entries.len()
-            );
+        // 2. Detect the drive allocation → a `DriveMix { kernel, ports, entries }`
+        // (`lunco_core::kernels`). The kernel is selected by the differential /
+        // steering schema the asset declares (Omniverse PhysX Vehicle names) or an
+        // explicit `lunco:driveMix` linear table. There is NO per-arch Rust
+        // component/branch — `apply_drive_mix` looks the named kernel up and runs it.
+        let drive_mix = if let Some(spec) =
+            reader.prim_attribute_value::<String>(&sdf_path, "lunco:driveMix")
+        {
+            info!("Explicit linear driveMix for {}", prim_path.path);
+            Some(DriveMix::parse_linear(&spec))
+        } else if has_api_schema(reader, &sdf_path, "PhysxVehicleTankDifferentialAPI") {
+            info!("Tank differential (skid kernel) for {}", prim_path.path);
+            Some(DriveMix::skid("drive_left", "drive_right"))
+        } else if has_api_schema(reader, &sdf_path, "PhysxVehicleAckermannSteeringAPI") {
+            // Ackermann: non-differential drive (both sides get throttle) + a
+            // dedicated steering port; the front wheels castor (see steering gate).
+            info!("Ackermann steering (linear kernel) for {}", prim_path.path);
+            Some(DriveMix::parse_linear("drive_left=1,0 drive_right=1,0 steering=0,1"))
+        } else {
+            None
+        };
+        if let Some(mix) = drive_mix {
             commands.entity(entity).insert(mix);
-        } else if has_api_schema(reader, &sdf_path, "PhysxVehicleDriveSkidAPI") {
-            info!("Detected Skid Drive for {}", prim_path.path);
-            commands.entity(entity).insert(DifferentialDrive {
-                left_port: "drive_left".to_string(),
-                right_port: "drive_right".to_string(),
-            });
-        } else if has_api_schema(reader, &sdf_path, "PhysxVehicleDrive4WAPI") {
-            info!("Detected Ackermann Drive for {}", prim_path.path);
-            commands.entity(entity).insert(AckermannSteer {
-                drive_left_port: "drive_left".to_string(),
-                drive_right_port: "drive_right".to_string(),
-                steer_port: "steering".to_string(),
-                max_steer_angle: 0.5,
-            });
         }
 
         // 2b. G5 — rocker-bogie differential. A chassis that names two rocker
@@ -996,12 +995,12 @@ fn process_usd_sim_prims(
             // Front wheels (index < 2) of an Ackermann rover steer. Gate on the
             // rover's drive type — a skid rover keeps all wheels fixed (it steers
             // by skidding), so only wire the steering port when the PARENT rover
-            // prim carries `PhysxVehicleDrive4WAPI` (Ackermann). Same for both
-            // wheel kinds: each attaches a shared `SteeringActuator` (joint or
-            // raycast), so the steering model is identical.
+            // prim carries `PhysxVehicleAckermannSteeringAPI` (Omniverse steering
+            // schema). Same for both wheel kinds: each attaches a shared
+            // `SteeringActuator` (joint or raycast), so the model is identical.
             let parent_prim = &prim_path.path[..prim_path.path.rfind('/').unwrap_or(0)];
             let is_ackermann = SdfPath::new(parent_prim)
-                .map(|p| has_api_schema(reader, &p, "PhysxVehicleDrive4WAPI"))
+                .map(|p| has_api_schema(reader, &p, "PhysxVehicleAckermannSteeringAPI"))
                 .unwrap_or(false);
             let steer_for_wheel = if index < 2 && is_ackermann { Some(p_steer) } else { None };
             if joint_targets.contains_key(&key) {
@@ -1552,7 +1551,11 @@ fn proxy_wheel_pose(
 }
 
 fn reconstruct_proxy_wheels(
-    role: Res<lunco_core::NetworkRole>,
+    // Optional: with no network context (standalone / a minimal test harness that
+    // ticks the fixed schedule without the full core plugin) there are no
+    // replicated proxies to reconstruct, so no-op instead of panicking on a missing
+    // resource. Only `NetworkRole::Client` does work here anyway.
+    role: Option<Res<lunco_core::NetworkRole>>,
     q_chassis: Query<
         (
             &RigidBody,
@@ -1575,6 +1578,7 @@ fn reconstruct_proxy_wheels(
     >,
     mut commands: Commands,
 ) {
+    let Some(role) = role else { return };
     if !matches!(*role, lunco_core::NetworkRole::Client) {
         return;
     }

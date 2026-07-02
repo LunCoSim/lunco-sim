@@ -29,6 +29,7 @@ use bevy::math::{DQuat, DVec3};
 use avian3d::prelude::*;
 use lunco_core::architecture::DigitalPort;
 use lunco_core::ports::{PortBackend, PortDirection, PortRef, PortType};
+use lunco_core::kernels::{ControlKernelRegistry, DriveMix};
 use lunco_fsw::FlightSoftware;
 
 mod sensing;
@@ -76,10 +77,10 @@ impl Plugin for LunCoMobilityPlugin {
         sensing::register_collision_event_bridge(app);
 
         app.register_type::<Suspension>()
-           .register_type::<DifferentialDrive>()
-           .register_type::<AckermannSteer>()
            .register_type::<WheelRaycast>()
-           .register_type::<GenericDriveMix>()
+           // `DriveMix` (the kernel-selected allocation spec, replacing the old
+           // per-arch `DifferentialDrive`/`AckermannSteer`/`GenericDriveMix`) is
+           // registered by `lunco-core` alongside the kernel registry.
            .register_type::<DifferentialCoupling>()
            // G5 rocker-bogie differential — separate set: it doesn't read the
            // control ports, only couples two rocker hinges. Idle unless a
@@ -113,23 +114,36 @@ impl Plugin for LunCoMobilityPlugin {
                // rover (unchanged) and a client simulates only its owned one.
                |t: Res<Time<Virtual>>| t.relative_speed_f64() > 0.0));
 
-        // Expose a rover's logical command ports (throttle/steer/brake) through
-        // the shared port substrate, so the ONE generic `SetPorts` command (and
-        // wires/API/scripts) can drive a wheeled vessel by name.
+        // Expose every FSW's logical command ports (a rover's throttle/steer/brake,
+        // etc.) through the shared port substrate, so the ONE generic `SetPorts`
+        // command (and wires/API/scripts) can drive any controllable by name.
         app.init_resource::<lunco_core::ports::PortRegistry>();
         {
             let mut reg = app
                 .world_mut()
                 .resource_mut::<lunco_core::ports::PortRegistry>();
-            reg.register(DRIVE_COMMAND_BACKEND);
+            reg.register(FSW_COMMAND_BACKEND);
         }
 
-        // Mix the logical `DriveCommand` (written via the port backend) into the
-        // actuator `DigitalPort`s BEFORE the DAC propagates them to `PhysicalPort`
-        // (and before the wheel systems, which run `.after(ControlDacSet)`).
+        // Own the control-allocation kernel registry here (the plugin that runs
+        // `apply_drive_mix`), seeded with the built-in `skid`/`linear` kernels —
+        // so any app running the drive systems has it, without depending on the
+        // full core plugin. Flight-kernel crates register additively the same way.
+        if !app.world().contains_resource::<ControlKernelRegistry>() {
+            app.insert_resource(ControlKernelRegistry::with_defaults());
+        }
+
+        // Mix the FSW's logical command inputs (written via the port backend) into
+        // the actuator `DigitalPort`s BEFORE the DAC propagates them to `PhysicalPort`
+        // (and before the wheel systems, which run `.after(ControlDacSet)`). The
+        // command surface is derived from USD `Controls` bindings (never a Rust
+        // literal) by `sync_fsw_command_surface`, ordered before the mix so a
+        // freshly-loaded vessel is drivable the same tick its binding lands.
         app.add_systems(
             FixedUpdate,
-            apply_drive_mix.before(lunco_core::ControlDacSet),
+            (sync_fsw_command_surface, apply_drive_mix)
+                .chain()
+                .before(lunco_core::ControlDacSet),
         );
     }
 }
@@ -600,90 +614,12 @@ fn apply_wheel_steering(
     }
 }
 
-/// Control Logic: Differential (Skid) mixing.
-/// 
-/// **Math**: `Left = Forward + Steer`, `Right = Forward - Steer`. 
-/// Creates a torque differential that rotates the chassis.
-#[derive(Component, Debug, Clone, Reflect, Default)]
-#[reflect(Component, Default)]
-pub struct DifferentialDrive {
-    /// Digital port identifier for left-side motors.
-    pub left_port: String,
-    /// Digital port identifier for right-side motors.
-    pub right_port: String,
-}
-
-/// Control Logic: Ackermann Steering.
-/// 
-/// **Math**: `Drive = Forward`, `SteerAngle = Input * MaxAngle`. 
-/// High-stability steering for vehicles with articulating front/rear axles.
-#[derive(Component, Debug, Clone, Reflect, Default)]
-#[reflect(Component, Default)]
-pub struct AckermannSteer {
-    /// Port name for drive motors (left).
-    pub drive_left_port: String,
-    /// Port name for drive motors (right).
-    pub drive_right_port: String,
-    /// Port name for the steering servo.
-    pub steer_port: String,
-    /// Maximum steering lock angle (radians).
-    pub max_steer_angle: f32,
-}
-
-/// G4b — One linear mix term: how a drive command projects onto ONE named port.
-/// `value = forward·fwd + steer·steer + brake·brake`, clamped to ±1 then scaled
-/// to the i16 port range. Covers skid (`fwd=1, steer=±1`), Ackermann-style drive
-/// (`fwd=1, steer=0` on drive ports + a dedicated steer port `steer=1`), and
-/// arbitrary **per-wheel** routing (each wheel its own port + coefficients).
-#[derive(Debug, Clone, Reflect, Default)]
-pub struct MixEntry {
-    /// FSW port name this term writes (must exist in the rover's `port_map`).
-    pub port: String,
-    pub forward: f64,
-    pub steer: f64,
-    /// Applied as a 0/1 gate from `FlightSoftware::brake_active` (a brake port
-    /// gets `brake=1`; a drive port leaves it 0 and is zeroed while braking).
-    pub brake: f64,
-}
-
-/// G4b — USD-authored drive **mix** for arbitrary actuator topology. Replaces the
-/// hardcoded skid/Ackermann routing for vehicles that declare one, so per-wheel
-/// independent drive (6-wheel, rocker-bogie, crab-steer) is a USD table, not Rust.
-/// Built from `lunco:driveMix` (see [`GenericDriveMix::parse`]); a rover has at
-/// most one of {`DifferentialDrive`, `AckermannSteer`, `GenericDriveMix`}.
-#[derive(Component, Debug, Clone, Reflect, Default)]
-#[reflect(Component, Default)]
-pub struct GenericDriveMix {
-    pub entries: Vec<MixEntry>,
-}
-
-impl GenericDriveMix {
-    /// Parse the compact `lunco:driveMix` string: whitespace-separated
-    /// `port=forward,steer[,brake]` terms (brake defaults 0). Example:
-    /// `"drive_left=1,1 drive_right=1,-1 brake=0,0,1"`. Malformed terms are
-    /// skipped with a warning rather than failing the whole vehicle.
-    pub fn parse(spec: &str) -> Self {
-        let mut entries = Vec::new();
-        for term in spec.split_whitespace() {
-            let Some((port, coeffs)) = term.split_once('=') else {
-                warn!("driveMix term '{term}' missing '=port=f,s[,b]'; skipped");
-                continue;
-            };
-            let nums: Vec<f64> = coeffs.split(',').filter_map(|c| c.trim().parse().ok()).collect();
-            if port.is_empty() || nums.len() < 2 {
-                warn!("driveMix term '{term}' needs port=forward,steer[,brake]; skipped");
-                continue;
-            }
-            entries.push(MixEntry {
-                port: port.to_string(),
-                forward: nums[0],
-                steer: nums[1],
-                brake: nums.get(2).copied().unwrap_or(0.0),
-            });
-        }
-        Self { entries }
-    }
-}
+// The per-arch steering components (`DifferentialDrive`, `AckermannSteer`,
+// `GenericDriveMix`) are GONE. A vessel's command→actuator allocation is now the
+// data-driven `lunco_core::kernels::DriveMix { kernel, ports, entries }`, whose
+// `kernel` names a self-registered `ControlKernel` (`skid` / `linear` / … flight
+// allocators later). `apply_drive_mix` looks the kernel up and runs it — no
+// per-architecture Rust branch, no component-type taxonomy.
 
 /// G5 — Rocker-bogie **differential** coupling primitive.
 ///
@@ -904,171 +840,116 @@ fn suspension_system(
 
 // ── Drive command ports ─────────────────────────────────────────────────────────
 
-/// A wheeled vessel's logical command input ports: `throttle`/`steer`
-/// (each −1..=1) and `brake` (0..=1). Written through the shared port substrate
-/// (the [`DRIVE_COMMAND_BACKEND`], reachable by `SetPorts`/wires/API/scripts) and
-/// mixed into the actuator [`DigitalPort`]s each tick by [`apply_drive_mix`]. This
-/// replaces the old `DriveRover`/`BrakeRover` commands — "driving a rover" is now
-/// just writing these named ports.
-#[derive(Component, Default)]
-pub struct DriveCommand {
-    /// Longitudinal throttle, −1..=1 (negative = reverse).
-    pub throttle: f64,
-    /// Steering, −1..=1.
-    pub steer: f64,
-    /// Brake, 0..=1 (`> 0.5` engages the brake).
-    pub brake: f64,
-}
-
-/// Port backend exposing [`DriveCommand`]'s `throttle`/`steer`/`brake` as writable
-/// **input** ports on any entity carrying the component. Modelled on
-/// `DIGITAL_PORT_BACKEND` in `crates/lunco-cosim/src/ports.rs`.
-const DRIVE_COMMAND_BACKEND: PortBackend = PortBackend {
+/// Port backend exposing a [`FlightSoftware`]'s `inputs` map as writable **input**
+/// ports on any entity carrying the component — the single command sink for every
+/// controllable (rover `throttle`/`steer`/`brake`, avatar `forward`/`side`/`up`, a
+/// lander's `throttle`/`pitch`/`roll`/`yaw`, …). Reachable by `SetPorts`/wires/API/
+/// scripts; the vehicle's actuator ([`apply_drive_mix`], `apply_fly`, a Modelica
+/// bridge) reads its own vocabulary back out.
+///
+/// Strict: only keys the vehicle *seeded* into `inputs` (its declared command
+/// surface — see [`FlightSoftware::new`]) are writable, so an undeclared command
+/// name is rejected and still surfaces as a dangling wire. Replaces the old
+/// per-class `DriveCommand` component — command state now has one home on the FSW.
+const FSW_COMMAND_BACKEND: PortBackend = PortBackend {
     list: |w, e, out| {
-        if let Some(dc) = w.get::<DriveCommand>(e) {
-            for (name, value) in [
-                ("throttle", dc.throttle),
-                ("steer", dc.steer),
-                ("brake", dc.brake),
-            ] {
+        if let Some(fsw) = w.get::<FlightSoftware>(e) {
+            for (name, value) in &fsw.inputs {
                 out.push(PortRef {
-                    name: name.to_string(),
+                    name: name.clone(),
                     direction: PortDirection::In,
                     port_type: PortType::Signal,
-                    value,
+                    value: *value,
                 });
             }
         }
     },
     read_output: |_w, _e, _n| None,
-    read_input: |w, e, n| {
-        w.get::<DriveCommand>(e).and_then(|dc| match n {
-            "throttle" => Some(dc.throttle),
-            "steer" => Some(dc.steer),
-            "brake" => Some(dc.brake),
-            _ => None,
-        })
-    },
+    read_input: |w, e, n| w.get::<FlightSoftware>(e).and_then(|f| f.inputs.get(n).copied()),
     write_input: |w, e, n, v| {
-        if let Some(mut dc) = w.get_mut::<DriveCommand>(e) {
-            match n {
-                "throttle" => dc.throttle = v,
-                "steer" => dc.steer = v,
-                "brake" => dc.brake = v,
-                _ => return false,
+        if let Some(mut f) = w.get_mut::<FlightSoftware>(e) {
+            if let Some(slot) = f.inputs.get_mut(n) {
+                *slot = v;
+                return true;
             }
-            return true;
         }
         false
     },
 };
 
-// ── Drive mix ─────────────────────────────────────────────────────────────────
-
-/// Mix a `forward`/`steer` command (each −1..=1) into left/right drive port
-/// values (i16, ±32767) for a skid/differential rover.
+/// Derive each controllable's FSW command surface from USD: for any entity that has
+/// both a [`FlightSoftware`] and a [`lunco_core::ControlBinding`], ensure every port
+/// the binding targets exists in `FlightSoftware.inputs` (seeded `0.0`).
 ///
-/// Two properties the old per-side clamp lacked:
-///   1. **Steer-priority**: hard steering bleeds off forward authority so the
-///      inner side can counter-rotate. Without this, at full throttle the outer
-///      side saturates and steering becomes a lazy arc — "can't steer while
-///      driving forward". At full steer, forward is cut in half so the rover
-///      can pivot even while W is held.
-///   2. **Proportional saturation**: when the mix exceeds ±1 it scales *both*
-///      sides by the larger magnitude, preserving the commanded L/R ratio,
-///      instead of clamping each side independently (which discards half the
-///      differential the moment forward saturates).
-fn skid_mix(forward: f64, steer: f64) -> (i16, i16) {
-    let steer = steer.clamp(-1.0, 1.0);
-    let drive = forward.clamp(-1.0, 1.0) * (1.0 - 0.5 * steer.abs());
-    let l = drive + steer;
-    let r = drive - steer;
-    let m = l.abs().max(r.abs()).max(1.0);
-    let full = DIGITAL_PORT_FULL_SCALE as f64;
-    let to_i16 = |v: f64| (v / m * full).round().clamp(-full, full) as i16;
-    (to_i16(l), to_i16(r))
+/// This is what lets the command vocabulary be **data, not a Rust literal**: a
+/// vessel's `Controls` profile (→ its `ControlBinding`) declares exactly which
+/// command ports it accepts, and the strict FSW backend then admits writes to those
+/// and no others. Additive (never removes keys) and idempotent, so it's safe to run
+/// on `Changed<ControlBinding>` regardless of which reader stamped the binding or
+/// the FSW, and regardless of spawn order.
+fn sync_fsw_command_surface(
+    mut q: Query<(&lunco_core::ControlBinding, &mut FlightSoftware), Changed<lunco_core::ControlBinding>>,
+) {
+    for (binding, mut fsw) in q.iter_mut() {
+        for port in binding.ports() {
+            if !fsw.inputs.contains_key(port) {
+                fsw.inputs.insert(port.to_string(), 0.0);
+            }
+        }
+    }
 }
 
-/// System mixing each rover's [`DriveCommand`] (throttle/steer/brake) into its
-/// actuator [`DigitalPort`]s. Reproduces the exact math of the old `on_drive_rover`
-/// + `on_brake_rover` observers, but reads the logical command from a component
-/// (written via the port substrate) instead of command events. Runs every fixed
-/// tick before the DAC.
+// ── Drive mix ─────────────────────────────────────────────────────────────────
+
+/// System allocating each rover's FSW command inputs (`throttle`/`steer`/`brake`,
+/// read from [`FlightSoftware::inputs`]) to its actuator [`DigitalPort`]s, via the
+/// vessel's data-selected [`DriveMix`] kernel (`skid`/`linear`/…, looked up in the
+/// [`ControlKernelRegistry`]). No per-architecture branch: the kernel is chosen by
+/// USD, its normalized `[-1,1]` outputs are scaled to the i16 port range here. Runs
+/// every fixed tick before the DAC.
 fn apply_drive_mix(
-    mut q: Query<(Entity, &DriveCommand, &mut FlightSoftware)>,
-    q_diff: Query<&DifferentialDrive>,
-    q_ack: Query<&AckermannSteer>,
-    q_mix: Query<&GenericDriveMix>,
+    mut q: Query<(Entity, &mut FlightSoftware, &DriveMix)>,
+    registry: Res<ControlKernelRegistry>,
     mut q_ports: Query<&mut DigitalPort>,
+    mut unknown: Local<std::collections::HashSet<String>>,
 ) {
-    for (entity, dc, mut fsw) in q.iter_mut() {
+    let full = DIGITAL_PORT_FULL_SCALE as f64;
+    for (entity, mut fsw, mix) in q.iter_mut() {
+        // Read this vehicle's logical command inputs off the FSW command surface.
+        let throttle = fsw.cmd("throttle");
+        let steer = fsw.cmd("steer");
+        let brake = fsw.cmd("brake");
         // Brake state (old `on_brake_rover`): engaged above half-scale. Locks the
         // wheel-spin/friction cone in the physics systems via `fsw.brake_active`.
-        fsw.brake_active = dc.brake > 0.5;
+        fsw.brake_active = brake > 0.5;
         let brake_port_val = if fsw.brake_active { DIGITAL_PORT_FULL_SCALE } else { 0 };
         if let Some(&port_b) = fsw.port_map.get("brake") {
             if let Ok(mut p) = q_ports.get_mut(port_b) { p.raw_value = brake_port_val; }
         }
 
-        drive_diag!("[drive-diag] apply_drive_mix: target {:?} throttle={} steer={} brake={} ports={:?}", entity, dc.throttle, dc.steer, fsw.brake_active, fsw.port_map);
+        drive_diag!("[drive-diag] apply_drive_mix: target {:?} kernel={} throttle={} steer={} brake={} ports={:?}", entity, mix.kernel, throttle, steer, fsw.brake_active, fsw.port_map);
 
-        // G4b — USD-authored linear mix wins when present (arbitrary per-wheel
-        // topology). While braking, throttle/steer are forced to 0 (matching the
-        // skid/Ackermann branches) and only brake-coefficient ports stay live.
-        if let Ok(mix) = q_mix.get(entity) {
-            let (fwd, steer, brake) = if fsw.brake_active {
-                (0.0, 0.0, 1.0)
-            } else {
-                (dc.throttle, dc.steer, 0.0)
-            };
-            let full = DIGITAL_PORT_FULL_SCALE as f64;
-            for e in &mix.entries {
-                let Some(&port_id) = fsw.port_map.get(&e.port) else { continue };
-                let raw = (fwd * e.forward + steer * e.steer + brake * e.brake).clamp(-1.0, 1.0);
+        let Some(kernel) = registry.get(&mix.kernel) else {
+            if unknown.insert(mix.kernel.clone()) {
+                warn!("[apply_drive_mix] unknown drive kernel '{}' on {:?} — vessel not actuated", mix.kernel, entity);
+            }
+            continue;
+        };
+
+        // While braking, force throttle/steer to 0 and drive the brake gate (1.0)
+        // so brake-coefficient ports engage and drive ports zero out — matching the
+        // old per-branch behaviour, now uniform across kernels.
+        let inputs = if fsw.brake_active {
+            lunco_core::kernels::DriveInputs { throttle: 0.0, steer: 0.0, brake: 1.0 }
+        } else {
+            lunco_core::kernels::DriveInputs { throttle, steer, brake: 0.0 }
+        };
+
+        for (port, value) in kernel(inputs, mix) {
+            if let Some(&port_id) = fsw.port_map.get(&port) {
                 if let Ok(mut p) = q_ports.get_mut(port_id) {
-                    p.raw_value = (raw * full).round() as i16;
+                    p.raw_value = (value * full).round().clamp(-full, full) as i16;
                 }
-            }
-            continue;
-        }
-
-        if fsw.brake_active {
-            for name in ["drive_left", "drive_right", "steering"] {
-                if let Some(&port_id) = fsw.port_map.get(name) {
-                    if let Ok(mut p) = q_ports.get_mut(port_id) { p.raw_value = 0; }
-                }
-            }
-            continue;
-        }
-
-        if let Ok(diff) = q_diff.get(entity) {
-            let (left_mix, right_mix) = skid_mix(dc.throttle, dc.steer);
-            if let Some(&port_l) = fsw.port_map.get(&diff.left_port) {
-                if let Ok(mut p) = q_ports.get_mut(port_l) { p.raw_value = left_mix; }
-            }
-            if let Some(&port_r) = fsw.port_map.get(&diff.right_port) {
-                if let Ok(mut p) = q_ports.get_mut(port_r) { p.raw_value = right_mix; }
-            }
-        } else if let Ok(ack) = q_ack.get(entity) {
-            // True Ackermann. Drive is **non-differential** — both sides get the same
-            // forward throttle, exactly like an engine pushing a car. Turning comes
-            // from the STEERING port: the front wheels physically castor on their
-            // steering-knuckle joints (`SteeringActuator`, joint rovers) or render a
-            // steer angle (`apply_wheel_steering`, raycast rovers), and the steered
-            // front tires' grip redirects the rover into an arc. Because the turn
-            // needs forward motion for the tires to bite, an Ackermann rover cannot
-            // pivot in place — the defining difference from the skid branch above.
-            let to_i16 = |v: f64| (v.clamp(-1.0, 1.0) * DIGITAL_PORT_FULL_SCALE as f64).round() as i16;
-            let drive = to_i16(dc.throttle);
-            let steer_val = to_i16(dc.steer);
-            if let Some(&port_l) = fsw.port_map.get(&ack.drive_left_port) {
-                if let Ok(mut p) = q_ports.get_mut(port_l) { p.raw_value = drive; }
-            }
-            if let Some(&port_r) = fsw.port_map.get(&ack.drive_right_port) {
-                if let Ok(mut p) = q_ports.get_mut(port_r) { p.raw_value = drive; }
-            }
-            if let Some(&port_s) = fsw.port_map.get(&ack.steer_port) {
-                if let Ok(mut p) = q_ports.get_mut(port_s) { p.raw_value = steer_val; }
             }
         }
     }
@@ -1133,27 +1014,7 @@ mod force_law_tests {
         assert!(differential_torque(0.0, 0.0, 0.5, 0.0, k, d) < 0.0);
     }
 
-    // ── G4b generic drive mix: parse + linear projection ────────────────────
-    #[test]
-    fn drive_mix_parses_and_skips_garbage() {
-        let m = GenericDriveMix::parse("drive_left=1,1 drive_right=1,-1 brake=0,0,1 junk bad=1");
-        // `junk` (no '=') and `bad=1` (only one coeff) are skipped.
-        assert_eq!(m.entries.len(), 3);
-        assert_eq!(m.entries[0].port, "drive_left");
-        assert_eq!((m.entries[0].forward, m.entries[0].steer, m.entries[0].brake), (1.0, 1.0, 0.0));
-        assert_eq!(m.entries[2].port, "brake");
-        assert_eq!(m.entries[2].brake, 1.0);
-    }
-
-    #[test]
-    fn drive_mix_skid_projection_is_symmetric() {
-        // The skid table: left = fwd+steer, right = fwd-steer. Pure forward ⇒
-        // both sides equal; pure steer ⇒ opposite sign (pivot).
-        let m = GenericDriveMix::parse("L=1,1 R=1,-1");
-        let proj = |fwd: f64, steer: f64, e: &MixEntry| (fwd * e.forward + steer * e.steer).clamp(-1.0, 1.0);
-        assert_eq!(proj(0.5, 0.0, &m.entries[0]), proj(0.5, 0.0, &m.entries[1]));
-        assert_eq!(proj(0.0, 0.5, &m.entries[0]), -proj(0.0, 0.5, &m.entries[1]));
-    }
+    // (drive-mix parse + kernel projection now live in `lunco_core::kernels`.)
 
     // ── drive_force_mag: reverse must work ──────────────────────────────────
     #[test]

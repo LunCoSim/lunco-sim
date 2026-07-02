@@ -117,8 +117,8 @@ def Xform "SandboxScene"
     # wheel type.
     #
     # Matrix: 2 steering types × 2 drivetrains = 4 variants
-    #   - skid_rover.usda       → PhysxVehicleDriveSkidAPI
-    #   - ackermann_rover.usda  → PhysxVehicleDrive4WAPI
+    #   - skid_rover.usda       → PhysxVehicleTankDifferentialAPI
+    #   - ackermann_rover.usda  → PhysxVehicleAckermannSteeringAPI
     #   - `variants = { string drivetrain = "physical" }` selects the
     #     joint-based drivetrain from the asset's `drivetrain` variantSet
     #     (raycast | physical); omitting it falls back to `raycast`. The
