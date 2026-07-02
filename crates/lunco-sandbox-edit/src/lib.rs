@@ -114,6 +114,7 @@ impl Plugin for SandboxEditPlugin {
                 .before(bevy::transform::TransformSystems::Propagate),
         );
         app.add_systems(Update, gizmo::sync_gizmo_camera);
+        app.add_systems(Update, gizmo::drive_gizmo_drag_no_shift);
         // Publish the drag state as the core `GizmoDragging` marker so transform-
         // gizmo-free crates (avatar camera follow) can read it.
         app.add_systems(Update, gizmo::sync_gizmo_dragging_marker);

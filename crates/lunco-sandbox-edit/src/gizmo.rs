@@ -16,7 +16,7 @@ use bevy::math::DVec3;
 use bevy::camera::RenderTarget;
 use big_space::prelude::FloatingOrigin;
 use avian3d::prelude::{LinearVelocity, RigidBody, TranslationInterpolation, RotationInterpolation};
-use transform_gizmo_bevy::{GizmoCamera, GizmoTarget};
+use transform_gizmo_bevy::{GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoTarget};
 
 /// Tracks the previous parent-local position and metadata for drag lifecycle.
 #[derive(Component)]
@@ -44,9 +44,13 @@ pub fn sync_gizmo_dragging_marker(
     for (e, gt) in &q {
         if gt.is_active() {
             any_active = true;
-            commands.entity(e).insert(lunco_core::GizmoDragging);
+            // `try_*`: a `GizmoTarget` entity can be despawned (scene reset,
+            // deselect-then-despawn) between this query read and command apply.
+            // The plain `insert`/`remove` then error on the dead entity; the
+            // fallible variants no-op instead.
+            commands.entity(e).try_insert(lunco_core::GizmoDragging);
         } else {
-            commands.entity(e).remove::<lunco_core::GizmoDragging>();
+            commands.entity(e).try_remove::<lunco_core::GizmoDragging>();
         }
     }
     // Single writer of `DragModeActive`: possession (plain-click) is blocked ONLY
@@ -230,6 +234,32 @@ pub fn restore_gizmo_dynamic(
             commands.entity(av_ent).insert(FloatingOrigin);
             info!("GIZMO: restored FloatingOrigin on avatar camera {:?}", av_ent);
         }
+    }
+}
+
+/// App-owned replacement for transform-gizmo-bevy's default `mouse_interaction`
+/// driver (disabled via Cargo features). The crate's version wrote
+/// `GizmoDragStarted`/`GizmoDragging` on EVERY left press/hold — so the
+/// **Shift+left-click** used to *select* an object also armed a drag, and once
+/// the gizmo renders ON the object (its handles under the cursor) that grab
+/// fired immediately. Gating on `!Shift` keeps Shift+click for selection only;
+/// a **plain** left-drag on a handle still moves the object (the gizmo only
+/// engages when `hovered`, i.e. the cursor is actually over a handle). Matches
+/// the app's shift=select / plain=possess partition (see `on_scene_click_select`).
+pub fn drive_gizmo_drag_no_shift(
+    mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut drag_started: MessageWriter<GizmoDragStarted>,
+    mut dragging: MessageWriter<GizmoDragging>,
+) {
+    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+        return;
+    }
+    if mouse.just_pressed(MouseButton::Left) {
+        drag_started.write_default();
+    }
+    if mouse.pressed(MouseButton::Left) {
+        dragging.write_default();
     }
 }
 

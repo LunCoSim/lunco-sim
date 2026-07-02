@@ -270,6 +270,18 @@ extension, stubs the arc out of composition, and routes the file to Bevy's glTF
 loader via a synthesized `lunco:resolvedAsset` (so the terrain renders for us,
 native + web).
 
+**Composition-stack anchoring.** The binary arc is discovered from the
+*composed layer stack*, not just the root layer: `compose.rs` walks every loaded
+layer (`discover_binary_sites`) keyed by authoring site `(layer id, spec path)`,
+then matches each composed prim's `prim_stack` against those sites to anchor
+`lunco:resolvedAsset` on the **composed prim**. So a `payload = @model.glb@`
+authored *inside a referenced `.usda` wrapper* (the `scene → wrapper.usda → .glb`
+shape the `structures/*.usda` model wrappers use) surfaces on the composed prim —
+e.g. `/Scene/Bldg/Visual` — exactly like a glb referenced directly in the scene.
+This keeps USD the source of truth for a placed model while still rendering the
+glTF (and firing the failure placeholder). Covered by
+`glb_payload_in_referenced_wrapper_anchors_on_composed_prim`.
+
 **To make the glb compose in external tools (Blender/usdview):** install
 Adobe's open-source [`USD-Fileformat-plugins`](https://github.com/adobe/USD-Fileformat-plugins)
 (glTF/FBX/OBJ/STL/PLY `SdfFileFormat` plugins) and point `PXR_PLUGINPATH_NAME`
@@ -291,7 +303,23 @@ USD references (e.g., `@/components/mobility/wheel.usda@`) are resolved relative
 ### Sandbox Editing Tools (UX Bridge)
 The `lunco-sandbox-edit` crate provides the interactive layer (palette, gizmo, inspector).
 - **Spawning**: `SpawnEntity` command is wired to `UsdOp::AddReference` against the active stage.
+  A palette spawn mounts the stage's `defaultPrim` via the **empty-path sentinel**
+  (`UsdPrimPath { path: "" }`) — the loader resolves and writes back the concrete
+  prim path. USD stays the source of truth for the root prim; deriving
+  `/PascalCase(stem)` from the filename silently mounts a non-existent prim (→
+  invisible spawn) whenever the stem and its `defaultPrim` disagree (e.g. a
+  `*_glb.usda` wrapper whose prim has no `Glb` suffix).
+- **Selection root**: a prim that declares `lunco:spawnable = true` — authored or
+  *composed from a referenced wrapper* — is tagged `SelectableRoot`, so a click on
+  a deep glTF sub-mesh resolves *up* (via `find_selectable`, depth cap 32) to the
+  placed model root rather than the clicked leaf. This keeps the transform gizmo on
+  the object's authored placement transform instead of dropping it at the world
+  origin (a glb leaf carries a ~identity parent-local transform).
 - **Manipulation**: The transform gizmo authors `UsdOp::SetTranslate` against the document.
+  The default `transform-gizmo-bevy` `mouse_interaction` driver is disabled (Cargo
+  `default-features = false`, only `gizmo_picking_backend` kept); drags are driven by
+  `drive_gizmo_drag_no_shift`, gated to plain (non-Shift) presses so Shift+click stays
+  *select-only* and never arms a grab on the gizmo rendered over the object.
 - **Undo**: Reverting a `UsdOp` in the document system automatically updates the 3D world.
 
 | Scheme | Purpose | Resolves to |

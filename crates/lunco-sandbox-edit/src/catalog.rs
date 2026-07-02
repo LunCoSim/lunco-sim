@@ -143,9 +143,6 @@ pub fn spawn_usd_entry(
     let SpawnSource::UsdFile(path) = &entry.source;
     let handle = asset_server.load(path.clone());
 
-    // Derive USD prim path from entry id: "solar_panel" → "/SolarPanel"
-    let prim_path = prim_path_from_entry_id(&entry.id);
-
     let root = commands.spawn((
         Name::new(entry.display_name.clone()),
         lunco_core::SelectableRoot,
@@ -157,7 +154,14 @@ pub fn spawn_usd_entry(
         UsdInstanceRoot,
         UsdPrimPath {
             stage_handle: handle,
-            path: prim_path,
+            // Empty path = "mount the stage's `defaultPrim`" sentinel (resolved
+            // by the loader, which writes the concrete path back — see
+            // `instantiate_usd_prim` in lunco-usd-bevy). USD is the source of
+            // truth for the root prim; deriving `/PascalCase(stem)` from the
+            // filename silently mounts a non-existent prim (→ invisible spawn)
+            // whenever the file stem and its `defaultPrim` disagree (e.g. a
+            // `*_glb.usda` wrapper whose prim has no `Glb` suffix).
+            path: String::new(),
         },
         Transform {
             translation: world_pos,

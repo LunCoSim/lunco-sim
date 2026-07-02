@@ -200,13 +200,20 @@ fn open_usd_docs_on_twin_added(
         .filter(|n| !n.is_empty())
         .or_else(|| twin.root.file_name().map(|f| f.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "twin".to_string());
+    // Register the OPENED FOLDER as this Twin's resolve root — unconditionally,
+    // before any scene decision. This is what routes `twin://<name>/…` AND what
+    // the spawn-catalog scan (`maintain_catalogs`) walks to find the Twin's
+    // `structures/…` parts. Doing it only in the `Some(default_scene)` branch
+    // meant a folder opened without a declared starting scene never registered,
+    // so its parts never reached the Spawn palette even though the folder was
+    // open. Keyed by the folder we actually opened (`twin.root`).
+    twin_roots.register(&twin_name, &twin.root);
     match default_scene {
         Some(scene) => {
-            // Point the `twin://` source at this Twin's root, then load the
-            // scene THROUGH that source — never as a bare absolute path. Works
-            // identically on native (fs) and web (http), and keeps the scene's
-            // co-located relative refs (terrain glb) resolving under `twin://`.
-            twin_roots.register(&twin_name, &twin.root);
+            // Load the scene THROUGH the `twin://` source registered above —
+            // never a bare absolute path. Works identically on native (fs) and
+            // web (http), and keeps the scene's co-located relative refs
+            // (terrain glb) resolving under `twin://`.
             info!(
                 "[twin] loading starting scene `twin://{}/{}` (twin `{}`)",
                 twin_name,

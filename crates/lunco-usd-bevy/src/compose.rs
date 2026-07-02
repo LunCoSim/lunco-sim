@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Result};
 use bevy::asset::{AssetPath, LoadContext};
 use openusd::ar::ResolvedPath;
-use openusd::sdf::{self, Path as SdfPath, PathListOp, SpecData, SpecType, Value};
+use openusd::sdf::{self, AbstractData, Path as SdfPath, PathListOp, SpecData, SpecType, Value};
 use openusd::usd::{PrimPredicate, Stage};
 use openusd::usda;
 
@@ -49,18 +49,18 @@ pub(crate) async fn compose_to_data(
     let mut bytes: HashMap<String, Vec<u8>> = HashMap::new();
     bytes.insert(root_id.clone(), root_bytes);
     let mut queue = vec![root_id.clone()];
-    // (composed-prim-path, load-uri) for every binary asset arc discovered.
-    let mut binary_assets: Vec<(SdfPath, String)> = Vec::new();
 
     while let Some(id) = queue.pop() {
         let raw = bytes.get(&id).cloned().expect("queued id is present in map");
         let text = String::from_utf8(raw).map_err(|e| anyhow!("layer {id} is not UTF-8: {e}"))?;
         let data = usda::parse(&text).map_err(|e| anyhow!("USD parse error in {id}: {e}"))?;
 
+        // Only the non-binary `.usda` closure is pre-fetched here; binary-asset
+        // arcs (glTF/…) are discovered post-composition by `discover_binary_sites`
+        // (driven by `flatten_stage`) so an arc authored inside a referenced
+        // `.usda` wrapper anchors on its COMPOSED prim.
         let anchor = ResolvedPath::new(&id);
-        let (refs, binaries) = discover_arcs(&data, &anchor);
-        binary_assets.extend(binaries);
-        for child_asset in refs {
+        for child_asset in discover_arcs(&data) {
             let child_id = canonicalize(&child_asset, Some(&anchor));
             if bytes.contains_key(&child_id) {
                 continue;
@@ -87,18 +87,20 @@ pub(crate) async fn compose_to_data(
         .open(&root_id)
         .map_err(|e| anyhow!("USD composition error: {e}"))?;
 
-    // 3. Flatten composed stage → TextReader, injecting binary-asset URIs.
-    flatten_stage(&stage, &binary_assets)
+    // 3. Flatten composed stage → TextReader. `flatten_stage` discovers binary
+    //    arcs from the composed layer stack and anchors their URIs on the
+    //    composed prims via each prim's composition stack.
+    flatten_stage(&stage)
 }
 
-/// Walk a parsed layer's specs and classify every external arc: non-binary
-/// `.usda` references/payloads/sublayers to fetch, and binary-asset arcs
-/// (glTF/…) recorded as `(prim_path, load_uri)` for `lunco:resolvedAsset`
-/// synthesis. Iterating ALL specs (not just the live prim tree) catches
-/// references authored inside variant blocks (stored at decorated paths).
-fn discover_arcs(data: &sdf::Data, anchor: &ResolvedPath) -> (Vec<String>, Vec<(SdfPath, String)>) {
+/// Walk a parsed layer's specs and collect the non-binary `.usda`
+/// references/payloads/sublayers to pre-fetch. Binary-asset arcs (glTF/…) are
+/// skipped here — they are not USD layers to fetch; their `lunco:resolvedAsset`
+/// URI is synthesized post-composition by [`discover_binary_sites`]. Iterating
+/// ALL specs (not just the live prim tree) catches references authored inside
+/// variant blocks (stored at decorated paths).
+fn discover_arcs(data: &sdf::Data) -> Vec<String> {
     let mut fetch = Vec::new();
-    let mut binary = Vec::new();
 
     if let Some(root) = data.spec(&SdfPath::abs_root()) {
         if let Some(Value::StringVec(subs)) = root.get("subLayers") {
@@ -106,7 +108,7 @@ fn discover_arcs(data: &sdf::Data, anchor: &ResolvedPath) -> (Vec<String>, Vec<(
         }
     }
 
-    for (path, spec) in data.iter() {
+    for (_path, spec) in data.iter() {
         let mut arcs: Vec<String> = Vec::new();
         if let Some(Value::ReferenceListOp(op)) = spec.get("references") {
             arcs.extend(op.iter().filter(|r| !r.asset_path.is_empty()).map(|r| r.asset_path.clone()));
@@ -118,22 +120,19 @@ fn discover_arcs(data: &sdf::Data, anchor: &ResolvedPath) -> (Vec<String>, Vec<(
             }
             _ => {}
         }
-        for ap in arcs {
-            if is_binary_asset(&ap) {
-                binary.push((path.clone(), resolve_binary_uri(&ap, Some(anchor))));
-            } else {
-                fetch.push(ap);
-            }
-        }
+        // Binary arcs (`.glb`/`.gltf`/…) are not fetchable USD layers — the
+        // resolver stubs them during composition; skip them from the fetch set.
+        fetch.extend(arcs.into_iter().filter(|ap| !is_binary_asset(ap)));
     }
 
-    (fetch, binary)
+    fetch
 }
 
 /// Bake the composed stage into a flat `HashMap<Path, Spec>` → `TextReader`.
-/// `binary_assets` are `(prim_path, uri)` pairs to surface as
-/// `lunco:resolvedAsset` attributes.
-fn flatten_stage(stage: &Stage, binary_assets: &[(SdfPath, String)]) -> Result<sdf::Data> {
+/// Binary-asset arcs (glTF/OBJ/STL) authored anywhere in the composed layer
+/// stack surface as `lunco:resolvedAsset` attributes, anchored on their COMPOSED
+/// prim (see [`discover_binary_sites`]).
+fn flatten_stage(stage: &Stage) -> Result<sdf::Data> {
     let mut data: HashMap<SdfPath, SpecData> = HashMap::new();
 
     // Pseudo-root: carries `defaultPrim` (deferred root-prim resolution) and the
@@ -162,6 +161,11 @@ fn flatten_stage(stage: &Stage, binary_assets: &[(SdfPath, String)]) -> Result<s
     stage
         .traverse(PrimPredicate::DEFAULT, |p| paths.push(p.clone()))
         .map_err(|e| anyhow!("stage traversal failed: {e}"))?;
+
+    // Binary-asset arcs keyed by authoring site `(layer id, spec path)` — the
+    // coordinates `Prim::prim_stack` reports. The traversal above forced every
+    // reachable reference/payload layer to load, so the whole stack is visible.
+    let binary_sites = discover_binary_sites(stage);
 
     for path in &paths {
         let prim = stage.prim(path.clone());
@@ -216,25 +220,70 @@ fn flatten_stage(stage: &Stage, binary_assets: &[(SdfPath, String)]) -> Result<s
                 data.insert(rel.path().clone(), r);
             }
         }
-    }
 
-    // glTF / binary-asset shim: surface each authored binary arc's URI as a
-    // `lunco:resolvedAsset` attribute on its (composed) prim, unless one was
-    // already authored. Skip arcs whose prim didn't survive composition.
-    for (path, uri) in binary_assets {
-        if !data.contains_key(path) {
-            continue;
-        }
-        if let Ok(attr_path) = path.append_property("lunco:resolvedAsset") {
-            data.entry(attr_path).or_insert_with(|| {
-                let mut a = SpecData::new(SpecType::Attribute);
-                a.add("default", Value::AssetPath(uri.clone().into()));
-                a
-            });
+        // glTF / binary-asset shim: if any site in THIS prim's composition stack
+        // authored a binary arc, surface its URI as `lunco:resolvedAsset` on this
+        // composed prim (unless already authored). `prim_stack` reports each
+        // contributing `(layer id, spec path)`, so an arc authored in a
+        // referenced `.usda` wrapper lands here — at the composed path — not at
+        // the wrapper-local path it was written to. The Bevy loader keys the
+        // glTF `SceneRoot` + failure placeholder off this attribute.
+        if !binary_sites.is_empty() {
+            if let Ok(stack) = prim.prim_stack() {
+                if let Some(uri) = stack.iter().find_map(|site| binary_sites.get(site)) {
+                    if let Ok(attr_path) = path.append_property("lunco:resolvedAsset") {
+                        data.entry(attr_path).or_insert_with(|| {
+                            let mut a = SpecData::new(SpecType::Attribute);
+                            a.add("default", Value::AssetPath(uri.clone().into()));
+                            a
+                        });
+                    }
+                }
+            }
         }
     }
 
     Ok(sdf::Data::from_specs(data))
+}
+
+/// Discover every binary-asset arc (glTF/OBJ/STL, per [`is_binary_asset`])
+/// authored across the composed stage's loaded layers, keyed by its authoring
+/// site `(layer identifier, spec path)` — the coordinates
+/// [`openusd::usd::Prim::prim_stack`] reports. [`flatten_stage`] matches these
+/// against each composed prim's stack to anchor `lunco:resolvedAsset` on the
+/// COMPOSED prim, so a glTF `payload`/`reference` authored inside a referenced
+/// `.usda` wrapper surfaces on the composed prim — not only arcs authored
+/// directly in the root layer, as the previous layer-local match required.
+fn discover_binary_sites(stage: &Stage) -> HashMap<(String, SdfPath), String> {
+    let mut sites: HashMap<(String, SdfPath), String> = HashMap::new();
+    for layer_id in stage.layer_identifiers() {
+        let Some(layer) = stage.layer(&layer_id) else { continue };
+        let data = layer.data();
+        let anchor = ResolvedPath::new(&layer_id);
+        for path in data.spec_paths() {
+            let mut arcs: Vec<String> = Vec::new();
+            if let Ok(Some(v)) = data.try_field(&path, "references") {
+                if let Value::ReferenceListOp(op) = v.as_ref() {
+                    arcs.extend(op.iter().filter(|r| !r.asset_path.is_empty()).map(|r| r.asset_path.clone()));
+                }
+            }
+            if let Ok(Some(v)) = data.try_field(&path, "payload") {
+                match v.as_ref() {
+                    Value::Payload(p) if !p.asset_path.is_empty() => arcs.push(p.asset_path.clone()),
+                    Value::PayloadListOp(op) => {
+                        arcs.extend(op.iter().filter(|p| !p.asset_path.is_empty()).map(|p| p.asset_path.clone()))
+                    }
+                    _ => {}
+                }
+            }
+            for ap in arcs {
+                if is_binary_asset(&ap) {
+                    sites.insert((layer_id.clone(), path.clone()), resolve_binary_uri(&ap, Some(&anchor)));
+                }
+            }
+        }
+    }
+    sites
 }
 
 /// Synchronous, **native-filesystem** compose for the USD doc viewport preview:
@@ -261,14 +310,9 @@ pub fn compose_native_fs(source: &str, base_dir: &std::path::Path) -> Option<sdf
     };
     let stage = Stage::builder().resolver(resolver).open(&root_id).ok()?;
 
-    // Discover binary-asset arcs (glTF payloads/references) authored in the root
-    // layer so their `lunco:resolvedAsset` URI is synthesized. Anchor is unused
-    // for the `scheme://` URIs this surfaces.
-    let binary = usda::parse(source)
-        .map(|data| discover_arcs(&data, &ResolvedPath::new("")).1)
-        .unwrap_or_default();
-
-    flatten_stage(&stage, &binary).ok()
+    // `flatten_stage` discovers binary-asset arcs (glTF payloads/references)
+    // across the composed layer stack and anchors each on its composed prim.
+    flatten_stage(&stage).ok()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -290,14 +334,9 @@ pub fn compose_file(path: &std::path::Path) -> Result<sdf::Data> {
         .to_str()
         .ok_or_else(|| anyhow!("non-UTF8 USD path: {path:?}"))?;
     let stage = Stage::open(id).map_err(|e| anyhow!("USD composition error for {id}: {e}"))?;
-    // Surface root-layer binary-asset arcs (glTF/…) as `lunco:resolvedAsset`,
-    // matching the async loader; anchored at the root file's own directory.
-    let binary = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|src| usda::parse(&src).ok())
-        .map(|data| discover_arcs(&data, &ResolvedPath::new(id)).1)
-        .unwrap_or_default();
-    flatten_stage(&stage, &binary)
+    // `flatten_stage` surfaces binary-asset arcs (glTF/…) as `lunco:resolvedAsset`
+    // across the whole composed layer stack, anchored on each composed prim.
+    flatten_stage(&stage)
 }
 
 /// Resolver for the native-fs viewport path: the root layer is held in memory;
@@ -454,5 +493,40 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
             Some("throttle"),
             "referenced rover must carry its inherited Controls through the reference"
         );
+    }
+
+    /// A glTF `payload` authored inside a REFERENCED `.usda` wrapper must surface
+    /// `lunco:resolvedAsset` on the COMPOSED prim (`/Scene/Bldg/Visual`), not the
+    /// wrapper-local path it was written to. This is what lets a scene keep USD as
+    /// the source of truth — `scene → .usda → .glb` — and still render the glTF
+    /// (and fire the failure placeholder) exactly like a glb referenced directly.
+    #[test]
+    fn glb_payload_in_referenced_wrapper_anchors_on_composed_prim() {
+        let dir = std::env::temp_dir().join("lunco_glb_wrapper_compose_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Wrapper: a `Structure` defaultPrim whose `Visual` child carries the glb
+        // payload — the Perseverance "usda → glb" shape.
+        std::fs::write(
+            dir.join("wrapper.usda"),
+            "#usda 1.0\n(\n    defaultPrim = \"Structure\"\n)\ndef Xform \"Structure\"\n{\n    def Xform \"Visual\" (\n        prepend payload = @model.glb@\n    )\n    {\n        string lunco:assetMode = \"scene\"\n    }\n}\n",
+        )
+        .unwrap();
+        // Scene references the wrapper — no direct glb embedding in the scene.
+        let scene = "#usda 1.0\ndef Xform \"Scene\"\n{\n    def Xform \"Bldg\" (\n        prepend references = @wrapper.usda@\n    )\n    {\n    }\n}\n";
+        let data = compose_native_fs(scene, &dir).expect("compose scene→wrapper→glb");
+
+        let visual = SdfPath::new("/Scene/Bldg/Visual").unwrap();
+        let attr = visual.append_property("lunco:resolvedAsset").unwrap();
+        let spec = data
+            .spec(&attr)
+            .expect("resolvedAsset must be synthesized on the composed Visual prim");
+        match spec.get("default") {
+            Some(Value::AssetPath(a)) => assert!(
+                a.as_str().ends_with("model.glb"),
+                "resolvedAsset should point at the wrapper-co-located glb, got {}",
+                a.as_str()
+            ),
+            other => panic!("resolvedAsset should be an AssetPath, got {other:?}"),
+        }
     }
 }

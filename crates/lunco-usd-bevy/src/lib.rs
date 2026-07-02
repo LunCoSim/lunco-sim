@@ -127,6 +127,12 @@ impl Plugin for UsdBevyPlugin {
             .register_type::<UsdAnimated>()
             .init_resource::<DiagnosticLabelFont>()
             .init_resource::<DiagnosticLabelConfig>()
+            // Guarantee the viewport substrate exists wherever these camera
+            // systems run: `cycle_active_camera`/`reconcile_scene_viewport`
+            // read `SceneViewport`, so a host that adds this plugin without
+            // lunco-core's `register_core_resources` (e.g. a focused test app)
+            // still has it. Idempotent — a no-op if core already registered it.
+            .init_resource::<lunco_core::SceneViewport>()
             .add_systems(Startup, load_diagnostic_label_font)
             .add_observer(on_usd_prim_added)
             .add_observer(light::on_usd_light_added)
@@ -972,30 +978,40 @@ fn instantiate_usd_prim(
             // bundle: the `on_usd_prim_added` observer reads it to decide the
             // child's identity regime, so a later `insert` would race the
             // observer and let the child take a colliding `Content` id.
-            match (load_into_grid, &child_member) {
-                (Some(LoadIntoGrid(grid)), Some(member)) => {
-                    commands.spawn((
+            let child_entity = match (load_into_grid, &child_member) {
+                (Some(LoadIntoGrid(grid)), Some(member)) => commands
+                    .spawn((
                         base_components,
                         CellCoord::default(),
                         lunco_core::GridAnchor,
                         ChildOf(*grid),
                         member.clone(),
-                    ));
-                }
-                (Some(LoadIntoGrid(grid)), None) => {
-                    commands.spawn((
-                        base_components,
-                        CellCoord::default(),
-                        lunco_core::GridAnchor,
-                        ChildOf(*grid),
-                    ));
-                }
+                    ))
+                    .id(),
+                (Some(LoadIntoGrid(grid)), None) => commands
+                    .spawn((base_components, CellCoord::default(), lunco_core::GridAnchor, ChildOf(*grid)))
+                    .id(),
                 (None, Some(member)) => {
-                    commands.spawn((base_components, ChildOf(entity), member.clone()));
+                    commands.spawn((base_components, ChildOf(entity), member.clone())).id()
                 }
-                (None, None) => {
-                    commands.spawn((base_components, ChildOf(entity)));
-                }
+                (None, None) => commands.spawn((base_components, ChildOf(entity))).id(),
+            };
+
+            // A prim that declares `lunco:spawnable = true` — authored on the prim
+            // or COMPOSED from a referenced wrapper (the `structures/*.usda` model
+            // wrappers all set it) — is a placeable "unit". Tag it `SelectableRoot`
+            // so a click on a deep glb sub-mesh resolves UP to this prim (via
+            // `find_selectable`), not the leaf. That matters for the transform
+            // gizmo: the gizmo crate reads a target's LOCAL `Transform` and treats
+            // it as world, but a glb leaf carries a parent-local (~0) transform, so
+            // targeting the leaf drops the gizmo at the world origin. This prim
+            // carries the authored placement transform (== world when its scene-root
+            // ancestor sits at identity), so the gizmo lands on the object. Works
+            // whether the prim is Grid-direct OR nested under a referenced scene.
+            // Scenes author `spawnable = false` (never a target); terrain/props
+            // without the flag fall through to the leaf as before.
+            if light::get_attribute_as_bool(reader, &child_path, "lunco:spawnable").unwrap_or(false) {
+                commands.entity(child_entity).insert(lunco_core::SelectableRoot);
             }
         }
     }

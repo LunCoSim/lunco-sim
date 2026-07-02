@@ -149,7 +149,10 @@ fn find_selectable(
     q_selectable: &Query<Entity, With<lunco_core::SelectableRoot>>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<Entity> {
-    const MAX_DEPTH: usize = 8;
+    // Deep enough to climb an imported glTF node tree (scene→node→…→mesh) up to
+    // the SelectableRoot prim that wraps it — an 8-level cap left tall glb
+    // hierarchies resolving to the clicked leaf instead of the model root.
+    const MAX_DEPTH: usize = 32;
     let mut entity = hit;
     let mut depth = 0;
 
