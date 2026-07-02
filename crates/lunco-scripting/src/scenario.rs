@@ -217,8 +217,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         // 1. Snapshot (entity, doc_id, gid, generation, source), releasing every
         //    World borrow before we execute scripts. `live` = all THIS-LANGUAGE
         //    entities (incl. paused) — drives despawn/detach teardown.
-        // (entity, doc_id, gid, generation, source, params-json, authority).
-        let mut work: Vec<(Entity, u64, i64, u64, String, String, Option<SessionId>)> = Vec::new();
+        // (entity, doc_id, gid, generation, maybe (source, params-json), authority).
+        // Source+params are cloned only when a (re)compile is due (see below) — not
+        // every tick — since they're consumed solely by `runtime.compile`.
+        let mut work: Vec<(Entity, u64, i64, u64, Option<(String, String)>, Option<SessionId>)> =
+            Vec::new();
         let live: HashSet<Entity>;
         {
             let mut q = world.query::<(Entity, &ScriptedModel, Option<&ScriptAuthority>)>();
@@ -239,7 +242,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     continue;
                 }
                 let Some(raw) = doc_id else { continue };
-                let (generation, source, params) = {
+                let (generation, maybe_src) = {
                     let registry = world.resource::<ScriptRegistry>();
                     let Some(host) = registry.documents.get(&DocumentId::new(raw)) else {
                         continue;
@@ -248,14 +251,25 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     if doc.language != language {
                         continue;
                     }
-                    (doc.generation, doc.source.clone(), doc.params.clone())
+                    let generation = doc.generation;
+                    // Only (re)compilation reads source/params, so clone them ONLY when a
+                    // recompile is actually due (first sight or generation bump) — otherwise
+                    // the multi-KB source was cloned and dropped unused every tick. This
+                    // predicate mirrors the loop's `!compiled || generation-changed` gate.
+                    let needs_recompile = world
+                        .get_resource::<ScenarioDriver<R>>()
+                        .and_then(|d| d.fsm.get(&entity))
+                        .map_or(true, |st| !st.compiled || st.generation != generation);
+                    let maybe_src =
+                        needs_recompile.then(|| (doc.source.clone(), doc.params.clone()));
+                    (generation, maybe_src)
                 };
                 let gid = world
                     .resource::<ApiEntityRegistry>()
                     .api_id_for(entity)
                     .map(|g| g.get() as i64)
                     .unwrap_or(-1);
-                work.push((entity, raw, gid, generation, source, params, authority));
+                work.push((entity, raw, gid, generation, maybe_src, authority));
             }
         }
 
@@ -287,7 +301,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             driver.runtime.maintain();
             let ScenarioDriver { runtime, fsm } = &mut *driver;
 
-            for (entity, raw, gid, generation, source, params, authority) in work {
+            for (entity, raw, gid, generation, maybe_src, authority) in work {
                 // Gate this entity's hook `cmd()`s against the launching session
                 // (§3.4). `None` for a host-trusted launch → ungated. Covers the
                 // hot-reload `on_stop` below too (still inside this iteration).
@@ -297,15 +311,17 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 let mut recompiled = false;
                 let mut compile_diag: Option<Diagnostic> = None;
 
-                // (Re)compile on first sight or generation bump.
-                if !st.compiled || st.generation != generation {
+                // (Re)compile on first sight or generation bump. Phase 1 provides
+                // `maybe_src` exactly when this is due (Some ⟺ recompile), so the
+                // presence of the source IS the gate — no per-tick source clone.
+                if let Some((source, params)) = &maybe_src {
                     recompiled = true;
                     // Hot-reload teardown: the OUTGOING program cleans up first.
                     if st.started && st.compiled {
                         let _ = runtime.call_hook(entity, ScenarioHook::Stop, gid);
                     }
                     st.started = false;
-                    match runtime.compile(entity, &source, &params) {
+                    match runtime.compile(entity, source, params) {
                         CompileOutcome::Failed(diag) => {
                             st.compiled = false;
                             st.generation = generation;
