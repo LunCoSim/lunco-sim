@@ -626,6 +626,16 @@ fn spotlight(anchor, caption)  { cmd("Spotlight", #{ anchor: anchor, text: capti
 /// Remove any active spotlight.
 fn clear_spotlight()           { cmd("ClearSpotlight") }
 
+// Guided TOUR (lunica-style coach marks). `coach(...)` shows one step — spotlight
+// `anchor` + a card with title/body, progress dots (index/total), and Back/Next/
+// Skip controls. The controls emit `cmd:TutorialNext`/`cmd:TutorialBack`/
+// `cmd:TutorialSkip` on the bus; a tour reacts in `on_event` (see the
+// tutorials/*/tour.rhai step-cursor pattern). `end_tour()` hides the coach.
+fn coach(index, total, anchor, title, body) {
+    cmd("SetTourStep", #{ index: index, total: total, anchor: anchor, title: title, body: body });
+}
+fn end_tour()                  { cmd("ClearTour") }
+
 /// Glyph for an objective state: pending •, active ▸, complete ✓, failed ✗.
 fn __obj_glyph(state) {
     if state == "complete" { "✓" }

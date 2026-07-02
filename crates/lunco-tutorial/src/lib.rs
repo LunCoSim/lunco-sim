@@ -292,6 +292,14 @@ impl Panel for TutorialsPanel {
 fn builtin_tutorials() -> Vec<TutorialMeta> {
     vec![
         TutorialMeta {
+            id: "sandbox-intro",
+            title: "Sandbox Intro",
+            blurb: "A guided coach-mark tour of the workspace — viewport, browser, inspector, console. Advances with Back / Next / Skip. Chains into First Drive.",
+            app: "sandbox",
+            difficulty: "beginner",
+            scene: "tutorials/sandbox_intro/sandbox_intro.usda",
+        },
+        TutorialMeta {
             id: "first-drive",
             title: "First Drive",
             blurb: "Take control of a rover and drive it to a flag on the lunar surface. Teaches possession and driving — every step advances when you actually do it.",
