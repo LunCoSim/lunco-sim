@@ -6805,8 +6805,11 @@ name = "lunco-autopilot"
 version = "0.6.0-dev"
 dependencies = [
  "bevy",
+ "lunco-behavior",
  "lunco-core",
  "lunco-cosim",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

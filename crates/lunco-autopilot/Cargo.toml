@@ -6,6 +6,14 @@ edition = "2021"
 [dependencies]
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+# The driving BEHAVIOUR is a lunco-behavior tree (sequence waypoints, when-to-brake
+# — the GLUE); its leaves call this crate's Rust steering math. Dependency-free BT
+# kernel, so the autopilot is engine/rhai-free.
+lunco-behavior = { path = "../lunco-behavior" }
+# The tree is authored as DATA (a `BehaviorSpec`), so rhai/JSON can define and
+# hot-swap it. serde deserializes that data; the crate never compiles rhai.
+serde = { workspace = true }
+serde_json = { workspace = true }
 # Control is the ONE generic `SetPorts` command (a batch of named input-port
 # writes); the autopilot emits it exactly like the keyboard and scripts do.
 lunco-cosim = { path = "../lunco-cosim" }

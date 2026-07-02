@@ -72,12 +72,16 @@ pub struct Autopilot {
     pub vessel: Entity,       // the vessel it drives
     pub session: SessionId,   // its own AiAgent identity (distinct per actor)
     pub engaged: bool,        // armed?
-    pub throttle: f64,        // prototype behaviour: constant setpoints
-    pub steer: f64,           //   (a production autopilot binds a rhai behaviour)
+    pub throttle: f64,        // fallback setpoint when no AutopilotBehavior tree
+    pub steer: f64,           //   is attached (see the behaviour-tree note below)
 }
 ```
 
-The autopilot is **structurally a user**. Its only specialty: its setpoint comes from a behaviour, not a keymap. The prototype uses constant `throttle`/`steer`; swapping in a bound rhai behaviour (`nav_to`/`steer_to`, already in `nav.rhai`) changes only what produces the setpoint, not the ownership plumbing.
+The autopilot is **structurally a user**. Its only specialty: its setpoint comes from a behaviour, not a keymap.
+
+**The behaviour is a [`lunco-behavior`] tree, authored as data.** The *what to do* is an `AutopilotBehavior` component holding a behaviour tree. The tree STRUCTURE (sequence waypoints, fallbacks, when-to-brake) is the **glue**, authored as DATA (`BehaviorSpec`, an internally-tagged serde enum — so rhai/JSON define it) and compiled by `build_tree`. Its leaves are **Rust** primitives (`nav_setpoint` steering math) — the split the project mandates: *computation in Rust, glue in rhai*. Because the tree is data, it is dynamic: the `SetAutopilotBehavior { vessel, spec_json }` command lets a rhai scenario define or **hot-swap** a vessel's behaviour at runtime — different autopilots, updated on the fly, no rebuild. This is the first consumer of the (previously unwired) `lunco-behavior` kernel; enabling per-entity storage required making the kernel's boxed children `Send + Sync` (a `BoxNode` alias — no new deps). With no `AutopilotBehavior` attached, the autopilot falls back to constant `throttle`/`steer` setpoints.
+
+[`lunco-behavior`]: ../../crates/lunco-behavior
 
 ### 4.2 Possession is the arbiter (no per-frame check)
 
@@ -151,11 +155,12 @@ One owner ⇒ one writer per tick ⇒ no competing port writes ⇒ no jitter. Di
 2. **Headless `lunco-autopilot` crate (DONE):** `Autopilot` component; `setup_autopilot_session` registers a reserved `AiAgent` `UserSession` + `claim`s the vessel; `drive_autopilots` emits `SetPorts` while `engaged && owns`. Deps `lunco-core` + `lunco-cosim` only. `AutopilotPlugin` added on the control path in `luncosim` + `lunco-sandbox` (so `--no-ui` runs it).
 3. **General ownership yield (DONE):** `drive_from_bindings` skips any vessel owned by a session `≠ LocalSession`. The single `lunco-controller` change; `Option`-guarded.
 4. **Takeover rule authored in rhai (DONE):** `assets/scripting/policy/control_authority.rhai` (`may_take_control`), registered at startup by `lunco-scripting::register_builtin_policies` under `CONTROL_AUTHORITY_HOOK`; consulted by `record_possession_authority` via `lunco_core::session::may_take_control` (fail-closed). No hardcoded steal rule in Rust; hot-replaceable via `SetScriptedPolicy`.
-5. **Behaviour (future):** replace the constant `throttle`/`steer` setpoints with a bound rhai behaviour (`nav_to`/`steer_to`).
+5. **Behaviour = data-authored `lunco-behavior` tree (DONE):** `BehaviorSpec` (serde, rhai/JSON) → `build_tree` → `AutopilotBehavior` component ticked in `drive_autopilots`; Rust leaves (`nav_setpoint` math); hot-swap via the `SetAutopilotBehavior` command. Made the `lunco-behavior` kernel `Send + Sync` (`BoxNode`) for per-entity ECS storage.
 
 ## 8. Testing
 
 - **Headless mechanism (DONE — `crates/lunco-autopilot/tests/authority.rs`):** autopilot engages → registers an `AiAgent` session + owns its vessel + drives it; **stops the instant it loses ownership** (simulated takeover) — the single-writer / no-jitter invariant; two autopilots own distinct vessels and drive only their own (multi-actor non-interference). Runs on `Standalone` with no avatar/UI.
+- **Behaviour tree (DONE — `crates/lunco-autopilot/tests/behavior.rs`):** a JSON-authored `BehaviorSpec` (the exact shape rhai emits) compiles to a tree that drives toward a waypoint and **advances the sequence** on arrival; `nav_setpoint` brakes within radius / drives when far; malformed specs error cleanly. Plus `lunco-behavior`'s own 11 kernel tests (now `Send + Sync`).
 - **Integration (future):** full `PossessVessel` takeover through `record_possession_authority` + the `lunco-controller` yield, asserting the human emits no `SetPorts` for an autopilot-owned vessel and takes over on possess.
 - **Regression (future):** the `first_drive` tutorial (autopilot + possess) drives to the flag without wheel oscillation.
 

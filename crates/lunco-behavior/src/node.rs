@@ -35,6 +35,12 @@ pub trait Node<Ctx: ?Sized> {
     fn reset(&mut self) {}
 }
 
+/// A boxed child node. `Send + Sync` so a whole tree can live in an ECS
+/// `Component` (Bevy requires it) and be ticked from a system — the kernel stays
+/// engine-free, but its containers are usable per-entity. Leaves that capture only
+/// `Send + Sync` data (the common case) satisfy this automatically.
+pub type BoxNode<Ctx> = Box<dyn Node<Ctx> + Send + Sync>;
+
 /// A leaf that runs a closure each tick and returns its [`Status`]. The scripting
 /// layer wraps a rhai/python callable in one of these.
 pub struct Action<F> {
@@ -57,13 +63,13 @@ impl<Ctx: ?Sized, F: FnMut(&mut Ctx) -> Status> Node<Ctx> for Action<F> {
 /// Runs children in order; fails on the first child failure, succeeds when all
 /// children have succeeded. The classic "do A then B then C" node.
 pub struct Sequence<Ctx: ?Sized> {
-    children: Vec<Box<dyn Node<Ctx>>>,
+    children: Vec<BoxNode<Ctx>>,
     current: usize,
 }
 
 impl<Ctx: ?Sized> Sequence<Ctx> {
     /// Build a sequence over the given ordered children.
-    pub fn new(children: Vec<Box<dyn Node<Ctx>>>) -> Self {
+    pub fn new(children: Vec<BoxNode<Ctx>>) -> Self {
         Self { children, current: 0 }
     }
 }
@@ -95,13 +101,13 @@ impl<Ctx: ?Sized> Node<Ctx> for Sequence<Ctx> {
 /// Runs children in order; succeeds on the first child success, fails only when
 /// every child has failed. The "fallback" node — try A, else B, else C.
 pub struct Selector<Ctx: ?Sized> {
-    children: Vec<Box<dyn Node<Ctx>>>,
+    children: Vec<BoxNode<Ctx>>,
     current: usize,
 }
 
 impl<Ctx: ?Sized> Selector<Ctx> {
     /// Build a selector (fallback) over the given ordered children.
-    pub fn new(children: Vec<Box<dyn Node<Ctx>>>) -> Self {
+    pub fn new(children: Vec<BoxNode<Ctx>>) -> Self {
         Self { children, current: 0 }
     }
 }
@@ -144,14 +150,14 @@ pub enum ParallelPolicy {
 /// Ticks all still-running children each tick and resolves by [`ParallelPolicy`].
 /// Each child's terminal result is latched so it isn't re-ticked after finishing.
 pub struct Parallel<Ctx: ?Sized> {
-    children: Vec<Box<dyn Node<Ctx>>>,
+    children: Vec<BoxNode<Ctx>>,
     latched: Vec<Status>,
     policy: ParallelPolicy,
 }
 
 impl<Ctx: ?Sized> Parallel<Ctx> {
     /// Build a parallel node with the given completion policy.
-    pub fn new(policy: ParallelPolicy, children: Vec<Box<dyn Node<Ctx>>>) -> Self {
+    pub fn new(policy: ParallelPolicy, children: Vec<BoxNode<Ctx>>) -> Self {
         let latched = vec![Status::Running; children.len()];
         Self { children, latched, policy }
     }
@@ -208,7 +214,7 @@ impl<Ctx: ?Sized> Node<Ctx> for Parallel<Ctx> {
 /// Re-runs a child to `Success` a fixed number of times, or forever. Any child
 /// `Failure` fails the repeat immediately.
 pub struct Repeat<Ctx: ?Sized> {
-    child: Box<dyn Node<Ctx>>,
+    child: BoxNode<Ctx>,
     /// `None` = forever; `Some(n)` = until the child has succeeded `n` times.
     target: Option<usize>,
     done: usize,
@@ -216,12 +222,12 @@ pub struct Repeat<Ctx: ?Sized> {
 
 impl<Ctx: ?Sized> Repeat<Ctx> {
     /// Repeat `child` until it has succeeded `count` times, then succeed.
-    pub fn times(count: usize, child: Box<dyn Node<Ctx>>) -> Self {
+    pub fn times(count: usize, child: BoxNode<Ctx>) -> Self {
         Self { child, target: Some(count), done: 0 }
     }
 
     /// Repeat `child` forever (only a child failure ends it).
-    pub fn forever(child: Box<dyn Node<Ctx>>) -> Self {
+    pub fn forever(child: BoxNode<Ctx>) -> Self {
         Self { child, target: None, done: 0 }
     }
 }
@@ -268,7 +274,7 @@ mod tests {
         end: Status,
     }
     impl Countdown {
-        fn new(delay: u32, end: Status) -> Box<dyn Node<()>> {
+        fn new(delay: u32, end: Status) -> BoxNode<()> {
             Box::new(Self { delay, left: delay, end })
         }
     }

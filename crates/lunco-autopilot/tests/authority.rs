@@ -4,7 +4,7 @@
 //! substrate + `AutopilotPlugin`, exactly as a `--no-ui` server runs it.
 
 use bevy::prelude::*;
-use lunco_autopilot::{autopilot_session, Autopilot, AutopilotPlugin};
+use lunco_autopilot::{autopilot_session, drive_autopilots, setup_autopilot_session, Autopilot};
 use lunco_core::session::{AuthorityRole, SessionRbac};
 use lunco_core::{GlobalEntityId, NetworkRole, SessionId, SessionRegistry};
 use lunco_cosim::SetPorts;
@@ -26,7 +26,10 @@ fn build() -> App {
         .init_resource::<SessionRbac>()
         .init_resource::<DriveLog>()
         .add_observer(capture)
-        .add_plugins(AutopilotPlugin);
+        // Add the autopilot systems directly (not the full plugin) so this stays a
+        // minimal headless harness independent of the command-registration infra.
+        .add_systems(Update, setup_autopilot_session)
+        .add_systems(FixedUpdate, drive_autopilots);
     app
 }
 
