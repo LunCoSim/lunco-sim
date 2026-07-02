@@ -115,17 +115,6 @@ impl Plugin for CoSimPlugin {
                 .chain(),
         );
 
-        // The wiring fabric is compiled once and rebuilt only when the
-        // `SimConnection` set changes; propagation then reads the compiled table
-        // instead of re-snapshotting every wire each tick. Rebuild must land
-        // before propagate in the same FixedUpdate.
-        app.init_resource::<systems::propagate::CompiledWiring>();
-        app.add_systems(
-            FixedUpdate,
-            systems::propagate::rebuild_compiled_wiring
-                .before(systems::propagate::CosimSet::Propagate),
-        );
-
         // Pin the two wiring fabrics in a deterministic order. The hardware DAC
         // (`lunco_core::ControlDacSet` → `wire_system`: `DigitalPort` →
         // `PhysicalPort.value`) writes values the cosim resolver now exposes as

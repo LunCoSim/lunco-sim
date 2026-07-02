@@ -45,7 +45,10 @@ pub mod reconcile;
 
 pub mod subsystems;
 
+pub mod derived;
+
 pub use architecture::*;
+pub use derived::RebuildOnChange;
 pub use mocks::*;
 pub use telemetry::*;
 pub use log::*;
