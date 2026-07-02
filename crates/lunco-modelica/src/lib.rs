@@ -1353,6 +1353,25 @@ fn build_modelica_core(app: &mut App) {
     app.add_message::<ModelicaNotice>();
     app.add_message::<CompileRequested>();
 
+    // ── Document foundation (moved out of the UI plugin so a headless server
+    // journals + replicates Modelica edits, not just the GUI) ──────────────
+    // The registry (source-of-truth for open `.mo` docs), the egui-free edit
+    // funnel (`ModelicaApiEditPlugin` — already UI-free), the A3 journal-wire
+    // auto-bridge (`wire_modelica_journal_handle`, reactive/once), and the
+    // lifecycle-event drain. `ModelicaUiPlugin` no longer registers these; it
+    // adds core first, so the GUI still gets them. Guarded/idempotent so the
+    // UI's own `WorkbenchState`/registry init (a legacy safety net) is a no-op.
+    app.init_resource::<crate::state::ModelicaDocumentRegistry>();
+    if !app.is_plugin_added::<crate::api::ModelicaApiEditPlugin>() {
+        app.add_plugins(crate::api::ModelicaApiEditPlugin);
+    }
+    app.add_systems(Update, crate::doc_ops::drain_document_changes);
+    app.add_systems(
+        Update,
+        crate::doc_ops::wire_modelica_journal_handle
+            .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
+    );
+
     // Experiments / Fast Run: backend-agnostic registry + this crate's
     // ModelicaRunner binding. UI for the Run buttons and Experiments
     // panel is layered in `ui::experiments_panel` (Step 5+).

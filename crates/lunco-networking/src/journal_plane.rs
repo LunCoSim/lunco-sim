@@ -86,47 +86,67 @@ pub fn full_journal_msgs(journal: &JournalResource) -> Vec<JournalEntryMsg> {
     journal.with_read(|j| j.entries().filter_map(to_msg).collect())
 }
 
-// ── Inbound apply (client) ────────────────────────────────────────────────────
+// ── Inbound apply (both roles) ────────────────────────────────────────────────
 
-/// Apply an inbound host entry into the local journal, merging via
-/// `append_remote` (idempotent + convergent). Called by the transport router
-/// only on a client; the host is the sole source in this one-way phase.
+/// Apply an inbound peer entry into the local journal, merging via
+/// `append_remote` (idempotent + convergent). Called by the transport router on
+/// **both** roles: a client mirrors the host's edits, and the host merges each
+/// client's edits into its journal — from which [`broadcast_journal_entries`]
+/// then relays them out to the *other* clients (the host is the fan-out hub, so
+/// peer A's edit reaches peer B). Idempotent, so the host re-receiving an entry
+/// it already relayed, or a client seeing its own edit echoed back, is a no-op.
 pub fn apply_inbound_entry(journal: &JournalResource, msg: &JournalEntryMsg) {
     match serde_json::from_str::<JournalEntry>(&msg.json) {
         Ok(entry) => journal.with_write(|j| j.append_remote(entry)),
-        Err(e) => warn!("[journal-plane] bad entry from host: {e}"),
+        Err(e) => warn!("[journal-plane] bad inbound entry: {e}"),
     }
 }
 
-// ── Outbound produce (host) ────────────────────────────────────────────────────
+// ── Outbound produce (both roles) ──────────────────────────────────────────────
 
-/// Host: broadcast newly-appended journal entries to all clients so their
-/// journals converge with the host's. Ships the tail of the log past a
-/// monotonic cursor (resends from 0 if the log shrank — journal replaced —
-/// since clients dedupe by `EntryId`). Late joiners also get the full journal on
-/// connect ([`full_journal_msgs`]); the overlap is harmless (idempotent).
-/// Reliable `BulkData` lane (edit history, not per-tick state). Host-only.
+/// Broadcast newly-appended journal entries so every peer's journal converges.
+/// Runs on **both** roles (bidirectional), with role-asymmetric fan-out:
+///
+/// - **Host** — the relay hub: ships *every* new tail entry (its own authored
+///   edits *and* client edits merged in via [`apply_inbound_entry`]) to
+///   `NetworkTarget::All`, so peer A's edit reaches peer B. Overlap with the
+///   origin peer is harmless (dedup by `EntryId`).
+/// - **Client** — ships only its **own** authored entries to the host; it never
+///   relays entries it received (the host already holds those and does the
+///   fan-out), avoiding needless echo. Foreign entries still advance the cursor.
+///
+/// Ships the tail past a monotonic cursor (resends from 0 if the log shrank —
+/// journal replaced — since peers dedupe by `EntryId`). Late joiners also get
+/// the full journal on connect ([`full_journal_msgs`]); overlap is harmless.
+/// Reliable `BulkData` lane (edit history, not per-tick state).
 pub fn broadcast_journal_entries(
     role: Res<NetworkRole>,
     journal: Option<Res<JournalResource>>,
     mut outbox: ResMut<SyncOutbox>,
     mut sent: Local<usize>,
 ) {
-    if !role.is_host() {
+    if !role.is_networked() {
         return;
     }
     let Some(journal) = journal else {
         return;
     };
+    let is_host = role.is_host();
+    let me = journal.local_author();
     journal.with_read(|j| {
         let total = j.len();
         if total < *sent {
-            *sent = 0; // journal replaced → resend (clients dedupe by EntryId)
+            *sent = 0; // journal replaced → resend (peers dedupe by EntryId)
         }
         if total == *sent {
             return;
         }
         for entry in j.entries().skip(*sent) {
+            // A client relays nothing — only its own authored edits go up to the
+            // host, which is the sole fan-out hub. The host ships everything.
+            if !is_host && entry.id.author != me {
+                continue;
+            }
             if let Some(msg) = to_msg(entry) {
                 outbox
                     .0

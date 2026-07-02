@@ -13,6 +13,32 @@ use bevy::prelude::*;
 use crate::document::ModelicaOp;
 use crate::state::ModelicaDocumentRegistry;
 
+/// Drain the registry's pending doc-lifecycle rings into the canonical
+/// `lunco_doc_bevy` triggers each frame (Opened → Changed → Closed).
+///
+/// Lives here (egui-free `doc_ops`), added by `ModelicaCorePlugin`, so the
+/// headless server drains the rings too — otherwise a `--no-ui` host that edits
+/// Modelica grows the rings unbounded and never fires `DocumentChanged` (which
+/// drives engine re-sync + projection). Was UI-only, but names no UI type.
+///
+/// Fire order per frame: Opened, Changed, Closed. Opened-before-Changed means
+/// subscribers that key on "docs I've seen Opened for" can safely skip Changed
+/// events for unknown ids.
+pub(crate) fn drain_document_changes(
+    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut commands: Commands,
+) {
+    for doc in registry.drain_pending_opened() {
+        commands.trigger(lunco_doc_bevy::DocumentOpened::local(doc));
+    }
+    for doc in registry.drain_pending_changes() {
+        commands.trigger(lunco_doc_bevy::DocumentChanged::local(doc));
+    }
+    for doc in registry.drain_pending_closed() {
+        commands.trigger(lunco_doc_bevy::DocumentClosed::local(doc));
+    }
+}
+
 /// Whether `op` mutates the source in a way that requires the host's
 /// AST to be reparsed *before* the op can be applied — `ReplaceSource`
 /// is a text-edit op (no inline AST mutation), so the next op needs a

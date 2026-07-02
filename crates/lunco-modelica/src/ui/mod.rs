@@ -112,35 +112,6 @@ pub mod session_codec;
 
 use crate::ModelicaModel;
 
-/// Fan queued document lifecycle notifications out as observer triggers.
-///
-/// The registry accumulates ids on every mutation (allocate → Opened +
-/// Changed, `checkpoint_source` with new text → Changed, explicit
-/// `mark_changed` after `host_mut` undo/redo → Changed, `remove_document`
-/// → Closed). This system drains all three queues once per frame and
-/// emits the matching generic events from [`lunco_doc_bevy`] so any
-/// observer (panel re-render, diagram re-parse, plot variable-list
-/// refresh, Twin journal, …) reacts without polling generation
-/// counters.
-///
-/// Fire order per frame: Opened, Changed, Closed. Opened-before-Changed
-/// means subscribers that key on "track docs I've seen Opened for" can
-/// safely skip Changed events for unknown ids.
-fn drain_document_changes(
-    mut registry: ResMut<ModelicaDocumentRegistry>,
-    mut commands: Commands,
-) {
-    for doc in registry.drain_pending_opened() {
-        commands.trigger(lunco_doc_bevy::DocumentOpened::local(doc));
-    }
-    for doc in registry.drain_pending_changes() {
-        commands.trigger(lunco_doc_bevy::DocumentChanged::local(doc));
-    }
-    for doc in registry.drain_pending_closed() {
-        commands.trigger(lunco_doc_bevy::DocumentClosed::local(doc));
-    }
-}
-
 /// Shadow-sync observer: Modelica doc opened → register entry in the
 /// Workspace session.
 ///
@@ -758,12 +729,10 @@ impl Plugin for ModelicaUiPlugin {
         #[cfg(feature = "lunco-api")]
         app.add_plugins(crate::api_queries::ModelicaApiQueriesPlugin);
 
-        // Edit events — always registered so the GUI and tests can
-        // dispatch them. External API exposure is gated separately
-        // inside the plugin via `ApiVisibility` (off by default; pass
-        // `--api-expose-edits` to expose). See
-        // `crates/lunco-modelica/src/api_edits.rs` for the rationale.
-        app.add_plugins(crate::api::ModelicaApiEditPlugin);
+        // Edit events (`ModelicaApiEditPlugin`), the doc registry, the journal
+        // wire, and `drain_document_changes` now live in `ModelicaCorePlugin`
+        // (build_modelica_core) so a headless server journals Modelica edits
+        // too. UI adds core first, so they're already present here.
 
         app.init_resource::<WorkbenchState>()
             .init_resource::<ModelicaDocumentRegistry>()
@@ -848,15 +817,8 @@ impl Plugin for ModelicaUiPlugin {
             .add_observer(panels::package_browser::on_msl_became_ready)
             .add_systems(Update, cleanup_removed_documents)
             .add_systems(Update, link_added_simulators)
-            .add_systems(Update, drain_document_changes)
-            // A3 auto-bridge: hand the journal to the registry once it exists,
-            // so every host records edits (incl. undo/redo) automatically.
-            // Reactive (`resource_added`) — runs once, never polls.
-            .add_systems(
-                Update,
-                crate::doc_ops::wire_modelica_journal_handle
-                    .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
-            )
+            // `drain_document_changes` + the A3 journal-wire auto-bridge moved
+            // to `ModelicaCorePlugin` (so headless journals too).
             .add_systems(Update, commands::drain_open_file_results)
             // Mirror the active document's volatile fields (source,
             // detected_name) into the registry-by-doc lookup

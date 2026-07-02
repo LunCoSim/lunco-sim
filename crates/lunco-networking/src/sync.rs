@@ -1338,14 +1338,14 @@ pub fn drain_sync_inbox(
                 // Phase 3+: host skips streaming an asset the peer already has.
             }
             SyncEnvelope::JournalEntry(msg) => {
-                // Route to the journal plane. Client mirrors the host's edit
-                // history (merge via `append_remote`); host ignores inbound
-                // entries in this one-way phase (client→host is bidirectional,
-                // later). The plane owns the apply logic; the ferry only routes.
-                if !role.is_host() {
-                    if let Some(journal) = ctx.journal.as_ref() {
-                        crate::journal_plane::apply_inbound_entry(journal, &msg);
-                    }
+                // Route to the journal plane (bidirectional). BOTH roles merge
+                // the inbound entry via `append_remote`: a client mirrors the
+                // host's edits; the host merges each client's edits, from which
+                // its `broadcast_journal_entries` then relays them to the other
+                // clients (host = fan-out hub). Idempotent, so echoes are no-ops.
+                // The plane owns the apply logic; the ferry only routes.
+                if let Some(journal) = ctx.journal.as_ref() {
+                    crate::journal_plane::apply_inbound_entry(journal, &msg);
                 }
             }
         }
@@ -2703,7 +2703,8 @@ impl Plugin for SyncPlugin {
                 crate::scenario_sync::request_missing_assets,
                 crate::scenario_sync::reassemble_asset_chunks,
                 crate::scenario_sync::drain_persist_results,
-                // Journal plane: host streams new journal entries to clients.
+                // Journal plane: both roles stream new journal entries — the
+                // host relays all (fan-out hub), clients send their own edits.
                 crate::journal_plane::broadcast_journal_entries,
             ))
             // `gather_snapshot` runs on the sim clock (`FixedPostUpdate`): it only
