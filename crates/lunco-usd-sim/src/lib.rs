@@ -538,6 +538,7 @@ fn process_usd_sim_prims(
                 distance: max_distance,
                 out_of_range_mode,
                 visualize,
+                ..default()
             });
         }
         if reader.prim_attribute_value::<bool>(&sdf_path, "lunco:sensor:contact").is_some() {
