@@ -16,7 +16,7 @@ use bevy::math::DVec3;
 use bevy::camera::RenderTarget;
 use big_space::prelude::FloatingOrigin;
 use avian3d::prelude::{LinearVelocity, RigidBody, TranslationInterpolation, RotationInterpolation};
-use transform_gizmo_bevy::{GizmoCamera, GizmoTarget};
+use transform_gizmo_bevy::{GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoTarget};
 
 /// Tracks the previous parent-local position and metadata for drag lifecycle.
 #[derive(Component)]
@@ -230,6 +230,87 @@ pub fn restore_gizmo_dynamic(
             commands.entity(av_ent).insert(FloatingOrigin);
             info!("GIZMO: restored FloatingOrigin on avatar camera {:?}", av_ent);
         }
+    }
+}
+
+/// TEMP DIAGNOSTIC — logs, on every selection change, what each selected
+/// entity actually carries: whether it has a `GizmoTarget`, its LOCAL
+/// `Transform.translation` (what transform-gizmo-bevy reads and treats as
+/// world) versus its `GlobalTransform` world position, and the GridAnchor/
+/// SelectableRoot markers. Rovers get a gizmo; static USD buildings/landers
+/// don't — this pinpoints whether the difference is a missing target, a
+/// missing Transform, or a local≠world frame mismatch. Remove once resolved.
+pub fn debug_gizmo_selection(
+    selected: Res<crate::SelectedEntities>,
+    q: Query<(
+        Has<GizmoTarget>,
+        Option<&Transform>,
+        Option<&GlobalTransform>,
+        Has<lunco_core::GridAnchor>,
+        Has<lunco_core::SelectableRoot>,
+        Option<&Name>,
+    )>,
+    q_parents: Query<&ChildOf>,
+) {
+    if !selected.is_changed() {
+        return;
+    }
+    info!("[gizmo-dbg] selection changed: {} entities", selected.entities.len());
+    for e in &selected.entities {
+        match q.get(*e) {
+            Ok((gt, tf, gtf, ga, sr, name)) => info!(
+                "[gizmo-dbg]  SELECTED {e:?} name={:?} gizmo_target={gt} grid_anchor={ga} selectable_root={sr} local={:?} world={:?}",
+                name.map(|n| n.as_str()),
+                tf.map(|t| t.translation),
+                gtf.map(|g| g.translation()),
+            ),
+            Err(_) => info!("[gizmo-dbg]  SELECTED {e:?} NOT MATCHED — missing Transform/GlobalTransform"),
+        }
+        // Walk the ancestor chain so we can see WHERE (if anywhere) a
+        // SelectableRoot / GridAnchor sits above a leaf, and at what depth.
+        let mut cur = *e;
+        let mut depth = 0;
+        while let Ok(parent) = q_parents.get(cur) {
+            let p = parent.parent();
+            depth += 1;
+            if let Ok((_, tf, _, ga, sr, name)) = q.get(p) {
+                info!(
+                    "[gizmo-dbg]    ^{depth} {p:?} name={:?} grid_anchor={ga} selectable_root={sr} local={:?}",
+                    name.map(|n| n.as_str()),
+                    tf.map(|t| t.translation),
+                );
+            }
+            cur = p;
+            if depth >= 16 {
+                break;
+            }
+        }
+    }
+}
+
+/// App-owned replacement for transform-gizmo-bevy's default `mouse_interaction`
+/// driver (disabled via Cargo features). The crate's version wrote
+/// `GizmoDragStarted`/`GizmoDragging` on EVERY left press/hold — so the
+/// **Shift+left-click** used to *select* an object also armed a drag, and once
+/// the gizmo renders ON the object (its handles under the cursor) that grab
+/// fired immediately. Gating on `!Shift` keeps Shift+click for selection only;
+/// a **plain** left-drag on a handle still moves the object (the gizmo only
+/// engages when `hovered`, i.e. the cursor is actually over a handle). Matches
+/// the app's shift=select / plain=possess partition (see `on_scene_click_select`).
+pub fn drive_gizmo_drag_no_shift(
+    mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut drag_started: MessageWriter<GizmoDragStarted>,
+    mut dragging: MessageWriter<GizmoDragging>,
+) {
+    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+        return;
+    }
+    if mouse.just_pressed(MouseButton::Left) {
+        drag_started.write_default();
+    }
+    if mouse.pressed(MouseButton::Left) {
+        dragging.write_default();
     }
 }
 

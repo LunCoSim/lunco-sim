@@ -155,7 +155,13 @@ big_space = "0.12.0"
 leafwing-input-manager = "0.20.0"
 bevy_egui = { version = "0.39.1", features = ["serde"] }
 bevy-inspector-egui = "0.36.0"
-transform-gizmo-bevy = "0.9.0"
+# `mouse_interaction` (default) fires a gizmo drag on ANY left-press held over
+# the gizmo, with no handle check. Selection here is Shift+left-click and the
+# gizmo renders ON the selected object, so that driver made the selecting click
+# immediately grab the gizmo. We drop it and drive drags ourselves, gated to
+# plain (non-Shift) presses — see `gizmo::drive_gizmo_drag_no_shift`. Keep
+# `gizmo_picking_backend` (hover/handle hit-testing).
+transform-gizmo-bevy = { version = "0.9.0", default-features = false, features = ["gizmo_picking_backend"] }
 avian_pickup = "0.5.0-rc.1"
 chrono = "0.4.40"
 futures-lite = "2.3.0"
