@@ -97,6 +97,15 @@ impl DriveMix {
         }
         Self { kernel: "linear".to_string(), ports: Vec::new(), entries }
     }
+
+    /// A **scripted (rhai) kernel**: `kernel` names a `lunco_hooks` hook id (the
+    /// `lunco:driveKernel` attribute) instead of a built-in registry entry. The
+    /// hook computes the per-port `[-1,1]` outputs itself, so `ports`/`entries` are
+    /// empty. `apply_drive_mix` falls back to the hook when the name isn't a
+    /// registered built-in — the "control policy in rhai" path.
+    pub fn scripted(hook_id: &str) -> Self {
+        Self { kernel: hook_id.to_string(), ports: Vec::new(), entries: Vec::new() }
+    }
 }
 
 /// A control-allocation kernel: a **pure** map from command inputs + the vessel's

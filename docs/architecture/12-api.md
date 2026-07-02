@@ -196,8 +196,7 @@ Commands are typed — each domain crate defines its own command structs. The AP
 
 | Domain | Command | Description |
 |---|---|---|
-| **Mobility** | `DriveRover` | Set forward/steer inputs for a rover. |
-| | `BrakeRover` | Apply brakes to a rover. |
+| **Control** | `SetPorts` | Write a vessel's named input ports (`throttle`/`steer`/`brake` for a rover; any FSW/Modelica/hardware port for other vessels) — the one generic control command. |
 | **Avatar** | `PossessVessel` | Attach camera and control to a vessel. |
 | | `FollowTarget` | Chase-camera a target. |
 | | `FocusTarget` | Orbit-camera a target. |
@@ -219,15 +218,20 @@ Commands are typed — each domain crate defines its own command structs. The AP
 
 ### Example: Drive a Rover
 
+Control is a single generic command — `SetPorts` writes the vessel's named input
+ports. A wheeled rover exposes `throttle`/`steer`/`brake`; re-send each tick (the
+command carries no persistent setpoint). `DriveMix` (selected by the vehicle's
+Omniverse differential/steering schema, or a scripted `lunco:driveKernel`) then
+allocates those inputs to the actuator ports.
+
 ```bash
 curl -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{
-    "command": "DriveRover",
+    "command": "SetPorts",
     "params": {
       "target": "01ARZ7NDEKTSV4M9",
-      "forward": 0.8,
-      "steer": 0.0
+      "writes": [["throttle", 0.8], ["steer", 0.0]]
     }
   }'
 ```
@@ -238,10 +242,10 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 curl -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{
-    "command": "BrakeRover",
+    "command": "SetPorts",
     "params": {
       "target": "01ARZ7NDEKTSV4M9",
-      "intensity": 1.0
+      "writes": [["brake", 1.0]]
     }
   }'
 ```
@@ -441,7 +445,7 @@ app.run();
 There are **two response shapes** behind `POST /api/commands`:
 
 1. **Reflect Event commands** — side effects. `OpenFile`,
-   `MoveComponent`, `DriveRover`, etc. The executor reflects on the
+   `MoveComponent`, `SetPorts`, etc. The executor reflects on the
    type, deserialises params, and triggers the matching `Event` for
    domain observers to handle. Returns `command_accepted` (with a
    request id) immediately; commands that report a result also record

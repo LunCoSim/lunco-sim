@@ -142,7 +142,7 @@ Representative commands already covering the user's surface:
 
 | Subsystem | Commands (file:line) |
 |---|---|
-| Rover/vehicle | `DriveRover`, `BrakeRover` (`lunco-mobility/src/lib.rs:613,629`) |
+| Rover/vehicle | `SetPorts` — writes named input ports (`throttle`/`steer`/`brake`); `DriveMix` allocates them to actuators (`lunco-cosim/src/lib.rs`, `lunco-mobility::apply_drive_mix`) |
 | Camera/control | `PossessVessel`, `ReleaseVessel`, `FocusTarget`, `FollowTarget` (`lunco-avatar/src/commands.rs`) |
 | Scene/USD | `LoadScene`, `ClearScene` (`lunco-usd-sim/src/cosim.rs:814,884`) |
 | Scene editing | `SpawnEntity`, `MoveEntity`, `SetObjectProperty`, `SelectEntity` (`lunco-sandbox-edit/src/commands.rs`) |
@@ -166,7 +166,7 @@ Representative commands already covering the user's surface:
 | **rhai → World access** | ❌ | `ScriptBackend::eval(&self, &str)` is pure; no World, no host fns |
 | **Persistent script state across ticks** | ❌ | `eval` builds a fresh `Engine` per call; `run_scripted_models` recompiles every tick |
 | **Temporal sequencing (wait/over-time)** | ❌ | no coroutine/yield/await/scheduler anywhere |
-| **Navigation: waypoints/goals/arrival/path-follow** | ❌ | zero hits; only camera follow exists. `DriveRover` is raw forward/steer, re-commanded every tick (no setpoint) |
+| **Navigation: waypoints/goals/arrival/path-follow** | ❌ | zero hits; only camera follow exists. `SetPorts` writes raw `throttle`/`steer`, re-commanded every tick (no setpoint) |
 | **By-name entity lookup** | ❌ | must `ListEntities` + match `Name` string |
 | **Timer "after N seconds"** | ❌ | derive from `SimTick`×`SECS_PER_TICK` or `WorldTime` |
 | Telemetry subscribe (events to script) | ⚠️ stub | `executor.rs:584` returns "Subscription created" |
@@ -224,7 +224,7 @@ command names.
 Ship a standard `prelude.rhai` (script, not Rust) wrapping raw `cmd()` into
 friendly verbs — so authoring stays nice without per-command Rust code:
 ```rhai
-fn drive(r, fwd, steer) { cmd("DriveRover", #{ target: r, forward: fwd, steer: steer }); }
+fn drive(r, fwd, steer) { cmd("SetPorts", #{ target: r, writes: [["throttle", fwd], ["steer", steer]] }); }
 fn possess(r)           { cmd("PossessVessel", #{ target: r }); }
 fn load(path)           { cmd("LoadScene", #{ path: path, root_prim: "" }); }
 fn set_prop(id, k, v)   { cmd("SetObjectProperty", #{ target: id, key: k, value: v }); }
@@ -243,7 +243,7 @@ entire capability surface — nothing reachable that isn't a vetted command.
 
 ### 4.1 Why a plain script won't work
 rhai is synchronous with **no async/await** (Rune has it; rhai doesn't), there is
-**no coroutine/yield/wait**, and `DriveRover` carries no persistent setpoint — it
+**no coroutine/yield/wait**, and `SetPorts` carries no persistent setpoint — it
 must be re-emitted every tick. So *"drive to checkpoint, wait until arrived, then
 next goal"* cannot be a blocking script. Two valid models:
 
@@ -265,7 +265,7 @@ let i = 0;
 fn on_tick(ctx) {
   let r = ctx.rover;
   if arrived(r, goals[i], 2.0) { i += 1; if i >= goals.len() { return done(); } }
-  steer_toward(r, goals[i]);           // emits DriveRover this tick
+  steer_toward(r, goals[i]);           // emits SetPorts(throttle/steer) this tick
 }
 fn on_event(name, data) { if name == "obstacle" { /* replan */ } }
 ```
@@ -287,15 +287,15 @@ Both current paths are one-shot/recompile-every-tick. Layer B needs
 
 ## 5. Navigation primitives (must build — none exist)
 
-`DriveRover` is the only actuator (raw forward/steer → DAC → wheel physics).
-Everything goal-shaped must be built. Minimal native set (registered as rhai
-verbs), all deterministic, emitting `DriveRover` each tick:
+`SetPorts` is the only actuator (writes `throttle`/`steer` inputs → `DriveMix` →
+DAC → wheel physics). Everything goal-shaped must be built. Minimal native set
+(registered as rhai verbs), all deterministic, emitting `SetPorts` each tick:
 
 ```rust
 distance(a, b) -> f64                 // world_vector(a,b).length()  (coords.rs:109)
 heading_error(rover, target) -> f64   // chassis forward vs vector-to-target
 arrived(rover, pos, tol) -> bool      // distance < tol
-steer_toward(rover, target)           // P-controller: heading->steer, dist->throttle, emit DriveRover
+steer_toward(rover, target)           // P-controller: heading->steer, dist->throttle, emit SetPorts
 ```
 `world_position`/`world_vector` already exist (`lunco-core/src/coords.rs:63,109`)
 and handle the floating-origin (big_space) correctly — use them, don't read raw
@@ -310,7 +310,7 @@ authors the waypoint list.
 ## 6. Determinism & networking
 
 Run scenarios **host-authoritative** (server/owner): the scenario emits
-`DriveRover`/etc., which already replicate via the `CommandBus` `SyncChannel` and
+`SetPorts`/etc., which already replicate via the `CommandBus` `SyncChannel` and
 client prediction (`AppliedInputSeq`, `OwnedInputLog`). This avoids divergence —
 clients don't run scenario logic, they receive its command stream. Seed any
 randomness explicitly (rhai `rand` left OFF) so a re-run reproduces. This matches
@@ -351,7 +351,7 @@ So tighter integration IS needed, as a **second, complementary channel**:
 |---|---|---|
 | Direction | writes | reads (+ scoped local writes) |
 | Mechanism | `cmd()` → `ReflectEvent::trigger` | `AppTypeRegistry` + `ReflectComponent` get/set |
-| Use for | DriveRover, LoadScene, Spawn, SetObjectProperty — anything authoritative/replicated/undoable | position, heading, sensors, cosim/Modelica vars, arbitrary `#[reflect]` fields, entity iteration |
+| Use for | SetPorts, LoadScene, Spawn, SetObjectProperty — anything authoritative/replicated/undoable | position, heading, sensors, cosim/Modelica vars, arbitrary `#[reflect]` fields, entity iteration |
 | Latency | async (poll result) | **synchronous** during eval |
 | Replicated? | yes (CommandBus SyncChannel) | no (local read) |
 | Cost | JSON+reflect+observer per call | direct reflected field access (no JSON) |
@@ -540,7 +540,7 @@ fn on_event(e) {                       // e is a TelemetryEvent
   if e.name == "TRIGGER_ENTER" && e.data == goals[i] {   // (a) mnemonic + zone id
     i += 1;
     if i >= goals.len() { emit("OBJECTIVE_COMPLETE", Severity::Info, rover_id); }
-    else { cmd("DriveRover", #{ target: rover_id, forward: 1.0 }); }
+    else { cmd("SetPorts", #{ target: rover_id, writes: [["throttle", 1.0]] }); }
   }
 }
 ```

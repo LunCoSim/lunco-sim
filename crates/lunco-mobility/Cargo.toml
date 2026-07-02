@@ -7,6 +7,10 @@ edition = "2021"
 bevy = { workspace = true }
 avian3d = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+# Language-neutral hook registry — backs the scripted (rhai) drive kernel:
+# `apply_drive_mix` falls back to a hook named by `DriveMix.kernel` when it isn't a
+# built-in `ControlKernelRegistry` entry. Dependency-free (no rhai/bevy).
+lunco-hooks = { path = "../lunco-hooks" }
 lunco-time = { path = "../lunco-time" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-hardware = { path = "../lunco-hardware" }

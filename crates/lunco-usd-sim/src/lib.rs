@@ -12,6 +12,7 @@
 //! | `PhysxVehicleTankDifferentialAPI` | `DriveMix { kernel: "skid" }` | Skid/tank steering |
 //! | `PhysxVehicleAckermannSteeringAPI` | `DriveMix { kernel: "linear" }` + steering port | Ackermann steering |
 //! | `lunco:driveMix` (string) | `DriveMix { kernel: "linear" }` | Arbitrary per-wheel linear mix |
+//! | `lunco:driveKernel` (hook id) | `DriveMix { kernel: <hook_id> }` | Scripted (rhai) drive kernel — hook computes per-port outputs |
 //! | `PhysxVehicleWheelAPI` | `WheelRaycast` *or* `MotorActuator` + `RigidBody` | Wheel — kind decided by joint authoring |
 //!
 //! ## Wheel kind: discriminated by standard authoring
@@ -284,6 +285,8 @@ pub struct PendingDifferential {
 ///    (`drive_left`, `drive_right`, `steering`, `brake`), plus `Vessel`.
 /// 2. **Detects `PhysxVehicleTankDifferentialAPI`** → `DriveMix { kernel: "skid" }`.
 /// 3. **Detects `PhysxVehicleAckermannSteeringAPI`** → `DriveMix { kernel: "linear" }` + steering.
+///    (A `lunco:driveKernel` attribute overrides both → `DriveMix { kernel: <hook_id> }`,
+///    a scripted rhai kernel — the imperative analog of an Omniverse OmniGraph controller.)
 /// 4. **Detects `PhysxVehicleWheelAPI`** → Sets up wheel based on whether an authored
 ///    `PhysicsRevoluteJoint` targets the wheel:
 ///    - **Joint-based** (joint authored): `RigidBody`, `Collider`, `MotorActuator` (constraint built by `lunco-usd-avian`)
@@ -799,7 +802,15 @@ fn process_usd_sim_prims(
         // steering schema the asset declares (Omniverse PhysX Vehicle names) or an
         // explicit `lunco:driveMix` linear table. There is NO per-arch Rust
         // component/branch — `apply_drive_mix` looks the named kernel up and runs it.
-        let drive_mix = if let Some(spec) =
+        let drive_mix = if let Some(hook_id) =
+            reader.prim_attribute_value::<String>(&sdf_path, "lunco:driveKernel")
+        {
+            // Scripted (rhai) kernel: the hook computes the per-port outputs, so it
+            // takes precedence over the built-in skid/linear schemas. `apply_drive_mix`
+            // falls back to the `lunco_hooks` hook named by `DriveMix.kernel`.
+            info!("Scripted drive kernel '{}' for {}", hook_id, prim_path.path);
+            Some(DriveMix::scripted(&hook_id))
+        } else if let Some(spec) =
             reader.prim_attribute_value::<String>(&sdf_path, "lunco:driveMix")
         {
             info!("Explicit linear driveMix for {}", prim_path.path);

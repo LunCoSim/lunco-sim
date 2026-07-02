@@ -3,8 +3,9 @@
 //! The hook substrate ([`lunco_hooks`]) lets internal decisions be authored in
 //! rhai: the convergent **merge** order ([`lunco_twin_journal::MergePolicy`]), the
 //! **authorization** gate ([`lunco_core::session::AUTHORIZE_HOOK`]), and per-vehicle
-//! **drive kernels** (a scripted `ControlKernel`, keyed by hook id — the
-//! [`lunco_core::kernels::ControlKernelRegistry`] consumer is deferred). But a scripted
+//! **drive kernels** (a `lunco:driveKernel` hook id in [`lunco_core::kernels::DriveMix`];
+//! `apply_drive_mix` falls back to the hook when the name isn't a built-in kernel).
+//! But a scripted
 //! policy is only correct if **every peer runs the identical one** — most sharply
 //! for the merge policy, whose determinism contract is that all peers linearize
 //! history the same way or their scenes diverge.
@@ -33,7 +34,8 @@ pub enum PolicyKind {
     Merge,
     /// The RBAC authorization gate ([`lunco_core::session::AUTHORIZE_HOOK`]).
     Authorize,
-    /// A vehicle drive kernel — a scripted `ControlKernel`, keyed by hook id.
+    /// A vehicle drive kernel — a rhai hook named by `lunco:driveKernel` /
+    /// [`lunco_core::kernels::DriveMix::kernel`], consumed by `apply_drive_mix`.
     DriveKernel,
 }
 
@@ -94,8 +96,8 @@ pub struct ScriptedPolicyMsg {
 /// Compile+register the policy's rhai hook and **activate** it: a `Merge` policy
 /// also flips the journal's [`MergeStrategy`]; `Authorize` registers under the
 /// gate's hook id so [`lunco_core::session::authorize`] consults it; a
-/// `DriveKernel` just registers the rhai hook by id, available to a scripted
-/// `ControlKernel` (registry consumer deferred). Re-registering hot-replaces
+/// `DriveKernel` just registers the rhai hook by id; `apply_drive_mix` invokes it
+/// for any vessel whose `DriveMix.kernel` names that id. Re-registering hot-replaces
 /// (idempotent for a stable source).
 pub fn apply_policy(def: &PolicyDef, journal: Option<&JournalResource>) -> Result<(), String> {
     let id = def.kind.effective_hook_id(&def.hook_id);

@@ -929,13 +929,6 @@ fn apply_drive_mix(
 
         drive_diag!("[drive-diag] apply_drive_mix: target {:?} kernel={} throttle={} steer={} brake={} ports={:?}", entity, mix.kernel, throttle, steer, fsw.brake_active, fsw.port_map);
 
-        let Some(kernel) = registry.get(&mix.kernel) else {
-            if unknown.insert(mix.kernel.clone()) {
-                warn!("[apply_drive_mix] unknown drive kernel '{}' on {:?} — vessel not actuated", mix.kernel, entity);
-            }
-            continue;
-        };
-
         // While braking, force throttle/steer to 0 and drive the brake gate (1.0)
         // so brake-coefficient ports engage and drive ports zero out — matching the
         // old per-branch behaviour, now uniform across kernels.
@@ -945,13 +938,55 @@ fn apply_drive_mix(
             lunco_core::kernels::DriveInputs { throttle, steer, brake: 0.0 }
         };
 
-        for (port, value) in kernel(inputs, mix) {
+        // Allocate command → normalized port writes. A built-in registry kernel
+        // (`skid`/`linear`/…) wins; otherwise `mix.kernel` names a scripted (rhai)
+        // drive kernel — a `lunco_hooks` hook that computes the per-port outputs
+        // itself ("control policy in rhai", `lunco:driveKernel`). An unknown name
+        // with no matching hook leaves the vessel un-actuated (fail-safe coast).
+        let outputs = match registry.get(&mix.kernel) {
+            Some(kernel) => kernel(inputs, mix),
+            None => {
+                // Scripted kernel: hand the hook the vessel's real command surface
+                // (`fsw.inputs`, un-gated — the script owns its brake policy), not the
+                // built-in kernels' fixed throttle/steer/brake projection.
+                let scripted = scripted_drive_mix(&mix.kernel, &fsw.inputs);
+                if scripted.is_empty() && unknown.insert(mix.kernel.clone()) {
+                    warn!("[apply_drive_mix] unknown drive kernel '{}' on {:?} — no built-in and no rhai hook; vessel not actuated", mix.kernel, entity);
+                }
+                scripted
+            }
+        };
+
+        for (port, value) in outputs {
             if let Some(&port_id) = fsw.port_map.get(&port) {
                 if let Ok(mut p) = q_ports.get_mut(port_id) {
                     p.raw_value = (value * full).round().clamp(-full, full) as i16;
                 }
             }
         }
+    }
+}
+
+/// Invoke a **scripted (rhai) drive kernel** by hook id. Hands the hook the vessel's
+/// **actual command surface** — its declared [`FlightSoftware::inputs`] map, keyed by
+/// whatever ports that vehicle accepts (a rover's `throttle`/`steer`/`brake`, a
+/// lander's `throttle`/`pitch`/`roll`/`yaw`, …) — NOT a fixed Rust key set. The
+/// command vocabulary is data, so a scripted kernel reads exactly the ports the
+/// vessel exposes and the script owns its own policy (incl. how `brake` gates).
+/// Reads back a `port → value` map in `[-1, 1]` (clamped defensively). Empty on an
+/// absent or faulted hook: **fail-safe** coast (ports left untouched — the brake
+/// port + `brake_active` friction cone are already applied upstream regardless).
+/// Host-side; a predicted client needs the identical hook, so the scripted-policy
+/// plane (`lunco_networking`) distributes + registers it on every peer.
+fn scripted_drive_mix(hook_id: &str, inputs: &std::collections::HashMap<String, f64>) -> Vec<(String, f64)> {
+    use lunco_hooks::HookValue;
+    let ctx = HookValue::map(inputs.iter().map(|(k, v)| (k.clone(), HookValue::Float(*v))));
+    match lunco_hooks::invoke(hook_id, &[ctx]) {
+        Some(Ok(HookValue::Map(entries))) => entries
+            .into_iter()
+            .filter_map(|(k, v)| v.as_f64().map(|f| (k, f.clamp(-1.0, 1.0))))
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -1015,8 +1050,49 @@ mod force_law_tests {
     }
 
     // (drive-mix parse + kernel projection now live in `lunco_core::kernels`.)
-    // (scripted rhai drive kernels will re-attach to the `ControlKernelRegistry`,
-    //  not a per-vessel component — the consumer is deliberately deferred.)
+
+    // ── scripted (rhai) drive kernel: hook-driven mixing, by DriveMix.kernel id ──
+    #[test]
+    fn scripted_drive_mix_maps_command_to_ports() {
+        use lunco_hooks::{HookResult, HookValue, RegisteredHook, ScriptHook};
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        // A native stand-in for a rhai kernel: tank mix over the vessel's OWN command
+        // ports (a rover exposes `throttle`/`steer`) — left=t+s, right=t-s.
+        struct TankKernel;
+        impl ScriptHook for TankKernel {
+            fn invoke(&self, args: &[HookValue]) -> HookResult {
+                let t = args[0].get("throttle").and_then(HookValue::as_f64).unwrap_or(0.0);
+                let s = args[0].get("steer").and_then(HookValue::as_f64).unwrap_or(0.0);
+                Ok(HookValue::map([
+                    ("drive_left", HookValue::Float((t + s).clamp(-1.0, 1.0))),
+                    ("drive_right", HookValue::Float((t - s).clamp(-1.0, 1.0))),
+                ]))
+            }
+        }
+        lunco_hooks::register(RegisteredHook {
+            id: "test.kernel.tank".into(),
+            backend: "rust".into(),
+            deterministic: true,
+            hook: Arc::new(TankKernel),
+        });
+
+        let inputs: HashMap<String, f64> =
+            [("throttle".into(), 1.0), ("steer".into(), 0.5), ("brake".into(), 0.0)].into();
+        let mut out = scripted_drive_mix("test.kernel.tank", &inputs);
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        // t+s = 1.5 → clamped to 1.0; t-s = 0.5.
+        assert_eq!(
+            out,
+            vec![("drive_left".to_string(), 1.0), ("drive_right".to_string(), 0.5)]
+        );
+
+        // Absent hook → empty (fail-safe coast; ports left untouched).
+        assert!(scripted_drive_mix("test.kernel.absent", &inputs).is_empty());
+
+        lunco_hooks::unregister("test.kernel.tank");
+    }
 
     // ── drive_force_mag: reverse must work ──────────────────────────────────
     #[test]
