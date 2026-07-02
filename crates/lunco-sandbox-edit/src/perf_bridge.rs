@@ -15,12 +15,19 @@ use lunco_workbench::perf_hud::{PerfHudSettings, PerfStats};
 /// and a sampler that copies `step_time` into `PerfStats.physics_ms`
 /// when the HUD is enabled.
 ///
-/// `PhysicsTotalDiagnosticsPlugin` *does* show up as a per-step
-/// spike source in profiling (~30 ms bursts every few seconds),
-/// but it's only ~10% of avian's overall spike contribution and
-/// gating it on the persisted HUD-at-startup flag confused users
-/// who toggle the HUD at runtime ("phys reads zero"). Always-on is
-/// the better tradeoff.
+/// Cost note (don't be fooled by profiles): `PhysicsTotalDiagnosticsPlugin`
+/// *appears* as a ~30 ms per-step spike, but it does not cause it. Its systems
+/// are microseconds (`Instant::now`/`elapsed` + one resource write); they
+/// bracket the physics step (`PhysicsStepSystems::First`/`Last`), so the span
+/// merely *measures* the real step cost — the spike is the step itself.
+/// Removing/gating the plugin removes the measurement, not the cost (no FPS
+/// gain), and avian 0.6.1 exposes no runtime toggle: the step-timing system is
+/// welded into the core `PhysicsStepSystems::Last` set, so it can't be
+/// run-condition-gated from outside without gating real physics, and Bevy
+/// plugins can't be removed post-startup. A prior build-time gate on the HUD
+/// flag also broke runtime toggling ("phys reads zero", no data on flip).
+/// Conclusion: keep the plugin always-on; gate only our own `sample_physics_step`
+/// below (which reads the always-live resource, so it's correct-on-toggle).
 pub struct PerfBridgePlugin;
 
 impl Plugin for PerfBridgePlugin {
