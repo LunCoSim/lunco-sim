@@ -218,6 +218,30 @@ pub fn scene_ops_after(
     me: &AuthorId,
     already: &HashSet<EntryId>,
 ) -> Vec<(EntryId, serde_json::Value)> {
+    domain_ops_after(journal, base, me, already, DomainKind::Usd)
+}
+
+/// The domain-parameterized core of [`scene_ops_after`]: select the not-yet-applied
+/// `Op` entries of a GIVEN `domain`, authored by a peer other than `me`, strictly
+/// after `base`, **in convergent [`merged_order_ids`](lunco_twin_journal::Journal::merged_order_ids)
+/// order** — so the selection honors the active [`MergeStrategy`] (default or a
+/// scripted merge policy) identically for every domain.
+///
+/// This is the single strategy-honoring selection every document domain must
+/// route its journal replay through. USD does today ([`scene_ops_after`]); when
+/// networked **Modelica** replay is wired (the deferred multi-doc / cross-peer
+/// `DocumentId` follow-up — see `lunco_sandbox::replay_scenario_journal`), it MUST
+/// select via `domain_ops_after(.., DomainKind::Modelica)` and feed
+/// [`lunco_modelica`]'s `replay_op`, NOT iterate raw `entries()` (insertion order),
+/// or Modelica state would diverge under a scripted merge policy. Verified for both
+/// domains by the `scripted_policy_reorders_*_replay` tests.
+pub fn domain_ops_after(
+    journal: &JournalResource,
+    base: Option<&EntryId>,
+    me: &AuthorId,
+    already: &HashSet<EntryId>,
+    domain: DomainKind,
+) -> Vec<(EntryId, serde_json::Value)> {
     journal.with_read(|j| {
         let order = j.merged_order_ids();
         let start = match base {
@@ -238,7 +262,7 @@ pub fn scene_ops_after(
                     return None; // client's own edit — already applied locally
                 }
                 match &e.kind {
-                    EntryKind::Op { domain: DomainKind::Usd, op, .. } => {
+                    EntryKind::Op { domain: d, op, .. } if *d == domain => {
                         Some((id.clone(), op.clone()))
                     }
                     _ => None,
@@ -468,5 +492,62 @@ mod tests {
         assert_eq!(vals(&scene_ops_after(&journal, None, &viewer, &none)), vec![1, 5]);
 
         lunco_hooks::unregister("test.net.author_desc");
+    }
+
+    /// The Modelica replay leg (when wired) honors the scripted merge policy for
+    /// free, because it routes through the SAME strategy-honoring selection as USD
+    /// — only the domain filter differs. Concurrent Modelica ops reorder under the
+    /// author-descending policy exactly like the USD ones, and USD ops are excluded
+    /// from a Modelica selection.
+    #[test]
+    fn scripted_policy_reorders_modelica_replay() {
+        use lunco_doc::DocumentId;
+        use lunco_twin_journal::{AuthorTag, TwinId};
+
+        let viewer = AuthorId::new("viewer");
+        let journal = JournalResource::new(TwinId::new("t"), viewer.clone());
+        let mk = |author: &str, domain: DomainKind, v: i32| JournalEntry {
+            id: EntryId { author: AuthorId::new(author), lamport: 1 },
+            parents: vec![],
+            author: AuthorTag { user: author.into(), tool: "t".into() },
+            at_ms: 0,
+            twin: TwinId::new("t"),
+            doc: DocumentId::new(1),
+            kind: EntryKind::Op {
+                domain,
+                op: serde_json::json!({ "v": v }),
+                inverse: serde_json::json!({}),
+            },
+            change_set: None,
+        };
+        journal.with_write(|j| {
+            j.append_remote(mk("aaa", DomainKind::Modelica, 1));
+            j.append_remote(mk("bbb", DomainKind::Modelica, 5));
+            j.append_remote(mk("ccc", DomainKind::Usd, 9)); // other domain — excluded
+        });
+        let none = HashSet::new();
+        let vals = |ops: &[(EntryId, serde_json::Value)]| {
+            ops.iter().map(|(_, v)| v["v"].as_i64().unwrap()).collect::<Vec<_>>()
+        };
+        let modelica = |j: &JournalResource| {
+            vals(&domain_ops_after(j, None, &viewer, &none, DomainKind::Modelica))
+        };
+
+        // Default: author ascending, USD op filtered out → [1, 5].
+        assert_eq!(modelica(&journal), vec![1, 5]);
+
+        // Under the author-descending scripted policy the concurrent Modelica ops
+        // flip → [5, 1] (same reordering the USD leg gets — one selection path).
+        activate_scripted_merge_policy(
+            &journal,
+            "test.net.modelica_desc",
+            "cmp",
+            "fn cmp(a, b) { if a.author < b.author { 1 } else if a.author > b.author { -1 } else { 0 } }",
+        )
+        .unwrap();
+        assert_eq!(modelica(&journal), vec![5, 1]);
+
+        use_default_merge_policy(&journal);
+        lunco_hooks::unregister("test.net.modelica_desc");
     }
 }
