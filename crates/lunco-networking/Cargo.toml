@@ -17,7 +17,7 @@ required-features = ["networking"]
 default = []
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
-networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess", "dep:uuid", "dep:sha2", "dep:cid", "dep:multihash-codetable", "dep:crossbeam-channel", "dep:lunco-twin", "dep:lunco-twin-journal", "dep:lunco-hooks", "dep:lunco-hooks-rhai"]
+networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess", "dep:uuid", "dep:sha2", "dep:lunco-hash", "dep:crossbeam-channel", "dep:lunco-twin", "dep:lunco-twin-journal", "dep:lunco-hooks", "dep:lunco-hooks-rhai"]
 # Client-prediction diagnostics (render-jitter / velocity / correction census in
 # `diagnostics.rs`). OFF by default → not compiled into normal/shipping builds.
 # Build with it when chasing netcode jitter; once compiled it's active unless
@@ -109,11 +109,10 @@ sha2 = { workspace = true, optional = true }
 crossbeam-channel = { workspace = true, optional = true }
 # IPLD content-addressing (IPFS interop): asset ids are real CIDv1
 # (raw codec + sha2-256 multihash), resolvable by `ipfs get`/`ipfs pin`.
-# Wire form is canonical CID bytes; the `cid` crate is used at
-# build/parse/render boundaries (incl. base32 string for debug + the
-# JSON cache sidecar).
-cid = { workspace = true, optional = true }
-multihash-codetable = { workspace = true, optional = true }
+# Minted through the shared hashing substrate's CID tier (one canonical impl,
+# shared with the precompute disk cache) — it re-exports the `Cid` type so this
+# crate no longer depends on `cid`/`multihash-codetable` directly.
+lunco-hash = { path = "../lunco-hash", features = ["cid"], optional = true }
 # URL-dialing WebTransport client IO (`wt_client`): lets the browser/native connect by
 # HOSTNAME (`https://sandbox.lunco.space:5888`) so a real CA cert validates with no
 # digest — lightyear's built-in IO only dials `https://{ip}`.

@@ -122,29 +122,27 @@ fn bake_or_load(grid: &HeightGrid) -> DerivedMaps {
 /// simply never matched (content-addressed → no explicit invalidation).
 const CACHE_FORMAT_VERSION: u64 = 1;
 
-/// Content hash of the DEM heights + every bake parameter → the cache key. FNV-1a
-/// fold (no JSON / no allocation), matching the "hash, don't serialize" idiom.
+/// Content hash of the DEM heights + every bake parameter → the cache key.
+/// Word-wise FNV-1a fold via the shared [`lunco_hash::Fnv1a`] (no JSON / no
+/// allocation), matching the "hash, don't serialize" idiom. Byte-identical to the
+/// former inline fold, so pre-existing cache entries stay valid.
 fn cache_key(grid: &HeightGrid) -> String {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a offset basis
-    let mut fold = |x: u64| {
-        h ^= x;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3); // FNV-1a prime
-    };
-    fold(CACHE_FORMAT_VERSION);
-    fold(grid.res as u64);
-    fold(grid.half_extent.to_bits() as u64);
-    fold(LAYER_RES as u64);
-    fold(AO_DIRS as u64);
-    fold(AO_STEPS as u64);
-    fold(AO_RADIUS_FRAC.to_bits());
-    fold(ROUGH_BASE.to_bits() as u64);
-    fold(ROUGH_STEEP_RAD.to_bits() as u64);
-    fold(SAFE_RAD.to_bits() as u64);
-    fold(CLIFF_RAD.to_bits() as u64);
+    let mut h = lunco_hash::Fnv1a::new();
+    h.write_u64(CACHE_FORMAT_VERSION);
+    h.write_u64(grid.res as u64);
+    h.write_u64(grid.half_extent.to_bits() as u64);
+    h.write_u64(LAYER_RES as u64);
+    h.write_u64(AO_DIRS as u64);
+    h.write_u64(AO_STEPS as u64);
+    h.write_u64(AO_RADIUS_FRAC.to_bits());
+    h.write_u64(ROUGH_BASE.to_bits() as u64);
+    h.write_u64(ROUGH_STEEP_RAD.to_bits() as u64);
+    h.write_u64(SAFE_RAD.to_bits() as u64);
+    h.write_u64(CLIFF_RAD.to_bits() as u64);
     for &v in &grid.heights {
-        fold(v.to_bits());
+        h.write_u64(v.to_bits());
     }
-    format!("{h:016x}")
+    format!("{:016x}", h.finish())
 }
 
 /// `cache://terrain/derived/<key>/` on disk (shared `cache_dir`).

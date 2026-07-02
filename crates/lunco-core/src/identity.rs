@@ -40,15 +40,10 @@ pub enum Provenance {
     Local,
 }
 
-/// FNV-1a 64-bit. Fixed and identical on every platform — the whole point.
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for &b in bytes {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
+/// FNV-1a 64-bit — the workspace fast-hash, byte-locked to the proto-tests. The
+/// impl lives in `lunco-hash` (shared with terrain cache keys + precompute); this
+/// alias keeps the call sites below terse and the wire-lock contract obvious.
+use lunco_hash::fnv1a64;
 
 /// Fold 64 bits into the 53-bit space, mixing high bits down so we don't just
 /// discard entropy. Must stay identical to the proto-tests reference.

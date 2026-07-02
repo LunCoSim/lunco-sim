@@ -1,0 +1,24 @@
+[package]
+name = "lunco-hash"
+version = "0.1.0"
+edition = "2021"
+description = "The workspace hashing substrate — two tiers behind one field-streaming front-end. Fast tier: FNV-1a change/cache keys (dependency-free, wasm-clean, byte-locked). CID tier (feature `cid`): CIDv1 raw+sha2-256 content addresses for on-disk/on-wire content. Draws the firewall between process-local ephemeral keys and cross-peer persisted content."
+
+[dependencies]
+# Fast tier is deliberately dependency-free so the lowest-level crates
+# (lunco-core identity, terrain cache keys) can pull it without weight or a
+# cycle, and it stays wasm-clean.
+
+# CID tier — only when `cid` is enabled. Same pins the networking scenario
+# distribution already uses, so a CID minted here is byte-identical to one minted
+# there (and to `ipfs add --raw-leaves --cid-version 1`).
+cid = { workspace = true, optional = true }
+multihash-codetable = { workspace = true, optional = true }
+
+[features]
+default = []
+# Content-addressing tier: `content::cid()` / `content::cid_from_bytes()`.
+cid = ["dep:cid", "dep:multihash-codetable"]
+
+[lints]
+workspace = true

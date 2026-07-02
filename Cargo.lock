@@ -6933,6 +6933,7 @@ dependencies = [
  "getrandom 0.2.17",
  "leafwing-input-manager",
  "lunco-command-macro",
+ "lunco-hash",
  "lunco-hooks",
  "serde",
  "serde_json",
@@ -7014,6 +7015,14 @@ dependencies = [
  "avian3d",
  "bevy",
  "lunco-core",
+]
+
+[[package]]
+name = "lunco-hash"
+version = "0.1.0"
+dependencies = [
+ "cid",
+ "multihash-codetable",
 ]
 
 [[package]]
@@ -7125,7 +7134,6 @@ dependencies = [
  "bevy_egui",
  "big_space",
  "bincode 1.3.3",
- "cid",
  "crossbeam-channel",
  "getrandom 0.2.17",
  "getrandom 0.4.2",
@@ -7143,6 +7151,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-fsw",
+ "lunco-hash",
  "lunco-hooks",
  "lunco-hooks-rhai",
  "lunco-obstacle-field",
@@ -7153,7 +7162,6 @@ dependencies = [
  "lunco-twin-journal",
  "lunco-workbench",
  "lunco-workspace",
- "multihash-codetable",
  "rustls-pemfile",
  "serde",
  "serde_json",
@@ -7383,6 +7391,7 @@ dependencies = [
  "lunco-api",
  "lunco-assets",
  "lunco-core",
+ "lunco-hash",
  "lunco-materials",
  "lunco-obstacle-field",
  "lunco-storage",

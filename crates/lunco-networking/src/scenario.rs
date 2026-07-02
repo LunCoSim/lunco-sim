@@ -41,29 +41,28 @@
 //! content-addressed → fetch by hash → M1" row) for the design lineage.
 
 use bevy::prelude::*;
-use cid::Cid;
-use multihash_codetable::{Code, MultihashDigest};
+use lunco_hash::content::Cid;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// IPLD codec for a raw byte block — the identity IPFS uses for
-/// `--raw-leaves` single-block files. Combined with a sha2-256 multihash this
-/// is the canonical "this blob's content" address.
-pub const RAW_CODEC: u64 = 0x55;
+/// IPLD codec for a raw byte block — the identity IPFS uses for `--raw-leaves`
+/// single-block files. Re-exported from the shared hashing substrate so there is
+/// one canonical definition (used by both this crate and the precompute cache).
+pub use lunco_hash::content::RAW_CODEC;
 
 /// Build the CIDv1 (`raw` codec + sha2-256) content address of `bytes` — the
 /// IPFS-resolvable identity of an asset's content. Same bytes ⇒ same CID on
-/// every peer, with zero coordination (the M1 contract).
+/// every peer, with zero coordination (the M1 contract). Thin domain alias over
+/// [`lunco_hash::content::cid`].
 pub fn cid_for_content(bytes: &[u8]) -> Cid {
-    let digest = Code::Sha2_256.digest(bytes);
-    Cid::new_v1(RAW_CODEC, digest)
+    lunco_hash::content::cid(bytes)
 }
 
 /// Parse canonical CID bytes (as carried on the wire / stored in a manifest
 /// sidecar) back into a [`Cid`]. Returns `None` on malformed input — callers
 /// treat a bad CID as "asset unknown" rather than panicking the netcode.
 pub fn cid_from_bytes(bytes: &[u8]) -> Option<Cid> {
-    Cid::try_from(bytes).ok()
+    lunco_hash::content::cid_from_bytes(bytes)
 }
 
 /// One asset in a scenario manifest: its path relative to the scenario root,
