@@ -54,7 +54,7 @@ pub use commands::{
 };
 pub use markers::{
     ActuatorDrivenJoint, EmbeddedScenarioPath, EmbeddedScenarioSource, FallbackSceneLight,
-    GridAnchor, HorizonShadowTerrain, RestoreFallbackLights, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
+    GridAnchor, HorizonShadowTerrain, NextScene, RestoreFallbackLights, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
     TRIGGER_COLLISION_LAYER,
 };
 pub use invariants::BigSpaceInvariantsPlugin;

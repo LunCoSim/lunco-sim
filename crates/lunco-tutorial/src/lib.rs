@@ -21,7 +21,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_core::subsystems::{SubsystemToggles, SUBSYSTEMS};
-use lunco_core::{on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue};
+use lunco_core::{on_command, register_commands, Command, NextScene, Severity, TelemetryEvent, TelemetryValue};
 use lunco_workbench::tutorial_overlay::TutorialHud;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt};
 use serde::{Deserialize, Serialize};
@@ -42,11 +42,9 @@ pub struct TutorialMeta {
     /// Difficulty tag (`"beginner"` / `"intermediate"` / …) shown as a chip.
     pub difficulty: &'static str,
     /// Asset-relative path to the tutorial's USD scene, loaded by [`StartTutorial`].
+    /// The chain to the NEXT tutorial is NOT here — it lives in the scene's USD
+    /// (`lunco:nextScene`), so each tutorial declares its own successor as data.
     pub scene: &'static str,
-    /// Id of the tutorial to auto-load when this one completes (`MISSION_COMPLETE`),
-    /// forming a chain / campaign. `None` ends the chain. The order lives here as
-    /// data — reorder a course by editing these links, no code change.
-    pub next: Option<&'static str>,
 }
 
 /// The catalog of registered tutorials. Populated in [`TutorialPlugin::build`]
@@ -178,37 +176,44 @@ fn on_set_subsystem_enabled(
 
 register_commands!(on_start_tutorial, on_skip_tutorial, on_set_subsystem_enabled,);
 
-/// Mark the current tutorial completed when its mission reports success, then
-/// auto-advance to the next tutorial in the chain (the scenario manager). A
-/// tutorial's `mission(me)` emits `MISSION_COMPLETE`; we attribute it to
-/// [`TutorialProgress::current`] (only ever set by a tutorial start), record the
-/// completion, and — if the meta declares a `next` — dispatch `StartTutorial`
-/// for it so a course flows tutorial→tutorial hands-free.
+/// On `MISSION_COMPLETE`, record the completion and auto-advance the chain by
+/// loading the scene named in USD (`lunco:nextScene` → [`NextScene`]) — the
+/// scenario manager. The chain lives entirely in DATA: each tutorial's scene
+/// declares its own successor, so there is NO per-tutorial Rust and no central
+/// campaign object. Works regardless of how the current scene was launched
+/// (`--scene`, the panel, or a prior chain step), since it reads the loaded
+/// world, not `TutorialProgress`.
 fn on_mission_complete(
     trigger: On<TelemetryEvent>,
-    registry: Res<TutorialRegistry>,
+    q_next: Query<&NextScene>,
     mut progress: ResMut<TutorialProgress>,
     mut commands: Commands,
 ) {
     if trigger.event().name != "MISSION_COMPLETE" {
         return;
     }
-    let Some(id) = progress.current.take() else { return };
-    if !progress.is_completed(&id) {
-        info!("[tutorial] completed '{id}'");
-        progress.completed.push(id.clone());
+    // Mark the current tutorial complete (for the launcher's ✓), if one is tracked.
+    if let Some(id) = progress.current.take() {
+        if !progress.is_completed(&id) {
+            info!("[tutorial] completed '{id}'");
+            progress.completed.push(id);
+        }
     }
-    // Auto-advance the chain: load the successor tutorial, if any.
-    if let Some(next) = registry.get(&id).and_then(|m| m.next) {
-        let next_title = registry.get(next).map(|m| m.title).unwrap_or(next);
-        info!("[tutorial] auto-advancing '{id}' → '{next}'");
-        commands.trigger(lunco_api::ApiCommandEvent {
-            command: "ShowNotification".to_string(),
-            params: serde_json::json!({ "text": format!("Next up: {next_title}"), "kind": "success" }),
-            id: 0,
-        });
-        commands.trigger(StartTutorial { id: next.to_string() });
-    }
+    // Auto-advance: load the successor scene declared in USD, if any.
+    let Some(next) = q_next.iter().map(|n| n.0.clone()).find(|s| !s.is_empty()) else {
+        return;
+    };
+    info!("[tutorial] auto-advancing → scene '{next}'");
+    commands.trigger(lunco_api::ApiCommandEvent {
+        command: "ShowNotification".to_string(),
+        params: serde_json::json!({ "text": "Loading next scene…", "kind": "success" }),
+        id: 0,
+    });
+    commands.trigger(lunco_api::ApiCommandEvent {
+        command: "LoadScene".to_string(),
+        params: serde_json::json!({ "path": next }),
+        id: 0,
+    });
 }
 
 // ── Launcher panel ────────────────────────────────────────────────────────
@@ -293,8 +298,6 @@ fn builtin_tutorials() -> Vec<TutorialMeta> {
             app: "sandbox",
             difficulty: "beginner",
             scene: "tutorials/first_drive/first_drive.usda",
-            // Chain: on completing First Drive, load the mission scene next.
-            next: Some("lander-rover-mission"),
         },
         TutorialMeta {
             id: "lander-rover-mission",
@@ -303,7 +306,6 @@ fn builtin_tutorials() -> Vec<TutorialMeta> {
             app: "sandbox",
             difficulty: "intermediate",
             scene: "scenes/sandbox/lander_test.usda",
-            next: None,
         },
     ]
 }

@@ -77,5 +77,8 @@ def Xform "FirstDrive"
     {
         custom string lunco:scenario = "first-drive"
         custom string lunco:scriptPath = "tutorials/first_drive/first_drive.rhai"
+        # Tutorial chain (data, not code): when this mission completes, the tutorial
+        # manager auto-loads this scene next. Each lesson names its own successor.
+        custom string lunco:nextScene = "scenes/sandbox/lander_test.usda"
     }
 }
