@@ -16,9 +16,38 @@ fn brake(rover) {
 
 fn load_scene(path)            { cmd("LoadScene", #{ path: path }) }
 fn clear_scene()               { cmd("ClearScene") }
+// Reload the CURRENTLY-active scene from disk (LoadScene no-ops on the live one).
+// Picks up .usda edits; pair with pause() for "reload then freeze".
+fn restart_scene()             { cmd("RestartScene") }
 fn set_property(id, key, val)  { cmd("SetObjectProperty", #{ target: id, key: key, value: val }) }
 fn detach_joint(joint)         { cmd("DetachJoint", #{ target: joint }) }
 fn possess(vessel)             { cmd("PossessVessel", #{ target: vessel }) }
+
+// ── Cinematic camera helpers (all generic cmd() under the hood) ──
+// A cutscene is just a `seq([...])` task that cuts the active viewport between
+// authored `def Camera` prims and dynamically frames moving vessels. Pair with
+// keyframed (`xformOp:*.timeSamples`) cameras + `play_animation()` for dollies.
+
+/// Cut the active viewport to a named `def Camera` prim (leaf name or full path).
+fn set_camera(name)            { cmd("SetActiveCamera", #{ name: name }) }
+/// Orbit-frame a target entity — keeps it centred; good for TRACKING a mover.
+fn focus(target)               { cmd("FocusTarget", #{ target: target }) }
+/// Chase a target with a spring-arm follow cam (rides behind/above it).
+fn follow(target)              { cmd("FollowTarget", #{ target: target }) }
+
+// World-time transport — pause/resume the WHOLE simulation (tick + physics) and
+// set its speed. `pause()` freezes everything (great right after restart_scene()
+// to inspect a scene without it running away); `set_rate(4.0)` = 4× realtime.
+fn pause()                     { cmd("SetTimeTransport", #{ playing: false }) }
+fn play()                      { cmd("SetTimeTransport", #{ playing: true }) }
+fn set_rate(r)                 { cmd("SetTimeTransport", #{ rate: r }) }
+
+// Animation transport — drives the `timeSamples` playhead (keyframed dollies,
+// visibility reveals, material fades). Shared sim clock; play once, all animate.
+fn play_animation()            { cmd("ControlAnimation", #{ playing: true }) }
+fn pause_animation()           { cmd("ControlAnimation", #{ playing: false }) }
+fn seek_animation(secs)        { cmd("ControlAnimation", #{ seek_secs: secs }) }
+fn animation_rate(rate)        { cmd("ControlAnimation", #{ rate: rate }) }
 
 // On-screen player notifications (toasts). `notify` is info-styled; `notify_kind`
 // takes a style: "info" | "success" | "warn" | "error". Lets a scenario announce

@@ -70,6 +70,11 @@ mod ui;
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
 mod url_scheme;
 
+/// `sandbox rhai` — stdin→HTTP rhai REPL client for a running instance. Native
+/// only (raw `std::net` HTTP; no window). See [`rhai_repl::run_if_requested`].
+#[cfg(not(target_family = "wasm"))]
+pub mod rhai_repl;
+
 /// Run the sandbox, choosing GUI vs. headless from the build + flags: headless
 /// when the `ui` feature is absent, or `--no-ui` / `LUNCO_NO_UI` is set;
 /// otherwise the windowed GUI. This is the `sandbox` (GUI) bin's entry point.

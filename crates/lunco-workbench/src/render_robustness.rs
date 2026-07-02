@@ -58,9 +58,15 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
 
 /// Runs once in the render world (`RenderStartup`), where `RenderDevice` exists.
 fn set_error_handler(device: Res<RenderDevice>) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    // A persistently-invalid pipeline (e.g. a material whose shader can't build)
+    // raises the SAME validation error EVERY frame — thousands per second. Count
+    // them so we log the first occurrence loudly + actionably and then throttle,
+    // instead of flooding the log (which itself tanks the frame rate).
+    let validation_hits = Arc::new(AtomicU64::new(0));
     device
         .wgpu_device()
-        .on_uncaptured_error(Arc::new(|err: wgpu::Error| match err {
+        .on_uncaptured_error(Arc::new(move |err: wgpu::Error| match err {
             // Validation errors don't lose the device — the offending command
             // buffer is rejected and we continue. The Windows resize
             // depth/color mismatch lands here; dropping the frame is correct.
@@ -81,8 +87,25 @@ fn set_error_handler(device: Res<RenderDevice>) {
                          so every frame is dropped (black viewport). Add `smaa_luts` to \
                          this binary's bevy features. Details: {description}"
                     );
-                } else {
-                    warn!("wgpu validation error (frame dropped, continuing): {description}");
+                    return;
+                }
+                // Rate-limit the otherwise per-frame storm: shout once (pointing at
+                // the usual culprit — a bad material shader), then log ~every 600th
+                // repeat so a persistent failure stays visible without flooding.
+                let n = validation_hits.fetch_add(1, Ordering::Relaxed);
+                if n == 0 {
+                    warn!(
+                        "wgpu validation error (frame dropped, continuing): {description}. \
+                         A persistent version of this usually means a material's render \
+                         pipeline is invalid — check any `primvars:shaderPath` (a shader \
+                         must be a whole shader with an `@fragment` entry, not a library). \
+                         Identical errors are now rate-limited."
+                    );
+                } else if n % 600 == 0 {
+                    warn!(
+                        "wgpu validation error persists ({} frames dropped): {description}",
+                        n + 1
+                    );
                 }
             }
             other => error!("wgpu error: {other}"),
