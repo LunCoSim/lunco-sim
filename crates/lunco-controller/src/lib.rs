@@ -90,6 +90,10 @@ fn drive_from_bindings(
     q_ctrl: Query<(&ControllerLink, &ActionState<UserIntent>)>,
     q_binding: Query<&ControlBinding>,
     q_vessel: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
+    // Self-drivers: an entity that holds its OWN input + its own binding under no
+    // external controller (the free avatar). Disjoint from `q_ctrl` (which requires
+    // a `ControllerLink`), so no query conflict.
+    q_self: Query<(Entity, &ActionState<UserIntent>, &ControlBinding), Without<ControllerLink>>,
     mut commands: Commands,
 ) {
     let client = matches!(*role, lunco_core::NetworkRole::Client);
@@ -126,6 +130,16 @@ fn drive_from_bindings(
             seq,
             tick: tick.0,
         });
+    }
+
+    // Self-drive (the free avatar): drive the entity's OWN command surface from its
+    // OWN input via its OWN binding — the identical `SetPorts` path, no bespoke
+    // avatar movement code. Local & kinematic (`apply_fly`), so no seq/tick
+    // prediction bookkeeping. `resolve` writes every bound port (0 when idle), so a
+    // released key zeroes the port and motion stops.
+    for (entity, intents, binding) in q_self.iter() {
+        let writes = binding.resolve(|intent| intents.pressed(&intent));
+        commands.trigger(lunco_cosim::SetPorts { target: entity, writes, seq: 0, tick: 0 });
     }
 }
 

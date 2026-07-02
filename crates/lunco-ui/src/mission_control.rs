@@ -355,7 +355,9 @@ pub fn populate_mission_control_view(
     avatar: Query<Entity, With<Avatar>>,
     bodies: Query<(Entity, &Name, &CelestialBody)>,
     spacecraft: Query<(Entity, &Name), With<Spacecraft>>,
-    rovers: Query<(Entity, &Name, Option<&lunco_core::GlobalEntityId>), With<FlightSoftware>>,
+    // The local avatar now carries a `FlightSoftware` command surface too (it's a
+    // controllable), so exclude it from the *rover* list.
+    rovers: Query<(Entity, &Name, Option<&lunco_core::GlobalEntityId>), (With<FlightSoftware>, Without<Avatar>)>,
     surface: Query<(), With<lunco_avatar::SurfaceCamera>>,
     gravity: Option<Res<lunco_celestial::LocalGravityField>>,
     changed: Query<
