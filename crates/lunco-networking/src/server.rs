@@ -11,9 +11,8 @@ use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use crate::sync::{
-    HandshakeMsg, JournalEntryMsg, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg,
-    ReplicationState, SnapshotMsg, SyncEnvelope, SyncInbox, SyncOutbox, ViewCenters,
-    MAX_SNAPSHOT_ENTRIES,
+    HandshakeMsg, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg, ReplicationState,
+    SnapshotMsg, SyncEnvelope, SyncInbox, SyncOutbox, ViewCenters, MAX_SNAPSHOT_ENTRIES,
 };
 use lunco_doc_bevy::JournalResource;
 use lunco_core::{
@@ -541,23 +540,18 @@ fn on_server_connected(
         }
     }
     // Full Twin-journal replay so a late joiner converges on the host's edit
-    // history (scenario-plane sync). Serialize each entry to JSON (bincode can't
-    // carry the `serde_json::Value` in an `Op`; see `JournalEntryMsg`). Ongoing
-    // appends then stream via `broadcast_journal_entries`; overlap is idempotent.
+    // history (journal plane). Ongoing appends then stream via the plane's
+    // `broadcast_journal_entries`; overlap is idempotent (dedup by EntryId).
     if let Some(journal) = &journal {
-        journal.with_read(|j| {
-            for entry in j.entries() {
-                if let Ok(json) = serde_json::to_string(entry) {
-                    server_send(
-                        &mut sender,
-                        server,
-                        &target,
-                        SyncChannel::BulkData,
-                        &SyncEnvelope::JournalEntry(JournalEntryMsg { json }),
-                    );
-                }
-            }
-        });
+        for msg in crate::journal_plane::full_journal_msgs(journal) {
+            server_send(
+                &mut sender,
+                server,
+                &target,
+                SyncChannel::BulkData,
+                &SyncEnvelope::JournalEntry(msg),
+            );
+        }
     }
     info!("[net] client connected: peer={peer:?} session={}", session.0);
 }

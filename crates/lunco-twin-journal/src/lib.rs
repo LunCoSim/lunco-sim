@@ -978,6 +978,16 @@ impl Journal {
         self.entry_order.is_empty()
     }
 
+    /// Set the author id for future local entries. In a networked session each
+    /// peer MUST set a distinct id (host vs each client) so `(author, lamport)`
+    /// entry ids stay globally unique — otherwise two peers mint colliding ids
+    /// and `append_remote` dedups a remote entry as a local one, and edits can't
+    /// be attributed to a peer. Set once, before recording local edits (or when
+    /// the peer's identity is first known); existing entries keep their author.
+    pub fn set_local_author(&mut self, author: AuthorId) {
+        self.local_author = author;
+    }
+
     // ── Streams ──────────────────────────────────────────────────────────
 
     pub fn stream(&self, id: &StreamId) -> Option<&Stream> {

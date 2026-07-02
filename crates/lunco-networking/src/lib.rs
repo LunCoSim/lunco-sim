@@ -41,6 +41,11 @@ pub mod scenario;
 /// CID-addressed assets a manifest advertises, into `<cache_dir>/scenarios/<id>/`.
 #[cfg(feature = "networking")]
 pub mod scenario_sync;
+/// The journal replication plane: authored Twin-journal entries host→client,
+/// merged via `append_remote`. Separated from the command/state/content planes
+/// (see module docs); the transport ferry only routes to it.
+#[cfg(feature = "networking")]
+pub mod journal_plane;
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
 mod server;
 #[cfg(feature = "networking")]

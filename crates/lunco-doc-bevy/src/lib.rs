@@ -688,6 +688,20 @@ impl JournalResource {
         f(&mut *guard)
     }
 
+    /// The author id stamped onto locally-recorded entries. Placeholder
+    /// (`AuthorId::local()`) until a networked peer stamps its identity via
+    /// [`set_local_author`](Self::set_local_author).
+    pub fn local_author(&self) -> AuthorId {
+        self.with_read(|j| j.local_author().clone())
+    }
+
+    /// Set the peer-unique author id for future local entries — see
+    /// [`CanonicalJournal::set_local_author`]. Each peer (host + each client)
+    /// must set a distinct id so cross-peer entry ids don't collide.
+    pub fn set_local_author(&self, author: AuthorId) {
+        self.with_write(|j| j.set_local_author(author));
+    }
+
     /// Build a [`JournalSink`] handle that records into this resource.
     /// Cheap — just clones the inner `Arc`.
     pub fn sink(&self) -> BevyJournalSink {

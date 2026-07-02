@@ -471,20 +471,6 @@ pub struct TutorStatusResource {
     pub one_shot_snap_request: Option<SharePerspectiveMsg>,
 }
 
-/// Host → clients (scenario-plane sync): one Twin-journal entry, so peers
-/// converge on the same edit history. The entry is carried as **JSON text**
-/// (not the typed `JournalEntry`) because it rides the positional `bincode`
-/// codec, which can't (de)serialize the `serde_json::Value` inside
-/// `EntryKind::Op` — exactly the reason [`SyncCommand`] carries its payload as a
-/// string. The client `serde_json::from_str`s it and feeds
-/// [`Journal::append_remote`](lunco_twin_journal::Journal::append_remote), which
-/// merges divergent history deterministically.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct JournalEntryMsg {
-    /// `serde_json::to_string(&JournalEntry)`.
-    pub json: String,
-}
-
 /// Everything that crosses the wire, tagged for reliable/unreliable routing by
 /// the accompanying [`SyncChannel`]. `lunco-networking` (de)serializes these.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -522,10 +508,11 @@ pub enum SyncEnvelope {
     AssetChunk(crate::scenario::AssetChunkMsg),
     // Peer → host: "I already have this CID" dedupe hint (Phase 3+).
     AssetHave(crate::scenario::AssetHaveMsg),
-    // Host → client: a Twin-journal entry (scenario-plane sync). Appended LAST
-    // (same positional-codec rule): a stale peer that predates journal sync
-    // simply never sends/handles it; prior discriminants stay put.
-    JournalEntry(JournalEntryMsg),
+    // Host → client: a Twin-journal entry (journal plane). Appended LAST (same
+    // positional-codec rule): a stale peer that predates journal sync simply
+    // never sends/handles it; prior discriminants stay put. Type owned by the
+    // `journal_plane` module (the plane owns its wire shape).
+    JournalEntry(crate::journal_plane::JournalEntryMsg),
 }
 
 // ── Resources (the contract `lunco-networking` touches) ───────────────────────
@@ -1082,6 +1069,12 @@ pub fn drain_sync_inbox(
                     // challenge/elevation path — stored now so the handshake field is
                     // load-bearing rather than dead.
                     ctx.credential.token = Some(h.token);
+                    // Stamp this client's peer-unique journal author (journal
+                    // plane) so its locally-authored edits get globally-unique
+                    // entry ids — distinct from the host and other clients.
+                    if let Some(journal) = ctx.journal.as_ref() {
+                        journal.set_local_author(crate::journal_plane::peer_author(h.session));
+                    }
                     info!("[net] handshake accepted: assigned session={}", h.session);
                 }
             }
@@ -1345,61 +1338,18 @@ pub fn drain_sync_inbox(
                 // Phase 3+: host skips streaming an asset the peer already has.
             }
             SyncEnvelope::JournalEntry(msg) => {
-                // Client mirrors the host's edit history: deserialize + merge via
-                // `append_remote` (idempotent + convergent). Host ignores inbound
-                // journal entries in this one-way phase (client→host op upload is
-                // the later bidirectional step).
+                // Route to the journal plane. Client mirrors the host's edit
+                // history (merge via `append_remote`); host ignores inbound
+                // entries in this one-way phase (client→host is bidirectional,
+                // later). The plane owns the apply logic; the ferry only routes.
                 if !role.is_host() {
                     if let Some(journal) = ctx.journal.as_ref() {
-                        match serde_json::from_str::<lunco_twin_journal::JournalEntry>(&msg.json) {
-                            Ok(entry) => journal.with_write(|j| j.append_remote(entry)),
-                            Err(e) => warn!("[net] bad journal entry from host: {e}"),
-                        }
+                        crate::journal_plane::apply_inbound_entry(journal, &msg);
                     }
                 }
             }
         }
     }
-}
-
-/// Host: broadcast newly-appended Twin-journal entries to all clients so their
-/// journals converge with the host's (scenario-plane sync). Ships the tail of
-/// `entry_order` past what it last sent; a fresh client also gets the full
-/// journal on connect (`on_server_connected`) — the overlap is harmless since
-/// [`append_remote`](lunco_twin_journal::Journal::append_remote) is idempotent.
-/// Reliable `BulkData` lane (edit history, not per-tick state). Host-only.
-pub fn broadcast_journal_entries(
-    role: Res<NetworkRole>,
-    journal: Option<Res<JournalResource>>,
-    mut outbox: ResMut<SyncOutbox>,
-    // Count of entries already broadcast (append-only log ⇒ a monotonic cursor).
-    mut sent: Local<usize>,
-) {
-    if !role.is_host() {
-        return;
-    }
-    let Some(journal) = journal else {
-        return;
-    };
-    journal.with_read(|j| {
-        let total = j.len();
-        // Journal replaced (e.g. a Twin loaded mid-session shrank/reset the log):
-        // re-send from the start — clients dedupe by EntryId.
-        if total < *sent {
-            *sent = 0;
-        }
-        if total == *sent {
-            return;
-        }
-        for entry in j.entries().skip(*sent) {
-            if let Ok(json) = serde_json::to_string(entry) {
-                outbox
-                    .0
-                    .push((SyncChannel::BulkData, SyncEnvelope::JournalEntry(JournalEntryMsg { json })));
-            }
-        }
-        *sent = total;
-    });
 }
 
 // ── State replication (host → clients) ────────────────────────────────────────
@@ -2724,6 +2674,9 @@ impl Plugin for SyncPlugin {
             .add_observer(apply_sync_command)
             .add_observer(on_update_profile_rbac)
             .add_systems(Startup, setup_host_rbac)
+            // Journal plane: stamp the host's peer-unique journal author (clients
+            // stamp theirs on handshake) so cross-peer entry ids don't collide.
+            .add_systems(Startup, crate::journal_plane::stamp_host_journal_author)
             .add_systems(PreUpdate, block_bevy_inputs)
             .add_systems(Update, (
                 drain_sync_inbox,
@@ -2750,8 +2703,8 @@ impl Plugin for SyncPlugin {
                 crate::scenario_sync::request_missing_assets,
                 crate::scenario_sync::reassemble_asset_chunks,
                 crate::scenario_sync::drain_persist_results,
-                // Scenario-plane sync: host streams new journal entries to clients.
-                broadcast_journal_entries,
+                // Journal plane: host streams new journal entries to clients.
+                crate::journal_plane::broadcast_journal_entries,
             ))
             // `gather_snapshot` runs on the sim clock (`FixedPostUpdate`): it only
             // writes our `SyncOutbox` (never calls lightyear), so it's safe off the
@@ -2787,6 +2740,7 @@ impl Plugin for SyncPlugin {
 #[cfg(test)]
 mod codec_roundtrip {
     use super::*;
+    use crate::journal_plane::JournalEntryMsg;
     use crate::shared::{deserialize_env, serialize_env};
 
     #[test]
