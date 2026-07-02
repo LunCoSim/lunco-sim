@@ -14,10 +14,13 @@
 use lunco_modelica::ModelicaCompiler;
 use rumoca_sim::{SimOptions, SimStepper};
 
-const SRC: &str = include_str!("../../../assets/models/AnnotatedRocketStage.mo");
+fn src() -> &'static str {
+    lunco_modelica::models::get_model("AnnotatedRocketStage.mo")
+        .expect("bundled AnnotatedRocketStage.mo")
+}
 
 fn build_stepper(initial_throttle: Option<f64>) -> SimStepper {
-    let (stripped, _) = lunco_modelica::ast_extract::strip_input_defaults(SRC);
+    let (stripped, _) = lunco_modelica::ast_extract::strip_input_defaults(src());
     let mut compiler = ModelicaCompiler::new();
     let dae = compiler
         .compile_str(

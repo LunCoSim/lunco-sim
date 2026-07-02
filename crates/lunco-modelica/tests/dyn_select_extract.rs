@@ -3,7 +3,10 @@
 use lunco_modelica::annotations::{DynExpr, DynValue, GraphicItem, extract_icon};
 use rumoca_compile::parsing::ast::Expression;
 
-const SRC: &str = include_str!("../../../assets/models/AnnotatedRocketStage.mo");
+fn src() -> &'static str {
+    lunco_modelica::models::get_model("AnnotatedRocketStage.mo")
+        .expect("bundled AnnotatedRocketStage.mo")
+}
 
 fn class_annotations<'a>(
     classes: &'a rumoca_compile::parsing::ast::AstIndexMap<
@@ -25,7 +28,7 @@ fn class_annotations<'a>(
 
 #[test]
 fn tank_icon_lox_is_dynamic() {
-    let ast = rumoca_phase_parse::parse_to_ast(SRC, "AnnotatedRocketStage.mo").expect("parse");
+    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Tank").expect("Tank class");
     let icon = extract_icon(&ann).expect("Tank Icon");
     let mut texts = icon.graphics.iter().filter_map(|g| match g {
@@ -44,7 +47,7 @@ fn tank_icon_lox_is_dynamic() {
 
 #[test]
 fn tank_blue_rectangle_extent_is_dynamic_and_evaluates() {
-    let ast = rumoca_phase_parse::parse_to_ast(SRC, "AnnotatedRocketStage.mo").expect("parse");
+    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Tank").expect("Tank class");
     let icon = extract_icon(&ann).expect("Tank Icon");
 
@@ -103,7 +106,7 @@ fn dyn_expr_survives_json_roundtrip() {
     // The canvas serializes Icon to JSON for transport between the
     // diagram projector and the canvas renderer; deserialise must
     // restore the dynamic branch.
-    let ast = rumoca_phase_parse::parse_to_ast(SRC, "AnnotatedRocketStage.mo").expect("parse");
+    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Tank").expect("Tank class");
     let icon = extract_icon(&ann).expect("Tank Icon");
 
@@ -126,7 +129,7 @@ fn dyn_expr_survives_json_roundtrip() {
 
 #[test]
 fn valve_icon_label_is_dynamic() {
-    let ast = rumoca_phase_parse::parse_to_ast(SRC, "AnnotatedRocketStage.mo").expect("parse");
+    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Valve").expect("Valve class");
     let icon = extract_icon(&ann).expect("Valve Icon");
     let mut texts = icon.graphics.iter().filter_map(|g| match g {

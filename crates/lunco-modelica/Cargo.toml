@@ -144,11 +144,6 @@ web-time = { workspace = true }
 # (uri, StoredDefinition) shipped at build time, skipping a ~27-min
 # per-file parse on the page.
 bincode = { workspace = true }
-# Compile-time embedding of the `assets/models/` tree so
-# `src/models.rs` can enumerate bundled `.mo` examples by walking a
-# static `Dir`, instead of requiring a `pub const + include_str!` line
-# per file. Same API works on wasm32 (where fs access is unavailable).
-include_dir = "0.7"
 # Raster decoders used by egui_extras' `all_loaders`. Only the formats
 # actually present in MSL Resources/Images are enabled to keep the
 # compile surface small.

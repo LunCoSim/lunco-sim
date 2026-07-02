@@ -1620,7 +1620,7 @@ mod observables_smoke {
     #[cfg(any())]
     #[test]
     fn rocket_engine_observables_round_trip() {
-        let raw = include_str!("../../../assets/models/RocketEngine.mo");
+        let raw = crate::models::get_model("RocketEngine.mo").expect("bundled RocketEngine.mo");
         let (src, _) = ast_extract::strip_input_defaults(raw);
         let mut c = ModelicaCompiler::new();
         let r = c.compile_str("RocketEngine", &src, "RocketEngine.mo")
@@ -1653,7 +1653,7 @@ mod observables_smoke {
     /// tooltips go dark.
     #[test]
     fn rocket_engine_descriptions_populate() {
-        let raw = include_str!("../../../assets/models/RocketEngine.mo");
+        let raw = crate::models::get_model("RocketEngine.mo").expect("bundled RocketEngine.mo");
         let ast = rumoca_phase_parse::parse_to_ast(raw, "RocketEngine.mo")
             .expect("parses");
         let mut index = crate::index::ModelicaIndex::new();

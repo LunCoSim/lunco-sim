@@ -3,12 +3,16 @@
 // the `cmd()` bus, so the same toggle is reachable from UI, HTTP API,
 // MCP, and scripts.
 //
-// Usage (in a scenario `on_start` or interactively):
+// A tool library binds as a static-module NAMESPACE — call `debug_viz::fn(...)`
+// directly, from anywhere including inside `on_tick`. NO `import` statement
+// (script-level `import` aliases are invisible to rhai's pure hook functions;
+// static modules are not).
 //
-//   import "debug_viz" as viz;
-//   viz.show_joints(true);          // anchor dots + axis lines
-//   viz.show_wheel_forces(true);    // force box + arrow at each wheel
-//   viz.disable_all();              // turn everything off
+//   fn on_start(me) {
+//       debug_viz::show_joints(true);        // anchor dots + axis lines
+//       debug_viz::show_wheel_forces(true);  // force box + arrow at each wheel
+//   }
+//   fn on_stop(me) { debug_viz::disable_all(); }   // turn everything off
 
 /// Toggle joint visualization (anchor dots + axis lines for every
 /// Avian joint in the scene).

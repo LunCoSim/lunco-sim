@@ -248,33 +248,20 @@ fn scenario_debug() -> bool {
     })
 }
 
-/// Ergonomic policy wrappers (drive/distance/arrived/...), authored in rhai and
-/// embedded at compile time so they're available with zero IO on every target
-/// (incl. wasm). Edit `rhai/prelude.rhai` — no Rust change needed for new helpers.
-/// The prelude's topic files (name, source), embedded at compile time. Split by
-/// concern for readability; loaded by [`compile_prelude`] which compiles each and
-/// `AST::merge`s them into ONE flat-namespace AST — same result as one big file,
-/// but a parse error names the actual file instead of an offset into a blob.
-pub(crate) const PRELUDE_FILES: &[(&str, &str)] = &[
-    ("_intro", include_str!("../rhai/prelude/_intro.rhai")),
-    ("math", include_str!("../rhai/prelude/math.rhai")),
-    ("nav", include_str!("../rhai/prelude/nav.rhai")),
-    ("tasks", include_str!("../rhai/prelude/tasks.rhai")),
-    ("mission", include_str!("../rhai/prelude/mission.rhai")),
-    ("control", include_str!("../rhai/prelude/control.rhai")),
-    ("hud", include_str!("../rhai/prelude/hud.rhai")),
-    ("sensing", include_str!("../rhai/prelude/sensing.rhai")),
-    ("select", include_str!("../rhai/prelude/select.rhai")),
-];
-
 /// Compile the split prelude into one AST (per-file compile + `AST::merge`).
-/// Flat namespace + embedded, identical to compiling a single concatenated
-/// string, but a syntax error is logged with the offending file's name and its
-/// position is relative to that file (error locality). Both prelude uses — the
-/// global module and the per-scenario `prelude_ast` merge — go through here.
+///
+/// The prelude is the ergonomic policy layer (drive/distance/arrived/nav/HUD/…)
+/// authored in rhai. Its topic files live under `assets/scripting/prelude/` and are
+/// embedded + enumerated by [`lunco_assets::scripting::prelude_files`] (the
+/// asset-owning crate) — sorted by stem for a deterministic merge, the files
+/// being pure `fn` definitions so order is semantically irrelevant. Flat
+/// namespace + embedded, identical to compiling one concatenated string, but a
+/// syntax error is logged with the offending file's name and a position relative
+/// to that file (error locality). Both prelude uses — the global module and the
+/// per-scenario `prelude_ast` merge — go through here.
 pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, rhai::ParseError> {
     let mut acc: Option<AST> = None;
-    for (name, src) in PRELUDE_FILES {
+    for (name, src) in lunco_assets::scripting::prelude_files() {
         match engine.compile(src) {
             Ok(part) => acc = Some(match acc {
                 Some(a) => a.merge(&part),
@@ -286,7 +273,7 @@ pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, rhai::ParseError> 
             }
         }
     }
-    Ok(acc.expect("PRELUDE_FILES is non-empty"))
+    Ok(acc.expect("prelude dir is non-empty"))
 }
 
 /// Build a rhai [`Engine`] with the World-bridge verbs registered, the embedded
@@ -1048,25 +1035,13 @@ mod tests {
         engine.set_max_expr_depths(128, 128);
         super::compile_prelude(&engine).expect("prelude must parse");
 
-        for (name, src) in [
-            ("patrol", include_str!("../rhai/examples/patrol.rhai")),
-            ("mission", include_str!("../rhai/examples/mission.rhai")),
-            (
-                "mission_plan",
-                include_str!("../rhai/examples/mission_plan.rhai"),
-            ),
-            ("sequence", include_str!("../rhai/examples/sequence.rhai")),
-            ("timeline", include_str!("../rhai/examples/timeline.rhai")),
-            ("avoid", include_str!("../rhai/examples/avoid.rhai")),
-            (
-                "formation (tool lib)",
-                include_str!("../rhai/tools/formation.rhai"),
-            ),
-            (
-                "survey (tool lib)",
-                include_str!("../rhai/tools/survey.rhai"),
-            ),
-        ] {
+        // Every embedded example scenario AND every built-in tool library must
+        // parse — enumerated from the asset-owning crate, so new files are
+        // covered automatically (no hand-kept list here).
+        let examples = lunco_assets::scripting::examples();
+        let tools = lunco_assets::scripting::tool_libraries();
+        assert!(!examples.is_empty() && !tools.is_empty(), "embedded scripting assets empty");
+        for (name, src) in examples.into_iter().chain(tools) {
             engine
                 .compile(src)
                 .unwrap_or_else(|e| panic!("{name}.rhai failed to parse: {e}"));

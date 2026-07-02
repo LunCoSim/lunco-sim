@@ -14,16 +14,20 @@ use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use rhai::Engine;
 
-/// Built-in rhai tool library (an example, hot-replaceable like any other).
-const FORMATION_SRC: &str = include_str!("../rhai/tools/formation.rhai");
-
 /// Seed the built-in tools (idempotent). Call once at plugin build, BEFORE the
 /// runtime engine is created, so they bind immediately:
-///   - `formation` — a rhai-source library (selection/formation helpers).
+///   - every `assets/scripting/tools/*.rhai` — a rhai-source library, name = stem
+///     (`formation`, `survey`, `debug_viz`, …). Add one by dropping a file. The
+///     files are embedded + enumerated by [`lunco_assets::scripting::tool_libraries`]
+///     (the asset-owning crate), so wasm — which has no filesystem — is covered;
+///     the runtime Twin scan ([`load_tool_libraries_from_dir`]) is the native-only,
+///     user-authored counterpart.
 ///   - `mathx` — a NATIVE (Rust) tool, proving the backend-agnostic abstraction:
 ///     the same `name::fn(...)` call site works whether the tool is rhai or Rust.
 pub fn register_builtins() {
-    lunco_tools_rhai::register_rhai_tool("formation", FORMATION_SRC);
+    for (name, src) in lunco_assets::scripting::tool_libraries() {
+        lunco_tools_rhai::register_rhai_tool(name, src);
+    }
     lunco_tools_rhai::register_native_tool(
         "mathx",
         vec!["hypot/2".into(), "lerp/3".into()],
@@ -210,6 +214,22 @@ pub fn register_queries(app: &mut App) {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    /// `register_builtins` discovers EVERY `assets/scripting/tools/*.rhai` (the
+    /// drop-a-file contract) plus the native `mathx` — no per-tool code edit.
+    #[test]
+    fn builtins_scanned_from_embedded_dir() {
+        register_builtins();
+        let names = lunco_tools::names();
+        for expected in ["formation", "survey", "debug_viz", "mathx"] {
+            assert!(names.contains(&expected.to_string()), "missing built-in {expected}");
+        }
+        // Every embedded tool `.rhai` registered under its stem — future files
+        // are picked up automatically, this guards the scan against silent drops.
+        for (stem, _) in lunco_assets::scripting::tool_libraries() {
+            assert!(names.contains(&stem.to_string()), "embedded {stem}.rhai not registered");
+        }
+    }
 
     /// `save_tool_library_file` → `load_tool_libraries_from_dir` round-trips,
     /// and a loaded library is registered + readable via the registry.

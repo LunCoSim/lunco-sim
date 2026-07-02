@@ -17,6 +17,10 @@ serde_json = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
 image = { workspace = true }
+# Compile-time embed of authored asset subtrees that must be present on EVERY
+# target (wasm has no filesystem). Used by `scripting.rs` to bake
+# `assets/scripting/` in. All-targets: `include_dir!` is fs-free at runtime.
+include_dir = "0.7"
 # Cross-platform user-home / config-dir resolution for `user_config_dir()`.
 # Native-only — the wasm path uses OPFS / IndexedDB instead and skips
 # this helper entirely.
