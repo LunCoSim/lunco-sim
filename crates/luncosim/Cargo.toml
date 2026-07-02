@@ -40,6 +40,7 @@ lunco-hardware = { path = "../lunco-hardware" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-robotics = { path = "../lunco-robotics" }
 lunco-controller = { path = "../lunco-controller" }
+lunco-autopilot = { path = "../lunco-autopilot" }
 # Dismisses the HTML loading screen once the first frame paints (wasm); no-op
 # native. Single desktop+web source, like `sandbox`/`lunica`.
 lunco-web = { workspace = true }

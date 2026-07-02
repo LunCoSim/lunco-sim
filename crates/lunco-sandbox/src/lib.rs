@@ -473,6 +473,10 @@ impl Plugin for SandboxCorePlugin {
             // just produces no input while the Drive/Brake/Possess command
             // observers + wire-type registrations the host needs stay live.
             .add_plugins(LunCoControllerPlugin)
+            // Autopilot = a headless AiAgent actor that possesses + drives a vessel
+            // (spec 034). Placed on the control path, not the avatar — runs on the
+            // `--no-ui` server identically.
+            .add_plugins(lunco_autopilot::AutopilotPlugin)
             .add_plugins(LunCoAvatarPlugin)
             .add_plugins(lunco_scripting::LunCoScriptingPlugin)
             // Default scene-wide fill for scenes that author no lighting; a

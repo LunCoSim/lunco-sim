@@ -6,6 +6,6 @@
   "args": ["@lunco/mcp-server"],
   "env": {
     "LUNCO_API_HOST": "localhost",
-    "LUNCO_API_PORT": "3000"
+    "LUNCO_API_PORT": "4101"
   }
 }

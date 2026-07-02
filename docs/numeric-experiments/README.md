@@ -11,7 +11,9 @@ The goal is twofold:
    the working configuration immediately, plus the *why*.
 2. **Surface design debt with concrete evidence.** Each report ends with a
    "TBDs / future work" section that links back to specific rumoca files
-   and behaviours. That feeds the AGENTS.md task list.
+   and behaviours. Those TBDs feed the ranked rumoca / lunco-modelica backlog
+   maintained in this folder (see the solver-tuning notes below), which
+   `AGENTS.md` §9 points back to as the solver-tuning reference.
 
 ## File naming
 

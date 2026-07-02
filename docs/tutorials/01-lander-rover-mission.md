@@ -17,7 +17,7 @@ Edit a file, reload the scene, watch it change. That's the whole loop. Let's go.
 You can run your work at any point with:
 
 ```
-cargo run -p lunco-sandbox --bin sandbox -- --api 3000 --scene scenes/sandbox/my_mission.usda
+cargo run -p lunco-sandbox --bin sandbox -- --api 4101 --scene scenes/sandbox/my_mission.usda
 ```
 
 ---

@@ -50,6 +50,30 @@ pub struct ScriptRegistry {
 
 pub struct LunCoScriptingPlugin;
 
+/// Register the built-in `policy→rhai` hooks from `assets/scripting/policy/*.rhai`.
+/// Each is a small authored decision function consulted by a Rust seam by hook id;
+/// authoring the rule in rhai keeps policy out of compiled code (tunable, no
+/// rebuild). Currently: the spec-034 control-authority takeover rule.
+#[cfg(feature = "rhai")]
+fn register_builtin_policies() {
+    // (policy file stem, hook id, entry fn)
+    const BUILTINS: &[(&str, &str, &str)] = &[(
+        "control_authority",
+        lunco_core::session::CONTROL_AUTHORITY_HOOK,
+        "may_take_control",
+    )];
+    for (stem, hook_id, entry) in BUILTINS {
+        let Some(src) = lunco_assets::scripting::policy(stem) else {
+            warn!("[policy] built-in policy '{stem}' missing from embedded assets");
+            continue;
+        };
+        match lunco_hooks_rhai::register_rhai_hook(*hook_id, *entry, src, false) {
+            Ok(_) => info!("[policy] registered built-in '{stem}' → {hook_id}"),
+            Err(e) => error!("[policy] built-in policy '{stem}' failed to compile: {e}"),
+        }
+    }
+}
+
 impl Plugin for LunCoScriptingPlugin {
     fn build(&self, app: &mut App) {
         info!("Initializing LunCo Scripting Bridge...");
@@ -99,6 +123,12 @@ impl Plugin for LunCoScriptingPlugin {
             // BEFORE the runtime engine is built, so build_world_engine's refresh
             // binds them immediately.
             tool_libs::register_builtins();
+            // Built-in `policy→rhai` hooks: register each `assets/scripting/policy/
+            // *.rhai` under its hook id so the possession / authorization paths
+            // consult AUTHORED rhai rules, not hardcoded Rust (spec 034 control-
+            // authority takeover). Hot-replaced by any later `SetScriptedPolicy` of
+            // the same id.
+            register_builtin_policies();
             // Shared per-document diagnostics store (also init'd by Modelica;
             // init_resource is idempotent). Scenario compile/runtime errors land
             // here and surface via the ScriptStatus query.

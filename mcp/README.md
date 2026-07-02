@@ -33,7 +33,7 @@ Environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LUNCO_API_HOST` | `localhost` | LunCoSim API host |
-| `LUNCO_API_PORT` | `3000` | LunCoSim API port |
+| `LUNCO_API_PORT` | `4101` | LunCoSim API port (matches the sim's `--api` default) |
 
 Example:
 
@@ -121,7 +121,7 @@ The combination above is designed so an agent can run:
 
 A runnable smoke test of this exact workflow lives at
 `tests/api/agent_workflow.sh` — start the workbench with
-`--api 3000` and run the script to verify every endpoint above
+`--api 4101` and run the script to verify every endpoint above
 end-to-end against AnnotatedRocketStage.
 
 ## Resources
@@ -193,7 +193,7 @@ Add to `~/.claude/mcp.json`:
       "args": ["@lunco/mcp-server"],
       "env": {
         "LUNCO_API_HOST": "localhost",
-        "LUNCO_API_PORT": "3000"
+        "LUNCO_API_PORT": "4101"
       }
     }
   }

@@ -315,15 +315,34 @@ fn record_possession_authority(
     role: Res<lunco_core::NetworkRole>,
     guard: Res<lunco_core::SyncApplyGuard>,
     local: Res<lunco_core::LocalSession>,
+    rbac: Res<lunco_core::session::SessionRbac>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     mut registry: ResMut<lunco_core::SessionRegistry>,
 ) {
-    if !role.is_host() {
+    // Record ownership on the authoritative peer: Host, and also single-player
+    // Standalone (whose authority is local) so the control-authority yield/takeover
+    // works offline. Only a Client defers to the host's table.
+    if matches!(*role, lunco_core::NetworkRole::Client) {
         return;
     }
     let cmd = trigger.event();
     let origin = guard.0.unwrap_or(local.0);
     if let Ok(gid) = q_gid.get(cmd.target) {
+        // Control-authority takeover (spec 034): if the vessel is currently owned by
+        // a DIFFERENT session, ask the rhai policy
+        // ([`lunco_core::session::CONTROL_AUTHORITY_HOOK`]) whether this possessor may
+        // take it. The rule (e.g. "a human may take from an autopilot; an autopilot
+        // may not take from a human") is authored in rhai, not here. If allowed,
+        // release the prior owner FIRST so the claim below succeeds under the default
+        // Exclusive policy; the released autopilot then loses `owns` and stops
+        // driving on its own. Fails closed (no policy ⇒ no takeover). One vessel per
+        // autopilot session, so releasing that session frees exactly this vessel.
+        if let Some(cur) = registry.owner_of(gid.get()) {
+            if cur != origin && lunco_core::session::may_take_control(&rbac, origin, cur, gid.get()) {
+                registry.release_session(cur);
+                info!("[auth] session {origin} took control of entity {} from {cur} (policy allowed)", gid.get());
+            }
+        }
         // One vessel per player. If the new target is claimable (free, or already
         // ours), drop EVERY vessel this session currently holds before claiming
         // it — so clicking through rovers swaps control instead of hoarding
@@ -366,7 +385,9 @@ fn release_possession_authority(
     mut registry: ResMut<lunco_core::SessionRegistry>,
 ) {
     let _ = trigger;
-    if !role.is_host() {
+    // Authoritative peer (Host or single-player Standalone); a Client defers to the
+    // host. Mirrors `record_possession_authority`.
+    if matches!(*role, lunco_core::NetworkRole::Client) {
         return;
     }
     let origin = guard.0.unwrap_or(local.0);

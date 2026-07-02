@@ -57,6 +57,7 @@ lunco-hardware = { path = "../lunco-hardware" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-robotics = { path = "../lunco-robotics" }
 lunco-controller = { path = "../lunco-controller" }
+lunco-autopilot = { path = "../lunco-autopilot" }
 lunco-fsw = { path = "../lunco-fsw" }
 # `default-features = false` drops avatar's egui/workbench/gizmo UI layer for the
 # lean server; the `ui` feature below re-enables it (`lunco-avatar/ui`) for the

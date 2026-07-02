@@ -28,6 +28,7 @@ Status legend: **Implemented** (built, in tree) · **Partial** (core built, gaps
 | 031 | Sandbox Editing Tools | Implemented | overlaps 015 (spawn/assembly) |
 | 032 | Model Source Listing & Unified Open | Implemented (historical) | |
 | 033 | Agent-Driven Simulation Loop | Implemented (historical) | |
+| 034 | Control Authority: Autopilot as a User | Not built | proposal (rev 2); autopilot = an `AiAgent` session; possession is the arbiter, `rbac.authorize` (rhai) decides stealing — reuses 010, no per-frame arbiter |
 
 ## Overlap notes
 

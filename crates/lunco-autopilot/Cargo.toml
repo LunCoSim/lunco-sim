@@ -1,0 +1,14 @@
+[package]
+name = "lunco-autopilot"
+version = "0.6.0-dev"
+edition = "2021"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+# Control is the ONE generic `SetPorts` command (a batch of named input-port
+# writes); the autopilot emits it exactly like the keyboard and scripts do.
+lunco-cosim = { path = "../lunco-cosim" }
+
+[lints]
+workspace = true
