@@ -20,10 +20,11 @@
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use lunco_core::NetworkRole;
 use lunco_doc_bevy::JournalResource;
-use lunco_twin_journal::{AuthorId, JournalEntry};
+use lunco_twin_journal::{AuthorId, DomainKind, EntryId, EntryKind, JournalEntry};
 
 use crate::sync::{SyncEnvelope, SyncOutbox};
 use lunco_core::SyncChannel;
@@ -136,6 +137,59 @@ pub fn broadcast_journal_entries(
     });
 }
 
+// ── Layer B: journal → scene replay selection (client) ────────────────────────
+
+/// Select the journal Op entries a client should **replay onto its scene** to
+/// see the host's live edits: the convergent-ordered
+/// ([`merged_order_ids`](lunco_twin_journal::Journal::merged_order_ids)) entries
+/// strictly **after** the base `head` (the scenario snapshot the client
+/// downloaded), authored by a DIFFERENT peer than `me` (skip the client's own
+/// edits — already applied locally), of **USD** domain, not already applied.
+/// Returns `(EntryId, op payload)` in apply order. Pure over the journal +
+/// inputs (unit-tested); the Bevy driver applies each via
+/// `lunco_usd::UsdDocumentRegistry::replay_op` and records the id.
+///
+/// - `base = None` ⇒ the scenario had no journal head at build (empty history)
+///   ⇒ every remote USD op is new.
+/// - `base = Some(h)` but `h` not yet in the journal (its full replay hasn't
+///   arrived) ⇒ return nothing (defer) rather than risk double-applying the
+///   baked history the downloaded files already reflect.
+pub fn scene_ops_after(
+    journal: &JournalResource,
+    base: Option<&EntryId>,
+    me: &AuthorId,
+    already: &HashSet<EntryId>,
+) -> Vec<(EntryId, serde_json::Value)> {
+    journal.with_read(|j| {
+        let order = j.merged_order_ids();
+        let start = match base {
+            None => 0,
+            Some(h) => match order.iter().position(|id| id == h) {
+                Some(i) => i + 1,
+                None => return Vec::new(), // base not arrived → defer
+            },
+        };
+        order[start..]
+            .iter()
+            .filter_map(|id| {
+                if already.contains(id) {
+                    return None;
+                }
+                let e = j.get(id)?;
+                if &e.id.author == me {
+                    return None; // client's own edit — already applied locally
+                }
+                match &e.kind {
+                    EntryKind::Op { domain: DomainKind::Usd, op, .. } => {
+                        Some((id.clone(), op.clone()))
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,5 +199,49 @@ mod tests {
         assert_ne!(peer_author(1), host_author());
         assert_ne!(peer_author(1), peer_author(2));
         assert_eq!(peer_author(7), peer_author(7));
+    }
+
+    #[test]
+    fn scene_ops_after_selects_remote_usd_ops_past_base() {
+        use lunco_doc::DocumentId;
+        use lunco_twin_journal::{AuthorTag, JournalEntry, LifecycleKind, TwinId};
+
+        let me = AuthorId::new("peer-1");
+        let journal = JournalResource::new(TwinId::new("t"), me.clone());
+        let host = |lam: u64| EntryId { author: AuthorId::new("host"), lamport: lam };
+        let mk = |lam: u64, kind: EntryKind| JournalEntry {
+            id: host(lam),
+            parents: if lam <= 1 { vec![] } else { vec![host(lam - 1)] },
+            author: AuthorTag { user: "host".into(), tool: "t".into() },
+            at_ms: 0,
+            twin: TwinId::new("t"),
+            doc: DocumentId::new(1),
+            kind,
+            change_set: None,
+        };
+        let usd = |v: i32| EntryKind::Op {
+            domain: DomainKind::Usd,
+            op: serde_json::json!({ "v": v }),
+            inverse: serde_json::json!({}),
+        };
+        journal.with_write(|j| {
+            j.append_remote(mk(1, usd(1)));
+            j.append_remote(mk(2, usd(2)));
+            j.append_remote(mk(3, EntryKind::Lifecycle(LifecycleKind::Saved))); // not an Op
+            j.append_remote(mk(4, usd(4)));
+        });
+        let none = HashSet::new();
+        let lam = |v: &[(EntryId, serde_json::Value)]| v.iter().map(|(id, _)| id.lamport).collect::<Vec<_>>();
+
+        // base = e1 (downloaded snapshot) → apply the newer USD ops (2, 4); the
+        // lifecycle entry (3) and the baked base (1) are excluded.
+        assert_eq!(lam(&scene_ops_after(&journal, Some(&host(1)), &me, &none)), vec![2, 4]);
+        // base = None → every remote USD op is new.
+        assert_eq!(lam(&scene_ops_after(&journal, None, &me, &none)), vec![1, 2, 4]);
+        // base present but not yet received → defer (don't double-apply history).
+        assert!(scene_ops_after(&journal, Some(&host(99)), &me, &none).is_empty());
+        // Already-applied ids are skipped.
+        let done: HashSet<_> = [host(2)].into_iter().collect();
+        assert_eq!(lam(&scene_ops_after(&journal, Some(&host(1)), &me, &done)), vec![4]);
     }
 }

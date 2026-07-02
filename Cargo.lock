@@ -7204,6 +7204,7 @@ dependencies = [
  "lunco-terrain-surface",
  "lunco-theme",
  "lunco-twin",
+ "lunco-twin-journal",
  "lunco-ui",
  "lunco-usd",
  "lunco-web",

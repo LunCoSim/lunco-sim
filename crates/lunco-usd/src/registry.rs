@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::Resource;
-use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
+use lunco_doc::{Document, DocumentHost, DocumentId, DocumentOrigin};
 
 use crate::document::UsdDocument;
 
@@ -129,6 +129,40 @@ impl UsdDocumentRegistry {
         Ok(ack)
     }
 
+    /// Apply a **journal op** to `doc` for replay (journal→scene projection, the
+    /// networked-edit consume path) **without recording it**. The op arrived via
+    /// `Journal::append_remote` and is already in the journal, so re-recording it
+    /// (as [`apply`](Self::apply) would, via the host's `JournalOpRecorder`)
+    /// would mint a duplicate local entry. This bypasses the recorder by applying
+    /// straight to the document, then marks `doc` changed so the scene
+    /// re-projects. `op` is the journal entry's serialized `UsdOp` payload.
+    ///
+    /// Returns `false` (logged, non-fatal) if the doc is unknown, the payload
+    /// isn't a `UsdOp`, or the apply is rejected (e.g. AddPrim of an existing
+    /// prim when replaying already-reflected history — harmless).
+    pub fn replay_op(&mut self, doc: DocumentId, op: &serde_json::Value) -> bool {
+        let parsed = match serde_json::from_value::<crate::document::UsdOp>(op.clone()) {
+            Ok(op) => op,
+            Err(e) => {
+                bevy::log::warn!("[usd-replay] op payload is not a UsdOp: {e}");
+                return false;
+            }
+        };
+        let Some(host) = self.hosts.get_mut(&doc) else {
+            return false;
+        };
+        match host.document_mut().apply(parsed) {
+            Ok(_) => {
+                self.pending_changes.push(doc);
+                true
+            }
+            Err(e) => {
+                bevy::log::warn!("[usd-replay] apply rejected on doc {doc}: {e:?}");
+                false
+            }
+        }
+    }
+
     /// Mark `doc` as changed without applying an op — for direct
     /// `host_mut` mutations (undo/redo loops, reload-from-disk).
     pub fn mark_changed(&mut self, doc: DocumentId) {
@@ -211,6 +245,33 @@ mod tests {
         let pending = reg.drain_pending();
         assert!(pending.opened.is_empty());
         assert_eq!(pending.changed, vec![id]);
+    }
+
+    #[test]
+    fn replay_op_applies_without_recording_and_marks_changed() {
+        let mut reg = UsdDocumentRegistry::default();
+        let id = reg.allocate(
+            TINY_USDA.to_string(),
+            DocumentOrigin::writable_file("/tmp/scene.usda"),
+        );
+        reg.drain_pending();
+        let gen0 = reg.host(id).unwrap().document().generation();
+        // A journal op payload = a serialized UsdOp.
+        let op = serde_json::to_value(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/World".into(),
+            name: "rover".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+        })
+        .unwrap();
+        assert!(reg.replay_op(id, &op), "valid op replays");
+        // Applied (generation advanced) + marked changed for re-projection.
+        assert!(reg.host(id).unwrap().document().generation() > gen0);
+        assert_eq!(reg.drain_pending().changed, vec![id]);
+        // A non-UsdOp payload and an unknown doc are rejected, not panics.
+        assert!(!reg.replay_op(id, &serde_json::json!({"nope": 1})));
+        assert!(!reg.replay_op(DocumentId::new(9999), &op));
     }
 
     #[test]

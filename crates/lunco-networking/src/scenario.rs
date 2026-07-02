@@ -166,6 +166,14 @@ pub struct ScenarioManifestMsg {
     /// The scenario's assets, descriptor-only (path + CID + size + media type).
     /// No bytes — those come via `AssetChunkMsg` in Phase 3.
     pub assets: Vec<ScenarioAsset>,
+    /// The host's Twin-journal head at the moment this manifest was built — the
+    /// **base** the downloaded asset snapshot corresponds to. The client loads
+    /// files at this state, then the journal plane replays only entries AFTER
+    /// this head onto the scene (Layer B), so host edits made *after* the build
+    /// appear without double-applying the history already baked into the files.
+    /// `None` if the host has no journal / an empty history. (bincode-safe:
+    /// `EntryId` is `{author: String, lamport: u64}`, no `serde_json::Value`.)
+    pub journal_head: Option<lunco_twin_journal::EntryId>,
 }
 
 /// Client → host: "I'm missing these assets — send me their bytes." Each entry

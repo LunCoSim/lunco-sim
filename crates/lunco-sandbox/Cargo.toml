@@ -96,6 +96,9 @@ lunco-twin = { path = "../lunco-twin" }
 # record edits (not just the egui workbench). `default-features = false` keeps
 # `lunco-doc-bevy/ui` (→ bevy_egui) off the headless server (CQ-601).
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+# Journal entry ids for the client-side journal→scene replay driver (Layer B).
+# Optional — only the `networking` build's `replay_scenario_journal` uses it.
+lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
 # ── UI-only crate deps (gated behind the `ui` feature) ────────────────────
 # A `--no-ui` server build (`--no-default-features --features server`) omits
 # these entirely: the egui workbench, the blueprint/shader material editors,
@@ -196,7 +199,7 @@ sandbox = []
 lunco-api = ["dep:lunco-api", "lunco-modelica/lunco-api"]
 # Multiplayer over WebTransport (lightyear). Pulls in the real networking
 # adapter; the wire substrate (lunco-api) is required.
-networking = ["dep:lunco-networking", "lunco-networking/networking", "lunco-api", "dep:lunco-storage"]
+networking = ["dep:lunco-networking", "lunco-networking/networking", "lunco-api", "dep:lunco-storage", "dep:lunco-twin-journal"]
 # Netcode jitter diagnostics — off by default (not in normal builds). Build with
 # `--features networking,net-diag` when debugging; see lunco-networking/diagnostics.rs.
 net-diag = ["networking", "lunco-networking/net-diag"]

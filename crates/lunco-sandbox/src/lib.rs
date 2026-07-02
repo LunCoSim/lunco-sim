@@ -300,6 +300,56 @@ fn load_ready_scenario(
     *last_loaded = Some(m.revision);
 }
 
+/// Scenario distribution Layer B (client consume): replay the host's live
+/// authored edits onto the client's loaded scenario scene. The journal plane
+/// converges the client's journal with the host's (`append_remote` + merge);
+/// this projects the merged Op entries onto the client's USD scene so host edits
+/// become *visible*. Applies only entries AFTER the manifest's `journal_head`
+/// (the downloaded snapshot's base — so history baked into the files isn't
+/// double-applied), authored by another peer (not the client's own edits), each
+/// once, without re-recording (`replay_op`). The assembly-crate bridge: it's the
+/// only place that sees the wire state (`RemoteScenarioManifest`), the journal,
+/// AND the USD registry.
+///
+/// Single active scene doc for now — multi-doc needs stable cross-peer
+/// `DocumentId` mapping (a follow-up). Client-only; the host authored the edits.
+#[cfg(feature = "networking")]
+fn replay_scenario_journal(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    mut registry: ResMut<lunco_usd::UsdDocumentRegistry>,
+    // Entry ids already projected onto the scene (once-per-entry guard).
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    if role.is_host() {
+        return;
+    }
+    let Some(journal) = journal else {
+        return;
+    };
+    let Some(manifest) = remote.manifest.as_ref() else {
+        return;
+    };
+    // Single active scene doc (scenario consume is single-scene for now).
+    let docs: Vec<_> = registry.ids().collect();
+    let [doc] = docs.as_slice() else {
+        return;
+    };
+    let doc = *doc;
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::scene_ops_after(
+        &journal,
+        manifest.journal_head.as_ref(),
+        &me,
+        &applied,
+    );
+    for (id, op) in pending {
+        registry.replay_op(doc, &op);
+        applied.insert(id);
+    }
+}
+
 /// The shared, headless-safe core: the persistent world shell, physics, cosim,
 /// USD scene load, mobility/hardware/controller/avatar, environment, the HTTP
 /// API, and networking. Added unconditionally by both the GUI and the server, so
@@ -466,6 +516,10 @@ impl Plugin for SandboxCorePlugin {
             // the scene loader (`lunco_usd::LoadScene`) — keeping each of those
             // crates free of the other.
             app.add_systems(Update, load_ready_scenario);
+            // Layer B: project the host's live journal edits onto the client's
+            // loaded scenario scene (client-only; no-op on the host + when no
+            // scenario/journal is present).
+            app.add_systems(Update, replay_scenario_journal);
             // Connect-menu bridge adapter + egui presence/tutorial overlays. Pulls
             // bevy_egui, so it's GUI-only and gated on `ui` (CQ-601) — the headless
             // server omits it. The host still answers runtime JoinServer/LeaveServer

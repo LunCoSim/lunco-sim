@@ -2845,6 +2845,7 @@ mod codec_roundtrip {
             name: String::new(),
             default_scene: None,
             assets: Vec::new(),
+            journal_head: None,
         });
         let bytes = serialize_env(&manifest).expect("serialize");
         assert_eq!(&bytes[..4], &[13, 0, 0, 0], "ScenarioManifest must be index 13");
@@ -2944,6 +2945,10 @@ mod codec_roundtrip {
             name: "lunar_base".into(),
             default_scene: Some("scenes/main.usda".into()),
             assets,
+            journal_head: Some(lunco_twin_journal::EntryId {
+                author: lunco_twin_journal::AuthorId::new("host"),
+                lamport: 7,
+            }),
         });
         let back = deserialize_env(&serialize_env(&env).expect("serialize")).expect("deserialize");
         match back {

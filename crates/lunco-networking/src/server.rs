@@ -773,6 +773,10 @@ struct ScenarioBuildInput {
     name: String,
     default_scene: Option<String>,
     descriptors: Vec<AssetDescriptor>,
+    /// The host's journal head at build time — the base the asset snapshot
+    /// corresponds to (journal-plane Layer B). Captured on the main thread by
+    /// the caller (the build task has no World access).
+    journal_head: Option<lunco_twin_journal::EntryId>,
 }
 
 /// Main-thread step: walk the Twin tree and resolve the file list — path joins,
@@ -782,7 +786,10 @@ struct ScenarioBuildInput {
 /// first and drops the duplicate (review: duplicate assets from overlapping
 /// parent/child walks). The blocking read + SHA-256 happens later in
 /// [`build_manifest_from_input`], off the main thread.
-fn collect_scenario_input(twin: &Twin) -> ScenarioBuildInput {
+fn collect_scenario_input(
+    twin: &Twin,
+    journal_head: Option<lunco_twin_journal::EntryId>,
+) -> ScenarioBuildInput {
     let mut seen: HashSet<String> = HashSet::new();
     let mut descriptors = Vec::new();
     for t in twin.walk() {
@@ -831,7 +838,7 @@ fn collect_scenario_input(twin: &Twin) -> ScenarioBuildInput {
         .and_then(|m| m.usd.as_ref())
         .and_then(|usd| usd.default_scene.clone());
 
-    ScenarioBuildInput { scenario_id, name, default_scene, descriptors }
+    ScenarioBuildInput { scenario_id, name, default_scene, descriptors, journal_head }
 }
 
 /// Stable 16-byte scenario id derived from the scenario root path — the
@@ -860,7 +867,7 @@ fn scenario_id_from_path(root: &Path) -> [u8; 16] {
 type ScenarioBuildOutput = (ScenarioManifestMsg, Vec<(Vec<u8>, PathBuf)>);
 
 fn build_manifest_from_input(input: ScenarioBuildInput) -> Option<ScenarioBuildOutput> {
-    let ScenarioBuildInput { scenario_id, name, default_scene, descriptors } = input;
+    let ScenarioBuildInput { scenario_id, name, default_scene, descriptors, journal_head } = input;
     let mut assets = Vec::with_capacity(descriptors.len());
     let mut cid_paths = Vec::with_capacity(descriptors.len());
     for d in descriptors {
@@ -891,7 +898,10 @@ fn build_manifest_from_input(input: ScenarioBuildInput) -> Option<ScenarioBuildO
         return None;
     }
     let revision = scenario_revision(&assets);
-    Some((ScenarioManifestMsg { scenario_id, revision, name, default_scene, assets }, cid_paths))
+    Some((
+        ScenarioManifestMsg { scenario_id, revision, name, default_scene, assets, journal_head },
+        cid_paths,
+    ))
 }
 
 /// Host-side: an in-flight off-thread scenario-manifest build. The walk reads +
@@ -909,10 +919,20 @@ pub(crate) struct PendingScenarioManifest {
 
 /// Spawn an off-thread manifest build for `twin`, replacing any in-flight one
 /// (a newer scenario supersedes a build still running for the previous one).
-fn spawn_manifest_build(twin: &Twin, pending: &mut PendingScenarioManifest) {
-    let input = collect_scenario_input(twin);
+fn spawn_manifest_build(
+    twin: &Twin,
+    journal_head: Option<lunco_twin_journal::EntryId>,
+    pending: &mut PendingScenarioManifest,
+) {
+    let input = collect_scenario_input(twin, journal_head);
     let pool = AsyncComputeTaskPool::get();
     pending.task = Some(pool.spawn(async move { build_manifest_from_input(input) }));
+}
+
+/// The host's current journal head (build-time base for Layer B), or `None` if
+/// there's no journal / empty history.
+fn journal_head(journal: &Option<Res<JournalResource>>) -> Option<lunco_twin_journal::EntryId> {
+    journal.as_ref().and_then(|j| j.with_read(|jj| jj.merged_head()))
 }
 
 /// Startup: if a Twin is already open when the host boots, kick off its manifest
@@ -920,13 +940,14 @@ fn spawn_manifest_build(twin: &Twin, pending: &mut PendingScenarioManifest) {
 /// `AsyncComputeTaskPool` is guaranteed initialized by then.
 fn spawn_initial_scenario_manifest(
     workspace: Option<Res<WorkspaceResource>>,
+    journal: Option<Res<JournalResource>>,
     mut pending: ResMut<PendingScenarioManifest>,
 ) {
     let Some(workspace) = workspace else { return };
     let Some(active) = workspace.active_twin else { return };
     if let Some(twin) = workspace.twin(active) {
         info!("[net] Host started with active twin, building scenario manifest for {:?}", twin.root);
-        spawn_manifest_build(twin, &mut pending);
+        spawn_manifest_build(twin, journal_head(&journal), &mut pending);
     }
 }
 
@@ -964,11 +985,12 @@ fn drive_scenario_manifest(
 fn on_twin_added_host(
     trigger: On<TwinAdded>,
     workspace: Res<WorkspaceResource>,
+    journal: Option<Res<JournalResource>>,
     mut pending: ResMut<PendingScenarioManifest>,
 ) {
     if let Some(twin) = workspace.twin(trigger.event().twin) {
         info!("[net] Twin added; building scenario manifest for {:?}", twin.root);
-        spawn_manifest_build(twin, &mut pending);
+        spawn_manifest_build(twin, journal_head(&journal), &mut pending);
     }
 }
 
