@@ -346,7 +346,7 @@ mod tests {
         );
         // A contact with no named sensor produces no zone events.
         assert!(zone_events("enter", rover, None, plain, None, &zone_name, &reg).is_empty());
-        // Unregistered entrant → gid 0, but the zone event still fires.
+        // Unregistered entrant → gid 0, but the zone event still fires (zone gid 7).
         let ghost = world.spawn_empty().id();
         assert_eq!(
             zone_events("enter", pad, None, ghost, None, &zone_name, &reg),

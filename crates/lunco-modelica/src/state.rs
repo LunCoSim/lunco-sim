@@ -19,7 +19,7 @@
 
 use bevy::prelude::*;
 use std::collections::HashMap;
-use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
+use lunco_doc::{Document, DocumentHost, DocumentId, DocumentOrigin};
 #[cfg(target_arch = "wasm32")]
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -501,6 +501,48 @@ impl ModelicaDocumentRegistry {
         self.pending_changes.push(doc);
     }
 
+    /// Apply a **journal op** to `doc` for replay (journal→scene projection —
+    /// the networked-edit consume path) **without recording it**. Mirror of
+    /// [`UsdDocumentRegistry::replay_op`](lunco_usd::UsdDocumentRegistry::replay_op).
+    ///
+    /// The op arrived via `Journal::append_remote` and is already in the
+    /// journal, so re-recording it (as `DocumentHost::apply` would via the
+    /// host's [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder)) would
+    /// mint a duplicate local entry. This applies straight to the document
+    /// (bypassing the recorder), waives the AST debounce, and marks `doc`
+    /// changed so the canvas / engine reproject. `op` is the entry's serialized
+    /// [`ModelicaOp`] payload.
+    ///
+    /// Returns `false` (logged, non-fatal) if the doc is unknown, the payload
+    /// isn't a `ModelicaOp`, or the apply is rejected — notably a structural op
+    /// (see [`op_needs_fresh_ast_pre_apply`](crate::doc_ops::op_needs_fresh_ast_pre_apply))
+    /// whose target the host's stale AST can't resolve yet; the interactive
+    /// funnel *defers* those, which cross-peer replay can't (a known limitation
+    /// tracked with multi-doc replay wiring).
+    pub fn replay_op(&mut self, doc: DocumentId, op: &serde_json::Value) -> bool {
+        let parsed = match serde_json::from_value::<ModelicaOp>(op.clone()) {
+            Ok(op) => op,
+            Err(e) => {
+                bevy::log::warn!("[modelica-replay] op payload is not a ModelicaOp: {e}");
+                return false;
+            }
+        };
+        let Some(host) = self.hosts.get_mut(&doc) else {
+            return false;
+        };
+        match host.document_mut().apply(parsed) {
+            Ok(_) => {
+                host.document_mut().waive_ast_debounce();
+                self.pending_changes.push(doc);
+                true
+            }
+            Err(e) => {
+                bevy::log::warn!("[modelica-replay] apply rejected on doc {doc}: {e:?}");
+                false
+            }
+        }
+    }
+
     /// Drain queued change notifications. The `drain_document_changes`
     /// system calls this each frame and fans the ids out as
     /// [`lunco_doc_bevy::DocumentChanged`] triggers. Deduped per drain
@@ -651,6 +693,33 @@ mod tests {
         assert_eq!(host.document().source(), "model B end B;");
         assert_eq!(host.generation(), 2); // gen 1 fresh + 1 checkpoint op
         assert!(host.can_undo());
+    }
+
+    #[test]
+    fn replay_op_applies_without_recording_and_marks_changed() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let doc = reg.allocate("model A end A;".into());
+        let _ = reg.drain_pending_opened(); // clear allocate-time events
+        let _ = reg.drain_pending_changes();
+        let gen0 = reg.host(doc).unwrap().generation();
+
+        // A journal op payload = a serialized ModelicaOp.
+        let op =
+            serde_json::to_value(ModelicaOp::ReplaceSource { new: "model B end B;".into() }).unwrap();
+        assert!(reg.replay_op(doc, &op), "valid op replays");
+
+        let host = reg.host(doc).unwrap();
+        assert_eq!(host.document().source(), "model B end B;");
+        assert!(host.generation() > gen0);
+        // Applying via the Document (not the DocumentHost) bypasses the recorder
+        // AND the undo stack — so replay pushes no undo entry (idempotent
+        // projection of history that's already in the journal).
+        assert!(!host.can_undo(), "replay does not record/undo");
+        // Marked changed for reprojection.
+        assert_eq!(reg.drain_pending_changes(), vec![doc]);
+        // A non-ModelicaOp payload and an unknown doc are rejected, not panics.
+        assert!(!reg.replay_op(doc, &serde_json::json!({ "nope": 1 })));
+        assert!(!reg.replay_op(DocumentId::new(9999), &op));
     }
 
     #[test]

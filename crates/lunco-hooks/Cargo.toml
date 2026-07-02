@@ -1,0 +1,15 @@
+[package]
+name = "lunco-hooks"
+version = "0.1.0"
+edition = "2021"
+description = "Backend-agnostic internal HOOK registry — the extension-point substrate that lets any scripting runtime (rhai now, python/wasm later) implement internal Rust decision points (merge policy, authorization, …). Dependency-free by design: it owns only the abstraction + the global registry."
+
+[dependencies]
+# Deliberately none. This crate owns ONLY the language-neutral abstraction
+# (`HookValue`, `ScriptHook`) and the global registry. Domain crates that define
+# a hook point (lunco-twin-journal, lunco-core) depend on THIS; language bindings
+# (lunco-hooks-rhai) also depend on this. It depends on nobody, so it stays
+# wasm-clean and can be pulled into the lowest-level crates without a cycle.
+
+[lints]
+workspace = true

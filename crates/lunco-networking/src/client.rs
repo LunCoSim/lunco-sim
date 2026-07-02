@@ -12,7 +12,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use crate::sync::{SyncInbox, SyncOutbox};
 use lunco_core::{LocalSession, NetStatus, NetworkRole, SessionId, SyncChannel};
 
-use crate::protocol::{CmdChannel, Frame, SnapChannel};
+use crate::protocol::{BulkChannel, CmdChannel, Frame, SnapChannel};
 use crate::shared::{deserialize_env, serialize_env, PRIVATE_KEY, PROTOCOL_ID};
 
 /// **Build-time**: register the client ferry systems, the disconnect observer,
@@ -344,6 +344,7 @@ fn client_send_outbox(
         let frame = Frame(bytes);
         match channel {
             SyncChannel::ControlStream => sender.send::<SnapChannel>(frame),
+            SyncChannel::BulkData => sender.send::<BulkChannel>(frame),
             _ => sender.send::<CmdChannel>(frame),
         }
     }

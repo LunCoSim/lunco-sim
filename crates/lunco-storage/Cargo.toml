@@ -14,11 +14,26 @@ serde = { workspace = true }
 async-trait = { workspace = true }
 futures-lite = { workspace = true }
 
-# Wasm-only: the `WebStorage` backend persists to the browser's
-# `localStorage`. Native builds use `FileStorage` (std::fs) and pull none
-# of this. `Window` + `Storage` are the only web-sys features needed.
+# Wasm-only: `WebStorage` (localStorage) + `OpfsStorage` (binary assets via
+# OPFS). Native builds use `FileStorage` (std::fs) and pull none of this.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { workspace = true, features = ["Window", "Storage"] }
+web-sys = { workspace = true, features = [
+    "Window",
+    "Storage",
+    # OPFS (Origin Private File System) — async, main-thread-legal write path.
+    "Navigator",
+    "StorageManager",
+    "FileSystemDirectoryHandle",
+    "FileSystemFileHandle",
+    "FileSystemGetDirectoryOptions",
+    "FileSystemGetFileOptions",
+    "FileSystemWritableFileStream",
+    "File",
+    "Blob",
+] }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+js-sys = { workspace = true }
 
 [features]
 # Empty stubs that unlock the corresponding `StorageHandle` variants.

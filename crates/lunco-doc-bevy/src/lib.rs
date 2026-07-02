@@ -57,6 +57,9 @@
 
 pub mod diagnostics;
 pub use diagnostics::DocumentDiagnostics;
+
+pub mod journal_persist;
+pub use journal_persist::JournalPersistencePlugin;
 // The pure-data half lives in lunco-doc; re-export for convenience so callers
 // can reach the whole diagnostics surface from one place.
 pub use lunco_doc::{status_json, DocDiagnostics};
@@ -686,6 +689,20 @@ impl JournalResource {
     pub fn with_write<R>(&self, f: impl FnOnce(&mut CanonicalJournal) -> R) -> R {
         let mut guard = self.inner.lock().expect("journal lock poisoned");
         f(&mut *guard)
+    }
+
+    /// The author id stamped onto locally-recorded entries. Placeholder
+    /// (`AuthorId::local()`) until a networked peer stamps its identity via
+    /// [`set_local_author`](Self::set_local_author).
+    pub fn local_author(&self) -> AuthorId {
+        self.with_read(|j| j.local_author().clone())
+    }
+
+    /// Set the peer-unique author id for future local entries — see
+    /// [`CanonicalJournal::set_local_author`]. Each peer (host + each client)
+    /// must set a distinct id so cross-peer entry ids don't collide.
+    pub fn set_local_author(&self, author: AuthorId) {
+        self.with_write(|j| j.set_local_author(author));
     }
 
     /// Build a [`JournalSink`] handle that records into this resource.

@@ -11,6 +11,12 @@ serde = { workspace = true }
 toml = { workspace = true }
 walkdir = "2.5"
 thiserror = { workspace = true }
+# Stable cross-session identity for a Twin/scenario. `v4` mints random
+# ids in `promote_to_twin` / `TwinManifest::new`; `serde` round-trips
+# the field through `twin.toml`. Used by the networking scenario-sync
+# layer as the stable `scenario_id` (content revision is a separate
+# SHA-256 digest computed by the manifest builder).
+uuid = { workspace = true }
 # DocumentKindId is a SmolStr newtype — opaque, cheap to clone, plays
 # well with HashMap keys; same crate the rest of the workspace uses
 # for stable string identifiers.

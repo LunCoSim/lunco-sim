@@ -31,6 +31,25 @@ mod shared;
 /// snapshots (no lightyear dep). Driven by this crate's lightyear adapter.
 #[cfg(feature = "networking")]
 pub mod sync;
+/// Scenario distribution: the server publishes its scenario manifest (CID-
+/// addressed assets + a Merkle revision), clients fetch the assets they're
+/// missing over the same WebTransport. IPFS-CID interop. Phase 1 ships the
+/// manifest; asset chunk transfer is Phase 3.
+#[cfg(feature = "networking")]
+pub mod scenario;
+/// Scenario asset transfer (Phase 3): one-way host→client byte streaming of the
+/// CID-addressed assets a manifest advertises, into `<cache_dir>/scenarios/<id>/`.
+#[cfg(feature = "networking")]
+pub mod scenario_sync;
+/// The journal replication plane: authored Twin-journal entries host→client,
+/// merged via `append_remote`. Separated from the command/state/content planes
+/// (see module docs); the transport ferry only routes to it.
+#[cfg(feature = "networking")]
+pub mod journal_plane;
+/// The scripted-policy plane: distribute + activate rhai policies (merge /
+/// authorization / drive-kernel) host→client so every peer runs the identical one.
+#[cfg(feature = "networking")]
+pub mod scripted_policy;
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
 mod server;
 #[cfg(feature = "networking")]

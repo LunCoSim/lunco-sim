@@ -75,7 +75,7 @@ External communication, ECS replication, telemetry extraction, and distributed a
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-networking`** | Multiplayer layer: transport-agnostic replication, authentication, and collaborative edit logs. |
+| **`lunco-networking`** | Multiplayer layer: transport-agnostic replication, authentication, and collaborative edit logs. Host-authoritative planes broadcast on connect + change: the **journal plane** (convergent op-log merge), the **scenario plane** (CID asset manifest + scenario sync), the **scripted-policy plane** (rhai merge/authorize/drive-kernel hooks distributed so every peer runs the identical one), and per-peer AOI snapshot routing. |
 | **`lunco-api`** | Transport-agnostic API core: introspection-based command discovery and ULID entity registry. |
 | **`lunco-telemetry`** | Generic reflection-based data extraction engine for "No-Code" telemetry mirroring. |
 | **`lunco-attributes`** | String-based distributed tuning registry for mapping SysML paths to raw ECS memory. |
@@ -106,6 +106,9 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-scripting`** | Runtime-agnostic, language-neutral world bridge with **rhai** as the default (browser-capable) backend; Python is an optional one-shot-eval backend, Lua a reserved (unimplemented) backend id; logic providers cover scenarios and sequencing. |
 | **`lunco-tools`** | Backend-agnostic tool trait + registry: a *tool* is a named, reusable bundle of callable functions whose implementation is pluggable (rhai/native/future). Deliberately dependency-free (rhai-free) — owns only the abstraction + global registry + discovery. |
 | **`lunco-tools-rhai`** | rhai adapter binding for the `lunco-tools` registry: `RhaiTool` (source) + `NativeRhaiTool` (native Rust), and `refresh`, which binds every registered tool into a rhai `Engine` as a static module callable as `name::fn(...)`. |
+| **`lunco-hooks`** | Language-agnostic hook registry: a *hook* is a named, deterministic-flagged decision point (`HookValue` in/out) whose implementation is pluggable. Backs the first-class policies — journal **merge** order, RBAC **authorize** gate, scripted **drive kernels** — as data, not Rust branches. Dependency-free (no rhai/bevy). |
+| **`lunco-hooks-rhai`** | rhai backend for `lunco-hooks`: compiles a rhai `source` + `entry` fn and registers it under a hook id (`register_rhai_hook`), so any hook point can be authored in rhai and hot-replaced. |
+| **`lunco-behavior`** | Dependency-free behaviour-tree kernel (mechanism split from any prelude): `Ctx`-driven tick-tree, HBT-ready. Not yet wired into a runtime. |
 
 ---
 

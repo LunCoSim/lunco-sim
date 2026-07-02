@@ -1015,6 +1015,8 @@ mod force_law_tests {
     }
 
     // (drive-mix parse + kernel projection now live in `lunco_core::kernels`.)
+    // (scripted rhai drive kernels will re-attach to the `ControlKernelRegistry`,
+    //  not a per-vessel component — the consumer is deliberately deferred.)
 
     // ── drive_force_mag: reverse must work ──────────────────────────────────
     #[test]

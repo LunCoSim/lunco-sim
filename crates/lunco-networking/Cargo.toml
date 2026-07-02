@@ -17,7 +17,7 @@ required-features = ["networking"]
 default = []
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
-networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess"]
+networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess", "dep:uuid", "dep:sha2", "dep:cid", "dep:multihash-codetable", "dep:crossbeam-channel", "dep:lunco-twin", "dep:lunco-twin-journal", "dep:lunco-hooks", "dep:lunco-hooks-rhai"]
 # Client-prediction diagnostics (render-jitter / velocity / correction census in
 # `diagnostics.rs`). OFF by default → not compiled into normal/shipping builds.
 # Build with it when chasing netcode jitter; once compiled it's active unless
@@ -62,7 +62,26 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-doc = { path = "../lunco-doc" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-workspace = { path = "../lunco-workspace" }
+# Promote a downloaded scenario → editable on-disk Twin (`PromoteScenario`):
+# `TwinMode::open` + `Twin::promote_to_twin` (writes `twin.toml`). Native-only in
+# effect (web has no folder fs). Optional — only the `networking` build uses it.
+lunco-twin = { path = "../lunco-twin", optional = true }
+# Journal-on-wire (scenario-plane sync): ship `JournalEntry`s host→client, applied
+# via `Journal::append_remote` (which merges). Optional — networking build only.
+lunco-twin-journal = { path = "../lunco-twin-journal", optional = true, features = ["hooks"] }
+# Pluggable convergent merge policy authored in rhai ("conflict resolution
+# strategies but in rhai"): register a deterministic merge hook and switch the
+# journal to `MergeStrategy::Scripted`. Optional — networking build only.
+lunco-hooks = { path = "../lunco-hooks", optional = true }
+lunco-hooks-rhai = { path = "../lunco-hooks-rhai", optional = true }
 lunco-controller = { path = "../lunco-controller" }
+# Scenario asset cache root (`cache_dir()`), for the Phase-3 client-side
+# `scenarios/<id>/` download target. Native + wasm-safe path helper.
+lunco-assets = { path = "../lunco-assets" }
+# Cross-platform asset persistence: native `FileStorage` (std::fs) + wasm
+# `OpfsStorage` (OPFS). Shared (not native-only) — the web client caches assets
+# through it too. Also serves the host's TLS cert file reads on native.
+lunco-storage = { path = "../lunco-storage" }
 # Optional: only the Layer-4 `mod ui` (egui overlays) uses it, behind the `ui`
 # feature. Headless servers never link egui.
 bevy_egui = { workspace = true, optional = true }
@@ -77,6 +96,24 @@ serde_json = { workspace = true, optional = true }
 # Binary wire codec for the snapshot/envelope hot path (replaces serde_json there —
 # ~2x smaller, no field names). serde_json stays for the Reflect command payload.
 bincode = { workspace = true, optional = true }
+# Stable scenario identity (twin.toml uuid) carried on the
+# ScenarioManifest envelope; works on native + wasm (the workspace uuid
+# features pull a wasm-capable getrandom backend).
+uuid = { workspace = true, optional = true }
+# SHA-256 for the scenario manifest revision digest + per-asset content
+# addressing. Pure Rust → compiles on wasm32-unknown-unknown so the web
+# client verifies asset hashes identically to the native client.
+sha2 = { workspace = true, optional = true }
+# Cross-platform completion channel for async asset persist (native task pool +
+# wasm spawn_local both push outcomes here). Gated with the networking feature.
+crossbeam-channel = { workspace = true, optional = true }
+# IPLD content-addressing (IPFS interop): asset ids are real CIDv1
+# (raw codec + sha2-256 multihash), resolvable by `ipfs get`/`ipfs pin`.
+# Wire form is canonical CID bytes; the `cid` crate is used at
+# build/parse/render boundaries (incl. base32 string for debug + the
+# JSON cache sidecar).
+cid = { workspace = true, optional = true }
+multihash-codetable = { workspace = true, optional = true }
 # URL-dialing WebTransport client IO (`wt_client`): lets the browser/native connect by
 # HOSTNAME (`https://sandbox.lunco.space:5888`) so a real CA cert validates with no
 # digest — lightyear's built-in IO only dials `https://{ip}`.
@@ -106,9 +143,8 @@ lightyear = { version = "0.27.0", default-features = false, optional = true, fea
   "webtransport_dangerous_configuration",
 ] }
 # Host TLS identity loading (production certbot cert via env paths). File reads
-# route through lunco-storage (raw `std::fs` is clippy-banned workspace-wide);
-# rustls-pemfile turns the PEM into DER for wtransport's sync `Identity::new`.
-lunco-storage = { path = "../lunco-storage" }
+# route through lunco-storage (shared dep, see above); rustls-pemfile turns the
+# PEM into DER for wtransport's sync `Identity::new`.
 wtransport = "0.6.1"
 rustls-pemfile = "2"
 # Single-instance IPC for `luncosim://` deep-links: forward a clicked link to the
@@ -132,6 +168,10 @@ lightyear = { version = "0.27.0", default-features = false, optional = true, fea
 # per-tab client id) and the client adapter's cert-digest read both need it, and
 # the crate is only ever compiled when the `networking` feature pulls it in.
 web-sys = { workspace = true, features = ["Window", "Location", "Performance"] }
+# Drives the async OPFS asset-persist future on the main thread without blocking
+# (the wasm counterpart of the native `AsyncComputeTaskPool` spawn). Only ever
+# compiled when the `networking` feature pulls this crate in (see note above).
+wasm-bindgen-futures = { workspace = true }
 # On wasm the getrandom crates `compile_error!` unless a browser-crypto backend
 # is enabled. Two incompatible majors land in our graph, each needing its own
 # feature turned on via unification (we never call getrandom directly):

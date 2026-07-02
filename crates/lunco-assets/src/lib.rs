@@ -44,6 +44,9 @@ pub mod download;
 pub mod font;
 pub mod msl;
 pub mod process;
+/// `scenario://` asset source — serves a networked client's downloaded scenario
+/// assets from the local cache (`<cache_dir>/scenarios/<id>/…`), native + web.
+pub mod scenario_source;
 pub mod twin_source;
 
 pub use asset_sources::register_lunco_asset_sources;

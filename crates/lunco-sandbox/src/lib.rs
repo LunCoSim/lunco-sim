@@ -263,6 +263,99 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
     group.build().disable::<TransformPlugin>()
 }
 
+/// Scenario distribution Phase 4 (client consume): when the connected client has
+/// downloaded + verified **every** asset of the host's advertised scenario, load
+/// its entry scene (`default_scene`) from the `scenario://` cache. Loaded once per
+/// scenario **revision** (a mid-session swap bumps the revision → reload).
+///
+/// This is a transient, read-only consume: the scene is mounted via `LoadScene`
+/// as a bare stage, NOT added to the workspace as an editable Twin (no `twin.toml`,
+/// no journal). Turning it into an editable on-disk Twin is a separate "promote"
+/// step; write-gating enforcement rides that later work. Host peers early-out
+/// (they already hold the scene). Headless-safe (`LoadScene` needs no GPU).
+#[cfg(feature = "networking")]
+fn load_ready_scenario(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    downloads: Res<lunco_networking::scenario_sync::AssetDownloads>,
+    // Last scenario revision we triggered a load for — reload only on change.
+    mut last_loaded: Local<Option<[u8; 32]>>,
+    mut commands: Commands,
+) {
+    if role.is_host() {
+        return;
+    }
+    let Some(m) = remote.manifest.as_ref() else {
+        return;
+    };
+    let Some(scene) = m.default_scene.as_deref() else {
+        return; // scenario advertises no entry scene → nothing to auto-load
+    };
+    if *last_loaded == Some(m.revision) || !downloads.all_cached(m) {
+        return;
+    }
+    let uri = lunco_networking::scenario_sync::scenario_asset_uri(&m.scenario_id, scene);
+    info!("[net] scenario fully cached; loading entry scene (read-only): {scene}");
+    commands.trigger(LoadScene { path: uri, root_prim: String::new() });
+    *last_loaded = Some(m.revision);
+}
+
+/// Scenario distribution Layer B: replay peers' live authored edits onto the
+/// local scene. The journal plane converges every peer's journal
+/// (`append_remote` + merge, bidirectional); this projects the merged Op entries
+/// onto the local USD scene so *other* peers' edits become visible. Runs on
+/// **both** roles now (full bidirectional collaboration):
+///
+/// - **Client** — projects entries AFTER the manifest's `journal_head` (the
+///   downloaded snapshot's base — so history baked into the files isn't
+///   double-applied), authored by another peer.
+/// - **Host** — projects over its full native history (base `None`); the
+///   `author != me` filter selects only client-authored edits (its own are
+///   already applied at author time), so the host *sees* clients' edits.
+///
+/// Each entry applies once, without re-recording (`replay_op`). The
+/// assembly-crate bridge: the only place that sees the wire state
+/// (`RemoteScenarioManifest`), the journal, AND the USD registry.
+///
+/// Single active scene doc for now — multi-doc needs stable cross-peer
+/// `DocumentId` mapping (a follow-up); `scene_ops_after` selects by author, not
+/// by the entry's peer-local `doc` id, which single-scene makes irrelevant.
+#[cfg(feature = "networking")]
+fn replay_scenario_journal(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    mut registry: ResMut<lunco_usd::UsdDocumentRegistry>,
+    // Entry ids already projected onto the scene (once-per-entry guard).
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let Some(journal) = journal else {
+        return;
+    };
+    // Base head: the host holds full history natively (None); a client bases on
+    // the downloaded snapshot's head, or waits if no scenario is loaded yet.
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    // Single active scene doc (scenario consume is single-scene for now).
+    let docs: Vec<_> = registry.ids().collect();
+    let [doc] = docs.as_slice() else {
+        return;
+    };
+    let doc = *doc;
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::scene_ops_after(&journal, base, &me, &applied);
+    for (id, op) in pending {
+        registry.replay_op(doc, &op);
+        applied.insert(id);
+    }
+}
+
 /// The shared, headless-safe core: the persistent world shell, physics, cosim,
 /// USD scene load, mobility/hardware/controller/avatar, environment, the HTTP
 /// API, and networking. Added unconditionally by both the GUI and the server, so
@@ -343,6 +436,16 @@ impl Plugin for SandboxCorePlugin {
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
             .add_plugins(lunco_core::WorldShellPlugin)
+            // Canonical Twin change-journal (op log). CORE substrate, not UI:
+            // it must exist on the headless server + every client so authored
+            // edits are recorded (the domain registries' `wire_*_journal_handle`
+            // systems fire on `resource_added::<JournalResource>` and attach a
+            // recorder to each DocumentHost). Previously added only by the
+            // workbench UI plugin, so a headless networked host journaled
+            // nothing — the blocker for journal-on-wire sync. Pure lifecycle
+            // observers + resources; no GPU/egui. The workbench add is now
+            // guarded to avoid a double-add (double observers).
+            .add_plugins(lunco_doc_bevy::TwinJournalPlugin)
             .add_plugins(GravityPlugin)
             .add_plugins(EnvironmentPlugin)
             .add_plugins(TerrainPlugin)
@@ -403,6 +506,22 @@ impl Plugin for SandboxCorePlugin {
         #[cfg(feature = "lunco-api")]
         app.add_plugins(lunco_api::LunCoApiPlugin::default());
 
+        // Durable journal history for headless (`lunco-sandbox-server` / any
+        // `--no-ui` host): load-on-startup + debounced-save of the canonical
+        // journal, so collaborative edit history survives restarts. The GUI keeps
+        // its own Twin-scoped `lunco-workspace` persistence, so this is
+        // headless-only to avoid two mechanisms writing the same history.
+        if self.headless {
+            app.add_plugins(lunco_doc_bevy::JournalPersistencePlugin);
+            // `setup_sandbox`'s twin-load path needs `WorkspaceResource`, which the
+            // GUI gets from `lunco-workbench`'s `WorkspacePlugin` — a crate the
+            // headless server doesn't link. Without this, a headless boot panics in
+            // `setup_sandbox`. Bare `init_resource` (not the full `WorkspacePlugin`)
+            // so we don't also pull in that plugin's Twin-scoped journal observers,
+            // which would double up on the `JournalPersistencePlugin` above.
+            app.init_resource::<lunco_workspace::WorkspaceResource>();
+        }
+
         // Multiplayer. Native: `--host [port]` / `--connect <addr>`; browser:
         // `?connect=host`. With no address the plugin still loads client-capable
         // but idle (single-player) so the in-sim *Connect* button / `JoinServer`
@@ -412,6 +531,17 @@ impl Plugin for SandboxCorePlugin {
             let mode = lunco_networking::NetworkMode::resolve(self.headless);
             info!("[net] networking mode: {mode:?}");
             app.add_plugins(lunco_networking::LunCoNetworkingPlugin { mode });
+            // Scenario distribution Phase 4: once a connected client has fully
+            // downloaded the host's advertised scenario, load its entry scene from
+            // the `scenario://` cache (read-only consume). The bridge lives here —
+            // the assembly crate that owns both the wire (`lunco-networking`) and
+            // the scene loader (`lunco_usd::LoadScene`) — keeping each of those
+            // crates free of the other.
+            app.add_systems(Update, load_ready_scenario);
+            // Layer B: project peers' live journal edits onto the local scene
+            // (bidirectional — clients see the host's edits, the host sees
+            // clients'; no-op when no scenario/journal is present).
+            app.add_systems(Update, replay_scenario_journal);
             // Connect-menu bridge adapter + egui presence/tutorial overlays. Pulls
             // bevy_egui, so it's GUI-only and gated on `ui` (CQ-601) — the headless
             // server omits it. The host still answers runtime JoinServer/LeaveServer
@@ -973,11 +1103,17 @@ fn setup_sandbox(world: &mut World) {
                 });
             }
         } else {
-            // It was loaded as Folder, create a default manifest
+            // It was loaded as Folder, create a default manifest.
+            // `uuid` is left `None`: this is an in-memory synthetic
+            // manifest for a folder with no `twin.toml`. The networking
+            // scenario-sync layer derives a stable id (path digest)
+            // when `uuid` is absent, so the server's scenario stays
+            // stable across restarts without writing a `twin.toml`.
             twin.manifest = Some(lunco_twin::TwinManifest {
                 name: twin_root.file_name().unwrap_or_default().to_string_lossy().into_owned(),
                 description: None,
                 version: "0.1.0".into(),
+                uuid: None,
                 default_perspective: None,
                 children: Vec::new(),
                 usd: Some(lunco_twin::UsdManifest {

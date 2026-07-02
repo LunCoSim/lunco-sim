@@ -9,6 +9,14 @@ lunco-doc = { path = "../lunco-doc" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 web-time = "1"
+# Optional: the scripted `ScriptedMergePolicy` hook adapter. Off by default so
+# the pure journal stays scripting-free; a consumer enables `hooks` to let a
+# rhai/Python merge policy fill `MergePolicy` via the language-neutral registry.
+lunco-hooks = { path = "../lunco-hooks", optional = true }
+
+[features]
+default = []
+hooks = ["dep:lunco-hooks"]
 
 # TODO(crdt): when we move from a local Vec-backed log to a yrs::Doc-backed
 # log (for persistent history, time-travel, and future multi-user sync),

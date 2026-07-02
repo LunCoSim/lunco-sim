@@ -45,12 +45,14 @@ BIN=target/debug/sandbox
 RL='info,wgpu=error,naga=warn'
 
 echo "launching HOST  ($HOST_POS, api $HOST_API)…"
-setsid nohup env RUST_LOG="$RL" "$BIN" --host --window-pos "$HOST_POS" --api "$HOST_API" \
+# Distinct LUNCO_PEER_ID per instance — both share this machine's persisted
+# install id otherwise, colliding on journal author ids (see journal_plane).
+setsid nohup env RUST_LOG="$RL" LUNCO_PEER_ID=local-host "$BIN" --host --window-pos "$HOST_POS" --api "$HOST_API" \
   >"$HOST_LOG" 2>&1 </dev/null & disown
 sleep 4   # let the host bind :5888 + write the cert digest before the client dials
 
 echo "launching CLIENT ($CLIENT_POS, api $CLIENT_API)…"
-setsid nohup env RUST_LOG="$RL" "$BIN" --connect 127.0.0.1 --window-pos "$CLIENT_POS" --api "$CLIENT_API" \
+setsid nohup env RUST_LOG="$RL" LUNCO_PEER_ID=local-client "$BIN" --connect 127.0.0.1 --window-pos "$CLIENT_POS" --api "$CLIENT_API" \
   >"$CLIENT_LOG" 2>&1 </dev/null & disown
 
 echo "host log:   $HOST_LOG"

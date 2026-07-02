@@ -43,6 +43,7 @@ use lunco_core::{
 use lunco_api::executor::{authz_target_gid, globalize_command_ids, resolve_command_ids};
 use lunco_api::registry::ApiEntityRegistry;
 pub use lunco_doc_bevy::{Presence, UserId, PresenceInfo};
+use lunco_doc_bevy::JournalResource;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_celestial::CelestialReferenceFrame;
 
@@ -226,6 +227,24 @@ pub struct InboundClientCtx<'w> {
     // Bundled here (vs a top-level param) to keep `drain_sync_inbox` within Bevy's
     // 16-argument system limit.
     view_centers: ResMut<'w, ViewCenters>,
+    // Client-side stash of the host's scenario manifest (filled by the
+    // `ScenarioManifest` arm). Bundled here for the same 16-arg-limit reason;
+    // host-side arms are no-ops.
+    remote_scenario: ResMut<'w, crate::scenario::RemoteScenarioManifest>,
+    // Phase-3 asset transfer queues (bundled for the same 16-arg reason). The
+    // arms only enqueue; the actual work runs in `crate::scenario_sync` systems.
+    // Client fills `incoming_chunks` (host arm is a no-op); host fills
+    // `pending_asset_requests` (client arm is a no-op).
+    incoming_chunks: ResMut<'w, crate::scenario_sync::IncomingAssetChunks>,
+    pending_asset_requests: ResMut<'w, crate::scenario_sync::PendingAssetRequests>,
+    // Canonical Twin journal — a client applies host-sent entries here via
+    // `append_remote` (merge). `Option` so the drain still runs in a build with
+    // no journal (e.g. a minimal networking-only test); host arm is a no-op.
+    journal: Option<Res<'w, JournalResource>>,
+    // Scripted-policy plane: a client registers+activates host-sent policies here
+    // and mirrors them into the registry. Bundled for the same 16-arg-limit reason;
+    // host arm is a no-op (host is the source of truth).
+    scripted_policies: ResMut<'w, crate::scripted_policy::ScriptedPolicyRegistry>,
 }
 
 /// Host → clients: the authoritative who-owns-what map (`gid → session`).
@@ -478,6 +497,30 @@ pub enum SyncEnvelope {
     Despawn(DespawnReplicationMsg),
     // Same positional-codec rule: append after `Despawn`. Client→host only.
     ViewCenter(ViewCenterMsg),
+    // ── Scenario distribution (appended LAST; see `scenario` mod) ──────────
+    // Same positional-bincode rule: appended after `ViewCenter` so all prior
+    // discriminants stay stable. A stale wasm client (no scenario support) vs a
+    // fresh host simply doesn't send/handle these — the variants are ignored,
+    // never shifted. Reserve all four now so Phase 3 (asset chunk transfer)
+    // needs no further enum edit; the handlers land then.
+    //
+    // Host → client: the scenario manifest (CID-addressed assets + revision).
+    ScenarioManifest(crate::scenario::ScenarioManifestMsg),
+    // Client → host: "I'm missing these CIDs, send bytes" (Phase 3).
+    AssetRequest(crate::scenario::AssetRequestMsg),
+    // Host → client: one chunk of an asset's bytes (Phase 3).
+    AssetChunk(crate::scenario::AssetChunkMsg),
+    // Peer → host: "I already have this CID" dedupe hint (Phase 3+).
+    AssetHave(crate::scenario::AssetHaveMsg),
+    // Host → client: a Twin-journal entry (journal plane). Appended LAST (same
+    // positional-codec rule): a stale peer that predates journal sync simply
+    // never sends/handles it; prior discriminants stay put. Type owned by the
+    // `journal_plane` module (the plane owns its wire shape).
+    JournalEntry(crate::journal_plane::JournalEntryMsg),
+    // Host → client: the active scripted-policy set (scripted-policy plane).
+    // Appended LAST (positional-codec rule): a stale peer that predates it never
+    // sends/handles it; prior discriminants stay put.
+    ScriptedPolicy(crate::scripted_policy::ScriptedPolicyMsg),
 }
 
 // ── Resources (the contract `lunco-networking` touches) ───────────────────────
@@ -861,16 +904,18 @@ pub fn apply_sync_command(
 
 // ── Inbox drain (commands / snapshots / spawns / handshake) ───────────────────
 
-/// Host relay gate for avatar-control envelopes (`TutorStatus`/`StudentStatus`/
-/// `SharePerspective`). These seize or redirect targeted peers' avatar camera +
-/// input, so the host must drop them from an *unauthenticated* sender (and the
-/// caller stamps the sender identity to prevent impersonation). Single chokepoint
-/// for that policy — change the required role here, not in each arm.
+/// Host capability gate for inbound envelopes keyed by a well-known capability
+/// (`lunco_core::session::capability::*`): the avatar-control relays
+/// (`TutorStatus`/`StudentStatus`/`SharePerspective`, which seize peers' camera +
+/// input) and the journal plane (`JournalEdit`, who may mutate shared authored
+/// content). The host drops such an envelope from a sender lacking the capability's
+/// role. Single chokepoint for that policy — change the required role in the
+/// registry, not in each arm.
 ///
 /// Returns whether the arm should keep processing:
-/// - non-host peer → `true` (clients never gate; they trust the host-stamped relay),
-/// - host + `Operator`-or-higher sender → `true` (caller stamps + relays + consumes),
-/// - host + sender lacks the relay capability's role → `false` (caller `continue`s: not relayed, not consumed).
+/// - non-host peer → `true` (clients never gate; they trust the host's decisions),
+/// - host + sender satisfies the capability's role → `true` (caller processes it),
+/// - host + sender lacks the role → `false` (caller rejects / `continue`s).
 ///
 /// **Policy is data, not hardcoded.** The required role for `capability`
 /// (`lunco_core::session::capability::*`) is resolved from the shared
@@ -886,7 +931,7 @@ pub fn apply_sync_command(
 /// per-sender identity binding done by each relay arm (anti-spoof), and the
 /// per-peer follow opt-in / explicit-target consent in the `TutorStatus` arm.
 #[inline]
-fn authed_for_avatar_relay(
+fn authed_for_capability(
     role: &NetworkRole,
     rbac: &lunco_core::session::SessionRbac,
     policies: &lunco_core::session::CommandPolicyRegistry,
@@ -996,6 +1041,10 @@ pub fn drain_sync_inbox(
                 if role.is_host() {
                     continue;
                 }
+                if entities.resolve(&GlobalEntityId::from_raw(spawn.gid)).is_some() {
+                    warn!("[net] Spawn rejected: gid {} already exists in registry", spawn.gid);
+                    continue;
+                }
                 pending_spawns.0.push(ReplicatedSpawn {
                     gid: spawn.gid,
                     entry_id: spawn.entry_id,
@@ -1030,6 +1079,12 @@ pub fn drain_sync_inbox(
                     // challenge/elevation path — stored now so the handshake field is
                     // load-bearing rather than dead.
                     ctx.credential.token = Some(h.token);
+                    // NOTE: the journal author is NOT (re)stamped here anymore. It's
+                    // set once at startup to a stable per-install id
+                    // (`journal_plane::stamp_local_journal_author`) so a peer's own
+                    // offline edits keep the same author across reconnects and thus
+                    // upload + merge correctly (the session-scoped author dropped
+                    // them). See `journal_plane::local_author_id`.
                     info!("[net] handshake accepted: assigned session={}", h.session);
                 }
             }
@@ -1117,8 +1172,8 @@ pub fn drain_sync_inbox(
                 // Host authz + anti-spoof: tutor mode seizes targeted peers' avatar
                 // camera and locks their input. Gate (one chokepoint) then bind the
                 // tutor identity to the actual sender (mirroring the `Cursor` arm) so a
-                // peer can't claim to be another session. See [`authed_for_avatar_relay`].
-                if !authed_for_avatar_relay(
+                // peer can't claim to be another session. See [`authed_for_capability`].
+                if !authed_for_capability(
                     &role,
                     &rbac,
                     &ctx.command_policies,
@@ -1191,8 +1246,8 @@ pub fn drain_sync_inbox(
                 //
                 // Anti-spoof: bind the report to its actual sender so a peer can't
                 // impersonate another student and pollute the observing tutor's
-                // mirrored view. See [`authed_for_avatar_relay`].
-                if !authed_for_avatar_relay(
+                // mirrored view. See [`authed_for_capability`].
+                if !authed_for_capability(
                     &role,
                     &rbac,
                     &ctx.command_policies,
@@ -1222,8 +1277,8 @@ pub fn drain_sync_inbox(
             SyncEnvelope::SharePerspective(mut msg) => {
                 // Same authz + anti-spoof as TutorStatus: a SharePerspective snaps
                 // every targeted peer's avatar/camera to the sender's view. See
-                // [`authed_for_avatar_relay`].
-                if !authed_for_avatar_relay(
+                // [`authed_for_capability`].
+                if !authed_for_capability(
                     &role,
                     &rbac,
                     &ctx.command_policies,
@@ -1243,6 +1298,93 @@ pub fn drain_sync_inbox(
 
                 if msg.tutor_session != local.0 .0 {
                     tutor_status.one_shot_snap_request = Some(msg);
+                }
+            }
+            // ── Scenario distribution ───────────────────────────────────────
+            // Phase 1: the client stashes the host's manifest; the host ignores
+            // any client-sent manifest (only the host publishes the scenario).
+            // Phase 3 wires AssetRequest/AssetChunk/AssetHave handlers; until
+            // then they're recognized-but-no-op so the wire enum is exhaustive
+            // and the reserved discriminants stay stable for a future host.
+            SyncEnvelope::ScenarioManifest(m) => {
+                if !role.is_host() {
+                    let incoming_rev = m.revision;
+                    // Dedupe on the WHOLE manifest, not `revision` alone: a
+                    // scenario swap can keep byte-identical assets (⇒ identical
+                    // Merkle `revision`) while changing `scenario_id` /
+                    // `default_scene` / `name`. Keying only on `revision` would
+                    // silently drop that swap and leave the client on the old
+                    // scenario (Phase 4 would auto-load the wrong entry scene).
+                    let is_new = ctx.remote_scenario.manifest.as_ref() != Some(&m);
+                    if is_new {
+                        info!(
+                            "[net] scenario manifest received: {} assets, revision={:x?}",
+                            m.assets.len(),
+                            &incoming_rev[..4]
+                        );
+                        ctx.remote_scenario.manifest = Some(m);
+                        // Phase 3 will emit AssetRequest for missing CIDs here.
+                        // Phase 4 will trigger the scene load once assets land.
+                    }
+                }
+            }
+            SyncEnvelope::AssetRequest(req) => {
+                // Host queues the request (keyed on the TRUSTED connection-bound
+                // sender, never a wire-supplied id) for the off-thread
+                // `serve_asset_requests`. Clients ignore inbound requests — only
+                // the host serves scenario bytes.
+                if role.is_host() && !req.missing.is_empty() {
+                    ctx.pending_asset_requests.0.push((sender, req.missing));
+                }
+            }
+            SyncEnvelope::AssetChunk(chunk) => {
+                // Client queues the chunk for `reassemble_asset_chunks`. The host
+                // never ingests inbound chunks (it's the sole byte source).
+                if !role.is_host() {
+                    ctx.incoming_chunks.0.push(chunk);
+                }
+            }
+            SyncEnvelope::AssetHave(_) => {
+                // Phase 3+: host skips streaming an asset the peer already has.
+            }
+            SyncEnvelope::JournalEntry(msg) => {
+                // Route to the journal plane (bidirectional). BOTH roles merge
+                // the inbound entry via `append_remote`: a client mirrors the
+                // host's edits; the host merges each client's edits, from which
+                // its `broadcast_journal_entries` then relays them to the other
+                // clients (host = fan-out hub). Idempotent, so echoes are no-ops.
+                //
+                // RBAC: the host first authorizes the sender against the
+                // `JournalEdit` capability (resolved from `CommandPolicyRegistry`,
+                // like any command) — a read-only viewer, or any role below the
+                // deployment's threshold, is rejected so it can't mutate the
+                // shared authored content. Open-sandbox by default (Observer
+                // floor); tighten via `set_override("JournalEdit", …)`. Clients
+                // skip the gate (`authed_for_capability` returns true off-host):
+                // they trust the host's already-authorized, relayed entries.
+                if !authed_for_capability(
+                    &role,
+                    &rbac,
+                    &ctx.command_policies,
+                    sender,
+                    lunco_core::session::capability::JOURNAL_EDIT,
+                ) {
+                    warn!("[journal-plane] rejected journal edit from unauthorized session {sender}");
+                } else if let Some(journal) = ctx.journal.as_ref() {
+                    crate::journal_plane::apply_inbound_entry(journal, &msg);
+                }
+            }
+            SyncEnvelope::ScriptedPolicy(msg) => {
+                // Scripted-policy plane: only a CLIENT applies the host's
+                // authoritative policy set (compile+register each hook, mirror the
+                // set locally). The host is the source — it never applies its own
+                // broadcast (and would only ever receive one from itself).
+                if !role.is_host() {
+                    crate::scripted_policy::apply_inbound_policies(
+                        &msg,
+                        &mut ctx.scripted_policies,
+                        ctx.journal.as_deref(),
+                    );
                 }
             }
         }
@@ -2545,12 +2687,40 @@ impl Plugin for SyncPlugin {
             .init_resource::<ReplicationState>()
             .init_resource::<PeerInterest>()
             .init_resource::<ViewCenters>()
+            // Scenario distribution: the client-side stash of the host's
+            // manifest (filled by the `ScenarioManifest` arm of
+            // `drain_sync_inbox`). Host-side publisher resource
+            // (`ScenarioManifestResource`) is initialized in `setup_host` —
+            // it's host-only and must not exist in single-player/client builds.
+            .init_resource::<crate::scenario::RemoteScenarioManifest>()
+            // Phase-3 asset transfer: the client-side download bookkeeping +
+            // inbound chunk queue, and the host-side request queue. All three are
+            // touched by the shared `drain_sync_inbox` (via `InboundClientCtx`) /
+            // client systems, so they must exist on every peer regardless of role.
+            // Host-only serve state (`HostAssetPaths`/`AssetServeTasks`) is
+            // initialized in `setup_host`.
+            .init_resource::<crate::scenario_sync::AssetDownloads>()
+            .init_resource::<crate::scenario_sync::IncomingAssetChunks>()
+            .init_resource::<crate::scenario_sync::PendingAssetRequests>()
+            .init_resource::<crate::scenario_sync::AssetPersist>()
+            // Scripted-policy plane: the active rhai policy set (merge / authz /
+            // drive-kernel). Host-authoritative; clients fill it from the host's
+            // broadcast (`drain_sync_inbox`). Present on every peer.
+            .init_resource::<crate::scripted_policy::ScriptedPolicyRegistry>()
             .register_settings_section::<CursorSettings>()
             .register_settings_section::<TutorialSettings>()
             .init_resource::<SyncChannelRegistry>()
             .add_observer(apply_sync_command)
             .add_observer(on_update_profile_rbac)
             .add_systems(Startup, setup_host_rbac)
+            // Journal plane: stamp this peer's stable per-install journal author
+            // (both roles) so edits are attributable + durable across reconnects.
+            // Reactive: runs once the frame the JournalResource appears.
+            .add_systems(
+                Update,
+                crate::journal_plane::stamp_local_journal_author
+                    .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
+            )
             .add_systems(PreUpdate, block_bevy_inputs)
             .add_systems(Update, (
                 drain_sync_inbox,
@@ -2570,6 +2740,19 @@ impl Plugin for SyncPlugin {
                 // to `interest_hz`). The server-side `assemble_and_send_snapshots`
                 // routes pose updates by these sets.
                 recompute_interest,
+                // Scenario asset transfer (Phase 3), client-side: request missing
+                // assets when a new manifest lands, and reassemble+persist the
+                // chunks the host streams back. Both no-op on the host. The
+                // host-side serve/send pair is registered in `setup_host`.
+                crate::scenario_sync::request_missing_assets,
+                crate::scenario_sync::reassemble_asset_chunks,
+                crate::scenario_sync::drain_persist_results,
+                // Journal plane: both roles stream new journal entries — the
+                // host relays all (fan-out hub), clients send their own edits.
+                crate::journal_plane::broadcast_journal_entries,
+                // Scripted-policy plane: host broadcasts the active policy set when
+                // it changes so every client converges on the identical policies.
+                crate::scripted_policy::broadcast_scripted_policies,
             ))
             // `gather_snapshot` runs on the sim clock (`FixedPostUpdate`): it only
             // writes our `SyncOutbox` (never calls lightyear), so it's safe off the
@@ -2596,12 +2779,18 @@ impl Plugin for SyncPlugin {
             // which also records after writeback in `FixedPostUpdate`.
             .add_systems(FixedPostUpdate, gather_snapshot.after(PhysicsSystems::Writeback));
         register_all_commands(app);
+        // Scenario-distribution commands (PromoteScenario) — its own
+        // `register_commands!` set in the `scenario_sync` module.
+        crate::scenario_sync::register_all_commands(app);
+        // Scripted-policy activation command (SetScriptedPolicy).
+        crate::scripted_policy::register_all_commands(app);
     }
 }
 
 #[cfg(test)]
 mod codec_roundtrip {
     use super::*;
+    use crate::journal_plane::JournalEntryMsg;
     use crate::shared::{deserialize_env, serialize_env};
 
     #[test]
@@ -2684,6 +2873,148 @@ mod codec_roundtrip {
         let despawn = serialize_env(&SyncEnvelope::Despawn(DespawnReplicationMsg { gid: 9 }))
             .expect("serialize");
         assert_eq!(&despawn[..4], &[11, 0, 0, 0], "Despawn must be the last variant");
+    }
+
+    #[test]
+    fn scenario_variants_appended_after_viewcenter_keep_discriminants_stable() {
+        // Same positional-bincode rule as `Despawn`: the four scenario variants
+        // are appended after `ViewCenter` (index 12) so no prior discriminant
+        // shifts. Lock the indices so a future mid-enum insert fails loudly
+        // instead of silently breaking a version-skewed peer (stale wasm bundle
+        // vs fresh host). ViewCenter=12, ScenarioManifest=13, AssetRequest=14,
+        // AssetChunk=15, AssetHave=16.
+        let viewcenter = serialize_env(&SyncEnvelope::ViewCenter(ViewCenterMsg {
+            pos: [0.0; 3],
+        }))
+        .expect("serialize");
+        assert_eq!(&viewcenter[..4], &[12, 0, 0, 0], "ViewCenter discriminant moved");
+
+        let manifest = SyncEnvelope::ScenarioManifest(crate::scenario::ScenarioManifestMsg {
+            scenario_id: [0u8; 16],
+            revision: [0u8; 32],
+            name: String::new(),
+            default_scene: None,
+            assets: Vec::new(),
+            journal_head: None,
+        });
+        let bytes = serialize_env(&manifest).expect("serialize");
+        assert_eq!(&bytes[..4], &[13, 0, 0, 0], "ScenarioManifest must be index 13");
+
+        let req = serialize_env(&SyncEnvelope::AssetRequest(crate::scenario::AssetRequestMsg {
+            missing: Vec::new(),
+        }))
+        .expect("serialize");
+        assert_eq!(&req[..4], &[14, 0, 0, 0], "AssetRequest must be index 14");
+
+        let chunk = serialize_env(&SyncEnvelope::AssetChunk(crate::scenario::AssetChunkMsg {
+            cid: Vec::new(),
+            offset: 0,
+            total: 0,
+            data: Vec::new(),
+        }))
+        .expect("serialize");
+        assert_eq!(&chunk[..4], &[15, 0, 0, 0], "AssetChunk must be index 15");
+
+        let have = serialize_env(&SyncEnvelope::AssetHave(crate::scenario::AssetHaveMsg {
+            cid: Vec::new(),
+        }))
+        .expect("serialize");
+        assert_eq!(&have[..4], &[16, 0, 0, 0], "AssetHave must be index 16");
+
+        let journal = serialize_env(&SyncEnvelope::JournalEntry(JournalEntryMsg {
+            json: String::new(),
+        }))
+        .expect("serialize");
+        assert_eq!(&journal[..4], &[17, 0, 0, 0], "JournalEntry must be index 17");
+    }
+
+    /// A `JournalEntry` round-trips through the JSON-in-bincode envelope — the
+    /// `serde_json::Value` inside an `Op` (which plain bincode can't carry)
+    /// survives because the entry travels as a JSON string.
+    #[test]
+    fn journal_entry_envelope_roundtrips() {
+        use lunco_twin_journal::{
+            AuthorId, AuthorTag, DomainKind, EntryId, EntryKind, JournalEntry, TwinId,
+        };
+        let entry = JournalEntry {
+            id: EntryId { author: AuthorId::new("peer"), lamport: 7 },
+            parents: vec![EntryId { author: AuthorId::local(), lamport: 3 }],
+            author: AuthorTag { user: "peer".into(), tool: "remote".into() },
+            at_ms: 42,
+            twin: TwinId::new("t"),
+            doc: lunco_doc::DocumentId::new(1),
+            // The Op carries `serde_json::Value` payloads — the exact shape plain
+            // bincode chokes on; the JSON-string envelope handles it.
+            kind: EntryKind::Op {
+                domain: DomainKind::Usd,
+                op: serde_json::json!({ "SetTranslate": { "path": "/World/rover", "value": [1.0, 2.0, 3.0] } }),
+                inverse: serde_json::json!({ "SetTranslate": { "path": "/World/rover", "value": [0.0, 0.0, 0.0] } }),
+            },
+            change_set: None,
+        };
+        let msg = JournalEntryMsg { json: serde_json::to_string(&entry).unwrap() };
+        let bytes = serialize_env(&SyncEnvelope::JournalEntry(msg)).expect("serialize");
+        let back = deserialize_env(&bytes).expect("deserialize");
+        let SyncEnvelope::JournalEntry(m) = back else {
+            panic!("wrong variant");
+        };
+        let round: JournalEntry = serde_json::from_str(&m.json).unwrap();
+        assert_eq!(round.id, entry.id);
+        assert_eq!(round.parents, entry.parents);
+        match round.kind {
+            EntryKind::Op { domain, op, .. } => {
+                assert_eq!(domain, DomainKind::Usd);
+                assert_eq!(op["SetTranslate"]["value"][0], 1.0);
+            }
+            _ => panic!("expected Op"),
+        }
+    }
+
+    #[test]
+    fn scenario_manifest_envelope_roundtrips() {
+        use crate::scenario::{cid_for_content, scenario_revision, ScenarioAsset, ScenarioManifestMsg};
+        // A realistic manifest: two assets with real CIDs + a computed revision.
+        let assets = vec![
+            ScenarioAsset {
+                path: "scenes/main.usda".into(),
+                cid: cid_for_content(b"#usda 1.0\n").to_bytes(),
+                size: 10,
+                media_type: Some("model/vnd.usd".into()),
+            },
+            ScenarioAsset {
+                path: "assets/rover.glb".into(),
+                cid: cid_for_content(b"glb bytes").to_bytes(),
+                size: 9,
+                media_type: None,
+            },
+        ];
+        let rev = scenario_revision(&assets);
+        let env = SyncEnvelope::ScenarioManifest(ScenarioManifestMsg {
+            scenario_id: [0xAB; 16],
+            revision: rev,
+            name: "lunar_base".into(),
+            default_scene: Some("scenes/main.usda".into()),
+            assets,
+            journal_head: Some(lunco_twin_journal::EntryId {
+                author: lunco_twin_journal::AuthorId::new("host"),
+                lamport: 7,
+            }),
+        });
+        let back = deserialize_env(&serialize_env(&env).expect("serialize")).expect("deserialize");
+        match back {
+            SyncEnvelope::ScenarioManifest(m) => {
+                assert_eq!(m.scenario_id, [0xAB; 16]);
+                assert_eq!(m.revision, rev);
+                assert_eq!(m.name, "lunar_base");
+                assert_eq!(m.default_scene.as_deref(), Some("scenes/main.usda"));
+                assert_eq!(m.assets.len(), 2);
+                // The CIDs survive the round-trip verbatim (canonical bytes).
+                assert_eq!(m.assets[0].path, "scenes/main.usda");
+                assert_eq!(m.assets[0].cid.len(), 36);
+                assert_eq!(m.assets[1].size, 9);
+            }
+            _ => panic!("wrong variant after round-trip"),
+        }
     }
 
     #[test]

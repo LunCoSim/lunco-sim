@@ -39,6 +39,8 @@ members = [
     "crates/lunco-twin-journal",
     "crates/lunco-tools",
     "crates/lunco-tools-rhai",
+    "crates/lunco-hooks",
+    "crates/lunco-hooks-rhai",
     "crates/lunco-workbench",
     "crates/lunco-web",
     "crates/lunco-scripting",
@@ -225,6 +227,11 @@ uuid = { version = "1", features = ["v4", "serde"] }
 indexmap = { version = "2.6", features = ["serde"] }
 smol_str = { version = "0.2", features = ["serde"] }
 crossbeam-channel = "0.5"
+# Link-time distributed registry (life-before-main collection). Backs the
+# asset-scheme registry: any crate `inventory::submit!`s its `AssetSchemeProvider`
+# and the pre-AssetPlugin registrar drains them — no central hardcoded scheme
+# list. wasm-safe (collected via wasm-bindgen module init).
+inventory = "0.3"
 egui_plot = "0.34.1"
 rfd = "0.15"
 tempfile = "3.10"
@@ -256,6 +263,19 @@ tar = "0.4"
 zstd = "0.13"
 rayon = "1"
 base64 = "0.22"
+# Pure-Rust SHA-256 — works on native AND wasm32-unknown-unknown (no
+# getrandom / no C). Used by lunco-assets (asset verify) and
+# lunco-networking (scenario manifest revision digest + asset content
+# addressing on both server and web client).
+sha2 = "0.10"
+# IPLD content-addressing (IPFS interop). `cid` builds/renders CIDs;
+# `multihash-codetable` provides `Code::Sha2_256.digest(bytes)`. Both
+# pure-Rust and wasm32-safe — the web client verifies asset hashes
+# identically to native and the CIDs it pins are resolvable by `ipfs
+# get`/`ipfs pin`. Wire form is canonical CID bytes (see
+# lunco-networking/src/scenario.rs).
+cid = { version = "0.11", default-features = false, features = ["alloc", "serde"] }
+multihash-codetable = { version = "0.2", default-features = false, features = ["sha2"] }
 
 # ── Bevy sub-crates — pinned to the exact `bevy` version above ────────
 # These ship in lock-step with bevy; a skewed minor (e.g. bevy_reflect

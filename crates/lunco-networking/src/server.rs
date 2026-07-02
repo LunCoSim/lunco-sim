@@ -2,19 +2,24 @@
 //! outbox→clients / clients→inbox ferry. Native only.
 
 use bevy::prelude::*;
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lightyear::netcode::server_plugin::NetcodeConfig;
 use lightyear::netcode::NetcodeServer;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
+use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use crate::sync::{
     HandshakeMsg, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg, ReplicationState,
     SnapshotMsg, SyncEnvelope, SyncInbox, SyncOutbox, ViewCenters, MAX_SNAPSHOT_ENTRIES,
 };
+use lunco_doc_bevy::JournalResource;
 use lunco_core::{
     NetStatus, SessionId, SessionRegistry, SessionProfiles, SimTick, SyncChannel,
 };
+use lunco_workspace::{Twin, TwinAdded, WorkspaceResource};
+use crate::scenario::{cid_for_content, scenario_revision, ScenarioAsset, ScenarioManifestMsg, ScenarioManifestResource};
 
 /// Host-authoritative map: live connection (deterministic netcode peer key) →
 /// **server-assigned** [`SessionId`]. The authority id is drawn from server
@@ -46,12 +51,13 @@ impl AssignedSessions {
     }
 }
 
-use crate::protocol::{CmdChannel, Frame, SnapChannel};
+use crate::protocol::{BulkChannel, CmdChannel, Frame, SnapChannel};
 use crate::shared::{deserialize_env, peer_to_session, serialize_env, PRIVATE_KEY, PROTOCOL_ID};
 
 use lunco_storage::{FileStorage, Storage, StorageHandle};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use wtransport::tls::{Certificate, CertificateChain, PrivateKey};
+use sha2::{Digest, Sha256};
 
 /// Env vars naming a CA-signed cert + key (PEM). When both are set the host
 /// serves that identity and browsers validate via the normal chain — no digest.
@@ -284,8 +290,21 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
         commands.trigger(Start { entity: server });
     });
     app.init_resource::<AssignedSessions>();
+    // Scenario distribution: the host's "current scenario" publisher resource,
+    // plus the in-flight off-thread manifest build. The build is spawned from a
+    // `Startup` system (below) rather than inline here so the
+    // `AsyncComputeTaskPool` is initialized before the first spawn.
+    app.init_resource::<ScenarioManifestResource>();
+    app.init_resource::<PendingScenarioManifest>();
+    // Phase-3 host-only serving state: CID→path index (filled by
+    // `drive_scenario_manifest`) + in-flight off-thread read jobs.
+    app.init_resource::<crate::scenario_sync::HostAssetPaths>();
+    app.init_resource::<crate::scenario_sync::AssetServeTasks>();
+    app.add_systems(Startup, spawn_initial_scenario_manifest);
+
     app.add_observer(on_server_connected);
     app.add_observer(on_server_disconnected);
+    app.add_observer(on_twin_added_host);
     // NOTE: these MUST stay in `Update` (the lightyear message ferry). Moving them
     // to `FixedUpdate` silently breaks the RELIABLE `CmdChannel` (client→host
     // PossessVessel/SpawnEntity never arrive) — lightyear's reliable flush is
@@ -306,14 +325,28 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
             // `Update` as the reliable-flush note above requires.
             host_recv_inbox.before(crate::sync::drain_sync_inbox),
             update_host_netstatus,
+            // Phase-3: turn queued client asset requests into off-thread read
+            // jobs. Doesn't touch the lightyear sender, so it runs parallel; must
+            // follow the drain that fills `PendingAssetRequests`.
+            crate::scenario_sync::serve_asset_requests.after(crate::sync::drain_sync_inbox),
             // `assemble_and_send_snapshots` shares `ServerMultiMessageSender` with
             // `host_send_outbox`, so chain (not parallel) to avoid the param conflict;
             // it edge-detects `ReplicationState.generation` to fire once per gather.
             (
+                // Publish a finished off-thread manifest build BEFORE the
+                // broadcast that edge-detects the resource, so a scenario opened
+                // this frame ships the same frame.
+                drive_scenario_manifest,
                 broadcast_ownership,
                 broadcast_profiles,
+                broadcast_scenario_manifest,
                 host_send_outbox,
                 assemble_and_send_snapshots,
+                // Phase-3: poll finished read jobs and stream their chunks to the
+                // requesting peer. Shares `ServerMultiMessageSender` with the two
+                // sends above, so it's chained (not parallel) to avoid the param
+                // conflict.
+                drain_and_send_asset_chunks,
             )
                 .chain()
                 .after(crate::sync::drain_sync_inbox),
@@ -350,6 +383,31 @@ fn broadcast_profiles(profiles: Res<SessionProfiles>, mut outbox: ResMut<SyncOut
     ));
 }
 
+/// Broadcast the host's current scenario manifest to all clients whenever its
+/// revision changes (the host re-loaded the scenario, or loaded one for the
+/// first time). Reliable channel — the manifest is session context, not per-tick
+/// state, and a mid-session scenario swap must reach every peer reliably. The
+/// per-client-on-connect send lives in [`on_server_connected`]; this is the
+/// "scenario changed while clients were connected" path. Host-only.
+fn broadcast_scenario_manifest(
+    scenario: Res<ScenarioManifestResource>,
+    mut outbox: ResMut<SyncOutbox>,
+) {
+    // `is_changed` fires when `setup_sandbox` fills the resource (None→Some) and
+    // when a reload swaps the manifest (revision bumps). Edge-detecting on the
+    // resource avoids re-sending every frame.
+    if !scenario.is_changed() {
+        return;
+    }
+    let Some(manifest) = scenario.manifest.clone() else {
+        return;
+    };
+    outbox.0.push((
+        SyncChannel::BulkData,
+        SyncEnvelope::ScenarioManifest(manifest),
+    ));
+}
+
 /// Mirror the live connected-client count into [`NetStatus`] for the status bar.
 fn update_host_netstatus(
     q: Query<(), (With<ClientOf>, With<Connected>)>,
@@ -376,6 +434,7 @@ fn server_send(
     let frame = Frame(bytes);
     let _ = match channel {
         SyncChannel::ControlStream => sender.send::<Frame, SnapChannel>(&frame, server, target),
+        SyncChannel::BulkData => sender.send::<Frame, BulkChannel>(&frame, server, target),
         _ => sender.send::<Frame, CmdChannel>(&frame, server, target),
     };
 }
@@ -395,6 +454,9 @@ fn on_server_connected(
     q_client: Query<&RemoteId, With<ClientOf>>,
     registry: Res<SessionRegistry>,
     profiles: Res<SessionProfiles>,
+    scenario: Option<Res<ScenarioManifestResource>>,
+    journal: Option<Res<JournalResource>>,
+    scripted_policies: Res<crate::scripted_policy::ScriptedPolicyRegistry>,
     server: Single<&Server>,
     tick: Res<SimTick>,
     mut sender: ServerMultiMessageSender,
@@ -461,6 +523,52 @@ fn on_server_connected(
             entries: crate::sync::profile_wire_entries(&profiles),
         }),
     );
+    // Scenario manifest: tell the joiner which scenario the server is running
+    // so it can fetch the assets it's missing (Phase 3) and load the scene
+    // (Phase 4). Only sent if the host has actually loaded a scenario — a bare
+    // host that's still loading sends nothing here, and the periodic
+    // `broadcast_scenario_manifest` will push it once `setup_sandbox` fills the
+    // resource.
+    if let Some(scenario) = &scenario {
+        if let Some(manifest) = &scenario.manifest {
+            server_send(
+                &mut sender,
+                server,
+                &target,
+                SyncChannel::BulkData,
+                &SyncEnvelope::ScenarioManifest(manifest.clone()),
+            );
+        }
+    }
+    // Full Twin-journal replay so a late joiner converges on the host's edit
+    // history (journal plane). Ongoing appends then stream via the plane's
+    // `broadcast_journal_entries`; overlap is idempotent (dedup by EntryId).
+    if let Some(journal) = &journal {
+        for msg in crate::journal_plane::full_journal_msgs(journal) {
+            server_send(
+                &mut sender,
+                server,
+                &target,
+                SyncChannel::BulkData,
+                &SyncEnvelope::JournalEntry(msg),
+            );
+        }
+    }
+    // Scripted-policy plane: send the active policy set so the late joiner runs the
+    // identical merge / authorization / drive-kernel policies (determinism). The
+    // periodic `broadcast_scripted_policies` only fires on change, so a joiner that
+    // connects after the last change needs this connect-time push.
+    if !scripted_policies.policies.is_empty() {
+        server_send(
+            &mut sender,
+            server,
+            &target,
+            SyncChannel::BulkData,
+            &SyncEnvelope::ScriptedPolicy(crate::scripted_policy::ScriptedPolicyMsg {
+                policies: scripted_policies.policies.clone(),
+            }),
+        );
+    }
     info!("[net] client connected: peer={peer:?} session={}", session.0);
 }
 
@@ -663,4 +771,308 @@ fn host_recv_inbox(
             }
         }
     }
+}
+
+/// One scenario file, resolved on the main thread (cheap path work only) so the
+/// blocking read + hash can run off-thread. `abs_path` is what the build task
+/// reads; `rel_path` is the scenario-root-relative, `/`-normalized manifest key.
+struct AssetDescriptor {
+    abs_path: PathBuf,
+    rel_path: String,
+    media_type: Option<String>,
+}
+
+/// Everything the off-thread manifest build needs, owned (no `&Twin` borrow) so
+/// it can cross the `AsyncComputeTaskPool` boundary.
+struct ScenarioBuildInput {
+    scenario_id: [u8; 16],
+    name: String,
+    default_scene: Option<String>,
+    descriptors: Vec<AssetDescriptor>,
+    /// The host's journal head at build time — the base the asset snapshot
+    /// corresponds to (journal-plane Layer B). Captured on the main thread by
+    /// the caller (the build task has no World access).
+    journal_head: Option<lunco_twin_journal::EntryId>,
+}
+
+/// Main-thread step: walk the Twin tree and resolve the file list — path joins,
+/// extension→media-type, and **path dedup** only, no file I/O. A parent Twin's
+/// `files()` already recurses into child-Twin subdirs, so the same asset can
+/// surface via both the parent and the child walk; the `seen` set keeps the
+/// first and drops the duplicate (review: duplicate assets from overlapping
+/// parent/child walks). The blocking read + SHA-256 happens later in
+/// [`build_manifest_from_input`], off the main thread.
+fn collect_scenario_input(
+    twin: &Twin,
+    journal_head: Option<lunco_twin_journal::EntryId>,
+) -> ScenarioBuildInput {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut descriptors = Vec::new();
+    for t in twin.walk() {
+        for entry in t.files() {
+            let abs_path = t.root.join(&entry.relative_path);
+            let Ok(rel_path) = abs_path.strip_prefix(&twin.root) else {
+                continue;
+            };
+            let path = rel_path.to_string_lossy().replace('\\', "/");
+            if !seen.insert(path.clone()) {
+                // Already enumerated via a different Twin in the walk (parent's
+                // recursive `files()` overlapping a child Twin's own `files()`).
+                continue;
+            }
+            let media_type = match entry.relative_path.extension().and_then(|s| s.to_str()) {
+                Some("usd" | "usda" | "usdc") => Some("model/vnd.usd".to_string()),
+                Some("glb") => Some("model/gltf-binary".to_string()),
+                Some("png") => Some("image/png".to_string()),
+                Some("jpg" | "jpeg") => Some("image/jpeg".to_string()),
+                _ => None,
+            };
+            descriptors.push(AssetDescriptor { abs_path, rel_path: path, media_type });
+        }
+    }
+
+    let scenario_id = twin
+        .manifest
+        .as_ref()
+        .and_then(|m| m.uuid)
+        .map(|u| u.into_bytes())
+        // No `twin.toml` uuid (unmanaged folder / pre-uuid twin): derive a
+        // *stable* id from the scenario root path rather than emitting all-zeros.
+        // The host owns this derivation (the client only sees the wire id and
+        // can't recompute a path digest it never learns), and it keeps two
+        // distinct folder-scenarios from colliding on `[0u8; 16]` — which would
+        // clobber each other in the client's `scenarios/<id>/` asset cache.
+        .unwrap_or_else(|| scenario_id_from_path(&twin.root));
+    let name = twin
+        .manifest
+        .as_ref()
+        .map(|m| m.name.clone())
+        .unwrap_or_else(|| twin.root.file_name().unwrap_or_default().to_string_lossy().into_owned());
+    let default_scene = twin
+        .manifest
+        .as_ref()
+        .and_then(|m| m.usd.as_ref())
+        .and_then(|usd| usd.default_scene.clone());
+
+    ScenarioBuildInput { scenario_id, name, default_scene, descriptors, journal_head }
+}
+
+/// Stable 16-byte scenario id derived from the scenario root path — the
+/// fallback when a Twin has no `twin.toml` uuid. SHA-256 of the path string,
+/// truncated to 16 bytes (the wire `scenario_id` width). Deterministic for a
+/// given path so the same folder-scenario keeps one identity across host
+/// restarts; distinct folders get distinct ids (vs the old all-zeros collapse).
+fn scenario_id_from_path(root: &Path) -> [u8; 16] {
+    let digest = Sha256::digest(root.to_string_lossy().as_bytes());
+    let mut id = [0u8; 16];
+    id.copy_from_slice(&digest[..16]);
+    id
+}
+
+/// Off-thread step: read + SHA-256-hash every descriptor and assemble the
+/// manifest. **Fail-closed**: if any file can't be read, the whole build
+/// returns `None` rather than emitting a manifest over the readable subset — a
+/// partial manifest hashes to a `revision` that matches its own truncated asset
+/// list, so it looks complete and a client would never request the dropped CID,
+/// leaving that asset permanently absent on every peer (review: silently dropped
+/// unreadable files corrupt the asset list and revision together).
+/// Off-thread build result: the wire manifest plus the host-local CID → absolute
+/// path map [`serve_asset_requests`](crate::scenario_sync::serve_asset_requests)
+/// reads bytes through (Phase 3). Kept out of the wire type — the client only
+/// ever sees relative paths; abs paths are the host's private serving index.
+type ScenarioBuildOutput = (ScenarioManifestMsg, Vec<(Vec<u8>, PathBuf)>);
+
+fn build_manifest_from_input(input: ScenarioBuildInput) -> Option<ScenarioBuildOutput> {
+    let ScenarioBuildInput { scenario_id, name, default_scene, descriptors, journal_head } = input;
+    let mut assets = Vec::with_capacity(descriptors.len());
+    let mut cid_paths = Vec::with_capacity(descriptors.len());
+    for d in descriptors {
+        let bytes = match std::fs::read(&d.abs_path) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(
+                    "[net] scenario manifest build aborted: unreadable asset {:?}: {e}",
+                    d.abs_path
+                );
+                return None;
+            }
+        };
+        let cid = cid_for_content(&bytes).to_bytes();
+        cid_paths.push((cid.clone(), d.abs_path));
+        assets.push(ScenarioAsset {
+            path: d.rel_path,
+            cid,
+            size: bytes.len() as u64,
+            media_type: d.media_type,
+        });
+    }
+    // Nothing to distribute → publish nothing. An empty asset list still hashes
+    // to a fixed non-empty `revision`, so without this guard a client would
+    // treat "scenario at revision R with zero assets" as a real scenario and
+    // could act on it; `None` instead routes callers down the bare-host path.
+    if assets.is_empty() {
+        return None;
+    }
+    let revision = scenario_revision(&assets);
+    Some((
+        ScenarioManifestMsg { scenario_id, revision, name, default_scene, assets, journal_head },
+        cid_paths,
+    ))
+}
+
+/// Host-side: an in-flight off-thread scenario-manifest build. The walk reads +
+/// SHA-256-hashes every scenario file — tens-to-hundreds of MB for a Twin with
+/// large binaries (terrain, meshes, textures). Run inline on the main thread it
+/// would stall the netcode ferry (ownership broadcast, snapshot assembly,
+/// reliable `CmdChannel` flush all run in `Update`), giving every connected
+/// client a multi-second hitch. So the build is spawned on the
+/// `AsyncComputeTaskPool` and drained into [`ScenarioManifestResource`] by
+/// [`drive_scenario_manifest`]. Host-only.
+#[derive(Resource, Default)]
+pub(crate) struct PendingScenarioManifest {
+    task: Option<Task<Option<ScenarioBuildOutput>>>,
+}
+
+/// Spawn an off-thread manifest build for `twin`, replacing any in-flight one
+/// (a newer scenario supersedes a build still running for the previous one).
+fn spawn_manifest_build(
+    twin: &Twin,
+    journal_head: Option<lunco_twin_journal::EntryId>,
+    pending: &mut PendingScenarioManifest,
+) {
+    let input = collect_scenario_input(twin, journal_head);
+    let pool = AsyncComputeTaskPool::get();
+    pending.task = Some(pool.spawn(async move { build_manifest_from_input(input) }));
+}
+
+/// The host's current journal head (build-time base for Layer B), or `None` if
+/// there's no journal / empty history.
+fn journal_head(journal: &Option<Res<JournalResource>>) -> Option<lunco_twin_journal::EntryId> {
+    journal.as_ref().and_then(|j| j.with_read(|jj| jj.merged_head()))
+}
+
+/// Startup: if a Twin is already open when the host boots, kick off its manifest
+/// build. Runs as a `Startup` system (not inline in `setup_host`) so the
+/// `AsyncComputeTaskPool` is guaranteed initialized by then.
+fn spawn_initial_scenario_manifest(
+    workspace: Option<Res<WorkspaceResource>>,
+    journal: Option<Res<JournalResource>>,
+    mut pending: ResMut<PendingScenarioManifest>,
+) {
+    let Some(workspace) = workspace else { return };
+    let Some(active) = workspace.active_twin else { return };
+    if let Some(twin) = workspace.twin(active) {
+        info!("[net] Host started with active twin, building scenario manifest for {:?}", twin.root);
+        spawn_manifest_build(twin, journal_head(&journal), &mut pending);
+    }
+}
+
+/// Poll the in-flight manifest build; when it finishes, publish the result into
+/// [`ScenarioManifestResource`] (which `is_changed`-triggers the broadcast).
+/// `None` from the task (a fail-closed build) leaves the previous manifest in
+/// place rather than clearing it. Host-only, runs in `Update`.
+fn drive_scenario_manifest(
+    mut pending: ResMut<PendingScenarioManifest>,
+    mut scenario: ResMut<ScenarioManifestResource>,
+    mut asset_paths: ResMut<crate::scenario_sync::HostAssetPaths>,
+) {
+    let Some(task) = pending.task.as_mut() else {
+        return;
+    };
+    let Some(result) = block_on(future::poll_once(task)) else {
+        return;
+    };
+    pending.task = None;
+    match result {
+        Some((manifest, cid_paths)) => {
+            info!("[net] scenario manifest built: {} assets", manifest.assets.len());
+            // Rebuild the CID→path serving index for the new scenario (a reload
+            // replaces the whole map — stale CIDs from the previous scenario must
+            // not linger and serve wrong bytes).
+            asset_paths.0 = cid_paths.into_iter().collect();
+            scenario.manifest = Some(manifest);
+        }
+        None => warn!("[net] scenario manifest build failed; keeping previous manifest"),
+    }
+}
+
+/// Observer: when a new Twin is opened/added on the host, kick off an off-thread
+/// rebuild of the scenario manifest (see [`PendingScenarioManifest`]).
+fn on_twin_added_host(
+    trigger: On<TwinAdded>,
+    workspace: Res<WorkspaceResource>,
+    journal: Option<Res<JournalResource>>,
+    mut pending: ResMut<PendingScenarioManifest>,
+) {
+    if let Some(twin) = workspace.twin(trigger.event().twin) {
+        info!("[net] Twin added; building scenario manifest for {:?}", twin.root);
+        spawn_manifest_build(twin, journal_head(&journal), &mut pending);
+    }
+}
+
+/// Host (Phase 3): poll finished off-thread read jobs and stream their chunks to
+/// the requesting peer over the reliable `BulkChannel`, capped at
+/// [`MAX_CHUNKS_PER_FRAME`](crate::scenario_sync::MAX_CHUNKS_PER_FRAME) per frame
+/// so a large multi-asset transfer can't flood lightyear's send buffer in one
+/// `Update`. Leftover chunks (and chunks whose task is still running) persist to
+/// the next frame; chunks for a peer that disconnected mid-transfer are dropped.
+fn drain_and_send_asset_chunks(
+    mut tasks: ResMut<crate::scenario_sync::AssetServeTasks>,
+    assigned: Res<AssignedSessions>,
+    q_client: Query<&RemoteId, With<ClientOf>>,
+    server: Single<&Server>,
+    mut sender: ServerMultiMessageSender,
+    // Carries chunks not yet flushed (per-frame cap / still-arriving tasks) across
+    // frames. A `Local` (not a resource) — this is the only reader/writer.
+    mut ready: Local<Vec<(SessionId, crate::scenario::AssetChunkMsg)>>,
+) {
+    // Harvest finished read jobs; keep the still-running ones.
+    if !tasks.0.is_empty() {
+        let mut still_running = Vec::new();
+        for (session, mut task) in tasks.0.drain(..) {
+            match block_on(future::poll_once(&mut task)) {
+                Some(chunks) => ready.extend(chunks.into_iter().map(|c| (session, c))),
+                None => still_running.push((session, task)),
+            }
+        }
+        tasks.0 = still_running;
+    }
+    if ready.is_empty() {
+        return;
+    }
+
+    // Resolve session → connected peer once for this frame.
+    let server = server.into_inner();
+    let mut peer_of: std::collections::HashMap<SessionId, _> = std::collections::HashMap::new();
+    for remote in q_client.iter() {
+        if let Some(session) = assigned.get(peer_to_session(remote.0).0) {
+            peer_of.insert(session, remote.0);
+        }
+    }
+
+    // Flush FIFO up to the per-frame cap; requeue the remainder.
+    let mut sent = 0usize;
+    let mut requeue = Vec::new();
+    for (session, chunk) in std::mem::take(&mut *ready) {
+        if sent >= crate::scenario_sync::MAX_CHUNKS_PER_FRAME {
+            requeue.push((session, chunk));
+            continue;
+        }
+        match peer_of.get(&session) {
+            Some(&peer) => {
+                server_send(
+                    &mut sender,
+                    server,
+                    &NetworkTarget::Single(peer),
+                    SyncChannel::BulkData,
+                    &SyncEnvelope::AssetChunk(chunk),
+                );
+                sent += 1;
+            }
+            // Peer disconnected mid-transfer → drop its chunks (it re-requests on
+            // reconnect from a fresh manifest).
+            None => {}
+        }
+    }
+    *ready = requeue;
 }

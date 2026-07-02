@@ -650,7 +650,30 @@ pub mod capability {
     pub const STUDENT_STATUS: &str = "StudentStatus";
     /// Relay a `SharePerspective` (one-shot snaps peers' camera to the sender's view).
     pub const SHARE_PERSPECTIVE: &str = "SharePerspective";
+    /// Apply an inbound **journal edit** (an authored document change on the
+    /// journal plane) to the host's authoritative history. Gates *who may edit
+    /// the shared scene/model*, resolved through [`CommandPolicyRegistry`] like
+    /// any command. Absent from the default registry → [`super::CommandPolicy::OPEN`]
+    /// (open-sandbox: any authenticated peer may edit). A deployment tightens
+    /// collaborative editing to, e.g., `Operator` via
+    /// [`CommandPolicyRegistry::set_override`](super::CommandPolicyRegistry::set_override)
+    /// (`"JournalEdit"`) — read-only viewers then can't mutate shared content.
+    pub const JOURNAL_EDIT: &str = "JournalEdit";
 }
+
+/// The [`lunco_hooks`] id of the optional **scripted authorization** hook.
+///
+/// When a hook is registered under this id, [`authorize`] consults it *after* the
+/// built-in role+ownership decision — but only on the ALLOW path, and only to
+/// **further restrict** (defense in depth): the final decision is `built-in AND
+/// hook`. This makes RBAC policy authorable in rhai/Python ("policy→rhai") for
+/// custom rules — per-capability allowlists, rate/time gates — without ever
+/// weakening the compiled floor. The hook receives a map
+/// `{ session, capability, target, owns_target, role }` and returns a bool
+/// (`true` = allow). It fails **closed**: a missing bool or a fault denies (a
+/// registered-but-broken security policy must not silently wave requests through).
+/// Absent hook ⇒ behaviour is byte-for-byte the pre-hook gate.
+pub const AUTHORIZE_HOOK: &str = "rbac.authorize";
 
 /// Per-command authorization policy, resolved by [`authorize`].
 ///
@@ -678,6 +701,9 @@ impl Default for CommandPolicyRegistry {
         // MVP policy, preserved: direct-control commands require ownership of
         // their target (G4). Everything else stays OPEN.
         base.insert("SetPorts", CommandPolicy::OWNED_CONTROL);
+        // H2 Fix: gate tutor/relay capabilities to Operator role by default
+        base.insert(capability::TUTOR_STATUS, CommandPolicy { min_role: AuthorityRole::Operator, ownership_gated: false });
+        base.insert(capability::SHARE_PERSPECTIVE, CommandPolicy { min_role: AuthorityRole::Operator, ownership_gated: false });
         Self { base, overrides: HashMap::new() }
     }
 }
@@ -754,7 +780,7 @@ pub fn authorize(
     // Ownership gate. Commands that aren't ownership-gated pass at the role floor
     // above — their arbitration (if any) happens in the handler (e.g.
     // [`SessionRegistry::claim`]).
-    if policy.ownership_gated {
+    let baseline: Result<(), Reject> = if policy.ownership_gated {
         match target_gid {
             Some(gid) if reg.owns(origin, gid) => Ok(()),
             Some(_) => Err(Reject::InvalidOp(format!(
@@ -764,6 +790,51 @@ pub fn authorize(
         }
     } else {
         Ok(())
+    };
+    baseline?;
+
+    // The compiled floor allowed this. If a scripted authorization policy is
+    // registered ([`AUTHORIZE_HOOK`], "policy→rhai"), it may FURTHER restrict —
+    // never grant. Absent hook ⇒ no-op (identical to the pre-hook gate).
+    authz_hook_gate(rbac, origin, type_name, target_gid, owns_target)
+}
+
+/// Consult the optional scripted authorization hook ([`AUTHORIZE_HOOK`]). Only
+/// reached once the built-in gate already allowed, so the hook can only tighten.
+/// Fails **closed** (a registered hook that faults or returns a non-bool denies).
+fn authz_hook_gate(
+    rbac: &SessionRbac,
+    origin: SessionId,
+    type_name: &str,
+    target_gid: Option<u64>,
+    owns_target: bool,
+) -> Result<(), Reject> {
+    use lunco_hooks::HookValue;
+    let role = rbac
+        .sessions
+        .get(&origin.0)
+        .map(|s| format!("{:?}", s.role))
+        .unwrap_or_else(|| "None".to_string());
+    let ctx = HookValue::map([
+        ("session", HookValue::Int(origin.0 as i64)),
+        ("capability", HookValue::str(type_name)),
+        ("target", HookValue::Int(target_gid.map(|g| g as i64).unwrap_or(-1))),
+        ("owns_target", HookValue::Bool(owns_target)),
+        ("role", HookValue::str(role)),
+    ]);
+    match lunco_hooks::invoke(AUTHORIZE_HOOK, &[ctx]) {
+        // No hook registered → unchanged behaviour.
+        None => Ok(()),
+        // Hook allowed.
+        Some(Ok(v)) if v.as_bool() == Some(true) => Ok(()),
+        // Hook denied (or returned a non-bool → fail closed).
+        Some(Ok(_)) => Err(Reject::InvalidOp(format!(
+            "session {origin} denied {type_name} by authorization policy"
+        ))),
+        // Hook faulted → fail closed (a broken security policy must not pass).
+        Some(Err(e)) => Err(Reject::InvalidOp(format!(
+            "session {origin} denied {type_name}: authorization policy error: {e}"
+        ))),
     }
 }
 
@@ -1029,4 +1100,8 @@ mod tests {
         pol.clear_override("SpawnEntity");
         assert!(authorize(&reg, &rbac, &pol, A, "SpawnEntity", None).is_ok());
     }
+    // NOTE: the scripted-authorization-hook test lives in
+    // `tests/authz_hook.rs` (its own test binary), because it registers under the
+    // process-global `AUTHORIZE_HOOK` id — doing so in this binary would race the
+    // other `authorize()` unit tests running on parallel threads.
 }
