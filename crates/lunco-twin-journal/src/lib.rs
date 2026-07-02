@@ -1395,7 +1395,6 @@ impl ScriptedMergePolicy {
 #[cfg(feature = "hooks")]
 impl MergePolicy for ScriptedMergePolicy {
     fn concurrent_cmp(&self, a: &JournalEntry, b: &JournalEntry) -> std::cmp::Ordering {
-        use lunco_hooks::HookValue;
         let args = [entry_to_hookvalue(a), entry_to_hookvalue(b)];
         match lunco_hooks::invoke(&self.hook_id, &args) {
             Some(Ok(v)) => match v.as_i64() {

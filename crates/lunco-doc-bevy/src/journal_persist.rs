@@ -66,38 +66,39 @@ fn read_bytes(path: &std::path::Path) -> Option<Vec<u8>> {
 }
 
 /// Load the persisted journal into the live resource once, the frame it appears.
-/// Swaps in place to preserve the shared `Arc` (recorders on document hosts keep
-/// writing to the loaded journal), and preserves the current local author (the
-/// networking layer stamps a stable install id) so new edits keep *this* peer's
-/// identity even if the saved file carried a different one. No-op when nothing is
-/// persisted yet.
 fn load_journal_once(journal: Option<Res<JournalResource>>) {
-    let Some(journal) = journal else {
-        return;
-    };
+    if let Some(journal) = journal {
+        load_from_disk(&journal);
+    }
+}
+
+/// Load the persisted journal into `journal` in place. Swaps to preserve the
+/// shared `Arc` (recorders on document hosts keep writing to the loaded journal),
+/// and preserves the current local author (the networking layer stamps a stable
+/// install id) and the live merge strategy (configuration, not persisted data) so
+/// new edits keep *this* peer's identity and a scripted merge policy survives a
+/// reload. Returns the number of entries loaded, or `None` when nothing is
+/// persisted yet / the file is unreadable. Shared by the startup system and tests.
+pub(crate) fn load_from_disk(journal: &JournalResource) -> Option<usize> {
     let twin_id = journal.with_read(|j| j.twin().0.clone());
     let path = journal_path(&twin_id);
-    let Some(bytes) = read_bytes(&path) else {
-        return; // nothing persisted → start fresh
-    };
+    let bytes = read_bytes(&path)?; // nothing persisted → start fresh
     match Journal::from_bytes(&bytes) {
         Ok(loaded) => {
             let n = loaded.len();
             journal.with_write(|j| {
                 let me = j.local_author().clone();
-                // Merge strategy is live configuration, not persisted data — the
-                // loaded journal carries the default; preserve whatever the
-                // networking layer activated so a scripted merge policy survives
-                // a reload.
                 let strategy = j.merge_strategy().clone();
                 *j = loaded;
                 j.set_local_author(me);
                 j.set_merge_strategy(strategy);
             });
             info!("[journal-persist] loaded {n} entries from {}", path.display());
+            Some(n)
         }
         Err(e) => {
             warn!("[journal-persist] parse of {} failed — starting fresh: {e}", path.display());
+            None
         }
     }
 }
@@ -119,30 +120,116 @@ fn persist_journal(
         return;
     }
     *acc = 0.0;
-    let (twin_id, len, bytes) = journal.with_read(|j| (j.twin().0.clone(), j.len(), j.to_bytes()));
+    let len = journal.with_read(|j| j.len());
     if len == *last_saved_len {
         return; // nothing new since the last save
     }
+    if save_to_disk(&journal).is_some() {
+        *last_saved_len = len;
+    }
+}
+
+/// Serialize `journal` and write it atomically to its on-disk path (tmp + fsync +
+/// rename, creating parent dirs) via [`lunco_storage::write_file_sync`]. Returns
+/// the number of entries written, or `None` on a serialize / I/O failure. Shared
+/// by the debounced save system and tests.
+pub(crate) fn save_to_disk(journal: &JournalResource) -> Option<usize> {
+    let (twin_id, len, bytes) = journal.with_read(|j| (j.twin().0.clone(), j.len(), j.to_bytes()));
     let bytes = match bytes {
         Ok(b) => b,
         Err(e) => {
             warn!("[journal-persist] serialize failed: {e}");
-            return;
+            return None;
         }
     };
     let path = journal_path(&twin_id);
     match lunco_storage::write_file_sync(&path, &bytes) {
         Ok(()) => {
-            *last_saved_len = len;
             debug!("[journal-persist] saved {len} entries to {}", path.display());
+            Some(len)
         }
-        Err(e) => warn!("[journal-persist] save to {} failed: {e}", path.display()),
+        Err(e) => {
+            warn!("[journal-persist] save to {} failed: {e}", path.display());
+            None
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// End-to-end persist→reload through the REAL save/load helpers + real file
+    /// I/O: author edits, save, then reload into a fresh journal (as a restarted
+    /// process would) and confirm the history — and that a reload preserves THIS
+    /// peer's live identity + merge strategy rather than clobbering them with the
+    /// saved file's. Isolated by a unique twin id; cleans up its file.
+    #[test]
+    fn save_then_load_roundtrips_on_disk() {
+        use lunco_doc::DocumentId;
+        use lunco_twin_journal::{AuthorId, AuthorTag, EntryKind, LifecycleKind, MergeStrategy, TwinId};
+
+        let twin = "lunco-test-journal-persist-roundtrip";
+        let path = journal_path(twin);
+        let _ = std::fs::remove_file(&path); // clear any leftover from a prior run
+
+        // Session 1: author 3 edits, then save.
+        let j1 = JournalResource::new(TwinId::new(twin), AuthorId::new("peer-A"));
+        j1.with_write(|j| {
+            for _ in 0..3 {
+                j.append_local(
+                    AuthorTag::for_tool("test"),
+                    DocumentId::new(1),
+                    EntryKind::Lifecycle(LifecycleKind::Saved),
+                    None,
+                );
+            }
+        });
+        assert_eq!(save_to_disk(&j1), Some(3), "save writes all 3 entries");
+        assert!(path.exists(), "journal file exists after save");
+
+        // Session 2 (a restarted process): a fresh, empty journal for the SAME
+        // twin, but with a DIFFERENT local author and an activated scripted merge
+        // strategy — neither of which the reload may clobber.
+        let j2 = JournalResource::new(TwinId::new(twin), AuthorId::new("peer-B"));
+        j2.with_write(|j| j.set_merge_strategy(MergeStrategy::Scripted("policy-x".into())));
+        assert_eq!(load_from_disk(&j2), Some(3), "reload restores all 3 entries");
+        j2.with_read(|j| {
+            assert_eq!(j.len(), 3, "history survived the restart");
+            assert_eq!(*j.local_author(), AuthorId::new("peer-B"), "this peer's identity preserved");
+            assert_eq!(
+                *j.merge_strategy(),
+                MergeStrategy::Scripted("policy-x".into()),
+                "live merge policy preserved across reload",
+            );
+        });
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Fixture generator (NOT an assertion): writes a real 3-entry journal for the
+    /// default `"local-twin"` so a headless-`sandbox-server` boot can be observed
+    /// loading it. Run with `--ignored` under an isolated `LUNCOSIM_CONFIG`; does
+    /// NOT clean up (the server boot reads it afterward).
+    #[test]
+    #[ignore = "fixture generator for the headless-server persist boot check"]
+    fn seed_local_twin_journal() {
+        use lunco_doc::DocumentId;
+        use lunco_twin_journal::{AuthorId, AuthorTag, EntryKind, LifecycleKind, TwinId};
+        let j = JournalResource::new(TwinId::new("local-twin"), AuthorId::new("seed"));
+        j.with_write(|jj| {
+            for _ in 0..3 {
+                jj.append_local(
+                    AuthorTag::for_tool("seed"),
+                    DocumentId::new(1),
+                    EntryKind::Lifecycle(LifecycleKind::Saved),
+                    None,
+                );
+            }
+        });
+        let n = save_to_disk(&j).expect("seed save");
+        eprintln!("SEEDED {n} entries at {}", journal_path("local-twin").display());
+    }
 
     #[test]
     fn journal_path_sanitizes_pathlike_twin_ids() {

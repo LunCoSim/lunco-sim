@@ -513,6 +513,13 @@ impl Plugin for SandboxCorePlugin {
         // headless-only to avoid two mechanisms writing the same history.
         if self.headless {
             app.add_plugins(lunco_doc_bevy::JournalPersistencePlugin);
+            // `setup_sandbox`'s twin-load path needs `WorkspaceResource`, which the
+            // GUI gets from `lunco-workbench`'s `WorkspacePlugin` — a crate the
+            // headless server doesn't link. Without this, a headless boot panics in
+            // `setup_sandbox`. Bare `init_resource` (not the full `WorkspacePlugin`)
+            // so we don't also pull in that plugin's Twin-scoped journal observers,
+            // which would double up on the `JournalPersistencePlugin` above.
+            app.init_resource::<lunco_workspace::WorkspaceResource>();
         }
 
         // Multiplayer. Native: `--host [port]` / `--connect <addr>`; browser:
