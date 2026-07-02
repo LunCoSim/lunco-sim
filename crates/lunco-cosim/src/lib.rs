@@ -166,14 +166,37 @@ impl Plugin for CoSimPlugin {
         // Sensors refresh their cached outputs before propagation so a wire
         // reading `accel_*`/`range`/`contact*` sees this tick's value. They only
         // touch entities carrying the corresponding sensor component.
+        //
+        // The IMU sensor needs only `Time<Fixed>` (a core resource), so it runs
+        // unconditionally. Range + contact sensors read avian-only system params
+        // (`SpatialQuery`, `Collisions` / `SubstepCount` / `Time<Physics>`), which
+        // only exist when `PhysicsPlugins` is added. Bevy 0.18 turns a missing
+        // `Res`/param into a hard error via the default handler (older versions
+        // silently skipped the system), so gate them on physics being active —
+        // headless cosim without avian (e.g. integration tests) then just skips
+        // them instead of panicking.
+        app.add_systems(
+            FixedUpdate,
+            sensors::update_imu_sensors.before(systems::propagate::CosimSet::Propagate),
+        );
         app.add_systems(
             FixedUpdate,
             (
-                sensors::update_imu_sensors,
                 sensors::update_range_sensors,
                 sensors::update_contact_sensors,
             )
+                .run_if(resource_exists::<Time<avian3d::prelude::Physics>>)
                 .before(systems::propagate::CosimSet::Propagate),
+        );
+
+        // Range-sensor beam gizmos are debug viz only — kept out of the sensing
+        // system so raycasting doesn't depend on render infra. Gated on the gizmo
+        // store so headless runs without `GizmoPlugin` skip it (Bevy 0.18 would
+        // otherwise panic on the missing `Gizmos` param).
+        app.add_systems(
+            Update,
+            sensors::draw_range_sensor_gizmos
+                .run_if(resource_exists::<GizmoConfigStore>),
         );
 
         app.add_systems(Update, systems::collider::sync_collider);

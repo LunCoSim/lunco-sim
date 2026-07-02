@@ -1,36 +1,24 @@
-//! Bundled Modelica example models.
+//! Bundled Modelica example models — the domain view.
 //!
-//! Single source of truth: every `*.mo` file under the workspace
-//! `assets/models/` directory is embedded at compile time via the
-//! `include_dir!` macro. Drop a new `.mo` file in, rebuild, and it
-//! appears in the Welcome tab — no edits to this file required.
+//! The raw embed lives in the asset-owning crate
+//! ([`lunco_assets::models`]): every `*.mo` under `assets/models/` is baked in
+//! at compile time (wasm has no filesystem) and handed here as `(filename,
+//! source)` pairs. Drop a new `.mo` file in, rebuild, and it appears in the
+//! Welcome tab — no edits to this file required.
 //!
-//! Per-model taglines (one-liners shown next to each entry on the
-//! Welcome screen) are read from an optional header comment of the
-//! form:
+//! This module adds the Modelica-specific interpretation on top: the
+//! [`BundledModel`] view and per-model **tagline** parsing (one-liners shown
+//! next to each entry on the Welcome screen), read from an optional header
+//! comment of the form:
 //!
 //! ```modelica
 //! // tagline: Two-stage RC low-pass filter — 6 MSL blocks
 //! model CascadedRCFilter ...
 //! ```
 //!
-//! Without a `// tagline:` line the model is still listed, just with
-//! an empty tagline string. The marker must appear before the first
-//! non-whitespace Modelica keyword.
-//!
-//! # Why embed instead of filesystem-scan?
-//!
-//! * **wasm32** has no filesystem — `include_dir!` is the only way.
-//! * **desktop** benefits from the zero-I/O path too (Welcome tab
-//!   renders instantly from a static slice; no async race on first
-//!   paint).
-
-use include_dir::{include_dir, Dir};
-
-/// Bundled model tree. Baked at compile time — rebuild after editing
-/// files under `assets/models/`.
-static MODELS_DIR: Dir<'_> =
-    include_dir!("$CARGO_MANIFEST_DIR/../../assets/models");
+//! Without a `// tagline:` line the model is still listed, just with an empty
+//! tagline string. The marker must appear before the first non-whitespace
+//! Modelica keyword.
 
 /// One bundled example.
 #[derive(Clone, Copy)]
@@ -68,49 +56,24 @@ fn extract_tagline(source: &str) -> &str {
     ""
 }
 
-/// All bundled models, in filesystem iteration order. Call this
-/// wherever the old `BUNDLED_MODELS` slice was used; it builds the
-/// list fresh every call (cheap — iterates the in-memory `Dir`).
+/// All bundled models, sorted by filename (stable across desktop/wasm). Builds
+/// the list fresh every call (cheap — enumerates the in-memory embed owned by
+/// [`lunco_assets::models`]) and layers on the Modelica tagline parse.
 pub fn bundled_models() -> Vec<BundledModel> {
-    let mut out: Vec<BundledModel> = MODELS_DIR
-        .files()
-        .filter(|f| {
-            f.path()
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("mo"))
-                .unwrap_or(false)
+    lunco_assets::models::model_files()
+        .into_iter()
+        .map(|(filename, source)| BundledModel {
+            filename,
+            source,
+            tagline: extract_tagline(source),
         })
-        .filter_map(|f| {
-            let filename = f.path().file_name()?.to_str()?;
-            let source = f.contents_utf8()?;
-            Some(BundledModel {
-                filename,
-                source,
-                tagline: extract_tagline(source),
-            })
-        })
-        .collect();
-    // Filesystem iteration order varies by platform; sort by filename
-    // so the Welcome tab order is stable across desktop and wasm
-    // builds.
-    out.sort_by(|a, b| a.filename.cmp(b.filename));
-    out
+        .collect()
 }
 
-/// Get a bundled model's source by filename. Case-sensitive match on
-/// the basename.
+/// Get a bundled model's source by filename. Case-sensitive match on the
+/// basename. Thin re-export of [`lunco_assets::models::model_source`].
 pub fn get_model(filename: &str) -> Option<&'static str> {
-    MODELS_DIR
-        .files()
-        .find(|f| {
-            f.path()
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n == filename)
-                .unwrap_or(false)
-        })
-        .and_then(|f| f.contents_utf8())
+    lunco_assets::models::model_source(filename)
 }
 
 #[cfg(test)]

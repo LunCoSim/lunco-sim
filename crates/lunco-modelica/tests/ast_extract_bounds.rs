@@ -9,14 +9,17 @@
 //! component's `modifications` map; this test verifies the same
 //! end-to-end guarantee through that surface.
 
-const SRC: &str = include_str!("../../../assets/models/AnnotatedRocketStage.mo");
+fn src() -> &'static str {
+    lunco_modelica::models::get_model("AnnotatedRocketStage.mo")
+        .expect("bundled AnnotatedRocketStage.mo")
+}
 
 #[test]
 fn bounds_extraction_finds_valve_opening_min_max() {
-    let ast = rumoca_phase_parse::parse_to_ast(SRC, "AnnotatedRocketStage.mo")
+    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo")
         .expect("parses");
     let mut index = lunco_modelica::index::ModelicaIndex::new();
-    index.rebuild_from_ast(&ast, SRC);
+    index.rebuild_from_ast(&ast, src());
     let entry = index
         .find_component_by_leaf("opening")
         .expect("opening not in index");

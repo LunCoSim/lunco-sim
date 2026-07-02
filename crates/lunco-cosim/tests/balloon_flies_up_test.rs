@@ -55,7 +55,9 @@ use lunco_modelica::{
 };
 use lunco_sandbox_edit::catalog::BalloonModelMarker;
 
-const BALLOON_MO: &str = include_str!("../../../assets/models/Balloon.mo");
+fn balloon_mo() -> &'static str {
+    lunco_modelica::models::get_model("Balloon.mo").expect("bundled Balloon.mo")
+}
 
 // ─── Miniature pipeline (matches the production binary) ─────────────────────
 
@@ -65,7 +67,7 @@ fn compile_balloon_model(
     channels: Res<ModelicaChannels>,
 ) {
     for (entity, name) in &q_new {
-        let source = BALLOON_MO.to_string();
+        let source = balloon_mo().to_string();
         let model_name = extract_model_name(&source).unwrap_or_else(|| "Balloon".into());
         let params = extract_parameters(&source);
         let inputs = extract_inputs_with_defaults(&source);

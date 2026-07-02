@@ -1,0 +1,84 @@
+#usda 1.0
+(
+    defaultPrim = "FirstDrive"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── Tutorial: First Drive ────────────────────────────────────────────────────
+# The simplest interactive lesson: possess a rover and drive it to a flag.
+#
+# ALL lesson logic is data: this scene sets the stage, and the orchestrator on
+# `/FirstDrive/Scenario` (scenarios-style .rhai) drives the HUD and evaluates
+# progress. It advances on REAL user actions — possession is a `cmd:PossessVessel`
+# event; arrival is the flag's `enter:waypoint` trigger-zone event — never a
+# scripted timer. See crates/lunco-tutorial and the tutorial_overlay HUD.
+#
+#   sandbox --scene tutorials/first_drive/first_drive.usda
+# or start it from the Tutorials panel.
+
+def Xform "FirstDrive"
+{
+    custom bool lunco:spawnable = false
+    custom string lunco:description = "Take control of a rover and drive it to the glowing flag. Click the rover (or press F) to possess it, then drive with W/A/S/D."
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.35, 0.33, 0.38)
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        custom double3 lunco:cameraLookAt = (7.0, 0.0, 4.0)
+        double3 xformOp:translate = (-6.0, 6.0, -8.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 12000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    # The rover the student drives. Skid-steer vehicle; possessable.
+    def Xform "Rover" (
+        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+    )
+    {
+        string lunco:vessel = "true"
+        double3 xformOp:translate = (0, 1.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # The goal: a glowing dome with an overlap-only "waypoint" trigger zone that
+    # fires `enter:waypoint` when the rover reaches it — the mission's arrival event.
+    def Xform "Flag" (
+        prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
+    )
+    {
+        double3 xformOp:translate = (14.0, 0.0, 8.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # The lesson orchestrator: a non-physical prim owning the tutorial mission.
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "first-drive"
+        custom string lunco:scriptPath = "tutorials/first_drive/first_drive.rhai"
+        # Tutorial chain (data, not code): when this mission completes, the tutorial
+        # manager auto-loads this scene next. Each lesson names its own successor.
+        custom string lunco:nextScene = "scenes/sandbox/lander_test.usda"
+    }
+}

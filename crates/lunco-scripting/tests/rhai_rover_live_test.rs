@@ -239,7 +239,7 @@ fn tick(app: &mut App) {
 fn rhai_scenario_drives_real_rover() {
     // The shipped declarative mission — first waypoint is far from the origin,
     // so the rover should be commanded to drive forward toward it.
-    let source = include_str!("../rhai/examples/mission_plan.rhai");
+    let source = lunco_assets::scripting::example("mission_plan").expect("mission_plan example embedded");
     let (mut app, _rover) = setup(source);
 
     tick(&mut app);
@@ -309,7 +309,7 @@ fn run_scenario_command_attaches_and_runs() {
         "rover starts with no scenario"
     );
 
-    let src = include_str!("../rhai/examples/mission_plan.rhai");
+    let src = lunco_assets::scripting::example("mission_plan").expect("mission_plan example embedded");
     app.world_mut().trigger(ApiCommandEvent {
         command: "RunScenario".to_string(),
         params: serde_json::json!({ "target": ROVER_GID, "source": src }),
@@ -1051,7 +1051,7 @@ fn client_role_gates_script_execution() {
     use lunco_core::NetworkRole;
     // The shipped mission drives toward its first (far) waypoint on tick 1 — a
     // reliable "did the script run?" probe (cf. rhai_scenario_drives_real_rover).
-    let src = include_str!("../rhai/examples/mission_plan.rhai");
+    let src = lunco_assets::scripting::example("mission_plan").expect("mission_plan example embedded");
 
     // Client → gated off: on_tick never issues a SetPorts drive.
     let (mut app, _r) = setup(src);

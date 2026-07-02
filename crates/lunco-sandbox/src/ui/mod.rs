@@ -79,6 +79,10 @@ impl Plugin for SandboxUiPlugin {
             .add_plugins(lunco_sandbox_edit::SandboxEditPlugin)
             .add_plugins(lunco_sandbox_edit::ui::SandboxEditUiPlugin)
             .add_plugins(lunco_materials::ShaderMaterialPlugin)
+            // Data-driven, Rhai-scripted tutorial system: launcher panel +
+            // Start/Skip/SetSubsystemEnabled commands + progress persistence.
+            // The objectives/hint HUD + spotlight it drives live in the workbench.
+            .add_plugins(lunco_tutorial::TutorialPlugin)
             // Rover-specific panels and the attach-a-model click flow.
             .add_plugins(|app: &mut App| {
                 use lunco_workbench::WorkbenchAppExt;

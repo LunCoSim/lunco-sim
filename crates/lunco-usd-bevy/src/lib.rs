@@ -774,6 +774,15 @@ fn instantiate_usd_prim(
             }
         }
 
+        // Tutorial chain: `lunco:nextScene = "scenes/foo.usda"` declares the scene
+        // to load when this scene's mission completes. Stamped as a `NextScene`
+        // marker; a generic handler (lunco-tutorial) loads it on MISSION_COMPLETE.
+        if let Some(next) = get_attribute_as_string(reader, &sdf_path, "lunco:nextScene")
+            .filter(|s| !s.trim().is_empty())
+        {
+            commands.entity(entity).insert(lunco_core::NextScene(next));
+        }
+
 
         // glTF / external-mesh branch.
         //

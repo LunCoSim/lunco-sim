@@ -3,7 +3,10 @@
 use lunco_modelica::annotations::{DynExpr, DynValue, GraphicItem, extract_icon};
 use rumoca_compile::parsing::ast::Expression;
 
-const SRC: &str = include_str!("../../../assets/models/AnnotatedRocketStage.mo");
+fn src() -> &'static str {
+    lunco_modelica::models::get_model("AnnotatedRocketStage.mo")
+        .expect("bundled AnnotatedRocketStage.mo")
+}
 
 fn class_annotations<'a>(
     classes: &'a rumoca_compile::parsing::ast::AstIndexMap<
@@ -24,27 +27,29 @@ fn class_annotations<'a>(
 }
 
 #[test]
-fn tank_icon_lox_is_dynamic() {
-    let ast = rumoca_phase_parse::parse_to_ast(SRC, "AnnotatedRocketStage.mo").expect("parse");
+fn tank_icon_mass_is_dynamic() {
+    // The tank shows a static "Propellant" title plus a live mass readout
+    // `DynamicSelect("kg", String(m) + " kg")` — the latter is the dynamic text.
+    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Tank").expect("Tank class");
     let icon = extract_icon(&ann).expect("Tank Icon");
     let mut texts = icon.graphics.iter().filter_map(|g| match g {
         GraphicItem::Text(t) => Some(t),
         _ => None,
     });
-    let lox = texts
-        .find(|t| t.text_string == "LOX")
-        .expect("LOX text in Tank icon; texts found:");
+    let mass = texts
+        .find(|t| t.text_string == "kg")
+        .expect("dynamic mass ('kg') text in Tank icon");
     assert!(
-        lox.text_string_dynamic.is_some(),
-        "LOX text should have a DynamicSelect dynamic branch; got {lox:#?}",
+        mass.text_string_dynamic.is_some(),
+        "mass text should have a DynamicSelect dynamic branch; got {mass:#?}",
     );
-    eprintln!("LOX dynamic = {:#?}", lox.text_string_dynamic);
+    eprintln!("mass dynamic = {:#?}", mass.text_string_dynamic);
 }
 
 #[test]
 fn tank_blue_rectangle_extent_is_dynamic_and_evaluates() {
-    let ast = rumoca_phase_parse::parse_to_ast(SRC, "AnnotatedRocketStage.mo").expect("parse");
+    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Tank").expect("Tank class");
     let icon = extract_icon(&ann).expect("Tank Icon");
 
@@ -103,30 +108,30 @@ fn dyn_expr_survives_json_roundtrip() {
     // The canvas serializes Icon to JSON for transport between the
     // diagram projector and the canvas renderer; deserialise must
     // restore the dynamic branch.
-    let ast = rumoca_phase_parse::parse_to_ast(SRC, "AnnotatedRocketStage.mo").expect("parse");
+    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Tank").expect("Tank class");
     let icon = extract_icon(&ann).expect("Tank Icon");
 
     let json = serde_json::to_value(&icon).expect("serialize");
     let restored: lunco_modelica::annotations::Icon =
         serde_json::from_value(json).expect("deserialize");
-    let lox = restored
+    let mass = restored
         .graphics
         .iter()
         .find_map(|g| match g {
-            GraphicItem::Text(t) if t.text_string == "LOX" => Some(t),
+            GraphicItem::Text(t) if t.text_string == "kg" => Some(t),
             _ => None,
         })
-        .expect("LOX text after roundtrip");
+        .expect("dynamic mass ('kg') text after roundtrip");
     assert!(
-        lox.text_string_dynamic.is_some(),
-        "LOX dynamic must survive JSON roundtrip; got {lox:#?}",
+        mass.text_string_dynamic.is_some(),
+        "mass dynamic must survive JSON roundtrip; got {mass:#?}",
     );
 }
 
 #[test]
 fn valve_icon_label_is_dynamic() {
-    let ast = rumoca_phase_parse::parse_to_ast(SRC, "AnnotatedRocketStage.mo").expect("parse");
+    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Valve").expect("Valve class");
     let icon = extract_icon(&ann).expect("Valve Icon");
     let mut texts = icon.graphics.iter().filter_map(|g| match g {

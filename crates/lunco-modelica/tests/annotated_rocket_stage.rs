@@ -10,11 +10,14 @@ use lunco_modelica::annotations::{
 };
 use rumoca_phase_parse::parse_to_ast;
 
-const SOURCE: &str = include_str!("../../../assets/models/AnnotatedRocketStage.mo");
+fn source() -> &'static str {
+    lunco_modelica::models::get_model("AnnotatedRocketStage.mo")
+        .expect("bundled AnnotatedRocketStage.mo")
+}
 
 #[test]
 fn fixture_parses_and_extracts() {
-    let ast = parse_to_ast(SOURCE, "AnnotatedRocketStage.mo").expect("parse");
+    let ast = parse_to_ast(source(), "AnnotatedRocketStage.mo").expect("parse");
     let pkg = ast
         .classes
         .iter()

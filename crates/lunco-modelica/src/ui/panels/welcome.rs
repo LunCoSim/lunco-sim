@@ -31,6 +31,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use serde::{Deserialize, Serialize};
 
 use crate::models::bundled_models;
 use crate::ui::welcome_progress::ExampleProgress;
@@ -41,127 +42,65 @@ pub const WELCOME_PANEL_ID: PanelId = PanelId("modelica_welcome");
 
 /// One step in a learning path — a concrete MSL class and the
 /// human-authored goal that tells the learner *what to look for*
-/// when they hit Run. Keeping the goal short (< 90 chars) keeps
-/// cards visually uniform and encourages punchy copy.
-struct PathStep {
-    qualified: &'static str,
+/// when they hit Run. Keep the goal short (< 90 chars) so cards stay
+/// visually uniform.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PathStep {
+    /// Fully-qualified MSL class to open (read-only).
+    pub qualified: String,
     /// Short display name (falls back to the trailing segment of
     /// `qualified` when empty).
-    label: &'static str,
-    goal: &'static str,
+    #[serde(default)]
+    pub label: String,
+    /// One-line "what to look for" goal shown under the step.
+    pub goal: String,
 }
 
 /// A hand-curated tutorial arc across ~5 MSL examples.
-struct LearningPath {
-    icon: &'static str,
-    title: &'static str,
-    subtitle: &'static str,
-    steps: &'static [PathStep],
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LearningPath {
+    /// Leading glyph for the header.
+    pub icon: String,
+    /// Path title.
+    pub title: String,
+    /// One-line subtitle under the title.
+    pub subtitle: String,
+    /// Ordered steps (aim for 4..=6, simplest first).
+    pub steps: Vec<PathStep>,
 }
 
-/// The three beginner paths. Intentionally small — more than three
-/// is paradox-of-choice; four examples per path is the classic
-/// tutorial rhythm (setup → variation → extension → integration).
-/// Adding a path? Keep `steps.len()` in the 4..=6 range and lead
-/// with the simplest, most visual example.
-const PATHS: &[LearningPath] = &[
-    LearningPath {
-        icon: "⚡",
-        title: "Circuits 101",
-        subtitle: "From a passive filter to an op-amp stage.",
-        steps: &[
-            PathStep {
-                qualified: "Modelica.Electrical.Analog.Examples.ChuaCircuit",
-                label: "ChuaCircuit",
-                goal: "Run it. Watch the chaotic attractor form on the XY plot.",
-            },
-            PathStep {
-                qualified: "Modelica.Electrical.Analog.Examples.CauerLowPassAnalog",
-                label: "CauerLowPass",
-                goal: "5th-order Cauer filter. Compare input to filtered output.",
-            },
-            PathStep {
-                qualified: "Modelica.Electrical.Analog.Examples.Rectifier",
-                label: "Rectifier",
-                goal: "Turn AC into pulsed DC. Overlay grid + load voltage.",
-            },
-            PathStep {
-                qualified: "Modelica.Electrical.Analog.Examples.ShowSaturatingInductor",
-                label: "SaturatingInductor",
-                goal: "Inductor hits its B-H knee. See current go non-linear.",
-            },
-            PathStep {
-                qualified: "Modelica.Electrical.Analog.Examples.AmplifierWithOpAmpDetailed",
-                label: "OpAmpDetailed",
-                goal: "Amplify a small sine. Tune the feedback ratio, re-run.",
-            },
-        ],
-    },
-    LearningPath {
-        icon: "⚙",
-        title: "Control basics",
-        subtitle: "Feedback loops, filters, boolean plumbing.",
-        steps: &[
-            PathStep {
-                qualified: "Modelica.Blocks.Examples.PID_Controller",
-                label: "PID_Controller",
-                goal: "Step change in setpoint. Watch P-I-D tame the response.",
-            },
-            PathStep {
-                qualified: "Modelica.Blocks.Examples.FilterWithRiseTime",
-                label: "FilterWithRiseTime",
-                goal: "Low-pass with a rise-time spec. Time the 10→90% climb.",
-            },
-            PathStep {
-                qualified: "Modelica.Blocks.Examples.InverseModel",
-                label: "InverseModel",
-                goal: "Invert a transfer function live. The classic trick.",
-            },
-            PathStep {
-                qualified: "Modelica.Blocks.Examples.RealNetwork1",
-                label: "RealNetwork1",
-                goal: "Arithmetic blocks wired into a tiny network.",
-            },
-            PathStep {
-                qualified: "Modelica.Blocks.Examples.LogicalNetwork1",
-                label: "LogicalNetwork1",
-                goal: "Boolean gates reacting to pulses. Read the truth table.",
-            },
-        ],
-    },
-    LearningPath {
-        icon: "🔧",
-        title: "Moving parts",
-        subtitle: "Mechanics from a spring-damper to a 3D pendulum.",
-        steps: &[
-            PathStep {
-                qualified: "Modelica.Mechanics.Rotational.Examples.First",
-                label: "Rotational.First",
-                goal: "Torque through inertia + spring-damper. The hello world.",
-            },
-            PathStep {
-                qualified: "Modelica.Mechanics.Rotational.Examples.ElasticBearing",
-                label: "ElasticBearing",
-                goal: "Shaft flex under load. Watch the phase lag develop.",
-            },
-            PathStep {
-                qualified: "Modelica.Mechanics.Rotational.Examples.CoupledClutches",
-                label: "CoupledClutches",
-                goal: "Clutches engage in sequence. Follow torque hand-off.",
-            },
-            PathStep {
-                qualified: "Modelica.Mechanics.Translational.Examples.Damper",
-                label: "Translational.Damper",
-                goal: "Mass-spring-damper in 1D. Change c, see the overshoot shift.",
-            },
-            PathStep {
-                qualified: "Modelica.Mechanics.MultiBody.Examples.Elementary.DoublePendulum",
-                label: "DoublePendulum",
-                goal: "Chaotic 3D two-link pendulum. Tweak initial angle.",
-            },
-        ],
-    },
-];
+/// Open registry of learning paths rendered by the [`WelcomePanel`]. Seeded
+/// from the embedded `assets/tutorials/learning_paths.json` (via the
+/// `lunco-assets` crate) in [`LearningPathRegistry::with_builtins`]; any plugin
+/// can [`register`](Self::register) more — the curriculum is editable **data**,
+/// not a `const` array welded into the render (spec 011 §6). Class-based (open
+/// MSL classes to read/run), lunica-local — distinct from the sandbox's
+/// scene+script `TutorialRegistry`.
+#[derive(Resource, Default, Clone, Serialize, Deserialize)]
+pub struct LearningPathRegistry {
+    /// Registered paths, in display order.
+    pub paths: Vec<LearningPath>,
+}
+
+impl LearningPathRegistry {
+    /// A registry seeded from the embedded learning-paths data file. On a parse
+    /// error (should never happen — the JSON is compiled in) logs and returns an
+    /// empty registry so the panel degrades gracefully rather than panicking.
+    pub fn with_builtins() -> Self {
+        match serde_json::from_str::<Self>(lunco_assets::tutorials::learning_paths_json()) {
+            Ok(reg) => reg,
+            Err(e) => {
+                warn!("[welcome] learning_paths.json parse failed: {e}");
+                Self::default()
+            }
+        }
+    }
+
+    /// Append a path to the registry.
+    pub fn register(&mut self, path: LearningPath) {
+        self.paths.push(path);
+    }
+}
 
 /// Per-panel state: which path (if any) is expanded, plus the
 /// Browse-all search/domain state. Stored in egui's data bag so the
@@ -169,8 +108,8 @@ const PATHS: &[LearningPath] = &[
 /// is a singleton panel so a single key is safe.
 #[derive(Clone, Default)]
 struct WelcomeState {
-    /// Index into `PATHS` of the expanded path. `None` = all
-    /// collapsed.
+    /// Index into the registry's `paths` of the expanded path. `None` =
+    /// all collapsed.
     expanded: Option<usize>,
     /// Live search string for Browse-all.
     browse_query: String,
@@ -318,6 +257,14 @@ impl Panel for WelcomePanel {
             .resource::<ExampleProgress>()
             .cloned()
             .unwrap_or_default();
+
+        // Learning-path catalog — a registry resource (was a `const` array),
+        // so the render reads data and other plugins can contribute paths.
+        // Falls back to the built-ins if the resource wasn't inserted.
+        let registry: LearningPathRegistry = ctx
+            .resource::<LearningPathRegistry>()
+            .cloned()
+            .unwrap_or_else(LearningPathRegistry::with_builtins);
 
         // Pull + mutate per-panel UI state from egui's data bag.
         let state_id = egui::Id::new(STATE_ID);
@@ -507,11 +454,12 @@ impl Panel for WelcomePanel {
                 // Overall header — "X of N paths started" turns the
                 // section into a tiny dashboard.
                 let total_steps: usize =
-                    PATHS.iter().map(|p| p.steps.len()).sum();
-                let done_steps: usize = PATHS
+                    registry.paths.iter().map(|p| p.steps.len()).sum();
+                let done_steps: usize = registry
+                    .paths
                     .iter()
                     .flat_map(|p| p.steps.iter())
-                    .filter(|s| progress.is_opened(s.qualified))
+                    .filter(|s| progress.is_opened(&s.qualified))
                     .count();
                 ui.horizontal(|ui| {
                     ui.heading(egui::RichText::new("Learning paths").size(16.0));
@@ -536,11 +484,11 @@ impl Panel for WelcomePanel {
                 );
                 ui.add_space(10.0);
 
-                for (i, path) in PATHS.iter().enumerate() {
+                for (i, path) in registry.paths.iter().enumerate() {
                     let opened = path
                         .steps
                         .iter()
-                        .filter(|s| progress.is_opened(s.qualified))
+                        .filter(|s| progress.is_opened(&s.qualified))
                         .count();
                     let is_expanded = wstate.expanded == Some(i);
 
@@ -576,7 +524,7 @@ impl Panel for WelcomePanel {
                     painter.text(
                         rect.min + egui::vec2(16.0, 32.0),
                         egui::Align2::LEFT_TOP,
-                        path.subtitle,
+                        path.subtitle.as_str(),
                         egui::FontId::proportional(11.0),
                         muted,
                     );
@@ -585,8 +533,8 @@ impl Panel for WelcomePanel {
                     // ○ = not yet. Plus a chevron hinting at
                     // expandable state.
                     let mut dots = String::new();
-                    for step in path.steps {
-                        dots.push_str(if progress.is_opened(step.qualified) {
+                    for step in &path.steps {
+                        dots.push_str(if progress.is_opened(&step.qualified) {
                             "● "
                         } else {
                             "○ "
@@ -628,8 +576,8 @@ impl Panel for WelcomePanel {
 
                     // Expanded step list.
                     if is_expanded {
-                        for step in path.steps {
-                            let opens = progress.opens_of(step.qualified);
+                        for step in &path.steps {
+                            let opens = progress.opens_of(&step.qualified);
                             let is_open = opens > 0;
 
                             // Resolve index entry for path-exists
@@ -688,7 +636,7 @@ impl Panel for WelcomePanel {
                                 painter.text(
                                     rect.min + egui::vec2(36.0, 8.0),
                                     egui::Align2::LEFT_TOP,
-                                    step.label,
+                                    step.label.as_str(),
                                     egui::FontId::proportional(13.0),
                                     title_tint,
                                 );
@@ -718,7 +666,7 @@ impl Panel for WelcomePanel {
                                 }
 
                                 if exists && resp.clicked() {
-                                    open_msl = Some(step.qualified.to_string());
+                                    open_msl = Some(step.qualified.clone());
                                 }
                             });
                             ui.add_space(4.0);
@@ -1018,5 +966,28 @@ impl Panel for WelcomePanel {
                 },
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod learning_path_tests {
+    use super::*;
+
+    /// The embedded `learning_paths.json` must deserialize into the registry
+    /// shape — guards against JSON/struct drift (which would otherwise degrade
+    /// silently to an empty panel via the `with_builtins` fallback).
+    #[test]
+    fn builtins_parse_from_embedded_json() {
+        let reg = LearningPathRegistry::with_builtins();
+        assert_eq!(reg.paths.len(), 3, "expected 3 built-in learning paths");
+        assert!(
+            reg.paths.iter().all(|p| p.steps.len() >= 4),
+            "each path should carry 4..=6 steps",
+        );
+        assert_eq!(reg.paths[0].title, "Circuits 101");
+        assert_eq!(
+            reg.paths[0].steps[0].qualified,
+            "Modelica.Electrical.Analog.Examples.ChuaCircuit",
+        );
     }
 }

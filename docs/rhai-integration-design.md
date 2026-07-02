@@ -85,7 +85,7 @@ calls, so prelude/library helpers must be stateless (take+return state).
 | `emit(name, value)` | event | fire a `TelemetryEvent` on the shared bus |
 
 Everything else is **policy in rhai** — see the embedded prelude
-`crates/lunco-scripting/rhai/prelude.rhai`: vector math, `distance`/`arrived`,
+`assets/scripting/prelude/` (one file per topic): vector math, `distance`/`arrived`,
 `steer_to`/`nav_to` (closed-loop steering), `run_plan` (declarative waypoint/
 objective executor), `drive`/`brake`/`load_scene` wrappers. The prelude is
 `include_str!`-embedded and registered as a global module (wasm-safe, no IO).
@@ -102,7 +102,7 @@ is bus-only (isolated VMs); see §7f.
 
 ### Examples
 
-`crates/lunco-scripting/rhai/examples/`: `patrol.rhai` (waypoint loop, emits
+`assets/scripting/examples/`: `patrol.rhai` (waypoint loop, emits
 checkpoints), `mission.rhai` (coordinator reacting via `on_event`),
 `mission_plan.rhai` (declarative `run_plan` mission).
 

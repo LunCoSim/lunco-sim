@@ -107,19 +107,23 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
             .map(|(name, doc)| serde_json::json!({ "name": name, "doc": doc }))
             .collect();
 
-        // Prelude helpers — compiled & introspected (name + param names). A bare
-        // engine parses fine; calls resolve at runtime, not compile.
-        let prelude: Vec<serde_json::Value> = rhai::Engine::new()
-            .compile(crate::world_bridge::PRELUDE)
-            .map(|ast| {
-                let mut fns: Vec<serde_json::Value> = ast
-                    .iter_functions()
-                    .map(|f| serde_json::json!({ "name": f.name, "params": f.params }))
-                    .collect();
-                fns.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
-                fns
-            })
-            .unwrap_or_default();
+        // Prelude helpers — compiled & introspected (name + param names). Uses the
+        // same raised expr-depth the scenario engine uses (the sequencer needs it;
+        // a stock engine rejects the prelude, which used to leave this list empty).
+        let prelude: Vec<serde_json::Value> = {
+            let mut engine = rhai::Engine::new();
+            engine.set_max_expr_depths(128, 128);
+            crate::world_bridge::compile_prelude(&engine)
+                .map(|ast| {
+                    let mut fns: Vec<serde_json::Value> = ast
+                        .iter_functions()
+                        .map(|f| serde_json::json!({ "name": f.name, "params": f.params }))
+                        .collect();
+                    fns.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+                    fns
+                })
+                .unwrap_or_default()
+        };
 
         // Tool libraries (incl. file-loaded ones).
         let tools: Vec<serde_json::Value> = lunco_tools::index()

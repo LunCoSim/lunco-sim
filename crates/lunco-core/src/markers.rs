@@ -192,3 +192,14 @@ pub const TRIGGER_COLLISION_LAYER: u32 = 1 << 7;
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component)]
 pub struct ScriptParams(pub std::collections::HashMap<String, f64>);
+
+/// The scene to load next when this scene's mission completes — the tutorial
+/// CHAIN, declared as DATA in USD (`custom string lunco:nextScene =
+/// "scenes/foo.usda"` on any prim, conventionally the scenario prim). A generic
+/// handler loads it on `MISSION_COMPLETE`, so a course flows scene→scene with no
+/// per-tutorial Rust and no central campaign object — each tutorial names its own
+/// successor. Empty/absent = end of chain. Lives in `lunco-core` so the USD loader
+/// and the tutorial handler share the contract (same pattern as [`TriggerZone`]).
+#[derive(Component, Debug, Clone, Reflect, Default)]
+#[reflect(Component)]
+pub struct NextScene(pub String);

@@ -99,6 +99,10 @@ pub struct RangeSensor {
     pub out_of_range_mode: OutOfRangeMode,
     /// Whether to draw the laser beam line using Bevy gizmos.
     pub visualize: bool,
+    /// Whether the last cast actually hit geometry (vs the out-of-range
+    /// fallback). Set by [`update_range_sensors`]; read by the separate
+    /// [`draw_range_sensor_gizmos`] viz system so drawing needs no re-cast.
+    pub hit: bool,
 }
 
 impl Default for RangeSensor {
@@ -110,6 +114,7 @@ impl Default for RangeSensor {
             distance: 100.0,
             out_of_range_mode: OutOfRangeMode::MaxDistance,
             visualize: false,
+            hit: false,
         }
     }
 }
@@ -250,7 +255,6 @@ pub fn update_range_sensors(
     spatial: SpatialQuery,
     q_parents: Query<&ChildOf>,
     mut q: Query<(Entity, &mut RangeSensor, &GlobalTransform)>,
-    mut gizmos: Gizmos,
 ) {
     for (e, mut s, transform) in &mut q {
         let origin = transform.translation().as_dvec3() + transform.rotation().as_dquat() * s.offset;
@@ -265,10 +269,8 @@ pub fn update_range_sensors(
         if let Ok(parent) = q_parents.get(e) {
             filter.excluded_entities.insert(parent.0);
         }
-        let mut hit_dist = s.max_distance;
-        let hit_something = match spatial.cast_ray(origin, dir, s.max_distance, true, &filter) {
+        s.hit = match spatial.cast_ray(origin, dir, s.max_distance, true, &filter) {
             Some(hit) => {
-                hit_dist = hit.distance;
                 s.distance = hit.distance;
                 true
             }
@@ -282,18 +284,38 @@ pub fn update_range_sensors(
                 false
             }
         };
+    }
+}
 
-        if s.visualize {
-            let end = origin + dir_world * hit_dist;
-            let color = if hit_something {
-                Color::srgb(1.0, 0.1, 0.1) // Bright red when hit-locked
-            } else {
-                Color::srgba(1.0, 0.1, 0.1, 0.4) // Faint translucent red when out of range
-            };
-            gizmos.line(origin.as_vec3(), end.as_vec3(), color);
-            if hit_something {
-                gizmos.sphere(end.as_vec3(), 0.15, color);
-            }
+/// Draw the laser-beam gizmo for every `visualize`d range sensor.
+///
+/// Split out of [`update_range_sensors`] so the *sensing* (a `SpatialQuery`
+/// raycast) never depends on the render-side `Gizmos` / `GizmoConfigStore`.
+/// Registered with a `resource_exists::<GizmoConfigStore>` gate so headless
+/// runs (integration tests, servers) without `GizmoPlugin` simply skip it
+/// instead of tripping Bevy 0.18's missing-param panic. Uses the stored
+/// `distance`/`hit` from the sensor pass, so it re-casts nothing.
+pub fn draw_range_sensor_gizmos(
+    q: Query<(&RangeSensor, &GlobalTransform)>,
+    mut gizmos: Gizmos,
+) {
+    for (s, transform) in &q {
+        if !s.visualize {
+            continue;
+        }
+        let origin = transform.translation().as_dvec3() + transform.rotation().as_dquat() * s.offset;
+        let dir_world = transform.rotation().as_dquat() * s.axis;
+        // Beam length: the hit distance when locked, else the full max range.
+        let beam = if s.hit { s.distance } else { s.max_distance };
+        let end = origin + dir_world * beam;
+        let color = if s.hit {
+            Color::srgb(1.0, 0.1, 0.1) // Bright red when hit-locked
+        } else {
+            Color::srgba(1.0, 0.1, 0.1, 0.4) // Faint translucent red when out of range
+        };
+        gizmos.line(origin.as_vec3(), end.as_vec3(), color);
+        if s.hit {
+            gizmos.sphere(end.as_vec3(), 0.15, color);
         }
     }
 }

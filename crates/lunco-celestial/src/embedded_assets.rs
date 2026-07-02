@@ -29,8 +29,9 @@ pub const TRAJECTORY_SHADER_HANDLE: Handle<Shader> = Handle::Uuid(TRAJECTORY_SHA
 // Embedded Missions
 // ============================================================================
 
-#[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
-const ARTEMIS_2_JSON: &str = include_str!("../../../assets/missions/artemis-2.json");
+// Mission JSON is owned by the asset crate — `lunco_assets::missions` embeds
+// `assets/missions/` and hands it over by basename (see `build` below), so this
+// crate holds no direct path into the shared asset tree.
 
 // ============================================================================
 // Embedded Ephemeris Data (wasm32)
@@ -62,9 +63,12 @@ impl Plugin for EmbeddedAssetsPlugin {
                 Shader::from_wgsl
             );
 
-            // Register mission data
+            // Register mission data (JSON via the asset-owning crate).
+            let artemis_2 = lunco_assets::missions::mission_source("artemis-2.json")
+                .expect("artemis-2.json must be embedded in assets/missions/")
+                .to_string();
             app.insert_resource(EmbeddedMissionData {
-                artemis_2: ARTEMIS_2_JSON.to_string(),
+                artemis_2,
                 artemis_2_ephemeris_csv: ARTEMIS_2_EPHEMERIS_CSV.to_string(),
             });
 

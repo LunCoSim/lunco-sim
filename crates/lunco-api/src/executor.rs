@@ -85,6 +85,28 @@ pub fn api_request_observer(
     }
 }
 
+/// Project every dispatched command onto the shared [`TelemetryEvent`] bus as a
+/// `cmd:<CommandName>` event, so a rhai scenario (or a tutorial's declarative
+/// `mission(me)`) can react to *any* UI/API action with `wait_for("cmd:SpawnEntity")`
+/// or an objective's `requires_event: "cmd:PossessVessel"` — no per-command glue.
+///
+/// This is the observer-triggered analog of the `project_events` registrar
+/// (which reads buffered *messages*); `ApiCommandEvent` is fired via
+/// `commands.trigger`, so it needs a dedicated observer rather than a
+/// `MessageReader`. Fires for the command as *requested* (before reflection/authz
+/// resolution) — the signal is "the user asked for X", which is what a tutorial
+/// step keys off. `source: 0` (no single emitter); payload = the command name.
+pub fn project_command_events(trigger: On<ApiCommandEvent>, mut commands: Commands) {
+    let name = &trigger.event().command;
+    commands.trigger(lunco_core::TelemetryEvent {
+        name: format!("cmd:{name}"),
+        source: 0,
+        severity: lunco_core::Severity::Info,
+        data: lunco_core::TelemetryValue::String(name.clone()),
+        timestamp: 0.0,
+    });
+}
+
 /// Dynamic dispatcher: converts generic [ApiCommandEvent] into pure simulation events.
 ///
 /// This system listens for all API-triggered commands and uses reflection to
@@ -639,7 +661,8 @@ impl Plugin for ApiExecutorPlugin {
             // the telemetry plugin isn't added.
             .init_resource::<TelemetrySubscriptions>()
             .add_observer(api_request_observer)
-            .add_observer(api_command_dispatcher);
+            .add_observer(api_command_dispatcher)
+            .add_observer(project_command_events);
 
         // Screenshot capture rides the bevy render stack — only present with
         // the `render` feature (off on a headless server).

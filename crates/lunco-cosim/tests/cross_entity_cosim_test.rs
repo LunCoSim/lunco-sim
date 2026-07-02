@@ -37,8 +37,12 @@ use lunco_scripting::{
     LunCoScriptingPlugin, ScriptRegistry,
 };
 
-const OSCILLATOR_MO: &str = include_str!("../../../assets/models/Oscillator.mo");
-const AMPLIFIER_PY: &str = include_str!("../../../assets/models/Amplifier.py");
+fn oscillator_mo() -> &'static str {
+    lunco_modelica::models::get_model("Oscillator.mo").expect("bundled Oscillator.mo")
+}
+fn amplifier_py() -> &'static str {
+    lunco_modelica::models::get_model("Amplifier.py").expect("bundled Amplifier.py")
+}
 
 fn wrap_modelica_into_simcomponent(
     mut commands: Commands,
@@ -160,9 +164,9 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
     // ── Wire engines to nodes ───────────────────────────────────────
     // Modelica oscillator: insert ModelicaModel + dispatch Compile.
     {
-        let model_name = extract_model_name(OSCILLATOR_MO).unwrap_or_else(|| "Oscillator".into());
-        let parameters = extract_parameters(OSCILLATOR_MO);
-        let inputs = extract_inputs_with_defaults(OSCILLATOR_MO).into_iter().collect();
+        let model_name = extract_model_name(oscillator_mo()).unwrap_or_else(|| "Oscillator".into());
+        let parameters = extract_parameters(oscillator_mo());
+        let inputs = extract_inputs_with_defaults(oscillator_mo()).into_iter().collect();
         app.world_mut().entity_mut(oscillator).insert(ModelicaModel {
             model_name: model_name.clone(),
             parameters,
@@ -174,7 +178,7 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
             entity: oscillator,
             session_id: 0,
             model_name,
-            source: OSCILLATOR_MO.to_string(),
+            source: oscillator_mo().to_string(),
             doc_uri: "model.mo".to_string(),
             extra_sources: Vec::new(),
             stream: None,
@@ -191,7 +195,7 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
                 id: doc_id.raw(),
                 generation: 0,
                 language: ScriptLanguage::Python,
-                source: AMPLIFIER_PY.to_string(),
+                source: amplifier_py().to_string(),
                 origin: DocumentOrigin::untitled("Amplifier"),
                 inputs: vec!["signal".to_string()],
                 outputs: vec!["scaled".to_string()],

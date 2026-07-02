@@ -1,0 +1,68 @@
+#usda 1.0
+(
+    defaultPrim = "SandboxIntro"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── Tutorial: Sandbox Intro (guided coach-mark TOUR) ─────────────────────────
+# A UI walkthrough of the workspace — the "guided tour" kind of tutorial (vs. the
+# interactive First Drive). All logic is in tour.rhai (a step-cursor coach tour);
+# this scene is just a light backdrop so the viewport step has something to show.
+# On completion it chains to First Drive via lunco:nextScene.
+#
+#   sandbox --scene tutorials/sandbox_intro/sandbox_intro.usda
+# or start it from the Tutorials panel.
+
+def Xform "SandboxIntro"
+{
+    custom bool lunco:spawnable = false
+    custom string lunco:description = "A guided tour of the LunCoSim workspace: viewport, browser, inspector, and console."
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.35, 0.33, 0.38)
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        custom double3 lunco:cameraLookAt = (0.0, 0.5, 0.0)
+        double3 xformOp:translate = (-6.0, 4.0, -8.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 12000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    # A rover in view so the "Viewport" step has something to frame.
+    def Xform "Rover" (
+        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+    )
+    {
+        double3 xformOp:translate = (0, 1.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "sandbox-intro"
+        custom string lunco:scriptPath = "tutorials/sandbox_intro/tour.rhai"
+        # On finishing the tour, chain to the First Drive lesson.
+        custom string lunco:nextScene = "tutorials/first_drive/first_drive.usda"
+    }
+}

@@ -1,0 +1,25 @@
+[package]
+name = "lunco-tutorial"
+version = "0.1.0-dev"
+edition = "2021"
+description = "Data-driven, Rhai-scripted tutorial system: a registry of tutorials, a dockable launcher panel, progress persistence, and the runtime-fidelity toggle command. Sits on top of the scripting/HUD substrate — no simulation logic of its own."
+
+[dependencies]
+bevy = { workspace = true }
+bevy_egui = { workspace = true }
+# `Command` / `on_command` / `register_commands!` macros + `TelemetryEvent`
+# (mission-complete detection) + `SubsystemToggles` (fidelity ramp).
+lunco-core = { path = "../lunco-core" }
+# `Panel` / `PanelCtx` / `WorkbenchAppExt::register_panel` for the launcher,
+# and `TutorialHud` to clear the HUD on skip.
+lunco-workbench = { path = "../lunco-workbench" }
+# `ApiCommandEvent` — StartTutorial dispatches `LoadScene` generically, so this
+# crate needs no dependency on whichever crate defines the scene-load command.
+lunco-api = { path = "../lunco-api" }
+# Persisted per-tutorial progress (completed set + last-started).
+lunco-settings = { path = "../lunco-settings" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

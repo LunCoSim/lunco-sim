@@ -24,11 +24,14 @@ pub fn remove_connection(
 ) -> Result<(), AstMutError> {
     let class_name = class.name.text.to_string();
     let before = class.equations.len();
+    // `connect(a, b)` is symmetric — the same connection whether authored
+    // `a→b` or `b→a` — so match the endpoints in EITHER order.
     class.equations.retain(|eq| {
         !matches!(
             eq,
             Equation::Connect { lhs, rhs }
-                if matches_port_ref(lhs, from) && matches_port_ref(rhs, to)
+                if (matches_port_ref(lhs, from) && matches_port_ref(rhs, to))
+                    || (matches_port_ref(lhs, to) && matches_port_ref(rhs, from))
         )
     });
     if class.equations.len() == before {

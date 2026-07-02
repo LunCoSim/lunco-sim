@@ -952,7 +952,8 @@ function F end F;
 
     #[test]
     fn fixture_file_parses() {
-        let src = include_str!("../../../../assets/models/AnnotatedRocketStage.mo");
+        let src = crate::models::get_model("AnnotatedRocketStage.mo")
+            .expect("bundled AnnotatedRocketStage.mo");
         let (cs, _errors) = parse_classes(src);
         // Top level: one package.
         assert_eq!(cs.len(), 1);

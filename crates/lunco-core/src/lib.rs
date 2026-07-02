@@ -43,6 +43,8 @@ pub mod session;
 /// applies; unit-tested without the avian/render build.
 pub mod reconcile;
 
+pub mod subsystems;
+
 pub use architecture::*;
 pub use mocks::*;
 pub use telemetry::*;
@@ -53,7 +55,7 @@ pub use commands::{
 };
 pub use markers::{
     ActuatorDrivenJoint, EmbeddedScenarioPath, EmbeddedScenarioSource, FallbackSceneLight,
-    GridAnchor, HorizonShadowTerrain, RestoreFallbackLights, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
+    GridAnchor, HorizonShadowTerrain, NextScene, RestoreFallbackLights, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
     TRIGGER_COLLISION_LAYER,
 };
 pub use invariants::BigSpaceInvariantsPlugin;
@@ -441,6 +443,9 @@ impl Plugin for LunCoCorePlugin {
         // heavier LunCoCorePlugin (log + big-space). See its doc comment for
         // the invariant this enforces.
         register_core_resources(app);
+        // Runtime subsystem toggles (progressive-fidelity substrate) +
+        // `SetSubsystemEnabled` command.
+        subsystems::build_subsystems(app);
         // DAC (DigitalPort → PhysicalPort) on the FIXED clock — see `ControlDacSet`
         // for why this must not run in `Update` (prediction determinism).
         app.add_systems(FixedUpdate, wire_system.in_set(ControlDacSet))

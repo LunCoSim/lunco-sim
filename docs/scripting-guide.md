@@ -4,7 +4,7 @@ How to write **scenarios** — persistent per-entity programs that sense and dri
 the simulation — in LunCoSim.
 
 - **Crate:** [`lunco-scripting`](../crates/lunco-scripting) · **Design rationale:** [rhai-integration-design.md](./rhai-integration-design.md)
-- **Examples:** [`crates/lunco-scripting/rhai/examples/`](../crates/lunco-scripting/rhai/examples) · **Helper library:** [`prelude.rhai`](../crates/lunco-scripting/rhai/prelude.rhai)
+- **Examples:** [`assets/scripting/examples/`](../assets/scripting/examples) · **Helper library:** [`assets/scripting/prelude/`](../assets/scripting/prelude)
 
 ---
 
@@ -85,8 +85,9 @@ no JSON round-trip on the read or write path.
 
 ## 4. Prelude helpers
 
-[`prelude.rhai`](../crates/lunco-scripting/rhai/prelude.rhai) is the
-hot-reloadable helper library on top of the verbs — read its header for the full,
+The [`prelude/`](../assets/scripting/prelude) directory (one `.rhai` per topic —
+`nav`, `sensing`, `control`, `tasks`, `mission`, `hud`, …) is the hot-reloadable
+helper library on top of the verbs — read the topic files for the full,
 authoritative list. Highlights:
 
 - **Vector math:** `vsub`/`vadd`/`vlen`/`vdot`/`vcross`/`vnorm`/`vscale`/`clamp`, `distance`, `arrived`.
@@ -116,8 +117,8 @@ fn on_tick(me) { drive(me, params.speed, 0.0); }
 
 Two layers, both pure rhai (no engine rebuild):
 
-- **Layer 1 — imperative steps** ([`sequence.rhai`](../crates/lunco-scripting/rhai/examples/sequence.rhai)): build a step array with `step`/`once`/`wait`/`wait_until`/`wait_for` and run it with `run_steps`; feed events via `seq_note_event` in `on_event`.
-- **Layer 2 — declarative timeline** ([`timeline.rhai`](../crates/lunco-scripting/rhai/examples/timeline.rhai)): a mission as **pure data** (an array of `{move_to|cmd|emit|wait|wait_event}` steps), lowered onto Layer 1 by `compile_timeline`. Because it's data, a timeline is serialisable — run one inline with `RunTimeline`, or store it (next section).
+- **Layer 1 — imperative steps** ([`sequence.rhai`](../assets/scripting/examples/sequence.rhai)): build a step array with `step`/`once`/`wait`/`wait_until`/`wait_for` and run it with `run_steps`; feed events via `seq_note_event` in `on_event`.
+- **Layer 2 — declarative timeline** ([`timeline.rhai`](../assets/scripting/examples/timeline.rhai)): a mission as **pure data** (an array of `{move_to|cmd|emit|wait|wait_event}` steps), lowered onto Layer 1 by `compile_timeline`. Because it's data, a timeline is serialisable — run one inline with `RunTimeline`, or store it (next section).
 
 Progress is observable on the telemetry bus: `STEP_COMPLETE(idx)` per step,
 `SEQUENCE_COMPLETE(len)` at the end (and `OBJECTIVE_COMPLETE`/`PLAN_COMPLETE` for `run_plan`).
@@ -127,8 +128,8 @@ Progress is observable on the telemetry bus: `STEP_COMPLETE(idx)` per step,
 A **tool library** is a named bundle of reusable policy, callable as
 `libname::fn(...)` from any hook (no `import` — they bind as static modules).
 
-- Author one: drop a `.rhai` in [`rhai/tools/`](../crates/lunco-scripting/rhai/tools), or `RegisterToolLibrary { name, source }` at runtime (hot-reloadable).
-- Examples: [`formation.rhai`](../crates/lunco-scripting/rhai/tools/formation.rhai) (formation flying), [`survey.rhai`](../crates/lunco-scripting/rhai/tools/survey.rhai) (lawnmower survey pattern).
+- Author one: drop a `.rhai` in [`rhai/tools/`](../assets/scripting/tools), or `RegisterToolLibrary { name, source }` at runtime (hot-reloadable).
+- Examples: [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
 - Discover: `ListToolLibraries`, `GetToolLibrary { name }`.
 - **Persistence:** registered libraries are mirrored to `<twin>/tools/*.rhai` and reloaded when the Twin opens.
 
@@ -168,20 +169,20 @@ script (which would double-fire `cmd()`/`emit()` and diverge the per-entity
 
 | File | Shows |
 |---|---|
-| [`patrol.rhai`](../crates/lunco-scripting/rhai/examples/patrol.rhai) | a looping waypoint patrol |
-| [`mission.rhai`](../crates/lunco-scripting/rhai/examples/mission.rhai) | event-channel coordination between scripts |
-| [`mission_plan.rhai`](../crates/lunco-scripting/rhai/examples/mission_plan.rhai) | a declarative waypoint plan via `run_plan` |
-| [`sequence.rhai`](../crates/lunco-scripting/rhai/examples/sequence.rhai) | the Layer-1 step sequencer |
-| [`timeline.rhai`](../crates/lunco-scripting/rhai/examples/timeline.rhai) | a Layer-2 mission as data |
-| [`avoid.rhai`](../crates/lunco-scripting/rhai/examples/avoid.rhai) | sensing + obstacle avoidance |
-| [`tools/formation.rhai`](../crates/lunco-scripting/rhai/tools/formation.rhai) | a tool library (formation flying) |
-| [`tools/survey.rhai`](../crates/lunco-scripting/rhai/tools/survey.rhai) | a custom tool library (survey pattern) |
+| [`patrol.rhai`](../assets/scripting/examples/patrol.rhai) | a looping waypoint patrol |
+| [`mission.rhai`](../assets/scripting/examples/mission.rhai) | event-channel coordination between scripts |
+| [`mission_plan.rhai`](../assets/scripting/examples/mission_plan.rhai) | a declarative waypoint plan via `run_plan` |
+| [`sequence.rhai`](../assets/scripting/examples/sequence.rhai) | the Layer-1 step sequencer |
+| [`timeline.rhai`](../assets/scripting/examples/timeline.rhai) | a Layer-2 mission as data |
+| [`avoid.rhai`](../assets/scripting/examples/avoid.rhai) | sensing + obstacle avoidance |
+| [`tools/formation.rhai`](../assets/scripting/tools/formation.rhai) | a tool library (formation flying) |
+| [`tools/survey.rhai`](../assets/scripting/tools/survey.rhai) | a custom tool library (survey pattern) |
 
 ## Links
 
 - [lunco-scripting crate README](../crates/lunco-scripting/README.md)
 - [Rhai integration design & as-built reference](./rhai-integration-design.md)
-- [prelude.rhai](../crates/lunco-scripting/rhai/prelude.rhai) — the helper library
-- [Examples directory](../crates/lunco-scripting/rhai/examples)
+- [prelude/](../assets/scripting/prelude) — the helper library (one file per topic)
+- [Examples directory](../assets/scripting/examples)
 - [Crate index](./crates-index.md)
 - [rhai language reference](https://rhai.rs/book/)

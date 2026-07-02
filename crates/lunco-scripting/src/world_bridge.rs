@@ -230,10 +230,51 @@ fn apply_dynamic_fields(component: &mut dyn bevy::reflect::Reflect, fields: &Map
 
 // ── Engine construction ────────────────────────────────────────────────────
 
-/// Ergonomic policy wrappers (drive/distance/arrived/...), authored in rhai and
-/// embedded at compile time so they're available with zero IO on every target
-/// (incl. wasm). Edit `rhai/prelude.rhai` — no Rust change needed for new helpers.
-pub(crate) const PRELUDE: &str = include_str!("../rhai/prelude.rhai");
+/// Whether scenarios run in DEBUG mode (autopilots on, verbose narration, …).
+/// Defaults to the build profile; `LUNCO_SCENARIO_DEBUG=1|0` (or true/false)
+/// overrides at runtime with no rebuild. Backs the rhai `is_debug()`/`env()` verbs.
+///
+/// Resolved ONCE and cached in a `OnceLock`: the cfg check + env-var read happen
+/// on the first call only, so a scenario polling `is_debug()` every tick pays just
+/// an atomic load, not an allocation/env lookup per frame. (The environment is
+/// fixed at launch, so caching is correct — "dynamic" means no rebuild, not
+/// per-frame mutation.)
+fn scenario_debug() -> bool {
+    static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DEBUG.get_or_init(|| match std::env::var("LUNCO_SCENARIO_DEBUG").ok().as_deref() {
+        Some("1") | Some("true") => true,
+        Some("0") | Some("false") => false,
+        _ => cfg!(debug_assertions),
+    })
+}
+
+/// Compile the split prelude into one AST (per-file compile + `AST::merge`).
+///
+/// The prelude is the ergonomic policy layer (drive/distance/arrived/nav/HUD/…)
+/// authored in rhai. Its topic files live under `assets/scripting/prelude/` and are
+/// embedded + enumerated by [`lunco_assets::scripting::prelude_files`] (the
+/// asset-owning crate) — sorted by stem for a deterministic merge, the files
+/// being pure `fn` definitions so order is semantically irrelevant. Flat
+/// namespace + embedded, identical to compiling one concatenated string, but a
+/// syntax error is logged with the offending file's name and a position relative
+/// to that file (error locality). Both prelude uses — the global module and the
+/// per-scenario `prelude_ast` merge — go through here.
+pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, rhai::ParseError> {
+    let mut acc: Option<AST> = None;
+    for (name, src) in lunco_assets::scripting::prelude_files() {
+        match engine.compile(src) {
+            Ok(part) => acc = Some(match acc {
+                Some(a) => a.merge(&part),
+                None => part,
+            }),
+            Err(e) => {
+                error!("[rhai] prelude/{name}.rhai failed to parse: {e}");
+                return Err(e);
+            }
+        }
+    }
+    Ok(acc.expect("prelude dir is non-empty"))
+}
 
 /// Build a rhai [`Engine`] with the World-bridge verbs registered, the embedded
 /// prelude loaded as a global module, and the same sandbox caps as the one-shot
@@ -487,6 +528,22 @@ pub fn build_world_engine() -> Engine {
     // unavailable.
     engine.register_fn("elapsed_seconds", || -> f64 { bridge_core::elapsed_seconds() });
 
+    // is_debug() -> bool / env(key) -> bool — the SCENARIO ENVIRONMENT, so a
+    // script can branch on it: `if is_debug() { autopilot() }` runs an autopilot in
+    // debug and lets a human play in release. Defaults to the BUILD PROFILE
+    // (`cfg!(debug_assertions)` — true under `cargo run`, false under `--release`),
+    // overridable AT RUNTIME with no rebuild via `LUNCO_SCENARIO_DEBUG=1|0`, so a
+    // release build can force-enable a debug scenario and vice-versa. Callable from
+    // any function (verbs are global, unlike the `params`/`env` scope constants).
+    engine.register_fn("is_debug", || -> bool { scenario_debug() });
+    engine.register_fn("env", |key: &str| -> bool {
+        match key {
+            "debug" => scenario_debug(),
+            "release" => !scenario_debug(),
+            _ => false,
+        }
+    });
+
     // rand() -> f64 in [0,1) — DETERMINISTIC: seeded per hook from (entity, tick,
     // hook), so it's identical on every networked peer and every re-run/replay.
     // Use this, never a wall-clock/OS source, or scenarios desync.
@@ -507,7 +564,7 @@ pub fn build_world_engine() -> Engine {
     // Load the embedded prelude as a global module so its helpers are callable
     // unqualified (e.g. `drive(r, 1.0, 0.0)`). Compiled against the same engine
     // so the wrappers can reach the native verbs above.
-    match engine.compile(PRELUDE) {
+    match compile_prelude(&engine) {
         Ok(ast) => match rhai::Module::eval_ast_as_new(rhai::Scope::new(), &ast, &engine) {
             Ok(module) => {
                 engine.register_global_module(module.into());
@@ -569,9 +626,8 @@ impl Default for RhaiScenarioRuntime {
     fn default() -> Self {
         let mut engine = build_world_engine();
         engine.on_print(|s| info!("[rhai] {s}"));
-        let prelude_ast = engine
-            .compile(PRELUDE)
-            .unwrap_or_else(|e| panic!("prelude.rhai must compile: {e}"));
+        let prelude_ast =
+            compile_prelude(&engine).unwrap_or_else(|e| panic!("prelude must compile: {e}"));
         Self {
             engine,
             states: std::collections::HashMap::new(),
@@ -972,37 +1028,26 @@ mod tests {
 
     #[test]
     fn prelude_and_examples_parse() {
-        let engine = rhai::Engine::new();
-        engine
-            .compile(super::PRELUDE)
-            .expect("prelude.rhai must parse");
+        // Use the SAME raised expr-depth the scenario engine uses at runtime — the
+        // prelude's sequencer legitimately needs it; a stock engine's lower default
+        // rejects it (this test used to fail on that pre-existing mismatch).
+        let mut engine = rhai::Engine::new();
+        engine.set_max_expr_depths(128, 128);
+        super::compile_prelude(&engine).expect("prelude must parse");
 
-        for (name, src) in [
-            ("patrol", include_str!("../rhai/examples/patrol.rhai")),
-            ("mission", include_str!("../rhai/examples/mission.rhai")),
-            (
-                "mission_plan",
-                include_str!("../rhai/examples/mission_plan.rhai"),
-            ),
-            ("sequence", include_str!("../rhai/examples/sequence.rhai")),
-            ("timeline", include_str!("../rhai/examples/timeline.rhai")),
-            ("avoid", include_str!("../rhai/examples/avoid.rhai")),
-            // Bundled scenario carrying the lander auto-land GUIDANCE (writes the
-            // command ports). Parse-guarded here so a syntax slip can't silently
-            // disable auto-land at scene load.
-            (
-                "lander_subsystems (scenario)",
-                include_str!("../../../assets/scenarios/lander_subsystems.rhai"),
-            ),
-            (
-                "formation (tool lib)",
-                include_str!("../rhai/tools/formation.rhai"),
-            ),
-            (
-                "survey (tool lib)",
-                include_str!("../rhai/tools/survey.rhai"),
-            ),
-        ] {
+        // Every embedded example scenario, built-in tool library, AND bundled
+        // runtime scenario must parse — all enumerated from the asset-owning
+        // crate, so new files are covered automatically (no hand-kept list here).
+        // The bundled scenarios include the lander auto-land GUIDANCE, so a
+        // syntax slip can't silently disable auto-land at scene load.
+        let examples = lunco_assets::scripting::examples();
+        let tools = lunco_assets::scripting::tool_libraries();
+        let scenarios = lunco_assets::scripting::scenarios();
+        assert!(
+            !examples.is_empty() && !tools.is_empty() && !scenarios.is_empty(),
+            "embedded scripting assets empty"
+        );
+        for (name, src) in examples.into_iter().chain(tools).chain(scenarios) {
             engine
                 .compile(src)
                 .unwrap_or_else(|e| panic!("{name}.rhai failed to parse: {e}"));

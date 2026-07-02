@@ -6768,6 +6768,7 @@ dependencies = [
  "dirs",
  "flate2",
  "image",
+ "include_dir",
  "inventory",
  "js-sys",
  "lunco-storage",
@@ -7060,7 +7061,6 @@ dependencies = [
  "getrandom 0.3.4",
  "htmd",
  "image",
- "include_dir",
  "indexmap",
  "js-sys",
  "log",
@@ -7229,6 +7229,7 @@ dependencies = [
  "lunco-terrain-globe",
  "lunco-terrain-surface",
  "lunco-theme",
+ "lunco-tutorial",
  "lunco-twin",
  "lunco-twin-journal",
  "lunco-ui",
@@ -7293,6 +7294,7 @@ dependencies = [
  "getrandom 0.3.4",
  "libloading",
  "lunco-api",
+ "lunco-assets",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -7411,6 +7413,20 @@ version = "0.1.0"
 dependencies = [
  "lunco-tools",
  "rhai",
+]
+
+[[package]]
+name = "lunco-tutorial"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "lunco-api",
+ "lunco-core",
+ "lunco-settings",
+ "lunco-workbench",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

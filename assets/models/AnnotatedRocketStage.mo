@@ -258,7 +258,11 @@ package AnnotatedRocketStage
           lineColor={40,40,40},
           fillColor={200,200,210},
           fillPattern=FillPattern.Solid),
-        Text(extent={{-120,-50},{120,-75}},
+        Text(extent={{-120,-28},{120,-48}},
+          // Live opening % via MLS §18 DynamicSelect.
+          textString=DynamicSelect("Valve", "Valve " + String(opening) + " %"),
+          textColor={40,40,40}),
+        Text(extent={{-120,-52},{120,-77}},
           textString="%name",
           textColor={40,40,40})
       }));

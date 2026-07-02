@@ -109,6 +109,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-hooks`** | Language-agnostic hook registry: a *hook* is a named, deterministic-flagged decision point (`HookValue` in/out) whose implementation is pluggable. Backs the first-class policies — journal **merge** order, RBAC **authorize** gate, scripted **drive kernels** — as data, not Rust branches. Dependency-free (no rhai/bevy). |
 | **`lunco-hooks-rhai`** | rhai backend for `lunco-hooks`: compiles a rhai `source` + `entry` fn and registers it under a hook id (`register_rhai_hook`), so any hook point can be authored in rhai and hot-replaced. |
 | **`lunco-behavior`** | Dependency-free behaviour-tree kernel (mechanism split from any prelude): `Ctx`-driven tick-tree, HBT-ready. Not yet wired into a runtime. |
+| **`lunco-tutorial`** | Data-driven, rhai-scripted tutorial shell: a tutorial *is* a USD scene + `*.rhai` orchestrator using the ordinary scripting substrate (task sequencer, `mission(me)`, `cmd:*` bus, HUD). Adds only the launcher panel, `StartTutorial`/`SkipTutorial`/progress, and the `SubsystemToggles` progressive-fidelity switch. UI-gated; holds no sim state (spec 011). |
 
 ---
 

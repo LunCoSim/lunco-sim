@@ -77,7 +77,9 @@ pub mod perspective_command;
 pub mod picker;
 pub mod status_bus;
 pub mod theme_command;
+pub mod tour_driver;
 pub mod tracked_task;
+pub mod tutorial_overlay;
 pub mod twin_browser;
 pub mod uri;
 pub mod window_command;
@@ -377,6 +379,15 @@ impl Plugin for WorkbenchPlugin {
         // Perf HUD (FPS / frame ms / optional physics ms) wired into
         // the right end of the status bar. Off by default; flip via
         // the `TogglePerfHud` typed command.
+        if !app.is_plugin_added::<tutorial_overlay::TutorialOverlayPlugin>() {
+            app.add_plugins(tutorial_overlay::TutorialOverlayPlugin);
+        }
+        // Data-driven guided-tour driver: plays coach-mark tours registered as
+        // data in the `TourCatalog` (no scripting runtime), so the lunica
+        // workbench and the sandbox share one tour renderer.
+        if !app.is_plugin_added::<tour_driver::TourDriverPlugin>() {
+            app.add_plugins(tour_driver::TourDriverPlugin);
+        }
         if !app.is_plugin_added::<perf_hud::PerfHudPlugin>() {
             app.add_plugins(perf_hud::PerfHudPlugin);
         }
