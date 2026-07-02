@@ -2,6 +2,7 @@
 members = [
     "crates/lunco-core",
     "crates/lunco-hash",
+    "crates/lunco-precompute",
     "crates/lunco-time",
     "crates/lunco-obc",
     "crates/lunco-fsw",

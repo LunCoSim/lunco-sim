@@ -7197,6 +7197,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-precompute"
+version = "0.1.0"
+dependencies = [
+ "lunco-hash",
+ "lunco-storage",
+]
+
+[[package]]
 name = "lunco-render"
 version = "0.1.0"
 dependencies = [
@@ -7391,9 +7399,9 @@ dependencies = [
  "lunco-api",
  "lunco-assets",
  "lunco-core",
- "lunco-hash",
  "lunco-materials",
  "lunco-obstacle-field",
+ "lunco-precompute",
  "lunco-storage",
  "lunco-terrain-core",
  "serde",

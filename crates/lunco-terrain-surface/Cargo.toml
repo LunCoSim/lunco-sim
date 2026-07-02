@@ -38,10 +38,10 @@ lunco-storage = { path = "../lunco-storage" }
 # (P4): persist surface/normal maps keyed by DEM+param hash so the AO march
 # isn't redone every load and peers converge. `cache_dir()` is cross-platform.
 lunco-assets = { path = "../lunco-assets" }
-# The workspace hashing substrate (fast tier) — the derived-layer bake key is a
-# word-wise FNV-1a fold of DEM heights + params. Uses the one canonical `Fnv1a`
-# instead of an inline copy of the fold constants.
-lunco-hash = { path = "../lunco-hash" }
+# The content-addressed precompute disk cache (Substrate B). The derived-layer
+# bake (`DerivedBake`) is a `lunco_precompute::Bake`; the crate owns the
+# load/store/rebake orchestration + the FNV-1a key fold (re-exported `Fnv1a`).
+lunco-precompute = { path = "../lunco-precompute" }
 serde = { workspace = true }
 # `ApiQueryProvider` speaks `serde_json::Value` for params/response.
 serde_json = { workspace = true }

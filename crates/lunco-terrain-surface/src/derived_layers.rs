@@ -102,79 +102,74 @@ fn start_derived_bakes(
     }
 }
 
-/// P4: content-addressed cache. Load the derived maps from disk if a bake with
-/// the same DEM + parameters was already persisted; otherwise bake and write them
-/// through (autosave). Pure-function bake → byte-identical key across runs and
-/// peers, so a second load (or a second peer) skips the expensive AO march, and
-/// the `cache://` dir is shared with the rest of the asset stack.
-fn bake_or_load(grid: &HeightGrid) -> DerivedMaps {
-    let key = cache_key(grid);
-    if let Some(maps) = load_cached(&key) {
-        info!("[terrain-layers] derived layers cache hit ({key})");
-        return maps;
-    }
-    let maps = bake_derived(grid);
-    write_cached(&key, &maps);
-    maps
-}
-
 /// Bump when the bake math or packed layout changes, so stale cache entries are
 /// simply never matched (content-addressed → no explicit invalidation).
 const CACHE_FORMAT_VERSION: u64 = 1;
 
-/// Content hash of the DEM heights + every bake parameter → the cache key.
-/// Word-wise FNV-1a fold via the shared [`lunco_hash::Fnv1a`] (no JSON / no
-/// allocation), matching the "hash, don't serialize" idiom. Byte-identical to the
-/// former inline fold, so pre-existing cache entries stay valid.
-fn cache_key(grid: &HeightGrid) -> String {
-    let mut h = lunco_hash::Fnv1a::new();
-    h.write_u64(CACHE_FORMAT_VERSION);
-    h.write_u64(grid.res as u64);
-    h.write_u64(grid.half_extent.to_bits() as u64);
-    h.write_u64(LAYER_RES as u64);
-    h.write_u64(AO_DIRS as u64);
-    h.write_u64(AO_STEPS as u64);
-    h.write_u64(AO_RADIUS_FRAC.to_bits());
-    h.write_u64(ROUGH_BASE.to_bits() as u64);
-    h.write_u64(ROUGH_STEEP_RAD.to_bits() as u64);
-    h.write_u64(SAFE_RAD.to_bits() as u64);
-    h.write_u64(CLIFF_RAD.to_bits() as u64);
-    for &v in &grid.heights {
-        h.write_u64(v.to_bits());
-    }
-    format!("{:016x}", h.finish())
+/// The derived-layer bake as a [`lunco_precompute::Bake`] — the content-addressed
+/// disk cache (Substrate B) owns the load/store/rebake orchestration; this only
+/// declares *what* is baked, *how it keys*, and *how it serializes*.
+struct DerivedBake<'a> {
+    grid: &'a HeightGrid,
 }
 
-/// `cache://terrain/derived/<key>/` on disk (shared `cache_dir`).
-fn cache_dir_for(key: &str) -> std::path::PathBuf {
-    lunco_assets::cache_dir().join("terrain").join("derived").join(key)
+impl lunco_precompute::Bake for DerivedBake<'_> {
+    type Output = DerivedMaps;
+    const NAMESPACE: &'static str = "terrain/derived";
+
+    /// Content hash of the DEM heights + every bake parameter. Word-wise FNV-1a
+    /// fold (no JSON / no allocation), version-first so a bake/layout change
+    /// invalidates old entries. Byte-identical to the former inline key, so
+    /// pre-existing cache entries stay valid.
+    fn key(&self) -> u64 {
+        let mut h = lunco_precompute::Fnv1a::new();
+        h.write_u64(CACHE_FORMAT_VERSION);
+        h.write_u64(self.grid.res as u64);
+        h.write_u64(self.grid.half_extent.to_bits() as u64);
+        h.write_u64(LAYER_RES as u64);
+        h.write_u64(AO_DIRS as u64);
+        h.write_u64(AO_STEPS as u64);
+        h.write_u64(AO_RADIUS_FRAC.to_bits());
+        h.write_u64(ROUGH_BASE.to_bits() as u64);
+        h.write_u64(ROUGH_STEEP_RAD.to_bits() as u64);
+        h.write_u64(SAFE_RAD.to_bits() as u64);
+        h.write_u64(CLIFF_RAD.to_bits() as u64);
+        for &v in &self.grid.heights {
+            h.write_u64(v.to_bits());
+        }
+        h.finish()
+    }
+
+    fn bake(&self) -> DerivedMaps {
+        bake_derived(self.grid)
+    }
+
+    fn store(dir: &std::path::Path, maps: &DerivedMaps) -> lunco_precompute::StorageResult<()> {
+        lunco_precompute::store_blob(dir, "surface.bin", &maps.surface_rgba)?;
+        lunco_precompute::store_blob(dir, "normal.bin", &maps.normal_rgba)
+    }
+
+    /// Load both layer buffers, validating that they are square and the same
+    /// size. `None` on any miss/mismatch → the orchestrator rebakes.
+    fn load(dir: &std::path::Path) -> Option<DerivedMaps> {
+        let surface_rgba = lunco_precompute::load_blob(dir, "surface.bin")?;
+        let normal_rgba = lunco_precompute::load_blob(dir, "normal.bin")?;
+        let texels = surface_rgba.len() / 4;
+        let res = (texels as f64).sqrt() as usize;
+        if res * res * 4 != surface_rgba.len() || normal_rgba.len() != surface_rgba.len() {
+            return None; // corrupt / partial → rebake
+        }
+        Some(DerivedMaps { res, surface_rgba, normal_rgba })
+    }
 }
 
-/// Load both layer buffers from the cache, validating that they are square and
-/// the same size. `None` on any miss/mismatch → caller bakes.
-fn load_cached(key: &str) -> Option<DerivedMaps> {
-    let dir = cache_dir_for(key);
-    let surface_rgba = lunco_storage::read_file_sync(&dir.join("surface.bin")).ok()?;
-    let normal_rgba = lunco_storage::read_file_sync(&dir.join("normal.bin")).ok()?;
-    let texels = surface_rgba.len() / 4;
-    let res = (texels as f64).sqrt() as usize;
-    if res * res * 4 != surface_rgba.len() || normal_rgba.len() != surface_rgba.len() {
-        return None; // corrupt / partial → rebake
-    }
-    Some(DerivedMaps { res, surface_rgba, normal_rgba })
-}
-
-/// Write both layer buffers through the Storage API (atomic, creates parents).
-/// Best-effort: a cache-write failure only costs a rebake next time.
-fn write_cached(key: &str, maps: &DerivedMaps) {
-    let dir = cache_dir_for(key);
-    if let Err(e) = lunco_storage::write_file_sync(&dir.join("surface.bin"), &maps.surface_rgba) {
-        warn!("[terrain-layers] derived cache write failed: {e}");
-        return;
-    }
-    if let Err(e) = lunco_storage::write_file_sync(&dir.join("normal.bin"), &maps.normal_rgba) {
-        warn!("[terrain-layers] derived cache write failed: {e}");
-    }
+/// P4: content-addressed cache. Load the derived maps from disk if a bake with
+/// the same DEM + parameters was already persisted; otherwise bake and write them
+/// through. Pure-function bake → byte-identical key across runs and peers, so a
+/// second load (or a second peer) skips the expensive AO march. The `cache://`
+/// dir is shared with the rest of the asset stack.
+fn bake_or_load(grid: &HeightGrid) -> DerivedMaps {
+    lunco_precompute::bake_or_load(&DerivedBake { grid }, &lunco_assets::cache_dir())
 }
 
 /// Pure bake (runs on the task pool): sample the derived layers and pack them.

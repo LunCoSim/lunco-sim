@@ -1,0 +1,23 @@
+[package]
+name = "lunco-precompute"
+version = "0.1.0"
+edition = "2021"
+description = "Content-addressed precompute disk cache — `bake_or_load`: run an expensive PURE function once, persist the artifact keyed by a content hash, and load it on every later run and peer. Built on lunco-hash (fast key + optional CID) over the lunco-storage I/O seam; runtime-agnostic (no bevy). Home for terrain derived layers, horizon bakes, collider/mesh bakes, USD flatten artifacts."
+
+[dependencies]
+# The hashing substrate: `Fnv1a`/`fnv1a64` derive the fast content key; the `cid`
+# feature forwards to lunco-hash's CID tier for blobs that travel cross-peer.
+lunco-hash = { path = "../lunco-hash" }
+# The I/O seam — cross-platform sync read/write (native FileStorage / wasm
+# WebStorage). This crate owns the CAS *policy*; lunco-storage stays I/O-only.
+lunco-storage = { path = "../lunco-storage" }
+
+[features]
+default = []
+# Cross-peer content addressing for baked blobs that go on the wire (scenario
+# distribution). Pulls lunco-hash's CID tier; off by default so a purely local
+# cache stays dependency-light.
+cid = ["lunco-hash/cid"]
+
+[lints]
+workspace = true
