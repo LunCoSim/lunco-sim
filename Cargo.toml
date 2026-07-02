@@ -218,6 +218,11 @@ uuid = { version = "1", features = ["v4", "serde"] }
 indexmap = { version = "2.6", features = ["serde"] }
 smol_str = { version = "0.2", features = ["serde"] }
 crossbeam-channel = "0.5"
+# Link-time distributed registry (life-before-main collection). Backs the
+# asset-scheme registry: any crate `inventory::submit!`s its `AssetSchemeProvider`
+# and the pre-AssetPlugin registrar drains them — no central hardcoded scheme
+# list. wasm-safe (collected via wasm-bindgen module init).
+inventory = "0.3"
 egui_plot = "0.34.1"
 rfd = "0.15"
 tempfile = "3.10"

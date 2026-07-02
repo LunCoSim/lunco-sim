@@ -41,7 +41,7 @@ use std::path::PathBuf;
 use lunco_core::{NetworkRole, SessionId, SyncChannel};
 use lunco_storage::StorageHandle;
 
-use crate::scenario::{cid_from_bytes, AssetChunkMsg, AssetRequestMsg, RemoteScenarioManifest};
+use crate::scenario::{cid_from_bytes, AssetChunkMsg, AssetRequestMsg, RemoteScenarioManifest, ScenarioManifestMsg};
 use crate::sync::{SyncEnvelope, SyncOutbox};
 
 /// Asset chunk payload size (bytes). Kept well under the lightyear reliable
@@ -66,6 +66,20 @@ pub struct AssetDownloads {
     /// manifest change doesn't re-emit a request for the same asset. Cleared for
     /// a CID if its download fails verification, so a fresh manifest can retry.
     requested: HashSet<Vec<u8>>,
+    /// CIDs downloaded, verified, and persisted to the cache this session. Drives
+    /// [`Self::all_cached`] — the Phase-4 "scene is ready to load" signal.
+    completed: HashSet<Vec<u8>>,
+}
+
+impl AssetDownloads {
+    /// True once **every** asset CID in `manifest` has been downloaded, verified,
+    /// and persisted — i.e. the entry scene and all its co-located refs are on
+    /// disk/OPFS and a [`scenario_asset_uri`] load will resolve. `false` for an
+    /// empty manifest (nothing to consume).
+    pub fn all_cached(&self, manifest: &ScenarioManifestMsg) -> bool {
+        !manifest.assets.is_empty()
+            && manifest.assets.iter().all(|a| self.completed.contains(&a.cid))
+    }
 }
 
 #[derive(Default)]
@@ -274,10 +288,20 @@ pub fn drain_persist_results(
         return;
     }
     while let Ok(outcome) = persist.rx.try_recv() {
-        if !outcome.ok {
-            downloads.requested.remove(&outcome.cid);
+        if outcome.ok {
+            downloads.completed.insert(outcome.cid);
+        } else {
+            downloads.requested.remove(&outcome.cid); // retriable on next manifest
         }
     }
+}
+
+/// The `scenario://` asset URI for a downloaded scenario asset (e.g. the entry
+/// scene). Resolves through the `scenario` asset source to
+/// `<cache_dir>/scenarios/<id>/<rel>` — where the download wrote it. Used by the
+/// consumer (Phase 4) to `LoadScene` a fully-cached scenario.
+pub fn scenario_asset_uri(scenario_id: &[u8; 16], rel: &str) -> String {
+    format!("scenario://{}/{}", hex16(scenario_id), rel)
 }
 
 /// The storage handle for a scenario asset's cache location. A

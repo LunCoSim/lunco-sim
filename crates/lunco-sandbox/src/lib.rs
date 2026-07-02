@@ -263,6 +263,43 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
     group.build().disable::<TransformPlugin>()
 }
 
+/// Scenario distribution Phase 4 (client consume): when the connected client has
+/// downloaded + verified **every** asset of the host's advertised scenario, load
+/// its entry scene (`default_scene`) from the `scenario://` cache. Loaded once per
+/// scenario **revision** (a mid-session swap bumps the revision → reload).
+///
+/// This is a transient, read-only consume: the scene is mounted via `LoadScene`
+/// as a bare stage, NOT added to the workspace as an editable Twin (no `twin.toml`,
+/// no journal). Turning it into an editable on-disk Twin is a separate "promote"
+/// step; write-gating enforcement rides that later work. Host peers early-out
+/// (they already hold the scene). Headless-safe (`LoadScene` needs no GPU).
+#[cfg(feature = "networking")]
+fn load_ready_scenario(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    downloads: Res<lunco_networking::scenario_sync::AssetDownloads>,
+    // Last scenario revision we triggered a load for — reload only on change.
+    mut last_loaded: Local<Option<[u8; 32]>>,
+    mut commands: Commands,
+) {
+    if role.is_host() {
+        return;
+    }
+    let Some(m) = remote.manifest.as_ref() else {
+        return;
+    };
+    let Some(scene) = m.default_scene.as_deref() else {
+        return; // scenario advertises no entry scene → nothing to auto-load
+    };
+    if *last_loaded == Some(m.revision) || !downloads.all_cached(m) {
+        return;
+    }
+    let uri = lunco_networking::scenario_sync::scenario_asset_uri(&m.scenario_id, scene);
+    info!("[net] scenario fully cached; loading entry scene (read-only): {scene}");
+    commands.trigger(LoadScene { path: uri, root_prim: String::new() });
+    *last_loaded = Some(m.revision);
+}
+
 /// The shared, headless-safe core: the persistent world shell, physics, cosim,
 /// USD scene load, mobility/hardware/controller/avatar, environment, the HTTP
 /// API, and networking. Added unconditionally by both the GUI and the server, so
@@ -412,6 +449,13 @@ impl Plugin for SandboxCorePlugin {
             let mode = lunco_networking::NetworkMode::resolve(self.headless);
             info!("[net] networking mode: {mode:?}");
             app.add_plugins(lunco_networking::LunCoNetworkingPlugin { mode });
+            // Scenario distribution Phase 4: once a connected client has fully
+            // downloaded the host's advertised scenario, load its entry scene from
+            // the `scenario://` cache (read-only consume). The bridge lives here —
+            // the assembly crate that owns both the wire (`lunco-networking`) and
+            // the scene loader (`lunco_usd::LoadScene`) — keeping each of those
+            // crates free of the other.
+            app.add_systems(Update, load_ready_scenario);
             // Connect-menu bridge adapter + egui presence/tutorial overlays. Pulls
             // bevy_egui, so it's GUI-only and gated on `ui` (CQ-601) — the headless
             // server omits it. The host still answers runtime JoinServer/LeaveServer
