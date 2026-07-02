@@ -10,6 +10,9 @@ lunco-core = { path = "../lunco-core" }
 # The ONE generic vessel-control command `SetPorts` (a batch of named input-port
 # writes) lives in `lunco-cosim`; `drive_from_bindings` triggers it from held keys.
 lunco-cosim = { path = "../lunco-cosim" }
+# Key→intent bindings are DATA (`assets/config/keybindings.json`), parsed into the
+# leafwing `InputMap` — no keys hardcoded in Rust.
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

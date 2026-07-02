@@ -178,26 +178,87 @@ fn record_control_input(
     }
 }
 
-/// Provides a standard WASD + EQ + Space mapping for generic avatar movement.
-pub fn get_avatar_input_map() -> leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent> {
+/// The bundled default keymap DATA — key→intent bindings live here as a file
+/// (`assets/config/keybindings.json`), NOT hardcoded in Rust. Embedded at compile
+/// time so it works on every target with zero IO. A vessel then maps these intents
+/// to its ports via its USD `Controls` profile.
+const KEYBINDINGS_JSON: &str = include_str!("../../../assets/config/keybindings.json");
+
+/// Build an avatar `InputMap<UserIntent>` from a key→intent JSON object
+/// (`{"MoveForward":["KeyW"], "Action":["KeyF","Space"], …}`; keys are bevy
+/// `KeyCode` variant names, intents `UserIntent` variants via
+/// [`lunco_core::parse_user_intent`]). Keys starting with `_` (e.g. `_comment`)
+/// and unknown intents are skipped. The mouse `Look`/`Zoom` axes are not
+/// key-bindable, so they're always added in code.
+pub fn build_avatar_input_map(json: &str) -> leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent> {
     use leafwing_input_manager::prelude::*;
-    use lunco_core::UserIntent::*;
-    let mut input_map = InputMap::new([
-        (MoveForward, KeyCode::KeyW),
-        (MoveBackward, KeyCode::KeyS),
-        (MoveLeft, KeyCode::KeyA),
-        (MoveRight, KeyCode::KeyD),
-        (MoveUp, KeyCode::KeyE),
-        (MoveDown, KeyCode::KeyQ),
-        (Action, KeyCode::KeyF),
-        // Space also fires `Action`: for a possessed vessel that's brake (rover)
-        // / arm-manual+full-throttle (lander) via its `ControlBinding`; for a
-        // free avatar it's the same context interaction as F.
-        (Action, KeyCode::Space),
-        (SwitchMode, KeyCode::KeyV),
-        (Pause, KeyCode::KeyP),
-    ]);
+    use lunco_core::UserIntent::{Look, Zoom};
+
+    let mut input_map = InputMap::default();
+    match serde_json::from_str::<serde_json::Value>(json) {
+        Ok(serde_json::Value::Object(obj)) => {
+            for (name, val) in &obj {
+                if name.starts_with('_') {
+                    continue;
+                }
+                let Some(intent) = lunco_core::parse_user_intent(name) else {
+                    warn!("[keybindings] unknown intent '{name}' (skipped)");
+                    continue;
+                };
+                match serde_json::from_value::<Vec<KeyCode>>(val.clone()) {
+                    Ok(keys) => {
+                        for k in keys {
+                            input_map.insert(intent, k);
+                        }
+                    }
+                    Err(e) => warn!("[keybindings] '{name}' keys unparseable ({e}); skipped"),
+                }
+            }
+        }
+        _ => error!("[keybindings] keybindings.json is not a JSON object; no key bindings loaded"),
+    }
+    // Mouse axes — not key-bindable, always present.
     input_map.insert_dual_axis(Look, MouseMove::default());
     input_map.insert_axis(Zoom, MouseScrollAxis::Y);
     input_map
+}
+
+/// The avatar/vessel input map, built from the bundled [`KEYBINDINGS_JSON`] data
+/// file. Key bindings are data, not code — edit `assets/config/keybindings.json`
+/// to rebind.
+pub fn get_avatar_input_map() -> leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent> {
+    build_avatar_input_map(KEYBINDINGS_JSON)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_core::UserIntent;
+
+    /// The bundled keybindings file parses, every entry is a known intent bound to
+    /// real `KeyCode`s, and the builder runs — guards the data file against a typo
+    /// silently emptying the keymap.
+    #[test]
+    fn bundled_keybindings_parse_and_build() {
+        let v: serde_json::Value =
+            serde_json::from_str(KEYBINDINGS_JSON).expect("keybindings.json must parse");
+        let obj = v.as_object().expect("keybindings.json must be an object");
+        let mut bound_keys = 0;
+        for (name, val) in obj {
+            if name.starts_with('_') {
+                continue;
+            }
+            assert!(
+                lunco_core::parse_user_intent(name).is_some(),
+                "keybindings.json names unknown intent '{name}'"
+            );
+            let keys: Vec<KeyCode> =
+                serde_json::from_value(val.clone()).expect("intent value must be a KeyCode array");
+            bound_keys += keys.len();
+        }
+        assert!(bound_keys >= 8, "expected the default control keys to be present");
+        // Builder runs end-to-end (also adds the mouse axes) without panicking.
+        let _ = get_avatar_input_map();
+        let _ = UserIntent::MoveForward;
+    }
 }

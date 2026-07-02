@@ -6808,6 +6808,7 @@ dependencies = [
  "leafwing-input-manager",
  "lunco-core",
  "lunco-cosim",
+ "serde_json",
 ]
 
 [[package]]

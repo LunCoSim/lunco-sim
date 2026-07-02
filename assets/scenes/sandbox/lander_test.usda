@@ -114,7 +114,11 @@ def Xform "LanderTest"
         #   velocity_y    --> descent_rate   (PID damping term)
         #   gravity_accel --> g              (env-correct gravity feed-forward; lunar ≈ 1.62)
         string lunco:modelicaModel = "models/Lander.mo"
-        string lunco:simWires = "force_x:force_x,force_y:force_y,force_z:force_z,torque_x:torque_x,torque_y:torque_y,torque_z:torque_z,position_x:pos_x,position_y:pos_y,position_z:pos_z,velocity_x:vel_x,velocity_y:vel_y,velocity_z:vel_z,quat_w:q_w,quat_x:q_x,quat_y:q_y,quat_z:q_z,angvel_x:w_x,angvel_y:w_y,angvel_z:w_z,gravity_accel:g,throttle:throttle"
+        # Actuator I/O only: force/torque OUT (Modelica -> Avian), orientation quat
+        # IN (rotates thrust to world), throttle OUT (telemetry/flame). The GNC-only
+        # feeds (position/velocity/angvel/gravity) were dropped with the GNC — the
+        # rhai autopilot reads pose/velocity from the avian ports directly.
+        string lunco:simWires = "force_x:force_x,force_y:force_y,force_z:force_z,torque_x:torque_x,torque_y:torque_y,torque_z:torque_z,quat_w:q_w,quat_x:q_x,quat_y:q_y,quat_z:q_z,throttle:throttle"
 
         # Modelica `when` events: threshold crossings of the model's continuous
         # OUTPUT signals become discrete events on the bus (edge detection in Rust,
@@ -442,62 +446,9 @@ def Xform "LanderTest"
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    def "TargetToLanderX"
-    {
-        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
-        string lunco:fromPort = "position_x"
-        rel lunco:wireTo = </LanderTest/Lander>
-        string lunco:toPort = "target_x"
-        double lunco:scale = 1.0
-    }
-    def "TargetToLanderY"
-    {
-        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
-        string lunco:fromPort = "position_y"
-        rel lunco:wireTo = </LanderTest/Lander>
-        string lunco:toPort = "target_y"
-        double lunco:scale = 1.0
-    }
-    def "TargetToLanderZ"
-    {
-        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
-        string lunco:fromPort = "position_z"
-        rel lunco:wireTo = </LanderTest/Lander>
-        string lunco:toPort = "target_z"
-        double lunco:scale = 1.0
-    }
-    def "TargetToLanderQw"
-    {
-        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
-        string lunco:fromPort = "quat_w"
-        rel lunco:wireTo = </LanderTest/Lander>
-        string lunco:toPort = "target_qw"
-        double lunco:scale = 1.0
-    }
-    def "TargetToLanderQx"
-    {
-        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
-        string lunco:fromPort = "quat_x"
-        rel lunco:wireTo = </LanderTest/Lander>
-        string lunco:toPort = "target_qx"
-        double lunco:scale = 1.0
-    }
-    def "TargetToLanderQy"
-    {
-        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
-        string lunco:fromPort = "quat_y"
-        rel lunco:wireTo = </LanderTest/Lander>
-        string lunco:toPort = "target_qy"
-        double lunco:scale = 1.0
-    }
-    def "TargetToLanderQz"
-    {
-        rel lunco:wireFrom = </LanderTest/LandingLocation/Zone>
-        string lunco:fromPort = "quat_z"
-        rel lunco:wireTo = </LanderTest/Lander>
-        string lunco:toPort = "target_qz"
-        double lunco:scale = 1.0
-    }
+    # (The former TargetToLander* wires that fed the lander's `target_*` GNC inputs
+    #  were removed with the GNC — the rhai autopilot reads the pad pose directly
+    #  via find("/LanderTest/LandingLocation").)
 
     def "AltimeterToLander"
     {

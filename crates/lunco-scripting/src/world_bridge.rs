@@ -987,6 +987,13 @@ mod tests {
             ("sequence", include_str!("../rhai/examples/sequence.rhai")),
             ("timeline", include_str!("../rhai/examples/timeline.rhai")),
             ("avoid", include_str!("../rhai/examples/avoid.rhai")),
+            // Bundled scenario carrying the lander auto-land GUIDANCE (writes the
+            // command ports). Parse-guarded here so a syntax slip can't silently
+            // disable auto-land at scene load.
+            (
+                "lander_subsystems (scenario)",
+                include_str!("../../../assets/scenarios/lander_subsystems.rhai"),
+            ),
             (
                 "formation (tool lib)",
                 include_str!("../rhai/tools/formation.rhai"),

@@ -6,45 +6,19 @@ model Lander
    the environment."
 
   // ── Vehicle parameters ──
-  parameter Real vehicle_mass = 2000.0 "Vehicle mass (kg) — keep == USD physics:mass";
   parameter Real max_thrust = 60000.0 "Max engine thrust (N)";
   parameter Real v_e = 2900.0 "Effective exhaust velocity (m/s)";
-  
-  // ── Gain parameters ──
-  parameter Real kp_pos = 4.0 "Position tracking gain";
-  parameter Real kp_rot = 15.0 "Rotation proportional gain";
-  parameter Real kd_rot = 8.0 "Rotation derivative gain";
 
-  // ── Custom speeds ──
-  input Real speed = 5.0 "Maximum translation speed (m/s)";
-  input Real angular_speed = 2.0 "Maximum rotation speed (rad/s)";
-
-  // ── Target location inputs (from LandingLocation) ──
-  input Real target_x = 0.0 "Target X position";
-  input Real target_y = 0.0 "Target Y position (ground level)";
-  input Real target_z = 0.0 "Target Z position";
-  input Real target_qw = 1.0 "Target orientation quat w";
-  input Real target_qx = 0.0 "Target orientation quat x";
-  input Real target_qy = 0.0 "Target orientation quat y";
-  input Real target_qz = 0.0 "Target orientation quat z";
-
-  // ── Current state inputs (from Avian body) ──
-  input Real pos_x = 0.0 "Current world X position";
-  input Real pos_y = 60.0 "Current world Y position";
-  input Real pos_z = 0.0 "Current world Z position";
-  input Real altitude = 60.0 "Measured altitude from altimeter (m)";
-  input Real vel_x = 0.0 "Current world X velocity";
-  input Real vel_y = 0.0 "Current world Y velocity";
-  input Real vel_z = 0.0 "Current world Z velocity";
+  // ── State inputs used by the actuator ──
+  // Body orientation (rotates the local thrust/torque into world frame) + engine
+  // arm. The former GNC-only inputs (target_*, pos_*, altitude, vel_*, w_*, g) and
+  // gains (vehicle_mass, kp_*, speed, angular_speed) were removed with the GNC —
+  // guidance is now an external rhai layer (lander_subsystems.rhai) that writes the
+  // command inputs below.
   input Real q_w = 1.0 "Current orientation quat w";
   input Real q_x = 0.0 "Current orientation quat x";
   input Real q_y = 0.0 "Current orientation quat y";
   input Real q_z = 0.0 "Current orientation quat z";
-  input Real w_x = 0.0 "Current angular velocity X";
-  input Real w_y = 0.0 "Current angular velocity Y";
-  input Real w_z = 0.0 "Current angular velocity Z";
-  
-  input Real g = 1.62 "Local gravity (m/s^2)";
   input Real engine_enable = 1.0 "1 = engine armed, 0 = cut";
 
   // ── External command inputs ──
