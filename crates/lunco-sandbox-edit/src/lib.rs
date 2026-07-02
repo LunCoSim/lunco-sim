@@ -115,7 +115,6 @@ impl Plugin for SandboxEditPlugin {
         );
         app.add_systems(Update, gizmo::sync_gizmo_camera);
         app.add_systems(Update, gizmo::drive_gizmo_drag_no_shift);
-        app.add_systems(Update, gizmo::debug_gizmo_selection);
         // Publish the drag state as the core `GizmoDragging` marker so transform-
         // gizmo-free crates (avatar camera follow) can read it.
         app.add_systems(Update, gizmo::sync_gizmo_dragging_marker);

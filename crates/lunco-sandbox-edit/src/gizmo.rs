@@ -44,9 +44,13 @@ pub fn sync_gizmo_dragging_marker(
     for (e, gt) in &q {
         if gt.is_active() {
             any_active = true;
-            commands.entity(e).insert(lunco_core::GizmoDragging);
+            // `try_*`: a `GizmoTarget` entity can be despawned (scene reset,
+            // deselect-then-despawn) between this query read and command apply.
+            // The plain `insert`/`remove` then error on the dead entity; the
+            // fallible variants no-op instead.
+            commands.entity(e).try_insert(lunco_core::GizmoDragging);
         } else {
-            commands.entity(e).remove::<lunco_core::GizmoDragging>();
+            commands.entity(e).try_remove::<lunco_core::GizmoDragging>();
         }
     }
     // Single writer of `DragModeActive`: possession (plain-click) is blocked ONLY
@@ -229,61 +233,6 @@ pub fn restore_gizmo_dynamic(
         for av_ent in q_avatar.iter() {
             commands.entity(av_ent).insert(FloatingOrigin);
             info!("GIZMO: restored FloatingOrigin on avatar camera {:?}", av_ent);
-        }
-    }
-}
-
-/// TEMP DIAGNOSTIC — logs, on every selection change, what each selected
-/// entity actually carries: whether it has a `GizmoTarget`, its LOCAL
-/// `Transform.translation` (what transform-gizmo-bevy reads and treats as
-/// world) versus its `GlobalTransform` world position, and the GridAnchor/
-/// SelectableRoot markers. Rovers get a gizmo; static USD buildings/landers
-/// don't — this pinpoints whether the difference is a missing target, a
-/// missing Transform, or a local≠world frame mismatch. Remove once resolved.
-pub fn debug_gizmo_selection(
-    selected: Res<crate::SelectedEntities>,
-    q: Query<(
-        Has<GizmoTarget>,
-        Option<&Transform>,
-        Option<&GlobalTransform>,
-        Has<lunco_core::GridAnchor>,
-        Has<lunco_core::SelectableRoot>,
-        Option<&Name>,
-    )>,
-    q_parents: Query<&ChildOf>,
-) {
-    if !selected.is_changed() {
-        return;
-    }
-    info!("[gizmo-dbg] selection changed: {} entities", selected.entities.len());
-    for e in &selected.entities {
-        match q.get(*e) {
-            Ok((gt, tf, gtf, ga, sr, name)) => info!(
-                "[gizmo-dbg]  SELECTED {e:?} name={:?} gizmo_target={gt} grid_anchor={ga} selectable_root={sr} local={:?} world={:?}",
-                name.map(|n| n.as_str()),
-                tf.map(|t| t.translation),
-                gtf.map(|g| g.translation()),
-            ),
-            Err(_) => info!("[gizmo-dbg]  SELECTED {e:?} NOT MATCHED — missing Transform/GlobalTransform"),
-        }
-        // Walk the ancestor chain so we can see WHERE (if anywhere) a
-        // SelectableRoot / GridAnchor sits above a leaf, and at what depth.
-        let mut cur = *e;
-        let mut depth = 0;
-        while let Ok(parent) = q_parents.get(cur) {
-            let p = parent.parent();
-            depth += 1;
-            if let Ok((_, tf, _, ga, sr, name)) = q.get(p) {
-                info!(
-                    "[gizmo-dbg]    ^{depth} {p:?} name={:?} grid_anchor={ga} selectable_root={sr} local={:?}",
-                    name.map(|n| n.as_str()),
-                    tf.map(|t| t.translation),
-                );
-            }
-            cur = p;
-            if depth >= 16 {
-                break;
-            }
         }
     }
 }
