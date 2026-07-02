@@ -328,20 +328,20 @@ mod tests {
         // with the entrant (rover, 42) as payload.
         assert_eq!(
             zone_events("enter", rover, None, pad, None, &zone_name, &reg),
-            vec![("enter:pad_2".to_string(), 42)]
+            vec![("enter:pad_2".to_string(), 42, 7)]
         );
         // Order-independent: the named side can be side 1.
         assert_eq!(
             zone_events("exit", pad, None, rover, None, &zone_name, &reg),
-            vec![("exit:pad_2".to_string(), 42)]
+            vec![("exit:pad_2".to_string(), 42, 7)]
         );
         // A contact with no named sensor produces no zone events.
         assert!(zone_events("enter", rover, None, plain, None, &zone_name, &reg).is_empty());
-        // Unregistered entrant → gid 0, but the zone event still fires.
+        // Unregistered entrant → gid 0, but the zone event still fires (zone gid 7).
         let ghost = world.spawn_empty().id();
         assert_eq!(
             zone_events("enter", pad, None, ghost, None, &zone_name, &reg),
-            vec![("enter:pad_2".to_string(), 0)]
+            vec![("enter:pad_2".to_string(), 0, 7)]
         );
     }
 }

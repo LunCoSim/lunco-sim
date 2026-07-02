@@ -7028,6 +7028,7 @@ dependencies = [
  "lunco-core",
  "lunco-fsw",
  "lunco-hardware",
+ "lunco-hooks",
  "lunco-time",
  "serde_json",
 ]

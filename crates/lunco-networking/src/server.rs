@@ -456,6 +456,7 @@ fn on_server_connected(
     profiles: Res<SessionProfiles>,
     scenario: Option<Res<ScenarioManifestResource>>,
     journal: Option<Res<JournalResource>>,
+    scripted_policies: Res<crate::scripted_policy::ScriptedPolicyRegistry>,
     server: Single<&Server>,
     tick: Res<SimTick>,
     mut sender: ServerMultiMessageSender,
@@ -552,6 +553,21 @@ fn on_server_connected(
                 &SyncEnvelope::JournalEntry(msg),
             );
         }
+    }
+    // Scripted-policy plane: send the active policy set so the late joiner runs the
+    // identical merge / authorization / drive-kernel policies (determinism). The
+    // periodic `broadcast_scripted_policies` only fires on change, so a joiner that
+    // connects after the last change needs this connect-time push.
+    if !scripted_policies.policies.is_empty() {
+        server_send(
+            &mut sender,
+            server,
+            &target,
+            SyncChannel::BulkData,
+            &SyncEnvelope::ScriptedPolicy(crate::scripted_policy::ScriptedPolicyMsg {
+                policies: scripted_policies.policies.clone(),
+            }),
+        );
     }
     info!("[net] client connected: peer={peer:?} session={}", session.0);
 }

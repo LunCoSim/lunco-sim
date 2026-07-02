@@ -46,6 +46,10 @@ pub mod scenario_sync;
 /// (see module docs); the transport ferry only routes to it.
 #[cfg(feature = "networking")]
 pub mod journal_plane;
+/// The scripted-policy plane: distribute + activate rhai policies (merge /
+/// authorization / drive-kernel) host→client so every peer runs the identical one.
+#[cfg(feature = "networking")]
+pub mod scripted_policy;
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
 mod server;
 #[cfg(feature = "networking")]

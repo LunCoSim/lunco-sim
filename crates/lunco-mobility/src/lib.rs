@@ -81,6 +81,7 @@ impl Plugin for LunCoMobilityPlugin {
            .register_type::<AckermannSteer>()
            .register_type::<WheelRaycast>()
            .register_type::<GenericDriveMix>()
+           .register_type::<ScriptedDriveKernel>()
            .register_type::<DifferentialCoupling>()
            // G5 rocker-bogie differential — separate set: it doesn't read the
            // control ports, only couples two rocker hinges. Idle unless a
@@ -642,6 +643,25 @@ pub struct GenericDriveMix {
     pub entries: Vec<MixEntry>,
 }
 
+/// G4c — a **scripted (rhai) drive kernel**: per-actuator mixing computed by a
+/// hook function instead of the hardcoded [`skid_mix`] or the linear
+/// [`GenericDriveMix`] table. For control laws easier to express as code —
+/// nonlinear crab/pivot blends, mode switches, saturation curves — this is the
+/// "control policy in rhai" path (the [`lunco_hooks`] hook is named by `hook_id`,
+/// authored as `lunco:driveKernel`).
+///
+/// Precedence in [`on_drive_rover`]: a scripted kernel wins over the mix table and
+/// the built-in skid/Ackermann branches, so the most dynamic policy is
+/// authoritative. Host-side (the drive observer runs where commands are applied);
+/// like the merge policy, a predicted client would need the identical hook to
+/// match — distribute the script and register it on every peer.
+#[derive(Component, Debug, Clone, Reflect, Default)]
+#[reflect(Component, Default)]
+pub struct ScriptedDriveKernel {
+    /// The [`lunco_hooks`] hook id whose function computes per-port outputs.
+    pub hook_id: String,
+}
+
 impl GenericDriveMix {
     /// Parse the compact `lunco:driveMix` string: whitespace-separated
     /// `port=forward,steer[,brake]` terms (brake defaults 0). Example:
@@ -951,6 +971,27 @@ fn skid_mix(forward: f64, steer: f64) -> (i16, i16) {
     (to_i16(l), to_i16(r))
 }
 
+/// Invoke a scripted (rhai) drive kernel: hand its hook `{ forward, steer, brake }`
+/// and read back a map of `port → value` in `[-1, 1]` (clamped defensively). The
+/// scripted sibling of [`skid_mix`] / [`GenericDriveMix`]. Returns empty on an
+/// absent or faulted hook — **fail-safe**: no actuation is safer than garbage
+/// (the caller then leaves ports untouched, i.e. coasting).
+fn scripted_drive_mix(hook_id: &str, forward: f64, steer: f64, brake: f64) -> Vec<(String, f64)> {
+    use lunco_hooks::HookValue;
+    let ctx = HookValue::map([
+        ("forward", HookValue::Float(forward)),
+        ("steer", HookValue::Float(steer)),
+        ("brake", HookValue::Float(brake)),
+    ]);
+    match lunco_hooks::invoke(hook_id, &[ctx]) {
+        Some(Ok(HookValue::Map(entries))) => entries
+            .into_iter()
+            .filter_map(|(k, v)| v.as_f64().map(|f| (k, f.clamp(-1.0, 1.0))))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Observer for DriveRover commands.
 #[on_command(DriveRover)]
 fn on_drive_rover(
@@ -959,6 +1000,7 @@ fn on_drive_rover(
     q_diff: Query<&DifferentialDrive>,
     q_ack: Query<&AckermannSteer>,
     q_mix: Query<&GenericDriveMix>,
+    q_kernel: Query<&ScriptedDriveKernel>,
     mut q_digital_ports: Query<&mut DigitalPort>,
 ) {
     let Ok(fsw) = q_rovers.get_mut(cmd.target) else {
@@ -966,6 +1008,27 @@ fn on_drive_rover(
         return;
     };
     drive_diag!("[drive-diag] on_drive_rover: target {:?} fwd={} steer={} brake={} ports={:?}", cmd.target, cmd.forward, cmd.steer, fsw.brake_active, fsw.port_map);
+
+    // G4c — a scripted (rhai) drive kernel wins over everything: the most dynamic
+    // control policy is authoritative. It computes per-port outputs from the same
+    // brake-gated (forward, steer, brake) the linear mix uses. Empty result (no
+    // hook / faulted) leaves ports untouched — fail-safe coast.
+    if let Ok(kernel) = q_kernel.get(cmd.target) {
+        let (fwd, steer, brake) = if fsw.brake_active {
+            (0.0, 0.0, 1.0)
+        } else {
+            (cmd.forward, cmd.steer, 0.0)
+        };
+        let full = DIGITAL_PORT_FULL_SCALE as f64;
+        for (port, value) in scripted_drive_mix(&kernel.hook_id, fwd, steer, brake) {
+            if let Some(&port_id) = fsw.port_map.get(&port) {
+                if let Ok(mut p) = q_digital_ports.get_mut(port_id) {
+                    p.raw_value = (value * full).round() as i16;
+                }
+            }
+        }
+        return;
+    }
 
     // G4b — USD-authored linear mix wins when present (arbitrary per-wheel
     // topology). While braking, forward/steer are forced to 0 (matching the
@@ -1138,6 +1201,45 @@ mod force_law_tests {
         let proj = |fwd: f64, steer: f64, e: &MixEntry| (fwd * e.forward + steer * e.steer).clamp(-1.0, 1.0);
         assert_eq!(proj(0.5, 0.0, &m.entries[0]), proj(0.5, 0.0, &m.entries[1]));
         assert_eq!(proj(0.0, 0.5, &m.entries[0]), -proj(0.0, 0.5, &m.entries[1]));
+    }
+
+    // ── G4c scripted (rhai) drive kernel: hook-driven mixing ────────────────
+    #[test]
+    fn scripted_drive_kernel_maps_command_to_ports() {
+        use lunco_hooks::{HookResult, HookValue, RegisteredHook, ScriptHook};
+        use std::sync::Arc;
+
+        // A native stand-in for a rhai kernel: tank mix (left=f+s, right=f-s).
+        struct TankKernel;
+        impl ScriptHook for TankKernel {
+            fn invoke(&self, args: &[HookValue]) -> HookResult {
+                let f = args[0].get("forward").and_then(HookValue::as_f64).unwrap_or(0.0);
+                let s = args[0].get("steer").and_then(HookValue::as_f64).unwrap_or(0.0);
+                Ok(HookValue::map([
+                    ("drive_left", HookValue::Float((f + s).clamp(-1.0, 1.0))),
+                    ("drive_right", HookValue::Float((f - s).clamp(-1.0, 1.0))),
+                ]))
+            }
+        }
+        lunco_hooks::register(RegisteredHook {
+            id: "test.kernel.tank".into(),
+            backend: "rust".into(),
+            deterministic: true,
+            hook: Arc::new(TankKernel),
+        });
+
+        let mut out = scripted_drive_mix("test.kernel.tank", 1.0, 0.5, 0.0);
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        // f+s = 1.5 → clamped to 1.0; f-s = 0.5.
+        assert_eq!(
+            out,
+            vec![("drive_left".to_string(), 1.0), ("drive_right".to_string(), 0.5)]
+        );
+
+        // Absent hook → empty (fail-safe coast; ports left untouched).
+        assert!(scripted_drive_mix("test.kernel.absent", 1.0, 0.0, 0.0).is_empty());
+
+        lunco_hooks::unregister("test.kernel.tank");
     }
 
     // ── drive_force_mag: reverse must work ──────────────────────────────────

@@ -114,6 +114,23 @@ pub struct ScenarioIntrospection<V> {
 /// Each method is keyed by the host `entity`; the impl owns the per-entity
 /// compiled state internally. `self_gid` is the host's `GlobalEntityId` (the
 /// `self` a hook receives), passed in so the impl never resolves it.
+///
+// TODO(hooks): evaluate folding this onto the `lunco-hooks` registry (the
+// language-neutral internal-hook substrate that backs `MergePolicy`,
+// `rbac.authorize`, and `ScriptedDriveKernel`). NOT done yet — deliberately —
+// because the two are different shapes and a forced migration is lateral churn on
+// a working system with no clear win:
+//   - `lunco-hooks` = STATELESS, GLOBAL policy functions keyed by a `HookId`
+//     string (`HookValue in → HookValue out`, one call, no identity).
+//   - `ScenarioRuntime` = STATEFUL, PER-ENTITY behaviour programs: a persistent
+//     `this` state object, a Start/Tick/Stop lifecycle FSM (`ScenarioDriver`),
+//     hot-reload/recompile, and replication — none of which the flat registry
+//     models.
+// They already share the SAME foundations (`bridge_core::ValueBuilder`, the
+// mechanism/per-language-binding split), so nothing is duplicated by keeping them
+// separate. Revisit ONLY if a concrete need appears — most likely "a scenario
+// script should be able to CALL a registered hook", which is a small ADDITIVE
+// bridge (invoke a `HookId` from a scenario verb), not a migration of this trait.
 pub trait ScenarioRuntime: Send + Sync + 'static {
     /// (Re)compile `source` for `entity`, replacing any prior program and running
     /// its top-level init. The driver guarantees the previous program's
