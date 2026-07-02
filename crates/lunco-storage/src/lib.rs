@@ -151,6 +151,16 @@ impl StorageHandle {
                 .unwrap_or("(invalid)")
                 .to_string(),
             Self::Memory(k) => k.clone(),
+            // Browser backends: show the last path/URL segment (or the opaque
+            // token) — the same "leaf name" intent as the File arm.
+            #[cfg(any(feature = "fsa_stub", doc))]
+            Self::Fsa(token) => token.clone(),
+            #[cfg(any(feature = "idb_stub", doc))]
+            Self::Idb { key, .. } => key.clone(),
+            #[cfg(any(feature = "opfs_stub", doc))]
+            Self::Opfs(path) => path.rsplit('/').find(|s| !s.is_empty()).unwrap_or(path).to_string(),
+            #[cfg(any(feature = "http_stub", doc))]
+            Self::Http(url) => url.rsplit('/').find(|s| !s.is_empty()).unwrap_or(url).to_string(),
         }
     }
 
