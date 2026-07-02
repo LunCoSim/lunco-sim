@@ -349,7 +349,40 @@ pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) {
     }
 }
 
-register_commands!(on_control_animation);
+/// Drive the LIVE-WORLD transport (physics/tick clock), distinct from
+/// [`ControlAnimation`] which drives the keyframe preview. Each field optional so
+/// one verb covers pause / play / rate — `{"command":"SetTimeTransport",
+/// "params":{"playing":false}}` PAUSES the whole simulation (tick + physics),
+/// `{"rate":4.0}` runs it 4× realtime. This is THE pause command: exposed on the
+/// API/MCP and wrapped by the rhai prelude verbs `pause()`/`play()`/`set_rate()`,
+/// so a cutscene or a "reload-then-pause" one-liner can freeze the world.
+#[Command(default)]
+pub struct SetTimeTransport {
+    /// Play (`Some(true)`) / pause (`Some(false)`); `None` leaves it.
+    pub playing: Option<bool>,
+    /// Speed multiplier vs realtime (1.0 = realtime); `None` leaves it.
+    pub rate: Option<f64>,
+}
+
+#[on_command(SetTimeTransport)]
+fn on_set_time_transport(
+    trigger: On<SetTimeTransport>,
+    mut transport: ResMut<crate::TimeTransport>,
+) {
+    let cmd = trigger.event();
+    if let Some(playing) = cmd.playing {
+        transport.mode = if playing {
+            crate::TransportMode::Playing
+        } else {
+            crate::TransportMode::Paused
+        };
+    }
+    if let Some(rate) = cmd.rate {
+        transport.rate = rate.max(0.0);
+    }
+}
+
+register_commands!(on_control_animation, on_set_time_transport);
 
 /// Plugin wiring for the clock tree: components, [`ResolvedDomains`], the resolve
 /// system in [`DomainResolveSet`] (`Update`), the [`AnimationPreview`] domain, and

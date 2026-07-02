@@ -1010,6 +1010,81 @@ fn on_load_scene(
     });
 }
 
+/// Reload the CURRENTLY-ACTIVE scene from disk — the "restart" verb.
+///
+/// [`LoadScene`] deliberately no-ops when asked to load the scene that is already
+/// active (same path + root), so it cannot pick up on-disk edits to the LIVE
+/// scene. `RestartScene` always clears the current scene's entities, force-reloads
+/// its stage asset from disk (busting the asset cache), and respawns a single
+/// fresh root — so editing a `.usda` then `restart_scene()` shows the change with
+/// no duplicate instances. Takes no args: it targets whatever scene is loaded.
+/// Paired with `pause()` this is the "reload-then-freeze" one-liner the workflow
+/// wanted (`restart_scene(); pause();`).
+#[Command(default)]
+pub struct RestartScene {}
+
+#[on_command(RestartScene)]
+fn on_restart_scene(
+    _cmd: RestartScene,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+    q_usd: Query<(Entity, &UsdPrimPath)>,
+    q_wires: Query<Entity, With<SimConnection>>,
+    q_modelica: Query<Entity, With<ModelicaModel>>,
+    q_scripted: Query<&ScriptedModel>,
+    channels: Res<ModelicaChannels>,
+    mut script_registry: ResMut<lunco_scripting::ScriptRegistry>,
+) {
+    // Every loaded prim shares the scene's stage handle. REUSE that handle (not a
+    // freshly-resolved path) so the exact same asset — INCLUDING its source scheme
+    // (`twin://…`, `scenario://…`) — is respawned. Resolving via `.path()` would
+    // drop the scheme and load a *different* raw-file asset, breaking twin routing
+    // (avatar/camera setup, composed runtime edits) and leaving a stale camera.
+    let Some((_, upp)) = q_usd.iter().next() else {
+        warn!("[restart-scene] no scene is loaded — nothing to restart");
+        return;
+    };
+    let handle = upp.stage_handle.clone();
+    // Full asset path WITH source scheme (owned, so `reload` doesn't need a
+    // `'static` borrow), for the reload key + the scene-root label. `None` only
+    // for a document-backed stage with no registered path — still respawnable
+    // from the handle, just unlabelled.
+    let asset_path = asset_server.get_path(handle.id()).map(|p| p.into_owned());
+    let label = asset_path
+        .as_ref()
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "restarted-scene".to_string());
+    info!("[restart-scene] reloading `{}` from disk", label);
+
+    // Despawn the old scene + free worker-side state (shared with `ClearScene`).
+    // Every scene-authored entity (incl. the Avatar camera) carries `UsdPrimPath`,
+    // so `try_despawn` (hierarchy-recursive) tears the old camera down here — no
+    // stale window camera survives into the fresh scene.
+    clear_scene_entities(
+        &mut commands,
+        &q_usd,
+        &q_wires,
+        &q_modelica,
+        &q_scripted,
+        &channels,
+        &mut script_registry,
+    );
+
+    // Force a fresh disk read so on-disk edits actually apply (the whole point).
+    // Reloading by the full path (scheme intact) targets the SAME asset id the
+    // handle holds, so it fires exactly one fresh `LoadedWithDependencies` → a
+    // single re-instantiation pass, no duplicate scene or camera.
+    if let Some(ap) = asset_path {
+        asset_server.reload(ap);
+    }
+
+    // Respawn from the SAME handle (defaultPrim resolution), deferred so the
+    // despawns flush first.
+    commands.queue(move |world: &mut World| {
+        spawn_scene_root_with_stage(world, &label, "", handle);
+    });
+}
+
 /// Clear the active scene — despawn every USD prim entity + cosim wire
 /// and free the worker-side Modelica steppers / Python script docs they
 /// referenced, leaving an empty viewport.
@@ -1496,7 +1571,7 @@ pub(crate) fn install(app: &mut App) {
     register_all_commands(app);
 }
 
-register_commands!(on_load_scene, on_clear_scene,);
+register_commands!(on_load_scene, on_clear_scene, on_restart_scene,);
 
 #[cfg(test)]
 mod tests {

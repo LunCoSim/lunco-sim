@@ -1,0 +1,151 @@
+#usda 1.0
+(
+    defaultPrim = "LanderTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+    # 1 timecode == 1 second, so `xformOp:*.timeSamples` keys below read as
+    # seconds and line up with the rhai `wait(...)` beats in the cutscene.
+    timeCodesPerSecond = 1
+    startTimeCode = 0
+    endTimeCode = 40
+    # Compose the whole powered-descent scene (lander + rover + waypoints + the
+    # onboard GNC/flame scripts) from the base test scene, then ADD a camera rig
+    # and swap the orchestration script for a cinematic one. Nothing is copied.
+    subLayers = [
+        @lander_test.usda@
+    ]
+)
+
+# ── Cinematic demo: a scripted lunar descent as a cut-scene ──────────────────
+#
+# One example that shows BOTH animation and planning:
+#   • ANIMATION — a keyframed `OrbitView` establishing dolly (pure USD
+#     `timeSamples`, driven by the shared animation transport) plus mounted
+#     cameras that ride the moving lander/rover and re-aim every frame.
+#   • PLANNING  — the same 3-gate rover survey course from the base scene.
+#
+# The camera CUTS are authored in `scenarios/lander_cinematic.rhai` as a
+# declarative `seq([...])` task: cut to a `def Camera`, `wait`, cut again,
+# `wait_for("lander_touchdown")`, then chase the rover through the course.
+#
+#   sandbox --scene scenes/sandbox/lander_cinematic.usda
+
+over "LanderTest"
+{
+    # ── OrbitView: keyframed establishing dolly ("coming down from orbit") ──
+    # A top-level `def Camera` whose `xformOp:translate` is animated with
+    # `timeSamples`. Because the prim carries xform timeSamples it is tagged
+    # `UsdAnimated` and the per-frame sampler recomposes its transform from the
+    # `xformOpOrder` stack against the animation clock — so it craning-dollies
+    # across the scene while the lander descends. `play_animation()` in the
+    # cutscene starts the transport.
+    def Camera "OrbitView"
+    {
+        # A slow crane-down + push-in: the camera starts high and far ("from
+        # orbit"), descends and orbits toward the pad while the lander comes down,
+        # easing its downward tilt from steep to shallow so the descent stays in
+        # frame. The translate move IS the zoom (a dolly-in). Sampled by the shared
+        # animation clock (`play_animation()` in the director).
+        double3 xformOp:translate.timeSamples = {
+            0:  (58, 78, 58),
+            5:  (46, 58, 52),
+            10: (34, 42, 45),
+            16: (24, 30, 38),
+            22: (18, 24, 34),
+        }
+        double3 xformOp:rotateXYZ.timeSamples = {
+            0:  (-50, 45, 0),
+            10: (-38, 43, 0),
+            22: (-28, 40, 0),
+        }
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        float focalLength = 22.0
+        float2 clippingRange = (0.1, 200000.0)
+    }
+
+    # ── PadCam: static low-angle pad camera for the touchdown beat ──
+    # A plain `def Camera` (no timeSamples) → its `lunco:cameraLookAt` aim is
+    # baked once at spawn and preserved. Sits beside the pad looking up so the
+    # lander settles into frame.
+    def Camera "PadCam"
+    {
+        custom double3 lunco:cameraLookAt = (0, 9, 0)
+        double3 xformOp:translate = (13, 2.5, 15)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float focalLength = 30.0
+        float2 clippingRange = (0.1, 200000.0)
+    }
+
+    # ── Mounted cameras that RIDE the lander (re-aim every frame) ──
+    # Nested `def Camera`s under the lander rigid body become grid-direct
+    # followers (`camera_mount`): each frame the camera is placed at
+    # mount·offset and aimed at `lunco:cameraLookAt` (lander-local). They move
+    # with the vehicle — the strongest "camera moving via animation" beat.
+    over "Lander"
+    {
+        # Cinematic descent: kill the base scene's sideways drift so the lander
+        # comes straight down and settles UPRIGHT on its legs (the base test scene
+        # keeps the drift on purpose to exercise lateral GNC).
+        double3 physics:linearVelocity = (0, 0, 0)
+
+        # Wide heroic establishing shot — mounted FAR back/up so it rides the whole
+        # descent while always auto-framing the lander (camera_mount re-aims every
+        # frame). This replaces the hand-keyframed free camera whose aim couldn't
+        # track the mover: a mounted cam is always correctly framed by construction.
+        def Camera "WideTrack"
+        {
+            custom double3 lunco:cameraLookAt = (0, -2, 0)
+            double3 xformOp:translate = (44, 30, 46)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float focalLength = 26.0
+            float2 clippingRange = (0.1, 200000.0)
+        }
+
+        # External tracking shot: 32 m back / 10 m up, always framing the lander.
+        def Camera "TrackCam"
+        {
+            custom double3 lunco:cameraLookAt = (0, 0, 0)
+            double3 xformOp:translate = (16, 9, 30)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float focalLength = 24.0
+            float2 clippingRange = (0.1, 200000.0)
+        }
+
+        # Onboard descent POV: mounted on the deck, looking straight down at the
+        # ground rushing up during final approach.
+        def Camera "DescentCam"
+        {
+            custom double3 lunco:cameraLookAt = (0, -30, 0)
+            double3 xformOp:translate = (0, 2.4, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float focalLength = 20.0
+            float2 clippingRange = (0.1, 200000.0)
+        }
+    }
+
+    # ── Rover chase camera for the deploy/survey phase ──
+    # Rover travels along −Z (headlights at z=−1.75), so the chase cam sits
+    # BEHIND at +Z and looks forward toward −Z.
+    over "SkidRover"
+    {
+        # Match the lander so the pair descends straight (no drift → clean landing).
+        double3 physics:linearVelocity = (0, 0, 0)
+
+        def Camera "RoverCam"
+        {
+            custom double3 lunco:cameraLookAt = (0, 0.6, -9)
+            double3 xformOp:translate = (0, 3, 7)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float focalLength = 26.0
+            float2 clippingRange = (0.1, 200000.0)
+        }
+    }
+
+    # ── Swap the orchestration script for the cut-scene director ──
+    # Same prim, same mission structure — the cinematic script adds camera cuts
+    # and the animation transport around the existing land→deploy→survey phases.
+    over "Scenario"
+    {
+        custom string lunco:scriptPath = "scenarios/lander_cinematic.rhai"
+    }
+}

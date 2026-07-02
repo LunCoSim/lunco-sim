@@ -79,6 +79,24 @@ pub fn apply_usd_shader_materials(
             continue;
         };
 
+        // ROBUSTNESS: refuse a shader that isn't a usable material shader. A pure
+        // library (`#define_import_path`, meant to be `#import`ed — e.g.
+        // pbr_lit.wgsl) has no `@fragment` entry, so binding a ShaderMaterial to it
+        // builds an INVALID render pipeline that wgpu rejects on EVERY frame (the
+        // `opaque_mesh_pipeline` validation storm → dropped frames / viewport
+        // blink, and it poisons the pipeline cache until the app restarts). Keep
+        // the StandardMaterial (displayColor) instead so the app renders normally.
+        if !shader_has_fragment_entry(&shader_path) {
+            warn!(
+                "[shader] prim {} → '{}' has no `@fragment` entry point (it looks \
+                 like a shader LIBRARY, not a material shader). Keeping the \
+                 StandardMaterial to avoid an invalid render pipeline. Point \
+                 primvars:shaderPath at a whole shader (one with `@fragment fn …`).",
+                prim_path.path, shader_path
+            );
+            continue;
+        }
+
         // Shader chosen by `primvars:shaderPath` (e.g. "shaders/wheel.wgsl");
         // generic colors/params come from primvars.
         let mut material = ShaderMaterial::default();
@@ -92,6 +110,44 @@ pub fn apply_usd_shader_materials(
             .remove::<MeshMaterial3d<StandardMaterial>>()
             .insert(MeshMaterial3d(handle));
     }
+}
+
+/// True if `shader_path` is a usable material shader — i.e. it declares a
+/// fragment entry point (`@fragment`). A pure shader LIBRARY (`#define_import_path`,
+/// meant only to be `#import`ed) has none, and binding a material to it produces
+/// an invalid render pipeline (see the call site).
+///
+/// Best-effort by design: it reads the on-disk source (native) and only VETOES a
+/// shader we can positively prove lacks `@fragment`. If the file can't be read
+/// (wasm, embedded source, or a path the loader resolves elsewhere), it returns
+/// `true` so the normal asset path — and its own error handling — still runs; we
+/// never block a shader we couldn't inspect.
+#[cfg(not(target_arch = "wasm32"))]
+fn shader_has_fragment_entry(shader_path: &str) -> bool {
+    // Match the loader's resolution: `<cwd>/<assets_dir>/<shader_path>`.
+    let full = std::env::current_dir()
+        .unwrap_or_default()
+        .join(lunco_assets::assets_dir())
+        .join(shader_path);
+    match std::fs::read_to_string(&full) {
+        // Check the CODE portion of each line (before any `//`), so an EXAMPLE
+        // `@fragment` inside a doc comment — as library shaders like pbr_lit.wgsl
+        // carry to show how to import them — isn't mistaken for a real entry point.
+        Ok(src) => src.lines().any(|line| {
+            let code = line.split_once("//").map_or(line, |(c, _)| c);
+            code.contains("@fragment")
+        }),
+        // A missing file can never build a valid pipeline → veto (fall back to the
+        // StandardMaterial). Any OTHER read error (permissions, etc.) is treated as
+        // "can't tell" → don't veto, so the normal asset path still runs.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn shader_has_fragment_entry(_shader_path: &str) -> bool {
+    true
 }
 
 /// Reads every authored `primvars:*` attribute (except the shader-routing
