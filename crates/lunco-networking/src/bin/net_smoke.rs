@@ -37,7 +37,18 @@
 use bevy::app::AppExit;
 use bevy::prelude::*;
 use lunco_core::SessionId;
+use lunco_doc::DocumentId;
+use lunco_doc_bevy::JournalResource;
+use lunco_networking::journal_plane::host_author;
 use lunco_networking::{LunCoNetworkingPlugin, NetworkMode};
+use lunco_twin_journal::{AuthorId, AuthorTag, DomainKind, EntryKind, TwinId};
+
+/// When (seconds) the host authors a journal edit — after the handshake so it
+/// ships via the live `broadcast_journal_entries` tail (not the on-connect
+/// full-journal replay), exercising the steady-state path.
+const HOST_JOURNAL_AT: f32 = 3.0;
+/// When (seconds) the client authors its journal edit (client→host upload).
+const CLIENT_JOURNAL_AT: f32 = 5.0;
 
 /// Each peer self-exits after this many seconds. Generous so the host stays up
 /// well past the client's connect/handshake latency (the active-overlap window
@@ -98,6 +109,10 @@ fn main() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::log::LogPlugin::default());
+    // A domain plugin (core/api/networking) uses `init_state`, which needs the
+    // `StateTransition` schedule — absent from `MinimalPlugins`. `DefaultPlugins`
+    // would pull it in, but this harness is windowless; add just `StatesPlugin`.
+    app.add_plugins(bevy::state::app::StatesPlugin);
     // The SyncPlugin's tutor-mode input-blocking systems (`block_bevy_inputs`,
     // `block_perspective_inputs`) take `ResMut<ButtonInput<…>>`; `MinimalPlugins`
     // omits those resources (no window), so seed empty ones here to keep the systems
@@ -108,6 +123,12 @@ fn main() {
     // the full app provides it via the workspace plugin, absent here — seed an empty.
     app.init_resource::<lunco_workspace::WorkspaceResource>();
     app.init_resource::<MySession>();
+    // Journal plane: give both peers a `JournalResource` so the journal-sync
+    // systems (`stamp_host_journal_author`, `broadcast_journal_entries`, the
+    // inbound merge arm) are live. The host stamps author "host" at Startup; the
+    // client stamps "peer-<session>" on handshake. Faithful to the full app's
+    // `TwinJournalPlugin`; inserted directly to keep the harness minimal.
+    app.insert_resource(JournalResource::new(TwinId::new("smoke"), AuthorId::local()));
     app.add_plugins(lunco_core::LunCoCorePlugin);
     app.add_plugins(lunco_api::LunCoApiPlugin::default());
     app.add_plugins(LunCoNetworkingPlugin { mode: Some(mode) });
@@ -121,11 +142,17 @@ fn main() {
         app.add_systems(Startup, host_spawn_rovers);
         app.add_observer(host_on_possess);
         app.add_observer(host_on_drive);
-        app.add_systems(Update, (host_integrate, host_report, host_despawn_g3));
+        app.add_systems(
+            Update,
+            (host_integrate, host_report, host_despawn_g3, host_author_journal_entry, host_journal_report),
+        );
     } else {
         app.init_resource::<MaxProxyX>();
         app.add_systems(Startup, client_spawn_proxies);
-        app.add_systems(Update, (client_act, test_apply_snapshots, client_report));
+        app.add_systems(
+            Update,
+            (client_act, test_apply_snapshots, client_report, client_author_journal_entry),
+        );
     }
 
     app.add_systems(Update, (report_session, exit_after_timeout));
@@ -334,6 +361,79 @@ fn client_report(
     }
 }
 
+// ── Journal plane (host ↔ client edit-history sync over the real wire) ─────────
+
+/// Author one journal `Op` entry (a stand-in USD edit) into `journal`, tagged as
+/// `marker`. `EntryId.author` is the journal's stamped local author (host="host",
+/// client="peer-<session>").
+fn author_marker(journal: &JournalResource, marker: &str) {
+    journal.with_write(|j| {
+        j.append_local(
+            AuthorTag::for_tool("test"),
+            DocumentId::new(1),
+            EntryKind::Op {
+                domain: DomainKind::Usd,
+                op: serde_json::json!({ "marker": marker }),
+                inverse: serde_json::json!({}),
+            },
+            None,
+        );
+    });
+}
+
+/// Host: author one journal edit mid-run. `broadcast_journal_entries` ships it to
+/// the client over the real wire; the client's `append_remote` merges it — the
+/// host→client journal-sync exercise.
+fn host_author_journal_entry(
+    time: Res<Time>,
+    journal: Option<Res<JournalResource>>,
+    mut done: Local<bool>,
+) {
+    if *done || time.elapsed_secs() < HOST_JOURNAL_AT {
+        return;
+    }
+    if let Some(j) = journal {
+        author_marker(&j, "H1");
+        *done = true;
+        info!("[test] host authored journal entry H1 (expect client to receive it)");
+    }
+}
+
+/// Host: report how many journal entries authored by a PEER (client) it holds —
+/// non-zero proves the client→host journal upload landed (the bidirectional leg).
+fn host_journal_report(time: Res<Time>, mut t: Local<f32>, journal: Option<Res<JournalResource>>) {
+    *t += time.delta_secs();
+    if *t < 1.0 {
+        return;
+    }
+    *t = 0.0;
+    if let Some(j) = journal {
+        let (total, peers) = j.with_read(|jj| {
+            let host = host_author();
+            (jj.len(), jj.entries().filter(|e| e.id.author != host).count())
+        });
+        info!("[test] HOST-JOURNAL total={total} peer_entries={peers}");
+    }
+}
+
+/// Client: after the handshake, author one journal edit — the journal plane ships
+/// it UP to the host (client→host), the bidirectional leg.
+fn client_author_journal_entry(
+    time: Res<Time>,
+    local: Res<lunco_core::LocalSession>,
+    journal: Option<Res<JournalResource>>,
+    mut done: Local<bool>,
+) {
+    if *done || local.0 .0 == 0 || time.elapsed_secs() < CLIENT_JOURNAL_AT {
+        return;
+    }
+    if let Some(j) = journal {
+        author_marker(&j, "C1");
+        *done = true;
+        info!("[test] client authored journal entry C1 (expect host to receive it)");
+    }
+}
+
 // ── Shared ────────────────────────────────────────────────────────────────────
 
 fn report_session(
@@ -358,6 +458,7 @@ fn exit_after_timeout(
     mine: Res<MySession>,
     registry: Option<Res<lunco_core::SessionRegistry>>,
     q_proxies: Query<&RoverGid, With<TestRover>>,
+    journal: Option<Res<JournalResource>>,
 ) {
     if time.elapsed_secs() <= RUN_SECS {
         return;
@@ -376,15 +477,29 @@ fn exit_after_timeout(
         // B5: the host despawned G3 mid-run; its proxy must be gone on the client.
         let g3_despawned = !q_proxies.iter().any(|g| g.0 == G3_GID);
 
+        // Journal plane: the host's authored edit (H1, author "host") must have
+        // reached this client over the wire (host→client journal sync). The
+        // client→host leg is checked on the host side (`HOST-JOURNAL peer_entries`).
+        let journal_from_host = journal
+            .as_ref()
+            .map(|j| {
+                j.with_read(|jj| {
+                    let host = host_author();
+                    jj.entries()
+                        .any(|e| e.id.author == host && matches!(e.kind, EntryKind::Op { .. }))
+                })
+            })
+            .unwrap_or(false);
+
         info!(
             "[test] checks: g2_moved={g2_moved} (x={:.2})  g1_still={g1_still} (x={:.2})  \
              g2_mine={g2_mine} (owner={g2_owner:?}, me={me})  g1_host={g1_host} (owner={g1_owner:?})  \
-             g3_despawned={g3_despawned}",
+             g3_despawned={g3_despawned}  journal_from_host={journal_from_host}",
             m.g2, m.g1
         );
 
-        if g2_moved && g1_still && g2_mine && g1_host && g3_despawned {
-            info!("[test] RESULT: PASS — exclusive possession + ownership-gated drive + sync + despawn-repl all hold");
+        if g2_moved && g1_still && g2_mine && g1_host && g3_despawned && journal_from_host {
+            info!("[test] RESULT: PASS — exclusive possession + ownership-gated drive + sync + despawn-repl + journal-sync all hold");
         } else {
             warn!("[test] RESULT: FAIL — see checks above");
         }

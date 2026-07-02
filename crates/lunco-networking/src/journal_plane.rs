@@ -221,6 +221,81 @@ mod tests {
         assert_eq!(peer_author(7), peer_author(7));
     }
 
+    /// End-to-end simulation of the bidirectional plane across THREE peers
+    /// (host + two clients) using the real plane functions — `full_journal_msgs`
+    /// (the host's fan-out / late-joiner replay), `apply_inbound_entry` (the
+    /// inbound merge, both roles), `peer_author`/`host_author` (the collision
+    /// fix), and `scene_ops_after` (Layer B selection) — plus the real
+    /// `append_remote` merge. No transport: entries are routed by hand exactly
+    /// as the ferry does, so it deterministically proves convergence + correct
+    /// scene-op selection without booting two networked apps.
+    #[test]
+    fn bidirectional_round_trip_converges_and_selects_foreign_ops() {
+        use lunco_doc::DocumentId;
+        use lunco_twin_journal::{AuthorTag, TwinId};
+
+        let twin = TwinId::new("t");
+        let host = JournalResource::new(twin.clone(), host_author());
+        let c1 = JournalResource::new(twin.clone(), peer_author(1));
+        let c2 = JournalResource::new(twin.clone(), peer_author(2));
+
+        // Author a local USD op on `j` (EntryId.author = j's local_author).
+        let author_usd = |j: &JournalResource, v: i32| {
+            j.with_write(|jj| {
+                jj.append_local(
+                    AuthorTag::for_tool("test"),
+                    DocumentId::new(1),
+                    EntryKind::Op {
+                        domain: DomainKind::Usd,
+                        op: serde_json::json!({ "v": v }),
+                        inverse: serde_json::json!({}),
+                    },
+                    None,
+                )
+            })
+        };
+        // The ferry: deliver every entry currently in `from` into `to` (merge).
+        let deliver = |from: &JournalResource, to: &JournalResource| {
+            for msg in full_journal_msgs(from) {
+                apply_inbound_entry(to, &msg);
+            }
+        };
+
+        // Host authors two edits, fans out to both clients (host → All).
+        author_usd(&host, 1);
+        author_usd(&host, 2);
+        deliver(&host, &c1);
+        deliver(&host, &c2);
+
+        // Client 1 authors an edit and sends it UP to the host (client → host);
+        // the host then RELAYS its whole log to client 2 (host = fan-out hub).
+        author_usd(&c1, 3);
+        deliver(&c1, &host);
+        deliver(&host, &c2);
+        // And the host's relay reaches client 1 too (its own edit echoes back —
+        // idempotent, a no-op) — model the full broadcast to All.
+        deliver(&host, &c1);
+
+        // All three peers converge on the identical merged order (3 entries).
+        let order = |j: &JournalResource| j.with_read(|jj| jj.merged_order_ids());
+        assert_eq!(order(&host).len(), 3, "host has all three edits");
+        assert_eq!(order(&host), order(&c1), "c1 converged with host");
+        assert_eq!(order(&host), order(&c2), "c2 converged with host");
+
+        let none = HashSet::new();
+        let vals = |ops: &[(EntryId, serde_json::Value)]| {
+            ops.iter().map(|(_, v)| v["v"].as_i64().unwrap()).collect::<Vec<_>>()
+        };
+        // Client 2 authored nothing → it replays ALL three edits (host's 1,2 +
+        // client 1's 3), in convergent order.
+        assert_eq!(vals(&scene_ops_after(&c2, None, &peer_author(2), &none)), vec![1, 2, 3]);
+        // Client 1 authored edit 3 → it is EXCLUDED (already applied locally);
+        // only the host's two remote edits replay.
+        assert_eq!(vals(&scene_ops_after(&c1, None, &peer_author(1), &none)), vec![1, 2]);
+        // The host sees client 1's edit (author != host), not its own two.
+        assert_eq!(vals(&scene_ops_after(&host, None, &host_author(), &none)), vec![3]);
+    }
+
     #[test]
     fn scene_ops_after_selects_remote_usd_ops_past_base() {
         use lunco_doc::DocumentId;

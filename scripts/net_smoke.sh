@@ -45,6 +45,9 @@ echo "----- client verdict -----"
 grep -E "RESULT|checks:" "$CLIENT_LOG" || true
 echo "----- host arbitration -----"
 grep -E "CLAIMED|DENIED|rejected DriveRover" "$HOST_LOG" | head -n 6 || true
+echo "----- journal sync (client→host leg: peer_entries should be >0) -----"
+grep -E "HOST-JOURNAL" "$HOST_LOG" | tail -n 2 || true
+grep -E "authored journal entry" "$HOST_LOG" "$CLIENT_LOG" || true
 
 if grep -q "RESULT: PASS" "$CLIENT_LOG"; then
   echo "net_smoke: PASS"
