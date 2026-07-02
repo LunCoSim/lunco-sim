@@ -210,14 +210,13 @@ pub struct Spacecraft {
     pub user_visible: bool,
 }
 
-/// Marker component for generic vessels.
-#[derive(Component)]
-pub struct Vessel;
-
-/// Marker component specifically for surface exploration rovers.
-#[derive(Component, Clone, Copy, Reflect, Default)]
-#[reflect(Component, Default)]
-pub struct RoverVessel;
+// NOTE: there is intentionally NO `Vessel` / `RoverVessel` / `LanderVessel`
+// marker. "Possessable / controllable" is derived from TOPOLOGY: an entity is
+// controllable iff it exposes writable control ports — a `FlightSoftware`
+// control surface (rovers via PhysX, or any `lunco:vessel="true"` prim) or a
+// Modelica `SimComponent`. The components a body already carries ARE its
+// definition; possession, control routing, prediction membership, and UI
+// labels read those capabilities directly instead of a redundant taxonomy tag.
 
 /// Marker component indicating an entity can be selected as a root object
 /// in editing tools (e.g., rover bodies, props, ramps, solar panels).

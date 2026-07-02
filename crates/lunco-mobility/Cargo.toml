@@ -17,9 +17,9 @@ lunco-api = { path = "../lunco-api", default-features = false }
 serde_json = { workspace = true }
 
 [features]
-# Drive-actuation chain tracing (off by default). Lights up the DriveRover →
+# Drive-actuation chain tracing (off by default). Lights up the DriveCommand →
 # port → wheel-force path with `info!` so a "rover won't move / snaps back" bug
-# can be localised: command receipt + routing (`on_drive_rover`) and the
+# can be localised: command mixing (`apply_drive_mix`) and the
 # per-tick force application incl. body kind / contact (`apply_wheel_drive`).
 # Mirrors `lunco-networking`'s `net-diag`. Used via the `drive_diag!` macro —
 # compiled out entirely when off (no hot-loop cost). Build with

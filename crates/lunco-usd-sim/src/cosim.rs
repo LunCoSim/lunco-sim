@@ -113,7 +113,6 @@ fn any_unwrapped_modelica(
 pub fn process_usd_cosim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath), Without<UsdSourcedCosim>>,
-    q_rover: Query<(), With<lunco_core::RoverVessel>>,
     stages: Res<Assets<UsdStageAsset>>,
     asset_server: Res<AssetServer>,
 ) {
@@ -169,6 +168,13 @@ pub fn process_usd_cosim_prims(
             lunco_core::SelectableRoot,
         ));
 
+        // NOTE: the possessable control-surface tag (`FlightSoftware`) for a
+        // `lunco:vessel="true"` prim is stamped in the general USD translator
+        // (`lunco-usd-bevy`), which runs for every prim — not here, which only
+        // sees `lunco:simWires` cosim prims. A lander's actuation backend is its
+        // `SimComponent` manual-override ports (written by `SetPorts`), read
+        // by topology at possess/route time; no vessel-kind marker.
+
         // Opaque-body guard, applied HERE (cosim intent is known the instant we
         // read `lunco:modelicaModel`/`lunco:pythonModel`) rather than only later
         // in `tag_cosim_opaque`, which waits for the asynchronously-wrapped
@@ -178,14 +184,14 @@ pub fn process_usd_cosim_prims(
         // landed — once b99991dd dropped the `SkipContentStamp` structural guard,
         // `NotPredictable` became the SOLE membership guard, so a late stamp meant
         // the body got predicted (local physics + cosim forces) and diverged.
-        // Stamping at prim-read time closes the window. Rovers are excluded — a
-        // rover chassis is locally computable even when it carries cosim subsystems
-        // (mirrors `tag_cosim_opaque`'s `Without<RoverVessel>`). Harmless on
+        // Stamping at prim-read time closes the window. No vessel-kind exception:
+        // a body reaching here has `lunco:simWires` + a model, so its motion is
+        // cosim-driven by definition (a locally-driven rover chassis never gains
+        // a `SimComponent` — under the sub-prim-per-model convention its Modelica
+        // subsystems live on child prims, not the moving body). Harmless on
         // non-`RigidBody` cosim prims (e.g. a joint-driven solar tracker): the
         // marker is inert where prediction never runs.
-        if q_rover.get(entity).is_err() {
-            commands.entity(entity).insert(lunco_core::NotPredictable);
-        }
+        commands.entity(entity).insert(lunco_core::NotPredictable);
 
         // Source files are loaded through Bevy's `AssetServer` rather
         // than `std::fs::read_to_string`. On native this reads from the
@@ -1395,8 +1401,11 @@ pub fn resolve_root_prim(_asset_path: &str, override_in: &str) -> String {
 /// `SimComponent`-attachment that makes a body server-driven also marks it
 /// unpredictable, so the client's prediction systems (`maintain_predicted_dynamic`,
 /// and any future contact-island promotion) refuse to ever predict it and keep it
-/// on the interpolated proxy path. Rovers (`RoverVessel`) are excluded — a rover's
-/// chassis is locally driven/computable even when it carries cosim subsystems.
+/// on the interpolated proxy path. No vessel-kind exception: a `SimComponent` on
+/// a `RigidBody` means the body's motion IS the cosim solver's output, which the
+/// client can't reproduce. A locally-driven rover chassis never carries a
+/// `SimComponent` (its Modelica subsystems live on child prims under the
+/// sub-prim-per-model convention), so it is naturally excluded by topology.
 /// Runs on both peers (cheap, idempotent — `Without<NotPredictable>` makes it a
 /// one-shot per body); harmless where prediction never runs.
 fn tag_cosim_opaque(
@@ -1406,7 +1415,6 @@ fn tag_cosim_opaque(
         (
             With<SimComponent>,
             With<avian3d::prelude::RigidBody>,
-            Without<lunco_core::RoverVessel>,
             Without<lunco_core::NotPredictable>,
         ),
     >,

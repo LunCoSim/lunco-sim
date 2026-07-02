@@ -64,7 +64,7 @@ fn arrived(entity, target, radius) {
 // ── Navigation (PURE rhai policy over the world_pos/world_forward reads) ─────
 //
 // All steering math lives here — Rust only exposes the raw position/heading
-// reads + the DriveRover command. Tune or replace freely; no Rust rebuild.
+// reads + the drive() SetPorts command. Tune or replace freely; no Rust rebuild.
 
 /// Signed steer command in [-1, 1] that turns `entity` toward world point
 /// `target`. Sign from the yaw-plane (up = +Y) cross product of heading × goal.
@@ -522,17 +522,20 @@ fn timeline_step(s) {
 /// in on_start and hold the result on `this`; feed it to run_steps each tick.
 fn compile_timeline(steps) { steps.map(|s| timeline_step(s)) }
 
-// ── Rover control (re-emit every tick: DriveRover has no persistent setpoint) ──
+// ── Rover control (re-emit every tick: the command has no persistent setpoint) ──
+// Control = write the vessel's named input ports via the ONE generic `SetPorts`
+// command (`writes` = [[port, value], …]). A wheeled rover exposes
+// `throttle`/`steer`/`brake`; other vessels expose their own input ports.
 
 /// Drive a rover this tick. `seq`/`tick` default to 0 — fine for host-local
 /// scenarios; networked control should thread real sequence/tick numbers.
 fn drive(rover, forward, steer) {
-    cmd("DriveRover", #{ target: rover, forward: forward, steer: steer, seq: 0, tick: 0 })
+    cmd("SetPorts", #{ target: rover, writes: [["throttle", forward], ["steer", steer]], seq: 0, tick: 0 })
 }
 
-/// Stop a rover this tick.
+/// Stop a rover this tick (full brake).
 fn brake(rover) {
-    cmd("BrakeRover", #{ target: rover })
+    cmd("SetPorts", #{ target: rover, writes: [["brake", 1.0]], seq: 0, tick: 0 })
 }
 
 // ── Scene / world manipulation shortcuts (all generic cmd() under the hood) ──
@@ -700,9 +703,20 @@ fn vscale(a, s) { [a[0]*s, a[1]*s, a[2]*s] }
 /// "LinearVelocity"). Built on get(), which returns () for an absent component.
 fn has_component(id, name) { get(id, name) != () }
 
-/// Kind tag for one entity ("rover"/"planet"/"unknown"), matching list_entities().type.
+/// Kind tag for one entity ("spacecraft"/"rover"/"planet"/"unknown").
+/// NOTE: vessel "kind" is now topology-derived — the old RoverVessel marker is
+/// gone and FlightSoftware (the possessable-vessel signal) does NOT derive
+/// Reflect, so has_component() can't see it. We approximate by testing the
+/// reflect-registered topology components: SimComponent (Modelica-flown →
+/// spacecraft) and the drive components (→ rover). A Rust bridge fn that reads
+/// FlightSoftware directly would be more precise.
+/// TODO: expose a native vessel_kind(id) bridge fn once FlightSoftware topology
+/// is queryable from script (kind is now derived, not stored on a marker).
 fn kind(id) {
-    if has_component(id, "RoverVessel") { "rover" }
+    if has_component(id, "SimComponent") { "spacecraft" }
+    else if has_component(id, "DifferentialDrive")
+         || has_component(id, "AckermannSteer")
+         || has_component(id, "GenericDriveMix") { "rover" }
     else if has_component(id, "CelestialBody") { "planet" }
     else { "unknown" }
 }

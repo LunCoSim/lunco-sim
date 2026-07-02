@@ -34,6 +34,7 @@ winit = ["bevy/bevy_winit"]
 
 [dependencies]
 lunco-core = { path = "../lunco-core" }
+lunco-fsw = { path = "../lunco-fsw" }
 # Substrate-only by default; the `render` feature adds the bevy render stack
 # the screenshot path needs (see `[features]` above). A headless server depends
 # on this crate with `default-features = false` (or without `render`) to stay

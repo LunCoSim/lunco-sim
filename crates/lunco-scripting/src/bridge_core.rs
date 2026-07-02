@@ -44,8 +44,9 @@ use lunco_api::schema::ApiResponse;
 use lunco_core::session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
 use lunco_core::{
     coords, CelestialBody, CommandOutcome, CommandResults, GlobalEntityId, OpId,
-    RoverVessel, Severity, SessionId, SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
+    Severity, SessionId, SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
+use lunco_fsw::FlightSoftware;
 
 // ── Native value construction ──────────────────────────────────────────────
 
@@ -751,14 +752,14 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
             Query<&ChildOf>,
             Query<&Grid>,
             Query<(Option<&CellCoord>, &Transform)>,
-            Query<(Option<&Name>, Option<&RoverVessel>, Option<&CelestialBody>)>,
+            Query<(Option<&Name>, Has<FlightSoftware>, Option<&CelestialBody>)>,
         )> = SystemState::new(world);
         let (q_parents, q_grids, q_spatial, q_meta) = state.get(world);
         let items = pairs
             .into_iter()
             .map(|(gid, entity)| {
-                let (name, rover, body) = q_meta.get(entity).unwrap_or((None, None, None));
-                let kind = if rover.is_some() {
+                let (name, is_vehicle, body) = q_meta.get(entity).unwrap_or((None, false, None));
+                let kind = if is_vehicle {
                     "rover"
                 } else if body.is_some() {
                     "planet"

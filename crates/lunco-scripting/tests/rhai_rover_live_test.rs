@@ -3,8 +3,8 @@
 //! A real `ScriptedModel { language: Rhai }` runs a scenario against a live
 //! `World`. We assert the scenario actually drove the simulation:
 //!   - P2: `on_start`/`on_tick` ran on the host entity.
-//!   - P1: `cmd("DriveRover", …)` dispatched by NAME through `ApiCommandEvent`
-//!         → reflect dispatch → the real `DriveRover` observer fired, with the
+//!   - P1: `cmd("SetPorts", …)` dispatched by NAME through `ApiCommandEvent`
+//!         → reflect dispatch → the real `SetPorts` observer fired, with the
 //!         `target` gid resolved back to the host `Entity`.
 //!   - P3: `world_pos`/`world_forward` reads fed the pure-rhai `nav_to`
 //!         steering, and `emit(...)` produced a `TelemetryEvent`.
@@ -12,7 +12,7 @@
 //!         `OBJECTIVE_COMPLETE` / `PLAN_COMPLETE`.
 //!
 //! Spy `#[on_command]` handlers stand in for the real mobility/physics stack
-//! (which lives in other crates) — the bridge dispatches to whatever `DriveRover`
+//! (which lives in other crates) — the bridge dispatches to whatever `SetPorts`
 //! is registered, so recording its arguments proves the whole path end-to-end.
 
 use bevy::prelude::*;
@@ -28,10 +28,14 @@ use lunco_scripting::{LunCoScriptingPlugin, ScriptRegistry};
 
 const ROVER_GID: u64 = 7777;
 
-// ── Spy commands (stand-ins for the real lunco-mobility DriveRover/BrakeRover) ─
+// ── Spy command (stand-in for the real `lunco_cosim::SetPorts`) ────────────────
+// Control is now the ONE generic `SetPorts` command (a batch of named port
+// writes). The spy records a drive sample (throttle/steer) into `DriveLog` and
+// counts full-brake writes into `BrakeCount`, so the same recording proves the
+// whole `cmd("SetPorts", …)` dispatch path end-to-end.
 
 #[derive(Resource, Default)]
-struct DriveLog(Vec<(f64, f64)>); // (forward, steer) per DriveRover
+struct DriveLog(Vec<(f64, f64)>); // (throttle, steer) per drive SetPorts
 
 #[derive(Resource, Default)]
 struct BrakeCount(u32);
@@ -40,30 +44,26 @@ struct BrakeCount(u32);
 struct EventLog(Vec<String>); // names of every emitted TelemetryEvent
 
 #[Command]
-struct DriveRover {
+struct SetPorts {
     #[authz_target]
     target: Entity,
-    forward: f64,
-    steer: f64,
+    writes: Vec<(String, f64)>,
+    #[serde(default)]
     seq: u32,
+    #[serde(default)]
     tick: u64,
 }
 
-#[on_command(DriveRover)]
-fn on_drive(_t: On<DriveRover>, mut log: ResMut<DriveLog>) {
-    log.0.push((cmd.forward, cmd.steer));
-}
-
-#[Command]
-struct BrakeRover {
-    #[authz_target]
-    target: Entity,
-}
-
-#[on_command(BrakeRover)]
-fn on_brake(_t: On<BrakeRover>, mut count: ResMut<BrakeCount>) {
-    let _ = cmd;
-    count.0 += 1;
+#[on_command(SetPorts)]
+fn on_drive(_t: On<SetPorts>, mut log: ResMut<DriveLog>, mut brakes: ResMut<BrakeCount>) {
+    let get = |name: &str| cmd.writes.iter().find(|(n, _)| n == name).map(|(_, v)| *v);
+    if get("brake").is_some_and(|b| b > 0.5) {
+        brakes.0 += 1;
+    }
+    // A throttle/steer write is a drive sample (mirrors the old `DriveRover` log).
+    if cmd.writes.iter().any(|(n, _)| n == "throttle" || n == "steer") {
+        log.0.push((get("throttle").unwrap_or(0.0), get("steer").unwrap_or(0.0)));
+    }
 }
 
 // A result-reporting command that "spawns" something and reports the new gid
@@ -96,7 +96,7 @@ fn on_report(_t: On<Report>, mut cap: ResMut<CapturedData>) {
     cap.0.push(cmd.value);
 }
 
-register_commands!(on_drive, on_brake, on_spawn, on_report);
+register_commands!(on_drive, on_spawn, on_report);
 
 // ── Reflect targets for the native get/set verbs ──────────────────────────────
 // A component and a resource, both reflect-registered, exercise the symmetric
@@ -177,7 +177,7 @@ fn spawn_rover(app: &mut App) -> Entity {
     rover
 }
 
-/// Spawn a rover carrying `RoverVessel` (so `list_entities().type == "rover"` and
+/// Spawn a rover carrying `FlightSoftware` (so `list_entities().type == "rover"` and
 /// the selection toolkit / formation tool library can find it) at world x = `x`.
 fn spawn_typed_rover(app: &mut App, gid: u64, x: f32) -> Entity {
     let e = app
@@ -186,7 +186,7 @@ fn spawn_typed_rover(app: &mut App, gid: u64, x: f32) -> Entity {
             Transform::from_xyz(x, 0.0, 0.0),
             GlobalTransform::from(Transform::from_xyz(x, 0.0, 0.0)),
             GlobalEntityId::from_raw(gid),
-            lunco_core::RoverVessel,
+            lunco_fsw::FlightSoftware::default(),
         ))
         .id();
     app.world_mut()
@@ -229,7 +229,7 @@ fn setup(source: &str) -> (App, Entity) {
 }
 
 /// Run one FixedUpdate, then flush so the dispatcher's queued command-triggers
-/// (DriveRover/BrakeRover) actually execute and reach the spies.
+/// (SetPorts) actually execute and reach the spies.
 fn tick(app: &mut App) {
     app.world_mut().run_schedule(FixedUpdate);
     app.world_mut().flush();
@@ -247,7 +247,7 @@ fn rhai_scenario_drives_real_rover() {
     let drives = &app.world().resource::<DriveLog>().0;
     assert!(
         !drives.is_empty(),
-        "scenario on_tick should have issued a DriveRover command"
+        "scenario on_tick should have issued a SetPorts drive command"
     );
     let (forward, steer) = drives[0];
     assert!(
@@ -674,7 +674,7 @@ fn registered_tool_library_callable_from_a_hook() {
         command: "RegisterToolLibrary".to_string(),
         params: serde_json::json!({
             "name": "drivelib",
-            "source": "fn drive_at(me, f) { cmd(\"DriveRover\", #{ target: me, forward: f, steer: 0.0, seq: 0, tick: 0 }); }",
+            "source": "fn drive_at(me, f) { cmd(\"SetPorts\", #{ target: me, writes: [[\"throttle\", f], [\"steer\", 0.0]], seq: 0, tick: 0 }); }",
         }),
         id: 1,
     });
@@ -878,7 +878,7 @@ fn run_timeline_lowers_data_to_a_running_scenario() {
         "name": "t",
         "steps": [
             { "move_to": [0.0, 0.0, -20.0], "speed": 1.0, "radius": 2.0 },
-            { "cmd": "BrakeRover", "params": {} },
+            { "cmd": "SetPorts", "params": { "writes": [["brake", 1.0]] } },
         ],
     })
     .to_string();
@@ -908,7 +908,7 @@ fn run_timeline_lowers_data_to_a_running_scenario() {
 fn run_timeline_arrives_advances_and_brakes() {
     // A move_to step placed AT the rover (large radius) arrives immediately: nav_to
     // brakes, the step completes (STEP_COMPLETE), and the next `cmd` step fires
-    // its BrakeRover. Proves data-step lowering + advancement + the cmd step.
+    // its brake SetPorts. Proves data-step lowering + advancement + the cmd step.
     use lunco_api::executor::ApiCommandEvent;
 
     let mut app = build_app();
@@ -1053,7 +1053,7 @@ fn client_role_gates_script_execution() {
     // reliable "did the script run?" probe (cf. rhai_scenario_drives_real_rover).
     let src = include_str!("../rhai/examples/mission_plan.rhai");
 
-    // Client → gated off: on_tick never issues a DriveRover.
+    // Client → gated off: on_tick never issues a SetPorts drive.
     let (mut app, _r) = setup(src);
     app.world_mut().insert_resource(NetworkRole::Client);
     tick(&mut app);

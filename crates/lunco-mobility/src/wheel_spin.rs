@@ -8,7 +8,6 @@
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use avian3d::prelude::*;
-use lunco_core::RoverVessel;
 use lunco_fsw::FlightSoftware;
 
 use crate::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity};
@@ -60,7 +59,7 @@ pub(crate) fn update_wheel_spin(
         // Client proxies are Kinematic with avian velocity zeroed; their real
         // ground speed arrives via this delivered hint (set by `interpolate_proxies`).
         Option<&lunco_core::ReplicatedChassisMotion>,
-    ), With<RoverVessel>>,
+    ), With<FlightSoftware>>,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
     time: Res<Time>,
 ) {
@@ -187,7 +186,7 @@ mod tests {
     use bevy::math::DVec3;
     use bevy::prelude::*;
     use bevy::time::Time;
-    use lunco_core::RoverVessel;
+    use lunco_fsw::FlightSoftware;
     use std::time::Duration;
 
     /// Drive `update_wheel_spin` one tick on a single grounded raycast wheel and
@@ -218,7 +217,7 @@ mod tests {
                 Rotation::default(),
                 LinearVelocity(DVec3::ZERO),
                 AngularVelocity(ang),
-                RoverVessel,
+                FlightSoftware::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();

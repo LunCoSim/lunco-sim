@@ -63,7 +63,7 @@ struct TestRover;
 #[derive(Component, Clone, Copy)]
 struct RoverGid(u64);
 
-/// Host: forward speed last commanded by an *applied* (authorized) `DriveRover`.
+/// Host: forward speed last commanded by an *applied* (authorized) `SetPorts`.
 #[derive(Component, Default)]
 struct DriveVel(f32);
 
@@ -114,7 +114,7 @@ fn main() {
 
     // Register the command types so the wire reflect (de)serialize + trigger
     // path works (the domain plugins normally do this; the harness skips them).
-    app.register_type::<lunco_mobility::DriveRover>();
+    app.register_type::<lunco_cosim::SetPorts>();
     app.register_type::<lunco_avatar::PossessVessel>();
 
     if is_host {
@@ -185,13 +185,15 @@ fn host_on_possess(
     }
 }
 
-/// Applied (authorized) drive → set the rover's synthetic forward speed. An
-/// *unauthorized* drive never reaches here — `apply_sync_command` rejects it at
-/// the authority gate before triggering the event.
-fn host_on_drive(trigger: On<lunco_mobility::DriveRover>, mut q: Query<&mut DriveVel>) {
+/// Applied (authorized) drive → set the rover's synthetic forward speed from the
+/// `"throttle"` port write. An *unauthorized* drive never reaches here —
+/// `apply_sync_command` rejects it at the authority gate before triggering.
+fn host_on_drive(trigger: On<lunco_cosim::SetPorts>, mut q: Query<&mut DriveVel>) {
     let cmd = trigger.event();
     if let Ok(mut v) = q.get_mut(cmd.target) {
-        v.0 = cmd.forward as f32;
+        if let Some((_, throttle)) = cmd.writes.iter().find(|(n, _)| n == "throttle") {
+            v.0 = *throttle as f32;
+        }
     }
 }
 
@@ -285,8 +287,8 @@ fn client_act(
         info!("[test] client requested possession of G2 (free) and G1 (host-owned)");
     }
     // Drive both — only the owned one (G2) should actually move.
-    commands.trigger(lunco_mobility::DriveRover { target: rovers.g2, forward: 1.0, steer: 0.0, seq: 0, tick: 0 });
-    commands.trigger(lunco_mobility::DriveRover { target: rovers.g1, forward: 1.0, steer: 0.0, seq: 0, tick: 0 });
+    commands.trigger(lunco_cosim::SetPorts { target: rovers.g2, writes: vec![("throttle".into(), 1.0), ("steer".into(), 0.0)], seq: 0, tick: 0 });
+    commands.trigger(lunco_cosim::SetPorts { target: rovers.g1, writes: vec![("throttle".into(), 1.0), ("steer".into(), 0.0)], seq: 0, tick: 0 });
 }
 
 /// Client-side snapshot apply (mirrors `lunco_sandbox_edit::apply_incoming_snapshots`

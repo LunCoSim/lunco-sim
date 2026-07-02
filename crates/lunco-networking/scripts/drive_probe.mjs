@@ -57,11 +57,11 @@ let seq = 1, ok = 0, fail = 0;
 const t0 = Date.now();
 while (Date.now() - t0 < SECONDS * 1000) {
   const s = await post(CLIENT, {
-    command: 'DriveRover',
-    params: { target: gid, forward: 1.0, steer: 0.0, seq, tick: 0 },
+    command: 'SetPorts',
+    params: { target: gid, writes: [['throttle', 1.0], ['steer', 0.0]], seq, tick: 0 },
   });
   s.status === 200 ? ok++ : fail++;
   seq++;
   await sleep(50);
 }
-console.log(`done: sent ${seq - 1} DriveRover (ok=${ok} fail=${fail}). Now grep both logs for "net-diag".`);
+console.log(`done: sent ${seq - 1} SetPorts (ok=${ok} fail=${fail}). Now grep both logs for "net-diag".`);

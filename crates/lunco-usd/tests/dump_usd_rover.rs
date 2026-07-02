@@ -180,11 +180,8 @@ fn dump_components(app: &App, entity: Entity) {
     } else {
         println!("  Collider: NONE");
     }
-    if app.world().get::<lunco_core::Vessel>(entity).is_some() {
-        println!("  Vessel: YES");
-    }
-    if app.world().get::<lunco_core::RoverVessel>(entity).is_some() {
-        println!("  RoverVessel: YES");
+    if app.world().get::<lunco_fsw::FlightSoftware>(entity).is_some() {
+        println!("  FlightSoftware: YES");
     }
     if let Some(wheel) = app.world().get::<WheelRaycast>(entity) {
         println!("  WheelRaycast: radius={}, rest={}, k={}, c={}",

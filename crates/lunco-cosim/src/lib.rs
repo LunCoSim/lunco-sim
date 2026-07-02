@@ -55,6 +55,12 @@ pub use ports::*;
 pub use suggestion::*;
 pub use connection::*;
 
+// Typed-command machinery (re-exported from `lunco-core`, which re-exports
+// the `lunco-command-macro` proc-macros). Used by the `SetPorts` command +
+// observer defined below — the ONE generic vessel-control command (a batch of
+// named input-port writes), driving landers, rovers, and any port-bearing vessel.
+use lunco_core::{Command, on_command, register_commands};
+
 /// Plugin for co-simulation orchestration.
 ///
 /// Registers [`crate::SimComponent`], [`crate::AvianSim`], and [`crate::SimConnection`] types,
@@ -171,8 +177,72 @@ impl Plugin for CoSimPlugin {
         );
 
         app.add_systems(Update, systems::collider::sync_collider);
+
+        // Register the typed command observers generated below (the
+        // `register_commands!` list turns into `register_all_commands(app)`).
+        register_all_commands(app);
     }
 }
+
+// ── Typed Command: generic port actuation ─────────────────────────────────────
+
+/// The ONE generic control command: write a batch of named input ports on
+/// `target`, applied through [`PortRegistry::write_port`]. This is the whole of
+/// vessel control — there is no `DriveRover`/`BrakeRover`/`DriveLander` and no
+/// axis/`VesselIntent` vocabulary. "Controlling" anything means writing its
+/// command input ports:
+/// - a wheeled rover exposes `throttle`/`steer`/`brake` (a
+///   [`lunco_mobility::DriveCommand`] backend); a mix system projects them onto
+///   its actuator ports,
+/// - a cosim-flown lander exposes its Modelica `manual_*` inputs
+///   ([`SimComponent`] backend),
+/// - a crane/door/factory arm exposes whatever input ports it declares.
+///
+/// The same command is emitted by the keyboard input path
+/// (`lunco-controller`), the HTTP/MCP API, scripts, and replayed remote peers —
+/// so every surface drives every controllable thing identically. `seq`/`tick`
+/// carry the prediction bookkeeping (host ack + client input log), replacing
+/// `DriveRover`'s; it rides `SyncChannel::ControlStream` over the network.
+#[Command]
+pub struct SetPorts {
+    /// The entity whose input ports are written.
+    #[authz_target]
+    pub target: Entity,
+    /// `(port_name, value)` writes to apply this tick. Undeclared names are
+    /// silently ignored by `PortRegistry` (strict per-backend), so a binding may
+    /// name ports a given vessel doesn't have without error.
+    pub writes: Vec<(String, f64)>,
+    #[serde(default)]
+    #[reflect(default)]
+    pub seq: u32,
+    #[serde(default)]
+    #[reflect(default)]
+    pub tick: u64,
+}
+
+/// Observer for [`SetPorts`]: applies each `(name, value)` via the
+/// [`PortRegistry`] — the single dispatch that reaches Modelica `SimComponent`
+/// inputs, `DriveCommand` throttle/steer/brake, `PhysicalPort`/`DigitalPort`
+/// registers, or any future backend, all by name. `write_port` needs `&mut
+/// World`, so we clone the (cheap, `fn`-pointer) registry and defer the writes
+/// through a `Commands` world closure.
+#[on_command(SetPorts)]
+fn on_set_ports(
+    cmd: SetPorts,
+    registry: Res<lunco_core::ports::PortRegistry>,
+    mut commands: Commands,
+) {
+    let reg = registry.clone();
+    let target = cmd.target;
+    let writes = cmd.writes.clone();
+    commands.queue(move |world: &mut World| {
+        for (port, value) in &writes {
+            reg.write_port(world, target, port, *value);
+        }
+    });
+}
+
+register_commands!(on_set_ports);
 
 /// Run condition: did any wiring (a [`SimConnection`] or a hardware
 /// [`lunco_core::architecture::Wire`]) get added this frame?

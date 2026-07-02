@@ -596,7 +596,7 @@ pub struct VesselInputLog {
 pub struct OwnedInputLog(pub HashMap<u64, VesselInputLog>);
 
 /// Host-side record of the highest input `seq` applied per gid, written when a
-/// `DriveRover`/`BrakeRover` is authorized + applied. Stamped into each snapshot's
+/// `SetPorts` control command is authorized + applied. Stamped into each snapshot's
 /// `last_input_seq` so the owning client knows how far the authoritative sim has
 /// integrated its inputs (the reconcile ack). Empty on client/standalone.
 #[derive(Resource, Default)]
@@ -626,7 +626,7 @@ impl Default for CommandPolicy {
 impl CommandPolicy {
     /// Open sandbox: any authenticated session, no ownership requirement.
     pub const OPEN: Self = Self { min_role: AuthorityRole::Observer, ownership_gated: false };
-    /// Ownership-gated control (e.g. `DriveRover`): the owner may act at the
+    /// Ownership-gated control (e.g. `SetPorts`): the owner may act at the
     /// Observer floor; a non-owner is rejected.
     pub const OWNED_CONTROL: Self = Self { min_role: AuthorityRole::Observer, ownership_gated: true };
 }
@@ -677,8 +677,7 @@ impl Default for CommandPolicyRegistry {
         let mut base = HashMap::new();
         // MVP policy, preserved: direct-control commands require ownership of
         // their target (G4). Everything else stays OPEN.
-        base.insert("DriveRover", CommandPolicy::OWNED_CONTROL);
-        base.insert("BrakeRover", CommandPolicy::OWNED_CONTROL);
+        base.insert("SetPorts", CommandPolicy::OWNED_CONTROL);
         Self { base, overrides: HashMap::new() }
     }
 }
@@ -914,12 +913,12 @@ mod tests {
         });
 
         // The owner may issue control commands.
-        assert!(authorize(&reg, &rbac, &pol, A, "DriveRover", Some(R1)).is_ok());
-        assert!(authorize(&reg, &rbac, &pol, A, "BrakeRover", Some(R1)).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, A, "SetPorts", Some(R1)).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, A, "SetPorts", Some(R1)).is_ok());
         // A non-owner may not.
-        assert!(authorize(&reg, &rbac, &pol, B, "DriveRover", Some(R1)).is_err());
+        assert!(authorize(&reg, &rbac, &pol, B, "SetPorts", Some(R1)).is_err());
         // A control command with no target is rejected.
-        assert!(authorize(&reg, &rbac, &pol, A, "DriveRover", None).is_err());
+        assert!(authorize(&reg, &rbac, &pol, A, "SetPorts", None).is_err());
         // Possession + structural commands are always allowed (arbitration is in
         // `claim`, not the authority gate).
         assert!(authorize(&reg, &rbac, &pol, B, "PossessVessel", Some(R1)).is_ok());
@@ -939,10 +938,10 @@ mod tests {
             });
         }
         // Owner-Observer A may drive what it owns, and possess/structural commands.
-        assert!(authorize(&reg, &observer_rbac, &pol, A, "DriveRover", Some(R1)).is_ok());
+        assert!(authorize(&reg, &observer_rbac, &pol, A, "SetPorts", Some(R1)).is_ok());
         assert!(authorize(&reg, &observer_rbac, &pol, A, "PossessVessel", Some(R1)).is_ok());
         // An authenticated non-owner is still rejected by the ownership gate.
-        assert!(authorize(&reg, &observer_rbac, &pol, B, "DriveRover", Some(R1)).is_err());
+        assert!(authorize(&reg, &observer_rbac, &pol, B, "SetPorts", Some(R1)).is_err());
 
         // The authenticated FLOOR remains: an UNauthenticated session is rejected
         // even for an owned entity (RBAC infra stays wired, just not role-gated).
@@ -954,7 +953,7 @@ mod tests {
             authenticated: false,
             token: None,
         });
-        assert!(authorize(&reg, &unauth_rbac, &pol, A, "DriveRover", Some(R1)).is_err());
+        assert!(authorize(&reg, &unauth_rbac, &pol, A, "SetPorts", Some(R1)).is_err());
 
         // M2: a session that is `authenticated` but carries NO server-issued token
         // is rejected even for an entity it owns. This is the gate that stops a
@@ -968,7 +967,7 @@ mod tests {
             authenticated: true,
             token: None,
         });
-        assert!(authorize(&reg, &tokenless_rbac, &pol, A, "DriveRover", Some(R1)).is_err());
+        assert!(authorize(&reg, &tokenless_rbac, &pol, A, "SetPorts", Some(R1)).is_err());
         assert!(authorize(&reg, &tokenless_rbac, &pol, A, "PossessVessel", Some(R1)).is_err());
     }
 

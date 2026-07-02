@@ -48,7 +48,7 @@ use lunco_celestial::CelestialReferenceFrame;
 
 // ── Wire payloads ─────────────────────────────────────────────────────────────
 
-/// A command on the wire: its short type name (e.g. `"DriveRover"`) + the
+/// A command on the wire: its short type name (e.g. `"SetPorts"`) + the
 /// reflect-serialized params as a **JSON string**, with `Entity` refs expressed as
 /// `GlobalEntityId`s. The payload is JSON *text* (not a `serde_json::Value`) so the
 /// envelope round-trips through the binary `bincode` codec — bincode is not
@@ -660,7 +660,7 @@ pub struct SyncCommandEvent {
 
 /// Declare which [`SyncChannel`] a command type rides, and (unless `Local`)
 /// register its capture observer. Called by `lunco-networking` for each
-/// networked command (e.g. `DriveRover` → `ControlStream`, `PossessVessel` →
+/// networked command (e.g. `SetPorts` → `ControlStream`, `PossessVessel` →
 /// `CommandBus`). No-op-on-the-wire commands need not be declared.
 pub trait DeclareChannelExt {
     fn declare_channel<C: Event + Reflect + TypePath>(&mut self, channel: SyncChannel) -> &mut Self;
@@ -756,7 +756,7 @@ fn capture_command<C: Event + Reflect + TypePath>(
 /// the end of a frame's batch so a possession that arrives alongside them is
 /// recorded first (see [`drain_sync_inbox`]).
 fn is_control_command(type_name: &str) -> bool {
-    matches!(type_name, "DriveRover" | "BrakeRover")
+    matches!(type_name, "SetPorts")
 }
 
 /// Apply an inbound command through the *same* reflect-trigger path as a local /
@@ -2276,13 +2276,9 @@ pub fn block_action_states(
     tutor_status: Res<TutorStatusResource>,
     local: Option<Res<LocalSession>>,
     mut q_user_intent: Query<&mut ActionState<lunco_core::UserIntent>>,
-    mut q_vessel_intent: Query<&mut ActionState<lunco_controller::VesselIntent>>,
 ) {
     if perspective_inputs_blocked(&settings, &tutor_status, local.as_deref()) {
         for mut state in &mut q_user_intent {
-            *state = ActionState::default();
-        }
-        for mut state in &mut q_vessel_intent {
             *state = ActionState::default();
         }
     }
@@ -2646,14 +2642,14 @@ mod codec_roundtrip {
         // (possession/drive) over the wire while snapshots kept working.
         let payload = r#"{"forward":1.0,"steer":-0.5}"#;
         let env = SyncEnvelope::Command(Mutation::local(SyncCommand {
-            type_name: "DriveRover".to_string(),
+            type_name: "SetPorts".to_string(),
             data: payload.to_string(),
         }));
         let bytes = serialize_env(&env).expect("serialize");
         let back = deserialize_env(&bytes).expect("deserialize");
         match back {
             SyncEnvelope::Command(m) => {
-                assert_eq!(m.payload.type_name, "DriveRover");
+                assert_eq!(m.payload.type_name, "SetPorts");
                 assert_eq!(m.payload.data, payload);
                 // The apply path re-parses the text to a Value; confirm it still does.
                 let v: serde_json::Value = serde_json::from_str(&m.payload.data).unwrap();

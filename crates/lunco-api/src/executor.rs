@@ -5,7 +5,7 @@
 //! the command name and JSON params.
 //!
 //! Domain observers can observe both:
-//! - `On<DriveRover>` for internal triggers
+//! - `On<SetPorts>` for internal triggers
 //! - `On<ApiCommandEvent>` for API triggers (downcast the command)
 
 use bevy::prelude::*;
@@ -64,7 +64,7 @@ pub fn api_request_observer(
     type_registry: Res<AppTypeRegistry>,
     cmd_results: Res<lunco_core::CommandResults>,
     mut subscriptions: ResMut<TelemetrySubscriptions>,
-    q_meta: Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
+    q_meta: Query<(Option<&Name>, Has<lunco_fsw::FlightSoftware>, Option<&lunco_core::CelestialBody>)>,
     // World pose for QueryEntity / future telemetry. `GlobalTransform`
     // mirrors Avian's `Position` post-writeback — we read it (instead
     // of Avian's `Position` directly) to keep this crate free of an
@@ -88,7 +88,7 @@ pub fn api_request_observer(
 /// Dynamic dispatcher: converts generic [ApiCommandEvent] into pure simulation events.
 ///
 /// This system listens for all API-triggered commands and uses reflection to
-/// fire the specific [Event] types (e.g. `DriveRover`).
+/// fire the specific [Event] types (e.g. `SetPorts`).
 pub fn api_command_dispatcher(
     trigger: On<ApiCommandEvent>,
     mut commands: Commands,
@@ -98,7 +98,7 @@ pub fn api_command_dispatcher(
     let event = trigger.event();
     let type_reg = type_registry.read();
 
-    // 1. Find type registration by short name (e.g. "DriveRover")
+    // 1. Find type registration by short name (e.g. "SetPorts")
     let Some(registration) = type_reg.get_with_short_type_path(&event.command) else {
         warn!("[lunco-api] Command '{}' not found in type registry", event.command);
         return;
@@ -417,7 +417,7 @@ fn execute_request(
     type_registry: &TypeRegistry,
     cmd_results: &lunco_core::CommandResults,
     subscriptions: &mut TelemetrySubscriptions,
-    q_meta: &Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
+    q_meta: &Query<(Option<&Name>, Has<lunco_fsw::FlightSoftware>, Option<&lunco_core::CelestialBody>)>,
     q_transforms: &Query<&GlobalTransform>,
     correlation_id: u64,
 ) -> Option<ApiResponse> {
@@ -538,8 +538,8 @@ fn execute_request(
         ApiRequest::QueryEntity { id } => {
             Some(match registry.resolve(id) {
                 Some(e) => {
-                    let (name, rover, body) = q_meta.get(e).unwrap_or((None, None, None));
-                    let kind = if rover.is_some() { "rover" } else if body.is_some() { "planet" } else { "unknown" };
+                    let (name, is_vehicle, body) = q_meta.get(e).unwrap_or((None, false, None));
+                    let kind = if is_vehicle { "rover" } else if body.is_some() { "planet" } else { "unknown" };
                     // World-space pose from GlobalTransform. Translation
                     // mirrors Avian's `Position` after physics writeback;
                     // rotation/scale let callers read orientation too
@@ -569,8 +569,8 @@ fn execute_request(
             let entities: Vec<serde_json::Value> = registry.entities()
                 .into_iter()
                 .map(|(api_id, entity)| {
-                    let (name, rover, body) = q_meta.get(entity).unwrap_or((None, None, None));
-                    let kind = if rover.is_some() { "rover" } else if body.is_some() { "planet" } else { "unknown" };
+                    let (name, is_vehicle, body) = q_meta.get(entity).unwrap_or((None, false, None));
+                    let kind = if is_vehicle { "rover" } else if body.is_some() { "planet" } else { "unknown" };
                     serde_json::json!({
                         "api_id": api_id,
                         "name": name.map(|n| n.as_str()).unwrap_or(""),

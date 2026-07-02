@@ -21,7 +21,14 @@ use leafwing_input_manager::prelude::*;
 use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 
 use lunco_controller::ControllerLink;
-use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, register_commands, on_command, SessionProfiles, LocalSession, NetworkRole, LocalAvatar};
+use lunco_core::{Avatar, CelestialBody, Spacecraft, register_commands, on_command, SessionProfiles, LocalSession, NetworkRole, LocalAvatar};
+/// Topology test for "possessable/controllable": has a control surface
+/// (`FlightSoftware`) or a Modelica actuation backend (`SimComponent`). Replaces
+/// the removed `Vessel` marker — a click possesses anything matching this.
+type Controllable = bevy::prelude::Or<(
+    bevy::prelude::With<lunco_fsw::FlightSoftware>,
+    bevy::prelude::With<lunco_cosim::SimComponent>,
+)>;
 use lunco_core::attach::migrate_to_grid;
 use lunco_celestial::{LocalGravityField, TeleportToSurface, LeaveSurface};
 use lunco_time::{TimeTransport, TransportMode, WorldTime};
@@ -300,7 +307,7 @@ pub struct LunCoAvatarPlugin;
 
 /// Host-only: record that the possessing session now owns the target vessel, so
 /// the authority gate ([`lunco_core::authorize`]) accepts that session's
-/// `DriveRover`s (gap G4). Runs for both local-host and wire-applied
+/// `SetPorts` control commands (gap G4). Runs for both local-host and wire-applied
 /// possessions; the origin is the wire-apply guard (remote) or the local
 /// session (host's own).
 fn record_possession_authority(
@@ -443,7 +450,7 @@ impl Plugin for LunCoAvatarPlugin {
         // `register_commands!` macro, which is what registers a type), so the
         // types are otherwise never registered — the host then logs "unknown
         // command type 'PossessVessel'", never records the client's ownership,
-        // and rejects every subsequent DriveRover as unauthorized (the "client
+        // and rejects every subsequent SetPorts as unauthorized (the "client
         // rover won't move" bug). `#[Command]` already derives `#[reflect(Event)]`,
         // so registering the type also attaches the `ReflectEvent` the apply path
         // triggers through.
@@ -1425,7 +1432,7 @@ pub fn avatar_raycast_possession(
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
-    q_vessel: Query<Entity, With<Vessel>>,
+    q_vessel: Query<Entity, Controllable>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_parents: Query<&ChildOf>,
     q_ground: Query<Entity, With<lunco_core::Ground>>,
@@ -1560,12 +1567,15 @@ fn on_release_command(
         (y, p, link, surface.is_some())
     } else { (0.0, 0.0, None, false) };
 
-    // Hard stop the rover upon disengaging control.
+    // Hard stop the rover upon disengaging control: zero throttle/steer, full brake.
     if let Some(link) = opt_link {
-        commands.trigger(lunco_mobility::DriveRover {
+        commands.trigger(lunco_cosim::SetPorts {
             target: link.vessel_entity,
-            forward: 0.0,
-            steer: 0.0,
+            writes: vec![
+                ("throttle".into(), 0.0),
+                ("steer".into(), 0.0),
+                ("brake".into(), 1.0),
+            ],
             seq: 0,
             tick: 0,
         });
@@ -1573,8 +1583,7 @@ fn on_release_command(
 
     commands.entity(avatar_ent)
         .remove::<ControllerLink>()
-        .remove::<ActionState<lunco_controller::VesselIntent>>()
-        .remove::<InputMap<lunco_controller::VesselIntent>>()
+        .remove::<lunco_controller::ControlBinding>()
         .remove::<SpringArmCamera>()
         .remove::<OrbitCamera>()
         .remove::<FrameBlend>()
@@ -1641,7 +1650,8 @@ fn on_possess_command(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_sc: Query<&Spacecraft>,
-    q_vessel: Query<&Vessel>,
+    q_vessel: Query<&lunco_fsw::FlightSoftware>,
+    q_lander_vessel: Query<(), With<lunco_cosim::SimComponent>>,
     q_vessel_gravity: Query<&GravityBody>,
     guard: Res<lunco_core::SyncApplyGuard>,
     registry: Res<lunco_core::SessionRegistry>,
@@ -1730,10 +1740,21 @@ fn on_possess_command(
     // entity for the query to match. Putting the action state on the vessel
     // (as a stranded component) silently disabled the entire keyboard drive
     // path; the legacy `on_user_intent` observer was masking the bug.
+    //
+    // The InputMap is selected by TOPOLOGY, not a vessel-kind marker: a body
+    // actuated through a Modelica `SimComponent` (its manual-override ports)
+    // binds Space to `ArmManual` and Q/E to yaw, while a wheel-drive vessel
+    // keeps the Space=Brake / no-yaw layout. Sharing one `VesselIntent` enum
+    // with two binding tables keeps the surface (HTTP API, MCP, scripts)
+    // identical while the keys match each vessel's physical actuation.
+    let is_lander = q_lander_vessel.get(cmd.target).is_ok();
     commands.entity(avatar_ent).insert((
         ControllerLink { vessel_entity: cmd.target },
-        ActionState::<lunco_controller::VesselIntent>::default(),
-        lunco_controller::get_default_input_map(),
+        if is_lander {
+            lunco_controller::ControlBinding::flight_binding()
+        } else {
+            lunco_controller::ControlBinding::rover_binding()
+        },
     ));
 
     // Detect if target is a surface vehicle (has GravityBody) and propagate surface mode.
@@ -1798,7 +1819,7 @@ fn on_follow_command(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
-    q_vessel: Query<&Vessel>,
+    q_vessel: Query<Entity, Controllable>,
     q_vessel_gravity: Query<&GravityBody>,
 ) {
     let cmd = trigger.event();
@@ -1844,8 +1865,7 @@ fn on_follow_command(
     let mut cmd_ent = commands.entity(avatar_ent);
     cmd_ent
         .remove::<ControllerLink>()
-        .remove::<ActionState<lunco_controller::VesselIntent>>()
-        .remove::<InputMap<lunco_controller::VesselIntent>>()
+        .remove::<lunco_controller::ControlBinding>()
         .remove::<FreeFlightCamera>()
         .remove::<SurfaceCamera>()
         .remove::<OrbitCamera>()

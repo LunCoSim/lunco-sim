@@ -659,14 +659,18 @@ fn instantiate_usd_prim(
                 .insert(lunco_core::EmbeddedScenarioPath(path));
         }
 
-        // Custom `lunco:vessel = "true"` attribute marks this prim as a
-        // possessable vessel. Without `PhysxVehicleContextAPI` (which auto-
-        // inserts `Vessel` for rovers), standalone rigid bodies like landers
-        // and spacecraft need this explicit tag so the avatar system routes
-        // plain-clicks to `PossessVessel` instead of `FollowTarget`.
+        // Custom `lunco:vessel = "true"` marks this prim as possessable by
+        // stamping `FlightSoftware` — the unified control-surface tag. There is
+        // no separate `Vessel` marker: "possessable/controllable" is exactly
+        // "has a control surface", so the avatar routes plain-clicks to
+        // `PossessVessel` for anything carrying `FlightSoftware` (or a Modelica
+        // `SimComponent`). Rovers get `FlightSoftware` from `PhysxVehicleContextAPI`
+        // instead; a standalone rigid body (lander, spacecraft) needs this tag.
+        // Empty `port_map` is fine — it means "possessable, no digital actuator
+        // ports of its own" (a lander's actuation is its Modelica inputs).
         if let Some(val) = get_attribute_as_string(reader, &sdf_path, "lunco:vessel") {
             if val.eq_ignore_ascii_case("true") {
-                commands.entity(entity).insert(lunco_core::Vessel);
+                commands.entity(entity).insert(lunco_fsw::FlightSoftware::default());
             }
         }
 

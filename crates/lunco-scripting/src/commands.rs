@@ -669,10 +669,10 @@ fn on_stop_scenario(
 /// Rationale (design §3.4 "Security"): a script body reaches the *entire*
 /// `cmd()` surface and executes under host authority, so a script-executing
 /// command is a privilege amplifier — a networked `Observer` that may not
-/// `DriveRover` directly could otherwise submit a scenario that does. We
+/// `SetPorts` directly could otherwise submit a scenario that does. We
 /// therefore declare an **`Operator`** floor for the script-executing /
 /// disk-persisting commands, and ownership-gated control for scenario lifecycle
-/// (which acts on a single `#[authz_target]` entity, exactly like `DriveRover`).
+/// (which acts on a single `#[authz_target]` entity, exactly like `SetPorts`).
 /// Deployments relax or tighten any of these at runtime via
 /// [`lunco_core::session::CommandPolicyRegistry::set_override`] with no recompile.
 ///
@@ -685,7 +685,7 @@ pub(crate) fn register_command_policies(app: &mut App) {
 
     // The registry is a `LunCoCorePlugin` resource; init defensively in case the
     // scripting plugin is added first (`init_resource` is idempotent and keeps
-    // the existing instance + its baseline `DriveRover`/`BrakeRover` entries).
+    // the existing instance + its baseline `SetPorts` entry).
     app.init_resource::<CommandPolicyRegistry>();
     let mut reg = app.world_mut().resource_mut::<CommandPolicyRegistry>();
 
@@ -708,7 +708,7 @@ pub(crate) fn register_command_policies(app: &mut App) {
 
     // Scenario lifecycle acts on one `#[authz_target]` entity → ownership-gated
     // control (owner acts at the Observer floor; a non-owner needs `Operator`
-    // and is then rejected by the ownership check), mirroring `DriveRover`.
+    // and is then rejected by the ownership check), mirroring `SetPorts`.
     reg.register("SetScenarioPaused", CommandPolicy::OWNED_CONTROL);
     reg.register("StopScenario", CommandPolicy::OWNED_CONTROL);
 
@@ -791,7 +791,7 @@ mod tests {
         let steps = serde_json::json!([
             { "move_to": [12.0, 0.0, 0.0], "speed": 1.0, "radius": 2.0 },
             { "wait": 5.0 },
-            { "cmd": "BrakeRover", "params": {} },
+            { "cmd": "SetPorts", "params": {} },
             { "wait_event": "GO" },
         ]);
         let mut steps_lit = String::new();
@@ -825,7 +825,7 @@ mod tests {
             assert_eq!(reg.policy_for(c), exec, "{c} should require Operator");
         }
 
-        // Scenario lifecycle is ownership-gated control, like DriveRover.
+        // Scenario lifecycle is ownership-gated control, like SetPorts.
         assert_eq!(reg.policy_for("SetScenarioPaused"), CommandPolicy::OWNED_CONTROL);
         assert_eq!(reg.policy_for("StopScenario"), CommandPolicy::OWNED_CONTROL);
 
@@ -837,7 +837,7 @@ mod tests {
         );
 
         // The baseline core entries survive our defensive init_resource.
-        assert_eq!(reg.policy_for("DriveRover"), CommandPolicy::OWNED_CONTROL);
+        assert_eq!(reg.policy_for("SetPorts"), CommandPolicy::OWNED_CONTROL);
         // An undeclared command stays OPEN (the RBAC-readiness invariant).
         assert_eq!(reg.policy_for("SomeUngatedQuery"), CommandPolicy::OPEN);
     }

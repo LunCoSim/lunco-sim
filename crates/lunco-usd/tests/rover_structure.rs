@@ -38,7 +38,6 @@ fn chassis_child(app: &App, rover: Entity, label: impl std::fmt::Display) -> Ent
         .find(|&c| app.world().get::<Name>(c).map(|n| n.as_str().contains("Chassis")).unwrap_or(false))
         .unwrap_or_else(|| panic!("{label}: rover has no Chassis child"))
 }
-use lunco_core::{Vessel, RoverVessel};
 use std::sync::Arc;
 use std::path::Path;
 
@@ -148,9 +147,9 @@ fn test_all_rover_files_match_procedural() {
         let mut app = compose_and_load(&Path::new("../../assets/").join(file), prim);
 
         // Find rover
-        let mut q = app.world_mut().query_filtered::<Entity, (With<Vessel>, With<RoverVessel>)>();
+        let mut q = app.world_mut().query_filtered::<Entity, With<FlightSoftware>>();
         let rover = q.iter(app.world()).next()
-            .unwrap_or_else(|| panic!("{label}: No Vessel+RoverVessel entity"));
+            .unwrap_or_else(|| panic!("{label}: No FlightSoftware entity"));
 
         // Physics
         let rb = app.world().get::<RigidBody>(rover).expect(&format!("{label}: missing RigidBody"));

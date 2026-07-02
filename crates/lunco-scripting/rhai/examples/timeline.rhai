@@ -15,7 +15,7 @@ const TIMELINE = #{
         #{ emit: "SAMPLE_DONE", value: true },                    // mark progress
         #{ wait_event: "GO" },                                    // hold for a hail
         #{ move_to: [12.0, 0.0, 25.0], speed: 1.0, radius: 2.0 }, // drive to B
-        #{ cmd: "BrakeRover", params: #{} },                     // stop
+        #{ cmd: "SetPorts", params: #{ writes: [["brake", 1.0]] } }, // stop
     ],
 };
 

@@ -8,7 +8,7 @@
 //!
 //! | USD Schema | LunCoSim Components | Description |
 //! |---|---|---|
-//! | `PhysxVehicleContextAPI` | `FlightSoftware`, `RoverVessel`, `Vessel` | Rover root entity |
+//! | `PhysxVehicleContextAPI` | `FlightSoftware`, `Vessel` | Rover root entity (kind is topology-derived, no `RoverVessel` marker) |
 //! | `PhysxVehicleDriveSkidAPI` | `DifferentialDrive` | Skid steering |
 //! | `PhysxVehicleDrive4WAPI` | `AckermannSteer` | Ackermann steering |
 //! | `PhysxVehicleWheelAPI` | `WheelRaycast` *or* `MotorActuator` + `RigidBody` | Wheel — kind decided by joint authoring |
@@ -61,7 +61,6 @@ use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel
 use lunco_fsw::FlightSoftware;
 use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
 use lunco_hardware::{MotorActuator, SteeringActuator};
-use lunco_core::RoverVessel;
 use lunco_avatar::{FreeFlightCamera, OrbitCamera, SpringArmCamera, AdaptiveNearPlane, ProvisionalAvatarCamera};
 use lunco_core::{Avatar, LocalAvatar};
 use lunco_core::architecture::IntentAnalogState;
@@ -280,7 +279,7 @@ pub struct PendingDifferential {
 /// # What It Does
 ///
 /// 1. **Detects `PhysxVehicleContextAPI`** → Creates `FlightSoftware` with 4 digital ports
-///    (`drive_left`, `drive_right`, `steering`, `brake`), plus `RoverVessel` and `Vessel`.
+///    (`drive_left`, `drive_right`, `steering`, `brake`), plus `Vessel`.
 /// 2. **Detects `PhysxVehicleDriveSkidAPI`** → Creates `DifferentialDrive` with port names.
 /// 3. **Detects `PhysxVehicleDrive4WAPI`** → Creates `AckermannSteer` with port names.
 /// 4. **Detects `PhysxVehicleWheelAPI`** → Sets up wheel based on whether an authored
@@ -735,7 +734,8 @@ fn process_usd_sim_prims(
         }
 
         // 1. Detect PhysxVehicleContextAPI (The Rover Root)
-        // Creates FlightSoftware with 4 digital ports + RoverVessel + Vessel markers
+        // Creates FlightSoftware with 4 digital ports (the control surface =
+        // the possessable/controllable signal; no separate Vessel marker)
         if has_api_schema(reader, &sdf_path, "PhysxVehicleContextAPI") {
             info!("Intercepted PhysxVehicleContextAPI for {}, initializing Flight Software", prim_path.path);
 
@@ -773,10 +773,10 @@ fn process_usd_sim_prims(
                     port_map,
                     brake_active: false,
                 },
-                RoverVessel,
                 lunco_core::SelectableRoot,
-                lunco_core::Vessel,
                 RoverWheels::default(),
+                // Expose throttle/steer/brake command ports (driven by `SetPorts`).
+                lunco_mobility::DriveCommand::default(),
             ));
 
             // OpenUSD-standard `PhysicsArticulationRootAPI` declares
@@ -1560,7 +1560,7 @@ fn reconstruct_proxy_wheels(
             &Rotation,
             Option<&lunco_core::ReplicatedChassisMotion>,
         ),
-        (With<RoverVessel>, Without<PhysicalWheel>),
+        (With<FlightSoftware>, Without<PhysicalWheel>),
     >,
     mut q_wheels: Query<
         (
@@ -1630,7 +1630,7 @@ fn animate_proxy_physical_wheels(
     >,
     q_chassis: Query<
         (&RigidBody, &Position, &Rotation, Option<&lunco_core::ReplicatedChassisMotion>),
-        With<RoverVessel>,
+        With<FlightSoftware>,
     >,
     mut q_visual: Query<&mut Transform, Without<PhysicalWheel>>,
     time: Res<Time>,
@@ -1924,7 +1924,7 @@ mod proxy_wheel_tests {
                     lin: DVec3::new(0.0, 0.0, -2.0), // 2 m/s along chassis forward (−Z)
                     ang: DVec3::ZERO,
                 },
-                RoverVessel,
+                FlightSoftware::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
@@ -1999,7 +1999,7 @@ mod proxy_wheel_tests {
                     lin: DVec3::new(0.0, 0.0, -2.0),
                     ang: DVec3::ZERO,
                 },
-                RoverVessel,
+                FlightSoftware::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
@@ -2058,7 +2058,7 @@ mod proxy_wheel_tests {
                 Position(DVec3::ZERO),
                 Rotation::default(),
                 lunco_core::ReplicatedChassisMotion { lin: DVec3::ZERO, ang },
-                RoverVessel,
+                FlightSoftware::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();

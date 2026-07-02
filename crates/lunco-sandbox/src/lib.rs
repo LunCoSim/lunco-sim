@@ -384,7 +384,7 @@ impl Plugin for SandboxCorePlugin {
             // path that resolves to a missing asset). Without this the app
             // silently boots a scene-less world (only procedural terrain /
             // obstacles), which masks the real error.
-            .add_systems(Update, (startup_scene_failguard, lander_manual_control))
+            .add_systems(Update, (startup_scene_failguard, lander_rover_joint_detach_key))
             // Cosim pipeline ordering inside FixedUpdate:
             //   HandleResponses → Propagate → ApplyForces → SpawnRequests.
             .configure_sets(FixedUpdate, (
@@ -1080,72 +1080,34 @@ fn startup_scene_failguard(
     }
 }
 
-fn lander_manual_control(
-    q_controllers: Query<&lunco_controller::ControllerLink>,
+fn lander_rover_joint_detach_key(
     keys: Res<ButtonInput<KeyCode>>,
-    mut q_sim_components: Query<&mut lunco_cosim::SimComponent>,
     q_names: Query<(Entity, &Name)>,
-    q_parents: Query<&ChildOf>,
     mut commands: Commands,
 ) {
-    // 1. Find possessed entity (the lander or one of its children)
-    let Some(link) = q_controllers.iter().next() else { return };
-    let vessel = link.vessel_entity;
-
-    // Walk up the parent hierarchy to find the ancestor Lander SimComponent
-    let mut current = vessel;
-    let mut target_vessel = None;
-    while current != Entity::PLACEHOLDER {
-        if let Ok((_, name)) = q_names.get(current) {
-            if name.as_str().starts_with("/LanderTest/Lander") && q_sim_components.contains(current) {
-                target_vessel = Some(current);
-                break;
-            }
-        }
-        if let Ok(child_of) = q_parents.get(current) {
-            current = child_of.0;
-        } else {
+    // Tutorial-scene UX affordance: press G to detach the joint holding the
+    // docked rover against the lander in `assets/scenes/sandbox/lander_test.usda`.
+    // The keyboard input that DRIVES the lander (WASD + QE + Space) no longer
+    // lives here — it flows through the typed-command path
+    // (`lunco-controller::drive_from_bindings` → `lunco_cosim::SetPorts` →
+    // `PortRegistry` writes to the `SimComponent` `manual_*` inputs), keyed off the
+    // vessel's `SimComponent` topology (the possess-time `ControlBinding`) so any
+    // lander in any scene is drivable without per-scene name matching.
+    //
+    // This G-to-detach shortcut is a different concern: it isn't a vessel-class
+    // behaviour, it's a click-equivalent for ONE specific named joint in ONE
+    // specific scene (the tutorial's `/LanderTest/LanderRoverJoint`). Tightly
+    // bound to that scene's USD path, hence the literal name match below. The
+    // principled generalization (find the joint connected to the currently
+    // possessed vessel and dispatch `DetachJoint`) is a TODO for when the
+    // scene authoring convention for dock joints stabilizes; for now this
+    // preserves the existing one-key tutorial flow.
+    if !keys.just_pressed(KeyCode::KeyG) { return; }
+    for (entity, name) in &q_names {
+        if name.as_str() == "/LanderTest/LanderRoverJoint" {
+            info!("Manual input: Detaching LanderRoverJoint!");
+            commands.trigger(lunco_sandbox_edit::commands::DetachJoint { target: entity });
             break;
-        }
-    }
-    let Some(target_vessel) = target_vessel else { return };
-
-    // 2. Space = manual override of the lander GNC (Lander.mo). Holding Space
-    //    hands thrust authority to the player (the model's mode-select fires
-    //    `manual_throttle * max_thrust`); releasing returns to the PID. We write
-    //    SimComponent.inputs directly — the cosim source of truth that
-    //    `sync_modelica_inputs` carries to the worker, so it isn't clobbered.
-    //    Always write (the key may be created async by the compiler).
-    if let Ok(mut comp) = q_sim_components.get_mut(target_vessel) {
-        let manual = if keys.pressed(KeyCode::Space) { 1.0 } else { 0.0 };
-        comp.inputs.insert("manual".to_string(), manual);
-        comp.inputs.insert("manual_throttle".to_string(), manual);
-
-        let mut pitch = 0.0;
-        if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) { pitch -= 1.0; }
-        if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) { pitch += 1.0; }
-
-        let mut roll = 0.0;
-        if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) { roll += 1.0; }
-        if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) { roll -= 1.0; }
-
-        let mut yaw = 0.0;
-        if keys.pressed(KeyCode::KeyQ) { yaw += 1.0; }
-        if keys.pressed(KeyCode::KeyE) { yaw -= 1.0; }
-
-        comp.inputs.insert("manual_pitch".to_string(), pitch);
-        comp.inputs.insert("manual_roll".to_string(), roll);
-        comp.inputs.insert("manual_yaw".to_string(), yaw);
-    }
-
-    // 4. Detach key G (or E)
-    if keys.just_pressed(KeyCode::KeyG) {
-        for (entity, name) in &q_names {
-            if name.as_str() == "/LanderTest/LanderRoverJoint" {
-                info!("Manual input: Detaching LanderRoverJoint!");
-                commands.trigger(lunco_sandbox_edit::commands::DetachJoint { target: entity });
-                break;
-            }
         }
     }
 }

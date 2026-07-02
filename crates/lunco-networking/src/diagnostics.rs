@@ -89,7 +89,7 @@ fn report_render_jitter(
             Has<lunco_core::OwnedLocally>,
             Has<lunco_core::PredictedDynamic>,
         ),
-        With<lunco_core::RoverVessel>,
+        With<lunco_fsw::FlightSoftware>,
     >,
     mut prev: Local<HashMap<Entity, (Vec3, Vec3)>>, // entity → (last pos, smoothed delta)
     mut n: Local<u32>,

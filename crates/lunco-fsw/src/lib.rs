@@ -68,7 +68,8 @@ fn unrecognized_command_handler(
 }
 
 
-// TODO: Migrate tests to typed commands (DriveRover, BrakeRover)
+// TODO: Migrate tests to the port-driven control path (write a `DriveCommand`
+// and run `lunco_mobility::apply_drive_mix`, or drive via `lunco_cosim::SetPorts`).
 // #[cfg(test)]
 // mod tests {
 //     use super::*;
@@ -88,9 +89,8 @@ fn unrecognized_command_handler(
 //     #[test]
 //     fn test_rover_differential_turning_left() {
 //         let (mut app, fsw_entity, p_l, p_r) = setup_test_app();
-//         app.world_mut().trigger(lunco_mobility::DriveRover {
-//             target: fsw_entity, forward: 1.0, steer: -1.0,
-//         });
+//         // e.g. insert `lunco_mobility::DriveCommand { throttle: 1.0, steer: -1.0, brake: 0.0 }`
+//         // on `fsw_entity` and run `apply_drive_mix`.
 //         assert_eq!(app.world().get::<DigitalPort>(p_l).unwrap().raw_value, 0);
 //         assert_eq!(app.world().get::<DigitalPort>(p_r).unwrap().raw_value, 32767);
 //     }

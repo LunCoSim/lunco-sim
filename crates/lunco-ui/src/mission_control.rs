@@ -4,7 +4,8 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use lunco_core::{Avatar, RoverVessel, Spacecraft};
+use lunco_core::{Avatar, Spacecraft};
+use lunco_fsw::FlightSoftware;
 use lunco_time::{TimeTransport, TransportMode, WorldTime};
 use lunco_celestial::{CelestialBody, TeleportToSurface, LeaveSurface};
 use lunco_avatar::{PossessVessel, ReleaseVessel, FocusTarget};
@@ -354,7 +355,7 @@ pub fn populate_mission_control_view(
     avatar: Query<Entity, With<Avatar>>,
     bodies: Query<(Entity, &Name, &CelestialBody)>,
     spacecraft: Query<(Entity, &Name), With<Spacecraft>>,
-    rovers: Query<(Entity, &Name, Option<&lunco_core::GlobalEntityId>), With<RoverVessel>>,
+    rovers: Query<(Entity, &Name, Option<&lunco_core::GlobalEntityId>), With<FlightSoftware>>,
     surface: Query<(), With<lunco_avatar::SurfaceCamera>>,
     gravity: Option<Res<lunco_celestial::LocalGravityField>>,
     changed: Query<
@@ -362,14 +363,14 @@ pub fn populate_mission_control_view(
         Or<(
             Changed<CelestialBody>,
             Changed<Spacecraft>,
-            Changed<RoverVessel>,
+            Changed<FlightSoftware>,
             Changed<Name>,
             Changed<lunco_core::GlobalEntityId>,
         )>,
     >,
     mut removed_body: RemovedComponents<CelestialBody>,
     mut removed_sc: RemovedComponents<Spacecraft>,
-    mut removed_rover: RemovedComponents<RoverVessel>,
+    mut removed_rover: RemovedComponents<FlightSoftware>,
 ) {
     let avatar_ent = avatar.iter().next();
     let on_surface = !surface.is_empty();

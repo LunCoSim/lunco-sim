@@ -976,7 +976,7 @@ pub fn record_predicted_state(
 /// owned, locally-predicted moving body — it keys off [`lunco_core::OwnedLocally`]
 /// + gid and corrects an arbitrary dynamic body's Transform/Position/velocity; it
 /// assumes nothing about "rover". (Only the *input* that drives the body, e.g.
-/// `DriveRover`, is domain-specific — the predict-and-reconcile substrate is not.)
+/// a `SetPorts` throttle/steer write, is domain-specific — the predict-and-reconcile substrate is not.)
 ///
 /// On each snapshot that acks a NEW input `seq` for an owned body, compare what we
 /// predicted at that seq (`PredictedStateLog`) to the authoritative state. **If
@@ -1137,9 +1137,9 @@ pub fn reconcile_owned_prediction(
 /// computable). That marker was added precisely so the structural
 /// `SkipContentStamp` guard wouldn't have to be the only thing (see
 /// `NotPredictable`'s doc) — so we no longer restrict to runtime spawns, which
-/// had frozen plain scene-content physics props server-only. Rovers
-/// (`RoverVessel`) and the possessed rover (`OwnedLocally`) are excluded — they
-/// have their own paths. Flips the body to `Dynamic` (it may already have been
+/// had frozen plain scene-content physics props server-only. Wheeled vehicles
+/// (a `FlightSoftware` control surface) and the possessed rover (`OwnedLocally`)
+/// are excluded — they have their own paths. Flips the body to `Dynamic` (it may already have been
 /// pinned `Kinematic` by `force_kinematic_proxies` the prior frame); a `Static`
 /// prop is left alone. Client-only.
 pub fn maintain_predicted_dynamic(
@@ -1149,7 +1149,11 @@ pub fn maintain_predicted_dynamic(
         (Entity, &RigidBody),
         (
             With<lunco_core::NetReplicate>,
-            Without<lunco_core::RoverVessel>,
+            // Wheeled vehicles (a `FlightSoftware` control surface) have their
+            // own predict path (`maintain_predicted_vehicles`); a cosim-flown
+            // vessel that also carries `FlightSoftware` is already caught by the
+            // `NotPredictable` guard below.
+            Without<lunco_fsw::FlightSoftware>,
             Without<lunco_core::OwnedLocally>,
             Without<lunco_core::PredictedDynamic>,
             // The cosim/server-only guard: a cosim-driven body (Modelica balloon,
@@ -1188,7 +1192,7 @@ pub fn maintain_predicted_dynamic(
 }
 
 /// Client Step 4 (`PREDICT_AND_SMOOTH` §5, predict-all-vehicles): designate every
-/// **remote rover** (`RoverVessel` you don't possess) as
+/// **remote rover** (a `FlightSoftware` vehicle you don't possess) as
 /// [`lunco_core::PredictedDynamic`] too — locally `Dynamic`, state-reconciled to
 /// authority each snapshot — reusing the Phase B machinery wholesale.
 ///
@@ -1202,9 +1206,9 @@ pub fn maintain_predicted_dynamic(
 /// Reuses `PredictedDynamic` (not a separate marker): every predict-own seam
 /// already excludes it (kinematic pin / drive / interpolate), and
 /// [`maintain_predicted_dynamic`]'s possession-demote already removes the marker
-/// when you possess the rover (its input-replay path takes over). Cosim rovers are
-/// safe — `tag_cosim_opaque` only marks non-`RoverVessel` bodies `NotPredictable`,
-/// which we still exclude here. Between snapshots the rover dead-reckons on the
+/// when you possess the rover (its input-replay path takes over). Cosim-flown
+/// vessels are safe — `tag_cosim_opaque` marks cosim-driven bodies
+/// `NotPredictable`, which we still exclude here. Between snapshots the rover dead-reckons on the
 /// authoritative velocity seated by `reconcile_predicted_dynamic`; held-input
 /// feed-forward (Step 3) would sharpen the actively-driven-remote case but is not
 /// needed for the push fix. Client-only.
@@ -1217,7 +1221,11 @@ pub fn maintain_predicted_vehicles(
         (Entity, &lunco_core::GlobalEntityId, &RigidBody),
         (
             With<lunco_core::NetReplicate>,
-            With<lunco_core::RoverVessel>,
+            // A wheeled vehicle = has a `FlightSoftware` control surface. The
+            // `Without<NotPredictable>` guard below excludes cosim-flown vessels
+            // (a lander carries `FlightSoftware` too but is `NotPredictable`),
+            // so this resolves to exactly the locally-simulated rovers.
+            With<lunco_fsw::FlightSoftware>,
             Without<lunco_core::OwnedLocally>,
             Without<lunco_core::PredictedDynamic>,
             Without<lunco_core::NotPredictable>,

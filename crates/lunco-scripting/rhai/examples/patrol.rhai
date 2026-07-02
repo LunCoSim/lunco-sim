@@ -27,7 +27,7 @@ fn on_tick(me) {
     let wp = WAYPOINTS[this.idx];
 
     // nav_to() = pure-rhai closed-loop steering (heading error -> steer), built
-    // from the world_pos/world_forward reads + DriveRover. Returns true on
+    // from the world_pos/world_forward reads + the drive() SetPorts. Returns true on
     // arrival, where we advance to the next waypoint.
     if nav_to(me, wp, 1.0, ARRIVE_RADIUS) {
         // Announce arrival on the shared bus. Any other script (or the API /

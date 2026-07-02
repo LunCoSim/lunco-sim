@@ -417,7 +417,7 @@ fn on_server_connected(
     // its server-issued token. Observer-authorized-by-default: read-only telemetry
     // plus possession/structural commands (which `authorize` gates at Observer) work
     // immediately on connect — no profile-name round-trip required. The session is
-    // promoted to Operator (gaining DriveRover/BrakeRover) when it sets a name via
+    // promoted to Operator (gaining SetPorts control) when it sets a name via
     // `on_update_profile_rbac`. The token makes the session a server-issued credential
     // (`is_authorized` requires one), closing the name-only self-promotion of M2.
     rbac.sessions.insert(session.0, lunco_core::session::UserSession {

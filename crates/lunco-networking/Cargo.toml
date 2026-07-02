@@ -36,12 +36,15 @@ workbench = ["dep:lunco-workbench"]
 bevy = { workspace = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-core = { path = "../lunco-core" }
+lunco-fsw = { path = "../lunco-fsw" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 # `default-features = false`: we only use the registry/executor types + plugin,
 # never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).
 # Native builds still get transport-http via lunco-sandbox's own default features.
 lunco-api = { path = "../lunco-api", default-features = false }
-lunco-mobility = { path = "../lunco-mobility" }
+# The ONE generic vessel-control command `SetPorts` lives here; the wire declares
+# a channel for it (replacing the old rover drive/brake command pair).
+lunco-cosim = { path = "../lunco-cosim" }
 # Wire substrate needs avatar/sandbox-edit COMPONENTS + commands, never their
 # egui editor UI — `default-features = false` keeps the networked headless server
 # (and this crate) egui/winit-free.

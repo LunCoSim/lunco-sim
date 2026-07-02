@@ -169,8 +169,7 @@ fn add_protocol(app: &mut App) {
     // Which wire channel each networked command rides (+ registers its capture
     // observer). Control inputs ride best-effort; structural commands ride the
     // reliable bus.
-    app.declare_channel::<lunco_mobility::DriveRover>(SyncChannel::ControlStream);
-    app.declare_channel::<lunco_mobility::BrakeRover>(SyncChannel::ControlStream);
+    app.declare_channel::<lunco_cosim::SetPorts>(SyncChannel::ControlStream);
     app.declare_channel::<lunco_avatar::PossessVessel>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_avatar::ReleaseVessel>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_avatar::UpdateProfile>(SyncChannel::CommandBus);

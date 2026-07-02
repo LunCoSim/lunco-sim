@@ -8,7 +8,6 @@ use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
 use lunco_materials::ShaderMaterial;
-use lunco_core::{Vessel, RoverVessel};
 use lunco_fsw::FlightSoftware;
 
 /// The rover root carries `PhysicsRigidBodyAPI`, so avian builds a
@@ -159,10 +158,10 @@ fn test_rover_components_via_bevy_pipeline() {
 
         let mut app = load_rover_through_bevy(&p, paths[i]);
 
-        // Find rover entity (has both Vessel and RoverVessel)
-        let mut q_rover = app.world_mut().query_filtered::<Entity, (With<Vessel>, With<RoverVessel>)>();
+        // Find rover entity (has FlightSoftware)
+        let mut q_rover = app.world_mut().query_filtered::<Entity, With<FlightSoftware>>();
         let rover_ent = q_rover.iter(app.world()).next()
-            .unwrap_or_else(|| panic!("{label}: No entity with Vessel+RoverVessel found"));
+            .unwrap_or_else(|| panic!("{label}: No entity with FlightSoftware found"));
 
         // --- REQUIRED COMPONENTS ---
 
@@ -383,11 +382,11 @@ fn test_rover_sim_processing_after_async_load() {
             "{label}: Must have DifferentialDrive or AckermannSteer after sim processing. \
             Rover won't be able to steer!");
 
-        // MUST have Vessel + RoverVessel
-        let mut q_vessel = app.world_mut().query_filtered::<Entity, (With<Vessel>, With<RoverVessel>)>();
+        // MUST have FlightSoftware
+        let mut q_vessel = app.world_mut().query_filtered::<Entity, With<FlightSoftware>>();
         let vessel_count = q_vessel.iter(app.world()).count();
         assert!(vessel_count > 0,
-            "{label}: Vessel+RoverVessel must be present. Got {vessel_count}.");
+            "{label}: FlightSoftware must be present. Got {vessel_count}.");
 
         // MUST have 4 wheels with WheelRaycast
         let mut q_wheels = app.world_mut().query_filtered::<Entity, With<WheelRaycast>>();
@@ -506,7 +505,7 @@ fn test_full_scene_loads_with_rovers() {
     app.world_mut().flush();
 
     // Count rovers — 5 instances from scene references
-    let mut q_rovers = app.world_mut().query_filtered::<(Entity, &Name, &UsdPrimPath), (With<Vessel>, With<RoverVessel>)>();
+    let mut q_rovers = app.world_mut().query_filtered::<(Entity, &Name, &UsdPrimPath), With<FlightSoftware>>();
     let rover_info: Vec<_> = q_rovers.iter(app.world())
         .map(|(_, n, p)| (n.as_str().to_string(), p.path.clone()))
         .collect();
@@ -534,7 +533,7 @@ fn test_full_scene_loads_with_rovers() {
 
     // All 5 rovers must show a visible body — the Chassis CHILD carries the
     // Mesh3d (the rover root is an Xform after the Xform-root refactor).
-    let mut q_rovers2 = app.world_mut().query_filtered::<Entity, (With<Vessel>, With<RoverVessel>)>();
+    let mut q_rovers2 = app.world_mut().query_filtered::<Entity, With<FlightSoftware>>();
     let rover_ents: Vec<Entity> = q_rovers2.iter(app.world()).collect();
     let visible_count = rover_ents.iter()
         .filter(|&&r| app.world().get::<Mesh3d>(chassis_child(&app, r, "scene")).is_some())

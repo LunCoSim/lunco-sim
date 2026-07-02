@@ -7,7 +7,9 @@ edition = "2021"
 bevy = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-mobility = { path = "../lunco-mobility" }
+# The ONE generic vessel-control command `SetPorts` (a batch of named input-port
+# writes) lives in `lunco-cosim`; `drive_from_bindings` triggers it from held keys.
+lunco-cosim = { path = "../lunco-cosim" }
 
 [lints]
 workspace = true
