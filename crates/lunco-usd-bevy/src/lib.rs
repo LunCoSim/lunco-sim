@@ -191,9 +191,20 @@ impl Plugin for UsdBevyPlugin {
                 Update,
                 (
                     bind_animated_to_preview,
+                    // Hot-reload: drop stale plans so the next `plan_usd_animation`
+                    // re-derives topology against the new stage content.
+                    clear_animation_plans_on_stage_reload.run_if(
+                        bevy::ecs::schedule::common_conditions::on_message::<
+                            AssetEvent<UsdStageAsset>,
+                        >,
+                    ),
+                    // Derive each animated prim's `AnimationPlan` once (tier-1 memo),
+                    // then sample values at `t` — both samplers read the cached plan.
+                    plan_usd_animation,
                     (sample_usd_animation, sample_usd_material_animation)
                         .after(lunco_time::DomainResolveSet),
-                ),
+                )
+                    .chain(),
             );
     }
 }
@@ -348,6 +359,57 @@ pub struct UsdVisualSynced;
 #[derive(Component, Reflect, Debug, Clone, Copy, Default)]
 #[reflect(Component)]
 pub struct UsdAnimated;
+
+/// Tier-1 RAM memo of an animated prim's **topology** — which channels carry
+/// `timeSamples` and (for materials) the resolved bound-shader path.
+///
+/// The set of animated channels is a *structural* property of the composed
+/// stage: it doesn't change frame to frame, only the sample time `t` does.
+/// [`plan_usd_animation`] derives it **once** (when the entity's stage asset is
+/// loaded) so the per-frame samplers ([`sample_usd_animation`] /
+/// [`sample_usd_material_animation`]) skip the reader topology walks
+/// (`has_xform_op_order`, `attr_has_time_samples`, `resolve_bound_shader`, …)
+/// and go straight to the value read at `t`. Cleared on stage hot-reload so it
+/// re-derives against the new content.
+#[derive(Component, Debug, Clone)]
+pub struct AnimationPlan {
+    /// Parsed prim `SdfPath` (cached so the samplers skip the per-frame re-parse).
+    pub path: SdfPath,
+    /// Stage `timeCodesPerSecond` (constant per stage) — seconds × this = code.
+    pub time_codes_per_second: f64,
+    /// How this prim's local `Transform` is driven.
+    pub xform: XformDrive,
+    /// Whether `visibility` carries `timeSamples` (else the sampler skips it).
+    pub visibility: bool,
+    /// Material channels + resolved shader, when any color/opacity is animated.
+    pub material: Option<MaterialPlan>,
+}
+
+/// The transform channel that drives an [`AnimationPlan`] prim's local pose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum XformDrive {
+    /// Authored `xformOpOrder` — recompose the whole stack honoring op order.
+    OpOrder,
+    /// A single `xformOp:transform` matrix drives the full pose.
+    Matrix,
+    /// Piecewise TRS: only the flagged channels carry `timeSamples`.
+    Trs { translate: bool, rotate: bool, scale: bool },
+    /// No animated transform channels (material/visibility-only prim).
+    None,
+}
+
+/// The resolved material-animation topology cached in an [`AnimationPlan`].
+#[derive(Debug, Clone)]
+pub struct MaterialPlan {
+    /// Resolved bound-shader prim path, when the color/opacity lives on a shader.
+    pub shader: Option<SdfPath>,
+    /// Shader `inputs:diffuseColor` is animated.
+    pub diffuse: bool,
+    /// Geom `primvars:displayColor` is animated (only when `diffuse` is false).
+    pub geom_color: bool,
+    /// Shader `inputs:opacity` is animated.
+    pub opacity: bool,
+}
 
 /// Marker placed on a USD scene root that exists purely to render a
 /// preview thumbnail. Plugins that activate simulation side-effects on
@@ -1793,67 +1855,169 @@ fn sample_animated_vec3(reader: &UsdData, path: &SdfPath, attr: &str, time: f64)
 /// ([`stage_time_codes_per_second`], default 24 per USD spec). Sublayer /
 /// reference `LayerOffset`s are already baked into the composed sample times by
 /// PCP at flatten, so no offset compose happens here.
+/// Derive each animated prim's [`AnimationPlan`] once, as soon as its stage
+/// asset is loaded (doc 19 — tier-1 memo of animation topology).
+///
+/// Gated on `Without<AnimationPlan>`, so it retries each frame only for
+/// entities not yet planned (a stage may not be loaded the frame `UsdAnimated`
+/// is added) and is **empty in steady state** once every animated prim carries
+/// its plan. The topology walks (`has_xform_op_order`, `attr_has_time_samples`,
+/// `resolve_bound_shader`, …) happen here — the per-frame samplers then just
+/// read values at `t`. Re-derived after a stage hot-reload via
+/// [`clear_animation_plans_on_stage_reload`].
+pub fn plan_usd_animation(
+    stages: Res<Assets<UsdStageAsset>>,
+    mut commands: Commands,
+    q: Query<(Entity, &UsdPrimPath), (With<UsdAnimated>, Without<AnimationPlan>)>,
+) {
+    for (entity, prim) in &q {
+        let Some(stage) = stages.get(&prim.stage_handle) else { continue };
+        let reader = &*stage.reader;
+        let Ok(sdf_path) = SdfPath::new(prim.path.as_str()) else { continue };
+
+        // Transform: an authored `xformOpOrder` drives the whole stack; else a
+        // single `xformOp:transform` matrix; else piecewise TRS with a per-channel
+        // gate (a channel without `timeSamples` keeps its code-set spawn value).
+        let xform = if has_xform_op_order(reader, &sdf_path) {
+            XformDrive::OpOrder
+        } else if attr_has_time_samples(reader, &sdf_path, "xformOp:transform") {
+            XformDrive::Matrix
+        } else {
+            let drive = XformDrive::Trs {
+                translate: attr_has_time_samples(reader, &sdf_path, "xformOp:translate"),
+                rotate: prim_rotation_animated(reader, &sdf_path),
+                scale: attr_has_time_samples(reader, &sdf_path, "xformOp:scale"),
+            };
+            match drive {
+                XformDrive::Trs { translate: false, rotate: false, scale: false } => {
+                    XformDrive::None
+                }
+                other => other,
+            }
+        };
+
+        // Material: resolve the bound shader once and record which channels move.
+        let shader = resolve_bound_shader(reader, &sdf_path);
+        let diffuse = shader
+            .as_ref()
+            .is_some_and(|s| attr_has_time_samples(reader, s, "inputs:diffuseColor"));
+        let geom_color =
+            !diffuse && attr_has_time_samples(reader, &sdf_path, "primvars:displayColor");
+        let opacity = shader
+            .as_ref()
+            .is_some_and(|s| attr_has_time_samples(reader, s, "inputs:opacity"));
+        let material = (diffuse || geom_color || opacity)
+            .then(|| MaterialPlan { shader, diffuse, geom_color, opacity });
+
+        commands.entity(entity).insert(AnimationPlan {
+            time_codes_per_second: stage_time_codes_per_second(reader),
+            xform,
+            visibility: attr_has_time_samples(reader, &sdf_path, "visibility"),
+            material,
+            path: sdf_path,
+        });
+    }
+}
+
+/// Drop cached [`AnimationPlan`]s for entities whose stage was hot-reloaded, so
+/// [`plan_usd_animation`] re-derives them against the new content. Runs only on
+/// frames carrying a `UsdStageAsset` `Modified` event (else the query is skipped).
+pub fn clear_animation_plans_on_stage_reload(
+    mut ev: MessageReader<AssetEvent<UsdStageAsset>>,
+    mut commands: Commands,
+    q: Query<(Entity, &UsdPrimPath), With<AnimationPlan>>,
+) {
+    let reloaded: Vec<AssetId<UsdStageAsset>> = ev
+        .read()
+        .filter_map(|e| match e {
+            AssetEvent::Modified { id } | AssetEvent::LoadedWithDependencies { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    if reloaded.is_empty() {
+        return;
+    }
+    for (entity, prim) in &q {
+        if reloaded.contains(&prim.stage_handle.id()) {
+            commands.entity(entity).remove::<AnimationPlan>();
+        }
+    }
+}
+
 pub fn sample_usd_animation(
     world: Res<lunco_time::WorldTime>,
     resolved: Res<lunco_time::ResolvedDomains>,
     stages: Res<Assets<UsdStageAsset>>,
     mut q: Query<
-        (&UsdPrimPath, &mut Transform, &mut Visibility, Option<&lunco_time::TimeBinding>),
+        (
+            &UsdPrimPath,
+            &AnimationPlan,
+            &mut Transform,
+            &mut Visibility,
+            Option<&lunco_time::TimeBinding>,
+        ),
         With<UsdAnimated>,
     >,
 ) {
-    for (prim, mut tf, mut vis, binding) in &mut q {
+    for (prim, plan, mut tf, mut vis, binding) in &mut q {
         let Some(stage) = stages.get(&prim.stage_handle) else { continue };
         let reader = &*stage.reader;
-        let Ok(sdf_path) = SdfPath::new(prim.path.as_str()) else { continue };
+        let sdf_path = &plan.path;
 
         // Resolve this entity's clock — its bound `TimeDomain` (per-object /
         // selection / project / factory) or the world clock when unbound — and
-        // convert seconds → USD time code.
+        // convert seconds → USD time code (topology already resolved in the plan).
         let secs = lunco_time::domain_time(&resolved, binding, &world);
-        let t = secs * stage_time_codes_per_second(reader);
+        let t = secs * plan.time_codes_per_second;
 
-        // An authored `xformOpOrder` defines the whole local transform — recompose
-        // it (honoring op order) so non-TRS stacks animate correctly. Else an
-        // `xformOp:transform` matrix drives the full pose. Else sample the
-        // piecewise translate / rotation / scale channels (the per-channel gate
-        // preserves a code-set spawn pose on un-animated channels).
-        if has_xform_op_order(reader, &sdf_path) {
-            if let Some(m) = compose_xform_order_at(reader, &sdf_path, t) {
-                tf.translation = m.translation;
-                tf.rotation = m.rotation;
-                tf.scale = m.scale;
-            }
-        } else if attr_has_time_samples(reader, &sdf_path, "xformOp:transform") {
-            if let Some(m) = read_matrix_transform_at(reader, &sdf_path, t) {
-                tf.translation = m.translation;
-                tf.rotation = m.rotation;
-                tf.scale = m.scale;
-            }
-        } else {
-            if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:translate", t) {
-                tf.translation = Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
-            }
-            // Any animated rotation channel → recompose the full local rotation
-            // (Euler order / `orient` slerp / single-axis) at `t`. Static rotation
-            // ops in the mix contribute their `default`.
-            if prim_rotation_animated(reader, &sdf_path) {
-                if let Some(q) = local_rotation_at(reader, &sdf_path, t) {
-                    tf.rotation = q;
+        // Drive the local transform per the plan's cached channel topology.
+        match &plan.xform {
+            XformDrive::OpOrder => {
+                if let Some(m) = compose_xform_order_at(reader, &sdf_path, t) {
+                    tf.translation = m.translation;
+                    tf.rotation = m.rotation;
+                    tf.scale = m.scale;
                 }
             }
-            if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:scale", t) {
-                tf.scale = Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
+            XformDrive::Matrix => {
+                if let Some(m) = read_matrix_transform_at(reader, &sdf_path, t) {
+                    tf.translation = m.translation;
+                    tf.rotation = m.rotation;
+                    tf.scale = m.scale;
+                }
             }
+            XformDrive::Trs { translate, rotate, scale } => {
+                if *translate {
+                    if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:translate", t) {
+                        tf.translation = Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
+                    }
+                }
+                // Any animated rotation channel → recompose the full local rotation
+                // (Euler order / `orient` slerp / single-axis) at `t`.
+                if *rotate {
+                    if let Some(q) = local_rotation_at(reader, &sdf_path, t) {
+                        tf.rotation = q;
+                    }
+                }
+                if *scale {
+                    if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:scale", t) {
+                        tf.scale = Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
+                    }
+                }
+            }
+            XformDrive::None => {}
         }
 
         // Animated `visibility` (token, held): `invisible` → `Hidden`, anything
-        // else → `Inherited`. Guarded so a prim animated only in xform/material
-        // never churns visibility change-detection.
-        if let Some(tok) = read_token_at(reader, &sdf_path, "visibility", t) {
-            let want = if tok == "invisible" { Visibility::Hidden } else { Visibility::Inherited };
-            if *vis != want {
-                *vis = want;
+        // else → `Inherited`. Skipped entirely unless the plan flags it, so a prim
+        // animated only in xform/material never churns visibility change-detection.
+        if plan.visibility {
+            if let Some(tok) = read_token_at(reader, &sdf_path, "visibility", t) {
+                let want =
+                    if tok == "invisible" { Visibility::Hidden } else { Visibility::Inherited };
+                if *vis != want {
+                    *vis = want;
+                }
             }
         }
     }
@@ -1875,36 +2039,36 @@ pub fn sample_usd_material_animation(
     stages: Res<Assets<UsdStageAsset>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     q: Query<
-        (&UsdPrimPath, &MeshMaterial3d<StandardMaterial>, Option<&lunco_time::TimeBinding>),
+        (
+            &UsdPrimPath,
+            &AnimationPlan,
+            &MeshMaterial3d<StandardMaterial>,
+            Option<&lunco_time::TimeBinding>,
+        ),
         With<UsdAnimated>,
     >,
 ) {
-    for (prim, mat_handle, binding) in &q {
+    for (prim, plan, mat_handle, binding) in &q {
+        // Cheap gate: the plan already resolved the shader + which channels move.
+        let Some(mat) = &plan.material else { continue };
         let Some(stage) = stages.get(&prim.stage_handle) else { continue };
         let reader = &*stage.reader;
-        let Ok(sdf_path) = SdfPath::new(prim.path.as_str()) else { continue };
-
-        // Cheap gate: resolve the bound shader once and test which channels move.
-        let shader = resolve_bound_shader(reader, &sdf_path);
-        let diffuse = shader
-            .as_ref()
-            .is_some_and(|s| attr_has_time_samples(reader, s, "inputs:diffuseColor"));
-        let geom_color = !diffuse && attr_has_time_samples(reader, &sdf_path, "primvars:displayColor");
-        let opacity = shader
-            .as_ref()
-            .is_some_and(|s| attr_has_time_samples(reader, s, "inputs:opacity"));
-        if !(diffuse || geom_color || opacity) {
-            continue;
-        }
+        let sdf_path = &plan.path;
 
         let secs = lunco_time::domain_time(&resolved, binding, &world);
-        let t = secs * stage_time_codes_per_second(reader);
+        let t = secs * plan.time_codes_per_second;
         let Some(material) = materials.get_mut(&mat_handle.0) else { continue };
 
         // Base color: a shader `inputs:diffuseColor` wins over geom displayColor.
         // USD `color3f` is linear scene-referred (matches `apply_standard_material`).
-        let color_src = if diffuse { shader.as_ref() } else if geom_color { Some(&sdf_path) } else { None };
-        let color_attr = if diffuse { "inputs:diffuseColor" } else { "primvars:displayColor" };
+        let color_src = if mat.diffuse {
+            mat.shader.as_ref()
+        } else if mat.geom_color {
+            Some(sdf_path)
+        } else {
+            None
+        };
+        let color_attr = if mat.diffuse { "inputs:diffuseColor" } else { "primvars:displayColor" };
         if let Some(src) = color_src {
             if let Some(c) = read_vec3_f64_at(reader, src, color_attr, t) {
                 let a = material.base_color.alpha();
@@ -1915,10 +2079,14 @@ pub fn sample_usd_material_animation(
 
         // Opacity → base-color alpha. If a fully-opaque material starts being
         // animated below 1.0, promote it to `Blend` so the transparency shows.
-        if let Some(o) = read_f32_at(reader, shader.as_ref().unwrap_or(&sdf_path), "inputs:opacity", t) {
-            material.base_color = material.base_color.with_alpha(o);
-            if o < 1.0 && material.alpha_mode == AlphaMode::Opaque {
-                material.alpha_mode = AlphaMode::Blend;
+        if mat.opacity {
+            if let Some(o) =
+                read_f32_at(reader, mat.shader.as_ref().unwrap_or(sdf_path), "inputs:opacity", t)
+            {
+                material.base_color = material.base_color.with_alpha(o);
+                if o < 1.0 && material.alpha_mode == AlphaMode::Opaque {
+                    material.alpha_mode = AlphaMode::Blend;
+                }
             }
         }
     }
