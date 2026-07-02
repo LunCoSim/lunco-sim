@@ -249,6 +249,19 @@ tar = "0.4"
 zstd = "0.13"
 rayon = "1"
 base64 = "0.22"
+# Pure-Rust SHA-256 — works on native AND wasm32-unknown-unknown (no
+# getrandom / no C). Used by lunco-assets (asset verify) and
+# lunco-networking (scenario manifest revision digest + asset content
+# addressing on both server and web client).
+sha2 = "0.10"
+# IPLD content-addressing (IPFS interop). `cid` builds/renders CIDs;
+# `multihash-codetable` provides `Code::Sha2_256.digest(bytes)`. Both
+# pure-Rust and wasm32-safe — the web client verifies asset hashes
+# identically to native and the CIDs it pins are resolvable by `ipfs
+# get`/`ipfs pin`. Wire form is canonical CID bytes (see
+# lunco-networking/src/scenario.rs).
+cid = { version = "0.11", default-features = false, features = ["alloc", "serde"] }
+multihash-codetable = { version = "0.2", default-features = false, features = ["sha2"] }
 
 # ── Bevy sub-crates — pinned to the exact `bevy` version above ────────
 # These ship in lock-step with bevy; a skewed minor (e.g. bevy_reflect
@@ -308,8 +321,16 @@ disallowed_methods = "deny"
 # Bevy/avian/parry are unusably slow at opt-level 0. opt-level=1 on our
 # own crates + opt-level=3 on deps recovers most of release-mode runtime
 # speed for a one-time longer dep build (cached afterwards).
+#
+# debug + split-debuginfo: default `debug = true` (full DWARF) is what makes
+# native target/debug explode to 40G+ on Bevy/avian. line-tables-only keeps
+# file:line backtraces while dropping variable DWARF (~60% smaller target);
+# split-debuginfo=unpacked keeps debuginfo in side .dwo files instead of
+# copying it into every example binary. sccache does not affect target/ size.
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
 
 [profile.dev.package."*"]
 opt-level = 3

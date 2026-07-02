@@ -396,8 +396,12 @@ impl Twin {
     ///
     /// Sets `self.manifest` to the provided manifest and persists it. No-op
     /// on the file index (the files are the same; only the manifest
-    /// appeared).
+    /// appeared). Mints a [`uuid`](manifest::TwinManifest::uuid) on the
+    /// manifest if absent so the promoted Twin has a stable cross-session
+    /// identity from the moment it's saved.
     pub fn promote_to_twin(&mut self, manifest: TwinManifest) -> Result<(), TwinError> {
+        let mut manifest = manifest;
+        manifest.ensure_uuid();
         manifest.write(&self.root.join(MANIFEST_FILENAME))?;
         self.manifest = Some(manifest);
         Ok(())
@@ -500,6 +504,7 @@ version = "0.1.0"
             name: "promoted".into(),
             description: None,
             version: "0.1.0".into(),
+            uuid: None,
             default_perspective: None,
             children: vec![],
             usd: None,
@@ -512,7 +517,9 @@ version = "0.1.0"
         let TwinMode::Twin(twin2) = TwinMode::open(tmp.path()).unwrap() else {
             panic!("expected Twin mode after promotion");
         };
-        assert_eq!(twin2.manifest.unwrap().name, "promoted");
+        let m = twin2.manifest.unwrap();
+        assert_eq!(m.name, "promoted");
+        assert!(m.uuid.is_some(), "promote_to_twin must mint a uuid");
     }
 
     #[test]

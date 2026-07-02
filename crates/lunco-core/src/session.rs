@@ -679,6 +679,9 @@ impl Default for CommandPolicyRegistry {
         // their target (G4). Everything else stays OPEN.
         base.insert("DriveRover", CommandPolicy::OWNED_CONTROL);
         base.insert("BrakeRover", CommandPolicy::OWNED_CONTROL);
+        // H2 Fix: gate tutor/relay capabilities to Operator role by default
+        base.insert(capability::TUTOR_STATUS, CommandPolicy { min_role: AuthorityRole::Operator, ownership_gated: false });
+        base.insert(capability::SHARE_PERSPECTIVE, CommandPolicy { min_role: AuthorityRole::Operator, ownership_gated: false });
         Self { base, overrides: HashMap::new() }
     }
 }

@@ -17,7 +17,7 @@ required-features = ["networking"]
 default = []
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
-networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess"]
+networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess", "dep:uuid", "dep:sha2", "dep:cid", "dep:multihash-codetable"]
 # Client-prediction diagnostics (render-jitter / velocity / correction census in
 # `diagnostics.rs`). OFF by default → not compiled into normal/shipping builds.
 # Build with it when chasing netcode jitter; once compiled it's active unless
@@ -60,6 +60,9 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-controller = { path = "../lunco-controller" }
+# Scenario asset cache root (`cache_dir()`), for the Phase-3 client-side
+# `scenarios/<id>/` download target. Native + wasm-safe path helper.
+lunco-assets = { path = "../lunco-assets" }
 # Optional: only the Layer-4 `mod ui` (egui overlays) uses it, behind the `ui`
 # feature. Headless servers never link egui.
 bevy_egui = { workspace = true, optional = true }
@@ -74,6 +77,21 @@ serde_json = { workspace = true, optional = true }
 # Binary wire codec for the snapshot/envelope hot path (replaces serde_json there —
 # ~2x smaller, no field names). serde_json stays for the Reflect command payload.
 bincode = { workspace = true, optional = true }
+# Stable scenario identity (twin.toml uuid) carried on the
+# ScenarioManifest envelope; works on native + wasm (the workspace uuid
+# features pull a wasm-capable getrandom backend).
+uuid = { workspace = true, optional = true }
+# SHA-256 for the scenario manifest revision digest + per-asset content
+# addressing. Pure Rust → compiles on wasm32-unknown-unknown so the web
+# client verifies asset hashes identically to the native client.
+sha2 = { workspace = true, optional = true }
+# IPLD content-addressing (IPFS interop): asset ids are real CIDv1
+# (raw codec + sha2-256 multihash), resolvable by `ipfs get`/`ipfs pin`.
+# Wire form is canonical CID bytes; the `cid` crate is used at
+# build/parse/render boundaries (incl. base32 string for debug + the
+# JSON cache sidecar).
+cid = { workspace = true, optional = true }
+multihash-codetable = { workspace = true, optional = true }
 # URL-dialing WebTransport client IO (`wt_client`): lets the browser/native connect by
 # HOSTNAME (`https://sandbox.lunco.space:5888`) so a real CA cert validates with no
 # digest — lightyear's built-in IO only dials `https://{ip}`.

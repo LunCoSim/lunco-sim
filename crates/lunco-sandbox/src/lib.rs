@@ -973,11 +973,17 @@ fn setup_sandbox(world: &mut World) {
                 });
             }
         } else {
-            // It was loaded as Folder, create a default manifest
+            // It was loaded as Folder, create a default manifest.
+            // `uuid` is left `None`: this is an in-memory synthetic
+            // manifest for a folder with no `twin.toml`. The networking
+            // scenario-sync layer derives a stable id (path digest)
+            // when `uuid` is absent, so the server's scenario stays
+            // stable across restarts without writing a `twin.toml`.
             twin.manifest = Some(lunco_twin::TwinManifest {
                 name: twin_root.file_name().unwrap_or_default().to_string_lossy().into_owned(),
                 description: None,
                 version: "0.1.0".into(),
+                uuid: None,
                 default_perspective: None,
                 children: Vec::new(),
                 usd: Some(lunco_twin::UsdManifest {

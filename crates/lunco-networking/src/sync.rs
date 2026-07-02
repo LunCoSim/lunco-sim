@@ -226,6 +226,16 @@ pub struct InboundClientCtx<'w> {
     // Bundled here (vs a top-level param) to keep `drain_sync_inbox` within Bevy's
     // 16-argument system limit.
     view_centers: ResMut<'w, ViewCenters>,
+    // Client-side stash of the host's scenario manifest (filled by the
+    // `ScenarioManifest` arm). Bundled here for the same 16-arg-limit reason;
+    // host-side arms are no-ops.
+    remote_scenario: ResMut<'w, crate::scenario::RemoteScenarioManifest>,
+    // Phase-3 asset transfer queues (bundled for the same 16-arg reason). The
+    // arms only enqueue; the actual work runs in `crate::scenario_sync` systems.
+    // Client fills `incoming_chunks` (host arm is a no-op); host fills
+    // `pending_asset_requests` (client arm is a no-op).
+    incoming_chunks: ResMut<'w, crate::scenario_sync::IncomingAssetChunks>,
+    pending_asset_requests: ResMut<'w, crate::scenario_sync::PendingAssetRequests>,
 }
 
 /// Host → clients: the authoritative who-owns-what map (`gid → session`).
@@ -478,6 +488,21 @@ pub enum SyncEnvelope {
     Despawn(DespawnReplicationMsg),
     // Same positional-codec rule: append after `Despawn`. Client→host only.
     ViewCenter(ViewCenterMsg),
+    // ── Scenario distribution (appended LAST; see `scenario` mod) ──────────
+    // Same positional-bincode rule: appended after `ViewCenter` so all prior
+    // discriminants stay stable. A stale wasm client (no scenario support) vs a
+    // fresh host simply doesn't send/handle these — the variants are ignored,
+    // never shifted. Reserve all four now so Phase 3 (asset chunk transfer)
+    // needs no further enum edit; the handlers land then.
+    //
+    // Host → client: the scenario manifest (CID-addressed assets + revision).
+    ScenarioManifest(crate::scenario::ScenarioManifestMsg),
+    // Client → host: "I'm missing these CIDs, send bytes" (Phase 3).
+    AssetRequest(crate::scenario::AssetRequestMsg),
+    // Host → client: one chunk of an asset's bytes (Phase 3).
+    AssetChunk(crate::scenario::AssetChunkMsg),
+    // Peer → host: "I already have this CID" dedupe hint (Phase 3+).
+    AssetHave(crate::scenario::AssetHaveMsg),
 }
 
 // ── Resources (the contract `lunco-networking` touches) ───────────────────────
@@ -996,6 +1021,10 @@ pub fn drain_sync_inbox(
                 if role.is_host() {
                     continue;
                 }
+                if entities.resolve(&GlobalEntityId::from_raw(spawn.gid)).is_some() {
+                    warn!("[net] Spawn rejected: gid {} already exists in registry", spawn.gid);
+                    continue;
+                }
                 pending_spawns.0.push(ReplicatedSpawn {
                     gid: spawn.gid,
                     entry_id: spawn.entry_id,
@@ -1244,6 +1273,53 @@ pub fn drain_sync_inbox(
                 if msg.tutor_session != local.0 .0 {
                     tutor_status.one_shot_snap_request = Some(msg);
                 }
+            }
+            // ── Scenario distribution ───────────────────────────────────────
+            // Phase 1: the client stashes the host's manifest; the host ignores
+            // any client-sent manifest (only the host publishes the scenario).
+            // Phase 3 wires AssetRequest/AssetChunk/AssetHave handlers; until
+            // then they're recognized-but-no-op so the wire enum is exhaustive
+            // and the reserved discriminants stay stable for a future host.
+            SyncEnvelope::ScenarioManifest(m) => {
+                if !role.is_host() {
+                    let incoming_rev = m.revision;
+                    // Dedupe on the WHOLE manifest, not `revision` alone: a
+                    // scenario swap can keep byte-identical assets (⇒ identical
+                    // Merkle `revision`) while changing `scenario_id` /
+                    // `default_scene` / `name`. Keying only on `revision` would
+                    // silently drop that swap and leave the client on the old
+                    // scenario (Phase 4 would auto-load the wrong entry scene).
+                    let is_new = ctx.remote_scenario.manifest.as_ref() != Some(&m);
+                    if is_new {
+                        info!(
+                            "[net] scenario manifest received: {} assets, revision={:x?}",
+                            m.assets.len(),
+                            &incoming_rev[..4]
+                        );
+                        ctx.remote_scenario.manifest = Some(m);
+                        // Phase 3 will emit AssetRequest for missing CIDs here.
+                        // Phase 4 will trigger the scene load once assets land.
+                    }
+                }
+            }
+            SyncEnvelope::AssetRequest(req) => {
+                // Host queues the request (keyed on the TRUSTED connection-bound
+                // sender, never a wire-supplied id) for the off-thread
+                // `serve_asset_requests`. Clients ignore inbound requests — only
+                // the host serves scenario bytes.
+                if role.is_host() && !req.missing.is_empty() {
+                    ctx.pending_asset_requests.0.push((sender, req.missing));
+                }
+            }
+            SyncEnvelope::AssetChunk(chunk) => {
+                // Client queues the chunk for `reassemble_asset_chunks`. The host
+                // never ingests inbound chunks (it's the sole byte source).
+                if !role.is_host() {
+                    ctx.incoming_chunks.0.push(chunk);
+                }
+            }
+            SyncEnvelope::AssetHave(_) => {
+                // Phase 3+: host skips streaming an asset the peer already has.
             }
         }
     }
@@ -2549,6 +2625,21 @@ impl Plugin for SyncPlugin {
             .init_resource::<ReplicationState>()
             .init_resource::<PeerInterest>()
             .init_resource::<ViewCenters>()
+            // Scenario distribution: the client-side stash of the host's
+            // manifest (filled by the `ScenarioManifest` arm of
+            // `drain_sync_inbox`). Host-side publisher resource
+            // (`ScenarioManifestResource`) is initialized in `setup_host` —
+            // it's host-only and must not exist in single-player/client builds.
+            .init_resource::<crate::scenario::RemoteScenarioManifest>()
+            // Phase-3 asset transfer: the client-side download bookkeeping +
+            // inbound chunk queue, and the host-side request queue. All three are
+            // touched by the shared `drain_sync_inbox` (via `InboundClientCtx`) /
+            // client systems, so they must exist on every peer regardless of role.
+            // Host-only serve state (`HostAssetPaths`/`AssetServeTasks`) is
+            // initialized in `setup_host`.
+            .init_resource::<crate::scenario_sync::AssetDownloads>()
+            .init_resource::<crate::scenario_sync::IncomingAssetChunks>()
+            .init_resource::<crate::scenario_sync::PendingAssetRequests>()
             .register_settings_section::<CursorSettings>()
             .register_settings_section::<TutorialSettings>()
             .init_resource::<SyncChannelRegistry>()
@@ -2574,6 +2665,12 @@ impl Plugin for SyncPlugin {
                 // to `interest_hz`). The server-side `assemble_and_send_snapshots`
                 // routes pose updates by these sets.
                 recompute_interest,
+                // Scenario asset transfer (Phase 3), client-side: request missing
+                // assets when a new manifest lands, and reassemble+persist the
+                // chunks the host streams back. Both no-op on the host. The
+                // host-side serve/send pair is registered in `setup_host`.
+                crate::scenario_sync::request_missing_assets,
+                crate::scenario_sync::reassemble_asset_chunks,
             ))
             // `gather_snapshot` runs on the sim clock (`FixedPostUpdate`): it only
             // writes our `SyncOutbox` (never calls lightyear), so it's safe off the
@@ -2688,6 +2785,95 @@ mod codec_roundtrip {
         let despawn = serialize_env(&SyncEnvelope::Despawn(DespawnReplicationMsg { gid: 9 }))
             .expect("serialize");
         assert_eq!(&despawn[..4], &[11, 0, 0, 0], "Despawn must be the last variant");
+    }
+
+    #[test]
+    fn scenario_variants_appended_after_viewcenter_keep_discriminants_stable() {
+        // Same positional-bincode rule as `Despawn`: the four scenario variants
+        // are appended after `ViewCenter` (index 12) so no prior discriminant
+        // shifts. Lock the indices so a future mid-enum insert fails loudly
+        // instead of silently breaking a version-skewed peer (stale wasm bundle
+        // vs fresh host). ViewCenter=12, ScenarioManifest=13, AssetRequest=14,
+        // AssetChunk=15, AssetHave=16.
+        let viewcenter = serialize_env(&SyncEnvelope::ViewCenter(ViewCenterMsg {
+            pos: [0.0; 3],
+        }))
+        .expect("serialize");
+        assert_eq!(&viewcenter[..4], &[12, 0, 0, 0], "ViewCenter discriminant moved");
+
+        let manifest = SyncEnvelope::ScenarioManifest(crate::scenario::ScenarioManifestMsg {
+            scenario_id: [0u8; 16],
+            revision: [0u8; 32],
+            name: String::new(),
+            default_scene: None,
+            assets: Vec::new(),
+        });
+        let bytes = serialize_env(&manifest).expect("serialize");
+        assert_eq!(&bytes[..4], &[13, 0, 0, 0], "ScenarioManifest must be index 13");
+
+        let req = serialize_env(&SyncEnvelope::AssetRequest(crate::scenario::AssetRequestMsg {
+            missing: Vec::new(),
+        }))
+        .expect("serialize");
+        assert_eq!(&req[..4], &[14, 0, 0, 0], "AssetRequest must be index 14");
+
+        let chunk = serialize_env(&SyncEnvelope::AssetChunk(crate::scenario::AssetChunkMsg {
+            cid: Vec::new(),
+            offset: 0,
+            total: 0,
+            data: Vec::new(),
+        }))
+        .expect("serialize");
+        assert_eq!(&chunk[..4], &[15, 0, 0, 0], "AssetChunk must be index 15");
+
+        let have = serialize_env(&SyncEnvelope::AssetHave(crate::scenario::AssetHaveMsg {
+            cid: Vec::new(),
+        }))
+        .expect("serialize");
+        assert_eq!(&have[..4], &[16, 0, 0, 0], "AssetHave must be index 16");
+    }
+
+    #[test]
+    fn scenario_manifest_envelope_roundtrips() {
+        use crate::scenario::{cid_for_content, scenario_revision, ScenarioAsset, ScenarioManifestMsg};
+        // A realistic manifest: two assets with real CIDs + a computed revision.
+        let assets = vec![
+            ScenarioAsset {
+                path: "scenes/main.usda".into(),
+                cid: cid_for_content(b"#usda 1.0\n").to_bytes(),
+                size: 10,
+                media_type: Some("model/vnd.usd".into()),
+            },
+            ScenarioAsset {
+                path: "assets/rover.glb".into(),
+                cid: cid_for_content(b"glb bytes").to_bytes(),
+                size: 9,
+                media_type: None,
+            },
+        ];
+        let rev = scenario_revision(&assets);
+        let env = SyncEnvelope::ScenarioManifest(ScenarioManifestMsg {
+            scenario_id: [0xAB; 16],
+            revision: rev,
+            name: "lunar_base".into(),
+            default_scene: Some("scenes/main.usda".into()),
+            assets,
+        });
+        let back = deserialize_env(&serialize_env(&env).expect("serialize")).expect("deserialize");
+        match back {
+            SyncEnvelope::ScenarioManifest(m) => {
+                assert_eq!(m.scenario_id, [0xAB; 16]);
+                assert_eq!(m.revision, rev);
+                assert_eq!(m.name, "lunar_base");
+                assert_eq!(m.default_scene.as_deref(), Some("scenes/main.usda"));
+                assert_eq!(m.assets.len(), 2);
+                // The CIDs survive the round-trip verbatim (canonical bytes).
+                assert_eq!(m.assets[0].path, "scenes/main.usda");
+                assert_eq!(m.assets[0].cid.len(), 36);
+                assert_eq!(m.assets[1].size, 9);
+            }
+            _ => panic!("wrong variant after round-trip"),
+        }
     }
 
     #[test]

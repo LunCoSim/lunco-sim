@@ -138,6 +138,13 @@ pub enum SyncChannel {
     /// rover throttle, manual joystick input, live parameter scrubs,
     /// presence cursors. This is AGENTS.md §4.2 made declarative.
     ControlStream,
+    /// **BulkData** — reliable + ordered like [`Self::CommandBus`], but a
+    /// *separate* lane for large, non-latency-critical payloads: the scenario
+    /// manifest and (future) content-addressed asset transfers. Kept off the
+    /// CommandBus so a big manifest / multi-MB asset stream can't
+    /// head-of-line-block join-critical traffic (Handshake, Ownership,
+    /// possession, spawn). File-transfer analogue to the interactive command bus.
+    BulkData,
 }
 
 /// Wire-shape carrier for a mutation. The payload is whatever the

@@ -31,7 +31,7 @@ path = "src/bin/build_msl_assets.rs"
 # Desktop-only: HTTP client for asset downloads, tarball extraction, hashing
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { workspace = true }
-sha2 = "0.10"
+sha2 = { workspace = true }
 # `which` is used by the glb process step to verify that `npx`
 # (Node.js) is on PATH before shelling out to gltf-transform. Native
 # only — the wasm path doesn't run process steps.
