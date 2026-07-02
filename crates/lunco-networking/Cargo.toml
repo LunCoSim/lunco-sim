@@ -17,7 +17,7 @@ required-features = ["networking"]
 default = []
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
-networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess", "dep:uuid", "dep:sha2", "dep:cid", "dep:multihash-codetable", "dep:crossbeam-channel"]
+networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess", "dep:uuid", "dep:sha2", "dep:cid", "dep:multihash-codetable", "dep:crossbeam-channel", "dep:lunco-twin"]
 # Client-prediction diagnostics (render-jitter / velocity / correction census in
 # `diagnostics.rs`). OFF by default → not compiled into normal/shipping builds.
 # Build with it when chasing netcode jitter; once compiled it's active unless
@@ -59,6 +59,10 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-doc = { path = "../lunco-doc" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-workspace = { path = "../lunco-workspace" }
+# Promote a downloaded scenario → editable on-disk Twin (`PromoteScenario`):
+# `TwinMode::open` + `Twin::promote_to_twin` (writes `twin.toml`). Native-only in
+# effect (web has no folder fs). Optional — only the `networking` build uses it.
+lunco-twin = { path = "../lunco-twin", optional = true }
 lunco-controller = { path = "../lunco-controller" }
 # Scenario asset cache root (`cache_dir()`), for the Phase-3 client-side
 # `scenarios/<id>/` download target. Native + wasm-safe path helper.

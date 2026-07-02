@@ -2699,6 +2699,9 @@ impl Plugin for SyncPlugin {
             // which also records after writeback in `FixedPostUpdate`.
             .add_systems(FixedPostUpdate, gather_snapshot.after(PhysicsSystems::Writeback));
         register_all_commands(app);
+        // Scenario-distribution commands (PromoteScenario) — its own
+        // `register_commands!` set in the `scenario_sync` module.
+        crate::scenario_sync::register_all_commands(app);
     }
 }
 

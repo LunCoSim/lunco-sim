@@ -146,11 +146,12 @@ pub fn scenario_cache_root(scenario_id: &[u8; 16]) -> PathBuf {
     lunco_assets::cache_dir().join("scenarios").join(hex16(scenario_id))
 }
 
-/// Resolve a manifest asset's relative path to its on-disk cache location,
-/// **rejecting path traversal** (`..`, absolute, or backslash segments) — the
-/// path comes from a remote host and must never escape the scenario cache root.
-fn scenario_asset_path(scenario_id: &[u8; 16], rel: &str) -> Option<PathBuf> {
-    let mut p = scenario_cache_root(scenario_id);
+/// A safe *relative* `PathBuf` from a `/`-separated manifest asset path,
+/// **rejecting traversal** (empty / `.` / `..` / backslash segments) — the path
+/// comes from a remote host and must never escape a target root. `None` if unsafe
+/// or empty.
+fn safe_rel_path(rel: &str) -> Option<PathBuf> {
+    let mut p = PathBuf::new();
     for seg in rel.split('/') {
         if seg.is_empty() || seg == "." || seg == ".." || seg.contains('\\') {
             warn!("[net] rejecting unsafe scenario asset path: {rel:?}");
@@ -158,7 +159,13 @@ fn scenario_asset_path(scenario_id: &[u8; 16], rel: &str) -> Option<PathBuf> {
         }
         p.push(seg);
     }
-    Some(p)
+    (!p.as_os_str().is_empty()).then_some(p)
+}
+
+/// Resolve a manifest asset's relative path to its on-disk cache location under
+/// [`scenario_cache_root`], traversal-guarded via [`safe_rel_path`].
+fn scenario_asset_path(scenario_id: &[u8; 16], rel: &str) -> Option<PathBuf> {
+    Some(scenario_cache_root(scenario_id).join(safe_rel_path(rel)?))
 }
 
 fn hex16(b: &[u8; 16]) -> String {
@@ -425,6 +432,117 @@ fn read_and_chunk(jobs: Vec<(Vec<u8>, PathBuf)>) -> Vec<AssetChunkMsg> {
     }
     out
 }
+
+// ── Promote: downloaded (read-only) scenario → editable on-disk Twin ──────────
+
+/// Command: materialize the currently-loaded downloaded scenario into an
+/// **editable** on-disk Twin at `folder`, add it to the workspace, and swap the
+/// running scene to it. The counterpart to the default read-only consume — "keep
+/// & edit this scenario". Empty `folder` = a GUI should present a folder picker
+/// first. Native-only in effect: web has no ambient folder filesystem (File
+/// System Access is a TODO); the wasm path logs and no-ops.
+///
+/// Local action (not networked) — it promotes *this* peer's local download.
+#[lunco_core::Command(default)]
+pub struct PromoteScenario {
+    /// Target folder that becomes the new Twin's root.
+    pub folder: String,
+}
+
+#[lunco_core::on_command(PromoteScenario)]
+fn on_promote_scenario(
+    trigger: On<PromoteScenario>,
+    remote: Res<RemoteScenarioManifest>,
+    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
+    mut commands: Commands,
+) {
+    let folder = trigger.event().folder.clone();
+    if folder.is_empty() {
+        warn!("[promote] no target folder given (a GUI should present a folder picker first)");
+        return;
+    }
+    let Some(manifest) = remote.manifest.clone() else {
+        warn!("[promote] no downloaded scenario to promote");
+        return;
+    };
+    promote_scenario_to_folder(&manifest, &folder, &mut workspace, &mut commands);
+}
+
+/// Materialize + promote (native). Copies each manifest asset from the scenario
+/// cache into `folder` through the storage API (no raw dir walk — only the
+/// scenario's own assets), writes a `twin.toml` that **preserves the scenario
+/// identity as the Twin uuid** (so a future re-download / bidirectional sync
+/// recognizes it), then `add_twin` + `TwinAdded` — which the USD observer turns
+/// into a `twin://` scene load, replacing the read-only `scenario://` view.
+#[cfg(not(target_arch = "wasm32"))]
+fn promote_scenario_to_folder(
+    manifest: &ScenarioManifestMsg,
+    folder: &str,
+    workspace: &mut lunco_workspace::WorkspaceResource,
+    commands: &mut Commands,
+) {
+    let target = PathBuf::from(folder);
+    let cache_root = scenario_cache_root(&manifest.scenario_id);
+    for asset in &manifest.assets {
+        let Some(rel) = safe_rel_path(&asset.path) else {
+            error!("[promote] unsafe asset path {:?}; aborting", asset.path);
+            return;
+        };
+        let src = cache_root.join(&rel);
+        let dst = target.join(&rel);
+        let bytes = match lunco_storage::read_file_sync(&src) {
+            Ok(b) => b,
+            Err(e) => {
+                error!("[promote] read cached asset {src:?}: {e}");
+                return;
+            }
+        };
+        if let Err(e) = lunco_storage::write_file_sync(&dst, &bytes) {
+            error!("[promote] write {dst:?}: {e}");
+            return;
+        }
+    }
+
+    let mut tm = lunco_twin::TwinManifest::new(manifest.name.clone());
+    tm.uuid = Some(uuid::Uuid::from_bytes(manifest.scenario_id));
+    tm.usd = Some(lunco_twin::UsdManifest {
+        default_scene: manifest.default_scene.clone(),
+    });
+
+    let mut twin = match lunco_twin::TwinMode::open(&target) {
+        Ok(lunco_twin::TwinMode::Folder(t)) | Ok(lunco_twin::TwinMode::Twin(t)) => t,
+        Ok(lunco_twin::TwinMode::Orphan(_)) => {
+            error!("[promote] {target:?} is a file, not a folder");
+            return;
+        }
+        Err(e) => {
+            error!("[promote] open {target:?}: {e}");
+            return;
+        }
+    };
+    if let Err(e) = twin.promote_to_twin(tm) {
+        error!("[promote] write twin.toml in {target:?}: {e}");
+        return;
+    }
+    let id = workspace.add_twin(twin);
+    commands.trigger(lunco_workspace::TwinAdded { twin: id });
+    info!(
+        "[promote] scenario '{}' promoted to editable Twin at {target:?}",
+        manifest.name
+    );
+}
+
+#[cfg(target_arch = "wasm32")]
+fn promote_scenario_to_folder(
+    _manifest: &ScenarioManifestMsg,
+    _folder: &str,
+    _workspace: &mut lunco_workspace::WorkspaceResource,
+    _commands: &mut Commands,
+) {
+    warn!("[promote] promotion needs a native filesystem folder; web (File System Access) is a TODO");
+}
+
+lunco_core::register_commands!(on_promote_scenario);
 
 #[cfg(test)]
 mod tests {
