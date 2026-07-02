@@ -230,6 +230,24 @@ fn apply_dynamic_fields(component: &mut dyn bevy::reflect::Reflect, fields: &Map
 
 // ── Engine construction ────────────────────────────────────────────────────
 
+/// Whether scenarios run in DEBUG mode (autopilots on, verbose narration, …).
+/// Defaults to the build profile; `LUNCO_SCENARIO_DEBUG=1|0` (or true/false)
+/// overrides at runtime with no rebuild. Backs the rhai `is_debug()`/`env()` verbs.
+///
+/// Resolved ONCE and cached in a `OnceLock`: the cfg check + env-var read happen
+/// on the first call only, so a scenario polling `is_debug()` every tick pays just
+/// an atomic load, not an allocation/env lookup per frame. (The environment is
+/// fixed at launch, so caching is correct — "dynamic" means no rebuild, not
+/// per-frame mutation.)
+fn scenario_debug() -> bool {
+    static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DEBUG.get_or_init(|| match std::env::var("LUNCO_SCENARIO_DEBUG").ok().as_deref() {
+        Some("1") | Some("true") => true,
+        Some("0") | Some("false") => false,
+        _ => cfg!(debug_assertions),
+    })
+}
+
 /// Ergonomic policy wrappers (drive/distance/arrived/...), authored in rhai and
 /// embedded at compile time so they're available with zero IO on every target
 /// (incl. wasm). Edit `rhai/prelude.rhai` — no Rust change needed for new helpers.
@@ -486,6 +504,22 @@ pub fn build_world_engine() -> Engine {
     // the fixed clock's elapsed time (advances only while the sim steps), 0.0 if
     // unavailable.
     engine.register_fn("elapsed_seconds", || -> f64 { bridge_core::elapsed_seconds() });
+
+    // is_debug() -> bool / env(key) -> bool — the SCENARIO ENVIRONMENT, so a
+    // script can branch on it: `if is_debug() { autopilot() }` runs an autopilot in
+    // debug and lets a human play in release. Defaults to the BUILD PROFILE
+    // (`cfg!(debug_assertions)` — true under `cargo run`, false under `--release`),
+    // overridable AT RUNTIME with no rebuild via `LUNCO_SCENARIO_DEBUG=1|0`, so a
+    // release build can force-enable a debug scenario and vice-versa. Callable from
+    // any function (verbs are global, unlike the `params`/`env` scope constants).
+    engine.register_fn("is_debug", || -> bool { scenario_debug() });
+    engine.register_fn("env", |key: &str| -> bool {
+        match key {
+            "debug" => scenario_debug(),
+            "release" => !scenario_debug(),
+            _ => false,
+        }
+    });
 
     // rand() -> f64 in [0,1) — DETERMINISTIC: seeded per hook from (entity, tick,
     // hook), so it's identical on every networked peer and every re-run/replay.

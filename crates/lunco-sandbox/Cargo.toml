@@ -101,6 +101,7 @@ lunco-doc = { path = "../lunco-doc", optional = true }
 lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-ui = { path = "../lunco-ui", optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-tutorial = { path = "../lunco-tutorial", optional = true }
 bevy_egui = { workspace = true, optional = true }
 # `default-features = false` so the native (`lunco-api`) and web (`web`)
 # features choose the transport: `transport-http` (axum/TcpListener) vs.
@@ -152,6 +153,7 @@ ui = [
     "lunco-networking?/ui",
     "lunco-api?/winit",
     "dep:lunco-workbench",
+    "dep:lunco-tutorial",
     "dep:lunco-materials",
     "dep:lunco-doc",
     "dep:lunco-theme",

@@ -7093,6 +7093,7 @@ dependencies = [
  "lunco-terrain-globe",
  "lunco-terrain-surface",
  "lunco-theme",
+ "lunco-tutorial",
  "lunco-twin",
  "lunco-ui",
  "lunco-usd",
@@ -7269,6 +7270,20 @@ version = "0.1.0"
 dependencies = [
  "lunco-tools",
  "rhai",
+]
+
+[[package]]
+name = "lunco-tutorial"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "lunco-api",
+ "lunco-core",
+ "lunco-settings",
+ "lunco-workbench",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

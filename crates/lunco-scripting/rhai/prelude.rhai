@@ -67,26 +67,45 @@ fn arrived(entity, target, radius) {
 // reads + the DriveRover command. Tune or replace freely; no Rust rebuild.
 
 /// Signed steer command in [-1, 1] that turns `entity` toward world point
-/// `target`. Sign from the yaw-plane (up = +Y) cross product of heading × goal.
+/// `target`, matched to the SKID-drive sign convention: the drive mixes
+/// `left = drive + steer`, so `+steer` yaws toward the RIGHT (the slower side).
+/// A yaw-plane cross `cy = (heading × goal).y > 0` means the target is to the
+/// LEFT, so we steer `-cy` to turn toward it. When the target is BEHIND
+/// (`dot < 0`) the cross collapses to ~0, so force a hard turn toward its side —
+/// otherwise the rover drives straight past forever. Gain 2.5 + clamp = firm turn.
 fn steer_to(entity, target) {
     let p = world_pos(entity);
     let f = world_forward(entity);
     if p == () || f == () { return 0.0; }
     let to  = vnorm(vsub(target, p));
     let fwd = vnorm(f);
-    let cross = vcross(fwd, to);
-    clamp(cross[1], -1.0, 1.0)   // +Y component = left/right yaw error
+    let cy  = vcross(fwd, to)[1];
+    let dot = vdot(fwd, to);
+    if dot < 0.0 {
+        if cy >= 0.0 { -1.0 } else { 1.0 }   // target behind → hard turn toward it
+    } else {
+        clamp(-cy * 2.5, -1.0, 1.0)          // skid: +steer yaws right, so negate
+    }
 }
 
 /// Drive `entity` toward world point `target` at `speed`. Returns true once
-/// within `radius` (and brakes). The core per-tick navigation primitive.
-/// (Named `nav_to`, not `goto` — `goto` is a reserved word in rhai.)
+/// within `radius` (and brakes). Eases the throttle down while poorly aligned so
+/// the rover PIVOTS toward the goal instead of arcing wide past it. The core
+/// per-tick navigation primitive. (Named `nav_to`, not `goto` — reserved word.)
 fn nav_to(entity, target, speed, radius) {
     if arrived(entity, target, radius) {
         brake(entity);
         return true;
     }
-    drive(entity, speed, steer_to(entity, target));
+    let steer = steer_to(entity, target);
+    let p = world_pos(entity);
+    let f = world_forward(entity);
+    let fwd = speed;
+    if p != () && f != () {
+        let dot = vdot(vnorm(f), vnorm(vsub(target, p)));
+        fwd = speed * clamp(0.25 + 0.75 * dot, 0.25, 1.0);
+    }
+    drive(entity, fwd, steer);
     false
 }
 
@@ -340,11 +359,20 @@ fn __run_task(me) {
 /// Engine driver — buffer an event name for `this.task`'s `wait_for` leaves to
 /// consume on the next advance. Called by the runtime per delivered event.
 fn __note_task_event(me, evt) {
-    if this.task == () { return; }
-    if this.__events == () { this.__events = []; }
+    if evt.name == () { return; }
+    let e = #{ name: evt.name, source: evt.source };
     // Buffer name + emitter source so `wait_for` (name) and `wait_for_from`
     // (name + source) can both match against this tick's events.
-    if evt.name != () { this.__events.push(#{ name: evt.name, source: evt.source }); }
+    if this.task != () {
+        if this.__events == () { this.__events = []; }
+        this.__events.push(e);
+    }
+    // Independent buffer for a declarative `mission(me)`'s `requires_event`
+    // objectives — so event-gated steps work whether or not a task is running.
+    if this.mission != () {
+        if this.__mevents == () { this.__mevents = []; }
+        this.__mevents.push(e);
+    }
 }
 
 /// SUGAR — define a `task(me)` function returning a node and the engine runs it
@@ -380,21 +408,34 @@ fn __init_task(me) {
 //   }
 // A scenario may run a `task` (behaviour) AND a `mission` (success tracking).
 
-/// One objective. `spec` keys (all optional but usually `done`): `done` (|m| bool
-/// completion), `dwell` (secs the condition must hold), `fail` (|m| bool failure),
-/// `requires` (array of objective ids that must complete first), `on_complete`
-/// (|m| side-effect when it completes).
+/// One objective. `spec` keys (all optional but usually `done` or
+/// `requires_event`): `text` (human label for the HUD, defaults to `id`), `done`
+/// (|m| bool completion), `requires_event` (event NAME whose arrival completes
+/// the objective — e.g. `"cmd:PossessVessel"` to advance when the user possesses
+/// a vessel; latched, so it may combine with `done`), `dwell` (secs the
+/// condition must hold), `fail` (|m| bool failure), `requires` (array of
+/// objective ids that must complete first), `on_complete` (|m| side-effect when
+/// it completes).
 fn objective(id, spec) {
     #{
         id: id,
+        text: if spec.text != () { spec.text } else { id },
         done: spec.done,
+        requires_event: spec.requires_event,
         dwell: spec.dwell,
         fail: spec.fail,
         requires: if spec.requires != () { spec.requires } else { [] },
         on_complete: spec.on_complete,
         state: "pending",   // pending → active → complete | failed
         t0: (),             // dwell entry time
+        __evfired: false,   // requires_event latch (event seen at least once)
     }
+}
+
+/// True if any buffered event this tick has name `want`.
+fn __obj_saw_event(evs, want) {
+    for e in evs { if e.name == want { return true; } }
+    false
 }
 
 /// State of objective `id` within mission list `m`, or () if absent.
@@ -410,6 +451,8 @@ fn __obj_ready(m, requires) {
 }
 
 /// Advance one ACTIVE objective: fail check → completion (with optional dwell).
+/// Completion requires the `done` closure (if any) AND the `requires_event`
+/// latch (if any); an objective with neither completes immediately (narration).
 fn __advance_objective(me, o, now) {
     if o.fail != () && o.fail.call(me) {
         o.state = "failed";
@@ -417,6 +460,7 @@ fn __advance_objective(me, o, now) {
         return o;
     }
     let met = o.done == () || o.done.call(me);
+    if o.requires_event != () { met = met && (o.__evfired == true); }
     if !met { o.t0 = (); return o; }          // condition broke → reset dwell
     if o.dwell != () {
         if o.t0 == () { o.t0 = now; }
@@ -428,10 +472,11 @@ fn __advance_objective(me, o, now) {
     o
 }
 
-/// Tick one objective: unlock from pending when its requires are met, then
-/// advance if active. Returns the updated objective.
-fn __tick_objective(me, o, m, now) {
+/// Tick one objective: latch any matching event, unlock from pending when its
+/// requires are met, then advance if active. Returns the updated objective.
+fn __tick_objective(me, o, m, now, evs) {
     if o.state == "complete" || o.state == "failed" { return o; }
+    if o.requires_event != () && __obj_saw_event(evs, o.requires_event) { o.__evfired = true; }
     if o.state == "pending" && __obj_ready(m, o.requires) { o.state = "active"; }
     if o.state == "active" { o = __advance_objective(me, o, now); }
     o
@@ -454,18 +499,34 @@ fn __mission_status(m) {
 /// on_tick; no-op when no mission was declared. Emits MISSION_COMPLETE /
 /// MISSION_FAILED once when the mission resolves.
 fn __run_mission(me) {
-    if this.mission == () { return; }
+    if this.mission == () { this.__mevents = []; return; }
     let now = elapsed_seconds();
+    let evs = if this.__mevents == () { [] } else { this.__mevents };
     let m = this.mission;
     for i in 0..m.len() {
-        m[i] = __tick_objective(me, m[i], m, now);
+        m[i] = __tick_objective(me, m[i], m, now, evs);
     }
     this.mission = m;
+    this.__mevents = [];   // events live one tick (actor-model cadence)
+    // Auto-publish the objectives checklist to the tutorial HUD when it changes,
+    // so a declarative `mission(me)` renders on screen with no extra scripting.
+    let hud = __mission_hud(m);
+    if this.__hud_obj != hud { this.__hud_obj = hud; cmd("SetObjectives", #{ text: hud }); }
     let s = __mission_status(m);
     if this.__mission_done != true {
         if s.any_failed { this.__mission_done = true; emit("MISSION_FAILED", 0); }
         else if s.all_done { this.__mission_done = true; emit("MISSION_COMPLETE", 0); }
     }
+}
+
+/// Format a mission's objectives into the HUD checklist block (glyph per state).
+fn __mission_hud(m) {
+    let out = "";
+    for o in m {
+        if out != "" { out += "\n"; }
+        out += __obj_glyph(o.state) + " " + o.text;
+    }
+    out
 }
 
 /// Engine driver — called once after on_start; seeds `this.mission` from a user
@@ -548,6 +609,50 @@ fn possess(vessel)             { cmd("PossessVessel", #{ target: vessel }) }
 // each phase without any Rust — drawn by the avatar UI overlay, logged headless.
 fn notify(msg)                 { cmd("ShowNotification", #{ text: msg }) }
 fn notify_kind(msg, kind)      { cmd("ShowNotification", #{ text: msg, kind: kind }) }
+
+// ── Tutorial HUD: PERSISTENT instructions/objectives + widget spotlight ──────
+//
+// Unlike notify() toasts (which fade after a few seconds), these stay on screen
+// until changed or cleared — so a tutorial can hold a hint up while the user
+// acts, show a live objectives checklist, and point at a workbench widget.
+// Rendered by lunco-workbench's tutorial_overlay (sandbox + lunica both load it).
+
+/// Set the persistent one-line hint at the top of the HUD.
+fn hint(msg)                   { cmd("SetHint", #{ text: msg }) }
+/// Clear the hint line.
+fn clear_hint()                { cmd("SetHint", #{ text: "" }) }
+/// Spotlight a workbench widget by its HelpAnchors key, with a caption.
+fn spotlight(anchor, caption)  { cmd("Spotlight", #{ anchor: anchor, text: caption }) }
+/// Remove any active spotlight.
+fn clear_spotlight()           { cmd("ClearSpotlight") }
+
+/// Glyph for an objective state: pending •, active ▸, complete ✓, failed ✗.
+fn __obj_glyph(state) {
+    if state == "complete" { "✓" }
+    else if state == "failed" { "✗" }
+    else if state == "active" { "▸" }
+    else { "•" }
+}
+
+/// Publish an objectives checklist to the HUD. `list` is an array of
+/// `#{ text, state }` (state ∈ "pending"|"active"|"complete"|"failed"). Use this
+/// for hand-driven step lists; a declarative `mission(me)` publishes itself.
+fn objectives_hud(list) {
+    let out = "";
+    for o in list {
+        let txt = if o.text != () { o.text } else { o.id };
+        let st  = if o.state != () { o.state } else { "pending" };
+        if out != "" { out += "\n"; }
+        out += __obj_glyph(st) + " " + txt;
+    }
+    cmd("SetObjectives", #{ text: out });
+}
+/// Clear the objectives checklist.
+fn clear_objectives()          { cmd("SetObjectives", #{ text: "" }) }
+
+/// Enable/disable a simulation subsystem at runtime (progressive fidelity ramp).
+/// `name` ∈ "thermal" | "comms-degradation" | "obstacle-field" (see lunco-core).
+fn set_subsystem(name, on)     { cmd("SetSubsystemEnabled", #{ name: name, on: on }) }
 
 // Event-source helpers. `evt.source` is the EMITTER's gid — which sensor/script
 // fired — so ONE `on_event` can branch per source (e.g. many checkpoints all
