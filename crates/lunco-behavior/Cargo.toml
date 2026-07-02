@@ -1,0 +1,15 @@
+[package]
+name = "lunco-behavior"
+version = "0.1.0"
+edition = "2021"
+description = "Language- and engine-agnostic behaviour-tree kernel (node model + tick traversal + event-match predicates). No rhai/python/avian/bevy dependency."
+
+# Intentionally DEPENDENCY-FREE: the whole point of the crate is that the autonomy
+# mechanism is decoupled from every scripting runtime and from the engine. The
+# scripting layer supplies a `Ctx` (world access + callable invocation) and drives
+# the same tree. Do NOT add rhai / pyo3 / avian / bevy here.
+
+[dependencies]
+
+[lints]
+workspace = true

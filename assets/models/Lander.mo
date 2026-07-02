@@ -47,12 +47,14 @@ model Lander
   input Real g = 1.62 "Local gravity (m/s^2)";
   input Real engine_enable = 1.0 "1 = engine armed, 0 = cut";
 
-  // ── Manual Override Inputs ──
-  input Real manual = 0.0 "1 = manual control active, 0 = GNC active";
-  input Real manual_throttle = 0.0 "Player vertical thrust command 0..1";
-  input Real manual_pitch = 0.0 "Player pitch rate command -1..1";
-  input Real manual_roll = 0.0 "Player roll rate command -1..1";
-  input Real manual_yaw = 0.0 "Player yaw rate command -1..1";
+  // ── External command inputs ──
+  // Written by whoever holds control THIS tick — the player, or an autopilot
+  // layer. Auto-vs-manual arbitration lives in that external layer, not here:
+  // this model just actuates the commands it's given.
+  input Real external_throttle = 0.0 "Vertical thrust command 0..1";
+  input Real pitch = 0.0 "Pitch rate command -1..1";
+  input Real roll = 0.0 "Roll rate command -1..1";
+  input Real yaw = 0.0 "Yaw rate command -1..1";
 
   // ── Propellant State ──
   Real m_prop(start = 2000.0) "Propellant remaining (kg)";
@@ -81,20 +83,11 @@ model Lander
   Real f_world_x, f_world_y, f_world_z;
   Real t_world_x, t_world_y, t_world_z;
 
-  // GNC (autonomous) world outputs
-  Real gnc_force_x, gnc_force_y, gnc_force_z;
-  Real gnc_torque_x, gnc_torque_y, gnc_torque_z;
-
-  // ── Intermediate variables ──
-  Real dx, dy, dz;
-  Real dist;
-  Real ux, uy, uz;
-  Real target_speed;
-  Real desired_vx, desired_vy, desired_vz;
-
-  Real dot;
-  Real actual_target_qw, actual_target_qx, actual_target_qy, actual_target_qz;
-  Real q_err_x, q_err_y, q_err_z;
+  // NOTE: the autonomous GNC (position/attitude PD tracking) has moved OUT of
+  // this model — auto guidance is now an external layer that writes the same
+  // command inputs above. This model is a pure commands -> world force/torque
+  // actuator. The GNC-only physics inputs (pos_*, vel_*, target_*, w_*, g, …)
+  // and gains are retained but unused, so `simWires` need not change.
 
 equation
   // Propellant bookkeeping
@@ -103,52 +96,12 @@ equation
   throttle = thrust / max_thrust;
 
   // 1. Spool-up/control lag filters (tau = 0.4s)
-  der(filter_throttle) = (manual_throttle - filter_throttle) / 0.4;
-  der(filter_pitch) = (manual_pitch - filter_pitch) / 0.4;
-  der(filter_roll) = (manual_roll - filter_roll) / 0.4;
-  der(filter_yaw) = (manual_yaw - filter_yaw) / 0.4;
+  der(filter_throttle) = (external_throttle - filter_throttle) / 0.4;
+  der(filter_pitch) = (pitch - filter_pitch) / 0.4;
+  der(filter_roll) = (roll - filter_roll) / 0.4;
+  der(filter_yaw) = (yaw - filter_yaw) / 0.4;
 
-  // 2. Position tracking equations (GNC)
-  dx = target_x - pos_x;
-  dy = (target_y + 5.0) - altitude; // 5.0m leg offset from ground-distance
-  dz = target_z - pos_z;
-
-  dist = sqrt(dx*dx + dy*dy + dz*dz);
-  ux = if dist > 0.01 then dx / dist else 0.0;
-  uy = if dist > 0.01 then dy / dist else 0.0;
-  uz = if dist > 0.01 then dz / dist else 0.0;
-
-  // Deceleration ramp within 5m
-  target_speed = if dist >= 5.0 then speed
-                 else speed * (dist / 5.0);
-
-  desired_vx = ux * target_speed;
-  desired_vy = uy * target_speed;
-  desired_vz = uz * target_speed;
-
-  // GNC (autonomous) world forces (including gravity feedforward on Y)
-  gnc_force_x = vehicle_mass * kp_pos * (desired_vx - vel_x);
-  gnc_force_y = vehicle_mass * kp_pos * (desired_vy - vel_y) + vehicle_mass * g;
-  gnc_force_z = vehicle_mass * kp_pos * (desired_vz - vel_z);
-
-  // 3. Rotation tracking equations (GNC)
-  dot = target_qw*q_w + target_qx*q_x + target_qy*q_y + target_qz*q_z;
-  actual_target_qw = if dot >= 0.0 then target_qw else -target_qw;
-  actual_target_qx = if dot >= 0.0 then target_qx else -target_qx;
-  actual_target_qy = if dot >= 0.0 then target_qy else -target_qy;
-  actual_target_qz = if dot >= 0.0 then target_qz else -target_qz;
-
-  // Vector part of relative rotation: q_err = q_target * q_current_inv
-  q_err_x = actual_target_qx*q_w - actual_target_qw*q_x - actual_target_qy*q_z + actual_target_qz*q_y;
-  q_err_y = actual_target_qy*q_w - actual_target_qw*q_y - actual_target_qz*q_x + actual_target_qx*q_z;
-  q_err_z = actual_target_qz*q_w - actual_target_qw*q_z - actual_target_qx*q_y + actual_target_qy*q_x;
-
-  // GNC (autonomous) world torques
-  gnc_torque_x = 3000.0 * (kp_rot * q_err_x - kd_rot * w_x);
-  gnc_torque_y = 3000.0 * (kp_rot * q_err_y - kd_rot * w_y);
-  gnc_torque_z = 3000.0 * (kp_rot * q_err_z - kd_rot * w_z);
-
-  // 4. Local manual force & torque generation
+  // 2. Local command force & torque generation
   f_loc_x = 0.0;
   f_loc_y = filter_throttle * max_thrust;
   f_loc_z = 0.0;
@@ -168,12 +121,13 @@ equation
   t_world_y = t_loc_y + 2.0 * (q_z * (q_y * t_loc_z - q_z * t_loc_y + q_w * t_loc_x) - q_x * (q_x * t_loc_y - q_y * t_loc_x + q_w * t_loc_z));
   t_world_z = t_loc_z + 2.0 * (q_x * (q_z * t_loc_x - q_x * t_loc_z + q_w * t_loc_y) - q_y * (q_y * t_loc_z - q_z * t_loc_y + q_w * t_loc_x));
 
-  // 7. Select engine mode (GNC vs Manual override)
-  force_x = engine_enable * (if manual > 0.5 then f_world_x else gnc_force_x);
-  force_y = engine_enable * (if manual > 0.5 then f_world_y else gnc_force_y);
-  force_z = engine_enable * (if manual > 0.5 then f_world_z else gnc_force_z);
+  // 7. Actuate the commanded force/torque (gated only by engine_enable). Auto
+  //    vs. manual is decided by whichever external layer writes the commands.
+  force_x = engine_enable * f_world_x;
+  force_y = engine_enable * f_world_y;
+  force_z = engine_enable * f_world_z;
 
-  torque_x = engine_enable * (if manual > 0.5 then t_world_x else gnc_torque_x);
-  torque_y = engine_enable * (if manual > 0.5 then t_world_y else gnc_torque_y);
-  torque_z = engine_enable * (if manual > 0.5 then t_world_z else gnc_torque_z);
+  torque_x = engine_enable * t_world_x;
+  torque_y = engine_enable * t_world_y;
+  torque_z = engine_enable * t_world_z;
 end Lander;

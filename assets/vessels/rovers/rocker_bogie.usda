@@ -3,6 +3,10 @@
     defaultPrim = "RockerBogie"
     upAxis = "Y"
     metersPerUnit = 1
+    # Shared control-profile library (see skid_rover.usda) — brings `_RoverControl`.
+    subLayers = [
+        @../control_profiles.usda@
+    ]
 )
 
 # G5 — rocker-bogie chassis with a differential coupling.
@@ -18,6 +22,7 @@
 
 def Xform "RockerBogie" (
     kind = "component"
+    inherits = </_RoverControl>
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",

@@ -3,22 +3,27 @@
     defaultPrim = "SixWheelIndependent"
     upAxis = "Y"
     metersPerUnit = 1
+    # Shared control-profile library (see skid_rover.usda) — brings `_RoverControl`.
+    subLayers = [
+        @../control_profiles.usda@
+    ]
 )
 
 # Six-wheel rover with INDEPENDENT per-wheel drive — the full G4 + G4b stack:
 #   * G4 extensible port set: `lunco:drivePorts` declares six custom actuator
 #     ports `drive_w0..drive_w5` (beyond the canonical drive_left/right/...).
 #   * G4 per-wheel binding: each wheel names its own port via `lunco:drivePort`.
-#   * G4b authored mix: `lunco:driveMix` maps the DriveRover (forward, steer)
-#     command onto all six channels — left bank `+steer`, right bank `−steer`
+#   * G4b authored mix: `lunco:driveMix` maps the DriveCommand (throttle, steer)
+#     onto all six channels — left bank `+steer`, right bank `−steer`
 #     (skid steering realised through six independent motors, not a 2-port mix).
 #
 # There is NO `PhysxVehicleDriveSkidAPI` here: the drivetrain is the authored
 # mix, so adding a 7th wheel or re-routing a channel is a one-line USD edit.
-# `PhysxVehicleContextAPI` still provides the FlightSoftware + RoverVessel.
+# `PhysxVehicleContextAPI` still provides the FlightSoftware control surface.
 
 def Xform "SixWheelIndependent" (
     kind = "component"
+    inherits = </_RoverControl>
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",

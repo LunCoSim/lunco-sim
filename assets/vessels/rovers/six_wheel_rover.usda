@@ -3,6 +3,10 @@
     defaultPrim = "SixWheelRover"
     upAxis = "Y"
     metersPerUnit = 1
+    # Shared control-profile library (see skid_rover.usda) — brings `_RoverControl`.
+    subLayers = [
+        @../control_profiles.usda@
+    ]
 )
 
 # Six-wheel skid rover — demonstrates G4 (arbitrary actuator topology authored
@@ -20,6 +24,7 @@
 
 def Xform "SixWheelRover" (
     kind = "component"
+    inherits = </_RoverControl>
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",

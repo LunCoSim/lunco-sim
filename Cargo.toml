@@ -4,6 +4,7 @@ members = [
     "crates/lunco-time",
     "crates/lunco-obc",
     "crates/lunco-fsw",
+    "crates/lunco-behavior",
     "crates/lunco-controller",
     "crates/lunco-attributes",
     "crates/lunco-avatar",

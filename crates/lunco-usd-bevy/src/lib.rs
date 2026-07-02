@@ -674,14 +674,29 @@ fn instantiate_usd_prim(
             }
         }
 
-        // Custom `lunco:controlBindings` authors this vessel's intent→port map
-        // (stage 2 of control) directly in the scene — a comma-separated list of
-        // `intent:port:scale`, e.g. `"forward:throttle:1, action:brake:1"`. When
-        // absent, the controller stamps a topology default at possess time. This
-        // is the fully data-driven path: a new vessel declares what its inputs
-        // actuate without any Rust change.
-        if let Some(spec) = get_attribute_as_string(reader, &sdf_path, "lunco:controlBindings") {
-            if let Some(binding) = lunco_core::ControlBinding::from_usd_spec(&spec) {
+        // Per-vessel intent→port control map (stage 2 of control), authored as a
+        // `Controls` child scope: each child prim's NAME is the intent, with
+        // `string lunco:port` + `double lunco:scale`. Authored inline OR pulled in
+        // from a shared profile class (`inherits = </_RoverControl>`); either way
+        // it's already composed into this flattened data. When absent, the
+        // controller stamps a topology default at possess. Fully data-driven: a
+        // vessel declares what its inputs actuate with no Rust change.
+        if let Some(controls) = reader
+            .prim_children(&sdf_path)
+            .into_iter()
+            .find(|c| c.name() == Some("Controls"))
+        {
+            let entries: Vec<(String, String, f64)> = reader
+                .prim_children(&controls)
+                .into_iter()
+                .filter_map(|bind| {
+                    let intent = bind.name()?.to_string();
+                    let port = reader.prim_attribute_value::<String>(&bind, "lunco:port")?;
+                    let scale = reader.prim_attribute_value::<f64>(&bind, "lunco:scale")?;
+                    Some((intent, port, scale))
+                })
+                .collect();
+            if let Some(binding) = lunco_core::ControlBinding::from_intent_entries(&entries) {
                 commands.entity(entity).insert(binding);
             }
         }

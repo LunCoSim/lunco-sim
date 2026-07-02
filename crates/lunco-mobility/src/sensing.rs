@@ -275,7 +275,16 @@ fn arm_sensor_collision_events(
 /// the event-side bridge.
 pub(crate) fn register_collision_event_bridge(app: &mut App) {
     app.add_systems(Update, arm_sensor_collision_events);
-    app.add_systems(FixedUpdate, bridge_collision_events);
+    // MUST read avian's `CollisionStart`/`CollisionEnd` AFTER the physics step
+    // that produces them. Avian runs its `PhysicsSchedule` in `FixedPostUpdate`;
+    // reading in `FixedUpdate` (as before) ran a whole schedule-phase EARLIER, so
+    // zone enter/exit lagged a tick and a fast pass-through could be missed.
+    // Ordering after `PhysicsSystems::Writeback` (the last physics set) reads the
+    // events generated this same tick.
+    app.add_systems(
+        FixedPostUpdate,
+        bridge_collision_events.after(PhysicsSystems::Writeback),
+    );
 }
 
 #[cfg(test)]

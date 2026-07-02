@@ -3,6 +3,11 @@
     defaultPrim = "Rucheyok"
     upAxis = "Y"
     metersPerUnit = 1
+    # Shared control-profile library (see skid_rover.usda) — brings `_RoverControl`.
+    # This asset lives one dir deeper, so the path is `../../`.
+    subLayers = [
+        @../../control_profiles.usda@
+    ]
 )
 
 # Rucheyok Lunar Rover
@@ -11,6 +16,7 @@
 
 def Xform "Rucheyok" (
     kind = "component"
+    inherits = </_RoverControl>
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",

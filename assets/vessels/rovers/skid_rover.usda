@@ -3,6 +3,11 @@
     defaultPrim = "SkidRover"
     upAxis = "Y"
     metersPerUnit = 1
+    # Shared control-profile library: brings the `_RoverControl` class (its
+    # `Controls` intent->port scope) into scope so `SkidRover` can `inherits` it.
+    subLayers = [
+        @../control_profiles.usda@
+    ]
 )
 
 # Base Skid-Steer Rover — reusable component definition.
@@ -38,6 +43,11 @@
 
 def Xform "SkidRover" (
     kind = "component"
+    # Intent->port control (stage 2): inherit the shared rover profile's `Controls`
+    # scope (forward/back->throttle, left/right->steer, action->brake). Override a
+    # single intent by redefining `Controls/<intent>` locally; the key->intent half
+    # is the shared leafwing UserIntent map.
+    inherits = </_RoverControl>
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",
@@ -57,17 +67,6 @@ def Xform "SkidRover" (
     float lunco:spawnLift = 1.0
     float physics:linearDamping = 0.5
     float physics:angularDamping = 2.0
-
-    # Intent→port control binding (stage 2 of control), authored in-scene. Each
-    # entry is `intent:port:scale`; while the intent is active it adds `scale` to
-    # the named input port (summed per port, clamped to [-1,1]). Skid steer maps
-    # W/S→throttle, A/D→steer, Space/F (Action)→brake — the shared UserIntent
-    # vocabulary, this vessel's own actuation. Read by the USD translator
-    # (`lunco:controlBindings`) → stamped as `ControlBinding` on this vessel; when
-    # present the controller does NOT fall back to a Rust topology default, so a
-    # scene can retune drive response without any code change.
-    string lunco:controlBindings = "forward:throttle:1, backward:throttle:-1, left:steer:-1, right:steer:1, action:brake:1"
-
 
     # Chassis collider + visual — 2.0 m × 0.3 m × 3.5 m.
     def Cube "Chassis" (

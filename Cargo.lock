@@ -6724,6 +6724,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-behavior"
+version = "0.1.0"
+
+[[package]]
 name = "lunco-cache"
 version = "0.1.0"
 dependencies = [

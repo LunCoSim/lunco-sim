@@ -3,6 +3,11 @@
     defaultPrim = "LanderTest"
     upAxis = "Y"
     metersPerUnit = 1
+    # Shared control-profile library — brings `_LanderControl` so the Lander prim
+    # can `inherits` its `Controls` intent->port scope.
+    subLayers = [
+        @../../vessels/control_profiles.usda@
+    ]
 )
 
 # Self-contained powered-descent lander cosim scene.
@@ -69,6 +74,9 @@ def Xform "LanderTest"
     # Main body: cylindrical tank with structural details. Starts at 30 m,
     # auto-descends via the rhai script, then hands control to the user.
     def Cylinder "Lander" (
+        # Intent->port control (stage 2): inherit the shared lander profile
+        # (forward/back->pitch, left/right->roll, yaw_left/right->yaw, action->throttle).
+        inherits = </_LanderControl>
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
     )
     {

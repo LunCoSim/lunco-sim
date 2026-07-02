@@ -1652,8 +1652,6 @@ fn on_possess_command(
     q_parents: Query<&ChildOf>,
     q_sc: Query<&Spacecraft>,
     q_vessel: Query<&lunco_fsw::FlightSoftware>,
-    q_lander_vessel: Query<(), With<lunco_cosim::SimComponent>>,
-    q_control_binding: Query<(), With<lunco_controller::ControlBinding>>,
     q_vessel_gravity: Query<&GravityBody>,
     guard: Res<lunco_core::SyncApplyGuard>,
     registry: Res<lunco_core::SessionRegistry>,
@@ -1738,23 +1736,14 @@ fn on_possess_command(
 
     // The controller link goes on the **avatar** (it carries the shared
     // `ActionState<UserIntent>` that `drive_from_bindings` reads); the intent→port
-    // `ControlBinding` lives on the **vessel** (its own property). If the vessel
-    // was authored with one from USD (`lunco:controlBindings`) it's already there;
-    // otherwise fall back to a TOPOLOGY default so any possessable vessel drives —
-    // a Modelica `SimComponent` body binds Q/E→yaw + Space→arm-manual, a
-    // wheel-drive vessel binds Space→brake. The shared `UserIntent` vocabulary
-    // keeps the surface (HTTP API, MCP, scripts) identical across both.
+    // `ControlBinding` lives on the **vessel** as its own property, authored purely
+    // from USD (a `Controls` scope / an inherited `_RoverControl`/`_LanderControl`
+    // profile). There is NO Rust topology default: a vessel is drivable iff its USD
+    // carries that scope. `drive_from_bindings` reads the binding off the vessel and
+    // skips any vessel that has none, so possession is a pure camera+link bind here.
     commands
         .entity(avatar_ent)
         .insert(ControllerLink { vessel_entity: cmd.target });
-    if q_control_binding.get(cmd.target).is_err() {
-        let is_lander = q_lander_vessel.get(cmd.target).is_ok();
-        commands.entity(cmd.target).insert(if is_lander {
-            lunco_controller::ControlBinding::flight_binding()
-        } else {
-            lunco_controller::ControlBinding::rover_binding()
-        });
-    }
 
     // Detect if target is a surface vehicle (has GravityBody) and propagate surface mode.
     let is_surface_vehicle = q_vessel_gravity.get(cmd.target).is_ok();

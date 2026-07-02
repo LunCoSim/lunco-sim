@@ -117,7 +117,7 @@ impl Default for IntentAnalogState {
 
 /// Parse a control-intent name (case-insensitive, `Move` prefix optional, with
 /// vessel-friendly aliases) into a [`UserIntent`]. Used by USD authoring
-/// ([`ControlBinding::from_usd_spec`]) so a scene can name intents in plain
+/// ([`ControlBinding::from_intent_entries`]) so a scene can name intents in plain
 /// words (`"forward"`, `"brake"`, `"yaw_left"`).
 pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
     match name.trim().to_ascii_lowercase().as_str() {
@@ -136,18 +136,20 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
 
 /// Per-vessel **intent → port** binding: while a [`UserIntent`] is active it
 /// contributes `scale` to the named input port. Multiple entries may share an
-/// intent (e.g. `Action` arming both `manual` and `manual_throttle`) or a port
-/// (e.g. `MoveForward`/`MoveBackward` summing into `throttle`).
+/// intent, or a port (e.g. `MoveForward`/`MoveBackward` summing into `throttle`
+/// with +1/-1).
 ///
 /// This is the SECOND, per-vessel stage of control. The first (key → intent) is
 /// the shared leafwing [`UserIntent`] input map; this component decides only what
 /// each intent *actuates* on this vessel, so a rover and a lander share the
-/// intent vocabulary while binding different ports. It's authorable from USD via
-/// [`from_usd_spec`](ControlBinding::from_usd_spec) (`lunco:controlBindings`), and
-/// the controller falls back to a topology default ([`rover_binding`] /
-/// [`flight_binding`]) when a possessed vessel carries none. The consuming system
+/// intent vocabulary while binding different ports. It is authored purely from
+/// USD as a `Controls` child scope (intent-named `def` prims with
+/// `lunco:port`+`lunco:scale`, built via
+/// [`from_intent_entries`](ControlBinding::from_intent_entries)) — there is NO
+/// hardcoded Rust default: a vessel is controllable iff it carries a `Controls`
+/// scope (author one, or `inherits` a shared profile class). The consuming system
 /// (`lunco_controller::drive_from_bindings`) reads it off the vessel via the
-/// controller link.
+/// controller link; a vessel without one is simply not driven.
 #[derive(Component, Debug, Clone)]
 pub struct ControlBinding {
     /// `(intent, port_name, scale)` — each active intent adds its scale to the
@@ -156,55 +158,17 @@ pub struct ControlBinding {
 }
 
 impl ControlBinding {
-    /// Wheeled rover: forward/back → `throttle`, left/right → `steer`,
-    /// `Action` (Space/F) → `brake`.
-    pub fn rover_binding() -> ControlBinding {
-        ControlBinding {
-            binds: vec![
-                (UserIntent::MoveForward, "throttle".into(), 1.0),
-                (UserIntent::MoveBackward, "throttle".into(), -1.0),
-                (UserIntent::MoveLeft, "steer".into(), -1.0),
-                (UserIntent::MoveRight, "steer".into(), 1.0),
-                (UserIntent::Action, "brake".into(), 1.0),
-            ],
-        }
-    }
-
-    /// Cosim-flown lander: forward/back → pitch, left/right → roll, up/down
-    /// (E/Q) → yaw, `Action` (Space/F) arms manual mode AND fires full throttle
-    /// (`manual` + `manual_throttle`, mirroring `Lander.mo`). Port names match the
-    /// Modelica `SimComponent.inputs`.
-    pub fn flight_binding() -> ControlBinding {
-        ControlBinding {
-            binds: vec![
-                (UserIntent::MoveForward, "manual_pitch".into(), -1.0),
-                (UserIntent::MoveBackward, "manual_pitch".into(), 1.0),
-                (UserIntent::MoveLeft, "manual_roll".into(), 1.0),
-                (UserIntent::MoveRight, "manual_roll".into(), -1.0),
-                (UserIntent::MoveDown, "manual_yaw".into(), 1.0),
-                (UserIntent::MoveUp, "manual_yaw".into(), -1.0),
-                (UserIntent::Action, "manual".into(), 1.0),
-                (UserIntent::Action, "manual_throttle".into(), 1.0),
-            ],
-        }
-    }
-
-    /// Parse a `lunco:controlBindings` USD attribute into a binding. The spec is
-    /// a comma-separated list of `intent:port:scale` entries, e.g.
-    /// `"forward:throttle:1, backward:throttle:-1, action:brake:1"`. Unparseable
-    /// entries (unknown intent, missing port, bad scale) are skipped with a
-    /// warning. Returns `None` when nothing valid parsed, so the caller can fall
-    /// back to a topology default.
-    pub fn from_usd_spec(spec: &str) -> Option<ControlBinding> {
+    /// Build from `(intent_name, port, scale)` triples the USD reader collects by
+    /// walking a vessel's `Controls` scope — each child prim's NAME is the intent
+    /// (`parse_user_intent`), with `string lunco:port` + `double lunco:scale`.
+    /// Unknown intents are skipped with a warning; returns `None` when nothing
+    /// valid parsed, so the caller can fall back to a topology default.
+    pub fn from_intent_entries(entries: &[(String, String, f64)]) -> Option<ControlBinding> {
         let mut binds = Vec::new();
-        for entry in spec.split(',').map(str::trim).filter(|e| !e.is_empty()) {
-            let mut parts = entry.split(':');
-            let intent = parts.next().and_then(parse_user_intent);
-            let port = parts.next().map(str::trim).filter(|p| !p.is_empty());
-            let scale = parts.next().and_then(|s| s.trim().parse::<f64>().ok());
-            match (intent, port, scale) {
-                (Some(i), Some(p), Some(s)) => binds.push((i, p.to_string(), s)),
-                _ => warn!("[ControlBinding] ignoring malformed entry '{entry}' (want intent:port:scale)"),
+        for (intent, port, scale) in entries {
+            match parse_user_intent(intent) {
+                Some(i) => binds.push((i, port.clone(), *scale)),
+                None => warn!("[ControlBinding] unknown control intent '{intent}' (skipped)"),
             }
         }
         (!binds.is_empty()).then_some(ControlBinding { binds })

@@ -360,3 +360,99 @@ impl openusd::ar::Resolver for FsResolver {
         None
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod inherits_compose_tests {
+    use super::*;
+    use crate::usd_data::UsdDataExt;
+
+    /// De-risk the control-profile design: a `class` carrying a `Controls` child
+    /// scope, `inherits`-ed by a vessel prim, must land those child prims (with
+    /// their attrs) under the vessel after full PCP flatten — so the entity
+    /// translator can walk `<Vessel>/Controls/<intent>` to build a `ControlBinding`.
+    #[test]
+    fn inherits_from_class_brings_child_prims_into_flattened_data() {
+        let usda = "#usda 1.0\n\
+class \"_RoverControl\"\n{\n    def \"Controls\"\n    {\n        def \"forward\"\n        {\n            uniform string lunco:port = \"throttle\"\n            uniform double lunco:scale = 1\n        }\n    }\n}\n\
+def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
+        let data = compose_native_fs(usda, std::path::Path::new("/tmp")).expect("compose+flatten");
+        let fwd = SdfPath::new("/Rover/Controls/forward").unwrap();
+        assert_eq!(
+            data.prim_attribute_value::<String>(&fwd, "lunco:port").as_deref(),
+            Some("throttle"),
+            "inherited Controls child must appear under /Rover with its attrs"
+        );
+        assert_eq!(data.prim_attribute_value::<f64>(&fwd, "lunco:scale"), Some(1.0));
+    }
+
+    /// The real delivery mechanism: a vessel in one file pulls a control-profile
+    /// `class` from ANOTHER file via `subLayers`, then `inherits` it — the
+    /// `Controls` child scope must compose onto the vessel. Proves rovers/landers
+    /// can share one profile file (DRY) without repeating bindings per asset.
+    #[test]
+    fn cross_file_sublayer_inherits_composes() {
+        let dir = std::env::temp_dir().join("lunco_ctrl_profile_compose_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("control_profiles.usda"),
+            "#usda 1.0\nclass \"_RoverControl\"\n{\n    def \"Controls\"\n    {\n        def \"forward\"\n        {\n            uniform string lunco:port = \"throttle\"\n            uniform double lunco:scale = 1\n        }\n    }\n}\n",
+        )
+        .unwrap();
+        let rover = dir.join("rover.usda");
+        std::fs::write(
+            &rover,
+            "#usda 1.0\n(\n    subLayers = [@./control_profiles.usda@]\n)\ndef Xform \"SkidRover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n",
+        )
+        .unwrap();
+        let data = compose_file(&rover).expect("compose_file");
+        let fwd = SdfPath::new("/SkidRover/Controls/forward").unwrap();
+        assert_eq!(
+            data.prim_attribute_value::<String>(&fwd, "lunco:port").as_deref(),
+            Some("throttle"),
+            "cross-file subLayers+inherits must land the Controls scope on the vessel"
+        );
+    }
+
+    /// End-to-end: the shipped `skid_rover.usda` inherits `_RoverControl` from
+    /// the shared `control_profiles.usda`, so its composed form must carry
+    /// `/SkidRover/Controls/forward` → `throttle`. Guards the real asset wiring.
+    #[test]
+    fn skid_rover_asset_inherits_control_profile() {
+        let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/vessels/rovers/skid_rover.usda");
+        let data = compose_file(&asset).expect("compose skid_rover.usda");
+        let fwd = SdfPath::new("/SkidRover/Controls/forward").unwrap();
+        assert_eq!(
+            data.prim_attribute_value::<String>(&fwd, "lunco:port").as_deref(),
+            Some("throttle"),
+            "skid_rover must inherit the rover control profile's Controls scope"
+        );
+        assert_eq!(data.prim_attribute_value::<f64>(&fwd, "lunco:scale"), Some(1.0));
+    }
+
+    /// The two harder composition paths, on the real `lander_test.usda`:
+    /// (a) an INLINE lander prim inheriting `_LanderControl` via the scene's own
+    ///     `subLayers`; (b) a rover pulled in by `references` whose OWN
+    ///     `subLayers`+`inherits` must still compose THROUGH the reference arc.
+    #[test]
+    fn lander_scene_composes_inline_and_referenced_control_profiles() {
+        let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/scenes/sandbox/lander_test.usda");
+        let data = compose_file(&scene).expect("compose lander_test.usda");
+
+        // (a) inline lander inherits _LanderControl through the scene subLayer.
+        let lander_fwd = SdfPath::new("/LanderTest/Lander/Controls/forward").unwrap();
+        assert_eq!(
+            data.prim_attribute_value::<String>(&lander_fwd, "lunco:port").as_deref(),
+            Some("pitch"),
+            "inline lander must inherit the lander control profile"
+        );
+        // (b) referenced rover's subLayer+inherits composes through the ref arc.
+        let rover_fwd = SdfPath::new("/LanderTest/SkidRover/Controls/forward").unwrap();
+        assert_eq!(
+            data.prim_attribute_value::<String>(&rover_fwd, "lunco:port").as_deref(),
+            Some("throttle"),
+            "referenced rover must carry its inherited Controls through the reference"
+        );
+    }
+}
