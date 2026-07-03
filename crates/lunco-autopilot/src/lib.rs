@@ -101,6 +101,31 @@ pub struct TargetState {
 /// leaves resolve their target through it, so they track a mover.
 pub type TargetStates = std::collections::HashMap<u64, TargetState>;
 
+/// Distance (world units) to the nearest collider along the forward ray-fan cast
+/// this tick by [`sense_clearance`] — the vessel's obstacle sensor. `None` on a lane
+/// means clear to [`range`](Self::range). Populated only where physics (avian) runs;
+/// a headless server has it, a physics-free harness leaves it all-clear.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Clearance {
+    /// Nearest hit straight ahead.
+    pub ahead: Option<f32>,
+    /// Nearest hit on the forward-left probe (heading rotated `+spread` about up).
+    pub left: Option<f32>,
+    /// Nearest hit on the forward-right probe (heading rotated `-spread`).
+    pub right: Option<f32>,
+    /// Sensor range the probes were cast to (a lane at this distance reads clear).
+    pub range: f32,
+}
+
+/// Per-vessel [`Clearance`] from the last [`sense_clearance`] pass, keyed by the
+/// **vessel** [`Entity`] — filled for every controlled vessel (human- or
+/// autopilot-driven), since the sensor is the rover's. A resource (not a component)
+/// so the raycasting system and its consumers stay decoupled: `sense_clearance`
+/// fills it (only when avian is present), [`drive_autopilots`] reads it into each
+/// [`DriveCtx`] (and a HUD could read it for a human), defaulting to all-clear.
+#[derive(Resource, Default)]
+pub struct ClearanceField(pub std::collections::HashMap<Entity, Clearance>);
+
 /// Per-tick bridge the behaviour tree reads/writes: the vessel's world pose in,
 /// the desired setpoint out. A leaf reads `pos`/`fwd` (and, for tracking leaves,
 /// `targets`) and writes `out`.
@@ -124,6 +149,10 @@ pub struct DriveCtx {
     /// moving target up here. Cheap `Arc` clone per autopilot; empty for pose-only
     /// leaves. See [`TargetStates`].
     pub targets: std::sync::Arc<TargetStates>,
+    /// Forward obstacle-sensor readings from this tick's physics ray-fan (see
+    /// [`Clearance`]). All-clear where physics isn't running. Read by the raycast
+    /// leaves `path_blocked` / `steer_clear`.
+    pub clearance: Clearance,
 }
 
 /// Data description of an autopilot behaviour tree — authored as rhai/JSON DATA
@@ -372,6 +401,25 @@ pub enum BehaviorSpec {
         /// The wrapped subtree.
         child: Box<BehaviorSpec>,
     },
+    /// Condition leaf: `Success` if the forward physics **raycast** hits a collider
+    /// within `distance` (the path ahead is blocked by terrain/geometry), else
+    /// `Failure`. Reads the [`Clearance`] sensor filled by [`sense_clearance`], so it
+    /// works headless. Writes no setpoint.
+    PathBlocked {
+        /// How near ahead a hit counts as blocking (world units).
+        #[serde(default = "default_obstacle_dist")]
+        distance: f32,
+    },
+    /// Reactive obstacle avoidance driven by the forward ray-fan ([`Clearance`]):
+    /// drive at `speed` when the path is clear, otherwise steer toward the more open
+    /// side and ease off, braking if boxed in. Always `Running` (a behaviour, not a
+    /// goal) — compose it under a `reactive_selector` behind a `path_blocked` guard,
+    /// or run it as the default action.
+    SteerClear {
+        /// Cruise speed when clear `[0, 1]`.
+        #[serde(default = "default_speed")]
+        speed: f64,
+    },
 }
 
 /// Completion rule for a [`BehaviorSpec::Parallel`], mapped to
@@ -482,8 +530,21 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
         BehaviorSpec::Cooldown { seconds, child } => {
             Box::new(CooldownNode::new(*seconds, build_tree(child)))
         }
+        BehaviorSpec::PathBlocked { distance } => leaf_path_blocked(*distance),
+        BehaviorSpec::SteerClear { speed } => leaf_steer_clear(*speed),
     }
 }
+
+/// Half-angle of the forward-left/right obstacle probes, radians (~30°). Shared by
+/// [`sense_clearance`] (which casts the probes) and [`leaf_steer_clear`] (which
+/// recomputes the probe directions to steer toward the open one), so they agree.
+const PROBE_SPREAD: f32 = 0.5236;
+/// How far the obstacle probes are cast (world units).
+const SENSOR_RANGE: f32 = 20.0;
+/// World-up offsets (m) from the vessel origin at which each lane is probed — a small
+/// fan of heights (low wheels → chassis → mast) so a body-height obstacle is detected
+/// well before a single centre-height ray would just graze it.
+const PROBE_HEIGHTS: [f32; 3] = [-0.2, 0.4, 1.0];
 
 /// Compile a [`BehaviorSpec::Patrol`] to `forever(sequence([drive_to (+ wait?)…]))`.
 /// Each waypoint becomes a `drive_to`; a non-zero `dwell` appends a braked
@@ -569,6 +630,55 @@ fn leaf_obstacle_ahead(distance: f32, cone_deg: f64) -> BoxNode<DriveCtx> {
             }
         }
         Status::Failure
+    }))
+}
+
+/// Condition leaf: `Success` if the forward obstacle ray (see [`Clearance::ahead`])
+/// hits within `distance` — the path ahead is blocked. Reads the physics-raycast
+/// sensor, so it works headless; all-clear (Failure) where physics isn't running.
+fn leaf_path_blocked(distance: f32) -> BoxNode<DriveCtx> {
+    Box::new(Action::new(move |ctx: &mut DriveCtx| {
+        if ctx.clearance.ahead.is_some_and(|d| d <= distance) {
+            Status::Success
+        } else {
+            Status::Failure
+        }
+    }))
+}
+
+/// Action leaf: reactive obstacle avoidance from the forward ray-fan ([`Clearance`]).
+/// Clear ahead → drive straight at `speed`. Blocked → steer toward the more open of
+/// the two side probes (recomputing their directions from [`PROBE_SPREAD`] so the
+/// steer sign matches [`nav_setpoint`]) and ease the throttle down; brake if boxed
+/// in on all three probes. Always `Running`.
+fn leaf_steer_clear(speed: f64) -> BoxNode<DriveCtx> {
+    Box::new(Action::new(move |ctx: &mut DriveCtx| {
+        let c = ctx.clearance;
+        let range = if c.range > 0.0 { c.range } else { SENSOR_RANGE };
+        let ahead = c.ahead.unwrap_or(range);
+        // Mostly clear ahead → just go.
+        if ahead >= range * 0.9 {
+            ctx.out = (speed, 0.0, 0.0);
+            return Status::Running;
+        }
+        let left = c.left.unwrap_or(range);
+        let right = c.right.unwrap_or(range);
+        // Boxed in on every probe → stop rather than grind forward.
+        if ahead < 2.0 && left < 2.0 && right < 2.0 {
+            ctx.out = (0.0, 0.0, 1.0);
+            return Status::Running;
+        }
+        // Steer toward the more open side. Recompute that probe's world direction and
+        // reuse the nav yaw-cross so the steer sign is consistent with drive_to.
+        let fwd = ctx.fwd.normalize_or_zero();
+        let open = if left >= right { PROBE_SPREAD } else { -PROBE_SPREAD };
+        let to = Quat::from_rotation_y(open) * fwd;
+        let cy = fwd.z * to.x - fwd.x * to.z;
+        let steer = (-cy * 2.5).clamp(-1.0, 1.0) as f64;
+        // Ease throttle with how much room is ahead (never below a crawl).
+        let throttle = speed * (ahead / range).clamp(0.2, 1.0) as f64;
+        ctx.out = (throttle, steer, 0.0);
+        Status::Running
     }))
 }
 
@@ -845,6 +955,7 @@ pub fn setup_autopilot_session(
     q_gid: Query<&GlobalEntityId>,
     mut rbac: ResMut<SessionRbac>,
     mut registry: ResMut<SessionRegistry>,
+    mut commands: Commands,
 ) {
     // Run on the authoritative peer (Host or single-player Standalone), never a
     // Client — ownership is the host's to assign. `is_host()` alone would skip the
@@ -871,6 +982,18 @@ pub fn setup_autopilot_session(
             Ok(()) => {
                 ap.engaged = true;
                 info!("[autopilot] session {} engaged, owns entity {}", ap.session, gid.get());
+                // Fire the SAME possession signal a human does (the avatar mirrors
+                // native possession to `cmd:PossessVessel`), so scenario waits like
+                // `wait_for("cmd:PossessVessel")` / `requires_event:"cmd:PossessVessel"`
+                // fire for an autopilot claim too — controller-uniform. `source` is the
+                // vessel gid so a scenario can filter by which vessel.
+                commands.trigger(lunco_core::TelemetryEvent {
+                    name: "cmd:PossessVessel".into(),
+                    source: gid.get(),
+                    severity: lunco_core::Severity::Info,
+                    data: lunco_core::TelemetryValue::String("PossessVessel".into()),
+                    timestamp: 0.0,
+                });
             }
             Err(cur) => {
                 ap.engaged = false;
@@ -906,6 +1029,7 @@ pub fn drive_autopilots(
     q_gid: Query<&GlobalEntityId>,
     q_xf: Query<&GlobalTransform>,
     q_targets: Query<(&GlobalEntityId, &GlobalTransform)>,
+    clearances: Option<Res<ClearanceField>>,
     mut prev: Local<PrevTargets>,
     mut commands: Commands,
 ) {
@@ -944,6 +1068,10 @@ pub fn drive_autopilots(
 
         let (throttle, steer, brake) = match (behavior, q_xf.get(ap.vessel).ok()) {
             (Some(mut tree), Some(xf)) => {
+                let clearance = clearances
+                    .as_ref()
+                    .and_then(|c| c.0.get(&ap.vessel).copied())
+                    .unwrap_or_default();
                 let mut ctx = DriveCtx {
                     self_gid: gid.get(),
                     pos: xf.translation(),
@@ -951,6 +1079,7 @@ pub fn drive_autopilots(
                     now,
                     out: (ap.throttle, ap.steer, 0.0),
                     targets: targets.clone(),
+                    clearance,
                 };
                 tree.0.tick(&mut ctx);
                 ctx.out
@@ -968,6 +1097,75 @@ pub fn drive_autopilots(
             seq: 0,
             tick: 0,
         });
+    }
+}
+
+/// Collect `root` and all of its descendants into `out` — the entity set a raycast
+/// must exclude so a vessel never senses its own chassis/wheel colliders.
+fn collect_hierarchy(root: Entity, q_children: &Query<&Children>, out: &mut Vec<Entity>) {
+    out.push(root);
+    if let Ok(children) = q_children.get(root) {
+        for &c in children {
+            collect_hierarchy(c, q_children, out);
+        }
+    }
+}
+
+/// Headless obstacle sensing — a **rover** capability, independent of who drives it.
+/// For every **controlled vessel** (owned by *any* session — a human or an autopilot,
+/// since an autopilot is just a user with a specialty), cast a forward ray-fan from
+/// the **vessel's** pose (ahead + `±`[`PROBE_SPREAD`], at each [`PROBE_HEIGHTS`]) via
+/// avian [`SpatialQuery`], excluding the vessel's own hierarchy, and record the
+/// nearest hit per lane into [`ClearanceField`] keyed by the vessel entity.
+/// `drive_autopilots` reads it for an autopilot's vessel; a human-driven rover gets
+/// the same readings (for a HUD / driver-assist). Gated on the physics pipeline
+/// existing, so a physics-free app just skips it (leaves then read all-clear).
+pub fn sense_clearance(
+    spatial: avian3d::prelude::SpatialQuery,
+    q_children: Query<&Children>,
+    registry: Res<SessionRegistry>,
+    q_vessels: Query<(Entity, &GlobalEntityId, &GlobalTransform)>,
+    mut field: ResMut<ClearanceField>,
+) {
+    use avian3d::prelude::SpatialQueryFilter;
+    field.0.clear();
+    for (vessel, gid, xf) in &q_vessels {
+        // Sense only vessels someone is actually driving (human OR autopilot). An
+        // idle, unowned vessel has no consumer for its clearance, so skip it.
+        if registry.owner_of(gid.get()).is_none() {
+            continue;
+        }
+        // Level forward: drop the pitch so the probe skims a horizontal plane instead
+        // of aiming into the ground (downhill) or the sky (uphill).
+        let f = xf.forward().as_vec3();
+        let fwd = Vec3::new(f.x, 0.0, f.z).normalize_or_zero();
+        if fwd == Vec3::ZERO {
+            continue;
+        }
+        let mut excluded = Vec::new();
+        collect_hierarchy(vessel, &q_children, &mut excluded);
+        let filter = SpatialQueryFilter::from_excluded_entities(excluded);
+        let base = xf.translation();
+        // Cast each lane at every body height, keep the nearest hit across them.
+        let lane = |dir: Vec3| -> Option<f32> {
+            let d = Dir3::new(dir).ok()?;
+            PROBE_HEIGHTS
+                .iter()
+                .filter_map(|h| {
+                    let origin = (base + Vec3::Y * *h).as_dvec3();
+                    spatial.cast_ray(origin, d, SENSOR_RANGE as f64, true, &filter).map(|hit| hit.distance as f32)
+                })
+                .reduce(f32::min)
+        };
+        field.0.insert(
+            vessel,
+            Clearance {
+                ahead: lane(fwd),
+                left: lane(Quat::from_rotation_y(PROBE_SPREAD) * fwd),
+                right: lane(Quat::from_rotation_y(-PROBE_SPREAD) * fwd),
+                range: SENSOR_RANGE,
+            },
+        );
     }
 }
 
@@ -1062,8 +1260,20 @@ impl Plugin for AutopilotPlugin {
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
         }
+        app.init_resource::<ClearanceField>();
         app.add_systems(Update, setup_autopilot_session);
-        app.add_systems(FixedUpdate, drive_autopilots);
+        // Sense obstacles (physics raycast) before driving, so `path_blocked` /
+        // `steer_clear` see this tick's clearance. Gated on the avian spatial pipeline
+        // so a physics-free app just skips sensing (leaves read all-clear).
+        app.add_systems(
+            FixedUpdate,
+            (
+                sense_clearance
+                    .run_if(resource_exists::<avian3d::collider_tree::ColliderTrees>)
+                    .before(drive_autopilots),
+                drive_autopilots,
+            ),
+        );
         register_all_commands(app);
     }
 }

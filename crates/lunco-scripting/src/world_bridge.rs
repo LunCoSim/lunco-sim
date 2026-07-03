@@ -501,6 +501,25 @@ pub fn build_world_engine() -> Engine {
         )
     });
 
+    // ── Control ownership (who drives this vessel — human OR autopilot) ───────
+    // owner_of(id) -> session id (i64) currently controlling the vessel (0 = local
+    // human, the autopilot band for an AI), or () if nobody owns it. Reads the
+    // possession arbiter's ownership, so a scenario can branch on whether a rover is
+    // driven — uniformly across a human and an autopilot (which is just a user with
+    // a specialty).
+    engine.register_fn("owner_of", |id: i64| -> Dynamic {
+        bridge_core::owner_of(id as u64).map(|s| Dynamic::from_int(s as i64)).unwrap_or(Dynamic::UNIT)
+    });
+    // controller(id) -> role string of the driver ("AiAgent" = autopilot, "Owner"/
+    // "Operator" = human), or () if unowned. The human-vs-AI test.
+    engine.register_fn("controller", |id: i64| -> Dynamic {
+        bridge_core::controller_role(id as u64).map(Dynamic::from).unwrap_or(Dynamic::UNIT)
+    });
+    // is_controlled(id) -> bool — true if any session (human or autopilot) drives it.
+    engine.register_fn("is_controlled", |id: i64| -> bool {
+        bridge_core::owner_of(id as u64).is_some()
+    });
+
     // emit(name, value) -> bool — fire a TelemetryEvent on the shared bus
     // (reused, not reinvented): existing API-subscription + log observers see
     // it immediately, and scripts receive it next tick via on_event. `value`

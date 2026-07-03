@@ -105,6 +105,7 @@ autopilot compiles today.
 | `cruise` | `throttle`, `steer` | Hold a constant setpoint; always `Running`. |
 | `brake` | — | Full brake; `Success`. |
 | `hold` | — | Full brake but **never finishes** (`Running`) — a "stay put" action, e.g. under a `parallel` while a guard holds. |
+| `steer_clear` | `speed` | Reactive obstacle avoidance off the forward ray-fan: drive at `speed` when clear, steer toward the more open side when blocked, brake if boxed in. Always `Running`. Physics-backed, headless. |
 | `wait` | `seconds` | Hold (braked) for `seconds` of mission time, then `Success`. Re-arms each lap under a loop (frozen clock ⇒ frozen wait). |
 
 ### Condition & scaffolding leaves (read-only / constant)
@@ -113,7 +114,8 @@ autopilot compiles today.
 |---|---|---|
 | `arrived` | `target`, `radius` | `Success` within `radius` of the point, else `Failure`. Writes no setpoint — the guard that makes selectors meaningful. |
 | `facing` | `target`, `tolerance` (deg) | `Success` if the heading is within `tolerance` of the target, else `Failure`. The read-only guard counterpart to `face`. |
-| `obstacle_ahead` | `distance`, `cone` (deg) | `Success` if another known **vessel** is within `distance` in a forward cone of `cone` degrees (self excluded), else `Failure`. Vessel-vs-vessel proximity — no terrain/collider raycast (see roadmap). |
+| `obstacle_ahead` | `distance`, `cone` (deg) | `Success` if another known **vessel** is within `distance` in a forward cone of `cone` degrees (self excluded), else `Failure`. Vessel-vs-vessel proximity (no physics needed). |
+| `path_blocked` | `distance` | `Success` if the forward **physics raycast** hits a collider (terrain/geometry) within `distance`, else `Failure`. Works headless — reads the [`Clearance`] sensor. |
 | `succeed` | — | Always `Success` — no-op / placeholder. |
 | `fail` | — | Always `Failure` — placeholder / forced-failure branch. |
 
@@ -185,6 +187,32 @@ autopilot compiles today.
 Re-checked every tick: it holds while a vessel is in the way and resumes driving the
 instant the path clears.
 
+**Rove and avoid terrain/obstacles** — physics raycast, works headless:
+
+```json
+{"kind":"reactive_selector","children":[
+  {"kind":"sequence","children":[
+    {"kind":"path_blocked","distance":5},
+    {"kind":"steer_clear","speed":0.5}]},
+  {"kind":"drive_to","target":[120,0,0],"speed":0.7}]}
+```
+
+`path_blocked` and `steer_clear` read a **physics ray-fan** the `sense_clearance`
+system casts each tick (avian `SpatialQuery`) from the **rover's** pose — ahead +
+`±30°`, at three body heights, level (pitch dropped so it skims horizontally),
+excluding the rover's own hierarchy, out to 20 m. It runs with **no rendering**, so a
+`--no-ui` server avoids obstacles exactly like a GUI client. Where physics isn't
+present the fan reads all-clear (`path_blocked` → `Failure`, `steer_clear` → drive
+straight), so the same tree degrades gracefully.
+
+**The sensor is the rover's, not the driver's.** `sense_clearance` fills clearance
+for *every* controlled vessel — one owned by a **human** (`PossessVessel`) just as
+much as one under an autopilot — keyed by the vessel entity. So the same obstacle
+readings are available whoever holds the wheel (an autopilot's `path_blocked`, or a
+future driver-assist HUD for a human). This mirrors the whole model: an autopilot is
+just a user with a specialty, so world queries key off the **rover**, never the
+actor entity, and work for any controller.
+
 From rhai a scenario emits the same data and hot-swaps it live:
 
 ```rhai
@@ -197,16 +225,13 @@ cmd("SetAutopilotBehavior", #{ vessel: rover, spec_json: "{...}" });
 
 The leaf vocabulary is bounded by what the context exposes. `DriveCtx` today gives
 each leaf the **own** vessel pose + id (`self_gid`), the mission clock, the setpoint
-out, and a snapshot of **other entities' live kinematic state** (`targets`: position
-+ a finite-difference velocity, keyed by GlobalEntityId — what `follow`, `intercept`
-and `obstacle_ahead` read). The following need still more, and each is deferred
-because it crosses an **architectural boundary**, not because it's hard — doing it
-half-way would be worse than not yet:
+out, a snapshot of **other entities' live kinematic state** (`targets`: position + a
+finite-difference velocity — what `follow`/`intercept`/`obstacle_ahead` read), and
+**forward raycast clearance** (`clearance` — what `path_blocked`/`steer_clear` read).
+The following need still more, and each is deferred because it crosses an
+**architectural boundary**, not because it's hard — doing it half-way would be worse
+than not yet:
 
-- **Terrain / collider raycast** (obstacle avoidance vs. the ground and static
-  geometry, beyond the vessel-vs-vessel `obstacle_ahead`) — needs a spatial-query
-  provider (avian `SpatialQuery` / `lunco-mobility`). The headless autopilot
-  deliberately pulls in **no physics dep**; adding one is the boundary to cross.
 - **Resource guards** (`battery_above`, `fuel_above`, thermal limits) — the
   `PortRegistry::read_port` API needs `&World`, which would force `drive_autopilots`
   to become an **exclusive system**. Wants a per-tick port-value snapshot resource

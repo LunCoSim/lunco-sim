@@ -4,7 +4,7 @@
 //! `SetAutopilotBehavior` command hot-swaps at runtime.
 
 use bevy::math::Vec3;
-use lunco_autopilot::{nav_setpoint, AutopilotBehavior, DriveCtx, TargetState, TargetStates};
+use lunco_autopilot::{nav_setpoint, AutopilotBehavior, Clearance, DriveCtx, TargetState, TargetStates};
 use std::sync::Arc;
 
 #[test]
@@ -17,7 +17,7 @@ fn json_tree_drives_and_sequences_waypoints() {
     let mut behavior = AutopilotBehavior::from_json(json).expect("spec must parse + build");
 
     // At the origin facing +X, far from waypoint 1 → drive forward, not braking.
-    let mut ctx = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut ctx = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     behavior.0.tick(&mut ctx);
     assert!(ctx.out.0 > 0.0, "should drive toward wp1, got {:?}", ctx.out);
     assert_eq!(ctx.out.2, 0.0, "not braking while en route");
@@ -51,7 +51,7 @@ fn bad_spec_is_a_clean_error() {
 /// gets close — a crude kinematic stand-in that lets multi-waypoint trees advance.
 /// Returns the number of ticks the tree spent braking (`out.2 > 0.5`).
 fn brake_ticks(behavior: &mut AutopilotBehavior, waypoints: &[Vec3], max: usize) -> usize {
-    let mut ctx = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut ctx = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     let mut braked = 0;
     let mut wp = 0;
     for _ in 0..max {
@@ -99,12 +99,12 @@ fn selector_with_arrived_guard_brakes_when_close_drives_when_far() {
     let mut behavior = AutopilotBehavior::from_json(json).expect("selector spec must build");
 
     // Far away → guard fails → falls through to drive_to → throttle up, not braking.
-    let mut far = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut far = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     behavior.0.tick(&mut far);
     assert!(far.out.0 > 0.0 && far.out.2 < 0.5, "far → drive, got {:?}", far.out);
 
     // At the goal → guard succeeds → brake branch taken.
-    let mut near = DriveCtx { pos: Vec3::new(10.0, 0.0, 0.0), fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut near = DriveCtx { pos: Vec3::new(10.0, 0.0, 0.0), fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     behavior.0.tick(&mut near);
     assert!(near.out.2 > 0.5, "at goal → brake, got {:?}", near.out);
 }
@@ -116,7 +116,7 @@ fn wait_latches_a_mission_time_deadline_and_resets_across_repeats() {
     // Running) until mission time reaches 3s, then Succeeds. The clock is `now`
     // (WorldTime.sim_secs), so a frozen clock freezes the wait.
     let mut behavior = AutopilotBehavior::from_json(r#"{"kind":"wait","seconds":3.0}"#).unwrap();
-    let mut ctx = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut ctx = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     assert_eq!(behavior.0.tick(&mut ctx), Status::Running);
     assert!(ctx.out.2 > 0.5, "wait holds the brakes");
     // Clock frozen (now unchanged) → still waiting: the deadline is mission-time, not
@@ -153,7 +153,7 @@ fn parallel_require_one_succeeds_when_first_child_arrives() {
         {"kind":"arrived","target":[0.0,0.0,0.0],"radius":2.0}
     ]}"#;
     let mut behavior = AutopilotBehavior::from_json(json).expect("parallel spec must build");
-    let mut ctx = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut ctx = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     assert_eq!(behavior.0.tick(&mut ctx), Status::Success, "arrived wins the race");
 }
 
@@ -164,7 +164,7 @@ fn face_pivots_in_place_then_succeeds_when_aligned() {
     // Running until aligned; when the heading swings onto the target, Success.
     let mut behavior =
         AutopilotBehavior::from_json(r#"{"kind":"face","target":[0.0,0.0,5.0],"tolerance":8.0}"#).unwrap();
-    let mut ctx = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut ctx = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     assert_eq!(behavior.0.tick(&mut ctx), Status::Running);
     assert_eq!(ctx.out.0, 0.0, "face uses no throttle (pivot in place)");
     assert!(ctx.out.1.abs() > 0.0, "face steers toward the target, got {:?}", ctx.out);
@@ -182,17 +182,17 @@ fn invert_negates_the_arrived_condition() {
         AutopilotBehavior::from_json(r#"{"kind":"invert","child":{"kind":"arrived","target":[0.0,0.0,0.0],"radius":2.0}}"#)
             .unwrap();
     // Far from the target → arrived Failure → invert Success ("not arrived").
-    let mut far = DriveCtx { pos: Vec3::new(50.0, 0.0, 0.0), fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut far = DriveCtx { pos: Vec3::new(50.0, 0.0, 0.0), fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     assert_eq!(inv.0.tick(&mut far), Status::Success);
     // At the target → arrived Success → invert Failure.
-    let mut near = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut near = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     assert_eq!(inv.0.tick(&mut near), Status::Failure);
 }
 
 #[test]
 fn force_and_retry_decorators_map_and_re_attempt() {
     use lunco_behavior::Status;
-    let mut ctx = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut ctx = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     // force_success swallows a failing child; force_failure overrides a success.
     let mut fs = AutopilotBehavior::from_json(r#"{"kind":"force_success","child":{"kind":"fail"}}"#).unwrap();
     assert_eq!(fs.0.tick(&mut ctx), Status::Success);
@@ -217,7 +217,7 @@ fn reactive_selector_switches_to_brake_the_instant_it_arrives() {
     ]}"#;
     let mut behavior = AutopilotBehavior::from_json(json).unwrap();
     // Away from the goal → arrived fails → falls through to drive_to → throttle up.
-    let mut ctx = DriveCtx { pos: Vec3::new(50.0, 0.0, 0.0), fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut ctx = DriveCtx { pos: Vec3::new(50.0, 0.0, 0.0), fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     behavior.0.tick(&mut ctx);
     assert!(ctx.out.0 > 0.0 && ctx.out.2 < 0.5, "far → drive, got {:?}", ctx.out);
     // Teleport onto the goal → the higher-priority branch preempts → brake.
@@ -235,7 +235,7 @@ fn timeout_aborts_a_running_child_on_the_mission_clock() {
         r#"{"kind":"timeout","seconds":2.0,"child":{"kind":"cruise","throttle":0.5}}"#,
     )
     .unwrap();
-    let mut ctx = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut ctx = DriveCtx { pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, self_gid: 0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     assert_eq!(behavior.0.tick(&mut ctx), Status::Running, "armed at t=0 (deadline 2)");
     assert_eq!(behavior.0.tick(&mut ctx), Status::Running, "frozen clock → still running");
     ctx.now = 1.9;
@@ -263,6 +263,7 @@ fn follow_tracks_a_live_target_and_fails_when_it_vanishes() {
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
         targets: Arc::new(targets),
+        clearance: Default::default(),
     };
     assert_eq!(behavior.0.tick(&mut ctx), Status::Running, "keeps following, never finishes");
     assert!(ctx.out.0 > 0.0, "drives toward the live target, got {:?}", ctx.out);
@@ -297,6 +298,7 @@ fn intercept_leads_a_moving_target_and_succeeds_on_contact() {
         self_gid: 0,
         out: (0.0, 0.0, 0.0),
         targets: Arc::new(targets),
+        clearance: Default::default(),
     };
     // Not yet in contact → Running, driving. The lead point is (20, 0, 10), i.e. off
     // to +Z of the target, so we steer toward the future position, not the tail.
@@ -333,6 +335,7 @@ fn obstacle_ahead_senses_a_vessel_in_the_forward_cone_and_excludes_self() {
         now: 0.0,
         out: (0.0, 0.0, 0.0),
         targets: Arc::new(targets),
+        clearance: Default::default(),
     };
     assert_eq!(behavior.0.tick(&mut ctx), Status::Success, "vessel ahead → obstacle");
 
@@ -356,9 +359,9 @@ fn facing_guards_heading_and_hold_stays_running() {
     // facing? Success when pointed at the target within tolerance, else Failure.
     let mut facing =
         AutopilotBehavior::from_json(r#"{"kind":"facing","target":[10.0,0.0,0.0],"tolerance":8.0}"#).unwrap();
-    let mut aligned = DriveCtx { self_gid: 0, pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut aligned = DriveCtx { self_gid: 0, pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     assert_eq!(facing.0.tick(&mut aligned), Status::Success);
-    let mut off = DriveCtx { self_gid: 0, pos: Vec3::ZERO, fwd: Vec3::Z, now: 0.0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut off = DriveCtx { self_gid: 0, pos: Vec3::ZERO, fwd: Vec3::Z, now: 0.0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     assert_eq!(facing.0.tick(&mut off), Status::Failure);
 
     // hold: brakes and never finishes (stays Running).
@@ -374,10 +377,62 @@ fn cooldown_blocks_re_entry_for_the_lockout_window() {
     // pass, then fires again.
     let mut behavior =
         AutopilotBehavior::from_json(r#"{"kind":"cooldown","seconds":2.0,"child":{"kind":"succeed"}}"#).unwrap();
-    let mut ctx = DriveCtx { self_gid: 0, pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, out: (0.0, 0.0, 0.0), targets: Default::default() };
+    let mut ctx = DriveCtx { self_gid: 0, pos: Vec3::ZERO, fwd: Vec3::X, now: 0.0, out: (0.0, 0.0, 0.0), targets: Default::default(), clearance: Default::default() };
     assert_eq!(behavior.0.tick(&mut ctx), Status::Success, "first fire allowed");
     ctx.now = 1.0;
     assert_eq!(behavior.0.tick(&mut ctx), Status::Failure, "within lockout → blocked");
     ctx.now = 2.0;
     assert_eq!(behavior.0.tick(&mut ctx), Status::Success, "lockout elapsed → fires again");
+}
+
+#[test]
+fn path_blocked_reads_the_forward_raycast_clearance() {
+    use lunco_behavior::Status;
+    let mut behavior = AutopilotBehavior::from_json(r#"{"kind":"path_blocked","distance":5.0}"#).unwrap();
+    let mut ctx = DriveCtx {
+        self_gid: 0,
+        pos: Vec3::ZERO,
+        fwd: Vec3::X,
+        now: 0.0,
+        out: (0.0, 0.0, 0.0),
+        targets: Default::default(),
+        clearance: Clearance { ahead: Some(3.0), left: None, right: None, range: 20.0 },
+    };
+    assert_eq!(behavior.0.tick(&mut ctx), Status::Success, "hit at 3 m < 5 m → blocked");
+    // Hit beyond the threshold → clear.
+    ctx.clearance.ahead = Some(9.0);
+    assert_eq!(behavior.0.tick(&mut ctx), Status::Failure, "hit at 9 m > 5 m → clear");
+    // No hit at all → clear.
+    ctx.clearance.ahead = None;
+    assert_eq!(behavior.0.tick(&mut ctx), Status::Failure, "no hit → clear");
+}
+
+#[test]
+fn steer_clear_goes_straight_when_open_and_turns_toward_the_open_side() {
+    use lunco_behavior::Status;
+    let mut behavior = AutopilotBehavior::from_json(r#"{"kind":"steer_clear","speed":0.6}"#).unwrap();
+    // Wide open ahead → drive straight, no steer.
+    let mut ctx = DriveCtx {
+        self_gid: 0,
+        pos: Vec3::ZERO,
+        fwd: Vec3::X,
+        now: 0.0,
+        out: (0.0, 0.0, 0.0),
+        targets: Default::default(),
+        clearance: Clearance { ahead: None, left: None, right: None, range: 20.0 },
+    };
+    assert_eq!(behavior.0.tick(&mut ctx), Status::Running);
+    assert!(ctx.out.0 > 0.0 && ctx.out.1.abs() < 1e-6, "open → straight, got {:?}", ctx.out);
+
+    // Blocked ahead, more room on the LEFT probe → steer toward it (nonzero steer),
+    // throttle eased.
+    ctx.clearance = Clearance { ahead: Some(4.0), left: Some(18.0), right: Some(5.0), range: 20.0 };
+    assert_eq!(behavior.0.tick(&mut ctx), Status::Running);
+    assert!(ctx.out.1.abs() > 0.0, "blocked → steers toward open side, got {:?}", ctx.out);
+    assert!(ctx.out.0 > 0.0 && ctx.out.0 < 0.6, "throttle eased when tight, got {:?}", ctx.out);
+
+    // Boxed in on all probes → brake.
+    ctx.clearance = Clearance { ahead: Some(1.0), left: Some(1.0), right: Some(1.0), range: 20.0 };
+    assert_eq!(behavior.0.tick(&mut ctx), Status::Running);
+    assert!(ctx.out.2 > 0.5, "boxed in → brake, got {:?}", ctx.out);
 }
