@@ -2,11 +2,12 @@
 // `/LanderTest/Lander`. EVENT-DRIVEN only: no control loop, no per-tick routing.
 //
 // Control is entirely WIRING-LEVEL now (no rhai stepping):
-//   • The GNC law (Modelica) outputs `gnc_throttle`; a USD self-wire
-//     (`gnc_throttle:external_throttle`) drives the actuator every tick in the cosim
-//     propagation — realtime, no script involved.
-//   • A possessing human's control binding writes the same command inputs and
-//     overrides the GNC wire (human > gnc). Authority is possession, not a flag.
+//   • The internal GNC law lives in `Lander.mo` and actuates the vessel directly.
+//   • It YIELDS to its pilot via the WIRED `piloted` port (1 when a session — a user
+//     or an autopilot — possesses the vessel). A possessing session's control
+//     binding writes the command inputs; the model's `piloted` gate selects them.
+//   • Authority is possession (derived by `PILOTED_BACKEND` in Rust), not a flag —
+//     nothing here touches it.
 //
 // This script only ORCHESTRATES via events: it latches touchdown for the mission to
 // react to, and reacts to the native Modelica fuel `when` events.
@@ -23,17 +24,11 @@ fn on_tick(me) {
 }
 
 fn on_event(me, evt) {
-    // AUTHORITY (gnc < human), EVENT-DRIVEN: on any possession change, re-evaluate
-    // who drives THIS lander and flip the model's `manual` gate. `controller(me)`
-    // reads the possession arbiter (ground truth), so a human possessing it → manual
-    // 1 (their stick drives), releasing / possessing something else → manual 0 (GNC
-    // resumes). No per-tick loop — this fires only on the possession events.
-    if evt.name == "cmd:PossessVessel" || evt.name == "cmd:ReleaseVessel" {
-        let drv = controller(me);
-        let m = if drv != () && drv != "AiAgent" { 1.0 } else { 0.0 };
-        set(me, "manual", m);
-        print("[Lander] authority: manual=" + m + " (driver=" + drv + ")");
-    }
+    // AUTHORITY is now a first-class WIRED signal: the vessel's `piloted` port
+    // (1 when ANY session — a user or an autopilot — possesses it, derived from the
+    // possession registry in Rust) is wired straight to the internal GNC model,
+    // which yields on it. No script toggle here — the internal controller reads
+    // possession status directly through the wire.
 
     // Native Modelica fuel `when` events (from `lunco:portEvents`).
     if evt.name == "lander_low_fuel" {

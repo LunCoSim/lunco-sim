@@ -7,6 +7,7 @@
   "MoveUp":       ["KeyE"],
   "MoveDown":     ["KeyQ"],
   "Action":       ["KeyF", "Space"],
+  "Release":      ["KeyG"],
   "SwitchMode":   ["KeyV"],
   "Pause":        ["KeyP"]
 }

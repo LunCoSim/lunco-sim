@@ -71,6 +71,9 @@ pub enum UserIntent {
 
     /// Context-sensitive primary interaction.
     Action,
+    /// Release/detach a dock or coupling (e.g. a lander→rover fixed joint). Routed
+    /// through the normal intent→port machinery to a `release` command port.
+    Release,
     /// Toggles between different control or view modes.
     SwitchMode,
     /// Pauses or unpauses the simulation state.
@@ -128,6 +131,7 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
         "up" | "moveup" | "yaw_right" => Some(UserIntent::MoveUp),
         "down" | "movedown" | "yaw_left" => Some(UserIntent::MoveDown),
         "action" | "brake" | "arm" | "fire" => Some(UserIntent::Action),
+        "release" | "detach" | "eject" | "decouple" => Some(UserIntent::Release),
         "switchmode" | "switch_mode" => Some(UserIntent::SwitchMode),
         "pause" => Some(UserIntent::Pause),
         _ => None,

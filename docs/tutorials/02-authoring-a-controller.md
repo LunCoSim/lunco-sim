@@ -1,0 +1,103 @@
+# Tutorial 02 — Author your own vessel controller
+
+Build a self-flying vessel from scratch, the LunCoSim way: the **control law in
+Modelica**, **logic in rhai**, **structure + authority in USD** — and a human (or an
+autopilot) that can take over. By the end you'll understand every layer of the
+lander's GNC and be able to write your own.
+
+> Reference (dense): [`skills/authoring-vessel-controllers`](../../skills/authoring-vessel-controllers/SKILL.md).
+> Worked example: `assets/models/Lander.mo` + `scenarios/lander_subsystems.rhai` +
+> `scenes/sandbox/lander_test.usda`.
+
+We'll build **`Hover.mo`** — a thruster that holds a target altitude and yields to a
+pilot. Small, but it exercises the whole stack.
+
+## Step 1 — the control law (Modelica)
+
+Create `assets/models/Hover.mo`. The model reads a **sensed** altitude and vertical
+velocity, computes a hover thrust, and yields to a pilot on the `piloted` gate:
+
+```modelica
+model Hover
+  parameter Real max_thrust = 20000.0;
+  input Real vehicle_mass = 500.0;     // wired from the body `mass`
+  input Real g = 1.62;
+  input Real target_alt = 10.0;
+  input Real altitude = 0.0;           // SENSED (wired, Step 3)
+  input Real climb_rate = 0.0;         // body velocity_y (wired)
+  input Real piloted = 0.0;            // authority gate (wired, Step 4)
+  input Real external_throttle = 0.0;  // pilot stick
+  output Real force_y, throttle;
+  Real gnc, cmd, filt(start = 0.0);
+equation
+  // GNC law: feed-forward hover + PD to the set-point. DIRECT (no spool).
+  gnc = min(max((g + 1.5*(target_alt - altitude) - 2.0*climb_rate) * vehicle_mass
+               / max_thrust, 0.0), 1.0);
+  der(filt) = (external_throttle - filt) / 0.3;      // spool the pilot stick (keeps it live)
+  cmd = piloted*filt + (1.0 - piloted)*gnc;          // yield-to-pilot gate, branch-free
+  force_y = cmd * max_thrust;
+  throttle = cmd;
+end Hover;
+```
+
+Why it's shaped this way: `min`/`max` (not `if`) for rumoca-safe clamps; the GNC path
+is direct so its braking isn't laggy; the pilot stick feeds a `der` so it stays a live
+input; `piloted` selects between them. (See the skill for the *input-folding* rule —
+the #1 gotcha.)
+
+## Step 2 — the supervisor (rhai, events only)
+
+Create `assets/scenarios/hover_super.rhai`. **No control loop** — just react to events:
+
+```rhai
+fn on_event(me, evt) {
+    if evt.name == "low_fuel" { notify_kind("Hover: low fuel", "warn"); }
+}
+```
+
+(A real controller sequences phases here with `wait_for`/`wait_until` or reacts to
+`lunco:portEvents`. Never write command ports every tick from rhai.)
+
+## Step 3 — sensors + wiring (USD)
+
+On your vessel prim, mount a referenced altimeter and wire sensors → model inputs, and
+model force → body. Mass comes from the body's own port (no magic number):
+
+```usda
+def "Altimeter" (prepend references = @../../vessels/sensors/altimeter.usda@</Altimeter>)
+{ double3 xformOp:translate = (0, -1, 0); uniform token[] xformOpOrder = ["xformOp:translate"] }
+
+# on the vessel prim:
+string lunco:modelicaModel = "models/Hover.mo"
+string lunco:simWires = "force_y:force_y,velocity_y:climb_rate,mass:vehicle_mass,piloted:piloted,throttle:throttle"
+custom string lunco:scriptPath = "scenarios/hover_super.rhai"
+```
+
+Feed `altitude` from the altimeter with a cross-prim wire (like `AltimeterToLander`):
+`lunco:wireFrom = <Altimeter>`, `fromPort = "range"`, `wireTo = <vessel>`, `toPort = "altitude"`.
+
+## Step 4 — control authority (already done!)
+
+You wired `piloted:piloted` in Step 3 — that's the whole authority mechanism. The
+`piloted` port is `1.0` whenever a session (a user **or** an autopilot) possesses the
+vessel, derived from the possession registry (`PILOTED_BACKEND`). Add a pilot
+intent→port binding (inherit `_LanderControl` or author your own) so the stick reaches
+`external_throttle` when possessed.
+
+Nothing else to write: **unpossessed → the GNC hovers; possess → the pilot flies;
+release → the GNC resumes.**
+
+## Step 5 — run & tune
+
+Load the scene, watch it hover. Possess it (click / F) and throttle — you fly it.
+Release — it holds again. Open the Inspector during the run and drag `target_alt` (make
+it a der-fed live input if you want it editable at sim-rate — see the skill).
+
+## What you learned
+
+- **Three languages, three jobs**: math→Modelica, events→rhai, structure/authority→USD.
+- **`piloted`** is the one, general control-authority signal — never a bespoke gate.
+- **Sensors, not god-view**; **wire constants** from the body; **keep inputs live**.
+
+Next: read the [lander GNC](../../assets/models/Lander.mo) — it's this same pattern with
+a velocity-scheduled descent, IMU attitude, and τ=I·α torque wired from inertia.

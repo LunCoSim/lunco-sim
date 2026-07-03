@@ -86,5 +86,12 @@ class "_LanderControl"
             uniform string lunco:port = "external_throttle"
             uniform double lunco:scale = 1
         }
+        # release/detach (G) → the dock-release actuator port; on the rising edge it
+        # detaches the fixed joint attaching this vessel to another body.
+        def "release"
+        {
+            uniform string lunco:port = "release"
+            uniform double lunco:scale = 1
+        }
     }
 }

@@ -36,9 +36,9 @@ fn task(me) {
         once(|m| {
             // Camera rides along WITHOUT possessing: `follow` inserts a chase camera
             // (SpringArmCamera) but no ControllerLink, so the lander stays UNPOSSESSED
-            // and its onboard GNC keeps driving via the `gnc_throttle:external_throttle`
-            // self-wire. (Possession would let the idle control binding write 0 and
-            // fight the wire — so it's reserved for a human deliberately taking over.)
+            // → its `piloted` port reads 0 → the internal GNC flies it. Possessing it
+            // would set piloted=1 and hand control to the pilot — reserved for a human
+            // (or an autopilot) deliberately taking over.
             follow(find("/LanderTest/Lander"));
             show_wp(2, false);
             show_wp(3, false);

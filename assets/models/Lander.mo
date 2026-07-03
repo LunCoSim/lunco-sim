@@ -1,14 +1,14 @@
-// tagline: Lander — onboard GNC + actuator with a LIVE (der-fed) manual-override gate; authority = possession events
+// tagline: Lander — internal GNC + actuator; yields to its pilot via the wired `piloted` authority signal
 model Lander
   "Powered-descent lander. The GNC control LAW (Modelica) computes `gnc_throttle`
-   directly; the actuator turns the SELECTED command into world force/torque. A
-   `manual` gate chooses GNC (0) vs the possessing human's stick (1). The gate is
-   made LIVE by routing `manual` through a `der` (→ `manual_live`) — an unwired
-   algebraic input folds in rumoca, a `der`-fed one stays a real runtime slot the
-   solver reads. The supervisor flips `manual` on POSSESSION EVENTS (not per-tick),
-   so gnc < human with no wire fighting the pilot and no per-tick scripting.
-   The human throttle is spool-filtered (feel); the GNC path is DIRECT (responsive
-   braking — a spool lag on the GNC is what made an earlier build tumble)."
+   directly; the actuator turns the SELECTED command into world force/torque. The
+   authority gate is the WIRED `piloted` port (1 when any session — a user or an
+   autopilot — possesses the vessel, derived from the possession registry): it
+   selects the session's stick when piloted, the internal GNC when not. Because
+   `piloted` is wired it is a live input the solver reads — no in-model flag, no
+   per-tick scripting, no wire fighting the pilot. The session throttle is
+   spool-filtered (feel); the GNC path is DIRECT (responsive braking — a spool lag
+   on the GNC is what made an earlier build tumble)."
 
   // ── Structural parameters ──
   parameter Real max_thrust = 60000.0 "Max engine thrust (N)";
@@ -33,8 +33,8 @@ model Lander
   input Real q_w = 1.0; input Real q_x = 0.0; input Real q_y = 0.0; input Real q_z = 0.0;
 
   // ── Authority + command inputs ──
-  input Real manual = 0.0 "0 = GNC drives; 1 = the possessing human's stick drives (set on possession EVENTS)";
-  input Real external_throttle = 0.0 "Human vertical thrust command 0..1";
+  input Real piloted = 0.0 "1 = a session (User/Autopilot) drives; 0 = intrinsic GNC. WIRED from the vessel's `piloted` port (derived from possession) — a first-class control-authority signal, not an in-model flag";
+  input Real external_throttle = 0.0 "Session vertical thrust command 0..1";
   input Real pitch = 0.0; input Real roll = 0.0; input Real yaw = 0.0;
 
   // ── Outputs ──
@@ -46,19 +46,18 @@ model Lander
   Real thrust;
   Real vy_sched, target_vy, a_cmd, gnc_raw, gnc_pos, gnc_thrust, gnc_throttle;
   Real cmd_throttle;
-  // LIVE (der-fed) copies — routing an input through a `der` stops rumoca folding it.
+  // LIVE (der-fed) copies of the tunable gains — a `der` stops rumoca folding them.
+  // (`piloted` needs no such trick: it's WIRED, hence already a live input.)
   Real kv_live(start = 1.2);
   Real ang_live(start = 2.0);
-  Real manual_live(start = 0.0);
   Real filter_throttle(start = 0.0), filter_pitch(start = 0.0), filter_roll(start = 0.0), filter_yaw(start = 0.0);
   Real f_loc_y, t_loc_x, t_loc_y, t_loc_z;
   Real f_world_x, f_world_y, f_world_z, t_world_x, t_world_y, t_world_z;
 
 equation
-  // Keep the tunable gains + the authority flag LIVE (der-fed → not folded).
+  // Keep the tunable gains LIVE (der-fed → not folded).
   der(kv_live) = (kv - kv_live) / 0.02;
   der(ang_live) = (ang_authority - ang_live) / 0.02;
-  der(manual_live) = (manual - manual_live) / 0.05;
 
   // ── GNC LAW → gnc_throttle (DIRECT, no spool). Velocity-scheduled descent. ──
   vy_sched = min(max(descent_slope * (altitude - rest_altitude), 0.0), vy_max);
@@ -75,13 +74,14 @@ equation
   der(filter_roll) = (roll - filter_roll) / spool_tau;
   der(filter_yaw) = (yaw - filter_yaw) / spool_tau;
 
-  // ── AUTHORITY GATE: branch-free select (rumoca-safe). manual_live is 0/1 from
-  //    possession events; GNC is the baseline. Attitude is manual-only (gated). ──
-  cmd_throttle = manual_live * filter_throttle + (1.0 - manual_live) * gnc_throttle;
+  // ── AUTHORITY GATE: branch-free select (rumoca-safe). `piloted` (WIRED from the
+  //    vessel's possession-derived port) is 1 when a user drives, 0 → intrinsic GNC.
+  //    Attitude is user-only (gated), so the autonomous descent issues no torque. ──
+  cmd_throttle = piloted * filter_throttle + (1.0 - piloted) * gnc_throttle;
   f_loc_y = cmd_throttle * max_thrust;
-  t_loc_x = manual_live * filter_pitch * inertia_xx * ang_live;   // τ = I·α, pitch about X
-  t_loc_y = manual_live * filter_yaw * inertia_yy * ang_live;     // τ = I·α, yaw   about Y
-  t_loc_z = manual_live * filter_roll * inertia_zz * ang_live;    // τ = I·α, roll  about Z
+  t_loc_x = piloted * filter_pitch * inertia_xx * ang_live;   // τ = I·α, pitch about X
+  t_loc_y = piloted * filter_yaw * inertia_yy * ang_live;     // τ = I·α, yaw   about Y
+  t_loc_z = piloted * filter_roll * inertia_zz * ang_live;    // τ = I·α, roll  about Z
 
   // Rotate local +Y thrust into world by the body quaternion.
   f_world_x = 2.0 * (q_x*q_y + q_w*q_z) * f_loc_y;
