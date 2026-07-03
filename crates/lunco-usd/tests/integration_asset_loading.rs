@@ -488,7 +488,6 @@ fn test_full_scene_loads_with_rovers() {
     // Load scene — Ground + Ramp + 5 rover instances (2 base files)
     // Matrix: 2 steering × 2 wheel types = 4 variants, plus 1 extra Ackermann
     let scene_path = Path::new("../../assets/scenes/sandbox/sandbox_scene.usda");
-    let scene_composed = compose_asset_from_file(scene_path);
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -519,8 +518,7 @@ fn test_full_scene_loads_with_rovers() {
     app.insert_resource(Time::<Fixed>::from_hz(0.0001));
 
     // Spawn scene — rovers come from scene references
-    let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-    let scene_handle = stages.add(UsdStageAsset { reader: Arc::new(scene_composed) });
+    let scene_handle = add_canonical_from_file(&mut app, scene_path);
     app.world_mut().spawn((
         Name::new("TestScene"),
         UsdPrimPath { stage_handle: scene_handle.clone(), path: "/SandboxScene".to_string() },

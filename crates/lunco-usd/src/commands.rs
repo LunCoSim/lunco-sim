@@ -312,8 +312,14 @@ fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
     // reads the live composed stage. Doc-overlay projection of runtime edits to
     // an opened file (the deleted `live_projection`'s job) is folded into the
     // `twin://` overlay path.
+    //
+    // Only mount when the asset pipeline is present: a headless doc-only context
+    // (API / MCP open, or the open-file unit test) has no `AssetServer`, and the
+    // document still opens through the async read path above.
     commands.queue(move |world: &mut World| {
-        lunco_usd_sim::cosim::spawn_scene_root_world(world, &path, "");
+        if world.contains_resource::<bevy::asset::AssetServer>() {
+            lunco_usd_sim::cosim::spawn_scene_root_world(world, &path, "");
+        }
     });
 }
 

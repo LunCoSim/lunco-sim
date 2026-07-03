@@ -4,18 +4,20 @@ use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use avian3d::prelude::*;
 use lunco_mobility::WheelRaycast;
-use std::sync::Arc;
 
 fn main() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(AssetPlugin::default());
-    
+
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
     app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
-    
+    // The avian/sim extractors read the LIVE canonical stage; without
+    // `UsdBevyPlugin` this harness must provide the resource itself.
+    app.init_non_send_resource::<CanonicalStages>();
+
     app.add_plugins((
         UsdAvianPlugin,
         UsdSimPlugin,
@@ -24,14 +26,20 @@ fn main() {
     println!("\n--- Loading Rucheyok Rover Physics ---");
 
     // Compose from disk (synchronous, no async AssetServer) so the referenced
-    // wheel / panel attributes the physics mapping reads are resolved.
+    // wheel / panel attributes the physics mapping reads are resolved, then
+    // publish the composed stage as the live canonical stage.
     let path = "assets/vessels/rovers/rucheyok/rucheyok.usda";
-    let reader = Arc::new(
-        compose_file(std::path::Path::new(path)).expect("Failed to compose rucheyok.usda"),
-    );
-
-    let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-    let stage_handle = stages.add(UsdStageAsset { reader });
+    let stage_handle = {
+        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
+        stages.add(UsdStageAsset { recipe: None })
+    };
+    let stage = compose_file_to_stage(std::path::Path::new(path))
+        .expect("Failed to compose rucheyok.usda");
+    let cstage = CanonicalStage::from_stage(stage, path.to_string());
+    app.world_mut()
+        .get_non_send_resource_mut::<CanonicalStages>()
+        .expect("CanonicalStages resource")
+        .insert(stage_handle.id(), cstage);
 
     // Spawn manually
     let entities = vec![
