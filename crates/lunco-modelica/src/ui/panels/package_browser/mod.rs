@@ -13,7 +13,7 @@ pub mod render;
 // module so the headless/server build can resolve packages without
 // egui. This panel renders that backend; pull the names it uses into
 // scope (not re-exported — callers reach them via `crate::package_tree`).
-use crate::package_tree::{PackageNode, InMemoryEntry, PackageTreeCache};
+use crate::package_tree::{PackageNode, PackageTreeCache};
 pub use render::PackageBrowserPanel;
 
 // NOTE: there is deliberately no `PackageBrowserPlugin`. The package-browser

@@ -371,8 +371,28 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
         );
         return;
     }
+    // Bundled fallback: a LunCoSim example shipped in the binary
+    // (`assets/models/*.mo`, embedded via `include_str!` — no file path). This
+    // is the third `SourceRootKind` (`Bundled`), so routing it here means
+    // `OpenClass{qualified}` resolves the WHOLE schema — MSL, open workspace
+    // docs, AND bundled demos — through one command instead of the Welcome
+    // panel owning a separate bundled opener. Match the top-level qualified
+    // segment against a bundled model's filename stem and open it in-memory.
+    let stem = qualified.split('.').next().unwrap_or(qualified);
+    if crate::models::bundled_models()
+        .iter()
+        .any(|m| m.filename.trim_end_matches(".mo") == stem)
+    {
+        bevy::log::info!("[CanvasDiagram] drill-in: opening bundled `{stem}`");
+        crate::ui::panels::package_browser::open_class(
+            world,
+            crate::class_ref::ClassRef::bundled([stem]),
+            true,
+        );
+        return;
+    }
     bevy::log::warn!(
-        "[CanvasDiagram] drill-in: could not locate `{}` (no MSL match, no open doc with that class)",
+        "[CanvasDiagram] drill-in: could not locate `{}` (no MSL match, no open doc, no bundled model)",
         qualified
     );
 }

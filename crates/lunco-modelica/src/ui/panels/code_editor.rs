@@ -307,39 +307,6 @@ pub fn editor_on_doc_changed(
     buf_state.cached_galley = None;
 }
 
-/// Pull the live source for `path` from the document registry by
-/// `doc` id and stuff it into `EditorBufferState`'s live fields.
-/// Per-tab routing (split views) requires the doc-id keyed lookup —
-/// the legacy active-doc-only variant returned
-/// whichever tab rendered last.
-fn sync_buffer_from_registry(world: &mut World, doc: lunco_doc::DocumentId) {
-    let (source, detected_name, generation) = {
-        let registry = world.resource::<ModelicaDocumentRegistry>();
-        let Some(host) = registry.host(doc) else { return };
-        let document = host.document();
-        let src = document.source().to_string();
-        // Cheap per-doc detected name from the AST index (no parse).
-        let detected = document
-            .index()
-            .classes
-            .values()
-            .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
-            .map(|c| c.name.clone());
-        (src, detected, host.generation())
-    };
-    // Galley cache is layout-tied; can't pull it from the registry.
-    // Letting it be None here forces a one-frame relayout — same
-    // cost path tab-switch already takes. Cheap on text bodies.
-    let mut buf_state = world.resource_mut::<EditorBufferState>();
-    buf_state.text = source;
-    buf_state.bound_doc = Some(doc);
-    buf_state.generation = generation;
-    buf_state.detected_name = detected_name;
-    buf_state.cached_galley = None;
-    // Fresh load from doc → no pending commit yet.
-    buf_state.pending_commit_at = None;
-}
-
 /// Code Editor panel — central viewport for Modelica source code.
 pub struct CodeEditorPanel;
 
@@ -458,9 +425,9 @@ impl Panel for CodeEditorPanel {
                     .unwrap_or(0);
                 let stale = buf.generation != external_gen;
                 if !restored || stale {
-                    // Inline sync-from-registry (no `&mut World` to call
-                    // `sync_buffer_from_registry`): read the doc source +
-                    // detected name through `ctx` and write into `buf`.
+                    // Inline sync-from-registry (this render path has `ctx`, not
+                    // `&mut World`): read the doc source + detected name through
+                    // `ctx` and write into `buf`.
                     if let Some((source, detected, generation)) = ctx
                         .resource::<ModelicaDocumentRegistry>()
                         .and_then(|r| r.host(doc))

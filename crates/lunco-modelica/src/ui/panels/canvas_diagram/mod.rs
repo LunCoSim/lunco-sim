@@ -850,29 +850,9 @@ pub fn active_doc_from_world_ctx(
         .and_then(|w| w.active_document)
 }
 
-/// `(doc, drilled_class)` for the currently-rendering tab body.
-/// Falls back to `(active_document, DrilledInClassNames[doc])` when
-/// no tab body is rendering — preserves legacy semantics for
-/// observers / systems that fire outside a body render.
-pub(super) fn render_target(
-    world: &World,
-) -> Option<(lunco_doc::DocumentId, Option<String>)> {
-    if let Some(ctx) = world
-        .get_resource::<crate::model_tabs_types::TabRenderContext>()
-    {
-        if let Some(doc) = ctx.doc {
-            return Some((doc, ctx.drilled_class.clone()));
-        }
-    }
-    let doc = world
-        .resource::<lunco_workspace::WorkspaceResource>()
-        .active_document?;
-    let drilled = crate::sim_default::drilled_class_for_doc(world, doc);
-    Some((doc, drilled))
-}
-
-/// `PanelCtx` sibling of [`render_target`] — same `(doc, drilled_class)`
-/// resolution reading through the capability-narrowed panel context.
+/// `(doc, drilled_class)` for the currently-rendering tab body, read through the
+/// capability-narrowed [`PanelCtx`](lunco_workbench::PanelCtx). Falls back to
+/// `(active_document, DrilledInClassNames[doc])` when no tab body is rendering.
 #[cfg(feature = "ui")]
 pub(super) fn render_target_ctx(
     ctx: &lunco_workbench::PanelCtx,

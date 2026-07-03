@@ -148,17 +148,40 @@ impl LunCoApiPlugin {
     }
 }
 
+/// Add `plugin` only if a plugin of the same type isn't already present.
+/// `Plugin` is unique by default and a duplicate `add_plugins` panics, so this
+/// keeps the transport-free core composable across `LunCoApiPlugin` and
+/// `LunCoScriptingPlugin` (which both want it) regardless of add order.
+pub fn add_plugin_once<P: Plugin>(app: &mut App, plugin: P) {
+    if !app.is_plugin_added::<P>() {
+        app.add_plugins(plugin);
+    }
+}
+
+/// Ensure the **transport-free command core** — the reflect-based command
+/// dispatcher ([`ApiExecutorPlugin`]) and entity-id registry
+/// ([`ApiEntityRegistryPlugin`]) — is present, without pulling any transport
+/// (no HTTP server, no `LunCoApiPlugin`). This is the seam that lets the
+/// scripting substrate run `cmd()` **independently of the API**: an app can add
+/// `LunCoScriptingPlugin` alone and scripts still dispatch every `#[Command]`.
+/// Idempotent — safe to call from both plugins.
+pub fn ensure_command_core(app: &mut App) {
+    add_plugin_once::<ApiExecutorPlugin>(app, ApiExecutorPlugin);
+    add_plugin_once::<ApiEntityRegistryPlugin>(app, ApiEntityRegistryPlugin);
+}
+
 impl Plugin for LunCoApiPlugin {
     fn build(&self, app: &mut App) {
-        // Core systems (always enabled)
-        app.add_plugins((
-            ApiEntityRegistryPlugin,
-            ApiQueryRegistryPlugin,
-            ApiVisibilityPlugin,
-            ApiExecutorPlugin,
-            ApiDiscoveryPlugin,
-            ApiTelemetryPlugin,
-        ));
+        // Transport-free command core (always enabled). Added via guarded helpers
+        // so it COMPOSES with `LunCoScriptingPlugin`, which now self-supplies the
+        // same core (`ensure_command_core`) to stay independent of this HTTP-API
+        // plugin — either may be added first, and neither double-adds. Plain
+        // `add_plugins` panics on a duplicate, hence the `is_plugin_added` guards.
+        ensure_command_core(app);
+        add_plugin_once::<ApiQueryRegistryPlugin>(app, ApiQueryRegistryPlugin);
+        add_plugin_once::<ApiVisibilityPlugin>(app, ApiVisibilityPlugin);
+        add_plugin_once::<ApiDiscoveryPlugin>(app, ApiDiscoveryPlugin);
+        add_plugin_once::<ApiTelemetryPlugin>(app, ApiTelemetryPlugin);
 
         // Built-in transform-only spatial query providers (Nearest,
         // EntitiesInRadius) — reachable over the API and via the scripting

@@ -9,7 +9,7 @@ description = "Native Modelica simulation integration for LunCoSim using Rumoca"
 # --api` Just Works for screenshot-driven debugging. Building without it
 # (`cargo build --no-default-features`) drops the axum/tokio web stack,
 # which matters for the wasm32 binary.
-default = ["lunco-api", "lunco-api/transport-http", "lunco-api/render", "ui"]
+default = ["lunco-api", "lunco-api/transport-http", "lunco-api/render", "ui", "scripting"]
 # The egui Modelica IDE: panels, diagram canvas, plots, docs viewer. OFF ⇒ the
 # compile core (ModelicaCorePlugin) builds headless — no egui/winit, no lyon,
 # no workbench shell. Consumers that need only the compiler (lunco-usd-sim on a
@@ -38,6 +38,12 @@ lunco-api = ["dep:lunco-api"]
 # bin with `--no-default-features --features server`. No `lunco-api/render` (the
 # server captures no screenshots) and no winit/egui.
 server = ["lunco-api", "lunco-api/transport-http"]
+# In-app rhai scripting: run/hot-reload scenarios and drive the workbench from
+# scripts (used by the rhai-authored lunica tutorials). INDEPENDENT of the API
+# feature — `lunco-scripting` self-supplies the transport-free command core, so
+# `cmd()` works with no HTTP server. On `default` so the GUI ships with it; drop
+# it (`--no-default-features`) for a scripting-free compile-core build.
+scripting = ["dep:lunco-scripting"]
 # Opt-in Tracy profiler hook. Off by default because tracy-client-sys needs a
 # C++ compile that breaks on wasm32 and on Windows MSVC 2019 (missing
 # `RelationProcessorDie` enumerant in pre-2004 Win10 SDKs). Enable with
@@ -184,6 +190,12 @@ crossbeam-channel = { workspace = true }
 # `default-features = false`: the `lunco-api` (native) and `web` features pick
 # the transport — `transport-http` vs. `transport-wasm`.
 lunco-api = { path = "../lunco-api", optional = true, default-features = false }
+# In-app rhai scripting runtime (RunScenario/hot-reload + the `cmd()`/prelude
+# world-bridge). Optional behind the `scripting` feature. Its default `rhai`
+# backend is wasm-clean, and it pulls `lunco-api` only default-features=false
+# (the transport-free command core) — no HTTP transport, keeping scripting
+# independent of the API server.
+lunco-scripting = { path = "../lunco-scripting", optional = true }
 # PERF-CRITICAL: compile-time static max level for the `log` facade.
 #
 # Why: parol_runtime (rumoca's parser engine) calls `log::trace!` in its

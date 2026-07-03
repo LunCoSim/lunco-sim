@@ -1397,12 +1397,10 @@ fn param_map_from_mods(
 /// `label`, when set, replaces the auto-generated "Run N" name so sweep rows
 /// are identifiable in `ListRuns`. Returns the new experiment id, or `None`
 /// when dispatch can't proceed (no doc, ambiguous class → picker, etc.).
-// `bounds_from_annotation` + `resolve_setup_bounds` are UI-free (they read
-// document/runner state) and moved to `crate::model_commands` so the headless
-// API server resolves sim bounds too. Re-exported here so the local callers
-// below and the `crate::ui::commands::compile::{...}` paths used by the
-// Experiments / Model-View panels keep resolving.
-pub(crate) use crate::model_commands::{bounds_from_annotation, resolve_setup_bounds};
+// `resolve_setup_bounds` is UI-free (reads document/runner state) and lives in
+// `crate::model_commands` so the headless API server resolves sim bounds too.
+// Re-exported here for the local callers below.
+pub(crate) use crate::model_commands::resolve_setup_bounds;
 
 fn dispatch_experiment(
     world: &mut World,
