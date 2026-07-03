@@ -19,7 +19,7 @@
 //! runs pay nothing (spec 011, "Architectural Separation").
 
 use bevy::prelude::*;
-use bevy_egui::egui;
+use bevy_egui::{egui, EguiPrimaryContextPass};
 use lunco_core::subsystems::{SubsystemToggles, SUBSYSTEMS};
 use lunco_core::{on_command, register_commands, Command, NextScene, Severity, TelemetryEvent, TelemetryValue};
 use lunco_workbench::tutorial_overlay::TutorialHud;
@@ -90,6 +90,13 @@ pub struct TutorialProgress {
     /// `#[serde(default)]` keeps older `settings.json` (no field) loading.
     #[serde(default)]
     pub onboarded: bool,
+    /// When `true`, a finished scenario chains straight to its `lunco:nextScene`
+    /// successor with no prompt (the old behaviour). When `false` (the default),
+    /// completion instead raises the [`PendingAdvance`] confirm popup so the user
+    /// decides whether to move on — no more silent "reboot" into the next scene.
+    /// Toggled from the popup's checkbox / the Tutorials panel; persisted.
+    #[serde(default)]
+    pub autoproceed: bool,
 }
 
 impl TutorialProgress {
@@ -101,6 +108,13 @@ impl TutorialProgress {
 impl lunco_settings::SettingsSection for TutorialProgress {
     const KEY: &'static str = "tutorial_progress";
 }
+
+/// A completed scenario is waiting on the user's confirmation before loading its
+/// declared successor. `Some(path)` while the [`draw_advance_prompt`] popup is
+/// showing; cleared when the user chooses Continue or Stay. Empty (the default)
+/// means no prompt is pending. Not persisted — it is transient per-completion.
+#[derive(Resource, Default, Clone)]
+pub struct PendingAdvance(pub Option<String>);
 
 // ── Commands ────────────────────────────────────────────────────────────────
 
@@ -196,6 +210,7 @@ fn on_mission_complete(
     trigger: On<TelemetryEvent>,
     q_next: Query<&NextScene>,
     mut progress: ResMut<TutorialProgress>,
+    mut pending: ResMut<PendingAdvance>,
     mut commands: Commands,
 ) {
     if trigger.event().name != "MISSION_COMPLETE" {
@@ -208,21 +223,128 @@ fn on_mission_complete(
             progress.completed.push(id);
         }
     }
-    // Auto-advance: load the successor scene declared in USD, if any.
+    // Successor scene declared in USD, if any. No successor → the chain simply
+    // ends here (nothing loads).
     let Some(next) = q_next.iter().map(|n| n.0.clone()).find(|s| !s.is_empty()) else {
         return;
     };
-    info!("[tutorial] auto-advancing → scene '{next}'");
-    commands.trigger(lunco_api::ApiCommandEvent {
-        command: "ShowNotification".to_string(),
-        params: serde_json::json!({ "text": "Loading next scene…", "kind": "success" }),
-        id: 0,
-    });
-    commands.trigger(lunco_api::ApiCommandEvent {
-        command: "LoadScene".to_string(),
-        params: serde_json::json!({ "path": next }),
-        id: 0,
-    });
+    if progress.autoproceed {
+        // Opt-in: chain straight through with no prompt (the old behaviour).
+        info!("[tutorial] auto-advancing → scene '{next}'");
+        commands.trigger(lunco_api::ApiCommandEvent {
+            command: "ShowNotification".to_string(),
+            params: serde_json::json!({ "text": "Loading next scene…", "kind": "success" }),
+            id: 0,
+        });
+        commands.trigger(lunco_api::ApiCommandEvent {
+            command: "LoadScene".to_string(),
+            params: serde_json::json!({ "path": next }),
+            id: 0,
+        });
+    } else {
+        // Default: ask first. The popup ([`draw_advance_prompt`]) decides.
+        info!("[tutorial] scenario complete — awaiting confirm to advance → '{next}'");
+        pending.0 = Some(next);
+    }
+}
+
+/// A tidy display name for a scene asset path (`tutorials/first_drive/first_drive.usda`
+/// → `First Drive`): prefer a registered tutorial's title, else the file stem.
+fn pretty_scene(registry: &TutorialRegistry, scene: &str) -> String {
+    if let Some(t) = registry.tutorials.iter().find(|t| t.scene == scene) {
+        return t.title.to_string();
+    }
+    let stem = scene.rsplit('/').next().unwrap_or(scene).trim_end_matches(".usda");
+    stem.split(['_', '-'])
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Modal confirm popup shown when a scenario finishes and a successor is queued
+/// (unless [`TutorialProgress::autoproceed`] is set). Continue loads the next
+/// scene; Stay dismisses. The checkbox flips `autoproceed` so future completions
+/// skip the prompt.
+fn draw_advance_prompt(
+    mut egui_ctx: bevy_egui::EguiContexts,
+    mut pending: ResMut<PendingAdvance>,
+    mut progress: ResMut<TutorialProgress>,
+    registry: Res<TutorialRegistry>,
+    mut commands: Commands,
+) {
+    let Some(next) = pending.0.clone() else {
+        return;
+    };
+    let Ok(ctx) = egui_ctx.ctx_mut() else {
+        return;
+    };
+    let next_title = pretty_scene(&registry, &next);
+
+    let mut proceed = false;
+    let mut dismiss = false;
+    let screen = ctx.screen_rect();
+    // Render the scrim + panel at `Order::Tooltip`, which paints ABOVE
+    // `Order::Foreground` — where the rover name-tags (and every other overlay)
+    // live. `egui::Modal` only reaches Foreground, so it *ties* with the name-tag
+    // and loses; hand-rolling the layer guarantees the prompt is on top of ALL UI.
+    egui::Area::new(egui::Id::new("tutorial_advance_scrim"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(screen.min)
+        .interactable(true)
+        .show(ctx, |ui| {
+            ui.painter()
+                .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(160));
+            // Swallow clicks aimed at the scene/overlays behind the prompt.
+            ui.allocate_rect(screen, egui::Sense::click());
+        });
+    egui::Area::new(egui::Id::new("tutorial_advance_prompt"))
+        .order(egui::Order::Tooltip)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_max_width(360.0);
+                ui.heading("🎓 Scenario complete");
+                ui.separator();
+                ui.label(format!("Continue to “{next_title}”?"));
+                ui.add_space(6.0);
+                let mut auto = progress.autoproceed;
+                if ui
+                    .checkbox(&mut auto, "Continue automatically from now on")
+                    .on_hover_text("Skip this prompt and chain straight to the next scenario.")
+                    .changed()
+                {
+                    progress.autoproceed = auto;
+                }
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Continue →").clicked() {
+                        proceed = true;
+                    }
+                    if ui.button("Stay here").clicked() {
+                        dismiss = true;
+                    }
+                });
+            });
+        });
+    // Esc keeps the user in the current scene.
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        dismiss = true;
+    }
+
+    if proceed {
+        commands.trigger(lunco_api::ApiCommandEvent {
+            command: "LoadScene".to_string(),
+            params: serde_json::json!({ "path": next }),
+            id: 0,
+        });
+        pending.0 = None;
+    } else if dismiss {
+        pending.0 = None;
+    }
 }
 
 /// Auto-launch the first-run onboarding tutorial once. Fires ~1 s after start
@@ -302,6 +424,16 @@ impl Panel for TutorialsPanel {
         ui.add_space(4.0);
         ui.heading("🎓 Tutorials");
         ui.label(egui::RichText::new("Interactive, scripted lessons.").weak().small());
+
+        // Chain preference: ask before each next scene, or roll straight through.
+        let mut auto = progress.autoproceed;
+        if ui
+            .checkbox(&mut auto, "Auto-continue to next scenario")
+            .on_hover_text("When off, a popup asks before loading each next scenario.")
+            .changed()
+        {
+            ctx.resource_scope::<TutorialProgress, ()>(|_ctx, p| p.autoproceed = auto);
+        }
         ui.separator();
 
         if registry.tutorials.is_empty() {
@@ -394,10 +526,14 @@ impl Plugin for TutorialPlugin {
             registry.register_tutorial(t);
         }
         app.insert_resource(registry);
+        app.init_resource::<PendingAdvance>();
         app.register_settings_section::<TutorialProgress>();
         register_all_commands(app);
         app.add_observer(on_mission_complete);
         app.add_systems(Update, first_start_autolaunch);
+        // The confirm-advance popup draws in the egui pass (same schedule the
+        // workbench overlays use).
+        app.add_systems(EguiPrimaryContextPass, draw_advance_prompt);
         app.register_panel(TutorialsPanel);
     }
 }

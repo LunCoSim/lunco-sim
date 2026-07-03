@@ -390,6 +390,16 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
 
         ui.separator();
 
+        // ── Tutorials submenu ────────────────────────────────────────────
+        // A dedicated entry so users can jump straight into any interactive
+        // lesson (same list the Tutorials panel shows). Each entry starts the
+        // tutorial by id via `StartTutorial`, which loads its scene + attaches
+        // the orchestrator script. Hovering an entry reveals its blurb — the
+        // plain-language "what does this teach" tip.
+        render_tutorials_submenu(ui, world);
+
+        ui.separator();
+
         let Some(roots) = world.get_resource::<lunco_assets::twin_source::TwinRoots>() else {
             ui.label(
                 bevy_egui::egui::RichText::new("(no TwinRoots resource)")
@@ -448,6 +458,41 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                     });
                     ui.close();
                 }
+            }
+        }
+    });
+}
+
+/// Render the "🎓 Tutorials" submenu inside the Scenarios menu. Lists every
+/// registered tutorial with a completion tick, a difficulty chip, and its blurb
+/// on hover; clicking starts it. Kept next to the scenes list so the menu is the
+/// single place to launch either a raw scene or a guided lesson.
+fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
+    use bevy_egui::egui;
+
+    let registry = world.get_resource::<lunco_tutorial::TutorialRegistry>().cloned();
+    let progress = world.get_resource::<lunco_tutorial::TutorialProgress>().cloned().unwrap_or_default();
+
+    ui.menu_button("🎓 Tutorials", |ui| {
+        let Some(registry) = registry else {
+            ui.label(egui::RichText::new("(tutorials unavailable)").weak().italics());
+            return;
+        };
+        if registry.tutorials.is_empty() {
+            ui.label(egui::RichText::new("(no tutorials registered)").weak().italics());
+            return;
+        }
+
+        for meta in &registry.tutorials {
+            let done = progress.completed.iter().any(|c| c == meta.id);
+            // ✓ completed · 🎓 fresh, then the title and a dim difficulty chip.
+            let label = format!("{} {}  ·  {}", if done { "✓" } else { "🎓" }, meta.title, meta.difficulty);
+            let resp = ui.button(label);
+            // Hover tip: the plain-language "what this teaches" blurb.
+            let resp = resp.on_hover_text(meta.blurb);
+            if resp.clicked() {
+                world.trigger(lunco_tutorial::StartTutorial { id: meta.id.to_string() });
+                ui.close();
             }
         }
     });
