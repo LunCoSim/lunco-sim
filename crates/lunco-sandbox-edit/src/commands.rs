@@ -132,14 +132,24 @@ fn register_release_backend(reg: Option<ResMut<lunco_core::ports::PortRegistry>>
     }
 }
 
-/// Any vessel with a control binding gets a [`ReleaseActuator`], so its `release`
-/// port exists for the binding to write.
-fn attach_release_actuator(
+/// Ensure both bodies of every fixed joint carry a [`ReleaseActuator`], so the
+/// `release` port exists on any dockable vessel — STABLY and independent of
+/// possession (a vessel is releasable because it's jointed, not because it's
+/// currently driven). Gating this on `ControlBinding` was possession-dependent and
+/// the actuator vanished on release; keying it off the joint fixes that.
+fn attach_release_to_joint_bodies(
+    joints: Query<&avian3d::prelude::FixedJoint>,
+    have: Query<(), With<ReleaseActuator>>,
     mut commands: Commands,
-    q: Query<Entity, (Added<lunco_core::ControlBinding>, Without<ReleaseActuator>)>,
 ) {
-    for e in &q {
-        commands.entity(e).insert(ReleaseActuator::default());
+    for j in &joints {
+        for body in [j.body1, j.body2] {
+            if have.get(body).is_err() {
+                if let Ok(mut e) = commands.get_entity(body) {
+                    e.try_insert(ReleaseActuator::default());
+                }
+            }
+        }
     }
 }
 
@@ -155,12 +165,20 @@ fn joint_release_system(
         if act.cmd > 0.5 {
             if !act.latched {
                 act.latched = true;
+                let mut matched = 0;
                 for (je, j) in &joints {
                     if j.body1 == vessel || j.body2 == vessel {
+                        matched += 1;
                         info!("RELEASE: vessel {vessel:?} detaching joint {je:?}");
                         commands.trigger(DetachJoint { target: je });
                     }
                 }
+                info!(
+                    "RELEASE-DIAG: vessel {vessel:?} cmd={} fired; {} joints total, {} matched",
+                    act.cmd,
+                    joints.iter().count(),
+                    matched
+                );
             }
         } else {
             act.latched = false;
@@ -2824,7 +2842,7 @@ impl Plugin for SpawnCommandPlugin {
         // ReleaseActuator to every control-bound vessel, and edge-detect → detach.
         app.register_type::<ReleaseActuator>();
         app.add_systems(Startup, register_release_backend);
-        app.add_systems(Update, (attach_release_actuator, joint_release_system));
+        app.add_systems(Update, (attach_release_to_joint_bodies, joint_release_system));
         app.add_systems(
             Update,
             remove_legacy_ground_prim.run_if(obstacle_field_scene_changed),
