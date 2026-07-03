@@ -198,6 +198,64 @@ pub(crate) fn on_document_saved_persist_journal(
     }
 }
 
+/// Debounced periodic-save cadence — the journal is rewritten at most this often.
+const SAVE_INTERVAL_SECS: f32 = 5.0;
+
+/// Debounced periodic save: rewrite the journal to **its own twin's**
+/// `<root>/history/journal.json` at most every [`SAVE_INTERVAL_SECS`], and only
+/// when it grew. Gives a continuously-running host (the headless server)
+/// crash-durable history without an explicit `DocumentSaved`. Routes by the
+/// journal's own stable id (never the active twin), exactly like
+/// [`on_document_saved_persist_journal`]; a no-op until a twin has bound the
+/// journal (before that there's no twin folder to route to).
+pub(crate) fn persist_journal_periodic(
+    time: Res<Time>,
+    workspace: Res<WorkspaceResource>,
+    journal: Option<Res<JournalResource>>,
+    mut acc: Local<f32>,
+    mut last_saved_len: Local<usize>,
+) {
+    let Some(journal) = journal else { return };
+    *acc += time.delta_secs();
+    if *acc < SAVE_INTERVAL_SECS {
+        return;
+    }
+    *acc = 0.0;
+    let (id, len) = journal.with_read(|j| (j.twin().clone(), j.len()));
+    if len == *last_saved_len {
+        return; // nothing new since the last save
+    }
+    let Some(root) = root_for_journal_id(&workspace, &id) else {
+        return; // journal not yet bound to an open twin — nothing to route to
+    };
+    let bytes = match journal.with_read(|j| j.to_bytes()) {
+        Ok(b) => b,
+        Err(err) => {
+            warn!("[journal] serialize failed: {err}");
+            return;
+        }
+    };
+    if write_journal_bytes(&root, &bytes).is_ok() {
+        *last_saved_len = len;
+    }
+}
+
+/// The **single** journal-persistence mechanism, twin-folder-scoped: load
+/// `<twin>/history/journal.json` when a twin opens, and save it back on every
+/// explicit [`DocumentSaved`] **and** on a debounced periodic tick. Registered
+/// by both the GUI workspace and the headless server — the former per-crate
+/// global `lunco-doc-bevy` copy (which wrote to `~/.lunco/journal/`) is retired,
+/// so there is now one history location and one code path (DRY).
+pub struct WorkspaceJournalPlugin;
+
+impl Plugin for WorkspaceJournalPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(on_twin_added_load_journal)
+            .add_observer(on_document_saved_persist_journal)
+            .add_systems(Update, persist_journal_periodic);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

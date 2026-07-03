@@ -518,20 +518,21 @@ impl Plugin for SandboxCorePlugin {
         #[cfg(feature = "lunco-api")]
         app.add_plugins(lunco_api::LunCoApiPlugin::default());
 
-        // Durable journal history for headless (`lunco-sandbox-server` / any
-        // `--no-ui` host): load-on-startup + debounced-save of the canonical
-        // journal, so collaborative edit history survives restarts. The GUI keeps
-        // its own Twin-scoped `lunco-workspace` persistence, so this is
-        // headless-only to avoid two mechanisms writing the same history.
+        // Durable twin history for headless (`lunco-sandbox-server` / any
+        // `--no-ui` host): the SAME twin-folder-scoped persistence the GUI uses
+        // (`<twin>/history/journal.json`) — load on twin open, save on
+        // `DocumentSaved` + debounced periodic — so a running server's
+        // collaborative edit history survives restarts, in the project folder.
+        // One code path for GUI + headless (DRY); the old global
+        // `~/.lunco/journal/` `lunco-doc-bevy` copy is retired.
         if self.headless {
-            app.add_plugins(lunco_doc_bevy::JournalPersistencePlugin);
-            // `setup_sandbox`'s twin-load path needs `WorkspaceResource`, which the
-            // GUI gets from `lunco-workbench`'s `WorkspacePlugin` — a crate the
-            // headless server doesn't link. Without this, a headless boot panics in
-            // `setup_sandbox`. Bare `init_resource` (not the full `WorkspacePlugin`)
-            // so we don't also pull in that plugin's Twin-scoped journal observers,
-            // which would double up on the `JournalPersistencePlugin` above.
+            // `setup_sandbox`'s twin-load path (and the journal persistence) needs
+            // `WorkspaceResource`, which the GUI gets from `lunco-workbench`'s
+            // `WorkspacePlugin` — a crate the headless server doesn't link. Bare
+            // `init_resource` + just the journal plugin (not the full
+            // `WorkspacePlugin`) keeps the headless surface minimal.
             app.init_resource::<lunco_workspace::WorkspaceResource>();
+            app.add_plugins(lunco_workspace::journal_persistence::WorkspaceJournalPlugin);
         }
 
         // Multiplayer. Native: `--host [port]` / `--connect <addr>`; browser:
