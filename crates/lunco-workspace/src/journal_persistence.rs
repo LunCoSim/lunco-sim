@@ -1,11 +1,13 @@
 //! Twin edit-journal persistence (B1).
 //!
-//! Saves the canonical [`Journal`](lunco_twin_journal::Journal) to
-//! `<twin-root>/.lunco/journal/journal.json` and reloads it when a Twin
-//! opens, so edit history (and, later, versions / branches) survives across
-//! sessions. UI-free and headless: the disk I/O goes through [`lunco_storage`],
-//! the same byte-level layer the rest of the app uses — no business logic in
-//! the storage crate.
+//! Saves the canonical [`Journal`](lunco_twin_journal::Journal) to a visible,
+//! project-local `<twin-root>/history/journal.json` and reloads it when a Twin
+//! opens, so a twin's **current state** (its scene `.usda`, written on Save)
+//! and its **history** (this replayable op log) are persisted side by side.
+//! Edit history (and, later, versions / branches) survives across sessions.
+//! UI-free and headless: the disk I/O goes through [`lunco_storage`], the same
+//! byte-level layer the rest of the app uses — no business logic in the storage
+//! crate.
 //!
 //! - **Load** on [`TwinAdded`](crate::session::TwinAdded): read the file and
 //!   swap it into the live [`JournalResource`] *in place*, preserving the
@@ -14,8 +16,9 @@
 //! - **Save** on [`DocumentSaved`](lunco_doc_bevy::DocumentSaved): serialize
 //!   the journal and write it to the active Twin's folder.
 //!
-//! `.lunco/` is excluded from the Twin file index (it's session state), so the
-//! journal file never appears as a document.
+//! `history/journal.json` is a JSON file, so the extension-keyed document
+//! classifier (`.usda` → USD, etc.) never mounts it as a scene/document — it's
+//! visible in the project folder but is not an openable twin document.
 //!
 //! Both observers no-op when no [`JournalResource`] is present, so they're safe
 //! to register unconditionally (headless `--no-ui` servers without journaling
@@ -31,8 +34,10 @@ use lunco_twin_journal::{AuthorId, Journal as CanonicalJournal, TwinId as Journa
 use crate::session::TwinAdded;
 use crate::{TwinId, WorkspaceResource};
 
-/// Location of the journal file within a Twin folder.
-const JOURNAL_REL_PATH: &str = ".lunco/journal/journal.json";
+/// Location of the journal file within a Twin folder — a **visible**
+/// project-local `history/` folder (the durable, replayable edit log) so a
+/// twin's history lives alongside its scene, not hidden under `.lunco/`.
+const JOURNAL_REL_PATH: &str = "history/journal.json";
 
 /// Absolute path to a Twin's journal file.
 fn journal_path(twin_root: &Path) -> PathBuf {
