@@ -564,7 +564,7 @@ fn process_usd_avian_prims(
     query: Query<&UsdPrimPath, Without<UsdAvianProcessed>>,
     q_child_of: Query<&ChildOf>,
     stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
+    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
 ) {
     let entity = trigger.entity;
@@ -572,11 +572,17 @@ fn process_usd_avian_prims(
     let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
     let is_root = q_child_of.get(entity).is_err();
 
-    // Ph0′ CUTOVER: read the LIVE canonical stage when present (the source of
-    // truth), else fall back to the flattened asset. Both reads are proven
-    // identical via `UsdRead` (S2a–e), so physics is unchanged — the body just
-    // comes off the composed `Stage` directly instead of a baked snapshot.
-    if let Some(cs) = canonical.get(prim_path.stage_handle.id()) {
+    // Ph0′ CUTOVER: read the LIVE canonical stage — the source of truth — built
+    // on demand from the asset's recipe so it is available regardless of system
+    // ordering. Both reads are proven identical via `UsdRead` (S2a–e), so physics
+    // is unchanged; the body comes off the composed `Stage` directly. The
+    // flattened `stage.reader` serves ONLY recipe-less legacy assets (pending
+    // migration, then deleted).
+    let id = prim_path.stage_handle.id();
+    let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
+    let live = recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some();
+    if live {
+        let cs = canonical.get(id).expect("just built");
         bevy::log::debug!("[canonical] avian extract off LIVE stage: {}", prim_path.path);
         extract_avian_prim(&cs.view(), entity, &sdf_path, is_root, &mut commands);
     } else if let Some(stage) = stages.get(&prim_path.stage_handle) {

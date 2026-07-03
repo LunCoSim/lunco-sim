@@ -47,7 +47,7 @@ pub const ACTIVE_CAMERA_ATTR: &str = "lunco:activeCamera";
 
 /// True iff `path` authors `lunco:activeCamera` `timeSamples` — i.e. it is a
 /// camera track and its entity should get the [`CameraTrack`] marker at spawn.
-pub fn prim_is_camera_track(reader: &crate::UsdData, path: &SdfPath) -> bool {
+pub fn prim_is_camera_track<R: crate::UsdRead>(reader: &R, path: &SdfPath) -> bool {
     attr_has_time_samples(reader, path, ACTIVE_CAMERA_ATTR)
 }
 

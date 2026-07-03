@@ -71,6 +71,22 @@ pub trait UsdRead {
     /// prim's composition stack. On the flattened reader this reads the attr
     /// `flatten_stage` synthesized; on the live stage it is synthesized here.
     fn resolved_asset(&self, prim: &SdfPath) -> Option<String>;
+
+    /// Whether `prim` is active (`active` metadata; defaults to `true`, matching
+    /// USD semantics). The visual extractor skips mesh/child creation for
+    /// inactive prims.
+    fn is_active(&self, prim: &SdfPath) -> bool;
+
+    /// The stage's `defaultPrim` bare name (no leading slash), or `None` when the
+    /// stage declares none. The empty-path scene-root sentinel resolves through
+    /// this to the concrete subtree the reference/scene mounts.
+    fn default_prim(&self) -> Option<String>;
+
+    /// Whether attribute `name` on `prim` actually carries authored
+    /// `timeSamples` (not merely a `default`) — the per-channel test the
+    /// [`UsdAnimated`](crate::UsdAnimated) tagging uses so only genuinely
+    /// animated prims are sampled per frame.
+    fn has_time_samples(&self, prim: &SdfPath, name: &str) -> bool;
 }
 
 impl UsdRead for StageView<'_> {
@@ -101,14 +117,20 @@ impl UsdRead for StageView<'_> {
     }
 
     fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String> {
-        self.stage()
-            .prim(prim.clone())
-            .relationship(name)
-            .targets()
-            .unwrap_or_default()
-            .into_iter()
-            .next()
-            .map(|p| p.to_string())
+        let p = self.stage().prim(prim.clone());
+        // Relationship targets first (`material:binding`, `physics:body0`)…
+        if let Some(t) = p.relationship(name).targets().unwrap_or_default().into_iter().next() {
+            return Some(t.to_string());
+        }
+        // …else an attribute connection (`.connect`, e.g. `outputs:surface`). The
+        // flattened reader folds both `targetPaths` and `connectionPaths` into one
+        // `read_rel_target`; mirror that here so the bind→shader walk resolves off
+        // the live stage.
+        p.attribute(name)
+            .connections()
+            .ok()
+            .and_then(|c| c.into_iter().next())
+            .map(|t| t.to_string())
     }
 
     fn children(&self, prim: &SdfPath) -> Vec<SdfPath> {
@@ -139,6 +161,27 @@ impl UsdRead for StageView<'_> {
         let sites = self.binary_sites()?;
         let stack = self.stage().prim(prim.clone()).prim_stack().ok()?;
         stack.iter().find_map(|site| sites.get(site)).cloned()
+    }
+
+    fn is_active(&self, prim: &SdfPath) -> bool {
+        self.stage().prim(prim.clone()).is_active().unwrap_or(true)
+    }
+
+    fn default_prim(&self) -> Option<String> {
+        self.stage()
+            .default_prim()
+            .map(|t| t.to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    fn has_time_samples(&self, prim: &SdfPath, name: &str) -> bool {
+        self.stage()
+            .prim(prim.clone())
+            .attribute(name)
+            .time_samples()
+            .ok()
+            .flatten()
+            .is_some_and(|s| !s.is_empty())
     }
 }
 
@@ -176,6 +219,24 @@ impl UsdRead for openusd::sdf::Data {
             Value::AssetPath(a) => Some(a.as_str().to_string()),
             _ => None,
         }
+    }
+
+    fn is_active(&self, prim: &SdfPath) -> bool {
+        UsdDataExt::prim_is_active(self, prim)
+    }
+
+    fn default_prim(&self) -> Option<String> {
+        // `defaultPrim` is authored as `Value::Token`; `as_str` coerces
+        // Token/String/AssetPath uniformly (matches `stage_default_prim`).
+        let name = self.field(&SdfPath::abs_root(), "defaultPrim")?.as_str()?;
+        (!name.is_empty()).then(|| name.to_string())
+    }
+
+    fn has_time_samples(&self, prim: &SdfPath, name: &str) -> bool {
+        prim.append_property(name)
+            .ok()
+            .and_then(|ap| self.field(&ap, "timeSamples"))
+            .is_some_and(|v| matches!(v, Value::TimeSamples(_)))
     }
 }
 

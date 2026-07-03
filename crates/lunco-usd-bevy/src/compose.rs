@@ -211,6 +211,19 @@ pub(crate) fn flatten_stage(stage: &Stage) -> Result<sdf::Data> {
                     authored = true;
                 }
             }
+            // Attribute connections (`.connect`), PCP-composed & path-translated.
+            // The material shader network rides these: a `Material.outputs:surface`
+            // connects to its `Shader.outputs:surface`, so without preserving them
+            // `resolve_bound_shader` can't walk bind→shader on the flattened reader
+            // and every shader-networked material silently falls back to its
+            // displayColor baseline. Stored under `connectionPaths` where
+            // `read_rel_target` already looks (alongside relationship `targetPaths`).
+            if let Ok(conns) = attr.connections() {
+                if !conns.is_empty() {
+                    a.add("connectionPaths", Value::PathListOp(PathListOp::explicit(conns)));
+                    authored = true;
+                }
+            }
             if authored {
                 data.insert(attr.path().clone(), a);
             }

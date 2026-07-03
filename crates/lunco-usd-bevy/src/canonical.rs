@@ -159,6 +159,41 @@ impl CanonicalStages {
     pub fn is_empty(&self) -> bool {
         self.by_asset.is_empty()
     }
+
+    /// Build the canonical stage for `asset` from its `recipe` **on demand** if
+    /// not already present, and return a reference to it.
+    ///
+    /// Ph0′ timing fix: `sync_canonical_stages` reacts to `AssetEvent`s in
+    /// `Update`, but the visual/physics extractors instantiate synchronously in
+    /// the `on_usd_prim_added` observer cascade — which runs BEFORE that system
+    /// in the load frame. So the extractors would always miss the live stage and
+    /// fall back to the flatten. Building here, at the first read, makes the
+    /// canonical stage the source of truth regardless of system ordering. Cached,
+    /// so the whole prim cascade shares one composed stage. `None` only if the
+    /// asset carries no `recipe` (legacy flatten-only construction) or the build
+    /// fails.
+    pub fn get_or_build(
+        &mut self,
+        asset: bevy::asset::AssetId<crate::UsdStageAsset>,
+        recipe: &crate::StageRecipe,
+    ) -> Option<&CanonicalStage> {
+        if !self.by_asset.contains_key(&asset) {
+            match CanonicalStage::from_recipe(recipe) {
+                Ok(cs) => {
+                    bevy::log::debug!(
+                        "[canonical] on-demand built CanonicalStage for {asset:?} ({} prims)",
+                        cs.view().prim_paths().len()
+                    );
+                    self.by_asset.insert(asset, cs);
+                }
+                Err(e) => {
+                    bevy::log::warn!("[canonical] on-demand from_recipe failed for {asset:?}: {e}");
+                    return None;
+                }
+            }
+        }
+        self.by_asset.get(&asset)
+    }
 }
 
 /// Main-thread system (Ph0′): when a `UsdStageAsset` finishes loading with a

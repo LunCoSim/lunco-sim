@@ -185,10 +185,15 @@ impl Plugin for UsdBevyPlugin {
             .add_systems(
                 Update,
                 (
-                    sync_usd_visuals.run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<UsdStageAsset>>),
-                    // Ph0′: build the live canonical stage from each loaded
-                    // asset's recipe (additive; legacy path untouched).
+                    // Ph0′: build the live canonical stage from each loaded asset's
+                    // recipe FIRST, so the same-frame `sync_usd_visuals` (and the
+                    // physics observer it triggers via `UsdVisualSynced`) sees the
+                    // `CanonicalStage` and instantiates off the LIVE stage rather
+                    // than racing it and falling back to the flattened snapshot.
                     canonical::sync_canonical_stages.run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<UsdStageAsset>>),
+                    sync_usd_visuals
+                        .run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<UsdStageAsset>>)
+                        .after(canonical::sync_canonical_stages),
                     // Upgrades parked runtime-instance descendants to a
                     // hierarchical `Derived` id (gap G2/B.1) once their root id
                     // is allocated. Cheap: the query is empty unless a runtime
@@ -549,6 +554,7 @@ fn instance_role(root_path: &str, prim_path: &str) -> String {
 /// by independent material plugins in `lunco-materials` that observe
 /// the `UsdVisualSynced` insertion.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn instantiate_usd_prim(
     entity: Entity,
     prim_path: &UsdPrimPath,
@@ -559,16 +565,59 @@ fn instantiate_usd_prim(
     inherited_member: Option<&UsdInstanceMember>,
     commands: &mut Commands,
     stages: &Assets<UsdStageAsset>,
+    canonical: &mut CanonicalStages,
+    asset_server: &AssetServer,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    // Ph0′ CUTOVER: the LIVE canonical stage is the source of truth. It is built
+    // on demand here (first read) so it is available regardless of system
+    // ordering vs. the synchronous `on_usd_prim_added` observer cascade — meshes,
+    // materials, lights, cameras, and transforms come off the composed `Stage`
+    // directly. `lunco:resolvedAsset` is *synthesized* on the live stage (it is
+    // authored only post-flatten), read via `UsdRead::resolved_asset`.
+    //
+    // The flattened `stage.reader` is used ONLY for legacy assets that carry no
+    // `StageRecipe` (e.g. `live_projection` / test constructions) — those will be
+    // migrated to build recipes, after which the flatten is deleted outright.
+    let id = prim_path.stage_handle.id();
+    let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
+    let live = recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some();
+    if live {
+        let cs = canonical.get(id).expect("just built");
+        debug!("[canonical] visual instantiate off LIVE stage: {}", prim_path.path);
+        instantiate_usd_prim_read(
+            &cs.view(), entity, prim_path, existing_vis, existing_tf, load_into_grid,
+            is_instance_root, inherited_member, commands, asset_server, meshes, materials,
+        );
+    } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
+        instantiate_usd_prim_read(
+            &*stage.reader, entity, prim_path, existing_vis, existing_tf, load_into_grid,
+            is_instance_root, inherited_member, commands, asset_server, meshes, materials,
+        );
+    }
+}
+
+/// The visual extractor body, generic over the read source ([`UsdRead`]) — it
+/// maps one composed USD prim to its Bevy visual components (mesh, material,
+/// light, camera, transform, and the authored `lunco:*` markers) off either the
+/// live canonical [`StageView`](crate::StageView) or the flattened `sdf::Data`.
+#[allow(clippy::too_many_arguments)]
+fn instantiate_usd_prim_read<R: UsdRead>(
+    reader: &R,
+    entity: Entity,
+    prim_path: &UsdPrimPath,
+    existing_vis: Option<&Visibility>,
+    existing_tf: Option<&Transform>,
+    load_into_grid: Option<&LoadIntoGrid>,
+    is_instance_root: bool,
+    inherited_member: Option<&UsdInstanceMember>,
+    commands: &mut Commands,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
     {
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
-
-        // Borrow — `stage.reader` is `Arc<sdf::Data>`; deep-cloning it copies
-        // the whole stage `HashMap`. Every read below is `&self`.
-        let reader = &*stage.reader;
 
         // Deferred `defaultPrim` resolution. A scene-root spawned with an
         // empty path is the "use the stage's defaultPrim" sentinel
@@ -645,13 +694,13 @@ fn instantiate_usd_prim(
         });
 
         // Skip inactive prims
-        if !reader.prim_is_active(&sdf_path) {
+        if !reader.is_active(&sdf_path) {
             commands.entity(entity).insert(UsdVisualSynced);
             return;
         }
 
         // Get prim type (Cube, Cylinder, Sphere, etc.)
-        let prim_type = reader.prim_type_name(&sdf_path);
+        let prim_type = reader.type_name(&sdf_path);
 
         // UsdLux light prims (`DistantLight` sun / `DomeLight` ambient —
         // see `light.rs`). A light produces no mesh; the shared transform
@@ -707,7 +756,7 @@ fn instantiate_usd_prim(
         // is still built — visibility is the toggle. (Future: reveal
         // on `AssetServer::load_state(...).is_failed()`.)
         let is_placeholder = reader
-            .prim_attribute_value::<bool>(&sdf_path, "lunco:placeholder")
+            .scalar::<bool>(&sdf_path, "lunco:placeholder")
             .unwrap_or(false);
 
         // **Placeholder + payload pattern**: when `lunco:resolvedAsset`
@@ -847,17 +896,17 @@ fn instantiate_usd_prim(
         // controller stamps a topology default at possess. Fully data-driven: a
         // vessel declares what its inputs actuate with no Rust change.
         if let Some(controls) = reader
-            .prim_children(&sdf_path)
+            .children(&sdf_path)
             .into_iter()
             .find(|c| c.name() == Some("Controls"))
         {
             let entries: Vec<(String, String, f64)> = reader
-                .prim_children(&controls)
+                .children(&controls)
                 .into_iter()
                 .filter_map(|bind| {
                     let intent = bind.name()?.to_string();
-                    let port = reader.prim_attribute_value::<String>(&bind, "lunco:port")?;
-                    let scale = reader.prim_attribute_value::<f64>(&bind, "lunco:scale")?;
+                    let port = reader.scalar::<String>(&bind, "lunco:port")?;
+                    let scale = reader.scalar::<f64>(&bind, "lunco:scale")?;
                     Some((intent, port, scale))
                 })
                 .collect();
@@ -911,7 +960,7 @@ fn instantiate_usd_prim(
         //   attach as a `SceneRoot` child. Preserves hierarchy,
         //   materials, and lights at the cost of being opaque to the
         //   USD prim-path tree.
-        if let Some(asset_uri) = get_attribute_as_string(reader, &sdf_path, "lunco:resolvedAsset") {
+        if let Some(asset_uri) = reader.resolved_asset(&sdf_path) {
             let mode = get_attribute_as_string(reader, &sdf_path, "lunco:assetMode")
                 .unwrap_or_else(|| "scene".to_string());
             let label = get_attribute_as_string(reader, &sdf_path, "lunco:assetLabel");
@@ -1063,8 +1112,8 @@ fn instantiate_usd_prim(
         // Spawn children with their transforms pre-populated so physics sees them correctly.
         // This is critical for wheel positions — they must be at the correct offsets from
         // the chassis center before the suspension system runs.
-        for child_path in reader.prim_children(&sdf_path) {
-            if !reader.prim_is_active(&child_path) {
+        for child_path in reader.children(&sdf_path) {
+            if !reader.is_active(&child_path) {
                 continue;
             }
 
@@ -1168,6 +1217,7 @@ fn on_usd_prim_added(
     >,
     mut commands: Commands,
     stages: Res<Assets<UsdStageAsset>>,
+    mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -1190,6 +1240,7 @@ fn on_usd_prim_added(
         member,
         &mut commands,
         &stages,
+        &mut canonical,
         &asset_server,
         &mut meshes,
         &mut materials,
@@ -1227,6 +1278,7 @@ pub fn sync_usd_visuals(
     >,
     mut commands: Commands,
     stages: Res<Assets<UsdStageAsset>>,
+    mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -1253,6 +1305,7 @@ pub fn sync_usd_visuals(
                 member,
                 &mut commands,
                 &stages,
+                &mut canonical,
                 &asset_server,
                 &mut meshes,
                 &mut materials,
@@ -1339,10 +1392,10 @@ pub fn parent_prim_path(target: &str) -> Option<SdfPath> {
 ///
 /// Single source of truth for the bind→shader walk shared by the renderer
 /// ([`apply_standard_material`]) and the inspector's material editor.
-pub fn resolve_bound_shader(reader: &UsdData, mesh_path: &SdfPath) -> Option<SdfPath> {
-    let mat_path_str = read_rel_target(reader, mesh_path, "material:binding")?;
+pub fn resolve_bound_shader<R: UsdRead>(reader: &R, mesh_path: &SdfPath) -> Option<SdfPath> {
+    let mat_path_str = reader.rel_target(mesh_path, "material:binding")?;
     let mat_path = SdfPath::new(&mat_path_str).ok()?;
-    let surf_conn = read_rel_target(reader, &mat_path, "outputs:surface")?;
+    let surf_conn = reader.rel_target(&mat_path, "outputs:surface")?;
     parent_prim_path(&surf_conn)
 }
 
@@ -1362,8 +1415,8 @@ fn usd_wrap_to_address(wrap: Option<&str>) -> bevy::image::ImageAddressMode {
 
 /// Applies a standard PBR material to an entity, resolving material bindings
 /// and shader networks if present, or falling back to direct prim attributes.
-fn apply_standard_material(
-    reader: &UsdData,
+fn apply_standard_material<R: UsdRead>(
+    reader: &R,
     sdf_path: &SdfPath,
     mesh_handle: &Handle<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -1438,7 +1491,7 @@ fn apply_standard_material(
         // a `UsdUVTexture inputs:sourceColorSpace` of `raw`/`sRGB` overrides it.
         // `inputs:wrapS`/`wrapT` drive the sampler address modes at load time.
         let load_tex = |input: &str, is_color: bool| -> Option<Handle<Image>> {
-            let conn = read_rel_target(reader, &shader_path, input)?;
+            let conn = reader.rel_target(&shader_path, input)?;
             let texture_path = parent_prim_path(&conn)?;
             let asset_path = get_attribute_as_string(reader, &texture_path, "inputs:file")?;
             let resolved = resolve_texture_path(asset_server, stage_id, &asset_path)?;
@@ -1531,7 +1584,7 @@ fn apply_standard_material(
         }
         opacity_threshold =
             get_attribute_as_f32(reader, &shader_path, "inputs:opacityThreshold").unwrap_or(0.0);
-        opacity_connected = read_rel_target(reader, &shader_path, "inputs:opacity").is_some();
+        opacity_connected = reader.rel_target(&shader_path, "inputs:opacity").is_some();
 
         if let Some(i) = get_attribute_as_f32(reader, &shader_path, "inputs:ior") {
             ior = i;
@@ -1605,14 +1658,11 @@ fn apply_standard_material(
 /// prim name (no leading slash), or `None` when the stage declares no
 /// `defaultPrim`. The metadata lives on the pseudo-root spec at the
 /// absolute root path.
-pub fn stage_default_prim(reader: &UsdData) -> Option<String> {
-    // `defaultPrim` is authored as `Value::Token` (see compose.rs), and on
-    // openusd `main` `String::try_from(Value::Token)` is an error — only the
-    // `String` variant converts. `as_str` coerces `Token`/`String`/`AssetPath`
-    // uniformly, so it is the correct reader here.
-    let val = reader.field(&SdfPath::abs_root(), "defaultPrim")?;
-    let name = val.as_str()?;
-    (!name.is_empty()).then(|| name.to_string())
+pub fn stage_default_prim<R: UsdRead>(reader: &R) -> Option<String> {
+    // `defaultPrim` is authored as `Value::Token` (see compose.rs). The two
+    // `UsdRead` impls read it uniformly: the flatten off the pseudo-root spec,
+    // the live stage via `Stage::default_prim`.
+    reader.default_prim()
 }
 
 /// Parse a single USD layer's source text with openusd's USDA parser (no PCP
@@ -1756,11 +1806,8 @@ pub fn read_vec3_f64_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time
 /// True iff `attr` on `path` actually carries `timeSamples` (not just a
 /// `default`). The sampler uses this per-channel so it writes **only** animated
 /// channels — a static `xformOp:rotateXYZ` is left exactly as instantiated.
-pub fn attr_has_time_samples(reader: &UsdData, path: &SdfPath, attr: &str) -> bool {
-    path.append_property(attr)
-        .ok()
-        .and_then(|ap| reader.field(&ap, "timeSamples"))
-        .is_some_and(|v| matches!(v, Value::TimeSamples(_)))
+pub fn attr_has_time_samples<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> bool {
+    reader.has_time_samples(path, attr)
 }
 
 /// The xform ops the animation sampler drives, in compose order (T, R, S).
@@ -1775,7 +1822,7 @@ pub const ANIMATED_SHADER_INPUTS: [&str; 2] = ["inputs:diffuseColor", "inputs:op
 /// is animated and the entity should get the [`UsdAnimated`] marker. Covers
 /// translate / scale, the full matrix `xformOp:transform`, and every rotation
 /// channel ([`ROTATION_OPS`]: Euler orders, `orient`, single-axis).
-pub fn prim_has_xform_time_samples(reader: &UsdData, path: &SdfPath) -> bool {
+pub fn prim_has_xform_time_samples<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
     attr_has_time_samples(reader, path, "xformOp:translate")
         || attr_has_time_samples(reader, path, "xformOp:scale")
         || attr_has_time_samples(reader, path, "xformOp:transform")
@@ -1786,7 +1833,7 @@ pub fn prim_has_xform_time_samples(reader: &UsdData, path: &SdfPath) -> bool {
 /// xform op, `visibility`, geom `primvars:displayColor`, or a bound surface
 /// shader's [`ANIMATED_SHADER_INPUTS`]. Drives the [`UsdAnimated`] tag, so a
 /// material-only or visibility-only animation is funnelled the same as xform.
-pub fn prim_is_animated(reader: &UsdData, path: &SdfPath) -> bool {
+pub fn prim_is_animated<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
     if prim_has_xform_time_samples(reader, path)
         || attr_has_time_samples(reader, path, "visibility")
         || attr_has_time_samples(reader, path, "primvars:displayColor")
@@ -2218,7 +2265,7 @@ pub fn bind_animated_to_preview(
 /// `Vec3` (f32). Thin wrapper over [`read_vec3_f64`] — reused by
 /// downstream crates (e.g. `lunco-usd-sim`'s shader authoring) so there
 /// is one canonical vec3 reader. `None` if absent or unconvertible.
-pub fn get_attribute_as_vec3(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<Vec3> {
+pub fn get_attribute_as_vec3<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<Vec3> {
     read_vec3_f64(reader, path, attr).map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
 }
 
@@ -2237,7 +2284,7 @@ pub fn read_token<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<
 
 /// Back-compat alias for the string/asset call sites (visibility,
 /// `lunco:resolvedAsset`, …). Same impl as [`read_token`].
-fn get_attribute_as_string(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<String> {
+fn get_attribute_as_string<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<String> {
     read_token(reader, path, attr)
 }
 
@@ -2372,7 +2419,7 @@ pub fn read_matrix_transform_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f6
 
 /// True iff any rotation xform-op carries `timeSamples` (so the sampler must
 /// recompose the prim's rotation this frame).
-fn prim_rotation_animated(reader: &UsdData, path: &SdfPath) -> bool {
+fn prim_rotation_animated<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
     ROTATION_OPS.iter().any(|op| attr_has_time_samples(reader, path, op))
 }
 
@@ -2391,7 +2438,7 @@ fn read_xform_op_order<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<Str
 
 /// True iff the prim authors a non-empty `xformOpOrder` (so its local transform
 /// is defined by the ordered op stack, not the implicit TRS fallback).
-fn has_xform_op_order(reader: &UsdData, path: &SdfPath) -> bool {
+fn has_xform_op_order<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
     read_xform_op_order(reader, path).is_some()
 }
 
@@ -2823,14 +2870,14 @@ pub fn build_usd_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
 
 /// Reads a float-like attribute (`float` / `double` / `int`) from a USD prim.
 /// Falls back to the metadata-based "default" key if not found (needed for dome/light attributes).
-pub fn get_attribute_as_f32(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<f32> {
-    if let Some(v) = reader.prim_attribute_value::<f32>(path, attr) {
+pub fn get_attribute_as_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<f32> {
+    if let Some(v) = reader.scalar::<f32>(path, attr) {
         return Some(v);
     }
-    if let Some(v) = reader.prim_attribute_value::<f64>(path, attr) {
+    if let Some(v) = reader.scalar::<f64>(path, attr) {
         return Some(v as f32);
     }
-    if let Some(v) = reader.prim_attribute_value::<i32>(path, attr) {
+    if let Some(v) = reader.scalar::<i32>(path, attr) {
         return Some(v as f32);
     }
     light::get_attribute_as_f32(reader, path, attr)
@@ -3866,5 +3913,143 @@ mod mesh_view_parity_tests {
             format!("{:?}", baked.attribute(bevy::mesh::Mesh::ATTRIBUTE_POSITION)),
             "live mesh positions must equal the flattened mesh positions"
         );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod visual_view_parity_tests {
+    //! Ph0′ visual-flip: every channel the visual extractor reads — the bound
+    //! material network (`apply_standard_material` / `resolve_bound_shader`), the
+    //! UsdLux light attrs (`instantiate_light_prim`), and the UsdGeomCamera
+    //! film-back (`read_projection`) — must return identical opinions off a live
+    //! `StageView` and the flattened `sdf::Data`. Because the component-building
+    //! bodies are shared and generic, identical reads ⇒ identical Bevy visuals;
+    //! this is the material/light/camera analog of the avian extract-parity proof
+    //! that headless rendering can't provide.
+    use crate::compose::{compose_file, compose_file_to_stage};
+    use crate::light::read_intensity_with_exposure;
+    use crate::{
+        get_attribute_as_f32, get_attribute_as_vec3, read_token, resolve_bound_shader, StageView,
+        UsdRead,
+    };
+    use openusd::sdf::Path as SdfPath;
+
+    const FIXTURE: &str = r#"#usda 1.0
+( defaultPrim = "World" )
+def Xform "World"
+{
+    def Material "Mat"
+    {
+        token outputs:surface.connect = </World/Mat/S.outputs:surface>
+        def Shader "S"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.2, 0.4, 0.6)
+            float inputs:roughness = 0.33
+            float inputs:metallic = 0.7
+            float inputs:opacity = 0.5
+            token outputs:surface
+        }
+    }
+    def Cube "Box" ( prepend apiSchemas = ["MaterialBindingAPI"] )
+    {
+        rel material:binding = </World/Mat>
+        color3f primvars:displayColor = (0.9, 0.1, 0.1)
+        double size = 2
+    }
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 8000
+        float inputs:exposure = 1
+        float inputs:angle = 0.53
+        color3f inputs:color = (1.0, 0.95, 0.9)
+    }
+    def Camera "Cam"
+    {
+        float focalLength = 35
+        float verticalAperture = 24
+        float2 clippingRange = (0.5, 5000)
+        token projection = "perspective"
+    }
+}
+"#;
+
+    #[test]
+    fn visual_reads_agree_stage_vs_flatten() {
+        let dir = std::env::temp_dir().join("lunco_visual_view_parity");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("scene.usda");
+        std::fs::write(&f, FIXTURE).unwrap();
+
+        let stage = compose_file_to_stage(&f).expect("stage");
+        let flat = compose_file(&f).expect("flatten");
+        let view = StageView::new(&stage);
+
+        let box_p = SdfPath::new("/World/Box").unwrap();
+        let sun = SdfPath::new("/World/Sun").unwrap();
+        let cam = SdfPath::new("/World/Cam").unwrap();
+
+        // --- Material: bind→shader walk resolves to the same shader prim. ---
+        let shader_v = resolve_bound_shader(&view, &box_p);
+        let shader_f = resolve_bound_shader(&flat, &box_p);
+        assert_eq!(shader_v, shader_f, "bound-shader path must match");
+        let shader = shader_f.expect("bound shader resolves");
+
+        // Every PBR channel apply_standard_material reads off the shader agrees.
+        for attr in ["inputs:roughness", "inputs:metallic", "inputs:opacity"] {
+            assert_eq!(
+                get_attribute_as_f32(&view, &shader, attr),
+                get_attribute_as_f32(&flat, &shader, attr),
+                "shader {attr} must match",
+            );
+        }
+        assert_eq!(get_attribute_as_f32(&flat, &shader, "inputs:roughness"), Some(0.33));
+        assert_eq!(
+            get_attribute_as_vec3(&view, &shader, "inputs:diffuseColor"),
+            get_attribute_as_vec3(&flat, &shader, "inputs:diffuseColor"),
+            "diffuseColor must match",
+        );
+        // Geometry-baseline displayColor (the no-shader fallback channel).
+        assert_eq!(
+            get_attribute_as_vec3(&view, &box_p, "primvars:displayColor"),
+            get_attribute_as_vec3(&flat, &box_p, "primvars:displayColor"),
+            "displayColor must match",
+        );
+
+        // --- Light: intensity×2^exposure, angular size, color all agree. ---
+        assert_eq!(
+            read_intensity_with_exposure(&view, &sun, 10_000.0),
+            read_intensity_with_exposure(&flat, &sun, 10_000.0),
+            "illuminance must match",
+        );
+        assert_eq!(read_intensity_with_exposure(&flat, &sun, 10_000.0), 16_000.0);
+        assert_eq!(
+            get_attribute_as_f32(&view, &sun, "inputs:angle"),
+            get_attribute_as_f32(&flat, &sun, "inputs:angle"),
+            "sun angular diameter must match",
+        );
+        assert_eq!(
+            get_attribute_as_vec3(&view, &sun, "inputs:color"),
+            get_attribute_as_vec3(&flat, &sun, "inputs:color"),
+            "sun color must match",
+        );
+
+        // --- Camera: film-back + clip + projection token agree. ---
+        assert_eq!(
+            view.scalar::<[f32; 2]>(&cam, "clippingRange"),
+            flat.scalar::<[f32; 2]>(&cam, "clippingRange"),
+            "clippingRange must match",
+        );
+        assert_eq!(view.scalar::<f32>(&cam, "focalLength"), flat.scalar::<f32>(&cam, "focalLength"));
+        assert_eq!(
+            view.scalar::<f32>(&cam, "verticalAperture"),
+            flat.scalar::<f32>(&cam, "verticalAperture"),
+        );
+        assert_eq!(
+            read_token(&view, &cam, "projection"),
+            read_token(&flat, &cam, "projection"),
+            "projection token must match",
+        );
+        assert_eq!(read_token(&flat, &cam, "projection").as_deref(), Some("perspective"));
     }
 }

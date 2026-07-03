@@ -54,7 +54,7 @@ def Xform "World"
     let reader = Arc::new(openusd::usda::parse(usda_content).expect("parse USDA"));
 
     let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-    let stage_handle = stages.add(UsdStageAsset { reader });
+    let stage_handle = stages.add(UsdStageAsset { reader, recipe: None });
 
     // Spawn the MeshWithMaterial entity representing the USD prim
     let test_entity = app.world_mut().spawn((
@@ -143,7 +143,7 @@ def Xform "World"
 
     let stage_handle = {
         let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        stages.add(UsdStageAsset { reader })
+        stages.add(UsdStageAsset { reader, recipe: None })
     };
 
     let test_entity = app.world_mut().spawn((
@@ -242,7 +242,7 @@ fn material_for(usda: &str, prim_path: &str) -> StandardMaterial {
     let reader = Arc::new(openusd::usda::parse(usda).expect("parse USDA"));
     let stage_handle = {
         let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        stages.add(UsdStageAsset { reader })
+        stages.add(UsdStageAsset { reader, recipe: None })
     };
     let entity = app
         .world_mut()
