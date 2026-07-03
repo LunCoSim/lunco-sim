@@ -50,6 +50,7 @@ mod light;
 mod camera;
 pub mod camera_mount;
 pub mod camera_switch;
+pub mod camera_track;
 pub use camera_switch::SetActiveCamera;
 pub mod author;
 pub mod usd_data;
@@ -125,6 +126,7 @@ impl Plugin for UsdBevyPlugin {
             .register_asset_loader(UsdSourceTextLoader)
             .register_type::<UsdPrimPath>()
             .register_type::<UsdAnimated>()
+            .register_type::<camera_track::CameraTrack>()
             .init_resource::<DiagnosticLabelFont>()
             .init_resource::<DiagnosticLabelConfig>()
             // Guarantee the viewport substrate exists wherever these camera
@@ -203,6 +205,25 @@ impl Plugin for UsdBevyPlugin {
                     plan_usd_animation,
                     (sample_usd_animation, sample_usd_material_animation)
                         .after(lunco_time::DomainResolveSet),
+                )
+                    .chain(),
+            )
+            // Editorial **camera track** (doc 35): a prim's `lunco:activeCamera`
+            // timeSamples drive `SetActiveCamera` cuts over time. Same shape as
+            // the animation funnel — bind to the preview domain, derive the key
+            // plan once (re-derive on hot-reload), then sample the held camera at
+            // `t` and fire a cut on change. Query empty for scenes with no track.
+            .add_systems(
+                Update,
+                (
+                    camera_track::bind_camera_tracks_to_preview,
+                    camera_track::clear_camera_track_plans_on_stage_reload.run_if(
+                        bevy::ecs::schedule::common_conditions::on_message::<
+                            AssetEvent<UsdStageAsset>,
+                        >,
+                    ),
+                    camera_track::plan_camera_tracks,
+                    camera_track::sample_camera_tracks.after(lunco_time::DomainResolveSet),
                 )
                     .chain(),
             );
@@ -1005,6 +1026,14 @@ fn instantiate_usd_prim(
             commands.entity(entity).insert(UsdAnimated);
         }
 
+        // Tag a prim authoring `lunco:activeCamera` timeSamples as an editorial
+        // camera track (doc 35): its keys drive `SetActiveCamera` cuts over time.
+        // `bind_camera_tracks_to_preview` then binds it to the animation-preview
+        // domain so the transport scrubs the cuts.
+        if camera_track::prim_is_camera_track(reader, &sdf_path) {
+            commands.entity(entity).insert(camera_track::CameraTrack);
+        }
+
         // Spawn children with their transforms pre-populated so physics sees them correctly.
         // This is critical for wheel positions — they must be at the correct offsets from
         // the chassis center before the suspension system runs.
@@ -1762,7 +1791,7 @@ pub fn stage_time_codes_per_second(reader: &UsdData) -> f64 {
 /// held sample isn't a token/string/asset value. The animated twin of
 /// [`read_token`] — note tokens can't go through `prim_attribute_value_at::<String>`
 /// because `String::try_from(Value::Token)` fails on openusd `main`.
-fn read_token_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<String> {
+pub(crate) fn read_token_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<String> {
     let attr_path = path.append_property(attr).ok()?;
     let Some(Value::TimeSamples(samples)) = reader.field(&attr_path, "timeSamples") else {
         return None;
@@ -1773,6 +1802,28 @@ fn read_token_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Opt
         Value::AssetPath(a) => Some(a.as_str().to_string()),
         _ => None,
     }
+}
+
+/// Enumerate a token/string channel's authored keys as `(time_code, value)`
+/// pairs, ascending. Reads the raw `timeSamples` key times, then resolves each
+/// held value through [`read_token_at`] — so it doesn't depend on the inner
+/// sample value type. `None`/empty when the attribute carries no token samples.
+/// Used to build the [`camera_track::CameraTrackPlan`] key list once.
+pub(crate) fn read_token_timesamples(
+    reader: &UsdData,
+    path: &SdfPath,
+    attr: &str,
+) -> Vec<(f64, String)> {
+    let Ok(attr_path) = path.append_property(attr) else {
+        return Vec::new();
+    };
+    let Some(Value::TimeSamples(samples)) = reader.field(&attr_path, "timeSamples") else {
+        return Vec::new();
+    };
+    samples
+        .iter()
+        .filter_map(|s| read_token_at(reader, path, attr, s.0).map(|name| (s.0, name)))
+        .collect()
 }
 
 /// The authored time-code span `(first, last)` of one attribute's `timeSamples`
