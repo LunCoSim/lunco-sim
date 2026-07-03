@@ -1737,17 +1737,17 @@ pub fn read_vec3_f64<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Opti
 /// `timeSamples` at `time` (held/linear via `openusd::usd::evaluate`), falling
 /// back to `default` when there are no samples. Same value-type coverage
 /// (`[f32;3]`/`[f64;3]` and the `Vec<f32>`/`Vec<f64>` forms).
-pub fn read_vec3_f64_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<[f64; 3]> {
-    if let Some(v) = reader.prim_attribute_value_at::<[f32; 3]>(path, attr, time) {
+pub fn read_vec3_f64_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<[f64; 3]> {
+    if let Some(v) = reader.scalar_at::<[f32; 3]>(path, attr, time) {
         return Some([v[0] as f64, v[1] as f64, v[2] as f64]);
     }
-    if let Some(v) = reader.prim_attribute_value_at::<[f64; 3]>(path, attr, time) {
+    if let Some(v) = reader.scalar_at::<[f64; 3]>(path, attr, time) {
         return Some([v[0], v[1], v[2]]);
     }
-    if let Some(v) = reader.prim_attribute_value_at::<Vec<f32>>(path, attr, time) {
+    if let Some(v) = reader.scalar_at::<Vec<f32>>(path, attr, time) {
         if v.len() >= 3 { return Some([v[0] as f64, v[1] as f64, v[2] as f64]); }
     }
-    if let Some(v) = reader.prim_attribute_value_at::<Vec<f64>>(path, attr, time) {
+    if let Some(v) = reader.scalar_at::<Vec<f64>>(path, attr, time) {
         if v.len() >= 3 { return Some([v[0], v[1], v[2]]); }
     }
     None
@@ -2226,11 +2226,9 @@ pub fn get_attribute_as_vec3(reader: &UsdData, path: &SdfPath, attr: &str) -> Op
 /// `default` value at `prim.attr` and returns it as a `String` for
 /// `token`, `string`, and `asset` value types. `None` if absent or a
 /// different type.
-pub fn read_token(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<String> {
-    let attr_path = path.append_property(attr).ok()?;
-    let val = reader.field(&attr_path, "default")?;
-    match val {
-        Value::String(s) => Some(s.clone()),
+pub fn read_token<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<String> {
+    match reader.attr_value(path, attr)? {
+        Value::String(s) => Some(s),
         Value::Token(s) => Some(s.to_string()),
         Value::AssetPath(a) => Some(a.as_str().to_string()),
         _ => None,
@@ -2313,11 +2311,11 @@ fn value_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<V
 /// time `time` (timeSamples-or-default). The int fallback avoids the silent-`None`
 /// trap when an angle is authored as a bare integer (`rotateZ = 90`). `None` when
 /// absent or non-numeric.
-fn read_scalar_f32_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
+fn read_scalar_f32_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
     reader
-        .prim_attribute_value_at::<f32>(path, attr, time)
-        .or_else(|| reader.prim_attribute_value_at::<f64>(path, attr, time).map(|v| v as f32))
-        .or_else(|| match value_at(reader, path, attr, time)? {
+        .scalar_at::<f32>(path, attr, time)
+        .or_else(|| reader.scalar_at::<f64>(path, attr, time).map(|v| v as f32))
+        .or_else(|| match reader.attr_value_at(path, attr, time)? {
             Value::Int(v) => Some(v as f32),
             Value::Int64(v) => Some(v as f32),
             _ => None,
@@ -2330,9 +2328,9 @@ fn read_scalar_f32_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -
 /// composed about X then Y then Z. Each channel reads its `default` when static,
 /// so this serves both load-time decode (any `time`) and the animation sampler.
 /// `None` when the prim authors no rotation op.
-pub fn local_rotation_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option<Quat> {
+pub fn local_rotation_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Quat> {
     // 1. Quaternion orient wins.
-    if let Some(q) = value_at(reader, path, "xformOp:orient", time).and_then(|v| quat_from_value(&v)) {
+    if let Some(q) = reader.attr_value_at(path, "xformOp:orient", time).and_then(|v| quat_from_value(&v)) {
         return Some(q);
     }
     // 2. An Euler-order triple (degrees).
@@ -2362,8 +2360,8 @@ pub fn local_rotation_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option<
 /// last row — exactly glam's column-major / column-vector layout transposed, and
 /// the two transposes cancel, so the raw 16 elements feed `Mat4::from_cols_array`
 /// directly. `None` when no `xformOp:transform` is authored.
-pub fn read_matrix_transform_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option<Transform> {
-    match value_at(reader, path, "xformOp:transform", time)? {
+pub fn read_matrix_transform_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
+    match reader.attr_value_at(path, "xformOp:transform", time)? {
         Value::Matrix4d(m) => {
             let cols: [f32; 16] = std::array::from_fn(|i| m.0[i] as f32);
             Some(Transform::from_matrix(Mat4::from_cols_array(&cols)))
@@ -2382,11 +2380,10 @@ fn prim_rotation_animated(reader: &UsdData, path: &SdfPath) -> bool {
 /// when unauthored or empty. When authored it is the **authoritative** op
 /// sequence — [`compose_xform_order_at`] honors it exactly, including non-TRS
 /// orders the piecewise decode can't express.
-fn read_xform_op_order(reader: &UsdData, path: &SdfPath) -> Option<Vec<String>> {
-    let ap = path.append_property("xformOpOrder").ok()?;
-    let order: Vec<String> = match reader.field(&ap, "default")? {
+fn read_xform_op_order<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<String>> {
+    let order: Vec<String> = match reader.attr_value(path, "xformOpOrder")? {
         Value::TokenVec(v) => v.iter().map(|t| t.to_string()).collect(),
-        Value::StringVec(v) => v.clone(),
+        Value::StringVec(v) => v,
         _ => return None,
     };
     (!order.is_empty()).then_some(order)
@@ -2403,14 +2400,14 @@ fn has_xform_op_order(reader: &UsdData, path: &SdfPath) -> bool {
 /// Euler orders / single-axis / `orient` / the full `transform` matrix — keyed
 /// by the type segment after `xformOp:` (so a named op like
 /// `xformOp:translate:pivot` still resolves). `None` for an unknown or absent op.
-fn op_matrix_at(reader: &UsdData, path: &SdfPath, token: &str, time: f64) -> Option<Mat4> {
+fn op_matrix_at<R: UsdRead>(reader: &R, path: &SdfPath, token: &str, time: f64) -> Option<Mat4> {
     let kind = token.strip_prefix("xformOp:")?.split(':').next()?;
     let vec3 = |v: [f64; 3]| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
     let m = match kind {
         "translate" => Mat4::from_translation(vec3(read_vec3_f64_at(reader, path, token, time)?)),
         "scale" => Mat4::from_scale(vec3(read_vec3_f64_at(reader, path, token, time)?)),
-        "orient" => Mat4::from_quat(quat_from_value(&value_at(reader, path, token, time)?)?),
-        "transform" => match value_at(reader, path, token, time)? {
+        "orient" => Mat4::from_quat(quat_from_value(&reader.attr_value_at(path, token, time)?)?),
+        "transform" => match reader.attr_value_at(path, token, time)? {
             Value::Matrix4d(m) => Mat4::from_cols_array(&std::array::from_fn(|i| m.0[i] as f32)),
             _ => return None,
         },
@@ -2434,7 +2431,7 @@ fn op_matrix_at(reader: &UsdData, path: &SdfPath, token: &str, time: f64) -> Opt
 /// column-vector form that is `m₀·m₁·…·mₙ`, so each op **right**-multiplies the
 /// accumulator. `None` when no `xformOpOrder` is authored. A listed op that fails
 /// to read is skipped (treated as identity), matching USD's lenient stack.
-pub fn compose_xform_order_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option<Transform> {
+pub fn compose_xform_order_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
     let order = read_xform_op_order(reader, path)?;
     let mut m = Mat4::IDENTITY;
     for token in &order {
@@ -2454,7 +2451,7 @@ pub fn compose_xform_order_at(reader: &UsdData, path: &SdfPath, time: f64) -> Op
 /// scale). `None` when the prim authors no xform op at all — the caller then
 /// keeps the entity's existing transform. Shared by the static decoder and the
 /// animation sampler so both agree.
-pub fn local_transform_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option<Transform> {
+pub fn local_transform_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
     if let Some(tf) = compose_xform_order_at(reader, path, time) {
         return Some(tf);
     }
@@ -2481,7 +2478,7 @@ pub fn local_transform_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option
 /// `ONE` (callers that need `xformOp:scale` compose it themselves; avian
 /// pre-applies scale onto the collider instead). Avian downcasts the resulting
 /// `Transform` to `DVec3`/`DQuat` at its call site.
-pub fn read_transform_from_usd(reader: &UsdData, path: &SdfPath) -> Transform {
+pub fn read_transform_from_usd<R: UsdRead>(reader: &R, path: &SdfPath) -> Transform {
     match local_transform_at(reader, path, 0.0) {
         Some(tf) => Transform { scale: Vec3::ONE, ..tf },
         None => Transform::IDENTITY,

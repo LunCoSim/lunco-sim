@@ -49,6 +49,22 @@ pub trait UsdRead {
     /// First composed target of relationship `name` on `prim`, as a path string
     /// (e.g. a joint's `physics:body0`). Composed = PCP-translated.
     fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String>;
+
+    /// Immediate composed prim children of `prim`.
+    fn children(&self, prim: &SdfPath) -> Vec<SdfPath>;
+
+    /// The composed value of attribute `name` on `prim` at time code `time` —
+    /// authored `timeSamples` (interpolated) win, else the `default` opinion.
+    /// The transform decoders read at `time = 0.0` for static geometry.
+    fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value>;
+
+    /// Typed timeSamples-or-default read — the `_at` sibling of [`scalar`](Self::scalar).
+    fn scalar_at<T>(&self, prim: &SdfPath, name: &str, time: f64) -> Option<T>
+    where
+        T: TryFrom<Value>,
+    {
+        self.attr_value_at(prim, name, time).and_then(|v| v.get::<T>())
+    }
 }
 
 impl UsdRead for StageView<'_> {
@@ -88,6 +104,26 @@ impl UsdRead for StageView<'_> {
             .next()
             .map(|p| p.to_string())
     }
+
+    fn children(&self, prim: &SdfPath) -> Vec<SdfPath> {
+        self.stage()
+            .prim(prim.clone())
+            .children()
+            .map(|cs| cs.iter().map(|c| c.path().clone()).collect())
+            .unwrap_or_default()
+    }
+
+    fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value> {
+        let attr = self.stage().prim(prim.clone()).attribute(name);
+        if let Ok(Some(samples)) = attr.time_samples() {
+            if let Some(v) =
+                openusd::usd::evaluate(&samples, time, openusd::usd::InterpolationType::Linear)
+            {
+                return Some(v);
+            }
+        }
+        attr.get::<Value>().ok().flatten()
+    }
 }
 
 impl UsdRead for openusd::sdf::Data {
@@ -106,6 +142,14 @@ impl UsdRead for openusd::sdf::Data {
 
     fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String> {
         crate::read_rel_target(self, prim, name)
+    }
+
+    fn children(&self, prim: &SdfPath) -> Vec<SdfPath> {
+        UsdDataExt::prim_children(self, prim)
+    }
+
+    fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value> {
+        crate::value_at(self, prim, name, time)
     }
 }
 
