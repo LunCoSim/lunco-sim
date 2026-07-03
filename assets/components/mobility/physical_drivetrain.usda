@@ -22,6 +22,7 @@
 # The wheel colliders never touch the body, so the joints stay stable without
 # relying on collision-disable.
 def Xform "Drivetrain" (
+    kind = "component"
     prepend apiSchemas = ["PhysicsArticulationRootAPI"]
 )
 {

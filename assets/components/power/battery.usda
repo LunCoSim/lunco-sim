@@ -9,6 +9,7 @@
 # Modelica class: LunCo.Power.Battery.LithiumIon
 
 def Cube "Battery" (
+    kind = "component"
     prepend apiSchemas = ["LunCoPowerComponentAPI"]
 )
 {

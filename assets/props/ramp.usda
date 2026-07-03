@@ -6,7 +6,9 @@
 )
 
 # Angled ramp — static cuboid tilted ~17°.
-def Xform "Ramp"
+def Xform "Ramp" (
+    kind = "component"
+)
 {
     def Cube "Body" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]

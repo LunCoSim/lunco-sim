@@ -7,6 +7,7 @@
 
 
 def Cylinder "Motor" (
+    kind = "component"
     prepend apiSchemas = ["LunCoActuatorAPI"]
 )
 {

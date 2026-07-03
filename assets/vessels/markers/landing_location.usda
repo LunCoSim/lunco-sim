@@ -10,7 +10,9 @@
 # and the trigger volume is an overlap-only avian Sensor (non-solid).
 #
 # Drop it anywhere with `prepend references` + `xformOp:translate`.
-def Xform "LandingLocationMarker"
+def Xform "LandingLocationMarker" (
+    kind = "component"
+)
 {
     custom string lunco:landingLocation = "true"
 

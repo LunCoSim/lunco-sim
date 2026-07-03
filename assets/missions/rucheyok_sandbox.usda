@@ -5,7 +5,9 @@
     metersPerUnit = 1
 )
 
-def Xform "RucheyokSandbox"
+def Xform "RucheyokSandbox" (
+    kind = "assembly"
+)
 {
     custom bool lunco:spawnable = false
 

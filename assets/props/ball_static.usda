@@ -6,7 +6,9 @@
 )
 
 # Static ball — collider + mesh, no rigid body (stays put).
-def Xform "BallStatic"
+def Xform "BallStatic" (
+    kind = "component"
+)
 {
     def Sphere "Body" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]

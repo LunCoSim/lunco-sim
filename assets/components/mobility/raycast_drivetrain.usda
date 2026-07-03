@@ -15,7 +15,9 @@
 # Position is authored here (per-variant) rather than on the base wheel so the
 # `physical` variant can supply its own drop without losing to a stronger local
 # opinion (USD LIVERPS strength: local > variant/reference).
-def Xform "Drivetrain"
+def Xform "Drivetrain" (
+    kind = "component"
+)
 {
     over "Wheel_FL"
     {

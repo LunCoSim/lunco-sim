@@ -5,7 +5,9 @@
     metersPerUnit = 1
 )
 
-def Xform "SandboxScene"
+def Xform "SandboxScene" (
+    kind = "assembly"
+)
 {
     # A whole scene, not a spawnable part — excluded from the spawn catalog.
     custom bool lunco:spawnable = false

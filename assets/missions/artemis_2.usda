@@ -5,7 +5,9 @@
     metersPerUnit = 1
 )
 
-def Xform "Artemis2"
+def Xform "Artemis2" (
+    kind = "assembly"
+)
 {
     custom bool lunco:spawnable = false
 
