@@ -14,7 +14,15 @@ share one selection algorithm instead of duplicating it.
 |--------|------|
 | `quadtree` | CDLOD quadtree selection over an abstract square region: distance-range refinement from a fixed canonical screen metric (view-independent → deterministic across peers), 3D-Tiles geometric error, and CDLOD geomorph bands. `select_3d` takes eye-height so altitude coarsens LOD. |
 | `tile` | uniform planar tile-grid math: world↔tile mapping, the resident ring of tiles around a focus (the physics-collider-ring substrate). |
-| `source` | the `HeightSource` trait (`height_at` as a pure function of position) + a deterministic analytic FBM source for bring-up / tests. |
+| `source` | the `HeightSource` trait (`height_at` as a pure function of position) + `normal_at`, a deterministic analytic FBM source for bring-up / tests, and **`CompositeHeightSource`** — the orbit→surface bridge (site DEM inside a georeferenced region, globe height outside, smoothstep collar). |
+
+## The height oracle
+
+A `HeightSource` is the atom of the terrain model: features (a crater, a DEM, a
+whole planet) compose by wrapping the source below them, and the composed source
+is the **single truth** both the visual tile baker and the avian collider ring
+sample — so visuals and physics stay in lockstep. See the design narrative:
+[`docs/architecture/terrain-substrate.md`](../../docs/architecture/terrain-substrate.md).
 
 ## Built on by
 
@@ -23,5 +31,7 @@ share one selection algorithm instead of duplicating it.
 - **`lunco-terrain-globe`** — globe scale: cube-sphere region map + radius
   `HeightSource` for whole bodies seen from orbit.
 
-The future orbit→surface bridge is a *composite* `HeightSource` that returns the
-site DEM inside a georeferenced region and the globe height outside it.
+The orbit→surface bridge is `CompositeHeightSource` (above): it returns the site
+DEM inside a georeferenced region and the globe height outside it. The core type
+exists; live app-wiring (build from `lunco:anchor:lat/lon`, relate globe/surface
+grids, altitude swap) is the remaining step.
