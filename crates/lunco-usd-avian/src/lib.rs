@@ -53,7 +53,7 @@ use lunco_usd_bevy::{
 };
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, UsdInstanceRoot};
 use openusd::sdf::Path as SdfPath;
-use lunco_usd_bevy::UsdData;
+use openusd::usd::Stage;
 
 /// Bevy plugin for USD physics mapping.
 ///
@@ -579,8 +579,10 @@ fn process_usd_avian_prims(
     // flattened `stage.reader` serves ONLY recipe-less legacy assets (pending
     // migration, then deleted).
     let id = prim_path.stage_handle.id();
-    let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
-    let live = recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some();
+    let live = canonical.get(id).is_some() || {
+        let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
+        recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
+    };
     if live {
         let cs = canonical.get(id).expect("just built");
         bevy::log::debug!("[canonical] avian extract off LIVE stage: {}", prim_path.path);
@@ -692,22 +694,197 @@ fn extract_avian_prim<R: UsdRead>(
     }
 }
 
+/// Read the STANDARD UsdPhysics joint at `path` off the LIVE composed stage via
+/// openusd's typed schema (`openusd::schemas::physics`) into the deferred
+/// [`PendingUsdJoint`]. The typed schema wraps a live `Prim`, so it reads the
+/// composed opinion directly — canonical stage only, no flattened `sdf::Data`.
+///
+/// This replaces the ad-hoc raw-attribute joint reader with the USD standard:
+/// concrete joint subtypes ([`RevoluteJoint`](openusd::schemas::physics::RevoluteJoint)
+/// …), shared `JointBase` body/anchor relationships, `UsdPhysicsDriveAPI`, and
+/// per-DOF `UsdPhysicsLimitAPI` for the generic-D6 reduction. Returns `None` when
+/// `path` is not a UsdPhysics joint, is missing a body ref, or targets a wheel
+/// (owned by `lunco-usd-sim`). Revolute limits are converted degrees→radians
+/// (the `PendingUsdJoint` contract); prismatic/distance stay in scene units.
+fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoint> {
+    use openusd::schemas::physics::{self, JointAxis, JointBase};
+
+    let axis_of = |ax: Option<JointAxis>| match ax.unwrap_or_default() {
+        JointAxis::X => DVec3::X,
+        JointAxis::Y => DVec3::Y,
+        JointAxis::Z => DVec3::Z,
+    };
+    // Shared JointBase reads (both bodies + local anchors). `None` unless BOTH
+    // bodies are authored — world-anchored joints aren't mapped to avian here.
+    fn base<J: JointBase>(j: &J) -> Option<(String, String, DVec3, DVec3)> {
+        let to_dvec = |a: [f32; 3]| DVec3::new(a[0] as f64, a[1] as f64, a[2] as f64);
+        let b0 = j.body0_rel().targets().ok()?.into_iter().next()?;
+        let b1 = j.body1_rel().targets().ok()?.into_iter().next()?;
+        let lp0 = j.local_pos0_attr().get::<[f32; 3]>().ok().flatten().map(to_dvec).unwrap_or(DVec3::ZERO);
+        let lp1 = j.local_pos1_attr().get::<[f32; 3]>().ok().flatten().map(to_dvec).unwrap_or(DVec3::ZERO);
+        Some((b0.to_string(), b1.to_string(), lp0, lp1))
+    }
+    let read_drive = |ns: &str| -> Option<JointDrive> {
+        let d = physics::DriveAPI::get(stage, path.clone(), ns).ok().flatten()?;
+        let tp = d.target_position_attr().get::<f32>().ok().flatten().map(|v| v as f64);
+        let tv = d.target_velocity_attr().get::<f32>().ok().flatten().map(|v| v as f64);
+        let mf = d.max_force_attr().get::<f32>().ok().flatten().map(|v| v as f64);
+        (tp.is_some() || tv.is_some() || mf.is_some())
+            .then_some(JointDrive { target_position: tp, target_velocity: tv, max_force: mf })
+    };
+
+    let spec = if let Some(j) = physics::RevoluteJoint::get(stage, path.clone()).ok().flatten() {
+        let (b0, b1, lp0, lp1) = base(&j)?;
+        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
+        let lo = j.lower_limit_attr().get::<f32>().ok().flatten()
+            .map(|d| (d as f64).to_radians()).unwrap_or(f64::NEG_INFINITY);
+        let hi = j.upper_limit_attr().get::<f32>().ok().flatten()
+            .map(|d| (d as f64).to_radians()).unwrap_or(f64::INFINITY);
+        PendingUsdJoint {
+            body0_path: b0, body1_path: b1, axis, local_pos0: lp0, local_pos1: lp1,
+            limit_lower: lo, limit_upper: hi, joint_type: "PhysicsRevoluteJoint".into(),
+            swing_limit: None, drive: read_drive("angular"),
+        }
+    } else if let Some(j) = physics::PrismaticJoint::get(stage, path.clone()).ok().flatten() {
+        let (b0, b1, lp0, lp1) = base(&j)?;
+        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
+        let lo = j.lower_limit_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::NEG_INFINITY);
+        let hi = j.upper_limit_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::INFINITY);
+        PendingUsdJoint {
+            body0_path: b0, body1_path: b1, axis, local_pos0: lp0, local_pos1: lp1,
+            limit_lower: lo, limit_upper: hi, joint_type: "PhysicsPrismaticJoint".into(),
+            swing_limit: None, drive: read_drive("linear"),
+        }
+    } else if let Some(j) = physics::SphericalJoint::get(stage, path.clone()).ok().flatten() {
+        let (b0, b1, lp0, lp1) = base(&j)?;
+        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
+        let swing = j.cone_angle0_limit_attr().get::<f32>().ok().flatten()
+            .zip(j.cone_angle1_limit_attr().get::<f32>().ok().flatten())
+            .map(|(a, b)| (a as f64, b as f64));
+        PendingUsdJoint {
+            body0_path: b0, body1_path: b1, axis, local_pos0: lp0, local_pos1: lp1,
+            limit_lower: f64::NEG_INFINITY, limit_upper: f64::INFINITY,
+            joint_type: "PhysicsSphericalJoint".into(), swing_limit: swing, drive: None,
+        }
+    } else if let Some(j) = physics::FixedJoint::get(stage, path.clone()).ok().flatten() {
+        let (b0, b1, lp0, lp1) = base(&j)?;
+        PendingUsdJoint {
+            body0_path: b0, body1_path: b1, axis: DVec3::Y, local_pos0: lp0, local_pos1: lp1,
+            limit_lower: f64::NEG_INFINITY, limit_upper: f64::INFINITY,
+            joint_type: "PhysicsFixedJoint".into(), swing_limit: None, drive: None,
+        }
+    } else if let Some(j) = physics::DistanceJoint::get(stage, path.clone()).ok().flatten() {
+        let (b0, b1, lp0, lp1) = base(&j)?;
+        let lo = j.min_distance_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::NEG_INFINITY);
+        let hi = j.max_distance_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::INFINITY);
+        PendingUsdJoint {
+            body0_path: b0, body1_path: b1, axis: DVec3::Y, local_pos0: lp0, local_pos1: lp1,
+            limit_lower: lo, limit_upper: hi, joint_type: "PhysicsDistanceJoint".into(),
+            swing_limit: None, drive: None,
+        }
+    } else if let Some(j) = physics::Joint::get(stage, path.clone()).ok().flatten() {
+        // Generic/D6 → reduce via per-DOF UsdPhysicsLimitAPI (typed).
+        let (b0, b1, lp0, lp1) = base(&j)?;
+        let (reduced, axis, lo, hi) = reduce_generic_joint_typed(stage, path)?;
+        PendingUsdJoint {
+            body0_path: b0, body1_path: b1, axis, local_pos0: lp0, local_pos1: lp1,
+            limit_lower: lo, limit_upper: hi, joint_type: reduced.into(),
+            swing_limit: None, drive: None,
+        }
+    } else {
+        return None;
+    };
+
+    // Wheel-targeted joints are owned by `lunco-usd-sim` (built alongside the
+    // wheel body); skip them here to avoid double-up/race.
+    if let Ok(b1_path) = SdfPath::new(&spec.body1_path) {
+        if stage.prim(b1_path).attribute("physxVehicleWheel:radius").get::<f32>().ok().flatten().is_some() {
+            return None;
+        }
+    }
+    Some(spec)
+}
+
+/// Typed-schema sibling of [`reduce_generic_joint`]: reduces a generic
+/// `UsdPhysicsJoint` (D6) to the avian primitive matching its free DOFs by
+/// reading each per-DOF `UsdPhysicsLimitAPI` (`limit:{transX..rotZ}`) off the
+/// live stage. A DOF is *locked* when `low > high`, *free* when unauthored.
+fn reduce_generic_joint_typed(stage: &Stage, path: &SdfPath) -> Option<(&'static str, DVec3, f64, f64)> {
+    use openusd::schemas::physics;
+    const DOFS: [(&str, DVec3, bool); 6] = [
+        ("transX", DVec3::X, false), ("transY", DVec3::Y, false), ("transZ", DVec3::Z, false),
+        ("rotX", DVec3::X, true), ("rotY", DVec3::Y, true), ("rotZ", DVec3::Z, true),
+    ];
+    let mut free_trans: Vec<(DVec3, f64, f64)> = Vec::new();
+    let mut free_rot: Vec<(DVec3, f64, f64)> = Vec::new();
+    for (inst, axis, is_rot) in DOFS {
+        let (low, high) = match physics::LimitAPI::get(stage, path.clone(), inst).ok().flatten() {
+            Some(l) => (
+                l.low_attr().get::<f32>().ok().flatten().map(|v| v as f64),
+                l.high_attr().get::<f32>().ok().flatten().map(|v| v as f64),
+            ),
+            None => (None, None),
+        };
+        match (low, high) {
+            (Some(l), Some(h)) if l > h => {} // locked
+            (l, h) => {
+                let entry = (axis, l.unwrap_or(f64::NEG_INFINITY), h.unwrap_or(f64::INFINITY));
+                if is_rot { free_rot.push(entry) } else { free_trans.push(entry) }
+            }
+        }
+    }
+    match (free_trans.len(), free_rot.len()) {
+        (0, 0) => Some(("PhysicsFixedJoint", DVec3::Y, f64::NEG_INFINITY, f64::INFINITY)),
+        (0, 1) => Some(("PhysicsRevoluteJoint", free_rot[0].0, free_rot[0].1, free_rot[0].2)),
+        (1, 0) => Some(("PhysicsPrismaticJoint", free_trans[0].0, free_trans[0].1, free_trans[0].2)),
+        (0, 3) => Some(("PhysicsSphericalJoint", free_rot[0].0, f64::NEG_INFINITY, f64::INFINITY)),
+        _ => None,
+    }
+}
+
 /// Observer that fires when a USD prim entity is added.
 ///
-/// Currently only detects physics joints (PhysicsPrismaticJoint, PhysicsRevoluteJoint,
-/// etc.). Physics mapping for non-joint prims is handled by the deferred system.
+/// Detects physics joints (PhysicsRevoluteJoint, PhysicsPrismaticJoint, …) and
+/// stamps the deferred [`PendingUsdJoint`] carrier. Ph0′: reads the STANDARD
+/// UsdPhysics joint schema off the LIVE canonical stage
+/// ([`read_joint_spec_typed`]); the flattened raw-attribute path below is a
+/// transition fallback for recipe-less assets, deleted once every asset carries
+/// a `StageRecipe`.
 fn on_add_usd_prim(
     trigger: On<Add, UsdPrimPath>,
     query: Query<&UsdPrimPath>,
     stages: Res<Assets<UsdStageAsset>>,
+    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
 ) {
     let entity = trigger.entity;
     let Ok(prim_path) = query.get(entity) else { return; };
-    let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
     let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
 
-    // Borrow, not deep-clone the `Arc<UsdData>` (whole-stage copy).
+    // Ph0′: prefer the STANDARD typed UsdPhysics read off the live canonical
+    // stage (built on demand). The typed schema needs the composed `Stage`, so
+    // recipe-less assets fall through to the flattened raw reader below.
+    let id = prim_path.stage_handle.id();
+    let has_canonical = canonical.get(id).is_some() || {
+        let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
+        recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
+    };
+    if has_canonical {
+        let cs = canonical.get(id).expect("just built");
+        // A wheel prim on the LIVE stage → owned by the sim plugin, skip.
+        if cs.stage().prim(sdf_path.clone()).attribute("physxVehicleWheel:radius")
+            .get::<f32>().ok().flatten().is_some()
+        {
+            return;
+        }
+        if let Some(joint) = read_joint_spec_typed(cs.stage(), &sdf_path) {
+            commands.entity(entity).insert(joint);
+        }
+        return;
+    }
+
+    // ── Transition fallback: flattened raw-attribute joint read ──
+    let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
     let reader = &*stage.reader;
 
     // Skip wheel prims — the sim plugin handles those (raycast wheels don't need physical bodies)
@@ -1052,7 +1229,7 @@ fn read_vec3_attribute<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Op
 /// {targetPosition,targetVelocity,maxForce}` attributes, where `ns` is `angular`
 /// (revolute) or `linear` (prismatic). Returns `None` when none are authored, so
 /// an undriven joint stays passive (wire-driven only).
-fn read_joint_drive(reader: &UsdData, path: &SdfPath, ns: &str) -> Option<JointDrive> {
+fn read_joint_drive<R: UsdRead>(reader: &R, path: &SdfPath, ns: &str) -> Option<JointDrive> {
     let target_position = read_scalar_attribute(reader, path, &format!("drive:{ns}:physics:targetPosition"));
     let target_velocity = read_scalar_attribute(reader, path, &format!("drive:{ns}:physics:targetVelocity"));
     let max_force = read_scalar_attribute(reader, path, &format!("drive:{ns}:physics:maxForce"));
@@ -1075,7 +1252,7 @@ fn read_joint_drive(reader: &UsdData, path: &SdfPath, ns: &str) -> Option<JointD
 /// multi-DOF joint with no primitive (avian has no configurable 6-DOF joint):
 /// - all locked → `Fixed`; 1 free rotation → `Revolute`; 1 free translation →
 ///   `Prismatic`; all 3 rotations free (translations locked) → `Spherical`.
-fn reduce_generic_joint(reader: &UsdData, path: &SdfPath) -> Option<(&'static str, DVec3, f64, f64)> {
+fn reduce_generic_joint<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<(&'static str, DVec3, f64, f64)> {
     const DOFS: [(&str, DVec3, bool); 6] = [
         ("transX", DVec3::X, false),
         ("transY", DVec3::Y, false),
@@ -1310,5 +1487,75 @@ mod extract_parity_tests {
         assert!(live.1.is_some(), "live: compound collider built off the stage");
         assert_eq!(live.2, Some(500.0), "live: authored mass read off the stage");
         assert!(live.3, "live: ShouldBeDynamic (settles to Dynamic)");
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod joint_typed_tests {
+    //! Ph0′ physics rework: the joint projector reads the STANDARD UsdPhysics
+    //! joint schema (`openusd::schemas::physics`) off the live stage into the
+    //! deferred `PendingUsdJoint` — bodies, axis, standard `physics:lowerLimit`/
+    //! `upperLimit` (degrees → radians), local anchors, and `UsdPhysicsDriveAPI`.
+    //! This is the headless-verifiable half of the rework (the read); joint
+    //! *dynamics* need a rover boot.
+    use super::read_joint_spec_typed;
+    use bevy::math::DVec3;
+    use lunco_usd_bevy::compose_file_to_stage;
+    use openusd::sdf::Path as SdfPath;
+
+    const FIXTURE: &str = r#"#usda 1.0
+def Xform "Chassis" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def Xform "Wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def PhysicsRevoluteJoint "Hinge" (
+    prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+)
+{
+    rel physics:body0 = </Chassis>
+    rel physics:body1 = </Wheel>
+    uniform token physics:axis = "Y"
+    float physics:lowerLimit = -45
+    float physics:upperLimit = 45
+    point3f physics:localPos0 = (1, 0, 0)
+    point3f physics:localPos1 = (0, 0, 0)
+    float drive:angular:physics:targetVelocity = 2.5
+    float drive:angular:physics:maxForce = 100
+}
+"#;
+
+    #[test]
+    fn reads_standard_revolute_joint_off_live_stage() {
+        let dir = std::env::temp_dir().join("lunco_joint_typed");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("hinge.usda");
+        std::fs::write(&f, FIXTURE).unwrap();
+        let stage = compose_file_to_stage(&f).expect("compose stage");
+
+        let j = read_joint_spec_typed(&stage, &SdfPath::new("/Hinge").unwrap())
+            .expect("standard revolute joint reads off the live stage");
+
+        assert_eq!(j.joint_type, "PhysicsRevoluteJoint");
+        assert_eq!(j.body0_path, "/Chassis");
+        assert_eq!(j.body1_path, "/Wheel");
+        assert_eq!(j.axis, DVec3::Y);
+        // Standard `physics:lowerLimit`/`upperLimit` are DEGREES → radians.
+        assert!((j.limit_lower - (-45f64).to_radians()).abs() < 1e-9, "lower {}", j.limit_lower);
+        assert!((j.limit_upper - 45f64.to_radians()).abs() < 1e-9, "upper {}", j.limit_upper);
+        assert_eq!(j.local_pos0, DVec3::new(1.0, 0.0, 0.0));
+        assert_eq!(j.local_pos1, DVec3::ZERO);
+        // UsdPhysicsDriveAPI:angular → JointDrive.
+        let drive = j.drive.expect("angular drive read via DriveAPI");
+        assert_eq!(drive.target_velocity, Some(2.5));
+        assert_eq!(drive.max_force, Some(100.0));
+        assert_eq!(drive.target_position, None);
+    }
+
+    #[test]
+    fn non_joint_prim_reads_none() {
+        let dir = std::env::temp_dir().join("lunco_joint_typed");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("nojoint.usda");
+        std::fs::write(&f, "#usda 1.0\ndef Xform \"Plain\" {}\n").unwrap();
+        let stage = compose_file_to_stage(&f).expect("compose stage");
+        assert!(read_joint_spec_typed(&stage, &SdfPath::new("/Plain").unwrap()).is_none());
     }
 }

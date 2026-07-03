@@ -581,8 +581,13 @@ fn instantiate_usd_prim(
     // `StageRecipe` (e.g. `live_projection` / test constructions) — those will be
     // migrated to build recipes, after which the flatten is deleted outright.
     let id = prim_path.stage_handle.id();
-    let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
-    let live = recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some();
+    // Already built (recipe-built earlier, or directly inserted by a main-thread
+    // construction site like `live_projection`), else build on demand from the
+    // asset's recipe.
+    let live = canonical.get(id).is_some() || {
+        let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
+        recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
+    };
     if live {
         let cs = canonical.get(id).expect("just built");
         debug!("[canonical] visual instantiate off LIVE stage: {}", prim_path.path);

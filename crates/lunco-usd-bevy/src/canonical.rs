@@ -34,6 +34,21 @@ pub struct StageRecipe {
     pub bytes: HashMap<String, Vec<u8>>,
 }
 
+impl StageRecipe {
+    /// A **single-layer** recipe from an in-memory `source` string — for scenes
+    /// authored / composed in memory that carry no external file references
+    /// (live documents, viewport preview, tests). `root_id` is a synthetic layer
+    /// identifier (also the sole key in `bytes`), so `build_stage_from_closure`
+    /// opens it straight from the byte map with no filesystem access. Sources
+    /// with on-disk `references`/`payloads` need the full closure instead (they
+    /// won't resolve from a lone in-memory layer).
+    pub fn from_source(root_id: impl Into<String>, source: &str) -> Self {
+        let root_id = root_id.into();
+        let bytes = HashMap::from([(root_id.clone(), source.as_bytes().to_vec())]);
+        Self { root_id, bytes }
+    }
+}
+
 /// One committed change, owned + `Send`, as drained from the stage sink.
 /// (`CommittedChange` borrows the stage; we copy the paths out so the inbox can
 /// cross the sink→system boundary.)
@@ -151,6 +166,7 @@ impl CanonicalStages {
     ) -> Option<&mut CanonicalStage> {
         self.by_asset.get_mut(&asset)
     }
+
 
     pub fn len(&self) -> usize {
         self.by_asset.len()
