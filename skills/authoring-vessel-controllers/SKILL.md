@@ -1,17 +1,27 @@
 ---
 name: authoring-vessel-controllers
 description: >
-  How to build a vessel controller (autopilot / GNC) in LunCoSim the
-  canonical way: the control LAW as a Modelica model, high-level logic
-  and sequencing in rhai, sensors as USD library prims, and control
-  authority via the wired `piloted` signal + possession. Trigger
-  whenever you're adding or changing how a vessel drives itself — a
-  descent GNC, a cruise autopilot, a station-keeper — or wiring a
-  human/autopilot to override it. Encodes the layering decision
-  (math in Modelica, policy in rhai, structure in USD) and the
-  hard-won gotchas (input folding, sensor wiring, yield-to-pilot).
-  The reference implementation is the lander: models/Lander.mo +
-  scenarios/lander_subsystems.rhai + scenes/sandbox/lander_test.usda.
+  How to model a vehicle's behaviour in LunCoSim — making a spacecraft,
+  lander, rover, or drone move, fly, drive, or land under its own control,
+  and letting a person take over. USE THIS SKILL whenever the user asks, in
+  plain words, things like: "how do I model this lander / rover?", "how do
+  I make it fly (or drive, land, hover) itself?", "how do I add an
+  autopilot / a control system / guidance / a GNC?", "how do I make it
+  follow waypoints?", "how do I let the user take control?" or "why doesn't
+  my controller / thruster respond?". Any request to model how a vehicle
+  behaves under power, or to add/fix its self-driving or manual control,
+  belongs here — the user will NOT know the internal terms. (For the agent
+  mid-code, it also covers: a `.mo` control model, `lunco:simWires`, the
+  `piloted` port, `external_throttle`, `possess`/`follow`, or a rumoca
+  input that `set()` writes but that has no effect — and catch-yourself
+  moments like putting control math in rhai, a bespoke mode flag, a
+  self-wire, or reading the god-view pose instead of a sensor.) These rules
+  are project-specific: a naive approach silently FOLDS unwired Modelica
+  inputs (writes vanish) and CLOBBERS the pilot; the three-layer split
+  (math→Modelica, logic/events→rhai, structure/authority→USD) and the
+  wired `piloted` authority signal are not obvious from Modelica/Bevy
+  alone. Reference impl: the lander (models/Lander.mo,
+  scenarios/lander_subsystems.rhai, scenes/sandbox/lander_test.usda).
 ---
 
 # Authoring vessel controllers

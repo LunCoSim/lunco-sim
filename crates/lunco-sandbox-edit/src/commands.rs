@@ -74,6 +74,100 @@ pub fn on_detach_joint(
     }
 }
 
+// ── Dock release, as an actuator on the normal intent→port machinery ─────────
+
+/// Dock/release actuator. A vessel exposes a `release` command PORT; when it rises
+/// past 0.5 the fixed joint attaching this vessel to another body is detached, once.
+/// Driven exactly like throttle/steer: `Release` intent (KeyG) → the `_LanderControl`
+/// profile's `release`→`release` binding → `SetPorts` → this port. Replaces the old
+/// hardcoded G-to-detach special case; it works for any possessed vessel + dock joint.
+#[derive(bevy::prelude::Component, Default, bevy::prelude::Reflect)]
+#[reflect(Component)]
+pub struct ReleaseActuator {
+    /// Commanded release 0..1, written by the control binding.
+    pub cmd: f32,
+    /// Edge latch so a held key detaches only once.
+    latched: bool,
+}
+
+/// Port backend exposing `release` on any entity carrying a [`ReleaseActuator`].
+const RELEASE_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports::PortBackend {
+    list: |w, e, out| {
+        if let Some(a) = w.get::<ReleaseActuator>(e) {
+            out.push(lunco_core::ports::PortRef {
+                name: "release".to_string(),
+                direction: lunco_core::ports::PortDirection::InOut,
+                port_type: lunco_core::ports::PortType::Signal,
+                value: a.cmd as f64,
+            });
+        }
+    },
+    read_output: |w, e, n| {
+        if n != "release" { return None; }
+        w.get::<ReleaseActuator>(e).map(|a| a.cmd as f64)
+    },
+    read_input: |w, e, n| {
+        if n != "release" { return None; }
+        w.get::<ReleaseActuator>(e).map(|a| a.cmd as f64)
+    },
+    write_input: |w, e, n, v| {
+        if n != "release" { return false; }
+        if let Some(mut a) = w.get_mut::<ReleaseActuator>(e) {
+            a.cmd = v as f32;
+            return true;
+        }
+        false
+    },
+    resolve_output: None,
+    resolve_input: None,
+    read_slot: None,
+    write_slot: None,
+};
+
+/// Register [`RELEASE_BACKEND`] once the `PortRegistry` exists (after the cosim
+/// builtins). `Option` so an app without cosim doesn't panic.
+fn register_release_backend(reg: Option<ResMut<lunco_core::ports::PortRegistry>>) {
+    if let Some(mut reg) = reg {
+        reg.register(RELEASE_BACKEND);
+    }
+}
+
+/// Any vessel with a control binding gets a [`ReleaseActuator`], so its `release`
+/// port exists for the binding to write.
+fn attach_release_actuator(
+    mut commands: Commands,
+    q: Query<Entity, (Added<lunco_core::ControlBinding>, Without<ReleaseActuator>)>,
+) {
+    for e in &q {
+        commands.entity(e).insert(ReleaseActuator::default());
+    }
+}
+
+/// Edge-detect the `release` command → detach the fixed joint attaching this vessel
+/// to another body. The principled generalization of the old G-to-detach: any
+/// possessed vessel, any dock joint, no per-scene name matching.
+fn joint_release_system(
+    mut q: Query<(Entity, &mut ReleaseActuator)>,
+    joints: Query<(Entity, &avian3d::prelude::FixedJoint)>,
+    mut commands: Commands,
+) {
+    for (vessel, mut act) in &mut q {
+        if act.cmd > 0.5 {
+            if !act.latched {
+                act.latched = true;
+                for (je, j) in &joints {
+                    if j.body1 == vessel || j.body2 == vessel {
+                        info!("RELEASE: vessel {vessel:?} detaching joint {je:?}");
+                        commands.trigger(DetachJoint { target: je });
+                    }
+                }
+            }
+        } else {
+            act.latched = false;
+        }
+    }
+}
+
 /// Observer that handles SpawnEntity commands.
 pub fn on_spawn_entity_command(
     trigger: On<SpawnEntity>,
@@ -2725,6 +2819,12 @@ impl Plugin for SpawnCommandPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_spawn_entity_command);
         app.add_observer(on_detach_joint);
+        // Dock release as an actuator on the intent→port machinery (replaces the
+        // hardcoded G-to-detach): register the `release` port backend, attach a
+        // ReleaseActuator to every control-bound vessel, and edge-detect → detach.
+        app.register_type::<ReleaseActuator>();
+        app.add_systems(Startup, register_release_backend);
+        app.add_systems(Update, (attach_release_actuator, joint_release_system));
         app.add_systems(
             Update,
             remove_legacy_ground_prim.run_if(obstacle_field_scene_changed),

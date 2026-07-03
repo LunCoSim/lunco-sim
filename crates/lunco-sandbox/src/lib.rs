@@ -501,7 +501,7 @@ impl Plugin for SandboxCorePlugin {
             // path that resolves to a missing asset). Without this the app
             // silently boots a scene-less world (only procedural terrain /
             // obstacles), which masks the real error.
-            .add_systems(Update, (startup_scene_failguard, lander_rover_joint_detach_key))
+            .add_systems(Update, startup_scene_failguard)
             // Cosim pipeline ordering inside FixedUpdate:
             //   HandleResponses → Propagate → ApplyForces → SpawnRequests.
             .configure_sets(FixedUpdate, (
@@ -1254,37 +1254,10 @@ fn startup_scene_failguard(
     }
 }
 
-fn lander_rover_joint_detach_key(
-    keys: Res<ButtonInput<KeyCode>>,
-    q_names: Query<(Entity, &Name)>,
-    mut commands: Commands,
-) {
-    // Tutorial-scene UX affordance: press G to detach the joint holding the
-    // docked rover against the lander in `assets/scenes/sandbox/lander_test.usda`.
-    // The keyboard input that DRIVES the lander (WASD + QE + Space) no longer
-    // lives here — it flows through the typed-command path
-    // (`lunco-controller::drive_from_bindings` → `lunco_cosim::SetPorts` →
-    // `PortRegistry` writes to the `SimComponent` `manual_*` inputs), keyed off the
-    // vessel's `SimComponent` topology (the possess-time `ControlBinding`) so any
-    // lander in any scene is drivable without per-scene name matching.
-    //
-    // This G-to-detach shortcut is a different concern: it isn't a vessel-class
-    // behaviour, it's a click-equivalent for ONE specific named joint in ONE
-    // specific scene (the tutorial's `/LanderTest/LanderRoverJoint`). Tightly
-    // bound to that scene's USD path, hence the literal name match below. The
-    // principled generalization (find the joint connected to the currently
-    // possessed vessel and dispatch `DetachJoint`) is a TODO for when the
-    // scene authoring convention for dock joints stabilizes; for now this
-    // preserves the existing one-key tutorial flow.
-    if !keys.just_pressed(KeyCode::KeyG) { return; }
-    for (entity, name) in &q_names {
-        if name.as_str() == "/LanderTest/LanderRoverJoint" {
-            info!("Manual input: Detaching LanderRoverJoint!");
-            commands.trigger(lunco_sandbox_edit::commands::DetachJoint { target: entity });
-            break;
-        }
-    }
-}
+// (The hardcoded G-to-detach system was removed: dock release is now a vessel-class
+//  actuator on the normal intent→port machinery — the `Release` intent (KeyG) → the
+//  `release` port → `lunco_sandbox_edit::commands::ReleaseActuator` → DetachJoint.
+//  See the joint-as-actuator refactor. Works for any possessed vessel + dock joint.)
 
 fn on_restore_fallback_lights(
     _trigger: On<lunco_core::RestoreFallbackLights>,
