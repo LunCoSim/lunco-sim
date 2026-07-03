@@ -38,7 +38,7 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 | **`lunco-terrain-surface`** | Local high-detail DEM ground terrain (surface scale): heightfield colliders, CDLOD tile streaming, `big_space` per-tile anchoring, and the layered color pipeline; the "surface" projection of the terrain family. |
 | **`lunco-obstacle-field`** | Procedural crater + rock field generation (with LOD) for rover testing. |
 | **`lunco-experiments`** | Backend-agnostic experiment / batch-run registry: models a single Fast Run as a first-class artifact (params, bounds, trajectory) with `RunStatus` (`Pending`/`Queued`/`Running`/`Done`/`Failed`/`Cancelled`) and `RunBounds`; the sim backend plugs in via the `ExperimentRunner` trait, parallel runs schedule across a worker pool. |
-| **`lunco-cosim`** | Multi-engine orchestration (Modelica, FMU, GMAT, Avian) via explicit input/output wiring (`SimConnection`), following FMI/SSP causality. |
+| **`lunco-cosim`** | Multi-engine orchestration (Modelica, FMU, GMAT, Avian) via explicit input/output wiring (`SimConnection`), following FMI/SSP causality. Port backends (incl. the `piloted` control-authority sensor derived from possession) resolve every exposed value by name. |
 
 ---
 

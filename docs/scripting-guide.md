@@ -157,6 +157,22 @@ same id) — so behavior that used to be hardcoded is data, no rebuild.
 The seam supplies context Rust alone can see (argv, roles, first-run flag); the
 *decision* is entirely the policy's. Consulted via `lunco_hooks::invoke(id, &[ctx])`.
 
+## 7b. Vessel controllers & control authority
+
+A vessel that drives itself (a GNC / autopilot) is built in **three layers**: the
+control **LAW in Modelica** (`.mo`), high-level **logic/events in rhai** (no per-tick
+loops), and **structure/authority in USD**. Full recipe + gotchas:
+[`skills/authoring-vessel-controllers`](../skills/authoring-vessel-controllers/SKILL.md).
+
+**Control authority is the wired `piloted` signal.** The GNC is *internal* to the
+vessel model; a user and an autopilot are both *external sessions* that **possess**
+the vessel (arbitrated by possession + RBAC). The internal controller yields to
+whoever possesses by reading the read-only **`piloted`** cosim port (`1.0` when any
+session owns the vessel — `SessionRegistry::owner_of(...).is_some()`), wired into the
+model (`piloted:piloted`) and gating `cmd = piloted ? stick : gnc`. No in-model flag,
+no rhai toggle, no per-tick check — possession is the single source of truth. Ride the
+camera along without taking control via `follow(entity)`.
+
 ## 8. Persistence
 
 - **Per-entity scenarios → USD (load):** author `custom string lunco:script = '''<rhai>'''` on a prim; on spawn it auto-attaches and runs. *(Writing a live-edited scenario back onto its prim is not yet supported — it needs a USD asset↔document bridge.)*

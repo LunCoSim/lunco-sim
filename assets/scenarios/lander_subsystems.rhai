@@ -2,11 +2,12 @@
 // `/LanderTest/Lander`. EVENT-DRIVEN only: no control loop, no per-tick routing.
 //
 // Control is entirely WIRING-LEVEL now (no rhai stepping):
-//   • The GNC law (Modelica) outputs `gnc_throttle`; a USD self-wire
-//     (`gnc_throttle:external_throttle`) drives the actuator every tick in the cosim
-//     propagation — realtime, no script involved.
-//   • A possessing human's control binding writes the same command inputs and
-//     overrides the GNC wire (human > gnc). Authority is possession, not a flag.
+//   • The internal GNC law lives in `Lander.mo` and actuates the vessel directly.
+//   • It YIELDS to its pilot via the WIRED `piloted` port (1 when a session — a user
+//     or an autopilot — possesses the vessel). A possessing session's control
+//     binding writes the command inputs; the model's `piloted` gate selects them.
+//   • Authority is possession (derived by `PILOTED_BACKEND` in Rust), not a flag —
+//     nothing here touches it.
 //
 // This script only ORCHESTRATES via events: it latches touchdown for the mission to
 // react to, and reacts to the native Modelica fuel `when` events.

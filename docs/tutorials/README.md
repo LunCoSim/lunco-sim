@@ -36,6 +36,7 @@ shared HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
 | Tutorial | What you build |
 |---|---|
 | [01 — Lander → Rover mission](01-lander-rover-mission.md) | A lander that flies itself down on a glowing engine plume, releases a rover, and an autopilot that drives the rover through a waypoint course until you take over — with model-driven warnings and on-screen narration throughout. |
+| [02 — Author your own controller](02-authoring-a-controller.md) | Build a self-flying vessel from scratch: the control law in Modelica, logic in rhai, sensors + wiring + the `piloted` authority signal in USD — and a pilot who can take over. The layering behind every LunCoSim GNC. |
 
 Looking for a reference rather than a walkthrough? The full script verb list is
 in [`../scripting-guide.md`](../scripting-guide.md), and the design behind

@@ -1,14 +1,14 @@
-// tagline: Lander — onboard GNC + actuator with a LIVE (der-fed) manual-override gate; authority = possession events
+// tagline: Lander — internal GNC + actuator; yields to its pilot via the wired `piloted` authority signal
 model Lander
   "Powered-descent lander. The GNC control LAW (Modelica) computes `gnc_throttle`
-   directly; the actuator turns the SELECTED command into world force/torque. A
-   `manual` gate chooses GNC (0) vs the possessing human's stick (1). The gate is
-   made LIVE by routing `manual` through a `der` (→ `manual_live`) — an unwired
-   algebraic input folds in rumoca, a `der`-fed one stays a real runtime slot the
-   solver reads. The supervisor flips `manual` on POSSESSION EVENTS (not per-tick),
-   so gnc < human with no wire fighting the pilot and no per-tick scripting.
-   The human throttle is spool-filtered (feel); the GNC path is DIRECT (responsive
-   braking — a spool lag on the GNC is what made an earlier build tumble)."
+   directly; the actuator turns the SELECTED command into world force/torque. The
+   authority gate is the WIRED `piloted` port (1 when any session — a user or an
+   autopilot — possesses the vessel, derived from the possession registry): it
+   selects the session's stick when piloted, the internal GNC when not. Because
+   `piloted` is wired it is a live input the solver reads — no in-model flag, no
+   per-tick scripting, no wire fighting the pilot. The session throttle is
+   spool-filtered (feel); the GNC path is DIRECT (responsive braking — a spool lag
+   on the GNC is what made an earlier build tumble)."
 
   // ── Structural parameters ──
   parameter Real max_thrust = 60000.0 "Max engine thrust (N)";

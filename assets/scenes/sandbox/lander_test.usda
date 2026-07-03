@@ -14,11 +14,12 @@
 #
 # The chain is entirely the unified cosim wiring fabric — no bespoke Rust:
 #
-#   Avian body  ──(out height)──────► Lander.mo  altitude
-#               ──(out velocity_y)──► Lander.mo  descent_rate
-#                                         │  PID hover/descent law
-#                                         ▼  output `thrust`
-#   self-wire  thrust ─────► force_local_y  (BODY-FRAME thrust port, gap G1)
+#   Altimeter.range ────────► Lander.mo  altitude
+#   Avian body  ──(velocity_y)─► Lander.mo  descent_rate   (+ mass, inertia_*, quat)
+#   possession  ──(piloted)───► Lander.mo  piloted         (yield-to-pilot gate)
+#                                    │  velocity-scheduled descent law + gate
+#                                    ▼  force_x/y/z, torque_x/y/z (world frame)
+#   Lander.mo  force/torque ─► Avian body
 #
 # Gravity is applied by lunco-environment (sandbox default 9.81 NEG_Y); the
 # model must NOT re-apply it. Body-frame thrust means the engine fires along
@@ -112,18 +113,14 @@ def Xform "LanderTest"
         #   velocity_y       --> descent_rate  (vertical-velocity estimate)
         #   IMU / body quat  --> q_w..q_z      (attitude, to rotate thrust to world)
         #   g                =  1.62 (model param; lunar gravity is constant)
-        # and drives force/torque OUT to Avian. A `manual` port (unwired → 0) is the
-        # authority gate: 0 = GNC flies (baseline/lowest tier), 1 = obey the external
-        # command (a possessing autopilot/human overrides). Priority order is DATA in
-        # `lunco:controlLayers` below; who-wins is decided by possession + rhai, never
-        # computed here. See models/Lander.mo.
+        # and drives force/torque OUT to Avian. Control authority is the WIRED
+        # `piloted:piloted` signal (below): the internal GNC yields to whatever
+        # session (a user or an autopilot) possesses the vessel, and drives itself
+        # when none do. `piloted` is derived from the possession registry in Rust
+        # (PILOTED_BACKEND), so it needs no in-model flag and no scripting. See
+        # models/Lander.mo.
         string lunco:modelicaModel = "models/Lander.mo"
         string lunco:simWires = "force_x:force_x,force_y:force_y,force_z:force_z,torque_x:torque_x,torque_y:torque_y,torque_z:torque_z,quat_w:q_w,quat_x:q_x,quat_y:q_y,quat_z:q_z,velocity_y:descent_rate,mass:vehicle_mass,inertia_xx:inertia_xx,inertia_yy:inertia_yy,inertia_zz:inertia_zz,piloted:piloted,throttle:throttle"
-
-        # Control-authority tiers on this vessel, ascending priority (DATA, not code).
-        # gnc = the onboard Modelica baseline; a possessing autopilot/human outbids it.
-        # The `manual` gate + possession arbiter enforce it; this declares the order.
-        custom string lunco:controlLayers = "gnc:0, autopilot:1, human:2"
 
         # Modelica `when` events: threshold crossings of the model's continuous
         # OUTPUT signals become discrete events on the bus (edge detection in Rust,
