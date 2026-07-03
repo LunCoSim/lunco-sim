@@ -217,22 +217,32 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         .collect();
 
     for (doc, name, rel, synced) in entries {
-        // Current generation + composed payloads, or drop if the doc closed.
-        let resolved = world.resource::<UsdDocumentRegistry>().host(doc).map(|h| {
-            (
-                h.document().generation(),
-                h.document().composed_source(),
-                h.document().composed(),
-            )
-        });
-        let Some((cur_gen, composed_source, composed)) = resolved else {
-            world.resource::<TwinRoots>().clear_overlay(&name, &rel);
-            world.resource_mut::<DocBackedTwinScenes>().map.remove(&doc);
-            continue;
+        // Cheap generation probe FIRST — then early-out. The expensive payloads
+        // below (`composed_source()` re-serializes the whole composed stage to a
+        // String; `composed()` recomposes it) must NOT be computed every frame:
+        // the document is unchanged on the overwhelming majority of frames and we
+        // `continue` right after this check, so computing them up-front was
+        // ~212µs/frame of pure waste (profiled on the moonbase twin). Read only
+        // the generation here; pay for the payloads only once it has moved.
+        let cur_gen = match world.resource::<UsdDocumentRegistry>().host(doc) {
+            Some(h) => h.document().generation(),
+            None => {
+                world.resource::<TwinRoots>().clear_overlay(&name, &rel);
+                world.resource_mut::<DocBackedTwinScenes>().map.remove(&doc);
+                continue;
+            }
         };
         if Some(cur_gen) == synced {
             continue;
         }
+        // Generation moved — now (and only now) pay for the composed payloads.
+        let (composed_source, composed) = {
+            let reg = world.resource::<UsdDocumentRegistry>();
+            let h = reg
+                .host(doc)
+                .expect("doc host present: its generation was just read above (single-threaded exclusive system, no despawn between)");
+            (h.document().composed_source(), h.document().composed())
+        };
 
         // Always refresh the overlay so persistence / next load reflect the doc,
         // regardless of whether we reload the live asset.

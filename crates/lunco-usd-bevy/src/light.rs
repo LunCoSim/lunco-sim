@@ -197,12 +197,18 @@ pub(crate) fn instantiate_light_prim(
             let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
                 .map(|c| Color::linear_rgb(c.x, c.y, c.z))
                 .unwrap_or(Color::WHITE);
-            // TODO(review #2): defaults to true, and each rover authors two
-            // SphereLights. Spawning many rovers can exceed Bevy's per-cluster
-            // shadow-casting light cap → some headlights silently stop casting
-            // and/or framerate collapses. Consider defaulting rover headlight
-            // shadows off in the .usda, or capping shadow-casters in the loader.
-            let shadows_enabled = get_attribute_as_bool(reader, sdf_path, "inputs:shadow:enable").unwrap_or(true);
+            // Local lights (SphereLight → Spot/Point: rover headlights, fill
+            // lamps) default to NO cast shadows: each shadow-casting spot/point
+            // renders the whole scene again into its own shadow map every frame,
+            // and a scene with several rovers (two SphereLights each) stacks up a
+            // dozen extra shadow passes — profiled as the dominant render cost on
+            // the moonbase twin (`queue_shadows` / `check_point_light_mesh…`), and
+            // it also blows past Bevy's per-cluster shadow-caster cap. The light
+            // still ILLUMINATES; it just doesn't cast. A scene that genuinely
+            // wants a hero cast shadow opts in per-light with
+            // `inputs:shadow:enable = true`. (Was `unwrap_or(true)` — the
+            // TODO(review #2) fix.)
+            let shadows_enabled = get_attribute_as_bool(reader, sdf_path, "inputs:shadow:enable").unwrap_or(false);
             let range = get_attribute_as_f32(reader, sdf_path, "lunco:light:range").unwrap_or(30.0);
 
             if let Some(cone_angle_deg) = get_attribute_as_f32(reader, sdf_path, "inputs:shaping:cone:angle") {

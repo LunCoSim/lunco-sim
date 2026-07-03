@@ -65,6 +65,11 @@ use lunco_modelica::ModelicaSet;
 
 #[cfg(feature = "ui")]
 mod ui;
+/// Engine light-handling policy (`ShadowCastingSettings` + reactive
+/// possession-driven headlight shadow projection). Client render concern, so
+/// `ui`-gated. See [`light_policy`].
+#[cfg(feature = "ui")]
+mod light_policy;
 /// OS `luncosim://` scheme registration (desktop integration). Native + the
 /// networking feature only — there's nothing to dial without the wire.
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
@@ -570,6 +575,12 @@ impl Plugin for SandboxCorePlugin {
         // collider).
         #[cfg(feature = "ui")]
         app.add_systems(Update, bind_terrain_layers);
+
+        // Engine light-handling policy: the locally-possessed vessel's headlights
+        // cast shadows, the parked rovers stay cheap (reactive on possession
+        // events — see `light_policy`). Render concern → `ui`-gated.
+        #[cfg(feature = "ui")]
+        app.add_plugins(light_policy::LightPolicyPlugin);
 
         // LogDiagnosticsPlugin is loud (a multi-line summary every second) — gate
         // it on `--log-diag`.
