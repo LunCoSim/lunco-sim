@@ -24,10 +24,12 @@
 //! ## Edit target
 //!
 //! Per the Omniverse pattern, every [`UsdOp`] carries an `edit_target:
-//! LayerId` so future composition-aware editing can name *which layer*
-//! receives an opinion. Today the document is a single root layer and every
-//! op targets [`LayerId::root`]; non-root targets are rejected until
-//! genuine multi-layer routing lands (Phase C4).
+//! LayerId` naming *which layer* receives the opinion. The document composes
+//! **`base ⊕ runtime`**: [`LayerId::root`] authors the persisted base layer,
+//! [`LayerId::runtime`] the ephemeral, **non-persisted** overlay — so a tool can
+//! edit non-destructively over the base and promote to persistent on save.
+//! `apply` routes to the target layer via [`TargetLayer::from_id`]; unknown
+//! identifiers are rejected (no silent misrouting to root).
 
 use std::collections::VecDeque;
 
@@ -145,10 +147,10 @@ pub enum UsdChange {
 
 /// A typed, reversible mutation to a [`UsdDocument`].
 ///
-/// Every variant carries an `edit_target: LayerId` so future
-/// composition-aware editing can name *which layer* receives the
-/// opinion. Today only [`LayerId::root`] is meaningful; non-root
-/// targets are rejected.
+/// Every variant carries an `edit_target: LayerId` naming *which layer*
+/// receives the opinion — [`LayerId::root`] (persisted base) or
+/// [`LayerId::runtime`] (ephemeral, non-persisted overlay); `apply` routes to
+/// each. Unknown identifiers are rejected.
 ///
 /// Forward application routes through [`lunco_usd_bevy::author`] — the op is
 /// authored by SDF path into a transient `Stage` and the updated root layer
@@ -161,7 +163,7 @@ pub enum UsdOp {
     /// previous source as another `ReplaceSource`. Used as the
     /// universal inverse fallback for the other variants.
     ReplaceSource {
-        /// Layer to write to. Today: always [`LayerId::root`].
+        /// Layer to write to: [`LayerId::root`] (base) or [`LayerId::runtime`] (overlay).
         edit_target: LayerId,
         /// New full source for the layer.
         text: String,

@@ -333,6 +333,27 @@ collider is swapped atomically (the same keep-old-until-new activation the regen
 uses). No manual invalidation; an edit is indistinguishable from any other USD edit
 flowing through the membrane.
 
+**Authoring tier vs runtime tier — USD + Fabric, the Omniverse pattern.** USD is the
+source of truth, so edits author to it *by default*, but — like Omniverse, which never
+runs physics/render off authored USD but off a runtime cache (**Fabric**) — the terrain
+is **two tiers**: the **USD terrain doc** (committed edits as tiny param prims, the
+truth) and the **ECS `EditsLayer` + bake** (the projection physics/render read, our
+Fabric). Three disciplines follow, and the [command journal](command-journal.md) design
+carries the full rationale:
+
+- **Edit target is a runtime/session layer** (over the untouched base DEM), promotable
+  to persistent on save — `UsdOp` carries `edit_target`. A scratch dig never bakes into
+  the asset unless committed.
+- **Commit-granularity, never per-frame.** A continuous sculpt drag edits the *runtime*
+  projection live and authors **one** USD op on release (as Omniverse edits Fabric on
+  drag, writes USD on mouse-up); a click-dig authors at once. Authoring per frame would
+  thrash composition — the one hard rule.
+- **One prim per edit** — affordable *because* USD holds only tiny parameter records
+  (the oracle stores no geometry), so each edit is a prim addressable by path (its
+  identity) and individually undoable, while the runtime folds them all into the single
+  `EditsLayer`. So "one layer vs. per-edit" was a false tension: **prim-per-edit is the
+  authoring tier; the one `EditsLayer` is the projection tier** — both at once.
+
 **The three channels absorb the full toolset.** Height edits (dig / raise / flatten)
 are height modifiers; carve edits (tunnel, skylight, pit shaft) are carve/mask;
 place-object edits (rock, prefab, structure) are geometry gprims. One editing model,
