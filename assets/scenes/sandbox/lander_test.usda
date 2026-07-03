@@ -118,7 +118,7 @@ def Xform "LanderTest"
         # `lunco:controlLayers` below; who-wins is decided by possession + rhai, never
         # computed here. See models/Lander.mo.
         string lunco:modelicaModel = "models/Lander.mo"
-        string lunco:simWires = "force_x:force_x,force_y:force_y,force_z:force_z,torque_x:torque_x,torque_y:torque_y,torque_z:torque_z,quat_w:q_w,quat_x:q_x,quat_y:q_y,quat_z:q_z,velocity_y:descent_rate,mass:vehicle_mass,inertia_xx:inertia_xx,inertia_yy:inertia_yy,inertia_zz:inertia_zz,throttle:throttle"
+        string lunco:simWires = "force_x:force_x,force_y:force_y,force_z:force_z,torque_x:torque_x,torque_y:torque_y,torque_z:torque_z,quat_w:q_w,quat_x:q_x,quat_y:q_y,quat_z:q_z,velocity_y:descent_rate,mass:vehicle_mass,inertia_xx:inertia_xx,inertia_yy:inertia_yy,inertia_zz:inertia_zz,piloted:piloted,throttle:throttle"
 
         # Control-authority tiers on this vessel, ascending priority (DATA, not code).
         # gnc = the onboard Modelica baseline; a possessing autopilot/human outbids it.

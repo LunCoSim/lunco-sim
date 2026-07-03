@@ -23,17 +23,11 @@ fn on_tick(me) {
 }
 
 fn on_event(me, evt) {
-    // AUTHORITY (gnc < human), EVENT-DRIVEN: on any possession change, re-evaluate
-    // who drives THIS lander and flip the model's `manual` gate. `controller(me)`
-    // reads the possession arbiter (ground truth), so a human possessing it → manual
-    // 1 (their stick drives), releasing / possessing something else → manual 0 (GNC
-    // resumes). No per-tick loop — this fires only on the possession events.
-    if evt.name == "cmd:PossessVessel" || evt.name == "cmd:ReleaseVessel" {
-        let drv = controller(me);
-        let m = if drv != () && drv != "AiAgent" { 1.0 } else { 0.0 };
-        set(me, "manual", m);
-        print("[Lander] authority: manual=" + m + " (driver=" + drv + ")");
-    }
+    // AUTHORITY is now a first-class WIRED signal: the vessel's `piloted` port
+    // (1 when ANY session — a user or an autopilot — possesses it, derived from the
+    // possession registry in Rust) is wired straight to the internal GNC model,
+    // which yields on it. No script toggle here — the internal controller reads
+    // possession status directly through the wire.
 
     // Native Modelica fuel `when` events (from `lunco:portEvents`).
     if evt.name == "lander_low_fuel" {

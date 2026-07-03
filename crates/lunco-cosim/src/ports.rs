@@ -311,6 +311,53 @@ const DIGITAL_PORT_BACKEND: PortBackend = PortBackend {
     write_slot: None,
 };
 
+/// Control-authority sensor: a read-only `piloted` port, 1.0 while the vessel is
+/// possessed by ANY external session — a human user OR an autopilot (both are
+/// external session-controllers) — else 0.0. It reports only POSSESSION STATUS from
+/// the single source of truth ([`SessionRegistry`]); it treats every session
+/// uniformly, with no autopilot-specific or role logic.
+///
+/// This is "the INTERNAL controller yields to whoever possesses it": the vessel's
+/// intrinsic GNC (an in-model controller) wires `piloted` and gates
+/// `cmd = piloted ? session : gnc`. Because it's WIRED it's a live input (reaches
+/// the solver, unlike a folded flag). Session-vs-session (user vs autopilot) is
+/// arbitrated by possession + RBAC upstream; the GNC is simply the floor beneath
+/// the whole session layer.
+const PILOTED_BACKEND: PortBackend = PortBackend {
+    list: |w, e, out| {
+        if w.get::<lunco_core::GlobalEntityId>(e).is_some() {
+            out.push(PortRef {
+                name: "piloted".to_string(),
+                direction: PortDirection::Out,
+                port_type: PortType::Signal,
+                value: piloted_value(w, e),
+            });
+        }
+    },
+    read_output: |w, e, n| (n == "piloted").then(|| piloted_value(w, e)),
+    read_input: |_, _, _| None,
+    write_input: |_, _, _, _| false,
+    resolve_output: None,
+    resolve_input: None,
+    read_slot: None,
+    write_slot: None,
+};
+
+/// 1.0 iff this entity's vessel is owned by some session (possessed), else 0.0.
+fn piloted_value(w: &World, e: Entity) -> f64 {
+    let Some(gid) = w.get::<lunco_core::GlobalEntityId>(e).map(|g| g.get()) else {
+        return 0.0;
+    };
+    let owned = w
+        .get_resource::<lunco_core::SessionRegistry>()
+        .is_some_and(|r| r.owner_of(gid).is_some());
+    if owned {
+        1.0
+    } else {
+        0.0
+    }
+}
+
 /// Register the cosim engine's builtin port backends into `registry`, in
 /// resolution-precedence order: Modelica `SimComponent`, avian state, then the
 /// single-value hardware ports. Called from [`crate::CoSimPlugin`]. Other crates
@@ -321,4 +368,5 @@ pub fn register_builtin_port_backends(registry: &mut PortRegistry) {
     registry.register(AVIAN_BACKEND);
     registry.register(PHYSICAL_PORT_BACKEND);
     registry.register(DIGITAL_PORT_BACKEND);
+    registry.register(PILOTED_BACKEND);
 }
