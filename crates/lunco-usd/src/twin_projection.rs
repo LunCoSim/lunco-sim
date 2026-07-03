@@ -1,15 +1,14 @@
-//! Doc-backed twin default scene (E1b) — web-ready via the twin asset source.
+//! Doc-backed twin default scene — web-ready via the twin asset source.
 //!
-//! E1 ([`live_projection`](crate::live_projection)) makes scenes opened via
-//! `OpenFile` doc-backed, but it composes synchronously off the filesystem
-//! (`compose_native_fs`) — native-only, and it loses the `twin://` scheme that
-//! co-located refs (terrain `.glb`) need. The **default twin scene** loads
-//! through the `twin://` asset source and the async [`UsdLoader`], which already
-//! re-attaches the scheme so refs resolve correctly on every platform the source
-//! supports. E1b keeps that path and makes it doc-backed by serving the scene
+//! This is the **doc-backed live-projection path**: the default twin scene loads
+//! through the `twin://` asset source and the async [`UsdLoader`], which
+//! re-attaches the scheme so co-located refs (terrain `.glb`) resolve on every
+//! platform the source supports. It is made doc-backed by serving the scene
 //! document's **composed** (`base ⊕ runtime`) source as a *byte-overlay* on the
 //! twin source, so the live world composes from the editable document — and
-//! reloaded runtime spawns/moves appear live.
+//! reloaded runtime spawns/moves appear live. (The former native-only,
+//! filesystem-composing `live_projection` path for `OpenFile` scenes has been
+//! removed; opened files mount through the same storage-based async loader.)
 //!
 //! Flow (`open_usd_docs_on_twin_added` keeps firing `LoadScene` for the immediate
 //! live mount; E1b runs alongside):
@@ -101,6 +100,25 @@ struct TwinSceneRef {
 #[derive(Resource, Default)]
 pub struct DocBackedTwinScenes {
     map: HashMap<DocumentId, TwinSceneRef>,
+}
+
+impl DocBackedTwinScenes {
+    /// The `twin://` coordinates (`name`, `rel`) a document is already backed
+    /// under, if any — so a second consumer (e.g. the editor viewport) reuses
+    /// the same overlay + asset instead of registering a duplicate.
+    pub fn coords_of(&self, doc: DocumentId) -> Option<(String, String)> {
+        self.map.get(&doc).map(|s| (s.name.clone(), s.rel.clone()))
+    }
+
+    /// Track an already-allocated document as doc-backed under `(name, rel)`, so
+    /// [`sync_twin_overlays`] keeps its overlay + live entities in step with the
+    /// document generation. Idempotent — a document already tracked (e.g. a
+    /// default twin scene) keeps its existing coordinates.
+    pub fn track(&mut self, doc: DocumentId, name: String, rel: String) {
+        self.map
+            .entry(doc)
+            .or_insert(TwinSceneRef { name, rel, synced_generation: None });
+    }
 }
 
 /// A deferred structural reconcile for a twin scene, queued by
@@ -341,7 +359,7 @@ pub(crate) fn drain_twin_reconciles(world: &mut World) {
             crate::live_consume::reconcile_structural(
                 world,
                 item.handle_id,
-                &reader,
+                &*reader,
                 &item.resync_paths,
             );
         }

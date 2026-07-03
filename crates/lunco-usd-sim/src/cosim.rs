@@ -43,7 +43,7 @@ use lunco_scripting::{
 };
 use lunco_doc::DocumentHost;
 use lunco_usd_bevy::{
-    CanonicalStages, LoadIntoGrid, UsdData, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath,
+    CanonicalStages, LoadIntoGrid, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath,
     UsdRead, UsdStageAsset,
 };
 use openusd::sdf::Path as SdfPath;
@@ -1279,11 +1279,37 @@ pub fn despawn_usd_subtree(world: &mut World, root: Entity) {
 /// uses, so the observer instantiates its geometry + subtree in place without
 /// disturbing siblings. Returns `None` (no-op) if the parent isn't live yet or
 /// the prim is already spawned.
-pub fn spawn_usd_child(
+pub fn spawn_usd_child<R: lunco_usd_bevy::UsdRead>(
     world: &mut World,
     stage_handle_id: bevy::asset::AssetId<UsdStageAsset>,
-    reader: &UsdData,
+    reader: &R,
     path: &str,
+) -> Option<Entity> {
+    // Pre-populate the translate so physics sees the spawn offset before the
+    // observer refines the full transform (matches the loader's child branch).
+    let sdf_path = SdfPath::new(path).ok()?;
+    let tf = lunco_usd_bevy::get_attribute_as_vec3(reader, &sdf_path, "xformOp:translate")
+        .map(Transform::from_translation)
+        .unwrap_or_default();
+    spawn_usd_child_with_translate(world, stage_handle_id, path, tf)
+}
+
+/// Reader-free core of [`spawn_usd_child`]: spawn the stub child entity for
+/// `path` under its already-live parent, with a pre-read transform `tf`,
+/// inheriting grid-anchoring + instance membership from the parent. The
+/// `on_usd_prim_added` observer then builds the subtree from the canonical
+/// stage.
+///
+/// Split out so the live-stage projection bridge can pre-read the translate
+/// under a *short* immutable borrow of the `!Send` `CanonicalStage` and then
+/// spawn here with `&mut World` — the stage itself can't be held across the
+/// spawn (it aliases the world), but the observer that fires on insert reads it
+/// fresh from `CanonicalStages`.
+pub fn spawn_usd_child_with_translate(
+    world: &mut World,
+    stage_handle_id: bevy::asset::AssetId<UsdStageAsset>,
+    path: &str,
+    tf: Transform,
 ) -> Option<Entity> {
     // Parent path = `path` minus its final `/segment`.
     let (parent_prefix, _name) = path.rsplit_once('/')?;
@@ -1308,13 +1334,6 @@ pub fn spawn_usd_child(
     }
 
     let stage_handle = world.get::<UsdPrimPath>(parent_entity)?.stage_handle.clone();
-
-    // Pre-populate the translate so physics sees the spawn offset before the
-    // observer refines the full transform (matches the loader's child branch).
-    let sdf_path = SdfPath::new(path).ok()?;
-    let tf = lunco_usd_bevy::get_attribute_as_vec3(reader, &sdf_path, "xformOp:translate")
-        .map(Transform::from_translation)
-        .unwrap_or_default();
 
     // Inherit grid-anchoring + instance membership from the parent exactly as
     // `instantiate_usd_prim` derives them for its children.

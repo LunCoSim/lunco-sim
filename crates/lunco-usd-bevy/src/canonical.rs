@@ -172,6 +172,36 @@ impl CanonicalStages {
         self.by_asset.len()
     }
 
+    /// Insert (or replace) the live stage for `asset` — the door the live-doc
+    /// projection uses to publish a `CanonicalStage` it built from a document's
+    /// composed source, so the extractors read the live stage in-app and the
+    /// change sink is installed. Replacing drops the previous stage (and its
+    /// sink) for that asset.
+    pub fn insert(
+        &mut self,
+        asset: bevy::asset::AssetId<crate::UsdStageAsset>,
+        stage: CanonicalStage,
+    ) {
+        self.by_asset.insert(asset, stage);
+    }
+
+    /// Drain the change-sink inbox of **every** live stage, returning the
+    /// committed changes per asset (empty stages omitted). The Step-1 projection
+    /// bridge calls this each tick, then reconciles ECS off each stage's live
+    /// [`view`](CanonicalStage::view) — the read counterpart to authoring onto
+    /// the stage. Draining bumps each affected stage's `generation`.
+    pub fn drain_all_changes(
+        &mut self,
+    ) -> Vec<(bevy::asset::AssetId<crate::UsdStageAsset>, Vec<RawStageChange>)> {
+        self.by_asset
+            .iter_mut()
+            .filter_map(|(id, cs)| {
+                let changes = cs.drain_changes();
+                (!changes.is_empty()).then(|| (*id, changes))
+            })
+            .collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.by_asset.is_empty()
     }
@@ -360,26 +390,23 @@ mod resolved_asset_tests {
     //! payload (the Perseverance "usda→glb" shape).
 
     use super::*;
-    use crate::compose::{compose_native_fs, compose_native_fs_to_stage};
+    use crate::compose::{build_stage_from_closure, flatten_stage};
     use crate::UsdRead;
     use openusd::sdf::Path as SdfPath;
 
     #[test]
     fn resolved_asset_synth_matches_flatten_on_live_stage() {
-        let dir = std::env::temp_dir().join("lunco_resolved_asset_live");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("wrapper.usda"),
-            "#usda 1.0\n(\n    defaultPrim = \"Structure\"\n)\ndef Xform \"Structure\"\n{\n    def Xform \"Visual\" (\n        prepend payload = @model.glb@\n    )\n    {\n        string lunco:assetMode = \"scene\"\n    }\n}\n",
-        )
-        .unwrap();
-        let scene = "#usda 1.0\ndef Xform \"Scene\"\n{\n    def Xform \"Bldg\" (\n        prepend references = @wrapper.usda@\n    )\n    {\n    }\n}\n";
+        // A prim carrying a glb payload — the binary arc `resolved_asset`
+        // synthesizes its URI from. Built through the SAME storage-based recipe
+        // resolver the async loader uses (which stubs binary assets), so this is
+        // the production compose path, not the deleted native-fs shim.
+        let scene = "#usda 1.0\ndef Xform \"Scene\"\n{\n    def Xform \"Visual\" (\n        prepend payload = @model.glb@\n    )\n    {\n        string lunco:assetMode = \"scene\"\n    }\n}\n";
+        let recipe = StageRecipe::from_source("scene.usda", scene);
+        let stage = build_stage_from_closure(&recipe).expect("live stage from recipe");
+        let cs = CanonicalStage::from_stage(stage, "scene.usda");
+        let flat = flatten_stage(cs.stage()).expect("flatten");
 
-        let stage = compose_native_fs_to_stage(scene, &dir).expect("live stage");
-        let cs = CanonicalStage::from_stage(stage, "scene");
-        let flat = compose_native_fs(scene, &dir).expect("flatten");
-
-        let visual = SdfPath::new("/Scene/Bldg/Visual").unwrap();
+        let visual = SdfPath::new("/Scene/Visual").unwrap();
         let live = cs.view().resolved_asset(&visual);
         let baked = UsdRead::resolved_asset(&flat, &visual);
         assert_eq!(live, baked, "live resolved_asset synth must equal the flatten's");

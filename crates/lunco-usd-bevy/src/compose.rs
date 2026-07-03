@@ -312,55 +312,14 @@ pub(crate) fn discover_binary_sites(stage: &Stage) -> BinarySites {
     sites
 }
 
-/// Synchronous, **native-filesystem** compose for the USD doc viewport preview:
-/// the root layer is an in-memory `source` string; referenced sublayers are read
-/// from disk relative to `base_dir`. Returns the flattened composed stage, or
-/// `None` if composition fails (the caller falls back to the raw root layer).
-///
-/// Native-only — on wasm there is no synchronous filesystem, and the viewport
-/// preview historically fell back to the raw layer there. The async,
-/// `AssetServer`-driven path ([`compose_to_textreader`]) is what the actual
-/// asset loader uses on both platforms.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn compose_native_fs(source: &str, base_dir: &std::path::Path) -> Option<sdf::Data> {
-    // `flatten_stage` discovers binary-asset arcs (glTF payloads/references)
-    // across the composed layer stack and anchors each on its composed prim.
-    flatten_stage(&compose_native_fs_to_stage(source, base_dir)?).ok()
-}
-
-/// The live-[`Stage`] sibling of [`compose_native_fs`] — composes an in-memory
-/// root layer + on-disk sublayers through the binary-stubbing [`FsResolver`],
-/// WITHOUT flattening. For the canonical-document path and for `resolved_asset`
-/// synth tests (glTF payloads can't compose through openusd's `DefaultResolver`).
-#[cfg(not(target_arch = "wasm32"))]
-pub fn compose_native_fs_to_stage(source: &str, base_dir: &std::path::Path) -> Option<Stage> {
-    use crate::resolver::normalize;
-
-    // Synthetic absolute id for the in-memory root, placed under `base_dir` so
-    // relative references anchor correctly.
-    let root_id = normalize(&base_dir.join("__lunco_inmemory_root__.usda"))
-        .to_string_lossy()
-        .into_owned();
-    let resolver = FsResolver {
-        root_id: root_id.clone(),
-        root_bytes: source.as_bytes().to_vec(),
-    };
-    Stage::builder().resolver(resolver).open(&root_id).ok()
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn compose_native_fs(_source: &str, _base_dir: &std::path::Path) -> Option<sdf::Data> {
-    None
-}
-
 /// Compose a USD layer **from disk** through the real openusd PCP engine
 /// ([`Stage::open`], backed by [`openusd::ar::DefaultResolver`]) and flatten the
 /// composed result to [`sdf::Data`]. Native + synchronous: for tests and tools
 /// that load a real on-disk `.usda` with every reference resolved — distinct
-/// from the async `AssetServer`-driven loader ([`compose_to_data`]) and the
-/// in-memory-root viewport shim ([`compose_native_fs`]). `DefaultResolver`
-/// anchors each relative reference to its own layer's directory, so the on-disk
-/// reference tree resolves exactly as authored.
+/// from the async `AssetServer`-driven loader (the storage-based
+/// [`build_stage_from_closure`] path). `DefaultResolver` anchors each relative
+/// reference to its own layer's directory, so the on-disk reference tree
+/// resolves exactly as authored.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn compose_file(path: &std::path::Path) -> Result<sdf::Data> {
     // `flatten_stage` surfaces binary-asset arcs (glTF/…) as `lunco:resolvedAsset`
@@ -380,66 +339,6 @@ pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
     Stage::open(id).map_err(|e| anyhow!("USD composition error for {id}: {e}"))
 }
 
-/// Resolver for the native-fs viewport path: the root layer is held in memory;
-/// every other layer is read from disk. Binary assets route to the empty stub.
-#[cfg(not(target_arch = "wasm32"))]
-struct FsResolver {
-    root_id: String,
-    root_bytes: Vec<u8>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl openusd::ar::Resolver for FsResolver {
-    fn create_identifier(&self, asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
-        use crate::resolver::{is_binary_asset, normalize, BINARY_STUB_ID};
-        if is_binary_asset(asset_path) {
-            return BINARY_STUB_ID.to_string();
-        }
-        if asset_path.contains("://") {
-            return asset_path.to_string();
-        }
-        let p = std::path::Path::new(asset_path);
-        let joined = if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            anchor
-                .and_then(|a| a.parent())
-                .map(|d| d.join(p))
-                .unwrap_or_else(|| p.to_path_buf())
-        };
-        normalize(&joined).to_string_lossy().into_owned()
-    }
-
-    fn resolve(&self, asset_path: &str) -> Option<ResolvedPath> {
-        use crate::resolver::BINARY_STUB_ID;
-        if asset_path == self.root_id || asset_path == BINARY_STUB_ID || std::path::Path::new(asset_path).exists() {
-            Some(ResolvedPath::new(asset_path))
-        } else {
-            None
-        }
-    }
-
-    fn resolve_for_new_asset(&self, asset_path: &str) -> Option<ResolvedPath> {
-        Some(ResolvedPath::new(asset_path))
-    }
-
-    fn open_asset(&self, resolved_path: &ResolvedPath) -> std::io::Result<Box<dyn openusd::ar::Asset>> {
-        use crate::resolver::BINARY_STUB_ID;
-        let key = resolved_path.to_str().unwrap_or_default();
-        if key == self.root_id {
-            return Ok(Box::new(std::io::Cursor::new(self.root_bytes.clone())));
-        }
-        if key == BINARY_STUB_ID {
-            return Ok(Box::new(std::io::Cursor::new(b"#usda 1.0\n".to_vec())));
-        }
-        let bytes = std::fs::read(key)?;
-        Ok(Box::new(std::io::Cursor::new(bytes)))
-    }
-
-    fn get_modification_timestamp(&self, _asset_path: &str, _resolved_path: &ResolvedPath) -> Option<std::time::SystemTime> {
-        None
-    }
-}
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod inherits_compose_tests {
@@ -455,7 +354,9 @@ mod inherits_compose_tests {
         let usda = "#usda 1.0\n\
 class \"_RoverControl\"\n{\n    def \"Controls\"\n    {\n        def \"forward\"\n        {\n            uniform string lunco:port = \"throttle\"\n            uniform double lunco:scale = 1\n        }\n    }\n}\n\
 def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
-        let data = compose_native_fs(usda, std::path::Path::new("/tmp")).expect("compose+flatten");
+        let stage = build_stage_from_closure(&crate::StageRecipe::from_source("inherits.usda", usda))
+            .expect("compose");
+        let data = flatten_stage(&stage).expect("flatten");
         let fwd = SdfPath::new("/Rover/Controls/forward").unwrap();
         assert_eq!(
             data.prim_attribute_value::<String>(&fwd, "lunco:port").as_deref(),
@@ -543,18 +444,26 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
     /// (and fire the failure placeholder) exactly like a glb referenced directly.
     #[test]
     fn glb_payload_in_referenced_wrapper_anchors_on_composed_prim() {
-        let dir = std::env::temp_dir().join("lunco_glb_wrapper_compose_test");
-        std::fs::create_dir_all(&dir).unwrap();
+        use crate::resolver::canonicalize;
+        use openusd::ar::ResolvedPath;
         // Wrapper: a `Structure` defaultPrim whose `Visual` child carries the glb
         // payload — the Perseverance "usda → glb" shape.
-        std::fs::write(
-            dir.join("wrapper.usda"),
-            "#usda 1.0\n(\n    defaultPrim = \"Structure\"\n)\ndef Xform \"Structure\"\n{\n    def Xform \"Visual\" (\n        prepend payload = @model.glb@\n    )\n    {\n        string lunco:assetMode = \"scene\"\n    }\n}\n",
-        )
-        .unwrap();
+        let wrapper = "#usda 1.0\n(\n    defaultPrim = \"Structure\"\n)\ndef Xform \"Structure\"\n{\n    def Xform \"Visual\" (\n        prepend payload = @model.glb@\n    )\n    {\n        string lunco:assetMode = \"scene\"\n    }\n}\n";
         // Scene references the wrapper — no direct glb embedding in the scene.
         let scene = "#usda 1.0\ndef Xform \"Scene\"\n{\n    def Xform \"Bldg\" (\n        prepend references = @wrapper.usda@\n    )\n    {\n    }\n}\n";
-        let data = compose_native_fs(scene, &dir).expect("compose scene→wrapper→glb");
+        // Build the two-layer closure keyed exactly as the async loader's resolver
+        // does (`canonicalize`), so the scene's `@wrapper.usda@` reference resolves
+        // to the wrapper bytes and the `@model.glb@` payload is stubbed — the
+        // storage-based compose path, not the deleted native-fs shim.
+        let root_id = canonicalize("scene.usda", None);
+        let wrapper_id = canonicalize("wrapper.usda", Some(&ResolvedPath::new(&root_id)));
+        let bytes = HashMap::from([
+            (root_id.clone(), scene.as_bytes().to_vec()),
+            (wrapper_id, wrapper.as_bytes().to_vec()),
+        ]);
+        let stage = build_stage_from_closure(&crate::StageRecipe { root_id, bytes })
+            .expect("compose scene→wrapper→glb");
+        let data = flatten_stage(&stage).expect("flatten");
 
         let visual = SdfPath::new("/Scene/Bldg/Visual").unwrap();
         let attr = visual.append_property("lunco:resolvedAsset").unwrap();

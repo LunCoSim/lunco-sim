@@ -110,17 +110,12 @@ impl Plugin for UsdCommandsPlugin {
         // `<twin>/.lunco/runtime/<scene>.usda`, parallel to the journal.
         app.add_observer(crate::runtime_persistence::on_doc_opened_load_runtime);
         app.add_observer(crate::runtime_persistence::on_doc_changed_save_runtime);
-        // E1: project doc-backed scenes into the live world from their composed
-        // (base ⊕ runtime) stage, and keep them synced to later runtime edits.
-        app.init_resource::<crate::live_projection::PendingLiveImports>();
-        app.add_systems(
-            Update,
-            (
-                crate::live_projection::project_pending_live_imports,
-                crate::live_projection::refresh_live_doc_scenes,
-            )
-                .chain(),
-        );
+        // Projection bridge: drain each live `CanonicalStage`'s openusd change
+        // sink and reconcile ECS off the live composed stage — no flatten, no
+        // whole-scene reload. This is the read half of "author onto the stage →
+        // project into the world"; it fires for every live scene whose stage is
+        // authored (the sink-driven successor to the deleted `live_projection`).
+        app.add_systems(Update, crate::live_consume::project_stage_changes);
         // E1b: make the default twin scene doc-backed by serving its composed
         // source as a `twin://` byte-overlay (web-ready via the async loader).
         app.init_resource::<crate::twin_projection::PendingTwinDocs>();
@@ -309,17 +304,16 @@ fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
         });
         return;
     }
-    // E1: real file paths DO get a document (allocated asynchronously by
-    // `on_open_file_for_usd` → `drain_pending_usd_file_loads`). Defer the
-    // live-world mount to `live_projection`, which sources the scene root from
-    // that document's *composed* (base ⊕ runtime) stage once it exists — so
-    // persisted runtime spawns/moves show in the world, not just the file.
+    // Real file paths DO get a document (allocated asynchronously by
+    // `on_open_file_for_usd` → `drain_pending_usd_file_loads`) for editing.
+    // Mount the scene into the live world through the storage-based async loader
+    // (`spawn_scene_root_world` → `UsdLoader` → `StageRecipe` → `CanonicalStage`)
+    // — the same web-ready path `mem://` / `bundled://` take, so every scene
+    // reads the live composed stage. Doc-overlay projection of runtime edits to
+    // an opened file (the deleted `live_projection`'s job) is folded into the
+    // `twin://` overlay path.
     commands.queue(move |world: &mut World| {
-        if let Some(mut pending) =
-            world.get_resource_mut::<crate::live_projection::PendingLiveImports>()
-        {
-            pending.push(path);
-        }
+        lunco_usd_sim::cosim::spawn_scene_root_world(world, &path, "");
     });
 }
 

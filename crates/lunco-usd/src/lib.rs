@@ -30,7 +30,6 @@ use bevy::prelude::*;
 pub mod commands;
 pub mod document;
 pub mod live_consume;
-pub mod live_projection;
 pub mod registry;
 pub mod runtime_persistence;
 pub mod twin_projection;

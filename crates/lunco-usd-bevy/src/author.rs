@@ -206,9 +206,8 @@ pub fn parse_attribute_value(type_name: &str, literal: &str) -> Result<Value> {
 /// composed view: a base `references = @asset.usda@` opinion must survive as an
 /// opinion, not be pulled in. References/payloads ride along untouched here
 /// because they are just fields on the base spec. This is NOT a substitute for
-/// render-time PCP composition (that is [`compose_native_fs`] /
-/// `compose::compose_to_data`); it is the document's own two-layer (base +
-/// runtime) merge.
+/// render-time PCP composition (the storage-based `build_stage_from_closure`
+/// loader path); it is the document's own two-layer (base + runtime) merge.
 pub fn compose_layers(base: &sdf::Data, runtime: &sdf::Data) -> sdf::Data {
     let mut out = base.clone();
     for (path, rspec) in runtime.iter() {

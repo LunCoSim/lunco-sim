@@ -89,6 +89,15 @@ pub trait UsdRead {
     /// inactive prims.
     fn is_active(&self, prim: &SdfPath) -> bool;
 
+    /// Whether a prim exists at `prim` in the composed scene — the existence
+    /// test the incremental structural reconcile ([`reconcile_structural`]) uses
+    /// to tell a spawn (present in the stage, no live entity) from a remove
+    /// (absent, but a live entity survives). On the live stage this is
+    /// `Prim::is_valid`; on the flatten it is a spec lookup.
+    ///
+    /// [`reconcile_structural`]: crate::view::StageView
+    fn has_prim(&self, prim: &SdfPath) -> bool;
+
     /// The stage's `defaultPrim` bare name (no leading slash), or `None` when the
     /// stage declares none. The empty-path scene-root sentinel resolves through
     /// this to the concrete subtree the reference/scene mounts.
@@ -192,6 +201,10 @@ impl UsdRead for StageView<'_> {
         self.stage().prim(prim.clone()).is_active().unwrap_or(true)
     }
 
+    fn has_prim(&self, prim: &SdfPath) -> bool {
+        self.stage().prim(prim.clone()).is_valid().unwrap_or(false)
+    }
+
     fn default_prim(&self) -> Option<String> {
         self.stage()
             .default_prim()
@@ -264,6 +277,10 @@ impl UsdRead for openusd::sdf::Data {
 
     fn is_active(&self, prim: &SdfPath) -> bool {
         UsdDataExt::prim_is_active(self, prim)
+    }
+
+    fn has_prim(&self, prim: &SdfPath) -> bool {
+        self.spec(prim).is_some()
     }
 
     fn default_prim(&self) -> Option<String> {
